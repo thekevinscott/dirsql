@@ -44,6 +44,18 @@ git worktree remove .worktrees/my-feature
 3. **Link the PR**: `bd update <id> --external-ref "gh-<pr-number>"` after creating the PR
 4. **Close**: `bd close <id>` immediately after the PR is merged
 
+### Subagent Workflow
+
+New work on beads should be done via subagents in isolated worktrees. Each subagent:
+1. Creates a worktree and branch for its bead
+2. Does the implementation work (red/green TDD)
+3. Pushes the branch and opens a PR
+4. Monitors the PR and proactively resolves:
+   - CI failures
+   - GPG signing complaints
+   - Merge conflicts
+5. Continues monitoring until the PR is in a mergeable state
+
 ## Testing
 
 ### Red/Green Development

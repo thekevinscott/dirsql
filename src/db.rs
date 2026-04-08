@@ -80,11 +80,7 @@ impl Db {
     /// Internal tracking columns (_dirsql_*) are excluded from results.
     pub fn query(&self, sql: &str) -> Result<Vec<HashMap<String, Value>>> {
         let mut stmt = self.conn.prepare(sql)?;
-        let column_names: Vec<String> = stmt
-            .column_names()
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let column_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
 
         let rows = stmt.query_map([], |row| {
             let mut map = HashMap::new();
@@ -109,9 +105,9 @@ impl Db {
 /// Inject _dirsql_file_path and _dirsql_row_index columns into a CREATE TABLE DDL statement.
 fn inject_tracking_columns(ddl: &str) -> Result<String> {
     // Find the last closing paren in the DDL and insert our columns before it
-    let close_paren = ddl.rfind(')').ok_or_else(|| {
-        DbError::DdlParse("DDL must contain a closing parenthesis".to_string())
-    })?;
+    let close_paren = ddl
+        .rfind(')')
+        .ok_or_else(|| DbError::DdlParse("DDL must contain a closing parenthesis".to_string()))?;
 
     let before = &ddl[..close_paren];
     let after = &ddl[close_paren..];
@@ -173,10 +169,8 @@ mod tests {
     #[test]
     fn create_table_from_ddl() {
         let db = Db::new().unwrap();
-        db.create_table(
-            "CREATE TABLE comments (id TEXT PRIMARY KEY, body TEXT, resolved INTEGER)",
-        )
-        .unwrap();
+        db.create_table("CREATE TABLE comments (id TEXT PRIMARY KEY, body TEXT, resolved INTEGER)")
+            .unwrap();
 
         // Table should exist -- querying it should return empty results
         let rows = db.query("SELECT * FROM comments").unwrap();
@@ -196,8 +190,13 @@ mod tests {
         db.create_table("CREATE TABLE t (id TEXT)").unwrap();
 
         // The tracking columns should exist even though the user didn't declare them
-        db.insert_row("t", &HashMap::from([("id".into(), Value::Text("1".into()))]), "test.json", 0)
-            .unwrap();
+        db.insert_row(
+            "t",
+            &HashMap::from([("id".into(), Value::Text("1".into()))]),
+            "test.json",
+            0,
+        )
+        .unwrap();
 
         // SELECT * should NOT return tracking columns
         let rows = db.query("SELECT * FROM t").unwrap();
@@ -210,7 +209,8 @@ mod tests {
     #[test]
     fn insert_and_query_rows() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE docs (title TEXT, draft INTEGER)").unwrap();
+        db.create_table("CREATE TABLE docs (title TEXT, draft INTEGER)")
+            .unwrap();
 
         let row = HashMap::from([
             ("title".into(), Value::Text("Hello".into())),
@@ -227,7 +227,8 @@ mod tests {
     #[test]
     fn insert_multiple_rows_from_same_file() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE events (action TEXT, ts INTEGER)").unwrap();
+        db.create_table("CREATE TABLE events (action TEXT, ts INTEGER)")
+            .unwrap();
 
         for (i, action) in ["created", "resolved", "reopened"].iter().enumerate() {
             let row = HashMap::from([
@@ -246,7 +247,8 @@ mod tests {
     #[test]
     fn delete_rows_by_file_path() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE comments (id TEXT, body TEXT)").unwrap();
+        db.create_table("CREATE TABLE comments (id TEXT, body TEXT)")
+            .unwrap();
 
         // Insert rows from two different files
         for (i, (id, file)) in [("1", "a.jsonl"), ("2", "a.jsonl"), ("3", "b.jsonl")]
@@ -273,7 +275,8 @@ mod tests {
     #[test]
     fn query_with_where_clause() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE items (name TEXT, count INTEGER)").unwrap();
+        db.create_table("CREATE TABLE items (name TEXT, count INTEGER)")
+            .unwrap();
 
         for (i, (name, count)) in [("apple", 5), ("banana", 0), ("cherry", 3)]
             .iter()

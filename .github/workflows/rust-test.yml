@@ -7,13 +7,11 @@ on:
       - '**.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - '.github/workflows/rust-test.yml'
   pull_request:
     paths:
       - '**.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - '.github/workflows/rust-test.yml'
 
 jobs:
   test:

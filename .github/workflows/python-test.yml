@@ -8,14 +8,12 @@ on:
       - 'pyproject.toml'
       - 'uv.lock'
       - 'tests/**'
-      - '.github/workflows/python-test.yml'
   pull_request:
     paths:
       - '**.py'
       - 'pyproject.toml'
       - 'uv.lock'
       - 'tests/**'
-      - '.github/workflows/python-test.yml'
 
 jobs:
   test:
