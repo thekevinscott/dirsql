@@ -56,6 +56,14 @@ New work on beads should be done via subagents in isolated worktrees. Each subag
    - Merge conflicts
 5. Continues monitoring until the PR is in a mergeable state
 
+### Orchestrator Responsibilities
+
+The orchestrator (main Claude session) must proactively:
+1. **Monitor all open PRs** -- don't wait for the user to report failures. Check CI status after agent completion and on an ongoing basis.
+2. **Fix CI failures** on open PRs immediately, either directly or by dispatching a fix agent.
+3. **Handle post-merge cleanup** as soon as a PR merges (pull main, remove worktree, delete branch, close bead).
+4. **Keep the user informed** of PR status without being asked.
+
 ### Post-Merge Cleanup
 
 After a PR merges, the agent (or orchestrator) must:
@@ -63,7 +71,7 @@ After a PR merges, the agent (or orchestrator) must:
 2. **Move CWD to root repo first** (CRITICAL -- never remove a worktree from inside it): `cd /home/duncan/work/code/projects/dirsql`
 3. Remove the worktree: `git worktree remove .worktrees/<name>`
 4. Delete the local branch: `git branch -d <branch-name>`
-5. Close the bead: `bd close <id>`
+5. **Verify the bead is addressed** by the merged PR, then close it: `bd close <id>`
 
 ## Testing
 
