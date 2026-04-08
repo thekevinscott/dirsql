@@ -209,6 +209,35 @@ jobs:
             fi
           done
 
+  publish-npm:
+    needs: tag
+    if: needs.tag.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check if package.json exists
+        id: check
+        run: |
+          if [ -f package.json ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Node.js
+        if: steps.check.outputs.exists == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: https://registry.npmjs.org
+
+      - name: Publish to npm
+        if: steps.check.outputs.exists == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish
+
   github-release:
     needs: [tag, publish-pypi]
     if: needs.tag.outputs.created == 'true'
@@ -238,7 +267,7 @@ jobs:
             dist/*
 
   rollback:
-    needs: [tag, publish-pypi, publish-crates, github-release]
+    needs: [tag, publish-pypi, publish-crates, publish-npm, github-release]
     if: failure() && needs.tag.outputs.created == 'true'
     runs-on: ubuntu-latest
     permissions:
