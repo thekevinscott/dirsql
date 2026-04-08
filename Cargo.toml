@@ -2,6 +2,11 @@
 name = "dirsql"
 version = "0.1.0"
 edition = "2024"
+description = "Ephemeral SQL index over a local directory"
+license = "MIT"
+repository = "https://github.com/thekevinscott/dirsql"
+keywords = ["sql", "filesystem", "directory", "sqlite", "index"]
+categories = ["filesystem", "database"]
 
 [dependencies]
 globset = "0.4"

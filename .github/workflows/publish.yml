@@ -57,13 +57,14 @@ jobs:
           name: sdist
           path: dist
 
-  release:
+  tag:
     needs: [build, sdist]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      id-token: write
-    environment: release
+    outputs:
+      created: ${{ steps.tag.outputs.created }}
+      new_version: ${{ steps.version.outputs.new_version }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -151,33 +152,101 @@ jobs:
           git push origin "v${{ steps.version.outputs.new_version }}"
           echo "created=true" >> $GITHUB_OUTPUT
 
+  publish-pypi:
+    needs: tag
+    if: needs.tag.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    environment: release
+    steps:
       - uses: actions/download-artifact@v4
-        if: steps.tag.outputs.created == 'true'
         with:
           pattern: wheels-*
           merge-multiple: true
           path: dist
 
       - uses: actions/download-artifact@v4
-        if: steps.tag.outputs.created == 'true'
         with:
           name: sdist
           path: dist
 
       - name: Publish to PyPI
-        if: steps.tag.outputs.created == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
 
+  publish-crates:
+    needs: tag
+    if: needs.tag.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Update Cargo.toml version
+        run: |
+          sed -i 's/^version = ".*"/version = "${{ needs.tag.outputs.new_version }}"/' Cargo.toml
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          for attempt in 1 2 3; do
+            echo "Attempt $attempt of 3"
+            if cargo publish; then
+              echo "Published successfully"
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Publish failed, retrying in 15s..."
+              sleep 15
+            else
+              echo "All attempts failed"
+              exit 1
+            fi
+          done
+
+  github-release:
+    needs: [tag, publish-pypi]
+    if: needs.tag.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
       - name: Create GitHub Release
-        if: steps.tag.outputs.created == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v${{ steps.version.outputs.new_version }}" \
-            --title "v${{ steps.version.outputs.new_version }}" \
+          gh release create "v${{ needs.tag.outputs.new_version }}" \
+            --repo ${{ github.repository }} \
+            --title "v${{ needs.tag.outputs.new_version }}" \
             --generate-notes \
             dist/*
 
+  rollback:
+    needs: [tag, publish-pypi, publish-crates, github-release]
+    if: failure() && needs.tag.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       - name: Rollback tag on failure
-        if: failure() && steps.tag.outputs.created == 'true'
-        run: git push --delete origin "v${{ steps.version.outputs.new_version }}"
+        run: git push --delete origin "v${{ needs.tag.outputs.new_version }}"
