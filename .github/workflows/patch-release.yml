@@ -1,0 +1,44 @@
+name: Patch Release
+
+on:
+  schedule:
+    # Run at 2:00 AM UTC every day
+    - cron: '0 2 * * *'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.decide.outputs.should_release }}
+    steps:
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          STRATEGY: ${{ vars.RELEASE_STRATEGY }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT" = "schedule" ] && [ "$STRATEGY" != "immediate" ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT" = "push" ] && [ "$STRATEGY" = "immediate" ]; then
+            case "$COMMIT_MSG" in
+              *'[no-release]'*) echo "should_release=false" >> "$GITHUB_OUTPUT" ;;
+              *) echo "should_release=true" >> "$GITHUB_OUTPUT" ;;
+            esac
+          else
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    needs: check
+    if: needs.check.outputs.should_release == 'true'
+    uses: ./.github/workflows/publish.yml
+    with:
+      bump_type: patch
+    permissions:
+      contents: write
+      id-token: write

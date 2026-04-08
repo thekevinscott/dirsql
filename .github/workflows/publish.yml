@@ -1,0 +1,173 @@
+name: Publish Release
+
+on:
+  workflow_call:
+    inputs:
+      bump_type:
+        description: 'Version bump type: patch or minor'
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist
+          manylinux: auto
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.target }}
+          path: dist
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+  release:
+    needs: [build, sdist]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    environment: release
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Get current version
+        id: current
+        run: |
+          latest_tag=$(git tag --sort=-v:refname | grep -E '^v[0-9]' | head -n1)
+
+          if [ -z "$latest_tag" ]; then
+            echo "No tags found"
+            echo "version=0.0.0" >> $GITHUB_OUTPUT
+            echo "has_tags=false" >> $GITHUB_OUTPUT
+          else
+            echo "Latest tag: $latest_tag"
+            echo "version=${latest_tag#v}" >> $GITHUB_OUTPUT
+            echo "has_tags=true" >> $GITHUB_OUTPUT
+
+            commits_since_tag=$(git rev-list ${latest_tag}..HEAD --count)
+            echo "commits_since_tag=$commits_since_tag" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check for changes (patch only)
+        if: inputs.bump_type == 'patch' && steps.current.outputs.has_tags == 'true'
+        id: check_changes
+        run: |
+          if [ "${{ steps.current.outputs.commits_since_tag }}" -eq 0 ]; then
+            echo "No new commits since last tag, skipping release"
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          else
+            echo "Found ${{ steps.current.outputs.commits_since_tag }} commits since last tag"
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Calculate new version
+        id: version
+        run: |
+          current="${{ steps.current.outputs.version }}"
+          IFS='.' read -r major minor patch <<< "$current"
+
+          if [ "${{ inputs.bump_type }}" == "minor" ]; then
+            new_version="${major}.$((minor + 1)).0"
+          else
+            new_version="${major}.${minor}.$((patch + 1))"
+          fi
+
+          echo "new_version=$new_version" >> $GITHUB_OUTPUT
+          echo "New version will be: $new_version"
+
+      - name: Check if tag exists
+        id: tag_check
+        run: |
+          if git ls-remote --tags origin | grep -q "refs/tags/v${{ steps.version.outputs.new_version }}$"; then
+            echo "Tag v${{ steps.version.outputs.new_version }} already exists on remote"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Determine if release should proceed
+        id: should_release
+        run: |
+          if [ "${{ steps.tag_check.outputs.exists }}" == "true" ]; then
+            echo "proceed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if [ "${{ inputs.bump_type }}" == "patch" ] && [ "${{ steps.current.outputs.has_tags }}" == "true" ]; then
+            if [ "${{ steps.check_changes.outputs.should_release }}" == "false" ]; then
+              echo "proceed=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+
+          echo "proceed=true" >> $GITHUB_OUTPUT
+
+      - name: Create and push tag
+        if: steps.should_release.outputs.proceed == 'true'
+        id: tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ steps.version.outputs.new_version }}" -m "Release v${{ steps.version.outputs.new_version }}"
+          git push origin "v${{ steps.version.outputs.new_version }}"
+          echo "created=true" >> $GITHUB_OUTPUT
+
+      - uses: actions/download-artifact@v4
+        if: steps.tag.outputs.created == 'true'
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        if: steps.tag.outputs.created == 'true'
+        with:
+          name: sdist
+          path: dist
+
+      - name: Publish to PyPI
+        if: steps.tag.outputs.created == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Rollback tag on failure
+        if: failure() && steps.tag.outputs.created == 'true'
+        run: git push --delete origin "v${{ steps.version.outputs.new_version }}"
