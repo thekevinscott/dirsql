@@ -63,6 +63,7 @@ The orchestrator (main Claude session) must proactively:
 2. **Fix CI failures** on open PRs immediately, either directly or by dispatching a fix agent.
 3. **Handle post-merge cleanup** as soon as a PR merges (pull main, remove worktree, delete branch, close bead).
 4. **Keep the user informed** of PR status without being asked.
+5. **Use foreground monitoring** when waiting on CI and there's no other work to do. Background monitoring causes the conversation to go silent -- use it only when there's genuinely parallel work to perform.
 
 ### Post-Merge Cleanup
 
