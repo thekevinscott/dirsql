@@ -39,6 +39,7 @@ jobs:
     uses: ./.github/workflows/publish.yml
     with:
       bump_type: patch
+    secrets: inherit
     permissions:
       contents: write
       id-token: write
