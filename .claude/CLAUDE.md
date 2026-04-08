@@ -56,6 +56,15 @@ New work on beads should be done via subagents in isolated worktrees. Each subag
    - Merge conflicts
 5. Continues monitoring until the PR is in a mergeable state
 
+### Post-Merge Cleanup
+
+After a PR merges, the agent (or orchestrator) must:
+1. Pull main in the **root repo**: `git -C /home/duncan/work/code/projects/dirsql pull origin main`
+2. **Move CWD to root repo first** (CRITICAL -- never remove a worktree from inside it): `cd /home/duncan/work/code/projects/dirsql`
+3. Remove the worktree: `git worktree remove .worktrees/<name>`
+4. Delete the local branch: `git branch -d <branch-name>`
+5. Close the bead: `bd close <id>`
+
 ## Testing
 
 ### Red/Green Development
