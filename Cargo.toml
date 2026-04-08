@@ -8,12 +8,20 @@ repository = "https://github.com/thekevinscott/dirsql"
 keywords = ["sql", "filesystem", "directory", "sqlite", "index"]
 categories = ["filesystem", "database"]
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 globset = "0.4"
 notify = "7"
+pyo3 = { version = "0.24", features = ["extension-module"], optional = true }
 rusqlite = { version = "0.34", features = ["bundled"] }
 thiserror = "2"
 walkdir = "2"
+
+[features]
+default = []
+extension-module = ["pyo3/extension-module"]
 
 [dev-dependencies]
 tempfile = "3"

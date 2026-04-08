@@ -63,7 +63,7 @@ After a PR merges, the agent (or orchestrator) must:
 2. **Move CWD to root repo first** (CRITICAL -- never remove a worktree from inside it): `cd /home/duncan/work/code/projects/dirsql`
 3. Remove the worktree: `git worktree remove .worktrees/<name>`
 4. Delete the local branch: `git branch -d <branch-name>`
-5. Close the bead: `bd close <id>`
+5. **Verify the bead is addressed** by the merged PR, then close it: `bd close <id>`
 
 ## Testing
 

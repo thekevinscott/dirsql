@@ -1,0 +1,18 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "dirsql"
+version = "0.1.0"
+description = "Ephemeral SQL index over a local directory"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [
+    { name = "Kevin Scott" },
+]
+repository = "https://github.com/thekevinscott/dirsql"
+keywords = ["sql", "filesystem", "directory", "sqlite", "index"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]

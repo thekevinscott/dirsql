@@ -9,7 +9,24 @@ on:
         type: string
 
 jobs:
+  check-python:
+    runs-on: ubuntu-latest
+    outputs:
+      has_python: ${{ steps.check.outputs.has_python }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check for pyproject.toml
+        id: check
+        run: |
+          if [ -f pyproject.toml ]; then
+            echo "has_python=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_python=false" >> $GITHUB_OUTPUT
+          fi
+
   build:
+    needs: check-python
+    if: needs.check-python.outputs.has_python == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -41,6 +58,8 @@ jobs:
           path: dist
 
   sdist:
+    needs: check-python
+    if: needs.check-python.outputs.has_python == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -58,7 +77,6 @@ jobs:
           path: dist
 
   tag:
-    needs: [build, sdist]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -153,8 +171,8 @@ jobs:
           echo "created=true" >> $GITHUB_OUTPUT
 
   publish-pypi:
-    needs: tag
-    if: needs.tag.outputs.created == 'true'
+    needs: [tag, build, sdist]
+    if: always() && needs.tag.outputs.created == 'true' && needs.build.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -210,22 +228,15 @@ jobs:
           done
 
   github-release:
-    needs: [tag, publish-pypi]
-    if: needs.tag.outputs.created == 'true'
+    needs: [tag, publish-crates]
+    if: always() && needs.tag.outputs.created == 'true' && (needs.publish-crates.result == 'success' || needs.publish-crates.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v6
         with:
-          pattern: wheels-*
-          merge-multiple: true
-          path: dist
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: sdist
-          path: dist
+          fetch-depth: 0
 
       - name: Create GitHub Release
         env:
@@ -234,8 +245,7 @@ jobs:
           gh release create "v${{ needs.tag.outputs.new_version }}" \
             --repo ${{ github.repository }} \
             --title "v${{ needs.tag.outputs.new_version }}" \
-            --generate-notes \
-            dist/*
+            --generate-notes
 
   rollback:
     needs: [tag, publish-pypi, publish-crates, github-release]
