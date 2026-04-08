@@ -1,0 +1,8 @@
+/target
+.beads
+.claude/settings.local.json
+AGENTS.md
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
