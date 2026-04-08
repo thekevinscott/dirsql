@@ -20,6 +20,7 @@ dev = [
     "pytest-describe>=2",
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
+    "maturin>=1.0",
 ]
 
 [tool.maturin]
