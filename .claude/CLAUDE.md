@@ -13,7 +13,7 @@ Write scratch/temporary files to `/tmp` instead of asking permission. Use unique
 
 ### Git Worktrees
 
-All development work happens in git worktrees, not on the main branch directly.
+**ALL work happens in git worktrees.** Never edit files in the root repo directory. Never commit outside a worktree.
 
 #### Creating a Worktree
 
