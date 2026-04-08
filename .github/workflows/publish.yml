@@ -46,6 +46,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up QEMU
+        if: runner.os == 'Linux' && matrix.target == 'aarch64-unknown-linux-gnu'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
