@@ -29,6 +29,7 @@ jobs:
     if: needs.check-python.outputs.has_python == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -57,6 +58,11 @@ jobs:
           target: ${{ matrix.target }}
           args: --release --out dist
           manylinux: auto
+          before-script-linux: |
+            # Install OpenSSL dev for cross-compilation
+            if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+              apt-get update && apt-get install -y gcc-aarch64-linux-gnu
+            fi
 
       - uses: actions/upload-artifact@v4
         with:
@@ -178,7 +184,7 @@ jobs:
 
   publish-pypi:
     needs: [tag, build, sdist]
-    if: always() && needs.tag.outputs.created == 'true' && needs.build.result == 'success'
+    if: always() && needs.tag.outputs.created == 'true' && needs.sdist.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -237,6 +243,8 @@ jobs:
     needs: tag
     if: needs.tag.outputs.created == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
     steps:
       - uses: actions/checkout@v6
 
@@ -260,7 +268,7 @@ jobs:
         if: steps.check.outputs.exists == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish
+        run: npm publish --provenance --access public
 
   github-release:
     needs: [tag, publish-crates]
