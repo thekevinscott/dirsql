@@ -34,8 +34,8 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
+          # aarch64-unknown-linux-gnu disabled: cross-compilation fails in manylinux container
+          # TODO: re-enable once bundled SQLite cross-compilation is sorted out
           - os: macos-latest
             target: x86_64-apple-darwin
           - os: macos-latest
@@ -47,22 +47,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up QEMU
-        if: runner.os == 'Linux' && matrix.target == 'aarch64-unknown-linux-gnu'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
       - uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist
           manylinux: auto
-          before-script-linux: |
-            # Install OpenSSL dev for cross-compilation
-            if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
-              apt-get update && apt-get install -y gcc-aarch64-linux-gnu
-            fi
 
       - uses: actions/upload-artifact@v4
         with:
@@ -272,8 +261,8 @@ jobs:
         run: npm publish --provenance --access public
 
   github-release:
-    needs: [tag, publish-crates]
-    if: always() && needs.tag.outputs.created == 'true' && (needs.publish-crates.result == 'success' || needs.publish-crates.result == 'skipped')
+    needs: [tag, publish-pypi, publish-crates, publish-npm]
+    if: always() && needs.tag.outputs.created == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -292,8 +281,13 @@ jobs:
             --generate-notes
 
   rollback:
-    needs: [tag, publish-pypi, publish-crates, publish-npm, github-release]
-    if: failure() && needs.tag.outputs.created == 'true'
+    needs: [tag, publish-pypi, publish-crates, publish-npm]
+    if: |
+      always() &&
+      needs.tag.outputs.created == 'true' &&
+      needs.publish-pypi.result != 'success' &&
+      needs.publish-crates.result != 'success' &&
+      needs.publish-npm.result != 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
