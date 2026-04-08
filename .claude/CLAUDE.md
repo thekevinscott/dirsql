@@ -13,7 +13,7 @@ Write scratch/temporary files to `/tmp` instead of asking permission. Use unique
 
 ### Git Worktrees
 
-All development work happens in git worktrees, not on the main branch directly.
+**ALL work happens in git worktrees.** Never edit files in the root repo directory. Never commit outside a worktree.
 
 #### Creating a Worktree
 
@@ -43,6 +43,18 @@ git worktree remove .worktrees/my-feature
 2. **Create worktree and branch**
 3. **Link the PR**: `bd update <id> --external-ref "gh-<pr-number>"` after creating the PR
 4. **Close**: `bd close <id>` immediately after the PR is merged
+
+### Subagent Workflow
+
+New work on beads should be done via subagents in isolated worktrees. Each subagent:
+1. Creates a worktree and branch for its bead
+2. Does the implementation work (red/green TDD)
+3. Pushes the branch and opens a PR
+4. Monitors the PR and proactively resolves:
+   - CI failures
+   - GPG signing complaints
+   - Merge conflicts
+5. Continues monitoring until the PR is in a mergeable state
 
 ## Testing
 
