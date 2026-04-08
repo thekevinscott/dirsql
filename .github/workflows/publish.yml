@@ -168,6 +168,16 @@ jobs:
         if: steps.tag.outputs.created == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
 
+      - name: Create GitHub Release
+        if: steps.tag.outputs.created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.version.outputs.new_version }}" \
+            --title "v${{ steps.version.outputs.new_version }}" \
+            --generate-notes \
+            dist/*
+
       - name: Rollback tag on failure
         if: failure() && steps.tag.outputs.created == 'true'
         run: git push --delete origin "v${{ steps.version.outputs.new_version }}"
