@@ -214,7 +214,7 @@ jobs:
         run: |
           for attempt in 1 2 3; do
             echo "Attempt $attempt of 3"
-            if cargo publish; then
+            if cargo publish --allow-dirty; then
               echo "Published successfully"
               break
             fi

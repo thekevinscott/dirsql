@@ -14,7 +14,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 globset = "0.4"
 notify = "7"
-pyo3 = { version = "0.24", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
 rusqlite = { version = "0.34", features = ["bundled"] }
 thiserror = "2"
 walkdir = "2"
