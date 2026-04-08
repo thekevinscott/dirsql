@@ -100,7 +100,11 @@ A feature is not done until integration tests pass and cover the new functionali
 - **Unit tests**: Colocated with source
   - Python: `foo.py` -> `foo_test.py` in same directory
   - Rust: inline `#[cfg(test)]` module at bottom of each source file
-- **Integration tests**: `tests/integration/` -- test the Python SDK layer, mock third-party deps (SQLite/Rust core). Heavy use of pytest fixtures
-- **E2E tests**: `tests/e2e/` -- real filesystem, real SQLite, no mocks. Heavy use of pytest fixtures
+- **Integration tests**: `tests/integration/` -- test the Python SDK layer, mock third-party deps (SQLite, LLM calls). Heavy use of pytest fixtures. Run in CI.
+- **E2E tests**: `tests/e2e/` -- real filesystem, real SQLite, real LLM calls, no mocks. Heavy use of pytest fixtures. **NOT run in CI** (eventual LLM calls make them non-free). Run locally by Claude after significant code changes.
+
+### E2E Test Policy
+
+E2E tests are your primary feedback mechanism. Run them liberally after significant changes -- they catch issues that integration tests miss because integration tests mock out SQLite and (eventually) LLM calls. But do NOT add them to CI workflows. They are a local development tool.
 
 See skillet or karat for examples of test organization, fixtures, and pytest-describe patterns.
