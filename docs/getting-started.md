@@ -133,7 +133,7 @@ const results = await db.query(`
 4. Rows are inserted into an in-memory SQLite database
 5. SQL queries run against that database
 
-The database is ephemeral. It exists only while the `DirSQL` instance is alive. The filesystem is always the source of truth.
+The filesystem is always the source of truth. The database is rebuilt from files at startup.
 
 ## Next steps
 

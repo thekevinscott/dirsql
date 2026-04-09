@@ -4,7 +4,9 @@ Each table in `dirsql` maps a set of files to rows in an in-memory SQLite table.
 
 ## Table constructor
 
-```python
+::: code-group
+
+```python [Python]
 from dirsql import Table
 
 table = Table(
@@ -16,7 +18,33 @@ table = Table(
 )
 ```
 
-All three arguments are keyword-only.
+```rust [Rust]
+use dirsql_sdk::Table;
+
+let table = Table::new(
+    "CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
+    "comments/**/index.jsonl",
+    |_path, content| {
+        vec![serde_json::json!({"id": "...", "body": "...", "author": "..."})]
+    },
+);
+```
+
+```typescript [TypeScript]
+import { Table } from 'dirsql';
+
+const table = new Table({
+  ddl: 'CREATE TABLE comments (id TEXT, body TEXT, author TEXT)',
+  glob: 'comments/**/index.jsonl',
+  extract: (_path, content) => [
+    { id: '...', body: '...', author: '...' },
+  ],
+});
+```
+
+:::
+
+All three arguments are keyword-only (in Python). In Rust and TypeScript, they are positional or object fields respectively.
 
 ### `ddl`
 
@@ -91,7 +119,9 @@ def extract(path, content):
 
 Pass multiple `Table` definitions to index different file types into separate tables:
 
-```python
+::: code-group
+
+```python [Python]
 from dirsql import DirSQL, Table
 import json
 
@@ -112,19 +142,79 @@ db = DirSQL(
 )
 ```
 
+```rust [Rust]
+use dirsql_sdk::{DirSQL, Table};
+
+let db = DirSQL::new(
+    "./workspace",
+    vec![
+        Table::new(
+            "CREATE TABLE posts (title TEXT, author_id TEXT)",
+            "posts/*.json",
+            |_path, content| vec![serde_json::from_str(content).unwrap()],
+        ),
+        Table::new(
+            "CREATE TABLE authors (id TEXT, name TEXT)",
+            "authors/*.json",
+            |_path, content| vec![serde_json::from_str(content).unwrap()],
+        ),
+    ],
+)?;
+```
+
+```typescript [TypeScript]
+import { DirSQL, Table } from 'dirsql';
+
+const db = new DirSQL('./workspace', {
+  tables: [
+    new Table({
+      ddl: 'CREATE TABLE posts (title TEXT, author_id TEXT)',
+      glob: 'posts/*.json',
+      extract: (_path, content) => [JSON.parse(content)],
+    }),
+    new Table({
+      ddl: 'CREATE TABLE authors (id TEXT, name TEXT)',
+      glob: 'authors/*.json',
+      extract: (_path, content) => [JSON.parse(content)],
+    }),
+  ],
+});
+await db.ready;
+```
+
+:::
+
 Each table has its own glob and extract function. A file can only match one table (the first matching glob wins).
 
 ## Ignore patterns
 
 Use the `ignore` parameter to exclude paths from all tables:
 
-```python
+::: code-group
+
+```python [Python]
 db = DirSQL(
     "./workspace",
     ignore=["**/node_modules/**", "**/.git/**"],
     tables=[...],
 )
 ```
+
+```rust [Rust]
+let db = DirSQL::builder("./workspace")
+    .ignore(vec!["**/node_modules/**", "**/.git/**"])
+    .tables(vec![...])
+    .build()?;
+```
+
+```typescript [TypeScript]
+const db = new DirSQL('./workspace', {
+  ignore: ['**/node_modules/**', '**/.git/**'],
+  tables: [...],
+});
+```
+
+:::
 
 Ignore patterns are applied before glob matching. Any file matching an ignore pattern is skipped regardless of table globs.
 
