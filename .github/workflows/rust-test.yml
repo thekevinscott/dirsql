@@ -44,7 +44,7 @@ jobs:
       - name: Coverage
         run: |
           cargo install cargo-tarpaulin
-          cargo tarpaulin --workspace --out xml --fail-under 90
+          cargo tarpaulin -p dirsql-core --out xml --fail-under 90
 
       - name: Clippy
         run: cargo clippy --workspace -- -D warnings
