@@ -1,4 +1,4 @@
-# dirsql
+# `dirsql`
 
 Ephemeral SQL index over a local directory. Watches a filesystem, ingests structured files into an in-memory SQLite database, and exposes a SQL query interface. On shutdown, the database is discarded -- the filesystem is the source of truth.
 
@@ -18,7 +18,7 @@ Rust.
 
 The problem: structured data stored as flat files on disk (JSONL, JSON, markdown) is easy for agents and humans to read/write, git-friendly, and portable. But querying across many files is slow -- "show me all unresolved comments across 50 documents" requires opening and parsing every file.
 
-dirsql bridges this: files remain the source of truth (readable, appendable, diffable), but you get SQL queries and change events for free.
+`dirsql` bridges this: files remain the source of truth (readable, appendable, diffable), but you get SQL queries and change events for free.
 
 ## Motivating use case
 
@@ -42,15 +42,7 @@ my-article/
 The editor needs to:
 - Query "all unresolved comments in this workspace" without scanning every file
 - Get notified when an external agent appends to a thread or creates a new resource
-- Remain decoupled from any specific database -- dirsql is a dev dependency, not a data store
-
-## Analogues
-
-- **Steampipe**: SQL over cloud APIs
-- **Osquery**: SQL over OS state
-- **Datafusion/DuckDB**: SQL over data files (Parquet, CSV)
-
-dirsql is this pattern applied to a local project directory with real-time file watching.
+- Remain decoupled from any specific database -- `dirsql` is a dev dependency, not a data store
 
 ## Open questions (for scoping conversation)
 

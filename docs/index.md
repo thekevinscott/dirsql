@@ -12,9 +12,9 @@ hero:
       link: https://github.com/thekevinscott/dirsql
 ---
 
-## What is dirsql?
+## What is `dirsql`?
 
-dirsql watches a filesystem, ingests structured files into an in-memory SQLite database, and exposes a SQL query interface. On shutdown, the database is discarded -- the filesystem remains the source of truth.
+`dirsql` watches a filesystem, ingests structured files into an in-memory SQLite database, and exposes a SQL query interface. On shutdown, the database is discarded -- the filesystem remains the source of truth.
 
 ## The problem
 
@@ -22,9 +22,11 @@ Structured data stored as flat files (JSONL, JSON, markdown) is easy to read, wr
 
 ## The solution
 
-dirsql bridges this gap: files remain the source of truth, but you get SQL queries and real-time change events for free. Define tables with glob patterns and extract functions, and dirsql handles the rest.
+`dirsql` bridges this gap: files remain the source of truth, but you get SQL queries and real-time change events for free. Define tables with glob patterns and extract functions, and `dirsql` handles the rest.
 
-```python
+::: code-group
+
+```python [Python]
 from dirsql import DirSQL, Table
 import json
 
@@ -45,10 +47,45 @@ db = DirSQL(
 unresolved = db.query("SELECT * FROM comments WHERE resolved = 0")
 ```
 
-## Analogues
+```rust [Rust]
+use dirsql_sdk::{DirSQL, Table};
 
-- **Steampipe**: SQL over cloud APIs
-- **Osquery**: SQL over OS state
-- **Datafusion / DuckDB**: SQL over data files (Parquet, CSV)
+let db = DirSQL::new(
+    "./my-project",
+    vec![
+        Table::new(
+            "CREATE TABLE comments (id TEXT, body TEXT, resolved INTEGER)",
+            "comments/**/*.jsonl",
+            |path, content| {
+                content.lines()
+                    .map(|line| serde_json::from_str(line).unwrap())
+                    .collect()
+            },
+        ),
+    ],
+)?;
 
-dirsql applies this pattern to a local project directory with real-time file watching.
+let unresolved = db.query("SELECT * FROM comments WHERE resolved = 0")?;
+```
+
+```typescript [TypeScript]
+import { DirSQL, Table } from 'dirsql';
+
+const db = new DirSQL('./my-project', {
+  tables: [
+    new Table({
+      ddl: 'CREATE TABLE comments (id TEXT, body TEXT, resolved INTEGER)',
+      glob: 'comments/**/*.jsonl',
+      extract: (path, content) =>
+        content.split('\n').filter(Boolean).map(line => JSON.parse(line)),
+    }),
+  ],
+});
+await db.ready;
+
+const unresolved = await db.query(
+  'SELECT * FROM comments WHERE resolved = 0'
+);
+```
+
+:::

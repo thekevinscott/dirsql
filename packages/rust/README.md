@@ -1,6 +1,6 @@
 # dirsql-sdk
 
-Rust SDK for dirsql. Wraps the `dirsql-core` engine in a user-facing API that mirrors the Python SDK where Rust idioms allow.
+Rust SDK for `dirsql`. Wraps the `dirsql-core` engine in a user-facing API that mirrors the Python SDK where Rust idioms allow.
 
 ## Installation
 

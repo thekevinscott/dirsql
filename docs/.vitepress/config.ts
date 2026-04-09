@@ -11,14 +11,21 @@ export default defineConfig({
     },
 
     nav: [
+      { text: 'Getting Started', link: '/getting-started' },
+      { text: 'Guide', link: '/guide/tables' },
+      { text: 'Reference', link: '/api/' },
       { text: 'GitHub', link: 'https://github.com/thekevinscott/dirsql' }
     ],
 
     sidebar: [
-      { text: 'Overview', link: '/' },
-      { text: 'Getting Started', link: '/getting-started' },
       {
-        text: 'Guide',
+        text: 'Tutorials',
+        items: [
+          { text: 'Getting Started', link: '/getting-started' }
+        ]
+      },
+      {
+        text: 'How-to Guides',
         items: [
           { text: 'Defining Tables', link: '/guide/tables' },
           { text: 'Querying', link: '/guide/querying' },
@@ -32,7 +39,12 @@ export default defineConfig({
           { text: 'API Reference', link: '/api/' }
         ]
       },
-      { text: 'Architecture', link: '/architecture' }
+      {
+        text: 'Explanation',
+        items: [
+          { text: 'Architecture', link: '/architecture' }
+        ]
+      }
     ],
 
     outline: {

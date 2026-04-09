@@ -1,6 +1,6 @@
 # File Watching
 
-dirsql can monitor the filesystem for changes and emit events when rows are inserted, updated, or deleted. This is useful for building reactive applications that respond to file changes in real time.
+`dirsql` can monitor the filesystem for changes and emit events when rows are inserted, updated, or deleted. This is useful for building reactive applications that respond to file changes in real time.
 
 ## Starting a watch stream
 
@@ -49,7 +49,7 @@ event.file_path # "comments/abc/index.jsonl"
 
 ### `update`
 
-An existing row was modified. dirsql diffs the old and new rows extracted from the file to detect changes.
+An existing row was modified. `dirsql` diffs the old and new rows extracted from the file to detect changes.
 
 ```python
 event.action   # "update"
@@ -85,7 +85,7 @@ event.row       # None
 
 ## How diffing works
 
-When a file changes, dirsql:
+When a file changes, `dirsql`:
 
 1. Re-reads the file and calls the extract function to get new rows
 2. Compares new rows against the previously extracted rows for that file
@@ -96,6 +96,6 @@ Row identity is determined by position (row index within the file). If a file pr
 
 ## Filesystem events
 
-Under the hood, dirsql uses the `notify` crate (inotify on Linux, FSEvents on macOS, ReadDirectoryChangesW on Windows) to receive filesystem events. Events are coalesced and filtered through the table matcher before being processed.
+Under the hood, `dirsql` uses the `notify` crate (inotify on Linux, FSEvents on macOS, ReadDirectoryChangesW on Windows) to receive filesystem events. Events are coalesced and filtered through the table matcher before being processed.
 
 Files that do not match any table glob or that match an ignore pattern are silently skipped.
