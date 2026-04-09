@@ -245,10 +245,7 @@ mod tests {
     fn translate_event_multiple_paths() {
         let event = Event {
             kind: EventKind::Create(notify::event::CreateKind::File),
-            paths: vec![
-                PathBuf::from("/tmp/a.txt"),
-                PathBuf::from("/tmp/b.txt"),
-            ],
+            paths: vec![PathBuf::from("/tmp/a.txt"), PathBuf::from("/tmp/b.txt")],
             attrs: Default::default(),
         };
         let results = translate_event(&event);

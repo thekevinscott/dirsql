@@ -1360,10 +1360,7 @@ author = "Alice"
     fn navigate_dot_path_missing_nested_key_returns_null() {
         let rows = vec![{
             let mut m = HashMap::new();
-            m.insert(
-                "data".to_string(),
-                Value::Text(r#"{"a": {"b": 1}}"#.into()),
-            );
+            m.insert("data".to_string(), Value::Text(r#"{"a": {"b": 1}}"#.into()));
             m
         }];
         let columns = HashMap::from([(
@@ -1379,10 +1376,7 @@ author = "Alice"
         // Navigate into a JSON value that is not an object
         let rows = vec![{
             let mut m = HashMap::new();
-            m.insert(
-                "data".to_string(),
-                Value::Text(r#"{"a": 42}"#.into()),
-            );
+            m.insert("data".to_string(), Value::Text(r#"{"a": 42}"#.into()));
             m
         }];
         let columns = HashMap::from([(
