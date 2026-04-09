@@ -263,19 +263,13 @@ jobs:
           node-version: '22.x'
           registry-url: https://registry.npmjs.org
 
-      - name: Check npm version
-        if: steps.check.outputs.exists == 'true'
-        run: |
-          echo "Node: $(node --version)"
-          echo "npm: $(npm --version)"
-
       - name: Update package.json version
         if: steps.check.outputs.exists == 'true'
         run: npm version "${{ needs.tag.outputs.new_version }}" --no-git-tag-version
 
       - name: Publish to npm
         if: steps.check.outputs.exists == 'true'
-        run: npm publish --access public
+        run: npx npm@latest publish --access public
 
   github-release:
     needs: [tag, publish-pypi, publish-crates, publish-npm]
