@@ -241,6 +241,7 @@ dependencies = [
  "csv",
  "globset",
  "notify",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
