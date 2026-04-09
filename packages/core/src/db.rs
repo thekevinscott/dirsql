@@ -34,6 +34,62 @@ impl Db {
         Ok(())
     }
 
+    /// Return the user-defined column names for `table` (excludes `_dirsql_*` tracking columns).
+    pub fn get_table_columns(&self, table: &str) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!("PRAGMA table_info({})", table))?;
+        let columns: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .filter_map(|r| r.ok())
+            .filter(|name| !name.starts_with("_dirsql_"))
+            .collect();
+        Ok(columns)
+    }
+
+    /// Normalize a row to match the table schema.
+    ///
+    /// In relaxed mode (strict=false): extra keys are dropped, missing keys become NULL.
+    /// In strict mode (strict=true): extra or missing keys produce a SchemaMismatch error.
+    pub fn normalize_row(
+        &self,
+        table: &str,
+        row: &HashMap<String, Value>,
+        strict: bool,
+    ) -> Result<HashMap<String, Value>> {
+        let columns = self.get_table_columns(table)?;
+        let column_set: std::collections::HashSet<&str> =
+            columns.iter().map(|s| s.as_str()).collect();
+        let row_keys: std::collections::HashSet<&str> = row.keys().map(|s| s.as_str()).collect();
+
+        if strict {
+            let extra: Vec<&str> = row_keys.difference(&column_set).copied().collect();
+            if !extra.is_empty() {
+                return Err(DbError::SchemaMismatch(format!(
+                    "extra columns not in table {}: {}",
+                    table,
+                    extra.join(", ")
+                )));
+            }
+            let missing: Vec<&str> = column_set.difference(&row_keys).copied().collect();
+            if !missing.is_empty() {
+                return Err(DbError::SchemaMismatch(format!(
+                    "missing columns for table {}: {}",
+                    table,
+                    missing.join(", ")
+                )));
+            }
+            Ok(row.clone())
+        } else {
+            let mut normalized = HashMap::new();
+            for col in &columns {
+                let value = row.get(col).cloned().unwrap_or(Value::Null);
+                normalized.insert(col.clone(), value);
+            }
+            Ok(normalized)
+        }
+    }
+
     /// Insert a row into a table.
     /// `row` contains user-defined columns only. `file_path` and `row_index` are tracked internally.
     pub fn insert_row(
@@ -365,5 +421,81 @@ mod tests {
     #[test]
     fn parse_table_name_empty_after_create_table() {
         assert_eq!(parse_table_name("CREATE TABLE "), None);
+    }
+
+    #[test]
+    fn get_table_columns_returns_user_columns_only() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (name TEXT, count INTEGER)")
+            .unwrap();
+        let cols = db.get_table_columns("t").unwrap();
+        assert!(cols.contains(&"name".to_string()));
+        assert!(cols.contains(&"count".to_string()));
+        assert!(!cols.iter().any(|c| c.starts_with("_dirsql_")));
+    }
+
+    #[test]
+    fn normalize_row_relaxed_drops_extra_keys() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (name TEXT)").unwrap();
+        let row = HashMap::from([
+            ("name".into(), Value::Text("apple".into())),
+            ("color".into(), Value::Text("red".into())),
+        ]);
+        let normalized = db.normalize_row("t", &row, false).unwrap();
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized["name"], Value::Text("apple".into()));
+        assert!(!normalized.contains_key("color"));
+    }
+
+    #[test]
+    fn normalize_row_relaxed_fills_missing_with_null() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (name TEXT, color TEXT)")
+            .unwrap();
+        let row = HashMap::from([("name".into(), Value::Text("apple".into()))]);
+        let normalized = db.normalize_row("t", &row, false).unwrap();
+        assert_eq!(normalized.len(), 2);
+        assert_eq!(normalized["name"], Value::Text("apple".into()));
+        assert_eq!(normalized["color"], Value::Null);
+    }
+
+    #[test]
+    fn normalize_row_strict_errors_on_extra_keys() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (name TEXT)").unwrap();
+        let row = HashMap::from([
+            ("name".into(), Value::Text("apple".into())),
+            ("color".into(), Value::Text("red".into())),
+        ]);
+        let result = db.normalize_row("t", &row, true);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("extra columns"));
+    }
+
+    #[test]
+    fn normalize_row_strict_errors_on_missing_keys() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (name TEXT, color TEXT)")
+            .unwrap();
+        let row = HashMap::from([("name".into(), Value::Text("apple".into()))]);
+        let result = db.normalize_row("t", &row, true);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("missing columns"));
+    }
+
+    #[test]
+    fn normalize_row_strict_accepts_exact_match() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (name TEXT, color TEXT)")
+            .unwrap();
+        let row = HashMap::from([
+            ("name".into(), Value::Text("apple".into())),
+            ("color".into(), Value::Text("red".into())),
+        ]);
+        let normalized = db.normalize_row("t", &row, true).unwrap();
+        assert_eq!(normalized.len(), 2);
     }
 }

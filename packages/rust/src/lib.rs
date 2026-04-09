@@ -61,6 +61,7 @@ pub type Result<T> = std::result::Result<T, DirSqlError>;
 pub struct Table {
     pub ddl: String,
     pub glob: String,
+    pub strict: bool,
     extract: Arc<ExtractFn>,
 }
 
@@ -74,6 +75,15 @@ impl Table {
         })
     }
 
+    pub fn strict<F>(ddl: impl Into<String>, glob: impl Into<String>, extract: F) -> Self
+    where
+        F: Fn(&str, &str) -> Vec<Row> + Send + Sync + 'static,
+    {
+        let mut table = Self::new(ddl, glob, extract);
+        table.strict = true;
+        table
+    }
+
     pub fn try_new<F>(ddl: impl Into<String>, glob: impl Into<String>, extract: F) -> Self
     where
         F: Fn(&str, &str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static,
@@ -82,7 +92,12 @@ impl Table {
         let glob = glob.into();
         let extract = Arc::new(move |path: &str, content: &str| extract(path, content));
 
-        Self { ddl, glob, extract }
+        Self {
+            ddl,
+            glob,
+            extract,
+            strict: false,
+        }
     }
 }
 
@@ -90,6 +105,7 @@ struct TableConfig {
     name: String,
     glob: String,
     extract: Arc<ExtractFn>,
+    strict: bool,
 }
 
 type FileRows = (String, Vec<Row>);
@@ -178,6 +194,7 @@ impl DirSQL {
                     name: table_name,
                     glob: table.glob,
                     extract: table.extract,
+                    strict: table.strict,
                 });
             }
         }
@@ -192,6 +209,10 @@ impl DirSQL {
         let extract_map: HashMap<String, Arc<ExtractFn>> = table_configs
             .iter()
             .map(|cfg| (cfg.name.clone(), cfg.extract.clone()))
+            .collect();
+        let strict_map: HashMap<String, bool> = table_configs
+            .iter()
+            .map(|cfg| (cfg.name.clone(), cfg.strict))
             .collect();
         let files = scan_directory(&root, &matcher);
 
@@ -209,13 +230,18 @@ impl DirSQL {
                 let extract = extract_map.get(&table_name).ok_or_else(|| {
                     DirSqlError::Ddl(format!("missing extract function for table {table_name}"))
                 })?;
-                let rows = extract(&rel_path, &content).map_err(|err| DirSqlError::Extract {
-                    path: rel_path.clone(),
-                    message: err.to_string(),
-                })?;
+                let strict = *strict_map.get(&table_name).unwrap_or(&false);
+                let raw_rows =
+                    extract(&rel_path, &content).map_err(|err| DirSqlError::Extract {
+                        path: rel_path.clone(),
+                        message: err.to_string(),
+                    })?;
 
-                for (row_index, row) in rows.iter().enumerate() {
-                    db_guard.insert_row(&table_name, row, &rel_path, row_index)?;
+                let mut rows = Vec::with_capacity(raw_rows.len());
+                for (row_index, raw_row) in raw_rows.iter().enumerate() {
+                    let row = db_guard.normalize_row(&table_name, raw_row, strict)?;
+                    db_guard.insert_row(&table_name, &row, &rel_path, row_index)?;
+                    rows.push(row);
                 }
 
                 file_rows_guard.insert(rel_path, (table_name, rows));
@@ -256,6 +282,11 @@ fn run_watch_loop(inner: Arc<DirSqlInner>, watcher: Watcher, tx: UnboundedSender
         .table_configs
         .iter()
         .map(|cfg| (cfg.name.clone(), cfg.extract.clone()))
+        .collect();
+    let strict_map: HashMap<String, bool> = inner
+        .table_configs
+        .iter()
+        .map(|cfg| (cfg.name.clone(), cfg.strict))
         .collect();
 
     loop {
@@ -351,7 +382,7 @@ fn run_watch_loop(inner: Arc<DirSqlInner>, watcher: Watcher, tx: UnboundedSender
                         None => continue,
                     };
 
-                    let new_rows = match extract(&rel_path, &content) {
+                    let raw_rows = match extract(&rel_path, &content) {
                         Ok(rows) => rows,
                         Err(err) => {
                             let _ = tx.unbounded_send(CoreRowEvent::Error {
@@ -360,6 +391,40 @@ fn run_watch_loop(inner: Arc<DirSqlInner>, watcher: Watcher, tx: UnboundedSender
                             });
                             continue;
                         }
+                    };
+
+                    // Normalize rows according to schema
+                    let strict = *strict_map.get(&table_name).unwrap_or(&false);
+                    let new_rows = {
+                        let db = match inner.db.lock() {
+                            Ok(guard) => guard,
+                            Err(err) => {
+                                let _ = tx.unbounded_send(CoreRowEvent::Error {
+                                    file_path: PathBuf::from(&rel_path),
+                                    error: err.to_string(),
+                                });
+                                continue;
+                            }
+                        };
+                        let mut normalized = Vec::with_capacity(raw_rows.len());
+                        let mut had_error = false;
+                        for raw_row in &raw_rows {
+                            match db.normalize_row(&table_name, raw_row, strict) {
+                                Ok(row) => normalized.push(row),
+                                Err(err) => {
+                                    let _ = tx.unbounded_send(CoreRowEvent::Error {
+                                        file_path: PathBuf::from(&rel_path),
+                                        error: err.to_string(),
+                                    });
+                                    had_error = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if had_error {
+                            continue;
+                        }
+                        normalized
                     };
 
                     let old_rows = {
