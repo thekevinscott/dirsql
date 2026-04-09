@@ -49,6 +49,31 @@ class AsyncDirSQL:
         self._init_error = None
         self._task = asyncio.ensure_future(self._init_bg())
 
+    @classmethod
+    def from_config(cls, path):
+        """Create an AsyncDirSQL from a .dirsql.toml config file.
+
+        Returns an AsyncDirSQL instance. Call ``await db.ready()`` before querying.
+        """
+        instance = object.__new__(cls)
+        instance._root = None
+        instance._tables = None
+        instance._ignore = None
+        instance._db = None
+        instance._ready_event = asyncio.Event()
+        instance._init_error = None
+        instance._task = asyncio.ensure_future(instance._init_from_config(path))
+        return instance
+
+    async def _init_from_config(self, path):
+        """Run from_config scan in the background."""
+        try:
+            self._db = await asyncio.to_thread(DirSQL.from_config, path)
+        except Exception as exc:
+            self._init_error = exc
+        finally:
+            self._ready_event.set()
+
     async def _init_bg(self):
         """Run the scan in the background."""
         try:

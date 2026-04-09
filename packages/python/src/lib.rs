@@ -1,13 +1,16 @@
 #[cfg(feature = "extension-module")]
 mod python {
+    use dirsql_core::config;
     use dirsql_core::db::{Db, Value, parse_table_name};
     use dirsql_core::differ;
     use dirsql_core::matcher::TableMatcher;
+    use dirsql_core::parser::{self, ColumnSource, Format};
     use dirsql_core::scanner::scan_directory;
     use dirsql_core::watcher::{FileEvent, Watcher};
     use pyo3::exceptions::PyRuntimeError;
     use pyo3::prelude::*;
     use pyo3::types::{PyDict, PyList};
+    use regex::Regex;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
@@ -66,12 +69,31 @@ mod python {
     /// Rows extracted from a file: (table_name, rows).
     type FileRows = (String, Vec<HashMap<String, Value>>);
 
+    /// How rows are extracted from a file.
+    enum ExtractMode {
+        /// Python callable: fn(rel_path, content) -> list[dict]
+        Python(Py<PyAny>),
+        /// Built-in parser from config file.
+        BuiltIn {
+            format: Format,
+            each: Option<String>,
+            columns: HashMap<String, ColumnSource>,
+            capture_names: Vec<String>,
+        },
+    }
+
     /// Internal table config stored after init for use during watch.
     struct TableConfig {
         name: String,
         glob: String,
-        extract: Py<PyAny>,
+        extract: ExtractMode,
         strict: bool,
+    }
+
+    /// Extract `{name}` capture placeholders from a glob pattern.
+    fn extract_capture_names(glob: &str) -> Vec<String> {
+        let re = Regex::new(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
+        re.captures_iter(glob).map(|c| c[1].to_string()).collect()
     }
 
     /// The main DirSQL class. Creates an in-memory SQLite index over a directory.
@@ -198,7 +220,7 @@ mod python {
                 .map(|(name, glob, extract, strict)| TableConfig {
                     name,
                     glob,
-                    extract,
+                    extract: ExtractMode::Python(extract),
                     strict,
                 })
                 .collect();
@@ -208,6 +230,156 @@ mod python {
                 root: PathBuf::from(&root),
                 table_configs: stored_configs,
                 ignore_patterns: ignore.unwrap_or_default(),
+                file_rows: Mutex::new(file_rows),
+                watcher: Mutex::new(None),
+            })
+        }
+
+        /// Create a DirSQL instance from a .dirsql.toml config file.
+        #[classmethod]
+        fn from_config(_cls: &Bound<'_, pyo3::types::PyType>, path: String) -> PyResult<Self> {
+            let config_path = Path::new(&path);
+            let config = config::load_config(config_path)
+                .map_err(|e| PyRuntimeError::new_err(format!("Config error: {}", e)))?;
+
+            // Derive root directory from config file path
+            let root = config_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+
+            let db =
+                Db::new().map_err(|e| PyRuntimeError::new_err(format!("DB init error: {}", e)))?;
+
+            let mut table_configs: Vec<TableConfig> = Vec::new();
+            let mut parsed_names: Vec<(String, String)> = Vec::new(); // (table_name, glob)
+
+            for tc in &config.tables {
+                let table_name = parse_table_name(&tc.ddl).ok_or_else(|| {
+                    PyRuntimeError::new_err(format!(
+                        "Could not parse table name from DDL: {}",
+                        tc.ddl
+                    ))
+                })?;
+                db.create_table(&tc.ddl)
+                    .map_err(|e| PyRuntimeError::new_err(format!("DDL error: {}", e)))?;
+
+                let format = tc.format.ok_or_else(|| {
+                    PyRuntimeError::new_err(format!(
+                        "Unsupported format: cannot infer format for glob '{}'. \
+                         Specify format explicitly in the config.",
+                        tc.glob
+                    ))
+                })?;
+
+                let capture_names = extract_capture_names(&tc.glob);
+                let columns: HashMap<String, ColumnSource> = tc
+                    .columns
+                    .as_ref()
+                    .map(|cols| {
+                        cols.iter()
+                            .map(|(k, v)| (k.clone(), ColumnSource::parse(v, &capture_names)))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                parsed_names.push((table_name.clone(), tc.glob.clone()));
+                table_configs.push(TableConfig {
+                    name: table_name,
+                    glob: tc.glob.clone(),
+                    extract: ExtractMode::BuiltIn {
+                        format,
+                        each: tc.each.clone(),
+                        columns,
+                        capture_names,
+                    },
+                    strict: tc.strict.unwrap_or(false),
+                });
+            }
+
+            // Build glob -> table_name mappings for the scanner
+            let mappings: Vec<(&str, &str)> = parsed_names
+                .iter()
+                .map(|(name, glob)| (glob.as_str(), name.as_str()))
+                .collect();
+            let ignore_strs: Vec<&str> = config.ignore.iter().map(|s| s.as_str()).collect();
+
+            let matcher = TableMatcher::new(&mappings, &ignore_strs)
+                .map_err(|e| PyRuntimeError::new_err(format!("Glob error: {}", e)))?;
+
+            // Scan directory
+            let files = scan_directory(&root, &matcher);
+
+            // Build lookups for processing
+            let config_map: HashMap<&str, &TableConfig> = table_configs
+                .iter()
+                .map(|tc| (tc.name.as_str(), tc))
+                .collect();
+
+            let mut file_rows: HashMap<String, (String, Vec<HashMap<String, Value>>)> =
+                HashMap::new();
+
+            for (file_path, table_name) in &files {
+                let content = std::fs::read_to_string(file_path).map_err(|e| {
+                    PyRuntimeError::new_err(format!(
+                        "Failed to read {}: {}",
+                        file_path.display(),
+                        e
+                    ))
+                })?;
+
+                let rel_path = file_path
+                    .strip_prefix(&root)
+                    .unwrap_or(file_path)
+                    .to_string_lossy()
+                    .to_string();
+
+                let tc = config_map.get(table_name.as_str()).ok_or_else(|| {
+                    PyRuntimeError::new_err(format!("No config for table {}", table_name))
+                })?;
+
+                let rows = match &tc.extract {
+                    ExtractMode::BuiltIn {
+                        format,
+                        each,
+                        columns,
+                        capture_names: _,
+                    } => {
+                        let mut parsed = parser::parse_file(*format, &content, each.as_deref())
+                            .map_err(|e| PyRuntimeError::new_err(format!("Parse error: {}", e)))?;
+
+                        // Get path captures
+                        let rel = Path::new(&rel_path);
+                        let captures = matcher
+                            .match_file_with_captures(rel)
+                            .map(|m| m.captures)
+                            .unwrap_or_default();
+
+                        // Apply column mapping and path captures
+                        parsed = parser::apply_columns(&parsed, columns, &captures);
+
+                        parsed
+                    }
+                    ExtractMode::Python(_) => {
+                        unreachable!("from_config never uses Python extract")
+                    }
+                };
+
+                let strict = tc.strict;
+                let mut value_rows: Vec<HashMap<String, Value>> = Vec::new();
+                for (row_index, raw_row) in rows.iter().enumerate() {
+                    let row = db
+                        .normalize_row(table_name, raw_row, strict)
+                        .map_err(|e| PyRuntimeError::new_err(format!("Schema error: {}", e)))?;
+                    db.insert_row(table_name, &row, &rel_path, row_index)
+                        .map_err(|e| PyRuntimeError::new_err(format!("Insert error: {}", e)))?;
+                    value_rows.push(row);
+                }
+                file_rows.insert(rel_path, (table_name.clone(), value_rows));
+            }
+
+            Ok(PyDirSQL {
+                db: Mutex::new(db),
+                root,
+                table_configs,
+                ignore_patterns: config.ignore,
                 file_rows: Mutex::new(file_rows),
                 watcher: Mutex::new(None),
             })
@@ -284,18 +456,11 @@ mod python {
             let matcher = TableMatcher::new(&mappings, &ignore_strs)
                 .map_err(|e| PyRuntimeError::new_err(format!("Glob error: {}", e)))?;
 
-            // Build extract lookup
-            let extract_map: HashMap<&str, &Py<PyAny>> = self
+            // Build config lookup
+            let config_map: HashMap<&str, &TableConfig> = self
                 .table_configs
                 .iter()
-                .map(|tc| (tc.name.as_str(), &tc.extract))
-                .collect();
-
-            // Build strict lookup
-            let strict_map: HashMap<&str, bool> = self
-                .table_configs
-                .iter()
-                .map(|tc| (tc.name.as_str(), tc.strict))
+                .map(|tc| (tc.name.as_str(), tc))
                 .collect();
 
             let mut result_events = Vec::new();
@@ -364,55 +529,79 @@ mod python {
                             }
                         };
 
-                        // Call extract
-                        let extract_fn = match extract_map.get(table_name.as_str()) {
-                            Some(f) => f,
+                        let tc = match config_map.get(table_name.as_str()) {
+                            Some(tc) => tc,
                             None => continue,
                         };
 
-                        let extract_result = extract_fn.call1(py, (rel_path.clone(), content));
-                        let new_rows = match extract_result {
-                            Ok(result) => {
-                                let py_rows: Result<Vec<HashMap<String, Py<PyAny>>>, _> =
-                                    result.extract(py);
-                                match py_rows {
-                                    Ok(rows) => {
-                                        let strict =
-                                            *strict_map.get(table_name.as_str()).unwrap_or(&false);
-                                        let db = self.db.lock().map_err(|e| {
-                                            PyRuntimeError::new_err(format!("Lock error: {}", e))
-                                        })?;
-                                        let mut value_rows = Vec::new();
-                                        for py_row in &rows {
-                                            match convert_py_row(py, py_row).and_then(|raw| {
-                                                db.normalize_row(&table_name, &raw, strict).map_err(
-                                                    |e| {
-                                                        PyRuntimeError::new_err(format!(
-                                                            "Schema error: {}",
-                                                            e
-                                                        ))
-                                                    },
-                                                )
-                                            }) {
-                                                Ok(r) => value_rows.push(r),
-                                                Err(e) => {
-                                                    result_events.push(PyRowEvent {
-                                                        table: table_name.clone(),
-                                                        action: "error".to_string(),
-                                                        row: None,
-                                                        old_row: None,
-                                                        error: Some(format!(
-                                                            "Row conversion error: {}",
-                                                            e
-                                                        )),
-                                                        file_path: Some(rel_path.clone()),
-                                                    });
-                                                    continue;
+                        let new_rows = match &tc.extract {
+                            ExtractMode::Python(extract_fn) => {
+                                let extract_result =
+                                    extract_fn.call1(py, (rel_path.clone(), content));
+                                match extract_result {
+                                    Ok(result) => {
+                                        let py_rows: Result<Vec<HashMap<String, Py<PyAny>>>, _> =
+                                            result.extract(py);
+                                        match py_rows {
+                                            Ok(rows) => {
+                                                let db = self.db.lock().map_err(|e| {
+                                                    PyRuntimeError::new_err(format!(
+                                                        "Lock error: {}",
+                                                        e
+                                                    ))
+                                                })?;
+                                                let mut value_rows = Vec::new();
+                                                for py_row in &rows {
+                                                    match convert_py_row(py, py_row).and_then(
+                                                        |raw| {
+                                                            db.normalize_row(
+                                                                &table_name,
+                                                                &raw,
+                                                                tc.strict,
+                                                            )
+                                                            .map_err(|e| {
+                                                                PyRuntimeError::new_err(format!(
+                                                                    "Schema error: {}",
+                                                                    e
+                                                                ))
+                                                            })
+                                                        },
+                                                    ) {
+                                                        Ok(r) => value_rows.push(r),
+                                                        Err(e) => {
+                                                            result_events.push(PyRowEvent {
+                                                                table: table_name.clone(),
+                                                                action: "error".to_string(),
+                                                                row: None,
+                                                                old_row: None,
+                                                                error: Some(format!(
+                                                                    "Row conversion error: {}",
+                                                                    e
+                                                                )),
+                                                                file_path: Some(rel_path.clone()),
+                                                            });
+                                                            continue;
+                                                        }
+                                                    }
                                                 }
+                                                drop(db);
+                                                value_rows
+                                            }
+                                            Err(e) => {
+                                                result_events.push(PyRowEvent {
+                                                    table: table_name.clone(),
+                                                    action: "error".to_string(),
+                                                    row: None,
+                                                    old_row: None,
+                                                    error: Some(format!(
+                                                        "Extract result error: {}",
+                                                        e
+                                                    )),
+                                                    file_path: Some(rel_path.clone()),
+                                                });
+                                                continue;
                                             }
                                         }
-                                        drop(db);
-                                        value_rows
                                     }
                                     Err(e) => {
                                         result_events.push(PyRowEvent {
@@ -420,24 +609,62 @@ mod python {
                                             action: "error".to_string(),
                                             row: None,
                                             old_row: None,
-                                            error: Some(format!("Extract result error: {}", e)),
+                                            error: Some(format!("Extract error: {}", e)),
                                             file_path: Some(rel_path.clone()),
                                         });
                                         continue;
                                     }
                                 }
                             }
-                            Err(e) => {
-                                result_events.push(PyRowEvent {
-                                    table: table_name.clone(),
-                                    action: "error".to_string(),
-                                    row: None,
-                                    old_row: None,
-                                    error: Some(format!("Extract error: {}", e)),
-                                    file_path: Some(rel_path.clone()),
-                                });
-                                continue;
-                            }
+                            ExtractMode::BuiltIn {
+                                format,
+                                each,
+                                columns,
+                                capture_names: _,
+                            } => match parser::parse_file(*format, &content, each.as_deref()) {
+                                Ok(mut parsed) => {
+                                    let rel = Path::new(&rel_path);
+                                    let captures = matcher
+                                        .match_file_with_captures(rel)
+                                        .map(|m| m.captures)
+                                        .unwrap_or_default();
+                                    parsed = parser::apply_columns(&parsed, columns, &captures);
+
+                                    let db = self.db.lock().map_err(|e| {
+                                        PyRuntimeError::new_err(format!("Lock error: {}", e))
+                                    })?;
+                                    let mut value_rows = Vec::new();
+                                    for raw_row in &parsed {
+                                        match db.normalize_row(&table_name, raw_row, tc.strict) {
+                                            Ok(r) => value_rows.push(r),
+                                            Err(e) => {
+                                                result_events.push(PyRowEvent {
+                                                    table: table_name.clone(),
+                                                    action: "error".to_string(),
+                                                    row: None,
+                                                    old_row: None,
+                                                    error: Some(format!("Schema error: {}", e)),
+                                                    file_path: Some(rel_path.clone()),
+                                                });
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    drop(db);
+                                    value_rows
+                                }
+                                Err(e) => {
+                                    result_events.push(PyRowEvent {
+                                        table: table_name.clone(),
+                                        action: "error".to_string(),
+                                        row: None,
+                                        old_row: None,
+                                        error: Some(format!("Parse error: {}", e)),
+                                        file_path: Some(rel_path.clone()),
+                                    });
+                                    continue;
+                                }
+                            },
                         };
 
                         // Get old rows for diffing
