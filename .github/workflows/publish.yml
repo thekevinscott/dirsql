@@ -24,59 +24,6 @@ jobs:
             echo "has_python=false" >> $GITHUB_OUTPUT
           fi
 
-  build:
-    needs: check-python
-    if: needs.check-python.outputs.has_python == 'true'
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          # aarch64-unknown-linux-gnu disabled: cross-compilation fails in manylinux container
-          # TODO: re-enable once bundled SQLite cross-compilation is sorted out
-          - os: macos-latest
-            target: x86_64-apple-darwin
-          - os: macos-latest
-            target: aarch64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.target }}
-          args: --release --out dist
-          manylinux: auto
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-${{ matrix.target }}
-          path: dist
-
-  sdist:
-    needs: check-python
-    if: needs.check-python.outputs.has_python == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - uses: PyO3/maturin-action@v1
-        with:
-          command: sdist
-          args: --out dist
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sdist
-          path: dist
-
   tag:
     runs-on: ubuntu-latest
     permissions:
@@ -170,6 +117,66 @@ jobs:
           git tag -a "v${{ steps.version.outputs.new_version }}" -m "Release v${{ steps.version.outputs.new_version }}"
           git push origin "v${{ steps.version.outputs.new_version }}"
           echo "created=true" >> $GITHUB_OUTPUT
+
+  build:
+    needs: [check-python, tag]
+    if: needs.check-python.outputs.has_python == 'true' && needs.tag.outputs.created == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Update pyproject.toml version
+        shell: bash
+        run: |
+          sed -i.bak 's/^version = ".*"/version = "${{ needs.tag.outputs.new_version }}"/' pyproject.toml
+
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist
+          manylinux: auto
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.target }}
+          path: dist
+
+  sdist:
+    needs: [check-python, tag]
+    if: needs.check-python.outputs.has_python == 'true' && needs.tag.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Update pyproject.toml version
+        run: |
+          sed -i 's/^version = ".*"/version = "${{ needs.tag.outputs.new_version }}"/' pyproject.toml
+
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist
 
   publish-pypi:
     needs: [tag, build, sdist]
