@@ -38,11 +38,11 @@ jobs:
       - name: npm whoami
         run: npm whoami --registry https://registry.npmjs.org 2>&1 || true
 
+      - name: Bump to test version
+        run: npm version 0.0.99-test.$(date +%s) --no-git-tag-version
+
       - name: Dry-run publish
-        run: npm publish --access public --dry-run
+        run: npm publish --access public --dry-run 2>&1 || true
 
       - name: Actual publish (test tag)
-        if: success()
-        run: |
-          npm version 0.0.99-test.$(date +%s) --no-git-tag-version
-          npm publish --access public --tag test
+        run: npm publish --access public --tag test
