@@ -377,8 +377,8 @@ unsafe fn get_function_property(
 
     let mut value_type = 0i32;
     napi::sys::napi_typeof(env, val, &mut value_type);
-    if value_type != 6 {
-        // napi_function = 6
+    if value_type != 7 {
+        // napi_function = 7 (napi_object = 6)
         return Err(Error::new(
             Status::GenericFailure,
             format!("Property '{}' must be a function", name),

@@ -46,27 +46,6 @@ jobs:
         working-directory: packages/ts
         run: pnpm build
 
-      - name: Debug native module
-        working-directory: packages/ts
-        run: |
-          node -e "
-            const { DirSQL } = require('./index.js');
-            console.log('DirSQL type:', typeof DirSQL);
-            const os = require('os'), fs = require('fs'), path = require('path');
-            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-'));
-            fs.mkdirSync(path.join(dir, 'data'), { recursive: true });
-            fs.writeFileSync(path.join(dir, 'data/test.json'), '[{\"name\":\"a\"}]');
-            const fn1 = (fp, c) => JSON.parse(c);
-            console.log('fn1 type:', typeof fn1);
-            try {
-              const db = new DirSQL(dir, [{ddl:'CREATE TABLE t (name TEXT)', glob:'data/*.json', extract: fn1}]);
-              console.log('success:', db.query('SELECT * FROM t'));
-            } catch(e) {
-              console.error('error:', e.message);
-            }
-            fs.rmSync(dir, { recursive: true });
-          "
-
       - name: Run tests
         working-directory: packages/ts
         run: pnpm test
