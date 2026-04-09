@@ -106,9 +106,7 @@ fn json_value_to_value(v: &serde_json::Value) -> Value {
         }
         serde_json::Value::String(s) => Value::Text(s.clone()),
         // Nested objects/arrays are stored as JSON text
-        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
-            Value::Text(v.to_string())
-        }
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => Value::Text(v.to_string()),
     }
 }
 
@@ -118,10 +116,7 @@ fn json_object_to_row(obj: &serde_json::Map<String, serde_json::Value>) -> HashM
         .collect()
 }
 
-fn navigate_json<'a>(
-    value: &'a serde_json::Value,
-    path: &str,
-) -> Result<&'a serde_json::Value> {
+fn navigate_json<'a>(value: &'a serde_json::Value, path: &str) -> Result<&'a serde_json::Value> {
     let mut current = value;
     for segment in path.split('.') {
         if segment.is_empty() {
@@ -216,11 +211,7 @@ fn parse_csv(content: &str, is_tsv: bool) -> Result<Vec<HashMap<String, Value>>>
     }
     let mut reader = reader_builder.from_reader(content.as_bytes());
 
-    let headers: Vec<String> = reader
-        .headers()?
-        .iter()
-        .map(|h| h.to_string())
-        .collect();
+    let headers: Vec<String> = reader.headers()?.iter().map(|h| h.to_string()).collect();
 
     let mut rows = Vec::new();
     for record in reader.records() {
@@ -249,19 +240,12 @@ fn toml_value_to_value(v: &toml::Value) -> Value {
         toml::Value::Float(f) => Value::Real(*f),
         toml::Value::Boolean(b) => Value::Integer(if *b { 1 } else { 0 }),
         toml::Value::Datetime(dt) => Value::Text(dt.to_string()),
-        toml::Value::Array(a) => {
-            Value::Text(serde_json::to_string(a).unwrap_or_default())
-        }
-        toml::Value::Table(t) => {
-            Value::Text(serde_json::to_string(t).unwrap_or_default())
-        }
+        toml::Value::Array(a) => Value::Text(serde_json::to_string(a).unwrap_or_default()),
+        toml::Value::Table(t) => Value::Text(serde_json::to_string(t).unwrap_or_default()),
     }
 }
 
-fn navigate_toml<'a>(
-    value: &'a toml::Value,
-    path: &str,
-) -> Result<&'a toml::Value> {
+fn navigate_toml<'a>(value: &'a toml::Value, path: &str) -> Result<&'a toml::Value> {
     let mut current = value;
     for segment in path.split('.') {
         if segment.is_empty() {
@@ -356,10 +340,7 @@ fn yaml_mapping_to_row(mapping: &serde_yaml::Mapping) -> HashMap<String, Value> 
         .collect()
 }
 
-fn navigate_yaml<'a>(
-    value: &'a serde_yaml::Value,
-    path: &str,
-) -> Result<&'a serde_yaml::Value> {
+fn navigate_yaml<'a>(value: &'a serde_yaml::Value, path: &str) -> Result<&'a serde_yaml::Value> {
     let mut current = value;
     for segment in path.split('.') {
         if segment.is_empty() {
@@ -422,9 +403,7 @@ fn parse_frontmatter(content: &str) -> Result<Vec<HashMap<String, Value>>> {
 
     // Find the closing ---
     let after_first = &trimmed[3..];
-    let end_pos = after_first
-        .find("\n---")
-        .ok_or(ParseError::NoFrontmatter)?;
+    let end_pos = after_first.find("\n---").ok_or(ParseError::NoFrontmatter)?;
 
     let yaml_content = &after_first[..end_pos];
     let body_start = end_pos + 4; // skip "\n---"
@@ -791,6 +770,9 @@ price = 20
     fn frontmatter_multiline_body() {
         let content = "---\ntitle: Post\n---\nLine 1\nLine 2\nLine 3\n";
         let rows = parse_file(Format::Frontmatter, content, None).unwrap();
-        assert_eq!(rows[0]["body"], Value::Text("Line 1\nLine 2\nLine 3\n".into()));
+        assert_eq!(
+            rows[0]["body"],
+            Value::Text("Line 1\nLine 2\nLine 3\n".into())
+        );
     }
 }
