@@ -150,6 +150,12 @@ E2E tests are your primary feedback mechanism. Run them liberally after signific
 
 See skillet or karat for examples of test organization, fixtures, and pytest-describe patterns.
 
+### Docs as Spec
+
+**Docs are the canonical specification.** Every documented feature must have a corresponding test. Every test must trace back to a documented feature. If it's not in the docs, don't test it (and question whether it should exist). If it's in the docs, it must have a test.
+
+When adding a feature, the PR must include docs AND tests. When docs change, tests update to match. Agents must run e2e tests locally before pushing substantial changes.
+
 ### Benchmarks
 
 Run `cargo bench -p dirsql-core` after significant changes to the Rust codebase. Not in CI -- local only. Covers: SQLite operations, directory scanning, row diffing, glob matching. Use to catch performance regressions before merging.
