@@ -24,6 +24,23 @@ Write scratch/temporary files to `/tmp` instead of asking permission. Use unique
 - **Bead first**: When starting new work, the first step is always to create a bead (`bd create`). No implementation work begins without a bead.
 - These workflow rules apply to **all** changes, including documentation-only changes and updates to `AGENTS.md` or other instruction files. No exceptions.
 
+### Agent Identity and Auth
+
+- Agents must use the approved robot identity for git and GitHub operations. Do **not** use a personal non-robot identity such as `me@thekevinscott.com`.
+- Before any `git commit`, `git push`, or `gh pr create`, run `scripts/agent-preflight.sh <commit|push|pr>`.
+- The approved robot identity must be provided explicitly via environment variables:
+  - `APPROVED_GIT_NAME`
+  - `APPROVED_GIT_EMAIL`
+  - `AGENT_NAME`
+  - `AGENT_MODEL`
+- Approved robot credentials and wrappers are allowed. For example, environment sourced from `ROBOT_*` variables is valid for agent operations.
+- Set `git config user.useConfigOnly true` in agent worktrees so git never falls back to a personal global identity.
+- If the approved robot identity is not active, stop and ask. Never proceed with a non-robot personal identity.
+- Every agent-authored commit message must include this trailer at the bottom: `Agent: <assistant> (<model>)`
+- Examples:
+  - `Agent: Codex (gpt-5-codex)`
+  - `Agent: Claude (Sonnet 4.5)`
+
 ### Git Worktrees
 
 **ALL work happens in git worktrees.** Never edit files in the root repo directory. Never commit outside a worktree.
