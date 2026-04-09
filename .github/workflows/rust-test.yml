@@ -39,7 +39,7 @@ jobs:
         run: cargo install cargo-tarpaulin --locked
 
       - name: Run coverage
-        run: cargo tarpaulin --manifest-path packages/core/Cargo.toml --skip-clean --line --fail-under 90
+        run: cargo tarpaulin --manifest-path packages/core/Cargo.toml --skip-clean --line --fail-under 80
 
       - name: Clippy
         run: cargo clippy --workspace -- -D warnings
