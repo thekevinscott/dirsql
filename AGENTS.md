@@ -13,6 +13,7 @@ When adding a feature to one SDK, create beads for the other two. Don't let them
 ## Scratch Files
 
 Write scratch/temporary files to `/tmp` instead of asking permission. Use unique filenames to avoid collisions with other sessions.
+Temporary scripts, including Node or shell helpers, must also be written to `/tmp` and executed from there.
 
 ## Workflow
 

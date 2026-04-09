@@ -5,12 +5,14 @@ on:
     branches: [main]
     paths:
       - 'packages/core/**'
+      - 'packages/rust/**'
       - 'packages/python/src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
   pull_request:
     paths:
       - 'packages/core/**'
+      - 'packages/rust/**'
       - 'packages/python/src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'

@@ -18,7 +18,7 @@ cargo add dirsql-core
 
 ## Usage
 
-This crate is primarily consumed through language-specific SDKs ([Python](../python/), TypeScript). Direct Rust usage follows standard library patterns -- see the rustdoc for API details:
+This crate is the engine layer consumed by the Rust SDK (`../rust/`), the Python SDK (`../python/`), and future SDKs. Direct Rust usage follows standard library patterns -- see the rustdoc for API details:
 
 ```bash
 cargo doc --open -p dirsql-core
