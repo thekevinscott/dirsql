@@ -9,6 +9,7 @@ on:
       - 'packages/python/src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.github/workflows/rust-test.yml'
   pull_request:
     paths:
       - 'packages/core/**'
@@ -16,6 +17,7 @@ on:
       - 'packages/python/src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.github/workflows/rust-test.yml'
 
 jobs:
   test:
