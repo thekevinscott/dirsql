@@ -3,6 +3,10 @@ name: Minor Release
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+  id-token: write
+
 jobs:
   detect-changes:
     runs-on: ubuntu-latest
