@@ -1,0 +1,47 @@
+name: TS Lint
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/ts/**/*.ts'
+      - 'packages/ts/**/*.js'
+      - 'packages/ts/biome.json'
+      - 'packages/ts/package.json'
+  pull_request:
+    paths:
+      - 'packages/ts/**/*.ts'
+      - 'packages/ts/**/*.js'
+      - 'packages/ts/biome.json'
+      - 'packages/ts/package.json'
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        working-directory: packages/ts
+        run: pnpm install
+
+      - name: Lint
+        working-directory: packages/ts
+        run: pnpm lint
+
+      - name: Format check
+        working-directory: packages/ts
+        run: pnpm format:check
