@@ -62,9 +62,9 @@ jobs:
 
           while IFS= read -r file; do
             case "$file" in
-              *.rs|Cargo.toml|Cargo.lock) rust_changed=true ;;
-              *.py|pyproject.toml|uv.lock) python_changed=true ;;
-              package.json|*.ts|*.js) js_changed=true ;;
+              packages/core/**|packages/python/src/**|Cargo.lock) rust_changed=true ;;
+              packages/python/**.py|packages/python/pyproject.toml) python_changed=true ;;
+              packages/ts/**) js_changed=true ;;
               README.md|*.md) docs_changed=true ;;
             esac
           done <<< "$changed_files"
@@ -107,7 +107,7 @@ jobs:
       - name: Check if package.json exists
         id: check_npm
         run: |
-          if [ -f package.json ]; then
+          if [ -f packages/ts/package.json ]; then
             echo "exists=true" >> $GITHUB_OUTPUT
           else
             echo "exists=false" >> $GITHUB_OUTPUT
@@ -122,7 +122,9 @@ jobs:
       - name: Update package.json version
         if: steps.check_npm.outputs.exists == 'true'
         run: npm version "${{ needs.release.outputs.new_version }}" --no-git-tag-version
+        working-directory: packages/ts
 
       - name: Publish to npm
         if: steps.check_npm.outputs.exists == 'true'
         run: npm publish --provenance --access public
+        working-directory: packages/ts

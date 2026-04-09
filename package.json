@@ -1,8 +1,0 @@
-{
-  "name": "dirsql",
-  "version": "0.0.1",
-  "description": "Ephemeral SQL index over a local directory",
-  "license": "MIT",
-  "repository": "https://github.com/thekevinscott/dirsql",
-  "main": "index.js"
-}

@@ -4,14 +4,12 @@ on:
   push:
     branches: [main]
     paths:
-      - '**.py'
-      - 'pyproject.toml'
-      - 'uv.lock'
+      - 'packages/python/**/*.py'
+      - 'packages/python/pyproject.toml'
   pull_request:
     paths:
-      - '**.py'
-      - 'pyproject.toml'
-      - 'uv.lock'
+      - 'packages/python/**/*.py'
+      - 'packages/python/pyproject.toml'
 
 jobs:
   lint:
@@ -27,9 +25,12 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --extra dev
+        working-directory: packages/python
 
       - name: Lint
-        run: uv run just lint
+        run: uv run ruff check .
+        working-directory: packages/python
 
       - name: Format check
-        run: uv run just format-check
+        run: uv run ruff format --check .
+        working-directory: packages/python
