@@ -2,7 +2,7 @@
 layout: home
 hero:
   name: dirsql
-  tagline: Ephemeral SQL index over a local directory
+  tagline: Ephemeral SQL index over a local directory. `dirsql` watches a filesystem, ingests structured files into an in-memory SQLite database, and exposes a SQL query interface. The filesystem is always the source of truth.
   actions:
     - theme: brand
       text: Get Started
@@ -12,19 +12,15 @@ hero:
       link: https://github.com/thekevinscott/dirsql
 ---
 
-## What is `dirsql`?
+Structured data stored as flat files (JSON, CSV, markdown) is easy to read, write, diff, and version-control.
 
-`dirsql` watches a filesystem, ingests structured files into an in-memory SQLite database, and exposes a SQL query interface.
+But querying across many files is slow.
 
-The filesystem is always the source of truth.
+"Show me all records matching X across 50 files" requires opening and parsing every file.
 
-## The problem
+## Solution
 
-Structured data stored as flat files (JSON, CSV, markdown) is easy to read, write, diff, and version-control. But querying across many files is slow. "Show me all records matching X across 50 files" requires opening and parsing every file.
-
-## The solution
-
-`dirsql` bridges this gap: files remain the source of truth, but you get SQL queries and real-time change events for free. Define tables with glob patterns and extract functions, and `dirsql` handles the rest.
+`dirsql` bridges this gap. The filesystem remains the source of truth, but you get SQL queries and real-time change events for free. Define tables with glob patterns and extract functions, and `dirsql` handles the rest.
 
 ::: code-group
 
