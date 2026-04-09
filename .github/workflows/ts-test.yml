@@ -8,9 +8,11 @@ on:
     branches: [main]
     paths:
       - 'packages/ts/**'
+      - 'packages/core/**'
   pull_request:
     paths:
       - 'packages/ts/**'
+      - 'packages/core/**'
 
 jobs:
   test:
@@ -18,11 +20,32 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
       - name: Install Node
         uses: actions/setup-node@v4
         with:
           node-version: "24"
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        working-directory: packages/ts
+        run: pnpm install
+
+      - name: Build native module
+        working-directory: packages/ts
+        run: pnpm build
+
       - name: Run tests
         working-directory: packages/ts
-        run: npm run coverage
+        run: pnpm test
