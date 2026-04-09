@@ -4,7 +4,6 @@ use dirsql_core::matcher::TableMatcher;
 use dirsql_core::scanner::scan_directory;
 use dirsql_core::watcher::{FileEvent, Watcher};
 use napi::bindgen_prelude::*;
-use napi::JsObject;
 use napi_derive::napi;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -22,24 +21,327 @@ pub struct RowEvent {
     pub file_path: Option<String>,
 }
 
-/// Wrapper around napi::Ref that is Send.
+/// A persistent reference to a JS function, safe to store across calls.
 ///
-/// SAFETY: This is safe because:
-/// - All #[napi] methods run on the JS main thread
-/// - The Ref is only accessed from within #[napi] methods
-/// - We never send the Ref to another thread for actual use
-struct SendableRef(napi::Ref<()>);
+/// Uses napi_sys raw reference counting to persist JS function values.
+/// SAFETY: All access happens on the JS main thread via #[napi] methods.
+struct FnRef {
+    raw_env: napi::sys::napi_env,
+    raw_ref: napi::sys::napi_ref,
+}
 
-// SAFETY: See above. The Ref is only ever accessed on the JS main thread.
-unsafe impl Send for SendableRef {}
-// SAFETY: We only access via &self on the JS thread. Mutex<Db> handles interior mutability.
-unsafe impl Sync for SendableRef {}
+unsafe impl Send for FnRef {}
+unsafe impl Sync for FnRef {}
+
+impl FnRef {
+    /// Create a persistent reference from a raw napi_value (must be a function).
+    unsafe fn new(env: napi::sys::napi_env, value: napi::sys::napi_value) -> Result<Self> {
+        let mut raw_ref = std::ptr::null_mut();
+        let status = napi::sys::napi_create_reference(env, value, 1, &mut raw_ref);
+        if status != napi::sys::Status::napi_ok {
+            return Err(Error::new(Status::GenericFailure, "Failed to create reference"));
+        }
+        Ok(FnRef { raw_env: env, raw_ref })
+    }
+
+    /// Get the referenced value.
+    unsafe fn get_value(&self) -> Result<napi::sys::napi_value> {
+        let mut result = std::ptr::null_mut();
+        let status = napi::sys::napi_get_reference_value(self.raw_env, self.raw_ref, &mut result);
+        if status != napi::sys::Status::napi_ok {
+            return Err(Error::new(Status::GenericFailure, "Failed to get reference value"));
+        }
+        Ok(result)
+    }
+
+    /// Call this function reference with (filePath, content) args and return the result as JSON.
+    unsafe fn call_extract(&self, rel_path: &str, content: &str) -> Result<Vec<HashMap<String, Value>>> {
+        let env = self.raw_env;
+        let func = self.get_value()?;
+
+        // Create string args
+        let mut js_path = std::ptr::null_mut();
+        let status = napi::sys::napi_create_string_utf8(
+            env,
+            rel_path.as_ptr() as *const _,
+            rel_path.len(),
+            &mut js_path,
+        );
+        if status != napi::sys::Status::napi_ok {
+            return Err(Error::new(Status::GenericFailure, "Failed to create path string"));
+        }
+
+        let mut js_content = std::ptr::null_mut();
+        let status = napi::sys::napi_create_string_utf8(
+            env,
+            content.as_ptr() as *const _,
+            content.len(),
+            &mut js_content,
+        );
+        if status != napi::sys::Status::napi_ok {
+            return Err(Error::new(Status::GenericFailure, "Failed to create content string"));
+        }
+
+        // Get undefined for 'this'
+        let mut undefined = std::ptr::null_mut();
+        napi::sys::napi_get_undefined(env, &mut undefined);
+
+        // Call the function
+        let args = [js_path, js_content];
+        let mut result = std::ptr::null_mut();
+        let status = napi::sys::napi_call_function(env, undefined, func, 2, args.as_ptr(), &mut result);
+        if status != napi::sys::Status::napi_ok {
+            // Check for pending exception
+            let mut is_exception = false;
+            napi::sys::napi_is_exception_pending(env, &mut is_exception);
+            if is_exception {
+                let mut exception = std::ptr::null_mut();
+                napi::sys::napi_get_and_clear_last_exception(env, &mut exception);
+            }
+            return Err(Error::new(Status::GenericFailure, "Extract function call failed"));
+        }
+
+        // Parse result array
+        parse_js_array_of_objects(env, result)
+    }
+}
+
+impl Drop for FnRef {
+    fn drop(&mut self) {
+        unsafe {
+            napi::sys::napi_delete_reference(self.raw_env, self.raw_ref);
+        }
+    }
+}
+
+/// Parse a JS array of objects into Vec<HashMap<String, Value>> using napi_sys.
+unsafe fn parse_js_array_of_objects(
+    env: napi::sys::napi_env,
+    array: napi::sys::napi_value,
+) -> Result<Vec<HashMap<String, Value>>> {
+    let mut is_array = false;
+    napi::sys::napi_is_array(env, array, &mut is_array);
+    if !is_array {
+        return Err(Error::new(Status::GenericFailure, "Extract must return an array"));
+    }
+
+    let mut length: u32 = 0;
+    napi::sys::napi_get_array_length(env, array, &mut length);
+
+    let mut rows = Vec::with_capacity(length as usize);
+
+    for i in 0..length {
+        let mut element = std::ptr::null_mut();
+        napi::sys::napi_get_element(env, array, i, &mut element);
+
+        // Get property names
+        let mut names = std::ptr::null_mut();
+        napi::sys::napi_get_property_names(env, element, &mut names);
+
+        let mut names_len: u32 = 0;
+        napi::sys::napi_get_array_length(env, names, &mut names_len);
+
+        let mut row = HashMap::new();
+
+        for j in 0..names_len {
+            let mut key_val = std::ptr::null_mut();
+            napi::sys::napi_get_element(env, names, j, &mut key_val);
+
+            // Get key string
+            let mut key_len = 0usize;
+            napi::sys::napi_get_value_string_utf8(env, key_val, std::ptr::null_mut(), 0, &mut key_len);
+            let mut key_buf = vec![0u8; key_len + 1];
+            let mut actual_len = 0usize;
+            napi::sys::napi_get_value_string_utf8(
+                env,
+                key_val,
+                key_buf.as_mut_ptr() as *mut _,
+                key_len + 1,
+                &mut actual_len,
+            );
+            let key = String::from_utf8_lossy(&key_buf[..actual_len]).to_string();
+
+            // Get value
+            let mut val = std::ptr::null_mut();
+            napi::sys::napi_get_property(env, element, key_val, &mut val);
+
+            let value = js_val_to_value(env, val)?;
+            row.insert(key, value);
+        }
+
+        rows.push(row);
+    }
+
+    Ok(rows)
+}
+
+/// Convert a raw napi_value to a dirsql_core Value.
+unsafe fn js_val_to_value(env: napi::sys::napi_env, val: napi::sys::napi_value) -> Result<Value> {
+    let mut value_type = 0i32;
+    napi::sys::napi_typeof(env, val, &mut value_type);
+
+    match value_type {
+        // napi_undefined = 0, napi_null = 1
+        0 | 1 => Ok(Value::Null),
+        // napi_boolean = 2
+        2 => {
+            let mut b = false;
+            napi::sys::napi_get_value_bool(env, val, &mut b);
+            Ok(Value::Integer(if b { 1 } else { 0 }))
+        }
+        // napi_number = 3
+        3 => {
+            let mut n: f64 = 0.0;
+            napi::sys::napi_get_value_double(env, val, &mut n);
+            if n.fract() == 0.0 && n >= i64::MIN as f64 && n <= i64::MAX as f64 {
+                Ok(Value::Integer(n as i64))
+            } else {
+                Ok(Value::Real(n))
+            }
+        }
+        // napi_string = 4
+        4 => {
+            let mut len = 0usize;
+            napi::sys::napi_get_value_string_utf8(env, val, std::ptr::null_mut(), 0, &mut len);
+            let mut buf = vec![0u8; len + 1];
+            let mut actual = 0usize;
+            napi::sys::napi_get_value_string_utf8(
+                env,
+                val,
+                buf.as_mut_ptr() as *mut _,
+                len + 1,
+                &mut actual,
+            );
+            Ok(Value::Text(String::from_utf8_lossy(&buf[..actual]).to_string()))
+        }
+        // Everything else -> stringify
+        _ => {
+            let mut str_val = std::ptr::null_mut();
+            let status = napi::sys::napi_coerce_to_string(env, val, &mut str_val);
+            if status != napi::sys::Status::napi_ok {
+                return Ok(Value::Text("[object]".to_string()));
+            }
+            let mut len = 0usize;
+            napi::sys::napi_get_value_string_utf8(env, str_val, std::ptr::null_mut(), 0, &mut len);
+            let mut buf = vec![0u8; len + 1];
+            let mut actual = 0usize;
+            napi::sys::napi_get_value_string_utf8(
+                env,
+                str_val,
+                buf.as_mut_ptr() as *mut _,
+                len + 1,
+                &mut actual,
+            );
+            Ok(Value::Text(String::from_utf8_lossy(&buf[..actual]).to_string()))
+        }
+    }
+}
+
+/// Get a string property from a JS object.
+unsafe fn get_string_property(
+    env: napi::sys::napi_env,
+    obj: napi::sys::napi_value,
+    name: &str,
+) -> Result<String> {
+    let mut key = std::ptr::null_mut();
+    napi::sys::napi_create_string_utf8(env, name.as_ptr() as *const _, name.len(), &mut key);
+
+    let mut has = false;
+    napi::sys::napi_has_property(env, obj, key, &mut has);
+    if !has {
+        return Err(Error::new(
+            Status::GenericFailure,
+            format!("Missing property: {}", name),
+        ));
+    }
+
+    let mut val = std::ptr::null_mut();
+    napi::sys::napi_get_property(env, obj, key, &mut val);
+
+    let mut len = 0usize;
+    napi::sys::napi_get_value_string_utf8(env, val, std::ptr::null_mut(), 0, &mut len);
+    let mut buf = vec![0u8; len + 1];
+    let mut actual = 0usize;
+    napi::sys::napi_get_value_string_utf8(
+        env,
+        val,
+        buf.as_mut_ptr() as *mut _,
+        len + 1,
+        &mut actual,
+    );
+    Ok(String::from_utf8_lossy(&buf[..actual]).to_string())
+}
+
+/// Get a bool property from a JS object, with default.
+unsafe fn get_bool_property(
+    env: napi::sys::napi_env,
+    obj: napi::sys::napi_value,
+    name: &str,
+    default: bool,
+) -> bool {
+    let mut key = std::ptr::null_mut();
+    napi::sys::napi_create_string_utf8(env, name.as_ptr() as *const _, name.len(), &mut key);
+
+    let mut has = false;
+    napi::sys::napi_has_property(env, obj, key, &mut has);
+    if !has {
+        return default;
+    }
+
+    let mut val = std::ptr::null_mut();
+    napi::sys::napi_get_property(env, obj, key, &mut val);
+
+    let mut value_type = 0i32;
+    napi::sys::napi_typeof(env, val, &mut value_type);
+    if value_type != 2 {
+        // not a boolean
+        return default;
+    }
+
+    let mut b = default;
+    napi::sys::napi_get_value_bool(env, val, &mut b);
+    b
+}
+
+/// Get a function property from a JS object.
+unsafe fn get_function_property(
+    env: napi::sys::napi_env,
+    obj: napi::sys::napi_value,
+    name: &str,
+) -> Result<napi::sys::napi_value> {
+    let mut key = std::ptr::null_mut();
+    napi::sys::napi_create_string_utf8(env, name.as_ptr() as *const _, name.len(), &mut key);
+
+    let mut has = false;
+    napi::sys::napi_has_property(env, obj, key, &mut has);
+    if !has {
+        return Err(Error::new(
+            Status::GenericFailure,
+            format!("Missing property: {}", name),
+        ));
+    }
+
+    let mut val = std::ptr::null_mut();
+    napi::sys::napi_get_property(env, obj, key, &mut val);
+
+    let mut value_type = 0i32;
+    napi::sys::napi_typeof(env, val, &mut value_type);
+    if value_type != 6 {
+        // napi_function = 6
+        return Err(Error::new(
+            Status::GenericFailure,
+            format!("Property '{}' must be a function", name),
+        ));
+    }
+
+    Ok(val)
+}
 
 /// Internal table config stored after init for use during watch.
 struct TableConfig {
     name: String,
     glob: String,
-    extract_ref: SendableRef,
+    extract_ref: FnRef,
     strict: bool,
 }
 
@@ -80,100 +382,35 @@ fn value_row_to_json(row: &HashMap<String, Value>) -> HashMap<String, serde_json
         .collect()
 }
 
-/// Call the extract function via its Ref and parse the result.
-fn call_extract(
-    env: &Env,
-    extract_ref: &SendableRef,
-    rel_path: &str,
-    content: &str,
-) -> Result<Vec<HashMap<String, Value>>> {
-    let extract_fn: JsFunction = env.get_reference_value(&extract_ref.0)?;
-    let js_path = env.create_string(rel_path)?.into_unknown();
-    let js_content = env.create_string(content)?.into_unknown();
-    let result: JsObject = extract_fn.call(None, &[js_path, js_content])?.try_into()?;
-
-    // Convert JS array of objects to Vec<HashMap<String, Value>>
-    let len: u32 = result.get_array_length()?;
-    let mut rows = Vec::with_capacity(len as usize);
-
-    for i in 0..len {
-        let item_unknown: napi::JsUnknown = result.get_element(i)?;
-        let item: JsObject = item_unknown.try_into()?;
-        let keys = JsObject::keys(&item)?;
-        let mut row = HashMap::new();
-
-        for key in &keys {
-            let val: napi::JsUnknown = item.get_named_property(key)?;
-            let value = js_unknown_to_value(env, val)?;
-            row.insert(key.clone(), value);
-        }
-        rows.push(row);
-    }
-
-    Ok(rows)
-}
-
-/// Convert a JsUnknown to a dirsql_core Value.
-fn js_unknown_to_value(_env: &Env, val: napi::JsUnknown) -> Result<Value> {
-    match val.get_type()? {
-        napi::ValueType::Null | napi::ValueType::Undefined => Ok(Value::Null),
-        napi::ValueType::Boolean => {
-            let b: bool = val.coerce_to_bool()?.get_value()?;
-            Ok(Value::Integer(if b { 1 } else { 0 }))
-        }
-        napi::ValueType::Number => {
-            let n: f64 = val.coerce_to_number()?.get_double()?;
-            if n.fract() == 0.0 && n >= i64::MIN as f64 && n <= i64::MAX as f64 {
-                Ok(Value::Integer(n as i64))
-            } else {
-                Ok(Value::Real(n))
-            }
-        }
-        napi::ValueType::String => {
-            let s: String = unsafe { val.cast::<napi::JsString>() }
-                .into_utf8()?
-                .as_str()?
-                .to_string();
-            Ok(Value::Text(s))
-        }
-        _ => {
-            let s: String = val.coerce_to_string()?.into_utf8()?.as_str()?.to_string();
-            Ok(Value::Text(s))
-        }
-    }
-}
-
 #[napi]
 impl DirSQL {
     /// Create a new DirSQL instance.
     ///
     /// @param root - Root directory path to index
-    /// @param tables - Array of table definition objects { ddl, glob, extract, strict? }
+    /// @param tables - Array of table definition objects
     /// @param ignore - Optional array of glob patterns to ignore
     #[napi(constructor)]
     #[allow(clippy::new_ret_no_self)]
-    pub fn new(
-        env: Env,
-        root: String,
-        tables: napi::JsObject,
-        ignore: Option<Vec<String>>,
-    ) -> Result<Self> {
+    pub fn new(env: Env, root: String, tables: Array, ignore: Option<Vec<String>>) -> Result<Self> {
+        let raw_env = env.raw();
         let db = Db::new()
             .map_err(|e| Error::new(Status::GenericFailure, format!("DB init error: {}", e)))?;
 
         let root_path = PathBuf::from(&root);
         let mut table_configs: Vec<TableConfig> = Vec::new();
 
-        let tables_len: u32 = tables.get_array_length()?;
+        let tables_len = tables.len();
+
         for i in 0..tables_len {
-            let table_unknown: napi::JsUnknown = tables.get_element(i)?;
-            let table_obj: JsObject = table_unknown.try_into()?;
-            let ddl: String = table_obj.get_named_property("ddl")?;
-            let glob: String = table_obj.get_named_property("glob")?;
-            let extract_fn: JsFunction = table_obj.get_named_property("extract")?;
-            let strict: bool = table_obj
-                .get_named_property::<bool>("strict")
-                .unwrap_or(false);
+            let table_element: Unknown<'_> = tables.get(i)?.ok_or_else(|| {
+                Error::new(Status::GenericFailure, format!("Missing table at index {}", i))
+            })?;
+            let raw_obj = unsafe { table_element.raw() };
+
+            let ddl = unsafe { get_string_property(raw_env, raw_obj, "ddl")? };
+            let glob = unsafe { get_string_property(raw_env, raw_obj, "glob")? };
+            let extract_val = unsafe { get_function_property(raw_env, raw_obj, "extract")? };
+            let strict = unsafe { get_bool_property(raw_env, raw_obj, "strict", false) };
 
             let table_name = parse_table_name(&ddl).ok_or_else(|| {
                 Error::new(
@@ -184,12 +421,12 @@ impl DirSQL {
             db.create_table(&ddl)
                 .map_err(|e| Error::new(Status::GenericFailure, format!("DDL error: {}", e)))?;
 
-            let extract_ref = env.create_reference(extract_fn)?;
+            let extract_ref = unsafe { FnRef::new(raw_env, extract_val)? };
 
             table_configs.push(TableConfig {
                 name: table_name,
                 glob,
-                extract_ref: SendableRef(extract_ref),
+                extract_ref,
                 strict,
             });
         }
@@ -213,7 +450,7 @@ impl DirSQL {
         // Track rows per file
         let mut file_rows: HashMap<String, (String, Vec<HashMap<String, Value>>)> = HashMap::new();
 
-        // Process each file
+        // Process each file - call extract directly since we're on the JS thread
         for (file_path, table_name) in &files {
             let content = std::fs::read_to_string(file_path).map_err(|e| {
                 Error::new(
@@ -238,7 +475,7 @@ impl DirSQL {
                     )
                 })?;
 
-            let rows = call_extract(&env, &tc.extract_ref, &rel_path, &content)?;
+            let rows = unsafe { tc.extract_ref.call_extract(&rel_path, &content)? };
 
             let mut value_rows: Vec<HashMap<String, Value>> = Vec::new();
             for (row_index, row) in rows.iter().enumerate() {
@@ -296,7 +533,7 @@ impl DirSQL {
     /// Poll for file events with a timeout (in milliseconds).
     /// Returns an array of RowEvent objects, possibly empty if no events within timeout.
     #[napi(js_name = "pollEvents")]
-    pub fn poll_events(&self, env: Env, timeout_ms: u32) -> Result<Vec<RowEvent>> {
+    pub fn poll_events(&self, timeout_ms: u32) -> Result<Vec<RowEvent>> {
         let file_events = {
             let guard = self
                 .watcher
@@ -393,7 +630,9 @@ impl DirSQL {
                         None => continue,
                     };
 
-                    let extract_result = call_extract(&env, &tc.extract_ref, &rel_path, &content);
+                    // Call extract via stored function reference
+                    let extract_result =
+                        unsafe { tc.extract_ref.call_extract(&rel_path, &content) };
 
                     let new_rows = match extract_result {
                         Ok(raw_rows) => {
