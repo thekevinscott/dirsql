@@ -6,7 +6,8 @@ packages/*/target
 .worktrees/
 notes/
 
-# Node native addons
+# Node
+node_modules/
 *.node
 
 # Python

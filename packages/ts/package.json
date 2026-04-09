@@ -16,11 +16,22 @@
     "build:debug": "napi build",
     "prepublishOnly": "napi prepublish -t npm",
     "test": "vitest run",
-    "coverage": "vitest run --coverage"
+    "coverage": "vitest run --coverage",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "format:check": "biome format ."
   },
   "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
     "@napi-rs/cli": "^3.0.0",
     "vitest": "^3.1.1",
     "@vitest/coverage-v8": "^3.1.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@biomejs/biome",
+      "esbuild"
+    ]
   }
 }
