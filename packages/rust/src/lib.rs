@@ -144,8 +144,8 @@ impl DirSQL {
     pub fn from_config(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
         let config_path = root.join(".dirsql.toml");
-        let cfg = config::load_config(&config_path)
-            .map_err(|e| DirSqlError::Config(e.to_string()))?;
+        let cfg =
+            config::load_config(&config_path).map_err(|e| DirSqlError::Config(e.to_string()))?;
 
         let tables = build_tables_from_config(&cfg)?;
         Self::build(root, tables, cfg.ignore)
@@ -568,9 +568,8 @@ fn build_tables_from_config(cfg: &config::Config) -> Result<Vec<Table>> {
             table_cfg.glob.clone(),
             move |path: &str, content: &str| {
                 // 1. Parse file content
-                let mut rows =
-                    parser::parse_file(format, content, each.as_deref())
-                        .map_err(|e| -> BoxError { Box::new(e) })?;
+                let mut rows = parser::parse_file(format, content, each.as_deref())
+                    .map_err(|e| -> BoxError { Box::new(e) })?;
 
                 // 2. Extract captures from the path
                 let captures: HashMap<String, String> = if let Some(ref regex) = capture_regex {
@@ -644,8 +643,8 @@ impl AsyncDirSQL {
     pub fn from_config(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
         let config_path = root.join(".dirsql.toml");
-        let cfg = config::load_config(&config_path)
-            .map_err(|e| DirSqlError::Config(e.to_string()))?;
+        let cfg =
+            config::load_config(&config_path).map_err(|e| DirSqlError::Config(e.to_string()))?;
 
         let tables = build_tables_from_config(&cfg)?;
         let ignore_patterns: Vec<String> = cfg.ignore;

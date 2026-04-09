@@ -35,7 +35,9 @@ glob = "data/*.csv"
 #[test]
 fn from_config_indexes_csv_files() {
     let (_root, db) = setup_csv_config();
-    let rows = db.query("SELECT name, price FROM items ORDER BY name").unwrap();
+    let rows = db
+        .query("SELECT name, price FROM items ORDER BY name")
+        .unwrap();
 
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["name"], Value::Text("apple".into()));
@@ -61,16 +63,8 @@ glob = "**/*.csv"
 
     fs::create_dir_all(root.path().join("data")).unwrap();
     fs::create_dir_all(root.path().join("ignored")).unwrap();
-    fs::write(
-        root.path().join("data").join("a.csv"),
-        "name\nvisible\n",
-    )
-    .unwrap();
-    fs::write(
-        root.path().join("ignored").join("b.csv"),
-        "name\nhidden\n",
-    )
-    .unwrap();
+    fs::write(root.path().join("data").join("a.csv"), "name\nvisible\n").unwrap();
+    fs::write(root.path().join("ignored").join("b.csv"), "name\nhidden\n").unwrap();
 
     let db = DirSQL::from_config(root.path()).unwrap();
     let rows = db.query("SELECT name FROM items").unwrap();
@@ -102,7 +96,9 @@ each = "items"
     .unwrap();
 
     let db = DirSQL::from_config(root.path()).unwrap();
-    let rows = db.query("SELECT name, price FROM products ORDER BY name").unwrap();
+    let rows = db
+        .query("SELECT name, price FROM products ORDER BY name")
+        .unwrap();
 
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["name"], Value::Text("gadget".into()));
@@ -125,7 +121,10 @@ glob = "_comments/{thread_id}/index.jsonl"
 
     fs::create_dir_all(root.path().join("_comments").join("abc123")).unwrap();
     fs::write(
-        root.path().join("_comments").join("abc123").join("index.jsonl"),
+        root.path()
+            .join("_comments")
+            .join("abc123")
+            .join("index.jsonl"),
         r#"{"body": "hello world"}
 {"body": "goodbye world"}
 "#,
@@ -133,7 +132,9 @@ glob = "_comments/{thread_id}/index.jsonl"
     .unwrap();
 
     let db = DirSQL::from_config(root.path()).unwrap();
-    let rows = db.query("SELECT thread_id, body FROM comments ORDER BY body").unwrap();
+    let rows = db
+        .query("SELECT thread_id, body FROM comments ORDER BY body")
+        .unwrap();
 
     assert_eq!(rows.len(), 2);
     // Both rows should have thread_id = "abc123" from the path capture
@@ -188,11 +189,7 @@ format = "csv"
     )
     .unwrap();
 
-    fs::write(
-        root.path().join("data.txt"),
-        "x,y\nfoo,bar\n",
-    )
-    .unwrap();
+    fs::write(root.path().join("data.txt"), "x,y\nfoo,bar\n").unwrap();
 
     let db = DirSQL::from_config(root.path()).unwrap();
     let rows = db.query("SELECT x, y FROM data").unwrap();
@@ -244,15 +241,14 @@ glob = "*.csv"
     )
     .unwrap();
 
-    fs::write(
-        root.path().join("data.csv"),
-        "name\nhello\nworld\n",
-    )
-    .unwrap();
+    fs::write(root.path().join("data.csv"), "name\nhello\nworld\n").unwrap();
 
     let db = AsyncDirSQL::from_config(root.path()).unwrap();
     db.ready().await.unwrap();
-    let rows = db.query("SELECT name FROM items ORDER BY name").await.unwrap();
+    let rows = db
+        .query("SELECT name FROM items ORDER BY name")
+        .await
+        .unwrap();
 
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["name"], Value::Text("hello".into()));
