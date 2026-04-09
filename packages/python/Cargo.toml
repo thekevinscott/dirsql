@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 dirsql-core = { path = "../core" }
 pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
+regex = "1"
 
 [features]
 default = []
