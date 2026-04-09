@@ -6,15 +6,15 @@ import os
 
 import pytest
 
-from dirsql import AsyncDirSQL, Table
+from dirsql import DirSQL, Table
 
 
-def describe_AsyncDirSQL():
+def describe_DirSQL_async():
     def describe_init():
         @pytest.mark.asyncio
         async def it_creates_instance_synchronously(jsonl_dir):
-            """AsyncDirSQL constructor is sync and returns immediately."""
-            db = AsyncDirSQL(
+            """DirSQL constructor is sync and returns immediately."""
+            db = DirSQL(
                 jsonl_dir,
                 tables=[
                     Table(
@@ -37,7 +37,7 @@ def describe_AsyncDirSQL():
         @pytest.mark.asyncio
         async def it_indexes_files_after_ready(jsonl_dir):
             """Data is available after awaiting ready()."""
-            db = AsyncDirSQL(
+            db = DirSQL(
                 jsonl_dir,
                 tables=[
                     Table(
@@ -66,7 +66,7 @@ def describe_AsyncDirSQL():
             with open(os.path.join(tmp_dir, "data", "bad.json"), "w") as f:
                 f.write("not valid json")
 
-            db = AsyncDirSQL(
+            db = DirSQL(
                 tmp_dir,
                 tables=[
                     Table(
@@ -82,7 +82,7 @@ def describe_AsyncDirSQL():
         @pytest.mark.asyncio
         async def it_allows_multiple_ready_calls(jsonl_dir):
             """Calling ready() multiple times is safe and idempotent."""
-            db = AsyncDirSQL(
+            db = DirSQL(
                 jsonl_dir,
                 tables=[
                     Table(
@@ -109,7 +109,7 @@ def describe_AsyncDirSQL():
         @pytest.mark.asyncio
         async def it_returns_results_as_list_of_dicts(jsonl_dir):
             """Async query returns list of dicts with column names."""
-            db = AsyncDirSQL(
+            db = DirSQL(
                 jsonl_dir,
                 tables=[
                     Table(
@@ -137,7 +137,7 @@ def describe_AsyncDirSQL():
         @pytest.mark.asyncio
         async def it_raises_on_invalid_sql(jsonl_dir):
             """Invalid SQL raises an exception."""
-            db = AsyncDirSQL(
+            db = DirSQL(
                 jsonl_dir,
                 tables=[
                     Table(
@@ -163,7 +163,7 @@ def describe_AsyncDirSQL():
         @pytest.mark.asyncio
         async def it_emits_insert_events_for_new_files(tmp_dir):
             """watch() yields insert events when a new file is created."""
-            db = AsyncDirSQL(
+            db = DirSQL(
                 tmp_dir,
                 tables=[
                     Table(
@@ -210,7 +210,7 @@ def describe_AsyncDirSQL():
             with open(os.path.join(tmp_dir, "doomed.json"), "w") as f:
                 json.dump({"name": "doomed"}, f)
 
-            db = AsyncDirSQL(
+            db = DirSQL(
                 tmp_dir,
                 tables=[
                     Table(
@@ -260,7 +260,7 @@ def describe_AsyncDirSQL():
             with open(os.path.join(tmp_dir, "item.json"), "w") as f:
                 json.dump({"name": "draft"}, f)
 
-            db = AsyncDirSQL(
+            db = DirSQL(
                 tmp_dir,
                 tables=[
                     Table(
@@ -300,7 +300,7 @@ def describe_AsyncDirSQL():
         @pytest.mark.asyncio
         async def it_emits_error_events_for_bad_extract(tmp_dir):
             """watch() yields error events when extract lambda fails."""
-            db = AsyncDirSQL(
+            db = DirSQL(
                 tmp_dir,
                 tables=[
                     Table(
@@ -339,7 +339,7 @@ def describe_AsyncDirSQL():
         @pytest.mark.asyncio
         async def it_updates_db_on_file_changes(tmp_dir):
             """The database is kept in sync with file system changes."""
-            db = AsyncDirSQL(
+            db = DirSQL(
                 tmp_dir,
                 tables=[
                     Table(

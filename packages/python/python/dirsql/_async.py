@@ -1,8 +1,8 @@
-"""Async wrapper for DirSQL."""
+"""Async-by-default DirSQL wrapper."""
 
 import asyncio
 
-from dirsql._dirsql import DirSQL
+from dirsql._dirsql import DirSQL as _RustDirSQL
 
 
 class _WatchStream:
@@ -29,11 +29,11 @@ class _WatchStream:
                 self._buffer.extend(events)
 
 
-class AsyncDirSQL:
-    """Async wrapper around DirSQL.
+class DirSQL:
+    """Async-by-default wrapper around the Rust DirSQL engine.
 
     Usage:
-        db = AsyncDirSQL(root, tables=[...])
+        db = DirSQL(root, tables=[...])
         await db.ready()
         results = await db.query("SELECT ...")
         async for event in db.watch():
@@ -51,9 +51,9 @@ class AsyncDirSQL:
 
     @classmethod
     def from_config(cls, path):
-        """Create an AsyncDirSQL from a .dirsql.toml config file.
+        """Create a DirSQL from a .dirsql.toml config file.
 
-        Returns an AsyncDirSQL instance. Call ``await db.ready()`` before querying.
+        Returns a DirSQL instance. Call ``await db.ready()`` before querying.
         """
         instance = object.__new__(cls)
         instance._root = None
@@ -68,7 +68,7 @@ class AsyncDirSQL:
     async def _init_from_config(self, path):
         """Run from_config scan in the background."""
         try:
-            self._db = await asyncio.to_thread(DirSQL.from_config, path)
+            self._db = await asyncio.to_thread(_RustDirSQL.from_config, path)
         except Exception as exc:
             self._init_error = exc
         finally:
@@ -78,7 +78,7 @@ class AsyncDirSQL:
         """Run the scan in the background."""
         try:
             self._db = await asyncio.to_thread(
-                DirSQL, self._root, tables=self._tables, ignore=self._ignore
+                _RustDirSQL, self._root, tables=self._tables, ignore=self._ignore
             )
         except Exception as exc:
             self._init_error = exc

@@ -28,7 +28,7 @@ When adding a feature to one SDK, create beads for the other two.
 ```
 ┌─────────────────────────────────┐
 │         Python SDK              │
-│   DirSQL, AsyncDirSQL, Table    │
+│   DirSQL, Table, RowEvent       │
 ├─────────────────────────────────┤
 │         PyO3 bindings           │
 │   packages/python/src/lib.rs    │
@@ -85,9 +85,9 @@ The `lib.rs` file in `packages/python/src/` defines the PyO3 bindings that expos
 
 The Python `extract` callable is called from Rust via PyO3's GIL-acquiring mechanism. Python dicts are converted to `HashMap<String, Value>` for storage, and converted back for query results.
 
-### AsyncDirSQL
+### DirSQL (Python-facing async wrapper)
 
-A pure-Python wrapper (`_async.py`) that uses `asyncio.to_thread` to run the synchronous Rust operations off the event loop. The watch stream is implemented as a custom async iterator that polls for events in a background thread.
+The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses `asyncio.to_thread` to run the synchronous Rust operations off the event loop. The constructor is sync (starts a background scan), `ready()` and `query()` are async, and `watch()` returns an async iterator that polls for events in a background thread. The Rust-backed `PyDirSQL` class is imported as `_RustDirSQL` internally and is not part of the public API.
 
 ## Data flow
 

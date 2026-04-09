@@ -1,6 +1,6 @@
 """dirsql - Ephemeral SQL index over a local directory."""
 
-from dirsql._dirsql import DirSQL, Table, RowEvent, __version__
-from dirsql._async import AsyncDirSQL
+from dirsql._dirsql import Table, RowEvent, __version__
+from dirsql._async import DirSQL
 
-__all__ = ["DirSQL", "Table", "RowEvent", "AsyncDirSQL", "__version__"]
+__all__ = ["DirSQL", "Table", "RowEvent", "__version__"]

@@ -1,11 +1,11 @@
-"""Unit tests for the async DirSQL wrapper."""
+"""Unit tests for the DirSQL async wrapper."""
 
 import pytest
 
 from dirsql import _async as async_mod
 
 
-class _FakeDirSQL:
+class _FakeRustDirSQL:
     def __init__(self, root, *, tables, ignore=None):
         self.root = root
         self.tables = tables
@@ -35,9 +35,9 @@ class _FakeWatcherDb:
 
 @pytest.mark.asyncio
 async def test_ready_and_query_use_the_background_db(monkeypatch):
-    monkeypatch.setattr(async_mod, "DirSQL", _FakeDirSQL)
+    monkeypatch.setattr(async_mod, "_RustDirSQL", _FakeRustDirSQL)
 
-    db = async_mod.AsyncDirSQL("/tmp/root", tables=["table-a"], ignore=["**/*.tmp"])
+    db = async_mod.DirSQL("/tmp/root", tables=["table-a"], ignore=["**/*.tmp"])
     await db.ready()
 
     results = await db.query("SELECT 1")
@@ -55,9 +55,9 @@ async def test_ready_propagates_initialization_errors(monkeypatch):
         def __init__(self, *args, **kwargs):
             raise RuntimeError("boom")
 
-    monkeypatch.setattr(async_mod, "DirSQL", _BoomDirSQL)
+    monkeypatch.setattr(async_mod, "_RustDirSQL", _BoomDirSQL)
 
-    db = async_mod.AsyncDirSQL("/tmp/root", tables=["table-a"])
+    db = async_mod.DirSQL("/tmp/root", tables=["table-a"])
 
     with pytest.raises(RuntimeError, match="boom"):
         await db.ready()

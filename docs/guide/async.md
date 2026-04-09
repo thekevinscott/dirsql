@@ -1,6 +1,6 @@
 # Async API
 
-`AsyncDirSQL` wraps the synchronous `DirSQL` to work with Python's `asyncio`. The initial directory scan runs in a background thread so it does not block the event loop.
+`DirSQL` is async by default in Python. The initial directory scan runs in a background thread so it does not block the event loop.
 
 ## Basic usage
 
@@ -9,10 +9,10 @@
 ```python [Python]
 import asyncio
 import json
-from dirsql import AsyncDirSQL, Table
+from dirsql import DirSQL, Table
 
 async def main():
-    db = AsyncDirSQL(
+    db = DirSQL(
         "./my-project",
         tables=[
             Table(
@@ -75,10 +75,10 @@ console.log(results);
 ## Constructor
 
 ```python
-AsyncDirSQL(root, *, tables, ignore=None)
+DirSQL(root, *, tables, ignore=None)
 ```
 
-The constructor takes the same arguments as `DirSQL`. It immediately starts scanning in a background thread via `asyncio.ensure_future`. The constructor itself returns immediately without blocking.
+The constructor immediately starts scanning in a background thread via `asyncio.ensure_future`. The constructor itself returns immediately without blocking.
 
 ## `await db.ready()`
 
@@ -87,19 +87,19 @@ Waits until the initial directory scan is complete. If the scan raised an except
 `ready()` can be called multiple times safely. After the first completion, subsequent calls return immediately.
 
 ```python
-db = AsyncDirSQL("./data", tables=[...])
+db = DirSQL("./data", tables=[...])
 
 # Do other setup work here while the scan runs in the background
 setup_logging()
 connect_websocket()
 
-# Now wait for the scan to finish
+# Now wait for the scan to finish before querying
 await db.ready()
 ```
 
 ## `await db.query(sql)`
 
-Runs a SQL query in a background thread. Returns the same list-of-dicts format as the synchronous `DirSQL.query()`.
+Runs a SQL query in a background thread. Returns a list of dicts keyed by column name.
 
 ```python
 results = await db.query("SELECT COUNT(*) as n FROM items")
@@ -172,7 +172,7 @@ async def watch_and_serve(db):
         await notify_clients(event)
 
 async def main():
-    db = AsyncDirSQL("./data", tables=[...])
+    db = DirSQL("./data", tables=[...])
     await asyncio.gather(
         watch_and_serve(db),
         run_web_server(),

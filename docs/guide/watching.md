@@ -7,10 +7,10 @@
 ::: code-group
 
 ```python [Python]
-from dirsql import AsyncDirSQL, Table
+from dirsql import DirSQL, Table
 import json
 
-db = AsyncDirSQL(
+db = DirSQL(
     "./my-project",
     tables=[
         Table(
@@ -66,7 +66,7 @@ for await (const event of db.watch()) {
 
 :::
 
-See [Async API](./async.md) for full details on `AsyncDirSQL` (Python).
+See [Async API](./async.md) for full details on the async `DirSQL` API (Python).
 
 ## Event types
 
