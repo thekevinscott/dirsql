@@ -13,46 +13,51 @@ Requires Python >= 3.12. Ships as a native extension (Rust via PyO3) -- binary w
 ## Quick Start
 
 ```python
+import asyncio
 import json
 import os
 import tempfile
 from dirsql import DirSQL, Table
 
-# Create some data files
-root = tempfile.mkdtemp()
-os.makedirs(os.path.join(root, "comments", "abc"), exist_ok=True)
-os.makedirs(os.path.join(root, "comments", "def"), exist_ok=True)
+async def main():
+    # Create some data files
+    root = tempfile.mkdtemp()
+    os.makedirs(os.path.join(root, "comments", "abc"), exist_ok=True)
+    os.makedirs(os.path.join(root, "comments", "def"), exist_ok=True)
 
-with open(os.path.join(root, "comments", "abc", "index.jsonl"), "w") as f:
-    f.write(json.dumps({"body": "looks good", "author": "alice"}) + "\n")
-    f.write(json.dumps({"body": "needs work", "author": "bob"}) + "\n")
+    with open(os.path.join(root, "comments", "abc", "index.jsonl"), "w") as f:
+        f.write(json.dumps({"body": "looks good", "author": "alice"}) + "\n")
+        f.write(json.dumps({"body": "needs work", "author": "bob"}) + "\n")
 
-with open(os.path.join(root, "comments", "def", "index.jsonl"), "w") as f:
-    f.write(json.dumps({"body": "agreed", "author": "carol"}) + "\n")
+    with open(os.path.join(root, "comments", "def", "index.jsonl"), "w") as f:
+        f.write(json.dumps({"body": "agreed", "author": "carol"}) + "\n")
 
-# Define a table: DDL, glob pattern, and an extract function
-db = DirSQL(
-    root,
-    tables=[
-        Table(
-            ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
-            glob="comments/**/index.jsonl",
-            extract=lambda path, content: [
-                {
-                    "id": os.path.basename(os.path.dirname(path)),
-                    "body": row["body"],
-                    "author": row["author"],
-                }
-                for line in content.splitlines()
-                for row in [json.loads(line)]
-            ],
-        ),
-    ],
-)
+    # Define a table: DDL, glob pattern, and an extract function
+    db = DirSQL(
+        root,
+        tables=[
+            Table(
+                ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
+                glob="comments/**/index.jsonl",
+                extract=lambda path, content: [
+                    {
+                        "id": os.path.basename(os.path.dirname(path)),
+                        "body": row["body"],
+                        "author": row["author"],
+                    }
+                    for line in content.splitlines()
+                    for row in [json.loads(line)]
+                ],
+            ),
+        ],
+    )
+    await db.ready()
 
-# Query with SQL
-results = db.query("SELECT * FROM comments WHERE author = 'alice'")
-# [{"id": "abc", "body": "looks good", "author": "alice"}]
+    # Query with SQL
+    results = await db.query("SELECT * FROM comments WHERE author = 'alice'")
+    # [{"id": "abc", "body": "looks good", "author": "alice"}]
+
+asyncio.run(main())
 ```
 
 ## Multiple Tables and Joins
@@ -73,8 +78,9 @@ db = DirSQL(
         ),
     ],
 )
+await db.ready()
 
-results = db.query("""
+results = await db.query("""
     SELECT posts.title, authors.name
     FROM posts JOIN authors ON posts.author_id = authors.id
 """)
@@ -92,18 +98,17 @@ db = DirSQL(
 )
 ```
 
-## Async API
+## Watching for Changes
 
-`AsyncDirSQL` wraps the synchronous API for use with asyncio. Initialization is awaitable, and `watch()` returns an async iterator of row-level change events.
+`DirSQL` is async by default. The `watch()` method returns an async iterator of row-level change events.
 
 ```python
 import asyncio
 import json
-import os
-from dirsql import AsyncDirSQL, Table
+from dirsql import DirSQL, Table
 
 async def main():
-    db = AsyncDirSQL(
+    db = DirSQL(
         "/path/to/data",
         tables=[
             Table(
@@ -113,7 +118,9 @@ async def main():
             ),
         ],
     )
-    # Query works the same way
+    await db.ready()
+
+    # Query
     results = await db.query("SELECT * FROM items")
 
     # Watch for file changes (insert/update/delete/error events)
@@ -137,31 +144,27 @@ Defines how files map to a SQL table.
 
 ### `DirSQL(root, *, tables, ignore=None)`
 
-Creates an in-memory SQLite database indexed from the directory at `root`.
+Creates an in-memory SQLite database indexed from the directory at `root`. The constructor is sync and returns immediately; scanning runs in a background thread.
 
 - **`root`** (`str`): Path to the directory to index.
 - **`tables`** (`list[Table]`): Table definitions.
 - **`ignore`** (`list[str] | None`): Glob patterns for paths to skip.
 
-#### `DirSQL.query(sql) -> list[dict]`
-
-Execute a SQL query. Returns a list of dicts keyed by column name. Internal tracking columns (`_dirsql_*`) are excluded from results.
-
-### `AsyncDirSQL(root, *, tables, ignore=None)`
-
-Async wrapper. Constructor is sync (returns immediately). Queries implicitly wait for the initial scan. Call `await db.ready()` explicitly if you need to check for scan errors before querying.
-
-#### `await AsyncDirSQL.ready()`
+#### `await DirSQL.ready()`
 
 Wait for the initial scan to complete. Idempotent -- safe to call multiple times. Raises any exception that occurred during init.
 
-#### `await AsyncDirSQL.query(sql) -> list[dict]`
+#### `await DirSQL.query(sql) -> list[dict]`
 
-Same as `DirSQL.query`, but async.
+Execute a SQL query. Returns a list of dicts keyed by column name. Internal tracking columns (`_dirsql_*`) are excluded from results.
 
-#### `AsyncDirSQL.watch() -> AsyncIterator[RowEvent]`
+#### `DirSQL.watch() -> AsyncIterator[RowEvent]`
 
 Returns an async iterator that yields `RowEvent` objects as files change on disk. Starts the filesystem watcher on first iteration.
+
+#### `DirSQL.from_config(path) -> DirSQL`
+
+Create a `DirSQL` instance from a `.dirsql.toml` config file. Returns immediately; scanning runs in the background. Call `await db.ready()` before querying.
 
 ### `RowEvent`
 

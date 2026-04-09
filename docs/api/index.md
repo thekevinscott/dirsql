@@ -38,79 +38,13 @@ new DirSQL(root: string, options: { tables: Table[], ignore?: string[] })
 
 :::
 
-Creates an in-memory SQLite index over the given directory. The constructor scans the directory synchronously (Python/Rust) or starts scanning immediately (TypeScript).
+Creates an in-memory SQLite index over the given directory. In Python, the constructor starts scanning in a background thread and returns immediately. Call `await db.ready()` before querying. In Rust, the constructor scans synchronously. In TypeScript, scanning starts immediately.
 
 **Parameters:**
 
 - `root` -- Path to the directory to index.
 - `tables` -- List of `Table` definitions. Each defines a SQLite table, a glob pattern, and an extract function.
 - `ignore` -- Optional list of glob patterns. Files matching any ignore pattern are skipped regardless of table globs.
-
-### Methods
-
-#### `query`
-
-::: code-group
-
-```python [Python]
-db.query(sql: str) -> list[dict]
-```
-
-```rust [Rust]
-db.query(sql: &str) -> Result<Vec<HashMap<String, Value>>>
-```
-
-```typescript [TypeScript]
-await db.query(sql: string): Promise<Record<string, unknown>[]>
-```
-
-:::
-
-Execute a SQL query against the in-memory database. Returns results keyed by column name. Internal tracking columns (`_dirsql_file_path`, `_dirsql_row_index`) are excluded from results.
-
----
-
-## AsyncDirSQL
-
-### Import
-
-::: code-group
-
-```python [Python]
-from dirsql import AsyncDirSQL
-```
-
-```rust [Rust]
-use dirsql_sdk::DirSQL; // Same type, async methods via tokio
-```
-
-```typescript [TypeScript]
-import { DirSQL } from 'dirsql'; // Async by default
-```
-
-:::
-
-### Constructor
-
-::: code-group
-
-```python [Python]
-AsyncDirSQL(root: str, *, tables: list[Table], ignore: list[str] | None = None)
-```
-
-```rust [Rust]
-DirSQL::new(root: &str, tables: Vec<Table>) -> Result<DirSQL>
-```
-
-```typescript [TypeScript]
-new DirSQL(root: string, options: { tables: Table[], ignore?: string[] })
-```
-
-:::
-
-Async wrapper around `DirSQL`. Starts the directory scan in a background thread immediately. The constructor returns without blocking.
-
-**Parameters:** Same as `DirSQL`.
 
 ### Methods
 
@@ -152,7 +86,7 @@ await db.query(sql: string): Promise<Record<string, unknown>[]>
 
 :::
 
-Run a SQL query. Same return format as `DirSQL.query()`.
+Execute a SQL query against the in-memory database. Returns results keyed by column name. Internal tracking columns (`_dirsql_file_path`, `_dirsql_row_index`) are excluded from results.
 
 #### `watch`
 
@@ -177,6 +111,22 @@ for await (const event of db.watch()) {  // AsyncIterable<RowEvent>
 :::
 
 Returns an async iterable of `RowEvent` objects. The file watcher starts automatically on first iteration. The iterator never terminates on its own.
+
+#### `from_config`
+
+::: code-group
+
+```python [Python]
+DirSQL.from_config(path: str) -> DirSQL
+```
+
+```rust [Rust]
+DirSQL::from_config(path: &str) -> Result<DirSQL>
+```
+
+:::
+
+Create a `DirSQL` instance from a `.dirsql.toml` config file. In Python, returns immediately and scans in the background -- call `await db.ready()` before querying.
 
 ---
 

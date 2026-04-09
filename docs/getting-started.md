@@ -37,36 +37,41 @@ Index and query them with `dirsql`:
 ::: code-group
 
 ```python [Python]
-from dirsql import DirSQL, Table
+import asyncio
 import json
+from dirsql import DirSQL, Table
 
-db = DirSQL(
-    "./my-blog",
-    tables=[
-        Table(
-            ddl="CREATE TABLE posts (title TEXT, author TEXT)",
-            glob="posts/*.json",
-            extract=lambda path, content: [json.loads(content)],
-        ),
-        Table(
-            ddl="CREATE TABLE authors (id TEXT, name TEXT)",
-            glob="authors/*.json",
-            extract=lambda path, content: [json.loads(content)],
-        ),
-    ],
-)
+async def main():
+    db = DirSQL(
+        "./my-blog",
+        tables=[
+            Table(
+                ddl="CREATE TABLE posts (title TEXT, author TEXT)",
+                glob="posts/*.json",
+                extract=lambda path, content: [json.loads(content)],
+            ),
+            Table(
+                ddl="CREATE TABLE authors (id TEXT, name TEXT)",
+                glob="authors/*.json",
+                extract=lambda path, content: [json.loads(content)],
+            ),
+        ],
+    )
+    await db.ready()
 
-# Query all posts
-posts = db.query("SELECT * FROM posts")
-# [{"title": "Hello World", "author": "alice"}, {"title": "Second Post", "author": "bob"}]
+    # Query all posts
+    posts = await db.query("SELECT * FROM posts")
+    # [{"title": "Hello World", "author": "alice"}, {"title": "Second Post", "author": "bob"}]
 
-# Join across tables
-results = db.query("""
-    SELECT posts.title, authors.name
-    FROM posts
-    JOIN authors ON posts.author = authors.id
-""")
-# [{"title": "Hello World", "name": "Alice"}, {"title": "Second Post", "name": "Bob"}]
+    # Join across tables
+    results = await db.query("""
+        SELECT posts.title, authors.name
+        FROM posts
+        JOIN authors ON posts.author = authors.id
+    """)
+    # [{"title": "Hello World", "name": "Alice"}, {"title": "Second Post", "name": "Bob"}]
+
+asyncio.run(main())
 ```
 
 ```rust [Rust]
@@ -139,4 +144,4 @@ The filesystem is always the source of truth. The database is rebuilt from files
 - [Defining Tables](./guide/tables.md) -- DDL, globs, and extract functions in detail
 - [Querying](./guide/querying.md) -- SQL queries and return format
 - [File Watching](./guide/watching.md) -- real-time change events
-- [Async API](./guide/async.md) -- non-blocking usage with AsyncDirSQL
+- [Async API](./guide/async.md) -- async ready(), query(), and watch()

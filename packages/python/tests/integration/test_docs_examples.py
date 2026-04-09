@@ -9,7 +9,7 @@ import os
 
 import pytest
 
-from dirsql import AsyncDirSQL, DirSQL, Table
+from dirsql import DirSQL, Table
 
 
 # ---------------------------------------------------------------------------
@@ -61,21 +61,25 @@ def _blog_tables():
 
 
 def describe_getting_started():
-    def it_matches_getting_started_query_all_posts(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_getting_started_query_all_posts(tmp_dir):
         """Docs: db.query('SELECT * FROM posts') returns all posts."""
         root = _blog_dir(tmp_dir)
         db = DirSQL(root, tables=_blog_tables())
+        await db.ready()
 
-        posts = db.query("SELECT * FROM posts")
+        posts = await db.query("SELECT * FROM posts")
         titles = sorted([p["title"] for p in posts])
         assert titles == ["Hello World", "Second Post"]
 
-    def it_matches_getting_started_join_example(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_getting_started_join_example(tmp_dir):
         """Docs: JOIN posts with authors on posts.author = authors.id."""
         root = _blog_dir(tmp_dir)
         db = DirSQL(root, tables=_blog_tables())
+        await db.ready()
 
-        results = db.query(
+        results = await db.query(
             "SELECT posts.title, authors.name "
             "FROM posts "
             "JOIN authors ON posts.author = authors.id"
@@ -93,7 +97,8 @@ def describe_getting_started():
 
 
 def describe_tables_guide():
-    def it_matches_tables_guide_single_object_json(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_tables_guide_single_object_json(tmp_dir):
         """Docs: extract=lambda path, content: [json.loads(content)] for single-object JSON."""
         os.makedirs(os.path.join(tmp_dir, "data"), exist_ok=True)
         with open(os.path.join(tmp_dir, "data", "item.json"), "w") as f:
@@ -109,12 +114,14 @@ def describe_tables_guide():
                 ),
             ],
         )
-        results = db.query("SELECT * FROM items")
+        await db.ready()
+        results = await db.query("SELECT * FROM items")
         assert len(results) == 1
         assert results[0]["name"] == "widget"
         assert results[0]["value"] == 42
 
-    def it_matches_tables_guide_jsonl_extraction(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_tables_guide_jsonl_extraction(tmp_dir):
         """Docs: one row per line for JSONL files."""
         os.makedirs(os.path.join(tmp_dir, "comments", "abc"), exist_ok=True)
         with open(os.path.join(tmp_dir, "comments", "abc", "index.jsonl"), "w") as f:
@@ -133,12 +140,14 @@ def describe_tables_guide():
                 ),
             ],
         )
-        results = db.query("SELECT * FROM comments")
+        await db.ready()
+        results = await db.query("SELECT * FROM comments")
         assert len(results) == 2
         authors = sorted([r["author"] for r in results])
         assert authors == ["alice", "bob"]
 
-    def it_matches_tables_guide_derive_from_path(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_tables_guide_derive_from_path(tmp_dir):
         """Docs: extract values from the file path (os.path.dirname)."""
         os.makedirs(os.path.join(tmp_dir, "comments", "abc"), exist_ok=True)
         with open(os.path.join(tmp_dir, "comments", "abc", "index.jsonl"), "w") as f:
@@ -160,12 +169,14 @@ def describe_tables_guide():
                 ),
             ],
         )
-        results = db.query("SELECT * FROM comments")
+        await db.ready()
+        results = await db.query("SELECT * FROM comments")
         assert len(results) == 1
         assert results[0]["id"] == "abc"
         assert results[0]["body"] == "hello"
 
-    def it_matches_tables_guide_skip_draft_files(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_tables_guide_skip_draft_files(tmp_dir):
         """Docs: conditionally skip files by returning []."""
         with open(os.path.join(tmp_dir, "draft.json"), "w") as f:
             json.dump({"title": "Draft Post", "draft": True}, f)
@@ -188,11 +199,13 @@ def describe_tables_guide():
                 ),
             ],
         )
-        results = db.query("SELECT * FROM posts")
+        await db.ready()
+        results = await db.query("SELECT * FROM posts")
         assert len(results) == 1
         assert results[0]["title"] == "Published Post"
 
-    def it_matches_tables_guide_multiple_tables(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_tables_guide_multiple_tables(tmp_dir):
         """Docs: multiple Table definitions with different globs."""
         os.makedirs(os.path.join(tmp_dir, "posts"), exist_ok=True)
         os.makedirs(os.path.join(tmp_dir, "authors"), exist_ok=True)
@@ -218,12 +231,14 @@ def describe_tables_guide():
                 ),
             ],
         )
-        posts = db.query("SELECT * FROM posts")
-        authors = db.query("SELECT * FROM authors")
+        await db.ready()
+        posts = await db.query("SELECT * FROM posts")
+        authors = await db.query("SELECT * FROM authors")
         assert len(posts) == 1
         assert len(authors) == 1
 
-    def it_matches_tables_guide_ignore_patterns(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_tables_guide_ignore_patterns(tmp_dir):
         """Docs: ignore parameter excludes paths from all tables."""
         os.makedirs(os.path.join(tmp_dir, "data"), exist_ok=True)
         os.makedirs(os.path.join(tmp_dir, "node_modules"), exist_ok=True)
@@ -245,11 +260,13 @@ def describe_tables_guide():
                 ),
             ],
         )
-        results = db.query("SELECT * FROM items")
+        await db.ready()
+        results = await db.query("SELECT * FROM items")
         assert len(results) == 1
         assert results[0]["name"] == "real"
 
-    def it_matches_tables_guide_typed_columns(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_tables_guide_typed_columns(tmp_dir):
         """Docs: typed columns (TEXT, REAL, INTEGER)."""
         os.makedirs(os.path.join(tmp_dir, "data"), exist_ok=True)
         with open(os.path.join(tmp_dir, "data", "metric.json"), "w") as f:
@@ -265,13 +282,15 @@ def describe_tables_guide():
                 ),
             ],
         )
-        results = db.query("SELECT * FROM metrics")
+        await db.ready()
+        results = await db.query("SELECT * FROM metrics")
         assert len(results) == 1
         assert results[0]["name"] == "cpu"
         assert results[0]["value"] == pytest.approx(0.85)
         assert results[0]["count"] == 100
 
-    def it_matches_tables_guide_constraints(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_tables_guide_constraints(tmp_dir):
         """Docs: DDL with constraints like PRIMARY KEY, NOT NULL."""
         os.makedirs(os.path.join(tmp_dir, "data"), exist_ok=True)
         with open(os.path.join(tmp_dir, "data", "item.json"), "w") as f:
@@ -287,12 +306,14 @@ def describe_tables_guide():
                 ),
             ],
         )
-        results = db.query("SELECT * FROM items")
+        await db.ready()
+        results = await db.query("SELECT * FROM items")
         assert len(results) == 1
         assert results[0]["id"] == "abc"
         assert results[0]["name"] == "Widget"
 
-    def it_matches_tables_guide_value_types(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_tables_guide_value_types(tmp_dir):
         """Docs: supported value types table (str, int, float, bool, None)."""
         with open(os.path.join(tmp_dir, "item.json"), "w") as f:
             json.dump(
@@ -316,7 +337,8 @@ def describe_tables_guide():
                 ),
             ],
         )
-        results = db.query("SELECT * FROM items")
+        await db.ready()
+        results = await db.query("SELECT * FROM items")
         assert len(results) == 1
         row = results[0]
         assert row["text_val"] == "hello"
@@ -332,80 +354,96 @@ def describe_tables_guide():
 
 
 def describe_querying_guide():
-    def it_matches_querying_guide_select_all(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_querying_guide_select_all(tmp_dir):
         """Docs: SELECT * FROM comments."""
         root = _blog_dir(tmp_dir)
         db = DirSQL(root, tables=_blog_tables())
+        await db.ready()
 
-        results = db.query("SELECT * FROM posts")
+        results = await db.query("SELECT * FROM posts")
         assert len(results) == 2
 
-    def it_matches_querying_guide_where_filter(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_querying_guide_where_filter(tmp_dir):
         """Docs: SELECT * FROM comments WHERE author = 'alice'."""
         root = _blog_dir(tmp_dir)
         db = DirSQL(root, tables=_blog_tables())
+        await db.ready()
 
-        results = db.query("SELECT * FROM posts WHERE author = 'alice'")
+        results = await db.query("SELECT * FROM posts WHERE author = 'alice'")
         assert len(results) == 1
         assert results[0]["title"] == "Hello World"
 
-    def it_matches_querying_guide_aggregation(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_querying_guide_aggregation(tmp_dir):
         """Docs: SELECT author, COUNT(*) as n FROM comments GROUP BY author."""
         root = _blog_dir(tmp_dir)
         db = DirSQL(root, tables=_blog_tables())
+        await db.ready()
 
-        results = db.query("SELECT author, COUNT(*) as n FROM posts GROUP BY author")
+        results = await db.query("SELECT author, COUNT(*) as n FROM posts GROUP BY author")
         assert len(results) == 2
         count_map = {r["author"]: r["n"] for r in results}
         assert count_map["alice"] == 1
         assert count_map["bob"] == 1
 
-    def it_matches_querying_guide_join(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_querying_guide_join(tmp_dir):
         """Docs: JOIN across tables."""
         root = _blog_dir(tmp_dir)
         db = DirSQL(root, tables=_blog_tables())
+        await db.ready()
 
-        results = db.query(
+        results = await db.query(
             "SELECT posts.title, authors.name "
             "FROM posts "
             "JOIN authors ON posts.author = authors.id"
         )
         assert len(results) == 2
 
-    def it_matches_querying_guide_return_format(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_querying_guide_return_format(tmp_dir):
         """Docs: query returns list of dicts keyed by column name."""
         root = _blog_dir(tmp_dir)
         db = DirSQL(root, tables=_blog_tables())
+        await db.ready()
 
-        results = db.query("SELECT title, author FROM posts")
+        results = await db.query("SELECT title, author FROM posts")
         assert isinstance(results, list)
         assert all(isinstance(r, dict) for r in results)
         assert all("title" in r and "author" in r for r in results)
 
-    def it_matches_querying_guide_internal_columns_excluded(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_querying_guide_internal_columns_excluded(tmp_dir):
         """Docs: _dirsql_file_path and _dirsql_row_index excluded from SELECT *."""
         root = _blog_dir(tmp_dir)
         db = DirSQL(root, tables=_blog_tables())
+        await db.ready()
 
-        results = db.query("SELECT * FROM posts LIMIT 1")
+        results = await db.query("SELECT * FROM posts LIMIT 1")
         row = results[0]
         assert "_dirsql_file_path" not in row
         assert "_dirsql_row_index" not in row
 
-    def it_matches_querying_guide_error_handling(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_querying_guide_error_handling(tmp_dir):
         """Docs: invalid SQL raises an exception."""
         root = _blog_dir(tmp_dir)
         db = DirSQL(root, tables=_blog_tables())
+        await db.ready()
 
         with pytest.raises(Exception):
-            db.query("NOT VALID SQL")
+            await db.query("NOT VALID SQL")
 
-    def it_matches_querying_guide_empty_results(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_querying_guide_empty_results(tmp_dir):
         """Docs: queries matching no rows return an empty list."""
         root = _blog_dir(tmp_dir)
         db = DirSQL(root, tables=_blog_tables())
+        await db.ready()
 
-        results = db.query("SELECT * FROM posts WHERE author = 'nobody'")
+        results = await db.query("SELECT * FROM posts WHERE author = 'nobody'")
         assert results == []
 
 
@@ -417,14 +455,14 @@ def describe_querying_guide():
 def describe_async_guide():
     @pytest.mark.asyncio
     async def it_matches_async_guide_basic_usage(tmp_dir):
-        """Docs: AsyncDirSQL with ready() and query()."""
+        """Docs: DirSQL with ready() and query()."""
         os.makedirs(os.path.join(tmp_dir, "data"), exist_ok=True)
         with open(os.path.join(tmp_dir, "data", "a.json"), "w") as f:
             json.dump({"name": "low", "value": 5}, f)
         with open(os.path.join(tmp_dir, "data", "b.json"), "w") as f:
             json.dump({"name": "high", "value": 15}, f)
 
-        db = AsyncDirSQL(
+        db = DirSQL(
             tmp_dir,
             tables=[
                 Table(
@@ -448,7 +486,7 @@ def describe_async_guide():
         with open(os.path.join(tmp_dir, "data", "item.json"), "w") as f:
             json.dump({"name": "test", "value": 1}, f)
 
-        db = AsyncDirSQL(
+        db = DirSQL(
             tmp_dir,
             tables=[
                 Table(
@@ -473,7 +511,7 @@ def describe_async_guide():
         with open(os.path.join(tmp_dir, "data", "b.json"), "w") as f:
             json.dump({"name": "two", "value": 2}, f)
 
-        db = AsyncDirSQL(
+        db = DirSQL(
             tmp_dir,
             tables=[
                 Table(
@@ -504,7 +542,7 @@ def describe_watching_guide():
         # Pre-create directories so the watcher can monitor them
         os.makedirs(os.path.join(tmp_dir, "comments", "abc"), exist_ok=True)
 
-        db = AsyncDirSQL(
+        db = DirSQL(
             tmp_dir,
             tables=[
                 Table(
@@ -552,7 +590,7 @@ def describe_watching_guide():
         with open(os.path.join(tmp_dir, "comments", "abc", "index.json"), "w") as f:
             json.dump({"id": "abc", "body": "deleted comment", "author": "alice"}, f)
 
-        db = AsyncDirSQL(
+        db = DirSQL(
             tmp_dir,
             tables=[
                 Table(
@@ -603,7 +641,7 @@ def describe_watching_guide():
                 f,
             )
 
-        db = AsyncDirSQL(
+        db = DirSQL(
             tmp_dir,
             tables=[
                 Table(
@@ -647,7 +685,7 @@ def describe_watching_guide():
         # Pre-create directory so the watcher can monitor it
         os.makedirs(os.path.join(tmp_dir, "comments"), exist_ok=True)
 
-        db = AsyncDirSQL(
+        db = DirSQL(
             tmp_dir,
             tables=[
                 Table(
@@ -689,18 +727,22 @@ def describe_watching_guide():
 
 
 def describe_api_reference():
-    def it_matches_api_reference_dirsql_constructor(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_api_reference_dirsql_constructor(tmp_dir):
         """Docs: DirSQL(root, *, tables, ignore=None)."""
         root = _blog_dir(tmp_dir)
         db = DirSQL(root, tables=_blog_tables())
-        results = db.query("SELECT * FROM posts")
+        await db.ready()
+        results = await db.query("SELECT * FROM posts")
         assert len(results) == 2
 
-    def it_matches_api_reference_dirsql_query(tmp_dir):
+    @pytest.mark.asyncio
+    async def it_matches_api_reference_dirsql_query(tmp_dir):
         """Docs: db.query(sql) -> list[dict]."""
         root = _blog_dir(tmp_dir)
         db = DirSQL(root, tables=_blog_tables())
-        results = db.query("SELECT title FROM posts")
+        await db.ready()
+        results = await db.query("SELECT title FROM posts")
         assert isinstance(results, list)
         assert all(isinstance(r, dict) for r in results)
 
@@ -715,13 +757,13 @@ def describe_api_reference():
         assert table.glob == "**/*.json"
 
     @pytest.mark.asyncio
-    async def it_matches_api_reference_async_dirsql_constructor(tmp_dir):
-        """Docs: AsyncDirSQL(root, *, tables, ignore=None)."""
+    async def it_matches_api_reference_dirsql_async_constructor(tmp_dir):
+        """Docs: DirSQL(root, *, tables, ignore=None) with async ready/query."""
         os.makedirs(os.path.join(tmp_dir, "data"), exist_ok=True)
         with open(os.path.join(tmp_dir, "data", "item.json"), "w") as f:
             json.dump({"name": "test"}, f)
 
-        db = AsyncDirSQL(
+        db = DirSQL(
             tmp_dir,
             tables=[
                 Table(
