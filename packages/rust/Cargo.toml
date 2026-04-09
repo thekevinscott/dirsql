@@ -1,0 +1,20 @@
+[package]
+name = "dirsql-sdk"
+version = "0.1.0"
+edition = "2024"
+description = "Rust SDK for dirsql"
+license = "MIT"
+repository = "https://github.com/thekevinscott/dirsql"
+
+[dependencies]
+dirsql-core = { path = "../core" }
+futures-channel = "0.3"
+futures-core = "0.3"
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "sync"] }
+
+[dev-dependencies]
+futures-executor = "0.3"
+futures-util = "0.3"
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

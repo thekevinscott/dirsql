@@ -13,6 +13,7 @@ dirsql bridges this gap: files remain the source of truth, but you get SQL queri
 The project is a monorepo with three packages:
 
 - **[`packages/core/`](packages/core/)** -- Rust core library (`dirsql-core`). Handles SQLite, filesystem scanning, glob matching, file watching, and row diffing. All heavy lifting happens here.
+- **[`packages/rust/`](packages/rust/)** -- Rust SDK (`dirsql-sdk`). User-facing Rust API over the core engine with parity to the Python SDK where Rust idioms allow.
 - **[`packages/python/`](packages/python/)** -- Python SDK (`dirsql`). PyO3 bindings to the Rust core, plus a pure-Python async wrapper. Published to PyPI.
 - **[`packages/ts/`](packages/ts/)** -- TypeScript SDK (not yet implemented).
 
@@ -25,11 +26,11 @@ The project is a monorepo with three packages:
                          │
               ┌──────────┼──────────┐
               │ PyO3     │          │ (future: napi-rs)
-     ┌────────▼───────┐  │  ┌──────▼───────┐
-     │  Python SDK    │  │  │   TS SDK     │
-     │  (packages/    │  │  │  (packages/  │
-     │    python/)    │  │  │    ts/)      │
-     └────────────────┘  │  └──────────────┘
+     ┌────────▼───────┐ ┌────▼─────────┐ ┌──────▼───────┐
+     │  Python SDK    │ │  Rust SDK    │ │   TS SDK     │
+     │  (packages/    │ │ (packages/   │ │  (packages/  │
+     │    python/)    │ │   rust/)     │ │    ts/)      │
+     └────────────────┘ └──────────────┘ └──────────────┘
                          │
 ```
 
