@@ -25,3 +25,14 @@ dev = [
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
+exclude = [
+    ".github/",
+    ".claude/",
+    "tests/",
+    "notes/",
+    "index.js",
+    "package.json",
+    ".beads",
+    "AGENTS.md",
+    "justfile",
+]
