@@ -4,6 +4,115 @@
 
 const native = require("./dirsql.node");
 
+/**
+ * Async wrapper around DirSQL.
+ *
+ * The initial directory scan runs in a background microtask.
+ * Call `await db.ready()` before querying.
+ *
+ * Usage:
+ *   const db = new AsyncDirSQL(root, tables);
+ *   await db.ready();
+ *   const rows = await db.query("SELECT ...");
+ *   for await (const event of db.watch()) { ... }
+ */
+class AsyncDirSQL {
+  constructor(root, tables, ignore) {
+    this._db = null;
+    this._readyPromise = null;
+    this._initError = null;
+
+    this._readyPromise = new Promise((resolve) => {
+      // Run init in next microtask to be non-blocking
+      Promise.resolve().then(() => {
+        try {
+          this._db = new native.DirSQL(root, tables, ignore);
+        } catch (err) {
+          this._initError = err;
+        }
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * Create an AsyncDirSQL from a .dirsql.toml config file.
+   * Returns an AsyncDirSQL instance. Call `await db.ready()` before querying.
+   */
+  static fromConfig(configPath) {
+    const instance = Object.create(AsyncDirSQL.prototype);
+    instance._db = null;
+    instance._readyPromise = null;
+    instance._initError = null;
+
+    instance._readyPromise = new Promise((resolve) => {
+      Promise.resolve().then(() => {
+        try {
+          instance._db = native.DirSQL.fromConfig(configPath);
+        } catch (err) {
+          instance._initError = err;
+        }
+        resolve();
+      });
+    });
+
+    return instance;
+  }
+
+  /**
+   * Wait until the initial scan is complete.
+   * Throws any exception that occurred during init.
+   * Safe to call multiple times.
+   */
+  async ready() {
+    await this._readyPromise;
+    if (this._initError !== null) {
+      throw this._initError;
+    }
+  }
+
+  /**
+   * Execute a SQL query asynchronously.
+   */
+  async query(sql) {
+    return this._db.query(sql);
+  }
+
+  /**
+   * Start watching for file changes.
+   * Returns an async iterable of RowEvent objects.
+   */
+  watch() {
+    const db = this._db;
+    db.startWatcher();
+
+    return {
+      [Symbol.asyncIterator]() {
+        let buffer = [];
+        return {
+          async next() {
+            while (true) {
+              if (buffer.length > 0) {
+                return { value: buffer.shift(), done: false };
+              }
+              // Poll with a small timeout, then retry
+              const events = await new Promise((resolve) => {
+                // Use setImmediate/setTimeout to yield to the event loop
+                setTimeout(() => {
+                  resolve(db.pollEvents(200));
+                }, 0);
+              });
+              if (events.length > 0) {
+                buffer.push(...events);
+              }
+            }
+          },
+        };
+      },
+    };
+  }
+}
+
 // Re-export as a plain object so ESM interop (vitest, etc.) can
 // detect named exports. Native addon objects may not be spreadable.
-module.exports = { DirSQL: native.DirSQL };
+module.exports = { DirSQL: native.DirSQL, AsyncDirSQL };

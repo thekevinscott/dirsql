@@ -1,12 +1,15 @@
+use dirsql_core::config;
 use dirsql_core::db::{parse_table_name, Db, Value};
 use dirsql_core::differ;
-use dirsql_core::matcher::TableMatcher;
+use dirsql_core::matcher::{TableMatcher, parse_captures};
+use dirsql_core::parser::{self, ColumnSource, Format};
 use dirsql_core::scanner::scan_directory;
 use dirsql_core::watcher::{FileEvent, Watcher};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+use regex::Regex;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -388,11 +391,25 @@ unsafe fn get_function_property(
     Ok(val)
 }
 
+/// How rows are extracted from a file.
+enum ExtractMode {
+    /// JS function reference: fn(rel_path, content) -> array of objects.
+    Js(FnRef),
+    /// Built-in parser from config file.
+    BuiltIn {
+        format: Format,
+        each: Option<String>,
+        columns: HashMap<String, ColumnSource>,
+        capture_names: Vec<String>,
+        capture_regex: Option<Regex>,
+    },
+}
+
 /// Internal table config stored after init for use during watch.
 struct TableConfig {
     name: String,
     glob: String,
-    extract_ref: FnRef,
+    extract: ExtractMode,
     strict: bool,
 }
 
@@ -432,6 +449,56 @@ fn value_row_to_json(row: &HashMap<String, Value>) -> HashMap<String, serde_json
     row.iter()
         .map(|(k, v)| (k.clone(), value_to_json(v)))
         .collect()
+}
+
+/// Extract rows from file content using the configured extract mode.
+fn extract_rows(
+    mode: &ExtractMode,
+    rel_path: &str,
+    content: &str,
+    matcher: &TableMatcher,
+) -> Result<Vec<HashMap<String, Value>>> {
+    match mode {
+        ExtractMode::Js(fn_ref) => unsafe { fn_ref.call_extract(rel_path, content) },
+        ExtractMode::BuiltIn {
+            format,
+            each,
+            columns,
+            capture_names: _,
+            capture_regex,
+        } => {
+            let mut rows = parser::parse_file(*format, content, each.as_deref())
+                .map_err(|e| Error::new(Status::GenericFailure, format!("Parse error: {}", e)))?;
+
+            // Extract captures from the path
+            let captures: HashMap<String, String> = if let Some(ref regex) = capture_regex {
+                if let Some(caps) = regex.captures(rel_path) {
+                    caps.iter()
+                        .zip(regex.capture_names())
+                        .filter_map(|(m, name)| {
+                            if let (Some(m), Some(name)) = (m, name) {
+                                Some((name.to_string(), m.as_str().to_string()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                } else {
+                    // Fall back to matcher captures
+                    let rel = Path::new(rel_path);
+                    matcher
+                        .match_file_with_captures(rel)
+                        .map(|m| m.captures)
+                        .unwrap_or_default()
+                }
+            } else {
+                HashMap::new()
+            };
+
+            rows = parser::apply_columns(&rows, columns, &captures);
+            Ok(rows)
+        }
+    }
 }
 
 #[napi]
@@ -476,12 +543,12 @@ impl DirSQL {
             db.create_table(&ddl)
                 .map_err(|e| Error::new(Status::GenericFailure, format!("DDL error: {}", e)))?;
 
-            let extract_ref = unsafe { FnRef::new(raw_env, extract_val)? };
+            let fn_ref = unsafe { FnRef::new(raw_env, extract_val)? };
 
             table_configs.push(TableConfig {
                 name: table_name,
                 glob,
-                extract_ref,
+                extract: ExtractMode::Js(fn_ref),
                 strict,
             });
         }
@@ -530,7 +597,7 @@ impl DirSQL {
                     )
                 })?;
 
-            let rows = unsafe { tc.extract_ref.call_extract(&rel_path, &content)? };
+            let rows = extract_rows(&tc.extract, &rel_path, &content, &matcher)?;
 
             let mut value_rows: Vec<HashMap<String, Value>> = Vec::new();
             for (row_index, row) in rows.iter().enumerate() {
@@ -684,9 +751,9 @@ impl DirSQL {
                         None => continue,
                     };
 
-                    // Call extract via stored function reference
+                    // Call extract
                     let extract_result =
-                        unsafe { tc.extract_ref.call_extract(&rel_path, &content) };
+                        extract_rows(&tc.extract, &rel_path, &content, &matcher);
 
                     let new_rows = match extract_result {
                         Ok(raw_rows) => {
@@ -764,6 +831,142 @@ impl DirSQL {
         }
 
         Ok(result_events)
+    }
+
+    /// Create a DirSQL instance from a .dirsql.toml config file path.
+    ///
+    /// @param configPath - Path to the .dirsql.toml config file
+    #[napi(js_name = "fromConfig", factory)]
+    pub fn from_config(config_path: String) -> Result<Self> {
+        let config_path_buf = PathBuf::from(&config_path);
+        let cfg = config::load_config(&config_path_buf)
+            .map_err(|e| Error::new(Status::GenericFailure, format!("Config error: {}", e)))?;
+
+        // Derive root directory from config file path
+        let root = config_path_buf
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf();
+
+        let db = Db::new()
+            .map_err(|e| Error::new(Status::GenericFailure, format!("DB init error: {}", e)))?;
+
+        let mut table_configs: Vec<TableConfig> = Vec::new();
+        let mut parsed_names: Vec<(String, String)> = Vec::new();
+
+        for tc in &cfg.tables {
+            let table_name = parse_table_name(&tc.ddl).ok_or_else(|| {
+                Error::new(
+                    Status::GenericFailure,
+                    format!("Could not parse table name from DDL: {}", tc.ddl),
+                )
+            })?;
+            db.create_table(&tc.ddl)
+                .map_err(|e| Error::new(Status::GenericFailure, format!("DDL error: {}", e)))?;
+
+            let format = tc.format.ok_or_else(|| {
+                Error::new(
+                    Status::GenericFailure,
+                    format!(
+                        "Unsupported format: cannot infer format for glob '{}'. \
+                         Specify format explicitly in the config.",
+                        tc.glob
+                    ),
+                )
+            })?;
+
+            let (_, capture_names, capture_regex) = parse_captures(&tc.glob);
+            let columns: HashMap<String, ColumnSource> = tc
+                .columns
+                .as_ref()
+                .map(|cols| {
+                    cols.iter()
+                        .map(|(k, v)| (k.clone(), ColumnSource::parse(v, &capture_names)))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            parsed_names.push((table_name.clone(), tc.glob.clone()));
+            table_configs.push(TableConfig {
+                name: table_name,
+                glob: tc.glob.clone(),
+                extract: ExtractMode::BuiltIn {
+                    format,
+                    each: tc.each.clone(),
+                    columns,
+                    capture_names,
+                    capture_regex,
+                },
+                strict: tc.strict.unwrap_or(false),
+            });
+        }
+
+        // Build matcher
+        let mappings: Vec<(&str, &str)> = parsed_names
+            .iter()
+            .map(|(name, glob)| (glob.as_str(), name.as_str()))
+            .collect();
+        let ignore_strs: Vec<&str> = cfg.ignore.iter().map(|s| s.as_str()).collect();
+
+        let matcher = TableMatcher::new(&mappings, &ignore_strs)
+            .map_err(|e| Error::new(Status::GenericFailure, format!("Glob error: {}", e)))?;
+
+        // Scan directory
+        let files = scan_directory(&root, &matcher);
+
+        let mut file_rows: HashMap<String, (String, Vec<HashMap<String, Value>>)> = HashMap::new();
+
+        for (file_path, table_name) in &files {
+            let content = std::fs::read_to_string(file_path).map_err(|e| {
+                Error::new(
+                    Status::GenericFailure,
+                    format!("Failed to read {}: {}", file_path.display(), e),
+                )
+            })?;
+
+            let rel_path = file_path
+                .strip_prefix(&root)
+                .unwrap_or(file_path)
+                .to_string_lossy()
+                .to_string();
+
+            let tc = table_configs
+                .iter()
+                .find(|tc| &tc.name == table_name)
+                .ok_or_else(|| {
+                    Error::new(
+                        Status::GenericFailure,
+                        format!("No config for table {}", table_name),
+                    )
+                })?;
+
+            let rows = extract_rows(&tc.extract, &rel_path, &content, &matcher)?;
+
+            let strict = tc.strict;
+            let mut value_rows: Vec<HashMap<String, Value>> = Vec::new();
+            for (row_index, raw_row) in rows.iter().enumerate() {
+                let row = db
+                    .normalize_row(table_name, raw_row, strict)
+                    .map_err(|e| {
+                        Error::new(Status::GenericFailure, format!("Schema error: {}", e))
+                    })?;
+                db.insert_row(table_name, &row, &rel_path, row_index)
+                    .map_err(|e| {
+                        Error::new(Status::GenericFailure, format!("Insert error: {}", e))
+                    })?;
+                value_rows.push(row);
+            }
+            file_rows.insert(rel_path, (table_name.clone(), value_rows));
+        }
+
+        Ok(DirSQL {
+            db: Mutex::new(db),
+            root,
+            table_configs,
+            ignore_patterns: cfg.ignore,
+            file_rows: Mutex::new(file_rows),
+            watcher: Mutex::new(None),
+        })
     }
 }
 
