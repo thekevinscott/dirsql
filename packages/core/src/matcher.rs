@@ -31,7 +31,7 @@ pub struct TableMatcher {
 
 /// Parse `{name}` placeholders from a glob pattern.
 /// Returns (glob_with_placeholders_replaced_by_star, capture_names, capture_regex).
-fn parse_captures(pattern: &str) -> (String, Vec<String>, Option<Regex>) {
+pub fn parse_captures(pattern: &str) -> (String, Vec<String>, Option<Regex>) {
     let capture_re = Regex::new(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
     let mut names = Vec::new();
 

@@ -1,6 +1,8 @@
+use dirsql_core::config;
 use dirsql_core::db::{Db, parse_table_name};
 use dirsql_core::differ::{self, RowEvent as CoreRowEvent};
-use dirsql_core::matcher::TableMatcher;
+use dirsql_core::matcher::{TableMatcher, parse_captures};
+use dirsql_core::parser::{self, ColumnSource};
 use dirsql_core::scanner::scan_directory;
 use dirsql_core::watcher::{FileEvent, Watcher};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
@@ -53,6 +55,12 @@ pub enum DirSqlError {
 
     #[error("extract error for {path}: {message}")]
     Extract { path: String, message: String },
+
+    #[error("config error: {0}")]
+    Config(String),
+
+    #[error("no format for table '{0}': specify format explicitly or use a recognized extension")]
+    NoFormat(String),
 }
 
 pub type Result<T> = std::result::Result<T, DirSqlError>;
@@ -127,6 +135,20 @@ pub struct DirSQL {
 impl DirSQL {
     pub fn new(root: impl Into<PathBuf>, tables: Vec<Table>) -> Result<Self> {
         Self::with_ignore(root, tables, std::iter::empty::<String>())
+    }
+
+    /// Create a `DirSQL` instance from a `.dirsql.toml` config file.
+    ///
+    /// Looks for `.dirsql.toml` in the given root directory, parses it,
+    /// and generates extract functions from the declared format/each/columns.
+    pub fn from_config(root: impl Into<PathBuf>) -> Result<Self> {
+        let root = root.into();
+        let config_path = root.join(".dirsql.toml");
+        let cfg =
+            config::load_config(&config_path).map_err(|e| DirSqlError::Config(e.to_string()))?;
+
+        let tables = build_tables_from_config(&cfg)?;
+        Self::build(root, tables, cfg.ignore)
     }
 
     pub fn with_ignore<I, S>(
@@ -504,6 +526,86 @@ fn relative_path(root: &Path, path: &Path) -> String {
         .to_string()
 }
 
+/// Build `Table` objects from a parsed config.
+///
+/// For each table entry, generates an extract closure that uses the core
+/// parser to parse the file content, applies path captures from the glob
+/// pattern, and maps columns as specified.
+fn build_tables_from_config(cfg: &config::Config) -> Result<Vec<Table>> {
+    let mut tables = Vec::with_capacity(cfg.tables.len());
+
+    for table_cfg in &cfg.tables {
+        let format = table_cfg.format.ok_or_else(|| {
+            // Extract table name from DDL for the error message
+            let name = parse_table_name(&table_cfg.ddl).unwrap_or_else(|| table_cfg.glob.clone());
+            DirSqlError::NoFormat(name)
+        })?;
+
+        let each = table_cfg.each.clone();
+        let glob = table_cfg.glob.clone();
+
+        // Parse capture info from the glob pattern
+        let (_, capture_names, capture_regex) = parse_captures(&glob);
+
+        // Build column sources if columns are specified
+        let column_sources: HashMap<String, ColumnSource> = table_cfg
+            .columns
+            .as_ref()
+            .map(|cols| {
+                cols.iter()
+                    .map(|(col_name, source_str)| {
+                        (
+                            col_name.clone(),
+                            ColumnSource::parse(source_str, &capture_names),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let table = Table::try_new(
+            table_cfg.ddl.clone(),
+            table_cfg.glob.clone(),
+            move |path: &str, content: &str| {
+                // 1. Parse file content
+                let mut rows = parser::parse_file(format, content, each.as_deref())
+                    .map_err(|e| -> BoxError { Box::new(e) })?;
+
+                // 2. Extract captures from the path
+                let captures: HashMap<String, String> = if let Some(ref regex) = capture_regex {
+                    if let Some(caps) = regex.captures(path) {
+                        capture_names
+                            .iter()
+                            .filter_map(|name| {
+                                caps.name(name)
+                                    .map(|m| (name.clone(), m.as_str().to_string()))
+                            })
+                            .collect()
+                    } else {
+                        HashMap::new()
+                    }
+                } else {
+                    HashMap::new()
+                };
+
+                // 3. Apply column mapping and captures
+                rows = parser::apply_columns(&rows, &column_sources, &captures);
+
+                Ok(rows)
+            },
+        );
+
+        let mut table = table;
+        if table_cfg.strict == Some(true) {
+            table.strict = true;
+        }
+
+        tables.push(table);
+    }
+
+    Ok(tables)
+}
+
 /// Async wrapper around [`DirSQL`].
 ///
 /// Construction is non-blocking: the initial directory scan runs on a
@@ -532,6 +634,34 @@ impl AsyncDirSQL {
     /// the scan runs on a background thread.
     pub fn new(root: impl Into<PathBuf>, tables: Vec<Table>) -> Result<Self> {
         Self::with_ignore(root, tables, std::iter::empty::<String>())
+    }
+
+    /// Create an `AsyncDirSQL` instance from a `.dirsql.toml` config file.
+    ///
+    /// Returns immediately; the initial scan runs on a background thread.
+    /// Call `ready().await` before issuing queries.
+    pub fn from_config(root: impl Into<PathBuf>) -> Result<Self> {
+        let root = root.into();
+        let config_path = root.join(".dirsql.toml");
+        let cfg =
+            config::load_config(&config_path).map_err(|e| DirSqlError::Config(e.to_string()))?;
+
+        let tables = build_tables_from_config(&cfg)?;
+        let ignore_patterns: Vec<String> = cfg.ignore;
+
+        let inner = Arc::new(AsyncDirSqlInner {
+            db: tokio::sync::OnceCell::new(),
+            ready_notify: tokio::sync::Notify::new(),
+        });
+
+        let inner_clone = inner.clone();
+        thread::spawn(move || {
+            let result = DirSQL::build(root, tables, ignore_patterns);
+            let _ = inner_clone.db.set(result);
+            inner_clone.ready_notify.notify_waiters();
+        });
+
+        Ok(Self { inner })
     }
 
     /// Like [`new`](Self::new) but with ignore patterns.
