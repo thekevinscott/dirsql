@@ -344,3 +344,103 @@ def describe_DirSQL():
             db.query("SELECT * FROM t")
             assert captured["path"] == "test.json"
             assert '"val"' in captured["content"]
+
+    def describe_relaxed_schema():
+        def it_ignores_extra_keys_by_default(tmp_dir):
+            """Extra keys returned by extract are silently dropped."""
+            with open(os.path.join(tmp_dir, "item.json"), "w") as f:
+                json.dump({"name": "apple", "color": "red", "weight": 150}, f)
+
+            db = DirSQL(
+                tmp_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE items (name TEXT)",
+                        glob="*.json",
+                        extract=lambda path, content: [json.loads(content)],
+                    ),
+                ],
+            )
+            results = db.query("SELECT * FROM items")
+            assert len(results) == 1
+            assert results[0]["name"] == "apple"
+            assert "color" not in results[0]
+            assert "weight" not in results[0]
+
+        def it_fills_missing_keys_with_null(tmp_dir):
+            """Missing keys become NULL in the database."""
+            with open(os.path.join(tmp_dir, "item.json"), "w") as f:
+                json.dump({"name": "apple"}, f)
+
+            db = DirSQL(
+                tmp_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE items (name TEXT, color TEXT, count INTEGER)",
+                        glob="*.json",
+                        extract=lambda path, content: [json.loads(content)],
+                    ),
+                ],
+            )
+            results = db.query("SELECT * FROM items")
+            assert len(results) == 1
+            assert results[0]["name"] == "apple"
+            assert results[0]["color"] is None
+            assert results[0]["count"] is None
+
+        def it_raises_on_extra_keys_in_strict_mode(tmp_dir):
+            """Strict mode raises when extract returns keys not in the DDL."""
+            with open(os.path.join(tmp_dir, "item.json"), "w") as f:
+                json.dump({"name": "apple", "color": "red"}, f)
+
+            with pytest.raises(Exception):
+                DirSQL(
+                    tmp_dir,
+                    tables=[
+                        Table(
+                            ddl="CREATE TABLE items (name TEXT)",
+                            glob="*.json",
+                            extract=lambda path, content: [json.loads(content)],
+                            strict=True,
+                        ),
+                    ],
+                )
+
+        def it_raises_on_missing_keys_in_strict_mode(tmp_dir):
+            """Strict mode raises when extract is missing declared columns."""
+            with open(os.path.join(tmp_dir, "item.json"), "w") as f:
+                json.dump({"name": "apple"}, f)
+
+            with pytest.raises(Exception):
+                DirSQL(
+                    tmp_dir,
+                    tables=[
+                        Table(
+                            ddl="CREATE TABLE items (name TEXT, color TEXT)",
+                            glob="*.json",
+                            extract=lambda path, content: [json.loads(content)],
+                            strict=True,
+                        ),
+                    ],
+                )
+
+        def it_allows_exact_match_in_strict_mode(tmp_dir):
+            """Strict mode works when keys exactly match DDL columns."""
+            with open(os.path.join(tmp_dir, "item.json"), "w") as f:
+                json.dump({"name": "apple", "color": "red"}, f)
+
+            db = DirSQL(
+                tmp_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE items (name TEXT, color TEXT)",
+                        glob="*.json",
+                        extract=lambda path, content: [json.loads(content)],
+                        strict=True,
+                    ),
+                ],
+            )
+            results = db.query("SELECT * FROM items")
+            assert len(results) == 1
+            assert results[0]["name"] == "apple"
+            assert results[0]["color"] == "red"
