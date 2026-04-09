@@ -93,9 +93,7 @@ mod python {
     /// Extract `{name}` capture placeholders from a glob pattern.
     fn extract_capture_names(glob: &str) -> Vec<String> {
         let re = Regex::new(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
-        re.captures_iter(glob)
-            .map(|c| c[1].to_string())
-            .collect()
+        re.captures_iter(glob).map(|c| c[1].to_string()).collect()
     }
 
     /// The main DirSQL class. Creates an in-memory SQLite index over a directory.
@@ -245,10 +243,7 @@ mod python {
                 .map_err(|e| PyRuntimeError::new_err(format!("Config error: {}", e)))?;
 
             // Derive root directory from config file path
-            let root = config_path
-                .parent()
-                .unwrap_or(Path::new("."))
-                .to_path_buf();
+            let root = config_path.parent().unwrap_or(Path::new(".")).to_path_buf();
 
             let db =
                 Db::new().map_err(|e| PyRuntimeError::new_err(format!("DB init error: {}", e)))?;
@@ -280,9 +275,7 @@ mod python {
                     .as_ref()
                     .map(|cols| {
                         cols.iter()
-                            .map(|(k, v)| {
-                                (k.clone(), ColumnSource::parse(v, &capture_names))
-                            })
+                            .map(|(k, v)| (k.clone(), ColumnSource::parse(v, &capture_names)))
                             .collect()
                     })
                     .unwrap_or_default();
@@ -349,14 +342,8 @@ mod python {
                         columns,
                         capture_names: _,
                     } => {
-                        let mut parsed = parser::parse_file(
-                            *format,
-                            &content,
-                            each.as_deref(),
-                        )
-                        .map_err(|e| {
-                            PyRuntimeError::new_err(format!("Parse error: {}", e))
-                        })?;
+                        let mut parsed = parser::parse_file(*format, &content, each.as_deref())
+                            .map_err(|e| PyRuntimeError::new_err(format!("Parse error: {}", e)))?;
 
                         // Get path captures
                         let rel = Path::new(&rel_path);
@@ -553,10 +540,8 @@ mod python {
                                     extract_fn.call1(py, (rel_path.clone(), content));
                                 match extract_result {
                                     Ok(result) => {
-                                        let py_rows: Result<
-                                            Vec<HashMap<String, Py<PyAny>>>,
-                                            _,
-                                        > = result.extract(py);
+                                        let py_rows: Result<Vec<HashMap<String, Py<PyAny>>>, _> =
+                                            result.extract(py);
                                         match py_rows {
                                             Ok(rows) => {
                                                 let db = self.db.lock().map_err(|e| {
@@ -636,58 +621,50 @@ mod python {
                                 each,
                                 columns,
                                 capture_names: _,
-                            } => {
-                                match parser::parse_file(*format, &content, each.as_deref()) {
-                                    Ok(mut parsed) => {
-                                        let rel = Path::new(&rel_path);
-                                        let captures = matcher
-                                            .match_file_with_captures(rel)
-                                            .map(|m| m.captures)
-                                            .unwrap_or_default();
-                                        parsed =
-                                            parser::apply_columns(&parsed, columns, &captures);
+                            } => match parser::parse_file(*format, &content, each.as_deref()) {
+                                Ok(mut parsed) => {
+                                    let rel = Path::new(&rel_path);
+                                    let captures = matcher
+                                        .match_file_with_captures(rel)
+                                        .map(|m| m.captures)
+                                        .unwrap_or_default();
+                                    parsed = parser::apply_columns(&parsed, columns, &captures);
 
-                                        let db = self.db.lock().map_err(|e| {
-                                            PyRuntimeError::new_err(format!("Lock error: {}", e))
-                                        })?;
-                                        let mut value_rows = Vec::new();
-                                        for raw_row in &parsed {
-                                            match db
-                                                .normalize_row(&table_name, raw_row, tc.strict)
-                                            {
-                                                Ok(r) => value_rows.push(r),
-                                                Err(e) => {
-                                                    result_events.push(PyRowEvent {
-                                                        table: table_name.clone(),
-                                                        action: "error".to_string(),
-                                                        row: None,
-                                                        old_row: None,
-                                                        error: Some(format!(
-                                                            "Schema error: {}",
-                                                            e
-                                                        )),
-                                                        file_path: Some(rel_path.clone()),
-                                                    });
-                                                    continue;
-                                                }
+                                    let db = self.db.lock().map_err(|e| {
+                                        PyRuntimeError::new_err(format!("Lock error: {}", e))
+                                    })?;
+                                    let mut value_rows = Vec::new();
+                                    for raw_row in &parsed {
+                                        match db.normalize_row(&table_name, raw_row, tc.strict) {
+                                            Ok(r) => value_rows.push(r),
+                                            Err(e) => {
+                                                result_events.push(PyRowEvent {
+                                                    table: table_name.clone(),
+                                                    action: "error".to_string(),
+                                                    row: None,
+                                                    old_row: None,
+                                                    error: Some(format!("Schema error: {}", e)),
+                                                    file_path: Some(rel_path.clone()),
+                                                });
+                                                continue;
                                             }
                                         }
-                                        drop(db);
-                                        value_rows
                                     }
-                                    Err(e) => {
-                                        result_events.push(PyRowEvent {
-                                            table: table_name.clone(),
-                                            action: "error".to_string(),
-                                            row: None,
-                                            old_row: None,
-                                            error: Some(format!("Parse error: {}", e)),
-                                            file_path: Some(rel_path.clone()),
-                                        });
-                                        continue;
-                                    }
+                                    drop(db);
+                                    value_rows
                                 }
-                            }
+                                Err(e) => {
+                                    result_events.push(PyRowEvent {
+                                        table: table_name.clone(),
+                                        action: "error".to_string(),
+                                        row: None,
+                                        old_row: None,
+                                        error: Some(format!("Parse error: {}", e)),
+                                        file_path: Some(rel_path.clone()),
+                                    });
+                                    continue;
+                                }
+                            },
                         };
 
                         // Get old rows for diffing
