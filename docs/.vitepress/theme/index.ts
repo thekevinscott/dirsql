@@ -1,47 +1,100 @@
 import DefaultTheme from 'vitepress/theme'
 import type { Theme } from 'vitepress'
 
+/**
+ * Language tab persistence for VitePress code groups.
+ *
+ * VitePress code groups render as:
+ *   .vp-code-group
+ *     .tabs
+ *       input[type=radio]  (hidden, controls checked state)
+ *       label[for=...]     (visible tab)
+ *       input
+ *       label
+ *       ...
+ *     .blocks
+ *       div.language-python.active   (visible block)
+ *       div.language-typescript      (hidden block)
+ *       ...
+ *
+ * Tab switching is driven by click events on the hidden inputs.
+ * Active blocks are toggled via the .active CSS class.
+ */
+
 const STORAGE_KEY = 'dirsql-preferred-lang'
+
+/**
+ * Given a code group element, return parallel arrays of inputs, labels, and blocks.
+ */
+function getGroupParts(group: Element) {
+  const inputs = Array.from(group.querySelectorAll<HTMLInputElement>('.tabs input'))
+  const labels = Array.from(group.querySelectorAll<HTMLLabelElement>('.tabs label'))
+  const blocks = group.querySelector('.blocks')
+  const blockChildren = blocks
+    ? Array.from(blocks.children) as HTMLElement[]
+    : []
+  return { inputs, labels, blocks: blockChildren }
+}
 
 function applyStoredLanguage() {
   const lang = localStorage.getItem(STORAGE_KEY)
   if (!lang) return
 
   document.querySelectorAll('.vp-code-group').forEach((group) => {
-    const tabs = group.querySelectorAll('.tabs label')
-    const blocks = group.querySelectorAll('.blocks > div')
+    const { inputs, labels, blocks } = getGroupParts(group)
 
-    tabs.forEach((tab, i) => {
-      if (tab.textContent?.trim() === lang) {
-        // Activate this tab
-        const input = group.querySelectorAll('.tabs input')[i] as HTMLInputElement
-        if (input && !input.checked) {
-          input.checked = true
-          // Show corresponding block, hide others
-          blocks.forEach((block, j) => {
-            ;(block as HTMLElement).style.display = j === i ? '' : 'none'
-          })
-        }
-      }
+    const idx = labels.findIndex(
+      (label) => label.textContent?.trim().toLowerCase() === lang
+    )
+    if (idx < 0) return
+
+    const input = inputs[idx]
+    if (!input || input.checked) return
+
+    // Check the radio button (drives CSS styling via input:checked + label)
+    input.checked = true
+
+    // Toggle .active class on blocks (drives visibility)
+    blocks.forEach((block, j) => {
+      block.classList.toggle('active', j === idx)
     })
   })
 }
 
 function observeTabClicks() {
-  document.addEventListener('change', (e) => {
-    const target = e.target as HTMLElement
-    if (target.tagName === 'INPUT' && target.closest('.vp-code-group')) {
-      const group = target.closest('.vp-code-group')!
-      const inputs = group.querySelectorAll('.tabs input')
-      const labels = group.querySelectorAll('.tabs label')
-      const idx = Array.from(inputs).indexOf(target)
-      if (idx >= 0 && labels[idx]) {
-        const lang = labels[idx].textContent?.trim()
-        if (lang) {
-          localStorage.setItem(STORAGE_KEY, lang)
-        }
-      }
-    }
+  // VitePress code groups use click events on inputs, not change events.
+  window.addEventListener('click', (e) => {
+    const el = e.target as HTMLElement
+    if (!el.matches('.vp-code-group input')) return
+
+    // input -> .tabs -> .vp-code-group
+    const group = el.parentElement?.parentElement
+    if (!group) return
+
+    const { inputs, labels } = getGroupParts(group)
+    const idx = inputs.indexOf(el as HTMLInputElement)
+    if (idx < 0 || !labels[idx]) return
+
+    const lang = labels[idx].textContent?.trim().toLowerCase()
+    if (!lang) return
+
+    localStorage.setItem(STORAGE_KEY, lang)
+
+    // Sync all other code groups on the same page
+    document.querySelectorAll('.vp-code-group').forEach((otherGroup) => {
+      if (otherGroup === group) return
+      const other = getGroupParts(otherGroup)
+      const otherIdx = other.labels.findIndex(
+        (l) => l.textContent?.trim().toLowerCase() === lang
+      )
+      if (otherIdx < 0) return
+      const otherInput = other.inputs[otherIdx]
+      if (!otherInput || otherInput.checked) return
+      otherInput.checked = true
+      other.blocks.forEach((block, j) => {
+        block.classList.toggle('active', j === otherIdx)
+      })
+    })
   })
 }
 
@@ -50,10 +103,9 @@ export default {
   enhanceApp() {
     if (typeof window === 'undefined') return
 
-    // Apply on initial load and route changes
     observeTabClicks()
 
-    // Use MutationObserver to apply after VitePress renders content
+    // Use MutationObserver to apply stored preference after VitePress renders
     const observer = new MutationObserver(() => {
       applyStoredLanguage()
     })
