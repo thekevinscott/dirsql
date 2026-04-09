@@ -1,6 +1,9 @@
 /target
 .beads
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
+.worktrees/
+notes/
 
 # Dolt database files (added by bd init)
 .dolt/

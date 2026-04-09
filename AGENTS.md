@@ -20,7 +20,9 @@ Write scratch/temporary files to `/tmp` instead of asking permission. Use unique
 - **NEVER commit directly to main** - always create a PR
 - One PR per bead. Beads should be concise and small -- as small as possible while still being useful
 - Use `bd` (Beads) for task tracking: `bd list`, `bd show <id>`, `bd ready`
+- **NEVER inspect or modify `.beads/` directly**. Treat `.beads/` as an internal Beads implementation detail that is off limits. All issue tracking operations must go through the Beads CLI (`bd ...`) only.
 - **Bead first**: When starting new work, the first step is always to create a bead (`bd create`). No implementation work begins without a bead.
+- These workflow rules apply to **all** changes, including documentation-only changes and updates to `AGENTS.md` or other instruction files. No exceptions.
 
 ### Git Worktrees
 
