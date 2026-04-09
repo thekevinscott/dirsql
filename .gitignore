@@ -6,6 +6,16 @@ packages/*/target
 .worktrees/
 notes/
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.so
+.venv/
+
+# uv
+uv.lock
+
 # Dolt database files (added by bd init)
 .dolt/
 *.db
