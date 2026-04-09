@@ -17,17 +17,28 @@ API surface comparison across the three language SDKs.
 | Constructor                | `DirSQL(root, *, tables, ignore)` | `DirSQL::new(root, tables)` / `DirSQL::with_ignore(root, tables, ignore)` | `new DirSQL(root, tables, ignore?)` |
 | From config                | `DirSQL.from_config(path)`       | `DirSQL::from_config(root_dir)`   | `DirSQL.fromConfig(configPath)`   |
 | Query                      | `db.query(sql) -> list[dict]`    | `db.query(sql) -> Result<Vec<Row>>` | `db.query(sql) -> Record[]`     |
-| Watch (low-level)          | `db._start_watcher()` / `db._poll_events(ms)` | `db.watch() -> WatchStream` (channel) | `db.startWatcher()` / `db.pollEvents(ms)` |
+| Watch (low-level)          | `db._start_watcher()` / `db._poll_events(ms)` | `db.watch() -> WatchStream` (channel) | N/A (see below)                   |
 
 ## AsyncDirSQL
 
-| API                        | Python                                | Rust                                   | TypeScript                              |
-|----------------------------|---------------------------------------|----------------------------------------|-----------------------------------------|
-| Constructor                | `AsyncDirSQL(root, *, tables, ignore)` | `AsyncDirSQL::new(root, tables)?` / `with_ignore(...)` | `new AsyncDirSQL(root, tables, ignore?)` |
-| From config                | `AsyncDirSQL.from_config(path)`       | `AsyncDirSQL::from_config(root_dir)?`  | `AsyncDirSQL.fromConfig(configPath)`    |
-| Ready                      | `await db.ready()`                    | `db.ready().await?`                    | `await db.ready()`                      |
-| Query                      | `await db.query(sql)`                 | `db.query(sql).await?`                 | `await db.query(sql)`                   |
-| Watch                      | `async for event in db.watch()`       | `db.watch()? -> WatchStream` (Stream trait) | `for await (const event of db.watch())` |
+| API                        | Python                                | Rust                                   |
+|----------------------------|---------------------------------------|----------------------------------------|
+| Constructor                | `AsyncDirSQL(root, *, tables, ignore)` | `AsyncDirSQL::new(root, tables)?` / `with_ignore(...)` |
+| From config                | `AsyncDirSQL.from_config(path)`       | `AsyncDirSQL::from_config(root_dir)?`  |
+| Ready                      | `await db.ready()`                    | `db.ready().await?`                    |
+| Query                      | `await db.query(sql)`                 | `db.query(sql).await?`                 |
+| Watch                      | `async for event in db.watch()`       | `db.watch()? -> WatchStream` (Stream trait) |
+
+**TypeScript note:** JS is async by default, so there is no separate `AsyncDirSQL` class.
+The single `DirSQL` class has `ready: Promise<void>` (an awaitable property) and
+`watch(): AsyncIterable<RowEvent>` built in.  Usage:
+
+```ts
+const db = new DirSQL(root, tables);
+await db.ready;
+const rows = db.query("SELECT ...");
+for await (const event of db.watch()) { ... }
+```
 
 ## Language-Idiomatic Exceptions
 
@@ -48,12 +59,12 @@ API surface comparison across the three language SDKs.
 - All fallible operations return `Result<T, DirSqlError>`.
 
 ### TypeScript
-- Uses `camelCase` for method names (`fromConfig`, `startWatcher`, `pollEvents`).
+- Uses `camelCase` for method names (`fromConfig`).
 - `RowEvent` field names use `camelCase` (`oldRow`, `filePath`), not `snake_case`.
 - Table definitions are plain objects (`{ ddl, glob, extract, strict? }`), not a class.
 - `DirSQL.fromConfig` takes the config file path directly (like Python), not the root directory (like Rust).
-- `AsyncDirSQL` is a pure-JS wrapper class (not native).
-- Watch returns an `AsyncIterable<RowEvent>`.
+- No separate `AsyncDirSQL` — JS is async by default, so `DirSQL` has `ready: Promise<void>` and `watch(): AsyncIterable<RowEvent>` built in.
+- `query()` is synchronous (returns `Record[]`), matching the Python/Rust sync class.
 
 ## Test Coverage Matrix
 
@@ -72,7 +83,7 @@ API surface comparison across the three language SDKs.
 | Strict mode (extra keys)   | Y      | Y    | Y          |
 | Strict mode (missing keys) | Y      | Y    | Y          |
 | Strict mode (exact match)  | Y      | Y    | Y          |
-| AsyncDirSQL: ready + query | Y      | Y    | Y          |
-| AsyncDirSQL: multiple ready| Y      | Y    | Y          |
-| AsyncDirSQL: from_config   | Y      | Y    | Y          |
-| AsyncDirSQL: watch         | Y      | Y    | Y          |
+| AsyncDirSQL: ready + query | Y      | Y    | Y (via DirSQL.ready) |
+| AsyncDirSQL: multiple ready| Y      | Y    | Y (via DirSQL.ready) |
+| AsyncDirSQL: from_config   | Y      | Y    | Y (via DirSQL.fromConfig + ready) |
+| AsyncDirSQL: watch         | Y      | Y    | Y (via DirSQL.watch) |

@@ -5,24 +5,24 @@
 const native = require("./dirsql.node");
 
 /**
- * Async wrapper around DirSQL.
+ * DirSQL — query a directory as a SQLite database.
  *
- * The initial directory scan runs in a background microtask.
- * Call `await db.ready()` before querying.
+ * JavaScript is async by default, so there is a single class (no
+ * separate sync/async split).  The constructor kicks off the initial
+ * directory scan in a microtask; await `db.ready` before querying.
  *
  * Usage:
- *   const db = new AsyncDirSQL(root, tables);
- *   await db.ready();
- *   const rows = await db.query("SELECT ...");
+ *   const db = new DirSQL(root, tables);
+ *   await db.ready;
+ *   const rows = db.query("SELECT ...");
  *   for await (const event of db.watch()) { ... }
  */
-class AsyncDirSQL {
+class DirSQL {
   constructor(root, tables, ignore) {
     this._db = null;
-    this._readyPromise = null;
     this._initError = null;
 
-    this._readyPromise = new Promise((resolve) => {
+    this.ready = new Promise((resolve) => {
       // Run init in next microtask to be non-blocking
       Promise.resolve().then(() => {
         try {
@@ -32,20 +32,23 @@ class AsyncDirSQL {
         }
         resolve();
       });
+    }).then(() => {
+      if (this._initError !== null) {
+        throw this._initError;
+      }
     });
   }
 
   /**
-   * Create an AsyncDirSQL from a .dirsql.toml config file.
-   * Returns an AsyncDirSQL instance. Call `await db.ready()` before querying.
+   * Create a DirSQL from a .dirsql.toml config file.
+   * Returns a DirSQL instance.  Await `db.ready` before querying.
    */
   static fromConfig(configPath) {
-    const instance = Object.create(AsyncDirSQL.prototype);
+    const instance = Object.create(DirSQL.prototype);
     instance._db = null;
-    instance._readyPromise = null;
     instance._initError = null;
 
-    instance._readyPromise = new Promise((resolve) => {
+    instance.ready = new Promise((resolve) => {
       Promise.resolve().then(() => {
         try {
           instance._db = native.DirSQL.fromConfig(configPath);
@@ -54,27 +57,19 @@ class AsyncDirSQL {
         }
         resolve();
       });
+    }).then(() => {
+      if (instance._initError !== null) {
+        throw instance._initError;
+      }
     });
 
     return instance;
   }
 
   /**
-   * Wait until the initial scan is complete.
-   * Throws any exception that occurred during init.
-   * Safe to call multiple times.
+   * Execute a SQL query against the in-memory database.
    */
-  async ready() {
-    await this._readyPromise;
-    if (this._initError !== null) {
-      throw this._initError;
-    }
-  }
-
-  /**
-   * Execute a SQL query asynchronously.
-   */
-  async query(sql) {
+  query(sql) {
     return this._db.query(sql);
   }
 
@@ -115,4 +110,4 @@ class AsyncDirSQL {
 
 // Re-export as a plain object so ESM interop (vitest, etc.) can
 // detect named exports. Native addon objects may not be spreadable.
-module.exports = { DirSQL: native.DirSQL, AsyncDirSQL };
+module.exports = { DirSQL };

@@ -20,7 +20,9 @@ export interface RowEvent {
 
 export class DirSQL {
   /**
-   * Create a new DirSQL instance that indexes a directory into an in-memory SQLite database.
+   * Create a new DirSQL instance that indexes a directory into an in-memory
+   * SQLite database.  The initial scan runs in a microtask — await `db.ready`
+   * before querying.
    *
    * @param root - Root directory path to index
    * @param tables - Array of table definitions
@@ -37,60 +39,19 @@ export class DirSQL {
   static fromConfig(configPath: string): DirSQL;
 
   /**
+   * Resolves when the initial directory scan is complete.
+   * Rejects if the scan encountered an error.
+   * Safe to await multiple times.
+   */
+  ready: Promise<void>;
+
+  /**
    * Execute a SQL query against the in-memory database.
    *
    * @param sql - SQL query string
    * @returns Array of row objects
    */
   query(sql: string): Record<string, unknown>[];
-
-  /**
-   * Start the file watcher. Must be called before pollEvents.
-   */
-  startWatcher(): void;
-
-  /**
-   * Poll for file change events.
-   *
-   * @param timeoutMs - Timeout in milliseconds to wait for events
-   * @returns Array of row events (may be empty if no changes within timeout)
-   */
-  pollEvents(timeoutMs: number): RowEvent[];
-}
-
-export class AsyncDirSQL {
-  /**
-   * Create a new AsyncDirSQL instance.
-   * The initial directory scan runs in the background.
-   *
-   * @param root - Root directory path to index
-   * @param tables - Array of table definitions
-   * @param ignore - Optional array of glob patterns to ignore
-   */
-  constructor(root: string, tables: TableDef[], ignore?: string[]);
-
-  /**
-   * Create an AsyncDirSQL instance from a .dirsql.toml config file.
-   *
-   * @param configPath - Path to the .dirsql.toml config file
-   * @returns A new AsyncDirSQL instance
-   */
-  static fromConfig(configPath: string): AsyncDirSQL;
-
-  /**
-   * Wait until the initial directory scan is complete.
-   * Throws if the scan encountered an error.
-   * Safe to call multiple times.
-   */
-  ready(): Promise<void>;
-
-  /**
-   * Execute a SQL query asynchronously.
-   *
-   * @param sql - SQL query string
-   * @returns Promise resolving to an array of row objects
-   */
-  query(sql: string): Promise<Record<string, unknown>[]>;
 
   /**
    * Start watching for file changes.

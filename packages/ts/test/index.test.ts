@@ -8,7 +8,7 @@ import {
 } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { DirSQL, AsyncDirSQL } from "../index.js";
+import { DirSQL } from "../index.js";
 
 describe("DirSQL", () => {
   let dir: string;
@@ -612,11 +612,11 @@ describe("DirSQL watch", () => {
   });
 });
 
-describe("AsyncDirSQL", () => {
+describe("DirSQL ready", () => {
   let dir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "dirsql-async-"));
+    dir = mkdtempSync(join(tmpdir(), "dirsql-ready-"));
     mkdirSync(join(dir, "data"), { recursive: true });
     writeFileSync(
       join(dir, "data", "users.json"),
@@ -632,7 +632,7 @@ describe("AsyncDirSQL", () => {
   });
 
   it("indexes files after ready", async () => {
-    const db = new AsyncDirSQL(dir, [
+    const db = new DirSQL(dir, [
       {
         ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
         glob: "data/users.json",
@@ -640,14 +640,14 @@ describe("AsyncDirSQL", () => {
       },
     ]);
 
-    await db.ready();
-    const rows = await db.query("SELECT * FROM users ORDER BY name");
+    await db.ready;
+    const rows = db.query("SELECT * FROM users ORDER BY name");
     expect(rows).toHaveLength(2);
     expect(rows[0].name).toBe("Alice");
   });
 
-  it("allows multiple ready calls", async () => {
-    const db = new AsyncDirSQL(dir, [
+  it("allows multiple ready awaits", async () => {
+    const db = new DirSQL(dir, [
       {
         ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
         glob: "data/users.json",
@@ -655,14 +655,14 @@ describe("AsyncDirSQL", () => {
       },
     ]);
 
-    await db.ready();
-    await db.ready();
-    const rows = await db.query("SELECT * FROM users");
+    await db.ready;
+    await db.ready;
+    const rows = db.query("SELECT * FROM users");
     expect(rows).toHaveLength(2);
   });
 
   it("throws on invalid SQL after ready", async () => {
-    const db = new AsyncDirSQL(dir, [
+    const db = new DirSQL(dir, [
       {
         ddl: "CREATE TABLE users (name TEXT)",
         glob: "data/users.json",
@@ -670,23 +670,23 @@ describe("AsyncDirSQL", () => {
       },
     ]);
 
-    await db.ready();
-    await expect(db.query("NOT VALID SQL")).rejects.toThrow();
+    await db.ready;
+    expect(() => db.query("NOT VALID SQL")).toThrow();
   });
 });
 
-describe("AsyncDirSQL.fromConfig", () => {
+describe("DirSQL.fromConfig (async ready)", () => {
   let dir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "dirsql-async-config-"));
+    dir = mkdtempSync(join(tmpdir(), "dirsql-ready-config-"));
   });
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("loads config async", async () => {
+  it("loads config and awaits ready", async () => {
     mkdirSync(join(dir, "items"), { recursive: true });
     writeFileSync(
       join(dir, "items", "a.json"),
@@ -700,19 +700,19 @@ glob = "items/*.json"
 `,
     );
 
-    const db = AsyncDirSQL.fromConfig(join(dir, ".dirsql.toml"));
-    await db.ready();
-    const rows = await db.query("SELECT * FROM items");
+    const db = DirSQL.fromConfig(join(dir, ".dirsql.toml"));
+    await db.ready;
+    const rows = db.query("SELECT * FROM items");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("apple");
   });
 });
 
-describe("AsyncDirSQL watch", () => {
+describe("DirSQL watch (async iterable)", () => {
   let dir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "dirsql-async-watch-"));
+    dir = mkdtempSync(join(tmpdir(), "dirsql-watch-async-"));
   });
 
   afterEach(() => {
@@ -720,7 +720,7 @@ describe("AsyncDirSQL watch", () => {
   });
 
   it("yields insert events via async iterable", async () => {
-    const db = new AsyncDirSQL(dir, [
+    const db = new DirSQL(dir, [
       {
         ddl: "CREATE TABLE items (name TEXT)",
         glob: "**/*.json",
@@ -728,7 +728,7 @@ describe("AsyncDirSQL watch", () => {
       },
     ]);
 
-    await db.ready();
+    await db.ready;
 
     const events: Array<{ action: string; table: string; row?: unknown }> = [];
 
