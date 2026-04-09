@@ -154,7 +154,8 @@ impl TableMatcher {
                             .capture_names
                             .iter()
                             .filter_map(|name| {
-                                caps.name(name).map(|m| (name.clone(), m.as_str().to_string()))
+                                caps.name(name)
+                                    .map(|m| (name.clone(), m.as_str().to_string()))
                             })
                             .collect()
                     } else {
@@ -258,8 +259,7 @@ mod tests {
 
     #[test]
     fn capture_multiple_segments() {
-        let matcher =
-            TableMatcher::new(&[("{org}/{repo}/data.json", "repos")], &[]).unwrap();
+        let matcher = TableMatcher::new(&[("{org}/{repo}/data.json", "repos")], &[]).unwrap();
         let result = matcher
             .match_file_with_captures(Path::new("acme/widgets/data.json"))
             .unwrap();
@@ -280,8 +280,7 @@ mod tests {
 
     #[test]
     fn capture_with_glob_star() {
-        let matcher =
-            TableMatcher::new(&[("logs/{date}/*.jsonl", "logs")], &[]).unwrap();
+        let matcher = TableMatcher::new(&[("logs/{date}/*.jsonl", "logs")], &[]).unwrap();
         let result = matcher
             .match_file_with_captures(Path::new("logs/2024-01-15/events.jsonl"))
             .unwrap();
@@ -292,9 +291,11 @@ mod tests {
     fn capture_no_match_returns_none() {
         let matcher =
             TableMatcher::new(&[("comments/{thread_id}/index.jsonl", "comments")], &[]).unwrap();
-        assert!(matcher
-            .match_file_with_captures(Path::new("other/file.txt"))
-            .is_none());
+        assert!(
+            matcher
+                .match_file_with_captures(Path::new("other/file.txt"))
+                .is_none()
+        );
     }
 
     #[test]
@@ -310,8 +311,7 @@ mod tests {
 
     #[test]
     fn capture_with_double_star() {
-        let matcher =
-            TableMatcher::new(&[("**/{category}/items.json", "items")], &[]).unwrap();
+        let matcher = TableMatcher::new(&[("**/{category}/items.json", "items")], &[]).unwrap();
         let result = matcher
             .match_file_with_captures(Path::new("shop/electronics/items.json"))
             .unwrap();

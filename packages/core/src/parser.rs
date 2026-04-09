@@ -922,7 +922,10 @@ price = 20
                 "thread_id".to_string(),
                 ColumnSource::PathCapture("thread_id".to_string()),
             ),
-            ("body".to_string(), ColumnSource::DotPath("body".to_string())),
+            (
+                "body".to_string(),
+                ColumnSource::DotPath("body".to_string()),
+            ),
         ]);
         let captures = HashMap::from([("thread_id".to_string(), "t42".to_string())]);
         let result = apply_columns(&rows, &columns, &captures);
@@ -985,7 +988,10 @@ price = 20
             m
         }];
         let columns = HashMap::from([
-            ("name".to_string(), ColumnSource::DotPath("name".to_string())),
+            (
+                "name".to_string(),
+                ColumnSource::DotPath("name".to_string()),
+            ),
             ("age".to_string(), ColumnSource::DotPath("age".to_string())),
         ]);
         let result = apply_columns(&rows, &columns, &HashMap::new());
