@@ -279,9 +279,7 @@ mod python {
                 };
 
                 // Match against relative path so globs like "comments/**/*.jsonl" work
-                let rel_for_match = abs_path
-                    .strip_prefix(&self.root)
-                    .unwrap_or(abs_path);
+                let rel_for_match = abs_path.strip_prefix(&self.root).unwrap_or(abs_path);
 
                 // Skip files that don't match any table or are ignored
                 if matcher.is_ignored(rel_for_match) {
