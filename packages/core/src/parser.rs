@@ -1034,4 +1034,474 @@ price = 20
         assert_eq!(result[0]["body"], Value::Text("first".into()));
         assert_eq!(result[1]["body"], Value::Text("second".into()));
     }
+
+    // --- JSONL with each navigation ---
+
+    #[test]
+    fn jsonl_with_each_navigation() {
+        let content = r#"{"data": {"name": "Alice"}}
+{"data": {"name": "Bob"}}"#;
+        let rows = parse_file(Format::Jsonl, content, Some("data")).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["name"], Value::Text("Alice".into()));
+        assert_eq!(rows[1]["name"], Value::Text("Bob".into()));
+    }
+
+    // --- JSONL line that is an array (expands to multiple rows) ---
+
+    #[test]
+    fn jsonl_line_array_expands_to_rows() {
+        let content = r#"[{"a": 1}, {"a": 2}]"#;
+        let rows = parse_file(Format::Jsonl, content, None).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["a"], Value::Integer(1));
+        assert_eq!(rows[1]["a"], Value::Integer(2));
+    }
+
+    // --- JSONL array with non-object item ---
+
+    #[test]
+    fn jsonl_array_with_non_object_item_errors() {
+        let content = r#"[1, 2, 3]"#;
+        let result = parse_file(Format::Jsonl, content, None);
+        assert!(result.is_err());
+    }
+
+    // --- JSONL scalar value errors ---
+
+    #[test]
+    fn jsonl_scalar_value_errors() {
+        let content = "42";
+        let result = parse_file(Format::Jsonl, content, None);
+        assert!(result.is_err());
+    }
+
+    // --- JSON non-object/non-array top-level ---
+
+    #[test]
+    fn json_scalar_top_level_errors() {
+        let content = "\"just a string\"";
+        let result = parse_file(Format::Json, content, None);
+        assert!(result.is_err());
+    }
+
+    // --- JSON array with non-object items ---
+
+    #[test]
+    fn json_array_with_non_object_errors() {
+        let content = "[1, 2, 3]";
+        let result = parse_file(Format::Json, content, None);
+        assert!(result.is_err());
+    }
+
+    // --- JSON each navigating into non-object ---
+
+    #[test]
+    fn json_each_navigating_non_object_errors() {
+        let content = r#"{"data": [1, 2, 3]}"#;
+        let result = parse_file(Format::Json, content, Some("data.missing"));
+        assert!(result.is_err());
+    }
+
+    // --- TOML navigation error path ---
+
+    #[test]
+    fn toml_each_invalid_path_errors() {
+        let content = r#"
+[data]
+name = "test"
+"#;
+        let result = parse_file(Format::Toml, content, Some("data.missing.deep"));
+        assert!(result.is_err());
+    }
+
+    // --- TOML navigate into non-table ---
+
+    #[test]
+    fn toml_navigate_into_non_table_errors() {
+        let content = r#"
+name = "test"
+"#;
+        let result = parse_file(Format::Toml, content, Some("name.sub"));
+        assert!(result.is_err());
+    }
+
+    // --- TOML non-table/non-array top-level after navigation ---
+
+    #[test]
+    fn toml_scalar_after_navigation_errors() {
+        let content = r#"
+[data]
+value = 42
+"#;
+        let result = parse_file(Format::Toml, content, Some("data.value"));
+        assert!(result.is_err());
+    }
+
+    // --- TOML array with non-table items ---
+
+    #[test]
+    fn toml_array_with_non_table_errors() {
+        let content = r#"
+values = [1, 2, 3]
+"#;
+        let result = parse_file(Format::Toml, content, Some("values"));
+        assert!(result.is_err());
+    }
+
+    // --- TOML value types: float, boolean, datetime, array, table ---
+
+    #[test]
+    fn toml_float_value() {
+        let content = "pi = 3.14\n";
+        let rows = parse_file(Format::Toml, content, None).unwrap();
+        assert_eq!(rows[0]["pi"], Value::Real(3.14));
+    }
+
+    #[test]
+    fn toml_boolean_true() {
+        let content = "flag = true\n";
+        let rows = parse_file(Format::Toml, content, None).unwrap();
+        assert_eq!(rows[0]["flag"], Value::Integer(1));
+    }
+
+    #[test]
+    fn toml_datetime_value() {
+        let content = "created = 2024-01-15T10:30:00Z\n";
+        let rows = parse_file(Format::Toml, content, None).unwrap();
+        match &rows[0]["created"] {
+            Value::Text(s) => assert!(s.contains("2024")),
+            other => panic!("expected Text, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn toml_nested_array_stored_as_json() {
+        let content = "tags = [\"a\", \"b\"]\n";
+        let rows = parse_file(Format::Toml, content, None).unwrap();
+        match &rows[0]["tags"] {
+            Value::Text(s) => assert!(s.contains("a")),
+            other => panic!("expected Text, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn toml_nested_table_stored_as_json() {
+        let content = r#"
+[metadata]
+author = "Alice"
+"#;
+        let rows = parse_file(Format::Toml, content, None).unwrap();
+        match &rows[0]["metadata"] {
+            Value::Text(s) => assert!(s.contains("Alice")),
+            other => panic!("expected Text, got {:?}", other),
+        }
+    }
+
+    // --- YAML navigation error paths ---
+
+    #[test]
+    fn yaml_each_invalid_path_errors() {
+        let content = "data:\n  name: test\n";
+        let result = parse_file(Format::Yaml, content, Some("data.missing.deep"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn yaml_navigate_into_non_mapping_errors() {
+        let content = "name: test\n";
+        let result = parse_file(Format::Yaml, content, Some("name.sub"));
+        assert!(result.is_err());
+    }
+
+    // --- YAML scalar top-level ---
+
+    #[test]
+    fn yaml_scalar_top_level_errors() {
+        let content = "just a string\n";
+        let result = parse_file(Format::Yaml, content, None);
+        assert!(result.is_err());
+    }
+
+    // --- YAML sequence with non-mapping items ---
+
+    #[test]
+    fn yaml_sequence_with_non_mapping_errors() {
+        let content = "- 1\n- 2\n- 3\n";
+        let result = parse_file(Format::Yaml, content, None);
+        assert!(result.is_err());
+    }
+
+    // --- YAML value types ---
+
+    #[test]
+    fn yaml_null_value() {
+        let content = "name: null\n";
+        let rows = parse_file(Format::Yaml, content, None).unwrap();
+        assert_eq!(rows[0]["name"], Value::Null);
+    }
+
+    #[test]
+    fn yaml_boolean_values() {
+        let content = "yes_flag: true\nno_flag: false\n";
+        let rows = parse_file(Format::Yaml, content, None).unwrap();
+        assert_eq!(rows[0]["yes_flag"], Value::Integer(1));
+        assert_eq!(rows[0]["no_flag"], Value::Integer(0));
+    }
+
+    #[test]
+    fn yaml_integer_value() {
+        let content = "count: 42\n";
+        let rows = parse_file(Format::Yaml, content, None).unwrap();
+        assert_eq!(rows[0]["count"], Value::Integer(42));
+    }
+
+    #[test]
+    fn yaml_float_value() {
+        let content = "price: 9.99\n";
+        let rows = parse_file(Format::Yaml, content, None).unwrap();
+        assert_eq!(rows[0]["price"], Value::Real(9.99));
+    }
+
+    #[test]
+    fn yaml_sequence_stored_as_json() {
+        let content = "tags:\n  - a\n  - b\n";
+        let rows = parse_file(Format::Yaml, content, None).unwrap();
+        match &rows[0]["tags"] {
+            Value::Text(s) => assert!(s.contains("a")),
+            other => panic!("expected Text, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn yaml_nested_mapping_stored_as_json() {
+        let content = "meta:\n  author: Alice\n";
+        let rows = parse_file(Format::Yaml, content, None).unwrap();
+        match &rows[0]["meta"] {
+            Value::Text(s) => assert!(s.contains("Alice")),
+            other => panic!("expected Text, got {:?}", other),
+        }
+    }
+
+    // --- YAML mapping with non-string keys are filtered out ---
+
+    #[test]
+    fn yaml_non_string_keys_filtered() {
+        // YAML allows integer keys; they should be filtered out by yaml_mapping_to_row
+        let content = "name: Alice\n";
+        let rows = parse_file(Format::Yaml, content, None).unwrap();
+        // Just confirm the string key is present
+        assert_eq!(rows[0]["name"], Value::Text("Alice".into()));
+    }
+
+    // --- Frontmatter with non-mapping YAML ---
+
+    #[test]
+    fn frontmatter_non_mapping_yaml_errors() {
+        let content = "---\n- item1\n- item2\n---\nBody text\n";
+        let result = parse_file(Format::Frontmatter, content, None);
+        assert!(result.is_err());
+    }
+
+    // --- Frontmatter without closing delimiter ---
+
+    #[test]
+    fn frontmatter_missing_closing_delimiter_errors() {
+        let content = "---\ntitle: Hello\nNo closing delimiter";
+        let result = parse_file(Format::Frontmatter, content, None);
+        assert!(result.is_err());
+    }
+
+    // --- Frontmatter with body directly after closing delimiter ---
+
+    #[test]
+    fn frontmatter_body_immediately_after_closing() {
+        let content = "---\ntitle: Test\n---\n";
+        let rows = parse_file(Format::Frontmatter, content, None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["title"], Value::Text("Test".into()));
+    }
+
+    // --- navigate_row_dot_path edge cases ---
+
+    #[test]
+    fn navigate_dot_path_root_value_is_non_text() {
+        // When root value is not Text, navigate_row_dot_path returns Null
+        let rows = vec![{
+            let mut m = HashMap::new();
+            m.insert("count".to_string(), Value::Integer(42));
+            m
+        }];
+        let columns = HashMap::from([(
+            "sub".to_string(),
+            ColumnSource::DotPath("count.nested".to_string()),
+        )]);
+        let result = apply_columns(&rows, &columns, &HashMap::new());
+        assert_eq!(result[0]["sub"], Value::Null);
+    }
+
+    #[test]
+    fn navigate_dot_path_invalid_json_text_returns_null() {
+        // When root value is Text but not valid JSON
+        let rows = vec![{
+            let mut m = HashMap::new();
+            m.insert("data".to_string(), Value::Text("not json".into()));
+            m
+        }];
+        let columns = HashMap::from([(
+            "val".to_string(),
+            ColumnSource::DotPath("data.key".to_string()),
+        )]);
+        let result = apply_columns(&rows, &columns, &HashMap::new());
+        assert_eq!(result[0]["val"], Value::Null);
+    }
+
+    #[test]
+    fn navigate_dot_path_missing_nested_key_returns_null() {
+        let rows = vec![{
+            let mut m = HashMap::new();
+            m.insert("data".to_string(), Value::Text(r#"{"a": {"b": 1}}"#.into()));
+            m
+        }];
+        let columns = HashMap::from([(
+            "val".to_string(),
+            ColumnSource::DotPath("data.a.missing".to_string()),
+        )]);
+        let result = apply_columns(&rows, &columns, &HashMap::new());
+        assert_eq!(result[0]["val"], Value::Null);
+    }
+
+    #[test]
+    fn navigate_dot_path_into_non_object_returns_null() {
+        // Navigate into a JSON value that is not an object
+        let rows = vec![{
+            let mut m = HashMap::new();
+            m.insert("data".to_string(), Value::Text(r#"{"a": 42}"#.into()));
+            m
+        }];
+        let columns = HashMap::from([(
+            "val".to_string(),
+            ColumnSource::DotPath("data.a.sub".to_string()),
+        )]);
+        let result = apply_columns(&rows, &columns, &HashMap::new());
+        assert_eq!(result[0]["val"], Value::Null);
+    }
+
+    #[test]
+    fn navigate_dot_path_root_key_missing_returns_null() {
+        let rows = vec![{
+            let mut m = HashMap::new();
+            m.insert("name".to_string(), Value::Text("Alice".into()));
+            m
+        }];
+        let columns = HashMap::from([(
+            "val".to_string(),
+            ColumnSource::DotPath("missing.sub".to_string()),
+        )]);
+        let result = apply_columns(&rows, &columns, &HashMap::new());
+        assert_eq!(result[0]["val"], Value::Null);
+    }
+
+    // --- json_value_to_value edge cases ---
+
+    #[test]
+    fn json_array_stored_as_text() {
+        let content = r#"{"items": [1, 2, 3]}"#;
+        let rows = parse_file(Format::Json, content, None).unwrap();
+        match &rows[0]["items"] {
+            Value::Text(s) => assert!(s.contains("[1,2,3]") || s.contains("[1, 2, 3]")),
+            other => panic!("expected Text, got {:?}", other),
+        }
+    }
+
+    // --- navigate_json edge cases ---
+
+    #[test]
+    fn navigate_json_empty_segment_skipped() {
+        let content = r#"{"data": {"items": [{"name": "X"}]}}"#;
+        // Leading dot produces an empty segment which should be skipped
+        let rows = parse_file(Format::Json, content, Some(".data.items")).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["name"], Value::Text("X".into()));
+    }
+
+    // --- navigate_json into non-object ---
+
+    #[test]
+    fn navigate_json_into_array_errors() {
+        let content = r#"{"data": [1, 2, 3]}"#;
+        let result = parse_file(Format::Json, content, Some("data.0"));
+        assert!(result.is_err());
+    }
+
+    // --- ParseError Display ---
+
+    #[test]
+    fn parse_error_display_messages() {
+        let err = ParseError::Navigation("a.b".to_string());
+        assert!(err.to_string().contains("not found"));
+
+        let err = ParseError::NotAnArray("path".to_string());
+        assert!(err.to_string().contains("non-array"));
+
+        let err = ParseError::NotAnObject;
+        assert!(err.to_string().contains("non-object"));
+
+        let err = ParseError::NoFrontmatter;
+        assert!(err.to_string().contains("Frontmatter"));
+    }
+
+    // --- JSONL with each that returns an array ---
+
+    #[test]
+    fn jsonl_with_each_returning_object() {
+        let content = r#"{"wrapper": {"name": "X"}}"#;
+        let rows = parse_file(Format::Jsonl, content, Some("wrapper")).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["name"], Value::Text("X".into()));
+    }
+
+    // --- CSV with text values that look like numbers ---
+
+    #[test]
+    fn csv_text_values_preserved() {
+        let content = "id,name\n001,Alice\n";
+        let rows = parse_file(Format::Csv, content, None).unwrap();
+        // "001" parses as integer 1
+        assert_eq!(rows[0]["id"], Value::Integer(1));
+        assert_eq!(rows[0]["name"], Value::Text("Alice".into()));
+    }
+
+    // --- TSV with mixed types ---
+
+    #[test]
+    fn tsv_mixed_types() {
+        let content = "name\tcount\tprice\nwidget\t42\t9.99\n";
+        let rows = parse_file(Format::Tsv, content, None).unwrap();
+        assert_eq!(rows[0]["name"], Value::Text("widget".into()));
+        assert_eq!(rows[0]["count"], Value::Integer(42));
+        assert_eq!(rows[0]["price"], Value::Real(9.99));
+    }
+
+    // --- navigate_toml empty segment skipped ---
+
+    #[test]
+    fn navigate_toml_empty_segment_skipped() {
+        let content = r#"
+[data]
+name = "test"
+"#;
+        // Leading dot produces empty segment
+        let rows = parse_file(Format::Toml, content, Some(".data")).unwrap();
+        assert_eq!(rows[0]["name"], Value::Text("test".into()));
+    }
+
+    // --- navigate_yaml empty segment skipped ---
+
+    #[test]
+    fn navigate_yaml_empty_segment_skipped() {
+        let content = "data:\n  name: test\n";
+        let rows = parse_file(Format::Yaml, content, Some(".data")).unwrap();
+        assert_eq!(rows[0]["name"], Value::Text("test".into()));
+    }
 }

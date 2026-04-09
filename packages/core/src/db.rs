@@ -244,6 +244,7 @@ impl From<rusqlite::types::Value> for Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::types::ToSql;
 
     #[test]
     fn create_table_from_ddl() {
@@ -497,5 +498,200 @@ mod tests {
         ]);
         let normalized = db.normalize_row("t", &row, true).unwrap();
         assert_eq!(normalized.len(), 2);
+    }
+
+    // --- Value::to_sql coverage for all variants ---
+
+    #[test]
+    fn value_to_sql_null() {
+        let v = Value::Null;
+        let result = v.to_sql().unwrap();
+        assert!(matches!(
+            result,
+            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Null)
+        ));
+    }
+
+    #[test]
+    fn value_to_sql_integer() {
+        let v = Value::Integer(42);
+        let result = v.to_sql().unwrap();
+        assert!(matches!(
+            result,
+            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Integer(42))
+        ));
+    }
+
+    #[test]
+    fn value_to_sql_real() {
+        let v = Value::Real(3.14);
+        let result = v.to_sql().unwrap();
+        match result {
+            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Real(f)) => {
+                assert!((f - 3.14).abs() < f64::EPSILON);
+            }
+            _ => panic!("expected Real"),
+        }
+    }
+
+    #[test]
+    fn value_to_sql_text() {
+        let v = Value::Text("hello".into());
+        let result = v.to_sql().unwrap();
+        assert!(matches!(
+            result,
+            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Text(ref s)) if s == "hello"
+        ));
+    }
+
+    #[test]
+    fn value_to_sql_blob() {
+        let v = Value::Blob(vec![1, 2, 3]);
+        let result = v.to_sql().unwrap();
+        assert!(matches!(
+            result,
+            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Blob(ref b)) if b == &[1, 2, 3]
+        ));
+    }
+
+    // --- Value::from coverage for all variants ---
+
+    #[test]
+    fn value_from_sqlite_null() {
+        let v = Value::from(rusqlite::types::Value::Null);
+        assert_eq!(v, Value::Null);
+    }
+
+    #[test]
+    fn value_from_sqlite_integer() {
+        let v = Value::from(rusqlite::types::Value::Integer(99));
+        assert_eq!(v, Value::Integer(99));
+    }
+
+    #[test]
+    fn value_from_sqlite_real() {
+        let v = Value::from(rusqlite::types::Value::Real(2.718));
+        assert_eq!(v, Value::Real(2.718));
+    }
+
+    #[test]
+    fn value_from_sqlite_text() {
+        let v = Value::from(rusqlite::types::Value::Text("world".into()));
+        assert_eq!(v, Value::Text("world".into()));
+    }
+
+    #[test]
+    fn value_from_sqlite_blob() {
+        let v = Value::from(rusqlite::types::Value::Blob(vec![10, 20]));
+        assert_eq!(v, Value::Blob(vec![10, 20]));
+    }
+
+    // --- Insert and query with real/blob values ---
+
+    #[test]
+    fn insert_and_query_real_value() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (price REAL)").unwrap();
+        let row = HashMap::from([("price".into(), Value::Real(9.99))]);
+        db.insert_row("t", &row, "test.json", 0).unwrap();
+        let results = db.query("SELECT price FROM t").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["price"], Value::Real(9.99));
+    }
+
+    #[test]
+    fn insert_and_query_null_value() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (name TEXT)").unwrap();
+        let row = HashMap::from([("name".into(), Value::Null)]);
+        db.insert_row("t", &row, "test.json", 0).unwrap();
+        let results = db.query("SELECT name FROM t").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["name"], Value::Null);
+    }
+
+    #[test]
+    fn insert_and_query_blob_value() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (data BLOB)").unwrap();
+        let row = HashMap::from([("data".into(), Value::Blob(vec![0xFF, 0x00]))]);
+        db.insert_row("t", &row, "test.json", 0).unwrap();
+        let results = db.query("SELECT data FROM t").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["data"], Value::Blob(vec![0xFF, 0x00]));
+    }
+
+    // --- Query that returns _dirsql_ columns via explicit SELECT ---
+
+    #[test]
+    fn query_filters_dirsql_columns_from_star() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
+        db.insert_row("t", &row, "file.json", 0).unwrap();
+        // SELECT * should not include _dirsql_ columns
+        let results = db.query("SELECT * FROM t").unwrap();
+        assert_eq!(results[0].len(), 1);
+        assert!(results[0].contains_key("id"));
+    }
+
+    // --- Error path: query with invalid SQL ---
+
+    #[test]
+    fn query_invalid_sql_returns_error() {
+        let db = Db::new().unwrap();
+        let result = db.query("SELECT FROM nonexistent");
+        assert!(result.is_err());
+    }
+
+    // --- Error path: insert into nonexistent table ---
+
+    #[test]
+    fn insert_into_nonexistent_table_returns_error() {
+        let db = Db::new().unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
+        let result = db.insert_row("nonexistent", &row, "f.json", 0);
+        assert!(result.is_err());
+    }
+
+    // --- Error path: delete from nonexistent table ---
+
+    #[test]
+    fn delete_from_nonexistent_table_returns_error() {
+        let db = Db::new().unwrap();
+        let result = db.delete_rows_by_file("nonexistent", "f.json");
+        assert!(result.is_err());
+    }
+
+    // --- Error path: get_table_columns on nonexistent table returns empty ---
+
+    #[test]
+    fn get_table_columns_nonexistent_table_returns_empty() {
+        let db = Db::new().unwrap();
+        let cols = db.get_table_columns("nonexistent").unwrap();
+        assert!(cols.is_empty());
+    }
+
+    // --- DbError Display ---
+
+    #[test]
+    fn db_error_display_messages() {
+        let err = DbError::SchemaMismatch("test error".to_string());
+        assert!(err.to_string().contains("Schema mismatch"));
+
+        let err = DbError::DdlParse("bad ddl".to_string());
+        assert!(err.to_string().contains("DDL parse error"));
+    }
+
+    // --- delete_rows_by_file returns zero when no rows match ---
+
+    #[test]
+    fn delete_rows_by_file_returns_zero_for_no_matching_rows() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
+        db.insert_row("t", &row, "a.json", 0).unwrap();
+        let deleted = db.delete_rows_by_file("t", "nonexistent.json").unwrap();
+        assert_eq!(deleted, 0);
     }
 }

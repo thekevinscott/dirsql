@@ -224,4 +224,55 @@ mod tests {
         let results = translate_event(&event);
         assert!(results.is_empty());
     }
+
+    #[test]
+    fn translate_event_maps_modify() {
+        let event = Event {
+            kind: EventKind::Modify(notify::event::ModifyKind::Data(
+                notify::event::DataChange::Content,
+            )),
+            paths: vec![PathBuf::from("/tmp/changed.txt")],
+            attrs: Default::default(),
+        };
+        let results = translate_event(&event);
+        assert_eq!(
+            results,
+            vec![FileEvent::Modified(PathBuf::from("/tmp/changed.txt"))]
+        );
+    }
+
+    #[test]
+    fn translate_event_multiple_paths() {
+        let event = Event {
+            kind: EventKind::Create(notify::event::CreateKind::File),
+            paths: vec![PathBuf::from("/tmp/a.txt"), PathBuf::from("/tmp/b.txt")],
+            attrs: Default::default(),
+        };
+        let results = translate_event(&event);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0], FileEvent::Created(PathBuf::from("/tmp/a.txt")));
+        assert_eq!(results[1], FileEvent::Created(PathBuf::from("/tmp/b.txt")));
+    }
+
+    #[test]
+    fn translate_event_empty_paths() {
+        let event = Event {
+            kind: EventKind::Create(notify::event::CreateKind::File),
+            paths: vec![],
+            attrs: Default::default(),
+        };
+        let results = translate_event(&event);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn translate_event_ignores_other_kind() {
+        let event = Event {
+            kind: EventKind::Other,
+            paths: vec![PathBuf::from("/tmp/other.txt")],
+            attrs: Default::default(),
+        };
+        let results = translate_event(&event);
+        assert!(results.is_empty());
+    }
 }
