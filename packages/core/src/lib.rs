@@ -1,3 +1,4 @@
+pub mod config;
 pub mod db;
 pub mod differ;
 pub mod matcher;
