@@ -400,7 +400,6 @@ enum ExtractMode {
         format: Format,
         each: Option<String>,
         columns: HashMap<String, ColumnSource>,
-        capture_names: Vec<String>,
         capture_regex: Option<Regex>,
     },
 }
@@ -464,7 +463,6 @@ fn extract_rows(
             format,
             each,
             columns,
-            capture_names: _,
             capture_regex,
         } => {
             let mut rows = parser::parse_file(*format, content, each.as_deref())
@@ -894,7 +892,6 @@ impl DirSQL {
                     format,
                     each: tc.each.clone(),
                     columns,
-                    capture_names,
                     capture_regex,
                 },
                 strict: tc.strict.unwrap_or(false),
