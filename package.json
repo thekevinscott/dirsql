@@ -3,6 +3,9 @@
   "version": "0.0.1",
   "description": "Ephemeral SQL index over a local directory",
   "license": "MIT",
-  "repository": "https://github.com/thekevinscott/dirsql",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thekevinscott/dirsql.git"
+  },
   "main": "index.js"
 }

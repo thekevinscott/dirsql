@@ -1,0 +1,48 @@
+name: npm Publish Diagnostic
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/npm-publish-test.yml'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  npm-diagnostic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js (no registry-url)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+
+      - name: Node and npm versions
+        run: node --version && npm --version
+
+      - name: npm config
+        run: npm config list
+
+      - name: Check .npmrc
+        run: cat .npmrc 2>/dev/null || echo "no .npmrc"
+
+      - name: Check OIDC env vars
+        run: |
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL: $ACTIONS_ID_TOKEN_REQUEST_URL"
+          echo "NODE_AUTH_TOKEN: ${NODE_AUTH_TOKEN:-UNSET}"
+
+      - name: npm whoami
+        run: npm whoami --registry https://registry.npmjs.org 2>&1 || true
+
+      - name: Dry-run publish
+        run: npm publish --access public --dry-run
+
+      - name: Actual publish (test tag)
+        if: success()
+        run: |
+          npm version 0.0.99-test.$(date +%s) --no-git-tag-version
+          npm publish --access public --tag test
