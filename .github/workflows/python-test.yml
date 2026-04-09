@@ -5,13 +5,19 @@ on:
     branches: [main]
     paths:
       - '**.py'
+      - '**.rs'
       - 'pyproject.toml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - 'uv.lock'
       - 'tests/**'
   pull_request:
     paths:
       - '**.py'
+      - '**.rs'
       - 'pyproject.toml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - 'uv.lock'
       - 'tests/**'
 
