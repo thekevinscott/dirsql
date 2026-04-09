@@ -27,6 +27,7 @@ export default defineConfig({
       {
         text: 'How-to Guides',
         items: [
+          { text: 'Configuration File', link: '/guide/config' },
           { text: 'Defining Tables', link: '/guide/tables' },
           { text: 'Querying', link: '/guide/querying' },
           { text: 'File Watching', link: '/guide/watching' },
