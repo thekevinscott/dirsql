@@ -5,7 +5,6 @@ import json
 import os
 
 import pytest
-import pytest_asyncio
 
 from dirsql import AsyncDirSQL, Table
 
