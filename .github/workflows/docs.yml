@@ -1,5 +1,8 @@
 name: Deploy Docs
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   push:
     branches: [main]
@@ -36,7 +39,7 @@ jobs:
         working-directory: docs
         run: npx vitepress build
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: docs/.vitepress/dist
 
