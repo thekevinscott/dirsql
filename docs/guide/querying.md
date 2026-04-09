@@ -48,7 +48,7 @@ SQLite types map back to Python types:
 
 ## Internal columns
 
-dirsql adds internal tracking columns (`_dirsql_file_path`, `_dirsql_row_index`) to each table for file-change diffing. These columns are automatically excluded from `SELECT *` results. You do not need to account for them.
+`dirsql` adds internal tracking columns (`_dirsql_file_path`, `_dirsql_row_index`) to each table for file-change diffing. These columns are automatically excluded from `SELECT *` results. You do not need to account for them.
 
 ## Error handling
 

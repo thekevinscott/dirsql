@@ -1,4 +1,4 @@
-# dirsql
+# `dirsql`
 
 Ephemeral SQL index over a local directory. Watches a filesystem, ingests structured files into an in-memory SQLite database, and exposes a SQL query interface. On shutdown, the database is discarded -- the filesystem remains the source of truth.
 
@@ -6,7 +6,7 @@ Ephemeral SQL index over a local directory. Watches a filesystem, ingests struct
 
 Structured data stored as flat files (JSONL, JSON) is easy to read, write, diff, and version. But querying across many files is slow -- "show me all unresolved comments across 50 documents" requires opening and parsing every file.
 
-dirsql bridges this gap: files remain the source of truth, but you get SQL queries and real-time change events for free.
+`dirsql` bridges this gap: files remain the source of truth, but you get SQL queries and real-time change events for free.
 
 ## Architecture
 

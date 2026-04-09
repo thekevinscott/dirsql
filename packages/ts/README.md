@@ -1,6 +1,6 @@
-# dirsql (TypeScript SDK)
+# `dirsql` (TypeScript SDK)
 
-TypeScript SDK for dirsql. **Not yet implemented.**
+TypeScript SDK for `dirsql`. **Not yet implemented.**
 
 The TypeScript SDK will provide the same API surface as the [Python SDK](../python/README.md), adapted to TypeScript idioms (camelCase, `await db.ready` as an awaitable property, AsyncIterables for event streams).
 

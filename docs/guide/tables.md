@@ -1,6 +1,6 @@
 # Defining Tables
 
-Each table in dirsql maps a set of files to rows in an in-memory SQLite table. A table definition has three parts: DDL, a glob pattern, and an extract function.
+Each table in `dirsql` maps a set of files to rows in an in-memory SQLite table. A table definition has three parts: DDL, a glob pattern, and an extract function.
 
 ## Table constructor
 
@@ -20,7 +20,7 @@ All three arguments are keyword-only.
 
 ### `ddl`
 
-A SQLite `CREATE TABLE` statement. This defines the schema of the table. dirsql executes this DDL directly against the in-memory database, so any valid SQLite column types and constraints work.
+A SQLite `CREATE TABLE` statement. This defines the schema of the table. `dirsql` executes this DDL directly against the in-memory database, so any valid SQLite column types and constraints work.
 
 ```python
 # Simple text columns

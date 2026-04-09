@@ -1,6 +1,6 @@
 # dirsql-core
 
-Rust core library for dirsql. Provides the filesystem scanning, SQLite indexing, glob matching, file watching, and row diffing that power the language-specific SDKs.
+Rust core library for `dirsql`. Provides the filesystem scanning, SQLite indexing, glob matching, file watching, and row diffing that power the language-specific SDKs.
 
 ## Installation
 

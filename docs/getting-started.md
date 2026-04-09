@@ -2,9 +2,21 @@
 
 ## Installation
 
-```bash
+::: code-group
+
+```bash [Python]
 pip install dirsql
 ```
+
+```bash [Rust]
+cargo add dirsql-sdk
+```
+
+```bash [TypeScript]
+pnpm add dirsql
+```
+
+:::
 
 ## Quick start
 
@@ -20,9 +32,11 @@ my-blog/
     bob.json        # {"id": "bob", "name": "Bob"}
 ```
 
-Index and query them with dirsql:
+Index and query them with `dirsql`:
 
-```python
+::: code-group
+
+```python [Python]
 from dirsql import DirSQL, Table
 import json
 
@@ -55,9 +69,65 @@ results = db.query("""
 # [{"title": "Hello World", "name": "Alice"}, {"title": "Second Post", "name": "Bob"}]
 ```
 
+```rust [Rust]
+use dirsql_sdk::{DirSQL, Table};
+
+let db = DirSQL::new(
+    "./my-blog",
+    vec![
+        Table::new(
+            "CREATE TABLE posts (title TEXT, author TEXT)",
+            "posts/*.json",
+            |_path, content| vec![serde_json::from_str(content).unwrap()],
+        ),
+        Table::new(
+            "CREATE TABLE authors (id TEXT, name TEXT)",
+            "authors/*.json",
+            |_path, content| vec![serde_json::from_str(content).unwrap()],
+        ),
+    ],
+)?;
+
+let posts = db.query("SELECT * FROM posts")?;
+
+let results = db.query(
+    "SELECT posts.title, authors.name \
+     FROM posts JOIN authors ON posts.author = authors.id"
+)?;
+```
+
+```typescript [TypeScript]
+import { DirSQL, Table } from 'dirsql';
+
+const db = new DirSQL('./my-blog', {
+  tables: [
+    new Table({
+      ddl: 'CREATE TABLE posts (title TEXT, author TEXT)',
+      glob: 'posts/*.json',
+      extract: (_path, content) => [JSON.parse(content)],
+    }),
+    new Table({
+      ddl: 'CREATE TABLE authors (id TEXT, name TEXT)',
+      glob: 'authors/*.json',
+      extract: (_path, content) => [JSON.parse(content)],
+    }),
+  ],
+});
+await db.ready;
+
+const posts = await db.query('SELECT * FROM posts');
+
+const results = await db.query(`
+  SELECT posts.title, authors.name
+  FROM posts JOIN authors ON posts.author = authors.id
+`);
+```
+
+:::
+
 ## What happens at startup
 
-1. dirsql walks the directory tree
+1. `dirsql` walks the directory tree
 2. Files matching each table's glob pattern are read
 3. The `extract` function converts file content into rows
 4. Rows are inserted into an in-memory SQLite database

@@ -23,7 +23,7 @@ When adding a feature to one SDK, create beads for the other two.
 
 ## Overview
 
-dirsql is a Rust core with language-specific SDK wrappers.
+`dirsql` is a Rust core with language-specific SDK wrappers.
 
 ```
 ┌─────────────────────────────────┐
