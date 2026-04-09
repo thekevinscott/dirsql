@@ -12,8 +12,8 @@
   },
   "scripts": {
     "artifacts": "napi artifacts",
-    "build": "napi build --platform --release",
-    "build:debug": "napi build --platform",
+    "build": "napi build --release",
+    "build:debug": "napi build",
     "prepublishOnly": "napi prepublish -t npm",
     "test": "vitest run",
     "coverage": "vitest run --coverage"
