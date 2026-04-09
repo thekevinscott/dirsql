@@ -1,8 +1,29 @@
 # Architecture
 
+## Core Principle: One Implementation, Thin Bindings
+
+**The Rust core (`packages/core/`) is the single source of truth for all business logic.** Every language SDK is a thin binding layer that wraps the core -- it does NOT reimplement it.
+
+- **`packages/core/`** -- `dirsql-core` Rust crate. All business logic lives here: SQLite operations, glob matching, file scanning, row diffing, file watching.
+- **`packages/python/`** -- PyO3 bindings wrapping `dirsql-core`. Thin glue code + async Python wrapper.
+- **`packages/rust/`** -- Ergonomic Rust SDK wrapping `dirsql-core`. Builder pattern, async support via tokio.
+- **`packages/ts/`** -- napi-rs bindings wrapping `dirsql-core`. (Not yet implemented.)
+
+**Never reimplement core logic in a language SDK.** If you're writing SQLite operations, glob matching, file scanning, or row diffing in Python or TypeScript, that code belongs in the Rust core with a binding exposed to the SDK. The entire point of this architecture is a fast Rust core with language bindings, not three independent implementations.
+
+## Cross-Language Parity
+
+Aim for **complete API parity across all three SDKs**: same concepts, same capabilities, same naming where possible. Exceptions are allowed for language-idiomatic patterns:
+
+- **Python**: `await db.ready()` (method call). snake_case. Async iterators for event streams.
+- **TypeScript**: `await db.ready` (awaitable property). camelCase. AsyncIterables for event streams.
+- **Rust**: Builder pattern or `db.ready().await`. snake_case. Stream trait for event streams.
+
+When adding a feature to one SDK, create beads for the other two.
+
 ## Overview
 
-dirsql is a Rust core with language-specific SDK wrappers. The Python SDK is the primary interface today, with TypeScript planned.
+dirsql is a Rust core with language-specific SDK wrappers.
 
 ```
 ┌─────────────────────────────────┐

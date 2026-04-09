@@ -1,14 +1,8 @@
 # dirsql Development
 
-## Cross-Language Parity
+## Architecture
 
-dirsql ships SDKs in Rust, Python, and TypeScript. Aim for **complete API parity across all three languages**: same concepts, same capabilities, same naming where possible. Exceptions are allowed for language-idiomatic patterns:
-
-- **Python**: `await db.ready()` (method call, not awaitable property). snake_case. Async iterators for event streams.
-- **TypeScript**: `await db.ready` (awaitable property is idiomatic). camelCase. AsyncIterables for event streams.
-- **Rust**: Builder pattern or `db.ready().await`. snake_case. Stream trait for event streams.
-
-When adding a feature to one SDK, create beads for the other two. Don't let them drift apart.
+All architectural decisions and constraints (including cross-language parity rules, the one-implementation principle, and SDK design) are in `docs/architecture.md`. Do NOT put architectural information in this file -- AGENTS.md is for workflow and process only.
 
 ## Scratch Files
 
