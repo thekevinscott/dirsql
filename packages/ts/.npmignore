@@ -1,9 +1,11 @@
 # Source and build artifacts
 src/
+ts/
 target/
 Cargo.*
 build.rs
 *.rs
+tsconfig.json
 
 # Dev/CI infrastructure
 .claude/
