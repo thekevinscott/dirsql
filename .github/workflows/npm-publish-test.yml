@@ -41,8 +41,8 @@ jobs:
       - name: Bump to test version
         run: npm version 0.0.99-test.$(date +%s) --no-git-tag-version
 
-      - name: Dry-run publish
-        run: npm publish --access public --dry-run 2>&1 || true
+      - name: Dry-run publish (with provenance)
+        run: npm publish --provenance --access public --dry-run 2>&1 || true
 
-      - name: Actual publish (test tag)
-        run: npm publish --access public --tag test
+      - name: Actual publish (test tag, with provenance)
+        run: npm publish --provenance --access public --tag test
