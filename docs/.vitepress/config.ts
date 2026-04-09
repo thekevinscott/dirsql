@@ -39,12 +39,6 @@ export default defineConfig({
           { text: 'API Reference', link: '/api/' }
         ]
       },
-      {
-        text: 'Explanation',
-        items: [
-          { text: 'Architecture', link: '/architecture' }
-        ]
-      }
     ],
 
     outline: {

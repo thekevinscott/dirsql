@@ -4,7 +4,9 @@
 
 ## Basic usage
 
-```python
+::: code-group
+
+```python [Python]
 import asyncio
 import json
 from dirsql import AsyncDirSQL, Table
@@ -30,6 +32,53 @@ async def main():
 
 asyncio.run(main())
 ```
+
+```rust [Rust]
+use dirsql_sdk::{DirSQL, Table};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let db = DirSQL::new(
+        "./my-project",
+        vec![
+            Table::new(
+                "CREATE TABLE items (name TEXT, value INTEGER)",
+                "data/*.json",
+                |_path, content| vec![serde_json::from_str(content).unwrap()],
+            ),
+        ],
+    )?;
+
+    db.ready().await?;
+
+    let results = db.query("SELECT * FROM items WHERE value > 10")?;
+    println!("{:?}", results);
+    Ok(())
+}
+```
+
+```typescript [TypeScript]
+import { DirSQL, Table } from 'dirsql';
+
+const db = new DirSQL('./my-project', {
+  tables: [
+    new Table({
+      ddl: 'CREATE TABLE items (name TEXT, value INTEGER)',
+      glob: 'data/*.json',
+      extract: (_path, content) => [JSON.parse(content)],
+    }),
+  ],
+});
+
+// Wait for the initial scan to complete
+await db.ready;
+
+// Query
+const results = await db.query('SELECT * FROM items WHERE value > 10');
+console.log(results);
+```
+
+:::
 
 ## Constructor
 
@@ -68,7 +117,9 @@ results = await db.query("SELECT COUNT(*) as n FROM items")
 
 Returns an async iterable of `RowEvent` objects. The watcher is started automatically on the first iteration.
 
-```python
+::: code-group
+
+```python [Python]
 async for event in db.watch():
     if event.action == "insert":
         print(f"New row in {event.table}: {event.row}")
@@ -80,13 +131,50 @@ async for event in db.watch():
         print(f"Error: {event.error}")
 ```
 
+```rust [Rust]
+use futures::StreamExt;
+
+let mut stream = db.watch();
+while let Some(event) = stream.next().await {
+    match event.action {
+        Action::Insert => println!("New row in {}: {:?}", event.table, event.row),
+        Action::Update => println!("Updated row in {}: {:?}", event.table, event.row),
+        Action::Delete => println!("Deleted row from {}: {:?}", event.table, event.row),
+        Action::Error => eprintln!("Error: {:?}", event.error),
+    }
+}
+```
+
+```typescript [TypeScript]
+for await (const event of db.watch()) {
+  switch (event.action) {
+    case 'insert':
+      console.log(`New row in ${event.table}:`, event.row);
+      break;
+    case 'update':
+      console.log(`Updated row in ${event.table}:`, event.row);
+      break;
+    case 'delete':
+      console.log(`Deleted row from ${event.table}:`, event.row);
+      break;
+    case 'error':
+      console.error(`Error: ${event.error}`);
+      break;
+  }
+}
+```
+
+:::
+
 The async iterator polls for filesystem events with a 200ms timeout internally. It yields events as they arrive and never terminates on its own -- use `break` or cancellation to stop.
 
 ## Combining with other async code
 
-Because `AsyncDirSQL` uses `asyncio.to_thread` internally, it works alongside any other asyncio code without blocking:
+The async API works alongside other concurrent code without blocking:
 
-```python
+::: code-group
+
+```python [Python]
 async def watch_and_serve(db):
     async for event in db.watch():
         await notify_clients(event)
@@ -100,3 +188,42 @@ async def main():
         run_web_server(),
     )
 ```
+
+```rust [Rust]
+async fn watch_and_serve(db: &DirSQL) {
+    let mut stream = db.watch();
+    while let Some(event) = stream.next().await {
+        notify_clients(&event).await;
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let db = DirSQL::new("./data", vec![...])?;
+    db.ready().await?;
+
+    tokio::join!(
+        watch_and_serve(&db),
+        run_web_server(),
+    );
+    Ok(())
+}
+```
+
+```typescript [TypeScript]
+async function watchAndServe(db: DirSQL) {
+  for await (const event of db.watch()) {
+    await notifyClients(event);
+  }
+}
+
+const db = new DirSQL('./data', { tables: [...] });
+await db.ready;
+
+await Promise.all([
+  watchAndServe(db),
+  runWebServer(),
+]);
+```
+
+:::

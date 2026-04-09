@@ -2,7 +2,7 @@
 
 ## Architecture
 
-All architectural decisions and constraints (including cross-language parity rules, the one-implementation principle, and SDK design) are in `docs/architecture.md`. Do NOT put architectural information in this file -- AGENTS.md is for workflow and process only.
+All architectural decisions and constraints (including cross-language parity rules, the one-implementation principle, and SDK design) are in `ARCHITECTURE.md`. Do NOT put architectural information in this file -- AGENTS.md is for workflow and process only.
 
 ## Scratch Files
 

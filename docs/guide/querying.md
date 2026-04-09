@@ -4,7 +4,9 @@ Once a `DirSQL` instance is created, the initial directory scan is complete and 
 
 ## Basic queries
 
-```python
+::: code-group
+
+```python [Python]
 # All rows from a table
 results = db.query("SELECT * FROM comments")
 
@@ -22,19 +24,74 @@ results = db.query("""
 """)
 ```
 
+```rust [Rust]
+// All rows from a table
+let results = db.query("SELECT * FROM comments")?;
+
+// Filter with WHERE
+let results = db.query("SELECT * FROM comments WHERE author = 'alice'")?;
+
+// Aggregations
+let results = db.query("SELECT author, COUNT(*) as n FROM comments GROUP BY author")?;
+
+// JOINs across tables
+let results = db.query(
+    "SELECT posts.title, authors.name \
+     FROM posts JOIN authors ON posts.author_id = authors.id"
+)?;
+```
+
+```typescript [TypeScript]
+// All rows from a table
+const results = await db.query('SELECT * FROM comments');
+
+// Filter with WHERE
+const filtered = await db.query("SELECT * FROM comments WHERE author = 'alice'");
+
+// Aggregations
+const counts = await db.query('SELECT author, COUNT(*) as n FROM comments GROUP BY author');
+
+// JOINs across tables
+const joined = await db.query(`
+  SELECT posts.title, authors.name
+  FROM posts
+  JOIN authors ON posts.author_id = authors.id
+`);
+```
+
+:::
+
 Any valid SQLite SQL works. The in-memory database supports the full SQLite dialect including subqueries, CTEs, window functions, and aggregate functions.
 
 ## Return format
 
-`query()` returns a list of dicts. Each dict maps column names to Python values.
+`query()` returns a list of dicts (Python), a `Vec<HashMap>` (Rust), or an array of objects (TypeScript). Each entry maps column names to values.
 
-```python
+::: code-group
+
+```python [Python]
 results = db.query("SELECT title, author FROM posts")
 # [
 #     {"title": "Hello World", "author": "alice"},
 #     {"title": "Second Post", "author": "bob"},
 # ]
 ```
+
+```rust [Rust]
+let results = db.query("SELECT title, author FROM posts")?;
+// Vec<HashMap<String, Value>>
+// [{"title": "Hello World", "author": "alice"}, ...]
+```
+
+```typescript [TypeScript]
+const results = await db.query('SELECT title, author FROM posts');
+// [
+//   { title: 'Hello World', author: 'alice' },
+//   { title: 'Second Post', author: 'bob' },
+// ]
+```
+
+:::
 
 SQLite types map back to Python types:
 
@@ -52,20 +109,53 @@ SQLite types map back to Python types:
 
 ## Error handling
 
-Invalid SQL raises a Python exception:
+Invalid SQL raises an exception:
 
-```python
+::: code-group
+
+```python [Python]
 try:
     db.query("NOT VALID SQL")
 except Exception as e:
     print(f"Query error: {e}")
 ```
 
+```rust [Rust]
+match db.query("NOT VALID SQL") {
+    Ok(results) => println!("{:?}", results),
+    Err(e) => eprintln!("Query error: {}", e),
+}
+```
+
+```typescript [TypeScript]
+try {
+  await db.query('NOT VALID SQL');
+} catch (e) {
+  console.error(`Query error: ${e}`);
+}
+```
+
+:::
+
 ## Empty results
 
-Queries that match no rows return an empty list:
+Queries that match no rows return an empty collection:
 
-```python
+::: code-group
+
+```python [Python]
 results = db.query("SELECT * FROM posts WHERE author = 'nobody'")
 assert results == []
 ```
+
+```rust [Rust]
+let results = db.query("SELECT * FROM posts WHERE author = 'nobody'")?;
+assert!(results.is_empty());
+```
+
+```typescript [TypeScript]
+const results = await db.query("SELECT * FROM posts WHERE author = 'nobody'");
+console.assert(results.length === 0);
+```
+
+:::
