@@ -35,8 +35,11 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
-      - name: Run tests
-        run: cargo test --workspace
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin --locked
+
+      - name: Run coverage
+        run: cargo tarpaulin --manifest-path packages/core/Cargo.toml --skip-clean --line --fail-under 80
 
       - name: Clippy
         run: cargo clippy --workspace -- -D warnings

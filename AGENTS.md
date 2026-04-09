@@ -84,6 +84,7 @@ New work on beads should be done via subagents in isolated worktrees. Each subag
    - GPG signing complaints
    - Merge conflicts
 6. Continues monitoring until the PR is in a mergeable state
+7. When a bead spans multiple SDKs or package lanes, split it into separate subagents and isolated worktrees rather than serially implementing everything in one checkout.
 
 ### Orchestrator Responsibilities
 
@@ -94,6 +95,7 @@ The orchestrator (main Claude session) must proactively:
 4. **Keep the user informed** of PR status without being asked.
 5. **Use foreground monitoring** when waiting on CI and there's no other work to do. Background monitoring causes the conversation to go silent -- use it only when there's genuinely parallel work to perform.
 6. **Scripts to `/tmp`**: For polling/monitoring scripts (watching CI, waiting for merges), write the script to `/tmp` then run it via `bash /tmp/script.sh`. Do not use inline bash loops in tool calls.
+7. **No permission loops**: If a repo-authorized command needs sandbox escalation, state the exact command and why once, then keep working. Do not ask the user to approve it as a separate yes/no step.
 
 ### Post-Merge Cleanup
 
@@ -151,3 +153,13 @@ See skillet or karat for examples of test organization, fixtures, and pytest-des
 ### Benchmarks
 
 Run `cargo bench -p dirsql-core` after significant changes to the Rust codebase. Not in CI -- local only. Covers: SQLite operations, directory scanning, row diffing, glob matching. Use to catch performance regressions before merging.
+
+### Coverage Floor
+
+Coverage enforcement must stay explicit in CI for each SDK package:
+
+- Rust core coverage must stay at 90% or higher.
+- Python SDK coverage must stay at 90% or higher.
+- TypeScript SDK coverage must stay at 90% or higher.
+
+When work affects more than one SDK package, split the coverage and test work across subagents so each package can be validated independently.

@@ -1,0 +1,25 @@
+name: TS Test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/ts/**'
+  pull_request:
+    paths:
+      - 'packages/ts/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Run tests
+        working-directory: packages/ts
+        run: npm run coverage
