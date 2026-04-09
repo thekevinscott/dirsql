@@ -115,9 +115,7 @@ glob = "comments/{thread_id}/index.jsonl"
             )
 
             db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
-            results = db.query(
-                "SELECT * FROM comments ORDER BY thread_id"
-            )
+            results = db.query("SELECT * FROM comments ORDER BY thread_id")
             assert len(results) == 2
             assert results[0]["thread_id"] == "thread-1"
             assert results[0]["body"] == "hello"
@@ -128,9 +126,7 @@ glob = "comments/{thread_id}/index.jsonl"
             """columns config maps dot-paths to SQL columns."""
             _write(
                 os.path.join(config_dir, "people", "alice.json"),
-                json.dumps(
-                    {"metadata": {"author": {"name": "Alice"}}, "age": 30}
-                ),
+                json.dumps({"metadata": {"author": {"name": "Alice"}}, "age": 30}),
             )
             _write(
                 os.path.join(config_dir, ".dirsql.toml"),
@@ -247,9 +243,7 @@ glob = "authors/*.json"
         def it_raises_on_missing_config_file(config_dir):
             """from_config raises when the config file doesn't exist."""
             with pytest.raises(Exception):
-                DirSQL.from_config(
-                    os.path.join(config_dir, "nonexistent.toml")
-                )
+                DirSQL.from_config(os.path.join(config_dir, "nonexistent.toml"))
 
         def it_raises_on_invalid_toml(config_dir):
             """from_config raises on invalid TOML syntax."""
@@ -329,9 +323,7 @@ glob = "items/*.json"
             )
 
             db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
-            results = db.query(
-                "SELECT name FROM items WHERE price > 1.0"
-            )
+            results = db.query("SELECT name FROM items WHERE price > 1.0")
             assert len(results) == 1
             assert results[0]["name"] == "apple"
 
