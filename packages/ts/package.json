@@ -5,8 +5,22 @@
   "license": "MIT",
   "repository": "https://github.com/thekevinscott/dirsql",
   "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "binaryName": "dirsql",
+    "triples": {}
+  },
   "scripts": {
-    "test": "node --test",
-    "coverage": "node --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90"
+    "artifacts": "napi artifacts",
+    "build": "napi build --release",
+    "build:debug": "napi build",
+    "prepublishOnly": "napi prepublish -t npm",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.0.0",
+    "vitest": "^3.1.1",
+    "@vitest/coverage-v8": "^3.1.1"
   }
 }

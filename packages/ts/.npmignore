@@ -2,17 +2,14 @@
 src/
 target/
 Cargo.*
+build.rs
 *.rs
-*.toml
-*.lock
 
 # Dev/CI infrastructure
 .claude/
 .github/
-tests/
-python/
-.beads
-.dolt/
+test/
+vitest.config.ts
 
 # Docs and notes
 AGENTS.md

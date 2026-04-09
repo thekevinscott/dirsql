@@ -1,12 +1,44 @@
 # `dirsql` (TypeScript SDK)
 
-TypeScript SDK for `dirsql`. **Not yet implemented.**
+TypeScript SDK for `dirsql` -- napi-rs bindings wrapping the Rust core (`dirsql-core`).
 
-The TypeScript SDK will provide the same API surface as the [Python SDK](../python/README.md), adapted to TypeScript idioms (camelCase, `await db.ready` as an awaitable property, AsyncIterables for event streams).
+## Installation
 
-## Status
+```bash
+pnpm add dirsql
+```
 
-This package is a placeholder. See the [Python SDK](../python/README.md) for a working implementation and the [root README](../../README.md) for project overview.
+Requires a native build step (Rust toolchain). The native module is compiled during `pnpm build`.
+
+## Usage
+
+```typescript
+import { DirSQL } from "dirsql";
+
+const db = new DirSQL("/path/to/directory", [
+  {
+    ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
+    glob: "data/*.json",
+    extract: (filePath, content) => JSON.parse(content),
+  },
+]);
+
+const rows = db.query("SELECT * FROM users WHERE age > 25");
+console.log(rows);
+```
+
+## Building
+
+```bash
+pnpm install
+pnpm build
+```
+
+## Testing
+
+```bash
+pnpm test
+```
 
 ## License
 

@@ -6,6 +6,9 @@ packages/*/target
 .worktrees/
 notes/
 
+# Node native addons
+*.node
+
 # Python
 __pycache__/
 *.pyc
