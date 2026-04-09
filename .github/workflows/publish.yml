@@ -256,6 +256,10 @@ jobs:
           node-version: '20'
           registry-url: https://registry.npmjs.org
 
+      - name: Update package.json version
+        if: steps.check.outputs.exists == 'true'
+        run: npm version "${{ needs.tag.outputs.new_version }}" --no-git-tag-version
+
       - name: Publish to npm
         if: steps.check.outputs.exists == 'true'
         run: npm publish --provenance --access public
