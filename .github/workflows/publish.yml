@@ -7,6 +7,16 @@ on:
         description: 'Version bump type: patch or minor'
         required: true
         type: string
+      publish_pypi:
+        description: 'Whether to publish to PyPI'
+        required: false
+        type: boolean
+        default: true
+      publish_crates:
+        description: 'Whether to publish to crates.io'
+        required: false
+        type: boolean
+        default: true
     outputs:
       tag_created:
         description: 'Whether a tag was created'
@@ -127,7 +137,7 @@ jobs:
 
   build:
     needs: [check-python, tag]
-    if: needs.check-python.outputs.has_python == 'true' && needs.tag.outputs.created == 'true'
+    if: needs.check-python.outputs.has_python == 'true' && needs.tag.outputs.created == 'true' && inputs.publish_pypi
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -164,7 +174,7 @@ jobs:
 
   sdist:
     needs: [check-python, tag]
-    if: needs.check-python.outputs.has_python == 'true' && needs.tag.outputs.created == 'true'
+    if: needs.check-python.outputs.has_python == 'true' && needs.tag.outputs.created == 'true' && inputs.publish_pypi
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -187,7 +197,7 @@ jobs:
 
   publish-pypi:
     needs: [tag, build, sdist]
-    if: always() && needs.tag.outputs.created == 'true' && needs.sdist.result == 'success'
+    if: always() && needs.tag.outputs.created == 'true' && needs.sdist.result == 'success' && inputs.publish_pypi
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -211,7 +221,7 @@ jobs:
 
   publish-crates:
     needs: tag
-    if: needs.tag.outputs.created == 'true'
+    if: needs.tag.outputs.created == 'true' && inputs.publish_crates
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -269,8 +279,8 @@ jobs:
     if: |
       always() &&
       needs.tag.outputs.created == 'true' &&
-      needs.publish-pypi.result != 'success' &&
-      needs.publish-crates.result != 'success'
+      (needs.publish-pypi.result == 'failure' ||
+       needs.publish-crates.result == 'failure')
     runs-on: ubuntu-latest
     permissions:
       contents: write

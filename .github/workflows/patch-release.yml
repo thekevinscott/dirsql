@@ -33,12 +33,77 @@ jobs:
             echo "should_release=false" >> "$GITHUB_OUTPUT"
           fi
 
-  release:
+  detect-changes:
     needs: check
     if: needs.check.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      rust_changed: ${{ steps.changes.outputs.rust_changed }}
+      python_changed: ${{ steps.changes.outputs.python_changed }}
+      js_changed: ${{ steps.changes.outputs.js_changed }}
+      docs_changed: ${{ steps.changes.outputs.docs_changed }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed file types since last tag
+        id: changes
+        run: |
+          latest_tag=$(git tag --sort=-v:refname | grep -E '^v[0-9]' | head -n1)
+
+          if [ -z "$latest_tag" ]; then
+            # No tags yet -- treat everything as changed
+            echo "rust_changed=true" >> "$GITHUB_OUTPUT"
+            echo "python_changed=true" >> "$GITHUB_OUTPUT"
+            echo "js_changed=true" >> "$GITHUB_OUTPUT"
+            echo "docs_changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed_files=$(git diff --name-only "${latest_tag}..HEAD")
+
+          if [ -z "$changed_files" ]; then
+            echo "rust_changed=false" >> "$GITHUB_OUTPUT"
+            echo "python_changed=false" >> "$GITHUB_OUTPUT"
+            echo "js_changed=false" >> "$GITHUB_OUTPUT"
+            echo "docs_changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          rust_changed=false
+          python_changed=false
+          js_changed=false
+          docs_changed=false
+
+          while IFS= read -r file; do
+            case "$file" in
+              *.rs|Cargo.toml|Cargo.lock) rust_changed=true ;;
+              *.py|pyproject.toml|uv.lock) python_changed=true ;;
+              package.json|*.ts|*.js) js_changed=true ;;
+              README.md|*.md) docs_changed=true ;;
+            esac
+          done <<< "$changed_files"
+
+          echo "rust_changed=$rust_changed" >> "$GITHUB_OUTPUT"
+          echo "python_changed=$python_changed" >> "$GITHUB_OUTPUT"
+          echo "js_changed=$js_changed" >> "$GITHUB_OUTPUT"
+          echo "docs_changed=$docs_changed" >> "$GITHUB_OUTPUT"
+
+          echo "Rust: $rust_changed, Python: $python_changed, JS: $js_changed, Docs: $docs_changed"
+
+  release:
+    needs: [check, detect-changes]
+    if: >-
+      needs.check.outputs.should_release == 'true' &&
+      (needs.detect-changes.outputs.rust_changed == 'true' ||
+       needs.detect-changes.outputs.python_changed == 'true' ||
+       needs.detect-changes.outputs.docs_changed == 'true')
     uses: ./.github/workflows/publish.yml
     with:
       bump_type: patch
+      publish_pypi: ${{ needs.detect-changes.outputs.rust_changed == 'true' || needs.detect-changes.outputs.python_changed == 'true' || needs.detect-changes.outputs.docs_changed == 'true' }}
+      publish_crates: ${{ needs.detect-changes.outputs.rust_changed == 'true' || needs.detect-changes.outputs.docs_changed == 'true' }}
     secrets: inherit
     permissions:
       contents: write
@@ -47,8 +112,14 @@ jobs:
   # npm publish inlined here because npm OIDC doesn't support reusable workflows
   # (it validates the caller workflow name, not the called workflow)
   publish-npm:
-    needs: [check, release]
-    if: always() && needs.check.outputs.should_release == 'true' && needs.release.outputs.tag_created == 'true'
+    needs: [check, detect-changes, release]
+    if: >-
+      always() &&
+      needs.check.outputs.should_release == 'true' &&
+      needs.release.outputs.tag_created == 'true' &&
+      (needs.detect-changes.outputs.rust_changed == 'true' ||
+       needs.detect-changes.outputs.js_changed == 'true' ||
+       needs.detect-changes.outputs.docs_changed == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
