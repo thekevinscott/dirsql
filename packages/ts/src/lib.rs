@@ -64,7 +64,7 @@ impl FnRef {
         let status = napi::sys::napi_create_string_utf8(
             env,
             rel_path.as_ptr() as *const _,
-            rel_path.len(),
+            rel_path.len() as isize,
             &mut js_path,
         );
         if status != napi::sys::Status::napi_ok {
@@ -75,7 +75,7 @@ impl FnRef {
         let status = napi::sys::napi_create_string_utf8(
             env,
             content.as_ptr() as *const _,
-            content.len(),
+            content.len() as isize,
             &mut js_content,
         );
         if status != napi::sys::Status::napi_ok {
@@ -244,7 +244,7 @@ unsafe fn get_string_property(
     name: &str,
 ) -> Result<String> {
     let mut key = std::ptr::null_mut();
-    napi::sys::napi_create_string_utf8(env, name.as_ptr() as *const _, name.len(), &mut key);
+    napi::sys::napi_create_string_utf8(env, name.as_ptr() as *const _, name.len() as isize, &mut key);
 
     let mut has = false;
     napi::sys::napi_has_property(env, obj, key, &mut has);
@@ -280,7 +280,7 @@ unsafe fn get_bool_property(
     default: bool,
 ) -> bool {
     let mut key = std::ptr::null_mut();
-    napi::sys::napi_create_string_utf8(env, name.as_ptr() as *const _, name.len(), &mut key);
+    napi::sys::napi_create_string_utf8(env, name.as_ptr() as *const _, name.len() as isize, &mut key);
 
     let mut has = false;
     napi::sys::napi_has_property(env, obj, key, &mut has);
@@ -310,7 +310,7 @@ unsafe fn get_function_property(
     name: &str,
 ) -> Result<napi::sys::napi_value> {
     let mut key = std::ptr::null_mut();
-    napi::sys::napi_create_string_utf8(env, name.as_ptr() as *const _, name.len(), &mut key);
+    napi::sys::napi_create_string_utf8(env, name.as_ptr() as *const _, name.len() as isize, &mut key);
 
     let mut has = false;
     napi::sys::napi_has_property(env, obj, key, &mut has);
@@ -405,7 +405,7 @@ impl DirSQL {
             let table_element: Unknown<'_> = tables.get(i)?.ok_or_else(|| {
                 Error::new(Status::GenericFailure, format!("Missing table at index {}", i))
             })?;
-            let raw_obj = unsafe { table_element.raw() };
+            let raw_obj = table_element.raw();
 
             let ddl = unsafe { get_string_property(raw_env, raw_obj, "ddl")? };
             let glob = unsafe { get_string_property(raw_env, raw_obj, "glob")? };
