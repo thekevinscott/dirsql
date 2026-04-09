@@ -10,6 +10,7 @@ Write scratch/temporary files to `/tmp` instead of asking permission. Use unique
 - **NEVER commit directly to main** - always create a PR
 - One PR per bead. Beads should be concise and small -- as small as possible while still being useful
 - Use `bd` (Beads) for task tracking: `bd list`, `bd show <id>`, `bd ready`
+- **Bead first**: When starting new work, the first step is always to create a bead (`bd create`). No implementation work begins without a bead.
 
 ### Git Worktrees
 
@@ -47,14 +48,15 @@ git worktree remove .worktrees/my-feature
 ### Subagent Workflow
 
 New work on beads should be done via subagents in isolated worktrees. Each subagent:
-1. Creates a worktree and branch for its bead
-2. Does the implementation work (red/green TDD)
-3. Pushes the branch and opens a PR
-4. Monitors the PR and proactively resolves:
+1. Claims the bead (`bd update <id> --claim`) before starting any work
+2. Creates a worktree and branch for its bead
+3. Does the implementation work (red/green TDD)
+4. Pushes the branch and opens a PR
+5. Monitors the PR and proactively resolves:
    - CI failures
    - GPG signing complaints
    - Merge conflicts
-5. Continues monitoring until the PR is in a mergeable state
+6. Continues monitoring until the PR is in a mergeable state
 
 ### Orchestrator Responsibilities
 
@@ -64,6 +66,7 @@ The orchestrator (main Claude session) must proactively:
 3. **Handle post-merge cleanup** as soon as a PR merges (pull main, remove worktree, delete branch, close bead).
 4. **Keep the user informed** of PR status without being asked.
 5. **Use foreground monitoring** when waiting on CI and there's no other work to do. Background monitoring causes the conversation to go silent -- use it only when there's genuinely parallel work to perform.
+6. **Scripts to `/tmp`**: For polling/monitoring scripts (watching CI, waiting for merges), write the script to `/tmp` then run it via `bash /tmp/script.sh`. Do not use inline bash loops in tool calls.
 
 ### Post-Merge Cleanup
 
