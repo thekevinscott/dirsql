@@ -1,6 +1,6 @@
 # dirsql
 
-Ephemeral SQL index over a local directory. Watches a filesystem, ingests structured files (JSONL, JSON, markdown with frontmatter, CSV), builds an in-memory SQLite database, and exposes a SQL query interface. On shutdown, the database is discarded -- the filesystem is always the source of truth.
+Ephemeral SQL index over a local directory. Watches a filesystem, ingests structured files into an in-memory SQLite database, and exposes a SQL query interface. On shutdown, the database is discarded -- the filesystem is the source of truth.
 
 ## Language
 
