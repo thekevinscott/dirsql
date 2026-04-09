@@ -150,6 +150,29 @@ impl rusqlite::types::ToSql for Value {
     }
 }
 
+/// Extract the table name from a CREATE TABLE DDL statement.
+/// Handles: CREATE TABLE name (...), CREATE TABLE IF NOT EXISTS name (...)
+pub fn parse_table_name(ddl: &str) -> Option<String> {
+    let upper = ddl.to_uppercase();
+    let idx = upper.find("CREATE TABLE")?;
+    let rest = &ddl[idx + "CREATE TABLE".len()..].trim_start();
+
+    // Skip optional "IF NOT EXISTS"
+    let rest = if rest.to_uppercase().starts_with("IF NOT EXISTS") {
+        rest["IF NOT EXISTS".len()..].trim_start()
+    } else {
+        rest
+    };
+
+    // Table name is everything up to the first whitespace or '('
+    let name: String = rest
+        .chars()
+        .take_while(|c| !c.is_whitespace() && *c != '(')
+        .collect();
+
+    if name.is_empty() { None } else { Some(name) }
+}
+
 impl From<rusqlite::types::Value> for Value {
     fn from(v: rusqlite::types::Value) -> Self {
         match v {
@@ -308,5 +331,39 @@ mod tests {
     fn inject_tracking_columns_rejects_missing_paren() {
         let result = inject_tracking_columns("NOT A CREATE TABLE");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_table_name_simple() {
+        assert_eq!(
+            parse_table_name("CREATE TABLE comments (id TEXT)"),
+            Some("comments".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_table_name_if_not_exists() {
+        assert_eq!(
+            parse_table_name("CREATE TABLE IF NOT EXISTS comments (id TEXT)"),
+            Some("comments".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_table_name_no_space_before_paren() {
+        assert_eq!(
+            parse_table_name("CREATE TABLE t(id TEXT)"),
+            Some("t".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_table_name_invalid() {
+        assert_eq!(parse_table_name("NOT A DDL"), None);
+    }
+
+    #[test]
+    fn parse_table_name_empty_after_create_table() {
+        assert_eq!(parse_table_name("CREATE TABLE "), None);
     }
 }

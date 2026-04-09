@@ -1,40 +1,10 @@
-pub mod db;
-pub mod differ;
-pub mod matcher;
-pub mod scanner;
-pub mod watcher;
-
-/// Extract the table name from a CREATE TABLE DDL statement.
-/// Handles: CREATE TABLE name (...), CREATE TABLE IF NOT EXISTS name (...)
-pub fn parse_table_name(ddl: &str) -> Option<String> {
-    let upper = ddl.to_uppercase();
-    let idx = upper.find("CREATE TABLE")?;
-    let rest = &ddl[idx + "CREATE TABLE".len()..].trim_start();
-
-    // Skip optional "IF NOT EXISTS"
-    let rest = if rest.to_uppercase().starts_with("IF NOT EXISTS") {
-        rest["IF NOT EXISTS".len()..].trim_start()
-    } else {
-        rest
-    };
-
-    // Table name is everything up to the first whitespace or '('
-    let name: String = rest
-        .chars()
-        .take_while(|c| !c.is_whitespace() && *c != '(')
-        .collect();
-
-    if name.is_empty() { None } else { Some(name) }
-}
-
 #[cfg(feature = "extension-module")]
 mod python {
-    use crate::db::{Db, Value};
-    use crate::differ;
-    use crate::matcher::TableMatcher;
-    use crate::parse_table_name;
-    use crate::scanner::scan_directory;
-    use crate::watcher::{FileEvent, Watcher};
+    use dirsql_core::db::{Db, Value, parse_table_name};
+    use dirsql_core::differ;
+    use dirsql_core::matcher::TableMatcher;
+    use dirsql_core::scanner::scan_directory;
+    use dirsql_core::watcher::{FileEvent, Watcher};
     use pyo3::exceptions::PyRuntimeError;
     use pyo3::prelude::*;
     use pyo3::types::{PyDict, PyList};
@@ -602,44 +572,5 @@ mod python {
         m.add_class::<PyDirSQL>()?;
         m.add_class::<PyRowEvent>()?;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_table_name_simple() {
-        assert_eq!(
-            parse_table_name("CREATE TABLE comments (id TEXT)"),
-            Some("comments".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_table_name_if_not_exists() {
-        assert_eq!(
-            parse_table_name("CREATE TABLE IF NOT EXISTS comments (id TEXT)"),
-            Some("comments".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_table_name_no_space_before_paren() {
-        assert_eq!(
-            parse_table_name("CREATE TABLE t(id TEXT)"),
-            Some("t".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_table_name_invalid() {
-        assert_eq!(parse_table_name("NOT A DDL"), None);
-    }
-
-    #[test]
-    fn parse_table_name_empty_after_create_table() {
-        assert_eq!(parse_table_name("CREATE TABLE "), None);
     }
 }

@@ -4,12 +4,14 @@ on:
   push:
     branches: [main]
     paths:
-      - '**.rs'
+      - 'packages/core/**'
+      - 'packages/python/src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
   pull_request:
     paths:
-      - '**.rs'
+      - 'packages/core/**'
+      - 'packages/python/src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
 
@@ -32,10 +34,10 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
       - name: Run tests
-        run: cargo test
+        run: cargo test --workspace
 
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --workspace -- -D warnings
 
       - name: Format check
-        run: cargo fmt -- --check
+        run: cargo fmt --all -- --check

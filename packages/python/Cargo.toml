@@ -1,0 +1,15 @@
+[package]
+name = "dirsql"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+dirsql-core = { path = "../core" }
+pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
+
+[features]
+default = []
+extension-module = ["pyo3/extension-module"]

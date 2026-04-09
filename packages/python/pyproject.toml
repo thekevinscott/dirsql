@@ -26,15 +26,7 @@ dev = [
 [tool.maturin]
 features = ["extension-module"]
 exclude = [
-    ".github/",
-    ".claude/",
     "tests/",
-    "notes/",
-    "index.js",
-    "package.json",
-    ".beads",
-    "AGENTS.md",
-    "justfile",
 ]
 python-source = "python"
 module-name = "dirsql._dirsql"
