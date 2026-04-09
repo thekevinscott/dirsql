@@ -10,6 +10,9 @@ notes/
 node_modules/
 *.node
 
+# TypeScript build output
+packages/ts/dist/
+
 # Python
 __pycache__/
 *.pyc
