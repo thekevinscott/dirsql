@@ -20,6 +20,14 @@ uv.lock
 .dolt/
 *.db
 
+# TypeScript
+packages/ts/dist/
+packages/ts/node_modules/
+
+# Coverage
+.coverage
+*.lcov
+
 # VitePress / docs
 docs/node_modules/
 docs/.vitepress/cache/
