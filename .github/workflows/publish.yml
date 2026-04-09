@@ -223,6 +223,8 @@ jobs:
     needs: tag
     if: needs.tag.outputs.created == 'true' && inputs.publish_crates
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -235,9 +237,13 @@ jobs:
         run: |
           sed -i 's/^version = ".*"/version = "${{ needs.tag.outputs.new_version }}"/' Cargo.toml
 
+      - name: Get crates.io token
+        uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
       - name: Publish to crates.io
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
           for attempt in 1 2 3; do
             echo "Attempt $attempt of 3"
