@@ -46,9 +46,9 @@ jobs:
         working-directory: packages/ts
         run: pnpm build
 
-      - name: List build output
+      - name: Debug module exports
         working-directory: packages/ts
-        run: ls -la *.node 2>/dev/null || echo "No .node files found in packages/ts/"; ls -la ../../target/release/*.node 2>/dev/null || echo "No .node in target/release"; ls -la ../../target/release/libdirsql* 2>/dev/null || echo "No libdirsql in target/release"
+        run: node -e "const m = require('./dirsql.node'); console.log('exports:', Object.keys(m)); console.log('DirSQL:', typeof m.DirSQL);"
 
       - name: Run tests
         working-directory: packages/ts
