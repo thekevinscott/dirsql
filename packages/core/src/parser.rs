@@ -65,6 +65,124 @@ pub fn parse_file(
     }
 }
 
+/// Column mapping source: either a dot-path into parsed content or a path capture name.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ColumnSource {
+    /// Dot-path into parsed content (e.g., "metadata.author.name")
+    DotPath(String),
+    /// Reference to a path capture value (e.g., "thread_id" from `{thread_id}` in glob)
+    PathCapture(String),
+}
+
+impl ColumnSource {
+    /// Parse a column source string. If the name exists in `capture_names`, treat it
+    /// as a path capture. Otherwise treat it as a dot-path into parsed content.
+    pub fn parse(source: &str, capture_names: &[String]) -> Self {
+        if capture_names.contains(&source.to_string()) {
+            ColumnSource::PathCapture(source.to_string())
+        } else {
+            ColumnSource::DotPath(source.to_string())
+        }
+    }
+}
+
+/// Apply column mapping overrides to parsed rows.
+///
+/// - `rows`: parsed rows from `parse_file()`
+/// - `columns`: mapping of SQL column name -> source expression
+/// - `captures`: path-captured values from glob matching
+///
+/// For each output row, the function:
+/// 1. For DotPath sources: navigates into the original parsed content via the dot-path
+/// 2. For PathCapture sources: injects the captured value as a TEXT column
+///
+/// If `columns` is empty, rows pass through unchanged (with captures still injected
+/// for any column names matching capture keys).
+pub fn apply_columns(
+    rows: &[HashMap<String, Value>],
+    columns: &HashMap<String, ColumnSource>,
+    captures: &HashMap<String, String>,
+) -> Vec<HashMap<String, Value>> {
+    if columns.is_empty() {
+        // No explicit column mapping -- just inject captures into existing rows
+        let mut result = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut new_row = row.clone();
+            for (name, value) in captures {
+                new_row.insert(name.clone(), Value::Text(value.clone()));
+            }
+            result.push(new_row);
+        }
+        return result;
+    }
+
+    let mut result = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut new_row = HashMap::new();
+        for (col_name, source) in columns {
+            match source {
+                ColumnSource::PathCapture(cap_name) => {
+                    if let Some(val) = captures.get(cap_name) {
+                        new_row.insert(col_name.clone(), Value::Text(val.clone()));
+                    } else {
+                        new_row.insert(col_name.clone(), Value::Null);
+                    }
+                }
+                ColumnSource::DotPath(path) => {
+                    let value = navigate_row_dot_path(row, path);
+                    new_row.insert(col_name.clone(), value);
+                }
+            }
+        }
+        result.push(new_row);
+    }
+    result
+}
+
+/// Navigate a dot-path into a row's values.
+/// For simple (non-dotted) paths, looks up the key directly.
+/// For dotted paths like "metadata.author.name", the first segment must be a key
+/// in the row whose value is JSON text, then navigates into that JSON.
+fn navigate_row_dot_path(row: &HashMap<String, Value>, path: &str) -> Value {
+    let segments: Vec<&str> = path.split('.').collect();
+
+    if segments.len() == 1 {
+        // Simple key lookup
+        return row.get(path).cloned().unwrap_or(Value::Null);
+    }
+
+    // First segment is the row key
+    let root_key = segments[0];
+    let root_value = match row.get(root_key) {
+        Some(v) => v,
+        None => return Value::Null,
+    };
+
+    // If the root value is Text (possibly JSON), try to parse and navigate
+    match root_value {
+        Value::Text(json_text) => {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_text) {
+                let mut current = &parsed;
+                for segment in &segments[1..] {
+                    match current {
+                        serde_json::Value::Object(map) => {
+                            current = match map.get(*segment) {
+                                Some(v) => v,
+                                None => return Value::Null,
+                            };
+                        }
+                        _ => return Value::Null,
+                    }
+                }
+                json_value_to_value(current)
+            } else {
+                Value::Null
+            }
+        }
+        _ => Value::Null,
+    }
+}
+
 /// Infer the file format from a glob pattern's extension.
 pub fn infer_format(glob: &str) -> Option<Format> {
     // Extract the extension from the glob pattern.
@@ -774,5 +892,146 @@ price = 20
             rows[0]["body"],
             Value::Text("Line 1\nLine 2\nLine 3\n".into())
         );
+    }
+
+    // --- apply_columns tests ---
+
+    #[test]
+    fn apply_columns_injects_captures_without_column_mapping() {
+        let rows = vec![{
+            let mut m = HashMap::new();
+            m.insert("body".to_string(), Value::Text("hello".into()));
+            m
+        }];
+        let captures = HashMap::from([("thread_id".to_string(), "abc123".to_string())]);
+        let result = apply_columns(&rows, &HashMap::new(), &captures);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["body"], Value::Text("hello".into()));
+        assert_eq!(result[0]["thread_id"], Value::Text("abc123".into()));
+    }
+
+    #[test]
+    fn apply_columns_with_path_capture_source() {
+        let rows = vec![{
+            let mut m = HashMap::new();
+            m.insert("body".to_string(), Value::Text("hello".into()));
+            m
+        }];
+        let columns = HashMap::from([
+            (
+                "thread_id".to_string(),
+                ColumnSource::PathCapture("thread_id".to_string()),
+            ),
+            (
+                "body".to_string(),
+                ColumnSource::DotPath("body".to_string()),
+            ),
+        ]);
+        let captures = HashMap::from([("thread_id".to_string(), "t42".to_string())]);
+        let result = apply_columns(&rows, &columns, &captures);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["thread_id"], Value::Text("t42".into()));
+        assert_eq!(result[0]["body"], Value::Text("hello".into()));
+    }
+
+    #[test]
+    fn apply_columns_dot_path_into_nested_json() {
+        let rows = vec![{
+            let mut m = HashMap::new();
+            m.insert(
+                "metadata".to_string(),
+                Value::Text(r#"{"author":{"name":"Alice"}}"#.into()),
+            );
+            m
+        }];
+        let columns = HashMap::from([(
+            "author_name".to_string(),
+            ColumnSource::DotPath("metadata.author.name".to_string()),
+        )]);
+        let result = apply_columns(&rows, &columns, &HashMap::new());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["author_name"], Value::Text("Alice".into()));
+    }
+
+    #[test]
+    fn apply_columns_dot_path_missing_key_returns_null() {
+        let rows = vec![{
+            let mut m = HashMap::new();
+            m.insert("name".to_string(), Value::Text("Alice".into()));
+            m
+        }];
+        let columns = HashMap::from([(
+            "missing".to_string(),
+            ColumnSource::DotPath("nonexistent.path".to_string()),
+        )]);
+        let result = apply_columns(&rows, &columns, &HashMap::new());
+        assert_eq!(result[0]["missing"], Value::Null);
+    }
+
+    #[test]
+    fn apply_columns_missing_capture_returns_null() {
+        let rows = vec![HashMap::new()];
+        let columns = HashMap::from([(
+            "thread_id".to_string(),
+            ColumnSource::PathCapture("thread_id".to_string()),
+        )]);
+        let result = apply_columns(&rows, &columns, &HashMap::new());
+        assert_eq!(result[0]["thread_id"], Value::Null);
+    }
+
+    #[test]
+    fn apply_columns_simple_key_lookup() {
+        let rows = vec![{
+            let mut m = HashMap::new();
+            m.insert("name".to_string(), Value::Text("Alice".into()));
+            m.insert("age".to_string(), Value::Integer(30));
+            m
+        }];
+        let columns = HashMap::from([
+            (
+                "name".to_string(),
+                ColumnSource::DotPath("name".to_string()),
+            ),
+            ("age".to_string(), ColumnSource::DotPath("age".to_string())),
+        ]);
+        let result = apply_columns(&rows, &columns, &HashMap::new());
+        assert_eq!(result[0]["name"], Value::Text("Alice".into()));
+        assert_eq!(result[0]["age"], Value::Integer(30));
+    }
+
+    #[test]
+    fn column_source_parse_detects_capture() {
+        let captures = vec!["thread_id".to_string(), "org".to_string()];
+        assert_eq!(
+            ColumnSource::parse("thread_id", &captures),
+            ColumnSource::PathCapture("thread_id".to_string())
+        );
+        assert_eq!(
+            ColumnSource::parse("metadata.author.name", &captures),
+            ColumnSource::DotPath("metadata.author.name".to_string())
+        );
+    }
+
+    #[test]
+    fn apply_columns_multiple_rows() {
+        let rows = vec![
+            {
+                let mut m = HashMap::new();
+                m.insert("body".to_string(), Value::Text("first".into()));
+                m
+            },
+            {
+                let mut m = HashMap::new();
+                m.insert("body".to_string(), Value::Text("second".into()));
+                m
+            },
+        ];
+        let captures = HashMap::from([("id".to_string(), "x".to_string())]);
+        let result = apply_columns(&rows, &HashMap::new(), &captures);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0]["id"], Value::Text("x".into()));
+        assert_eq!(result[1]["id"], Value::Text("x".into()));
+        assert_eq!(result[0]["body"], Value::Text("first".into()));
+        assert_eq!(result[1]["body"], Value::Text("second".into()));
     }
 }

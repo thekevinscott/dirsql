@@ -219,6 +219,7 @@ dependencies = [
  "criterion",
  "globset",
  "notify",
+ "regex",
  "rusqlite",
  "tempfile",
  "thiserror",
