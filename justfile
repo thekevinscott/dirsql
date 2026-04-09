@@ -17,19 +17,19 @@ fix:
 
 # Run Python unit tests (colocated)
 test-unit:
-    pytest packages/python/python/ -x -q
+    uv run python -m pytest packages/python/python/ -x -q
 
 # Run integration tests
 test-integration:
-    pytest packages/python/tests/integration/ -x -q
+    uv run python -m pytest packages/python/tests/integration/ -x -q
 
 # Run e2e tests (local only, not CI)
 test-e2e:
-    pytest packages/python/tests/e2e/ -x -q
+    uv run python -m pytest packages/python/tests/e2e/ -x -q
 
 # CI test target (unit + integration, no e2e)
 test-ci:
-    pytest packages/python/python/ packages/python/tests/integration/ -x -q --tb=short 2>/dev/null || echo "No tests found yet"
+    uv run python -m pytest packages/python/python/ packages/python/tests/integration/ -x -q --tb=short 2>/dev/null || echo "No tests found yet"
 
 # Run Rust tests
 test-rust:

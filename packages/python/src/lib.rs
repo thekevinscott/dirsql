@@ -278,14 +278,16 @@ mod python {
                     FileEvent::Created(p) | FileEvent::Modified(p) | FileEvent::Deleted(p) => p,
                 };
 
-                // Match against relative path so globs like "data/*.json" work
-                let rel = abs_path.strip_prefix(&self.root).unwrap_or(abs_path);
+                // Match against relative path so globs like "comments/**/*.jsonl" work
+                let rel_for_match = abs_path
+                    .strip_prefix(&self.root)
+                    .unwrap_or(abs_path);
 
                 // Skip files that don't match any table or are ignored
-                if matcher.is_ignored(rel) {
+                if matcher.is_ignored(rel_for_match) {
                     continue;
                 }
-                let table_name = match matcher.match_file(rel) {
+                let table_name = match matcher.match_file(rel_for_match) {
                     Some(name) => name.to_string(),
                     None => continue,
                 };

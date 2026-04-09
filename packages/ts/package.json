@@ -4,5 +4,9 @@
   "description": "Ephemeral SQL index over a local directory",
   "license": "MIT",
   "repository": "https://github.com/thekevinscott/dirsql",
-  "main": "index.js"
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test",
+    "coverage": "node --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90"
+  }
 }

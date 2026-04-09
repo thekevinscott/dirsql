@@ -42,5 +42,5 @@ jobs:
         working-directory: packages/python
 
       - name: Run tests
-        run: uv run pytest python/ tests/integration/ -x -q --tb=short 2>/dev/null || echo "No tests found yet"
+        run: uv run python -m pytest python/ tests/integration/ -x -q --tb=short --cov=dirsql --cov-report=term-missing --cov-fail-under=90
         working-directory: packages/python

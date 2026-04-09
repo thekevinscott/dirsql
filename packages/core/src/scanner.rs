@@ -10,8 +10,8 @@ pub fn scan_directory(root: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, Stri
     for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
 
-        // Match against relative path so that globs like "comments/**/index.txt"
-        // work regardless of the absolute root directory.
+        // Match against relative path so globs like "comments/**/*.jsonl" work
+        // regardless of the absolute root directory.
         let rel_path = path.strip_prefix(root).unwrap_or(path);
 
         if matcher.is_ignored(rel_path) {
