@@ -117,9 +117,7 @@ def describe_tables_guide():
     def it_matches_tables_guide_jsonl_extraction(tmp_dir):
         """Docs: one row per line for JSONL files."""
         os.makedirs(os.path.join(tmp_dir, "comments", "abc"), exist_ok=True)
-        with open(
-            os.path.join(tmp_dir, "comments", "abc", "index.jsonl"), "w"
-        ) as f:
+        with open(os.path.join(tmp_dir, "comments", "abc", "index.jsonl"), "w") as f:
             f.write(json.dumps({"body": "first", "author": "alice"}) + "\n")
             f.write(json.dumps({"body": "second", "author": "bob"}) + "\n")
 
@@ -143,9 +141,7 @@ def describe_tables_guide():
     def it_matches_tables_guide_derive_from_path(tmp_dir):
         """Docs: extract values from the file path (os.path.dirname)."""
         os.makedirs(os.path.join(tmp_dir, "comments", "abc"), exist_ok=True)
-        with open(
-            os.path.join(tmp_dir, "comments", "abc", "index.jsonl"), "w"
-        ) as f:
+        with open(os.path.join(tmp_dir, "comments", "abc", "index.jsonl"), "w") as f:
             f.write(json.dumps({"body": "hello"}) + "\n")
 
         db = DirSQL(
@@ -235,9 +231,7 @@ def describe_tables_guide():
         with open(os.path.join(tmp_dir, "data", "item.json"), "w") as f:
             json.dump({"name": "real"}, f)
 
-        with open(
-            os.path.join(tmp_dir, "node_modules", "dep.json"), "w"
-        ) as f:
+        with open(os.path.join(tmp_dir, "node_modules", "dep.json"), "w") as f:
             json.dump({"name": "ignored"}, f)
 
         db = DirSQL(
@@ -360,9 +354,7 @@ def describe_querying_guide():
         root = _blog_dir(tmp_dir)
         db = DirSQL(root, tables=_blog_tables())
 
-        results = db.query(
-            "SELECT author, COUNT(*) as n FROM posts GROUP BY author"
-        )
+        results = db.query("SELECT author, COUNT(*) as n FROM posts GROUP BY author")
         assert len(results) == 2
         count_map = {r["author"]: r["n"] for r in results}
         assert count_map["alice"] == 1
@@ -535,12 +527,8 @@ def describe_watching_guide():
         task = asyncio.create_task(collect())
         await asyncio.sleep(0.3)
 
-        with open(
-            os.path.join(tmp_dir, "comments", "abc", "index.json"), "w"
-        ) as f:
-            json.dump(
-                {"id": "abc", "body": "new comment", "author": "alice"}, f
-            )
+        with open(os.path.join(tmp_dir, "comments", "abc", "index.json"), "w") as f:
+            json.dump({"id": "abc", "body": "new comment", "author": "alice"}, f)
 
         try:
             await asyncio.wait_for(task, timeout=5.0)
@@ -561,12 +549,8 @@ def describe_watching_guide():
         import asyncio
 
         os.makedirs(os.path.join(tmp_dir, "comments", "abc"), exist_ok=True)
-        with open(
-            os.path.join(tmp_dir, "comments", "abc", "index.json"), "w"
-        ) as f:
-            json.dump(
-                {"id": "abc", "body": "deleted comment", "author": "alice"}, f
-            )
+        with open(os.path.join(tmp_dir, "comments", "abc", "index.json"), "w") as f:
+            json.dump({"id": "abc", "body": "deleted comment", "author": "alice"}, f)
 
         db = AsyncDirSQL(
             tmp_dir,
@@ -609,9 +593,7 @@ def describe_watching_guide():
         import asyncio
 
         os.makedirs(os.path.join(tmp_dir, "comments", "abc"), exist_ok=True)
-        with open(
-            os.path.join(tmp_dir, "comments", "abc", "index.json"), "w"
-        ) as f:
+        with open(os.path.join(tmp_dir, "comments", "abc", "index.json"), "w") as f:
             json.dump(
                 {
                     "id": "abc",
@@ -644,12 +626,8 @@ def describe_watching_guide():
         task = asyncio.create_task(collect())
         await asyncio.sleep(0.3)
 
-        with open(
-            os.path.join(tmp_dir, "comments", "abc", "index.json"), "w"
-        ) as f:
-            json.dump(
-                {"id": "abc", "body": "edited comment", "author": "alice"}, f
-            )
+        with open(os.path.join(tmp_dir, "comments", "abc", "index.json"), "w") as f:
+            json.dump({"id": "abc", "body": "edited comment", "author": "alice"}, f)
 
         try:
             await asyncio.wait_for(task, timeout=5.0)
@@ -659,9 +637,7 @@ def describe_watching_guide():
         assert len(events) >= 1
         # Could be update or delete+insert depending on implementation
         actions = {e.action for e in events}
-        assert "update" in actions or (
-            "delete" in actions and "insert" in actions
-        )
+        assert "update" in actions or ("delete" in actions and "insert" in actions)
 
     @pytest.mark.asyncio
     async def it_matches_watching_guide_error_event(tmp_dir):
@@ -694,9 +670,7 @@ def describe_watching_guide():
         task = asyncio.create_task(collect())
         await asyncio.sleep(0.3)
 
-        with open(
-            os.path.join(tmp_dir, "comments", "bad.json"), "w"
-        ) as f:
+        with open(os.path.join(tmp_dir, "comments", "bad.json"), "w") as f:
             f.write("not json at all")
 
         try:

@@ -34,11 +34,7 @@ fn blog_dir(root: &std::path::Path) {
         r#"{"id": "alice", "name": "Alice"}"#,
     )
     .unwrap();
-    fs::write(
-        authors.join("bob.json"),
-        r#"{"id": "bob", "name": "Bob"}"#,
-    )
-    .unwrap();
+    fs::write(authors.join("bob.json"), r#"{"id": "bob", "name": "Bob"}"#).unwrap();
 }
 
 fn blog_tables() -> Vec<Table> {
@@ -153,11 +149,7 @@ fn it_matches_tables_guide_single_object_json() {
     let root = TempDir::new().unwrap();
     let data = root.path().join("data");
     fs::create_dir_all(&data).unwrap();
-    fs::write(
-        data.join("item.json"),
-        r#"{"name": "widget", "value": 42}"#,
-    )
-    .unwrap();
+    fs::write(data.join("item.json"), r#"{"name": "widget", "value": 42}"#).unwrap();
 
     let db = DirSQL::new(
         root.path(),
@@ -193,11 +185,7 @@ fn it_matches_tables_guide_multiple_rows_per_file() {
     let root = TempDir::new().unwrap();
     let comments = root.path().join("comments").join("abc");
     fs::create_dir_all(&comments).unwrap();
-    fs::write(
-        comments.join("index.txt"),
-        "first|alice\nsecond|bob\n",
-    )
-    .unwrap();
+    fs::write(comments.join("index.txt"), "first|alice\nsecond|bob\n").unwrap();
 
     let db = DirSQL::new(
         root.path(),
@@ -316,11 +304,7 @@ fn it_matches_tables_guide_multiple_tables() {
     fs::create_dir_all(root.path().join("posts")).unwrap();
     fs::create_dir_all(root.path().join("authors")).unwrap();
 
-    fs::write(
-        root.path().join("posts").join("hello.txt"),
-        "Hello World|1",
-    )
-    .unwrap();
+    fs::write(root.path().join("posts").join("hello.txt"), "Hello World|1").unwrap();
     fs::write(root.path().join("authors").join("alice.txt"), "1|Alice").unwrap();
 
     let posts = Table::new(
@@ -382,11 +366,7 @@ fn it_matches_tables_guide_ignore_patterns() {
     fs::create_dir_all(root.path().join("node_modules")).unwrap();
 
     fs::write(root.path().join("data").join("item.txt"), "real").unwrap();
-    fs::write(
-        root.path().join("node_modules").join("dep.txt"),
-        "ignored",
-    )
-    .unwrap();
+    fs::write(root.path().join("node_modules").join("dep.txt"), "ignored").unwrap();
 
     let db = DirSQL::with_ignore(
         root.path(),
@@ -433,10 +413,7 @@ fn it_matches_tables_guide_typed_columns() {
                         "name".into(),
                         Value::Text(obj["name"].as_str().unwrap().to_string()),
                     ),
-                    (
-                        "value".into(),
-                        Value::Real(obj["value"].as_f64().unwrap()),
-                    ),
+                    ("value".into(), Value::Real(obj["value"].as_f64().unwrap())),
                     (
                         "count".into(),
                         Value::Integer(obj["count"].as_i64().unwrap()),
@@ -462,11 +439,7 @@ fn it_matches_tables_guide_constraints() {
     let root = TempDir::new().unwrap();
     let data = root.path().join("data");
     fs::create_dir_all(&data).unwrap();
-    fs::write(
-        data.join("item.json"),
-        r#"{"id": "abc", "name": "Widget"}"#,
-    )
-    .unwrap();
+    fs::write(data.join("item.json"), r#"{"id": "abc", "name": "Widget"}"#).unwrap();
 
     let db = DirSQL::new(
         root.path(),
@@ -832,10 +805,7 @@ async fn it_matches_async_guide_count_query() {
     .unwrap();
 
     db.ready().await.unwrap();
-    let rows = db
-        .query("SELECT COUNT(*) as n FROM items")
-        .await
-        .unwrap();
+    let rows = db.query("SELECT COUNT(*) as n FROM items").await.unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["n"], Value::Integer(2));
 }
