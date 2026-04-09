@@ -21,8 +21,6 @@ db = AsyncDirSQL(
     ],
 )
 
-await db.ready()
-
 async for event in db.watch():
     print(f"{event.action} on {event.table}: {event.row}")
 ```
@@ -60,7 +58,6 @@ const db = new DirSQL('./my-project', {
     }),
   ],
 });
-await db.ready;
 
 for await (const event of db.watch()) {
   console.log(`${event.action} on ${event.table}:`, event.row);

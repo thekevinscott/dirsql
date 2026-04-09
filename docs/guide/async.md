@@ -23,9 +23,6 @@ async def main():
         ],
     )
 
-    # Wait for the initial scan to complete
-    await db.ready()
-
     # Query (runs in a thread, does not block the event loop)
     results = await db.query("SELECT * FROM items WHERE value > 10")
     print(results)
@@ -49,8 +46,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ],
     )?;
 
-    db.ready().await?;
-
     let results = db.query("SELECT * FROM items WHERE value > 10")?;
     println!("{:?}", results);
     Ok(())
@@ -69,9 +64,6 @@ const db = new DirSQL('./my-project', {
     }),
   ],
 });
-
-// Wait for the initial scan to complete
-await db.ready;
 
 // Query
 const results = await db.query('SELECT * FROM items WHERE value > 10');
@@ -181,8 +173,6 @@ async def watch_and_serve(db):
 
 async def main():
     db = AsyncDirSQL("./data", tables=[...])
-    await db.ready()
-
     await asyncio.gather(
         watch_and_serve(db),
         run_web_server(),
@@ -200,7 +190,6 @@ async fn watch_and_serve(db: &DirSQL) {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = DirSQL::new("./data", vec![...])?;
-    db.ready().await?;
 
     tokio::join!(
         watch_and_serve(&db),
@@ -218,7 +207,6 @@ async function watchAndServe(db: DirSQL) {
 }
 
 const db = new DirSQL('./data', { tables: [...] });
-await db.ready;
 
 await Promise.all([
   watchAndServe(db),
