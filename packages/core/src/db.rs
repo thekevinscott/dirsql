@@ -101,8 +101,7 @@ impl Db {
         strict: bool,
     ) -> Result<HashMap<String, Value>> {
         let columns = self.get_columns(table)?;
-        let col_set: std::collections::HashSet<&str> =
-            columns.iter().map(|s| s.as_str()).collect();
+        let col_set: std::collections::HashSet<&str> = columns.iter().map(|s| s.as_str()).collect();
         let row_keys: std::collections::HashSet<&str> = row.keys().map(|s| s.as_str()).collect();
 
         if strict {

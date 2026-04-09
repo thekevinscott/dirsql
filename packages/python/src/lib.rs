@@ -110,15 +110,22 @@ mod python {
                 })?;
                 db.create_table(&t.ddl)
                     .map_err(|e| PyRuntimeError::new_err(format!("DDL error: {}", e)))?;
-                parsed_configs.push((table_name, t.glob.clone(), t.extract.clone_ref(py), t.strict));
+                parsed_configs.push((
+                    table_name,
+                    t.glob.clone(),
+                    t.extract.clone_ref(py),
+                    t.strict,
+                ));
             }
 
             // Build glob -> table_name mappings for the scanner
             let mappings: Vec<(&str, &str)> = parsed_configs
                 .iter()
-                .map(|(name, glob, _extract, _strict): &(String, String, Py<PyAny>, bool)| {
-                    (glob.as_str(), name.as_str())
-                })
+                .map(
+                    |(name, glob, _extract, _strict): &(String, String, Py<PyAny>, bool)| {
+                        (glob.as_str(), name.as_str())
+                    },
+                )
                 .collect();
             let ignore_strs: Vec<&str> = ignore
                 .as_ref()
@@ -135,17 +142,21 @@ mod python {
             // Build a lookup from table_name -> extract callable
             let extract_map: HashMap<String, Py<PyAny>> = parsed_configs
                 .iter()
-                .map(|(name, _glob, extract, _strict): &(String, String, Py<PyAny>, bool)| {
-                    (name.clone(), extract.clone_ref(py))
-                })
+                .map(
+                    |(name, _glob, extract, _strict): &(String, String, Py<PyAny>, bool)| {
+                        (name.clone(), extract.clone_ref(py))
+                    },
+                )
                 .collect();
 
             // Build strict mode lookup
             let strict_map: HashMap<String, bool> = parsed_configs
                 .iter()
-                .map(|(name, _glob, _extract, strict): &(String, String, Py<PyAny>, bool)| {
-                    (name.clone(), *strict)
-                })
+                .map(
+                    |(name, _glob, _extract, strict): &(String, String, Py<PyAny>, bool)| {
+                        (name.clone(), *strict)
+                    },
+                )
                 .collect();
 
             // Track rows per file for later diffing
@@ -183,7 +194,8 @@ mod python {
                 let mut value_rows: Vec<HashMap<String, Value>> = Vec::new();
                 for (row_index, py_row) in rows.iter().enumerate() {
                     let raw_row = convert_py_row(py, py_row)?;
-                    let row = db.conform_row(table_name, &raw_row, strict)
+                    let row = db
+                        .conform_row(table_name, &raw_row, strict)
                         .map_err(|e| PyRuntimeError::new_err(format!("Schema error: {}", e)))?;
                     db.insert_row(table_name, &row, &rel_path, row_index)
                         .map_err(|e| PyRuntimeError::new_err(format!("Insert error: {}", e)))?;
@@ -377,7 +389,10 @@ mod python {
                                     result.extract(py);
                                 match py_rows {
                                     Ok(rows) => {
-                                        let strict = strict_map.get(table_name.as_str()).copied().unwrap_or(false);
+                                        let strict = strict_map
+                                            .get(table_name.as_str())
+                                            .copied()
+                                            .unwrap_or(false);
                                         let db = self.db.lock().map_err(|e| {
                                             PyRuntimeError::new_err(format!("Lock error: {}", e))
                                         })?;
@@ -385,7 +400,11 @@ mod python {
                                         for py_row in &rows {
                                             match convert_py_row(py, py_row) {
                                                 Ok(raw_row) => {
-                                                    match db.conform_row(&table_name, &raw_row, strict) {
+                                                    match db.conform_row(
+                                                        &table_name,
+                                                        &raw_row,
+                                                        strict,
+                                                    ) {
                                                         Ok(r) => value_rows.push(r),
                                                         Err(e) => {
                                                             result_events.push(PyRowEvent {
