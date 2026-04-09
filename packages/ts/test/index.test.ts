@@ -5,25 +5,24 @@ import { tmpdir } from "os";
 import { DirSQL } from "../index.js";
 
 describe("DirSQL", () => {
-  let dir;
+  let dir: string;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "dirsql-test-"));
-    // Create test files
     mkdirSync(join(dir, "data"), { recursive: true });
     writeFileSync(
       join(dir, "data", "users.json"),
       JSON.stringify([
         { name: "Alice", age: 30 },
         { name: "Bob", age: 25 },
-      ])
+      ]),
     );
     writeFileSync(
       join(dir, "data", "products.json"),
       JSON.stringify([
         { name: "Widget", price: 9.99 },
         { name: "Gadget", price: 19.99 },
-      ])
+      ]),
     );
   });
 
@@ -36,7 +35,7 @@ describe("DirSQL", () => {
       {
         ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
         glob: "data/users.json",
-        extract: (_filePath, content) => JSON.parse(content),
+        extract: (_filePath: string, content: string) => JSON.parse(content),
       },
     ]);
 
@@ -53,12 +52,12 @@ describe("DirSQL", () => {
       {
         ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
         glob: "data/users.json",
-        extract: (_filePath, content) => JSON.parse(content),
+        extract: (_filePath: string, content: string) => JSON.parse(content),
       },
       {
         ddl: "CREATE TABLE products (name TEXT, price REAL)",
         glob: "data/products.json",
-        extract: (_filePath, content) => JSON.parse(content),
+        extract: (_filePath: string, content: string) => JSON.parse(content),
       },
     ]);
 
@@ -76,8 +75,10 @@ describe("DirSQL", () => {
       {
         ddl: "CREATE TABLE items (name TEXT)",
         glob: "data/*.json",
-        extract: (_filePath, content) =>
-          JSON.parse(content).map((item) => ({ name: item.name })),
+        extract: (_filePath: string, content: string) =>
+          JSON.parse(content).map((item: { name: string }) => ({
+            name: item.name,
+          })),
       },
     ]);
 
@@ -92,11 +93,13 @@ describe("DirSQL", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "data/*.json",
-          extract: (_filePath, content) =>
-            JSON.parse(content).map((item) => ({ name: item.name })),
+          extract: (_filePath: string, content: string) =>
+            JSON.parse(content).map((item: { name: string }) => ({
+              name: item.name,
+            })),
         },
       ],
-      ["data/products.json"]
+      ["data/products.json"],
     );
 
     const rows = db.query("SELECT * FROM items ORDER BY name");
@@ -108,7 +111,7 @@ describe("DirSQL", () => {
       {
         ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
         glob: "data/users.json",
-        extract: (_filePath, content) => JSON.parse(content),
+        extract: (_filePath: string, content: string) => JSON.parse(content),
       },
     ]);
 
@@ -124,7 +127,7 @@ describe("DirSQL", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "**/*.json",
-          extract: (_filePath, content) => JSON.parse(content),
+          extract: (_filePath: string, content: string) => JSON.parse(content),
         },
       ]);
 
@@ -140,7 +143,7 @@ describe("DirSQL", () => {
       {
         ddl: "CREATE TABLE users (name TEXT)",
         glob: "data/users.json",
-        extract: (_filePath, content) => JSON.parse(content),
+        extract: (_filePath: string, content: string) => JSON.parse(content),
       },
     ]);
 
@@ -156,7 +159,7 @@ describe("DirSQL", () => {
             glob: "**/*.json",
             extract: () => [],
           },
-        ])
+        ]),
     ).toThrow();
   });
 });
