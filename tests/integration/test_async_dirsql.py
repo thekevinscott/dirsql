@@ -12,9 +12,9 @@ from dirsql import AsyncDirSQL, Table
 def describe_AsyncDirSQL():
     def describe_init():
         @pytest.mark.asyncio
-        async def it_creates_instance_with_await(jsonl_dir):
-            """AsyncDirSQL can be initialized with await."""
-            db = await AsyncDirSQL(
+        async def it_creates_instance_synchronously(jsonl_dir):
+            """AsyncDirSQL constructor is sync and returns immediately."""
+            db = AsyncDirSQL(
                 jsonl_dir,
                 tables=[
                     Table(
@@ -35,9 +35,9 @@ def describe_AsyncDirSQL():
             assert db is not None
 
         @pytest.mark.asyncio
-        async def it_indexes_files_on_init(jsonl_dir):
-            """Async init scans and indexes directory contents."""
-            db = await AsyncDirSQL(
+        async def it_indexes_files_after_ready(jsonl_dir):
+            """Data is available after awaiting ready()."""
+            db = AsyncDirSQL(
                 jsonl_dir,
                 tables=[
                     Table(
@@ -55,33 +55,61 @@ def describe_AsyncDirSQL():
                     ),
                 ],
             )
+            await db.ready()
             results = await db.query("SELECT * FROM comments")
             assert len(results) == 3
 
         @pytest.mark.asyncio
-        async def it_raises_on_extract_error_during_init(tmp_dir):
-            """Extract lambda errors during init raise exceptions."""
+        async def it_raises_on_extract_error_during_ready(tmp_dir):
+            """Extract lambda errors during ready() raise exceptions."""
             os.makedirs(os.path.join(tmp_dir, "data"), exist_ok=True)
             with open(os.path.join(tmp_dir, "data", "bad.json"), "w") as f:
                 f.write("not valid json")
 
+            db = AsyncDirSQL(
+                tmp_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE items (name TEXT)",
+                        glob="data/*.json",
+                        extract=lambda path, content: [json.loads(content)],
+                    ),
+                ],
+            )
             with pytest.raises(Exception):
-                await AsyncDirSQL(
-                    tmp_dir,
-                    tables=[
-                        Table(
-                            ddl="CREATE TABLE items (name TEXT)",
-                            glob="data/*.json",
-                            extract=lambda path, content: [json.loads(content)],
-                        ),
-                    ],
-                )
+                await db.ready()
+
+        @pytest.mark.asyncio
+        async def it_allows_multiple_ready_calls(jsonl_dir):
+            """Calling ready() multiple times is safe and idempotent."""
+            db = AsyncDirSQL(
+                jsonl_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
+                        glob="comments/**/index.jsonl",
+                        extract=lambda path, content: [
+                            {
+                                "id": os.path.basename(os.path.dirname(path)),
+                                "body": row["body"],
+                                "author": row["author"],
+                            }
+                            for line in content.splitlines()
+                            for row in [json.loads(line)]
+                        ],
+                    ),
+                ],
+            )
+            await db.ready()
+            await db.ready()
+            results = await db.query("SELECT * FROM comments")
+            assert len(results) == 3
 
     def describe_query():
         @pytest.mark.asyncio
         async def it_returns_results_as_list_of_dicts(jsonl_dir):
             """Async query returns list of dicts with column names."""
-            db = await AsyncDirSQL(
+            db = AsyncDirSQL(
                 jsonl_dir,
                 tables=[
                     Table(
@@ -99,6 +127,7 @@ def describe_AsyncDirSQL():
                     ),
                 ],
             )
+            await db.ready()
             results = await db.query(
                 "SELECT author FROM comments WHERE body = 'first comment'"
             )
@@ -108,7 +137,7 @@ def describe_AsyncDirSQL():
         @pytest.mark.asyncio
         async def it_raises_on_invalid_sql(jsonl_dir):
             """Invalid SQL raises an exception."""
-            db = await AsyncDirSQL(
+            db = AsyncDirSQL(
                 jsonl_dir,
                 tables=[
                     Table(
@@ -126,6 +155,7 @@ def describe_AsyncDirSQL():
                     ),
                 ],
             )
+            await db.ready()
             with pytest.raises(Exception):
                 await db.query("NOT VALID SQL")
 
@@ -133,7 +163,7 @@ def describe_AsyncDirSQL():
         @pytest.mark.asyncio
         async def it_emits_insert_events_for_new_files(tmp_dir):
             """watch() yields insert events when a new file is created."""
-            db = await AsyncDirSQL(
+            db = AsyncDirSQL(
                 tmp_dir,
                 tables=[
                     Table(
@@ -143,6 +173,7 @@ def describe_AsyncDirSQL():
                     ),
                 ],
             )
+            await db.ready()
 
             events = []
 
@@ -179,7 +210,7 @@ def describe_AsyncDirSQL():
             with open(os.path.join(tmp_dir, "doomed.json"), "w") as f:
                 json.dump({"name": "doomed"}, f)
 
-            db = await AsyncDirSQL(
+            db = AsyncDirSQL(
                 tmp_dir,
                 tables=[
                     Table(
@@ -189,6 +220,7 @@ def describe_AsyncDirSQL():
                     ),
                 ],
             )
+            await db.ready()
 
             # Confirm initial data
             results = await db.query("SELECT * FROM items")
@@ -228,7 +260,7 @@ def describe_AsyncDirSQL():
             with open(os.path.join(tmp_dir, "item.json"), "w") as f:
                 json.dump({"name": "draft"}, f)
 
-            db = await AsyncDirSQL(
+            db = AsyncDirSQL(
                 tmp_dir,
                 tables=[
                     Table(
@@ -238,6 +270,7 @@ def describe_AsyncDirSQL():
                     ),
                 ],
             )
+            await db.ready()
 
             events = []
 
@@ -267,7 +300,7 @@ def describe_AsyncDirSQL():
         @pytest.mark.asyncio
         async def it_emits_error_events_for_bad_extract(tmp_dir):
             """watch() yields error events when extract lambda fails."""
-            db = await AsyncDirSQL(
+            db = AsyncDirSQL(
                 tmp_dir,
                 tables=[
                     Table(
@@ -277,6 +310,7 @@ def describe_AsyncDirSQL():
                     ),
                 ],
             )
+            await db.ready()
 
             events = []
 
@@ -305,7 +339,7 @@ def describe_AsyncDirSQL():
         @pytest.mark.asyncio
         async def it_updates_db_on_file_changes(tmp_dir):
             """The database is kept in sync with file system changes."""
-            db = await AsyncDirSQL(
+            db = AsyncDirSQL(
                 tmp_dir,
                 tables=[
                     Table(
@@ -315,6 +349,7 @@ def describe_AsyncDirSQL():
                     ),
                 ],
             )
+            await db.ready()
 
             # Initially empty
             results = await db.query("SELECT * FROM items")

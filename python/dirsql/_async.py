@@ -33,7 +33,8 @@ class AsyncDirSQL:
     """Async wrapper around DirSQL.
 
     Usage:
-        db = await AsyncDirSQL(root, tables=[...])
+        db = AsyncDirSQL(root, tables=[...])
+        await db.ready()
         results = await db.query("SELECT ...")
         async for event in db.watch():
             ...
@@ -44,15 +45,30 @@ class AsyncDirSQL:
         self._tables = tables
         self._ignore = ignore
         self._db = None
+        self._ready_event = asyncio.Event()
+        self._init_error = None
+        self._task = asyncio.ensure_future(self._init_bg())
 
-    def __await__(self):
-        return self._init().__await__()
+    async def _init_bg(self):
+        """Run the scan in the background."""
+        try:
+            self._db = await asyncio.to_thread(
+                DirSQL, self._root, tables=self._tables, ignore=self._ignore
+            )
+        except Exception as exc:
+            self._init_error = exc
+        finally:
+            self._ready_event.set()
 
-    async def _init(self):
-        self._db = await asyncio.to_thread(
-            DirSQL, self._root, tables=self._tables, ignore=self._ignore
-        )
-        return self
+    async def ready(self):
+        """Wait until the initial scan is complete.
+
+        Raises any exception that occurred during init.
+        Can be called multiple times safely.
+        """
+        await self._ready_event.wait()
+        if self._init_error is not None:
+            raise self._init_error
 
     async def query(self, sql):
         """Execute a SQL query asynchronously."""
