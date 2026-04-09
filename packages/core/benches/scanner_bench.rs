@@ -10,15 +10,15 @@ fn create_temp_tree(file_count: usize) -> TempDir {
         // Distribute files across subdirectories
         let subdir = dir.path().join(format!("dir_{}", i % 10));
         fs::create_dir_all(&subdir).unwrap();
-        fs::write(subdir.join(format!("file_{i}.csv")), format!("id,val\n{i},x")).unwrap();
+        fs::write(
+            subdir.join(format!("file_{i}.csv")),
+            format!("id,val\n{i},x"),
+        )
+        .unwrap();
     }
     // Add some non-matching files
     for i in 0..file_count / 5 {
-        fs::write(
-            dir.path().join(format!("readme_{i}.md")),
-            "# not matched",
-        )
-        .unwrap();
+        fs::write(dir.path().join(format!("readme_{i}.md")), "# not matched").unwrap();
     }
     dir
 }

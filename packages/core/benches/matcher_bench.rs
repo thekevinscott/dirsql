@@ -6,7 +6,10 @@ fn make_matcher(pattern_count: usize) -> TableMatcher {
     let patterns: Vec<(String, String)> = (0..pattern_count)
         .map(|i| (format!("**/*.ext{i}"), format!("table_{i}")))
         .collect();
-    let refs: Vec<(&str, &str)> = patterns.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+    let refs: Vec<(&str, &str)> = patterns
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
     TableMatcher::new(&refs, &[]).unwrap()
 }
 
@@ -37,9 +40,7 @@ fn bench_match_file(c: &mut Criterion) {
 }
 
 fn bench_is_ignored(c: &mut Criterion) {
-    let ignore_patterns: Vec<String> = (0..20)
-        .map(|i| format!("**/dir_{i}/**"))
-        .collect();
+    let ignore_patterns: Vec<String> = (0..20).map(|i| format!("**/dir_{i}/**")).collect();
     let ignore_refs: Vec<&str> = ignore_patterns.iter().map(|s| s.as_str()).collect();
     let matcher = TableMatcher::new(&[("**/*.csv", "t")], &ignore_refs).unwrap();
     let paths = make_test_paths(100);
@@ -59,7 +60,10 @@ fn bench_match_construction(c: &mut Criterion) {
         let patterns: Vec<(String, String)> = (0..pattern_count)
             .map(|i| (format!("**/*.ext{i}"), format!("table_{i}")))
             .collect();
-        let refs: Vec<(&str, &str)> = patterns.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+        let refs: Vec<(&str, &str)> = patterns
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect();
         group.bench_with_input(
             BenchmarkId::from_parameter(pattern_count),
             &pattern_count,
@@ -73,5 +77,10 @@ fn bench_match_construction(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_match_file, bench_is_ignored, bench_match_construction);
+criterion_group!(
+    benches,
+    bench_match_file,
+    bench_is_ignored,
+    bench_match_construction
+);
 criterion_main!(benches);
