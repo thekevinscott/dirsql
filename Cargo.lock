@@ -261,6 +261,7 @@ dependencies = [
  "futures-core",
  "futures-executor",
  "futures-util",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",

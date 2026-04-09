@@ -17,4 +17,5 @@ tokio = { version = "1", features = ["rt", "sync"] }
 futures-executor = "0.3"
 futures-util = "0.3"
 tempfile = "3"
+serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
