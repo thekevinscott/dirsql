@@ -174,11 +174,7 @@ fn it_streams_watch_events() {
 #[test]
 fn it_ignores_extra_keys_by_default() {
     let root = TempDir::new().unwrap();
-    fs::write(
-        root.path().join("item.txt"),
-        "apple|red|150",
-    )
-    .unwrap();
+    fs::write(root.path().join("item.txt"), "apple|red|150").unwrap();
 
     let db = DirSQL::new(
         root.path(),
@@ -217,9 +213,10 @@ fn it_fills_missing_keys_with_null() {
             "CREATE TABLE items (name TEXT, color TEXT, count INTEGER)",
             "*.txt",
             |_, content| {
-                vec![HashMap::from([
-                    ("name".into(), Value::Text(content.trim().to_string())),
-                ])]
+                vec![HashMap::from([(
+                    "name".into(),
+                    Value::Text(content.trim().to_string()),
+                )])]
             },
         )],
     )
@@ -268,9 +265,10 @@ fn it_raises_on_missing_keys_in_strict_mode() {
             "CREATE TABLE items (name TEXT, color TEXT)",
             "*.txt",
             |_, content| {
-                vec![HashMap::from([
-                    ("name".into(), Value::Text(content.trim().to_string())),
-                ])]
+                vec![HashMap::from([(
+                    "name".into(),
+                    Value::Text(content.trim().to_string()),
+                )])]
             },
         )],
     );
@@ -348,9 +346,7 @@ fn it_streams_watch_update_events() {
     let event = block_on(stream.next()).expect("watch event");
     // Could be Update or Delete+Insert
     match event {
-        dirsql_sdk::RowEvent::Update {
-            table, new_row, ..
-        } => {
+        dirsql_sdk::RowEvent::Update { table, new_row, .. } => {
             assert_eq!(table, "items");
             assert_eq!(new_row["name"], Value::Text("final".into()));
         }
@@ -374,9 +370,7 @@ fn it_streams_watch_error_events() {
         vec![Table::try_new(
             "CREATE TABLE items (name TEXT)",
             "**/*.txt",
-            |_, _content| {
-                Err("intentional parse failure".into())
-            },
+            |_, _content| Err("intentional parse failure".into()),
         )],
     )
     .unwrap();

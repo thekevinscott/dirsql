@@ -1,7 +1,7 @@
 use dirsql_core::config;
 use dirsql_core::db::{parse_table_name, Db, Value};
 use dirsql_core::differ;
-use dirsql_core::matcher::{TableMatcher, parse_captures};
+use dirsql_core::matcher::{parse_captures, TableMatcher};
 use dirsql_core::parser::{self, ColumnSource, Format};
 use dirsql_core::scanner::scan_directory;
 use dirsql_core::watcher::{FileEvent, Watcher};
@@ -750,8 +750,7 @@ impl DirSQL {
                     };
 
                     // Call extract
-                    let extract_result =
-                        extract_rows(&tc.extract, &rel_path, &content, &matcher);
+                    let extract_result = extract_rows(&tc.extract, &rel_path, &content, &matcher);
 
                     let new_rows = match extract_result {
                         Ok(raw_rows) => {
@@ -942,11 +941,9 @@ impl DirSQL {
             let strict = tc.strict;
             let mut value_rows: Vec<HashMap<String, Value>> = Vec::new();
             for (row_index, raw_row) in rows.iter().enumerate() {
-                let row = db
-                    .normalize_row(table_name, raw_row, strict)
-                    .map_err(|e| {
-                        Error::new(Status::GenericFailure, format!("Schema error: {}", e))
-                    })?;
+                let row = db.normalize_row(table_name, raw_row, strict).map_err(|e| {
+                    Error::new(Status::GenericFailure, format!("Schema error: {}", e))
+                })?;
                 db.insert_row(table_name, &row, &rel_path, row_index)
                     .map_err(|e| {
                         Error::new(Status::GenericFailure, format!("Insert error: {}", e))
