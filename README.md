@@ -101,7 +101,7 @@ import os
 from dirsql import AsyncDirSQL, Table
 
 async def main():
-    db = await AsyncDirSQL(
+    db = AsyncDirSQL(
         "/path/to/data",
         tables=[
             Table(
@@ -111,6 +111,7 @@ async def main():
             ),
         ],
     )
+    await db.ready()  # wait for initial scan to complete
 
     # Query works the same way
     results = await db.query("SELECT * FROM items")
@@ -160,7 +161,11 @@ Execute a SQL query. Returns a list of dicts keyed by column name. Internal trac
 
 ### `AsyncDirSQL(root, *, tables, ignore=None)`
 
-Async wrapper. Must be `await`ed to initialize.
+Async wrapper. Constructor is sync (returns immediately). Call `await db.ready()` to wait for the initial scan.
+
+#### `await AsyncDirSQL.ready()`
+
+Wait for the initial scan to complete. Idempotent -- safe to call multiple times. Raises any exception that occurred during init.
 
 #### `await AsyncDirSQL.query(sql) -> list[dict]`
 
