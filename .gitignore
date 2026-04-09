@@ -19,3 +19,8 @@ uv.lock
 # Dolt database files (added by bd init)
 .dolt/
 *.db
+
+# VitePress / docs
+docs/node_modules/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
