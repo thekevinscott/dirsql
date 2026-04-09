@@ -32,14 +32,23 @@ require_env APPROVED_GIT_NAME
 require_env APPROVED_GIT_EMAIL
 require_env AGENT_NAME
 require_env AGENT_MODEL
+require_env APPROVED_GPG_KEY
 
-configured_name="$(git config --get user.name || true)"
-configured_email="$(git config --get user.email || true)"
-use_config_only="$(git config --bool --get user.useConfigOnly || true)"
+signing_key="$(git config --get user.signingkey || true)"
+commit_gpgsign="$(git config --bool --get commit.gpgsign || true)"
+author_ident="$(git var GIT_AUTHOR_IDENT)"
+committer_ident="$(git var GIT_COMMITTER_IDENT)"
+effective_author_name="$(printf '%s\n' "$author_ident" | sed -E 's/^(.*) <.*$/\1/')"
+effective_author_email="$(printf '%s\n' "$author_ident" | sed -E 's/^.*<(.*)>.*$/\1/')"
+effective_committer_name="$(printf '%s\n' "$committer_ident" | sed -E 's/^(.*) <.*$/\1/')"
+effective_committer_email="$(printf '%s\n' "$committer_ident" | sed -E 's/^.*<(.*)>.*$/\1/')"
 
-[ "$configured_name" = "$APPROVED_GIT_NAME" ] || fail "git user.name does not match APPROVED_GIT_NAME"
-[ "$configured_email" = "$APPROVED_GIT_EMAIL" ] || fail "git user.email does not match APPROVED_GIT_EMAIL"
-[ "$use_config_only" = "true" ] || fail "git user.useConfigOnly must be true"
+[ "$effective_author_name" = "$APPROVED_GIT_NAME" ] || fail "effective author name does not match APPROVED_GIT_NAME"
+[ "$effective_author_email" = "$APPROVED_GIT_EMAIL" ] || fail "effective author email does not match APPROVED_GIT_EMAIL"
+[ "$effective_committer_name" = "$APPROVED_GIT_NAME" ] || fail "effective committer name does not match APPROVED_GIT_NAME"
+[ "$effective_committer_email" = "$APPROVED_GIT_EMAIL" ] || fail "effective committer email does not match APPROVED_GIT_EMAIL"
+[ "$signing_key" = "$APPROVED_GPG_KEY" ] || fail "git user.signingkey does not match APPROVED_GPG_KEY"
+[ "$commit_gpgsign" = "true" ] || fail "git commit.gpgsign must be true"
 
 trailer="Agent: $AGENT_NAME ($AGENT_MODEL)"
 
@@ -57,6 +66,7 @@ case "$action" in
         [ "$head_author_email" = "$APPROVED_GIT_EMAIL" ] || fail "HEAD author email does not match APPROVED_GIT_EMAIL"
         [ "$head_committer_email" = "$APPROVED_GIT_EMAIL" ] || fail "HEAD committer email does not match APPROVED_GIT_EMAIL"
         printf '%s\n' "$head_message" | grep -Fqx "$trailer" || fail "HEAD commit is missing trailer: $trailer"
+        git verify-commit HEAD >/dev/null 2>&1 || fail "HEAD commit is not signed or the signature cannot be verified locally"
 
         if [ "$action" = "pr" ]; then
             require_env GH_TOKEN

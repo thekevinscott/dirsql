@@ -34,7 +34,10 @@ Write scratch/temporary files to `/tmp` instead of asking permission. Use unique
   - `AGENT_NAME`
   - `AGENT_MODEL`
 - Approved robot credentials and wrappers are allowed. For example, environment sourced from `ROBOT_*` variables is valid for agent operations.
-- Set `git config user.useConfigOnly true` in agent worktrees so git never falls back to a personal global identity.
+- Prefer the Claude-style wrapper/env model for all git and GitHub operations. Launch the agent through the approved robot wrapper or export equivalent robot environment variables before running `git` or `gh`.
+- Do **not** rely on ambient personal shell identity. Do **not** write worktree-local `user.name`, `user.email`, or signing config unless explicitly requested.
+- Commits must be GPG-signed with the approved robot signing key and must show as verified on GitHub.
+- Configure signing through the approved robot wrapper/env before committing, then verify with `scripts/agent-preflight.sh`.
 - If the approved robot identity is not active, stop and ask. Never proceed with a non-robot personal identity.
 - Every agent-authored commit message must include this trailer at the bottom: `Agent: <assistant> (<model>)`
 - Examples:
