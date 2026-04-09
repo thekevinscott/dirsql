@@ -13,6 +13,7 @@ authors = [
 ]
 repository = "https://github.com/thekevinscott/dirsql"
 keywords = ["sql", "filesystem", "directory", "sqlite", "index"]
+readme = "README.md"
 
 [project.optional-dependencies]
 dev = [
