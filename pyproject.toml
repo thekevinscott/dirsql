@@ -36,3 +36,5 @@ exclude = [
     "AGENTS.md",
     "justfile",
 ]
+python-source = "python"
+module-name = "dirsql._dirsql"
