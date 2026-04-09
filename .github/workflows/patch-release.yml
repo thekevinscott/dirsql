@@ -43,3 +43,39 @@ jobs:
     permissions:
       contents: write
       id-token: write
+
+  # npm publish inlined here because npm OIDC doesn't support reusable workflows
+  # (it validates the caller workflow name, not the called workflow)
+  publish-npm:
+    needs: [check, release]
+    if: always() && needs.check.outputs.should_release == 'true' && needs.release.outputs.tag_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check if package.json exists
+        id: check_npm
+        run: |
+          if [ -f package.json ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Node.js
+        if: steps.check_npm.outputs.exists == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          registry-url: https://registry.npmjs.org
+
+      - name: Update package.json version
+        if: steps.check_npm.outputs.exists == 'true'
+        run: npm version "${{ needs.release.outputs.new_version }}" --no-git-tag-version
+
+      - name: Publish to npm
+        if: steps.check_npm.outputs.exists == 'true'
+        run: npm publish --provenance --access public
