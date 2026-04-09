@@ -149,3 +149,7 @@ A feature is not done until integration tests pass and cover the new functionali
 E2E tests are your primary feedback mechanism. Run them liberally after significant changes -- they catch issues that integration tests miss because integration tests mock out SQLite and (eventually) LLM calls. But do NOT add them to CI workflows. They are a local development tool.
 
 See skillet or karat for examples of test organization, fixtures, and pytest-describe patterns.
+
+### Benchmarks
+
+Run `cargo bench -p dirsql-core` after significant changes to the Rust codebase. Not in CI -- local only. Covers: SQLite operations, directory scanning, row diffing, glob matching. Use to catch performance regressions before merging.
