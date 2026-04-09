@@ -76,6 +76,61 @@ impl Db {
         Ok(count)
     }
 
+    /// Get the user-defined column names for a table (excludes _dirsql_* tracking columns).
+    pub fn get_columns(&self, table: &str) -> Result<Vec<String>> {
+        let sql = format!("PRAGMA table_info({})", table);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let columns: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .filter_map(|r| r.ok())
+            .filter(|name| !name.starts_with("_dirsql_"))
+            .collect();
+        Ok(columns)
+    }
+
+    /// Conform a row to the table schema.
+    ///
+    /// In relaxed mode (strict=false): extra keys not in the DDL are dropped,
+    /// missing keys are filled with Value::Null.
+    ///
+    /// In strict mode (strict=true): extra or missing keys produce a SchemaMismatch error.
+    pub fn conform_row(
+        &self,
+        table: &str,
+        row: &HashMap<String, Value>,
+        strict: bool,
+    ) -> Result<HashMap<String, Value>> {
+        let columns = self.get_columns(table)?;
+        let col_set: std::collections::HashSet<&str> =
+            columns.iter().map(|s| s.as_str()).collect();
+        let row_keys: std::collections::HashSet<&str> = row.keys().map(|s| s.as_str()).collect();
+
+        if strict {
+            let extra: Vec<&str> = row_keys.difference(&col_set).copied().collect();
+            if !extra.is_empty() {
+                return Err(DbError::SchemaMismatch(format!(
+                    "table '{}': extra keys not in DDL: {:?}",
+                    table, extra
+                )));
+            }
+            let missing: Vec<&str> = col_set.difference(&row_keys).copied().collect();
+            if !missing.is_empty() {
+                return Err(DbError::SchemaMismatch(format!(
+                    "table '{}': missing keys required by DDL: {:?}",
+                    table, missing
+                )));
+            }
+            Ok(row.clone())
+        } else {
+            let mut conformed = HashMap::new();
+            for col in &columns {
+                let value = row.get(col).cloned().unwrap_or(Value::Null);
+                conformed.insert(col.clone(), value);
+            }
+            Ok(conformed)
+        }
+    }
+
     /// Query the database, returning rows as a list of column-name -> value maps.
     /// Internal tracking columns (_dirsql_*) are excluded from results.
     pub fn query(&self, sql: &str) -> Result<Vec<HashMap<String, Value>>> {
@@ -365,5 +420,80 @@ mod tests {
     #[test]
     fn parse_table_name_empty_after_create_table() {
         assert_eq!(parse_table_name("CREATE TABLE "), None);
+    }
+
+    #[test]
+    fn get_columns_returns_user_columns_only() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT, name TEXT, count INTEGER)")
+            .unwrap();
+        let cols = db.get_columns("t").unwrap();
+        assert_eq!(cols, vec!["id", "name", "count"]);
+    }
+
+    #[test]
+    fn conform_row_relaxed_drops_extra_keys() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT, name TEXT)")
+            .unwrap();
+        let row = HashMap::from([
+            ("id".into(), Value::Text("1".into())),
+            ("name".into(), Value::Text("alice".into())),
+            ("extra".into(), Value::Text("ignored".into())),
+        ]);
+        let conformed = db.conform_row("t", &row, false).unwrap();
+        assert!(conformed.contains_key("id"));
+        assert!(conformed.contains_key("name"));
+        assert!(!conformed.contains_key("extra"));
+    }
+
+    #[test]
+    fn conform_row_relaxed_fills_missing_with_null() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT, name TEXT)")
+            .unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
+        let conformed = db.conform_row("t", &row, false).unwrap();
+        assert_eq!(conformed["id"], Value::Text("1".into()));
+        assert_eq!(conformed["name"], Value::Null);
+    }
+
+    #[test]
+    fn conform_row_strict_errors_on_extra_keys() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        let row = HashMap::from([
+            ("id".into(), Value::Text("1".into())),
+            ("extra".into(), Value::Text("bad".into())),
+        ]);
+        let result = db.conform_row("t", &row, true);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("extra keys"));
+    }
+
+    #[test]
+    fn conform_row_strict_errors_on_missing_keys() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT, name TEXT)")
+            .unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
+        let result = db.conform_row("t", &row, true);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("missing keys"));
+    }
+
+    #[test]
+    fn conform_row_strict_passes_with_exact_match() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT, name TEXT)")
+            .unwrap();
+        let row = HashMap::from([
+            ("id".into(), Value::Text("1".into())),
+            ("name".into(), Value::Text("alice".into())),
+        ]);
+        let conformed = db.conform_row("t", &row, true).unwrap();
+        assert_eq!(conformed.len(), 2);
     }
 }

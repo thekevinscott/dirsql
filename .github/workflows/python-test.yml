@@ -1,5 +1,8 @@
 name: Python Test
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   push:
     branches: [main]
@@ -41,6 +44,6 @@ jobs:
         run: uv run maturin develop
         working-directory: packages/python
 
-      - name: Run tests
-        run: uv run pytest python/ tests/integration/ -x -q --tb=short 2>/dev/null || echo "No tests found yet"
+      - name: Run tests with coverage
+        run: uv run pytest python/ tests/integration/ -x -q --tb=short --cov=dirsql --cov-fail-under=90
         working-directory: packages/python

@@ -18,6 +18,7 @@ readme = "README.md"
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
+    "pytest-cov>=5",
     "pytest-describe>=2",
     "pytest-asyncio>=0.23",
     "ruff>=0.4",

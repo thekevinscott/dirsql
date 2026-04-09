@@ -1,5 +1,8 @@
 name: Rust Test
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   push:
     branches: [main]
@@ -37,6 +40,11 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace
+
+      - name: Coverage
+        run: |
+          cargo install cargo-tarpaulin
+          cargo tarpaulin --workspace --out xml --fail-under 90
 
       - name: Clippy
         run: cargo clippy --workspace -- -D warnings

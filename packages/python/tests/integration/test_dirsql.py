@@ -318,6 +318,105 @@ def describe_DirSQL():
             results = db.query("SELECT * FROM items")
             assert len(results) == 0
 
+    def describe_schema_mode():
+        def it_ignores_extra_keys_by_default(tmp_dir):
+            """Relaxed mode (default): extra keys returned by extract are silently dropped."""
+            with open(os.path.join(tmp_dir, "data.json"), "w") as f:
+                json.dump({"name": "alice", "age": 30, "extra": "ignored"}, f)
+
+            db = DirSQL(
+                tmp_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE t (name TEXT, age INTEGER)",
+                        glob="*.json",
+                        extract=lambda path, content: [json.loads(content)],
+                    ),
+                ],
+            )
+            results = db.query("SELECT * FROM t")
+            assert len(results) == 1
+            assert results[0]["name"] == "alice"
+            assert results[0]["age"] == 30
+            assert "extra" not in results[0]
+
+        def it_fills_missing_keys_with_null_by_default(tmp_dir):
+            """Relaxed mode (default): missing keys become NULL."""
+            with open(os.path.join(tmp_dir, "data.json"), "w") as f:
+                json.dump({"name": "alice"}, f)
+
+            db = DirSQL(
+                tmp_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE t (name TEXT, age INTEGER)",
+                        glob="*.json",
+                        extract=lambda path, content: [json.loads(content)],
+                    ),
+                ],
+            )
+            results = db.query("SELECT * FROM t")
+            assert len(results) == 1
+            assert results[0]["name"] == "alice"
+            assert results[0]["age"] is None
+
+        def it_raises_on_extra_keys_in_strict_mode(tmp_dir):
+            """Strict mode: extra keys raise an error."""
+            with open(os.path.join(tmp_dir, "data.json"), "w") as f:
+                json.dump({"name": "alice", "extra": "bad"}, f)
+
+            with pytest.raises(Exception, match="Schema error"):
+                DirSQL(
+                    tmp_dir,
+                    tables=[
+                        Table(
+                            ddl="CREATE TABLE t (name TEXT)",
+                            glob="*.json",
+                            extract=lambda path, content: [json.loads(content)],
+                            strict=True,
+                        ),
+                    ],
+                )
+
+        def it_raises_on_missing_keys_in_strict_mode(tmp_dir):
+            """Strict mode: missing keys raise an error."""
+            with open(os.path.join(tmp_dir, "data.json"), "w") as f:
+                json.dump({"name": "alice"}, f)
+
+            with pytest.raises(Exception, match="Schema error"):
+                DirSQL(
+                    tmp_dir,
+                    tables=[
+                        Table(
+                            ddl="CREATE TABLE t (name TEXT, age INTEGER)",
+                            glob="*.json",
+                            extract=lambda path, content: [json.loads(content)],
+                            strict=True,
+                        ),
+                    ],
+                )
+
+        def it_passes_strict_mode_with_exact_match(tmp_dir):
+            """Strict mode: exact key match works fine."""
+            with open(os.path.join(tmp_dir, "data.json"), "w") as f:
+                json.dump({"name": "alice", "age": 30}, f)
+
+            db = DirSQL(
+                tmp_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE t (name TEXT, age INTEGER)",
+                        glob="*.json",
+                        extract=lambda path, content: [json.loads(content)],
+                        strict=True,
+                    ),
+                ],
+            )
+            results = db.query("SELECT * FROM t")
+            assert len(results) == 1
+            assert results[0]["name"] == "alice"
+            assert results[0]["age"] == 30
+
     def describe_extract_receives_path_and_content():
         def it_passes_relative_path_and_string_content(tmp_dir):
             """Extract receives the file path (relative to root) and content as string."""

@@ -21,14 +21,21 @@ mod python {
         #[pyo3(get)]
         glob: String,
         extract: Py<PyAny>,
+        #[pyo3(get)]
+        strict: bool,
     }
 
     #[pymethods]
     impl PyTable {
         #[new]
-        #[pyo3(signature = (*, ddl, glob, extract))]
-        fn new(ddl: String, glob: String, extract: Py<PyAny>) -> Self {
-            PyTable { ddl, glob, extract }
+        #[pyo3(signature = (*, ddl, glob, extract, strict=false))]
+        fn new(ddl: String, glob: String, extract: Py<PyAny>, strict: bool) -> Self {
+            PyTable {
+                ddl,
+                glob,
+                extract,
+                strict,
+            }
         }
     }
 
@@ -64,6 +71,7 @@ mod python {
         name: String,
         glob: String,
         extract: Py<PyAny>,
+        strict: bool,
     }
 
     /// The main DirSQL class. Creates an in-memory SQLite index over a directory.
@@ -92,7 +100,7 @@ mod python {
                 Db::new().map_err(|e| PyRuntimeError::new_err(format!("DB init error: {}", e)))?;
 
             // Parse table names from DDLs and create tables
-            let mut parsed_configs: Vec<(String, String, Py<PyAny>)> = Vec::new();
+            let mut parsed_configs: Vec<(String, String, Py<PyAny>, bool)> = Vec::new();
             for t in &tables {
                 let table_name = parse_table_name(&t.ddl).ok_or_else(|| {
                     PyRuntimeError::new_err(format!(
@@ -102,13 +110,13 @@ mod python {
                 })?;
                 db.create_table(&t.ddl)
                     .map_err(|e| PyRuntimeError::new_err(format!("DDL error: {}", e)))?;
-                parsed_configs.push((table_name, t.glob.clone(), t.extract.clone_ref(py)));
+                parsed_configs.push((table_name, t.glob.clone(), t.extract.clone_ref(py), t.strict));
             }
 
             // Build glob -> table_name mappings for the scanner
             let mappings: Vec<(&str, &str)> = parsed_configs
                 .iter()
-                .map(|(name, glob, _extract): &(String, String, Py<PyAny>)| {
+                .map(|(name, glob, _extract, _strict): &(String, String, Py<PyAny>, bool)| {
                     (glob.as_str(), name.as_str())
                 })
                 .collect();
@@ -127,8 +135,16 @@ mod python {
             // Build a lookup from table_name -> extract callable
             let extract_map: HashMap<String, Py<PyAny>> = parsed_configs
                 .iter()
-                .map(|(name, _glob, extract): &(String, String, Py<PyAny>)| {
+                .map(|(name, _glob, extract, _strict): &(String, String, Py<PyAny>, bool)| {
                     (name.clone(), extract.clone_ref(py))
+                })
+                .collect();
+
+            // Build strict mode lookup
+            let strict_map: HashMap<String, bool> = parsed_configs
+                .iter()
+                .map(|(name, _glob, _extract, strict): &(String, String, Py<PyAny>, bool)| {
+                    (name.clone(), *strict)
                 })
                 .collect();
 
@@ -163,9 +179,12 @@ mod python {
                 let rows: Vec<HashMap<String, Py<PyAny>>> = result.extract(py)?;
 
                 // Convert and insert rows, tracking them
+                let strict = strict_map.get(table_name).copied().unwrap_or(false);
                 let mut value_rows: Vec<HashMap<String, Value>> = Vec::new();
                 for (row_index, py_row) in rows.iter().enumerate() {
-                    let row = convert_py_row(py, py_row)?;
+                    let raw_row = convert_py_row(py, py_row)?;
+                    let row = db.conform_row(table_name, &raw_row, strict)
+                        .map_err(|e| PyRuntimeError::new_err(format!("Schema error: {}", e)))?;
                     db.insert_row(table_name, &row, &rel_path, row_index)
                         .map_err(|e| PyRuntimeError::new_err(format!("Insert error: {}", e)))?;
                     value_rows.push(row);
@@ -176,10 +195,11 @@ mod python {
             // Store table configs for watch use
             let stored_configs: Vec<TableConfig> = parsed_configs
                 .into_iter()
-                .map(|(name, glob, extract)| TableConfig {
+                .map(|(name, glob, extract, strict)| TableConfig {
                     name,
                     glob,
                     extract,
+                    strict,
                 })
                 .collect();
 
@@ -271,6 +291,13 @@ mod python {
                 .map(|tc| (tc.name.as_str(), &tc.extract))
                 .collect();
 
+            // Build strict mode lookup
+            let strict_map: HashMap<&str, bool> = self
+                .table_configs
+                .iter()
+                .map(|tc| (tc.name.as_str(), tc.strict))
+                .collect();
+
             let mut result_events = Vec::new();
 
             for file_event in file_events {
@@ -350,10 +377,32 @@ mod python {
                                     result.extract(py);
                                 match py_rows {
                                     Ok(rows) => {
+                                        let strict = strict_map.get(table_name.as_str()).copied().unwrap_or(false);
+                                        let db = self.db.lock().map_err(|e| {
+                                            PyRuntimeError::new_err(format!("Lock error: {}", e))
+                                        })?;
                                         let mut value_rows = Vec::new();
                                         for py_row in &rows {
                                             match convert_py_row(py, py_row) {
-                                                Ok(r) => value_rows.push(r),
+                                                Ok(raw_row) => {
+                                                    match db.conform_row(&table_name, &raw_row, strict) {
+                                                        Ok(r) => value_rows.push(r),
+                                                        Err(e) => {
+                                                            result_events.push(PyRowEvent {
+                                                                table: table_name.clone(),
+                                                                action: "error".to_string(),
+                                                                row: None,
+                                                                old_row: None,
+                                                                error: Some(format!(
+                                                                    "Schema error: {}",
+                                                                    e
+                                                                )),
+                                                                file_path: Some(rel_path.clone()),
+                                                            });
+                                                            continue;
+                                                        }
+                                                    }
+                                                }
                                                 Err(e) => {
                                                     result_events.push(PyRowEvent {
                                                         table: table_name.clone(),
@@ -370,6 +419,7 @@ mod python {
                                                 }
                                             }
                                         }
+                                        drop(db);
                                         value_rows
                                     }
                                     Err(e) => {
