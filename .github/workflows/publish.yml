@@ -7,6 +7,13 @@ on:
         description: 'Version bump type: patch or minor'
         required: true
         type: string
+    outputs:
+      tag_created:
+        description: 'Whether a tag was created'
+        value: ${{ jobs.tag.outputs.created }}
+      new_version:
+        description: 'The new version number'
+        value: ${{ jobs.tag.outputs.new_version }}
 
 jobs:
   check-python:
@@ -237,42 +244,8 @@ jobs:
             fi
           done
 
-  publish-npm:
-    needs: tag
-    if: needs.tag.outputs.created == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Check if package.json exists
-        id: check
-        run: |
-          if [ -f package.json ]; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Setup Node.js
-        if: steps.check.outputs.exists == 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24.x'
-          registry-url: https://registry.npmjs.org
-
-      - name: Update package.json version
-        if: steps.check.outputs.exists == 'true'
-        run: npm version "${{ needs.tag.outputs.new_version }}" --no-git-tag-version
-
-      - name: Publish to npm
-        if: steps.check.outputs.exists == 'true'
-        run: npm publish --access public
-
   github-release:
-    needs: [tag, publish-pypi, publish-crates, publish-npm]
+    needs: [tag, publish-pypi, publish-crates]
     if: always() && needs.tag.outputs.created == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -292,13 +265,12 @@ jobs:
             --generate-notes
 
   rollback:
-    needs: [tag, publish-pypi, publish-crates, publish-npm]
+    needs: [tag, publish-pypi, publish-crates]
     if: |
       always() &&
       needs.tag.outputs.created == 'true' &&
       needs.publish-pypi.result != 'success' &&
-      needs.publish-crates.result != 'success' &&
-      needs.publish-npm.result != 'success'
+      needs.publish-crates.result != 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
