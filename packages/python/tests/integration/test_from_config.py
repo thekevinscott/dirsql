@@ -5,7 +5,6 @@ import os
 import tempfile
 
 import pytest
-import pytest_asyncio
 
 from dirsql import DirSQL, AsyncDirSQL
 
