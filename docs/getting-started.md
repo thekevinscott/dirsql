@@ -113,7 +113,6 @@ const db = new DirSQL('./my-blog', {
     }),
   ],
 });
-await db.ready;
 
 const posts = await db.query('SELECT * FROM posts');
 

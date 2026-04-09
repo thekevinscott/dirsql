@@ -76,7 +76,6 @@ const db = new DirSQL('./my-project', {
     }),
   ],
 });
-await db.ready;
 
 const large = await db.query('SELECT * FROM files WHERE size > 1000');
 ```

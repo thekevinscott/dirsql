@@ -113,8 +113,6 @@ async def main():
             ),
         ],
     )
-    await db.ready()  # wait for initial scan to complete
-
     # Query works the same way
     results = await db.query("SELECT * FROM items")
 
@@ -151,7 +149,7 @@ Execute a SQL query. Returns a list of dicts keyed by column name. Internal trac
 
 ### `AsyncDirSQL(root, *, tables, ignore=None)`
 
-Async wrapper. Constructor is sync (returns immediately). Call `await db.ready()` to wait for the initial scan.
+Async wrapper. Constructor is sync (returns immediately). Queries implicitly wait for the initial scan. Call `await db.ready()` explicitly if you need to check for scan errors before querying.
 
 #### `await AsyncDirSQL.ready()`
 

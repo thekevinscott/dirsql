@@ -179,7 +179,6 @@ const db = new DirSQL('./workspace', {
     }),
   ],
 });
-await db.ready;
 ```
 
 :::

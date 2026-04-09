@@ -169,7 +169,6 @@ napi-rs bindings to `dirsql-core`. Same API shape as Python:
 
 ```typescript
 const db = new DirSQL(root, { tables, ignore });
-await db.ready;
 
 const rows = await db.query("SELECT * FROM comments");
 
