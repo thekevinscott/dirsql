@@ -87,21 +87,14 @@ pub fn load_config(path: &Path) -> Result<Config> {
 pub fn load_config_str(content: &str) -> Result<Config> {
     let raw: RawConfig = toml::from_str(content)?;
 
-    let ignore = raw
-        .dirsql
-        .and_then(|d| d.ignore)
-        .unwrap_or_default();
+    let ignore = raw.dirsql.and_then(|d| d.ignore).unwrap_or_default();
 
     let raw_tables = raw.table.unwrap_or_default();
     let mut tables = Vec::with_capacity(raw_tables.len());
 
     for raw_table in raw_tables {
-        let ddl = raw_table
-            .ddl
-            .ok_or(ConfigError::MissingField("ddl"))?;
-        let glob = raw_table
-            .glob
-            .ok_or(ConfigError::MissingField("glob"))?;
+        let ddl = raw_table.ddl.ok_or(ConfigError::MissingField("ddl"))?;
+        let glob = raw_table.glob.ok_or(ConfigError::MissingField("glob"))?;
 
         let format = match raw_table.format {
             Some(f) => Some(parse_format_str(&f)?),
