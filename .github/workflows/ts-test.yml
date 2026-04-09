@@ -46,10 +46,6 @@ jobs:
         working-directory: packages/ts
         run: pnpm build
 
-      - name: Debug module exports
-        working-directory: packages/ts
-        run: node -e "const m = require('./dirsql.node'); console.log('exports:', Object.keys(m)); console.log('DirSQL:', typeof m.DirSQL);"
-
       - name: Run tests
         working-directory: packages/ts
         run: pnpm test

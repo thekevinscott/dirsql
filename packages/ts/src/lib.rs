@@ -397,7 +397,7 @@ struct TableConfig {
 }
 
 /// The main DirSQL class. Creates an in-memory SQLite index over a directory.
-#[napi]
+#[napi(js_name = "DirSQL")]
 pub struct DirSQL {
     db: Mutex<Db>,
     root: PathBuf,
