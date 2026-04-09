@@ -39,9 +39,15 @@ impl FnRef {
         let mut raw_ref = std::ptr::null_mut();
         let status = napi::sys::napi_create_reference(env, value, 1, &mut raw_ref);
         if status != napi::sys::Status::napi_ok {
-            return Err(Error::new(Status::GenericFailure, "Failed to create reference"));
+            return Err(Error::new(
+                Status::GenericFailure,
+                "Failed to create reference",
+            ));
         }
-        Ok(FnRef { raw_env: env, raw_ref })
+        Ok(FnRef {
+            raw_env: env,
+            raw_ref,
+        })
     }
 
     /// Get the referenced value.
@@ -49,13 +55,20 @@ impl FnRef {
         let mut result = std::ptr::null_mut();
         let status = napi::sys::napi_get_reference_value(self.raw_env, self.raw_ref, &mut result);
         if status != napi::sys::Status::napi_ok {
-            return Err(Error::new(Status::GenericFailure, "Failed to get reference value"));
+            return Err(Error::new(
+                Status::GenericFailure,
+                "Failed to get reference value",
+            ));
         }
         Ok(result)
     }
 
     /// Call this function reference with (filePath, content) args and return the result as JSON.
-    unsafe fn call_extract(&self, rel_path: &str, content: &str) -> Result<Vec<HashMap<String, Value>>> {
+    unsafe fn call_extract(
+        &self,
+        rel_path: &str,
+        content: &str,
+    ) -> Result<Vec<HashMap<String, Value>>> {
         let env = self.raw_env;
         let func = self.get_value()?;
 
@@ -68,7 +81,10 @@ impl FnRef {
             &mut js_path,
         );
         if status != napi::sys::Status::napi_ok {
-            return Err(Error::new(Status::GenericFailure, "Failed to create path string"));
+            return Err(Error::new(
+                Status::GenericFailure,
+                "Failed to create path string",
+            ));
         }
 
         let mut js_content = std::ptr::null_mut();
@@ -79,7 +95,10 @@ impl FnRef {
             &mut js_content,
         );
         if status != napi::sys::Status::napi_ok {
-            return Err(Error::new(Status::GenericFailure, "Failed to create content string"));
+            return Err(Error::new(
+                Status::GenericFailure,
+                "Failed to create content string",
+            ));
         }
 
         // Get undefined for 'this'
@@ -89,7 +108,8 @@ impl FnRef {
         // Call the function
         let args = [js_path, js_content];
         let mut result = std::ptr::null_mut();
-        let status = napi::sys::napi_call_function(env, undefined, func, 2, args.as_ptr(), &mut result);
+        let status =
+            napi::sys::napi_call_function(env, undefined, func, 2, args.as_ptr(), &mut result);
         if status != napi::sys::Status::napi_ok {
             // Check for pending exception
             let mut is_exception = false;
@@ -98,7 +118,10 @@ impl FnRef {
                 let mut exception = std::ptr::null_mut();
                 napi::sys::napi_get_and_clear_last_exception(env, &mut exception);
             }
-            return Err(Error::new(Status::GenericFailure, "Extract function call failed"));
+            return Err(Error::new(
+                Status::GenericFailure,
+                "Extract function call failed",
+            ));
         }
 
         // Parse result array
@@ -122,7 +145,10 @@ unsafe fn parse_js_array_of_objects(
     let mut is_array = false;
     napi::sys::napi_is_array(env, array, &mut is_array);
     if !is_array {
-        return Err(Error::new(Status::GenericFailure, "Extract must return an array"));
+        return Err(Error::new(
+            Status::GenericFailure,
+            "Extract must return an array",
+        ));
     }
 
     let mut length: u32 = 0;
@@ -149,7 +175,13 @@ unsafe fn parse_js_array_of_objects(
 
             // Get key string
             let mut key_len = 0usize;
-            napi::sys::napi_get_value_string_utf8(env, key_val, std::ptr::null_mut(), 0, &mut key_len);
+            napi::sys::napi_get_value_string_utf8(
+                env,
+                key_val,
+                std::ptr::null_mut(),
+                0,
+                &mut key_len,
+            );
             let mut key_buf = vec![0u8; key_len + 1];
             let mut actual_len = 0usize;
             napi::sys::napi_get_value_string_utf8(
@@ -212,7 +244,9 @@ unsafe fn js_val_to_value(env: napi::sys::napi_env, val: napi::sys::napi_value) 
                 len + 1,
                 &mut actual,
             );
-            Ok(Value::Text(String::from_utf8_lossy(&buf[..actual]).to_string()))
+            Ok(Value::Text(
+                String::from_utf8_lossy(&buf[..actual]).to_string(),
+            ))
         }
         // Everything else -> stringify
         _ => {
@@ -232,7 +266,9 @@ unsafe fn js_val_to_value(env: napi::sys::napi_env, val: napi::sys::napi_value) 
                 len + 1,
                 &mut actual,
             );
-            Ok(Value::Text(String::from_utf8_lossy(&buf[..actual]).to_string()))
+            Ok(Value::Text(
+                String::from_utf8_lossy(&buf[..actual]).to_string(),
+            ))
         }
     }
 }
@@ -244,7 +280,12 @@ unsafe fn get_string_property(
     name: &str,
 ) -> Result<String> {
     let mut key = std::ptr::null_mut();
-    napi::sys::napi_create_string_utf8(env, name.as_ptr() as *const _, name.len() as isize, &mut key);
+    napi::sys::napi_create_string_utf8(
+        env,
+        name.as_ptr() as *const _,
+        name.len() as isize,
+        &mut key,
+    );
 
     let mut has = false;
     napi::sys::napi_has_property(env, obj, key, &mut has);
@@ -280,7 +321,12 @@ unsafe fn get_bool_property(
     default: bool,
 ) -> bool {
     let mut key = std::ptr::null_mut();
-    napi::sys::napi_create_string_utf8(env, name.as_ptr() as *const _, name.len() as isize, &mut key);
+    napi::sys::napi_create_string_utf8(
+        env,
+        name.as_ptr() as *const _,
+        name.len() as isize,
+        &mut key,
+    );
 
     let mut has = false;
     napi::sys::napi_has_property(env, obj, key, &mut has);
@@ -310,7 +356,12 @@ unsafe fn get_function_property(
     name: &str,
 ) -> Result<napi::sys::napi_value> {
     let mut key = std::ptr::null_mut();
-    napi::sys::napi_create_string_utf8(env, name.as_ptr() as *const _, name.len() as isize, &mut key);
+    napi::sys::napi_create_string_utf8(
+        env,
+        name.as_ptr() as *const _,
+        name.len() as isize,
+        &mut key,
+    );
 
     let mut has = false;
     napi::sys::napi_has_property(env, obj, key, &mut has);
@@ -353,6 +404,7 @@ pub struct DirSQL {
     table_configs: Vec<TableConfig>,
     ignore_patterns: Vec<String>,
     /// Tracks rows per file for diffing: file_rel_path -> (table_name, rows)
+    #[allow(clippy::type_complexity)]
     file_rows: Mutex<HashMap<String, (String, Vec<HashMap<String, Value>>)>>,
     watcher: Mutex<Option<Watcher>>,
 }
@@ -403,7 +455,10 @@ impl DirSQL {
 
         for i in 0..tables_len {
             let table_element: Unknown<'_> = tables.get(i)?.ok_or_else(|| {
-                Error::new(Status::GenericFailure, format!("Missing table at index {}", i))
+                Error::new(
+                    Status::GenericFailure,
+                    format!("Missing table at index {}", i),
+                )
             })?;
             let raw_obj = table_element.raw();
 
@@ -479,11 +534,9 @@ impl DirSQL {
 
             let mut value_rows: Vec<HashMap<String, Value>> = Vec::new();
             for (row_index, row) in rows.iter().enumerate() {
-                let normalized = db
-                    .normalize_row(table_name, row, tc.strict)
-                    .map_err(|e| {
-                        Error::new(Status::GenericFailure, format!("Schema error: {}", e))
-                    })?;
+                let normalized = db.normalize_row(table_name, row, tc.strict).map_err(|e| {
+                    Error::new(Status::GenericFailure, format!("Schema error: {}", e))
+                })?;
                 db.insert_row(table_name, &normalized, &rel_path, row_index)
                     .map_err(|e| {
                         Error::new(Status::GenericFailure, format!("Insert error: {}", e))
@@ -603,9 +656,10 @@ impl DirSQL {
                     let db = self.db.lock().map_err(|e| {
                         Error::new(Status::GenericFailure, format!("Lock error: {}", e))
                     })?;
-                    db.delete_rows_by_file(&table_name, &rel_path).map_err(|e| {
-                        Error::new(Status::GenericFailure, format!("DB error: {}", e))
-                    })?;
+                    db.delete_rows_by_file(&table_name, &rel_path)
+                        .map_err(|e| {
+                            Error::new(Status::GenericFailure, format!("DB error: {}", e))
+                        })?;
 
                     for re in row_events {
                         result_events.push(row_event_to_js(&re, &rel_path));
@@ -685,9 +739,10 @@ impl DirSQL {
                         let db = self.db.lock().map_err(|e| {
                             Error::new(Status::GenericFailure, format!("Lock error: {}", e))
                         })?;
-                        db.delete_rows_by_file(&table_name, &rel_path).map_err(|e| {
-                            Error::new(Status::GenericFailure, format!("DB error: {}", e))
-                        })?;
+                        db.delete_rows_by_file(&table_name, &rel_path)
+                            .map_err(|e| {
+                                Error::new(Status::GenericFailure, format!("DB error: {}", e))
+                            })?;
                         for (row_index, row) in new_rows.iter().enumerate() {
                             db.insert_row(&table_name, row, &rel_path, row_index)
                                 .map_err(|e| {
