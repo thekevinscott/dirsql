@@ -260,8 +260,12 @@ jobs:
         if: steps.check.outputs.exists == 'true'
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           registry-url: https://registry.npmjs.org
+
+      - name: Update npm CLI
+        if: steps.check.outputs.exists == 'true'
+        run: npm install -g npm@latest
 
       - name: Update package.json version
         if: steps.check.outputs.exists == 'true'
@@ -269,7 +273,7 @@ jobs:
 
       - name: Publish to npm
         if: steps.check.outputs.exists == 'true'
-        run: npm publish --provenance --access public
+        run: npm publish --access public
 
   github-release:
     needs: [tag, publish-pypi, publish-crates, publish-npm]
