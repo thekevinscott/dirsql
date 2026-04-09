@@ -382,7 +382,9 @@ def describe_querying_guide():
         db = DirSQL(root, tables=_blog_tables())
         await db.ready()
 
-        results = await db.query("SELECT author, COUNT(*) as n FROM posts GROUP BY author")
+        results = await db.query(
+            "SELECT author, COUNT(*) as n FROM posts GROUP BY author"
+        )
         assert len(results) == 2
         count_map = {r["author"]: r["n"] for r in results}
         assert count_map["alice"] == 1
