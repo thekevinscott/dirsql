@@ -24,14 +24,21 @@ export interface RowEvent {
 // The native addon exposes a DirSQL class. We load it and re-export
 // with proper TypeScript types.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const native: { DirSQL: NativeDirSQL } = require("../dirsql.node");
-
-interface NativeDirSQL {
-  new (root: string, tables: TableDef[], ignore?: string[]): NativeDirSQL;
+interface NativeDirSQLInstance {
   query(sql: string): Record<string, unknown>[];
   startWatcher(): void;
   pollEvents(timeoutMs: number): RowEvent[];
 }
+
+interface NativeDirSQLConstructor {
+  new (
+    root: string,
+    tables: TableDef[],
+    ignore?: string[],
+  ): NativeDirSQLInstance;
+}
+
+const native: { DirSQL: NativeDirSQLConstructor } = require("../dirsql.node");
 
 export const DirSQL: {
   new (root: string, tables: TableDef[], ignore?: string[]): DirSQL;

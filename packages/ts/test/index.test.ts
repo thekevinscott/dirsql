@@ -1,8 +1,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DirSQL } from "dirsql";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 describe("DirSQL", () => {
   let dir: string;
