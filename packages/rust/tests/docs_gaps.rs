@@ -116,11 +116,7 @@ glob = "*.yaml"
 "#,
     )
     .unwrap();
-    fs::write(
-        root.path().join("data.yaml"),
-        "name: widget\nprice: 9.99\n",
-    )
-    .unwrap();
+    fs::write(root.path().join("data.yaml"), "name: widget\nprice: 9.99\n").unwrap();
 
     let db = DirSQL::from_config(root.path()).unwrap();
     let rows = db.query("SELECT name, price FROM items").unwrap();
@@ -209,8 +205,8 @@ strict = true
     .unwrap();
 
     // Either construction fails, or the first query surfaces the strict violation.
-    let result = DirSQL::from_config(root.path())
-        .and_then(|db| db.query("SELECT * FROM items").map(|_| ()));
+    let result =
+        DirSQL::from_config(root.path()).and_then(|db| db.query("SELECT * FROM items").map(|_| ()));
     assert!(
         result.is_err(),
         "expected strict=true to reject extra keys, got Ok"
