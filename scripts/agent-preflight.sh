@@ -33,13 +33,9 @@ require_env() {
 : "${APPROVED_GIT_NAME:=${ROBOT_GIT_NAME-}}"
 : "${APPROVED_GIT_EMAIL:=${ROBOT_GIT_EMAIL-}}"
 : "${APPROVED_GPG_KEY:=${ROBOT_GPG_KEY_ID-}}"
-: "${AGENT_NAME:=${ROBOT_AGENT_NAME-}}"
-: "${AGENT_MODEL:=${ROBOT_AGENT_MODEL-}}"
 
 require_env APPROVED_GIT_NAME
 require_env APPROVED_GIT_EMAIL
-require_env AGENT_NAME
-require_env AGENT_MODEL
 require_env APPROVED_GPG_KEY
 
 signing_key="$(git config --get user.signingkey || true)"
@@ -58,22 +54,16 @@ effective_committer_email="$(printf '%s\n' "$committer_ident" | sed -E 's/^.*<(.
 [ "$signing_key" = "$APPROVED_GPG_KEY" ] || fail "git user.signingkey does not match APPROVED_GPG_KEY"
 [ "$commit_gpgsign" = "true" ] || fail "git commit.gpgsign must be true"
 
-trailer="Agent: $AGENT_NAME ($AGENT_MODEL)"
-
 case "$action" in
     commit)
         echo "agent-preflight: ok for commit using approved robot identity $APPROVED_GIT_EMAIL"
-        echo "agent-preflight: include this trailer in the commit message:"
-        echo "$trailer"
         ;;
     push|pr)
         head_author_email="$(git log -1 --format=%ae HEAD)"
         head_committer_email="$(git log -1 --format=%ce HEAD)"
-        head_message="$(git log -1 --format=%B HEAD)"
 
         [ "$head_author_email" = "$APPROVED_GIT_EMAIL" ] || fail "HEAD author email does not match APPROVED_GIT_EMAIL"
         [ "$head_committer_email" = "$APPROVED_GIT_EMAIL" ] || fail "HEAD committer email does not match APPROVED_GIT_EMAIL"
-        printf '%s\n' "$head_message" | grep -Fqx "$trailer" || fail "HEAD commit is missing trailer: $trailer"
         git verify-commit HEAD >/dev/null 2>&1 || fail "HEAD commit is not signed or the signature cannot be verified locally"
 
         if [ "$action" = "pr" ]; then

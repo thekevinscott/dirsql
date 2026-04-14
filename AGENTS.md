@@ -24,18 +24,15 @@ Temporary scripts, including Node or shell helpers, must also be written to `/tm
 - Agents must use the approved robot identity for git and GitHub operations. Do **not** use a personal non-robot identity such as `me@thekevinscott.com`.
 - Before any `git commit`, `git push`, or `gh pr create`, run `scripts/agent-preflight.sh <commit|push|pr>`.
 - The approved robot identity must be provided explicitly via environment variables. The preflight script accepts either naming convention:
-  - Explicit: `APPROVED_GIT_NAME`, `APPROVED_GIT_EMAIL`, `APPROVED_GPG_KEY`, `AGENT_NAME`, `AGENT_MODEL`
-  - Wrapper-style (`ROBOT_*`): `ROBOT_GIT_NAME`, `ROBOT_GIT_EMAIL`, `ROBOT_GPG_KEY_ID`, `ROBOT_AGENT_NAME`, `ROBOT_AGENT_MODEL`
-- The `cc`/`cx` wrappers in `~/work/dotfiles` set the `ROBOT_*` git/GPG vars. Wrappers must additionally export `ROBOT_AGENT_NAME` (e.g., `Claude`, `Codex`) and `ROBOT_AGENT_MODEL` (e.g., `Opus 4.6`, `gpt-5-codex`) so the preflight trailer check passes.
+  - Explicit: `APPROVED_GIT_NAME`, `APPROVED_GIT_EMAIL`, `APPROVED_GPG_KEY`
+  - Wrapper-style (`ROBOT_*`): `ROBOT_GIT_NAME`, `ROBOT_GIT_EMAIL`, `ROBOT_GPG_KEY_ID`
+- The `cc`/`cx` wrappers in `~/work/dotfiles` set the `ROBOT_*` git/GPG vars.
 - Prefer the Claude-style wrapper/env model for all git and GitHub operations. Launch the agent through the approved robot wrapper or export equivalent robot environment variables before running `git` or `gh`.
 - Do **not** rely on ambient personal shell identity. Do **not** write worktree-local `user.name`, `user.email`, or signing config unless explicitly requested.
 - Commits must be GPG-signed with the approved robot signing key and must show as verified on GitHub.
 - Configure signing through the approved robot wrapper/env before committing, then verify with `scripts/agent-preflight.sh`.
 - If the approved robot identity is not active, stop and ask. Never proceed with a non-robot personal identity.
-- Every agent-authored commit message must include this trailer at the bottom: `Agent: <assistant> (<model>)`
-- Examples:
-  - `Agent: Codex (gpt-5-codex)`
-  - `Agent: Claude (Sonnet 4.5)`
+- Provenance comes from the verified robot git author + GPG signature. No assistant/model trailer is required.
 
 ### Git Worktrees
 
