@@ -9,7 +9,7 @@ export default defineConfig({
     pool: "forks",
     coverage: {
       provider: "v8",
-      include: ["index.js"],
+      include: ["dist/index.js"],
       thresholds: {
         lines: 90,
         branches: 90,
