@@ -201,18 +201,19 @@ not actually provide. Per this bead's scope, they are surfaced for review and
 
 Discovered while mirroring the Python gap tests to Rust and TypeScript:
 
-### 5.1 Rust `RowEvent` has no `file_path` on Insert/Update/Delete
+### 5.1 Rust `RowEvent` has no `file_path` on Insert/Update/Delete — CLOSED (dirsql-n7x)
 
 - `docs/guide/watching.md` documents `RowEvent.file_path` as a relative
   path on all event variants.
-- The Rust SDK re-exports `dirsql_core::differ::RowEvent`, whose
-  `Insert` / `Update` / `Delete` variants carry `{table, row}` only.
-  Only the `Error` variant has a `file_path` field.
-- Python and TypeScript SDKs add `file_path` at the SDK layer; Rust
-  does not.
-- **Action**: either bring Rust into parity (add `file_path` to all
-  variants, via either the core type or an SDK wrapper), or update the
-  docs to scope `file_path` availability. File a bead.
+- Previously the Rust SDK re-exported `dirsql_core::differ::RowEvent`, whose
+  `Insert` / `Update` / `Delete` variants carried `{table, row}` only and
+  only the `Error` variant had a `file_path` field.
+- **Closed in dirsql-n7x**: `file_path: String` is now a field on
+  `RowEvent::Insert`, `::Update`, and `::Delete` in `packages/core/src/differ.rs`
+  (Error keeps its existing `file_path: PathBuf`). The Rust SDK re-exports
+  the enum directly, and the napi bindings for Python/TS now read
+  `file_path` from the core event. Covered by
+  `packages/rust/tests/docs_gaps.rs::watch_insert_event_carries_relative_file_path`.
 
 ### 5.2 TypeScript SDK has no `fromConfig`
 

@@ -276,9 +276,52 @@ fn extract_blob_values_round_trip_via_sdk() {
 // ---------------------------------------------------------------------------
 // docs/guide/watching.md -- RowEvent.file_path relative-path assertion
 // ---------------------------------------------------------------------------
-//
-// NOTE: Skipped on Rust. The Rust SDK re-exports `dirsql_core::differ::RowEvent`,
-// whose Insert/Update/Delete variants do NOT carry a `file_path` field (only the
-// Error variant does). The Python and TS SDKs surface `file_path`/`filePath` on
-// all row events as a convenience. This is an SDK-parity gap flagged in
-// TESTS_AUDIT.md rather than a test to mirror here.
+
+/// Docs (guide/watching.md): Insert events carry `file_path`, the relative
+/// path of the source file within the watched root.
+#[test]
+fn watch_insert_event_carries_relative_file_path() {
+    use dirsql_sdk::DirSQL;
+    use futures_executor::block_on;
+    use futures_util::StreamExt;
+    use std::time::Duration;
+
+    let root = TempDir::new().unwrap();
+    let table = Table::new(
+        "CREATE TABLE items (name TEXT)",
+        "**/*.txt",
+        |_, content| {
+            vec![HashMap::from([(
+                "name".into(),
+                Value::Text(content.trim().to_string()),
+            )])]
+        },
+    );
+    let db = DirSQL::new(root.path(), vec![table]).unwrap();
+
+    let mut stream = db.watch().unwrap();
+
+    std::thread::sleep(Duration::from_millis(250));
+    fs::write(root.path().join("new_item.txt"), "apple").unwrap();
+
+    let event = block_on(stream.next()).expect("expected watch event");
+    match event {
+        dirsql_sdk::RowEvent::Insert {
+            table,
+            row,
+            file_path,
+        } => {
+            assert_eq!(table, "items");
+            assert_eq!(row["name"], Value::Text("apple".into()));
+            // Must be a RELATIVE path, not absolute.
+            assert!(
+                !std::path::Path::new(&file_path).is_absolute(),
+                "file_path should be relative, got: {file_path}"
+            );
+            // Normalize separators for cross-platform safety.
+            let normalized = file_path.replace('\\', "/");
+            assert_eq!(normalized, "new_item.txt");
+        }
+        other => panic!("expected insert event, got: {other:?}"),
+    }
+}

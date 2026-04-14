@@ -768,35 +768,44 @@ impl DirSQL {
 }
 
 /// Convert a differ::RowEvent into a JS RowEvent.
-fn row_event_to_js(event: &differ::RowEvent, rel_path: &str) -> RowEvent {
+fn row_event_to_js(event: &differ::RowEvent, _rel_path: &str) -> RowEvent {
     match event {
-        differ::RowEvent::Insert { table, row } => RowEvent {
+        differ::RowEvent::Insert {
+            table,
+            row,
+            file_path,
+        } => RowEvent {
             table: table.clone(),
             action: "insert".to_string(),
             row: Some(value_row_to_json(row)),
             old_row: None,
             error: None,
-            file_path: Some(rel_path.to_string()),
+            file_path: Some(file_path.clone()),
         },
         differ::RowEvent::Update {
             table,
             old_row,
             new_row,
+            file_path,
         } => RowEvent {
             table: table.clone(),
             action: "update".to_string(),
             row: Some(value_row_to_json(new_row)),
             old_row: Some(value_row_to_json(old_row)),
             error: None,
-            file_path: Some(rel_path.to_string()),
+            file_path: Some(file_path.clone()),
         },
-        differ::RowEvent::Delete { table, row } => RowEvent {
+        differ::RowEvent::Delete {
+            table,
+            row,
+            file_path,
+        } => RowEvent {
             table: table.clone(),
             action: "delete".to_string(),
             row: Some(value_row_to_json(row)),
             old_row: None,
             error: None,
-            file_path: Some(rel_path.to_string()),
+            file_path: Some(file_path.clone()),
         },
         differ::RowEvent::Error { file_path, error } => RowEvent {
             table: String::new(),

@@ -4,20 +4,26 @@ use std::path::PathBuf;
 use crate::db::Value;
 
 /// Events produced by comparing old and new file content.
+///
+/// All variants include the source file's relative path (`file_path`) so
+/// downstream consumers can attribute row events to their originating file.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RowEvent {
     Insert {
         table: String,
         row: HashMap<String, Value>,
+        file_path: String,
     },
     Update {
         table: String,
         old_row: HashMap<String, Value>,
         new_row: HashMap<String, Value>,
+        file_path: String,
     },
     Delete {
         table: String,
         row: HashMap<String, Value>,
+        file_path: String,
     },
     Error {
         file_path: PathBuf,
@@ -30,7 +36,7 @@ pub enum RowEvent {
 /// - `table`: the target table name
 /// - `old`: previous row content (None if file is new)
 /// - `new`: current row content (None if file was deleted)
-/// - `file_path`: the file path (used in Error events)
+/// - `file_path`: the relative file path to attach to each emitted event
 ///
 /// For multi-row files (JSONL), uses line-index-based identity:
 /// - Unchanged lines produce no events
@@ -43,7 +49,7 @@ pub fn diff(
     table: &str,
     old: Option<&[HashMap<String, Value>]>,
     new: Option<&[HashMap<String, Value>]>,
-    _file_path: &str,
+    file_path: &str,
 ) -> Vec<RowEvent> {
     match (old, new) {
         (None, None) => Vec::new(),
@@ -52,6 +58,7 @@ pub fn diff(
             .map(|r| RowEvent::Insert {
                 table: table.to_string(),
                 row: r.clone(),
+                file_path: file_path.to_string(),
             })
             .collect(),
         (Some(old_rows), None) => old_rows
@@ -59,9 +66,10 @@ pub fn diff(
             .map(|r| RowEvent::Delete {
                 table: table.to_string(),
                 row: r.clone(),
+                file_path: file_path.to_string(),
             })
             .collect(),
-        (Some(old_rows), Some(new_rows)) => diff_rows(table, old_rows, new_rows),
+        (Some(old_rows), Some(new_rows)) => diff_rows(table, old_rows, new_rows, file_path),
     }
 }
 
@@ -70,10 +78,11 @@ fn diff_rows(
     table: &str,
     old_rows: &[HashMap<String, Value>],
     new_rows: &[HashMap<String, Value>],
+    file_path: &str,
 ) -> Vec<RowEvent> {
     // If file shrunk, do full replace
     if new_rows.len() < old_rows.len() {
-        return full_replace(table, old_rows, new_rows);
+        return full_replace(table, old_rows, new_rows, file_path);
     }
 
     // Compare overlapping rows line by line
@@ -90,7 +99,7 @@ fn diff_rows(
     // For multi-row files, if more than half of overlapping rows changed, full replace.
     // Single-row files (overlap == 1) never trigger full replace -- they use Update.
     if overlap > 1 && changed * 2 > overlap {
-        return full_replace(table, old_rows, new_rows);
+        return full_replace(table, old_rows, new_rows, file_path);
     }
 
     // Emit Update events for changed lines
@@ -100,6 +109,7 @@ fn diff_rows(
                 table: table.to_string(),
                 old_row: old_rows[i].clone(),
                 new_row: new_rows[i].clone(),
+                file_path: file_path.to_string(),
             });
         }
     }
@@ -109,6 +119,7 @@ fn diff_rows(
         events.push(RowEvent::Insert {
             table: table.to_string(),
             row: row.clone(),
+            file_path: file_path.to_string(),
         });
     }
 
@@ -120,18 +131,21 @@ fn full_replace(
     table: &str,
     old_rows: &[HashMap<String, Value>],
     new_rows: &[HashMap<String, Value>],
+    file_path: &str,
 ) -> Vec<RowEvent> {
     let mut events = Vec::with_capacity(old_rows.len() + new_rows.len());
     for row in old_rows {
         events.push(RowEvent::Delete {
             table: table.to_string(),
             row: row.clone(),
+            file_path: file_path.to_string(),
         });
     }
     for row in new_rows {
         events.push(RowEvent::Insert {
             table: table.to_string(),
             row: row.clone(),
+            file_path: file_path.to_string(),
         });
     }
     events
@@ -166,12 +180,16 @@ mod tests {
         ];
         let events = diff("users", None, Some(&rows), "users.jsonl");
         assert_eq!(events.len(), 2);
-        assert!(
-            matches!(&events[0], RowEvent::Insert { table, row } if table == "users" && row["name"] == text("alice"))
-        );
-        assert!(
-            matches!(&events[1], RowEvent::Insert { table, row } if table == "users" && row["name"] == text("bob"))
-        );
+        assert!(matches!(
+            &events[0],
+            RowEvent::Insert { table, row, file_path }
+                if table == "users" && row["name"] == text("alice") && file_path == "users.jsonl"
+        ));
+        assert!(matches!(
+            &events[1],
+            RowEvent::Insert { table, row, file_path }
+                if table == "users" && row["name"] == text("bob") && file_path == "users.jsonl"
+        ));
     }
 
     // --- All deletes (file deleted) ---
@@ -181,12 +199,16 @@ mod tests {
         let rows = vec![row(&[("id", text("1"))]), row(&[("id", text("2"))])];
         let events = diff("items", Some(&rows), None, "items.jsonl");
         assert_eq!(events.len(), 2);
-        assert!(
-            matches!(&events[0], RowEvent::Delete { table, row } if table == "items" && row["id"] == text("1"))
-        );
-        assert!(
-            matches!(&events[1], RowEvent::Delete { table, row } if table == "items" && row["id"] == text("2"))
-        );
+        assert!(matches!(
+            &events[0],
+            RowEvent::Delete { table, row, file_path }
+                if table == "items" && row["id"] == text("1") && file_path == "items.jsonl"
+        ));
+        assert!(matches!(
+            &events[1],
+            RowEvent::Delete { table, row, file_path }
+                if table == "items" && row["id"] == text("2") && file_path == "items.jsonl"
+        ));
     }
 
     // --- No changes ---
@@ -214,10 +236,14 @@ mod tests {
         ];
         let events = diff("t", Some(&old), Some(&new), "t.jsonl");
         assert_eq!(events.len(), 1);
-        assert!(
-            matches!(&events[0], RowEvent::Update { table, old_row, new_row }
-            if table == "t" && old_row["val"] == text("b") && new_row["val"] == text("B"))
-        );
+        assert!(matches!(
+            &events[0],
+            RowEvent::Update { table, old_row, new_row, file_path }
+                if table == "t"
+                    && old_row["val"] == text("b")
+                    && new_row["val"] == text("B")
+                    && file_path == "t.jsonl"
+        ));
     }
 
     // --- Append new lines ---
@@ -232,12 +258,16 @@ mod tests {
         ];
         let events = diff("t", Some(&old), Some(&new), "t.jsonl");
         assert_eq!(events.len(), 2);
-        assert!(
-            matches!(&events[0], RowEvent::Insert { table, row } if table == "t" && row["id"] == int(2))
-        );
-        assert!(
-            matches!(&events[1], RowEvent::Insert { table, row } if table == "t" && row["id"] == int(3))
-        );
+        assert!(matches!(
+            &events[0],
+            RowEvent::Insert { table, row, file_path }
+                if table == "t" && row["id"] == int(2) && file_path == "t.jsonl"
+        ));
+        assert!(matches!(
+            &events[1],
+            RowEvent::Insert { table, row, file_path }
+                if table == "t" && row["id"] == int(3) && file_path == "t.jsonl"
+        ));
     }
 
     // --- Full replace on shrink ---
@@ -263,6 +293,12 @@ mod tests {
             .collect();
         assert_eq!(deletes.len(), 3);
         assert_eq!(inserts.len(), 1);
+        assert!(events.iter().all(|e| match e {
+            RowEvent::Insert { file_path, .. }
+            | RowEvent::Update { file_path, .. }
+            | RowEvent::Delete { file_path, .. } => file_path == "t.jsonl",
+            RowEvent::Error { .. } => false,
+        }));
     }
 
     // --- Full replace on heavy modification ---
@@ -304,10 +340,14 @@ mod tests {
         let new = vec![row(&[("title", text("Final"))])];
         let events = diff("docs", Some(&old), Some(&new), "doc.json");
         assert_eq!(events.len(), 1);
-        assert!(
-            matches!(&events[0], RowEvent::Update { table, old_row, new_row }
-            if table == "docs" && old_row["title"] == text("Draft") && new_row["title"] == text("Final"))
-        );
+        assert!(matches!(
+            &events[0],
+            RowEvent::Update { table, old_row, new_row, file_path }
+                if table == "docs"
+                    && old_row["title"] == text("Draft")
+                    && new_row["title"] == text("Final")
+                    && file_path == "doc.json"
+        ));
     }
 
     // --- Single-row file: no change ---

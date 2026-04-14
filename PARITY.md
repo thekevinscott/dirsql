@@ -7,7 +7,7 @@ API surface comparison across the three language SDKs.
 | Concept     | Python                  | Rust                     | TypeScript               |
 |-------------|-------------------------|--------------------------|--------------------------|
 | Table def   | `Table(ddl, glob, extract, strict)` | `Table::new(ddl, glob, extract)` / `Table::strict(...)` / `Table::try_new(...)` | `{ ddl, glob, extract, strict? }` (plain object) |
-| Row event   | `RowEvent` (class, frozen attrs) | `RowEvent` (enum: Insert/Update/Delete/Error) | `RowEvent` (plain object with action string) |
+| Row event   | `RowEvent` (class, frozen attrs; `file_path` on all variants) | `RowEvent` (enum: Insert/Update/Delete/Error; `file_path` on all variants) | `RowEvent` (plain object with action string; `filePath` on all variants) |
 | Row type    | `dict[str, Any]`        | `HashMap<String, Value>` | `Record<string, unknown>` |
 
 ## DirSQL (synchronous)
@@ -52,7 +52,7 @@ for await (const event of db.watch()) { ... }
 ### Rust
 - Uses `snake_case` for all identifiers.
 - `Table` has separate constructors: `new` (infallible extract), `try_new` (fallible extract), `strict` (shorthand).
-- `RowEvent` is a Rust enum with variants (`Insert { table, row }`, etc.) rather than a flat struct.
+- `RowEvent` is a Rust enum with variants (`Insert { table, row, file_path }`, `Update { table, old_row, new_row, file_path }`, `Delete { table, row, file_path }`, `Error { file_path, error }`) rather than a flat struct. `file_path` is a relative `String` on Insert/Update/Delete and a `PathBuf` on Error.
 - `DirSQL::from_config` takes a root directory path (looks for `.dirsql.toml` inside), not the config file path directly.
 - `AsyncDirSQL` uses tokio and `OnceCell` internally.
 - Watch returns `futures_channel::mpsc::UnboundedReceiver<RowEvent>` implementing `Stream`.
