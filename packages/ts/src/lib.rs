@@ -860,9 +860,9 @@ impl DirSQL {
 
                     // Extract rows from file content per the table's configured mode.
                     let extract_result: Result<Vec<HashMap<String, Value>>> = match &tc.extract {
-                        ExtractMode::Js(fn_ref) => {
-                            unsafe { fn_ref.call_extract(&rel_path, &content) }
-                        }
+                        ExtractMode::Js(fn_ref) => unsafe {
+                            fn_ref.call_extract(&rel_path, &content)
+                        },
                         ExtractMode::BuiltIn {
                             format,
                             each,
