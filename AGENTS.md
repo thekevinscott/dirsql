@@ -9,6 +9,12 @@ All architectural decisions and constraints (including cross-language parity rul
 Write scratch/temporary files to `/tmp` instead of asking permission. Use unique filenames to avoid collisions with other sessions.
 Temporary scripts, including Node or shell helpers, must also be written to `/tmp` and executed from there.
 
+## Shell Commands
+
+**Do not chain commands** with `;`, `&&`, or `||`. Chained commands break the per-command permission model -- each command must be evaluated separately, and chaining forces a single bulk approval (or prompt) for the whole pipeline. Run each command as its own call.
+
+Exceptions: piping (`|`) is fine when it's genuinely one logical operation (e.g., `cmd | jq`). Heredocs (`cat <<EOF`) are fine. `cd path && cmd` is NOT fine -- use `cd` as a separate call (or pass absolute paths).
+
 ## Workflow
 
 - Work in git worktrees under `.worktrees/` folder
