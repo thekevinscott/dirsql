@@ -198,6 +198,18 @@ See skillet or karat for examples of test organization, fixtures, and pytest-des
 
 When adding a feature, the PR must include docs AND tests. When docs change, tests update to match. Agents must run e2e tests locally before pushing substantial changes.
 
+### Cross-SDK Parity (PARITY.md)
+
+`PARITY.md` is a **living document** that tracks API-surface parity across the Python, Rust, and TypeScript SDKs. It must stay current.
+
+On every PR that touches any SDK's public API (`packages/python/python/dirsql/`, `packages/rust/src/`, `packages/ts/ts/` or `packages/ts/src/`), the author must:
+
+1. Update `PARITY.md` to reflect the new/changed/removed API surface.
+2. Call out in the PR body whether the change is **introducing parity drift** (one SDK gets something the others don't yet) or **restoring parity** (bringing a lagging SDK in line). Drift is allowed but must be intentional and tracked.
+3. If drift is introduced, open a follow-up bead for each lagging SDK so the gap is visible.
+
+Orchestrators must block merges of SDK-touching PRs that don't update `PARITY.md`.
+
 ### Benchmarks
 
 Run `cargo bench -p dirsql-core` after significant changes to the Rust codebase. Not in CI -- local only. Covers: SQLite operations, directory scanning, row diffing, glob matching. Use to catch performance regressions before merging.
