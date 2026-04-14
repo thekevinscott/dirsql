@@ -83,6 +83,7 @@ New work on beads should be done via subagents in isolated worktrees. Each subag
    - Merge conflicts
 6. Continues monitoring until the PR is in a mergeable state
 7. When a bead spans multiple SDKs or package lanes, split it into separate subagents and isolated worktrees rather than serially implementing everything in one checkout.
+8. **Run e2e tests locally before `git push` on substantial changes** (see "E2E Before Push" below). Report the result in the PR body using the `## E2E Verification` template.
 
 ### Orchestrator Responsibilities
 
@@ -94,6 +95,46 @@ The orchestrator (main Claude session) must proactively:
 5. **Use foreground monitoring** when waiting on CI and there's no other work to do. Background monitoring causes the conversation to go silent -- use it only when there's genuinely parallel work to perform.
 6. **Scripts to `/tmp`**: For polling/monitoring scripts (watching CI, waiting for merges), write the script to `/tmp` then run it via `bash /tmp/script.sh`. Do not use inline bash loops in tool calls.
 7. **No permission loops**: If a repo-authorized command needs sandbox escalation, state the exact command and why once, then keep working. Do not ask the user to approve it as a separate yes/no step.
+8. **Enforce the E2E-before-push rule**: Before merging any PR that touches substantial code (see "E2E Before Push" below), confirm the PR body contains a completed `## E2E Verification` section. If it's missing, dispatch an agent to run e2e and update the PR body before merge. Do not add e2e to CI -- it stays local-only per the E2E Test Policy.
+
+### E2E Before Push
+
+Agents must run the full e2e suite locally before any `git push` that includes a **substantial code change**, and report the outcome in the PR body.
+
+**"Substantial" means any change touching:**
+- `packages/core/**` (Rust core)
+- `packages/python/src/**` (excluding files matching `*_test.py`)
+- `packages/ts/src/**` (excluding files matching `*.test.ts` / `*.spec.ts`)
+- Any shared SDK runtime code reachable from the above
+
+**Not substantial** (e2e is optional, note "N/A - docs/lint/typo only" in the PR body):
+- Docs (`*.md`, `docs/**`, `README*`)
+- Lint/format-only changes
+- Typo fixes with no behavior change
+- Test-only changes (test files themselves)
+- CI/workflow config
+
+**How to run:**
+- Python SDK: `just test-e2e`
+- TypeScript SDK: `pnpm --dir packages/ts run test:e2e` (when a TS e2e target exists)
+- Rust core: covered by `cargo test --workspace`; run `cargo bench -p dirsql-core` after Rust-heavy changes
+
+Record the exact commands run and their outcomes in the PR body.
+
+**PR body requirement:** PRs that include substantial changes must contain this section verbatim (checkboxes filled in):
+
+```markdown
+## E2E Verification
+
+- [ ] Ran e2e suites locally for every affected SDK
+- [ ] Python SDK e2e: pass / fail / N/A
+- [ ] TypeScript SDK e2e: pass / fail / N/A
+- [ ] Rust core e2e (if applicable): pass / fail / N/A
+- Command(s) run:
+- Result summary:
+```
+
+For docs/lint/typo-only PRs, include the section with a single line: `N/A - docs/lint/typo only`.
 
 ### Post-Merge Cleanup
 
