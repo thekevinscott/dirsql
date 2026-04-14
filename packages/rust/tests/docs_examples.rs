@@ -591,7 +591,7 @@ fn it_matches_watching_guide_insert_event() {
     let event = futures_executor::block_on(futures_util::StreamExt::next(&mut stream))
         .expect("expected watch event");
     match event {
-        dirsql_sdk::RowEvent::Insert { table, row } => {
+        dirsql_sdk::RowEvent::Insert { table, row, .. } => {
             assert_eq!(table, "items");
             assert_eq!(row["name"], Value::Text("apple".into()));
         }
@@ -631,7 +631,7 @@ fn it_matches_watching_guide_delete_event() {
     let event = futures_executor::block_on(futures_util::StreamExt::next(&mut stream))
         .expect("expected watch event");
     match event {
-        dirsql_sdk::RowEvent::Delete { table, row } => {
+        dirsql_sdk::RowEvent::Delete { table, row, .. } => {
             assert_eq!(table, "items");
             assert_eq!(row["name"], Value::Text("doomed".into()));
         }
@@ -673,6 +673,7 @@ fn it_matches_watching_guide_update_event() {
             table,
             new_row,
             old_row,
+            ..
         } => {
             assert_eq!(table, "items");
             assert_eq!(new_row["name"], Value::Text("final".into()));
@@ -682,7 +683,7 @@ fn it_matches_watching_guide_update_event() {
             assert_eq!(table, "items");
             // Expect the insert to follow
         }
-        dirsql_sdk::RowEvent::Insert { table, row } => {
+        dirsql_sdk::RowEvent::Insert { table, row, .. } => {
             assert_eq!(table, "items");
             assert_eq!(row["name"], Value::Text("final".into()));
         }

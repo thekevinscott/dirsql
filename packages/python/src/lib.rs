@@ -711,10 +711,14 @@ mod python {
     fn row_event_to_py(
         py: Python<'_>,
         event: &differ::RowEvent,
-        rel_path: &str,
+        _rel_path: &str,
     ) -> PyResult<PyRowEvent> {
         match event {
-            differ::RowEvent::Insert { table, row } => {
+            differ::RowEvent::Insert {
+                table,
+                row,
+                file_path,
+            } => {
                 let dict = value_row_to_py_dict(py, row)?;
                 Ok(PyRowEvent {
                     table: table.clone(),
@@ -722,13 +726,14 @@ mod python {
                     row: Some(dict),
                     old_row: None,
                     error: None,
-                    file_path: Some(rel_path.to_string()),
+                    file_path: Some(file_path.clone()),
                 })
             }
             differ::RowEvent::Update {
                 table,
                 old_row,
                 new_row,
+                file_path,
             } => {
                 let new_dict = value_row_to_py_dict(py, new_row)?;
                 let old_dict = value_row_to_py_dict(py, old_row)?;
@@ -738,10 +743,14 @@ mod python {
                     row: Some(new_dict),
                     old_row: Some(old_dict),
                     error: None,
-                    file_path: Some(rel_path.to_string()),
+                    file_path: Some(file_path.clone()),
                 })
             }
-            differ::RowEvent::Delete { table, row } => {
+            differ::RowEvent::Delete {
+                table,
+                row,
+                file_path,
+            } => {
                 let dict = value_row_to_py_dict(py, row)?;
                 Ok(PyRowEvent {
                     table: table.clone(),
@@ -749,7 +758,7 @@ mod python {
                     row: Some(dict),
                     old_row: None,
                     error: None,
-                    file_path: Some(rel_path.to_string()),
+                    file_path: Some(file_path.clone()),
                 })
             }
             differ::RowEvent::Error { file_path, error } => Ok(PyRowEvent {

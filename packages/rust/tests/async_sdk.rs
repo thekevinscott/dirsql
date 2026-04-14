@@ -165,7 +165,7 @@ async fn it_streams_watch_events() {
         .expect("stream ended");
 
     match event {
-        dirsql_sdk::RowEvent::Insert { table, row } => {
+        dirsql_sdk::RowEvent::Insert { table, row, .. } => {
             assert_eq!(table, "items");
             assert_eq!(row["name"], Value::Text("apple".into()));
         }
