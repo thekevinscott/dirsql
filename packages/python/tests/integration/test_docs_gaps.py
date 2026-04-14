@@ -49,9 +49,7 @@ def describe_tables_guide_bytes_to_blob():
                 Table(
                     ddl="CREATE TABLE blobs (name TEXT, data BLOB)",
                     glob="*.json",
-                    extract=lambda path, content: [
-                        {"name": "bin", "data": payload}
-                    ],
+                    extract=lambda path, content: [{"name": "bin", "data": payload}],
                 ),
             ],
         )
