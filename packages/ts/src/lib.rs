@@ -1,12 +1,14 @@
+use dirsql_core::config;
 use dirsql_core::db::{parse_table_name, Db, Value};
 use dirsql_core::differ;
-use dirsql_core::matcher::TableMatcher;
+use dirsql_core::matcher::{parse_captures, TableMatcher};
+use dirsql_core::parser::{self, ColumnSource, Format};
 use dirsql_core::scanner::scan_directory;
 use dirsql_core::watcher::{FileEvent, Watcher};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -388,11 +390,23 @@ unsafe fn get_function_property(
     Ok(val)
 }
 
+/// How rows are extracted from a file.
+enum ExtractMode {
+    /// JS callback supplied via the constructor.
+    Js(FnRef),
+    /// Built-in parser driven by a `.dirsql.toml` config.
+    BuiltIn {
+        format: Format,
+        each: Option<String>,
+        columns: HashMap<String, ColumnSource>,
+    },
+}
+
 /// Internal table config stored after init for use during watch.
 struct TableConfig {
     name: String,
     glob: String,
-    extract_ref: FnRef,
+    extract: ExtractMode,
     strict: bool,
 }
 
@@ -481,7 +495,7 @@ impl DirSQL {
             table_configs.push(TableConfig {
                 name: table_name,
                 glob,
-                extract_ref,
+                extract: ExtractMode::Js(extract_ref),
                 strict,
             });
         }
@@ -530,7 +544,12 @@ impl DirSQL {
                     )
                 })?;
 
-            let rows = unsafe { tc.extract_ref.call_extract(&rel_path, &content)? };
+            let rows = match &tc.extract {
+                ExtractMode::Js(fn_ref) => unsafe { fn_ref.call_extract(&rel_path, &content)? },
+                ExtractMode::BuiltIn { .. } => {
+                    unreachable!("constructor path never uses BuiltIn extract")
+                }
+            };
 
             let mut value_rows: Vec<HashMap<String, Value>> = Vec::new();
             for (row_index, row) in rows.iter().enumerate() {
@@ -551,6 +570,161 @@ impl DirSQL {
             root: root_path,
             table_configs,
             ignore_patterns: ignore.unwrap_or_default(),
+            file_rows: Mutex::new(file_rows),
+            watcher: Mutex::new(None),
+        })
+    }
+
+    /// Create a DirSQL instance from a `.dirsql.toml` config file.
+    ///
+    /// Parses the TOML config, derives the root directory from the config
+    /// file's parent, and scans files using the built-in parser for each
+    /// declared format. No JS `extract` callback is required — tables
+    /// created this way use the core parser directly.
+    ///
+    /// @param configPath - Path to the `.dirsql.toml` file.
+    #[napi(factory, js_name = "fromConfig")]
+    pub fn from_config(config_path: String) -> Result<Self> {
+        let config_path_ref = Path::new(&config_path);
+        let cfg = config::load_config(config_path_ref)
+            .map_err(|e| Error::new(Status::GenericFailure, format!("Config error: {}", e)))?;
+
+        let root_path = config_path_ref
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+
+        let db = Db::new()
+            .map_err(|e| Error::new(Status::GenericFailure, format!("DB init error: {}", e)))?;
+
+        let mut table_configs: Vec<TableConfig> = Vec::new();
+
+        for tc in &cfg.tables {
+            let table_name = parse_table_name(&tc.ddl).ok_or_else(|| {
+                Error::new(
+                    Status::GenericFailure,
+                    format!("Could not parse table name from DDL: {}", tc.ddl),
+                )
+            })?;
+            db.create_table(&tc.ddl)
+                .map_err(|e| Error::new(Status::GenericFailure, format!("DDL error: {}", e)))?;
+
+            let format = tc.format.ok_or_else(|| {
+                Error::new(
+                    Status::GenericFailure,
+                    format!(
+                        "Unsupported format: cannot infer format for glob '{}'. \
+                         Specify format explicitly in the config.",
+                        tc.glob
+                    ),
+                )
+            })?;
+
+            let (_, capture_names, _) = parse_captures(&tc.glob);
+            let columns: HashMap<String, ColumnSource> = tc
+                .columns
+                .as_ref()
+                .map(|cols| {
+                    cols.iter()
+                        .map(|(k, v)| (k.clone(), ColumnSource::parse(v, &capture_names)))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            table_configs.push(TableConfig {
+                name: table_name,
+                glob: tc.glob.clone(),
+                extract: ExtractMode::BuiltIn {
+                    format,
+                    each: tc.each.clone(),
+                    columns,
+                },
+                strict: tc.strict.unwrap_or(false),
+            });
+        }
+
+        // Build glob -> table_name mappings for the scanner
+        let mappings: Vec<(&str, &str)> = table_configs
+            .iter()
+            .map(|tc| (tc.glob.as_str(), tc.name.as_str()))
+            .collect();
+        let ignore_strs: Vec<&str> = cfg.ignore.iter().map(|s| s.as_str()).collect();
+
+        let matcher = TableMatcher::new(&mappings, &ignore_strs)
+            .map_err(|e| Error::new(Status::GenericFailure, format!("Glob error: {}", e)))?;
+
+        let files = scan_directory(&root_path, &matcher);
+
+        let config_map: HashMap<&str, &TableConfig> = table_configs
+            .iter()
+            .map(|tc| (tc.name.as_str(), tc))
+            .collect();
+
+        let mut file_rows: HashMap<String, (String, Vec<HashMap<String, Value>>)> = HashMap::new();
+
+        for (file_path, table_name) in &files {
+            let content = std::fs::read_to_string(file_path).map_err(|e| {
+                Error::new(
+                    Status::GenericFailure,
+                    format!("Failed to read {}: {}", file_path.display(), e),
+                )
+            })?;
+
+            let rel_path = file_path
+                .strip_prefix(&root_path)
+                .unwrap_or(file_path)
+                .to_string_lossy()
+                .to_string();
+
+            let tc = config_map.get(table_name.as_str()).ok_or_else(|| {
+                Error::new(
+                    Status::GenericFailure,
+                    format!("No config for table {}", table_name),
+                )
+            })?;
+
+            let rows = match &tc.extract {
+                ExtractMode::BuiltIn {
+                    format,
+                    each,
+                    columns,
+                } => {
+                    let mut parsed = parser::parse_file(*format, &content, each.as_deref())
+                        .map_err(|e| {
+                            Error::new(Status::GenericFailure, format!("Parse error: {}", e))
+                        })?;
+                    let rel = Path::new(&rel_path);
+                    let captures = matcher
+                        .match_file_with_captures(rel)
+                        .map(|m| m.captures)
+                        .unwrap_or_default();
+                    parsed = parser::apply_columns(&parsed, columns, &captures);
+                    parsed
+                }
+                ExtractMode::Js(_) => unreachable!("from_config never uses JS extract"),
+            };
+
+            let mut value_rows: Vec<HashMap<String, Value>> = Vec::new();
+            for (row_index, raw_row) in rows.iter().enumerate() {
+                let normalized = db
+                    .normalize_row(table_name, raw_row, tc.strict)
+                    .map_err(|e| {
+                        Error::new(Status::GenericFailure, format!("Schema error: {}", e))
+                    })?;
+                db.insert_row(table_name, &normalized, &rel_path, row_index)
+                    .map_err(|e| {
+                        Error::new(Status::GenericFailure, format!("Insert error: {}", e))
+                    })?;
+                value_rows.push(normalized);
+            }
+            file_rows.insert(rel_path, (table_name.clone(), value_rows));
+        }
+
+        Ok(DirSQL {
+            db: Mutex::new(db),
+            root: root_path,
+            table_configs,
+            ignore_patterns: cfg.ignore,
             file_rows: Mutex::new(file_rows),
             watcher: Mutex::new(None),
         })
@@ -684,9 +858,31 @@ impl DirSQL {
                         None => continue,
                     };
 
-                    // Call extract via stored function reference
-                    let extract_result =
-                        unsafe { tc.extract_ref.call_extract(&rel_path, &content) };
+                    // Extract rows from file content per the table's configured mode.
+                    let extract_result: Result<Vec<HashMap<String, Value>>> = match &tc.extract {
+                        ExtractMode::Js(fn_ref) => unsafe {
+                            fn_ref.call_extract(&rel_path, &content)
+                        },
+                        ExtractMode::BuiltIn {
+                            format,
+                            each,
+                            columns,
+                        } => match parser::parse_file(*format, &content, each.as_deref()) {
+                            Ok(mut parsed) => {
+                                let rel = Path::new(&rel_path);
+                                let captures = matcher
+                                    .match_file_with_captures(rel)
+                                    .map(|m| m.captures)
+                                    .unwrap_or_default();
+                                parsed = parser::apply_columns(&parsed, columns, &captures);
+                                Ok(parsed)
+                            }
+                            Err(e) => Err(Error::new(
+                                Status::GenericFailure,
+                                format!("Parse error: {}", e),
+                            )),
+                        },
+                    };
 
                     let new_rows = match extract_result {
                         Ok(raw_rows) => {

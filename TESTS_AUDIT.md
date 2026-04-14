@@ -214,17 +214,21 @@ Discovered while mirroring the Python gap tests to Rust and TypeScript:
   variants, via either the core type or an SDK wrapper), or update the
   docs to scope `file_path` availability. File a bead.
 
-### 5.2 TypeScript SDK has no `fromConfig`
+### 5.2 TypeScript SDK `fromConfig` — CLOSED (dirsql-hh3)
 
 - `docs/guide/config.md` documents `.dirsql.toml` driven `fromConfig`
   across Python and Rust.
-- `packages/ts/ts/index.ts` exposes only the `new DirSQL(dir, tables, ignore?)`
-  constructor. No `fromConfig` static method.
-- This is why this PR adds no TypeScript mirrors for the format tests
-  (`.tsv`, `.ndjson`, `.toml`, `.yaml`/`.yml`, `.md` frontmatter,
-  `strict = true` in config) — the entry point doesn't exist on TS yet.
-- **Action**: file a bead to add `DirSQL.fromConfig` to the TypeScript
-  SDK, covering the same format surface as Python/Rust.
+- **Resolved** by bead `dirsql-hh3`: `packages/ts/ts/index.ts` now
+  exposes `DirSQL.fromConfig(configPath)` as a static factory, backed
+  by the core config loader + parser in `packages/ts/src/lib.rs`.
+- TypeScript mirrors of the format tests (`.json`, `.jsonl`, `.ndjson`,
+  `.csv`, `.tsv`, `.toml`, `.yaml`/`.yml`, `.md` frontmatter,
+  path captures, column mapping, `each`, ignore, multiple tables,
+  explicit format override, `strict = true`, and the error cases) now
+  live in `packages/ts/test/from_config.test.ts`.
+- Signature matches Python's (`configPath` is the path to the TOML
+  file, not the root dir); this divergence from Rust's `from_config(root_dir)`
+  is documented in `PARITY.md` under "Language-Idiomatic Exceptions".
 
 ---
 

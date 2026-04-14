@@ -62,6 +62,21 @@ export interface DirSQL {
 /** Constructor shape for {@link DirSQL}. */
 export interface DirSQLConstructor {
   new (root: string, tables: TableDef[], ignore?: string[]): DirSQL;
+  /**
+   * Load a {@link DirSQL} instance from a `.dirsql.toml` config file.
+   *
+   * The root directory is derived from the config file's parent. Tables
+   * are parsed using the built-in parser for each format declared in the
+   * config (`.json`, `.jsonl`, `.ndjson`, `.csv`, `.tsv`, `.toml`,
+   * `.yaml`/`.yml`, `.md` frontmatter). No JS `extract` callback is
+   * required or used. Honours `[dirsql].ignore` and per-table
+   * `strict = true`.
+   *
+   * @param configPath - Path to the `.dirsql.toml` file.
+   * @throws If the file is missing, the TOML is invalid, a table entry
+   * lacks `ddl`/`glob`, or the format cannot be inferred.
+   */
+  fromConfig(configPath: string): DirSQL;
 }
 
 // Resolve `dirsql.node` relative to this compiled module. After `tsc`
