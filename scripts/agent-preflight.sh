@@ -28,6 +28,14 @@ require_env() {
     [ -n "$value" ] || fail "missing required environment variable: $var_name"
 }
 
+# Accept either APPROVED_* (explicit) or ROBOT_* (set by the cc/cx wrappers
+# in ~/work/dotfiles). The wrapper convention is documented in AGENTS.md.
+: "${APPROVED_GIT_NAME:=${ROBOT_GIT_NAME-}}"
+: "${APPROVED_GIT_EMAIL:=${ROBOT_GIT_EMAIL-}}"
+: "${APPROVED_GPG_KEY:=${ROBOT_GPG_KEY_ID-}}"
+: "${AGENT_NAME:=${ROBOT_AGENT_NAME-}}"
+: "${AGENT_MODEL:=${ROBOT_AGENT_MODEL-}}"
+
 require_env APPROVED_GIT_NAME
 require_env APPROVED_GIT_EMAIL
 require_env AGENT_NAME
