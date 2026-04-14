@@ -170,3 +170,221 @@ fn it_streams_watch_events() {
         other => panic!("unexpected event: {other:?}"),
     }
 }
+
+#[test]
+fn it_ignores_extra_keys_by_default() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("item.txt"), "apple|red|150").unwrap();
+
+    let db = DirSQL::new(
+        root.path(),
+        vec![Table::new(
+            "CREATE TABLE items (name TEXT)",
+            "*.txt",
+            |_, content| {
+                let mut parts = content.trim().split('|');
+                let name = parts.next().unwrap_or("").to_string();
+                let color = parts.next().unwrap_or("").to_string();
+                vec![HashMap::from([
+                    ("name".into(), Value::Text(name)),
+                    ("color".into(), Value::Text(color)),
+                    ("weight".into(), Value::Integer(150)),
+                ])]
+            },
+        )],
+    )
+    .unwrap();
+
+    let rows = db.query("SELECT * FROM items").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["name"], Value::Text("apple".into()));
+    assert!(!rows[0].contains_key("color"));
+    assert!(!rows[0].contains_key("weight"));
+}
+
+#[test]
+fn it_fills_missing_keys_with_null() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("item.txt"), "apple").unwrap();
+
+    let db = DirSQL::new(
+        root.path(),
+        vec![Table::new(
+            "CREATE TABLE items (name TEXT, color TEXT, count INTEGER)",
+            "*.txt",
+            |_, content| {
+                vec![HashMap::from([(
+                    "name".into(),
+                    Value::Text(content.trim().to_string()),
+                )])]
+            },
+        )],
+    )
+    .unwrap();
+
+    let rows = db.query("SELECT * FROM items").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["name"], Value::Text("apple".into()));
+    assert_eq!(rows[0]["color"], Value::Null);
+    assert_eq!(rows[0]["count"], Value::Null);
+}
+
+#[test]
+fn it_raises_on_extra_keys_in_strict_mode() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("item.txt"), "apple|red").unwrap();
+
+    let result = DirSQL::new(
+        root.path(),
+        vec![Table::strict(
+            "CREATE TABLE items (name TEXT)",
+            "*.txt",
+            |_, content| {
+                let mut parts = content.trim().split('|');
+                let name = parts.next().unwrap_or("").to_string();
+                let color = parts.next().unwrap_or("").to_string();
+                vec![HashMap::from([
+                    ("name".into(), Value::Text(name)),
+                    ("color".into(), Value::Text(color)),
+                ])]
+            },
+        )],
+    );
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn it_raises_on_missing_keys_in_strict_mode() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("item.txt"), "apple").unwrap();
+
+    let result = DirSQL::new(
+        root.path(),
+        vec![Table::strict(
+            "CREATE TABLE items (name TEXT, color TEXT)",
+            "*.txt",
+            |_, content| {
+                vec![HashMap::from([(
+                    "name".into(),
+                    Value::Text(content.trim().to_string()),
+                )])]
+            },
+        )],
+    );
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn it_allows_exact_match_in_strict_mode() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("item.txt"), "apple|red").unwrap();
+
+    let db = DirSQL::new(
+        root.path(),
+        vec![Table::strict(
+            "CREATE TABLE items (name TEXT, color TEXT)",
+            "*.txt",
+            |_, content| {
+                let mut parts = content.trim().split('|');
+                let name = parts.next().unwrap_or("").to_string();
+                let color = parts.next().unwrap_or("").to_string();
+                vec![HashMap::from([
+                    ("name".into(), Value::Text(name)),
+                    ("color".into(), Value::Text(color)),
+                ])]
+            },
+        )],
+    )
+    .unwrap();
+
+    let rows = db.query("SELECT * FROM items").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["name"], Value::Text("apple".into()));
+    assert_eq!(rows[0]["color"], Value::Text("red".into()));
+}
+
+#[test]
+fn it_streams_watch_delete_events() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("doomed.txt"), "doomed").unwrap();
+
+    let db = DirSQL::new(root.path(), vec![items_table()]).unwrap();
+
+    // Verify initial data
+    let rows = db.query("SELECT * FROM items").unwrap();
+    assert_eq!(rows.len(), 1);
+
+    let mut stream = db.watch().unwrap();
+
+    std::thread::sleep(Duration::from_millis(250));
+    fs::remove_file(root.path().join("doomed.txt")).unwrap();
+
+    let event = block_on(stream.next()).expect("watch event");
+    match event {
+        dirsql_sdk::RowEvent::Delete { table, row } => {
+            assert_eq!(table, "items");
+            assert_eq!(row["name"], Value::Text("doomed".into()));
+        }
+        other => panic!("expected delete event, got: {other:?}"),
+    }
+}
+
+#[test]
+fn it_streams_watch_update_events() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("item.txt"), "draft").unwrap();
+
+    let db = DirSQL::new(root.path(), vec![items_table()]).unwrap();
+
+    let mut stream = db.watch().unwrap();
+
+    std::thread::sleep(Duration::from_millis(250));
+    fs::write(root.path().join("item.txt"), "final").unwrap();
+
+    let event = block_on(stream.next()).expect("watch event");
+    // Could be Update or Delete+Insert
+    match event {
+        dirsql_sdk::RowEvent::Update { table, new_row, .. } => {
+            assert_eq!(table, "items");
+            assert_eq!(new_row["name"], Value::Text("final".into()));
+        }
+        dirsql_sdk::RowEvent::Delete { table, .. } => {
+            assert_eq!(table, "items");
+        }
+        dirsql_sdk::RowEvent::Insert { table, row } => {
+            assert_eq!(table, "items");
+            assert_eq!(row["name"], Value::Text("final".into()));
+        }
+        other => panic!("expected update-related event, got: {other:?}"),
+    }
+}
+
+#[test]
+fn it_streams_watch_error_events() {
+    let root = TempDir::new().unwrap();
+
+    let db = DirSQL::new(
+        root.path(),
+        vec![Table::try_new(
+            "CREATE TABLE items (name TEXT)",
+            "**/*.txt",
+            |_, _content| Err("intentional parse failure".into()),
+        )],
+    )
+    .unwrap();
+
+    let mut stream = db.watch().unwrap();
+
+    std::thread::sleep(Duration::from_millis(250));
+    fs::write(root.path().join("bad.txt"), "data").unwrap();
+
+    let event = block_on(stream.next()).expect("watch event");
+    match event {
+        dirsql_sdk::RowEvent::Error { error, .. } => {
+            assert!(error.contains("intentional parse failure"));
+        }
+        other => panic!("expected error event, got: {other:?}"),
+    }
+}
