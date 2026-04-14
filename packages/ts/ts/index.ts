@@ -79,10 +79,71 @@ export interface DirSQLConstructor {
   fromConfig(configPath: string): DirSQL;
 }
 
-// Resolve `dirsql.node` relative to this compiled module. After `tsc`
-// emits to `dist/`, `__dirname` is `<pkg>/dist`, so `..` reaches the
-// package root where napi-rs writes the native binary.
-const bindingPath = join(__dirname, "..", "dirsql.node");
-const binding: { DirSQL: DirSQLConstructor } = require(bindingPath);
+// Core module shape. The real implementation comes from the napi-rs
+// native binary (`dirsql.node`); tests may substitute a fake.
+interface CoreModule {
+  DirSQL: DirSQLConstructor;
+}
 
-export const DirSQL: DirSQLConstructor = binding.DirSQL;
+// Lazy-loaded reference to the core module. Populated on first access
+// by `loadNativeCore()`, or by `__setCoreForTesting()` for tests.
+let core: CoreModule | null = null;
+
+/**
+ * Load the native napi-rs binary. Resolved relative to this compiled
+ * module: after `tsc` emits to `dist/`, `__dirname` is `<pkg>/dist`, so
+ * `..` reaches the package root where napi-rs writes `dirsql.node`.
+ */
+function loadNativeCore(): CoreModule {
+  const bindingPath = join(__dirname, "..", "dirsql.node");
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require(bindingPath) as CoreModule;
+}
+
+function getCore(): CoreModule {
+  if (core === null) {
+    core = loadNativeCore();
+  }
+  return core;
+}
+
+/**
+ * **Test-only.** Replace the core module used by the SDK with a fake.
+ *
+ * This is an internal escape hatch for unit tests that want to mock the
+ * napi-rs binding layer without loading the real native binary. Passing
+ * `null` resets to the default (lazy native load on next access). Not
+ * part of the public API; do not use in application code.
+ */
+export function __setCoreForTesting(fake: CoreModule | null): void {
+  core = fake;
+}
+
+/**
+ * Public `DirSQL` export. Implemented as a Proxy so that
+ * {@link __setCoreForTesting} can swap the underlying implementation
+ * after this module has been imported. From a consumer's perspective it
+ * behaves identically to the napi-rs-backed constructor: `new DirSQL(...)`
+ * constructs an instance and `DirSQL.fromConfig(...)` is a static method.
+ */
+export const DirSQL: DirSQLConstructor = new Proxy(
+  // Must be a `function` (not arrow) so the Proxy supports `construct`.
+  // biome-ignore lint/complexity/useArrowFunction: Proxy construct trap requires a constructible target.
+  function () {} as unknown as DirSQLConstructor,
+  {
+    construct(_target, args, newTarget) {
+      const Ctor = getCore().DirSQL;
+      return Reflect.construct(
+        Ctor,
+        args,
+        newTarget === _target ? Ctor : newTarget,
+      );
+    },
+    get(_target, prop, receiver) {
+      return Reflect.get(getCore().DirSQL, prop, receiver);
+    },
+    has(_target, prop) {
+      return prop in getCore().DirSQL;
+    },
+  },
+);
