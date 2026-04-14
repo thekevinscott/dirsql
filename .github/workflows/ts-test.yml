@@ -15,7 +15,8 @@ on:
       - 'packages/core/**'
 
 jobs:
-  test:
+  unit:
+    name: Unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -46,6 +47,79 @@ jobs:
         working-directory: packages/ts
         run: pnpm build
 
-      - name: Run tests
+      - name: Run unit tests
         working-directory: packages/ts
-        run: pnpm test
+        run: pnpm test:unit
+
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        working-directory: packages/ts
+        run: pnpm install
+
+      - name: Build native module
+        working-directory: packages/ts
+        run: pnpm build
+
+      - name: Run integration tests
+        working-directory: packages/ts
+        run: pnpm test:integration
+
+  coverage:
+    name: Coverage floor (90%)
+    runs-on: ubuntu-latest
+    needs: [unit, integration]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        working-directory: packages/ts
+        run: pnpm install
+
+      - name: Build native module
+        working-directory: packages/ts
+        run: pnpm build
+
+      - name: Run coverage (unit + integration, no e2e)
+        working-directory: packages/ts
+        run: pnpm coverage

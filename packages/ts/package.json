@@ -22,6 +22,8 @@
     "build:debug": "napi build && tsc",
     "prepublishOnly": "napi prepublish -t npm",
     "test": "vitest run",
+    "test:unit": "vitest run --dir src --passWithNoTests",
+    "test:integration": "vitest run --dir test --passWithNoTests",
     "coverage": "vitest run --coverage",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
