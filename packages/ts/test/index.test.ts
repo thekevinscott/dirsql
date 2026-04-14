@@ -163,3 +163,116 @@ describe("DirSQL", () => {
     ).toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Gap-filling tests for docs features previously untested on the TS SDK side.
+// Mirrors packages/python/tests/integration/test_docs_gaps.py (bead dirsql-9ng).
+// See TESTS_AUDIT.md.
+// ---------------------------------------------------------------------------
+
+describe("DirSQL strict mode", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "dirsql-strict-"));
+    mkdirSync(join(dir, "items"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Docs (guide/tables.md / guide/config.md "Strict Mode"):
+  // `strict: true` on a Table def rejects rows with keys not in the DDL.
+  it("rejects rows with extra keys when strict is true", () => {
+    writeFileSync(
+      join(dir, "items", "a.json"),
+      JSON.stringify({ name: "apple", color: "red" }),
+    );
+
+    expect(
+      () =>
+        new DirSQL(dir, [
+          {
+            ddl: "CREATE TABLE items (name TEXT)",
+            glob: "items/*.json",
+            extract: (_filePath: string, content: string) => [
+              JSON.parse(content),
+            ],
+            strict: true,
+          },
+        ]),
+    ).toThrow();
+  });
+
+  // Docs: strict mode passes on exact key match.
+  it("allows rows with exact key match when strict is true", () => {
+    writeFileSync(
+      join(dir, "items", "a.json"),
+      JSON.stringify({ name: "apple", color: "red" }),
+    );
+
+    const db = new DirSQL(dir, [
+      {
+        ddl: "CREATE TABLE items (name TEXT, color TEXT)",
+        glob: "items/*.json",
+        extract: (_filePath: string, content: string) => [JSON.parse(content)],
+        strict: true,
+      },
+    ]);
+
+    const rows = db.query("SELECT name, color FROM items");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].name).toBe("apple");
+    expect(rows[0].color).toBe("red");
+  });
+});
+
+describe("DirSQL watch events", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "dirsql-watch-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Docs (guide/watching.md event payloads): `filePath` is relative to the root.
+  // All examples in watching.md show relative paths (e.g. "comments/abc/index.json")
+  // rather than absolute paths.
+  it("sets filePath as a relative path on watch events", () => {
+    mkdirSync(join(dir, "nested", "dir"), { recursive: true });
+
+    const db = new DirSQL(dir, [
+      {
+        ddl: "CREATE TABLE items (name TEXT)",
+        glob: "**/*.json",
+        extract: (_filePath: string, content: string) => [JSON.parse(content)],
+      },
+    ]);
+
+    db.startWatcher();
+
+    // Give the watcher a moment to settle before writing, so the file event
+    // is definitely captured.
+    const relPath = join("nested", "dir", "new.json");
+    writeFileSync(join(dir, relPath), JSON.stringify({ name: "relative" }));
+
+    // Poll until we see at least one event, up to ~5s total.
+    const events: ReturnType<typeof db.pollEvents> = [];
+    const deadline = Date.now() + 5000;
+    while (events.length === 0 && Date.now() < deadline) {
+      events.push(...db.pollEvents(250));
+    }
+
+    expect(events.length).toBeGreaterThan(0);
+    const ev = events[0];
+    expect(ev.filePath).toBeTruthy();
+    const fp = (ev.filePath ?? "").replace(/\\/g, "/");
+    // Must be relative (not absolute).
+    expect(fp.startsWith("/")).toBe(false);
+    expect(fp).toBe(relPath.replace(/\\/g, "/"));
+  });
+});

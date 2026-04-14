@@ -197,13 +197,44 @@ not actually provide. Per this bead's scope, they are surfaced for review and
 
 ---
 
+## 5. Cross-SDK Parity Gaps (surfaced, not fixed)
+
+Discovered while mirroring the Python gap tests to Rust and TypeScript:
+
+### 5.1 Rust `RowEvent` has no `file_path` on Insert/Update/Delete
+
+- `docs/guide/watching.md` documents `RowEvent.file_path` as a relative
+  path on all event variants.
+- The Rust SDK re-exports `dirsql_core::differ::RowEvent`, whose
+  `Insert` / `Update` / `Delete` variants carry `{table, row}` only.
+  Only the `Error` variant has a `file_path` field.
+- Python and TypeScript SDKs add `file_path` at the SDK layer; Rust
+  does not.
+- **Action**: either bring Rust into parity (add `file_path` to all
+  variants, via either the core type or an SDK wrapper), or update the
+  docs to scope `file_path` availability. File a bead.
+
+### 5.2 TypeScript SDK has no `fromConfig`
+
+- `docs/guide/config.md` documents `.dirsql.toml` driven `fromConfig`
+  across Python and Rust.
+- `packages/ts/ts/index.ts` exposes only the `new DirSQL(dir, tables, ignore?)`
+  constructor. No `fromConfig` static method.
+- This is why this PR adds no TypeScript mirrors for the format tests
+  (`.tsv`, `.ndjson`, `.toml`, `.yaml`/`.yml`, `.md` frontmatter,
+  `strict = true` in config) — the entry point doesn't exist on TS yet.
+- **Action**: file a bead to add `DirSQL.fromConfig` to the TypeScript
+  SDK, covering the same format surface as Python/Rust.
+
+---
+
 ## Verification
 
 Commands run locally in this worktree:
 
-- `uv run pytest packages/python/tests/integration/ -v` -> 85 passed
-- `cargo test --manifest-path packages/rust/Cargo.toml` -> all binaries + doc-tests passed
-- `cd packages/ts; pnpm test` -> 8 passed
+- `uv run pytest packages/python/tests/integration/ -v` -> 85 passed (+11 new in `test_docs_gaps.py`)
+- `cargo test --manifest-path packages/rust/Cargo.toml` -> all passing (+9 new in `docs_gaps.rs`)
+- `cd packages/ts; pnpm test` -> 11 passed (+3 new in `index.test.ts`)
 
 No test suite was modified except by additions. No docs, no source code, no
 other tests were changed by this audit pass.
