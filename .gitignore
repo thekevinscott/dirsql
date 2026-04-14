@@ -12,6 +12,8 @@ node_modules/
 
 # TypeScript build output
 packages/ts/dist/
+# napi-rs generated type definitions (authored types live in packages/ts/ts/)
+packages/ts/index.d.ts
 
 # Python
 __pycache__/
