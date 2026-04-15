@@ -1,0 +1,33 @@
+[package]
+name = "dirsql-cli"
+version = "0.1.0"
+edition = "2024"
+description = "CLI binary for dirsql"
+license = "MIT"
+repository = "https://github.com/thekevinscott/dirsql"
+
+[[bin]]
+name = "dirsql"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dirsql-sdk = { path = "../rust" }
+dirsql-core = { path = "../core" }
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+base64 = "0.22"
+tracing = "0.1"
+
+[dev-dependencies]
+assert_cmd = "2"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

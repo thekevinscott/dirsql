@@ -136,6 +136,11 @@ dirsql watch                             # stream events to stdout as JSONL
 - Optional Unix socket for local-only access
 - Reads `.dirsql.toml` by default, override with `--config`
 
+**Status:** initial HTTP-serve slice landed. Single binary `dirsql [DIR]` that
+boots `POST /query` + `GET /healthz`. `GET /events` is a 501 stub pending a
+chosen wire format (SSE vs WebSocket vs JSONL). Subcommands (`init`, `query`,
+`watch`) and Unix-socket transport remain TODO.
+
 ### Python SDK: config file support
 
 ```python
