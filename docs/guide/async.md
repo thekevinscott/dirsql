@@ -31,7 +31,7 @@ asyncio.run(main())
 ```
 
 ```rust [Rust]
-use dirsql_sdk::{DirSQL, Table};
+use dirsql::{DirSQL, Table};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use dirsql_core::db::Value;
-use dirsql_core::differ::diff;
+use dirsql::db::Value;
+use dirsql::differ::diff;
 use std::collections::HashMap;
 
 fn make_rows(count: usize) -> Vec<HashMap<String, Value>> {

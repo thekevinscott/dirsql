@@ -205,11 +205,11 @@ Discovered while mirroring the Python gap tests to Rust and TypeScript:
 
 - `docs/guide/watching.md` documents `RowEvent.file_path` as a relative
   path on all event variants.
-- Previously the Rust SDK re-exported `dirsql_core::differ::RowEvent`, whose
+- Previously the Rust SDK re-exported `dirsql::differ::RowEvent`, whose
   `Insert` / `Update` / `Delete` variants carried `{table, row}` only and
   only the `Error` variant had a `file_path` field.
 - **Closed in dirsql-n7x**: `file_path: String` is now a field on
-  `RowEvent::Insert`, `::Update`, and `::Delete` in `packages/core/src/differ.rs`
+  `RowEvent::Insert`, `::Update`, and `::Delete` in `packages/rust/src/differ.rs`
   (Error keeps its existing `file_path: PathBuf`). The Rust SDK re-exports
   the enum directly, and the napi bindings for Python/TS now read
   `file_path` from the core event. Covered by

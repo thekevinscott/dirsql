@@ -5,16 +5,16 @@
 Run all benchmarks:
 
 ```bash
-cargo bench -p dirsql-core
+cargo bench -p dirsql
 ```
 
 Run a specific benchmark:
 
 ```bash
-cargo bench -p dirsql-core --bench db_bench
-cargo bench -p dirsql-core --bench scanner_bench
-cargo bench -p dirsql-core --bench differ_bench
-cargo bench -p dirsql-core --bench matcher_bench
+cargo bench -p dirsql --bench db_bench
+cargo bench -p dirsql --bench scanner_bench
+cargo bench -p dirsql --bench differ_bench
+cargo bench -p dirsql --bench matcher_bench
 ```
 
 Results are written to `packages/core/target/criterion/` with HTML reports.

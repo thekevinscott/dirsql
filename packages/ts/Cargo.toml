@@ -2,12 +2,13 @@
 name = "dirsql-napi"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-dirsql-core = { path = "../core" }
+dirsql = { path = "../rust" }
 napi = { version = "3", features = ["napi6", "serde-json"] }
 napi-derive = "3"
 serde_json = "1"

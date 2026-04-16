@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use dirsql_core::db::{Db, Value};
+use dirsql::db::{Db, Value};
 use std::collections::HashMap;
 
 fn make_row(i: usize) -> HashMap<String, Value> {

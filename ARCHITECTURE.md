@@ -2,14 +2,13 @@
 
 ## Core Principle: One Implementation, Thin Bindings
 
-**The Rust core (`packages/core/`) is the single source of truth for all business logic.** Every language SDK is a thin binding layer that wraps the core -- it does NOT reimplement it.
+**The Rust crate (`packages/rust/`) is the single source of truth for all business logic.** Every language SDK is a thin binding layer that wraps it -- it does NOT reimplement it.
 
-- **`packages/core/`** -- `dirsql-core` Rust crate. All business logic lives here: SQLite operations, glob matching, file scanning, row diffing, file watching.
-- **`packages/python/`** -- PyO3 bindings wrapping `dirsql-core`. Thin glue code + async Python wrapper.
-- **`packages/rust/`** -- Ergonomic Rust SDK wrapping `dirsql-core`. Builder pattern, async support via tokio.
-- **`packages/ts/`** -- napi-rs bindings wrapping `dirsql-core`. (Not yet implemented.)
+- **`packages/rust/`** -- the `dirsql` Rust crate. All business logic lives here: SQLite operations, glob matching, file scanning, row diffing, file watching, plus the ergonomic user-facing Rust API (builder pattern, async support via tokio). This is the only crate published to crates.io.
+- **`packages/python/`** -- PyO3 bindings wrapping `dirsql`. Thin glue code + async Python wrapper. The underlying binding crate (`dirsql-py-ext`) is not published to crates.io.
+- **`packages/ts/`** -- napi-rs bindings wrapping `dirsql`. The underlying binding crate (`dirsql-napi`) is not published to crates.io.
 
-**Never reimplement core logic in a language SDK.** If you're writing SQLite operations, glob matching, file scanning, or row diffing in Python or TypeScript, that code belongs in the Rust core with a binding exposed to the SDK. The entire point of this architecture is a fast Rust core with language bindings, not three independent implementations.
+**Never reimplement core logic in a language SDK.** If you're writing SQLite operations, glob matching, file scanning, or row diffing in Python or TypeScript, that code belongs in the Rust crate with a binding exposed to the SDK. The entire point of this architecture is a fast Rust core with language bindings, not three independent implementations.
 
 ## Cross-Language Parity
 
@@ -33,8 +32,8 @@ When adding a feature to one SDK, create beads for the other two.
 │         PyO3 bindings           │
 │   packages/python/src/lib.rs    │
 ├─────────────────────────────────┤
-│         Rust core               │
-│   packages/core/src/            │
+│         Rust crate              │
+│   packages/rust/src/            │
 │   ┌───────┬──────────┬────────┐ │
 │   │  db   │ scanner  │watcher │ │
 │   │       │          │        │ │
@@ -49,9 +48,9 @@ When adding a feature to one SDK, create beads for the other two.
 └─────────────────────────────────┘
 ```
 
-## Rust core (`packages/core/`)
+## Rust crate (`packages/rust/`)
 
-The core library is a Rust crate (`dirsql-core`) that handles all heavy lifting:
+The `dirsql` Rust crate handles all heavy lifting:
 
 ### `db` -- In-memory SQLite
 

@@ -10,22 +10,21 @@ Structured data stored as flat files (JSONL, JSON) is easy to read, write, diff,
 
 ## Architecture
 
-The project is a monorepo with three packages:
+The project is a monorepo with three published packages, all named `dirsql`:
 
-- **[`packages/core/`](packages/core/)** -- Rust core library (`dirsql-core`). Handles SQLite, filesystem scanning, glob matching, file watching, and row diffing. All heavy lifting happens here.
-- **[`packages/rust/`](packages/rust/)** -- Rust SDK (`dirsql-sdk`). User-facing Rust API over the core engine with parity to the Python SDK where Rust idioms allow.
-- **[`packages/python/`](packages/python/)** -- Python SDK (`dirsql`). PyO3 bindings to the Rust core, plus a pure-Python async wrapper. Published to PyPI.
-- **[`packages/ts/`](packages/ts/)** -- TypeScript SDK (not yet implemented).
+- **[`packages/rust/`](packages/rust/)** -- Rust SDK and core engine (`dirsql` crate). Contains the SQLite indexing, filesystem scanning, glob matching, file watching, and row diffing, plus the user-facing Rust API. Published to crates.io.
+- **[`packages/python/`](packages/python/)** -- Python SDK (`dirsql`). PyO3 bindings over the Rust crate, plus a pure-Python async wrapper. Published to PyPI. The underlying Rust binding crate (`dirsql-py-ext`) is not published.
+- **[`packages/ts/`](packages/ts/)** -- TypeScript SDK (`dirsql` on npm). napi-rs bindings over the Rust crate. The underlying Rust binding crate (`dirsql-napi`) is not published.
 
 ```
                   ┌──────────────┐
-                  │  dirsql-core │   Rust: rusqlite + notify + walkdir
+                  │    dirsql    │   Rust: rusqlite + notify + walkdir
                   │  (packages/  │
-                  │    core/)    │
+                  │    rust/)    │
                   └──────┬───────┘
                          │
               ┌──────────┼──────────┐
-              │ PyO3     │          │ (future: napi-rs)
+              │ PyO3     │          │ napi-rs
      ┌────────▼───────┐ ┌────▼─────────┐ ┌──────▼───────┐
      │  Python SDK    │ │  Rust SDK    │ │   TS SDK     │
      │  (packages/    │ │ (packages/   │ │  (packages/  │
@@ -37,7 +36,7 @@ The project is a monorepo with three packages:
 ## SDK Documentation
 
 - **Python**: [packages/python/README.md](packages/python/README.md) -- installation, sync + async API, full reference
-- **Rust**: [packages/core/README.md](packages/core/README.md) -- crate usage and module overview
+- **Rust**: [packages/rust/README.md](packages/rust/README.md) -- crate usage and API overview
 - **TypeScript**: [packages/ts/README.md](packages/ts/README.md) -- status and roadmap
 
 ## Development

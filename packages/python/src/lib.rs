@@ -1,12 +1,12 @@
 #[cfg(feature = "extension-module")]
 mod python {
-    use dirsql_core::config;
-    use dirsql_core::db::{Db, Value, parse_table_name};
-    use dirsql_core::differ;
-    use dirsql_core::matcher::TableMatcher;
-    use dirsql_core::parser::{self, ColumnSource, Format};
-    use dirsql_core::scanner::scan_directory;
-    use dirsql_core::watcher::{FileEvent, Watcher};
+    use dirsql::config;
+    use dirsql::db::{Db, Value, parse_table_name};
+    use dirsql::differ;
+    use dirsql::matcher::TableMatcher;
+    use dirsql::parser::{self, ColumnSource, Format};
+    use dirsql::scanner::scan_directory;
+    use dirsql::watcher::{FileEvent, Watcher};
     use pyo3::exceptions::PyRuntimeError;
     use pyo3::prelude::*;
     use pyo3::types::{PyDict, PyList};

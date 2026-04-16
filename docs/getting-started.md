@@ -9,7 +9,7 @@ pip install dirsql
 ```
 
 ```bash [Rust]
-cargo add dirsql-sdk
+cargo add dirsql
 ```
 
 ```bash [TypeScript]
@@ -75,7 +75,7 @@ asyncio.run(main())
 ```
 
 ```rust [Rust]
-use dirsql_sdk::{DirSQL, Table};
+use dirsql::{DirSQL, Table};
 
 let db = DirSQL::new(
     "./my-blog",

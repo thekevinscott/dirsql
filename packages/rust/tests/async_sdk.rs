@@ -1,4 +1,4 @@
-use dirsql_sdk::{AsyncDirSQL, Row, Table, Value};
+use dirsql::{AsyncDirSQL, Row, Table, Value};
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::fs;
@@ -165,7 +165,7 @@ async fn it_streams_watch_events() {
         .expect("stream ended");
 
     match event {
-        dirsql_sdk::RowEvent::Insert { table, row, .. } => {
+        dirsql::RowEvent::Insert { table, row, .. } => {
             assert_eq!(table, "items");
             assert_eq!(row["name"], Value::Text("apple".into()));
         }

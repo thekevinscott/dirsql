@@ -1,10 +1,10 @@
-use dirsql_core::config;
-use dirsql_core::db::{parse_table_name, Db, Value};
-use dirsql_core::differ;
-use dirsql_core::matcher::{parse_captures, TableMatcher};
-use dirsql_core::parser::{self, ColumnSource, Format};
-use dirsql_core::scanner::scan_directory;
-use dirsql_core::watcher::{FileEvent, Watcher};
+use dirsql::config;
+use dirsql::db::{parse_table_name, Db, Value};
+use dirsql::differ;
+use dirsql::matcher::{parse_captures, TableMatcher};
+use dirsql::parser::{self, ColumnSource, Format};
+use dirsql::scanner::scan_directory;
+use dirsql::watcher::{FileEvent, Watcher};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::collections::HashMap;
@@ -209,7 +209,7 @@ unsafe fn parse_js_array_of_objects(
     Ok(rows)
 }
 
-/// Convert a raw napi_value to a dirsql_core Value.
+/// Convert a raw napi_value to a dirsql Value.
 unsafe fn js_val_to_value(env: napi::sys::napi_env, val: napi::sys::napi_value) -> Result<Value> {
     let mut value_type = 0i32;
     napi::sys::napi_typeof(env, val, &mut value_type);
@@ -423,7 +423,7 @@ pub struct DirSQL {
     watcher: Mutex<Option<Watcher>>,
 }
 
-/// Convert a dirsql_core Value to serde_json::Value.
+/// Convert a dirsql Value to serde_json::Value.
 fn value_to_json(v: &Value) -> serde_json::Value {
     match v {
         Value::Null => serde_json::Value::Null,

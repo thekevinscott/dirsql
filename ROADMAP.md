@@ -98,11 +98,11 @@ glob = "logs/*.csv"
 
 #### Implementation
 
-New `parser` module in `packages/core/` that takes `(format, each, columns, path, content)` and returns `Vec<HashMap<String, Value>>`. The Python SDK calls this Rust parser when `format` is provided, falls back to the Python `extract` callable when not.
+New `parser` module in `packages/rust/` that takes `(format, each, columns, path, content)` and returns `Vec<HashMap<String, Value>>`. The Python SDK calls this Rust parser when `format` is provided, falls back to the Python `extract` callable when not.
 
 ### Rust consumer API
 
-High-level `DirSQL` struct in `dirsql-core` with parity to the Python SDK:
+High-level `DirSQL` struct in `dirsql` with parity to the Python SDK:
 
 ```rust
 let db = DirSQL::from_config(".")?;  // reads .dirsql.toml
@@ -121,9 +121,9 @@ for event in db.watch() {
 
 Foundation for the CLI tool. Enables Rust consumers without PyO3.
 
-### CLI tool (`packages/cli/`)
+### CLI tool
 
-Separate binary crate depending on `dirsql-core`.
+Ships inside the consolidated `dirsql` crate behind a default-on `cli` feature (bat pattern).
 
 ```bash
 dirsql init                              # create .dirsql.toml with examples
@@ -165,7 +165,7 @@ Enables:
 
 ### TypeScript SDK (`packages/ts/`)
 
-napi-rs bindings to `dirsql-core`. Same API shape as Python:
+napi-rs bindings to `dirsql`. Same API shape as Python:
 
 ```typescript
 const db = new DirSQL(root, { tables, ignore });

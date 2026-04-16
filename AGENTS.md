@@ -113,7 +113,7 @@ Orchestrators must block merges of SDK-touching PRs that don't update `PARITY.md
 
 ### Benchmarks
 
-Run `cargo bench -p dirsql-core` after significant changes to the Rust codebase. Not in CI -- local only. Covers: SQLite operations, directory scanning, row diffing, glob matching. Use to catch performance regressions before merging.
+Run `cargo bench -p dirsql` after significant changes to the Rust codebase. Not in CI -- local only. Covers: SQLite operations, directory scanning, row diffing, glob matching. Use to catch performance regressions before merging.
 
 ### Coverage Floor
 

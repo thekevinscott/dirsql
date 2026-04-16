@@ -1,10 +1,17 @@
-use dirsql_core::config;
-use dirsql_core::db::{Db, parse_table_name};
-use dirsql_core::differ::{self, RowEvent as CoreRowEvent};
-use dirsql_core::matcher::{TableMatcher, parse_captures};
-use dirsql_core::parser::{self, ColumnSource};
-use dirsql_core::scanner::scan_directory;
-use dirsql_core::watcher::{FileEvent, Watcher};
+pub mod config;
+pub mod db;
+pub mod differ;
+pub mod matcher;
+pub mod parser;
+pub mod scanner;
+pub mod watcher;
+
+use crate::db::{Db, parse_table_name};
+use crate::differ::RowEvent as CoreRowEvent;
+use crate::matcher::{TableMatcher, parse_captures};
+use crate::parser::ColumnSource;
+use crate::scanner::scan_directory;
+use crate::watcher::{FileEvent, Watcher};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use std::collections::HashMap;
 use std::error::Error as StdError;
@@ -24,13 +31,13 @@ type BoxError = Box<dyn StdError + Send + Sync + 'static>;
 type ExtractFn =
     dyn Fn(&str, &str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static;
 
-pub use dirsql_core::db::Value;
-pub use dirsql_core::differ::RowEvent;
+pub use crate::db::Value;
+pub use crate::differ::RowEvent;
 
 #[derive(Debug, Error)]
 pub enum DirSqlError {
     #[error(transparent)]
-    Core(#[from] dirsql_core::db::DbError),
+    Core(#[from] crate::db::DbError),
 
     #[error(transparent)]
     Io(#[from] std::io::Error),

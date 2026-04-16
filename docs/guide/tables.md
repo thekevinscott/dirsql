@@ -19,7 +19,7 @@ table = Table(
 ```
 
 ```rust [Rust]
-use dirsql_sdk::Table;
+use dirsql::Table;
 
 let table = Table::new(
     "CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
@@ -143,7 +143,7 @@ db = DirSQL(
 ```
 
 ```rust [Rust]
-use dirsql_sdk::{DirSQL, Table};
+use dirsql::{DirSQL, Table};
 
 let db = DirSQL::new(
     "./workspace",

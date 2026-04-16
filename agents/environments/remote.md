@@ -44,7 +44,7 @@ Do **NOT** hardcode `/home/duncan/...`. Use `$PWD` or the actual sandbox root (e
 
 - Python: run `pytest` directly against `packages/python`.
 - TypeScript: `pnpm --dir packages/ts run <script>`.
-- Rust: `cargo test --workspace`; `cargo bench -p dirsql-core` for benches.
+- Rust: `cargo test --workspace`; `cargo bench -p dirsql` for benches.
 
 ## E2E suites
 

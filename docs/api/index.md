@@ -11,7 +11,7 @@ from dirsql import DirSQL
 ```
 
 ```rust [Rust]
-use dirsql_sdk::DirSQL;
+use dirsql::DirSQL;
 ```
 
 ```typescript [TypeScript]
@@ -141,7 +141,7 @@ from dirsql import Table
 ```
 
 ```rust [Rust]
-use dirsql_sdk::Table;
+use dirsql::Table;
 ```
 
 ```typescript [TypeScript]
@@ -194,7 +194,7 @@ from dirsql import RowEvent
 ```
 
 ```rust [Rust]
-use dirsql_sdk::RowEvent;
+use dirsql::RowEvent;
 ```
 
 ```typescript [TypeScript]
