@@ -10,14 +10,18 @@ This repo is developed in one of two environments. The rest of this file is writ
 
 ### Detecting the environment
 
-You are in a **remote** environment if any of the following are true:
+The Claude Code harness exports `CLAUDE_CODE_REMOTE=true` in every hosted (cloud / web) session. That is the **canonical, documented signal** -- see <https://code.claude.com/docs/en/env-vars.md>. Use it as the single source of truth:
 
-- Working directory is not `/home/duncan/work/code/projects/dirsql` (e.g. `/home/user/dirsql`).
-- `bd` is not on `PATH`.
-- None of `ROBOT_GIT_NAME`, `ROBOT_GPG_KEY_ID`, `APPROVED_GIT_NAME`, `APPROVED_GPG_KEY` are set in the environment.
-- The session was launched on a pre-assigned branch named `claude/<something>` rather than `main`.
+```bash
+[ "${CLAUDE_CODE_REMOTE:-}" = "true" ] && mode=remote || mode=local
+```
 
-If any of these hold, follow the Remote Execution overrides. Otherwise treat the session as local.
+- `CLAUDE_CODE_REMOTE=true` -> **remote**.
+- Variable unset, empty, or any other value -> **local**.
+
+Do NOT infer the environment from secondary symptoms like working directory, presence/absence of `bd`, the active git identity, or the current branch name. Those signals are noisy: a local dev machine can be missing `bd`, a maintainer can work from a non-default checkout, and `CLAUDECODE=1` is set in **both** local and remote sessions so it can't distinguish them.
+
+If `CLAUDE_CODE_REMOTE` is unset and you're unsure (e.g. running this file from a non-Claude-Code automation), default to **local** and ask the user before doing anything that would be destructive under the wrong assumption (e.g. configuring git identity, setting up worktrees).
 
 ### Remote Execution (hosted Claude Code session)
 
