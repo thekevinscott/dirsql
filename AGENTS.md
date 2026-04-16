@@ -4,28 +4,7 @@
 
 All architectural decisions and constraints (including cross-language parity rules, the one-implementation principle, and SDK design) are in `ARCHITECTURE.md`. Do NOT put architectural information in this file -- AGENTS.md is for workflow and process only.
 
-## Execution Environments
-
-This repo is developed in one of two environments -- **local** (a maintainer's machine with `bd`, `just`, GPG keys, etc.) or **remote** (a hosted Claude Code sandbox with none of that). The environment-specific workflow rules live in dedicated files:
-
-- `agents/environments/local.md`
-- `agents/environments/remote.md`
-
-A SessionStart hook (`.claude/hooks/select-environment.sh`) runs on every session start and symlinks `agents/build/environment.md` to whichever of those files applies to the current session. Selection is driven by a single, documented signal:
-
-```bash
-[ "${CLAUDE_CODE_REMOTE:-}" = "true" ] && mode=remote || mode=local
-```
-
-`CLAUDE_CODE_REMOTE=true` is the canonical env var the Claude Code harness sets in every hosted session -- see <https://code.claude.com/docs/en/env-vars.md>. Do NOT try to infer the environment from secondary symptoms (working directory, presence/absence of `bd`, active git identity, branch name); they are noisy and `CLAUDECODE=1` is set in both environments.
-
-The environment file is pulled into context via this import, which every agent session evaluates eagerly:
-
 @agents/build/environment.md
-
-The symlink target is generated, so `agents/build/` is gitignored. The two source files in `agents/environments/` are checked in and are the places to edit environment-specific rules.
-
-If the hook hasn't run yet (e.g. this file is being read by non-Claude-Code automation), default to **local** and ask before doing anything destructive under the wrong assumption.
 
 ## Scratch Files
 
