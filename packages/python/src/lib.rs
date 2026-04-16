@@ -115,9 +115,7 @@ mod python {
 
         fn query(&self, py: Python<'_>, sql: String) -> PyResult<Py<PyList>> {
             let db = self.inner.clone();
-            let rows = py
-                .detach(move || db.query(&sql))
-                .map_err(to_py_err)?;
+            let rows = py.detach(move || db.query(&sql)).map_err(to_py_err)?;
 
             let list = PyList::empty(py);
             for row in rows {
@@ -128,8 +126,7 @@ mod python {
 
         fn _start_watcher(&self, py: Python<'_>) -> PyResult<()> {
             let db = self.inner.clone();
-            py.detach(move || db.start_watching())
-                .map_err(to_py_err)
+            py.detach(move || db.start_watching()).map_err(to_py_err)
         }
 
         fn _poll_events(&self, py: Python<'_>, timeout_ms: u64) -> PyResult<Vec<PyRowEvent>> {

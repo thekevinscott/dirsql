@@ -184,8 +184,7 @@ impl DirSQL {
     /// The root directory is taken as the config file's parent.
     pub fn from_config_path(config_path: impl AsRef<Path>) -> Result<Self> {
         let path = config_path.as_ref();
-        let cfg =
-            config::load_config(path).map_err(|e| DirSqlError::Config(e.to_string()))?;
+        let cfg = config::load_config(path).map_err(|e| DirSqlError::Config(e.to_string()))?;
         let root = path
             .parent()
             .map(PathBuf::from)
@@ -230,8 +229,8 @@ impl DirSQL {
             .lock()
             .map_err(|e| DirSqlError::Lock(e.to_string()))?;
         if guard.is_none() {
-            let watcher = Watcher::new(&self.inner.root)
-                .map_err(|e| DirSqlError::Watch(e.to_string()))?;
+            let watcher =
+                Watcher::new(&self.inner.root).map_err(|e| DirSqlError::Watch(e.to_string()))?;
             *guard = Some(watcher);
         }
         Ok(())
@@ -401,14 +400,12 @@ impl DirSQL {
         let row_events = differ::diff(table, old_rows.as_deref(), Some(&new_rows), rel_path);
 
         let db_result = match self.inner.db.lock() {
-            Ok(db) => db
-                .delete_rows_by_file(table, rel_path)
-                .and_then(|_| {
-                    for (i, row) in new_rows.iter().enumerate() {
-                        db.insert_row(table, row, rel_path, i)?;
-                    }
-                    Ok(())
-                }),
+            Ok(db) => db.delete_rows_by_file(table, rel_path).and_then(|_| {
+                for (i, row) in new_rows.iter().enumerate() {
+                    db.insert_row(table, row, rel_path, i)?;
+                }
+                Ok(())
+            }),
             Err(e) => return vec![error_event(rel_path, e.to_string())],
         };
 
@@ -434,8 +431,8 @@ impl DirSQL {
         let mut mappings: Vec<(String, String)> = Vec::with_capacity(tables.len());
 
         for table in tables {
-            let table_name = parse_table_name(&table.ddl)
-                .ok_or_else(|| DirSqlError::Ddl(table.ddl.clone()))?;
+            let table_name =
+                parse_table_name(&table.ddl).ok_or_else(|| DirSqlError::Ddl(table.ddl.clone()))?;
             if extract_map.contains_key(&table_name) {
                 return Err(DirSqlError::DuplicateTable(table_name));
             }
@@ -463,11 +460,10 @@ impl DirSQL {
                 DirSqlError::Ddl(format!("missing extract function for table {table_name}"))
             })?;
             let strict = *strict_map.get(&table_name).unwrap_or(&false);
-            let raw_rows =
-                extract(&rel_path, &content).map_err(|e| DirSqlError::Extract {
-                    path: rel_path.clone(),
-                    message: e.to_string(),
-                })?;
+            let raw_rows = extract(&rel_path, &content).map_err(|e| DirSqlError::Extract {
+                path: rel_path.clone(),
+                message: e.to_string(),
+            })?;
 
             let mut rows = Vec::with_capacity(raw_rows.len());
             for (row_index, raw_row) in raw_rows.iter().enumerate() {
@@ -629,8 +625,7 @@ impl AsyncDirSQL {
 
     pub fn from_config_path(config_path: impl AsRef<Path>) -> Result<Self> {
         let path = config_path.as_ref();
-        let cfg =
-            config::load_config(path).map_err(|e| DirSqlError::Config(e.to_string()))?;
+        let cfg = config::load_config(path).map_err(|e| DirSqlError::Config(e.to_string()))?;
         let root = path
             .parent()
             .map(PathBuf::from)
