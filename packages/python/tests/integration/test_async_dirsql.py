@@ -204,9 +204,7 @@ def describe_DirSQL_async():
             except asyncio.TimeoutError:
                 pytest.fail("Timed out waiting for watch events")
 
-            insert = next(
-                (e for e in events if e.action == "insert"), None
-            )
+            insert = next((e for e in events if e.action == "insert"), None)
             assert insert is not None, f"no insert event in {events!r}"
             assert insert.table == "items"
             assert insert.row["name"] == "apple"
