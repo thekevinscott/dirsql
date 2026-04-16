@@ -1,6 +1,16 @@
+import { resolve } from "node:path";
 import { defineConfig } from "vitest/config";
 
+// Alias `dirsql` to the TS source so vitest instruments it for coverage.
+// Without this, tests resolve `dirsql` to the compiled `dist/index.js` via
+// the package's self-reference, which v8 coverage can't instrument when
+// it's reached through a raw CJS `require()` outside vitest's module graph.
 export default defineConfig({
+  resolve: {
+    alias: {
+      dirsql: resolve(__dirname, "ts/index.ts"),
+    },
+  },
   test: {
     // Native napi-rs modules require forks pool (not threads) because
     // the default threads pool uses worker_threads which create a
@@ -9,7 +19,7 @@ export default defineConfig({
     pool: "forks",
     coverage: {
       provider: "v8",
-      include: ["dist/index.js"],
+      include: ["ts/index.ts"],
       thresholds: {
         lines: 90,
         branches: 90,
