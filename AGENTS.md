@@ -4,6 +4,51 @@
 
 All architectural decisions and constraints (including cross-language parity rules, the one-implementation principle, and SDK design) are in `ARCHITECTURE.md`. Do NOT put architectural information in this file -- AGENTS.md is for workflow and process only.
 
+## Execution Environments
+
+This repo is developed in one of two environments. The rest of this file is written for **local** execution and applies as-is. If the current session is a **remote** hosted sandbox, the overrides in the "Remote Execution" subsection below replace the corresponding local instructions. Everything not called out as an override still applies.
+
+### Detecting the environment
+
+You are in a **remote** environment if any of the following are true:
+
+- Working directory is not `/home/duncan/work/code/projects/dirsql` (e.g. `/home/user/dirsql`).
+- `bd` is not on `PATH`.
+- None of `ROBOT_GIT_NAME`, `ROBOT_GPG_KEY_ID`, `APPROVED_GIT_NAME`, `APPROVED_GPG_KEY` are set in the environment.
+- The session was launched on a pre-assigned branch named `claude/<something>` rather than `main`.
+
+If any of these hold, follow the Remote Execution overrides. Otherwise treat the session as local.
+
+### Remote Execution (hosted Claude Code session)
+
+In a hosted sandbox (no `~/work/dotfiles`, no GPG keyring, no `bd`, no `just`, no local LLM credentials), the following overrides apply. If an item listed here turns out to be available in the sandbox, prefer the local instruction.
+
+**Identity and signing.** The harness has already set a non-personal git identity (e.g. `Claude <noreply@anthropic.com>`). Use it as-is -- do NOT rewrite `user.name` / `user.email` and do NOT attempt to configure GPG. The "commits must be GPG-signed by the approved robot key" rule and the `scripts/agent-preflight.sh` gate are both **suspended** in this environment; commits will be unsigned.
+
+**Branches and worktrees.** The harness assigns a session branch (typically `claude/general-session-<id>`). Use it as the base for all work. Do NOT create `.worktrees/` -- the sandbox is already an isolated checkout. Instead, create one child branch per PR directly from the session branch:
+
+```bash
+git checkout -b claude/general-session-<id>-<slug> claude/general-session-<id>
+```
+
+One PR per change still applies. The "never commit directly to `main`" rule still applies.
+
+**Task tracking (Beads).** `bd` is not installed. Skip every `bd create` / `bd update --claim` / `bd close` step. Do NOT fabricate bead IDs in commits or PR bodies. Track work via GitHub issues directly (using the `mcp__github__*` tools). Reference issues by `owner/repo#<num>` in commit messages and PR bodies; use `Fixes #<num>` where appropriate.
+
+**Testing.** `just` is typically not available. Substitute the underlying commands:
+
+- Python: run `pytest` directly against `packages/python`.
+- TypeScript: `pnpm --dir packages/ts run <script>`.
+- Rust: `cargo test --workspace`; `cargo bench -p dirsql-core` for benches.
+
+E2E suites that make live LLM calls cannot run in the hosted sandbox. In the PR body's `## E2E Verification` section, state this explicitly (e.g. `blocked-remote: no LLM credentials in sandbox`) instead of claiming pass/fail. CI on GitHub remains the authoritative gate; the orchestrator continues to monitor it via `mcp__github__*` tools.
+
+**Path assumptions.** Do NOT hardcode `/home/duncan/...`. Use `$PWD` or the actual sandbox root (e.g. `/home/user/dirsql`).
+
+**Post-merge cleanup.** There is no worktree to remove. Cleanup reduces to: pull `main` into the sandbox checkout, then delete the merged feature branch locally. Do NOT try to `git worktree remove`.
+
+**Permissions and tool access.** The sandbox restricts `gh` CLI access; all GitHub operations must go through `mcp__github__*` MCP tools. Repository scope is limited to whatever the session declares; do not attempt operations against other repositories.
+
 ## Scratch Files
 
 Write scratch/temporary files to `/tmp` instead of asking permission. Use unique filenames to avoid collisions with other sessions.
