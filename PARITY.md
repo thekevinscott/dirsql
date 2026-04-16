@@ -72,6 +72,7 @@ for await (const event of db.watch()) { ... }
 - `DirSQL.fromConfig` takes the config file path directly (like Python), not the root directory (like Rust).
 - No separate `AsyncDirSQL` — JS is async by default, so `DirSQL` has `ready: Promise<void>` and `watch(): AsyncIterable<RowEvent>` built in.
 - `query()` is synchronous (returns `Record[]`), matching the Python/Rust sync class.
+- The initial directory scan currently runs synchronously inside the constructor, so `ready` resolves immediately (and construction errors throw synchronously). The Promise exists so consumers can write uniform async-style code across SDKs.
 
 ## Test Coverage Matrix
 
