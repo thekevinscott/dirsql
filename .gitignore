@@ -27,6 +27,7 @@ __pycache__/
 *.pyo
 *.so
 .venv/
+.coverage
 
 # uv
 uv.lock

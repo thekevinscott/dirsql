@@ -88,7 +88,7 @@ jobs:
         run: pnpm test:integration
 
   coverage:
-    name: Coverage floor (90%)
+    name: TS coverage floor (90%)
     runs-on: ubuntu-latest
     needs: [unit, integration]
     steps:
