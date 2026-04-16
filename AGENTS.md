@@ -66,7 +66,7 @@ See skillet or karat for examples of test organization, fixtures, and pytest-des
 Agents must run the full e2e suite locally before any `git push` that includes a **substantial code change**, and report the outcome in the PR body. The commands to run differ per environment -- see the active environment file for specifics.
 
 **"Substantial" means any change touching:**
-- `packages/core/**` (Rust core)
+- `packages/rust/**` (Rust core)
 - `packages/python/src/**` (excluding files matching `*_test.py`)
 - `packages/ts/src/**` (excluding files matching `*.test.ts` / `*.spec.ts`)
 - Any shared SDK runtime code reachable from the above

@@ -65,7 +65,7 @@ jobs:
 
           while IFS= read -r file; do
             case "$file" in
-              packages/core/**|packages/python/src/**|Cargo.lock) rust_changed=true ;;
+              packages/rust/**|packages/python/src/**|Cargo.lock) rust_changed=true ;;
               packages/python/**.py|packages/python/pyproject.toml) python_changed=true ;;
               packages/ts/**) js_changed=true ;;
               README.md|*.md) docs_changed=true ;;

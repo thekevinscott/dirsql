@@ -17,7 +17,7 @@ cargo bench -p dirsql --bench differ_bench
 cargo bench -p dirsql --bench matcher_bench
 ```
 
-Results are written to `packages/core/target/criterion/` with HTML reports.
+Results are written to `packages/rust/target/criterion/` with HTML reports.
 
 ### What is benchmarked
 

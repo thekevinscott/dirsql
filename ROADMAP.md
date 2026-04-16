@@ -5,7 +5,7 @@
 - Rust core: in-memory SQLite, file watching, directory scanning, glob matching, row diffing
 - Python SDK: async-by-default API, DirSQL with ready()/query()/watch(), Table with DDL + extract lambda
 - Publishing: PyPI, crates.io, npm (placeholder)
-- Monorepo: packages/core, packages/python, packages/ts
+- Monorepo: packages/rust, packages/python, packages/ts
 - CI: Rust test, Python test/lint, conditional releases, trusted publishing (OIDC)
 - Docs: VitePress site, per-package READMEs, benchmarks (Criterion)
 

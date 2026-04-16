@@ -8,12 +8,12 @@ on:
     branches: [main]
     paths:
       - 'packages/python/**'
-      - 'packages/core/**'
+      - 'packages/rust/**'
       - 'Cargo.lock'
   pull_request:
     paths:
       - 'packages/python/**'
-      - 'packages/core/**'
+      - 'packages/rust/**'
       - 'Cargo.lock'
 
 jobs:
