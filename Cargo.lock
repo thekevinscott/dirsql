@@ -257,7 +257,6 @@ dependencies = [
  "criterion",
  "csv",
  "futures-channel",
- "futures-core",
  "futures-executor",
  "futures-util",
  "globset",
@@ -291,7 +290,6 @@ version = "0.1.0"
 dependencies = [
  "dirsql",
  "pyo3",
- "regex",
 ]
 
 [[package]]

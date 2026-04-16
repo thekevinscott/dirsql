@@ -1,18 +1,31 @@
-use dirsql::config;
-use dirsql::db::{parse_table_name, Db, Value};
-use dirsql::differ;
-use dirsql::matcher::{parse_captures, TableMatcher};
-use dirsql::parser::{self, ColumnSource, Format};
-use dirsql::scanner::scan_directory;
-use dirsql::watcher::{FileEvent, Watcher};
+// The raw napi_sys helpers below are already declared `unsafe fn` as a
+// whole. Edition 2024 adds a lint that requires each unsafe op to be
+// wrapped in its own `unsafe { }` block; that would only add noise here.
+#![allow(unsafe_op_in_unsafe_fn)]
+
+//! napi-rs binding for `dirsql`. Intentionally thin: all orchestration lives
+//! in `dirsql::DirSQL`. This layer only:
+//!
+//! - wraps a JS `extract` callable in a Rust closure (via a persistent napi
+//!   reference) so it can be handed to [`dirsql::Table`]
+//! - converts row values and events between Rust and serde_json shapes napi
+//!   exposes to JS
+//! - forwards the constructor / `fromConfig` / `query` / `startWatcher` /
+//!   `pollEvents` to the corresponding `DirSQL` methods
+//!
+//! All methods execute on the JS event-loop thread, so the JS `extract`
+//! callback is only ever invoked synchronously from that thread.
+
+use dirsql::{DirSQL as CoreDirSQL, Row, RowEvent as CoreRowEvent, Table, Value};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::Arc;
 use std::time::Duration;
 
-/// A row event emitted by the watch stream.
+// -- Public napi-rs classes --------------------------------------------------
+
+/// A row-level event emitted by the file watcher.
 #[napi(object)]
 pub struct RowEvent {
     pub table: String,
@@ -23,10 +36,98 @@ pub struct RowEvent {
     pub file_path: Option<String>,
 }
 
+/// The main DirSQL class. Creates an in-memory SQLite index over a directory.
+#[napi(js_name = "DirSQL")]
+pub struct DirSQL {
+    inner: CoreDirSQL,
+}
+
+#[napi]
+impl DirSQL {
+    /// Create a new DirSQL instance.
+    ///
+    /// @param root - Root directory path to index
+    /// @param tables - Array of table definition objects
+    /// @param ignore - Optional array of glob patterns to ignore
+    #[napi(constructor)]
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(env: Env, root: String, tables: Array, ignore: Option<Vec<String>>) -> Result<Self> {
+        let raw_env = env.raw();
+        let tables_len = tables.len();
+        let mut rust_tables: Vec<Table> = Vec::with_capacity(tables_len as usize);
+
+        for i in 0..tables_len {
+            let table_element: Unknown<'_> = tables.get(i)?.ok_or_else(|| {
+                Error::new(
+                    Status::GenericFailure,
+                    format!("Missing table at index {}", i),
+                )
+            })?;
+            let raw_obj = table_element.raw();
+
+            let ddl = unsafe { get_string_property(raw_env, raw_obj, "ddl")? };
+            let glob = unsafe { get_string_property(raw_env, raw_obj, "glob")? };
+            let extract_val = unsafe { get_function_property(raw_env, raw_obj, "extract")? };
+            let strict = unsafe { get_bool_property(raw_env, raw_obj, "strict", false) };
+
+            let fn_ref = unsafe { Arc::new(FnRef::new(raw_env, extract_val)?) };
+            let mut table = Table::try_new(ddl, glob, make_extract_closure(fn_ref));
+            table.strict = strict;
+            rust_tables.push(table);
+        }
+
+        let inner = match ignore {
+            Some(ig) => CoreDirSQL::with_ignore(root, rust_tables, ig),
+            None => CoreDirSQL::new(root, rust_tables),
+        }
+        .map_err(to_napi_err)?;
+
+        Ok(DirSQL { inner })
+    }
+
+    /// Create a DirSQL instance from a `.dirsql.toml` config file.
+    ///
+    /// Parses the TOML config, derives the root directory from the config
+    /// file's parent, and scans files using the built-in parser for each
+    /// declared format. No JS `extract` callback is required.
+    #[napi(factory, js_name = "fromConfig")]
+    pub fn from_config(config_path: String) -> Result<Self> {
+        let inner = CoreDirSQL::from_config_path(&config_path).map_err(to_napi_err)?;
+        Ok(DirSQL { inner })
+    }
+
+    /// Execute a SQL query and return results as an array of objects.
+    #[napi]
+    pub fn query(&self, sql: String) -> Result<Vec<HashMap<String, serde_json::Value>>> {
+        let rows = self.inner.query(&sql).map_err(to_napi_err)?;
+        Ok(rows.iter().map(value_row_to_json).collect())
+    }
+
+    /// Start the file watcher. Must be called before pollEvents.
+    #[napi(js_name = "startWatcher")]
+    pub fn start_watcher(&self) -> Result<()> {
+        self.inner.start_watching().map_err(to_napi_err)
+    }
+
+    /// Poll for file events with a timeout (in milliseconds).
+    /// Returns an array of RowEvent objects, possibly empty.
+    #[napi(js_name = "pollEvents")]
+    pub fn poll_events(&self, timeout_ms: u32) -> Result<Vec<RowEvent>> {
+        let events = self
+            .inner
+            .poll_events(Duration::from_millis(timeout_ms as u64))
+            .map_err(to_napi_err)?;
+        Ok(events.iter().map(row_event_to_js).collect())
+    }
+}
+
+// -- JS callback plumbing ----------------------------------------------------
+
 /// A persistent reference to a JS function, safe to store across calls.
 ///
-/// Uses napi_sys raw reference counting to persist JS function values.
-/// SAFETY: All access happens on the JS main thread via #[napi] methods.
+/// SAFETY: All access happens on the JS main thread via `#[napi]` methods.
+/// `DirSQL::new` and `DirSQL::pollEvents` both run on that thread, and the
+/// extract closure is only invoked synchronously within those methods.
 struct FnRef {
     raw_env: napi::sys::napi_env,
     raw_ref: napi::sys::napi_ref,
@@ -36,7 +137,6 @@ unsafe impl Send for FnRef {}
 unsafe impl Sync for FnRef {}
 
 impl FnRef {
-    /// Create a persistent reference from a raw napi_value (must be a function).
     unsafe fn new(env: napi::sys::napi_env, value: napi::sys::napi_value) -> Result<Self> {
         let mut raw_ref = std::ptr::null_mut();
         let status = napi::sys::napi_create_reference(env, value, 1, &mut raw_ref);
@@ -52,7 +152,6 @@ impl FnRef {
         })
     }
 
-    /// Get the referenced value.
     unsafe fn get_value(&self) -> Result<napi::sys::napi_value> {
         let mut result = std::ptr::null_mut();
         let status = napi::sys::napi_get_reference_value(self.raw_env, self.raw_ref, &mut result);
@@ -65,7 +164,6 @@ impl FnRef {
         Ok(result)
     }
 
-    /// Call this function reference with (filePath, content) args and return the result as JSON.
     unsafe fn call_extract(
         &self,
         rel_path: &str,
@@ -74,7 +172,6 @@ impl FnRef {
         let env = self.raw_env;
         let func = self.get_value()?;
 
-        // Create string args
         let mut js_path = std::ptr::null_mut();
         let status = napi::sys::napi_create_string_utf8(
             env,
@@ -103,17 +200,14 @@ impl FnRef {
             ));
         }
 
-        // Get undefined for 'this'
         let mut undefined = std::ptr::null_mut();
         napi::sys::napi_get_undefined(env, &mut undefined);
 
-        // Call the function
         let args = [js_path, js_content];
         let mut result = std::ptr::null_mut();
         let status =
             napi::sys::napi_call_function(env, undefined, func, 2, args.as_ptr(), &mut result);
         if status != napi::sys::Status::napi_ok {
-            // Check for pending exception
             let mut is_exception = false;
             napi::sys::napi_is_exception_pending(env, &mut is_exception);
             if is_exception {
@@ -126,7 +220,6 @@ impl FnRef {
             ));
         }
 
-        // Parse result array
         parse_js_array_of_objects(env, result)
     }
 }
@@ -139,7 +232,33 @@ impl Drop for FnRef {
     }
 }
 
-/// Parse a JS array of objects into Vec<HashMap<String, Value>> using napi_sys.
+type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
+fn make_extract_closure(
+    fn_ref: Arc<FnRef>,
+) -> impl Fn(&str, &str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static {
+    move |path: &str, content: &str| unsafe {
+        fn_ref
+            .call_extract(path, content)
+            .map_err(|e| -> BoxError { Box::new(ExtractError(e.to_string())) })
+    }
+}
+
+#[derive(Debug)]
+struct ExtractError(String);
+impl std::fmt::Display for ExtractError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for ExtractError {}
+
+fn to_napi_err<E: std::fmt::Display>(e: E) -> Error {
+    Error::new(Status::GenericFailure, e.to_string())
+}
+
+// -- JS <-> Rust value conversion helpers ------------------------------------
+
 unsafe fn parse_js_array_of_objects(
     env: napi::sys::napi_env,
     array: napi::sys::napi_value,
@@ -162,7 +281,6 @@ unsafe fn parse_js_array_of_objects(
         let mut element = std::ptr::null_mut();
         napi::sys::napi_get_element(env, array, i, &mut element);
 
-        // Get property names
         let mut names = std::ptr::null_mut();
         napi::sys::napi_get_property_names(env, element, &mut names);
 
@@ -175,7 +293,6 @@ unsafe fn parse_js_array_of_objects(
             let mut key_val = std::ptr::null_mut();
             napi::sys::napi_get_element(env, names, j, &mut key_val);
 
-            // Get key string
             let mut key_len = 0usize;
             napi::sys::napi_get_value_string_utf8(
                 env,
@@ -195,7 +312,6 @@ unsafe fn parse_js_array_of_objects(
             );
             let key = String::from_utf8_lossy(&key_buf[..actual_len]).to_string();
 
-            // Get value
             let mut val = std::ptr::null_mut();
             napi::sys::napi_get_property(env, element, key_val, &mut val);
 
@@ -209,21 +325,17 @@ unsafe fn parse_js_array_of_objects(
     Ok(rows)
 }
 
-/// Convert a raw napi_value to a dirsql Value.
 unsafe fn js_val_to_value(env: napi::sys::napi_env, val: napi::sys::napi_value) -> Result<Value> {
     let mut value_type = 0i32;
     napi::sys::napi_typeof(env, val, &mut value_type);
 
     match value_type {
-        // napi_undefined = 0, napi_null = 1
         0 | 1 => Ok(Value::Null),
-        // napi_boolean = 2
         2 => {
             let mut b = false;
             napi::sys::napi_get_value_bool(env, val, &mut b);
             Ok(Value::Integer(if b { 1 } else { 0 }))
         }
-        // napi_number = 3
         3 => {
             let mut n: f64 = 0.0;
             napi::sys::napi_get_value_double(env, val, &mut n);
@@ -233,7 +345,6 @@ unsafe fn js_val_to_value(env: napi::sys::napi_env, val: napi::sys::napi_value) 
                 Ok(Value::Real(n))
             }
         }
-        // napi_string = 4
         4 => {
             let mut len = 0usize;
             napi::sys::napi_get_value_string_utf8(env, val, std::ptr::null_mut(), 0, &mut len);
@@ -250,7 +361,6 @@ unsafe fn js_val_to_value(env: napi::sys::napi_env, val: napi::sys::napi_value) 
                 String::from_utf8_lossy(&buf[..actual]).to_string(),
             ))
         }
-        // Everything else -> stringify
         _ => {
             let mut str_val = std::ptr::null_mut();
             let status = napi::sys::napi_coerce_to_string(env, val, &mut str_val);
@@ -275,7 +385,6 @@ unsafe fn js_val_to_value(env: napi::sys::napi_env, val: napi::sys::napi_value) 
     }
 }
 
-/// Get a string property from a JS object.
 unsafe fn get_string_property(
     env: napi::sys::napi_env,
     obj: napi::sys::napi_value,
@@ -315,7 +424,6 @@ unsafe fn get_string_property(
     Ok(String::from_utf8_lossy(&buf[..actual]).to_string())
 }
 
-/// Get a bool property from a JS object, with default.
 unsafe fn get_bool_property(
     env: napi::sys::napi_env,
     obj: napi::sys::napi_value,
@@ -342,7 +450,6 @@ unsafe fn get_bool_property(
     let mut value_type = 0i32;
     napi::sys::napi_typeof(env, val, &mut value_type);
     if value_type != 2 {
-        // not a boolean
         return default;
     }
 
@@ -351,7 +458,6 @@ unsafe fn get_bool_property(
     b
 }
 
-/// Get a function property from a JS object.
 unsafe fn get_function_property(
     env: napi::sys::napi_env,
     obj: napi::sys::napi_value,
@@ -380,7 +486,6 @@ unsafe fn get_function_property(
     let mut value_type = 0i32;
     napi::sys::napi_typeof(env, val, &mut value_type);
     if value_type != 7 {
-        // napi_function = 7 (napi_object = 6)
         return Err(Error::new(
             Status::GenericFailure,
             format!("Property '{}' must be a function", name),
@@ -390,40 +495,8 @@ unsafe fn get_function_property(
     Ok(val)
 }
 
-/// How rows are extracted from a file.
-enum ExtractMode {
-    /// JS callback supplied via the constructor.
-    Js(FnRef),
-    /// Built-in parser driven by a `.dirsql.toml` config.
-    BuiltIn {
-        format: Format,
-        each: Option<String>,
-        columns: HashMap<String, ColumnSource>,
-    },
-}
+// -- Row/event conversion ----------------------------------------------------
 
-/// Internal table config stored after init for use during watch.
-struct TableConfig {
-    name: String,
-    glob: String,
-    extract: ExtractMode,
-    strict: bool,
-}
-
-/// The main DirSQL class. Creates an in-memory SQLite index over a directory.
-#[napi(js_name = "DirSQL")]
-pub struct DirSQL {
-    db: Mutex<Db>,
-    root: PathBuf,
-    table_configs: Vec<TableConfig>,
-    ignore_patterns: Vec<String>,
-    /// Tracks rows per file for diffing: file_rel_path -> (table_name, rows)
-    #[allow(clippy::type_complexity)]
-    file_rows: Mutex<HashMap<String, (String, Vec<HashMap<String, Value>>)>>,
-    watcher: Mutex<Option<Watcher>>,
-}
-
-/// Convert a dirsql Value to serde_json::Value.
 fn value_to_json(v: &Value) -> serde_json::Value {
     match v {
         Value::Null => serde_json::Value::Null,
@@ -441,532 +514,15 @@ fn value_to_json(v: &Value) -> serde_json::Value {
     }
 }
 
-/// Convert a HashMap<String, Value> to a serde_json map for returning to JS.
 fn value_row_to_json(row: &HashMap<String, Value>) -> HashMap<String, serde_json::Value> {
     row.iter()
         .map(|(k, v)| (k.clone(), value_to_json(v)))
         .collect()
 }
 
-#[napi]
-impl DirSQL {
-    /// Create a new DirSQL instance.
-    ///
-    /// @param root - Root directory path to index
-    /// @param tables - Array of table definition objects
-    /// @param ignore - Optional array of glob patterns to ignore
-    #[napi(constructor)]
-    #[allow(clippy::new_ret_no_self)]
-    pub fn new(env: Env, root: String, tables: Array, ignore: Option<Vec<String>>) -> Result<Self> {
-        let raw_env = env.raw();
-        let db = Db::new()
-            .map_err(|e| Error::new(Status::GenericFailure, format!("DB init error: {}", e)))?;
-
-        let root_path = PathBuf::from(&root);
-        let mut table_configs: Vec<TableConfig> = Vec::new();
-
-        let tables_len = tables.len();
-
-        for i in 0..tables_len {
-            let table_element: Unknown<'_> = tables.get(i)?.ok_or_else(|| {
-                Error::new(
-                    Status::GenericFailure,
-                    format!("Missing table at index {}", i),
-                )
-            })?;
-            let raw_obj = table_element.raw();
-
-            let ddl = unsafe { get_string_property(raw_env, raw_obj, "ddl")? };
-            let glob = unsafe { get_string_property(raw_env, raw_obj, "glob")? };
-            let extract_val = unsafe { get_function_property(raw_env, raw_obj, "extract")? };
-            let strict = unsafe { get_bool_property(raw_env, raw_obj, "strict", false) };
-
-            let table_name = parse_table_name(&ddl).ok_or_else(|| {
-                Error::new(
-                    Status::GenericFailure,
-                    format!("Could not parse table name from DDL: {}", ddl),
-                )
-            })?;
-            db.create_table(&ddl)
-                .map_err(|e| Error::new(Status::GenericFailure, format!("DDL error: {}", e)))?;
-
-            let extract_ref = unsafe { FnRef::new(raw_env, extract_val)? };
-
-            table_configs.push(TableConfig {
-                name: table_name,
-                glob,
-                extract: ExtractMode::Js(extract_ref),
-                strict,
-            });
-        }
-
-        // Build glob -> table_name mappings for the scanner
-        let mappings: Vec<(&str, &str)> = table_configs
-            .iter()
-            .map(|tc| (tc.glob.as_str(), tc.name.as_str()))
-            .collect();
-        let ignore_strs: Vec<&str> = ignore
-            .as_ref()
-            .map(|v| v.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_default();
-
-        let matcher = TableMatcher::new(&mappings, &ignore_strs)
-            .map_err(|e| Error::new(Status::GenericFailure, format!("Glob error: {}", e)))?;
-
-        // Scan directory
-        let files = scan_directory(&root_path, &matcher);
-
-        // Track rows per file
-        let mut file_rows: HashMap<String, (String, Vec<HashMap<String, Value>>)> = HashMap::new();
-
-        // Process each file - call extract directly since we're on the JS thread
-        for (file_path, table_name) in &files {
-            let content = std::fs::read_to_string(file_path).map_err(|e| {
-                Error::new(
-                    Status::GenericFailure,
-                    format!("Failed to read {}: {}", file_path.display(), e),
-                )
-            })?;
-
-            let rel_path = file_path
-                .strip_prefix(&root_path)
-                .unwrap_or(file_path)
-                .to_string_lossy()
-                .to_string();
-
-            let tc = table_configs
-                .iter()
-                .find(|tc| &tc.name == table_name)
-                .ok_or_else(|| {
-                    Error::new(
-                        Status::GenericFailure,
-                        format!("No extract function for table {}", table_name),
-                    )
-                })?;
-
-            let rows = match &tc.extract {
-                ExtractMode::Js(fn_ref) => unsafe { fn_ref.call_extract(&rel_path, &content)? },
-                ExtractMode::BuiltIn { .. } => {
-                    unreachable!("constructor path never uses BuiltIn extract")
-                }
-            };
-
-            let mut value_rows: Vec<HashMap<String, Value>> = Vec::new();
-            for (row_index, row) in rows.iter().enumerate() {
-                let normalized = db.normalize_row(table_name, row, tc.strict).map_err(|e| {
-                    Error::new(Status::GenericFailure, format!("Schema error: {}", e))
-                })?;
-                db.insert_row(table_name, &normalized, &rel_path, row_index)
-                    .map_err(|e| {
-                        Error::new(Status::GenericFailure, format!("Insert error: {}", e))
-                    })?;
-                value_rows.push(normalized);
-            }
-            file_rows.insert(rel_path, (table_name.clone(), value_rows));
-        }
-
-        Ok(DirSQL {
-            db: Mutex::new(db),
-            root: root_path,
-            table_configs,
-            ignore_patterns: ignore.unwrap_or_default(),
-            file_rows: Mutex::new(file_rows),
-            watcher: Mutex::new(None),
-        })
-    }
-
-    /// Create a DirSQL instance from a `.dirsql.toml` config file.
-    ///
-    /// Parses the TOML config, derives the root directory from the config
-    /// file's parent, and scans files using the built-in parser for each
-    /// declared format. No JS `extract` callback is required — tables
-    /// created this way use the core parser directly.
-    ///
-    /// @param configPath - Path to the `.dirsql.toml` file.
-    #[napi(factory, js_name = "fromConfig")]
-    pub fn from_config(config_path: String) -> Result<Self> {
-        let config_path_ref = Path::new(&config_path);
-        let cfg = config::load_config(config_path_ref)
-            .map_err(|e| Error::new(Status::GenericFailure, format!("Config error: {}", e)))?;
-
-        let root_path = config_path_ref
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_path_buf();
-
-        let db = Db::new()
-            .map_err(|e| Error::new(Status::GenericFailure, format!("DB init error: {}", e)))?;
-
-        let mut table_configs: Vec<TableConfig> = Vec::new();
-
-        for tc in &cfg.tables {
-            let table_name = parse_table_name(&tc.ddl).ok_or_else(|| {
-                Error::new(
-                    Status::GenericFailure,
-                    format!("Could not parse table name from DDL: {}", tc.ddl),
-                )
-            })?;
-            db.create_table(&tc.ddl)
-                .map_err(|e| Error::new(Status::GenericFailure, format!("DDL error: {}", e)))?;
-
-            let format = tc.format.ok_or_else(|| {
-                Error::new(
-                    Status::GenericFailure,
-                    format!(
-                        "Unsupported format: cannot infer format for glob '{}'. \
-                         Specify format explicitly in the config.",
-                        tc.glob
-                    ),
-                )
-            })?;
-
-            let (_, capture_names, _) = parse_captures(&tc.glob);
-            let columns: HashMap<String, ColumnSource> = tc
-                .columns
-                .as_ref()
-                .map(|cols| {
-                    cols.iter()
-                        .map(|(k, v)| (k.clone(), ColumnSource::parse(v, &capture_names)))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            table_configs.push(TableConfig {
-                name: table_name,
-                glob: tc.glob.clone(),
-                extract: ExtractMode::BuiltIn {
-                    format,
-                    each: tc.each.clone(),
-                    columns,
-                },
-                strict: tc.strict.unwrap_or(false),
-            });
-        }
-
-        // Build glob -> table_name mappings for the scanner
-        let mappings: Vec<(&str, &str)> = table_configs
-            .iter()
-            .map(|tc| (tc.glob.as_str(), tc.name.as_str()))
-            .collect();
-        let ignore_strs: Vec<&str> = cfg.ignore.iter().map(|s| s.as_str()).collect();
-
-        let matcher = TableMatcher::new(&mappings, &ignore_strs)
-            .map_err(|e| Error::new(Status::GenericFailure, format!("Glob error: {}", e)))?;
-
-        let files = scan_directory(&root_path, &matcher);
-
-        let config_map: HashMap<&str, &TableConfig> = table_configs
-            .iter()
-            .map(|tc| (tc.name.as_str(), tc))
-            .collect();
-
-        let mut file_rows: HashMap<String, (String, Vec<HashMap<String, Value>>)> = HashMap::new();
-
-        for (file_path, table_name) in &files {
-            let content = std::fs::read_to_string(file_path).map_err(|e| {
-                Error::new(
-                    Status::GenericFailure,
-                    format!("Failed to read {}: {}", file_path.display(), e),
-                )
-            })?;
-
-            let rel_path = file_path
-                .strip_prefix(&root_path)
-                .unwrap_or(file_path)
-                .to_string_lossy()
-                .to_string();
-
-            let tc = config_map.get(table_name.as_str()).ok_or_else(|| {
-                Error::new(
-                    Status::GenericFailure,
-                    format!("No config for table {}", table_name),
-                )
-            })?;
-
-            let rows = match &tc.extract {
-                ExtractMode::BuiltIn {
-                    format,
-                    each,
-                    columns,
-                } => {
-                    let mut parsed = parser::parse_file(*format, &content, each.as_deref())
-                        .map_err(|e| {
-                            Error::new(Status::GenericFailure, format!("Parse error: {}", e))
-                        })?;
-                    let rel = Path::new(&rel_path);
-                    let captures = matcher
-                        .match_file_with_captures(rel)
-                        .map(|m| m.captures)
-                        .unwrap_or_default();
-                    parsed = parser::apply_columns(&parsed, columns, &captures);
-                    parsed
-                }
-                ExtractMode::Js(_) => unreachable!("from_config never uses JS extract"),
-            };
-
-            let mut value_rows: Vec<HashMap<String, Value>> = Vec::new();
-            for (row_index, raw_row) in rows.iter().enumerate() {
-                let normalized = db
-                    .normalize_row(table_name, raw_row, tc.strict)
-                    .map_err(|e| {
-                        Error::new(Status::GenericFailure, format!("Schema error: {}", e))
-                    })?;
-                db.insert_row(table_name, &normalized, &rel_path, row_index)
-                    .map_err(|e| {
-                        Error::new(Status::GenericFailure, format!("Insert error: {}", e))
-                    })?;
-                value_rows.push(normalized);
-            }
-            file_rows.insert(rel_path, (table_name.clone(), value_rows));
-        }
-
-        Ok(DirSQL {
-            db: Mutex::new(db),
-            root: root_path,
-            table_configs,
-            ignore_patterns: cfg.ignore,
-            file_rows: Mutex::new(file_rows),
-            watcher: Mutex::new(None),
-        })
-    }
-
-    /// Execute a SQL query and return results as an array of objects.
-    #[napi]
-    pub fn query(&self, sql: String) -> Result<Vec<HashMap<String, serde_json::Value>>> {
-        let db = self
-            .db
-            .lock()
-            .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
-        let rows = db
-            .query(&sql)
-            .map_err(|e| Error::new(Status::GenericFailure, format!("Query error: {}", e)))?;
-
-        Ok(rows.iter().map(value_row_to_json).collect())
-    }
-
-    /// Start the file watcher. Must be called before pollEvents.
-    #[napi(js_name = "startWatcher")]
-    pub fn start_watcher(&self) -> Result<()> {
-        let watcher = Watcher::new(&self.root)
-            .map_err(|e| Error::new(Status::GenericFailure, format!("Watcher error: {}", e)))?;
-        let mut guard = self
-            .watcher
-            .lock()
-            .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
-        *guard = Some(watcher);
-        Ok(())
-    }
-
-    /// Poll for file events with a timeout (in milliseconds).
-    /// Returns an array of RowEvent objects, possibly empty if no events within timeout.
-    #[napi(js_name = "pollEvents")]
-    pub fn poll_events(&self, timeout_ms: u32) -> Result<Vec<RowEvent>> {
-        let file_events = {
-            let guard = self
-                .watcher
-                .lock()
-                .map_err(|e| Error::new(Status::GenericFailure, format!("Lock error: {}", e)))?;
-            let watcher = guard.as_ref().ok_or_else(|| {
-                Error::new(
-                    Status::GenericFailure,
-                    "Watcher not started. Call startWatcher first.",
-                )
-            })?;
-
-            let mut events = Vec::new();
-            if let Some(event) = watcher.recv_timeout(Duration::from_millis(timeout_ms as u64)) {
-                events.push(event);
-                events.extend(watcher.try_recv_all());
-            }
-            events
-        };
-
-        if file_events.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mappings: Vec<(&str, &str)> = self
-            .table_configs
-            .iter()
-            .map(|tc| (tc.glob.as_str(), tc.name.as_str()))
-            .collect();
-        let ignore_strs: Vec<&str> = self.ignore_patterns.iter().map(|s| s.as_str()).collect();
-        let matcher = TableMatcher::new(&mappings, &ignore_strs)
-            .map_err(|e| Error::new(Status::GenericFailure, format!("Glob error: {}", e)))?;
-
-        let mut result_events = Vec::new();
-
-        for file_event in file_events {
-            let abs_path = match &file_event {
-                FileEvent::Created(p) | FileEvent::Modified(p) | FileEvent::Deleted(p) => p,
-            };
-
-            let rel_for_match = abs_path.strip_prefix(&self.root).unwrap_or(abs_path);
-
-            if matcher.is_ignored(rel_for_match) {
-                continue;
-            }
-            let table_name = match matcher.match_file(rel_for_match) {
-                Some(name) => name.to_string(),
-                None => continue,
-            };
-
-            let rel_path = abs_path
-                .strip_prefix(&self.root)
-                .unwrap_or(abs_path)
-                .to_string_lossy()
-                .to_string();
-
-            match file_event {
-                FileEvent::Deleted(_) => {
-                    let mut file_rows = self.file_rows.lock().map_err(|e| {
-                        Error::new(Status::GenericFailure, format!("Lock error: {}", e))
-                    })?;
-                    let old_entry = file_rows.remove(&rel_path);
-                    let old_rows = old_entry.as_ref().map(|(_, rows)| rows.as_slice());
-
-                    let row_events = differ::diff(&table_name, old_rows, None, &rel_path);
-
-                    let db = self.db.lock().map_err(|e| {
-                        Error::new(Status::GenericFailure, format!("Lock error: {}", e))
-                    })?;
-                    db.delete_rows_by_file(&table_name, &rel_path)
-                        .map_err(|e| {
-                            Error::new(Status::GenericFailure, format!("DB error: {}", e))
-                        })?;
-
-                    for re in row_events {
-                        result_events.push(row_event_to_js(&re, &rel_path));
-                    }
-                }
-                FileEvent::Created(_) | FileEvent::Modified(_) => {
-                    let content = match std::fs::read_to_string(abs_path) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            if e.kind() == std::io::ErrorKind::NotFound {
-                                continue;
-                            }
-                            return Err(Error::new(
-                                Status::GenericFailure,
-                                format!("Failed to read {}: {}", abs_path.display(), e),
-                            ));
-                        }
-                    };
-
-                    let tc = match self.table_configs.iter().find(|tc| tc.name == table_name) {
-                        Some(tc) => tc,
-                        None => continue,
-                    };
-
-                    // Extract rows from file content per the table's configured mode.
-                    let extract_result: Result<Vec<HashMap<String, Value>>> = match &tc.extract {
-                        ExtractMode::Js(fn_ref) => unsafe {
-                            fn_ref.call_extract(&rel_path, &content)
-                        },
-                        ExtractMode::BuiltIn {
-                            format,
-                            each,
-                            columns,
-                        } => match parser::parse_file(*format, &content, each.as_deref()) {
-                            Ok(mut parsed) => {
-                                let rel = Path::new(&rel_path);
-                                let captures = matcher
-                                    .match_file_with_captures(rel)
-                                    .map(|m| m.captures)
-                                    .unwrap_or_default();
-                                parsed = parser::apply_columns(&parsed, columns, &captures);
-                                Ok(parsed)
-                            }
-                            Err(e) => Err(Error::new(
-                                Status::GenericFailure,
-                                format!("Parse error: {}", e),
-                            )),
-                        },
-                    };
-
-                    let new_rows = match extract_result {
-                        Ok(raw_rows) => {
-                            let db = self.db.lock().map_err(|e| {
-                                Error::new(Status::GenericFailure, format!("Lock error: {}", e))
-                            })?;
-                            let mut value_rows = Vec::new();
-                            for raw_row in &raw_rows {
-                                match db.normalize_row(&table_name, raw_row, tc.strict) {
-                                    Ok(r) => value_rows.push(r),
-                                    Err(e) => {
-                                        result_events.push(RowEvent {
-                                            table: table_name.clone(),
-                                            action: "error".to_string(),
-                                            row: None,
-                                            old_row: None,
-                                            error: Some(format!("Schema error: {}", e)),
-                                            file_path: Some(rel_path.clone()),
-                                        });
-                                        continue;
-                                    }
-                                }
-                            }
-                            drop(db);
-                            value_rows
-                        }
-                        Err(e) => {
-                            result_events.push(RowEvent {
-                                table: table_name.clone(),
-                                action: "error".to_string(),
-                                row: None,
-                                old_row: None,
-                                error: Some(format!("Extract error: {}", e)),
-                                file_path: Some(rel_path.clone()),
-                            });
-                            continue;
-                        }
-                    };
-
-                    let mut file_rows = self.file_rows.lock().map_err(|e| {
-                        Error::new(Status::GenericFailure, format!("Lock error: {}", e))
-                    })?;
-                    let old_entry = file_rows.get(&rel_path);
-                    let old_rows = old_entry.map(|(_, rows)| rows.as_slice());
-
-                    let row_events =
-                        differ::diff(&table_name, old_rows, Some(&new_rows), &rel_path);
-
-                    {
-                        let db = self.db.lock().map_err(|e| {
-                            Error::new(Status::GenericFailure, format!("Lock error: {}", e))
-                        })?;
-                        db.delete_rows_by_file(&table_name, &rel_path)
-                            .map_err(|e| {
-                                Error::new(Status::GenericFailure, format!("DB error: {}", e))
-                            })?;
-                        for (row_index, row) in new_rows.iter().enumerate() {
-                            db.insert_row(&table_name, row, &rel_path, row_index)
-                                .map_err(|e| {
-                                    Error::new(
-                                        Status::GenericFailure,
-                                        format!("Insert error: {}", e),
-                                    )
-                                })?;
-                        }
-                    }
-
-                    file_rows.insert(rel_path.clone(), (table_name.clone(), new_rows));
-
-                    for re in row_events {
-                        result_events.push(row_event_to_js(&re, &rel_path));
-                    }
-                }
-            }
-        }
-
-        Ok(result_events)
-    }
-}
-
-/// Convert a differ::RowEvent into a JS RowEvent.
-fn row_event_to_js(event: &differ::RowEvent, _rel_path: &str) -> RowEvent {
+fn row_event_to_js(event: &CoreRowEvent) -> RowEvent {
     match event {
-        differ::RowEvent::Insert {
+        CoreRowEvent::Insert {
             table,
             row,
             file_path,
@@ -978,7 +534,7 @@ fn row_event_to_js(event: &differ::RowEvent, _rel_path: &str) -> RowEvent {
             error: None,
             file_path: Some(file_path.clone()),
         },
-        differ::RowEvent::Update {
+        CoreRowEvent::Update {
             table,
             old_row,
             new_row,
@@ -991,7 +547,7 @@ fn row_event_to_js(event: &differ::RowEvent, _rel_path: &str) -> RowEvent {
             error: None,
             file_path: Some(file_path.clone()),
         },
-        differ::RowEvent::Delete {
+        CoreRowEvent::Delete {
             table,
             row,
             file_path,
@@ -1003,7 +559,7 @@ fn row_event_to_js(event: &differ::RowEvent, _rel_path: &str) -> RowEvent {
             error: None,
             file_path: Some(file_path.clone()),
         },
-        differ::RowEvent::Error { file_path, error } => RowEvent {
+        CoreRowEvent::Error { file_path, error } => RowEvent {
             table: String::new(),
             action: "error".to_string(),
             row: None,

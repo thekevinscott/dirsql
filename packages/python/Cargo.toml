@@ -1,7 +1,7 @@
 [package]
 name = "dirsql-py-ext"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 publish = false
 
 [lib]
@@ -9,9 +9,8 @@ name = "dirsql_py_ext"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-dirsql = { path = "../rust" }
+dirsql.workspace = true
 pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
-regex = "1"
 
 [features]
 default = []

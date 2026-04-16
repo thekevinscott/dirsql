@@ -1,17 +1,17 @@
 [package]
 name = "dirsql-napi"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 publish = false
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-dirsql = { path = "../rust" }
+dirsql.workspace = true
 napi = { version = "3", features = ["napi6", "serde-json"] }
 napi-derive = "3"
-serde_json = "1"
+serde_json.workspace = true
 
 [build-dependencies]
 napi-build = "2"
