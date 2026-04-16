@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use dirsql_core::matcher::TableMatcher;
+use dirsql::matcher::TableMatcher;
 use std::path::Path;
 
 fn make_matcher(pattern_count: usize) -> TableMatcher {

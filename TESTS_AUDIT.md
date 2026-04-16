@@ -14,7 +14,7 @@ Scope of docs surveyed:
 Scope of tests surveyed:
 - `packages/python/tests/integration/*.py`
 - `packages/ts/test/*.test.ts`
-- `packages/rust/tests/*.rs` (plus inline `#[cfg(test)]` in `packages/core/src/*.rs`
+- `packages/rust/tests/*.rs` (plus inline `#[cfg(test)]` in `packages/rust/src/*.rs`
   where relevant)
 
 Legend: "P" = Python, "R" = Rust, "T" = TypeScript.
@@ -48,7 +48,7 @@ Legend: "P" = Python, "R" = Rust, "T" = TypeScript.
 | `watch()` async iterable yields events (Py/Rust) | `docs/guide/watching.md`; `docs/api/index.md` | P: `test_async_dirsql.py::describe_watch::*`; R: `async_sdk.rs::it_streams_watch_events` |
 | `RowEvent.action/table/row/old_row/error/file_path` | `docs/guide/watching.md` event payloads; `docs/api/index.md` RowEvent | P: `test_docs_examples.py::describe_watching_guide_*` (asserts action/table/row); R: `sdk.rs`/`docs_examples.rs`; `file_path` covered via `test_docs_examples.py::it_matches_watching_guide_insert_event` (asserts non-None) |
 | `RowEvent.file_path` is **relative** to root | `docs/guide/watching.md` (all examples show relative paths) | **Added**: P `test_docs_gaps.py::describe_watching_guide_positional_identity_gap::it_sets_file_path_as_relative_path_on_events` |
-| Diffing: identical content emits nothing; appends emit inserts; full replace on heavy edits | `docs/guide/watching.md` "How diffing works" | Core unit tests in `packages/core/src/differ.rs` (`no_events_when_content_identical`, `insert_events_for_appended_lines`, `full_replace_when_more_than_half_changed`) |
+| Diffing: identical content emits nothing; appends emit inserts; full replace on heavy edits | `docs/guide/watching.md` "How diffing works" | Core unit tests in `packages/rust/src/differ.rs` (`no_events_when_content_identical`, `insert_events_for_appended_lines`, `full_replace_when_more_than_half_changed`) |
 | Diffing: shrinking file drops dropped rows (end state) | `docs/guide/watching.md` "How diffing works" | **Added**: P `test_docs_gaps.py::describe_watching_guide_positional_identity_gap::it_emits_delete_for_shrinking_file_positionally`. See divergence in section 4: the *mechanism* described (positional identity) is not what the implementation does (full replace on shrink). |
 | `from_config(path)` basic indexing | `docs/guide/config.md` "Basic Example"; `docs/api/index.md` | P: `test_from_config.py::describe_basic`; R: `from_config.rs::from_config_indexes_csv_files` |
 | Format inference: `.json` | `docs/guide/config.md` "Supported Formats" | P: `test_from_config.py::describe_basic::it_loads_json_files_via_config`; R: `from_config.rs::from_config_with_json_and_each` |
@@ -131,11 +131,11 @@ for either promotion into the docs or removal.
   validates DB state after filesystem events; the invariant is implicit in
   `docs/guide/watching.md` "Updates the in-memory database to reflect the new
   state". **Recommendation:** keep.
-- `packages/core/src/differ.rs` inline tests cover edge cases
+- `packages/rust/src/differ.rs` inline tests cover edge cases
   (`no_full_replace_when_exactly_half_changed`,
   `full_replace_deletes_before_inserts`) that are finer-grained than the docs.
   **Recommendation:** keep as internal unit tests; no doc action needed.
-- `packages/core/src/db.rs` inline tests exercising `Value::Blob` — correspond
+- `packages/rust/src/db.rs` inline tests exercising `Value::Blob` — correspond
   to documented `bytes -> BLOB` mapping. **Recommendation:** keep.
 - `packages/ts/test/index.test.ts "handles empty directories gracefully"` /
   `"throws on invalid DDL"` — mirror Python tests above; same recommendations.
@@ -178,7 +178,7 @@ not actually provide. Per this bead's scope, they are surfaced for review and
   determined by position (row index within the file). If a file previously
   produced 3 rows and now produces 2, the first two rows are compared for
   updates and the third is emitted as a delete."
-- `packages/core/src/differ.rs::diff_rows` does a **full replace** (delete all
+- `packages/rust/src/differ.rs::diff_rows` does a **full replace** (delete all
   old rows, insert all new rows) whenever the new file has fewer rows than the
   old file. The third row is not selectively deleted; all three are deleted
   and the two remaining are re-inserted. Only when the file grows or stays the
@@ -205,11 +205,11 @@ Discovered while mirroring the Python gap tests to Rust and TypeScript:
 
 - `docs/guide/watching.md` documents `RowEvent.file_path` as a relative
   path on all event variants.
-- Previously the Rust SDK re-exported `dirsql_core::differ::RowEvent`, whose
+- Previously the Rust SDK re-exported `dirsql::differ::RowEvent`, whose
   `Insert` / `Update` / `Delete` variants carried `{table, row}` only and
   only the `Error` variant had a `file_path` field.
 - **Closed in dirsql-n7x**: `file_path: String` is now a field on
-  `RowEvent::Insert`, `::Update`, and `::Delete` in `packages/core/src/differ.rs`
+  `RowEvent::Insert`, `::Update`, and `::Delete` in `packages/rust/src/differ.rs`
   (Error keeps its existing `file_path: PathBuf`). The Rust SDK re-exports
   the enum directly, and the napi bindings for Python/TS now read
   `file_path` from the core event. Covered by

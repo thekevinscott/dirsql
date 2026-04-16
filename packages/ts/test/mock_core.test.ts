@@ -66,4 +66,54 @@ describe("__setCoreForTesting", () => {
     expect(fromConfig).toHaveBeenCalledWith("/tmp/fake.toml");
     expect(db.query("x")).toEqual([{ via: "fromConfig" }]);
   });
+
+  it("exposes watch() as an AsyncIterable driven by pollEvents", async () => {
+    const queued: dirsql.RowEvent[][] = [
+      [],
+      [
+        {
+          table: "items",
+          action: "insert",
+          row: { name: "one" },
+          filePath: "a.json",
+        },
+      ],
+      [
+        {
+          table: "items",
+          action: "insert",
+          row: { name: "two" },
+          filePath: "b.json",
+        },
+      ],
+    ];
+    const fakeInstance = {
+      query: () => [],
+      startWatcher: vi.fn(),
+      pollEvents: vi.fn(() => queued.shift() ?? []),
+    };
+    const FakeDirSQL = vi.fn(function (this: unknown) {
+      return fakeInstance;
+    }) as unknown as new (
+      ...args: unknown[]
+    ) => typeof fakeInstance;
+
+    (
+      dirsql as unknown as {
+        __setCoreForTesting: (c: { DirSQL: unknown }) => void;
+      }
+    ).__setCoreForTesting({ DirSQL: FakeDirSQL });
+
+    const db = new dirsql.DirSQL("/tmp/nothing", []);
+    const seen: dirsql.RowEvent[] = [];
+    for await (const event of db.watch()) {
+      seen.push(event);
+      if (seen.length >= 2) break;
+    }
+
+    expect(fakeInstance.startWatcher).toHaveBeenCalledTimes(1);
+    expect(seen).toHaveLength(2);
+    expect(seen[0].row).toEqual({ name: "one" });
+    expect(seen[1].row).toEqual({ name: "two" });
+  });
 });

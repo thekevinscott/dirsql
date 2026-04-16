@@ -8,12 +8,12 @@ on:
     branches: [main]
     paths:
       - 'packages/python/**'
-      - 'packages/core/**'
+      - 'packages/rust/**'
       - 'Cargo.lock'
   pull_request:
     paths:
       - 'packages/python/**'
-      - 'packages/core/**'
+      - 'packages/rust/**'
       - 'Cargo.lock'
 
 jobs:
@@ -82,7 +82,7 @@ jobs:
         working-directory: packages/python
 
   coverage:
-    name: Coverage floor (90%)
+    name: Python coverage floor (90%)
     runs-on: ubuntu-latest
     needs: [unit, integration]
     steps:

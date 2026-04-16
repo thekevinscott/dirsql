@@ -254,17 +254,11 @@ checksum = "52560adf09603e58c9a7ee1fe1dcb95a16927b17c127f0ac02d6e768a0e25bc1"
 name = "dirsql"
 version = "0.1.0"
 dependencies = [
- "dirsql-core",
- "pyo3",
- "regex",
-]
-
-[[package]]
-name = "dirsql-core"
-version = "0.1.0"
-dependencies = [
  "criterion",
  "csv",
+ "futures-channel",
+ "futures-executor",
+ "futures-util",
  "globset",
  "notify",
  "regex",
@@ -274,6 +268,7 @@ dependencies = [
  "serde_yaml",
  "tempfile",
  "thiserror",
+ "tokio",
  "toml",
  "walkdir",
 ]
@@ -282,7 +277,7 @@ dependencies = [
 name = "dirsql-napi"
 version = "0.1.0"
 dependencies = [
- "dirsql-core",
+ "dirsql",
  "napi",
  "napi-build",
  "napi-derive",
@@ -290,18 +285,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "dirsql-sdk"
+name = "dirsql-py-ext"
 version = "0.1.0"
 dependencies = [
- "dirsql-core",
- "futures-channel",
- "futures-core",
- "futures-executor",
- "futures-util",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
+ "dirsql",
+ "pyo3",
 ]
 
 [[package]]

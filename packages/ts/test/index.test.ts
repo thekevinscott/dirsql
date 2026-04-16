@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DirSQL } from "dirsql";
+import { DirSQL, type RowEvent } from "dirsql";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 describe("DirSQL", () => {
@@ -274,5 +274,22 @@ describe("DirSQL watch events", () => {
     // Must be relative (not absolute).
     expect(fp.startsWith("/")).toBe(false);
     expect(fp).toBe(relPath.replace(/\\/g, "/"));
+  });
+
+  // PARITY: the TS DirSQL exposes `ready: Promise<void>` and
+  // `watch(): AsyncIterable<RowEvent>` to match Python/Rust.
+  it("exposes ready as an awaitable Promise", async () => {
+    const db = new DirSQL(dir, [
+      {
+        ddl: "CREATE TABLE items (name TEXT)",
+        glob: "**/*.json",
+        extract: (_filePath: string, content: string) => [JSON.parse(content)],
+      },
+    ]);
+
+    expect(db.ready).toBeInstanceOf(Promise);
+    await expect(db.ready).resolves.toBeUndefined();
+    // query works immediately after ready resolves.
+    expect(db.query("SELECT * FROM items")).toEqual([]);
   });
 });

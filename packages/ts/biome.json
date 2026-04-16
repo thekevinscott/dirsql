@@ -21,6 +21,7 @@
       "node_modules",
       "target",
       "dist",
+      "coverage",
       "index.d.ts",
       "pnpm-lock.yaml"
     ]

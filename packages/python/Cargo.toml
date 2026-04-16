@@ -1,15 +1,16 @@
 [package]
-name = "dirsql"
-version = "0.1.0"
-edition = "2024"
+name = "dirsql-py-ext"
+version.workspace = true
+edition.workspace = true
+publish = false
 
 [lib]
+name = "dirsql_py_ext"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-dirsql-core = { path = "../core" }
+dirsql.workspace = true
 pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
-regex = "1"
 
 [features]
 default = []

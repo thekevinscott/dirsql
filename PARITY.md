@@ -15,9 +15,16 @@ API surface comparison across the three language SDKs.
 | API                        | Python                           | Rust                              | TypeScript                        |
 |----------------------------|----------------------------------|-----------------------------------|-----------------------------------|
 | Constructor                | `DirSQL(root, *, tables, ignore)` | `DirSQL::new(root, tables)` / `DirSQL::with_ignore(root, tables, ignore)` | `new DirSQL(root, tables, ignore?)` |
-| From config                | `DirSQL.from_config(path)`       | `DirSQL::from_config(root_dir)`   | `DirSQL.fromConfig(configPath)`   |
+| From config                | `DirSQL.from_config(path)`       | `DirSQL::from_config(root_dir)` / `DirSQL::from_config_path(cfg_path)` | `DirSQL.fromConfig(configPath)`   |
 | Query                      | `db.query(sql) -> list[dict]`    | `db.query(sql) -> Result<Vec<Row>>` | `db.query(sql) -> Record[]`     |
-| Watch (low-level)          | `db._start_watcher()` / `db._poll_events(ms)` | `db.watch() -> WatchStream` (channel) | N/A (see below)                   |
+| Start watcher              | `db._start_watcher()`            | `db.start_watching()`             | `db.startWatcher()`               |
+| Poll events                | `db._poll_events(ms)`            | `db.poll_events(duration)`        | `db.pollEvents(ms)`               |
+| Watch (channel/stream)     | `async for event in db.watch()` (via `_async.py`) | `db.watch() -> WatchStream` (channel) | `for await (const ev of db.watch())` |
+
+All three bindings share a single Rust implementation: `dirsql::DirSQL` handles
+the initial scan, SQL, watcher, and row diffing. Python (`dirsql-py-ext`) and
+TypeScript (`dirsql-napi`) bindings are thin shims that only marshal values
+between the host language and Rust.
 
 ## AsyncDirSQL
 
@@ -65,6 +72,7 @@ for await (const event of db.watch()) { ... }
 - `DirSQL.fromConfig` takes the config file path directly (like Python), not the root directory (like Rust).
 - No separate `AsyncDirSQL` — JS is async by default, so `DirSQL` has `ready: Promise<void>` and `watch(): AsyncIterable<RowEvent>` built in.
 - `query()` is synchronous (returns `Record[]`), matching the Python/Rust sync class.
+- The initial directory scan currently runs synchronously inside the constructor, so `ready` resolves immediately (and construction errors throw synchronously). The Promise exists so consumers can write uniform async-style code across SDKs.
 
 ## Test Coverage Matrix
 

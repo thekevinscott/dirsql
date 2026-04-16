@@ -95,7 +95,7 @@ The "substantial change" definition and PR body template live in `AGENTS.md`. In
 
 - Python SDK: `just test-e2e`
 - TypeScript SDK: `pnpm --dir packages/ts run test:e2e` (when a TS e2e target exists)
-- Rust core: covered by `cargo test --workspace`; run `cargo bench -p dirsql-core` after Rust-heavy changes
+- Rust core: covered by `cargo test --workspace`; run `cargo bench -p dirsql` after Rust-heavy changes
 
 Record the exact commands run and their outcomes in the PR body.
 

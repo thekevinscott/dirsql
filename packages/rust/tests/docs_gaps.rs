@@ -5,7 +5,7 @@
 //! These mirror `packages/python/tests/integration/test_docs_gaps.py` for the
 //! Rust SDK (bead dirsql-9ng). See TESTS_AUDIT.md.
 
-use dirsql_sdk::{DirSQL, Table, Value};
+use dirsql::{DirSQL, Table, Value};
 use std::collections::HashMap;
 use std::fs;
 use tempfile::TempDir;
@@ -281,7 +281,7 @@ fn extract_blob_values_round_trip_via_sdk() {
 /// path of the source file within the watched root.
 #[test]
 fn watch_insert_event_carries_relative_file_path() {
-    use dirsql_sdk::DirSQL;
+    use dirsql::DirSQL;
     use futures_executor::block_on;
     use futures_util::StreamExt;
     use std::time::Duration;
@@ -306,7 +306,7 @@ fn watch_insert_event_carries_relative_file_path() {
 
     let event = block_on(stream.next()).expect("expected watch event");
     match event {
-        dirsql_sdk::RowEvent::Insert {
+        dirsql::RowEvent::Insert {
             table,
             row,
             file_path,

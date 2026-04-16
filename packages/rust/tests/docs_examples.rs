@@ -3,7 +3,7 @@
 //! Each test is named to match the doc page and section it verifies.
 //! If a doc example changes and these tests break, the docs need updating (or vice versa).
 
-use dirsql_sdk::{DirSQL, Table, Value};
+use dirsql::{DirSQL, Table, Value};
 use std::collections::HashMap;
 use std::fs;
 use tempfile::TempDir;
@@ -591,7 +591,7 @@ fn it_matches_watching_guide_insert_event() {
     let event = futures_executor::block_on(futures_util::StreamExt::next(&mut stream))
         .expect("expected watch event");
     match event {
-        dirsql_sdk::RowEvent::Insert { table, row, .. } => {
+        dirsql::RowEvent::Insert { table, row, .. } => {
             assert_eq!(table, "items");
             assert_eq!(row["name"], Value::Text("apple".into()));
         }
@@ -631,7 +631,7 @@ fn it_matches_watching_guide_delete_event() {
     let event = futures_executor::block_on(futures_util::StreamExt::next(&mut stream))
         .expect("expected watch event");
     match event {
-        dirsql_sdk::RowEvent::Delete { table, row, .. } => {
+        dirsql::RowEvent::Delete { table, row, .. } => {
             assert_eq!(table, "items");
             assert_eq!(row["name"], Value::Text("doomed".into()));
         }
@@ -669,7 +669,7 @@ fn it_matches_watching_guide_update_event() {
 
     // Could be Update or Delete+Insert depending on implementation
     match event {
-        dirsql_sdk::RowEvent::Update {
+        dirsql::RowEvent::Update {
             table,
             new_row,
             old_row,
@@ -679,11 +679,11 @@ fn it_matches_watching_guide_update_event() {
             assert_eq!(new_row["name"], Value::Text("final".into()));
             assert_eq!(old_row["name"], Value::Text("draft".into()));
         }
-        dirsql_sdk::RowEvent::Delete { table, .. } => {
+        dirsql::RowEvent::Delete { table, .. } => {
             assert_eq!(table, "items");
             // Expect the insert to follow
         }
-        dirsql_sdk::RowEvent::Insert { table, row, .. } => {
+        dirsql::RowEvent::Insert { table, row, .. } => {
             assert_eq!(table, "items");
             assert_eq!(row["name"], Value::Text("final".into()));
         }
@@ -703,7 +703,7 @@ async fn it_matches_async_guide_basic_usage() {
     fs::write(data.join("a.json"), r#"{"name": "low", "value": 5}"#).unwrap();
     fs::write(data.join("b.json"), r#"{"name": "high", "value": 15}"#).unwrap();
 
-    let db = dirsql_sdk::AsyncDirSQL::new(
+    let db = dirsql::AsyncDirSQL::new(
         root.path(),
         vec![Table::new(
             "CREATE TABLE items (name TEXT, value INTEGER)",
@@ -744,7 +744,7 @@ async fn it_matches_async_guide_ready_idempotent() {
     fs::create_dir_all(&data).unwrap();
     fs::write(data.join("item.json"), r#"{"name": "test", "value": 1}"#).unwrap();
 
-    let db = dirsql_sdk::AsyncDirSQL::new(
+    let db = dirsql::AsyncDirSQL::new(
         root.path(),
         vec![Table::new(
             "CREATE TABLE items (name TEXT, value INTEGER)",
@@ -782,7 +782,7 @@ async fn it_matches_async_guide_count_query() {
     fs::write(data.join("a.json"), r#"{"name": "one", "value": 1}"#).unwrap();
     fs::write(data.join("b.json"), r#"{"name": "two", "value": 2}"#).unwrap();
 
-    let db = dirsql_sdk::AsyncDirSQL::new(
+    let db = dirsql::AsyncDirSQL::new(
         root.path(),
         vec![Table::new(
             "CREATE TABLE items (name TEXT, value INTEGER)",

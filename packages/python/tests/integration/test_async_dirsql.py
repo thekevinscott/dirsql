@@ -180,7 +180,7 @@ def describe_DirSQL_async():
             async def collect_events():
                 async for event in db.watch():
                     events.append(event)
-                    if len(events) >= 1:
+                    if event.action == "insert":
                         break
 
             task = asyncio.create_task(collect_events())
@@ -188,9 +188,15 @@ def describe_DirSQL_async():
             # Give the watcher time to start
             await asyncio.sleep(0.3)
 
-            # Create a new file
-            with open(os.path.join(tmp_dir, "new_item.json"), "w") as f:
+            # Create a new file atomically -- write to a sibling tmp path
+            # then rename into place. Without this the watcher can fire on
+            # the empty file between open() and write, producing a spurious
+            # error event ahead of the insert.
+            final = os.path.join(tmp_dir, "new_item.json")
+            tmp = final + ".tmp"
+            with open(tmp, "w") as f:
                 json.dump({"name": "apple"}, f)
+            os.replace(tmp, final)
 
             # Wait for events with timeout
             try:
@@ -198,10 +204,10 @@ def describe_DirSQL_async():
             except asyncio.TimeoutError:
                 pytest.fail("Timed out waiting for watch events")
 
-            assert len(events) >= 1
-            assert events[0].action == "insert"
-            assert events[0].table == "items"
-            assert events[0].row["name"] == "apple"
+            insert = next((e for e in events if e.action == "insert"), None)
+            assert insert is not None, f"no insert event in {events!r}"
+            assert insert.table == "items"
+            assert insert.row["name"] == "apple"
 
         @pytest.mark.asyncio
         async def it_emits_delete_events_for_removed_files(tmp_dir):

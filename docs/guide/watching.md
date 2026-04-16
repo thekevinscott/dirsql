@@ -26,7 +26,7 @@ async for event in db.watch():
 ```
 
 ```rust [Rust]
-use dirsql_sdk::{DirSQL, Table};
+use dirsql::{DirSQL, Table};
 use futures::StreamExt;
 
 let db = DirSQL::new(

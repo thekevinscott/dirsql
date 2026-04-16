@@ -36,53 +36,22 @@ export interface RowEvent {
   filePath?: string | null;
 }
 
-/**
- * Ephemeral SQL index over a local directory.
- *
- * Constructing a `DirSQL` scans `root`, matches files against each
- * {@link TableDef}'s `glob`, extracts rows via `extract`, and builds an
- * in-memory SQLite database. Call {@link DirSQL.query} to run SQL, or
- * {@link DirSQL.startWatcher} + {@link DirSQL.pollEvents} to react to
- * filesystem changes.
- */
-export interface DirSQL {
-  /** Execute a SQL query and return results as an array of row objects. */
+// Shape of the napi-rs-exposed class. The wrapper below drives this.
+interface NativeDirSQL {
   query(sql: string): Record<string, unknown>[];
-  /** Start the file watcher. Must be called before {@link pollEvents}. */
   startWatcher(): void;
-  /**
-   * Poll for file change events.
-   *
-   * @param timeoutMs - Milliseconds to wait for events before returning.
-   * @returns Array of row events; empty if no changes occurred in the window.
-   */
   pollEvents(timeoutMs: number): RowEvent[];
 }
 
-/** Constructor shape for {@link DirSQL}. */
-export interface DirSQLConstructor {
-  new (root: string, tables: TableDef[], ignore?: string[]): DirSQL;
-  /**
-   * Load a {@link DirSQL} instance from a `.dirsql.toml` config file.
-   *
-   * The root directory is derived from the config file's parent. Tables
-   * are parsed using the built-in parser for each format declared in the
-   * config (`.json`, `.jsonl`, `.ndjson`, `.csv`, `.tsv`, `.toml`,
-   * `.yaml`/`.yml`, `.md` frontmatter). No JS `extract` callback is
-   * required or used. Honours `[dirsql].ignore` and per-table
-   * `strict = true`.
-   *
-   * @param configPath - Path to the `.dirsql.toml` file.
-   * @throws If the file is missing, the TOML is invalid, a table entry
-   * lacks `ddl`/`glob`, or the format cannot be inferred.
-   */
-  fromConfig(configPath: string): DirSQL;
+interface NativeDirSQLConstructor {
+  new (root: string, tables: TableDef[], ignore?: string[]): NativeDirSQL;
+  fromConfig(configPath: string): NativeDirSQL;
 }
 
 // Core module shape. The real implementation comes from the napi-rs
 // native binary (`dirsql.node`); tests may substitute a fake.
 interface CoreModule {
-  DirSQL: DirSQLConstructor;
+  DirSQL: NativeDirSQLConstructor;
 }
 
 // Lazy-loaded reference to the core module. Populated on first access
@@ -120,30 +89,101 @@ export function __setCoreForTesting(fake: CoreModule | null): void {
 }
 
 /**
- * Public `DirSQL` export. Implemented as a Proxy so that
- * {@link __setCoreForTesting} can swap the underlying implementation
- * after this module has been imported. From a consumer's perspective it
- * behaves identically to the napi-rs-backed constructor: `new DirSQL(...)`
- * constructs an instance and `DirSQL.fromConfig(...)` is a static method.
+ * Ephemeral SQL index over a local directory.
+ *
+ * Constructing a `DirSQL` scans `root`, matches files against each
+ * {@link TableDef}'s `glob`, extracts rows via `extract`, and builds an
+ * in-memory SQLite database. `query` / `startWatcher` / `pollEvents`
+ * are synchronous; {@link ready} and {@link watch} expose the same
+ * surface in an async-idiomatic shape so TypeScript consumers don't
+ * need a separate `AsyncDirSQL` class.
+ *
+ * ```ts
+ * const db = new DirSQL(root, tables);
+ * await db.ready;
+ * const rows = db.query("SELECT ...");
+ * for await (const event of db.watch()) { ... }
+ * ```
  */
-export const DirSQL: DirSQLConstructor = new Proxy(
-  // Must be a `function` (not arrow) so the Proxy supports `construct`.
-  // biome-ignore lint/complexity/useArrowFunction: Proxy construct trap requires a constructible target.
-  function () {} as unknown as DirSQLConstructor,
-  {
-    construct(_target, args, newTarget) {
-      const Ctor = getCore().DirSQL;
-      return Reflect.construct(
-        Ctor,
-        args,
-        newTarget === _target ? Ctor : newTarget,
-      );
-    },
-    get(_target, prop, receiver) {
-      return Reflect.get(getCore().DirSQL, prop, receiver);
-    },
-    has(_target, prop) {
-      return prop in getCore().DirSQL;
-    },
-  },
-);
+export class DirSQL {
+  /**
+   * Resolves once the initial directory scan has completed. Scanning
+   * runs synchronously inside the constructor, so this Promise is
+   * already resolved by the time the constructor returns; construction
+   * failures throw synchronously rather than surfacing here. Exposed
+   * as a Promise purely so consumers can write async-style code
+   * uniformly across SDKs.
+   */
+  readonly ready: Promise<void>;
+
+  private _inner: NativeDirSQL;
+
+  constructor(root: string, tables: TableDef[], ignore?: string[]) {
+    const Ctor = getCore().DirSQL;
+    this._inner =
+      ignore === undefined
+        ? new Ctor(root, tables)
+        : new Ctor(root, tables, ignore);
+    this.ready = Promise.resolve();
+  }
+
+  /**
+   * Load a {@link DirSQL} instance from a `.dirsql.toml` config file.
+   *
+   * The root directory is derived from the config file's parent. Tables
+   * are parsed using the built-in parser for each format declared in the
+   * config. No JS `extract` callback is required.
+   */
+  static fromConfig(configPath: string): DirSQL {
+    const instance = Object.create(DirSQL.prototype) as DirSQL;
+    const writable = instance as unknown as {
+      _inner: NativeDirSQL;
+      ready: Promise<void>;
+    };
+    writable._inner = getCore().DirSQL.fromConfig(configPath);
+    writable.ready = Promise.resolve();
+    return instance;
+  }
+
+  /** Execute a SQL query and return results as an array of row objects. */
+  query(sql: string): Record<string, unknown>[] {
+    return this._inner.query(sql);
+  }
+
+  /**
+   * Start the file watcher. Must be called before {@link pollEvents}.
+   * Idempotent — safe to call multiple times.
+   */
+  startWatcher(): void {
+    this._inner.startWatcher();
+  }
+
+  /**
+   * Poll for file change events, blocking up to `timeoutMs` for the first
+   * event. Returns all events observed in the window (possibly empty).
+   */
+  pollEvents(timeoutMs: number): RowEvent[] {
+    return this._inner.pollEvents(timeoutMs);
+  }
+
+  /**
+   * Watch for file change events as an async iterable.
+   *
+   * ```ts
+   * for await (const event of db.watch()) { ... }
+   * ```
+   *
+   * Starts the underlying watcher on first iteration, then polls in 200ms
+   * increments and yields each {@link RowEvent}. The iterator runs
+   * indefinitely; break out of the `for await` loop to stop.
+   */
+  async *watch(): AsyncGenerator<RowEvent, void, unknown> {
+    this._inner.startWatcher();
+    while (true) {
+      const events = this._inner.pollEvents(200);
+      for (const event of events) {
+        yield event;
+      }
+    }
+  }
+}

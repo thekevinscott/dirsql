@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use dirsql_core::matcher::TableMatcher;
-use dirsql_core::scanner::scan_directory;
+use dirsql::matcher::TableMatcher;
+use dirsql::scanner::scan_directory;
 use std::fs;
 use tempfile::TempDir;
 

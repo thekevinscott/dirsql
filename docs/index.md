@@ -44,7 +44,7 @@ large = db.query("SELECT * FROM files WHERE size > 1000")
 ```
 
 ```rust [Rust]
-use dirsql_sdk::{DirSQL, Table};
+use dirsql::{DirSQL, Table};
 
 let db = DirSQL::new(
     "./my-project",

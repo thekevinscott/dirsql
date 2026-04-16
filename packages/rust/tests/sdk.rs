@@ -1,4 +1,4 @@
-use dirsql_sdk::{DirSQL, Row, Table, Value};
+use dirsql::{DirSQL, Row, Table, Value};
 use futures_executor::block_on;
 use futures_util::StreamExt;
 use std::collections::HashMap;
@@ -163,7 +163,7 @@ fn it_streams_watch_events() {
 
     let event = block_on(stream.next()).expect("watch event");
     match event {
-        dirsql_sdk::RowEvent::Insert { table, row, .. } => {
+        dirsql::RowEvent::Insert { table, row, .. } => {
             assert_eq!(table, "items");
             assert_eq!(row["name"], Value::Text("apple".into()));
         }
@@ -323,7 +323,7 @@ fn it_streams_watch_delete_events() {
 
     let event = block_on(stream.next()).expect("watch event");
     match event {
-        dirsql_sdk::RowEvent::Delete { table, row, .. } => {
+        dirsql::RowEvent::Delete { table, row, .. } => {
             assert_eq!(table, "items");
             assert_eq!(row["name"], Value::Text("doomed".into()));
         }
@@ -346,14 +346,14 @@ fn it_streams_watch_update_events() {
     let event = block_on(stream.next()).expect("watch event");
     // Could be Update or Delete+Insert
     match event {
-        dirsql_sdk::RowEvent::Update { table, new_row, .. } => {
+        dirsql::RowEvent::Update { table, new_row, .. } => {
             assert_eq!(table, "items");
             assert_eq!(new_row["name"], Value::Text("final".into()));
         }
-        dirsql_sdk::RowEvent::Delete { table, .. } => {
+        dirsql::RowEvent::Delete { table, .. } => {
             assert_eq!(table, "items");
         }
-        dirsql_sdk::RowEvent::Insert { table, row, .. } => {
+        dirsql::RowEvent::Insert { table, row, .. } => {
             assert_eq!(table, "items");
             assert_eq!(row["name"], Value::Text("final".into()));
         }
@@ -382,7 +382,7 @@ fn it_streams_watch_error_events() {
 
     let event = block_on(stream.next()).expect("watch event");
     match event {
-        dirsql_sdk::RowEvent::Error { error, .. } => {
+        dirsql::RowEvent::Error { error, .. } => {
             assert!(error.contains("intentional parse failure"));
         }
         other => panic!("expected error event, got: {other:?}"),

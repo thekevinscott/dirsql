@@ -16,6 +16,8 @@ node_modules/
 
 # TypeScript build output
 packages/ts/dist/
+# TypeScript coverage output
+packages/ts/coverage/
 # napi-rs generated type definitions (authored types live in packages/ts/ts/)
 packages/ts/index.d.ts
 
@@ -25,6 +27,7 @@ __pycache__/
 *.pyo
 *.so
 .venv/
+.coverage
 
 # uv
 uv.lock

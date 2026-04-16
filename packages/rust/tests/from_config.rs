@@ -1,4 +1,4 @@
-use dirsql_sdk::{DirSQL, Value};
+use dirsql::{DirSQL, Value};
 use std::fs;
 use tempfile::TempDir;
 
@@ -227,7 +227,7 @@ glob = "*.dat"
 
 #[tokio::test]
 async fn async_from_config_works() {
-    use dirsql_sdk::AsyncDirSQL;
+    use dirsql::AsyncDirSQL;
 
     let root = TempDir::new().unwrap();
 

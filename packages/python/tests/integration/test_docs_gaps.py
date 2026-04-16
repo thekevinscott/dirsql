@@ -305,7 +305,7 @@ def describe_watching_guide_positional_identity_gap():
         assert delete_events, "expected at least one delete event when file shrinks"
         # Docs promise positional identity: the third (idx=2) row should be deleted.
         # The current implementation does a full-replace on shrink instead
-        # (see packages/core/src/differ.rs::diff_rows). That is a doc/impl
+        # (see packages/rust/src/differ.rs::diff_rows). That is a doc/impl
         # divergence surfaced in TESTS_AUDIT.md, not fixed here.
         # What we *can* assert without contradicting either side: among the
         # delete events the dropped row (idx=2, name=row-2) must appear.
