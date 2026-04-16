@@ -121,7 +121,9 @@ export class DirSQL {
   constructor(root: string, tables: TableDef[], ignore?: string[]) {
     const Ctor = getCore().DirSQL;
     this._inner =
-      ignore === undefined ? new Ctor(root, tables) : new Ctor(root, tables, ignore);
+      ignore === undefined
+        ? new Ctor(root, tables)
+        : new Ctor(root, tables, ignore);
     this.ready = Promise.resolve();
   }
 
