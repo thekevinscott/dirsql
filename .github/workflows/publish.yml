@@ -44,9 +44,9 @@ jobs:
         id: check
         run: |
           if [ -f packages/python/pyproject.toml ]; then
-            echo "has_python=true" >> $GITHUB_OUTPUT
+            echo "has_python=true" >> "$GITHUB_OUTPUT"
           else
-            echo "has_python=false" >> $GITHUB_OUTPUT
+            echo "has_python=false" >> "$GITHUB_OUTPUT"
           fi
 
   tag:
