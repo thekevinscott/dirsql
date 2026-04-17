@@ -31,20 +31,20 @@ let table = Table::new(
 ```
 
 ```typescript [TypeScript]
-import { Table } from 'dirsql';
+import type { TableDef } from 'dirsql';
 
-const table = new Table({
+const table: TableDef = {
   ddl: 'CREATE TABLE comments (id TEXT, body TEXT, author TEXT)',
   glob: 'comments/**/index.jsonl',
   extract: (_path, content) => [
     { id: '...', body: '...', author: '...' },
   ],
-});
+};
 ```
 
 :::
 
-All three arguments are keyword-only (in Python). In Rust and TypeScript, they are positional or object fields respectively.
+All three arguments are keyword-only (in Python). In Rust they are positional to `Table::new`. In TypeScript a table is a plain `TableDef` object literal — the TS SDK exports the `TableDef` type (not a class).
 
 ### `ddl`
 
@@ -163,22 +163,22 @@ let db = DirSQL::new(
 ```
 
 ```typescript [TypeScript]
-import { DirSQL, Table } from 'dirsql';
+import { DirSQL, type TableDef } from 'dirsql';
 
-const db = new DirSQL('./workspace', {
-  tables: [
-    new Table({
-      ddl: 'CREATE TABLE posts (title TEXT, author_id TEXT)',
-      glob: 'posts/*.json',
-      extract: (_path, content) => [JSON.parse(content)],
-    }),
-    new Table({
-      ddl: 'CREATE TABLE authors (id TEXT, name TEXT)',
-      glob: 'authors/*.json',
-      extract: (_path, content) => [JSON.parse(content)],
-    }),
-  ],
-});
+const tables: TableDef[] = [
+  {
+    ddl: 'CREATE TABLE posts (title TEXT, author_id TEXT)',
+    glob: 'posts/*.json',
+    extract: (_path, content) => [JSON.parse(content)],
+  },
+  {
+    ddl: 'CREATE TABLE authors (id TEXT, name TEXT)',
+    glob: 'authors/*.json',
+    extract: (_path, content) => [JSON.parse(content)],
+  },
+];
+
+const db = new DirSQL('./workspace', tables);
 ```
 
 :::

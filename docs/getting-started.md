@@ -102,22 +102,22 @@ let results = db.query(
 ```
 
 ```typescript [TypeScript]
-import { DirSQL, Table } from 'dirsql';
+import { DirSQL, type TableDef } from 'dirsql';
 
-const db = new DirSQL('./my-blog', {
-  tables: [
-    new Table({
-      ddl: 'CREATE TABLE posts (title TEXT, author TEXT)',
-      glob: 'posts/*.json',
-      extract: (_path, content) => [JSON.parse(content)],
-    }),
-    new Table({
-      ddl: 'CREATE TABLE authors (id TEXT, name TEXT)',
-      glob: 'authors/*.json',
-      extract: (_path, content) => [JSON.parse(content)],
-    }),
-  ],
-});
+const tables: TableDef[] = [
+  {
+    ddl: 'CREATE TABLE posts (title TEXT, author TEXT)',
+    glob: 'posts/*.json',
+    extract: (_path, content) => [JSON.parse(content)],
+  },
+  {
+    ddl: 'CREATE TABLE authors (id TEXT, name TEXT)',
+    glob: 'authors/*.json',
+    extract: (_path, content) => [JSON.parse(content)],
+  },
+];
+
+const db = new DirSQL('./my-blog', tables);
 
 const posts = await db.query('SELECT * FROM posts');
 
