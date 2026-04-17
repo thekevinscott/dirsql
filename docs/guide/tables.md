@@ -200,10 +200,11 @@ db = DirSQL(
 ```
 
 ```rust [Rust]
-let db = DirSQL::builder("./workspace")
-    .ignore(vec!["**/node_modules/**", "**/.git/**"])
-    .tables(vec![...])
-    .build()?;
+let db = DirSQL::with_ignore(
+    "./workspace",
+    vec![/* tables */],
+    vec!["**/node_modules/**", "**/.git/**"],
+)?;
 ```
 
 ```typescript [TypeScript]
