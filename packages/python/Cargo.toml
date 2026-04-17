@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 dirsql.workspace = true
-pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.28", features = ["extension-module", "generate-import-lib"], optional = true }
 
 [features]
 default = []
