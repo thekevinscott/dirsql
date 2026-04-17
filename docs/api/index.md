@@ -33,7 +33,7 @@ DirSQL::new(root: &str, tables: Vec<Table>) -> Result<DirSQL>
 ```
 
 ```typescript [TypeScript]
-new DirSQL(root: string, options: { tables: Table[], ignore?: string[] })
+new DirSQL(root: string, tables: TableDef[], ignore?: string[])
 ```
 
 :::

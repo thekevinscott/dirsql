@@ -55,15 +55,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```typescript [TypeScript]
 import { DirSQL, Table } from 'dirsql';
 
-const db = new DirSQL('./my-project', {
-  tables: [
-    new Table({
-      ddl: 'CREATE TABLE items (name TEXT, value INTEGER)',
-      glob: 'data/*.json',
-      extract: (_path, content) => [JSON.parse(content)],
-    }),
-  ],
-});
+const db = new DirSQL('./my-project', [
+  new Table({
+    ddl: 'CREATE TABLE items (name TEXT, value INTEGER)',
+    glob: 'data/*.json',
+    extract: (_path, content) => [JSON.parse(content)],
+  }),
+]);
 
 // Query
 const results = await db.query('SELECT * FROM items WHERE value > 10');
@@ -206,7 +204,7 @@ async function watchAndServe(db: DirSQL) {
   }
 }
 
-const db = new DirSQL('./data', { tables: [...] });
+const db = new DirSQL('./data', [/* tables */]);
 
 await Promise.all([
   watchAndServe(db),

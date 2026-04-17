@@ -235,10 +235,11 @@ let db = DirSQL::with_ignore(
 ```
 
 ```typescript [TypeScript]
-const db = new DirSQL('./workspace', {
-  ignore: ['**/node_modules/**', '**/.git/**'],
-  tables: [...],
-});
+const db = new DirSQL(
+  './workspace',
+  [/* tables */],
+  ['**/node_modules/**', '**/.git/**'],
+);
 ```
 
 :::
