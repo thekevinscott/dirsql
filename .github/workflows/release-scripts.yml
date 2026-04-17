@@ -4,14 +4,14 @@ on:
   pull_request:
     paths:
       - 'scripts/release/**'
-      - '.github/workflows/release.yml'
+      - '.github/workflows/patch-release.yml'
       - '.github/workflows/publish.yml'
       - '.github/workflows/release-scripts.yml'
   push:
     branches: [main]
     paths:
       - 'scripts/release/**'
-      - '.github/workflows/release.yml'
+      - '.github/workflows/patch-release.yml'
       - '.github/workflows/publish.yml'
       - '.github/workflows/release-scripts.yml'
 

@@ -1,3 +1,7 @@
+# File is patch-release.yml (not release.yml) because crates.io and npm
+# Trusted Publishing validate the *caller* workflow filename in the OIDC
+# JWT. The configured trust policies list `patch-release.yml`; renaming
+# this file breaks publishing with HTTP 400 from the token endpoint.
 name: Release
 
 env:

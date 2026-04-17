@@ -1,6 +1,6 @@
 """Resolve which packages to publish for a given release dispatch.
 
-Consumed by .github/workflows/release.yml. Writes the four *_changed flags
+Consumed by .github/workflows/patch-release.yml. Writes the four *_changed flags
 to GITHUB_OUTPUT when run as a script. Keep all branching logic here, not
 in the workflow YAML -- the YAML should be a thin wrapper.
 """
