@@ -41,3 +41,9 @@ uv.lock
 docs/node_modules/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
+
+# Playwright
+docs/test-results/
+docs/playwright-report/
+docs/blob-report/
+docs/.playwright/
