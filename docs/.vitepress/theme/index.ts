@@ -22,6 +22,31 @@ import type { Theme } from 'vitepress'
  */
 
 const STORAGE_KEY = 'dirsql-preferred-lang'
+const URL_PARAM = 'lang'
+
+/**
+ * Read a language preference from the URL. Supports either:
+ *   - query string:   ?lang=python
+ *   - hash fragment:  #lang=python
+ *
+ * Returns the lowercased language name, or null when absent.
+ */
+function getLanguageFromUrl(): string | null {
+  try {
+    const query = new URLSearchParams(window.location.search).get(URL_PARAM)
+    if (query) return query.trim().toLowerCase()
+
+    const hash = window.location.hash.replace(/^#/, '')
+    if (hash) {
+      const hashParams = new URLSearchParams(hash)
+      const fromHash = hashParams.get(URL_PARAM)
+      if (fromHash) return fromHash.trim().toLowerCase()
+    }
+  } catch {
+    // URL APIs can throw on exotic inputs; fall through to null.
+  }
+  return null
+}
 
 /**
  * Given a code group element, return parallel arrays of inputs, labels, and blocks.
@@ -103,10 +128,31 @@ export default {
   enhanceApp() {
     if (typeof window === 'undefined') return
 
+    // URL flag wins over any previously stored preference, but we only persist
+    // once we've confirmed the value matches a real tab -- typos shouldn't
+    // poison localStorage. `pendingUrlLang` is consumed the first time a
+    // matching render arrives.
+    let pendingUrlLang: string | null = getLanguageFromUrl()
+    const consumePendingLang = () => {
+      if (!pendingUrlLang) return
+      const matches = Array.from(
+        document.querySelectorAll<HTMLLabelElement>('.vp-code-group .tabs label')
+      ).some((l) => l.textContent?.trim().toLowerCase() === pendingUrlLang)
+      if (!matches) return
+      localStorage.setItem(STORAGE_KEY, pendingUrlLang)
+      pendingUrlLang = null
+    }
+    window.addEventListener('hashchange', () => {
+      pendingUrlLang = getLanguageFromUrl()
+      consumePendingLang()
+      applyStoredLanguage()
+    })
+
     observeTabClicks()
 
     // Use MutationObserver to apply stored preference after VitePress renders
     const observer = new MutationObserver(() => {
+      consumePendingLang()
       applyStoredLanguage()
     })
 
@@ -114,6 +160,7 @@ export default {
       const content = document.querySelector('.VPContent')
       if (content) {
         observer.observe(content, { childList: true, subtree: true })
+        consumePendingLang()
         applyStoredLanguage()
       } else {
         requestAnimationFrame(tryObserve)

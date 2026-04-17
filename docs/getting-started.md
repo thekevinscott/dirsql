@@ -1,5 +1,12 @@
 # Getting Started
 
+::: tip Language preference
+Every multi-language example on this site is a tabbed code group. Click a tab and
+your choice is remembered across pages. You can also force a language via URL with
+`?lang=python`, `?lang=rust`, or `?lang=typescript` (e.g.
+`/dirsql/getting-started?lang=rust`) -- useful for sharing language-specific links.
+:::
+
 ## Installation
 
 ::: code-group
