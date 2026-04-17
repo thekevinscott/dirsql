@@ -341,18 +341,18 @@ impl DirSQL {
     fn handle_delete(&self, table: &str, rel_path: &str) -> Vec<RowEvent> {
         let old_rows = match self.inner.file_rows.lock() {
             Ok(mut file_rows) => file_rows.remove(rel_path).map(|(_, r)| r),
-            Err(e) => return vec![error_event(rel_path, e.to_string())],
+            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
         };
 
         let row_events = differ::diff(table, old_rows.as_deref(), None, rel_path);
 
         let delete_result = match self.inner.db.lock() {
             Ok(db) => db.delete_rows_by_file(table, rel_path),
-            Err(e) => return vec![error_event(rel_path, e.to_string())],
+            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
         };
 
         if let Err(e) = delete_result {
-            return vec![error_event(rel_path, e.to_string())];
+            return vec![error_event(Some(table), rel_path, e.to_string())];
         }
 
         row_events
@@ -362,7 +362,7 @@ impl DirSQL {
         let content = match std::fs::read_to_string(abs_path) {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
-            Err(e) => return vec![error_event(rel_path, e.to_string())],
+            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
         };
 
         let extract = match self.inner.extract_map.get(table) {
@@ -372,7 +372,7 @@ impl DirSQL {
 
         let raw_rows = match extract(rel_path, &content) {
             Ok(r) => r,
-            Err(e) => return vec![error_event(rel_path, e.to_string())],
+            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
         };
 
         let strict = *self.inner.strict_map.get(table).unwrap_or(&false);
@@ -380,13 +380,13 @@ impl DirSQL {
         let new_rows = {
             let db = match self.inner.db.lock() {
                 Ok(g) => g,
-                Err(e) => return vec![error_event(rel_path, e.to_string())],
+                Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
             };
             let mut normalized = Vec::with_capacity(raw_rows.len());
             for raw in &raw_rows {
                 match db.normalize_row(table, raw, strict) {
                     Ok(row) => normalized.push(row),
-                    Err(e) => return vec![error_event(rel_path, e.to_string())],
+                    Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
                 }
             }
             normalized
@@ -394,7 +394,7 @@ impl DirSQL {
 
         let old_rows = match self.inner.file_rows.lock() {
             Ok(guard) => guard.get(rel_path).map(|(_, r)| r.clone()),
-            Err(e) => return vec![error_event(rel_path, e.to_string())],
+            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
         };
 
         let row_events = differ::diff(table, old_rows.as_deref(), Some(&new_rows), rel_path);
@@ -406,11 +406,11 @@ impl DirSQL {
                 }
                 Ok(())
             }),
-            Err(e) => return vec![error_event(rel_path, e.to_string())],
+            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
         };
 
         if let Err(e) = db_result {
-            return vec![error_event(rel_path, e.to_string())];
+            return vec![error_event(Some(table), rel_path, e.to_string())];
         }
 
         if let Ok(mut guard) = self.inner.file_rows.lock() {
@@ -491,8 +491,9 @@ impl DirSQL {
     }
 }
 
-fn error_event(rel_path: &str, error: String) -> RowEvent {
+fn error_event(table: Option<&str>, rel_path: &str, error: String) -> RowEvent {
     RowEvent::Error {
+        table: table.map(str::to_string),
         file_path: PathBuf::from(rel_path),
         error,
     }
@@ -510,6 +511,7 @@ fn run_channel_loop(db: DirSQL, tx: UnboundedSender<RowEvent>) {
             }
             Err(e) => {
                 let _ = tx.unbounded_send(RowEvent::Error {
+                    table: None,
                     file_path: db.inner.root.clone(),
                     error: e.to_string(),
                 });

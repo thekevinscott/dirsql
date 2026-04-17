@@ -26,6 +26,10 @@ pub enum RowEvent {
         file_path: String,
     },
     Error {
+        /// The table whose glob matched the failing file, when known.
+        /// `None` for errors that aren't tied to a specific table (e.g.
+        /// a watch-channel failure before file attribution).
+        table: Option<String>,
         file_path: PathBuf,
         error: String,
     },
