@@ -242,11 +242,31 @@ jobs:
           sed -i 's/^version = ".*"/version = "${{ needs.tag.outputs.new_version }}"/' packages/python/Cargo.toml
           sed -i 's/^version = ".*"/version = "${{ needs.tag.outputs.new_version }}"/' packages/ts/Cargo.toml
 
+      - name: Check if version already on crates.io
+        id: crates_check
+        env:
+          VERSION: ${{ needs.tag.outputs.new_version }}
+        run: |
+          # crates.io publishes are permanent; treat "already published" as a
+          # success so a partial prior release can be resumed without getting
+          # stuck on this leg.
+          published=$(curl -sf "https://crates.io/api/v1/crates/dirsql" \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); print('\n'.join(v['num'] for v in d.get('versions', [])))" \
+            | grep -Fx "$VERSION" || true)
+          if [ -n "$published" ]; then
+            echo "dirsql@$VERSION already on crates.io; skipping publish"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Get crates.io token
+        if: steps.crates_check.outputs.skip != 'true'
         uses: rust-lang/crates-io-auth-action@v1
         id: auth
 
       - name: Publish to crates.io
+        if: steps.crates_check.outputs.skip != 'true'
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
@@ -290,11 +310,15 @@ jobs:
 
   rollback:
     needs: [tag, publish-pypi, publish-crates]
+    # Only delete the tag if no publish leg succeeded. crates.io publishes are
+    # permanent, so if crates succeeded we must keep the tag even if pypi
+    # failed -- otherwise the next run recomputes the same version and
+    # collides with the already-published crate.
     if: |
       always() &&
       needs.tag.outputs.created == 'true' &&
-      (needs.publish-pypi.result == 'failure' ||
-       needs.publish-crates.result == 'failure')
+      needs.publish-pypi.result != 'success' &&
+      needs.publish-crates.result != 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
