@@ -29,13 +29,17 @@ on:
       publish_python:
         description: 'Publish Python (only used when publish_mode=custom)'
         type: boolean
-        default: true
+        default: false
       publish_rust:
         description: 'Publish Rust (only used when publish_mode=custom)'
         type: boolean
-        default: true
+        default: false
       publish_js:
         description: 'Publish JS/npm (only used when publish_mode=custom)'
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Dry run: compute the plan but skip all destructive operations (tag, publish, release)'
         type: boolean
         default: true
 
@@ -49,6 +53,7 @@ jobs:
     outputs:
       should_release: ${{ steps.decide.outputs.should_release }}
       bump_type: ${{ steps.decide.outputs.bump_type }}
+      dry_run: ${{ steps.decide.outputs.dry_run }}
     steps:
       - id: decide
         env:
@@ -56,12 +61,16 @@ jobs:
           STRATEGY: ${{ vars.RELEASE_STRATEGY }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           DISPATCH_BUMP: ${{ inputs.bump_type }}
+          DISPATCH_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           # Schedule and push only ever produce patch releases. Minor is
-          # workflow_dispatch-only.
+          # workflow_dispatch-only. Non-dispatch events never dry-run
+          # (scheduled cuts should actually ship).
+          dry_run=false
           if [ "$EVENT" = "workflow_dispatch" ]; then
             echo "should_release=true" >> "$GITHUB_OUTPUT"
             echo "bump_type=${DISPATCH_BUMP:-patch}" >> "$GITHUB_OUTPUT"
+            dry_run="${DISPATCH_DRY_RUN:-true}"
           elif [ "$EVENT" = "schedule" ] && [ "$STRATEGY" != "immediate" ]; then
             echo "should_release=true" >> "$GITHUB_OUTPUT"
             echo "bump_type=patch" >> "$GITHUB_OUTPUT"
@@ -80,6 +89,7 @@ jobs:
             echo "should_release=false" >> "$GITHUB_OUTPUT"
             echo "bump_type=patch" >> "$GITHUB_OUTPUT"
           fi
+          echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
 
   detect-changes:
     needs: check
@@ -95,6 +105,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Collect diff since last tag
+        id: diff
+        run: |
+          latest_tag=$(git tag --sort=-v:refname | grep -E '^v[0-9]' | head -n1 || true)
+          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+          {
+            echo "changed_files<<CHANGED_FILES_EOF"
+            if [ -n "$latest_tag" ]; then
+              git diff --name-only "${latest_tag}..HEAD"
+            fi
+            echo "CHANGED_FILES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Resolve publish targets
         id: changes
         env:
@@ -103,76 +126,9 @@ jobs:
           CUSTOM_PYTHON: ${{ inputs.publish_python }}
           CUSTOM_RUST: ${{ inputs.publish_rust }}
           CUSTOM_JS: ${{ inputs.publish_js }}
-        run: |
-          # Scheduled/push releases always auto-detect from the diff since
-          # the last tag. Manual dispatches honor publish_mode.
-          mode="$PUBLISH_MODE"
-          if [ "$EVENT_NAME" != "workflow_dispatch" ]; then
-            mode="changed"
-          fi
-
-          if [ "$mode" = "all" ]; then
-            echo "rust_changed=true"    >> "$GITHUB_OUTPUT"
-            echo "python_changed=true"  >> "$GITHUB_OUTPUT"
-            echo "js_changed=true"      >> "$GITHUB_OUTPUT"
-            echo "docs_changed=true"    >> "$GITHUB_OUTPUT"
-            echo "Mode: all (publish everything)"
-            exit 0
-          fi
-
-          if [ "$mode" = "custom" ]; then
-            # No cascade in custom mode -- user explicitly picks targets.
-            echo "rust_changed=${CUSTOM_RUST:-false}"     >> "$GITHUB_OUTPUT"
-            echo "python_changed=${CUSTOM_PYTHON:-false}" >> "$GITHUB_OUTPUT"
-            echo "js_changed=${CUSTOM_JS:-false}"         >> "$GITHUB_OUTPUT"
-            echo "docs_changed=false"                     >> "$GITHUB_OUTPUT"
-            echo "Mode: custom (python=$CUSTOM_PYTHON rust=$CUSTOM_RUST js=$CUSTOM_JS)"
-            exit 0
-          fi
-
-          # mode=changed: diff files since last tag. Rust core changes
-          # cascade to all three since Python and TS bundle the Rust binary.
-          latest_tag=$(git tag --sort=-v:refname | grep -E '^v[0-9]' | head -n1)
-
-          if [ -z "$latest_tag" ]; then
-            echo "rust_changed=true"   >> "$GITHUB_OUTPUT"
-            echo "python_changed=true" >> "$GITHUB_OUTPUT"
-            echo "js_changed=true"     >> "$GITHUB_OUTPUT"
-            echo "docs_changed=true"   >> "$GITHUB_OUTPUT"
-            echo "No prior tag; treating all as changed"
-            exit 0
-          fi
-
-          changed_files=$(git diff --name-only "${latest_tag}..HEAD")
-
-          if [ -z "$changed_files" ]; then
-            echo "rust_changed=false"   >> "$GITHUB_OUTPUT"
-            echo "python_changed=false" >> "$GITHUB_OUTPUT"
-            echo "js_changed=false"     >> "$GITHUB_OUTPUT"
-            echo "docs_changed=false"   >> "$GITHUB_OUTPUT"
-            echo "No files changed since $latest_tag"
-            exit 0
-          fi
-
-          rust_changed=false
-          python_changed=false
-          js_changed=false
-          docs_changed=false
-
-          while IFS= read -r file; do
-            case "$file" in
-              packages/rust/**|packages/python/src/**|Cargo.lock) rust_changed=true ;;
-              packages/python/**.py|packages/python/pyproject.toml) python_changed=true ;;
-              packages/ts/**) js_changed=true ;;
-              README.md|*.md) docs_changed=true ;;
-            esac
-          done <<< "$changed_files"
-
-          echo "rust_changed=$rust_changed"     >> "$GITHUB_OUTPUT"
-          echo "python_changed=$python_changed" >> "$GITHUB_OUTPUT"
-          echo "js_changed=$js_changed"         >> "$GITHUB_OUTPUT"
-          echo "docs_changed=$docs_changed"     >> "$GITHUB_OUTPUT"
-          echo "Mode: changed (rust=$rust_changed python=$python_changed js=$js_changed docs=$docs_changed)"
+          LATEST_TAG: ${{ steps.diff.outputs.latest_tag }}
+          CHANGED_FILES: ${{ steps.diff.outputs.changed_files }}
+        run: python3 scripts/release/resolve_publish_targets.py
 
   release:
     needs: [check, detect-changes]
@@ -185,6 +141,7 @@ jobs:
     uses: ./.github/workflows/publish.yml
     with:
       bump_type: ${{ needs.check.outputs.bump_type }}
+      dry_run: ${{ needs.check.outputs.dry_run == 'true' }}
       publish_pypi: ${{ needs.detect-changes.outputs.rust_changed == 'true' || needs.detect-changes.outputs.python_changed == 'true' || needs.detect-changes.outputs.docs_changed == 'true' }}
       publish_crates: ${{ needs.detect-changes.outputs.rust_changed == 'true' || needs.detect-changes.outputs.docs_changed == 'true' }}
     secrets: inherit
@@ -219,36 +176,37 @@ jobs:
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Setup Node.js
+      - name: Read package name
         if: steps.check_npm.outputs.exists == 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24.x'
-
-      - name: Install pnpm
-        if: steps.check_npm.outputs.exists == 'true'
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Install deps
-        if: steps.check_npm.outputs.exists == 'true'
-        run: pnpm install --frozen-lockfile
-        working-directory: packages/ts
+        id: pkg
+        run: |
+          pkg=$(python3 -c "import json; print(json.load(open('packages/ts/package.json'))['name'])")
+          echo "name=$pkg" >> "$GITHUB_OUTPUT"
 
       - name: Check if version already on npm
         if: steps.check_npm.outputs.exists == 'true'
         id: npm_check
         env:
+          REGISTRY: npm
+          PACKAGE: ${{ steps.pkg.outputs.name }}
           VERSION: ${{ needs.release.outputs.new_version }}
-        run: |
-          pkg=$(node -p "require('./package.json').name")
-          if npm view "$pkg@$VERSION" version >/dev/null 2>&1; then
-            echo "$pkg@$VERSION already on npm; skipping publish"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
+        run: python3 scripts/release/check_published.py
+
+      - name: Setup Node.js
+        if: steps.check_npm.outputs.exists == 'true' && steps.npm_check.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+
+      - name: Install pnpm
+        if: steps.check_npm.outputs.exists == 'true' && steps.npm_check.outputs.skip != 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install deps
+        if: steps.check_npm.outputs.exists == 'true' && steps.npm_check.outputs.skip != 'true'
+        run: pnpm install --frozen-lockfile
         working-directory: packages/ts
 
       - name: Update package.json version
@@ -261,7 +219,18 @@ jobs:
         run: pnpm run build
         working-directory: packages/ts
 
+      - name: Publish to npm (dry-run)
+        if: >-
+          steps.check_npm.outputs.exists == 'true' &&
+          steps.npm_check.outputs.skip != 'true' &&
+          needs.check.outputs.dry_run == 'true'
+        run: npm publish --provenance --access public --dry-run
+        working-directory: packages/ts
+
       - name: Publish to npm
-        if: steps.check_npm.outputs.exists == 'true' && steps.npm_check.outputs.skip != 'true'
+        if: >-
+          steps.check_npm.outputs.exists == 'true' &&
+          steps.npm_check.outputs.skip != 'true' &&
+          needs.check.outputs.dry_run != 'true'
         run: npm publish --provenance --access public
         working-directory: packages/ts

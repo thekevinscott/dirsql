@@ -20,6 +20,11 @@ on:
         required: false
         type: boolean
         default: true
+      dry_run:
+        description: 'Dry run: compute the plan but skip all destructive operations (tag, publish, release)'
+        required: false
+        type: boolean
+        default: false
     outputs:
       tag_created:
         description: 'Whether a tag was created'
@@ -56,87 +61,71 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get current version
+      - name: Get current state
         id: current
         run: |
-          latest_tag=$(git tag --sort=-v:refname | grep -E '^v[0-9]' | head -n1)
-
-          if [ -z "$latest_tag" ]; then
-            echo "No tags found"
-            echo "version=0.0.0" >> $GITHUB_OUTPUT
-            echo "has_tags=false" >> $GITHUB_OUTPUT
+          latest_tag=$(git tag --sort=-v:refname | grep -E '^v[0-9]' | head -n1 || true)
+          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+          if [ -n "$latest_tag" ]; then
+            commits=$(git rev-list "${latest_tag}..HEAD" --count)
           else
-            echo "Latest tag: $latest_tag"
-            echo "version=${latest_tag#v}" >> $GITHUB_OUTPUT
-            echo "has_tags=true" >> $GITHUB_OUTPUT
-
-            commits_since_tag=$(git rev-list ${latest_tag}..HEAD --count)
-            echo "commits_since_tag=$commits_since_tag" >> $GITHUB_OUTPUT
+            commits=0
           fi
+          echo "commits_since_tag=$commits" >> "$GITHUB_OUTPUT"
 
-      - name: Check for changes (patch only)
-        if: inputs.bump_type == 'patch' && steps.current.outputs.has_tags == 'true'
-        id: check_changes
-        run: |
-          if [ "${{ steps.current.outputs.commits_since_tag }}" -eq 0 ]; then
-            echo "No new commits since last tag, skipping release"
-            echo "should_release=false" >> $GITHUB_OUTPUT
-          else
-            echo "Found ${{ steps.current.outputs.commits_since_tag }} commits since last tag"
-            echo "should_release=true" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Calculate new version
+      - name: Compute next version
         id: version
-        run: |
-          current="${{ steps.current.outputs.version }}"
-          IFS='.' read -r major minor patch <<< "$current"
+        env:
+          LATEST_TAG: ${{ steps.current.outputs.latest_tag }}
+          BUMP_TYPE: ${{ inputs.bump_type }}
+          COMMITS_SINCE_TAG: ${{ steps.current.outputs.commits_since_tag }}
+        run: python3 scripts/release/compute_version.py
 
-          if [ "${{ inputs.bump_type }}" == "minor" ]; then
-            new_version="${major}.$((minor + 1)).0"
-          else
-            new_version="${major}.${minor}.$((patch + 1))"
-          fi
-
-          echo "new_version=$new_version" >> $GITHUB_OUTPUT
-          echo "New version will be: $new_version"
-
-      - name: Check if tag exists
+      - name: Check if tag already exists on remote
         id: tag_check
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
         run: |
-          if git ls-remote --tags origin | grep -q "refs/tags/v${{ steps.version.outputs.new_version }}$"; then
-            echo "Tag v${{ steps.version.outputs.new_version }} already exists on remote"
-            echo "exists=true" >> $GITHUB_OUTPUT
+          if git ls-remote --tags origin | grep -q "refs/tags/v${NEW_VERSION}$"; then
+            echo "Tag v${NEW_VERSION} already exists on remote"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
           else
-            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Determine if release should proceed
-        id: should_release
+      - name: Plan (dry run)
+        if: inputs.dry_run
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
+          SHOULD_RELEASE: ${{ steps.version.outputs.should_release }}
+          TAG_EXISTS: ${{ steps.tag_check.outputs.exists }}
+          PUBLISH_PYPI: ${{ inputs.publish_pypi }}
+          PUBLISH_CRATES: ${{ inputs.publish_crates }}
+          BUMP: ${{ inputs.bump_type }}
         run: |
-          if [ "${{ steps.tag_check.outputs.exists }}" == "true" ]; then
-            echo "proceed=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          if [ "${{ inputs.bump_type }}" == "patch" ] && [ "${{ steps.current.outputs.has_tags }}" == "true" ]; then
-            if [ "${{ steps.check_changes.outputs.should_release }}" == "false" ]; then
-              echo "proceed=false" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-          fi
-
-          echo "proceed=true" >> $GITHUB_OUTPUT
+          echo "=== DRY RUN PLAN ==="
+          echo "bump_type:        $BUMP"
+          echo "new_version:      $NEW_VERSION"
+          echo "should_release:   $SHOULD_RELEASE"
+          echo "tag_exists:       $TAG_EXISTS"
+          echo "would publish_pypi:   $PUBLISH_PYPI"
+          echo "would publish_crates: $PUBLISH_CRATES"
+          echo "===================="
 
       - name: Create and push tag
-        if: steps.should_release.outputs.proceed == 'true'
+        if: >-
+          !inputs.dry_run &&
+          steps.version.outputs.should_release == 'true' &&
+          steps.tag_check.outputs.exists != 'true'
         id: tag
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "v${{ steps.version.outputs.new_version }}" -m "Release v${{ steps.version.outputs.new_version }}"
-          git push origin "v${{ steps.version.outputs.new_version }}"
-          echo "created=true" >> $GITHUB_OUTPUT
+          git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}"
+          git push origin "v${NEW_VERSION}"
+          echo "created=true" >> "$GITHUB_OUTPUT"
 
   build:
     needs: [check-python, tag]
@@ -218,6 +207,7 @@ jobs:
           path: dist
 
       - name: Publish to PyPI
+        if: '!inputs.dry_run'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           attestations: false
@@ -225,6 +215,12 @@ jobs:
           # partial prior release can be resumed without getting stuck on
           # this leg. Mirrors the crates.io pre-check.
           skip-existing: true
+
+      - name: Would publish to PyPI (dry run)
+        if: inputs.dry_run
+        run: |
+          echo "DRY RUN: would upload the following artifacts to PyPI"
+          ls -la dist
 
   publish-crates:
     needs: tag
@@ -249,28 +245,22 @@ jobs:
       - name: Check if version already on crates.io
         id: crates_check
         env:
+          REGISTRY: crates
+          PACKAGE: dirsql
           VERSION: ${{ needs.tag.outputs.new_version }}
-        run: |
-          # crates.io publishes are permanent; treat "already published" as a
-          # success so a partial prior release can be resumed without getting
-          # stuck on this leg.
-          published=$(curl -sf "https://crates.io/api/v1/crates/dirsql" \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); print('\n'.join(v['num'] for v in d.get('versions', [])))" \
-            | grep -Fx "$VERSION" || true)
-          if [ -n "$published" ]; then
-            echo "dirsql@$VERSION already on crates.io; skipping publish"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
+        run: python3 scripts/release/check_published.py
+
+      - name: Cargo publish dry-run
+        if: inputs.dry_run && steps.crates_check.outputs.skip != 'true'
+        run: cargo publish -p dirsql --allow-dirty --dry-run
 
       - name: Get crates.io token
-        if: steps.crates_check.outputs.skip != 'true'
+        if: '!inputs.dry_run && steps.crates_check.outputs.skip != ''true'''
         uses: rust-lang/crates-io-auth-action@v1
         id: auth
 
       - name: Publish to crates.io
-        if: steps.crates_check.outputs.skip != 'true'
+        if: '!inputs.dry_run && steps.crates_check.outputs.skip != ''true'''
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
@@ -294,7 +284,7 @@ jobs:
 
   github-release:
     needs: [tag, publish-pypi, publish-crates]
-    if: always() && needs.tag.outputs.created == 'true'
+    if: '!inputs.dry_run && always() && needs.tag.outputs.created == ''true'''
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -319,6 +309,7 @@ jobs:
     # failed -- otherwise the next run recomputes the same version and
     # collides with the already-published crate.
     if: |
+      !inputs.dry_run &&
       always() &&
       needs.tag.outputs.created == 'true' &&
       needs.publish-pypi.result != 'success' &&
