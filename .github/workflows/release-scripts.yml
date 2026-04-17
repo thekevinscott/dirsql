@@ -1,0 +1,42 @@
+name: Release Scripts
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/release/**'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/publish.yml'
+      - '.github/workflows/release-scripts.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/release/**'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/publish.yml'
+      - '.github/workflows/release-scripts.yml'
+
+jobs:
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Run tests
+        working-directory: scripts/release
+        run: uv run --group dev pytest -v
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install actionlint
+        run: |
+          bash <(curl -sSf https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+
+      - name: Run actionlint
+        run: ./actionlint -color

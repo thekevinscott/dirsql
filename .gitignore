@@ -28,6 +28,7 @@ __pycache__/
 *.so
 .venv/
 .coverage
+.pytest_cache/
 
 # uv
 uv.lock
