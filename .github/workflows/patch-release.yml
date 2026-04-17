@@ -10,6 +10,14 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      publish_mode:
+        description: 'Which packages to publish'
+        type: choice
+        options:
+          - all
+          - changed
+        default: all
 
 permissions:
   contents: write
@@ -58,9 +66,11 @@ jobs:
         id: changes
         env:
           EVENT_NAME: ${{ github.event_name }}
+          PUBLISH_MODE: ${{ inputs.publish_mode || 'all' }}
         run: |
-          # Manual dispatch should publish everything
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          # Manual dispatch with publish_mode=all (default) publishes everything.
+          # publish_mode=changed falls through to the file-diff path below.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$PUBLISH_MODE" != "changed" ]; then
             echo "rust_changed=true" >> "$GITHUB_OUTPUT"
             echo "python_changed=true" >> "$GITHUB_OUTPUT"
             echo "js_changed=true" >> "$GITHUB_OUTPUT"
