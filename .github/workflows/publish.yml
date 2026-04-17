@@ -221,6 +221,10 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           attestations: false
+          # Idempotency: silently skip files already uploaded to PyPI so a
+          # partial prior release can be resumed without getting stuck on
+          # this leg. Mirrors the crates.io pre-check.
+          skip-existing: true
 
   publish-crates:
     needs: tag
