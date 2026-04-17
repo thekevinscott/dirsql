@@ -26,8 +26,30 @@ async for event in db.watch():
 ```
 
 ```rust [Rust]
-use dirsql::{DirSQL, Table};
+use dirsql::{DirSQL, Table, Value};
 use futures::StreamExt;
+use std::collections::HashMap;
+
+// See `row_from_json` in getting-started.md for a reusable helper.
+fn row_from_json(raw: &str) -> HashMap<String, Value> {
+    let v: serde_json::Value = serde_json::from_str(raw).unwrap();
+    let serde_json::Value::Object(obj) = v else { return HashMap::new() };
+    obj.into_iter()
+        .map(|(k, val)| {
+            let v = match val {
+                serde_json::Value::String(s) => Value::Text(s),
+                serde_json::Value::Number(n) => n
+                    .as_i64()
+                    .map(Value::Integer)
+                    .unwrap_or_else(|| Value::Real(n.as_f64().unwrap_or(0.0))),
+                serde_json::Value::Bool(b) => Value::Integer(b as i64),
+                serde_json::Value::Null => Value::Null,
+                other => Value::Text(other.to_string()),
+            };
+            (k, v)
+        })
+        .collect()
+}
 
 let db = DirSQL::new(
     "./my-project",
@@ -35,7 +57,7 @@ let db = DirSQL::new(
         Table::new(
             "CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
             "comments/**/*.json",
-            |_path, content| vec![serde_json::from_str(content).unwrap()],
+            |_path, content| vec![row_from_json(content)],
         ),
     ],
 )?;
