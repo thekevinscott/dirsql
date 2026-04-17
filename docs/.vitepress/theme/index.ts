@@ -21,32 +21,10 @@ import type { Theme } from 'vitepress'
  * Active blocks are toggled via the .active CSS class.
  */
 
-const STORAGE_KEY = 'dirsql-preferred-lang'
-const URL_PARAM = 'lang'
+import { STORAGE_KEY, parseLanguageFromUrl } from './lang'
 
-/**
- * Read a language preference from the URL. Supports either:
- *   - query string:   ?lang=python
- *   - hash fragment:  #lang=python
- *
- * Returns the lowercased language name, or null when absent.
- */
-function getLanguageFromUrl(): string | null {
-  try {
-    const query = new URLSearchParams(window.location.search).get(URL_PARAM)
-    if (query) return query.trim().toLowerCase()
-
-    const hash = window.location.hash.replace(/^#/, '')
-    if (hash) {
-      const hashParams = new URLSearchParams(hash)
-      const fromHash = hashParams.get(URL_PARAM)
-      if (fromHash) return fromHash.trim().toLowerCase()
-    }
-  } catch {
-    // URL APIs can throw on exotic inputs; fall through to null.
-  }
-  return null
-}
+const getLanguageFromUrl = (): string | null =>
+  parseLanguageFromUrl(window.location.search, window.location.hash)
 
 /**
  * Given a code group element, return parallel arrays of inputs, labels, and blocks.

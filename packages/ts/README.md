@@ -2,6 +2,8 @@
 
 TypeScript SDK for `dirsql` -- napi-rs bindings wrapping the Rust core (`dirsql`).
 
+[Documentation](https://thekevinscott.github.io/dirsql/?lang=typescript)
+
 ## Installation
 
 ```bash
