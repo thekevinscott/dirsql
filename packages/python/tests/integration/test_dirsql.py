@@ -291,6 +291,40 @@ def describe_DirSQL():
                 await db.query("NOT VALID SQL")
 
         @pytest.mark.asyncio
+        async def it_rejects_write_statements_via_query(tmp_dir):
+            """`query()` rejects non-SELECT statements so a caller can't mutate the index."""
+            with open(os.path.join(tmp_dir, "item.json"), "w") as f:
+                json.dump({"name": "apple"}, f)
+
+            db = DirSQL(
+                tmp_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE items (name TEXT)",
+                        glob="*.json",
+                        extract=lambda path, content: [json.loads(content)],
+                    ),
+                ],
+            )
+            await db.ready()
+
+            for stmt in [
+                "DELETE FROM items",
+                "DROP TABLE items",
+                "INSERT INTO items (name) VALUES ('evil')",
+                "UPDATE items SET name = 'x'",
+                "ATTACH DATABASE ':memory:' AS evil",
+                "PRAGMA writable_schema = 1",
+            ]:
+                with pytest.raises(Exception, match="(?i)read-only|writeforbidden"):
+                    await db.query(stmt)
+
+            # Index remains intact.
+            results = await db.query("SELECT name FROM items")
+            assert len(results) == 1
+            assert results[0]["name"] == "apple"
+
+        @pytest.mark.asyncio
         async def it_raises_on_invalid_ddl(tmp_dir):
             """Invalid DDL raises an exception during init."""
             db = DirSQL(

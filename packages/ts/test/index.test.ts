@@ -150,6 +150,38 @@ describe("DirSQL", () => {
     expect(() => db.query("SELECT * FROM nonexistent")).toThrow();
   });
 
+  it("rejects write statements via query", () => {
+    const itemDir = join(dir, "items");
+    mkdirSync(itemDir, { recursive: true });
+    writeFileSync(
+      join(itemDir, "a.json"),
+      JSON.stringify({ name: "apple" }),
+    );
+
+    const db = new DirSQL(dir, [
+      {
+        ddl: "CREATE TABLE items (name TEXT)",
+        glob: "items/*.json",
+        extract: (_filePath: string, content: string) => [JSON.parse(content)],
+      },
+    ]);
+
+    for (const stmt of [
+      "DELETE FROM items",
+      "DROP TABLE items",
+      "INSERT INTO items (name) VALUES ('evil')",
+      "UPDATE items SET name = 'x'",
+      "ATTACH DATABASE ':memory:' AS evil",
+      "PRAGMA writable_schema = 1",
+    ]) {
+      expect(() => db.query(stmt)).toThrow(/read-only/i);
+    }
+
+    // Index is unchanged.
+    const rows = db.query("SELECT name FROM items");
+    expect(rows).toEqual([{ name: "apple" }]);
+  });
+
   it("throws on invalid DDL", () => {
     expect(
       () =>

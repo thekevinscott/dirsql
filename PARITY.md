@@ -16,7 +16,7 @@ API surface comparison across the three language SDKs.
 |----------------------------|----------------------------------|-----------------------------------|-----------------------------------|
 | Constructor                | `DirSQL(root, *, tables, ignore)` | `DirSQL::new(root, tables)` / `DirSQL::with_ignore(root, tables, ignore)` | `new DirSQL(root, tables, ignore?)` |
 | From config                | `DirSQL.from_config(path)`       | `DirSQL::from_config(root_dir)` / `DirSQL::from_config_path(cfg_path)` | `DirSQL.fromConfig(configPath)`   |
-| Query                      | `db.query(sql) -> list[dict]`    | `db.query(sql) -> Result<Vec<Row>>` | `db.query(sql) -> Record[]`     |
+| Query (read-only; rejects non-SELECT) | `db.query(sql) -> list[dict]`    | `db.query(sql) -> Result<Vec<Row>>` | `db.query(sql) -> Record[]`     |
 | Start watcher              | `db._start_watcher()`            | `db.start_watching()`             | `db.startWatcher()`               |
 | Poll events                | `db._poll_events(ms)`            | `db.poll_events(duration)`        | `db.pollEvents(ms)`               |
 | Watch (channel/stream)     | `async for event in db.watch()` (via `_async.py`) | `db.watch() -> WatchStream` (channel) | `for await (const ev of db.watch())` |
@@ -63,7 +63,7 @@ for await (const event of db.watch()) { ... }
 - `DirSQL::from_config` takes a root directory path (looks for `.dirsql.toml` inside), not the config file path directly.
 - `AsyncDirSQL` uses tokio and `OnceCell` internally.
 - Watch returns `futures_channel::mpsc::UnboundedReceiver<RowEvent>` implementing `Stream`.
-- All fallible operations return `Result<T, DirSqlError>`.
+- All fallible operations return `Result<T, DirSqlError>`. Write statements sent to `query()` surface as `DirSqlError::WriteForbidden { keyword }`; in the Python/TS bindings the same condition is a `RuntimeError` / `Error` with a "read-only" message.
 
 ### TypeScript
 - Uses `camelCase` for method names (`fromConfig`).
@@ -86,6 +86,7 @@ for await (const event of db.watch()) { ... }
 | Watch: delete              | Y      | Y    | Y          |
 | Watch: update              | Y      | Y    | Y          |
 | Watch: error               | Y      | Y    | Y          |
+| Query rejects writes       | Y      | Y    | Y          |
 | Relaxed schema (extra keys)| Y      | Y    | Y          |
 | Relaxed schema (missing)   | Y      | Y    | Y          |
 | Strict mode (extra keys)   | Y      | Y    | Y          |

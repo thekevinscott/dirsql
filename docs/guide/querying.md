@@ -61,7 +61,7 @@ const joined = await db.query(`
 
 :::
 
-Any valid SQLite SQL works. The in-memory database supports the full SQLite dialect including subqueries, CTEs, window functions, and aggregate functions.
+Any valid SQLite **SELECT** works. The in-memory database supports the full SQLite dialect including subqueries, CTEs, window functions, and aggregate functions. See [Read-only queries](#read-only-queries) below for why write statements (`INSERT`, `UPDATE`, `DELETE`, `DROP`, etc.) are rejected.
 
 ## Return format
 
@@ -106,6 +106,32 @@ SQLite types map back to Python types:
 ## Internal columns
 
 `dirsql` adds internal tracking columns (`_dirsql_file_path`, `_dirsql_row_index`) to each table for file-change diffing. These columns are automatically excluded from `SELECT *` results. You do not need to account for them.
+
+## Read-only queries
+
+`query()` accepts only read-only statements. The first non-comment keyword must be `SELECT` or `WITH` (for a CTE that feeds a `SELECT`); any other leading keyword — `INSERT`, `UPDATE`, `DELETE`, `DROP`, `CREATE`, `ALTER`, `ATTACH`, `PRAGMA`, `VACUUM`, `REPLACE`, etc. — is rejected before it reaches SQLite.
+
+This keeps the in-memory index consistent with the on-disk files that back it. Mutations only happen through the watcher/indexer pipeline: to change data, edit the underlying file and let the watcher re-extract rows.
+
+::: code-group
+
+```python [Python]
+# Raises a RuntimeError; the index is unchanged.
+db.query("DELETE FROM posts")
+```
+
+```rust [Rust]
+// Returns DirSqlError::WriteForbidden; the index is unchanged.
+let err = db.query("DELETE FROM posts").unwrap_err();
+assert!(matches!(err, dirsql::DirSqlError::WriteForbidden { .. }));
+```
+
+```typescript [TypeScript]
+// Throws an Error whose message explains writes are not accepted.
+expect(() => db.query('DELETE FROM posts')).toThrow(/read-only/i);
+```
+
+:::
 
 ## Error handling
 
