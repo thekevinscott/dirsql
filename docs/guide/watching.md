@@ -26,7 +26,7 @@ async for event in db.watch():
 ```
 
 ```rust [Rust]
-use dirsql::{DirSQL, Table, Value};
+use dirsql::{DirSQL, RowEvent, Table, Value};
 use futures::StreamExt;
 use std::collections::HashMap;
 
@@ -62,9 +62,22 @@ let db = DirSQL::new(
     ],
 )?;
 
-let mut stream = db.watch();
+let mut stream = db.watch()?;
 while let Some(event) = stream.next().await {
-    println!("{} on {}: {:?}", event.action, event.table, event.row);
+    match event {
+        RowEvent::Insert { table, row, file_path } => {
+            println!("insert on {table} ({file_path}): {row:?}")
+        }
+        RowEvent::Update { table, old_row, new_row, file_path } => {
+            println!("update on {table} ({file_path}): {old_row:?} -> {new_row:?}")
+        }
+        RowEvent::Delete { table, row, file_path } => {
+            println!("delete on {table} ({file_path}): {row:?}")
+        }
+        RowEvent::Error { file_path, error } => {
+            println!("error on {file_path:?}: {error}")
+        }
+    }
 }
 ```
 
@@ -109,11 +122,12 @@ event.file_path # "comments/abc/index.json"
 ```
 
 ```rust [Rust]
-event.action   // Action::Insert
-event.table    // "comments"
-event.row      // Some({"id": "abc", "body": "new comment", "author": "alice"})
-event.old_row  // None
-event.file_path // "comments/abc/index.json"
+// RowEvent is an enum; match on the variant to destructure its fields.
+RowEvent::Insert {
+    table,     // "comments"
+    row,       // {"id": "abc", "body": "new comment", "author": "alice"}
+    file_path, // "comments/abc/index.json"
+} => { /* ... */ }
 ```
 
 ```typescript [TypeScript]
@@ -141,11 +155,12 @@ event.file_path # "comments/abc/index.json"
 ```
 
 ```rust [Rust]
-event.action   // Action::Update
-event.table    // "comments"
-event.row      // Some({"id": "abc", "body": "edited comment", "author": "alice"})
-event.old_row  // Some({"id": "abc", "body": "original comment", "author": "alice"})
-event.file_path // "comments/abc/index.json"
+RowEvent::Update {
+    table,     // "comments"
+    old_row,   // {"id": "abc", "body": "original comment", "author": "alice"}
+    new_row,   // {"id": "abc", "body": "edited comment", "author": "alice"}
+    file_path, // "comments/abc/index.json"
+} => { /* ... */ }
 ```
 
 ```typescript [TypeScript]
@@ -173,11 +188,11 @@ event.file_path # "comments/abc/index.json"
 ```
 
 ```rust [Rust]
-event.action   // Action::Delete
-event.table    // "comments"
-event.row      // Some({"id": "abc", "body": "deleted comment", "author": "alice"})
-event.old_row  // None
-event.file_path // "comments/abc/index.json"
+RowEvent::Delete {
+    table,     // "comments"
+    row,       // {"id": "abc", "body": "deleted comment", "author": "alice"}
+    file_path, // "comments/abc/index.json"
+} => { /* ... */ }
 ```
 
 ```typescript [TypeScript]
@@ -205,11 +220,12 @@ event.row       # None
 ```
 
 ```rust [Rust]
-event.action    // Action::Error
-event.table     // "comments"
-event.error     // Some("Extract error: ...")
-event.file_path // "comments/abc/index.json"
-event.row       // None
+// RowEvent::Error has no `table` field -- the variant only carries the
+// failing file path and the error message.
+RowEvent::Error {
+    file_path, // PathBuf, e.g. "comments/abc/index.json"
+    error,     // "Extract error: ..."
+} => { /* ... */ }
 ```
 
 ```typescript [TypeScript]
