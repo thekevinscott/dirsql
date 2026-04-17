@@ -69,17 +69,17 @@ while let Some(event) = stream.next().await {
 ```
 
 ```typescript [TypeScript]
-import { DirSQL, Table } from 'dirsql';
+import { DirSQL, type TableDef } from 'dirsql';
 
-const db = new DirSQL('./my-project', {
-  tables: [
-    new Table({
-      ddl: 'CREATE TABLE comments (id TEXT, body TEXT, author TEXT)',
-      glob: 'comments/**/*.json',
-      extract: (_path, content) => [JSON.parse(content)],
-    }),
-  ],
-});
+const tables: TableDef[] = [
+  {
+    ddl: 'CREATE TABLE comments (id TEXT, body TEXT, author TEXT)',
+    glob: 'comments/**/*.json',
+    extract: (_path, content) => [JSON.parse(content)],
+  },
+];
+
+const db = new DirSQL('./my-project', tables);
 
 for await (const event of db.watch()) {
   console.log(`${event.action} on ${event.table}:`, event.row);
