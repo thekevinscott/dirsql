@@ -2,6 +2,8 @@
 
 Ephemeral SQL index over a local directory. Watches a filesystem, ingests structured files into an in-memory SQLite database, and exposes a SQL query interface. The database is purely in-memory -- the filesystem is always the source of truth.
 
+[Documentation](https://thekevinscott.github.io/dirsql/?lang=python)
+
 ## Installation
 
 ```bash
