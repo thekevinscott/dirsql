@@ -18,6 +18,7 @@
 
 use dirsql::{DirSQL as CoreDirSQL, Row, RowEvent as CoreRowEvent, Table, Value};
 use napi::bindgen_prelude::*;
+use napi::Task;
 use napi_derive::napi;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -101,10 +102,15 @@ impl DirSQL {
     }
 
     /// Execute a SQL query and return results as an array of objects.
-    #[napi]
-    pub fn query(&self, sql: String) -> Result<Vec<HashMap<String, serde_json::Value>>> {
-        let rows = self.inner.query(&sql).map_err(to_napi_err)?;
-        Ok(rows.iter().map(value_row_to_json).collect())
+    ///
+    /// Runs on the libuv threadpool so queries don't block the JS event loop.
+    /// Returns a `Promise` in JS.
+    #[napi(ts_return_type = "Promise<Record<string, unknown>[]>")]
+    pub fn query(&self, sql: String) -> AsyncTask<QueryTask> {
+        AsyncTask::new(QueryTask {
+            inner: self.inner.clone(),
+            sql,
+        })
     }
 
     /// Start the file watcher. Must be called before pollEvents.
@@ -122,6 +128,30 @@ impl DirSQL {
             .poll_events(Duration::from_millis(timeout_ms as u64))
             .map_err(to_napi_err)?;
         Ok(events.iter().map(row_event_to_js).collect())
+    }
+}
+
+// -- Async tasks -------------------------------------------------------------
+
+/// Runs `DirSQL::query` on the libuv threadpool so the JS event loop stays
+/// responsive. `CoreDirSQL` is cheap to clone (internally `Arc`-wrapped), so
+/// each task owns its own handle for the lifetime of the query.
+pub struct QueryTask {
+    inner: CoreDirSQL,
+    sql: String,
+}
+
+impl Task for QueryTask {
+    type Output = Vec<HashMap<String, serde_json::Value>>;
+    type JsValue = Vec<HashMap<String, serde_json::Value>>;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let rows = self.inner.query(&self.sql).map_err(to_napi_err)?;
+        Ok(rows.iter().map(value_row_to_json).collect())
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        Ok(output)
     }
 }
 

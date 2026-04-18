@@ -43,7 +43,7 @@ export interface RowEvent {
 
 // Shape of the napi-rs-exposed class. The wrapper below drives this.
 interface NativeDirSQL {
-  query(sql: string): Record<string, unknown>[];
+  query(sql: string): Promise<Record<string, unknown>[]>;
   startWatcher(): void;
   pollEvents(timeoutMs: number): RowEvent[];
 }
@@ -98,15 +98,15 @@ export function __setCoreForTesting(fake: CoreModule | null): void {
  *
  * Constructing a `DirSQL` scans `root`, matches files against each
  * {@link TableDef}'s `glob`, extracts rows via `extract`, and builds an
- * in-memory SQLite database. `query` / `startWatcher` / `pollEvents`
- * are synchronous; {@link ready} and {@link watch} expose the same
+ * in-memory SQLite database. {@link query} runs on a worker thread and
+ * returns a Promise; {@link ready} and {@link watch} expose the same
  * surface in an async-idiomatic shape so TypeScript consumers don't
  * need a separate `AsyncDirSQL` class.
  *
  * ```ts
  * const db = new DirSQL(root, tables);
  * await db.ready;
- * const rows = db.query("SELECT ...");
+ * const rows = await db.query("SELECT ...");
  * for await (const event of db.watch()) { ... }
  * ```
  */
@@ -150,8 +150,13 @@ export class DirSQL {
     return instance;
   }
 
-  /** Execute a SQL query and return results as an array of row objects. */
-  query(sql: string): Record<string, unknown>[] {
+  /**
+   * Execute a SQL query and return results as an array of row objects.
+   *
+   * The query runs on the libuv threadpool, so the JS event loop stays
+   * responsive even for large result sets or long-running queries.
+   */
+  query(sql: string): Promise<Record<string, unknown>[]> {
     return this._inner.query(sql);
   }
 

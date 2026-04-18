@@ -27,7 +27,7 @@ describe("DirSQL.fromConfig", () => {
   });
 
   // Basic format: JSON
-  it("loads JSON files via config", () => {
+  it("loads JSON files via config", async () => {
     writeFile(
       join(dir, "items", "a.json"),
       JSON.stringify({ name: "apple", price: 1.5 }),
@@ -46,7 +46,7 @@ glob = "items/*.json"
     );
 
     const db = DirSQL.fromConfig(configPath);
-    const rows = db.query("SELECT * FROM items ORDER BY name");
+    const rows = await db.query("SELECT * FROM items ORDER BY name");
     expect(rows).toHaveLength(2);
     expect(rows[0].name).toBe("apple");
     expect(rows[0].price).toBeCloseTo(1.5);
@@ -54,7 +54,7 @@ glob = "items/*.json"
   });
 
   // Basic format: JSONL
-  it("loads JSONL files via config", () => {
+  it("loads JSONL files via config", async () => {
     writeFile(
       join(dir, "events.jsonl"),
       `${JSON.stringify({ type: "click", count: 5 })}\n${JSON.stringify({
@@ -72,14 +72,14 @@ glob = "*.jsonl"
     );
 
     const db = DirSQL.fromConfig(configPath);
-    const rows = db.query("SELECT * FROM events ORDER BY type");
+    const rows = await db.query("SELECT * FROM events ORDER BY type");
     expect(rows).toHaveLength(2);
     expect(rows[0].type).toBe("click");
     expect(rows[0].count).toBe(5);
   });
 
   // NDJSON alias
-  it("loads NDJSON files via config", () => {
+  it("loads NDJSON files via config", async () => {
     writeFile(
       join(dir, "events.ndjson"),
       `${JSON.stringify({ type: "a" })}\n${JSON.stringify({ type: "b" })}\n`,
@@ -94,14 +94,14 @@ glob = "*.ndjson"
     );
 
     const db = DirSQL.fromConfig(configPath);
-    const rows = db.query("SELECT type FROM events ORDER BY type");
+    const rows = await db.query("SELECT type FROM events ORDER BY type");
     expect(rows).toHaveLength(2);
     expect(rows[0].type).toBe("a");
     expect(rows[1].type).toBe("b");
   });
 
   // CSV
-  it("loads CSV files via config", () => {
+  it("loads CSV files via config", async () => {
     writeFile(join(dir, "data.csv"), "name,count\napples,10\noranges,20\n");
     writeFile(
       configPath,
@@ -113,14 +113,14 @@ glob = "*.csv"
     );
 
     const db = DirSQL.fromConfig(configPath);
-    const rows = db.query("SELECT * FROM produce ORDER BY name");
+    const rows = await db.query("SELECT * FROM produce ORDER BY name");
     expect(rows).toHaveLength(2);
     expect(rows[0].name).toBe("apples");
     expect(rows[1].name).toBe("oranges");
   });
 
   // TSV
-  it("loads TSV files via config", () => {
+  it("loads TSV files via config", async () => {
     writeFile(join(dir, "data.tsv"), "name\tcount\napples\t10\noranges\t20\n");
     writeFile(
       configPath,
@@ -132,14 +132,14 @@ glob = "*.tsv"
     );
 
     const db = DirSQL.fromConfig(configPath);
-    const rows = db.query("SELECT * FROM produce ORDER BY name");
+    const rows = await db.query("SELECT * FROM produce ORDER BY name");
     expect(rows).toHaveLength(2);
     expect(rows[0].name).toBe("apples");
     expect(rows[1].name).toBe("oranges");
   });
 
   // TOML
-  it("loads TOML files via config", () => {
+  it("loads TOML files via config", async () => {
     writeFile(join(dir, "settings.toml"), `name = "root"\nvalue = "42"\n`);
     writeFile(
       configPath,
@@ -167,14 +167,14 @@ glob = "data/*.toml"
     );
 
     const db = DirSQL.fromConfig(configPath);
-    const rows = db.query("SELECT * FROM settings");
+    const rows = await db.query("SELECT * FROM settings");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("root");
     expect(rows[0].value).toBe("42");
   });
 
   // YAML
-  it("loads YAML files via config (.yaml)", () => {
+  it("loads YAML files via config (.yaml)", async () => {
     writeFile(join(dir, "data", "a.yaml"), "name: apple\ncolor: red\n");
     writeFile(
       configPath,
@@ -186,14 +186,14 @@ glob = "data/*.yaml"
     );
 
     const db = DirSQL.fromConfig(configPath);
-    const rows = db.query("SELECT * FROM items");
+    const rows = await db.query("SELECT * FROM items");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("apple");
     expect(rows[0].color).toBe("red");
   });
 
   // YAML .yml alias
-  it("loads YAML files via config (.yml)", () => {
+  it("loads YAML files via config (.yml)", async () => {
     writeFile(join(dir, "data", "a.yml"), "name: banana\n");
     writeFile(
       configPath,
@@ -205,13 +205,13 @@ glob = "data/*.yml"
     );
 
     const db = DirSQL.fromConfig(configPath);
-    const rows = db.query("SELECT * FROM items");
+    const rows = await db.query("SELECT * FROM items");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("banana");
   });
 
   // Markdown + frontmatter
-  it("loads markdown with frontmatter via config", () => {
+  it("loads markdown with frontmatter via config", async () => {
     writeFile(
       join(dir, "posts", "hello.md"),
       "---\ntitle: Hello\nauthor: Alice\n---\nThe body text here.\n",
@@ -226,7 +226,7 @@ glob = "posts/*.md"
     );
 
     const db = DirSQL.fromConfig(configPath);
-    const rows = db.query("SELECT * FROM posts");
+    const rows = await db.query("SELECT * FROM posts");
     expect(rows).toHaveLength(1);
     expect(rows[0].title).toBe("Hello");
     expect(rows[0].author).toBe("Alice");
@@ -234,7 +234,7 @@ glob = "posts/*.md"
   });
 
   // Path captures
-  it("injects path captures into rows", () => {
+  it("injects path captures into rows", async () => {
     writeFile(
       join(dir, "comments", "thread-1", "index.jsonl"),
       `${JSON.stringify({ body: "hello", author: "alice" })}\n`,
@@ -253,7 +253,7 @@ glob = "comments/{thread_id}/index.jsonl"
     );
 
     const db = DirSQL.fromConfig(configPath);
-    const rows = db.query("SELECT * FROM comments ORDER BY thread_id");
+    const rows = await db.query("SELECT * FROM comments ORDER BY thread_id");
     expect(rows).toHaveLength(2);
     expect(rows[0].thread_id).toBe("thread-1");
     expect(rows[0].body).toBe("hello");
@@ -261,7 +261,7 @@ glob = "comments/{thread_id}/index.jsonl"
   });
 
   // Column mapping
-  it("applies column mapping", () => {
+  it("applies column mapping", async () => {
     writeFile(
       join(dir, "people", "alice.json"),
       JSON.stringify({ metadata: { author: { name: "Alice" } }, age: 30 }),
@@ -280,14 +280,14 @@ age = "age"
     );
 
     const db = DirSQL.fromConfig(configPath);
-    const rows = db.query("SELECT * FROM people");
+    const rows = await db.query("SELECT * FROM people");
     expect(rows).toHaveLength(1);
     expect(rows[0].display_name).toBe("Alice");
     expect(rows[0].age).toBe(30);
   });
 
   // each
-  it("uses each to navigate into arrays", () => {
+  it("uses each to navigate into arrays", async () => {
     writeFile(
       join(dir, "catalog.json"),
       JSON.stringify({
@@ -310,14 +310,14 @@ each = "data.items"
     );
 
     const db = DirSQL.fromConfig(configPath);
-    const rows = db.query("SELECT * FROM items ORDER BY name");
+    const rows = await db.query("SELECT * FROM items ORDER BY name");
     expect(rows).toHaveLength(2);
     expect(rows[0].name).toBe("gadget");
     expect(rows[1].name).toBe("widget");
   });
 
   // ignore
-  it("respects ignore patterns", () => {
+  it("respects ignore patterns", async () => {
     writeFile(join(dir, "data", "good.json"), JSON.stringify({ val: 1 }));
     writeFile(
       join(dir, "data", "node_modules", "bad.json"),
@@ -336,13 +336,13 @@ glob = "data/**/*.json"
     );
 
     const db = DirSQL.fromConfig(configPath);
-    const rows = db.query("SELECT * FROM items");
+    const rows = await db.query("SELECT * FROM items");
     expect(rows).toHaveLength(1);
     expect(rows[0].val).toBe(1);
   });
 
   // Multiple tables
-  it("loads multiple tables", () => {
+  it("loads multiple tables", async () => {
     writeFile(
       join(dir, "posts", "hello.json"),
       JSON.stringify({ title: "Hello" }),
@@ -365,8 +365,8 @@ glob = "authors/*.json"
     );
 
     const db = DirSQL.fromConfig(configPath);
-    const posts = db.query("SELECT * FROM posts");
-    const authors = db.query("SELECT * FROM authors");
+    const posts = await db.query("SELECT * FROM posts");
+    const authors = await db.query("SELECT * FROM authors");
     expect(posts).toHaveLength(1);
     expect(authors).toHaveLength(1);
     expect(posts[0].title).toBe("Hello");
@@ -374,7 +374,7 @@ glob = "authors/*.json"
   });
 
   // Explicit format override
-  it("uses explicit format override", () => {
+  it("uses explicit format override", async () => {
     writeFile(join(dir, "data.txt"), "name,val\nfoo,1\n");
     writeFile(
       configPath,
@@ -387,14 +387,14 @@ format = "csv"
     );
 
     const db = DirSQL.fromConfig(configPath);
-    const rows = db.query("SELECT * FROM t");
+    const rows = await db.query("SELECT * FROM t");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("foo");
     expect(rows[0].val).toBe("1");
   });
 
   // Strict = true (passing)
-  it("allows rows with exact keys when strict = true in config", () => {
+  it("allows rows with exact keys when strict = true in config", async () => {
     writeFile(
       join(dir, "items", "a.json"),
       JSON.stringify({ name: "apple", color: "red" }),
@@ -410,14 +410,14 @@ strict = true
     );
 
     const db = DirSQL.fromConfig(configPath);
-    const rows = db.query("SELECT name, color FROM items");
+    const rows = await db.query("SELECT name, color FROM items");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("apple");
     expect(rows[0].color).toBe("red");
   });
 
   // Strict = true (rejecting)
-  it("rejects rows with extra keys when strict = true in config", () => {
+  it("rejects rows with extra keys when strict = true in config", async () => {
     writeFile(
       join(dir, "items", "a.json"),
       JSON.stringify({ name: "apple", color: "red" }),
@@ -436,18 +436,18 @@ strict = true
   });
 
   // Error: missing config file
-  it("throws when config file is missing", () => {
+  it("throws when config file is missing", async () => {
     expect(() => DirSQL.fromConfig(join(dir, "nonexistent.toml"))).toThrow();
   });
 
   // Error: invalid TOML
-  it("throws on invalid TOML", () => {
+  it("throws on invalid TOML", async () => {
     writeFile(configPath, "this is not valid [[[");
     expect(() => DirSQL.fromConfig(configPath)).toThrow();
   });
 
   // Error: missing DDL
-  it("throws when a table entry is missing ddl", () => {
+  it("throws when a table entry is missing ddl", async () => {
     writeFile(
       configPath,
       `
@@ -459,7 +459,7 @@ glob = "*.json"
   });
 
   // Error: unsupported format
-  it("throws when format cannot be inferred and none given", () => {
+  it("throws when format cannot be inferred and none given", async () => {
     writeFile(join(dir, "data.dat"), "some data");
     writeFile(
       configPath,

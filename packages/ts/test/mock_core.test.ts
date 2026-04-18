@@ -19,9 +19,9 @@ describe("__setCoreForTesting", () => {
     ).__setCoreForTesting(null);
   });
 
-  it("routes `new DirSQL(...)` through the injected fake core", () => {
+  it("routes `new DirSQL(...)` through the injected fake core", async () => {
     const fakeInstance = {
-      query: vi.fn(() => [{ injected: true }]),
+      query: vi.fn(async () => [{ injected: true }]),
       startWatcher: vi.fn(),
       pollEvents: vi.fn(() => []),
     };
@@ -39,13 +39,13 @@ describe("__setCoreForTesting", () => {
 
     const db = new dirsql.DirSQL("/tmp/does-not-exist", []);
     expect(FakeDirSQL).toHaveBeenCalledWith("/tmp/does-not-exist", []);
-    expect(db.query("SELECT 1")).toEqual([{ injected: true }]);
+    expect(await db.query("SELECT 1")).toEqual([{ injected: true }]);
     expect(fakeInstance.query).toHaveBeenCalledWith("SELECT 1");
   });
 
-  it("routes static methods (fromConfig) through the injected fake core", () => {
+  it("routes static methods (fromConfig) through the injected fake core", async () => {
     const fromConfig = vi.fn(() => ({
-      query: () => [{ via: "fromConfig" }],
+      query: async () => [{ via: "fromConfig" }],
       startWatcher: () => {},
       pollEvents: () => [],
     }));
@@ -64,7 +64,7 @@ describe("__setCoreForTesting", () => {
 
     const db = dirsql.DirSQL.fromConfig("/tmp/fake.toml");
     expect(fromConfig).toHaveBeenCalledWith("/tmp/fake.toml");
-    expect(db.query("x")).toEqual([{ via: "fromConfig" }]);
+    expect(await db.query("x")).toEqual([{ via: "fromConfig" }]);
   });
 
   it("exposes watch() as an AsyncIterable driven by pollEvents", async () => {
@@ -88,7 +88,7 @@ describe("__setCoreForTesting", () => {
       ],
     ];
     const fakeInstance = {
-      query: () => [],
+      query: async () => [],
       startWatcher: vi.fn(),
       pollEvents: vi.fn(() => queued.shift() ?? []),
     };
@@ -139,7 +139,7 @@ describe("__setCoreForTesting", () => {
       return [];
     });
     const fakeInstance = {
-      query: () => [],
+      query: async () => [],
       startWatcher: vi.fn(),
       pollEvents,
     };

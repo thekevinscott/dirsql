@@ -30,7 +30,7 @@ describe("DirSQL", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("creates an instance and queries data", () => {
+  it("creates an instance and queries data", async () => {
     const db = new DirSQL(dir, [
       {
         ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
@@ -39,7 +39,7 @@ describe("DirSQL", () => {
       },
     ]);
 
-    const rows = db.query("SELECT * FROM users ORDER BY name");
+    const rows = await db.query("SELECT * FROM users ORDER BY name");
     expect(rows).toHaveLength(2);
     expect(rows[0].name).toBe("Alice");
     expect(rows[0].age).toBe(30);
@@ -47,7 +47,7 @@ describe("DirSQL", () => {
     expect(rows[1].age).toBe(25);
   });
 
-  it("supports multiple tables", () => {
+  it("supports multiple tables", async () => {
     const db = new DirSQL(dir, [
       {
         ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
@@ -61,16 +61,16 @@ describe("DirSQL", () => {
       },
     ]);
 
-    const users = db.query("SELECT * FROM users ORDER BY name");
+    const users = await db.query("SELECT * FROM users ORDER BY name");
     expect(users).toHaveLength(2);
 
-    const products = db.query("SELECT * FROM products ORDER BY name");
+    const products = await db.query("SELECT * FROM products ORDER BY name");
     expect(products).toHaveLength(2);
     expect(products[0].name).toBe("Gadget");
     expect(products[0].price).toBeCloseTo(19.99);
   });
 
-  it("supports glob patterns", () => {
+  it("supports glob patterns", async () => {
     const db = new DirSQL(dir, [
       {
         ddl: "CREATE TABLE items (name TEXT)",
@@ -82,11 +82,11 @@ describe("DirSQL", () => {
       },
     ]);
 
-    const rows = db.query("SELECT * FROM items ORDER BY name");
+    const rows = await db.query("SELECT * FROM items ORDER BY name");
     expect(rows).toHaveLength(4);
   });
 
-  it("supports ignore patterns", () => {
+  it("supports ignore patterns", async () => {
     const db = new DirSQL(
       dir,
       [
@@ -102,11 +102,11 @@ describe("DirSQL", () => {
       ["data/products.json"],
     );
 
-    const rows = db.query("SELECT * FROM items ORDER BY name");
+    const rows = await db.query("SELECT * FROM items ORDER BY name");
     expect(rows).toHaveLength(2);
   });
 
-  it("handles SQL queries with WHERE clauses", () => {
+  it("handles SQL queries with WHERE clauses", async () => {
     const db = new DirSQL(dir, [
       {
         ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
@@ -115,12 +115,12 @@ describe("DirSQL", () => {
       },
     ]);
 
-    const rows = db.query("SELECT * FROM users WHERE age > 27");
+    const rows = await db.query("SELECT * FROM users WHERE age > 27");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("Alice");
   });
 
-  it("handles empty directories gracefully", () => {
+  it("handles empty directories gracefully", async () => {
     const emptyDir = mkdtempSync(join(tmpdir(), "dirsql-empty-"));
     try {
       const db = new DirSQL(emptyDir, [
@@ -131,14 +131,14 @@ describe("DirSQL", () => {
         },
       ]);
 
-      const rows = db.query("SELECT * FROM items");
+      const rows = await db.query("SELECT * FROM items");
       expect(rows).toHaveLength(0);
     } finally {
       rmSync(emptyDir, { recursive: true, force: true });
     }
   });
 
-  it("throws on invalid SQL", () => {
+  it("throws on invalid SQL", async () => {
     const db = new DirSQL(dir, [
       {
         ddl: "CREATE TABLE users (name TEXT)",
@@ -147,10 +147,10 @@ describe("DirSQL", () => {
       },
     ]);
 
-    expect(() => db.query("SELECT * FROM nonexistent")).toThrow();
+    await expect(db.query("SELECT * FROM nonexistent")).rejects.toThrow();
   });
 
-  it("rejects write statements via query", () => {
+  it("rejects write statements via query", async () => {
     const itemDir = join(dir, "items");
     mkdirSync(itemDir, { recursive: true });
     writeFileSync(join(itemDir, "a.json"), JSON.stringify({ name: "apple" }));
@@ -173,11 +173,11 @@ describe("DirSQL", () => {
       "REPLACE INTO items (name) VALUES ('x')",
       "VACUUM",
     ]) {
-      expect(() => db.query(stmt)).toThrow(/read-only/i);
+      await expect(db.query(stmt)).rejects.toThrow(/read-only/i);
     }
 
     // Index is unchanged.
-    const rows = db.query("SELECT name FROM items");
+    const rows = await db.query("SELECT name FROM items");
     expect(rows).toEqual([{ name: "apple" }]);
   });
 
@@ -237,7 +237,7 @@ describe("DirSQL strict mode", () => {
   });
 
   // Docs: strict mode passes on exact key match.
-  it("allows rows with exact key match when strict is true", () => {
+  it("allows rows with exact key match when strict is true", async () => {
     writeFileSync(
       join(dir, "items", "a.json"),
       JSON.stringify({ name: "apple", color: "red" }),
@@ -252,7 +252,7 @@ describe("DirSQL strict mode", () => {
       },
     ]);
 
-    const rows = db.query("SELECT name, color FROM items");
+    const rows = await db.query("SELECT name, color FROM items");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("apple");
     expect(rows[0].color).toBe("red");
@@ -321,6 +321,6 @@ describe("DirSQL watch events", () => {
     expect(db.ready).toBeInstanceOf(Promise);
     await expect(db.ready).resolves.toBeUndefined();
     // query works immediately after ready resolves.
-    expect(db.query("SELECT * FROM items")).toEqual([]);
+    expect(await db.query("SELECT * FROM items")).toEqual([]);
   });
 });
