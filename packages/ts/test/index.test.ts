@@ -153,10 +153,7 @@ describe("DirSQL", () => {
   it("rejects write statements via query", () => {
     const itemDir = join(dir, "items");
     mkdirSync(itemDir, { recursive: true });
-    writeFileSync(
-      join(itemDir, "a.json"),
-      JSON.stringify({ name: "apple" }),
-    );
+    writeFileSync(join(itemDir, "a.json"), JSON.stringify({ name: "apple" }));
 
     const db = new DirSQL(dir, [
       {
