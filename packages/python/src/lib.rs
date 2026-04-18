@@ -4,8 +4,8 @@
 //! - wraps a Python `extract` callable in a Rust closure (acquiring the GIL as
 //!   needed) so it can be handed to [`dirsql::Table`]
 //! - converts row dicts, values, and events between Python and Rust
-//! - forwards `new` / `from_config` / `query` / `_start_watcher` /
-//!   `_poll_events` to the corresponding `DirSQL` methods
+//! - forwards `new` / `query` / `_start_watcher` / `_poll_events` to the
+//!   corresponding `DirSQL` methods
 //!
 //! The Python-side async wrapper (`dirsql._async.DirSQL`) drives this binding
 //! via `asyncio.to_thread`.
@@ -86,34 +86,38 @@ mod python {
     #[pymethods]
     impl PyDirSQL {
         #[new]
-        #[pyo3(signature = (root, *, tables, ignore=None))]
+        #[pyo3(signature = (root=None, *, tables=None, ignore=None, config=None))]
         fn new(
             py: Python<'_>,
-            root: String,
-            tables: Vec<PyRef<'_, PyTable>>,
+            root: Option<String>,
+            tables: Option<Vec<PyRef<'_, PyTable>>>,
             ignore: Option<Vec<String>>,
+            config: Option<String>,
         ) -> PyResult<Self> {
-            let rust_tables: Vec<Table> = tables.iter().map(|t| build_table(py, t)).collect();
+            let rust_tables: Vec<Table> = tables
+                .as_deref()
+                .map(|ts| ts.iter().map(|t| build_table(py, t)).collect())
+                .unwrap_or_default();
 
             let inner = py
-                .detach(move || match ignore {
-                    Some(ig) => DirSQL::with_ignore(root, rust_tables, ig),
-                    None => DirSQL::new(root, rust_tables),
+                .detach(move || {
+                    let mut builder = DirSQL::builder();
+                    if let Some(r) = root {
+                        builder = builder.root(r);
+                    }
+                    if !rust_tables.is_empty() {
+                        builder = builder.tables(rust_tables);
+                    }
+                    if let Some(ig) = ignore {
+                        builder = builder.ignore(ig);
+                    }
+                    if let Some(c) = config {
+                        builder = builder.config(c);
+                    }
+                    builder.build()
                 })
                 .map_err(to_py_err)?;
 
-            Ok(Self { inner })
-        }
-
-        #[classmethod]
-        fn from_config(
-            _cls: &Bound<'_, pyo3::types::PyType>,
-            py: Python<'_>,
-            path: String,
-        ) -> PyResult<Self> {
-            let inner = py
-                .detach(move || DirSQL::from_config_path(&path))
-                .map_err(to_py_err)?;
             Ok(Self { inner })
         }
 

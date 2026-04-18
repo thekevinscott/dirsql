@@ -44,24 +44,30 @@ describe("__setCoreForTesting", () => {
       }
     ).__setCoreForTesting({ DirSQL: FakeDirSQL });
 
-    const db = new dirsql.DirSQL("/tmp/does-not-exist", []);
+    const db = new dirsql.DirSQL({ root: "/tmp/does-not-exist", tables: [] });
     await db.ready;
-    expect(openAsync).toHaveBeenCalledWith("/tmp/does-not-exist", []);
+    expect(openAsync).toHaveBeenCalledWith(
+      "/tmp/does-not-exist",
+      [],
+      null,
+      null,
+    );
     expect(await db.query("SELECT 1")).toEqual([{ injected: true }]);
     expect(fakeInstance.query).toHaveBeenCalledWith("SELECT 1");
   });
 
-  it("routes static methods (fromConfig) through the injected fake core", async () => {
-    const fromConfigAsync = vi.fn(async () => ({
-      query: async () => [{ via: "fromConfig" }],
-      startWatcher: async () => {},
-      pollEvents: async () => [],
-    }));
+  it("routes `new DirSQL(configPath)` through the injected fake core", async () => {
+    const fakeInstance = {
+      query: vi.fn(async () => [{ via: "config" }]),
+      startWatcher: vi.fn(async () => {}),
+      pollEvents: vi.fn(async () => []),
+    };
+    const openAsync = vi.fn(async () => fakeInstance);
     const FakeDirSQL = Object.assign(
-      () => {
-        throw new Error("ctor not expected");
-      },
-      { fromConfigAsync },
+      vi.fn(function (this: unknown) {
+        throw new Error("sync ctor should not be called");
+      }),
+      { openAsync },
     );
 
     (
@@ -70,9 +76,10 @@ describe("__setCoreForTesting", () => {
       }
     ).__setCoreForTesting({ DirSQL: FakeDirSQL });
 
-    const db = await dirsql.DirSQL.fromConfig("/tmp/fake.toml");
-    expect(fromConfigAsync).toHaveBeenCalledWith("/tmp/fake.toml");
-    expect(await db.query("x")).toEqual([{ via: "fromConfig" }]);
+    const db = new dirsql.DirSQL("/tmp/fake.toml");
+    await db.ready;
+    expect(openAsync).toHaveBeenCalledWith(null, null, null, "/tmp/fake.toml");
+    expect(await db.query("x")).toEqual([{ via: "config" }]);
   });
 
   it("exposes watch() as an AsyncIterable driven by pollEvents", async () => {
@@ -114,7 +121,7 @@ describe("__setCoreForTesting", () => {
       }
     ).__setCoreForTesting({ DirSQL: FakeDirSQL });
 
-    const db = new dirsql.DirSQL("/tmp/nothing", []);
+    const db = new dirsql.DirSQL({ root: "/tmp/nothing", tables: [] });
     const seen: dirsql.RowEvent[] = [];
     for await (const event of db.watch()) {
       seen.push(event);
@@ -167,7 +174,7 @@ describe("__setCoreForTesting", () => {
       }
     ).__setCoreForTesting({ DirSQL: FakeDirSQL });
 
-    const db = new dirsql.DirSQL("/tmp/nothing", []);
+    const db = new dirsql.DirSQL({ root: "/tmp/nothing", tables: [] });
     await db.ready;
 
     let timerFired = false;

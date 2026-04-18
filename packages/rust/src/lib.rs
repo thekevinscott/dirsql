@@ -178,31 +178,26 @@ pub struct DirSQL {
 }
 
 impl DirSQL {
-    /// Construct a `DirSQL` over `root` using the provided tables. Blocks on
-    /// the initial directory scan.
+    /// Start building a `DirSQL`. See [`DirSQLBuilder`] for the available
+    /// configuration methods. Call `.build()` to finish construction
+    /// synchronously (or `.prepare()` + [`finish_build`](Self::finish_build)
+    /// to split the scan across threads for async bindings).
+    ///
+    /// The builder is the single construction entrypoint. To load from a
+    /// `.dirsql.toml`, pass the config path via `.config(path)`; to override
+    /// the root, use `.root(path)`; to add tables programmatically, use
+    /// `.table(t)` / `.tables(ts)`. When both a `.config()` and explicit
+    /// `.root()` are set, the explicit root wins and a warning is emitted.
+    pub fn builder() -> DirSQLBuilder {
+        DirSQLBuilder::default()
+    }
+
+    /// Shortcut for `DirSQL::builder().root(root).tables(tables).build()`.
     pub fn new(root: impl Into<PathBuf>, tables: Vec<Table>) -> Result<Self> {
-        Self::with_ignore(root, tables, std::iter::empty::<String>())
+        DirSQL::builder().root(root).tables(tables).build()
     }
 
-    /// Construct a `DirSQL` from a `.dirsql.toml` located at `root/.dirsql.toml`.
-    pub fn from_config(root: impl Into<PathBuf>) -> Result<Self> {
-        let root = root.into();
-        Self::from_config_path(root.join(".dirsql.toml"))
-    }
-
-    /// Construct a `DirSQL` from an explicit path to a `.dirsql.toml` file.
-    /// The root directory is taken as the config file's parent.
-    pub fn from_config_path(config_path: impl AsRef<Path>) -> Result<Self> {
-        let path = config_path.as_ref();
-        let cfg = config::load_config(path).map_err(|e| DirSqlError::Config(e.to_string()))?;
-        let root = path
-            .parent()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let tables = build_tables_from_config(&cfg)?;
-        Self::build(root, tables, cfg.ignore)
-    }
-
+    /// Shortcut for `DirSQL::builder().root(...).tables(...).ignore(...).build()`.
     pub fn with_ignore<I, S>(
         root: impl Into<PathBuf>,
         tables: Vec<Table>,
@@ -212,11 +207,25 @@ impl DirSQL {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        Self::build(
-            root.into(),
-            tables,
-            ignore.into_iter().map(Into::into).collect(),
-        )
+        DirSQL::builder()
+            .root(root)
+            .tables(tables)
+            .ignore(ignore)
+            .build()
+    }
+
+    /// Shortcut for `DirSQL::builder().config(root/.dirsql.toml).build()`.
+    pub fn from_config(root: impl Into<PathBuf>) -> Result<Self> {
+        DirSQL::builder()
+            .config(root.into().join(".dirsql.toml"))
+            .build()
+    }
+
+    /// Shortcut for `DirSQL::builder().config(config_path).build()`.
+    pub fn from_config_path(config_path: impl AsRef<Path>) -> Result<Self> {
+        DirSQL::builder()
+            .config(config_path.as_ref().to_path_buf())
+            .build()
     }
 
     /// Run a SQL query against the in-memory database.
@@ -483,7 +492,7 @@ impl DirSQL {
         row_events
     }
 
-    pub(crate) fn build(
+    pub(crate) fn build_from_parts(
         root: PathBuf,
         tables: Vec<Table>,
         ignore_patterns: Vec<String>,
@@ -612,6 +621,165 @@ impl DirSQL {
                 watch_thread_started: AtomicBool::new(false),
             }),
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Builder
+// ---------------------------------------------------------------------------
+
+/// Builder for [`DirSQL`] and [`AsyncDirSQL`].
+///
+/// All configuration methods return `self` and are chainable. Call
+/// [`build`](Self::build) for synchronous construction, or
+/// [`build_async`](Self::build_async) to produce an [`AsyncDirSQL`] whose
+/// initial scan runs on a background thread.
+///
+/// # Example
+/// ```ignore
+/// use dirsql::{DirSQL, Table};
+/// let db = DirSQL::builder()
+///     .root("./data")
+///     .table(Table::new("CREATE TABLE t (x TEXT)", "*.json", |_, _| vec![]))
+///     .ignore(["target/**"])
+///     .build()?;
+/// ```
+///
+/// # Config files
+/// Pass a `.dirsql.toml` path via [`config`](Self::config). If the config
+/// file declares a `root` field, it is resolved relative to the config's
+/// parent directory. If both the config and an explicit [`root`](Self::root)
+/// are provided, the explicit root wins and a warning is emitted.
+#[derive(Default)]
+pub struct DirSQLBuilder {
+    root: Option<PathBuf>,
+    tables: Vec<Table>,
+    ignore: Vec<String>,
+    config_path: Option<PathBuf>,
+}
+
+impl DirSQLBuilder {
+    /// Set the root directory to scan. Overrides any `root` declared by a
+    /// config file passed via [`config`](Self::config), emitting a warning
+    /// on stderr to flag the collision.
+    pub fn root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.root = Some(root.into());
+        self
+    }
+
+    /// Replace the accumulated table list with `tables`.
+    pub fn tables(mut self, tables: Vec<Table>) -> Self {
+        self.tables = tables;
+        self
+    }
+
+    /// Append a single table to the table list.
+    pub fn table(mut self, table: Table) -> Self {
+        self.tables.push(table);
+        self
+    }
+
+    /// Replace the accumulated ignore-pattern list with `ignore`.
+    pub fn ignore<I, S>(mut self, ignore: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.ignore = ignore.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Load a `.dirsql.toml` config file at build time. The file's `[[table]]`
+    /// entries are appended after any programmatic tables; its `[dirsql].ignore`
+    /// patterns are appended; its optional `[dirsql].root` is resolved relative
+    /// to the config's parent directory. If the builder's own [`root`](Self::root)
+    /// was also set, the explicit value wins (with a warning).
+    pub fn config(mut self, config_path: impl Into<PathBuf>) -> Self {
+        self.config_path = Some(config_path.into());
+        self
+    }
+
+    /// Resolve all inputs (reading the config file if one was supplied) into
+    /// the (root, tables, ignore) tuple used by the construction pipeline.
+    /// Emits a warning on stderr if both an explicit root and a config-supplied
+    /// root are present.
+    fn resolve(self) -> Result<(PathBuf, Vec<Table>, Vec<String>)> {
+        let DirSQLBuilder {
+            root: explicit_root,
+            mut tables,
+            mut ignore,
+            config_path,
+        } = self;
+
+        let mut config_root: Option<PathBuf> = None;
+
+        if let Some(ref cfg_path) = config_path {
+            let cfg = config::load_config(cfg_path)
+                .map_err(|e| DirSqlError::Config(e.to_string()))?;
+
+            let cfg_parent = cfg_path
+                .parent()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            if let Some(cfg_root) = cfg.root.clone() {
+                let resolved = if cfg_root.is_absolute() {
+                    cfg_root
+                } else {
+                    cfg_parent.join(cfg_root)
+                };
+                config_root = Some(resolved);
+            } else {
+                config_root = Some(cfg_parent);
+            }
+
+            let cfg_tables = build_tables_from_config(&cfg)?;
+            tables.extend(cfg_tables);
+            ignore.extend(cfg.ignore);
+        }
+
+        let root = match (explicit_root, config_root) {
+            (Some(explicit), Some(cfg)) => {
+                if explicit != cfg {
+                    eprintln!(
+                        "dirsql: explicit .root({}) overrides config root ({})",
+                        explicit.display(),
+                        cfg.display(),
+                    );
+                }
+                explicit
+            }
+            (Some(explicit), None) => explicit,
+            (None, Some(cfg)) => cfg,
+            (None, None) => {
+                return Err(DirSqlError::Config(
+                    "no root directory: call .root(...) or .config(path)".into(),
+                ));
+            }
+        };
+
+        Ok((root, tables, ignore))
+    }
+
+    /// Finish building synchronously. Blocks on the initial directory scan.
+    pub fn build(self) -> Result<DirSQL> {
+        let (root, tables, ignore) = self.resolve()?;
+        DirSQL::build_from_parts(root, tables, ignore)
+    }
+
+    /// Split-phase prepare: runs the Send-safe portion of construction and
+    /// returns the intermediate [`PreparedBuild`]. Intended for async bindings
+    /// (napi, py-ext) that must finish on a specific thread.
+    #[doc(hidden)]
+    pub fn prepare(self) -> Result<PreparedBuild> {
+        let (root, tables, ignore) = self.resolve()?;
+        DirSQL::prepare_build(root, tables, ignore)
+    }
+
+    /// Finish building asynchronously. Returns immediately; the initial scan
+    /// runs on a background thread. Call [`AsyncDirSQL::ready`] to await it.
+    pub fn build_async(self) -> Result<AsyncDirSQL> {
+        let (root, tables, ignore) = self.resolve()?;
+        Ok(AsyncDirSQL::spawn_build(root, tables, ignore))
     }
 }
 
@@ -772,26 +940,13 @@ struct AsyncDirSqlInner {
 }
 
 impl AsyncDirSQL {
+    /// Shortcut for `DirSQL::builder().root(root).tables(tables).build_async()`.
     pub fn new(root: impl Into<PathBuf>, tables: Vec<Table>) -> Result<Self> {
-        Self::with_ignore(root, tables, std::iter::empty::<String>())
+        DirSQL::builder().root(root).tables(tables).build_async()
     }
 
-    pub fn from_config(root: impl Into<PathBuf>) -> Result<Self> {
-        let root = root.into();
-        Self::from_config_path(root.join(".dirsql.toml"))
-    }
-
-    pub fn from_config_path(config_path: impl AsRef<Path>) -> Result<Self> {
-        let path = config_path.as_ref();
-        let cfg = config::load_config(path).map_err(|e| DirSqlError::Config(e.to_string()))?;
-        let root = path
-            .parent()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let tables = build_tables_from_config(&cfg)?;
-        Ok(Self::spawn_build(root, tables, cfg.ignore))
-    }
-
+    /// Shortcut for
+    /// `DirSQL::builder().root(...).tables(...).ignore(...).build_async()`.
     pub fn with_ignore<I, S>(
         root: impl Into<PathBuf>,
         tables: Vec<Table>,
@@ -801,19 +956,35 @@ impl AsyncDirSQL {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        let root = root.into();
-        let ignore_patterns: Vec<String> = ignore.into_iter().map(Into::into).collect();
-        Ok(Self::spawn_build(root, tables, ignore_patterns))
+        DirSQL::builder()
+            .root(root)
+            .tables(tables)
+            .ignore(ignore)
+            .build_async()
     }
 
-    fn spawn_build(root: PathBuf, tables: Vec<Table>, ignore: Vec<String>) -> Self {
+    /// Shortcut for `DirSQL::builder().config(root/.dirsql.toml).build_async()`.
+    pub fn from_config(root: impl Into<PathBuf>) -> Result<Self> {
+        DirSQL::builder()
+            .config(root.into().join(".dirsql.toml"))
+            .build_async()
+    }
+
+    /// Shortcut for `DirSQL::builder().config(config_path).build_async()`.
+    pub fn from_config_path(config_path: impl AsRef<Path>) -> Result<Self> {
+        DirSQL::builder()
+            .config(config_path.as_ref().to_path_buf())
+            .build_async()
+    }
+
+    pub(crate) fn spawn_build(root: PathBuf, tables: Vec<Table>, ignore: Vec<String>) -> Self {
         let inner = Arc::new(AsyncDirSqlInner {
             db: tokio::sync::OnceCell::new(),
             ready_notify: tokio::sync::Notify::new(),
         });
         let inner_clone = inner.clone();
         thread::spawn(move || {
-            let result = DirSQL::build(root, tables, ignore);
+            let result = DirSQL::build_from_parts(root, tables, ignore);
             let _ = inner_clone.db.set(result);
             inner_clone.ready_notify.notify_waiters();
         });

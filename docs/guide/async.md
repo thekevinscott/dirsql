@@ -55,13 +55,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```typescript [TypeScript]
 import { DirSQL, Table } from 'dirsql';
 
-const db = new DirSQL('./my-project', [
-  new Table({
-    ddl: 'CREATE TABLE items (name TEXT, value INTEGER)',
-    glob: 'data/*.json',
-    extract: (_path, content) => [JSON.parse(content)],
-  }),
-]);
+const db = new DirSQL({
+  root: './my-project',
+  tables: [
+    new Table({
+      ddl: 'CREATE TABLE items (name TEXT, value INTEGER)',
+      glob: 'data/*.json',
+      extract: (_path, content) => [JSON.parse(content)],
+    }),
+  ],
+});
 
 // Query
 const results = await db.query('SELECT * FROM items WHERE value > 10');
@@ -73,7 +76,7 @@ console.log(results);
 ## Constructor
 
 ```python
-DirSQL(root, *, tables, ignore=None)
+DirSQL(root=None, *, tables=None, ignore=None, config=None)
 ```
 
 The constructor immediately starts scanning in a background thread via `asyncio.ensure_future`. The constructor itself returns immediately without blocking.
@@ -204,7 +207,7 @@ async function watchAndServe(db: DirSQL) {
   }
 }
 
-const db = new DirSQL('./data', [/* tables */]);
+const db = new DirSQL({ root: './data', tables: [/* tables */] });
 
 await Promise.all([
   watchAndServe(db),

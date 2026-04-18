@@ -1,4 +1,4 @@
-"""Integration tests for DirSQL.from_config()."""
+"""Integration tests for DirSQL(config=)."""
 
 import json
 import os
@@ -44,7 +44,7 @@ glob = "items/*.json"
 """,
             )
 
-            db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
             results = await db.query("SELECT * FROM items ORDER BY name")
             assert len(results) == 2
@@ -68,7 +68,7 @@ glob = "*.csv"
 """,
             )
 
-            db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
             results = await db.query("SELECT * FROM produce ORDER BY name")
             assert len(results) == 2
@@ -93,7 +93,7 @@ glob = "*.jsonl"
 """,
             )
 
-            db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
             results = await db.query("SELECT * FROM events ORDER BY type")
             assert len(results) == 2
@@ -121,7 +121,7 @@ glob = "comments/{thread_id}/index.jsonl"
 """,
             )
 
-            db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
             results = await db.query("SELECT * FROM comments ORDER BY thread_id")
             assert len(results) == 2
@@ -150,7 +150,7 @@ age = "age"
 """,
             )
 
-            db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
             results = await db.query("SELECT * FROM people")
             assert len(results) == 1
@@ -184,7 +184,7 @@ each = "data.items"
 """,
             )
 
-            db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
             results = await db.query("SELECT * FROM items ORDER BY name")
             assert len(results) == 2
@@ -215,7 +215,7 @@ glob = "data/**/*.json"
 """,
             )
 
-            db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
             results = await db.query("SELECT * FROM items")
             assert len(results) == 1
@@ -246,7 +246,7 @@ glob = "authors/*.json"
 """,
             )
 
-            db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
             posts = await db.query("SELECT * FROM posts")
             authors = await db.query("SELECT * FROM authors")
@@ -259,7 +259,7 @@ glob = "authors/*.json"
         @pytest.mark.asyncio
         async def it_raises_on_missing_config_file(config_dir):
             """from_config raises when the config file doesn't exist."""
-            db = DirSQL.from_config(os.path.join(config_dir, "nonexistent.toml"))
+            db = DirSQL(config=os.path.join(config_dir, "nonexistent.toml"))
             with pytest.raises(Exception):
                 await db.ready()
 
@@ -270,7 +270,7 @@ glob = "authors/*.json"
                 os.path.join(config_dir, ".dirsql.toml"),
                 "this is not valid [[[",
             )
-            db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             with pytest.raises(Exception):
                 await db.ready()
 
@@ -284,7 +284,7 @@ glob = "authors/*.json"
 glob = "*.json"
 """,
             )
-            db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             with pytest.raises(Exception):
                 await db.ready()
 
@@ -303,7 +303,7 @@ ddl = "CREATE TABLE t (x TEXT)"
 glob = "*.dat"
 """,
             )
-            db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             with pytest.raises(Exception, match="[Ff]ormat|[Uu]nsupported"):
                 await db.ready()
 
@@ -326,7 +326,7 @@ format = "csv"
 """,
             )
 
-            db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
             results = await db.query("SELECT * FROM t")
             assert len(results) == 1
@@ -349,7 +349,7 @@ glob = "items/*.json"
 """,
             )
 
-            db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
             results = await db.query("SELECT name FROM items WHERE price > 1.0")
             assert len(results) == 1

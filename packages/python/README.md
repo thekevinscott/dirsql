@@ -150,13 +150,16 @@ Defines how files map to a SQL table.
 - **`glob`** (`str`): A glob pattern matched against file paths relative to root.
 - **`extract`** (`Callable[[str, str], list[dict]]`): A function receiving `(relative_path, file_content)` and returning a list of row dicts. Each dict's keys must match the DDL column names.
 
-### `DirSQL(root, *, tables, ignore=None)`
+### `DirSQL(root=None, *, tables=None, ignore=None, config=None)`
 
 Creates an in-memory SQLite database indexed from the directory at `root`. The constructor is sync and returns immediately; scanning runs in a background thread.
 
-- **`root`** (`str`): Path to the directory to index.
-- **`tables`** (`list[Table]`): Table definitions.
-- **`ignore`** (`list[str] | None`): Glob patterns for paths to skip.
+At least one of `root` or `config` must be supplied. When both `root` and `config` are passed (or `config` declares `[dirsql].root`), the explicit `root` wins and a warning is emitted on stderr.
+
+- **`root`** (`str | None`): Path to the directory to index. Optional when `config` supplies one.
+- **`tables`** (`list[Table] | None`): Programmatic table definitions. Appended to any tables in the config file.
+- **`ignore`** (`list[str] | None`): Glob patterns for paths to skip. Appended to any `[dirsql].ignore` patterns in the config file.
+- **`config`** (`str | None`): Optional path to a `.dirsql.toml` file. Its `[[table]]` entries, `[dirsql].ignore`, and optional `[dirsql].root` are merged into the constructor's inputs.
 
 #### `await DirSQL.ready()`
 
@@ -169,10 +172,6 @@ Execute a SQL query. Returns a list of dicts keyed by column name. Internal trac
 #### `DirSQL.watch() -> AsyncIterator[RowEvent]`
 
 Returns an async iterator that yields `RowEvent` objects as files change on disk. Starts the filesystem watcher on first iteration.
-
-#### `DirSQL.from_config(path) -> DirSQL`
-
-Create a `DirSQL` instance from a `.dirsql.toml` config file. Returns immediately; scanning runs in the background. Call `await db.ready()` before querying.
 
 ### `RowEvent`
 

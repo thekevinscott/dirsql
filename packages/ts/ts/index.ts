@@ -27,6 +27,30 @@ export interface TableDef {
   strict?: boolean;
 }
 
+/**
+ * Options accepted by the {@link DirSQL} constructor.
+ *
+ * At least one of `root` or `config` must be supplied. When both are set,
+ * the explicit `root` wins over any `[dirsql].root` declared in the config
+ * file (a warning is emitted by the native layer).
+ */
+export interface DirSQLOptions {
+  /** Root directory to scan. */
+  root?: string;
+  /** Programmatic table definitions. Each table's `extract` runs in-process. */
+  tables?: TableDef[];
+  /** Glob patterns (relative to `root`) to ignore. */
+  ignore?: string[];
+  /**
+   * Path to a `.dirsql.toml` config file. Its `[[table]]` entries are
+   * appended to any programmatic `tables`; its `[dirsql].ignore` patterns
+   * are appended to any explicit `ignore`. If the config declares a
+   * `[dirsql].root` and no explicit `root` is given, it is resolved
+   * relative to the config file's parent directory.
+   */
+  config?: string;
+}
+
 /** A row-level event emitted by the file watcher. */
 export interface RowEvent {
   /**
@@ -50,14 +74,12 @@ interface NativeDirSQL {
 }
 
 interface NativeDirSQLConstructor {
-  new (root: string, tables: TableDef[], ignore?: string[]): NativeDirSQL;
-  fromConfig(configPath: string): NativeDirSQL;
   openAsync(
-    root: string,
-    tables: TableDef[],
-    ignore?: string[],
+    root: string | null,
+    tables: TableDef[] | null,
+    ignore: string[] | null,
+    config: string | null,
   ): Promise<NativeDirSQL>;
-  fromConfigAsync(configPath: string): Promise<NativeDirSQL>;
 }
 
 // Core module shape. The real implementation comes from the napi-rs
@@ -105,6 +127,10 @@ export function __setCoreForTesting(fake: CoreModule | null): void {
 /**
  * Ephemeral SQL index over a local directory.
  *
+ * The constructor is overloaded: pass a config-file path directly, or an
+ * options object with any combination of `root`, `tables`, `ignore`, and
+ * `config`.
+ *
  * Constructing a `DirSQL` returns immediately; the directory scan, file
  * reads, and initial row extraction run asynchronously. `db.ready`
  * resolves once construction has completed, and every method (including
@@ -113,7 +139,12 @@ export function __setCoreForTesting(fake: CoreModule | null): void {
  * callers can start using the instance immediately:
  *
  * ```ts
- * const db = new DirSQL(root, tables);
+ * // From a config file:
+ * const db = new DirSQL("./my-config.toml");
+ *
+ * // Programmatic:
+ * const db2 = new DirSQL({ root: "./data", tables: [...] });
+ *
  * await db.ready; // optional: wait for the initial scan explicitly
  * const rows = await db.query("SELECT ...");
  * for await (const event of db.watch()) { ... }
@@ -135,37 +166,23 @@ export class DirSQL {
   // Initialized by `ready`. Do NOT touch before awaiting `ready`.
   private _inner!: NativeDirSQL;
 
-  constructor(root: string, tables: TableDef[], ignore?: string[]) {
+  /** Construct from a `.dirsql.toml` config-file path. */
+  constructor(configPath: string);
+  /** Construct from structured options. */
+  constructor(options: DirSQLOptions);
+  constructor(arg: string | DirSQLOptions) {
+    const options: DirSQLOptions =
+      typeof arg === "string" ? { config: arg } : arg;
     const Ctor = getCore().DirSQL;
-    const openPromise =
-      ignore === undefined
-        ? Ctor.openAsync(root, tables)
-        : Ctor.openAsync(root, tables, ignore);
+    const openPromise = Ctor.openAsync(
+      options.root ?? null,
+      options.tables ?? null,
+      options.ignore ?? null,
+      options.config ?? null,
+    );
     this.ready = openPromise.then((inner) => {
       this._inner = inner;
     });
-  }
-
-  /**
-   * Load a {@link DirSQL} instance from a `.dirsql.toml` config file.
-   *
-   * The root directory is derived from the config file's parent. Tables
-   * are parsed using the built-in parser for each format declared in the
-   * config. No JS `extract` callback is required.
-   *
-   * The config-driven path runs entirely on the libuv threadpool, so the
-   * JS event loop stays responsive during the initial scan.
-   */
-  static async fromConfig(configPath: string): Promise<DirSQL> {
-    const inner = await getCore().DirSQL.fromConfigAsync(configPath);
-    const instance = Object.create(DirSQL.prototype) as DirSQL;
-    const writable = instance as unknown as {
-      _inner: NativeDirSQL;
-      ready: Promise<void>;
-    };
-    writable._inner = inner;
-    writable.ready = Promise.resolve();
-    return instance;
   }
 
   /**

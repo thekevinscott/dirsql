@@ -63,13 +63,16 @@ let large = db.query("SELECT * FROM files WHERE size > 1000")?;
 ```typescript [TypeScript]
 import { DirSQL, Table } from 'dirsql';
 
-const db = new DirSQL('./my-project', [
-  new Table({
-    ddl: 'CREATE TABLE files (name TEXT, size INTEGER, type TEXT)',
-    glob: 'data/*.json',
-    extract: (_path, content) => [JSON.parse(content)],
-  }),
-]);
+const db = new DirSQL({
+  root: './my-project',
+  tables: [
+    new Table({
+      ddl: 'CREATE TABLE files (name TEXT, size INTEGER, type TEXT)',
+      glob: 'data/*.json',
+      extract: (_path, content) => [JSON.parse(content)],
+    }),
+  ],
+});
 
 const large = await db.query('SELECT * FROM files WHERE size > 1000');
 ```

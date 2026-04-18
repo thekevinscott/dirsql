@@ -31,13 +31,16 @@ describe("DirSQL", () => {
   });
 
   it("creates an instance and queries data", async () => {
-    const db = new DirSQL(dir, [
-      {
-        ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
-        glob: "data/users.json",
-        extract: (_filePath: string, content: string) => JSON.parse(content),
-      },
-    ]);
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
+          glob: "data/users.json",
+          extract: (_filePath: string, content: string) => JSON.parse(content),
+        },
+      ],
+    });
 
     const rows = await db.query("SELECT * FROM users ORDER BY name");
     expect(rows).toHaveLength(2);
@@ -48,18 +51,21 @@ describe("DirSQL", () => {
   });
 
   it("supports multiple tables", async () => {
-    const db = new DirSQL(dir, [
-      {
-        ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
-        glob: "data/users.json",
-        extract: (_filePath: string, content: string) => JSON.parse(content),
-      },
-      {
-        ddl: "CREATE TABLE products (name TEXT, price REAL)",
-        glob: "data/products.json",
-        extract: (_filePath: string, content: string) => JSON.parse(content),
-      },
-    ]);
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
+          glob: "data/users.json",
+          extract: (_filePath: string, content: string) => JSON.parse(content),
+        },
+        {
+          ddl: "CREATE TABLE products (name TEXT, price REAL)",
+          glob: "data/products.json",
+          extract: (_filePath: string, content: string) => JSON.parse(content),
+        },
+      ],
+    });
 
     const users = await db.query("SELECT * FROM users ORDER BY name");
     expect(users).toHaveLength(2);
@@ -71,25 +77,9 @@ describe("DirSQL", () => {
   });
 
   it("supports glob patterns", async () => {
-    const db = new DirSQL(dir, [
-      {
-        ddl: "CREATE TABLE items (name TEXT)",
-        glob: "data/*.json",
-        extract: (_filePath: string, content: string) =>
-          JSON.parse(content).map((item: { name: string }) => ({
-            name: item.name,
-          })),
-      },
-    ]);
-
-    const rows = await db.query("SELECT * FROM items ORDER BY name");
-    expect(rows).toHaveLength(4);
-  });
-
-  it("supports ignore patterns", async () => {
-    const db = new DirSQL(
-      dir,
-      [
+    const db = new DirSQL({
+      root: dir,
+      tables: [
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "data/*.json",
@@ -99,21 +89,43 @@ describe("DirSQL", () => {
             })),
         },
       ],
-      ["data/products.json"],
-    );
+    });
+
+    const rows = await db.query("SELECT * FROM items ORDER BY name");
+    expect(rows).toHaveLength(4);
+  });
+
+  it("supports ignore patterns", async () => {
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE items (name TEXT)",
+          glob: "data/*.json",
+          extract: (_filePath: string, content: string) =>
+            JSON.parse(content).map((item: { name: string }) => ({
+              name: item.name,
+            })),
+        },
+      ],
+      ignore: ["data/products.json"],
+    });
 
     const rows = await db.query("SELECT * FROM items ORDER BY name");
     expect(rows).toHaveLength(2);
   });
 
   it("handles SQL queries with WHERE clauses", async () => {
-    const db = new DirSQL(dir, [
-      {
-        ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
-        glob: "data/users.json",
-        extract: (_filePath: string, content: string) => JSON.parse(content),
-      },
-    ]);
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
+          glob: "data/users.json",
+          extract: (_filePath: string, content: string) => JSON.parse(content),
+        },
+      ],
+    });
 
     const rows = await db.query("SELECT * FROM users WHERE age > 27");
     expect(rows).toHaveLength(1);
@@ -123,13 +135,17 @@ describe("DirSQL", () => {
   it("handles empty directories gracefully", async () => {
     const emptyDir = mkdtempSync(join(tmpdir(), "dirsql-empty-"));
     try {
-      const db = new DirSQL(emptyDir, [
-        {
-          ddl: "CREATE TABLE items (name TEXT)",
-          glob: "**/*.json",
-          extract: (_filePath: string, content: string) => JSON.parse(content),
-        },
-      ]);
+      const db = new DirSQL({
+        root: emptyDir,
+        tables: [
+          {
+            ddl: "CREATE TABLE items (name TEXT)",
+            glob: "**/*.json",
+            extract: (_filePath: string, content: string) =>
+              JSON.parse(content),
+          },
+        ],
+      });
 
       const rows = await db.query("SELECT * FROM items");
       expect(rows).toHaveLength(0);
@@ -139,13 +155,16 @@ describe("DirSQL", () => {
   });
 
   it("throws on invalid SQL", async () => {
-    const db = new DirSQL(dir, [
-      {
-        ddl: "CREATE TABLE users (name TEXT)",
-        glob: "data/users.json",
-        extract: (_filePath: string, content: string) => JSON.parse(content),
-      },
-    ]);
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE users (name TEXT)",
+          glob: "data/users.json",
+          extract: (_filePath: string, content: string) => JSON.parse(content),
+        },
+      ],
+    });
 
     await expect(db.query("SELECT * FROM nonexistent")).rejects.toThrow();
   });
@@ -155,13 +174,18 @@ describe("DirSQL", () => {
     mkdirSync(itemDir, { recursive: true });
     writeFileSync(join(itemDir, "a.json"), JSON.stringify({ name: "apple" }));
 
-    const db = new DirSQL(dir, [
-      {
-        ddl: "CREATE TABLE items (name TEXT)",
-        glob: "items/*.json",
-        extract: (_filePath: string, content: string) => [JSON.parse(content)],
-      },
-    ]);
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE items (name TEXT)",
+          glob: "items/*.json",
+          extract: (_filePath: string, content: string) => [
+            JSON.parse(content),
+          ],
+        },
+      ],
+    });
 
     for (const stmt of [
       "DELETE FROM items",
@@ -182,13 +206,16 @@ describe("DirSQL", () => {
   });
 
   it("rejects ready with invalid DDL", async () => {
-    const db = new DirSQL(dir, [
-      {
-        ddl: "NOT VALID SQL",
-        glob: "**/*.json",
-        extract: () => [],
-      },
-    ]);
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "NOT VALID SQL",
+          glob: "**/*.json",
+          extract: () => [],
+        },
+      ],
+    });
     // Construction is async: DDL errors surface via the `ready` Promise
     // rejection rather than a sync throw.
     await expect(db.ready).rejects.toThrow();
@@ -221,14 +248,19 @@ describe("DirSQL strict mode", () => {
       JSON.stringify({ name: "apple", color: "red" }),
     );
 
-    const db = new DirSQL(dir, [
-      {
-        ddl: "CREATE TABLE items (name TEXT)",
-        glob: "items/*.json",
-        extract: (_filePath: string, content: string) => [JSON.parse(content)],
-        strict: true,
-      },
-    ]);
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE items (name TEXT)",
+          glob: "items/*.json",
+          extract: (_filePath: string, content: string) => [
+            JSON.parse(content),
+          ],
+          strict: true,
+        },
+      ],
+    });
     await expect(db.ready).rejects.toThrow();
   });
 
@@ -239,14 +271,19 @@ describe("DirSQL strict mode", () => {
       JSON.stringify({ name: "apple", color: "red" }),
     );
 
-    const db = new DirSQL(dir, [
-      {
-        ddl: "CREATE TABLE items (name TEXT, color TEXT)",
-        glob: "items/*.json",
-        extract: (_filePath: string, content: string) => [JSON.parse(content)],
-        strict: true,
-      },
-    ]);
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE items (name TEXT, color TEXT)",
+          glob: "items/*.json",
+          extract: (_filePath: string, content: string) => [
+            JSON.parse(content),
+          ],
+          strict: true,
+        },
+      ],
+    });
 
     const rows = await db.query("SELECT name, color FROM items");
     expect(rows).toHaveLength(1);
@@ -272,13 +309,18 @@ describe("DirSQL watch events", () => {
   it("sets filePath as a relative path on watch events", async () => {
     mkdirSync(join(dir, "nested", "dir"), { recursive: true });
 
-    const db = new DirSQL(dir, [
-      {
-        ddl: "CREATE TABLE items (name TEXT)",
-        glob: "**/*.json",
-        extract: (_filePath: string, content: string) => [JSON.parse(content)],
-      },
-    ]);
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE items (name TEXT)",
+          glob: "**/*.json",
+          extract: (_filePath: string, content: string) => [
+            JSON.parse(content),
+          ],
+        },
+      ],
+    });
 
     await db.startWatcher();
 
@@ -308,13 +350,18 @@ describe("DirSQL watch events", () => {
   // analog of the async query test; a ~500ms native poll must coexist with
   // a concurrent ~50ms setTimeout.
   it("does not block the JS event loop during pollEvents", async () => {
-    const db = new DirSQL(dir, [
-      {
-        ddl: "CREATE TABLE items (name TEXT)",
-        glob: "**/*.json",
-        extract: (_filePath: string, content: string) => [JSON.parse(content)],
-      },
-    ]);
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE items (name TEXT)",
+          glob: "**/*.json",
+          extract: (_filePath: string, content: string) => [
+            JSON.parse(content),
+          ],
+        },
+      ],
+    });
 
     await db.startWatcher();
 
@@ -338,13 +385,18 @@ describe("DirSQL watch events", () => {
   // PARITY: the TS DirSQL exposes `ready: Promise<void>` and
   // `watch(): AsyncIterable<RowEvent>` to match Python/Rust.
   it("exposes ready as an awaitable Promise", async () => {
-    const db = new DirSQL(dir, [
-      {
-        ddl: "CREATE TABLE items (name TEXT)",
-        glob: "**/*.json",
-        extract: (_filePath: string, content: string) => [JSON.parse(content)],
-      },
-    ]);
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE items (name TEXT)",
+          glob: "**/*.json",
+          extract: (_filePath: string, content: string) => [
+            JSON.parse(content),
+          ],
+        },
+      ],
+    });
 
     expect(db.ready).toBeInstanceOf(Promise);
     await expect(db.ready).resolves.toBeUndefined();
@@ -371,13 +423,18 @@ describe("DirSQL watch events", () => {
       timerFired = true;
     }, 1);
 
-    const db = new DirSQL(dir, [
-      {
-        ddl: "CREATE TABLE items (name TEXT)",
-        glob: "items/*.json",
-        extract: (_filePath: string, content: string) => [JSON.parse(content)],
-      },
-    ]);
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE items (name TEXT)",
+          glob: "items/*.json",
+          extract: (_filePath: string, content: string) => [
+            JSON.parse(content),
+          ],
+        },
+      ],
+    });
 
     // The constructor returns synchronously — the scan hasn't finished yet,
     // so the timer has had a chance to fire before we await `ready`.
@@ -397,13 +454,18 @@ describe("DirSQL watch events", () => {
       JSON.stringify({ name: "eagerly-resolved" }),
     );
 
-    const db = new DirSQL(dir, [
-      {
-        ddl: "CREATE TABLE items (name TEXT)",
-        glob: "*.json",
-        extract: (_filePath: string, content: string) => [JSON.parse(content)],
-      },
-    ]);
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE items (name TEXT)",
+          glob: "*.json",
+          extract: (_filePath: string, content: string) => [
+            JSON.parse(content),
+          ],
+        },
+      ],
+    });
 
     // Do NOT await db.ready explicitly — query() must do it internally.
     const rows = await db.query("SELECT name FROM items");

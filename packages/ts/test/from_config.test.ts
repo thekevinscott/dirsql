@@ -1,5 +1,5 @@
-// Integration tests for DirSQL.fromConfig — the TS mirror of
-// packages/python/tests/integration/test_from_config.py and
+// Integration tests for config-driven construction: `new DirSQL(configPath)`.
+// TS mirror of packages/python/tests/integration/test_from_config.py and
 // packages/rust/tests/from_config.rs. See bead dirsql-hh3.
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -13,7 +13,7 @@ function writeFile(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
-describe("DirSQL.fromConfig", () => {
+describe("new DirSQL(configPath)", () => {
   let dir: string;
   let configPath: string;
 
@@ -45,7 +45,8 @@ glob = "items/*.json"
 `,
     );
 
-    const db = await DirSQL.fromConfig(configPath);
+    const db = new DirSQL(configPath);
+    await db.ready;
     const rows = await db.query("SELECT * FROM items ORDER BY name");
     expect(rows).toHaveLength(2);
     expect(rows[0].name).toBe("apple");
@@ -71,7 +72,8 @@ glob = "*.jsonl"
 `,
     );
 
-    const db = await DirSQL.fromConfig(configPath);
+    const db = new DirSQL(configPath);
+    await db.ready;
     const rows = await db.query("SELECT * FROM events ORDER BY type");
     expect(rows).toHaveLength(2);
     expect(rows[0].type).toBe("click");
@@ -93,7 +95,8 @@ glob = "*.ndjson"
 `,
     );
 
-    const db = await DirSQL.fromConfig(configPath);
+    const db = new DirSQL(configPath);
+    await db.ready;
     const rows = await db.query("SELECT type FROM events ORDER BY type");
     expect(rows).toHaveLength(2);
     expect(rows[0].type).toBe("a");
@@ -112,7 +115,8 @@ glob = "*.csv"
 `,
     );
 
-    const db = await DirSQL.fromConfig(configPath);
+    const db = new DirSQL(configPath);
+    await db.ready;
     const rows = await db.query("SELECT * FROM produce ORDER BY name");
     expect(rows).toHaveLength(2);
     expect(rows[0].name).toBe("apples");
@@ -131,7 +135,8 @@ glob = "*.tsv"
 `,
     );
 
-    const db = await DirSQL.fromConfig(configPath);
+    const db = new DirSQL(configPath);
+    await db.ready;
     const rows = await db.query("SELECT * FROM produce ORDER BY name");
     expect(rows).toHaveLength(2);
     expect(rows[0].name).toBe("apples");
@@ -166,7 +171,8 @@ glob = "data/*.toml"
 `,
     );
 
-    const db = await DirSQL.fromConfig(configPath);
+    const db = new DirSQL(configPath);
+    await db.ready;
     const rows = await db.query("SELECT * FROM settings");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("root");
@@ -185,7 +191,8 @@ glob = "data/*.yaml"
 `,
     );
 
-    const db = await DirSQL.fromConfig(configPath);
+    const db = new DirSQL(configPath);
+    await db.ready;
     const rows = await db.query("SELECT * FROM items");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("apple");
@@ -204,7 +211,8 @@ glob = "data/*.yml"
 `,
     );
 
-    const db = await DirSQL.fromConfig(configPath);
+    const db = new DirSQL(configPath);
+    await db.ready;
     const rows = await db.query("SELECT * FROM items");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("banana");
@@ -225,7 +233,8 @@ glob = "posts/*.md"
 `,
     );
 
-    const db = await DirSQL.fromConfig(configPath);
+    const db = new DirSQL(configPath);
+    await db.ready;
     const rows = await db.query("SELECT * FROM posts");
     expect(rows).toHaveLength(1);
     expect(rows[0].title).toBe("Hello");
@@ -252,7 +261,8 @@ glob = "comments/{thread_id}/index.jsonl"
 `,
     );
 
-    const db = await DirSQL.fromConfig(configPath);
+    const db = new DirSQL(configPath);
+    await db.ready;
     const rows = await db.query("SELECT * FROM comments ORDER BY thread_id");
     expect(rows).toHaveLength(2);
     expect(rows[0].thread_id).toBe("thread-1");
@@ -279,7 +289,8 @@ age = "age"
 `,
     );
 
-    const db = await DirSQL.fromConfig(configPath);
+    const db = new DirSQL(configPath);
+    await db.ready;
     const rows = await db.query("SELECT * FROM people");
     expect(rows).toHaveLength(1);
     expect(rows[0].display_name).toBe("Alice");
@@ -309,7 +320,8 @@ each = "data.items"
 `,
     );
 
-    const db = await DirSQL.fromConfig(configPath);
+    const db = new DirSQL(configPath);
+    await db.ready;
     const rows = await db.query("SELECT * FROM items ORDER BY name");
     expect(rows).toHaveLength(2);
     expect(rows[0].name).toBe("gadget");
@@ -335,7 +347,8 @@ glob = "data/**/*.json"
 `,
     );
 
-    const db = await DirSQL.fromConfig(configPath);
+    const db = new DirSQL(configPath);
+    await db.ready;
     const rows = await db.query("SELECT * FROM items");
     expect(rows).toHaveLength(1);
     expect(rows[0].val).toBe(1);
@@ -364,7 +377,8 @@ glob = "authors/*.json"
 `,
     );
 
-    const db = await DirSQL.fromConfig(configPath);
+    const db = new DirSQL(configPath);
+    await db.ready;
     const posts = await db.query("SELECT * FROM posts");
     const authors = await db.query("SELECT * FROM authors");
     expect(posts).toHaveLength(1);
@@ -386,7 +400,8 @@ format = "csv"
 `,
     );
 
-    const db = await DirSQL.fromConfig(configPath);
+    const db = new DirSQL(configPath);
+    await db.ready;
     const rows = await db.query("SELECT * FROM t");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("foo");
@@ -409,7 +424,8 @@ strict = true
 `,
     );
 
-    const db = await DirSQL.fromConfig(configPath);
+    const db = new DirSQL(configPath);
+    await db.ready;
     const rows = await db.query("SELECT name, color FROM items");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("apple");
@@ -432,20 +448,20 @@ strict = true
 `,
     );
 
-    await expect(DirSQL.fromConfig(configPath)).rejects.toThrow();
+    await expect(new DirSQL(configPath).ready).rejects.toThrow();
   });
 
   // Error: missing config file
   it("throws when config file is missing", async () => {
     await expect(
-      DirSQL.fromConfig(join(dir, "nonexistent.toml")),
+      new DirSQL(join(dir, "nonexistent.toml")).ready,
     ).rejects.toThrow();
   });
 
   // Error: invalid TOML
   it("throws on invalid TOML", async () => {
     writeFile(configPath, "this is not valid [[[");
-    await expect(DirSQL.fromConfig(configPath)).rejects.toThrow();
+    await expect(new DirSQL(configPath).ready).rejects.toThrow();
   });
 
   // Error: missing DDL
@@ -457,7 +473,7 @@ strict = true
 glob = "*.json"
 `,
     );
-    await expect(DirSQL.fromConfig(configPath)).rejects.toThrow();
+    await expect(new DirSQL(configPath).ready).rejects.toThrow();
   });
 
   // Error: unsupported format
@@ -471,6 +487,6 @@ ddl = "CREATE TABLE t (x TEXT)"
 glob = "*.dat"
 `,
     );
-    await expect(DirSQL.fromConfig(configPath)).rejects.toThrow();
+    await expect(new DirSQL(configPath).ready).rejects.toThrow();
   });
 });

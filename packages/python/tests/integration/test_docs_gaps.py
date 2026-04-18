@@ -84,7 +84,7 @@ ddl = "CREATE TABLE produce (name TEXT, count TEXT)"
 glob = "*.tsv"
 """,
         )
-        db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+        db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
         await db.ready()
         results = await db.query("SELECT * FROM produce ORDER BY name")
         assert len(results) == 2
@@ -110,7 +110,7 @@ ddl = "CREATE TABLE events (type TEXT, count INTEGER)"
 glob = "*.ndjson"
 """,
         )
-        db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+        db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
         await db.ready()
         results = await db.query("SELECT * FROM events ORDER BY type")
         assert len(results) == 2
@@ -132,7 +132,7 @@ ddl = "CREATE TABLE app (name TEXT, version TEXT)"
 glob = "config/*.toml"
 """,
         )
-        db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+        db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
         await db.ready()
         results = await db.query("SELECT * FROM app")
         assert len(results) == 1
@@ -155,7 +155,7 @@ ddl = "CREATE TABLE items (name TEXT, price REAL)"
 glob = "*.{ext}"
 """,
         )
-        db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+        db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
         await db.ready()
         results = await db.query("SELECT * FROM items")
         assert len(results) == 1
@@ -177,7 +177,7 @@ ddl = "CREATE TABLE posts (title TEXT, author TEXT, body TEXT)"
 glob = "posts/*.md"
 """,
         )
-        db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+        db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
         await db.ready()
         results = await db.query("SELECT * FROM posts")
         assert len(results) == 1
@@ -203,7 +203,7 @@ glob = "items/*.json"
 strict = true
 """,
         )
-        db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+        db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
         with pytest.raises(Exception):
             await db.ready()
 
@@ -223,7 +223,7 @@ glob = "items/*.json"
 strict = true
 """,
         )
-        db = DirSQL.from_config(os.path.join(config_dir, ".dirsql.toml"))
+        db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
         await db.ready()
         results = await db.query("SELECT * FROM items")
         assert len(results) == 1

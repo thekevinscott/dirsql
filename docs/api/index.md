@@ -25,26 +25,49 @@ import { DirSQL } from 'dirsql';
 ::: code-group
 
 ```python [Python]
-DirSQL(root: str, *, tables: list[Table], ignore: list[str] | None = None)
+DirSQL(
+    root: str | None = None,
+    *,
+    tables: list[Table] | None = None,
+    ignore: list[str] | None = None,
+    config: str | None = None,
+)
 ```
 
 ```rust [Rust]
-DirSQL::new(root: &str, tables: Vec<Table>) -> Result<DirSQL>
+DirSQL::builder()
+    .root(root)                 // optional
+    .tables(tables)             // optional; append with .table(t)
+    .ignore(patterns)           // optional
+    .config(config_toml_path)   // optional
+    .build()                    // -> Result<DirSQL>
 ```
 
 ```typescript [TypeScript]
-new DirSQL(root: string, tables: TableDef[], ignore?: string[])
+new DirSQL(configPath: string)
+// or
+new DirSQL({
+    root?: string,
+    tables?: TableDef[],
+    ignore?: string[],
+    config?: string,
+})
 ```
 
 :::
 
-Creates an in-memory SQLite index over the given directory. In Python, the constructor starts scanning in a background thread and returns immediately. Call `await db.ready()` before querying. In Rust, the constructor scans synchronously. In TypeScript, scanning starts immediately.
+Creates an in-memory SQLite index over the given directory. At least one of `root` or `config` must be supplied.
+
+When both `root` and `config` are supplied -- or when `config` declares `[dirsql].root` -- the explicit `root` wins and a warning is emitted on stderr. A `[dirsql].root` declared in the config file is resolved relative to the config file's parent directory.
+
+In Python, the constructor starts scanning in a background thread and returns immediately. Call `await db.ready()` before querying. In Rust, `.build()` scans synchronously; use `.build_async()` (via `AsyncDirSQL`) for the tokio-driven equivalent. In TypeScript, scanning starts immediately and `db.ready` resolves when the scan finishes.
 
 **Parameters:**
 
-- `root` -- Path to the directory to index.
+- `root` -- Path to the directory to index. Optional if `config` is supplied.
 - `tables` -- List of `Table` definitions. Each defines a SQLite table, a glob pattern, and an extract function.
 - `ignore` -- Optional list of glob patterns. Files matching any ignore pattern are skipped regardless of table globs.
+- `config` -- Optional path to a `.dirsql.toml` config file. Its `[[table]]` entries are appended to any programmatic `tables`; its `[dirsql].ignore` patterns are appended to any explicit `ignore`; its optional `[dirsql].root` supplies the root directory when `root` is not passed explicitly.
 
 ### Methods
 
@@ -111,22 +134,6 @@ for await (const event of db.watch()) {  // AsyncIterable<RowEvent>
 :::
 
 Returns an async iterable of `RowEvent` objects. The file watcher starts automatically on first iteration. The iterator never terminates on its own.
-
-#### `from_config`
-
-::: code-group
-
-```python [Python]
-DirSQL.from_config(path: str) -> DirSQL
-```
-
-```rust [Rust]
-DirSQL::from_config(path: &str) -> Result<DirSQL>
-```
-
-:::
-
-Create a `DirSQL` instance from a `.dirsql.toml` config file. In Python, returns immediately and scans in the background -- call `await db.ready()` before querying.
 
 ---
 

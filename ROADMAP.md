@@ -105,7 +105,9 @@ New `parser` module in `packages/rust/` that takes `(format, each, columns, path
 High-level `DirSQL` struct in `dirsql` with parity to the Python SDK:
 
 ```rust
-let db = DirSQL::from_config(".")?;  // reads .dirsql.toml
+let db = DirSQL::builder()
+    .config("./.dirsql.toml")
+    .build()?;
 let db = DirSQL::builder()
     .root(".")
     .table(Table::new(ddl, glob).format(Format::Jsonl))
@@ -136,7 +138,7 @@ Flags: `--config` (default `./.dirsql.toml`), `--host` (default `localhost`), `-
 
 ```python
 # Read from .dirsql.toml (no lambdas needed)
-db = DirSQL.from_config(".")
+db = DirSQL(config="./.dirsql.toml")
 
 # Or mix: config file tables + programmatic tables with extract
 db = DirSQL("/path", tables=[...], config=".dirsql.toml")
@@ -164,7 +166,7 @@ Enables:
 napi-rs bindings to `dirsql`. Same API shape as Python:
 
 ```typescript
-const db = new DirSQL(root, { tables, ignore });
+const db = new DirSQL({ root, tables, ignore });
 
 const rows = await db.query("SELECT * FROM comments");
 
@@ -173,10 +175,10 @@ for await (const event of db.watch()) {
 }
 ```
 
-Or config-based:
+Or config-based (string = config file path):
 
 ```typescript
-const db = DirSQL.fromConfig(".");
+const db = new DirSQL("./.dirsql.toml");
 ```
 
 ### LLM-assisted schema inference

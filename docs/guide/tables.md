@@ -205,7 +205,7 @@ const tables: TableDef[] = [
   },
 ];
 
-const db = new DirSQL('./workspace', tables);
+const db = new DirSQL({ root: './workspace', tables });
 ```
 
 :::
@@ -235,11 +235,11 @@ let db = DirSQL::with_ignore(
 ```
 
 ```typescript [TypeScript]
-const db = new DirSQL(
-  './workspace',
-  [/* tables */],
-  ['**/node_modules/**', '**/.git/**'],
-);
+const db = new DirSQL({
+  root: './workspace',
+  tables: [/* tables */],
+  ignore: ['**/node_modules/**', '**/.git/**'],
+});
 ```
 
 :::

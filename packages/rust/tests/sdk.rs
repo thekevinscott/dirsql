@@ -488,3 +488,182 @@ fn it_splits_scan_and_build_for_async_bindings() {
     assert_eq!(rows[0]["name"], Value::Text("alpha".into()));
     assert_eq!(rows[1]["name"], Value::Text("beta".into()));
 }
+
+// ---------------------------------------------------------------------------
+// Builder API
+// ---------------------------------------------------------------------------
+
+#[test]
+fn builder_root_and_table_match_new() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("a.txt"), "alpha").unwrap();
+    fs::write(root.path().join("b.txt"), "beta").unwrap();
+
+    let db = DirSQL::builder()
+        .root(root.path())
+        .table(items_table())
+        .build()
+        .unwrap();
+
+    let rows = db.query("SELECT name FROM items ORDER BY name").unwrap();
+    assert_eq!(rows.len(), 2);
+}
+
+#[test]
+fn builder_ignore_filters_files() {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("skip")).unwrap();
+    fs::write(root.path().join("a.txt"), "alpha").unwrap();
+    fs::write(root.path().join("skip").join("b.txt"), "beta").unwrap();
+
+    let db = DirSQL::builder()
+        .root(root.path())
+        .table(items_table())
+        .ignore(["skip/**"])
+        .build()
+        .unwrap();
+
+    let rows = db.query("SELECT name FROM items").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["name"], Value::Text("alpha".into()));
+}
+
+#[test]
+fn builder_config_loads_tables_and_root() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("a.json"), r#"{"name":"one"}"#).unwrap();
+    fs::write(root.path().join("b.json"), r#"{"name":"two"}"#).unwrap();
+
+    let cfg_path = root.path().join(".dirsql.toml");
+    fs::write(
+        &cfg_path,
+        r#"
+[[table]]
+ddl = "CREATE TABLE items (name TEXT)"
+glob = "*.json"
+"#,
+    )
+    .unwrap();
+
+    let db = DirSQL::builder().config(&cfg_path).build().unwrap();
+    let rows = db.query("SELECT name FROM items ORDER BY name").unwrap();
+    assert_eq!(rows.len(), 2);
+}
+
+#[test]
+fn builder_config_root_resolves_relative_to_config_parent() {
+    let root = TempDir::new().unwrap();
+    let data_dir = root.path().join("data");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("a.json"), r#"{"name":"one"}"#).unwrap();
+
+    let cfg_path = root.path().join(".dirsql.toml");
+    fs::write(
+        &cfg_path,
+        r#"
+[dirsql]
+root = "data"
+
+[[table]]
+ddl = "CREATE TABLE items (name TEXT)"
+glob = "*.json"
+"#,
+    )
+    .unwrap();
+
+    let db = DirSQL::builder().config(&cfg_path).build().unwrap();
+    let rows = db.query("SELECT name FROM items").unwrap();
+    assert_eq!(rows.len(), 1);
+}
+
+#[test]
+fn builder_explicit_root_overrides_config_root() {
+    // Config root points at an empty dir, but explicit .root() wins.
+    let temp = TempDir::new().unwrap();
+    let empty_dir = temp.path().join("empty");
+    let data_dir = temp.path().join("data");
+    fs::create_dir_all(&empty_dir).unwrap();
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("x.json"), r#"{"name":"present"}"#).unwrap();
+
+    let cfg_path = temp.path().join(".dirsql.toml");
+    fs::write(
+        &cfg_path,
+        r#"
+[dirsql]
+root = "empty"
+
+[[table]]
+ddl = "CREATE TABLE items (name TEXT)"
+glob = "*.json"
+"#,
+    )
+    .unwrap();
+
+    let db = DirSQL::builder()
+        .root(&data_dir)
+        .config(&cfg_path)
+        .build()
+        .unwrap();
+    let rows = db.query("SELECT name FROM items").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["name"], Value::Text("present".into()));
+}
+
+#[test]
+fn builder_without_root_or_config_errors() {
+    let result = DirSQL::builder().table(items_table()).build();
+    let err = match result {
+        Ok(_) => panic!("expected error when no root is provided"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("root"), "expected root-missing error, got: {msg}");
+}
+
+#[test]
+fn builder_appends_programmatic_tables_to_config_tables() {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("notes")).unwrap();
+    fs::write(
+        root.path().join("notes").join("a.txt"),
+        "hello",
+    )
+    .unwrap();
+    fs::write(root.path().join("a.json"), r#"{"name":"from_config"}"#).unwrap();
+
+    let cfg_path = root.path().join(".dirsql.toml");
+    fs::write(
+        &cfg_path,
+        r#"
+[[table]]
+ddl = "CREATE TABLE items (name TEXT)"
+glob = "*.json"
+"#,
+    )
+    .unwrap();
+
+    let notes_table = Table::new(
+        "CREATE TABLE notes (body TEXT)",
+        "notes/*.txt",
+        |_path, content| {
+            vec![HashMap::from([(
+                "body".into(),
+                Value::Text(content.trim().to_string()),
+            )])]
+        },
+    );
+
+    let db = DirSQL::builder()
+        .root(root.path())
+        .table(notes_table)
+        .config(&cfg_path)
+        .build()
+        .unwrap();
+
+    let items = db.query("SELECT name FROM items").unwrap();
+    assert_eq!(items.len(), 1);
+    let notes = db.query("SELECT body FROM notes").unwrap();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0]["body"], Value::Text("hello".into()));
+}

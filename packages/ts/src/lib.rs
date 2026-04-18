@@ -10,11 +10,13 @@
 //!   reference) so it can be handed to [`dirsql::Table`]
 //! - converts row values and events between Rust and serde_json shapes napi
 //!   exposes to JS
-//! - forwards the constructor / `fromConfig` / `query` / `startWatcher` /
-//!   `pollEvents` to the corresponding `DirSQL` methods
+//! - forwards `openAsync` / `query` / `startWatcher` / `pollEvents` to the
+//!   corresponding `DirSQL` methods
 //!
-//! All methods execute on the JS event-loop thread, so the JS `extract`
-//! callback is only ever invoked synchronously from that thread.
+//! `openAsync` is the single construction entry point. It accepts an optional
+//! `root`, optional `tables`, optional `ignore`, and optional `config` path;
+//! the TS wrapper exposes a matching overloaded constructor so callers can
+//! write either `new DirSQL(configPath)` or `new DirSQL({ root, tables, ... })`.
 
 use dirsql::{
     DirSQL as CoreDirSQL, PreparedBuild, RawFileEvent, Row, RowEvent as CoreRowEvent, Table, Value,
@@ -52,65 +54,37 @@ pub struct DirSQL {
 
 #[napi]
 impl DirSQL {
-    /// Create a new DirSQL instance.
-    ///
-    /// @param root - Root directory path to index
-    /// @param tables - Array of table definition objects
-    /// @param ignore - Optional array of glob patterns to ignore
-    #[napi(constructor)]
-    #[allow(clippy::new_ret_no_self)]
-    pub fn new(env: Env, root: String, tables: Array, ignore: Option<Vec<String>>) -> Result<Self> {
-        let rust_tables = parse_tables_from_js(env, tables)?;
-        let inner = match ignore {
-            Some(ig) => CoreDirSQL::with_ignore(root, rust_tables, ig),
-            None => CoreDirSQL::new(root, rust_tables),
-        }
-        .map_err(to_napi_err)?;
-
-        Ok(DirSQL { inner })
-    }
-
-    /// Async factory used by the TypeScript SDK to construct `DirSQL` without
-    /// blocking the JS event loop.
+    /// The single construction entry point. All arguments are optional; at
+    /// least one of `root` or `config` must be provided.
     ///
     /// Table parsing runs synchronously on the JS thread (napi references to
     /// each JS `extract` callback can only be created there). The directory
     /// scan + file I/O then runs on the libuv threadpool via [`OpenTask`];
     /// the `extract` callbacks and DB inserts run back on the JS thread in
     /// the task's `resolve` phase.
+    ///
+    /// When `config` is supplied, its `[[table]]` entries are appended after
+    /// any programmatic `tables` and its `[dirsql].ignore` is appended after
+    /// any explicit `ignore`. When both `root` and config's `[dirsql].root`
+    /// are supplied, the explicit `root` wins and a warning is emitted.
     #[napi(js_name = "openAsync", ts_return_type = "Promise<DirSQL>")]
     pub fn open_async(
         env: Env,
-        root: String,
-        tables: Array,
+        root: Option<String>,
+        tables: Option<Array>,
         ignore: Option<Vec<String>>,
+        config: Option<String>,
     ) -> Result<AsyncTask<OpenTask>> {
-        let rust_tables = parse_tables_from_js(env, tables)?;
+        let rust_tables = match tables {
+            Some(ts) => parse_tables_from_js(env, ts)?,
+            None => Vec::new(),
+        };
         Ok(AsyncTask::new(OpenTask {
-            root: PathBuf::from(root),
+            root: root.map(PathBuf::from),
+            config_path: config.map(PathBuf::from),
             tables: Some(rust_tables),
             ignore: ignore.unwrap_or_default(),
         }))
-    }
-
-    /// Create a DirSQL instance from a `.dirsql.toml` config file.
-    ///
-    /// Parses the TOML config, derives the root directory from the config
-    /// file's parent, and scans files using the built-in parser for each
-    /// declared format. No JS `extract` callback is required.
-    #[napi(factory, js_name = "fromConfig")]
-    pub fn from_config(config_path: String) -> Result<Self> {
-        let inner = CoreDirSQL::from_config_path(&config_path).map_err(to_napi_err)?;
-        Ok(DirSQL { inner })
-    }
-
-    /// Async factory used by the TypeScript SDK to load a `DirSQL` from a
-    /// config file without blocking the JS event loop. The config-driven
-    /// path only uses built-in Rust extractors, so the full construction
-    /// runs on the libuv threadpool.
-    #[napi(js_name = "fromConfigAsync", ts_return_type = "Promise<DirSQL>")]
-    pub fn from_config_async(config_path: String) -> AsyncTask<FromConfigTask> {
-        AsyncTask::new(FromConfigTask { config_path })
     }
 
     /// Execute a SQL query and return results as an array of objects.
@@ -154,13 +128,15 @@ impl DirSQL {
 
 /// Splits construction across the libuv threadpool and the JS main thread.
 ///
-/// `compute()` performs the directory scan + file reads via
-/// [`CoreDirSQL::prepare_build`] — I/O that is safe to run on a worker
-/// thread. `resolve()` then runs the `extract` callbacks and DB inserts via
+/// `compute()` resolves the builder (loading a `.dirsql.toml` if supplied)
+/// and performs the directory scan + file reads via the builder's
+/// `prepare()` — I/O that is safe to run on a worker thread. `resolve()`
+/// then runs the `extract` callbacks and DB inserts via
 /// [`CoreDirSQL::finish_build`], which must happen on the JS main thread so
 /// napi handles remain valid when invoking each JS `extract` callback.
 pub struct OpenTask {
-    root: PathBuf,
+    root: Option<PathBuf>,
+    config_path: Option<PathBuf>,
     // `Option` so we can move `tables` out in `compute` without requiring
     // `Table: Default` for `std::mem::take`.
     tables: Option<Vec<Table>>,
@@ -175,34 +151,21 @@ impl Task for OpenTask {
         let tables = self.tables.take().ok_or_else(|| {
             Error::new(Status::GenericFailure, "OpenTask computed more than once")
         })?;
-        let root = std::mem::take(&mut self.root);
         let ignore = std::mem::take(&mut self.ignore);
-        CoreDirSQL::prepare_build(root, tables, ignore).map_err(to_napi_err)
+
+        let mut builder = CoreDirSQL::builder().tables(tables).ignore(ignore);
+        if let Some(root) = self.root.take() {
+            builder = builder.root(root);
+        }
+        if let Some(cfg) = self.config_path.take() {
+            builder = builder.config(cfg);
+        }
+        builder.prepare().map_err(to_napi_err)
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
         let inner = CoreDirSQL::finish_build(output).map_err(to_napi_err)?;
         Ok(DirSQL { inner })
-    }
-}
-
-/// Runs `CoreDirSQL::from_config_path` on the libuv threadpool. The
-/// config-driven construction path uses only built-in Rust extractors, so
-/// the entire build — scan, extract, DB insert — can run off the JS thread.
-pub struct FromConfigTask {
-    config_path: String,
-}
-
-impl Task for FromConfigTask {
-    type Output = CoreDirSQL;
-    type JsValue = DirSQL;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        CoreDirSQL::from_config_path(&self.config_path).map_err(to_napi_err)
-    }
-
-    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
-        Ok(DirSQL { inner: output })
     }
 }
 

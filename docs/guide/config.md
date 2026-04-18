@@ -15,6 +15,49 @@ glob = "posts/*.json"
 
 The `format` is inferred from the glob extension (`.json` -> JSON, `.jsonl` -> JSONL, `.csv` -> CSV, etc.). Each JSON key maps to a column with the same name.
 
+## Loading a Config File
+
+Pass the config file path to the `DirSQL` constructor:
+
+::: code-group
+
+```python [Python]
+from dirsql import DirSQL
+
+db = DirSQL(config="./my-project/.dirsql.toml")
+await db.ready()
+```
+
+```rust [Rust]
+use dirsql::DirSQL;
+
+let db = DirSQL::builder()
+    .config("./my-project/.dirsql.toml")
+    .build()?;
+```
+
+```typescript [TypeScript]
+import { DirSQL } from "dirsql";
+
+// String argument is interpreted as a config file path.
+const db = new DirSQL("./my-project/.dirsql.toml");
+await db.ready;
+```
+
+:::
+
+By default, the root directory scanned is the config file's parent directory. Override it by passing `root` explicitly (the explicit value wins and a warning is emitted) or by declaring `[dirsql].root` in the config file itself.
+
+## Root Directory
+
+By default, the config file's parent directory is the scan root. To index a different location, declare `[dirsql].root` (relative paths are resolved relative to the config file's parent):
+
+```toml
+[dirsql]
+root = "../data"
+ignore = ["node_modules/**"]
+```
+
 ## Supported Formats
 
 | Extension | Format | Rows |
