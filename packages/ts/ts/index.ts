@@ -44,8 +44,8 @@ export interface RowEvent {
 // Shape of the napi-rs-exposed class. The wrapper below drives this.
 interface NativeDirSQL {
   query(sql: string): Promise<Record<string, unknown>[]>;
-  startWatcher(): void;
-  pollEvents(timeoutMs: number): RowEvent[];
+  startWatcher(): Promise<void>;
+  pollEvents(timeoutMs: number): Promise<RowEvent[]>;
 }
 
 interface NativeDirSQLConstructor {
@@ -163,16 +163,22 @@ export class DirSQL {
   /**
    * Start the file watcher. Must be called before {@link pollEvents}.
    * Idempotent — safe to call multiple times.
+   *
+   * Runs on the libuv threadpool, so the JS event loop stays responsive
+   * while the watcher is being initialized.
    */
-  startWatcher(): void {
-    this._inner.startWatcher();
+  startWatcher(): Promise<void> {
+    return this._inner.startWatcher();
   }
 
   /**
    * Poll for file change events, blocking up to `timeoutMs` for the first
    * event. Returns all events observed in the window (possibly empty).
+   *
+   * Runs on the libuv threadpool, so the JS event loop stays responsive
+   * for the duration of the poll timeout.
    */
-  pollEvents(timeoutMs: number): RowEvent[] {
+  pollEvents(timeoutMs: number): Promise<RowEvent[]> {
     return this._inner.pollEvents(timeoutMs);
   }
 
@@ -183,24 +189,19 @@ export class DirSQL {
    * for await (const event of db.watch()) { ... }
    * ```
    *
-   * Starts the underlying watcher on first iteration, then polls in a
-   * non-blocking loop and yields each {@link RowEvent}. The iterator runs
-   * indefinitely; break out of the `for await` loop to stop.
+   * Starts the underlying watcher on first iteration, then awaits a
+   * bounded native poll each cycle. The iterator runs indefinitely; break
+   * out of the `for await` loop to stop.
    */
   async *watch(): AsyncGenerator<RowEvent, void, unknown> {
-    this._inner.startWatcher();
+    await this._inner.startWatcher();
     while (true) {
-      // `pollEvents` is a sync napi call that parks the JS thread for the
-      // duration of its timeout. Using a long timeout plus no `await`
-      // between iterations starves the JS event loop, so same-process
-      // timers, microtasks, and fs writes never fire. Use a non-blocking
-      // poll and a short async wait when idle so the loop gets to run.
-      const events = this._inner.pollEvents(0);
+      // Native `pollEvents` now runs on the libuv threadpool and returns a
+      // Promise, so awaiting it does not park the JS thread. A ~200ms
+      // timeout keeps the poll cadence low without starving the event loop.
+      const events = await this._inner.pollEvents(200);
       for (const event of events) {
         yield event;
-      }
-      if (events.length === 0) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 10));
       }
     }
   }

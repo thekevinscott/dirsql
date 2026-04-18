@@ -16,7 +16,7 @@
 //! All methods execute on the JS event-loop thread, so the JS `extract`
 //! callback is only ever invoked synchronously from that thread.
 
-use dirsql::{DirSQL as CoreDirSQL, Row, RowEvent as CoreRowEvent, Table, Value};
+use dirsql::{DirSQL as CoreDirSQL, RawFileEvent, Row, RowEvent as CoreRowEvent, Table, Value};
 use napi::bindgen_prelude::*;
 use napi::Task;
 use napi_derive::napi;
@@ -114,20 +114,27 @@ impl DirSQL {
     }
 
     /// Start the file watcher. Must be called before pollEvents.
-    #[napi(js_name = "startWatcher")]
-    pub fn start_watcher(&self) -> Result<()> {
-        self.inner.start_watching().map_err(to_napi_err)
+    ///
+    /// Runs on the libuv threadpool so the JS event loop stays responsive
+    /// while the watcher is being initialized. Returns a `Promise` in JS.
+    #[napi(js_name = "startWatcher", ts_return_type = "Promise<void>")]
+    pub fn start_watcher(&self) -> AsyncTask<StartWatcherTask> {
+        AsyncTask::new(StartWatcherTask {
+            inner: self.inner.clone(),
+        })
     }
 
     /// Poll for file events with a timeout (in milliseconds).
     /// Returns an array of RowEvent objects, possibly empty.
-    #[napi(js_name = "pollEvents")]
-    pub fn poll_events(&self, timeout_ms: u32) -> Result<Vec<RowEvent>> {
-        let events = self
-            .inner
-            .poll_events(Duration::from_millis(timeout_ms as u64))
-            .map_err(to_napi_err)?;
-        Ok(events.iter().map(row_event_to_js).collect())
+    ///
+    /// Runs on the libuv threadpool so the JS event loop stays responsive
+    /// for the duration of the poll timeout. Returns a `Promise` in JS.
+    #[napi(js_name = "pollEvents", ts_return_type = "Promise<RowEvent[]>")]
+    pub fn poll_events(&self, timeout_ms: u32) -> AsyncTask<PollEventsTask> {
+        AsyncTask::new(PollEventsTask {
+            inner: self.inner.clone(),
+            timeout_ms,
+        })
     }
 }
 
@@ -152,6 +159,55 @@ impl Task for QueryTask {
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
         Ok(output)
+    }
+}
+
+/// Runs `DirSQL::start_watching` on the libuv threadpool. Idempotent on the
+/// core side, so repeated calls from JS are still safe.
+pub struct StartWatcherTask {
+    inner: CoreDirSQL,
+}
+
+impl Task for StartWatcherTask {
+    type Output = ();
+    type JsValue = ();
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        self.inner.start_watching().map_err(to_napi_err)
+    }
+
+    fn resolve(&mut self, _env: Env, _output: Self::Output) -> Result<Self::JsValue> {
+        Ok(())
+    }
+}
+
+/// Splits polling across the libuv threadpool and the JS main thread.
+///
+/// The blocking wait for raw file events runs in `compute()` on the
+/// threadpool (parking a worker thread, not the JS thread). Processing
+/// those events into [`RowEvent`]s — which invokes the JS `extract`
+/// callback for created / modified files — runs in `resolve()` on the
+/// JS main thread, where napi handles are valid. Without this split,
+/// `compute()` would call into JS from a worker thread and crash V8
+/// with "Cannot create a handle without a HandleScope".
+pub struct PollEventsTask {
+    inner: CoreDirSQL,
+    timeout_ms: u32,
+}
+
+impl Task for PollEventsTask {
+    type Output = Vec<RawFileEvent>;
+    type JsValue = Vec<RowEvent>;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        self.inner
+            .wait_file_events(Duration::from_millis(self.timeout_ms as u64))
+            .map_err(to_napi_err)
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        let row_events = self.inner.apply_file_events(output);
+        Ok(row_events.iter().map(row_event_to_js).collect())
     }
 }
 

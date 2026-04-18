@@ -1,4 +1,4 @@
-use dirsql::{DirSQL, Row, Table, Value};
+use dirsql::{DirSQL, RawFileEvent, Row, Table, Value};
 use futures_executor::block_on;
 use futures_util::StreamExt;
 use std::collections::HashMap;
@@ -397,4 +397,42 @@ fn it_streams_watch_error_events() {
         }
         other => panic!("expected error event, got: {other:?}"),
     }
+}
+
+// The split-phase wait/apply API is used by async bindings (TypeScript) that
+// cannot safely invoke the `extract` callback off the host thread. Verify the
+// two halves round-trip to the same result as the combined `poll_events`.
+#[test]
+fn it_splits_wait_and_apply_for_async_bindings() {
+    let root = TempDir::new().unwrap();
+    let db = DirSQL::new(root.path(), vec![items_table()]).unwrap();
+    db.start_watching().unwrap();
+
+    // Empty wait returns no events and apply on empty returns no row events.
+    let empty = db.wait_file_events(Duration::from_millis(50)).unwrap();
+    assert!(empty.is_empty());
+    assert!(db.apply_file_events(Vec::new()).is_empty());
+
+    // Write a file, then drain raw FileEvents without running extract.
+    fs::write(root.path().join("new.txt"), "hello").unwrap();
+    let mut raw = Vec::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while raw.is_empty() && std::time::Instant::now() < deadline {
+        raw.extend(db.wait_file_events(Duration::from_millis(250)).unwrap());
+    }
+    assert!(!raw.is_empty(), "expected at least one raw file event");
+    assert!(raw.iter().any(|e| matches!(
+        e,
+        RawFileEvent::Created(_) | RawFileEvent::Modified(_)
+    )));
+
+    // Apply runs extract and mutates the DB. Inserts land in the index.
+    let row_events = db.apply_file_events(raw);
+    assert!(!row_events.is_empty());
+
+    let rows = db.query("SELECT name FROM items").unwrap();
+    assert!(rows.iter().any(|r| matches!(
+        r.get("name"),
+        Some(Value::Text(name)) if name == "hello"
+    )));
 }
