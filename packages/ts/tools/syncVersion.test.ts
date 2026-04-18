@@ -7,6 +7,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PLATFORMS } from "../ts/platforms.js";
 import { defaultPkgPath, syncVersion } from "./syncVersion.js";
 
 let tmpPkg: string;
@@ -42,45 +43,33 @@ describe("defaultPkgPath", () => {
 
 describe("syncVersion", () => {
   describe("with a plain version tag", () => {
-    it("writes the version into package.json and strips a leading `v`", () => {
-      writePkgJson({
-        name: "dirsql",
-        version: "0.0.0",
-        optionalDependencies: { "@dirsql/cli-linux-x64-gnu": "0.0.0" },
-      });
+    it("sets version and injects optionalDependencies from PLATFORMS", () => {
+      writePkgJson({ name: "dirsql", version: "0.0.0" });
       syncVersion("v0.5.0", pkgPath);
       const pkg = readPkg();
       expect(pkg.version).toBe("0.5.0");
-      expect(pkg.optionalDependencies?.["@dirsql/cli-linux-x64-gnu"]).toBe(
-        "0.5.0",
+      const expected = Object.fromEntries(
+        PLATFORMS.map((p) => [p.name, "0.5.0"]),
       );
+      expect(pkg.optionalDependencies).toEqual(expected);
     });
   });
 
-  describe("with many optionalDependencies", () => {
-    it("rewrites every entry to match", () => {
+  describe("when optionalDependencies already exist", () => {
+    it("replaces them with the PLATFORMS-derived list at the new version", () => {
       writePkgJson({
         name: "dirsql",
         version: "0.0.0",
         optionalDependencies: {
-          "@dirsql/cli-linux-x64-gnu": "0.0.0",
-          "@dirsql/cli-darwin-arm64": "0.0.0",
-          "@dirsql/cli-win32-x64-msvc": "0.0.0",
+          "@legacy/stale-entry": "0.0.0",
         },
       });
       syncVersion("1.2.3", pkgPath);
       const pkg = readPkg();
-      for (const v of Object.values(pkg.optionalDependencies ?? {})) {
-        expect(v).toBe("1.2.3");
-      }
-    });
-  });
-
-  describe("without any optionalDependencies", () => {
-    it("updates the version alone", () => {
-      writePkgJson({ name: "dirsql", version: "0.0.0" });
-      syncVersion("2.0.0", pkgPath);
-      expect(readPkg().version).toBe("2.0.0");
+      expect(pkg.optionalDependencies).toEqual(
+        Object.fromEntries(PLATFORMS.map((p) => [p.name, "1.2.3"])),
+      );
+      expect(pkg.optionalDependencies).not.toHaveProperty("@legacy/stale-entry");
     });
   });
 

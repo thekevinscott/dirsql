@@ -21,13 +21,6 @@
     "binaryName": "dirsql",
     "triples": {}
   },
-  "optionalDependencies": {
-    "@dirsql/cli-linux-x64-gnu": "0.0.1",
-    "@dirsql/cli-linux-arm64-gnu": "0.0.1",
-    "@dirsql/cli-darwin-x64": "0.0.1",
-    "@dirsql/cli-darwin-arm64": "0.0.1",
-    "@dirsql/cli-win32-x64-msvc": "0.0.1"
-  },
   "engines": {
     "node": ">=22"
   },
@@ -49,14 +42,6 @@
   "wireit": {
     "napi:build": {
       "command": "napi build --release",
-      "files": [
-        "src/**/*.rs",
-        "build.rs",
-        "Cargo.toml",
-        "../../packages/rust/src/**/*.rs",
-        "../../packages/rust/Cargo.toml",
-        "../../Cargo.toml"
-      ],
       "output": ["dirsql.node", "ts/index.d.ts"]
     },
     "tsc": {
@@ -82,7 +67,12 @@
     "test": {
       "command": "vitest run",
       "dependencies": ["napi:build"],
-      "files": ["ts/**/*.ts", "tools/**/*.ts", "test/**/*.ts", "vitest.config.ts"],
+      "files": [
+        "ts/**/*.ts",
+        "tools/**/*.ts",
+        "test/**/*.ts",
+        "vitest.config.ts"
+      ],
       "output": []
     },
     "test:unit": {
@@ -94,13 +84,23 @@
     "test:integration": {
       "command": "vitest run --dir test --passWithNoTests",
       "dependencies": ["napi:build"],
-      "files": ["ts/**/*.ts", "tools/**/*.ts", "test/**/*.ts", "vitest.config.ts"],
+      "files": [
+        "ts/**/*.ts",
+        "tools/**/*.ts",
+        "test/**/*.ts",
+        "vitest.config.ts"
+      ],
       "output": []
     },
     "coverage": {
       "command": "vitest run --coverage",
       "dependencies": ["napi:build"],
-      "files": ["ts/**/*.ts", "tools/**/*.ts", "test/**/*.ts", "vitest.config.ts"],
+      "files": [
+        "ts/**/*.ts",
+        "tools/**/*.ts",
+        "test/**/*.ts",
+        "vitest.config.ts"
+      ],
       "output": ["coverage/**"]
     }
   },
