@@ -177,3 +177,4 @@ The filesystem is always the source of truth. The database is rebuilt from files
 - [File Watching](./guide/watching.md) -- real-time change events
 - [Async API](./guide/async.md) -- async ready(), query(), and watch()
 - [Command-Line Interface](./guide/cli.md) -- `dirsql` runs an HTTP server (`POST /query`, `GET /events` SSE)
+- [Collaboration with CRDTs](./guide/crdt.md) -- multi-writer document merging alongside `dirsql`
