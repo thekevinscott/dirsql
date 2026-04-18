@@ -7,7 +7,7 @@ name = "dirsql"
 version = "0.1.0"
 description = "Ephemeral SQL index over a local directory"
 license = "MIT"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 authors = [
     { name = "Kevin Scott" },
 ]
@@ -25,6 +25,14 @@ dev = [
     "maturin>=1.0",
 ]
 
+[project.scripts]
+# Console script that execs the Rust CLI binary bundled inside the wheel
+# at `dirsql/_binary/dirsql` (built by CI before `maturin build`). Wheel
+# tags make the wheel platform-specific, so pip picks the right binary
+# at install time — no runtime download, no launcher dependency on the
+# network.
+dirsql = "dirsql._cli.main:main"
+
 [tool.maturin]
 features = ["extension-module"]
 exclude = [
@@ -32,3 +40,10 @@ exclude = [
 ]
 python-source = "python"
 module-name = "dirsql._dirsql"
+# CI copies the release-built `dirsql` binary into
+# `python/dirsql/_binary/<name>` before `maturin build` so it ships
+# inside the wheel as package data. `.gitignore`d; not in source
+# control.
+include = [
+    { path = "python/dirsql/_binary/*", format = "wheel" },
+]

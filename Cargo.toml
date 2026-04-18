@@ -5,6 +5,7 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 license = "MIT"
 repository = "https://github.com/thekevinscott/dirsql"
 
@@ -16,3 +17,23 @@ regex = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "sync"] }
 futures-channel = "0.3"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+# Broad groups kept at `warn` so CI can catch regressions without
+# becoming hostile to contributors; upgrade to `deny` in CI if desired.
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Opinionated opt-outs from pedantic: too noisy vs. useful here.
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

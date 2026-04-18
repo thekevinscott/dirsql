@@ -12,6 +12,7 @@
 // loader works whether the package is consumed via `node_modules/dirsql`
 // or via a pnpm workspace self-reference from `test/`.
 
+import { createRequire } from "node:module";
 import { join } from "node:path";
 
 /** Definition of a SQL-indexed table backed by files on disk. */
@@ -65,13 +66,15 @@ let core: CoreModule | null = null;
 
 /**
  * Load the native napi-rs binary. Resolved relative to this compiled
- * module: after `tsc` emits to `dist/`, `__dirname` is `<pkg>/dist`, so
- * `..` reaches the package root where napi-rs writes `dirsql.node`.
+ * module: after `tsc` emits to `dist/`, the module's directory is
+ * `<pkg>/dist`, so `..` reaches the package root where napi-rs writes
+ * `dirsql.node`. The binary itself is a CommonJS addon, so we use
+ * `createRequire` to load it from inside an ESM module.
  */
 function loadNativeCore(): CoreModule {
-  const bindingPath = join(__dirname, "..", "dirsql.node");
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require(bindingPath) as CoreModule;
+  const bindingPath = join(import.meta.dirname, "..", "dirsql.node");
+  const requireFromHere = createRequire(import.meta.url);
+  return requireFromHere(bindingPath) as CoreModule;
 }
 
 function getCore(): CoreModule {

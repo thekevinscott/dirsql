@@ -29,6 +29,14 @@ __pycache__/
 .venv/
 .coverage
 .pytest_cache/
+# Rust CLI binary bundled into the wheel by CI (not in source control).
+packages/python/python/dirsql/_binary/
+
+# npm per-platform packages assembled from release archives
+target/npm-platforms/
+
+# wireit cache (per-package)
+packages/*/.wireit/
 
 # uv
 uv.lock

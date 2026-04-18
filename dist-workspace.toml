@@ -1,0 +1,26 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.31.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app. We don't use cargo-dist's npm
+# installer — the npm package is hand-written in `packages/npm/` using
+# the `optionalDependencies` per-platform pattern (esbuild/biome/swc/
+# turbo style), so the published code is reviewable and the launcher
+# doesn't need a postinstall script.
+installers = []
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+# Where to host releases
+hosting = "github"
+# The `dirsql` bin is gated behind the `cli` feature so library consumers
+# (`cargo add dirsql`) pull zero CLI deps. Release builds must enable it
+# explicitly — otherwise `required-features` silently skips the bin target.
+features = ["cli"]
+# Only release the Rust crate. The workspace also contains PyO3 + napi-rs
+# bindings that are `publish = false` and produced by separate pipelines.
+precise-builds = true

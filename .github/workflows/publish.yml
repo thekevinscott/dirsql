@@ -137,6 +137,8 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
           - os: macos-latest
             target: x86_64-apple-darwin
           - os: macos-latest
@@ -153,10 +155,37 @@ jobs:
         run: |
           sed -i.bak 's/^version = ".*"/version = "${{ needs.tag.outputs.new_version }}"/' packages/python/pyproject.toml
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Build the `dirsql` CLI binary with `--features cli` and stage it
+      # into `packages/python/python/dirsql/_binary/` so maturin's
+      # `[tool.maturin] include` picks it up and ships it inside the
+      # wheel. Wheel tags make the platform dispatch free.
+      - name: Build CLI binary
+        shell: bash
+        run: |
+          cargo build --release --bin dirsql --features cli \
+            --target ${{ matrix.target }} --manifest-path packages/rust/Cargo.toml
+
+      - name: Stage binary for wheel include
+        shell: bash
+        run: |
+          mkdir -p packages/python/python/dirsql/_binary
+          src="target/${{ matrix.target }}/release"
+          if [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
+            cp "$src/dirsql.exe" packages/python/python/dirsql/_binary/dirsql.exe
+          else
+            cp "$src/dirsql" packages/python/python/dirsql/_binary/dirsql
+            chmod +x packages/python/python/dirsql/_binary/dirsql
+          fi
+
       - uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --manifest-path packages/python/Cargo.toml --interpreter 3.9 3.10 3.11 3.12 3.13
+          args: --release --out dist --manifest-path packages/python/Cargo.toml --interpreter 3.10 3.11 3.12 3.13
           manylinux: auto
 
       - uses: actions/upload-artifact@v4

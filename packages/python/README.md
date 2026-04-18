@@ -12,6 +12,12 @@ pip install dirsql
 
 Requires Python >= 3.12. Ships as a native extension (Rust via PyO3) -- binary wheels are provided for common platforms.
 
+Each wheel also bundles the `dirsql` HTTP-server CLI as a console script, so `pip install dirsql` also gives you a `dirsql` command on `$PATH`. See the [CLI guide](https://github.com/thekevinscott/dirsql/blob/main/docs/guide/cli.md).
+
+## Publishing (maintainers)
+
+Handled by `.github/workflows/publish.yml` (invoked from `minor-release.yml` / `patch-release.yml`). For each target triple the `build` job `cargo build`s the Rust CLI with `--features cli`, stages the binary into `python/dirsql/_binary/`, runs `maturin build` (which picks the binary up via the `[tool.maturin] include` rule in `pyproject.toml`), and the wheels + sdist are then trusted-published to PyPI.
+
 ## Quick Start
 
 ```python
