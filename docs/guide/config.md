@@ -63,7 +63,53 @@ glob = "posts/*.json"
 
 [table.columns]
 display_name = "metadata.author.name"
+body        = "body"
 ```
+
+::: warning `[table.columns]` is a complete projection, not a partial rename
+When a `[table.columns]` section is present, `dirsql` switches to fully
+declarative projection: **only the columns listed in the mapping are
+populated**. Any column in the DDL that is not mentioned in the mapping
+is set to `NULL` for every row — the original key from the file is not
+auto-copied.
+
+This is intentional: `[table.columns]` means "here is exactly where
+every column comes from", not "rename these specific keys".
+
+**Trap to avoid.** A config like this:
+
+```toml
+[[table]]
+ddl = "CREATE TABLE comments (id TEXT, body TEXT, display_name TEXT)"
+glob = "*.json"
+
+[table.columns]
+display_name = "author"   # intended: "just rename author -> display_name"
+```
+
+against a file `one.json`:
+
+```json
+{"id": "a1", "body": "hello", "author": "Alice"}
+```
+
+produces:
+
+```json
+[{"id": null, "body": null, "display_name": "Alice"}]
+```
+
+`id` and `body` are `NULL` because they are not listed in
+`[table.columns]`. To keep them populated, add them to the mapping
+explicitly:
+
+```toml
+[table.columns]
+id           = "id"
+body         = "body"
+display_name = "author"
+```
+:::
 
 ## Ignore Patterns
 
