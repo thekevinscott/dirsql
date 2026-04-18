@@ -49,10 +49,14 @@ mod python {
     }
 
     /// A row event produced by the watch loop.
+    ///
+    /// `table` is `Optional[str]` because error events may occur before a
+    /// file has been attributed to any table (e.g. a watch-channel failure).
+    /// For insert / update / delete events it is always set.
     #[pyclass(name = "RowEvent", frozen)]
     struct PyRowEvent {
         #[pyo3(get)]
-        table: String,
+        table: Option<String>,
         #[pyo3(get)]
         action: String,
         #[pyo3(get)]
@@ -199,7 +203,7 @@ mod python {
                 row,
                 file_path,
             } => PyRowEvent {
-                table: table.clone(),
+                table: Some(table.clone()),
                 action: "insert".to_string(),
                 row: Some(value_row_to_py_dict(py, row)?),
                 old_row: None,
@@ -212,7 +216,7 @@ mod python {
                 new_row,
                 file_path,
             } => PyRowEvent {
-                table: table.clone(),
+                table: Some(table.clone()),
                 action: "update".to_string(),
                 row: Some(value_row_to_py_dict(py, new_row)?),
                 old_row: Some(value_row_to_py_dict(py, old_row)?),
@@ -224,15 +228,19 @@ mod python {
                 row,
                 file_path,
             } => PyRowEvent {
-                table: table.clone(),
+                table: Some(table.clone()),
                 action: "delete".to_string(),
                 row: Some(value_row_to_py_dict(py, row)?),
                 old_row: None,
                 error: None,
                 file_path: Some(file_path.clone()),
             },
-            RowEvent::Error { file_path, error } => PyRowEvent {
-                table: String::new(),
+            RowEvent::Error {
+                table,
+                file_path,
+                error,
+            } => PyRowEvent {
+                table: table.clone(),
                 action: "error".to_string(),
                 row: None,
                 old_row: None,

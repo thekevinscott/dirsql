@@ -26,9 +26,13 @@ use std::time::Duration;
 // -- Public napi-rs classes --------------------------------------------------
 
 /// A row-level event emitted by the file watcher.
+///
+/// `table` is nullable because error events may occur before a file has
+/// been attributed to any table (e.g. a watch-channel failure). For
+/// insert / update / delete events it is always set.
 #[napi(object)]
 pub struct RowEvent {
-    pub table: String,
+    pub table: Option<String>,
     pub action: String,
     pub row: Option<HashMap<String, serde_json::Value>>,
     pub old_row: Option<HashMap<String, serde_json::Value>>,
@@ -527,7 +531,7 @@ fn row_event_to_js(event: &CoreRowEvent) -> RowEvent {
             row,
             file_path,
         } => RowEvent {
-            table: table.clone(),
+            table: Some(table.clone()),
             action: "insert".to_string(),
             row: Some(value_row_to_json(row)),
             old_row: None,
@@ -540,7 +544,7 @@ fn row_event_to_js(event: &CoreRowEvent) -> RowEvent {
             new_row,
             file_path,
         } => RowEvent {
-            table: table.clone(),
+            table: Some(table.clone()),
             action: "update".to_string(),
             row: Some(value_row_to_json(new_row)),
             old_row: Some(value_row_to_json(old_row)),
@@ -552,15 +556,19 @@ fn row_event_to_js(event: &CoreRowEvent) -> RowEvent {
             row,
             file_path,
         } => RowEvent {
-            table: table.clone(),
+            table: Some(table.clone()),
             action: "delete".to_string(),
             row: Some(value_row_to_json(row)),
             old_row: None,
             error: None,
             file_path: Some(file_path.clone()),
         },
-        CoreRowEvent::Error { file_path, error } => RowEvent {
-            table: String::new(),
+        CoreRowEvent::Error {
+            table,
+            file_path,
+            error,
+        } => RowEvent {
+            table: table.clone(),
             action: "error".to_string(),
             row: None,
             old_row: None,

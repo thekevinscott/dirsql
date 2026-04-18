@@ -382,8 +382,18 @@ fn it_streams_watch_error_events() {
 
     let event = block_on(stream.next()).expect("watch event");
     match event {
-        dirsql::RowEvent::Error { error, .. } => {
+        dirsql::RowEvent::Error {
+            table,
+            error,
+            file_path,
+        } => {
             assert!(error.contains("intentional parse failure"));
+            assert_eq!(
+                table.as_deref(),
+                Some("items"),
+                "error event should attribute the failure to the matching table"
+            );
+            assert!(file_path.to_string_lossy().contains("bad.txt"));
         }
         other => panic!("expected error event, got: {other:?}"),
     }

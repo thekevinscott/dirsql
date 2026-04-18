@@ -28,7 +28,12 @@ export interface TableDef {
 
 /** A row-level event emitted by the file watcher. */
 export interface RowEvent {
-  table: string;
+  /**
+   * The table the event applies to. Always set for insert / update / delete.
+   * May be `null` on error events that occur before a file is attributed
+   * to any table (e.g. a watch-channel failure).
+   */
+  table: string | null;
   action: "insert" | "update" | "delete" | "error";
   row?: Record<string, unknown> | null;
   oldRow?: Record<string, unknown> | null;
