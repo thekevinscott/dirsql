@@ -17,8 +17,8 @@
 //! callback is only ever invoked synchronously from that thread.
 
 use dirsql::{DirSQL as CoreDirSQL, RawFileEvent, Row, RowEvent as CoreRowEvent, Table, Value};
-use napi::bindgen_prelude::*;
 use napi::Task;
+use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::collections::HashMap;
 use std::sync::Arc;

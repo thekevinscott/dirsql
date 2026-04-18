@@ -421,10 +421,10 @@ fn it_splits_wait_and_apply_for_async_bindings() {
         raw.extend(db.wait_file_events(Duration::from_millis(250)).unwrap());
     }
     assert!(!raw.is_empty(), "expected at least one raw file event");
-    assert!(raw.iter().any(|e| matches!(
-        e,
-        RawFileEvent::Created(_) | RawFileEvent::Modified(_)
-    )));
+    assert!(
+        raw.iter()
+            .any(|e| matches!(e, RawFileEvent::Created(_) | RawFileEvent::Modified(_)))
+    );
 
     // Apply runs extract and mutates the DB. Inserts land in the index.
     let row_events = db.apply_file_events(raw);
