@@ -4,6 +4,8 @@ Rust SDK for `dirsql`. Ephemeral SQL index over a local directory.
 
 [Documentation](https://thekevinscott.github.io/dirsql/?lang=rust)
 
+Also available as [`dirsql` on PyPI](https://pypi.org/project/dirsql/) and [`dirsql` on npm](https://www.npmjs.com/package/dirsql).
+
 ## Installation
 
 ```bash
