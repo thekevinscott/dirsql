@@ -30,7 +30,7 @@ describe("DirSQL", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("creates an instance and queries data", () => {
+  it("creates an instance and queries data", async () => {
     const db = new DirSQL(dir, [
       {
         ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
@@ -39,7 +39,7 @@ describe("DirSQL", () => {
       },
     ]);
 
-    const rows = db.query("SELECT * FROM users ORDER BY name");
+    const rows = await db.query("SELECT * FROM users ORDER BY name");
     expect(rows).toHaveLength(2);
     expect(rows[0].name).toBe("Alice");
     expect(rows[0].age).toBe(30);
@@ -47,7 +47,7 @@ describe("DirSQL", () => {
     expect(rows[1].age).toBe(25);
   });
 
-  it("supports multiple tables", () => {
+  it("supports multiple tables", async () => {
     const db = new DirSQL(dir, [
       {
         ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
@@ -61,16 +61,16 @@ describe("DirSQL", () => {
       },
     ]);
 
-    const users = db.query("SELECT * FROM users ORDER BY name");
+    const users = await db.query("SELECT * FROM users ORDER BY name");
     expect(users).toHaveLength(2);
 
-    const products = db.query("SELECT * FROM products ORDER BY name");
+    const products = await db.query("SELECT * FROM products ORDER BY name");
     expect(products).toHaveLength(2);
     expect(products[0].name).toBe("Gadget");
     expect(products[0].price).toBeCloseTo(19.99);
   });
 
-  it("supports glob patterns", () => {
+  it("supports glob patterns", async () => {
     const db = new DirSQL(dir, [
       {
         ddl: "CREATE TABLE items (name TEXT)",
@@ -82,11 +82,11 @@ describe("DirSQL", () => {
       },
     ]);
 
-    const rows = db.query("SELECT * FROM items ORDER BY name");
+    const rows = await db.query("SELECT * FROM items ORDER BY name");
     expect(rows).toHaveLength(4);
   });
 
-  it("supports ignore patterns", () => {
+  it("supports ignore patterns", async () => {
     const db = new DirSQL(
       dir,
       [
@@ -102,11 +102,11 @@ describe("DirSQL", () => {
       ["data/products.json"],
     );
 
-    const rows = db.query("SELECT * FROM items ORDER BY name");
+    const rows = await db.query("SELECT * FROM items ORDER BY name");
     expect(rows).toHaveLength(2);
   });
 
-  it("handles SQL queries with WHERE clauses", () => {
+  it("handles SQL queries with WHERE clauses", async () => {
     const db = new DirSQL(dir, [
       {
         ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
@@ -115,12 +115,12 @@ describe("DirSQL", () => {
       },
     ]);
 
-    const rows = db.query("SELECT * FROM users WHERE age > 27");
+    const rows = await db.query("SELECT * FROM users WHERE age > 27");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("Alice");
   });
 
-  it("handles empty directories gracefully", () => {
+  it("handles empty directories gracefully", async () => {
     const emptyDir = mkdtempSync(join(tmpdir(), "dirsql-empty-"));
     try {
       const db = new DirSQL(emptyDir, [
@@ -131,14 +131,14 @@ describe("DirSQL", () => {
         },
       ]);
 
-      const rows = db.query("SELECT * FROM items");
+      const rows = await db.query("SELECT * FROM items");
       expect(rows).toHaveLength(0);
     } finally {
       rmSync(emptyDir, { recursive: true, force: true });
     }
   });
 
-  it("throws on invalid SQL", () => {
+  it("throws on invalid SQL", async () => {
     const db = new DirSQL(dir, [
       {
         ddl: "CREATE TABLE users (name TEXT)",
@@ -147,10 +147,10 @@ describe("DirSQL", () => {
       },
     ]);
 
-    expect(() => db.query("SELECT * FROM nonexistent")).toThrow();
+    await expect(db.query("SELECT * FROM nonexistent")).rejects.toThrow();
   });
 
-  it("rejects write statements via query", () => {
+  it("rejects write statements via query", async () => {
     const itemDir = join(dir, "items");
     mkdirSync(itemDir, { recursive: true });
     writeFileSync(join(itemDir, "a.json"), JSON.stringify({ name: "apple" }));
@@ -173,11 +173,11 @@ describe("DirSQL", () => {
       "REPLACE INTO items (name) VALUES ('x')",
       "VACUUM",
     ]) {
-      expect(() => db.query(stmt)).toThrow(/read-only/i);
+      await expect(db.query(stmt)).rejects.toThrow(/read-only/i);
     }
 
     // Index is unchanged.
-    const rows = db.query("SELECT name FROM items");
+    const rows = await db.query("SELECT name FROM items");
     expect(rows).toEqual([{ name: "apple" }]);
   });
 
@@ -237,7 +237,7 @@ describe("DirSQL strict mode", () => {
   });
 
   // Docs: strict mode passes on exact key match.
-  it("allows rows with exact key match when strict is true", () => {
+  it("allows rows with exact key match when strict is true", async () => {
     writeFileSync(
       join(dir, "items", "a.json"),
       JSON.stringify({ name: "apple", color: "red" }),
@@ -252,7 +252,7 @@ describe("DirSQL strict mode", () => {
       },
     ]);
 
-    const rows = db.query("SELECT name, color FROM items");
+    const rows = await db.query("SELECT name, color FROM items");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("apple");
     expect(rows[0].color).toBe("red");
@@ -273,7 +273,7 @@ describe("DirSQL watch events", () => {
   // Docs (guide/watching.md event payloads): `filePath` is relative to the root.
   // All examples in watching.md show relative paths (e.g. "comments/abc/index.json")
   // rather than absolute paths.
-  it("sets filePath as a relative path on watch events", () => {
+  it("sets filePath as a relative path on watch events", async () => {
     mkdirSync(join(dir, "nested", "dir"), { recursive: true });
 
     const db = new DirSQL(dir, [
@@ -284,7 +284,7 @@ describe("DirSQL watch events", () => {
       },
     ]);
 
-    db.startWatcher();
+    await db.startWatcher();
 
     // Give the watcher a moment to settle before writing, so the file event
     // is definitely captured.
@@ -292,10 +292,10 @@ describe("DirSQL watch events", () => {
     writeFileSync(join(dir, relPath), JSON.stringify({ name: "relative" }));
 
     // Poll until we see at least one event, up to ~5s total.
-    const events: ReturnType<typeof db.pollEvents> = [];
+    const events: RowEvent[] = [];
     const deadline = Date.now() + 5000;
     while (events.length === 0 && Date.now() < deadline) {
-      events.push(...db.pollEvents(250));
+      events.push(...(await db.pollEvents(250)));
     }
 
     expect(events.length).toBeGreaterThan(0);
@@ -305,6 +305,38 @@ describe("DirSQL watch events", () => {
     // Must be relative (not absolute).
     expect(fp.startsWith("/")).toBe(false);
     expect(fp).toBe(relPath.replace(/\\/g, "/"));
+  });
+
+  // #147: pollEvents runs on the libuv threadpool, so awaiting a long poll
+  // timeout does NOT starve the JS event loop. This is the watch-layer
+  // analog of the async query test; a ~500ms native poll must coexist with
+  // a concurrent ~50ms setTimeout.
+  it("does not block the JS event loop during pollEvents", async () => {
+    const db = new DirSQL(dir, [
+      {
+        ddl: "CREATE TABLE items (name TEXT)",
+        glob: "**/*.json",
+        extract: (_filePath: string, content: string) => [JSON.parse(content)],
+      },
+    ]);
+
+    await db.startWatcher();
+
+    let timerFired = false;
+    setTimeout(() => {
+      timerFired = true;
+    }, 50);
+
+    // Native poll timeout is 10x the timer delay. With a sync poll, the
+    // timer would be starved and fire only after the poll returns.
+    const pollStart = Date.now();
+    await db.pollEvents(500);
+    const pollElapsed = Date.now() - pollStart;
+
+    // The timer fires concurrently with the poll (it's not starved).
+    expect(timerFired).toBe(true);
+    // Sanity: the poll still actually parked the native thread for ~500ms.
+    expect(pollElapsed).toBeGreaterThanOrEqual(400);
   });
 
   // PARITY: the TS DirSQL exposes `ready: Promise<void>` and
@@ -321,6 +353,6 @@ describe("DirSQL watch events", () => {
     expect(db.ready).toBeInstanceOf(Promise);
     await expect(db.ready).resolves.toBeUndefined();
     // query works immediately after ready resolves.
-    expect(db.query("SELECT * FROM items")).toEqual([]);
+    expect(await db.query("SELECT * FROM items")).toEqual([]);
   });
 });

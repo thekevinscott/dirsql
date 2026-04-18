@@ -44,6 +44,8 @@ use thiserror::Error;
 
 pub use crate::db::{DbError, Value};
 pub use crate::differ::RowEvent;
+#[doc(hidden)]
+pub use crate::watcher::FileEvent as RawFileEvent;
 
 pub type Row = HashMap<String, Value>;
 pub type WatchStream = UnboundedReceiver<RowEvent>;
@@ -270,6 +272,51 @@ impl DirSQL {
         self.inner.poll_used.store(true, Ordering::SeqCst);
         self.start_watching()?;
         self.poll_once(timeout)
+    }
+
+    /// Split-phase wait helper used by async bindings that cannot safely
+    /// invoke the `extract` callback off the host thread (e.g. the napi-rs
+    /// TypeScript binding, where JS callbacks must run on the main JS
+    /// thread). Blocks up to `timeout` for raw file events and returns them
+    /// unprocessed. Pair with [`apply_file_events`](Self::apply_file_events)
+    /// to finish the pipeline on the correct thread.
+    #[doc(hidden)]
+    pub fn wait_file_events(&self, timeout: Duration) -> Result<Vec<FileEvent>> {
+        if self.inner.watch_thread_started.load(Ordering::SeqCst) {
+            return Err(DirSqlError::Watch(
+                "watch() is active; cannot mix with poll_events()".into(),
+            ));
+        }
+        self.inner.poll_used.store(true, Ordering::SeqCst);
+        self.start_watching()?;
+        let guard = self
+            .inner
+            .watcher
+            .lock()
+            .map_err(|e| DirSqlError::Lock(e.to_string()))?;
+        let watcher = guard
+            .as_ref()
+            .ok_or_else(|| DirSqlError::Watch("watcher not started".into()))?;
+        let mut events = Vec::new();
+        if let Some(first) = watcher.recv_timeout(timeout) {
+            events.push(first);
+            events.extend(watcher.try_recv_all());
+        }
+        Ok(events)
+    }
+
+    /// Apply a batch of raw file events through the extract/DB update
+    /// pipeline. Counterpart to [`wait_file_events`](Self::wait_file_events).
+    /// Runs the `extract` callback inline, so the caller must invoke this on
+    /// a thread where that callback is safe to call (the JS main thread for
+    /// the TypeScript binding).
+    #[doc(hidden)]
+    pub fn apply_file_events(&self, events: Vec<FileEvent>) -> Vec<RowEvent> {
+        let mut out = Vec::new();
+        for fe in events {
+            out.extend(self.process_file_event(fe));
+        }
+        out
     }
 
     /// Channel-based watch API. Spawns a background thread that pushes
