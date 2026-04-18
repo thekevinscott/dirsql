@@ -43,14 +43,16 @@ describe("defaultPkgPath", () => {
 
 describe("syncVersion", () => {
   describe("with a plain version tag", () => {
-    it("sets version and injects optionalDependencies from PLATFORMS", () => {
+    it("sets version and injects optionalDependencies for both cli-* and lib-* sub-packages", () => {
       writePkgJson({ name: "dirsql", version: "0.0.0" });
       syncVersion("v0.5.0", pkgPath);
       const pkg = readPkg();
       expect(pkg.version).toBe("0.5.0");
-      const expected = Object.fromEntries(
-        PLATFORMS.map((p) => [p.name, "0.5.0"]),
-      );
+      const expected: Record<string, string> = {};
+      for (const p of PLATFORMS) {
+        expected[p.name] = "0.5.0";
+        expected[p.libName] = "0.5.0";
+      }
       expect(pkg.optionalDependencies).toEqual(expected);
     });
   });
@@ -66,9 +68,12 @@ describe("syncVersion", () => {
       });
       syncVersion("1.2.3", pkgPath);
       const pkg = readPkg();
-      expect(pkg.optionalDependencies).toEqual(
-        Object.fromEntries(PLATFORMS.map((p) => [p.name, "1.2.3"])),
-      );
+      const expected: Record<string, string> = {};
+      for (const p of PLATFORMS) {
+        expected[p.name] = "1.2.3";
+        expected[p.libName] = "1.2.3";
+      }
+      expect(pkg.optionalDependencies).toEqual(expected);
       expect(pkg.optionalDependencies).not.toHaveProperty("@legacy/stale-entry");
     });
   });

@@ -1,16 +1,16 @@
 #!/usr/bin/env -S node --import tsx
 // Rewrite `packages/ts/package.json` for a release: sets `version` and
-// injects `optionalDependencies` from `PLATFORMS` (one
-// `@dirsql/cli-<triple>@<version>` entry per target). Called from the
+// injects `optionalDependencies` from `PLATFORMS` — one entry per
+// target for both the CLI binary sub-package (`@dirsql/cli-<slug>`) and
+// the napi library sub-package (`@dirsql/lib-<slug>`). Called from the
 // publish-npm workflow between building the per-platform sub-packages
 // and running `npm publish` on the main package.
 //
 // `optionalDependencies` are deliberately NOT committed to the
-// package.json in source control: the `@dirsql/cli-*` sub-packages
-// don't exist on npm until the first tagged release creates them, so
-// having them in the committed manifest would break
-// `pnpm install --frozen-lockfile` for contributors. Injecting at
-// publish time solves both problems.
+// package.json in source control: the sub-packages don't exist on npm
+// until the first tagged release creates them, so having them in the
+// committed manifest would break `pnpm install --frozen-lockfile` for
+// contributors. Injecting at publish time solves both problems.
 //
 // Usage: `tsx tools/syncVersion.ts v0.2.0`
 // Leading `v` is stripped.
@@ -37,9 +37,12 @@ export function syncVersion(
     optionalDependencies?: Record<string, string>;
   };
   pkg.version = version;
-  pkg.optionalDependencies = Object.fromEntries(
-    PLATFORMS.map((p) => [p.name, version]),
-  );
+  const optional: Record<string, string> = {};
+  for (const p of PLATFORMS) {
+    optional[p.name] = version;
+    optional[p.libName] = version;
+  }
+  pkg.optionalDependencies = optional;
   writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
   process.stdout.write(`synced package.json to ${version}\n`);
 }

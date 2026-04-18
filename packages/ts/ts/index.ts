@@ -1,19 +1,16 @@
 // dirsql TypeScript SDK.
 //
-// The public surface is implemented in Rust via napi-rs. `pnpm build` runs
-// `napi build` which produces `dirsql.node` at the package root, then
-// `tsc` compiles this file to `dist/index.js` + `dist/index.d.ts`, which
-// is what consumers import via the package's `main` / `types` / `exports`
-// fields.
+// The public surface is implemented in Rust via napi-rs. In development
+// `pnpm build` runs `napi build` which drops `dirsql.node` at the
+// package root; the loader in `loadNativeCore.ts` falls back to that
+// file so running from source works.
 //
-// The native binary lives at the package root (not in `dist/`) because
-// that is where napi-rs writes it and where `napi prepublish` expects it.
-// We resolve it relative to this file's location at runtime so the
-// loader works whether the package is consumed via `node_modules/dirsql`
-// or via a pnpm workspace self-reference from `test/`.
+// In a published install the napi binary ships inside a per-platform
+// `@dirsql/lib-<slug>` sub-package (wired via `optionalDependencies`),
+// and the loader resolves the one matching the host's OS/arch. No Rust
+// toolchain is required at install time on any supported platform.
 
-import { createRequire } from "node:module";
-import { join } from "node:path";
+import { loadNativeCore as defaultLoadNativeCore } from "./loadNativeCore.js";
 
 /** Definition of a SQL-indexed table backed by files on disk. */
 export interface TableDef {
@@ -88,26 +85,13 @@ interface CoreModule {
   DirSQL: NativeDirSQLConstructor;
 }
 
-// Lazy-loaded reference to the core module. Populated on first access
-// by `loadNativeCore()`, or by `__setCoreForTesting()` for tests.
+// Lazy-loaded reference to the core module. Populated on first access by
+// `defaultLoadNativeCore()`, or by `__setCoreForTesting()` for tests.
 let core: CoreModule | null = null;
-
-/**
- * Load the native napi-rs binary. Resolved relative to this compiled
- * module: after `tsc` emits to `dist/`, the module's directory is
- * `<pkg>/dist`, so `..` reaches the package root where napi-rs writes
- * `dirsql.node`. The binary itself is a CommonJS addon, so we use
- * `createRequire` to load it from inside an ESM module.
- */
-function loadNativeCore(): CoreModule {
-  const bindingPath = join(import.meta.dirname, "..", "dirsql.node");
-  const requireFromHere = createRequire(import.meta.url);
-  return requireFromHere(bindingPath) as CoreModule;
-}
 
 function getCore(): CoreModule {
   if (core === null) {
-    core = loadNativeCore();
+    core = defaultLoadNativeCore() as CoreModule;
   }
   return core;
 }
