@@ -5,10 +5,13 @@
 //! Third-party HTTP transport is real (`reqwest`, `eventsource-client`);
 //! everything below the `dirsql::cli` module is live.
 //!
-//! RED PHASE: these tests reference APIs that do not exist yet
-//! (`dirsql::cli::serve`, `dirsql::cli::ServerHandle`). Running
-//! `cargo test -p dirsql --test cli_integration` must fail to compile
-//! until the server lands.
+//! Gated behind `--features cli` — the module under test lives in
+//! `src/cli/`, which is only compiled when that feature is on. Runs
+//! clean under `cargo test -p dirsql --features cli`; compiled to an
+//! empty test binary otherwise so `cargo test` (no features) and
+//! `cargo llvm-cov` without the flag still succeed.
+
+#![cfg(feature = "cli")]
 
 use std::time::Duration;
 
@@ -247,12 +250,10 @@ async fn get_events_streams_mutation_events() {
     let (root, db) = blog_fixture();
     let handle = spawn_server(db).await;
 
-    let client = eventsource_client::ClientBuilder::for_url(&format!(
-        "{}/events",
-        base_url(&handle)
-    ))
-    .unwrap()
-    .build();
+    let client =
+        eventsource_client::ClientBuilder::for_url(&format!("{}/events", base_url(&handle)))
+            .unwrap()
+            .build();
 
     let mut stream = client.stream();
 
@@ -269,8 +270,14 @@ async fn get_events_streams_mutation_events() {
     .unwrap();
 
     let payload = await_row_event(&mut stream, Duration::from_secs(5)).await;
-    assert_eq!(payload.get("action").and_then(JsonValue::as_str), Some("update"));
-    assert_eq!(payload.get("table").and_then(JsonValue::as_str), Some("posts"));
+    assert_eq!(
+        payload.get("action").and_then(JsonValue::as_str),
+        Some("update")
+    );
+    assert_eq!(
+        payload.get("table").and_then(JsonValue::as_str),
+        Some("posts")
+    );
 
     handle.shutdown().await.unwrap();
 }
@@ -282,12 +289,10 @@ async fn get_events_surfaces_parse_errors_as_error_events_not_fatal() {
     let (root, db) = blog_fixture();
     let handle = spawn_server(db).await;
 
-    let client = eventsource_client::ClientBuilder::for_url(&format!(
-        "{}/events",
-        base_url(&handle)
-    ))
-    .unwrap()
-    .build();
+    let client =
+        eventsource_client::ClientBuilder::for_url(&format!("{}/events", base_url(&handle)))
+            .unwrap()
+            .build();
     let mut stream = client.stream();
 
     await_ready(&mut stream).await;

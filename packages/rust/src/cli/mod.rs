@@ -135,7 +135,10 @@ impl ServerHandle {
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
     #[error("bind {addr}: {source}")]
-    Bind { addr: String, source: std::io::Error },
+    Bind {
+        addr: String,
+        source: std::io::Error,
+    },
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error("server task panicked: {0}")]

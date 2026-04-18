@@ -66,10 +66,7 @@ async fn main() -> ExitCode {
 fn load_state(cli: &Cli) -> AppState {
     let config_path = &cli.config;
     if !config_path.exists() {
-        return AppState::Unavailable(format!(
-            "config not found at {}",
-            config_path.display()
-        ));
+        return AppState::Unavailable(format!("config not found at {}", config_path.display()));
     }
 
     // Canonicalize so the root (derived from the config's parent) is

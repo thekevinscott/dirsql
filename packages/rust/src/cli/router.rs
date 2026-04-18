@@ -68,11 +68,8 @@ async fn handle_query(
     };
 
     let timeout = ctx.query_timeout;
-    let join = tokio::time::timeout(
-        timeout,
-        tokio::task::spawn_blocking(move || db.query(&sql)),
-    )
-    .await;
+    let join =
+        tokio::time::timeout(timeout, tokio::task::spawn_blocking(move || db.query(&sql))).await;
 
     match join {
         Ok(Ok(Ok(rows))) => Json(rows_to_json(&rows)).into_response(),
@@ -112,9 +109,7 @@ async fn handle_events(State(ctx): State<SharedCtx>) -> Response {
     // the subscription is attached. Data is non-empty because SSE parsers
     // skip events with no `data:` line.
     let ready = futures::stream::once(async {
-        Ok::<SseEvent, std::convert::Infallible>(
-            SseEvent::default().event("ready").data("{}"),
-        )
+        Ok::<SseEvent, std::convert::Infallible>(SseEvent::default().event("ready").data("{}"))
     });
     let combined = ready.chain(events);
 

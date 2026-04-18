@@ -6,10 +6,12 @@
 //! via bounded retries; they are NOT tolerant of missing or broken
 //! behavior described in `docs/guide/cli.md`.
 //!
-//! RED PHASE: the `dirsql` binary does not exist yet. `assert_cmd`'s
-//! `cargo_bin` lookup will fail for every test below. These tests turn
-//! green once #101 (bin scaffolding) lands and #105 (server) implements
-//! the HTTP surface documented in the CLI guide.
+//! Gated behind `--features cli`: the `dirsql` bin target itself is
+//! `required-features = ["cli"]`, so without the feature there's no
+//! binary for `assert_cmd::cargo_bin` to find. Compile to an empty
+//! test binary in that case so default `cargo test` still succeeds.
+
+#![cfg(feature = "cli")]
 
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -80,7 +82,10 @@ fn spawn_dirsql(dir: &std::path::Path, port: u16) -> Child {
 
 /// Block until the server answers `GET /query` (or times out).
 fn wait_until_ready(port: u16, timeout: Duration) {
-    let client = Client::builder().timeout(Duration::from_millis(250)).build().unwrap();
+    let client = Client::builder()
+        .timeout(Duration::from_millis(250))
+        .build()
+        .unwrap();
     let url = format!("http://localhost:{port}/query");
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -160,7 +165,9 @@ fn server_announces_bind_on_stdout() {
     let stdout = child.stdout.take().expect("stdout piped");
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
-    reader.read_line(&mut line).expect("expected a startup line");
+    reader
+        .read_line(&mut line)
+        .expect("expected a startup line");
     assert!(
         line.contains(&format!("localhost:{port}")),
         "unexpected startup banner: {line:?}"
@@ -247,17 +254,16 @@ fn get_events_emits_insert_event_when_file_created() {
     )
     .unwrap();
 
-    let data = rx.recv_timeout(Duration::from_secs(10)).expect("no SSE event");
+    let data = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("no SSE event");
     let payload: Value = serde_json::from_str(&data).unwrap();
     assert_eq!(
         payload.get("action").and_then(Value::as_str),
         Some("insert"),
         "expected an insert event, got {payload}"
     );
-    assert_eq!(
-        payload.get("table").and_then(Value::as_str),
-        Some("posts")
-    );
+    assert_eq!(payload.get("table").and_then(Value::as_str), Some("posts"));
 
     kill_and_wait(child);
 }

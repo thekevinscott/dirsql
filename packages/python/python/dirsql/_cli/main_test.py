@@ -67,9 +67,7 @@ def describe_main():
             assert seen["args"] == ["/fake/dirsql", "hello"]
 
     def describe_when_the_binary_cannot_be_resolved():
-        def it_returns_1_and_writes_a_dirsql_prefixed_stderr(
-            capsys, monkeypatch
-        ):
+        def it_returns_1_and_writes_a_dirsql_prefixed_stderr(capsys, monkeypatch):
             def raise_missing():
                 raise FileNotFoundError("bundled `dirsql` not found at /x")
 

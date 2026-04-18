@@ -41,9 +41,7 @@ def describe_DirSQL_async():
         async def it_uses_the_background_db(monkeypatch):
             monkeypatch.setattr(async_mod, "_RustDirSQL", _FakeRustDirSQL)
 
-            db = async_mod.DirSQL(
-                "/tmp/root", tables=["table-a"], ignore=["**/*.tmp"]
-            )
+            db = async_mod.DirSQL("/tmp/root", tables=["table-a"], ignore=["**/*.tmp"])
             await db.ready()
 
             results = await db.query("SELECT 1")
