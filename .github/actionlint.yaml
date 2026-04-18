@@ -1,0 +1,12 @@
+# actionlint configuration
+# https://github.com/rhysd/actionlint/blob/main/docs/config.md
+
+paths:
+  # `release.yml` is regenerated verbatim by `cargo-dist` (`dist generate`).
+  # Its bash snippets carry upstream shellcheck info/style hints that
+  # we can't hand-fix without diverging from the generator. Scope the
+  # ignore to that single file so other workflows still get the full
+  # shellcheck treatment.
+  .github/workflows/release.yml:
+    ignore:
+      - 'shellcheck reported issue in this script: SC(2086|2129):'

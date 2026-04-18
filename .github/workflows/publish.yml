@@ -137,6 +137,8 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
           - os: macos-latest
             target: x86_64-apple-darwin
           - os: macos-latest
@@ -153,10 +155,37 @@ jobs:
         run: |
           sed -i.bak 's/^version = ".*"/version = "${{ needs.tag.outputs.new_version }}"/' packages/python/pyproject.toml
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Build the `dirsql` CLI binary with `--features cli` and stage it
+      # into `packages/python/python/dirsql/_binary/` so maturin's
+      # `[tool.maturin] include` picks it up and ships it inside the
+      # wheel. Wheel tags make the platform dispatch free.
+      - name: Build CLI binary
+        shell: bash
+        run: |
+          cargo build --release --bin dirsql --features cli \
+            --target ${{ matrix.target }} --manifest-path packages/rust/Cargo.toml
+
+      - name: Stage binary for wheel include
+        shell: bash
+        run: |
+          mkdir -p packages/python/python/dirsql/_binary
+          src="target/${{ matrix.target }}/release"
+          if [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
+            cp "$src/dirsql.exe" packages/python/python/dirsql/_binary/dirsql.exe
+          else
+            cp "$src/dirsql" packages/python/python/dirsql/_binary/dirsql
+            chmod +x packages/python/python/dirsql/_binary/dirsql
+          fi
+
       - uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --manifest-path packages/python/Cargo.toml --interpreter 3.9 3.10 3.11 3.12 3.13
+          args: --release --out dist --manifest-path packages/python/Cargo.toml --interpreter 3.10 3.11 3.12 3.13
           manylinux: auto
 
       - uses: actions/upload-artifact@v4
@@ -189,7 +218,16 @@ jobs:
 
   publish-pypi:
     needs: [tag, build, sdist]
-    if: always() && needs.tag.outputs.created == 'true' && needs.sdist.result == 'success' && inputs.publish_pypi
+    # Require EVERY build matrix row to succeed, not just sdist. `build` uses
+    # `fail-fast: false` and each row uploads its own `wheels-<target>`
+    # artifact, so a single failed target would otherwise silently ship a
+    # release with a missing platform wheel -- users on that platform fall
+    # back to the sdist (v0.2.0 shipped this way after aarch64-linux failed
+    # to cross-compile). Block instead: `check_published.py` + pypi
+    # `skip-existing: true` make a re-dispatch idempotent once the build is
+    # fixed, and `rollback` stays dormant because a skipped publish-pypi is
+    # 'skipped' (not 'failure').
+    if: always() && needs.tag.outputs.created == 'true' && needs.build.result == 'success' && needs.sdist.result == 'success' && inputs.publish_pypi
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -306,16 +344,19 @@ jobs:
 
   rollback:
     needs: [tag, publish-pypi, publish-crates]
-    # Only delete the tag if no publish leg succeeded. crates.io publishes are
-    # permanent, so if crates succeeded we must keep the tag even if pypi
-    # failed -- otherwise the next run recomputes the same version and
-    # collides with the already-published crate.
+    # Only delete the tag if BOTH publish legs actually failed. `!= 'success'`
+    # also matches 'skipped', which fires this branch for legitimate gated-off
+    # runs (e.g. a TS-only release where publish_pypi=false and
+    # publish_crates=false). Rolling back there removes a tag whose artifacts
+    # shipped on npm -- the GitHub Release then dangles against a missing ref.
+    # crates.io publishes are permanent, so if crates succeeded we must keep
+    # the tag even if pypi failed.
     if: |
       !inputs.dry_run &&
       always() &&
       needs.tag.outputs.created == 'true' &&
-      needs.publish-pypi.result != 'success' &&
-      needs.publish-crates.result != 'success'
+      needs.publish-pypi.result == 'failure' &&
+      needs.publish-crates.result == 'failure'
     runs-on: ubuntu-latest
     permissions:
       contents: write

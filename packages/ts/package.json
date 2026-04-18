@@ -4,6 +4,7 @@
   "description": "Ephemeral SQL index over a local directory",
   "license": "MIT",
   "repository": "https://github.com/thekevinscott/dirsql",
+  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -12,32 +13,106 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist/", "dirsql.node"],
+  "bin": {
+    "dirsql": "dist/bin/dirsql.js"
+  },
+  "files": ["dist/", "dirsql.node", "README.md", "LICENSE"],
   "napi": {
     "binaryName": "dirsql",
     "triples": {}
   },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "artifacts": "napi artifacts",
-    "build": "napi build --release && tsc",
-    "build:debug": "napi build && tsc",
+    "build": "wireit",
+    "build:debug": "wireit",
+    "build:platforms": "tsx tools/buildPlatforms.ts",
     "prepublishOnly": "napi prepublish -t npm",
-    "test": "vitest run",
-    "test:unit": "vitest run --dir src --passWithNoTests",
-    "test:integration": "vitest run --dir test --passWithNoTests",
-    "coverage": "vitest run --coverage",
+    "test": "wireit",
+    "test:unit": "wireit",
+    "test:integration": "wireit",
+    "coverage": "wireit",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "format:check": "biome format ."
   },
+  "wireit": {
+    "napi:build": {
+      "command": "napi build --release",
+      "output": ["dirsql.node", "ts/index.d.ts"]
+    },
+    "tsc": {
+      "command": "tsc",
+      "files": ["ts/**/*.ts", "tsconfig.json"],
+      "output": ["dist/**"]
+    },
+    "build": {
+      "dependencies": ["napi:build", "tsc"]
+    },
+    "build:debug": {
+      "command": "napi build && tsc",
+      "files": [
+        "src/**/*.rs",
+        "build.rs",
+        "Cargo.toml",
+        "../../packages/rust/src/**/*.rs",
+        "ts/**/*.ts",
+        "tsconfig.json"
+      ],
+      "output": ["dirsql.node", "dist/**", "ts/index.d.ts"]
+    },
+    "test": {
+      "command": "vitest run",
+      "dependencies": ["napi:build"],
+      "files": [
+        "ts/**/*.ts",
+        "tools/**/*.ts",
+        "test/**/*.ts",
+        "vitest.config.ts"
+      ],
+      "output": []
+    },
+    "test:unit": {
+      "command": "vitest run --dir src --passWithNoTests",
+      "dependencies": ["napi:build"],
+      "files": ["ts/**/*.ts", "src/**/*.ts", "vitest.config.ts"],
+      "output": []
+    },
+    "test:integration": {
+      "command": "vitest run --dir test --passWithNoTests",
+      "dependencies": ["napi:build"],
+      "files": [
+        "ts/**/*.ts",
+        "tools/**/*.ts",
+        "test/**/*.ts",
+        "vitest.config.ts"
+      ],
+      "output": []
+    },
+    "coverage": {
+      "command": "vitest run --coverage",
+      "dependencies": ["napi:build"],
+      "files": [
+        "ts/**/*.ts",
+        "tools/**/*.ts",
+        "test/**/*.ts",
+        "vitest.config.ts"
+      ],
+      "output": ["coverage/**"]
+    }
+  },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
     "@napi-rs/cli": "^3.0.0",
     "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.8.0",
     "vitest": "^3.1.1",
-    "@vitest/coverage-v8": "^3.1.1"
+    "@vitest/coverage-v8": "^3.1.1",
+    "wireit": "^0.14.12"
   },
   "pnpm": {
     "onlyBuiltDependencies": ["@biomejs/biome", "esbuild"]

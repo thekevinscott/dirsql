@@ -6,8 +6,26 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+# Opt-in CLI. Library consumers (`cargo add dirsql`) pull zero CLI deps.
+# CLI install: `cargo install dirsql --features cli`.
+cli = [
+    "dep:axum",
+    "dep:clap",
+    "dep:futures",
+    "dep:tokio-stream",
+    "tokio/rt-multi-thread",
+    "tokio/macros",
+    "tokio/signal",
+    "tokio/net",
+]
+
 [dependencies]
+axum = { version = "0.8", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
 csv = "1"
+futures = { version = "0.3", optional = true }
 futures-channel.workspace = true
 globset = "0.4"
 notify = "7"
@@ -18,15 +36,30 @@ serde_json.workspace = true
 serde_yaml = "0.9"
 thiserror.workspace = true
 tokio.workspace = true
+tokio-stream = { version = "0.1", features = ["sync"], optional = true }
 toml = "0.8"
 walkdir = "2"
 
+[[bin]]
+name = "dirsql"
+path = "src/bin/dirsql.rs"
+required-features = ["cli"]
+
+[package.metadata.docs.rs]
+no-default-features = true
+
 [dev-dependencies]
+assert_cmd = "2"
 criterion = { version = "0.5", features = ["html_reports"] }
+eventsource-client = "0.13"
 futures-executor = "0.3"
 futures-util = "0.3"
+libc = "0.2"
+predicates = "3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls", "stream"] }
+serde_json.workspace = true
 tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "process"] }
 
 [[bench]]
 name = "db_bench"

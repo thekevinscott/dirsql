@@ -123,18 +123,14 @@ Foundation for the CLI tool. Enables Rust consumers without PyO3.
 
 ### CLI tool
 
-Ships inside the consolidated `dirsql` crate behind a default-on `cli` feature (bat pattern).
+Ships inside the consolidated `dirsql` crate behind an opt-in `cli` feature. Library consumers (`cargo add dirsql`) get zero CLI deps. CLI install is `cargo install dirsql --features cli`. The npm and PyPI packages ship the prebuilt Rust binary with a thin launcher; they are not separate implementations.
 
-```bash
-dirsql init                              # create .dirsql.toml with examples
-dirsql query "SELECT * FROM comments"    # one-shot query
-dirsql serve                             # long-running, HTTP + file watching
-dirsql watch                             # stream events to stdout as JSONL
-```
+Running `dirsql` starts a long-lived HTTP server — no subcommands. The server exposes:
 
-- `dirsql serve` exposes HTTP API: POST `/query` for SQL, GET `/events` (SSE) for change stream
-- Optional Unix socket for local-only access
-- Reads `.dirsql.toml` by default, override with `--config`
+- `POST /query` — JSON in, JSON rows out
+- `GET /events` — Server-Sent Events stream of row change events
+
+Flags: `--config` (default `./.dirsql.toml`), `--host` (default `localhost`), `--port` (default `7117`). One-shot `query` / `watch` / `init` subcommands were deliberately deferred — see `docs/guide/cli.md` for rationale.
 
 ### Python SDK: config file support
 

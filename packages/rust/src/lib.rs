@@ -22,6 +22,9 @@ pub mod scanner;
 #[doc(hidden)]
 pub mod watcher;
 
+#[cfg(feature = "cli")]
+pub mod cli;
+
 use crate::db::{Db, parse_table_name};
 use crate::matcher::{TableMatcher, parse_captures};
 use crate::parser::ColumnSource;
