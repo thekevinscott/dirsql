@@ -63,7 +63,7 @@ for await (const event of db.watch()) { ... }
 - `DirSQL::from_config` takes a root directory path (looks for `.dirsql.toml` inside), not the config file path directly.
 - `AsyncDirSQL` uses tokio and `OnceCell` internally.
 - Watch returns `futures_channel::mpsc::UnboundedReceiver<RowEvent>` implementing `Stream`.
-- All fallible operations return `Result<T, DirSqlError>`. Write statements sent to `query()` surface as `DirSqlError::WriteForbidden { keyword }`; in the Python/TS bindings the same condition is a `RuntimeError` / `Error` with a "read-only" message.
+- All fallible operations return `Result<T, DirSqlError>`. Statements classified as writes by SQLite's `sqlite3_stmt_readonly` surface as the unit variant `DirSqlError::WriteForbidden`; in the Python/TS bindings the same condition is a `RuntimeError` / `Error` with a "read-only" message.
 
 ### TypeScript
 - Uses `camelCase` for method names (`fromConfig`).

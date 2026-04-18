@@ -12,6 +12,11 @@ pub enum DbError {
 
     #[error("DDL parse error: {0}")]
     DdlParse(String),
+
+    #[error(
+        "query() only accepts read-only statements; SQLite classified this statement as a write"
+    )]
+    WriteForbidden,
 }
 
 pub type Result<T> = std::result::Result<T, DbError>;
@@ -133,9 +138,17 @@ impl Db {
     }
 
     /// Query the database, returning rows as a list of column-name -> value maps.
-    /// Internal tracking columns (_dirsql_*) are excluded from results.
+    ///
+    /// Rejects any statement that SQLite itself classifies as a write
+    /// (INSERT / UPDATE / DELETE / DROP / CREATE / ALTER / REPLACE / VACUUM /
+    /// ANALYZE / …) via `sqlite3_stmt_readonly`, surfaced here as
+    /// [`DbError::WriteForbidden`]. Internal tracking columns (`_dirsql_*`)
+    /// are excluded from results.
     pub fn query(&self, sql: &str) -> Result<Vec<HashMap<String, Value>>> {
         let mut stmt = self.conn.prepare(sql)?;
+        if !stmt.readonly() {
+            return Err(DbError::WriteForbidden);
+        }
         let column_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
 
         let rows = stmt.query_map([], |row| {

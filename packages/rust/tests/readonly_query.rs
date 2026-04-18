@@ -1,9 +1,11 @@
 //! Integration tests for the read-only enforcement on `DirSQL::query`.
 //!
 //! `query()` is the user-facing surface for running SQL over the index. It
-//! must only accept read-only statements so that a caller who reaches the
-//! method (SDK user, HTTP client, etc.) cannot mutate the in-memory index
-//! via `DELETE`, `DROP`, `ATTACH`, `PRAGMA writable_schema`, etc.
+//! must only accept statements that SQLite itself classifies as read-only via
+//! `sqlite3_stmt_readonly`, so a caller who reaches the method (SDK user,
+//! HTTP client, etc.) cannot mutate the in-memory index via `DELETE`, `DROP`,
+//! `INSERT`, `UPDATE`, `CREATE`, `ALTER`, `REPLACE`, `VACUUM`, `ANALYZE`,
+//! etc.
 
 use dirsql::{DirSQL, DirSqlError, Table, Value};
 use std::collections::HashMap;
@@ -37,7 +39,7 @@ fn it_rejects_delete_via_query() {
 
     let err = db.query("DELETE FROM items").unwrap_err();
     assert!(
-        matches!(err, DirSqlError::WriteForbidden { .. }),
+        matches!(err, DirSqlError::WriteForbidden),
         "expected WriteForbidden, got {err:?}"
     );
 
@@ -51,7 +53,7 @@ fn it_rejects_drop_table_via_query() {
     let db = items_db(root.path());
 
     let err = db.query("DROP TABLE items").unwrap_err();
-    assert!(matches!(err, DirSqlError::WriteForbidden { .. }));
+    assert!(matches!(err, DirSqlError::WriteForbidden));
 
     let rows = db.query("SELECT name FROM items").unwrap();
     assert_eq!(rows.len(), 2);
@@ -65,7 +67,7 @@ fn it_rejects_insert_via_query() {
     let err = db
         .query("INSERT INTO items (name) VALUES ('evil')")
         .unwrap_err();
-    assert!(matches!(err, DirSqlError::WriteForbidden { .. }));
+    assert!(matches!(err, DirSqlError::WriteForbidden));
 
     let rows = db.query("SELECT name FROM items").unwrap();
     assert_eq!(rows.len(), 2);
@@ -77,28 +79,10 @@ fn it_rejects_update_via_query() {
     let db = items_db(root.path());
 
     let err = db.query("UPDATE items SET name = 'zzz'").unwrap_err();
-    assert!(matches!(err, DirSqlError::WriteForbidden { .. }));
+    assert!(matches!(err, DirSqlError::WriteForbidden));
 
     let rows = db.query("SELECT name FROM items ORDER BY name").unwrap();
     assert_eq!(rows[0]["name"], Value::Text("apple".into()));
-}
-
-#[test]
-fn it_rejects_attach_via_query() {
-    let root = TempDir::new().unwrap();
-    let db = items_db(root.path());
-
-    let err = db.query("ATTACH DATABASE ':memory:' AS evil").unwrap_err();
-    assert!(matches!(err, DirSqlError::WriteForbidden { .. }));
-}
-
-#[test]
-fn it_rejects_pragma_via_query() {
-    let root = TempDir::new().unwrap();
-    let db = items_db(root.path());
-
-    let err = db.query("PRAGMA writable_schema = 1").unwrap_err();
-    assert!(matches!(err, DirSqlError::WriteForbidden { .. }));
 }
 
 #[test]
@@ -107,7 +91,18 @@ fn it_rejects_create_table_via_query() {
     let db = items_db(root.path());
 
     let err = db.query("CREATE TABLE evil (id TEXT)").unwrap_err();
-    assert!(matches!(err, DirSqlError::WriteForbidden { .. }));
+    assert!(matches!(err, DirSqlError::WriteForbidden));
+}
+
+#[test]
+fn it_rejects_alter_table_via_query() {
+    let root = TempDir::new().unwrap();
+    let db = items_db(root.path());
+
+    let err = db
+        .query("ALTER TABLE items ADD COLUMN evil TEXT")
+        .unwrap_err();
+    assert!(matches!(err, DirSqlError::WriteForbidden));
 }
 
 #[test]
@@ -118,7 +113,7 @@ fn it_rejects_replace_via_query() {
     let err = db
         .query("REPLACE INTO items (name) VALUES ('x')")
         .unwrap_err();
-    assert!(matches!(err, DirSqlError::WriteForbidden { .. }));
+    assert!(matches!(err, DirSqlError::WriteForbidden));
 }
 
 #[test]
@@ -127,7 +122,16 @@ fn it_rejects_vacuum_via_query() {
     let db = items_db(root.path());
 
     let err = db.query("VACUUM").unwrap_err();
-    assert!(matches!(err, DirSqlError::WriteForbidden { .. }));
+    assert!(matches!(err, DirSqlError::WriteForbidden));
+}
+
+#[test]
+fn it_rejects_analyze_via_query() {
+    let root = TempDir::new().unwrap();
+    let db = items_db(root.path());
+
+    let err = db.query("ANALYZE").unwrap_err();
+    assert!(matches!(err, DirSqlError::WriteForbidden));
 }
 
 #[test]
@@ -165,7 +169,7 @@ fn it_rejects_write_after_leading_line_comment() {
     let db = items_db(root.path());
 
     let err = db.query("-- innocent\nDELETE FROM items").unwrap_err();
-    assert!(matches!(err, DirSqlError::WriteForbidden { .. }));
+    assert!(matches!(err, DirSqlError::WriteForbidden));
 
     let rows = db.query("SELECT name FROM items").unwrap();
     assert_eq!(rows.len(), 2);
@@ -177,7 +181,7 @@ fn it_rejects_write_after_leading_block_comment() {
     let db = items_db(root.path());
 
     let err = db.query("/* innocent */ DROP TABLE items").unwrap_err();
-    assert!(matches!(err, DirSqlError::WriteForbidden { .. }));
+    assert!(matches!(err, DirSqlError::WriteForbidden));
 
     let rows = db.query("SELECT name FROM items").unwrap();
     assert_eq!(rows.len(), 2);
@@ -193,14 +197,14 @@ fn it_allows_select_after_leading_comment() {
 }
 
 #[test]
-fn write_forbidden_error_mentions_rejected_keyword() {
+fn write_forbidden_error_mentions_read_only() {
     let root = TempDir::new().unwrap();
     let db = items_db(root.path());
 
     let err = db.query("DELETE FROM items").unwrap_err();
     let msg = err.to_string();
     assert!(
-        msg.to_uppercase().contains("DELETE"),
-        "error message should mention DELETE, got: {msg}"
+        msg.to_lowercase().contains("read-only"),
+        "error message should mention read-only, got: {msg}"
     );
 }

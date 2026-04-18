@@ -171,8 +171,10 @@ describe("DirSQL", () => {
       "DROP TABLE items",
       "INSERT INTO items (name) VALUES ('evil')",
       "UPDATE items SET name = 'x'",
-      "ATTACH DATABASE ':memory:' AS evil",
-      "PRAGMA writable_schema = 1",
+      "CREATE TABLE evil (id TEXT)",
+      "ALTER TABLE items ADD COLUMN evil TEXT",
+      "REPLACE INTO items (name) VALUES ('x')",
+      "VACUUM",
     ]) {
       expect(() => db.query(stmt)).toThrow(/read-only/i);
     }

@@ -109,7 +109,7 @@ SQLite types map back to Python types:
 
 ## Read-only queries
 
-`query()` accepts only read-only statements. The first non-comment keyword must be `SELECT` or `WITH` (for a CTE that feeds a `SELECT`); any other leading keyword — `INSERT`, `UPDATE`, `DELETE`, `DROP`, `CREATE`, `ALTER`, `ATTACH`, `PRAGMA`, `VACUUM`, `REPLACE`, etc. — is rejected before it reaches SQLite.
+`query()` accepts only read-only statements. Each statement is prepared on SQLite and then classified via `sqlite3_stmt_readonly`; anything SQLite itself flags as a write — `INSERT`, `UPDATE`, `DELETE`, `DROP`, `CREATE`, `ALTER`, `REPLACE`, `VACUUM`, `ANALYZE`, etc. — is rejected before any rows are produced.
 
 This keeps the in-memory index consistent with the on-disk files that back it. Mutations only happen through the watcher/indexer pipeline: to change data, edit the underlying file and let the watcher re-extract rows.
 
@@ -123,7 +123,7 @@ db.query("DELETE FROM posts")
 ```rust [Rust]
 // Returns DirSqlError::WriteForbidden; the index is unchanged.
 let err = db.query("DELETE FROM posts").unwrap_err();
-assert!(matches!(err, dirsql::DirSqlError::WriteForbidden { .. }));
+assert!(matches!(err, dirsql::DirSqlError::WriteForbidden));
 ```
 
 ```typescript [TypeScript]

@@ -85,10 +85,9 @@ pub enum DirSqlError {
     NoFormat(String),
 
     #[error(
-        "query() only accepts read-only statements; rejected leading keyword `{keyword}`. \
-         Use SELECT (or WITH ... SELECT) instead."
+        "query() only accepts read-only statements; SQLite classified this statement as a write"
     )]
-    WriteForbidden { keyword: String },
+    WriteForbidden,
 }
 
 pub type Result<T> = std::result::Result<T, DirSqlError>;
@@ -217,21 +216,20 @@ impl DirSQL {
 
     /// Run a SQL query against the in-memory database.
     ///
-    /// Only read-only statements are accepted. The first non-comment keyword
-    /// must be `SELECT` or `WITH` (for a CTE feeding a `SELECT`); any other
-    /// leading keyword — `INSERT`, `UPDATE`, `DELETE`, `DROP`, `CREATE`,
-    /// `ALTER`, `ATTACH`, `PRAGMA`, `VACUUM`, `REPLACE`, etc. — is rejected
-    /// with [`DirSqlError::WriteForbidden`] before touching SQLite. This
+    /// Only read-only statements are accepted. Each statement is prepared on
+    /// SQLite and then classified via `sqlite3_stmt_readonly`; anything that
+    /// SQLite itself flags as a write — `INSERT`, `UPDATE`, `DELETE`, `DROP`,
+    /// `CREATE`, `ALTER`, `REPLACE`, `VACUUM`, `ANALYZE`, etc. — is rejected
+    /// with [`DirSqlError::WriteForbidden`] before any rows are produced. This
     /// keeps the in-memory index consistent with the on-disk files that back
     /// it: mutations only happen through the watcher/indexer pipeline.
     pub fn query(&self, sql: &str) -> Result<Vec<Row>> {
-        ensure_read_only(sql)?;
         let db = self
             .inner
             .db
             .lock()
             .map_err(|e| DirSqlError::Lock(e.to_string()))?;
-        db.query(sql).map_err(Into::into)
+        db.query(sql).map_err(map_db_error)
     }
 
     /// Lazily create the filesystem watcher. Idempotent; subsequent calls are
@@ -506,55 +504,16 @@ impl DirSQL {
     }
 }
 
-/// Reject anything that isn't a read-only statement before it reaches SQLite.
-///
-/// The check is intentionally lexical: we strip leading whitespace and SQL
-/// comments (`-- line` and `/* block */`), then read the first keyword. Only
-/// `SELECT` and `WITH` are allowed through — `WITH` so CTE-driven queries
-/// (`WITH x AS (SELECT ...) SELECT * FROM x`) still work. Anything else —
-/// `INSERT`, `UPDATE`, `DELETE`, `DROP`, `CREATE`, `ALTER`, `ATTACH`,
-/// `PRAGMA`, `VACUUM`, `REPLACE`, `DETACH`, `REINDEX`, `ANALYZE`, etc. —
-/// yields [`DirSqlError::WriteForbidden`].
-///
-/// This is a defense against the SQL-injection surface described in issue
-/// #128: every SDK consumer (Rust, Python, TS, HTTP) funnels through
-/// `DirSQL::query`, so the single check covers them all.
-fn ensure_read_only(sql: &str) -> Result<()> {
-    let keyword = leading_keyword(sql);
-    match keyword.as_str() {
-        "SELECT" | "WITH" => Ok(()),
-        "" => Err(DirSqlError::WriteForbidden {
-            keyword: "<empty>".into(),
-        }),
-        _ => Err(DirSqlError::WriteForbidden { keyword }),
+/// Translate a [`DbError`] into a [`DirSqlError`], promoting the core's
+/// structural write-rejection ([`DbError::WriteForbidden`]) into
+/// [`DirSqlError::WriteForbidden`] so callers can distinguish a rejected
+/// write from any other query error. Every other `DbError` flows through the
+/// usual [`DirSqlError::Core`] conversion.
+fn map_db_error(e: DbError) -> DirSqlError {
+    match e {
+        DbError::WriteForbidden => DirSqlError::WriteForbidden,
+        other => DirSqlError::Core(other),
     }
-}
-
-/// Return the first SQL keyword (uppercased), skipping leading whitespace and
-/// `--` / `/* */` comments. Returns `""` if the input is empty after
-/// stripping.
-fn leading_keyword(sql: &str) -> String {
-    let mut rest = sql;
-    loop {
-        rest = rest.trim_start();
-        if let Some(after) = rest.strip_prefix("--") {
-            rest = match after.find('\n') {
-                Some(nl) => &after[nl + 1..],
-                None => "",
-            };
-        } else if let Some(after) = rest.strip_prefix("/*") {
-            rest = match after.find("*/") {
-                Some(end) => &after[end + 2..],
-                None => "",
-            };
-        } else {
-            break;
-        }
-    }
-    rest.chars()
-        .take_while(|c| c.is_ascii_alphabetic())
-        .collect::<String>()
-        .to_ascii_uppercase()
 }
 
 fn error_event(rel_path: &str, error: String) -> RowEvent {
@@ -783,77 +742,23 @@ mod readonly_tests {
     use super::*;
 
     #[test]
-    fn leading_keyword_extracts_plain_select() {
-        assert_eq!(leading_keyword("SELECT 1"), "SELECT");
+    fn map_db_error_promotes_write_forbidden() {
+        let err = map_db_error(DbError::WriteForbidden);
+        assert!(matches!(err, DirSqlError::WriteForbidden));
     }
 
     #[test]
-    fn leading_keyword_uppercases_lowercase_input() {
-        assert_eq!(leading_keyword("select 1"), "SELECT");
+    fn map_db_error_leaves_sqlite_errors_as_core() {
+        let err = map_db_error(DbError::Sqlite(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
+            Some("syntax error".into()),
+        )));
+        assert!(matches!(err, DirSqlError::Core(_)));
     }
 
     #[test]
-    fn leading_keyword_skips_whitespace() {
-        assert_eq!(leading_keyword("   \n\t SELECT 1"), "SELECT");
-    }
-
-    #[test]
-    fn leading_keyword_skips_line_comment() {
-        assert_eq!(leading_keyword("-- hi\nSELECT 1"), "SELECT");
-    }
-
-    #[test]
-    fn leading_keyword_skips_block_comment() {
-        assert_eq!(leading_keyword("/* hi */ SELECT 1"), "SELECT");
-    }
-
-    #[test]
-    fn leading_keyword_skips_multiple_comments() {
-        assert_eq!(leading_keyword("/* a */ -- b\n  /* c */SELECT"), "SELECT");
-    }
-
-    #[test]
-    fn leading_keyword_handles_unterminated_block_comment() {
-        assert_eq!(leading_keyword("/* unterminated SELECT"), "");
-    }
-
-    #[test]
-    fn leading_keyword_empty_input_returns_empty() {
-        assert_eq!(leading_keyword(""), "");
-        assert_eq!(leading_keyword("   \n  "), "");
-    }
-
-    #[test]
-    fn ensure_read_only_allows_select() {
-        assert!(ensure_read_only("SELECT 1").is_ok());
-    }
-
-    #[test]
-    fn ensure_read_only_allows_with_cte() {
-        assert!(ensure_read_only("WITH x AS (SELECT 1) SELECT * FROM x").is_ok());
-    }
-
-    #[test]
-    fn ensure_read_only_rejects_delete_with_keyword_in_error() {
-        let err = ensure_read_only("DELETE FROM t").unwrap_err();
-        match err {
-            DirSqlError::WriteForbidden { keyword } => assert_eq!(keyword, "DELETE"),
-            other => panic!("expected WriteForbidden, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn ensure_read_only_rejects_empty_input() {
-        let err = ensure_read_only("").unwrap_err();
-        assert!(matches!(err, DirSqlError::WriteForbidden { .. }));
-    }
-
-    #[test]
-    fn ensure_read_only_rejects_pragma() {
-        let err = ensure_read_only("PRAGMA writable_schema = 1").unwrap_err();
-        match err {
-            DirSqlError::WriteForbidden { keyword } => assert_eq!(keyword, "PRAGMA"),
-            other => panic!("expected WriteForbidden, got {other:?}"),
-        }
+    fn map_db_error_leaves_schema_mismatch_as_core() {
+        let err = map_db_error(DbError::SchemaMismatch("nope".into()));
+        assert!(matches!(err, DirSqlError::Core(_)));
     }
 }
