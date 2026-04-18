@@ -213,16 +213,18 @@ An error occurred while processing a file change. The file was modified but the 
 
 ```python [Python]
 event.action    # "error"
-event.table     # "comments"
+event.table     # "comments" (or None if the error isn't tied to a table)
 event.error     # "Extract error: ..."
 event.file_path # "comments/abc/index.json"
 event.row       # None
 ```
 
 ```rust [Rust]
-// RowEvent::Error has no `table` field -- the variant only carries the
-// failing file path and the error message.
+// `table` is `Option<String>`: `Some("comments")` when the failing
+// file matched a table's glob; `None` for errors that aren't tied
+// to a specific table (e.g. a watch-channel failure).
 RowEvent::Error {
+    table,     // Some("comments")
     file_path, // PathBuf, e.g. "comments/abc/index.json"
     error,     // "Extract error: ..."
 } => { /* ... */ }
@@ -230,7 +232,7 @@ RowEvent::Error {
 
 ```typescript [TypeScript]
 event.action   // 'error'
-event.table    // 'comments'
+event.table    // 'comments' (or null if the error isn't tied to a table)
 event.error    // 'Extract error: ...'
 event.filePath // 'comments/abc/index.json'
 event.row      // undefined

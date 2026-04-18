@@ -45,7 +45,7 @@ on:
       dry_run:
         description: 'Dry run: compute the plan but skip all destructive operations (tag, publish, release)'
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: write

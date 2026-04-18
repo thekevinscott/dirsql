@@ -105,7 +105,30 @@ SQLite types map back to Python types:
 
 ## Internal columns
 
-`dirsql` adds internal tracking columns (`_dirsql_file_path`, `_dirsql_row_index`) to each table for file-change diffing. These columns are automatically excluded from `SELECT *` results. You do not need to account for them.
+`dirsql` adds internal tracking columns (`_dirsql_file_path`, `_dirsql_row_index`) to each table for file-change diffing. These columns are automatically excluded from `SELECT *` results, so day-to-day queries don't need to account for them.
+
+If you want to know which file a row came from, you can name the tracking columns explicitly in the projection:
+
+::: code-group
+
+```python [Python]
+rows = db.query("SELECT title, _dirsql_file_path FROM posts")
+# [{"title": "Hello World", "_dirsql_file_path": "posts/hello.json"}, ...]
+```
+
+```rust [Rust]
+let rows = db.query("SELECT title, _dirsql_file_path FROM posts")?;
+// [{"title": "Hello World", "_dirsql_file_path": "posts/hello.json"}, ...]
+```
+
+```typescript [TypeScript]
+const rows = await db.query('SELECT title, _dirsql_file_path FROM posts');
+// [{ title: 'Hello World', _dirsql_file_path: 'posts/hello.json' }, ...]
+```
+
+:::
+
+Tracking columns are only returned when named explicitly — `SELECT *` continues to exclude them.
 
 ## Read-only queries
 

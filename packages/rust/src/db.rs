@@ -142,8 +142,12 @@ impl Db {
     /// Rejects any statement that SQLite itself classifies as a write
     /// (INSERT / UPDATE / DELETE / DROP / CREATE / ALTER / REPLACE / VACUUM /
     /// ANALYZE / …) via `sqlite3_stmt_readonly`, surfaced here as
-    /// [`DbError::WriteForbidden`]. Internal tracking columns (`_dirsql_*`)
-    /// are excluded from results.
+    /// [`DbError::WriteForbidden`].
+    ///
+    /// Internal tracking columns (`_dirsql_*`) are excluded from `SELECT *`
+    /// results so they don't leak. But if the user names one explicitly in the
+    /// projection (e.g. `SELECT _dirsql_file_path FROM t`), it's returned —
+    /// users opt into the tracking surface by typing the column name.
     pub fn query(&self, sql: &str) -> Result<Vec<HashMap<String, Value>>> {
         let mut stmt = self.conn.prepare(sql)?;
         if !stmt.readonly() {
@@ -154,7 +158,7 @@ impl Db {
         let rows = stmt.query_map([], |row| {
             let mut map = HashMap::new();
             for (i, name) in column_names.iter().enumerate() {
-                if name.starts_with("_dirsql_") {
+                if name.starts_with("_dirsql_") && !sql.contains(name) {
                     continue;
                 }
                 let val: rusqlite::types::Value = row.get(i)?;
@@ -646,6 +650,69 @@ mod tests {
         let results = db.query("SELECT * FROM t").unwrap();
         assert_eq!(results[0].len(), 1);
         assert!(results[0].contains_key("id"));
+    }
+
+    #[test]
+    fn query_honors_explicit_dirsql_file_path() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
+        db.insert_row("t", &row, "file.json", 0).unwrap();
+
+        let results = db.query("SELECT _dirsql_file_path FROM t").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].get("_dirsql_file_path"),
+            Some(&Value::Text("file.json".into())),
+        );
+    }
+
+    #[test]
+    fn query_honors_explicit_dirsql_alongside_user_columns() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE posts (title TEXT)").unwrap();
+        let row = HashMap::from([("title".into(), Value::Text("Hello".into()))]);
+        db.insert_row("posts", &row, "posts/hello.json", 0).unwrap();
+
+        let results = db
+            .query("SELECT title, _dirsql_file_path FROM posts")
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["title"], Value::Text("Hello".into()));
+        assert_eq!(
+            results[0]["_dirsql_file_path"],
+            Value::Text("posts/hello.json".into()),
+        );
+    }
+
+    #[test]
+    fn query_honors_explicit_dirsql_row_index() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("a".into()))]);
+        db.insert_row("t", &row, "f.jsonl", 7).unwrap();
+
+        let results = db.query("SELECT _dirsql_row_index FROM t").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["_dirsql_row_index"], Value::Integer(7));
+    }
+
+    #[test]
+    fn query_keeps_dirsql_when_filter_references_it_with_star_projection() {
+        // Naming `_dirsql_file_path` anywhere in the SQL is treated as
+        // "the user is aware of this tracking column", so `SELECT *` with
+        // a `_dirsql_*` reference in WHERE returns it.
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
+        db.insert_row("t", &row, "file.json", 0).unwrap();
+
+        let results = db
+            .query("SELECT * FROM t WHERE _dirsql_file_path = 'file.json'")
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].contains_key("id"));
+        assert!(results[0].contains_key("_dirsql_file_path"));
     }
 
     // --- Error path: query with invalid SQL ---

@@ -2,6 +2,8 @@
 
 Rust SDK for `dirsql`. Ephemeral SQL index over a local directory.
 
+[Documentation](https://thekevinscott.github.io/dirsql/?lang=rust)
+
 ## Installation
 
 ```bash

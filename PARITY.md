@@ -59,7 +59,7 @@ for await (const event of db.watch()) { ... }
 ### Rust
 - Uses `snake_case` for all identifiers.
 - `Table` has separate constructors: `new` (infallible extract), `try_new` (fallible extract), `strict` (shorthand).
-- `RowEvent` is a Rust enum with variants (`Insert { table, row, file_path }`, `Update { table, old_row, new_row, file_path }`, `Delete { table, row, file_path }`, `Error { file_path, error }`) rather than a flat struct. `file_path` is a relative `String` on Insert/Update/Delete and a `PathBuf` on Error.
+- `RowEvent` is a Rust enum with variants (`Insert { table, row, file_path }`, `Update { table, old_row, new_row, file_path }`, `Delete { table, row, file_path }`, `Error { table, file_path, error }`) rather than a flat struct. `file_path` is a relative `String` on Insert/Update/Delete and a `PathBuf` on Error. `table` is `String` on Insert/Update/Delete and `Option<String>` on Error — `None` for errors that aren't tied to a specific table (e.g. a watch-channel failure). Python exposes the same field as `Optional[str]`; TypeScript as `string | null`.
 - `DirSQL::from_config` takes a root directory path (looks for `.dirsql.toml` inside), not the config file path directly.
 - `AsyncDirSQL` uses tokio and `OnceCell` internally.
 - Watch returns `futures_channel::mpsc::UnboundedReceiver<RowEvent>` implementing `Stream`.

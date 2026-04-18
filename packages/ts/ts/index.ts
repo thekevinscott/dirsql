@@ -28,7 +28,12 @@ export interface TableDef {
 
 /** A row-level event emitted by the file watcher. */
 export interface RowEvent {
-  table: string;
+  /**
+   * The table the event applies to. Always set for insert / update / delete.
+   * May be `null` on error events that occur before a file is attributed
+   * to any table (e.g. a watch-channel failure).
+   */
+  table: string | null;
   action: "insert" | "update" | "delete" | "error";
   row?: Record<string, unknown> | null;
   oldRow?: Record<string, unknown> | null;
@@ -173,16 +178,24 @@ export class DirSQL {
    * for await (const event of db.watch()) { ... }
    * ```
    *
-   * Starts the underlying watcher on first iteration, then polls in 200ms
-   * increments and yields each {@link RowEvent}. The iterator runs
+   * Starts the underlying watcher on first iteration, then polls in a
+   * non-blocking loop and yields each {@link RowEvent}. The iterator runs
    * indefinitely; break out of the `for await` loop to stop.
    */
   async *watch(): AsyncGenerator<RowEvent, void, unknown> {
     this._inner.startWatcher();
     while (true) {
-      const events = this._inner.pollEvents(200);
+      // `pollEvents` is a sync napi call that parks the JS thread for the
+      // duration of its timeout. Using a long timeout plus no `await`
+      // between iterations starves the JS event loop, so same-process
+      // timers, microtasks, and fs writes never fire. Use a non-blocking
+      // poll and a short async wait when idle so the loop gets to run.
+      const events = this._inner.pollEvents(0);
       for (const event of events) {
         yield event;
+      }
+      if (events.length === 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
       }
     }
   }

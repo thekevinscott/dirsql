@@ -341,6 +341,10 @@ def describe_DirSQL_async():
             assert len(events) >= 1
             assert events[0].action == "error"
             assert events[0].error is not None
+            # The failing file matched the `items` table's glob; the error
+            # event must carry that attribution so multi-table consumers can
+            # route the error to the right handler.
+            assert events[0].table == "items"
 
         @pytest.mark.asyncio
         async def it_updates_db_on_file_changes(tmp_dir):
