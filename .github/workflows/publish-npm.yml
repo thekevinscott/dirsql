@@ -1,10 +1,15 @@
 name: Publish npm packages
 
 # Fires after the cargo-dist `Release` workflow completes on a version
-# tag. Downloads the release's Rust archives, synthesizes per-platform
-# `@dirsql/cli-<triple>` packages from them, and publishes both the
-# main `dirsql` package (SDK + CLI launcher) and every sub-package to
-# npm.
+# tag. Two halves:
+#
+# 1. `build-napi` matrix — per Rust target triple, runs `napi build` to
+#    produce `dirsql.<slug>.node` and uploads it as a workflow artifact.
+# 2. `publish` — downloads the cargo-dist Rust archives AND the napi
+#    artifacts, synthesizes per-platform `@dirsql/cli-<slug>` (CLI
+#    binary) and `@dirsql/lib-<slug>` (napi addon) packages, and
+#    publishes everything to npm along with the top-level `dirsql`
+#    package whose `optionalDependencies` pin all of them.
 #
 # Requires repo secret: `NPM_TOKEN` (a classic automation token for the
 # npm account that owns the `dirsql` name and the `@dirsql` scope).
@@ -22,7 +27,69 @@ on:
         required: true
 
 jobs:
+  build-napi:
+    if: >
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - triple: x86_64-unknown-linux-gnu
+            slug: linux-x64-gnu
+            runner: ubuntu-latest
+          - triple: aarch64-unknown-linux-gnu
+            slug: linux-arm64-gnu
+            runner: ubuntu-24.04-arm
+          - triple: x86_64-apple-darwin
+            slug: darwin-x64
+            runner: macos-13
+          - triple: aarch64-apple-darwin
+            slug: darwin-arm64
+            runner: macos-14
+          - triple: x86_64-pc-windows-msvc
+            slug: win32-x64-msvc
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: packages/ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
+      - name: Install deps
+        run: npm ci --ignore-scripts || npm install --ignore-scripts
+      - name: Build napi binary
+        run: npx napi build --release --target ${{ matrix.triple }}
+      - name: Rename to triple-suffixed filename
+        shell: bash
+        run: |
+          # `napi build` drops `dirsql.<node-slug>.node` on some setups
+          # and `dirsql.node` (unsuffixed) on others depending on CLI
+          # version. Normalize to the suffix buildLibPlatforms expects.
+          if [ -f "dirsql.${{ matrix.slug }}.node" ]; then
+            echo "already suffixed"
+          elif [ -f "dirsql.node" ]; then
+            mv "dirsql.node" "dirsql.${{ matrix.slug }}.node"
+          else
+            echo "no napi build output found" >&2
+            ls -la
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: napi-${{ matrix.triple }}
+          path: packages/ts/dirsql.${{ matrix.slug }}.node
+          if-no-files-found: error
+
   publish:
+    needs: [build-napi]
     if: >
       (github.event_name == 'workflow_dispatch') ||
       (github.event.workflow_run.conclusion == 'success' &&
@@ -69,19 +136,33 @@ jobs:
             --pattern 'dirsql-*.zip' \
             --dir target/distrib
 
-      - name: Synthesize per-platform npm packages
+      - name: Synthesize per-platform CLI packages
         env:
           DIRSQL_VERSION: ${{ steps.tag.outputs.tag }}
         run: |
           export DIRSQL_VERSION="${DIRSQL_VERSION#v}"
           npx tsx tools/buildPlatforms.ts
 
+      - name: Download napi artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: napi-*
+          path: ${{ github.workspace }}/target/napi-artifacts
+          merge-multiple: true
+
+      - name: Synthesize per-platform napi lib packages
+        env:
+          DIRSQL_VERSION: ${{ steps.tag.outputs.tag }}
+        run: |
+          export DIRSQL_VERSION="${DIRSQL_VERSION#v}"
+          npx tsx tools/buildLibPlatforms.ts
+
       - name: Publish per-platform packages
         working-directory: ${{ github.workspace }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          for dir in target/npm-platforms/*; do
+          for dir in target/npm-platforms/* target/npm-lib-platforms/*; do
             echo "publishing $dir"
             npm publish "$dir" --access public --tag latest
           done

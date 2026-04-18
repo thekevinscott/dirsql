@@ -12,26 +12,31 @@ Also available as [`dirsql` on crates.io](https://crates.io/crates/dirsql) and [
 pnpm add dirsql
 ```
 
-Requires a native build step (Rust toolchain). The native module is compiled during `pnpm build`.
+Prebuilt binaries ship for linux-x64, linux-arm64, darwin-x64, darwin-arm64, and win32-x64. npm / pnpm pick up the right one via `optionalDependencies` — no Rust toolchain required.
 
 ## Usage
 
 ```typescript
 import { DirSQL } from "dirsql";
 
-const db = new DirSQL("/path/to/directory", [
-  {
-    ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
-    glob: "data/*.json",
-    extract: (filePath, content) => JSON.parse(content),
-  },
-]);
+const db = new DirSQL({
+  root: "/path/to/directory",
+  tables: [
+    {
+      ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
+      glob: "data/*.json",
+      extract: (_filePath, content) => JSON.parse(content),
+    },
+  ],
+});
 
-const rows = db.query("SELECT * FROM users WHERE age > 25");
+const rows = await db.query("SELECT * FROM users WHERE age > 25");
 console.log(rows);
 ```
 
-## Building
+## Building (from source)
+
+Building from source requires a Rust toolchain.
 
 ```bash
 pnpm install
