@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -26,6 +26,11 @@ pub type Result<T> = std::result::Result<T, ConfigError>;
 /// Parsed configuration from a `.dirsql.toml` file.
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// Optional root directory override. When absent, callers derive the
+    /// root from the config file's own location. When present, it is taken
+    /// relative to the config file's parent (so a config at
+    /// `/proj/.dirsql.toml` with `root = "docs"` scans `/proj/docs`).
+    pub root: Option<PathBuf>,
     pub ignore: Vec<String>,
     pub tables: Vec<TableConfig>,
 }
@@ -51,6 +56,7 @@ struct RawConfig {
 
 #[derive(Deserialize)]
 struct RawDirsql {
+    root: Option<PathBuf>,
     ignore: Option<Vec<String>>,
 }
 
@@ -87,7 +93,10 @@ pub fn load_config(path: &Path) -> Result<Config> {
 pub fn load_config_str(content: &str) -> Result<Config> {
     let raw: RawConfig = toml::from_str(content)?;
 
-    let ignore = raw.dirsql.and_then(|d| d.ignore).unwrap_or_default();
+    let (root, ignore) = match raw.dirsql {
+        Some(d) => (d.root, d.ignore.unwrap_or_default()),
+        None => (None, Vec::new()),
+    };
 
     let raw_tables = raw.table.unwrap_or_default();
     let mut tables = Vec::with_capacity(raw_tables.len());
@@ -111,7 +120,11 @@ pub fn load_config_str(content: &str) -> Result<Config> {
         });
     }
 
-    Ok(Config { ignore, tables })
+    Ok(Config {
+        root,
+        ignore,
+        tables,
+    })
 }
 
 #[cfg(test)]
@@ -365,6 +378,45 @@ glob = "*.dat"
 "#;
         let config = load_config_str(toml).unwrap();
         assert_eq!(config.tables[0].format, None);
+    }
+
+    #[test]
+    fn optional_root_parses_when_present() {
+        let toml = r#"
+[dirsql]
+root = "docs"
+
+[[table]]
+ddl = "CREATE TABLE t (x TEXT)"
+glob = "*.json"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert_eq!(config.root.as_deref(), Some(Path::new("docs")));
+    }
+
+    #[test]
+    fn root_absent_by_default() {
+        let toml = r#"
+[[table]]
+ddl = "CREATE TABLE t (x TEXT)"
+glob = "*.json"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert!(config.root.is_none());
+    }
+
+    #[test]
+    fn root_can_be_absolute() {
+        let toml = r#"
+[dirsql]
+root = "/tmp/data"
+
+[[table]]
+ddl = "CREATE TABLE t (x TEXT)"
+glob = "*.json"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert_eq!(config.root.as_deref(), Some(Path::new("/tmp/data")));
     }
 
     #[test]

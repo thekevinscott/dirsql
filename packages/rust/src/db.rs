@@ -541,11 +541,11 @@ mod tests {
 
     #[test]
     fn value_to_sql_real() {
-        let v = Value::Real(3.14);
+        let v = Value::Real(1.5);
         let result = v.to_sql().unwrap();
         match result {
             rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Real(f)) => {
-                assert!((f - 3.14).abs() < f64::EPSILON);
+                assert!((f - 1.5).abs() < f64::EPSILON);
             }
             _ => panic!("expected Real"),
         }
@@ -587,8 +587,8 @@ mod tests {
 
     #[test]
     fn value_from_sqlite_real() {
-        let v = Value::from(rusqlite::types::Value::Real(2.718));
-        assert_eq!(v, Value::Real(2.718));
+        let v = Value::from(rusqlite::types::Value::Real(1.25));
+        assert_eq!(v, Value::Real(1.25));
     }
 
     #[test]

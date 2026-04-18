@@ -1153,9 +1153,9 @@ values = [1, 2, 3]
 
     #[test]
     fn toml_float_value() {
-        let content = "pi = 3.14\n";
+        let content = "ratio = 1.5\n";
         let rows = parse_file(Format::Toml, content, None).unwrap();
-        assert_eq!(rows[0]["pi"], Value::Real(3.14));
+        assert_eq!(rows[0]["ratio"], Value::Real(1.5));
     }
 
     #[test]

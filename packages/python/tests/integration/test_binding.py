@@ -1,11 +1,11 @@
 """Integration tests for the Python SDK binding layer.
 
 These tests exercise the async Python wrapper in ``dirsql._async`` in
-isolation by mocking the Rust core (``dirsql._dirsql.DirSQL`` / its
-``from_config`` classmethod). They verify the SDK's binding glue --
-offloading to threads, ready()/error propagation, lazy watcher startup,
-event iteration, config-based construction, and kwarg forwarding --
-without touching the real PyO3-backed engine.
+isolation by mocking the Rust core (``dirsql._dirsql.DirSQL``). They
+verify the SDK's binding glue -- offloading to threads, ready()/error
+propagation, lazy watcher startup, event iteration, config-based
+construction, and kwarg forwarding -- without touching the real
+PyO3-backed engine.
 
 Core behaviour (SQL semantics, scanning, diffing, watching) is covered
 by the Rust core's own unit tests and by the local-only e2e suite.
@@ -27,34 +27,20 @@ class _FakeRustDirSQL:
 
     instances: list = []
 
-    def __init__(self, root, *, tables, ignore=None):
+    def __init__(self, root=None, *, tables=None, ignore=None, config=None):
         self.root = root
         self.tables = tables
         self.ignore = ignore
+        self.config = config
         self.queries: list[str] = []
-        self.query_results: list = [{"ok": 1}]
+        self.query_results: list = (
+            [{"from_config": config}] if config is not None else [{"ok": 1}]
+        )
         self.started = False
         self.poll_calls: list[int] = []
         # Scripted event batches; each poll returns the next batch.
         self.poll_batches: list[list] = []
         _FakeRustDirSQL.instances.append(self)
-
-    # Class-level from_config so we can swap it with a callable that
-    # returns a fresh instance (mirrors the real classmethod shape).
-    @classmethod
-    def from_config(cls, path):
-        inst = object.__new__(cls)
-        inst.root = None
-        inst.tables = None
-        inst.ignore = None
-        inst.queries = []
-        inst.query_results = [{"from_config": path}]
-        inst.started = False
-        inst.poll_calls = []
-        inst.poll_batches = []
-        inst.config_path = path
-        cls.instances.append(inst)
-        return inst
 
     def query(self, sql):
         self.queries.append(sql)
@@ -219,16 +205,17 @@ def describe_binding_layer():
             assert event == "late"
             assert len(fake.poll_calls) == 3
 
-    def describe_from_config():
-        # Feature: DirSQL.from_config(path) classmethod. See
+    def describe_config_kwarg():
+        # Feature: DirSQL(config=path) forwards to the Rust core. See
         # docs/guide/config.md and packages/python/README.md.
         @pytest.mark.asyncio
-        async def it_delegates_to_rust_from_config(mock_core):
-            db = async_mod.DirSQL.from_config("/some/.dirsql.toml")
+        async def it_forwards_config_path_to_core(mock_core):
+            db = async_mod.DirSQL(config="/some/.dirsql.toml")
             await db.ready()
 
             inst = _FakeRustDirSQL.instances[-1]
-            assert inst.config_path == "/some/.dirsql.toml"
+            assert inst.config == "/some/.dirsql.toml"
+            assert inst.root is None
 
             result = await db.query("SELECT 1")
             assert result == [{"from_config": "/some/.dirsql.toml"}]
@@ -236,14 +223,17 @@ def describe_binding_layer():
         @pytest.mark.asyncio
         async def it_surfaces_config_load_errors(monkeypatch):
             class Boom(_FakeRustDirSQL):
-                @classmethod
-                def from_config(cls, path):
-                    raise FileNotFoundError(path)
+                def __init__(self, root=None, **kwargs):
+                    raise FileNotFoundError(kwargs.get("config") or root)
 
             monkeypatch.setattr(async_mod, "_RustDirSQL", Boom)
-            db = async_mod.DirSQL.from_config("/missing.toml")
+            db = async_mod.DirSQL(config="/missing.toml")
             with pytest.raises(FileNotFoundError):
                 await db.ready()
+
+        def it_rejects_construction_without_root_or_config():
+            with pytest.raises(TypeError):
+                async_mod.DirSQL()
 
     def describe_ignore_kwarg():
         # Feature: ignore patterns. See docs/guide/tables.md and

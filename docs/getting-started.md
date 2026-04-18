@@ -148,7 +148,7 @@ const tables: TableDef[] = [
   },
 ];
 
-const db = new DirSQL('./my-blog', tables);
+const db = new DirSQL({ root: './my-blog', tables });
 
 const posts = await db.query('SELECT * FROM posts');
 

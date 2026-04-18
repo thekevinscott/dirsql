@@ -27,6 +27,30 @@ export interface TableDef {
   strict?: boolean;
 }
 
+/**
+ * Options accepted by the {@link DirSQL} constructor.
+ *
+ * At least one of `root` or `config` must be supplied. When both are set,
+ * the explicit `root` wins over any `[dirsql].root` declared in the config
+ * file (a warning is emitted by the native layer).
+ */
+export interface DirSQLOptions {
+  /** Root directory to scan. */
+  root?: string;
+  /** Programmatic table definitions. Each table's `extract` runs in-process. */
+  tables?: TableDef[];
+  /** Glob patterns (relative to `root`) to ignore. */
+  ignore?: string[];
+  /**
+   * Path to a `.dirsql.toml` config file. Its `[[table]]` entries are
+   * appended to any programmatic `tables`; its `[dirsql].ignore` patterns
+   * are appended to any explicit `ignore`. If the config declares a
+   * `[dirsql].root` and no explicit `root` is given, it is resolved
+   * relative to the config file's parent directory.
+   */
+  config?: string;
+}
+
 /** A row-level event emitted by the file watcher. */
 export interface RowEvent {
   /**
@@ -50,8 +74,12 @@ interface NativeDirSQL {
 }
 
 interface NativeDirSQLConstructor {
-  new (root: string, tables: TableDef[], ignore?: string[]): NativeDirSQL;
-  fromConfig(configPath: string): NativeDirSQL;
+  openAsync(
+    root: string | null,
+    tables: TableDef[] | null,
+    ignore: string[] | null,
+    config: string | null,
+  ): Promise<NativeDirSQL>;
 }
 
 // Core module shape. The real implementation comes from the napi-rs
@@ -99,67 +127,73 @@ export function __setCoreForTesting(fake: CoreModule | null): void {
 /**
  * Ephemeral SQL index over a local directory.
  *
- * Constructing a `DirSQL` scans `root`, matches files against each
- * {@link TableDef}'s `glob`, extracts rows via `extract`, and builds an
- * in-memory SQLite database. {@link query} runs on a worker thread and
- * returns a Promise; {@link ready} and {@link watch} expose the same
- * surface in an async-idiomatic shape so TypeScript consumers don't
- * need a separate `AsyncDirSQL` class.
+ * The constructor is overloaded: pass a config-file path directly, or an
+ * options object with any combination of `root`, `tables`, `ignore`, and
+ * `config`.
+ *
+ * Constructing a `DirSQL` returns immediately; the directory scan, file
+ * reads, and initial row extraction run asynchronously. `db.ready`
+ * resolves once construction has completed, and every method (including
+ * {@link query}, {@link startWatcher}, {@link pollEvents}, and
+ * {@link watch}) transparently awaits `ready` before doing any work, so
+ * callers can start using the instance immediately:
  *
  * ```ts
- * const db = new DirSQL(root, tables);
- * await db.ready;
+ * // From a config file:
+ * const db = new DirSQL("./my-config.toml");
+ *
+ * // Programmatic:
+ * const db2 = new DirSQL({ root: "./data", tables: [...] });
+ *
+ * await db.ready; // optional: wait for the initial scan explicitly
  * const rows = await db.query("SELECT ...");
  * for await (const event of db.watch()) { ... }
  * ```
+ *
+ * The scan runs on the libuv threadpool, so constructing a `DirSQL` does
+ * not block the JS event loop even for large directories.
  */
 export class DirSQL {
   /**
-   * Resolves once the initial directory scan has completed. Scanning
-   * runs synchronously inside the constructor, so this Promise is
-   * already resolved by the time the constructor returns; construction
-   * failures throw synchronously rather than surfacing here. Exposed
-   * as a Promise purely so consumers can write async-style code
-   * uniformly across SDKs.
+   * Resolves once the initial directory scan + row extraction have
+   * completed, or rejects if construction failed. Every other method on
+   * this class implicitly awaits `ready`, so awaiting it explicitly is
+   * only necessary when a caller needs to observe construction errors
+   * synchronously (without issuing a query first).
    */
   readonly ready: Promise<void>;
 
-  private _inner: NativeDirSQL;
+  // Initialized by `ready`. Do NOT touch before awaiting `ready`.
+  private _inner!: NativeDirSQL;
 
-  constructor(root: string, tables: TableDef[], ignore?: string[]) {
+  /** Construct from a `.dirsql.toml` config-file path. */
+  constructor(configPath: string);
+  /** Construct from structured options. */
+  constructor(options: DirSQLOptions);
+  constructor(arg: string | DirSQLOptions) {
+    const options: DirSQLOptions =
+      typeof arg === "string" ? { config: arg } : arg;
     const Ctor = getCore().DirSQL;
-    this._inner =
-      ignore === undefined
-        ? new Ctor(root, tables)
-        : new Ctor(root, tables, ignore);
-    this.ready = Promise.resolve();
-  }
-
-  /**
-   * Load a {@link DirSQL} instance from a `.dirsql.toml` config file.
-   *
-   * The root directory is derived from the config file's parent. Tables
-   * are parsed using the built-in parser for each format declared in the
-   * config. No JS `extract` callback is required.
-   */
-  static fromConfig(configPath: string): DirSQL {
-    const instance = Object.create(DirSQL.prototype) as DirSQL;
-    const writable = instance as unknown as {
-      _inner: NativeDirSQL;
-      ready: Promise<void>;
-    };
-    writable._inner = getCore().DirSQL.fromConfig(configPath);
-    writable.ready = Promise.resolve();
-    return instance;
+    const openPromise = Ctor.openAsync(
+      options.root ?? null,
+      options.tables ?? null,
+      options.ignore ?? null,
+      options.config ?? null,
+    );
+    this.ready = openPromise.then((inner) => {
+      this._inner = inner;
+    });
   }
 
   /**
    * Execute a SQL query and return results as an array of row objects.
    *
-   * The query runs on the libuv threadpool, so the JS event loop stays
-   * responsive even for large result sets or long-running queries.
+   * Awaits the initial scan if it has not yet finished, then runs the
+   * query on the libuv threadpool, so the JS event loop stays responsive
+   * even for large result sets or long-running queries.
    */
-  query(sql: string): Promise<Record<string, unknown>[]> {
+  async query(sql: string): Promise<Record<string, unknown>[]> {
+    await this.ready;
     return this._inner.query(sql);
   }
 
@@ -167,10 +201,12 @@ export class DirSQL {
    * Start the file watcher. Must be called before {@link pollEvents}.
    * Idempotent — safe to call multiple times.
    *
-   * Runs on the libuv threadpool, so the JS event loop stays responsive
-   * while the watcher is being initialized.
+   * Awaits the initial scan if it has not yet finished, then runs on the
+   * libuv threadpool so the JS event loop stays responsive while the
+   * watcher is being initialized.
    */
-  startWatcher(): Promise<void> {
+  async startWatcher(): Promise<void> {
+    await this.ready;
     return this._inner.startWatcher();
   }
 
@@ -178,10 +214,12 @@ export class DirSQL {
    * Poll for file change events, blocking up to `timeoutMs` for the first
    * event. Returns all events observed in the window (possibly empty).
    *
-   * Runs on the libuv threadpool, so the JS event loop stays responsive
-   * for the duration of the poll timeout.
+   * Awaits the initial scan if it has not yet finished, then runs on the
+   * libuv threadpool so the JS event loop stays responsive for the
+   * duration of the poll timeout.
    */
-  pollEvents(timeoutMs: number): Promise<RowEvent[]> {
+  async pollEvents(timeoutMs: number): Promise<RowEvent[]> {
+    await this.ready;
     return this._inner.pollEvents(timeoutMs);
   }
 
@@ -192,11 +230,12 @@ export class DirSQL {
    * for await (const event of db.watch()) { ... }
    * ```
    *
-   * Starts the underlying watcher on first iteration, then awaits a
-   * bounded native poll each cycle. The iterator runs indefinitely; break
-   * out of the `for await` loop to stop.
+   * Awaits the initial scan on first iteration, starts the underlying
+   * watcher, then awaits a bounded native poll each cycle. The iterator
+   * runs indefinitely; break out of the `for await` loop to stop.
    */
   async *watch(): AsyncGenerator<RowEvent, void, unknown> {
+    await this.ready;
     await this._inner.startWatcher();
     while (true) {
       // Native `pollEvents` now runs on the libuv threadpool and returns a

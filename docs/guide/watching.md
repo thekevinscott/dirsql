@@ -92,7 +92,7 @@ const tables: TableDef[] = [
   },
 ];
 
-const db = new DirSQL('./my-project', tables);
+const db = new DirSQL({ root: './my-project', tables });
 
 for await (const event of db.watch()) {
   console.log(`${event.action} on ${event.table}:`, event.row);

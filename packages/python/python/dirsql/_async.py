@@ -33,52 +33,42 @@ class DirSQL:
     """Async-by-default wrapper around the Rust DirSQL engine.
 
     Usage:
+        # Programmatic:
         db = DirSQL(root, tables=[...])
+        # From a config file:
+        db = DirSQL(config="./my-config.toml")
+
         await db.ready()
         results = await db.query("SELECT ...")
         async for event in db.watch():
             ...
+
+    At least one of ``root`` or ``config`` must be supplied. When both are
+    set, the explicit ``root`` wins over any ``[dirsql].root`` in the config
+    file (a warning is emitted on stderr).
     """
 
-    def __init__(self, root, *, tables, ignore=None):
+    def __init__(self, root=None, *, tables=None, ignore=None, config=None):
+        if root is None and config is None:
+            raise TypeError("DirSQL requires either a root directory or a config= path")
         self._root = root
         self._tables = tables
         self._ignore = ignore
+        self._config = config
         self._db = None
         self._ready_event = asyncio.Event()
         self._init_error = None
         self._task = asyncio.ensure_future(self._init_bg())
 
-    @classmethod
-    def from_config(cls, path):
-        """Create a DirSQL from a .dirsql.toml config file.
-
-        Returns a DirSQL instance. Call ``await db.ready()`` before querying.
-        """
-        instance = object.__new__(cls)
-        instance._root = None
-        instance._tables = None
-        instance._ignore = None
-        instance._db = None
-        instance._ready_event = asyncio.Event()
-        instance._init_error = None
-        instance._task = asyncio.ensure_future(instance._init_from_config(path))
-        return instance
-
-    async def _init_from_config(self, path):
-        """Run from_config scan in the background."""
-        try:
-            self._db = await asyncio.to_thread(_RustDirSQL.from_config, path)
-        except Exception as exc:
-            self._init_error = exc
-        finally:
-            self._ready_event.set()
-
     async def _init_bg(self):
         """Run the scan in the background."""
         try:
             self._db = await asyncio.to_thread(
-                _RustDirSQL, self._root, tables=self._tables, ignore=self._ignore
+                _RustDirSQL,
+                self._root,
+                tables=self._tables,
+                ignore=self._ignore,
+                config=self._config,
             )
         except Exception as exc:
             self._init_error = exc

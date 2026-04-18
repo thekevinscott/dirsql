@@ -106,11 +106,11 @@ mod tests {
         let mut found_create = false;
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
-            if let Some(event) = watcher.recv_timeout(Duration::from_millis(200)) {
-                if matches!(event, FileEvent::Created(_)) {
-                    found_create = true;
-                    break;
-                }
+            if let Some(event) = watcher.recv_timeout(Duration::from_millis(200))
+                && matches!(event, FileEvent::Created(_))
+            {
+                found_create = true;
+                break;
             }
         }
         assert!(found_create, "Expected a Created event");
@@ -130,11 +130,11 @@ mod tests {
         let mut found_delete = false;
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
-            if let Some(event) = watcher.recv_timeout(Duration::from_millis(200)) {
-                if matches!(event, FileEvent::Deleted(_)) {
-                    found_delete = true;
-                    break;
-                }
+            if let Some(event) = watcher.recv_timeout(Duration::from_millis(200))
+                && matches!(event, FileEvent::Deleted(_))
+            {
+                found_delete = true;
+                break;
             }
         }
         assert!(found_delete, "Expected a Deleted event");
@@ -155,11 +155,11 @@ mod tests {
         let mut found_event = false;
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
-            if let Some(event) = watcher.recv_timeout(Duration::from_millis(200)) {
-                if matches!(event, FileEvent::Modified(_) | FileEvent::Created(_)) {
-                    found_event = true;
-                    break;
-                }
+            if let Some(event) = watcher.recv_timeout(Duration::from_millis(200))
+                && matches!(event, FileEvent::Modified(_) | FileEvent::Created(_))
+            {
+                found_event = true;
+                break;
             }
         }
         assert!(found_event, "Expected a Modified or Created event");
