@@ -83,6 +83,11 @@ pub enum DirSqlError {
 
     #[error("no format for table '{0}': specify format explicitly or use a recognized extension")]
     NoFormat(String),
+
+    #[error(
+        "query() only accepts read-only statements; SQLite classified this statement as a write"
+    )]
+    WriteForbidden,
 }
 
 pub type Result<T> = std::result::Result<T, DirSqlError>;
@@ -210,13 +215,21 @@ impl DirSQL {
     }
 
     /// Run a SQL query against the in-memory database.
+    ///
+    /// Only read-only statements are accepted. Each statement is prepared on
+    /// SQLite and then classified via `sqlite3_stmt_readonly`; anything that
+    /// SQLite itself flags as a write — `INSERT`, `UPDATE`, `DELETE`, `DROP`,
+    /// `CREATE`, `ALTER`, `REPLACE`, `VACUUM`, `ANALYZE`, etc. — is rejected
+    /// with [`DirSqlError::WriteForbidden`] before any rows are produced. This
+    /// keeps the in-memory index consistent with the on-disk files that back
+    /// it: mutations only happen through the watcher/indexer pipeline.
     pub fn query(&self, sql: &str) -> Result<Vec<Row>> {
         let db = self
             .inner
             .db
             .lock()
             .map_err(|e| DirSqlError::Lock(e.to_string()))?;
-        db.query(sql).map_err(Into::into)
+        db.query(sql).map_err(map_db_error)
     }
 
     /// Lazily create the filesystem watcher. Idempotent; subsequent calls are
@@ -491,6 +504,18 @@ impl DirSQL {
     }
 }
 
+/// Translate a [`DbError`] into a [`DirSqlError`], promoting the core's
+/// structural write-rejection ([`DbError::WriteForbidden`]) into
+/// [`DirSqlError::WriteForbidden`] so callers can distinguish a rejected
+/// write from any other query error. Every other `DbError` flows through the
+/// usual [`DirSqlError::Core`] conversion.
+fn map_db_error(e: DbError) -> DirSqlError {
+    match e {
+        DbError::WriteForbidden => DirSqlError::WriteForbidden,
+        other => DirSqlError::Core(other),
+    }
+}
+
 fn error_event(table: Option<&str>, rel_path: &str, error: String) -> RowEvent {
     RowEvent::Error {
         table: table.map(str::to_string),
@@ -711,5 +736,31 @@ impl AsyncDirSQL {
                 "not ready: call ready().await first".into(),
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod readonly_tests {
+    use super::*;
+
+    #[test]
+    fn map_db_error_promotes_write_forbidden() {
+        let err = map_db_error(DbError::WriteForbidden);
+        assert!(matches!(err, DirSqlError::WriteForbidden));
+    }
+
+    #[test]
+    fn map_db_error_leaves_sqlite_errors_as_core() {
+        let err = map_db_error(DbError::Sqlite(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
+            Some("syntax error".into()),
+        )));
+        assert!(matches!(err, DirSqlError::Core(_)));
+    }
+
+    #[test]
+    fn map_db_error_leaves_schema_mismatch_as_core() {
+        let err = map_db_error(DbError::SchemaMismatch("nope".into()));
+        assert!(matches!(err, DirSqlError::Core(_)));
     }
 }
