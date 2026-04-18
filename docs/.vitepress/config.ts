@@ -32,7 +32,8 @@ export default defineConfig({
           { text: 'Querying', link: '/guide/querying' },
           { text: 'File Watching', link: '/guide/watching' },
           { text: 'Async API', link: '/guide/async' },
-          { text: 'Command-Line Interface', link: '/guide/cli' }
+          { text: 'Command-Line Interface', link: '/guide/cli' },
+          { text: 'Collaboration with CRDTs', link: '/guide/crdt' }
         ]
       },
       {
