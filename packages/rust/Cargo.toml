@@ -6,7 +6,14 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+# Opt-in CLI. Library consumers (`cargo add dirsql`) pull zero CLI deps.
+# CLI install: `cargo install dirsql --features cli`.
+cli = ["dep:clap"]
+
 [dependencies]
+clap = { version = "4", features = ["derive"], optional = true }
 csv = "1"
 futures-channel.workspace = true
 globset = "0.4"
@@ -20,6 +27,14 @@ thiserror.workspace = true
 tokio.workspace = true
 toml = "0.8"
 walkdir = "2"
+
+[[bin]]
+name = "dirsql"
+path = "src/bin/dirsql.rs"
+required-features = ["cli"]
+
+[package.metadata.docs.rs]
+no-default-features = true
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
