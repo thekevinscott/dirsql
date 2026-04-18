@@ -50,9 +50,7 @@ class DirSQL:
 
     def __init__(self, root=None, *, tables=None, ignore=None, config=None):
         if root is None and config is None:
-            raise TypeError(
-                "DirSQL requires either a root directory or a config= path"
-            )
+            raise TypeError("DirSQL requires either a root directory or a config= path")
         self._root = root
         self._tables = tables
         self._ignore = ignore

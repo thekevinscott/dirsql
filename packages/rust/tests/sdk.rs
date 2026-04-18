@@ -618,18 +618,17 @@ fn builder_without_root_or_config_errors() {
         Err(e) => e,
     };
     let msg = err.to_string();
-    assert!(msg.contains("root"), "expected root-missing error, got: {msg}");
+    assert!(
+        msg.contains("root"),
+        "expected root-missing error, got: {msg}"
+    );
 }
 
 #[test]
 fn builder_appends_programmatic_tables_to_config_tables() {
     let root = TempDir::new().unwrap();
     fs::create_dir_all(root.path().join("notes")).unwrap();
-    fs::write(
-        root.path().join("notes").join("a.txt"),
-        "hello",
-    )
-    .unwrap();
+    fs::write(root.path().join("notes").join("a.txt"), "hello").unwrap();
     fs::write(root.path().join("a.json"), r#"{"name":"from_config"}"#).unwrap();
 
     let cfg_path = root.path().join(".dirsql.toml");

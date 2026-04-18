@@ -714,8 +714,8 @@ impl DirSQLBuilder {
         let mut config_root: Option<PathBuf> = None;
 
         if let Some(ref cfg_path) = config_path {
-            let cfg = config::load_config(cfg_path)
-                .map_err(|e| DirSqlError::Config(e.to_string()))?;
+            let cfg =
+                config::load_config(cfg_path).map_err(|e| DirSqlError::Config(e.to_string()))?;
 
             let cfg_parent = cfg_path
                 .parent()
