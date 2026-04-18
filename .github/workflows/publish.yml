@@ -238,9 +238,11 @@ jobs:
 
       - name: Update Cargo.toml versions
         run: |
-          sed -i 's/^version = ".*"/version = "${{ needs.tag.outputs.new_version }}"/' packages/rust/Cargo.toml
-          sed -i 's/^version = ".*"/version = "${{ needs.tag.outputs.new_version }}"/' packages/python/Cargo.toml
-          sed -i 's/^version = ".*"/version = "${{ needs.tag.outputs.new_version }}"/' packages/ts/Cargo.toml
+          # All package Cargo.toml files inherit `version.workspace = true`,
+          # so the only literal `version = "..."` lives in the workspace root.
+          # cargo publish reads that value when packaging -- bump it here or
+          # the upload reuses the stale workspace version.
+          sed -i 's/^version = ".*"/version = "${{ needs.tag.outputs.new_version }}"/' Cargo.toml
 
       - name: Check if version already on crates.io
         id: crates_check
