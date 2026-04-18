@@ -14,8 +14,8 @@ API surface comparison across the three language SDKs.
 
 | API                        | Python                           | Rust                              | TypeScript                        |
 |----------------------------|----------------------------------|-----------------------------------|-----------------------------------|
-| Constructor                | `DirSQL(root, *, tables, ignore)` | `DirSQL::new(root, tables)` / `DirSQL::with_ignore(root, tables, ignore)` | `new DirSQL(root, tables, ignore?)` |
-| From config                | `DirSQL.from_config(path)`       | `DirSQL::from_config(root_dir)` / `DirSQL::from_config_path(cfg_path)` | `DirSQL.fromConfig(configPath)`   |
+| Constructor                | `DirSQL(root, *, tables, ignore)` | `DirSQL::new(root, tables)` / `DirSQL::with_ignore(root, tables, ignore)` | `new DirSQL(root, tables, ignore?)` + `await db.ready` (scan runs on libuv threadpool) |
+| From config                | `DirSQL.from_config(path)`       | `DirSQL::from_config(root_dir)` / `DirSQL::from_config_path(cfg_path)` | `await DirSQL.fromConfig(configPath) -> Promise<DirSQL>` |
 | Query (read-only; rejects non-SELECT) | `db.query(sql) -> list[dict]`    | `db.query(sql) -> Result<Vec<Row>>` | `await db.query(sql) -> Record[]` (runs on libuv threadpool) |
 | Start watcher              | `db._start_watcher()`            | `db.start_watching()`             | `await db.startWatcher()` (runs on libuv threadpool) |
 | Poll events                | `db._poll_events(ms)`            | `db.poll_events(duration)`        | `await db.pollEvents(ms)` (runs on libuv threadpool) |
@@ -72,7 +72,7 @@ for await (const event of db.watch()) { ... }
 - `DirSQL.fromConfig` takes the config file path directly (like Python), not the root directory (like Rust).
 - No separate `AsyncDirSQL` — JS is async by default, so `DirSQL` has `ready: Promise<void>`, `query(): Promise<Record[]>`, and `watch(): AsyncIterable<RowEvent>` built in.
 - `query()`, `startWatcher()`, and `pollEvents()` all return `Promise`s and run on the libuv threadpool so the JS event loop stays responsive (even for long poll timeouts).
-- The initial directory scan currently runs synchronously inside the constructor, so `ready` resolves immediately (and construction errors throw synchronously). The Promise exists so consumers can write uniform async-style code across SDKs. Tracked in #146.
+- `new DirSQL(...)` returns synchronously but the initial directory scan runs on the libuv threadpool: `ready` resolves once it completes and rejects on scan error. Every method transparently awaits `ready`, so callers can issue queries immediately. `DirSQL.fromConfig(path)` is async (`Promise<DirSQL>`), mirroring the async-factory shape in Python/Rust.
 
 ## Test Coverage Matrix
 

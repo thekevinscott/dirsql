@@ -45,7 +45,7 @@ glob = "items/*.json"
 `,
     );
 
-    const db = DirSQL.fromConfig(configPath);
+    const db = await DirSQL.fromConfig(configPath);
     const rows = await db.query("SELECT * FROM items ORDER BY name");
     expect(rows).toHaveLength(2);
     expect(rows[0].name).toBe("apple");
@@ -71,7 +71,7 @@ glob = "*.jsonl"
 `,
     );
 
-    const db = DirSQL.fromConfig(configPath);
+    const db = await DirSQL.fromConfig(configPath);
     const rows = await db.query("SELECT * FROM events ORDER BY type");
     expect(rows).toHaveLength(2);
     expect(rows[0].type).toBe("click");
@@ -93,7 +93,7 @@ glob = "*.ndjson"
 `,
     );
 
-    const db = DirSQL.fromConfig(configPath);
+    const db = await DirSQL.fromConfig(configPath);
     const rows = await db.query("SELECT type FROM events ORDER BY type");
     expect(rows).toHaveLength(2);
     expect(rows[0].type).toBe("a");
@@ -112,7 +112,7 @@ glob = "*.csv"
 `,
     );
 
-    const db = DirSQL.fromConfig(configPath);
+    const db = await DirSQL.fromConfig(configPath);
     const rows = await db.query("SELECT * FROM produce ORDER BY name");
     expect(rows).toHaveLength(2);
     expect(rows[0].name).toBe("apples");
@@ -131,7 +131,7 @@ glob = "*.tsv"
 `,
     );
 
-    const db = DirSQL.fromConfig(configPath);
+    const db = await DirSQL.fromConfig(configPath);
     const rows = await db.query("SELECT * FROM produce ORDER BY name");
     expect(rows).toHaveLength(2);
     expect(rows[0].name).toBe("apples");
@@ -166,7 +166,7 @@ glob = "data/*.toml"
 `,
     );
 
-    const db = DirSQL.fromConfig(configPath);
+    const db = await DirSQL.fromConfig(configPath);
     const rows = await db.query("SELECT * FROM settings");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("root");
@@ -185,7 +185,7 @@ glob = "data/*.yaml"
 `,
     );
 
-    const db = DirSQL.fromConfig(configPath);
+    const db = await DirSQL.fromConfig(configPath);
     const rows = await db.query("SELECT * FROM items");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("apple");
@@ -204,7 +204,7 @@ glob = "data/*.yml"
 `,
     );
 
-    const db = DirSQL.fromConfig(configPath);
+    const db = await DirSQL.fromConfig(configPath);
     const rows = await db.query("SELECT * FROM items");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("banana");
@@ -225,7 +225,7 @@ glob = "posts/*.md"
 `,
     );
 
-    const db = DirSQL.fromConfig(configPath);
+    const db = await DirSQL.fromConfig(configPath);
     const rows = await db.query("SELECT * FROM posts");
     expect(rows).toHaveLength(1);
     expect(rows[0].title).toBe("Hello");
@@ -252,7 +252,7 @@ glob = "comments/{thread_id}/index.jsonl"
 `,
     );
 
-    const db = DirSQL.fromConfig(configPath);
+    const db = await DirSQL.fromConfig(configPath);
     const rows = await db.query("SELECT * FROM comments ORDER BY thread_id");
     expect(rows).toHaveLength(2);
     expect(rows[0].thread_id).toBe("thread-1");
@@ -279,7 +279,7 @@ age = "age"
 `,
     );
 
-    const db = DirSQL.fromConfig(configPath);
+    const db = await DirSQL.fromConfig(configPath);
     const rows = await db.query("SELECT * FROM people");
     expect(rows).toHaveLength(1);
     expect(rows[0].display_name).toBe("Alice");
@@ -309,7 +309,7 @@ each = "data.items"
 `,
     );
 
-    const db = DirSQL.fromConfig(configPath);
+    const db = await DirSQL.fromConfig(configPath);
     const rows = await db.query("SELECT * FROM items ORDER BY name");
     expect(rows).toHaveLength(2);
     expect(rows[0].name).toBe("gadget");
@@ -335,7 +335,7 @@ glob = "data/**/*.json"
 `,
     );
 
-    const db = DirSQL.fromConfig(configPath);
+    const db = await DirSQL.fromConfig(configPath);
     const rows = await db.query("SELECT * FROM items");
     expect(rows).toHaveLength(1);
     expect(rows[0].val).toBe(1);
@@ -364,7 +364,7 @@ glob = "authors/*.json"
 `,
     );
 
-    const db = DirSQL.fromConfig(configPath);
+    const db = await DirSQL.fromConfig(configPath);
     const posts = await db.query("SELECT * FROM posts");
     const authors = await db.query("SELECT * FROM authors");
     expect(posts).toHaveLength(1);
@@ -386,7 +386,7 @@ format = "csv"
 `,
     );
 
-    const db = DirSQL.fromConfig(configPath);
+    const db = await DirSQL.fromConfig(configPath);
     const rows = await db.query("SELECT * FROM t");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("foo");
@@ -409,7 +409,7 @@ strict = true
 `,
     );
 
-    const db = DirSQL.fromConfig(configPath);
+    const db = await DirSQL.fromConfig(configPath);
     const rows = await db.query("SELECT name, color FROM items");
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("apple");
@@ -432,18 +432,20 @@ strict = true
 `,
     );
 
-    expect(() => DirSQL.fromConfig(configPath)).toThrow();
+    await expect(DirSQL.fromConfig(configPath)).rejects.toThrow();
   });
 
   // Error: missing config file
   it("throws when config file is missing", async () => {
-    expect(() => DirSQL.fromConfig(join(dir, "nonexistent.toml"))).toThrow();
+    await expect(
+      DirSQL.fromConfig(join(dir, "nonexistent.toml")),
+    ).rejects.toThrow();
   });
 
   // Error: invalid TOML
   it("throws on invalid TOML", async () => {
     writeFile(configPath, "this is not valid [[[");
-    expect(() => DirSQL.fromConfig(configPath)).toThrow();
+    await expect(DirSQL.fromConfig(configPath)).rejects.toThrow();
   });
 
   // Error: missing DDL
@@ -455,7 +457,7 @@ strict = true
 glob = "*.json"
 `,
     );
-    expect(() => DirSQL.fromConfig(configPath)).toThrow();
+    await expect(DirSQL.fromConfig(configPath)).rejects.toThrow();
   });
 
   // Error: unsupported format
@@ -469,6 +471,6 @@ ddl = "CREATE TABLE t (x TEXT)"
 glob = "*.dat"
 `,
     );
-    expect(() => DirSQL.fromConfig(configPath)).toThrow();
+    await expect(DirSQL.fromConfig(configPath)).rejects.toThrow();
   });
 });

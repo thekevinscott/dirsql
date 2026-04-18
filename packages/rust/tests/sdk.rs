@@ -436,3 +436,55 @@ fn it_splits_wait_and_apply_for_async_bindings() {
         Some(Value::Text(name)) if name == "hello"
     )));
 }
+
+// The split-phase prepare/finish build API is used by async bindings
+// (TypeScript) that cannot safely invoke the `extract` callback off the host
+// thread. `prepare_build` walks the directory and reads file contents on the
+// worker thread; `finish_build` runs `extract` + DB inserts on the thread
+// where the callback is safe. Verify both halves together produce the same
+// result as the combined `DirSQL::new` constructor.
+#[test]
+fn it_splits_scan_and_build_for_async_bindings() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("a.txt"), "alpha").unwrap();
+    fs::write(root.path().join("b.txt"), "beta").unwrap();
+
+    // Counter proves `prepare_build` does NOT invoke `extract` — only
+    // `finish_build` should call it, once per scanned file.
+    let extract_calls = Arc::new(AtomicUsize::new(0));
+    let counter = extract_calls.clone();
+    let table = Table::new(
+        "CREATE TABLE items (name TEXT)",
+        "**/*.txt",
+        move |_path, content| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            vec![HashMap::from([(
+                "name".into(),
+                Value::Text(content.trim().to_string()),
+            )])]
+        },
+    );
+
+    let prepared =
+        DirSQL::prepare_build(root.path().to_path_buf(), vec![table], Vec::new()).unwrap();
+    assert_eq!(
+        extract_calls.load(Ordering::SeqCst),
+        0,
+        "prepare_build must not call extract"
+    );
+
+    let db = DirSQL::finish_build(prepared).unwrap();
+    assert_eq!(
+        extract_calls.load(Ordering::SeqCst),
+        2,
+        "finish_build should call extract once per scanned file"
+    );
+
+    let rows = db.query("SELECT name FROM items ORDER BY name").unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["name"], Value::Text("alpha".into()));
+    assert_eq!(rows[1]["name"], Value::Text("beta".into()));
+}

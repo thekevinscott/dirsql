@@ -488,21 +488,33 @@ impl DirSQL {
         tables: Vec<Table>,
         ignore_patterns: Vec<String>,
     ) -> Result<Self> {
-        let db = Db::new()?;
-        let mut extract_map: HashMap<String, Arc<ExtractFn>> = HashMap::new();
-        let mut strict_map: HashMap<String, bool> = HashMap::new();
-        let mut mappings: Vec<(String, String)> = Vec::with_capacity(tables.len());
+        let prepared = Self::prepare_build(root, tables, ignore_patterns)?;
+        Self::finish_build(prepared)
+    }
 
-        for table in tables {
+    /// Split-phase construction — part 1. Performs all I/O that is safe to run
+    /// off the host's main thread: validates DDL, compiles the matcher, walks
+    /// the directory, reads every matched file's contents into memory. Does
+    /// **not** invoke `extract`.
+    ///
+    /// Pair with [`finish_build`](Self::finish_build) to complete construction
+    /// on a thread where the `extract` callback can safely execute (e.g. the
+    /// JS main thread for the napi-rs TypeScript binding).
+    #[doc(hidden)]
+    pub fn prepare_build(
+        root: PathBuf,
+        tables: Vec<Table>,
+        ignore_patterns: Vec<String>,
+    ) -> Result<PreparedBuild> {
+        let mut seen: HashMap<String, ()> = HashMap::with_capacity(tables.len());
+        let mut mappings: Vec<(String, String)> = Vec::with_capacity(tables.len());
+        for table in &tables {
             let table_name =
                 parse_table_name(&table.ddl).ok_or_else(|| DirSqlError::Ddl(table.ddl.clone()))?;
-            if extract_map.contains_key(&table_name) {
+            if seen.insert(table_name.clone(), ()).is_some() {
                 return Err(DirSqlError::DuplicateTable(table_name));
             }
-            db.create_table(&table.ddl)?;
-            mappings.push((table.glob.clone(), table_name.clone()));
-            extract_map.insert(table_name.clone(), table.extract);
-            strict_map.insert(table_name, table.strict);
+            mappings.push((table.glob.clone(), table_name));
         }
 
         let mapping_refs: Vec<(&str, &str)> = mappings
@@ -514,11 +526,60 @@ impl DirSQL {
             .map_err(|e| DirSqlError::Matcher(e.to_string()))?;
 
         let files = scan_directory(&root, &matcher);
-        let mut file_rows: HashMap<String, (String, Vec<Row>)> = HashMap::new();
-
+        let mut scanned_files = Vec::with_capacity(files.len());
         for (file_path, table_name) in files {
             let content = std::fs::read_to_string(&file_path)?;
             let rel_path = relative_path(&root, &file_path);
+            scanned_files.push(ScannedFile {
+                rel_path,
+                table_name,
+                content,
+            });
+        }
+
+        Ok(PreparedBuild {
+            root,
+            tables,
+            matcher,
+            scanned_files,
+        })
+    }
+
+    /// Split-phase construction — part 2. Consumes the intermediate state from
+    /// [`prepare_build`](Self::prepare_build): creates the SQLite database,
+    /// runs each table's DDL, invokes each file's `extract` callback, and
+    /// inserts the resulting rows.
+    ///
+    /// Must be invoked on a thread where the `extract` closures can safely
+    /// run. For the napi-rs binding that is the JS main thread.
+    #[doc(hidden)]
+    pub fn finish_build(prepared: PreparedBuild) -> Result<Self> {
+        let PreparedBuild {
+            root,
+            tables,
+            matcher,
+            scanned_files,
+        } = prepared;
+
+        let db = Db::new()?;
+        let mut extract_map: HashMap<String, Arc<ExtractFn>> = HashMap::new();
+        let mut strict_map: HashMap<String, bool> = HashMap::new();
+
+        for table in tables {
+            let table_name =
+                parse_table_name(&table.ddl).ok_or_else(|| DirSqlError::Ddl(table.ddl.clone()))?;
+            db.create_table(&table.ddl)?;
+            extract_map.insert(table_name.clone(), table.extract);
+            strict_map.insert(table_name, table.strict);
+        }
+
+        let mut file_rows: HashMap<String, (String, Vec<Row>)> = HashMap::new();
+        for ScannedFile {
+            rel_path,
+            table_name,
+            content,
+        } in scanned_files
+        {
             let extract = extract_map.get(&table_name).ok_or_else(|| {
                 DirSqlError::Ddl(format!("missing extract function for table {table_name}"))
             })?;
@@ -552,6 +613,26 @@ impl DirSQL {
             }),
         })
     }
+}
+
+/// A single file discovered during [`DirSQL::prepare_build`]: its
+/// root-relative path, the table it belongs to, and its raw contents.
+#[doc(hidden)]
+pub struct ScannedFile {
+    pub rel_path: String,
+    pub table_name: String,
+    pub content: String,
+}
+
+/// Intermediate state produced by [`DirSQL::prepare_build`] and consumed by
+/// [`DirSQL::finish_build`]. Opaque on purpose; fields are only visible to
+/// the in-workspace bindings.
+#[doc(hidden)]
+pub struct PreparedBuild {
+    root: PathBuf,
+    tables: Vec<Table>,
+    matcher: TableMatcher,
+    scanned_files: Vec<ScannedFile>,
 }
 
 /// Translate a [`DbError`] into a [`DirSqlError`], promoting the core's

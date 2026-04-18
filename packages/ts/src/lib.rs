@@ -16,11 +16,14 @@
 //! All methods execute on the JS event-loop thread, so the JS `extract`
 //! callback is only ever invoked synchronously from that thread.
 
-use dirsql::{DirSQL as CoreDirSQL, RawFileEvent, Row, RowEvent as CoreRowEvent, Table, Value};
+use dirsql::{
+    DirSQL as CoreDirSQL, PreparedBuild, RawFileEvent, Row, RowEvent as CoreRowEvent, Table, Value,
+};
 use napi::Task;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -57,30 +60,7 @@ impl DirSQL {
     #[napi(constructor)]
     #[allow(clippy::new_ret_no_self)]
     pub fn new(env: Env, root: String, tables: Array, ignore: Option<Vec<String>>) -> Result<Self> {
-        let raw_env = env.raw();
-        let tables_len = tables.len();
-        let mut rust_tables: Vec<Table> = Vec::with_capacity(tables_len as usize);
-
-        for i in 0..tables_len {
-            let table_element: Unknown<'_> = tables.get(i)?.ok_or_else(|| {
-                Error::new(
-                    Status::GenericFailure,
-                    format!("Missing table at index {}", i),
-                )
-            })?;
-            let raw_obj = table_element.raw();
-
-            let ddl = unsafe { get_string_property(raw_env, raw_obj, "ddl")? };
-            let glob = unsafe { get_string_property(raw_env, raw_obj, "glob")? };
-            let extract_val = unsafe { get_function_property(raw_env, raw_obj, "extract")? };
-            let strict = unsafe { get_bool_property(raw_env, raw_obj, "strict", false) };
-
-            let fn_ref = unsafe { Arc::new(FnRef::new(raw_env, extract_val)?) };
-            let mut table = Table::try_new(ddl, glob, make_extract_closure(fn_ref));
-            table.strict = strict;
-            rust_tables.push(table);
-        }
-
+        let rust_tables = parse_tables_from_js(env, tables)?;
         let inner = match ignore {
             Some(ig) => CoreDirSQL::with_ignore(root, rust_tables, ig),
             None => CoreDirSQL::new(root, rust_tables),
@@ -88,6 +68,29 @@ impl DirSQL {
         .map_err(to_napi_err)?;
 
         Ok(DirSQL { inner })
+    }
+
+    /// Async factory used by the TypeScript SDK to construct `DirSQL` without
+    /// blocking the JS event loop.
+    ///
+    /// Table parsing runs synchronously on the JS thread (napi references to
+    /// each JS `extract` callback can only be created there). The directory
+    /// scan + file I/O then runs on the libuv threadpool via [`OpenTask`];
+    /// the `extract` callbacks and DB inserts run back on the JS thread in
+    /// the task's `resolve` phase.
+    #[napi(js_name = "openAsync", ts_return_type = "Promise<DirSQL>")]
+    pub fn open_async(
+        env: Env,
+        root: String,
+        tables: Array,
+        ignore: Option<Vec<String>>,
+    ) -> Result<AsyncTask<OpenTask>> {
+        let rust_tables = parse_tables_from_js(env, tables)?;
+        Ok(AsyncTask::new(OpenTask {
+            root: PathBuf::from(root),
+            tables: Some(rust_tables),
+            ignore: ignore.unwrap_or_default(),
+        }))
     }
 
     /// Create a DirSQL instance from a `.dirsql.toml` config file.
@@ -99,6 +102,15 @@ impl DirSQL {
     pub fn from_config(config_path: String) -> Result<Self> {
         let inner = CoreDirSQL::from_config_path(&config_path).map_err(to_napi_err)?;
         Ok(DirSQL { inner })
+    }
+
+    /// Async factory used by the TypeScript SDK to load a `DirSQL` from a
+    /// config file without blocking the JS event loop. The config-driven
+    /// path only uses built-in Rust extractors, so the full construction
+    /// runs on the libuv threadpool.
+    #[napi(js_name = "fromConfigAsync", ts_return_type = "Promise<DirSQL>")]
+    pub fn from_config_async(config_path: String) -> AsyncTask<FromConfigTask> {
+        AsyncTask::new(FromConfigTask { config_path })
     }
 
     /// Execute a SQL query and return results as an array of objects.
@@ -139,6 +151,60 @@ impl DirSQL {
 }
 
 // -- Async tasks -------------------------------------------------------------
+
+/// Splits construction across the libuv threadpool and the JS main thread.
+///
+/// `compute()` performs the directory scan + file reads via
+/// [`CoreDirSQL::prepare_build`] — I/O that is safe to run on a worker
+/// thread. `resolve()` then runs the `extract` callbacks and DB inserts via
+/// [`CoreDirSQL::finish_build`], which must happen on the JS main thread so
+/// napi handles remain valid when invoking each JS `extract` callback.
+pub struct OpenTask {
+    root: PathBuf,
+    // `Option` so we can move `tables` out in `compute` without requiring
+    // `Table: Default` for `std::mem::take`.
+    tables: Option<Vec<Table>>,
+    ignore: Vec<String>,
+}
+
+impl Task for OpenTask {
+    type Output = PreparedBuild;
+    type JsValue = DirSQL;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let tables = self.tables.take().ok_or_else(|| {
+            Error::new(Status::GenericFailure, "OpenTask computed more than once")
+        })?;
+        let root = std::mem::take(&mut self.root);
+        let ignore = std::mem::take(&mut self.ignore);
+        CoreDirSQL::prepare_build(root, tables, ignore).map_err(to_napi_err)
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        let inner = CoreDirSQL::finish_build(output).map_err(to_napi_err)?;
+        Ok(DirSQL { inner })
+    }
+}
+
+/// Runs `CoreDirSQL::from_config_path` on the libuv threadpool. The
+/// config-driven construction path uses only built-in Rust extractors, so
+/// the entire build — scan, extract, DB insert — can run off the JS thread.
+pub struct FromConfigTask {
+    config_path: String,
+}
+
+impl Task for FromConfigTask {
+    type Output = CoreDirSQL;
+    type JsValue = DirSQL;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        CoreDirSQL::from_config_path(&self.config_path).map_err(to_napi_err)
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        Ok(DirSQL { inner: output })
+    }
+}
 
 /// Runs `DirSQL::query` on the libuv threadpool so the JS event loop stays
 /// responsive. `CoreDirSQL` is cheap to clone (internally `Arc`-wrapped), so
@@ -209,6 +275,39 @@ impl Task for PollEventsTask {
         let row_events = self.inner.apply_file_events(output);
         Ok(row_events.iter().map(row_event_to_js).collect())
     }
+}
+
+// -- Table-definition parsing ------------------------------------------------
+
+/// Parse a JS array of `TableDef` objects into Rust [`Table`]s. Must run on
+/// the JS thread: creates a persistent napi reference to each `extract`
+/// callback so it can be invoked later without a live JS call frame.
+fn parse_tables_from_js(env: Env, tables: Array) -> Result<Vec<Table>> {
+    let raw_env = env.raw();
+    let tables_len = tables.len();
+    let mut rust_tables: Vec<Table> = Vec::with_capacity(tables_len as usize);
+
+    for i in 0..tables_len {
+        let table_element: Unknown<'_> = tables.get(i)?.ok_or_else(|| {
+            Error::new(
+                Status::GenericFailure,
+                format!("Missing table at index {}", i),
+            )
+        })?;
+        let raw_obj = table_element.raw();
+
+        let ddl = unsafe { get_string_property(raw_env, raw_obj, "ddl")? };
+        let glob = unsafe { get_string_property(raw_env, raw_obj, "glob")? };
+        let extract_val = unsafe { get_function_property(raw_env, raw_obj, "extract")? };
+        let strict = unsafe { get_bool_property(raw_env, raw_obj, "strict", false) };
+
+        let fn_ref = unsafe { Arc::new(FnRef::new(raw_env, extract_val)?) };
+        let mut table = Table::try_new(ddl, glob, make_extract_closure(fn_ref));
+        table.strict = strict;
+        rust_tables.push(table);
+    }
+
+    Ok(rust_tables)
 }
 
 // -- JS callback plumbing ----------------------------------------------------

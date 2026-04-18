@@ -25,11 +25,18 @@ describe("__setCoreForTesting", () => {
       startWatcher: vi.fn(async () => {}),
       pollEvents: vi.fn(async () => []),
     };
-    const FakeDirSQL = vi.fn(function (this: unknown) {
-      return fakeInstance;
-    }) as unknown as new (
+    const openAsync = vi.fn(async () => fakeInstance);
+    // The ctor is unused on the async path — assert it isn't called.
+    const FakeDirSQL = Object.assign(
+      vi.fn(function (this: unknown) {
+        throw new Error("sync ctor should not be called");
+      }),
+      { openAsync },
+    ) as unknown as (new (
       ...args: unknown[]
-    ) => typeof fakeInstance;
+    ) => typeof fakeInstance) & {
+      openAsync: typeof openAsync;
+    };
 
     (
       dirsql as unknown as {
@@ -38,13 +45,14 @@ describe("__setCoreForTesting", () => {
     ).__setCoreForTesting({ DirSQL: FakeDirSQL });
 
     const db = new dirsql.DirSQL("/tmp/does-not-exist", []);
-    expect(FakeDirSQL).toHaveBeenCalledWith("/tmp/does-not-exist", []);
+    await db.ready;
+    expect(openAsync).toHaveBeenCalledWith("/tmp/does-not-exist", []);
     expect(await db.query("SELECT 1")).toEqual([{ injected: true }]);
     expect(fakeInstance.query).toHaveBeenCalledWith("SELECT 1");
   });
 
   it("routes static methods (fromConfig) through the injected fake core", async () => {
-    const fromConfig = vi.fn(() => ({
+    const fromConfigAsync = vi.fn(async () => ({
       query: async () => [{ via: "fromConfig" }],
       startWatcher: async () => {},
       pollEvents: async () => [],
@@ -53,7 +61,7 @@ describe("__setCoreForTesting", () => {
       () => {
         throw new Error("ctor not expected");
       },
-      { fromConfig },
+      { fromConfigAsync },
     );
 
     (
@@ -62,8 +70,8 @@ describe("__setCoreForTesting", () => {
       }
     ).__setCoreForTesting({ DirSQL: FakeDirSQL });
 
-    const db = dirsql.DirSQL.fromConfig("/tmp/fake.toml");
-    expect(fromConfig).toHaveBeenCalledWith("/tmp/fake.toml");
+    const db = await dirsql.DirSQL.fromConfig("/tmp/fake.toml");
+    expect(fromConfigAsync).toHaveBeenCalledWith("/tmp/fake.toml");
     expect(await db.query("x")).toEqual([{ via: "fromConfig" }]);
   });
 
@@ -92,11 +100,13 @@ describe("__setCoreForTesting", () => {
       startWatcher: vi.fn(async () => {}),
       pollEvents: vi.fn(async () => queued.shift() ?? []),
     };
-    const FakeDirSQL = vi.fn(function (this: unknown) {
-      return fakeInstance;
-    }) as unknown as new (
-      ...args: unknown[]
-    ) => typeof fakeInstance;
+    const openAsync = vi.fn(async () => fakeInstance);
+    const FakeDirSQL = Object.assign(
+      vi.fn(function (this: unknown) {
+        throw new Error("sync ctor should not be called");
+      }),
+      { openAsync },
+    );
 
     (
       dirsql as unknown as {
@@ -143,11 +153,13 @@ describe("__setCoreForTesting", () => {
       startWatcher: vi.fn(async () => {}),
       pollEvents,
     };
-    const FakeDirSQL = vi.fn(function (this: unknown) {
-      return fakeInstance;
-    }) as unknown as new (
-      ...args: unknown[]
-    ) => typeof fakeInstance;
+    const openAsync = vi.fn(async () => fakeInstance);
+    const FakeDirSQL = Object.assign(
+      vi.fn(function (this: unknown) {
+        throw new Error("sync ctor should not be called");
+      }),
+      { openAsync },
+    );
 
     (
       dirsql as unknown as {
@@ -156,6 +168,7 @@ describe("__setCoreForTesting", () => {
     ).__setCoreForTesting({ DirSQL: FakeDirSQL });
 
     const db = new dirsql.DirSQL("/tmp/nothing", []);
+    await db.ready;
 
     let timerFired = false;
     setTimeout(() => {

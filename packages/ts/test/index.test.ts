@@ -181,17 +181,17 @@ describe("DirSQL", () => {
     expect(rows).toEqual([{ name: "apple" }]);
   });
 
-  it("throws on invalid DDL", () => {
-    expect(
-      () =>
-        new DirSQL(dir, [
-          {
-            ddl: "NOT VALID SQL",
-            glob: "**/*.json",
-            extract: () => [],
-          },
-        ]),
-    ).toThrow();
+  it("rejects ready with invalid DDL", async () => {
+    const db = new DirSQL(dir, [
+      {
+        ddl: "NOT VALID SQL",
+        glob: "**/*.json",
+        extract: () => [],
+      },
+    ]);
+    // Construction is async: DDL errors surface via the `ready` Promise
+    // rejection rather than a sync throw.
+    await expect(db.ready).rejects.toThrow();
   });
 });
 
@@ -215,25 +215,21 @@ describe("DirSQL strict mode", () => {
 
   // Docs (guide/tables.md / guide/config.md "Strict Mode"):
   // `strict: true` on a Table def rejects rows with keys not in the DDL.
-  it("rejects rows with extra keys when strict is true", () => {
+  it("rejects rows with extra keys when strict is true", async () => {
     writeFileSync(
       join(dir, "items", "a.json"),
       JSON.stringify({ name: "apple", color: "red" }),
     );
 
-    expect(
-      () =>
-        new DirSQL(dir, [
-          {
-            ddl: "CREATE TABLE items (name TEXT)",
-            glob: "items/*.json",
-            extract: (_filePath: string, content: string) => [
-              JSON.parse(content),
-            ],
-            strict: true,
-          },
-        ]),
-    ).toThrow();
+    const db = new DirSQL(dir, [
+      {
+        ddl: "CREATE TABLE items (name TEXT)",
+        glob: "items/*.json",
+        extract: (_filePath: string, content: string) => [JSON.parse(content)],
+        strict: true,
+      },
+    ]);
+    await expect(db.ready).rejects.toThrow();
   });
 
   // Docs: strict mode passes on exact key match.
@@ -354,5 +350,63 @@ describe("DirSQL watch events", () => {
     await expect(db.ready).resolves.toBeUndefined();
     // query works immediately after ready resolves.
     expect(await db.query("SELECT * FROM items")).toEqual([]);
+  });
+
+  // #146: the constructor must NOT block the JS event loop. The directory
+  // scan + file reads happen on the libuv threadpool; the constructor
+  // returns immediately with a `ready` promise. A concurrent short setTimeout
+  // should fire before or during the scan, not after it.
+  it("does not block the JS event loop during construction", async () => {
+    // Seed with a handful of files so the scan has real work to do.
+    mkdirSync(join(dir, "items"), { recursive: true });
+    for (let i = 0; i < 20; i++) {
+      writeFileSync(
+        join(dir, "items", `f${i}.json`),
+        JSON.stringify({ name: `item-${i}` }),
+      );
+    }
+
+    let timerFired = false;
+    setTimeout(() => {
+      timerFired = true;
+    }, 1);
+
+    const db = new DirSQL(dir, [
+      {
+        ddl: "CREATE TABLE items (name TEXT)",
+        glob: "items/*.json",
+        extract: (_filePath: string, content: string) => [JSON.parse(content)],
+      },
+    ]);
+
+    // The constructor returns synchronously — the scan hasn't finished yet,
+    // so the timer has had a chance to fire before we await `ready`.
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    expect(timerFired).toBe(true);
+
+    await db.ready;
+    const rows = await db.query("SELECT name FROM items ORDER BY name");
+    expect(rows).toHaveLength(20);
+  });
+
+  // #146: `query()` transparently awaits `ready`, so callers can issue it
+  // before the initial scan has finished and it just works.
+  it("query awaits ready so callers can issue it eagerly", async () => {
+    writeFileSync(
+      join(dir, "x.json"),
+      JSON.stringify({ name: "eagerly-resolved" }),
+    );
+
+    const db = new DirSQL(dir, [
+      {
+        ddl: "CREATE TABLE items (name TEXT)",
+        glob: "*.json",
+        extract: (_filePath: string, content: string) => [JSON.parse(content)],
+      },
+    ]);
+
+    // Do NOT await db.ready explicitly — query() must do it internally.
+    const rows = await db.query("SELECT name FROM items");
+    expect(rows).toEqual([{ name: "eagerly-resolved" }]);
   });
 });
