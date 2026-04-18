@@ -306,16 +306,19 @@ jobs:
 
   rollback:
     needs: [tag, publish-pypi, publish-crates]
-    # Only delete the tag if no publish leg succeeded. crates.io publishes are
-    # permanent, so if crates succeeded we must keep the tag even if pypi
-    # failed -- otherwise the next run recomputes the same version and
-    # collides with the already-published crate.
+    # Only delete the tag if BOTH publish legs actually failed. `!= 'success'`
+    # also matches 'skipped', which fires this branch for legitimate gated-off
+    # runs (e.g. a TS-only release where publish_pypi=false and
+    # publish_crates=false). Rolling back there removes a tag whose artifacts
+    # shipped on npm -- the GitHub Release then dangles against a missing ref.
+    # crates.io publishes are permanent, so if crates succeeded we must keep
+    # the tag even if pypi failed.
     if: |
       !inputs.dry_run &&
       always() &&
       needs.tag.outputs.created == 'true' &&
-      needs.publish-pypi.result != 'success' &&
-      needs.publish-crates.result != 'success'
+      needs.publish-pypi.result == 'failure' &&
+      needs.publish-crates.result == 'failure'
     runs-on: ubuntu-latest
     permissions:
       contents: write

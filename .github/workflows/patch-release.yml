@@ -232,9 +232,30 @@ jobs:
         working-directory: packages/ts
 
       - name: Publish to npm
+        id: npm_publish
         if: >-
           steps.check_npm.outputs.exists == 'true' &&
           steps.npm_check.outputs.skip != 'true' &&
           needs.check.outputs.dry_run != 'true'
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access public --loglevel=verbose
         working-directory: packages/ts
+
+      # Surface the full npm error log when publish fails so we can diagnose
+      # without re-running. npm writes these to ~/.npm/_logs/ at loglevel debug.
+      - name: Dump npm logs on failure
+        if: failure() && steps.npm_publish.outcome == 'failure'
+        run: |
+          echo "::group::npm CLI version"
+          npm --version
+          node --version
+          echo "::endgroup::"
+          echo "::group::Package tarball contents (what would be published)"
+          cd packages/ts && npm pack --dry-run --json || true
+          echo "::endgroup::"
+          echo "::group::npm debug logs"
+          shopt -s nullglob
+          for f in "$HOME"/.npm/_logs/*.log; do
+            echo "=== $f ==="
+            cat "$f"
+          done
+          echo "::endgroup::"
