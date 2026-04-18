@@ -207,14 +207,33 @@ jobs:
           path: dist
 
       - name: Publish to PyPI
+        id: pypi_publish
         if: '!inputs.dry_run'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           attestations: false
+          # Twine verbose output. Mirrors the npm --loglevel=verbose
+          # treatment so failures are self-diagnosing without a re-run.
+          verbose: true
           # Idempotency: silently skip files already uploaded to PyPI so a
           # partial prior release can be resumed without getting stuck on
           # this leg. Mirrors the crates.io pre-check.
           skip-existing: true
+
+      # Surface tooling versions and the artifact set when PyPI upload fails
+      # so the check-run annotation isn't just "exit code 1".
+      - name: Dump PyPI diagnostics on failure
+        if: failure() && steps.pypi_publish.outcome == 'failure'
+        run: |
+          echo "::group::Tooling versions"
+          python3 --version
+          pip3 --version || true
+          echo "::endgroup::"
+          echo "::group::Artifacts that would have been uploaded"
+          ls -la dist
+          echo "--- sha256 ---"
+          sha256sum dist/* || true
+          echo "::endgroup::"
 
       - name: Would publish to PyPI (dry run)
         if: inputs.dry_run
@@ -262,16 +281,21 @@ jobs:
         id: auth
 
       - name: Publish to crates.io
+        id: crates_publish
         if: '!inputs.dry_run && steps.crates_check.outputs.skip != ''true'''
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          # --verbose on cargo publish surfaces HTTP request/response detail
+          # and the packaged file list. Mirrors the npm --loglevel=verbose
+          # treatment so CI failures are self-diagnosing.
+          CARGO_TERM_VERBOSE: "true"
         run: |
           # Publish only the consolidated dirsql crate. The Python and
           # TypeScript binding crates are marked publish = false in their
           # Cargo.toml files and are not published to crates.io.
           for attempt in 1 2 3; do
             echo "Publishing dirsql (attempt $attempt of 3)"
-            if cargo publish -p dirsql --allow-dirty; then
+            if cargo publish -p dirsql --allow-dirty --verbose; then
               echo "Published dirsql successfully"
               break
             fi
@@ -283,6 +307,22 @@ jobs:
               exit 1
             fi
           done
+
+      # Surface toolchain + packaged file list when cargo publish fails so
+      # the check-run annotation isn't just "exit code 1".
+      - name: Dump crates diagnostics on failure
+        if: failure() && steps.crates_publish.outcome == 'failure'
+        run: |
+          echo "::group::Tooling versions"
+          cargo --version
+          rustc --version
+          echo "::endgroup::"
+          echo "::group::Resolved workspace version"
+          grep -E '^version = ' Cargo.toml || true
+          echo "::endgroup::"
+          echo "::group::Files cargo would package"
+          cargo package -p dirsql --allow-dirty --list || true
+          echo "::endgroup::"
 
   github-release:
     needs: [tag, publish-pypi, publish-crates]
