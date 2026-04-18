@@ -56,10 +56,14 @@ jobs:
       # must be gated off by `required-features = ["cli"]`. If someone drops
       # that line, a default `cargo install dirsql` would pull clap into every
       # library consumer's build -- this guard catches that regression.
+      #
+      # Uses an isolated --target-dir so a cached `target/debug/dirsql`
+      # (built with --features cli on a previous run and restored by
+      # actions/cache) can't mask a regression.
       - name: Silent-skip canary (no bin without cli feature)
         run: |
-          cargo build -p dirsql --locked
-          test ! -x target/debug/dirsql
+          cargo build -p dirsql --locked --target-dir target/canary
+          test ! -x target/canary/debug/dirsql
 
       - name: CLI feature build + smoke
         run: |
