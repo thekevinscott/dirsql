@@ -16,7 +16,16 @@ cargo add dirsql
 pnpm add dirsql
 ```
 
+```bash [CLI]
+# Pick whichever install path you already have handy
+npx dirsql --version
+uvx dirsql --version
+cargo install dirsql --features cli
+```
+
 :::
+
+See the [CLI guide](./guide/cli.md) for details on the command-line interface, and the [Rust library README](https://github.com/thekevinscott/dirsql/tree/main/packages/rust) for the library-vs-CLI feature split.
 
 ## Quick start
 
@@ -167,3 +176,4 @@ The filesystem is always the source of truth. The database is rebuilt from files
 - [Querying](./guide/querying.md) -- SQL queries and return format
 - [File Watching](./guide/watching.md) -- real-time change events
 - [Async API](./guide/async.md) -- async ready(), query(), and watch()
+- [Command-Line Interface](./guide/cli.md) -- `dirsql` runs an HTTP server (`POST /query`, `GET /events` SSE)

@@ -19,7 +19,13 @@ export default defineConfig({
     pool: "forks",
     coverage: {
       provider: "v8",
-      include: ["ts/index.ts"],
+      include: ["ts/**/*.ts", "tools/**/*.ts"],
+      exclude: [
+        "**/*.test.ts",
+        "test/**/*.ts",
+        "ts/bin/dirsql.ts", // 5-line entry, exercised by the integration test
+        "ts/index.ts", // needs the napi binary; covered by SDK integration tests
+      ],
       thresholds: {
         lines: 90,
         branches: 90,

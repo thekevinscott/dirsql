@@ -1,0 +1,95 @@
+name: Publish npm packages
+
+# Fires after the cargo-dist `Release` workflow completes on a version
+# tag. Downloads the release's Rust archives, synthesizes per-platform
+# `@dirsql/cli-<triple>` packages from them, and publishes both the
+# main `dirsql` package (SDK + CLI launcher) and every sub-package to
+# npm.
+#
+# Requires repo secret: `NPM_TOKEN` (a classic automation token for the
+# npm account that owns the `dirsql` name and the `@dirsql` scope).
+# Before the first release: `npm publish --dry-run` locally from
+# `packages/ts/` to confirm the scope is reachable.
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.2.0)"
+        required: true
+
+jobs:
+  publish:
+    if: >
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-latest
+    environment: npm
+    defaults:
+      run:
+        working-directory: packages/ts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install deps
+        run: npm ci --ignore-scripts || npm install --ignore-scripts
+
+      - name: Build TS (compile launcher + index)
+        run: npx tsc
+
+      - name: Resolve release tag
+        id: tag
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download release archives
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          mkdir -p target/distrib
+          gh release download "$TAG" \
+            --repo ${{ github.repository }} \
+            --pattern 'dirsql-*.tar.xz' \
+            --pattern 'dirsql-*.zip' \
+            --dir target/distrib
+
+      - name: Synthesize per-platform npm packages
+        env:
+          DIRSQL_VERSION: ${{ steps.tag.outputs.tag }}
+        run: |
+          export DIRSQL_VERSION="${DIRSQL_VERSION#v}"
+          npx tsx tools/buildPlatforms.ts
+
+      - name: Publish per-platform packages
+        working-directory: ${{ github.workspace }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for dir in target/npm-platforms/*; do
+            echo "publishing $dir"
+            npm publish "$dir" --access public --tag latest
+          done
+
+      - name: Sync main package version + optionalDependencies to release tag
+        run: npx tsx tools/syncVersion.ts "${{ steps.tag.outputs.tag }}"
+
+      - name: Publish main `dirsql` package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --tag latest
