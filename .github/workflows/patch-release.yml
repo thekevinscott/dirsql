@@ -244,13 +244,14 @@ jobs:
       # without re-running. npm writes these to ~/.npm/_logs/ at loglevel debug.
       - name: Dump npm logs on failure
         if: failure() && steps.npm_publish.outcome == 'failure'
+        working-directory: packages/ts
         run: |
           echo "::group::npm CLI version"
           npm --version
           node --version
           echo "::endgroup::"
           echo "::group::Package tarball contents (what would be published)"
-          cd packages/ts && npm pack --dry-run --json || true
+          npm pack --dry-run --json || true
           echo "::endgroup::"
           echo "::group::npm debug logs"
           shopt -s nullglob
