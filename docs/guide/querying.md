@@ -43,16 +43,16 @@ let results = db.query(
 
 ```typescript [TypeScript]
 // All rows from a table
-const results = await db.query('SELECT * FROM comments');
+const results = db.query('SELECT * FROM comments');
 
 // Filter with WHERE
-const filtered = await db.query("SELECT * FROM comments WHERE author = 'alice'");
+const filtered = db.query("SELECT * FROM comments WHERE author = 'alice'");
 
 // Aggregations
-const counts = await db.query('SELECT author, COUNT(*) as n FROM comments GROUP BY author');
+const counts = db.query('SELECT author, COUNT(*) as n FROM comments GROUP BY author');
 
 // JOINs across tables
-const joined = await db.query(`
+const joined = db.query(`
   SELECT posts.title, authors.name
   FROM posts
   JOIN authors ON posts.author_id = authors.id
@@ -84,7 +84,7 @@ let results = db.query("SELECT title, author FROM posts")?;
 ```
 
 ```typescript [TypeScript]
-const results = await db.query('SELECT title, author FROM posts');
+const results = db.query('SELECT title, author FROM posts');
 // [
 //   { title: 'Hello World', author: 'alice' },
 //   { title: 'Second Post', author: 'bob' },
@@ -122,7 +122,7 @@ let rows = db.query("SELECT title, _dirsql_file_path FROM posts")?;
 ```
 
 ```typescript [TypeScript]
-const rows = await db.query('SELECT title, _dirsql_file_path FROM posts');
+const rows = db.query('SELECT title, _dirsql_file_path FROM posts');
 // [{ title: 'Hello World', _dirsql_file_path: 'posts/hello.json' }, ...]
 ```
 
@@ -178,7 +178,7 @@ match db.query("NOT VALID SQL") {
 
 ```typescript [TypeScript]
 try {
-  await db.query('NOT VALID SQL');
+  db.query('NOT VALID SQL');
 } catch (e) {
   console.error(`Query error: ${e}`);
 }
@@ -203,7 +203,7 @@ assert!(results.is_empty());
 ```
 
 ```typescript [TypeScript]
-const results = await db.query("SELECT * FROM posts WHERE author = 'nobody'");
+const results = db.query("SELECT * FROM posts WHERE author = 'nobody'");
 console.assert(results.length === 0);
 ```
 

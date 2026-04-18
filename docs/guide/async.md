@@ -63,8 +63,10 @@ const db = new DirSQL('./my-project', [
   }),
 ]);
 
-// Query
-const results = await db.query('SELECT * FROM items WHERE value > 10');
+// `query()` is synchronous in TypeScript (there is no AsyncDirSQL
+// class — see PARITY.md). The call blocks the JS thread for the
+// duration of the SQLite read.
+const results = db.query('SELECT * FROM items WHERE value > 10');
 console.log(results);
 ```
 

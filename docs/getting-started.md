@@ -141,9 +141,9 @@ const tables: TableDef[] = [
 
 const db = new DirSQL('./my-blog', tables);
 
-const posts = await db.query('SELECT * FROM posts');
+const posts = db.query('SELECT * FROM posts');
 
-const results = await db.query(`
+const results = db.query(`
   SELECT posts.title, authors.name
   FROM posts JOIN authors ON posts.author = authors.id
 `);

@@ -81,7 +81,7 @@ db.query(sql: &str) -> Result<Vec<HashMap<String, Value>>>
 ```
 
 ```typescript [TypeScript]
-await db.query(sql: string): Promise<Record<string, unknown>[]>
+db.query(sql: string): Record<string, unknown>[]
 ```
 
 :::
