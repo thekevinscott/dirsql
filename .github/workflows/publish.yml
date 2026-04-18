@@ -218,7 +218,16 @@ jobs:
 
   publish-pypi:
     needs: [tag, build, sdist]
-    if: always() && needs.tag.outputs.created == 'true' && needs.sdist.result == 'success' && inputs.publish_pypi
+    # Require EVERY build matrix row to succeed, not just sdist. `build` uses
+    # `fail-fast: false` and each row uploads its own `wheels-<target>`
+    # artifact, so a single failed target would otherwise silently ship a
+    # release with a missing platform wheel -- users on that platform fall
+    # back to the sdist (v0.2.0 shipped this way after aarch64-linux failed
+    # to cross-compile). Block instead: `check_published.py` + pypi
+    # `skip-existing: true` make a re-dispatch idempotent once the build is
+    # fixed, and `rollback` stays dormant because a skipped publish-pypi is
+    # 'skipped' (not 'failure').
+    if: always() && needs.tag.outputs.created == 'true' && needs.build.result == 'success' && needs.sdist.result == 'success' && inputs.publish_pypi
     runs-on: ubuntu-latest
     permissions:
       id-token: write
