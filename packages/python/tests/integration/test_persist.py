@@ -2,6 +2,7 @@
 
 import json
 import os
+import sqlite3
 import tempfile
 
 import pytest
@@ -212,6 +213,72 @@ def describe_persist():
             await db.ready()
             results = await db.query("SELECT name FROM items")
             assert {r["name"] for r in results} == {"apple"}
+
+    def describe_racy_window():
+        @pytest.mark.asyncio
+        async def it_hash_confirms_files_inside_racy_window(persist_dir):
+            """When a cached file's mtime falls inside the racy window
+            (mtime >= snapshot_ns), the reconcile must fall back to a content
+            hash instead of trusting the stat tuple. Corrupt the cached hash
+            so the hash check fails; the file must be re-parsed."""
+            path = os.path.join(persist_dir, "items", "a.json")
+            _write(path, json.dumps({"name": "apple", "price": 1.5}))
+
+            box1 = [0]
+            db1 = DirSQL(persist_dir, tables=[_items_table(box1)], persist=True)
+            await db1.ready()
+            assert box1[0] == 1
+            del db1  # release any file handles before mutating cache.db
+
+            cache = os.path.join(persist_dir, ".dirsql", "cache.db")
+            conn = sqlite3.connect(cache)
+            # Force this file into the racy window by zeroing snapshot_ns,
+            # and corrupt its cached hash so the hash-confirm branch fails.
+            conn.execute(
+                "UPDATE _dirsql_files SET snapshot_ns = 0, "
+                "content_hash = zeroblob(32)"
+            )
+            conn.commit()
+            conn.close()
+
+            box2 = [0]
+            db2 = DirSQL(persist_dir, tables=[_items_table(box2)], persist=True)
+            await db2.ready()
+            # Racy-window path forces a hash check; corrupted hash -> re-parse.
+            assert box2[0] == 1
+            results = await db2.query("SELECT name FROM items")
+            assert results[0]["name"] == "apple"
+
+    def describe_dirsql_version_bump():
+        @pytest.mark.asyncio
+        async def it_rebuilds_cache_when_dirsql_version_changes(persist_dir):
+            """A mismatch on the cached `dirsql_version` meta key must trigger
+            a full rebuild — even for otherwise-unchanged files."""
+            _write(
+                os.path.join(persist_dir, "items", "a.json"),
+                json.dumps({"name": "apple", "price": 1.5}),
+            )
+
+            box1 = [0]
+            db1 = DirSQL(persist_dir, tables=[_items_table(box1)], persist=True)
+            await db1.ready()
+            assert box1[0] == 1
+            del db1
+
+            cache = os.path.join(persist_dir, ".dirsql", "cache.db")
+            conn = sqlite3.connect(cache)
+            conn.execute(
+                "UPDATE _dirsql_meta SET value = 'bogus-version' "
+                "WHERE key = 'dirsql_version'"
+            )
+            conn.commit()
+            conn.close()
+
+            box2 = [0]
+            db2 = DirSQL(persist_dir, tables=[_items_table(box2)], persist=True)
+            await db2.ready()
+            # Version mismatch forces a full rebuild; the file is re-parsed.
+            assert box2[0] == 1
 
     def describe_custom_persist_path():
         @pytest.mark.asyncio

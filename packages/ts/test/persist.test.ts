@@ -8,6 +8,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+// `node:sqlite` is experimental in Node 22 but stable enough for tests.
+// Used only to corrupt the on-disk cache so we can exercise the racy-window
+// and dirsql_version-bump reconcile paths.
+import { DatabaseSync } from "node:sqlite";
 import { DirSQL } from "dirsql";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -207,6 +211,67 @@ describe("DirSQL persist", () => {
     await db.ready;
     const rows = await db.query("SELECT name FROM items");
     expect(rows.map((r) => r.name)).toEqual(["apple"]);
+  });
+
+  it("hash-confirms files that fall inside the racy window", async () => {
+    // Files whose cached mtime >= snapshot_ns are considered "racy" and must
+    // be hash-confirmed instead of trusted. Corrupt the cached hash so the
+    // hash check fails; the file must then be re-parsed.
+    const box1 = { count: 0 };
+    const db1 = new DirSQL({
+      root: dir,
+      tables: [makeTable(box1)],
+      persist: true,
+    });
+    await db1.ready;
+    expect(box1.count).toBe(1);
+
+    const cache = join(dir, ".dirsql", "cache.db");
+    const conn = new DatabaseSync(cache);
+    conn.exec(
+      "UPDATE _dirsql_files SET snapshot_ns = 0, content_hash = zeroblob(32)",
+    );
+    conn.close();
+
+    const box2 = { count: 0 };
+    const db2 = new DirSQL({
+      root: dir,
+      tables: [makeTable(box2)],
+      persist: true,
+    });
+    await db2.ready;
+    // Racy-window path forces a hash check; corrupted hash -> re-parse.
+    expect(box2.count).toBe(1);
+    const rows = await db2.query("SELECT name FROM items");
+    expect(rows[0].name).toBe("apple");
+  });
+
+  it("rebuilds the cache when the dirsql_version meta changes", async () => {
+    const box1 = { count: 0 };
+    const db1 = new DirSQL({
+      root: dir,
+      tables: [makeTable(box1)],
+      persist: true,
+    });
+    await db1.ready;
+    expect(box1.count).toBe(1);
+
+    const cache = join(dir, ".dirsql", "cache.db");
+    const conn = new DatabaseSync(cache);
+    conn.exec(
+      "UPDATE _dirsql_meta SET value = 'bogus-version' WHERE key = 'dirsql_version'",
+    );
+    conn.close();
+
+    const box2 = { count: 0 };
+    const db2 = new DirSQL({
+      root: dir,
+      tables: [makeTable(box2)],
+      persist: true,
+    });
+    await db2.ready;
+    // Version mismatch forces a full rebuild; the file is re-parsed.
+    expect(box2.count).toBe(1);
   });
 
   it("honors a custom persistPath", async () => {

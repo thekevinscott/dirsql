@@ -111,8 +111,8 @@ for await (const event of db.watch()) { ... }
 | Persist: changed file is re-parsed     | Y      | Y    | Y          |
 | Persist: deleted file rows removed     | Y      | Y    | Y          |
 | Persist: new file ingested             | Y      | Y    | Y          |
-| Persist: racy-window triggers hash     | -      | Y    | -          |
+| Persist: racy-window triggers hash     | Y      | Y    | Y          |
 | Persist: glob change forces rebuild    | Y      | Y    | Y          |
-| Persist: dirsql_version bump rebuilds  | -      | Y    | -          |
+| Persist: dirsql_version bump rebuilds  | Y      | Y    | Y          |
 | Persist: `.dirsql/` excluded from walk | Y      | Y    | Y          |
 | Persist: custom persist_path honored   | Y      | Y    | Y          |
