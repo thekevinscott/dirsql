@@ -369,6 +369,11 @@ def describe_DirSQL_async():
 
             async def collect_events():
                 async for event in db.watch():
+                    # Filter to insert events only: mid-write the watcher can
+                    # deliver a spurious error/update event before the insert
+                    # fires, which would race the query below.
+                    if event.action != "insert":
+                        continue
                     events.append(event)
                     if len(events) >= 1:
                         break

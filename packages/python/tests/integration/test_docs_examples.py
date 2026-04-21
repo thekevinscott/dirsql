@@ -560,6 +560,11 @@ def describe_watching_guide():
 
         async def collect():
             async for event in db.watch():
+                # Mid-write the watcher may deliver a spurious event (e.g. an
+                # error if the file is still being written); only the insert
+                # is meaningful here.
+                if event.action != "insert":
+                    continue
                 events.append(event)
                 if len(events) >= 1:
                     break
@@ -608,6 +613,8 @@ def describe_watching_guide():
 
         async def collect():
             async for event in db.watch():
+                if event.action != "delete":
+                    continue
                 events.append(event)
                 if len(events) >= 1:
                     break
@@ -659,6 +666,11 @@ def describe_watching_guide():
 
         async def collect():
             async for event in db.watch():
+                # An update may surface as a single "update" or as a
+                # "delete"+"insert" pair. Filter out the unrelated "error"
+                # events that can fire mid-write.
+                if event.action not in ("update", "delete", "insert"):
+                    continue
                 events.append(event)
                 if len(events) >= 1:
                     break
@@ -703,6 +715,8 @@ def describe_watching_guide():
 
         async def collect():
             async for event in db.watch():
+                if event.action != "error":
+                    continue
                 events.append(event)
                 if len(events) >= 1:
                     break
