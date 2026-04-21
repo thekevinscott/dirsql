@@ -22,7 +22,7 @@ wins (a warning is emitted on stderr).
 
 | API                        | Python                                         | Rust                                                 | TypeScript                                              |
 |----------------------------|------------------------------------------------|------------------------------------------------------|---------------------------------------------------------|
-| Constructor                | `DirSQL(root=None, *, tables=None, ignore=None, config=None)` | `DirSQL::builder().root(..).tables(..).ignore(..).config(..).build()` (also `DirSQL::new`/`with_ignore` shortcuts) | `new DirSQL(configPath)` or `new DirSQL({ root?, tables?, ignore?, config? })` + `await db.ready` |
+| Constructor                | `DirSQL(root=None, *, tables=None, ignore=None, config=None, persist=False, persist_path=None)` | `DirSQL::builder().root(..).tables(..).ignore(..).config(..).persist(..).persist_path(..).build()` (also `DirSQL::new`/`with_ignore` shortcuts) | `new DirSQL(configPath)` or `new DirSQL({ root?, tables?, ignore?, config?, persist?, persistPath? })` + `await db.ready` |
 | Query (read-only; rejects non-SELECT) | `db.query(sql) -> list[dict]`        | `db.query(sql) -> Result<Vec<Row>>`                  | `await db.query(sql) -> Record[]` (runs on libuv threadpool) |
 | Start watcher              | `db._start_watcher()`                          | `db.start_watching()`                                | `await db.startWatcher()` (runs on libuv threadpool)    |
 | Poll events                | `db._poll_events(ms)`                          | `db.poll_events(duration)`                           | `await db.pollEvents(ms)` (runs on libuv threadpool)    |
@@ -37,7 +37,7 @@ between the host language and Rust.
 
 | API                        | Python                                | Rust                                   |
 |----------------------------|---------------------------------------|----------------------------------------|
-| Constructor                | (merged into `DirSQL`; the Python `DirSQL` is already async-by-default) | `AsyncDirSQL::builder().root(..).tables(..).ignore(..).config(..).build_async()?` (also `new`/`with_ignore` shortcuts) |
+| Constructor                | (merged into `DirSQL`; the Python `DirSQL` is already async-by-default) | `AsyncDirSQL::builder().root(..).tables(..).ignore(..).config(..).persist(..).persist_path(..).build_async()?` (also `new`/`with_ignore` shortcuts) |
 | Ready                      | `await db.ready()`                    | `db.ready().await?`                    |
 | Query                      | `await db.query(sql)`                 | `db.query(sql).await?`                 |
 | Watch                      | `async for event in db.watch()`       | `db.watch()? -> WatchStream` (Stream trait) |
@@ -106,3 +106,13 @@ for await (const event of db.watch()) { ... }
 | AsyncDirSQL: multiple ready| Y      | Y    | Y (via DirSQL.ready) |
 | AsyncDirSQL: from config   | Y      | Y    | Y (via `new DirSQL(string)` + ready) |
 | AsyncDirSQL: watch         | Y      | Y    | Y (via DirSQL.watch) |
+| Persist: cold start writes cache       | -      | -    | -          |
+| Persist: warm start trusts cache       | -      | -    | -          |
+| Persist: changed file is re-parsed     | -      | -    | -          |
+| Persist: deleted file rows removed     | -      | -    | -          |
+| Persist: new file ingested             | -      | -    | -          |
+| Persist: racy-window triggers hash     | -      | -    | -          |
+| Persist: glob change forces rebuild    | -      | -    | -          |
+| Persist: dirsql_version bump rebuilds  | -      | -    | -          |
+| Persist: `.dirsql/` excluded from walk | -      | -    | -          |
+| Persist: custom persist_path honored   | -      | -    | -          |

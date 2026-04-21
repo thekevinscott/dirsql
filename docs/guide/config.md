@@ -163,6 +163,20 @@ The `ignore` list skips files and directories entirely (not even scanned):
 ignore = ["node_modules/**", ".git/**", "*.pyc", "__pycache__/**"]
 ```
 
+The top-level `.dirsql/` directory is always excluded, whether you list it or not -- it is a reserved namespace for `dirsql`'s own metadata (see [Persistence](./persistence.md)).
+
+## Persistence
+
+Set `persist = true` to keep the SQLite database on disk between runs instead of rebuilding from scratch on every startup:
+
+```toml
+[dirsql]
+persist = true
+# persist_path = ".dirsql/cache.db"   # optional; this is the default
+```
+
+See [Persistence](./persistence.md) for the full reconcile algorithm, storage layout, and limitations.
+
 ## Strict Mode
 
 By default, extra keys in file content are ignored and missing keys become NULL. Enable strict mode to error on mismatches:
