@@ -18,6 +18,8 @@ pub mod matcher;
 #[doc(hidden)]
 pub mod parser;
 #[doc(hidden)]
+pub mod persist;
+#[doc(hidden)]
 pub mod scanner;
 #[doc(hidden)]
 pub mod watcher;
@@ -28,6 +30,12 @@ pub mod cli;
 use crate::db::{Db, parse_table_name};
 use crate::matcher::{TableMatcher, parse_captures};
 use crate::parser::ColumnSource;
+use crate::persist::{
+    CachedFile, FileStat, build_meta, canonical_root, compute_glob_config_hash,
+    create_sidecar_tables, delete_file as cache_delete_file, drop_user_tables, ensure_parent_dir,
+    hash_file, meta_is_compatible, now_ns, read_cached_files, read_meta, read_rows_for_file,
+    resolve_persist_path, upsert_file, write_meta,
+};
 use crate::scanner::scan_directory;
 use crate::watcher::{FileEvent, Watcher};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
@@ -492,72 +500,90 @@ impl DirSQL {
         row_events
     }
 
-    pub(crate) fn build_from_parts(
-        root: PathBuf,
-        tables: Vec<Table>,
-        ignore_patterns: Vec<String>,
-    ) -> Result<Self> {
-        let prepared = Self::prepare_build(root, tables, ignore_patterns)?;
+    pub(crate) fn build_from_resolved(resolved: ResolvedBuild) -> Result<Self> {
+        let prepared = Self::prepare_resolved(resolved)?;
         Self::finish_build(prepared)
     }
 
     /// Split-phase construction — part 1. Performs all I/O that is safe to run
     /// off the host's main thread: validates DDL, compiles the matcher, walks
-    /// the directory, reads every matched file's contents into memory. Does
-    /// **not** invoke `extract`.
+    /// the directory, opens the persistent cache (when enabled) and decides
+    /// which files need re-parsing, then reads only those files' contents
+    /// into memory. Does **not** invoke `extract`.
     ///
     /// Pair with [`finish_build`](Self::finish_build) to complete construction
     /// on a thread where the `extract` callback can safely execute (e.g. the
     /// JS main thread for the napi-rs TypeScript binding).
     #[doc(hidden)]
-    pub fn prepare_build(
-        root: PathBuf,
-        tables: Vec<Table>,
-        ignore_patterns: Vec<String>,
-    ) -> Result<PreparedBuild> {
-        let mut seen: HashMap<String, ()> = HashMap::with_capacity(tables.len());
-        let mut mappings: Vec<(String, String)> = Vec::with_capacity(tables.len());
-        for table in &tables {
-            let table_name =
-                parse_table_name(&table.ddl).ok_or_else(|| DirSqlError::Ddl(table.ddl.clone()))?;
-            if seen.insert(table_name.clone(), ()).is_some() {
-                return Err(DirSqlError::DuplicateTable(table_name));
+    pub fn prepare_resolved(resolved: ResolvedBuild) -> Result<PreparedBuild> {
+        let ResolvedBuild {
+            root,
+            tables,
+            ignore,
+            persist,
+            persist_path,
+        } = resolved;
+
+        let (matcher, table_names) = compile_matcher(&tables, &ignore)?;
+
+        // Resolve the persistent context first (when enabled), so that
+        // file scanning can consult the cached file index.
+        let persist_ctx = if persist {
+            Some(prepare_persist(
+                &root,
+                &tables,
+                &ignore,
+                persist_path.as_deref(),
+            )?)
+        } else {
+            None
+        };
+
+        // Walk the directory once.
+        let scanned = scan_directory(&root, &matcher);
+
+        // Build the list of files needing re-parse. When persist is
+        // enabled, files whose stat tuple matches the cache (and that pass
+        // the racy-window check) are trusted instead of re-parsed.
+        let (scanned_files, trusted, deleted) = match &persist_ctx {
+            None => {
+                let mut files = Vec::with_capacity(scanned.len());
+                for (path, table_name) in scanned {
+                    let content = std::fs::read_to_string(&path)?;
+                    files.push(ScannedFile {
+                        rel_path: relative_path(&root, &path),
+                        table_name,
+                        content,
+                        stat: None,
+                    });
+                }
+                (files, Vec::new(), Vec::new())
             }
-            mappings.push((table.glob.clone(), table_name));
-        }
+            Some(ctx) => reconcile_scan(&root, scanned, ctx)?,
+        };
 
-        let mapping_refs: Vec<(&str, &str)> = mappings
-            .iter()
-            .map(|(g, n)| (g.as_str(), n.as_str()))
-            .collect();
-        let ignore_refs: Vec<&str> = ignore_patterns.iter().map(String::as_str).collect();
-        let matcher = TableMatcher::new(&mapping_refs, &ignore_refs)
-            .map_err(|e| DirSqlError::Matcher(e.to_string()))?;
-
-        let files = scan_directory(&root, &matcher);
-        let mut scanned_files = Vec::with_capacity(files.len());
-        for (file_path, table_name) in files {
-            let content = std::fs::read_to_string(&file_path)?;
-            let rel_path = relative_path(&root, &file_path);
-            scanned_files.push(ScannedFile {
-                rel_path,
-                table_name,
-                content,
-            });
-        }
+        let _ = table_names;
 
         Ok(PreparedBuild {
             root,
             tables,
             matcher,
             scanned_files,
+            persist: persist_ctx.map(|ctx| PreparedPersist {
+                db: ctx.db,
+                trusted,
+                deleted,
+                meta: ctx.expected_meta,
+                cold_rebuild: ctx.cold_rebuild,
+            }),
         })
     }
 
     /// Split-phase construction — part 2. Consumes the intermediate state from
-    /// [`prepare_build`](Self::prepare_build): creates the SQLite database,
-    /// runs each table's DDL, invokes each file's `extract` callback, and
-    /// inserts the resulting rows.
+    /// [`prepare_resolved`](Self::prepare_resolved): creates the SQLite
+    /// database (or wires up the persistent on-disk one), runs each table's
+    /// DDL, invokes each file's `extract` callback, and inserts the
+    /// resulting rows.
     ///
     /// Must be invoked on a thread where the `extract` closures can safely
     /// run. For the napi-rs binding that is the JS main thread.
@@ -568,25 +594,60 @@ impl DirSQL {
             tables,
             matcher,
             scanned_files,
+            persist,
         } = prepared;
 
-        let db = Db::new()?;
+        let (db, persist_ready) = match persist {
+            Some(p) => (p.db, Some((p.trusted, p.deleted, p.meta, p.cold_rebuild))),
+            None => (Db::new()?, None),
+        };
+
         let mut extract_map: HashMap<String, Arc<ExtractFn>> = HashMap::new();
         let mut strict_map: HashMap<String, bool> = HashMap::new();
+        let mut ddl_map: HashMap<String, String> = HashMap::new();
 
         for table in tables {
             let table_name =
                 parse_table_name(&table.ddl).ok_or_else(|| DirSqlError::Ddl(table.ddl.clone()))?;
-            db.create_table(&table.ddl)?;
+            // When the cache already holds this table from a prior run,
+            // skip CREATE TABLE: the schema is preserved verbatim across
+            // runs (the glob_config_hash captures the DDL).
+            if !table_exists(&db, &table_name)? {
+                db.create_table(&table.ddl)?;
+            }
             extract_map.insert(table_name.clone(), table.extract);
-            strict_map.insert(table_name, table.strict);
+            strict_map.insert(table_name.clone(), table.strict);
+            ddl_map.insert(table_name, table.ddl);
         }
 
         let mut file_rows: HashMap<String, (String, Vec<Row>)> = HashMap::new();
+
+        // First, apply trusted-file rebuilds of the in-memory file_rows
+        // cache from the on-disk SQLite. These files are NOT re-parsed.
+        if let Some((trusted, deleted, _, _)) = persist_ready.as_ref() {
+            for tf in trusted {
+                let user_columns = db.get_table_columns(&tf.table_name).map_err(map_db_error)?;
+                let rows =
+                    read_rows_for_file(db.conn(), &tf.table_name, &tf.rel_path, &user_columns)
+                        .map_err(|e| DirSqlError::Core(DbError::Sqlite(e)))?;
+                file_rows.insert(tf.rel_path.clone(), (tf.table_name.clone(), rows));
+            }
+
+            for (rel_path, table_name) in deleted {
+                db.delete_rows_by_file(table_name, rel_path)
+                    .map_err(map_db_error)?;
+                cache_delete_file(db.conn(), rel_path)
+                    .map_err(|e| DirSqlError::Core(DbError::Sqlite(e)))?;
+            }
+        }
+
+        // Process every file that needs (re)parsing.
+        let snapshot_ns = now_ns();
         for ScannedFile {
             rel_path,
             table_name,
             content,
+            stat,
         } in scanned_files
         {
             let extract = extract_map.get(&table_name).ok_or_else(|| {
@@ -599,13 +660,41 @@ impl DirSQL {
             })?;
 
             let mut rows = Vec::with_capacity(raw_rows.len());
+            // When updating an existing file in the persistent cache, drop
+            // its old rows before inserting the new ones.
+            if persist_ready.is_some() {
+                db.delete_rows_by_file(&table_name, &rel_path)
+                    .map_err(map_db_error)?;
+            }
             for (row_index, raw_row) in raw_rows.iter().enumerate() {
                 let row = db.normalize_row(&table_name, raw_row, strict)?;
                 db.insert_row(&table_name, &row, &rel_path, row_index)?;
                 rows.push(row);
             }
 
+            // Update the persistent file index after a successful parse.
+            if persist_ready.is_some()
+                && let Some(stat) = stat.as_ref()
+            {
+                let hash = hash_file(&root.join(&rel_path)).ok();
+                upsert_file(
+                    db.conn(),
+                    &rel_path,
+                    &table_name,
+                    stat,
+                    hash.as_ref(),
+                    snapshot_ns,
+                )
+                .map_err(|e| DirSqlError::Core(DbError::Sqlite(e)))?;
+            }
+
             file_rows.insert(rel_path, (table_name, rows));
+        }
+
+        // Write the meta block last so a crash mid-build leaves an
+        // incompatible cache that is detected on the next startup.
+        if let Some((_, _, meta, _)) = persist_ready.as_ref() {
+            write_meta(db.conn(), meta).map_err(|e| DirSqlError::Core(DbError::Sqlite(e)))?;
         }
 
         Ok(Self {
@@ -656,6 +745,8 @@ pub struct DirSQLBuilder {
     tables: Vec<Table>,
     ignore: Vec<String>,
     config_path: Option<PathBuf>,
+    persist: bool,
+    persist_path: Option<PathBuf>,
 }
 
 impl DirSQLBuilder {
@@ -699,16 +790,35 @@ impl DirSQLBuilder {
         self
     }
 
+    /// Enable persistent on-disk storage. When `true`, the SQLite database is
+    /// written to `<root>/.dirsql/cache.db` (override via
+    /// [`persist_path`](Self::persist_path)) so subsequent startups only
+    /// re-parse files that have actually changed. See
+    /// `docs/guide/persistence.md` for the reconcile contract.
+    pub fn persist(mut self, persist: bool) -> Self {
+        self.persist = persist;
+        self
+    }
+
+    /// Override the location of the persistent cache file. Ignored when
+    /// [`persist`](Self::persist) is `false`.
+    pub fn persist_path(mut self, path: impl AsRef<Path>) -> Self {
+        self.persist_path = Some(path.as_ref().to_path_buf());
+        self
+    }
+
     /// Resolve all inputs (reading the config file if one was supplied) into
-    /// the (root, tables, ignore) tuple used by the construction pipeline.
-    /// Emits a warning on stderr if both an explicit root and a config-supplied
-    /// root are present.
-    fn resolve(self) -> Result<(PathBuf, Vec<Table>, Vec<String>)> {
+    /// a [`ResolvedBuild`] used by the construction pipeline. Emits a warning
+    /// on stderr if both an explicit root and a config-supplied root are
+    /// present.
+    fn resolve(self) -> Result<ResolvedBuild> {
         let DirSQLBuilder {
             root: explicit_root,
             mut tables,
             mut ignore,
             config_path,
+            mut persist,
+            mut persist_path,
         } = self;
 
         let mut config_root: Option<PathBuf> = None;
@@ -729,12 +839,26 @@ impl DirSQLBuilder {
                 };
                 config_root = Some(resolved);
             } else {
-                config_root = Some(cfg_parent);
+                config_root = Some(cfg_parent.clone());
             }
 
             let cfg_tables = build_tables_from_config(&cfg)?;
             tables.extend(cfg_tables);
             ignore.extend(cfg.ignore);
+
+            if cfg.persist {
+                persist = true;
+            }
+            if persist_path.is_none()
+                && let Some(p) = cfg.persist_path.clone()
+            {
+                let resolved = if p.is_absolute() {
+                    p
+                } else {
+                    cfg_parent.join(p)
+                };
+                persist_path = Some(resolved);
+            }
         }
 
         let root = match (explicit_root, config_root) {
@@ -757,13 +881,19 @@ impl DirSQLBuilder {
             }
         };
 
-        Ok((root, tables, ignore))
+        Ok(ResolvedBuild {
+            root,
+            tables,
+            ignore,
+            persist,
+            persist_path,
+        })
     }
 
     /// Finish building synchronously. Blocks on the initial directory scan.
     pub fn build(self) -> Result<DirSQL> {
-        let (root, tables, ignore) = self.resolve()?;
-        DirSQL::build_from_parts(root, tables, ignore)
+        let resolved = self.resolve()?;
+        DirSQL::build_from_resolved(resolved)
     }
 
     /// Split-phase prepare: runs the Send-safe portion of construction and
@@ -771,36 +901,216 @@ impl DirSQLBuilder {
     /// (napi, py-ext) that must finish on a specific thread.
     #[doc(hidden)]
     pub fn prepare(self) -> Result<PreparedBuild> {
-        let (root, tables, ignore) = self.resolve()?;
-        DirSQL::prepare_build(root, tables, ignore)
+        let resolved = self.resolve()?;
+        DirSQL::prepare_resolved(resolved)
     }
 
     /// Finish building asynchronously. Returns immediately; the initial scan
     /// runs on a background thread. Call [`AsyncDirSQL::ready`] to await it.
     pub fn build_async(self) -> Result<AsyncDirSQL> {
-        let (root, tables, ignore) = self.resolve()?;
-        Ok(AsyncDirSQL::spawn_build(root, tables, ignore))
+        let resolved = self.resolve()?;
+        Ok(AsyncDirSQL::spawn_build(resolved))
     }
 }
 
-/// A single file discovered during [`DirSQL::prepare_build`]: its
-/// root-relative path, the table it belongs to, and its raw contents.
+/// Fully-resolved builder inputs: the result of merging programmatic
+/// settings with values loaded from a `.dirsql.toml` config file.
+#[doc(hidden)]
+pub struct ResolvedBuild {
+    pub root: PathBuf,
+    pub tables: Vec<Table>,
+    pub ignore: Vec<String>,
+    pub persist: bool,
+    pub persist_path: Option<PathBuf>,
+}
+
+/// A single file discovered during [`DirSQL::prepare_resolved`]: its
+/// root-relative path, the table it belongs to, its raw contents, and the
+/// filesystem stat tuple captured during the scan (when persist is on).
 #[doc(hidden)]
 pub struct ScannedFile {
     pub rel_path: String,
     pub table_name: String,
     pub content: String,
+    pub stat: Option<FileStat>,
 }
 
-/// Intermediate state produced by [`DirSQL::prepare_build`] and consumed by
-/// [`DirSQL::finish_build`]. Opaque on purpose; fields are only visible to
-/// the in-workspace bindings.
+/// Intermediate state produced by [`DirSQL::prepare_resolved`] and consumed
+/// by [`DirSQL::finish_build`]. Opaque on purpose; fields are only visible
+/// to the in-workspace bindings.
 #[doc(hidden)]
 pub struct PreparedBuild {
     root: PathBuf,
     tables: Vec<Table>,
     matcher: TableMatcher,
     scanned_files: Vec<ScannedFile>,
+    persist: Option<PreparedPersist>,
+}
+
+#[doc(hidden)]
+pub struct PreparedPersist {
+    db: Db,
+    trusted: Vec<TrustedFile>,
+    deleted: Vec<(String, String)>,
+    meta: HashMap<String, String>,
+    cold_rebuild: bool,
+}
+
+#[doc(hidden)]
+pub struct TrustedFile {
+    pub rel_path: String,
+    pub table_name: String,
+}
+
+/// Internal context produced by [`prepare_persist`].
+struct PersistContext {
+    db: Db,
+    cached: HashMap<String, CachedFile>,
+    expected_meta: HashMap<String, String>,
+    cold_rebuild: bool,
+}
+
+fn compile_matcher(
+    tables: &[Table],
+    ignore_patterns: &[String],
+) -> Result<(TableMatcher, Vec<String>)> {
+    let mut seen: HashMap<String, ()> = HashMap::with_capacity(tables.len());
+    let mut mappings: Vec<(String, String)> = Vec::with_capacity(tables.len());
+    let mut names = Vec::with_capacity(tables.len());
+    for table in tables {
+        let table_name =
+            parse_table_name(&table.ddl).ok_or_else(|| DirSqlError::Ddl(table.ddl.clone()))?;
+        if seen.insert(table_name.clone(), ()).is_some() {
+            return Err(DirSqlError::DuplicateTable(table_name));
+        }
+        mappings.push((table.glob.clone(), table_name.clone()));
+        names.push(table_name);
+    }
+
+    let mapping_refs: Vec<(&str, &str)> = mappings
+        .iter()
+        .map(|(g, n)| (g.as_str(), n.as_str()))
+        .collect();
+    let ignore_refs: Vec<&str> = ignore_patterns.iter().map(String::as_str).collect();
+    let matcher = TableMatcher::new(&mapping_refs, &ignore_refs)
+        .map_err(|e| DirSqlError::Matcher(e.to_string()))?;
+    Ok((matcher, names))
+}
+
+/// Open (or create) the persistent SQLite cache and read its meta. If the
+/// meta is missing or incompatible with the current build, the cache is
+/// wiped and the resulting [`PersistContext`] reports `cold_rebuild = true`
+/// so the rest of the pipeline knows to treat every file as new.
+fn prepare_persist(
+    root: &Path,
+    tables: &[Table],
+    ignore: &[String],
+    persist_path_override: Option<&Path>,
+) -> Result<PersistContext> {
+    let path = resolve_persist_path(root, persist_path_override);
+    ensure_parent_dir(&path)?;
+
+    let db = Db::open(&path).map_err(map_db_error)?;
+    create_sidecar_tables(db.conn()).map_err(|e| DirSqlError::Core(DbError::Sqlite(e)))?;
+
+    let glob_hash = compute_glob_config_hash(tables, ignore);
+    let canonical = canonical_root(root);
+    let expected_meta = build_meta(&glob_hash, &canonical);
+
+    let cached_meta = read_meta(db.conn()).map_err(|e| DirSqlError::Core(DbError::Sqlite(e)))?;
+    let compatible = !cached_meta.is_empty() && meta_is_compatible(&cached_meta, &expected_meta);
+
+    let (cached, cold_rebuild) = if compatible {
+        let files =
+            read_cached_files(db.conn()).map_err(|e| DirSqlError::Core(DbError::Sqlite(e)))?;
+        (files, false)
+    } else {
+        drop_user_tables(db.conn()).map_err(|e| DirSqlError::Core(DbError::Sqlite(e)))?;
+        (HashMap::new(), true)
+    };
+
+    Ok(PersistContext {
+        db,
+        cached,
+        expected_meta,
+        cold_rebuild,
+    })
+}
+
+/// Decide which files are trusted, which need re-parsing, and which were
+/// removed since the last cache write. Reads file content only for
+/// to-be-reparsed files.
+#[allow(clippy::type_complexity)]
+fn reconcile_scan(
+    root: &Path,
+    scanned: Vec<(PathBuf, String)>,
+    ctx: &PersistContext,
+) -> Result<(Vec<ScannedFile>, Vec<TrustedFile>, Vec<(String, String)>)> {
+    let mut to_parse = Vec::new();
+    let mut trusted = Vec::new();
+    let mut seen_paths: std::collections::HashSet<String> =
+        std::collections::HashSet::with_capacity(scanned.len());
+
+    for (path, table_name) in scanned {
+        let rel_path = relative_path(root, &path);
+        seen_paths.insert(rel_path.clone());
+
+        let metadata = std::fs::metadata(&path)?;
+        let stat = FileStat::from_metadata(&metadata);
+
+        let cached = ctx.cached.get(&rel_path);
+        let trust = match cached {
+            Some(c) if c.table_name == table_name && c.stat == stat => {
+                // Stat matches. Outside the racy window? Trust the cache.
+                if c.snapshot_ns > stat.mtime_ns {
+                    true
+                } else {
+                    // Hash-confirm.
+                    match (hash_file(&path).ok(), c.content_hash) {
+                        (Some(live), Some(cached_hash)) => live == cached_hash,
+                        _ => false,
+                    }
+                }
+            }
+            _ => false,
+        };
+
+        if trust {
+            trusted.push(TrustedFile {
+                rel_path,
+                table_name,
+            });
+        } else {
+            let content = std::fs::read_to_string(&path)?;
+            to_parse.push(ScannedFile {
+                rel_path,
+                table_name,
+                content,
+                stat: Some(stat),
+            });
+        }
+    }
+
+    let mut deleted = Vec::new();
+    for (rel_path, cf) in &ctx.cached {
+        if !seen_paths.contains(rel_path) {
+            deleted.push((rel_path.clone(), cf.table_name.clone()));
+        }
+    }
+
+    Ok((to_parse, trusted, deleted))
+}
+
+fn table_exists(db: &Db, name: &str) -> Result<bool> {
+    let count: i64 = db
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            rusqlite::params![name],
+            |row| row.get(0),
+        )
+        .map_err(|e| DirSqlError::Core(DbError::Sqlite(e)))?;
+    Ok(count > 0)
 }
 
 /// Translate a [`DbError`] into a [`DirSqlError`], promoting the core's
@@ -977,14 +1287,14 @@ impl AsyncDirSQL {
             .build_async()
     }
 
-    pub(crate) fn spawn_build(root: PathBuf, tables: Vec<Table>, ignore: Vec<String>) -> Self {
+    pub(crate) fn spawn_build(resolved: ResolvedBuild) -> Self {
         let inner = Arc::new(AsyncDirSqlInner {
             db: tokio::sync::OnceCell::new(),
             ready_notify: tokio::sync::Notify::new(),
         });
         let inner_clone = inner.clone();
         thread::spawn(move || {
-            let result = DirSQL::build_from_parts(root, tables, ignore);
+            let result = DirSQL::build_from_resolved(resolved);
             let _ = inner_clone.db.set(result);
             inner_clone.ready_notify.notify_waiters();
         });

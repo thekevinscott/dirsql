@@ -27,11 +27,22 @@ class _FakeRustDirSQL:
 
     instances: list = []
 
-    def __init__(self, root=None, *, tables=None, ignore=None, config=None):
+    def __init__(
+        self,
+        root=None,
+        *,
+        tables=None,
+        ignore=None,
+        config=None,
+        persist=False,
+        persist_path=None,
+    ):
         self.root = root
         self.tables = tables
         self.ignore = ignore
         self.config = config
+        self.persist = persist
+        self.persist_path = persist_path
         self.queries: list[str] = []
         self.query_results: list = (
             [{"from_config": config}] if config is not None else [{"ok": 1}]
@@ -254,3 +265,26 @@ def describe_binding_layer():
             db = async_mod.DirSQL("/root", tables=["t"])
             await db.ready()
             assert _FakeRustDirSQL.instances[0].ignore is None
+
+    def describe_persist_kwargs():
+        # Feature: persist / persist_path. See docs/guide/persistence.md.
+        @pytest.mark.asyncio
+        async def it_forwards_persist_kwargs_to_core(mock_core):
+            db = async_mod.DirSQL(
+                "/root",
+                tables=["t"],
+                persist=True,
+                persist_path="/tmp/cache.db",
+            )
+            await db.ready()
+            inst = _FakeRustDirSQL.instances[0]
+            assert inst.persist is True
+            assert inst.persist_path == "/tmp/cache.db"
+
+        @pytest.mark.asyncio
+        async def it_defaults_persist_to_false(mock_core):
+            db = async_mod.DirSQL("/root", tables=["t"])
+            await db.ready()
+            inst = _FakeRustDirSQL.instances[0]
+            assert inst.persist is False
+            assert inst.persist_path is None
