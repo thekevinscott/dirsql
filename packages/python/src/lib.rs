@@ -17,6 +17,7 @@ mod python {
     use pyo3::prelude::*;
     use pyo3::types::{PyDict, PyList};
     use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::time::Duration;
 
     // -- Public PyO3 classes ------------------------------------------------
@@ -86,13 +87,15 @@ mod python {
     #[pymethods]
     impl PyDirSQL {
         #[new]
-        #[pyo3(signature = (root=None, *, tables=None, ignore=None, config=None))]
+        #[pyo3(signature = (root=None, *, tables=None, ignore=None, config=None, persist=false, persist_path=None))]
         fn new(
             py: Python<'_>,
             root: Option<String>,
             tables: Option<Vec<PyRef<'_, PyTable>>>,
             ignore: Option<Vec<String>>,
             config: Option<String>,
+            persist: bool,
+            persist_path: Option<PathBuf>,
         ) -> PyResult<Self> {
             let rust_tables: Vec<Table> = tables
                 .as_deref()
@@ -113,6 +116,12 @@ mod python {
                     }
                     if let Some(c) = config {
                         builder = builder.config(c);
+                    }
+                    if persist {
+                        builder = builder.persist(true);
+                    }
+                    if let Some(p) = persist_path {
+                        builder = builder.persist_path(p);
                     }
                     builder.build()
                 })

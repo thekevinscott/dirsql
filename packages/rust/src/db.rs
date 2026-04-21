@@ -1,5 +1,6 @@
 use rusqlite::Connection;
 use std::collections::HashMap;
+use std::path::Path;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -29,6 +30,20 @@ impl Db {
     pub fn new() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         Ok(Self { conn })
+    }
+
+    /// Open a `Db` backed by an on-disk SQLite file. Used by the persistent
+    /// cache path; in-memory mode is the default.
+    pub fn open(path: &Path) -> Result<Self> {
+        let conn = Connection::open(path)?;
+        Ok(Self { conn })
+    }
+
+    /// Borrow the underlying SQLite connection. Internal use only — exposed
+    /// to the `persist` module so it can manage the sidecar tables.
+    #[doc(hidden)]
+    pub fn conn(&self) -> &Connection {
+        &self.conn
     }
 
     /// Create a table from a user-provided DDL statement.

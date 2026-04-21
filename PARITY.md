@@ -106,13 +106,13 @@ for await (const event of db.watch()) { ... }
 | AsyncDirSQL: multiple ready| Y      | Y    | Y (via DirSQL.ready) |
 | AsyncDirSQL: from config   | Y      | Y    | Y (via `new DirSQL(string)` + ready) |
 | AsyncDirSQL: watch         | Y      | Y    | Y (via DirSQL.watch) |
-| Persist: cold start writes cache       | -      | -    | -          |
-| Persist: warm start trusts cache       | -      | -    | -          |
-| Persist: changed file is re-parsed     | -      | -    | -          |
-| Persist: deleted file rows removed     | -      | -    | -          |
-| Persist: new file ingested             | -      | -    | -          |
-| Persist: racy-window triggers hash     | -      | -    | -          |
-| Persist: glob change forces rebuild    | -      | -    | -          |
-| Persist: dirsql_version bump rebuilds  | -      | -    | -          |
-| Persist: `.dirsql/` excluded from walk | -      | -    | -          |
-| Persist: custom persist_path honored   | -      | -    | -          |
+| Persist: cold start writes cache       | Y      | Y    | Y          |
+| Persist: warm start trusts cache       | Y      | Y    | Y          |
+| Persist: changed file is re-parsed     | Y      | Y    | Y          |
+| Persist: deleted file rows removed     | Y      | Y    | Y          |
+| Persist: new file ingested             | Y      | Y    | Y          |
+| Persist: racy-window triggers hash     | -      | Y    | -          |
+| Persist: glob change forces rebuild    | Y      | Y    | Y          |
+| Persist: dirsql_version bump rebuilds  | -      | Y    | -          |
+| Persist: `.dirsql/` excluded from walk | Y      | Y    | Y          |
+| Persist: custom persist_path honored   | Y      | Y    | Y          |

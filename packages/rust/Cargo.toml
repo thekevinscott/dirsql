@@ -23,6 +23,7 @@ cli = [
 
 [dependencies]
 axum = { version = "0.8", optional = true }
+blake3 = "1"
 clap = { version = "4", features = ["derive"], optional = true }
 csv = "1"
 futures = { version = "0.3", optional = true }

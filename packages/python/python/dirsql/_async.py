@@ -46,15 +46,29 @@ class DirSQL:
     At least one of ``root`` or ``config`` must be supplied. When both are
     set, the explicit ``root`` wins over any ``[dirsql].root`` in the config
     file (a warning is emitted on stderr).
+
+    Pass ``persist=True`` to keep an on-disk SQLite cache (default location:
+    ``<root>/.dirsql/cache.db``). Override the location with ``persist_path``.
     """
 
-    def __init__(self, root=None, *, tables=None, ignore=None, config=None):
+    def __init__(
+        self,
+        root=None,
+        *,
+        tables=None,
+        ignore=None,
+        config=None,
+        persist=False,
+        persist_path=None,
+    ):
         if root is None and config is None:
             raise TypeError("DirSQL requires either a root directory or a config= path")
         self._root = root
         self._tables = tables
         self._ignore = ignore
         self._config = config
+        self._persist = persist
+        self._persist_path = persist_path
         self._db = None
         self._ready_event = asyncio.Event()
         self._init_error = None
@@ -69,6 +83,8 @@ class DirSQL:
                 tables=self._tables,
                 ignore=self._ignore,
                 config=self._config,
+                persist=self._persist,
+                persist_path=self._persist_path,
             )
         except Exception as exc:
             self._init_error = exc
