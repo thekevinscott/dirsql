@@ -203,7 +203,9 @@ describe("DirSQL persist", () => {
         {
           ddl: "CREATE TABLE items (name TEXT, price REAL)",
           glob: "**/*.json",
-          extract: (_filePath: string, content: string) => [JSON.parse(content)],
+          extract: (_filePath: string, content: string) => [
+            JSON.parse(content),
+          ],
         },
       ],
       persist: true,

@@ -235,8 +235,7 @@ def describe_persist():
             # Force this file into the racy window by zeroing snapshot_ns,
             # and corrupt its cached hash so the hash-confirm branch fails.
             conn.execute(
-                "UPDATE _dirsql_files SET snapshot_ns = 0, "
-                "content_hash = zeroblob(32)"
+                "UPDATE _dirsql_files SET snapshot_ns = 0, content_hash = zeroblob(32)"
             )
             conn.commit()
             conn.close()
@@ -298,6 +297,4 @@ def describe_persist():
             )
             await db.ready()
             assert os.path.exists(custom)
-            assert not os.path.exists(
-                os.path.join(persist_dir, ".dirsql", "cache.db")
-            )
+            assert not os.path.exists(os.path.join(persist_dir, ".dirsql", "cache.db"))
