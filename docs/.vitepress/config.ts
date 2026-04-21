@@ -31,6 +31,7 @@ export default defineConfig({
           { text: 'Defining Tables', link: '/guide/tables' },
           { text: 'Querying', link: '/guide/querying' },
           { text: 'File Watching', link: '/guide/watching' },
+          { text: 'Persistence', link: '/guide/persistence' },
           { text: 'Async API', link: '/guide/async' },
           { text: 'Command-Line Interface', link: '/guide/cli' },
           { text: 'Collaboration with CRDTs', link: '/guide/crdt' }

@@ -74,6 +74,8 @@ impl DirSQL {
         tables: Option<Array>,
         ignore: Option<Vec<String>>,
         config: Option<String>,
+        persist: Option<bool>,
+        persist_path: Option<String>,
     ) -> Result<AsyncTask<OpenTask>> {
         let rust_tables = match tables {
             Some(ts) => parse_tables_from_js(env, ts)?,
@@ -84,6 +86,8 @@ impl DirSQL {
             config_path: config.map(PathBuf::from),
             tables: Some(rust_tables),
             ignore: ignore.unwrap_or_default(),
+            persist: persist.unwrap_or(false),
+            persist_path: persist_path.map(PathBuf::from),
         }))
     }
 
@@ -141,6 +145,8 @@ pub struct OpenTask {
     // `Table: Default` for `std::mem::take`.
     tables: Option<Vec<Table>>,
     ignore: Vec<String>,
+    persist: bool,
+    persist_path: Option<PathBuf>,
 }
 
 impl Task for OpenTask {
@@ -159,6 +165,12 @@ impl Task for OpenTask {
         }
         if let Some(cfg) = self.config_path.take() {
             builder = builder.config(cfg);
+        }
+        if self.persist {
+            builder = builder.persist(true);
+        }
+        if let Some(p) = self.persist_path.take() {
+            builder = builder.persist_path(p);
         }
         builder.prepare().map_err(to_napi_err)
     }

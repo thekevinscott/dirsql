@@ -2,12 +2,27 @@ use crate::matcher::TableMatcher;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+/// Top-level directory name reserved for `dirsql`'s own metadata (e.g. the
+/// persistent cache database). Always excluded from the scan, regardless of
+/// whether persistence is enabled.
+pub const RESERVED_DIR: &str = ".dirsql";
+
 /// Walk a directory tree and return all file paths paired with their matching table name.
 /// Ignored paths and directories are skipped. Only files (not directories) are returned.
+///
+/// The top-level `.dirsql/` directory is unconditionally excluded.
 pub fn scan_directory(root: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, String)> {
     let mut results = Vec::new();
 
-    for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
+    let walker = WalkDir::new(root).into_iter().filter_entry(|entry| {
+        // Skip the reserved `.dirsql/` directory at the top level.
+        if entry.depth() == 1 && entry.file_type().is_dir() && entry.file_name() == RESERVED_DIR {
+            return false;
+        }
+        true
+    });
+
+    for entry in walker.filter_map(|e| e.ok()) {
         let path = entry.path();
 
         // Match against relative path so globs like "comments/**/*.jsonl" work
@@ -100,5 +115,22 @@ mod tests {
         let results = scan_directory(dir.path(), &matcher);
 
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn scan_excludes_top_level_dirsql_directory() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("real.csv"), "a,b\n1,2").unwrap();
+
+        // Files inside the reserved `.dirsql/` directory (e.g. the cache db)
+        // must never be picked up by the scanner.
+        fs::create_dir(dir.path().join(".dirsql")).unwrap();
+        fs::write(dir.path().join(".dirsql").join("cache.csv"), "a,b\n1,2").unwrap();
+
+        let matcher = TableMatcher::new(&[("**/*.csv", "t")], &[]).unwrap();
+        let results = scan_directory(dir.path(), &matcher);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].0.ends_with("real.csv"));
     }
 }

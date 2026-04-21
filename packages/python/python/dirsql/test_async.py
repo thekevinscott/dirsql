@@ -8,11 +8,22 @@ from dirsql import _async as async_mod
 
 
 class _FakeRustDirSQL:
-    def __init__(self, root=None, *, tables=None, ignore=None, config=None):
+    def __init__(
+        self,
+        root=None,
+        *,
+        tables=None,
+        ignore=None,
+        config=None,
+        persist=False,
+        persist_path=None,
+    ):
         self.root = root
         self.tables = tables
         self.ignore = ignore
         self.config = config
+        self.persist = persist
+        self.persist_path = persist_path
         self.query_calls = []
 
     def query(self, sql):

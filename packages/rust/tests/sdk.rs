@@ -468,12 +468,15 @@ fn it_splits_scan_and_build_for_async_bindings() {
         },
     );
 
-    let prepared =
-        DirSQL::prepare_build(root.path().to_path_buf(), vec![table], Vec::new()).unwrap();
+    let prepared = DirSQL::builder()
+        .root(root.path().to_path_buf())
+        .tables(vec![table])
+        .prepare()
+        .unwrap();
     assert_eq!(
         extract_calls.load(Ordering::SeqCst),
         0,
-        "prepare_build must not call extract"
+        "prepare must not call extract"
     );
 
     let db = DirSQL::finish_build(prepared).unwrap();
