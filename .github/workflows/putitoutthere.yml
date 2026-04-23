@@ -1,0 +1,125 @@
+# Release orchestration via putitoutthere.
+#
+# This workflow is currently `workflow_dispatch`-only to avoid double-firing
+# with the existing cargo-dist `release.yml`, which triggers on version tags.
+# Once the cargo-dist flow is removed, change the trigger to:
+#
+#   on:
+#     push:
+#       branches: [main]
+#     workflow_dispatch:
+#       inputs: {...}
+#
+# See putitoutthere.toml for package declarations and AGENTS.md for the
+# `release:` trailer convention.
+
+name: Release (putitoutthere)
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry-run: compute plan, skip publish + tag'
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-putitoutthere
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: plan
+        uses: thekevinscott/put-it-out-there@v0
+        with:
+          command: plan
+
+  build:
+    needs: plan
+    if: fromJSON(needs.plan.outputs.matrix || '[]')[0] != null
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runs_on }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Rust (if crates)
+        if: matrix.kind == 'crates'
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build crate
+        if: matrix.kind == 'crates'
+        run: cargo package --manifest-path ${{ matrix.path }}/Cargo.toml --target-dir ${{ matrix.path }}/target
+      - name: Setup Python (if pypi)
+        if: matrix.kind == 'pypi'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build wheel (maturin)
+        if: matrix.kind == 'pypi' && matrix.build == 'maturin'
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out ${{ matrix.path }}/dist ${{ matrix.target == 'sdist' && '--sdist' || format('--target {0}', matrix.target) }}
+          working-directory: ${{ matrix.path }}
+      - name: Setup Node (if npm)
+        if: matrix.kind == 'npm'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build npm package (napi)
+        if: matrix.kind == 'npm' && matrix.build == 'napi'
+        run: |
+          cd ${{ matrix.path }}
+          npm ci
+          npx napi build --release
+          npm run build --if-present
+      - name: Build npm package (vanilla)
+        if: matrix.kind == 'npm' && matrix.build != 'napi'
+        run: |
+          cd ${{ matrix.path }}
+          npm ci
+          npm run build --if-present
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+
+  publish:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: thekevinscott/put-it-out-there@v0
+        with:
+          command: publish
+          dry_run: ${{ inputs.dry_run || 'true' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}

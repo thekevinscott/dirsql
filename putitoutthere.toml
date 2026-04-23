@@ -1,0 +1,32 @@
+# Put It Out There — release orchestration config.
+# Docs: https://github.com/thekevinscott/put-it-out-there
+#
+# All three packages publish to their respective registries under the name
+# `dirsql`. The `name` field below is the orchestrator's internal identifier
+# (used for tags, `release:` trailer scoping, and `depends_on`) — it does NOT
+# override the registry name, which is read from each package's manifest.
+
+[putitoutthere]
+version = 1
+
+[[package]]
+name = "dirsql-rust"
+kind = "crates"
+path = "packages/rust"
+paths = ["packages/rust/**", "Cargo.toml", "Cargo.lock"]
+
+[[package]]
+name = "dirsql-python"
+kind = "pypi"
+path = "packages/python"
+paths = ["packages/python/**"]
+build = "maturin"
+depends_on = ["dirsql-rust"]
+
+[[package]]
+name = "dirsql-ts"
+kind = "npm"
+path = "packages/ts"
+paths = ["packages/ts/**"]
+build = "napi"
+depends_on = ["dirsql-rust"]

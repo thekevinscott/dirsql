@@ -124,3 +124,44 @@ Coverage enforcement must stay explicit in CI for each SDK package:
 - TypeScript SDK coverage must stay at 90% or higher.
 
 When work affects more than one SDK package, split the coverage and test work across subagents so each package can be validated independently.
+
+## Releasing
+
+dirsql uses [putitoutthere](https://github.com/thekevinscott/put-it-out-there) to orchestrate releases across crates.io, PyPI, and npm. Package declarations live in `putitoutthere.toml` at the repo root.
+
+### Trailer convention
+
+When you finish a unit of work and are preparing a PR or commit, add a git trailer to the commit message body to signal a release:
+
+    release: <patch|minor|major|skip>
+
+Rules:
+- Omit the trailer for docs-only, CI-only, or internal-only changes.
+- `patch` for bug fixes or internal refactors that don't change public API.
+- `minor` for new features that are backwards-compatible.
+- `major` for breaking changes.
+- `skip` to suppress release when path filters would otherwise cascade.
+
+The trailer on the merge commit determines the release. If merging via "Squash and merge," include the trailer in the PR description so it ends up in the squashed commit body.
+
+### Scoping a release to specific packages
+
+To release a subset of packages, append a bracketed list of orchestrator package names (from `putitoutthere.toml`):
+
+    release: minor [dirsql-rust, dirsql-python]
+
+Packages named in the list are bumped with the specified version. Other packages cascaded by path filters still get a `patch`. Packages in the list that *aren't* cascaded are force-included.
+
+### Cascading
+
+`dirsql-python` and `dirsql-ts` both `depends_on = ["dirsql-rust"]`, so any change to `packages/rust/**` cascades a release of the Python and TS wrappers along with the crate. A change confined to `packages/ts/**` (for example) ships only the npm package.
+
+### Local validation
+
+```
+node_modules/.bin/putitoutthere plan       # what would ship on this commit
+node_modules/.bin/putitoutthere doctor     # config + handlers + auth check
+node_modules/.bin/putitoutthere preflight  # full pre-publish check, no side effects
+```
+
+Invoke via `node node_modules/putitoutthere/dist/cli.js ...` if the `.bin` shim misbehaves.
