@@ -14,6 +14,7 @@ export default defineConfig({
       { text: 'Getting Started', link: '/getting-started' },
       { text: 'Guide', link: '/guide/tables' },
       { text: 'Reference', link: '/api/' },
+      { text: 'Migrations', link: '/migrations' },
       { text: 'GitHub', link: 'https://github.com/thekevinscott/dirsql' }
     ],
 
@@ -39,7 +40,8 @@ export default defineConfig({
       {
         text: 'Reference',
         items: [
-          { text: 'API Reference', link: '/api/' }
+          { text: 'API Reference', link: '/api/' },
+          { text: 'Migrations', link: '/migrations' }
         ]
       },
     ],

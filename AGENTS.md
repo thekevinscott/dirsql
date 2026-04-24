@@ -99,6 +99,53 @@ For docs/lint/typo-only PRs, include the section with a single line: `N/A - docs
 
 When adding a feature, the PR must include docs AND tests. When docs change, tests update to match. Agents must run e2e tests locally before pushing substantial changes.
 
+### Changelog and Migrations
+
+**Every PR that touches public-facing SDK code must update `CHANGELOG.md`.** This is enforced in CI by `.github/workflows/changelog-check.yml`; an unmet gate blocks merge.
+
+The scope is intentionally broad -- any change under SDK source (Rust core, Python/TS packages, binding crates, or top-level `Cargo.toml` / `Cargo.lock`) requires a changelog entry, excluding test-only files. We err toward requiring entries because the project does not yet strictly follow semver, so the changelog must carry the signal that semver would otherwise provide.
+
+**Escape hatch.** If a PR genuinely has no observable change -- a pure refactor, an internal rename, a type-signature tidy with the same runtime -- bypass the gate by adding a trailer to any commit in the PR:
+
+```
+skip-changelog: <reason>
+```
+
+The reason is logged to CI and stays in git history, so the decision is auditable. Use this sparingly; when in doubt, write the changelog entry.
+
+Every entry goes under `## [Unreleased]`, categorized per [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`.
+
+**`MIGRATIONS.md` is additionally required when a PR:**
+
+- Breaks a public API (signature, name, return type, config key, CLI flag, action input).
+- Removes a previously deprecated symbol.
+- Changes runtime behavior without changing the API (exit codes, event payloads, on-disk layouts, default values, tag formats).
+
+Purely additive changes and behavior-preserving bug fixes do NOT require a migration entry.
+
+Migration entries live under `## [Unreleased]` in `MIGRATIONS.md` and must follow the template at the bottom of that file. Every entry has five required subsections:
+
+1. **Summary** -- one paragraph: what broke, which SDKs/call sites, and why.
+2. **Required changes** -- table of before/after snippets for every affected surface (config, CLI, action inputs, function signatures, return types).
+3. **Deprecations removed** -- previously warned symbols that are now hard errors.
+4. **Behavior changes without code changes** -- same API, different runtime behavior.
+5. **Verification** -- a concrete dry-run command plus expected output that a consumer can run to confirm the upgrade.
+
+If a subsection does not apply, keep the heading and write `_None._`. Do not omit subsections.
+
+`MIGRATIONS.md` is the source of truth and is surfaced on the docs site at `/migrations` via a VitePress include (`docs/migrations.md`). Do not edit the rendered page; edit the root file and the docs site picks up the change on the next build.
+
+**PR body requirement:** PRs that touch SDK code must contain the following block (checkboxes filled in):
+
+```markdown
+## Changelog / Migrations
+
+- [ ] `CHANGELOG.md` updated under `## [Unreleased]` (or: `skip-changelog` trailer on a commit with reason)
+- [ ] `MIGRATIONS.md` updated (or: not required -- additive/bugfix only)
+```
+
+Orchestrators must block merges of SDK-touching PRs that miss either file when required.
+
 ### Cross-SDK Parity (PARITY.md)
 
 `PARITY.md` is a **living document** that tracks API-surface parity across the Python, Rust, and TypeScript SDKs. It must stay current.

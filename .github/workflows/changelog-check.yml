@@ -1,0 +1,109 @@
+name: Changelog Check
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Require CHANGELOG update for SDK code changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          mapfile -t changed < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+
+          # Decide whether this PR touches code that requires a CHANGELOG entry.
+          # Scope matches AGENTS.md "substantial" definition: any SDK source,
+          # excluding test files, docs, lint/format, and CI config. We err on
+          # the side of requiring an entry because the project does not yet
+          # strictly follow semver, so we cannot rely on semver intent to
+          # signal what is breaking.
+          code_changed=false
+          for f in "${changed[@]}"; do
+            case "$f" in
+              # Rust core source (exclude tests/benches directories)
+              packages/rust/src/*) code_changed=true ;;
+              # Python bindings (Rust) source
+              packages/python/src/*) code_changed=true ;;
+              # Python package source, excluding *_test.py
+              packages/python/python/*_test.py) ;;
+              packages/python/python/*) code_changed=true ;;
+              # TypeScript bindings (Rust/napi) source
+              packages/ts/src/*) code_changed=true ;;
+              # TypeScript package source, excluding *.test.ts / *.spec.ts
+              packages/ts/ts/*.test.ts|packages/ts/ts/*.spec.ts) ;;
+              packages/ts/ts/*) code_changed=true ;;
+              # Top-level Cargo manifests affect SDK builds
+              Cargo.toml|Cargo.lock) code_changed=true ;;
+            esac
+          done
+
+          if ! $code_changed; then
+            echo "No SDK code changes detected. Skipping changelog check."
+            exit 0
+          fi
+
+          # Escape hatch: any commit in the PR range carrying a
+          # `skip-changelog:` trailer bypasses the gate. The trailer value
+          # should state the reason so the decision stays auditable in git
+          # history. Example:
+          #   skip-changelog: internal refactor, no observable behavior change
+          skip_trailers=$(
+            git log --format='%(trailers:key=skip-changelog,valueonly)' \
+              "$BASE_SHA..$HEAD_SHA" \
+            | grep -v '^$' \
+            || true
+          )
+          if [ -n "$skip_trailers" ]; then
+            echo "skip-changelog trailer present. Bypassing CHANGELOG check."
+            echo "Reason(s):"
+            printf '%s\n' "$skip_trailers" | sed 's/^/  - /'
+            exit 0
+          fi
+
+          if ! printf '%s\n' "${changed[@]}" | grep -qx 'CHANGELOG.md'; then
+            cat <<'EOF' >&2
+          ::error file=CHANGELOG.md::SDK code changed but CHANGELOG.md was not updated.
+
+          Every PR that modifies public-facing SDK code must add an entry under
+          '## [Unreleased]' in CHANGELOG.md. If the change is also breaking,
+          behavior-altering, or removes a deprecated symbol, add a matching
+          migration entry to MIGRATIONS.md (see its template).
+
+          Escape hatch: if this PR genuinely has no observable change (pure
+          refactor, internal rename, etc.), add a trailer to any commit:
+
+              skip-changelog: <reason>
+
+          See AGENTS.md, section "Changelog and Migrations", for the full rule.
+          EOF
+            exit 1
+          fi
+
+          # Require net-positive additions to CHANGELOG.md so a no-op touch
+          # (e.g. whitespace) cannot satisfy the gate.
+          added=$(git diff "$BASE_SHA" "$HEAD_SHA" -- CHANGELOG.md \
+            | grep -E '^\+[^+]' \
+            | grep -vE '^\+\s*$' \
+            | wc -l)
+          if [ "$added" -lt 1 ]; then
+            echo "::error file=CHANGELOG.md::CHANGELOG.md was touched but has no added content." >&2
+            exit 1
+          fi
+
+          echo "CHANGELOG.md updated with $added added line(s). OK."
