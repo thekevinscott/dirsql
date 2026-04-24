@@ -7,7 +7,7 @@ This file is the source of truth. The docs site
 ([Migrations](https://thekevinscott.github.io/dirsql/migrations)) is generated
 from it via a VitePress include; do not edit the rendered page.
 
-See also: [`CHANGELOG.md`](./CHANGELOG.md) for the full release log.
+See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHANGELOG.md) for the full release log. (The relative path is not used because this file is also included into the docs site via a VitePress include, where relative paths would break.)
 
 ## [Unreleased]
 
