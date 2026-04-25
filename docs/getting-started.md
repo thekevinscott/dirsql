@@ -1,4 +1,10 @@
+---
+canonical: https://thekevinscott.github.io/dirsql/getting-started
+---
+
 # Getting Started
+
+> Online: <https://thekevinscott.github.io/dirsql/getting-started>
 
 ## Installation
 

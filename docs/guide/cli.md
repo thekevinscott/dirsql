@@ -1,4 +1,10 @@
+---
+canonical: https://thekevinscott.github.io/dirsql/guide/cli
+---
+
 # Command-Line Interface
+
+> Online: <https://thekevinscott.github.io/dirsql/guide/cli>
 
 `dirsql` starts an HTTP server that exposes identical SDK functionality.
 

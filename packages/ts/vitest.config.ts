@@ -17,6 +17,15 @@ export default defineConfig({
     // separate V8 context where JS functions have incompatible types
     // for napi_typeof checks.
     pool: "forks",
+    // The `docs/` symlink at the package root points to the workspace docs,
+    // which contains Playwright e2e specs. Without this exclude, vitest's
+    // default test discovery picks them up and tries to load `@playwright/test`.
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/.{git,cache}/**",
+      "docs/**",
+    ],
     coverage: {
       provider: "v8",
       include: ["ts/**/*.ts", "tools/**/*.ts"],

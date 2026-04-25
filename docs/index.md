@@ -1,4 +1,5 @@
 ---
+canonical: https://thekevinscott.github.io/dirsql/
 layout: home
 hero:
   name: dirsql

@@ -46,4 +46,5 @@ module-name = "dirsql._dirsql"
 # control.
 include = [
     { path = "python/dirsql/_binary/*", format = "wheel" },
+    { path = "docs/**/*", format = "sdist" },
 ]

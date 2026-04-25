@@ -5,6 +5,19 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+# `docs/` is a symlink to the workspace `docs/` so the markdown ships with the
+# crate; everything below is the VitePress build tooling we don't want to ship.
+exclude = [
+    "docs/.vitepress",
+    "docs/.claude",
+    "docs/tests",
+    "docs/AGENTS.md",
+    "docs/package.json",
+    "docs/pnpm-lock.yaml",
+    "docs/pnpm-workspace.yaml",
+    "docs/playwright.config.ts",
+    "docs/vitest.config.ts",
+]
 
 [features]
 default = []

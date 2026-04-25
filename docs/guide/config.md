@@ -1,4 +1,10 @@
+---
+canonical: https://thekevinscott.github.io/dirsql/guide/config
+---
+
 # Configuration File
+
+> Online: <https://thekevinscott.github.io/dirsql/guide/config>
 
 `dirsql` can be configured with a `.dirsql.toml` file, allowing you to define tables declaratively without writing code.
 
