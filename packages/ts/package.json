@@ -16,12 +16,7 @@
   "bin": {
     "dirsql": "dist/bin/dirsql.js"
   },
-  "files": [
-    "dist/",
-    "docs/",
-    "README.md",
-    "LICENSE"
-  ],
+  "files": ["dist/", "docs/", "README.md", "LICENSE"],
   "napi": {
     "binaryName": "dirsql",
     "triples": {}
