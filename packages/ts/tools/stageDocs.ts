@@ -1,10 +1,10 @@
-// Replaces the `docs` symlink with a real copy of the workspace docs (markdown
-// only) before `npm pack`, so the published tarball contains the docs files
-// and not just a dangling symlink. After packing, restores the symlink.
+// Replaces the `docs` symlink in this package with a real copy of the
+// workspace docs (markdown only) before `npm pack`, so the published tarball
+// contains the docs files and not just a dangling symlink. After packing,
+// restores the symlink.
 //
-// Invoked by `npm` lifecycle scripts: `prepack` -> `pre`, `postpack` -> `post`.
+// Invoked by npm lifecycle scripts: `prepack` -> `pre`, `postpack` -> `post`.
 
-import { execSync } from 'node:child_process';
 import {
   cpSync,
   existsSync,
@@ -12,60 +12,81 @@ import {
   readdirSync,
   rmSync,
   symlinkSync,
-} from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const phase = process.argv[2];
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const PACKAGE_DIR = resolve(__dirname, '..');
-const DOCS_LINK = join(PACKAGE_DIR, 'docs');
-const WORKSPACE_DOCS = resolve(PACKAGE_DIR, '..', '..', 'docs');
+// Markdown files at the docs root that should ship with the package.
+export const KEEP_FILES = new Set([
+  "index.md",
+  "getting-started.md",
+  "migrations.md",
+]);
 
-// Patterns to keep when staging the docs into the published package. Anything
-// else under docs/ (VitePress build tooling, agent meta, tests) stays out.
-const KEEP = new Set(['index.md', 'getting-started.md', 'migrations.md']);
-const KEEP_DIRS = new Set(['guide', 'api']);
+// Subdirectories of docs whose contents (recursively) should ship.
+export const KEEP_DIRS = new Set(["guide", "api"]);
 
-function stageDocs(): void {
-  if (existsSync(DOCS_LINK) && lstatSync(DOCS_LINK).isSymbolicLink()) {
-    rmSync(DOCS_LINK);
-  } else if (existsSync(DOCS_LINK)) {
-    rmSync(DOCS_LINK, { recursive: true, force: true });
+export function stageDocs(workspaceDocs: string, packageDocs: string): void {
+  if (existsSync(packageDocs) || lstatSafe(packageDocs)) {
+    rmSync(packageDocs, { recursive: true, force: true });
   }
 
-  for (const entry of readdirSync(WORKSPACE_DOCS, { withFileTypes: true })) {
+  for (const entry of readdirSync(workspaceDocs, { withFileTypes: true })) {
     if (entry.isDirectory() && KEEP_DIRS.has(entry.name)) {
       cpSync(
-        join(WORKSPACE_DOCS, entry.name),
-        join(DOCS_LINK, entry.name),
+        join(workspaceDocs, entry.name),
+        join(packageDocs, entry.name),
         { recursive: true },
       );
-    } else if (entry.isFile() && KEEP.has(entry.name)) {
-      cpSync(join(WORKSPACE_DOCS, entry.name), join(DOCS_LINK, entry.name));
+    } else if (entry.isFile() && KEEP_FILES.has(entry.name)) {
+      cpSync(join(workspaceDocs, entry.name), join(packageDocs, entry.name));
     }
   }
 }
 
-function restoreSymlink(): void {
-  if (existsSync(DOCS_LINK)) {
-    rmSync(DOCS_LINK, { recursive: true, force: true });
+export function restoreSymlink(packageDocs: string, target: string): void {
+  if (existsSync(packageDocs) || lstatSafe(packageDocs)) {
+    rmSync(packageDocs, { recursive: true, force: true });
   }
-  symlinkSync('../../docs', DOCS_LINK);
+  symlinkSync(target, packageDocs);
 }
 
-if (phase === 'pre') {
-  stageDocs();
-} else if (phase === 'post') {
-  restoreSymlink();
-} else {
-  console.error(`stageDocs: unknown phase '${phase}' (expected 'pre' or 'post')`);
-  process.exit(1);
+// `existsSync` returns false for broken symlinks; `lstatSync` throws. This
+// helper returns the lstat result (truthy) for any path that has an entry,
+// including broken symlinks, and `null` otherwise.
+function lstatSafe(path: string): ReturnType<typeof lstatSync> | null {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
 }
 
-// Light log so CI shows what happened.
-const entries = existsSync(DOCS_LINK)
-  ? execSync(`find ${DOCS_LINK} -maxdepth 2 -type f`, { encoding: 'utf8' })
-  : '';
-console.log(`stageDocs(${phase}) -> docs/ now contains:\n${entries}`);
+// CLI entry point — executed via the npm `prepack` / `postpack` hooks.
+// `import.meta.url` is undefined when this module is imported by tests, so the
+// CLI block is skipped during test runs.
+const isCli =
+  typeof import.meta.url === "string" &&
+  process.argv[1] === fileURLToPath(import.meta.url);
+
+if (isCli) {
+  const phase = process.argv[2];
+  const here = dirname(fileURLToPath(import.meta.url));
+  const packageDir = resolve(here, "..");
+  const packageDocs = join(packageDir, "docs");
+  const workspaceDocs = resolve(packageDir, "..", "..", "docs");
+  const symlinkTarget = "../../docs";
+
+  if (phase === "pre") {
+    stageDocs(workspaceDocs, packageDocs);
+    console.log(`stageDocs(pre) -> staged workspace docs into ${packageDocs}`);
+  } else if (phase === "post") {
+    restoreSymlink(packageDocs, symlinkTarget);
+    console.log(`stageDocs(post) -> restored symlink ${packageDocs} -> ${symlinkTarget}`);
+  } else {
+    console.error(
+      `stageDocs: unknown phase '${phase}' (expected 'pre' or 'post')`,
+    );
+    process.exit(1);
+  }
+}
