@@ -1,4 +1,10 @@
+---
+canonical: https://thekevinscott.github.io/dirsql/guide/querying
+---
+
 # Querying
+
+> Online: <https://thekevinscott.github.io/dirsql/guide/querying>
 
 Once a `DirSQL` instance is created, the initial directory scan is complete and you can run SQL queries against the indexed data.
 

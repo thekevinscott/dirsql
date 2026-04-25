@@ -1,4 +1,10 @@
+---
+canonical: https://thekevinscott.github.io/dirsql/guide/watching
+---
+
 # File Watching
+
+> Online: <https://thekevinscott.github.io/dirsql/guide/watching>
 
 `dirsql` can monitor the filesystem for changes and emit events when rows are inserted, updated, or deleted. This is useful for building reactive applications that respond to file changes in real time.
 

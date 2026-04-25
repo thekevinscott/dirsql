@@ -1,4 +1,10 @@
+---
+canonical: https://thekevinscott.github.io/dirsql/guide/crdt
+---
+
 # Collaboration with CRDTs
+
+> Online: <https://thekevinscott.github.io/dirsql/guide/crdt>
 
 `dirsql` treats the filesystem as the source of truth. That works well when a single process (or a single human) is writing, but breaks down for multi-writer collaboration: two peers editing the same file concurrently produce a merge conflict, not a merged result.
 

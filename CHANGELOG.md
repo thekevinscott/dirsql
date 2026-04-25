@@ -42,6 +42,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     from the opt-in CLI install and calls out the `required-features`
     silent-skip footgun.
   - `CHANGELOG.md` (this file).
+  - Three-tier docs structure: root `README.md` mirrors the layout of
+    `docs/` (one `##` per page) so agents reading the source can
+    navigate without leaving the repo, every page in `docs/` has a
+    `canonical` frontmatter + visible link back to its published URL,
+    and the `docs/` folder now ships inside each published SDK
+    package (`packages/<lang>/docs` symlinks the workspace `docs/`;
+    cargo, maturin, and the npm `prepack` staging script include the
+    markdown content in published artifacts).
 - Tests:
   - 11 in-process HTTP integration tests
     (`packages/rust/tests/cli_integration.rs`) covering every

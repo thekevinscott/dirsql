@@ -1,4 +1,10 @@
+---
+canonical: https://thekevinscott.github.io/dirsql/guide/tables
+---
+
 # Defining Tables
+
+> Online: <https://thekevinscott.github.io/dirsql/guide/tables>
 
 Each table in `dirsql` maps a set of files to rows in an in-memory SQLite table. A table definition has three parts: DDL, a glob pattern, and an extract function.
 

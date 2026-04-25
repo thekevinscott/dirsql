@@ -16,7 +16,12 @@
   "bin": {
     "dirsql": "dist/bin/dirsql.js"
   },
-  "files": ["dist/", "README.md", "LICENSE"],
+  "files": [
+    "dist/",
+    "docs/",
+    "README.md",
+    "LICENSE"
+  ],
   "napi": {
     "binaryName": "dirsql",
     "triples": {}
@@ -29,6 +34,8 @@
     "build": "wireit",
     "build:debug": "wireit",
     "build:platforms": "tsx tools/buildPlatforms.ts",
+    "prepack": "tsx tools/stageDocs.ts pre",
+    "postpack": "tsx tools/stageDocs.ts post",
     "prepublishOnly": "napi prepublish -t npm",
     "test": "wireit",
     "test:unit": "wireit",
