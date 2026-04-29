@@ -11,7 +11,55 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
-_No migrations required yet for the next release._
+### Release pipeline migrated to `putitoutthere`
+
+#### Summary
+
+The release process is now driven by [putitoutthere](https://github.com/thekevinscott/putitoutthere). No SDK call sites change; the migration is observable in tag layout, npm package layout, and CI configuration. Consumers installing via `pip install dirsql` / `cargo add dirsql` / `npm install dirsql` see no behavioral difference at install time. Operators reading release tags or pinning npm sub-packages by name need to update their references.
+
+#### Required changes
+
+| Surface | Before | After |
+|---|---|---|
+| Git tag for a release | one shared tag `v{version}` | three per-package tags `dirsql-rust-v{version}`, `dirsql-py-v{version}`, `dirsql-npm-v{version}` |
+| npm CLI sub-packages | `@dirsql/cli-<short-slug>` (e.g. `@dirsql/cli-linux-x64-gnu`) | `@dirsql/cli-{triple}` (e.g. `@dirsql/cli-linux-x64-gnu`) — same scheme, retained via `name` template |
+| npm napi sub-packages | `@dirsql/lib-<short-slug>` | `@dirsql/lib-{triple}` — same scheme, retained via `name` template |
+| Release trigger | scheduled cron + immediate-on-push (toggle via `RELEASE_STRATEGY` repo var) | every push to `main` whose changes match a package's `globs` |
+| Skip a release | `[no-release]` in commit message | `release: skip` trailer in commit body |
+| Bump type | `workflow_dispatch` input (`patch` / `minor`) | `release: <bump>` trailer in commit body (default `patch`) |
+| Publish auth | bootstrap `NPM_TOKEN` + `crates-io-auth-action` + PyPI TP | OIDC trusted publishers on all three registries; no long-lived tokens reachable from the workflow |
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- **Per-SDK selective publishing.** The `workflow_dispatch` `publish_python` / `publish_rust` / `publish_js` toggles are gone; package selection now flows through `release: <bump> [<pkg-name>, ...]` trailers (per-package names: `dirsql-rust`, `dirsql-py`, `dirsql-npm`).
+- **Auto-rollback on partial publish failure** is no longer performed. The previous pipeline deleted the tag if both PyPI and crates.io publishes failed; under putitoutthere, a partial failure leaves the published artifacts in place and re-runs are idempotent (each handler's first move is `isPublished`, which short-circuits cleanly on already-published versions).
+- **GitHub Release notes** are still auto-generated (`gh release create --generate-notes`) but the Release is now created by the reusable workflow, not the consumer's `publish.yml`.
+- **Dry-run mode** is removed. The plan job is side-effect-free; inspect the matrix output on a feature branch to preview a release.
+
+#### Verification
+
+```
+# 1. The new caller workflow lints clean.
+yamllint .github/workflows/release.yml
+
+# 2. The toml parses and the plan resolves.
+#    (Locally — putitoutthere's `plan` is pure over (config + git state).)
+npx -y putitoutthere@0.2 plan
+
+# 3. Trusted publishers on all three registries point at this filename.
+#    Expected entry on each:
+#      Repository: thekevinscott/dirsql
+#      Workflow:   release.yml
+#      Environment: release
+#    PyPI:    https://pypi.org/manage/project/dirsql/settings/publishing/
+#    crates:  https://crates.io/crates/dirsql/settings
+#    npm:     https://www.npmjs.com/package/dirsql/access
+#             — plus one per per-platform package (see PR body).
+```
 
 <!--
 When a PR introduces a breaking change, a deprecation removal, or a

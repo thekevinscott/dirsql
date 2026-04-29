@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Release pipeline rewritten on top of [putitoutthere](https://github.com/thekevinscott/putitoutthere).**
+  The hand-rolled `patch-release.yml` + `publish.yml` + `publish-npm.yml`
+  + `release-scripts.yml` + cargo-dist `release.yml` stack is replaced
+  with a single `.github/workflows/release.yml` that calls the reusable
+  `thekevinscott/putitoutthere/.github/workflows/release.yml@v0` workflow.
+  Configuration moves to `putitoutthere.toml` at the repo root. Auth is
+  OIDC trusted publishers on all three registries — no long-lived
+  registry tokens. Per-package tags replace the single shared `v{version}`
+  tag (each of `dirsql-rust`, `dirsql-py`, `dirsql-npm` now tags as
+  `<name>-v<version>`); historical `v0.2.x` tags remain untouched. See
+  [MIGRATIONS.md](./MIGRATIONS.md) for the consumer-visible details.
+
+### Removed
+
+- `scripts/release/` (custom Python orchestration: `compute_version.py`,
+  `check_published.py`, `resolve_publish_targets.py`, plus their tests
+  and `pyproject.toml`). Functionally replaced by putitoutthere's
+  built-in cascade detection, version computation, and `isPublished`
+  pre-check.
+- `dist-workspace.toml` and the orphaned `[profile.dist]` block in the
+  workspace `Cargo.toml`. cargo-dist no longer cuts the release.
+- `.github/workflows/patch-release.yml`, `.github/workflows/publish.yml`,
+  `.github/workflows/publish-npm.yml`, `.github/workflows/release-scripts.yml`.
+
 ### Added
 
 - `dirsql` CLI binary (Rust, `--features cli`). Running the binary

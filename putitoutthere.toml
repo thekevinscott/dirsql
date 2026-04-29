@@ -1,0 +1,93 @@
+# putitoutthere release configuration.
+#
+# Three published artifacts, all named `dirsql` on their respective
+# registries (crates.io, PyPI, npm). They share a workspace version and
+# release together, but each gets its own tag (default `{name}-v{version}`)
+# because putitoutthere tags are per-package.
+#
+# Cascade: a change under `packages/rust/**` cascades into the Python and
+# npm packages via `depends_on`, so a single Rust edit republishes all
+# three in topological order.
+
+[putitoutthere]
+version = 1
+
+# crates.io: the consolidated `dirsql` library + CLI binary. Library
+# consumers (`cargo add dirsql`) get the SDK; `cargo install dirsql
+# --features cli` builds the binary.
+[[package]]
+name  = "dirsql-rust"
+crate = "dirsql"
+kind  = "crates"
+path  = "packages/rust"
+globs = [
+  "packages/rust/**",
+  "Cargo.toml",
+  "Cargo.lock",
+]
+first_version = "0.1.0"
+
+# PyPI: maturin-built wheels per target with the Rust CLI binary staged
+# into `python/dirsql/_binary/` so `pip install dirsql` ships a working
+# CLI on PATH (the `ruff` / `uv` pattern). The launcher entry point in
+# `pyproject.toml` (`dirsql._cli.main:main`) reads the bundled binary at
+# runtime.
+[[package]]
+name  = "dirsql-py"
+pypi  = "dirsql"
+kind  = "pypi"
+build = "maturin"
+path  = "packages/python"
+globs = [
+  "packages/python/**",
+  "packages/rust/**",
+  "Cargo.toml",
+  "Cargo.lock",
+]
+depends_on    = ["dirsql-rust"]
+first_version = "0.1.0"
+targets = [
+  "x86_64-unknown-linux-gnu",
+  # aarch64 cross-compile from x86_64 ubuntu-latest fails at link time
+  # (hit during v0.2.0). The free `ubuntu-24.04-arm` runner sidesteps
+  # the cross toolchain entirely.
+  { triple = "aarch64-unknown-linux-gnu", runner = "ubuntu-24.04-arm" },
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+]
+
+[package.bundle_cli]
+bin        = "dirsql"
+stage_to   = "python/dirsql/_binary"
+crate_path = "packages/rust"
+
+# npm: the dual-family pattern. `@dirsql/lib-{triple}` ships the napi-rs
+# `.node` addon; `@dirsql/cli-{triple}` ships the CLI binary. The
+# top-level `dirsql` package's `optionalDependencies` pin one of each
+# per platform; npm installs exactly the right pair at install time.
+# This is the `@swc/core` / dirsql distribution shape.
+[[package]]
+name  = "dirsql-npm"
+npm   = "dirsql"
+kind  = "npm"
+path  = "packages/ts"
+globs = [
+  "packages/ts/**",
+  "packages/rust/**",
+  "Cargo.toml",
+  "Cargo.lock",
+]
+depends_on    = ["dirsql-rust"]
+first_version = "0.1.0"
+build = [
+  { mode = "napi",        name = "@dirsql/lib-{triple}" },
+  { mode = "bundled-cli", name = "@dirsql/cli-{triple}" },
+]
+targets = [
+  "linux-x64-gnu",
+  { triple = "linux-arm64-gnu", runner = "ubuntu-24.04-arm" },
+  "darwin-x64",
+  "darwin-arm64",
+  "win32-x64-msvc",
+]
