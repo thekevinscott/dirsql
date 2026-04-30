@@ -60,7 +60,10 @@ targets = [
   # (hit during v0.2.0). The free `ubuntu-24.04-arm` runner sidesteps
   # the cross toolchain entirely.
   { triple = "aarch64-unknown-linux-gnu", runner = "ubuntu-24.04-arm" },
-  "x86_64-apple-darwin",
+  # macos-latest is arm64 since 2024; pin the Intel target to macos-13
+  # so the runner host matches the build target (stagePlatform.ts /
+  # napi-rs both build for the runner's host triple).
+  { triple = "x86_64-apple-darwin", runner = "macos-13" },
   "aarch64-apple-darwin",
   "x86_64-pc-windows-msvc",
 ]
@@ -90,7 +93,9 @@ build = [
 targets = [
   "linux-x64-gnu",
   { triple = "linux-arm64-gnu", runner = "ubuntu-24.04-arm" },
-  "darwin-x64",
+  # macos-latest is arm64; pin the Intel target to macos-13 so the
+  # runner host matches the build target.
+  { triple = "darwin-x64", runner = "macos-13" },
   "darwin-arm64",
   "win32-x64-msvc",
 ]
