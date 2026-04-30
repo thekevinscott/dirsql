@@ -102,7 +102,21 @@ function stageOne(args: StageOneArgs): StageResult["staged"][number] {
   const exe = target.exe === true;
   const binName = exe ? "dirsql.exe" : "dirsql";
 
-  // 1. napi binary. For the host target, napi:build (wireit dep) has
+  // 1. Ensure the cargo target is installed (idempotent). Must run
+  //    before any cross-target build — both `napi build --target` and
+  //    `cargo build --target` shell out to rustc, which fails with
+  //    `can't find crate for core` when the target's stdlib isn't
+  //    on disk.
+  const rustupAdd = spawn("rustup", ["target", "add", target.triple], {
+    stdio: "inherit",
+  });
+  if (rustupAdd.status !== 0) {
+    throw new Error(
+      `rustup target add ${target.triple} failed (exit ${rustupAdd.status})`,
+    );
+  }
+
+  // 2. napi binary. For the host target, napi:build (wireit dep) has
   //    already dropped `dirsql.<triple>.node` at the package root.
   //    Cross-targets (darwin-x64 from arm64, etc.) need their own
   //    `napi build --release --target <triple>` invocation.
@@ -140,16 +154,6 @@ function stageOne(args: StageOneArgs): StageResult["staged"][number] {
   rmSync(napiOutDir, { recursive: true, force: true });
   mkdirSync(napiOutDir, { recursive: true });
   copyFileSync(napiSrc, join(napiOutDir, `dirsql.${triple}.node`));
-
-  // 2. Ensure the cargo target is installed (idempotent).
-  const rustupAdd = spawn("rustup", ["target", "add", target.triple], {
-    stdio: "inherit",
-  });
-  if (rustupAdd.status !== 0) {
-    throw new Error(
-      `rustup target add ${target.triple} failed (exit ${rustupAdd.status})`,
-    );
-  }
 
   // 3. Cargo build the standalone CLI binary. The bin is gated behind
   //    `--features cli` (packages/rust/Cargo.toml `[[bin]]
