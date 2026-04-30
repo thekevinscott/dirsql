@@ -19,6 +19,10 @@ name: Bootstrap npm platforms
 
 on:
   workflow_dispatch:
+  # TEMP — REVERT BEFORE MERGING. Auto-runs on PR push so the bootstrap
+  # stubs get seeded without needing manual dispatch.
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
