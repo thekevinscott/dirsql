@@ -65,6 +65,7 @@ function lstatSafe(path: string): ReturnType<typeof lstatSync> | null {
 // CLI entry point — executed via the npm `prepack` / `postpack` hooks.
 // `import.meta.url` is undefined when this module is imported by tests, so the
 // CLI block is skipped during test runs.
+/* v8 ignore start -- script-invocation guard; tests import the helpers directly */
 const isCli =
   typeof import.meta.url === "string" &&
   process.argv[1] === fileURLToPath(import.meta.url);
@@ -90,3 +91,4 @@ if (isCli) {
     process.exit(1);
   }
 }
+/* v8 ignore stop */

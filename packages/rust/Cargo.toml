@@ -1,7 +1,10 @@
 [package]
 name = "dirsql"
 description = "Ephemeral SQL index over a local directory"
-version.workspace = true
+# Explicit literal (not `version.workspace = true`) so putitoutthere's
+# crates handler can update it via `replaceCargoVersion`. The workspace
+# version stays for the binding crates (publish = false).
+version = "0.2.7"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

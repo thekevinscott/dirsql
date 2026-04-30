@@ -1,0 +1,101 @@
+# putitoutthere release configuration.
+#
+# Three published artifacts, all named `dirsql` on their respective
+# registries (crates.io, PyPI, npm). They share a workspace version and
+# release together, but each gets its own tag (default `{name}-v{version}`)
+# because putitoutthere tags are per-package.
+#
+# Cascade: a change under `packages/rust/**` cascades into the Python and
+# npm packages via `depends_on`, so a single Rust edit republishes all
+# three in topological order.
+
+[putitoutthere]
+version = 1
+
+# crates.io: the consolidated `dirsql` library + CLI binary. Library
+# consumers (`cargo add dirsql`) get the SDK; `cargo install dirsql
+# --features cli` builds the binary.
+[[package]]
+name  = "dirsql-rust"
+crate = "dirsql"
+kind  = "crates"
+path  = "packages/rust"
+globs = [
+  "packages/rust/**",
+  "Cargo.toml",
+  "Cargo.lock",
+]
+first_version = "0.2.8"
+
+# PyPI: maturin-built wheels per target. The Rust CLI binary is NOT
+# bundled — putitoutthere v0.2.3's `[package.bundle_cli]` parses but is
+# unwired in the reusable workflow (no cross-compile step reads
+# `matrix.bundle_cli`). When that lands upstream, restore the block
+# below and re-add the `dirsql` console script to pyproject.toml.
+#
+#   [package.bundle_cli]
+#   bin        = "dirsql"
+#   stage_to   = "python/dirsql/_binary"
+#   crate_path = "packages/rust"
+#
+# Until then, `pip install dirsql` gives users the SDK only. CLI install
+# paths: `cargo install dirsql --features cli`, `npx dirsql`.
+[[package]]
+name  = "dirsql-py"
+pypi  = "dirsql"
+kind  = "pypi"
+build = "maturin"
+path  = "packages/python"
+globs = [
+  "packages/python/**",
+  "packages/rust/**",
+  "Cargo.toml",
+  "Cargo.lock",
+]
+depends_on    = ["dirsql-rust"]
+first_version = "0.2.8"
+targets = [
+  "x86_64-unknown-linux-gnu",
+  # aarch64 cross-compile from x86_64 ubuntu-latest fails at link time
+  # (hit during v0.2.0). The free `ubuntu-24.04-arm` runner sidesteps
+  # the cross toolchain entirely.
+  { triple = "aarch64-unknown-linux-gnu", runner = "ubuntu-24.04-arm" },
+  # Both apple-darwin targets build on macos-latest (arm64); the Intel
+  # target is cross-compiled from arm64. Free `macos-13` (x64) runners
+  # were deprecated in 2024.
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+]
+
+# npm: the dual-family pattern. `@dirsql/lib-{triple}` ships the napi-rs
+# `.node` addon; `@dirsql/cli-{triple}` ships the CLI binary. The
+# top-level `dirsql` package's `optionalDependencies` pin one of each
+# per platform; npm installs exactly the right pair at install time.
+# This is the `@swc/core` / dirsql distribution shape.
+[[package]]
+name  = "dirsql-npm"
+npm   = "dirsql"
+kind  = "npm"
+path  = "packages/ts"
+globs = [
+  "packages/ts/**",
+  "packages/rust/**",
+  "Cargo.toml",
+  "Cargo.lock",
+]
+depends_on    = ["dirsql-rust"]
+first_version = "0.2.8"
+build = [
+  { mode = "napi",        name = "@dirsql/lib-{triple}" },
+  { mode = "bundled-cli", name = "@dirsql/cli-{triple}" },
+]
+targets = [
+  "linux-x64-gnu",
+  { triple = "linux-arm64-gnu", runner = "ubuntu-24.04-arm" },
+  # Both darwin targets build on macos-latest (arm64); the Intel target
+  # is cross-compiled from arm64.
+  "darwin-x64",
+  "darwin-arm64",
+  "win32-x64-msvc",
+]
