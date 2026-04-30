@@ -1,15 +1,17 @@
-// Stage napi addon + bundled CLI binary for the host triple under
-// `build/{mode}-{triple}/`. Putitoutthere's reusable workflow runs each
-// (mode, triple) matrix row on a runner native to its target, so we only
-// ever need to produce host-target binaries — no cross-compile.
+// Stage napi addons + bundled CLI binaries for every target the host
+// runner can build. Putitoutthere's matrix runs `npm run build` on a
+// runner without passing `matrix.target`, so this script can't ask
+// which (mode, triple) the current row wants. We instead build for
+// every target in the same platform family as the host (darwin host →
+// both darwin-x64 and darwin-arm64; linux host → just the host triple,
+// since linux-x64 and linux-arm64 each have their own native runner;
+// windows host → the host triple) and let the workflow's per-row
+// upload step pick from `build/{mode}-{triple}/`.
 //
-// The reusable workflow does NOT pass `matrix.target` / `matrix.build`
-// to `npm run build`, so this script can't tell whether the current row
-// wants napi or bundled-cli. We produce both every run; the workflow's
-// per-row upload step (`actions/upload-artifact@v7` with
-// `path: build/{mode}-{triple}/`) picks only the matching subdir.
-// Building both is wasteful by 2× per target, but it's the simplest
-// correct contract until putitoutthere surfaces matrix vars.
+// The napi:build wireit task produces `dirsql.<host-triple>.node` at
+// the package root. For each additional in-family target we run
+// `napi build --release --target <triple>` ourselves, because napi-rs
+// hands us host-only by default.
 
 import { spawnSync } from "node:child_process";
 import {
@@ -37,6 +39,20 @@ export function findHostPlatform(
   return p;
 }
 
+/**
+ * Targets we should attempt to build from `host`. Always includes the
+ * host triple itself; on darwin we also include the other darwin arch
+ * because Apple's toolchain ships both. Linux + Windows hosts only
+ * build their own triple — within those families putitoutthere assigns
+ * separate native runners per target.
+ */
+export function buildSetFor(host: Platform): readonly Platform[] {
+  if (host.nodePlatform === "darwin") {
+    return PLATFORMS.filter((p) => p.nodePlatform === "darwin");
+  }
+  return [host];
+}
+
 export interface StagePlatformOptions {
   /** Package directory (defaults to `packages/ts`). */
   tsPkg?: string;
@@ -49,9 +65,7 @@ export interface StagePlatformOptions {
 }
 
 export interface StageResult {
-  triple: string;
-  napiOutDir: string;
-  cliOutDir: string;
+  staged: { triple: string; napiOutDir: string; cliOutDir: string }[];
 }
 
 export function stagePlatform(opts: StagePlatformOptions = {}): StageResult {
@@ -59,28 +73,67 @@ export function stagePlatform(opts: StagePlatformOptions = {}): StageResult {
   const tsPkg =
     opts.tsPkg ?? resolve(fileURLToPath(import.meta.url), "..", "..");
   const repo = opts.repo ?? resolve(tsPkg, "..", "..");
-  const platform = opts.platform ?? findHostPlatform();
+  const host = opts.platform ?? findHostPlatform();
   const spawn = opts.spawn ?? spawnSync;
   /* v8 ignore stop */
-  const triple = librarySlug(platform);
-  const exe = platform.exe === true;
+
+  const targets = buildSetFor(host);
+  const staged: StageResult["staged"] = [];
+
+  for (const target of targets) {
+    staged.push(stageOne({ tsPkg, repo, host, target, spawn }));
+  }
+
+  return { staged };
+}
+
+interface StageOneArgs {
+  tsPkg: string;
+  repo: string;
+  host: Platform;
+  target: Platform;
+  spawn: typeof spawnSync;
+}
+
+function stageOne(args: StageOneArgs): StageResult["staged"][number] {
+  const { tsPkg, repo, host, target, spawn } = args;
+  const triple = librarySlug(target);
+  const isHost = host.triple === target.triple;
+  const exe = target.exe === true;
   const binName = exe ? "dirsql.exe" : "dirsql";
 
-  // 1. Pick up napi-rs's output. The `napi:build` wireit task is a
-  //    dependency of `stage:platform`, so the .node file is already on
-  //    disk. napi-rs CLI v3 emits `dirsql.<slug>.node` for native
-  //    builds; older versions sometimes drop `dirsql.node` (unsuffixed).
-  //    Probe both.
-  const napiSuffixed = join(tsPkg, `dirsql.${triple}.node`);
-  const napiUnsuffixed = join(tsPkg, "dirsql.node");
+  // 1. napi binary. For the host target, napi:build (wireit dep) has
+  //    already dropped `dirsql.<triple>.node` at the package root.
+  //    Cross-targets (darwin-x64 from arm64, etc.) need their own
+  //    `napi build --release --target <triple>` invocation.
   let napiSrc: string;
-  if (existsSync(napiSuffixed)) napiSrc = napiSuffixed;
-  else if (existsSync(napiUnsuffixed)) napiSrc = napiUnsuffixed;
-  else {
-    const here = readdirSync(tsPkg).filter((f) => f.endsWith(".node"));
-    throw new Error(
-      `napi:build produced no .node file at ${napiSuffixed} or ${napiUnsuffixed} (saw: ${here.join(", ") || "none"}). The napi:build wireit task should run before stage:platform.`,
+  if (isHost) {
+    const suffixed = join(tsPkg, `dirsql.${triple}.node`);
+    const unsuffixed = join(tsPkg, "dirsql.node");
+    if (existsSync(suffixed)) napiSrc = suffixed;
+    else if (existsSync(unsuffixed)) napiSrc = unsuffixed;
+    else {
+      const here = readdirSync(tsPkg).filter((f) => f.endsWith(".node"));
+      throw new Error(
+        `napi:build produced no .node file at ${suffixed} or ${unsuffixed} (saw: ${here.join(", ") || "none"}).`,
+      );
+    }
+  } else {
+    const cross = spawn(
+      "npx",
+      ["napi", "build", "--release", "--target", target.triple],
+      { cwd: tsPkg, stdio: "inherit" },
     );
+    if (cross.status !== 0) {
+      throw new Error(
+        `napi cross-build for ${target.triple} failed (exit ${cross.status})`,
+      );
+    }
+    const out = join(tsPkg, `dirsql.${triple}.node`);
+    if (!existsSync(out)) {
+      throw new Error(`napi cross-build: missing ${out}`);
+    }
+    napiSrc = out;
   }
 
   const napiOutDir = join(tsPkg, "build", `napi-${triple}`);
@@ -88,19 +141,18 @@ export function stagePlatform(opts: StagePlatformOptions = {}): StageResult {
   mkdirSync(napiOutDir, { recursive: true });
   copyFileSync(napiSrc, join(napiOutDir, `dirsql.${triple}.node`));
 
-  // 2. Ensure the cargo target is installed. GHA's macos / windows
-  //    runners pre-install rustup with only the host triple; the
-  //    `--target <triple>` form below otherwise errors with `the target
-  //    may not be installed`. `rustup target add` is idempotent.
-  const rustupAdd = spawn("rustup", ["target", "add", platform.triple], {
+  // 2. Ensure the cargo target is installed (idempotent).
+  const rustupAdd = spawn("rustup", ["target", "add", target.triple], {
     stdio: "inherit",
   });
   if (rustupAdd.status !== 0) {
-    throw new Error(`rustup target add ${platform.triple} failed (exit ${rustupAdd.status})`);
+    throw new Error(
+      `rustup target add ${target.triple} failed (exit ${rustupAdd.status})`,
+    );
   }
 
   // 3. Cargo build the standalone CLI binary. The bin is gated behind
-  //    `--features cli` (see packages/rust/Cargo.toml `[[bin]]
+  //    `--features cli` (packages/rust/Cargo.toml `[[bin]]
   //    required-features`); without the flag cargo silently skips it.
   const cargo = spawn(
     "cargo",
@@ -114,7 +166,7 @@ export function stagePlatform(opts: StagePlatformOptions = {}): StageResult {
       "--manifest-path",
       join(repo, "packages", "rust", "Cargo.toml"),
       "--target",
-      platform.triple,
+      target.triple,
     ],
     { stdio: "inherit" },
   );
@@ -122,7 +174,7 @@ export function stagePlatform(opts: StagePlatformOptions = {}): StageResult {
     throw new Error(`cargo build failed (exit ${cargo.status})`);
   }
 
-  const cliSrc = join(repo, "target", platform.triple, "release", binName);
+  const cliSrc = join(repo, "target", target.triple, "release", binName);
   /* v8 ignore start -- defensive: cargo returned 0 but produced no binary */
   if (!existsSync(cliSrc)) {
     throw new Error(`cargo build: missing binary at ${cliSrc}`);
@@ -134,7 +186,9 @@ export function stagePlatform(opts: StagePlatformOptions = {}): StageResult {
   mkdirSync(cliOutDir, { recursive: true });
   copyFileSync(cliSrc, join(cliOutDir, binName));
 
-  process.stdout.write(`staged ${triple}: napi -> ${napiOutDir}, cli -> ${cliOutDir}\n`);
+  process.stdout.write(
+    `staged ${triple} (${isHost ? "host" : "cross"}): napi -> ${napiOutDir}, cli -> ${cliOutDir}\n`,
+  );
   return { triple, napiOutDir, cliOutDir };
 }
 
