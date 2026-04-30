@@ -42,73 +42,72 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Format: name|os|cpu|libc (libc empty when not applicable).
-          packages=(
-            "@dirsql/lib-linux-x64-gnu|linux|x64|glibc"
-            "@dirsql/lib-linux-arm64-gnu|linux|arm64|glibc"
-            "@dirsql/lib-darwin-x64|darwin|x64|"
-            "@dirsql/lib-darwin-arm64|darwin|arm64|"
-            "@dirsql/lib-win32-x64-msvc|win32|x64|"
-            "@dirsql/cli-linux-x64-gnu|linux|x64|glibc"
-            "@dirsql/cli-linux-arm64-gnu|linux|arm64|glibc"
-            "@dirsql/cli-darwin-x64|darwin|x64|"
-            "@dirsql/cli-darwin-arm64|darwin|arm64|"
-            "@dirsql/cli-win32-x64-msvc|win32|x64|"
-          )
-          for entry in "${packages[@]}"; do
-            IFS='|' read -r pkg os cpu libc <<< "$entry"
-            echo "::group::$pkg"
+          node --input-type=module <<'NODE'
+          import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { join } from "node:path";
+          import { spawnSync } from "node:child_process";
 
-            # Skip when bootstrap version is already on the registry
-            # (re-runs of this workflow are idempotent).
-            if npm view "$pkg@0.0.0-bootstrap" version >/dev/null 2>&1; then
-              echo "$pkg@0.0.0-bootstrap already on npm; skipping."
-              echo "::endgroup::"
-              continue
-            fi
+          // [name, npm os, npm cpu, npm libc | null]
+          const packages = [
+            ["@dirsql/lib-linux-x64-gnu",   "linux",  "x64",   "glibc"],
+            ["@dirsql/lib-linux-arm64-gnu", "linux",  "arm64", "glibc"],
+            ["@dirsql/lib-darwin-x64",      "darwin", "x64",   null],
+            ["@dirsql/lib-darwin-arm64",    "darwin", "arm64", null],
+            ["@dirsql/lib-win32-x64-msvc",  "win32",  "x64",   null],
+            ["@dirsql/cli-linux-x64-gnu",   "linux",  "x64",   "glibc"],
+            ["@dirsql/cli-linux-arm64-gnu", "linux",  "arm64", "glibc"],
+            ["@dirsql/cli-darwin-x64",      "darwin", "x64",   null],
+            ["@dirsql/cli-darwin-arm64",    "darwin", "arm64", null],
+            ["@dirsql/cli-win32-x64-msvc",  "win32",  "x64",   null],
+          ];
 
-            tmp=$(mktemp -d)
-            (
-              cd "$tmp"
+          const README = [
+            "# Bootstrap stub",
+            "",
+            "This is a placeholder version published only so the npm trusted-publisher",
+            "feature can be enabled on the package. Do not install.",
+            "",
+            "See [`dirsql`](https://www.npmjs.com/package/dirsql) for the real package.",
+            "",
+          ].join("\n");
 
-              # Build package.json with optional libc field.
-              if [ -n "$libc" ]; then
-                cat > package.json <<JSON
-          {
-            "name": "$pkg",
-            "version": "0.0.0-bootstrap",
-            "description": "Bootstrap stub for OIDC trusted-publisher setup. See https://www.npmjs.com/package/dirsql.",
-            "license": "MIT",
-            "repository": "https://github.com/thekevinscott/dirsql",
-            "os": ["$os"],
-            "cpu": ["$cpu"],
-            "libc": ["$libc"]
+          for (const [name, os, cpu, libc] of packages) {
+            console.log(`::group::${name}`);
+
+            // Idempotency: skip when the bootstrap version already exists.
+            const view = spawnSync("npm", ["view", `${name}@0.0.0-bootstrap`, "version"], {
+              stdio: ["ignore", "pipe", "pipe"],
+            });
+            if (view.status === 0) {
+              console.log(`${name}@0.0.0-bootstrap already on npm; skipping.`);
+              console.log("::endgroup::");
+              continue;
+            }
+
+            const tmp = mkdtempSync(join(tmpdir(), "bootstrap-"));
+            const pkg = {
+              name,
+              version: "0.0.0-bootstrap",
+              description: "Bootstrap stub for OIDC trusted-publisher setup. See https://www.npmjs.com/package/dirsql.",
+              license: "MIT",
+              repository: "https://github.com/thekevinscott/dirsql",
+              os: [os],
+              cpu: [cpu],
+              ...(libc ? { libc: [libc] } : {}),
+            };
+            writeFileSync(join(tmp, "package.json"), JSON.stringify(pkg, null, 2) + "\n");
+            writeFileSync(join(tmp, "README.md"), README);
+
+            const pub = spawnSync("npm", ["publish", "--access=public"], {
+              cwd: tmp,
+              stdio: "inherit",
+            });
+            rmSync(tmp, { recursive: true, force: true });
+            if (pub.status !== 0) {
+              console.error(`::endgroup::`);
+              process.exit(pub.status ?? 1);
+            }
+            console.log("::endgroup::");
           }
-          JSON
-              else
-                cat > package.json <<JSON
-          {
-            "name": "$pkg",
-            "version": "0.0.0-bootstrap",
-            "description": "Bootstrap stub for OIDC trusted-publisher setup. See https://www.npmjs.com/package/dirsql.",
-            "license": "MIT",
-            "repository": "https://github.com/thekevinscott/dirsql",
-            "os": ["$os"],
-            "cpu": ["$cpu"]
-          }
-          JSON
-              fi
-
-              cat > README.md <<'MD'
-          # Bootstrap stub
-
-          This is a placeholder version published only so the npm trusted-publisher feature can be enabled on the package. Do not install.
-
-          See [`dirsql`](https://www.npmjs.com/package/dirsql) for the real package.
-          MD
-
-              npm publish --access public
-            )
-            rm -rf "$tmp"
-            echo "::endgroup::"
-          done
+          NODE
