@@ -28,7 +28,7 @@
     "artifacts": "napi artifacts",
     "build": "wireit",
     "build:debug": "wireit",
-    "stage:platform": "tsx tools/stagePlatform.ts",
+    "stage:platform": "wireit",
     "prepack": "tsx tools/stageDocs.ts pre",
     "postpack": "tsx tools/stageDocs.ts post",
     "test": "wireit",

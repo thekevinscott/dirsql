@@ -31,8 +31,8 @@ __pycache__/
 # Rust CLI binary bundled into the wheel by CI (not in source control).
 packages/python/python/dirsql/_binary/
 
-# npm per-platform packages assembled from release archives
-target/npm-platforms/
+# putitoutthere per-(mode, triple) staging outputs
+packages/ts/build/
 
 # wireit cache (per-package)
 packages/*/.wireit/
