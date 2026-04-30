@@ -123,3 +123,46 @@ jobs:
       - name: Run coverage (unit + integration, no e2e)
         working-directory: packages/ts
         run: pnpm coverage
+
+  # Run `pnpm build` on each release-target host so stagePlatform.ts —
+  # which the release pipeline depends on — is exercised against real
+  # toolchains before merge. The unit/integration jobs above run only
+  # on ubuntu to keep iteration cheap; this job catches OS-specific
+  # cross-compile bugs (rust target ordering, napi-rs platform quirks,
+  # MSVC env on Windows) that the release workflow would otherwise hit
+  # post-merge.
+  cross-build:
+    name: Cross-platform build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        working-directory: packages/ts
+        run: pnpm install
+
+      - name: Build (napi:build + tsc + stage:platform)
+        working-directory: packages/ts
+        run: pnpm build
