@@ -74,6 +74,9 @@ function fakeSpawn(opts: {
       // "missing": don't write anything
       return { status: 0 } as ReturnType<typeof spawnFn>;
     }
+    if (cmd === "rustup") {
+      return { status: 0 } as ReturnType<typeof spawnFn>;
+    }
     if (cmd === "cargo") {
       const targetIdx = args.indexOf("--target");
       const target = targetIdx >= 0 ? args[targetIdx + 1] : "default";
@@ -142,15 +145,36 @@ describe("stagePlatform", () => {
     expect(() => stagePlatform({ tsPkg, repo, platform: linux, spawn })).toThrow(/napi build produced no .node file/);
   });
 
+  it("throws when napi build returns non-zero", () => {
+    const spawn = vi.fn((cmd: string) => {
+      if (cmd === "npx") return { status: 2 };
+      return { status: 0 };
+    }) as unknown as typeof spawnFn;
+    expect(() => stagePlatform({ tsPkg, repo, platform: linux, spawn })).toThrow(/napi build failed.*exit 2/);
+  });
+
   it("throws when cargo build returns non-zero", () => {
     const spawn = vi.fn((cmd: string) => {
       if (cmd === "npx") {
         writeFileSync(join(tsPkg, "dirsql.node"), "fake-node");
         return { status: 0 };
       }
+      if (cmd === "rustup") return { status: 0 };
       return { status: 101 };
     }) as unknown as typeof spawnFn;
     expect(() => stagePlatform({ tsPkg, repo, platform: linux, spawn })).toThrow(/cargo build failed.*exit 101/);
+  });
+
+  it("throws when rustup target add returns non-zero", () => {
+    const spawn = vi.fn((cmd: string) => {
+      if (cmd === "npx") {
+        writeFileSync(join(tsPkg, "dirsql.node"), "fake-node");
+        return { status: 0 };
+      }
+      if (cmd === "rustup") return { status: 1 };
+      return { status: 0 };
+    }) as unknown as typeof spawnFn;
+    expect(() => stagePlatform({ tsPkg, repo, platform: linux, spawn })).toThrow(/rustup target add.*failed/);
   });
 
   it("overwrites existing build output (idempotent re-run)", () => {

@@ -55,11 +55,13 @@ export interface StageResult {
 }
 
 export function stagePlatform(opts: StagePlatformOptions = {}): StageResult {
+  /* v8 ignore start -- trivial defaults; tests inject all four explicitly */
   const tsPkg =
     opts.tsPkg ?? resolve(fileURLToPath(import.meta.url), "..", "..");
   const repo = opts.repo ?? resolve(tsPkg, "..", "..");
   const platform = opts.platform ?? findHostPlatform();
   const spawn = opts.spawn ?? spawnSync;
+  /* v8 ignore stop */
   const triple = librarySlug(platform);
   const exe = platform.exe === true;
   const binName = exe ? "dirsql.exe" : "dirsql";
@@ -93,7 +95,18 @@ export function stagePlatform(opts: StagePlatformOptions = {}): StageResult {
   mkdirSync(napiOutDir, { recursive: true });
   copyFileSync(napiSrc, join(napiOutDir, `dirsql.${triple}.node`));
 
-  // 2. Cargo build the standalone CLI binary. The bin is gated behind
+  // 2. Ensure the cargo target is installed. GHA's macos / windows
+  //    runners pre-install rustup with only the host triple; the
+  //    `--target <triple>` form below otherwise errors with `the target
+  //    may not be installed`. `rustup target add` is idempotent.
+  const rustupAdd = spawn("rustup", ["target", "add", platform.triple], {
+    stdio: "inherit",
+  });
+  if (rustupAdd.status !== 0) {
+    throw new Error(`rustup target add ${platform.triple} failed (exit ${rustupAdd.status})`);
+  }
+
+  // 3. Cargo build the standalone CLI binary. The bin is gated behind
   //    `--features cli` (see packages/rust/Cargo.toml `[[bin]]
   //    required-features`); without the flag cargo silently skips it.
   const cargo = spawn(
@@ -117,9 +130,11 @@ export function stagePlatform(opts: StagePlatformOptions = {}): StageResult {
   }
 
   const cliSrc = join(repo, "target", platform.triple, "release", binName);
+  /* v8 ignore start -- defensive: cargo returned 0 but produced no binary */
   if (!existsSync(cliSrc)) {
     throw new Error(`cargo build: missing binary at ${cliSrc}`);
   }
+  /* v8 ignore stop */
 
   const cliOutDir = join(tsPkg, "build", `bundled-cli-${triple}`);
   rmSync(cliOutDir, { recursive: true, force: true });
