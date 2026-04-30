@@ -27,11 +27,19 @@ globs = [
 ]
 first_version = "0.1.0"
 
-# PyPI: maturin-built wheels per target with the Rust CLI binary staged
-# into `python/dirsql/_binary/` so `pip install dirsql` ships a working
-# CLI on PATH (the `ruff` / `uv` pattern). The launcher entry point in
-# `pyproject.toml` (`dirsql._cli.main:main`) reads the bundled binary at
-# runtime.
+# PyPI: maturin-built wheels per target. The Rust CLI binary is NOT
+# bundled — putitoutthere v0.2.3's `[package.bundle_cli]` parses but is
+# unwired in the reusable workflow (no cross-compile step reads
+# `matrix.bundle_cli`). When that lands upstream, restore the block
+# below and re-add the `dirsql` console script to pyproject.toml.
+#
+#   [package.bundle_cli]
+#   bin        = "dirsql"
+#   stage_to   = "python/dirsql/_binary"
+#   crate_path = "packages/rust"
+#
+# Until then, `pip install dirsql` gives users the SDK only. CLI install
+# paths: `cargo install dirsql --features cli`, `npx dirsql`.
 [[package]]
 name  = "dirsql-py"
 pypi  = "dirsql"
@@ -56,11 +64,6 @@ targets = [
   "aarch64-apple-darwin",
   "x86_64-pc-windows-msvc",
 ]
-
-[package.bundle_cli]
-bin        = "dirsql"
-stage_to   = "python/dirsql/_binary"
-crate_path = "packages/rust"
 
 # npm: the dual-family pattern. `@dirsql/lib-{triple}` ships the napi-rs
 # `.node` addon; `@dirsql/cli-{triple}` ships the CLI binary. The

@@ -28,10 +28,9 @@
     "artifacts": "napi artifacts",
     "build": "wireit",
     "build:debug": "wireit",
-    "build:platforms": "tsx tools/buildPlatforms.ts",
+    "stage:platform": "tsx tools/stagePlatform.ts",
     "prepack": "tsx tools/stageDocs.ts pre",
     "postpack": "tsx tools/stageDocs.ts post",
-    "prepublishOnly": "napi prepublish -t npm",
     "test": "wireit",
     "test:unit": "wireit",
     "test:integration": "wireit",
@@ -51,8 +50,21 @@
       "files": ["ts/**/*.ts", "tsconfig.json"],
       "output": ["dist/**"]
     },
+    "stage:platform": {
+      "command": "tsx tools/stagePlatform.ts",
+      "files": [
+        "tools/stagePlatform.ts",
+        "ts/platforms.ts",
+        "src/**/*.rs",
+        "build.rs",
+        "Cargo.toml",
+        "../rust/src/**/*.rs",
+        "../rust/Cargo.toml"
+      ],
+      "output": ["build/**"]
+    },
     "build": {
-      "dependencies": ["napi:build", "tsc"]
+      "dependencies": ["napi:build", "tsc", "stage:platform"]
     },
     "build:debug": {
       "command": "napi build && tsc",

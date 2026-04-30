@@ -1,0 +1,110 @@
+name: Bootstrap npm platforms
+
+# One-time bootstrap. Publishes a stub `0.0.0-bootstrap` of every
+# per-platform npm sub-package (`@dirsql/lib-*`, `@dirsql/cli-*`) using
+# a long-lived `NPM_TOKEN`, so that the npm trusted-publisher feature
+# can be enabled on each (TP requires the package to exist).
+#
+# After this workflow succeeds:
+#   1. For each package below, register a trusted publisher at
+#      https://www.npmjs.com/package/<name>/access pointing at
+#      `release.yml` + environment `release`.
+#   2. Delete the `NPM_TOKEN` repo secret.
+#   3. Delete this workflow file.
+#
+# Putitoutthere v0.2 explicitly does NOT pass long-lived tokens through
+# the reusable workflow, so this bootstrap step is a separate,
+# manually-dispatched workflow rather than a one-time switch in the
+# release path.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Publish 0.0.0-bootstrap stubs
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Format: name|os|cpu|libc (libc empty when not applicable).
+          packages=(
+            "@dirsql/lib-linux-x64-gnu|linux|x64|glibc"
+            "@dirsql/lib-linux-arm64-gnu|linux|arm64|glibc"
+            "@dirsql/lib-darwin-x64|darwin|x64|"
+            "@dirsql/lib-darwin-arm64|darwin|arm64|"
+            "@dirsql/lib-win32-x64-msvc|win32|x64|"
+            "@dirsql/cli-linux-x64-gnu|linux|x64|glibc"
+            "@dirsql/cli-linux-arm64-gnu|linux|arm64|glibc"
+            "@dirsql/cli-darwin-x64|darwin|x64|"
+            "@dirsql/cli-darwin-arm64|darwin|arm64|"
+            "@dirsql/cli-win32-x64-msvc|win32|x64|"
+          )
+          for entry in "${packages[@]}"; do
+            IFS='|' read -r pkg os cpu libc <<< "$entry"
+            echo "::group::$pkg"
+
+            # Skip when bootstrap version is already on the registry
+            # (re-runs of this workflow are idempotent).
+            if npm view "$pkg@0.0.0-bootstrap" version >/dev/null 2>&1; then
+              echo "$pkg@0.0.0-bootstrap already on npm; skipping."
+              echo "::endgroup::"
+              continue
+            fi
+
+            tmp=$(mktemp -d)
+            (
+              cd "$tmp"
+
+              # Build package.json with optional libc field.
+              if [ -n "$libc" ]; then
+                cat > package.json <<JSON
+          {
+            "name": "$pkg",
+            "version": "0.0.0-bootstrap",
+            "description": "Bootstrap stub for OIDC trusted-publisher setup. See https://www.npmjs.com/package/dirsql.",
+            "license": "MIT",
+            "repository": "https://github.com/thekevinscott/dirsql",
+            "os": ["$os"],
+            "cpu": ["$cpu"],
+            "libc": ["$libc"]
+          }
+          JSON
+              else
+                cat > package.json <<JSON
+          {
+            "name": "$pkg",
+            "version": "0.0.0-bootstrap",
+            "description": "Bootstrap stub for OIDC trusted-publisher setup. See https://www.npmjs.com/package/dirsql.",
+            "license": "MIT",
+            "repository": "https://github.com/thekevinscott/dirsql",
+            "os": ["$os"],
+            "cpu": ["$cpu"]
+          }
+          JSON
+              fi
+
+              cat > README.md <<'MD'
+          # Bootstrap stub
+
+          This is a placeholder version published only so the npm trusted-publisher feature can be enabled on the package. Do not install.
+
+          See [`dirsql`](https://www.npmjs.com/package/dirsql) for the real package.
+          MD
+
+              npm publish --access public
+            )
+            rm -rf "$tmp"
+            echo "::endgroup::"
+          done

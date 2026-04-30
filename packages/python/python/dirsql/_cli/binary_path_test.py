@@ -56,13 +56,15 @@ def describe_binary_path():
             assert root.joinpath_calls == [("_binary", "dirsql.exe")]
 
     def describe_when_the_binary_is_missing():
-        def it_raises_FileNotFoundError_with_a_rebuild_hint(monkeypatch):
+        def it_raises_FileNotFoundError_pointing_at_alternate_install_paths(
+            monkeypatch,
+        ):
             monkeypatch.setattr(mod, "is_windows", lambda: False)
             root = _FakeRoot("/does/not/exist", exists=False)
             monkeypatch.setattr(mod, "files", lambda _mod: root)
 
             with pytest.raises(FileNotFoundError) as exc:
                 mod.binary_path()
-            assert "maturin build --release --bin dirsql --features cli" in str(
-                exc.value
-            )
+            msg = str(exc.value)
+            assert "cargo install dirsql --features cli" in msg
+            assert "npx dirsql" in msg

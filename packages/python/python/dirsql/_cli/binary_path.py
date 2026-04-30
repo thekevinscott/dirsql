@@ -12,8 +12,9 @@ def binary_path() -> str:
     path = files("dirsql").joinpath("_binary", name)
     if not path.is_file():
         raise FileNotFoundError(
-            f"bundled `{name}` not found at {path}; "
-            "this wheel was built without the CLI binary. "
-            "Rebuild with `maturin build --release --bin dirsql --features cli`."
+            f"bundled `{name}` not found at {path}. The dirsql PyPI wheel "
+            "no longer ships the CLI binary (release-tooling regression "
+            "while putitoutthere wires up bundle_cli). Install the CLI via "
+            "`cargo install dirsql --features cli` or `npx dirsql`."
         )
     return str(path)
