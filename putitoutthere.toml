@@ -25,7 +25,7 @@ globs = [
   "Cargo.toml",
   "Cargo.lock",
 ]
-first_version = "0.1.0"
+first_version = "0.2.8"
 
 # PyPI: maturin-built wheels per target. The Rust CLI binary is NOT
 # bundled — putitoutthere v0.2.3's `[package.bundle_cli]` parses but is
@@ -53,7 +53,7 @@ globs = [
   "Cargo.lock",
 ]
 depends_on    = ["dirsql-rust"]
-first_version = "0.1.0"
+first_version = "0.2.8"
 targets = [
   "x86_64-unknown-linux-gnu",
   # aarch64 cross-compile from x86_64 ubuntu-latest fails at link time
@@ -82,7 +82,7 @@ globs = [
   "Cargo.lock",
 ]
 depends_on    = ["dirsql-rust"]
-first_version = "0.1.0"
+first_version = "0.2.8"
 build = [
   { mode = "napi",        name = "@dirsql/lib-{triple}" },
   { mode = "bundled-cli", name = "@dirsql/cli-{triple}" },
