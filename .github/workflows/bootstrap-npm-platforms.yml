@@ -36,6 +36,47 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Verify NPM_TOKEN is set
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN repo secret is empty or missing." >&2
+            echo "## :x: NPM_TOKEN missing" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "The \`NPM_TOKEN\` repo secret is empty or not exposed to this workflow run." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Note: \`pull_request\` triggers from forks do not receive secrets. This branch is on the same repo, so secrets should be available — but if the secret was added after the PR was opened, GitHub Actions may need a fresh push to surface it." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          # Confirm npm can authenticate with the token before we try
+          # to publish. `npm whoami` returns the username on success.
+          if ! who=$(npm whoami 2>&1); then
+            echo "::error::npm whoami failed; NPM_TOKEN is invalid or expired." >&2
+            {
+              echo "## :x: NPM_TOKEN authentication failed"
+              echo ""
+              echo "\`npm whoami\` returned non-zero. The token may be expired, scoped wrong, or 2FA-protected (which CI cannot satisfy)."
+              echo ""
+              echo "**npm output:**"
+              echo '```'
+              echo "$who"
+              echo '```'
+              echo ""
+              echo "**To fix:** create a new **Granular Access Token** at <https://www.npmjs.com/settings/~/tokens/granular-access-token-create> with:"
+              echo ""
+              echo "- **Permissions:** \`Read and write\`"
+              echo "- **Scopes:** the \`@dirsql\` org/scope (and the \`dirsql\` package itself)"
+              echo "- **Expiration:** anything (will be deleted after bootstrap)"
+              echo ""
+              echo "Then update the \`NPM_TOKEN\` repo secret and re-run this workflow."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Authenticated to npm as: $who"
+
       - name: Publish 0.0.0-bootstrap stubs
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -43,10 +84,13 @@ jobs:
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
-          import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+          import { mkdtempSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
           import { tmpdir } from "node:os";
           import { join } from "node:path";
           import { spawnSync } from "node:child_process";
+
+          const summary = process.env.GITHUB_STEP_SUMMARY;
+          const log = (s) => { if (summary) appendFileSync(summary, s + "\n"); };
 
           // [name, npm os, npm cpu, npm libc | null]
           const packages = [
@@ -101,13 +145,29 @@ jobs:
 
             const pub = spawnSync("npm", ["publish", "--access=public"], {
               cwd: tmp,
-              stdio: "inherit",
+              stdio: ["ignore", "pipe", "pipe"],
             });
+            const stdout = pub.stdout?.toString() ?? "";
+            const stderr = pub.stderr?.toString() ?? "";
+            process.stdout.write(stdout);
+            process.stderr.write(stderr);
             rmSync(tmp, { recursive: true, force: true });
             if (pub.status !== 0) {
+              log(`### :x: \`${name}\` publish failed (exit ${pub.status})`);
+              log("");
+              log("**stderr:**");
+              log("```");
+              log(stderr.trim() || "(empty)");
+              log("```");
+              log("");
+              log("**stdout:**");
+              log("```");
+              log(stdout.trim() || "(empty)");
+              log("```");
               console.error(`::endgroup::`);
               process.exit(pub.status ?? 1);
             }
+            log(`- :white_check_mark: \`${name}\` published`);
             console.log("::endgroup::");
           }
           NODE
