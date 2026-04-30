@@ -30,6 +30,11 @@ permissions:
 jobs:
   bootstrap:
     runs-on: ubuntu-latest
+    # NPM_TOKEN may have been added as an environment-scoped secret on
+    # the `release` environment (alongside the OIDC trusted-publisher
+    # config). Declaring the environment here makes both repo secrets
+    # AND `release`-scoped secrets visible to this job.
+    environment: release
     steps:
       - uses: actions/setup-node@v6
         with:
