@@ -137,7 +137,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        # Mirrors the release.yml matrix runners so every host the
+        # release workflow uses is exercised on PR. ubuntu-latest is
+        # redundant with the unit/integration jobs above, but listed
+        # explicitly so the gate stays correct if either changes.
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
 
