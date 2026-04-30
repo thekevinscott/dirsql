@@ -66,18 +66,11 @@ export function stagePlatform(opts: StagePlatformOptions = {}): StageResult {
   const exe = platform.exe === true;
   const binName = exe ? "dirsql.exe" : "dirsql";
 
-  // 1. napi build (native target — no `--target` flag; napi-rs places
-  //    `dirsql.node` at the package root for native builds).
-  const napi = spawn("npx", ["napi", "build", "--release"], {
-    cwd: tsPkg,
-    stdio: "inherit",
-  });
-  if (napi.status !== 0) {
-    throw new Error(`napi build failed (exit ${napi.status})`);
-  }
-
-  // napi-rs CLI v3 emits `dirsql.<slug>.node` for native builds; older
-  // versions sometimes drop `dirsql.node` (unsuffixed). Probe both.
+  // 1. Pick up napi-rs's output. The `napi:build` wireit task is a
+  //    dependency of `stage:platform`, so the .node file is already on
+  //    disk. napi-rs CLI v3 emits `dirsql.<slug>.node` for native
+  //    builds; older versions sometimes drop `dirsql.node` (unsuffixed).
+  //    Probe both.
   const napiSuffixed = join(tsPkg, `dirsql.${triple}.node`);
   const napiUnsuffixed = join(tsPkg, "dirsql.node");
   let napiSrc: string;
@@ -86,7 +79,7 @@ export function stagePlatform(opts: StagePlatformOptions = {}): StageResult {
   else {
     const here = readdirSync(tsPkg).filter((f) => f.endsWith(".node"));
     throw new Error(
-      `napi build produced no .node file at ${napiSuffixed} or ${napiUnsuffixed} (saw: ${here.join(", ") || "none"})`,
+      `napi:build produced no .node file at ${napiSuffixed} or ${napiUnsuffixed} (saw: ${here.join(", ") || "none"}). The napi:build wireit task should run before stage:platform.`,
     );
   }
 

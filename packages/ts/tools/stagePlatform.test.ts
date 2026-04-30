@@ -51,32 +51,26 @@ const windows: Platform = {
   exe: true,
 };
 
-/** Spawn fake that drops a `.node` file for `napi build` and a binary
- *  under `target/<triple>/release/` for `cargo build`, then returns
- *  status 0. */
-function fakeSpawn(opts: {
-  binName?: string;
-  triple: string;
-  napiSuffix?: "suffixed" | "unsuffixed" | "missing";
-}) {
-  const napiSuffix = opts.napiSuffix ?? "suffixed";
+const slugFor: Record<string, string> = {
+  "x86_64-unknown-linux-gnu": "linux-x64-gnu",
+  "x86_64-pc-windows-msvc": "win32-x64-msvc",
+  "aarch64-apple-darwin": "darwin-arm64",
+};
+
+/** Drop a .node file at the package root (mimics napi:build's effect). */
+function seedNapiOutput(triple: string, mode: "suffixed" | "unsuffixed") {
+  const slug = slugFor[triple] ?? "linux-x64-gnu";
+  const name = mode === "suffixed" ? `dirsql.${slug}.node` : "dirsql.node";
+  writeFileSync(join(tsPkg, name), "fake-node");
+}
+
+/** Spawn fake that handles `rustup target add` and `cargo build`. The napi
+ *  build is the napi:build wireit task's job; stage:platform reads its
+ *  output, so the .node file must already be on disk. */
+function fakeSpawn(opts: { binName?: string }) {
   const binName = opts.binName ?? "dirsql";
   return vi.fn((cmd: string, args: readonly string[]) => {
-    if (cmd === "npx" && args[0] === "napi") {
-      if (napiSuffix === "suffixed") {
-        writeFileSync(
-          join(tsPkg, `dirsql.${librarySlugFor(opts.triple)}.node`),
-          "fake-node",
-        );
-      } else if (napiSuffix === "unsuffixed") {
-        writeFileSync(join(tsPkg, "dirsql.node"), "fake-node");
-      }
-      // "missing": don't write anything
-      return { status: 0 } as ReturnType<typeof spawnFn>;
-    }
-    if (cmd === "rustup") {
-      return { status: 0 } as ReturnType<typeof spawnFn>;
-    }
+    if (cmd === "rustup") return { status: 0 } as ReturnType<typeof spawnFn>;
     if (cmd === "cargo") {
       const targetIdx = args.indexOf("--target");
       const target = targetIdx >= 0 ? args[targetIdx + 1] : "default";
@@ -94,17 +88,6 @@ type spawnFn = (
   opts?: unknown,
 ) => { status: number | null };
 
-function librarySlugFor(triple: string): string {
-  const slugMap: Record<string, string> = {
-    "x86_64-unknown-linux-gnu": "linux-x64-gnu",
-    "x86_64-pc-windows-msvc": "win32-x64-msvc",
-    "aarch64-apple-darwin": "darwin-arm64",
-  };
-  const s = slugMap[triple];
-  if (!s) throw new Error(`no slug for ${triple} in test fixture`);
-  return s;
-}
-
 describe("findHostPlatform", () => {
   it("returns the matching PLATFORMS row for a known host", () => {
     const p = findHostPlatform("linux-x64");
@@ -118,7 +101,8 @@ describe("findHostPlatform", () => {
 
 describe("stagePlatform", () => {
   it("stages both napi and cli outputs for a Linux host", () => {
-    const spawn = fakeSpawn({ triple: linux.triple });
+    seedNapiOutput(linux.triple, "suffixed");
+    const spawn = fakeSpawn({});
     const result = stagePlatform({ tsPkg, repo, platform: linux, spawn });
 
     expect(result.triple).toBe("linux-x64-gnu");
@@ -127,38 +111,29 @@ describe("stagePlatform", () => {
   });
 
   it("uses dirsql.exe on Windows", () => {
-    const spawn = fakeSpawn({ binName: "dirsql.exe", triple: windows.triple });
+    seedNapiOutput(windows.triple, "suffixed");
+    const spawn = fakeSpawn({ binName: "dirsql.exe" });
     stagePlatform({ tsPkg, repo, platform: windows, spawn });
 
     expect(existsSync(join(tsPkg, "build", "bundled-cli-win32-x64-msvc", "dirsql.exe"))).toBe(true);
   });
 
-  it("falls back to dirsql.node when napi-rs emits the unsuffixed name", () => {
-    const spawn = fakeSpawn({ triple: linux.triple, napiSuffix: "unsuffixed" });
+  it("falls back to dirsql.node when napi-rs emitted the unsuffixed name", () => {
+    seedNapiOutput(linux.triple, "unsuffixed");
+    const spawn = fakeSpawn({});
     stagePlatform({ tsPkg, repo, platform: linux, spawn });
 
     expect(existsSync(join(tsPkg, "build", "napi-linux-x64-gnu", "dirsql.linux-x64-gnu.node"))).toBe(true);
   });
 
-  it("throws when napi build produces no .node file", () => {
-    const spawn = fakeSpawn({ triple: linux.triple, napiSuffix: "missing" });
-    expect(() => stagePlatform({ tsPkg, repo, platform: linux, spawn })).toThrow(/napi build produced no .node file/);
-  });
-
-  it("throws when napi build returns non-zero", () => {
-    const spawn = vi.fn((cmd: string) => {
-      if (cmd === "npx") return { status: 2 };
-      return { status: 0 };
-    }) as unknown as typeof spawnFn;
-    expect(() => stagePlatform({ tsPkg, repo, platform: linux, spawn })).toThrow(/napi build failed.*exit 2/);
+  it("throws when no .node file is present (napi:build hasn't run)", () => {
+    const spawn = fakeSpawn({});
+    expect(() => stagePlatform({ tsPkg, repo, platform: linux, spawn })).toThrow(/napi:build produced no .node file/);
   });
 
   it("throws when cargo build returns non-zero", () => {
+    seedNapiOutput(linux.triple, "suffixed");
     const spawn = vi.fn((cmd: string) => {
-      if (cmd === "npx") {
-        writeFileSync(join(tsPkg, "dirsql.node"), "fake-node");
-        return { status: 0 };
-      }
       if (cmd === "rustup") return { status: 0 };
       return { status: 101 };
     }) as unknown as typeof spawnFn;
@@ -166,11 +141,8 @@ describe("stagePlatform", () => {
   });
 
   it("throws when rustup target add returns non-zero", () => {
+    seedNapiOutput(linux.triple, "suffixed");
     const spawn = vi.fn((cmd: string) => {
-      if (cmd === "npx") {
-        writeFileSync(join(tsPkg, "dirsql.node"), "fake-node");
-        return { status: 0 };
-      }
       if (cmd === "rustup") return { status: 1 };
       return { status: 0 };
     }) as unknown as typeof spawnFn;
@@ -178,11 +150,12 @@ describe("stagePlatform", () => {
   });
 
   it("overwrites existing build output (idempotent re-run)", () => {
+    seedNapiOutput(linux.triple, "suffixed");
     const stale = join(tsPkg, "build", "napi-linux-x64-gnu", "stale.node");
     mkdirSync(join(tsPkg, "build", "napi-linux-x64-gnu"), { recursive: true });
     writeFileSync(stale, "stale");
 
-    const spawn = fakeSpawn({ triple: linux.triple });
+    const spawn = fakeSpawn({});
     stagePlatform({ tsPkg, repo, platform: linux, spawn });
 
     expect(existsSync(stale)).toBe(false);

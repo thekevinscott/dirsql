@@ -52,6 +52,7 @@
     },
     "stage:platform": {
       "command": "tsx tools/stagePlatform.ts",
+      "dependencies": ["napi:build"],
       "files": [
         "tools/stagePlatform.ts",
         "ts/platforms.ts",
