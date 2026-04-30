@@ -76,6 +76,16 @@ jobs:
             exit 1
           fi
           echo "Authenticated to npm as: $who"
+          {
+            echo "## :information_source: npm authentication context"
+            echo ""
+            echo "**\`npm whoami\`:** \`$who\`"
+            echo ""
+            echo "**\`npm org ls @dirsql\` output** (token owner's role in the @dirsql org):"
+            echo '```'
+            npm org ls @dirsql 2>&1 || echo "(failed — token owner may not be a member of the @dirsql org)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish 0.0.0-bootstrap stubs
         env:
