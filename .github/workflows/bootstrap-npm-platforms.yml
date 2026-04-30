@@ -150,7 +150,10 @@ jobs:
               version: "0.0.0-bootstrap",
               description: "Bootstrap stub for OIDC trusted-publisher setup. See https://www.npmjs.com/package/dirsql.",
               license: "MIT",
-              repository: "https://github.com/thekevinscott/dirsql",
+              repository: {
+                type: "git",
+                url: "git+https://github.com/thekevinscott/dirsql.git",
+              },
               os: [os],
               cpu: [cpu],
               ...(libc ? { libc: [libc] } : {}),
@@ -158,7 +161,7 @@ jobs:
             writeFileSync(join(tmp, "package.json"), JSON.stringify(pkg, null, 2) + "\n");
             writeFileSync(join(tmp, "README.md"), README);
 
-            const pub = spawnSync("npm", ["publish", "--access=public"], {
+            const pub = spawnSync("npm", ["publish", "--access=public", "--tag=bootstrap"], {
               cwd: tmp,
               stdio: ["ignore", "pipe", "pipe"],
             });
