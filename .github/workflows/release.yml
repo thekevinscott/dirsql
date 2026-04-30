@@ -16,13 +16,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-  # TEMP — REVERT BEFORE MERGING. Lets this PR exercise the full
-  # plan+build+publish pipeline so we can confirm it works end-to-end.
-  # Will attempt a real publish; expected to fail at the npm step on
-  # the first run because the per-platform packages don't exist yet
-  # (run the Bootstrap workflow first to seed them).
-  pull_request:
-    branches: [main]
 
 jobs:
   release:
