@@ -1,0 +1,26 @@
+name: Release Precheck
+
+# PR-time gate that runs putitoutthere's plan + build matrix using the
+# same `_matrix.yml` reusable workflow that drives the release path.
+# Catches every build/build-tooling regression (rust target ordering,
+# cross-compile, napi-rs platform quirks, MSVC env, etc.) before merge,
+# so the post-merge release on `main` doesn't fail catastrophically.
+#
+# Structurally publish-incapable: `build.yml` only requests
+# `contents: read` and never reaches putitoutthere's `publish:` job
+# (no `id-token: write`, no OIDC exchange, no registry auth). Drift-
+# free vs. release because both paths share `_matrix.yml`.
+#
+# Pin to `@v0` deliberately: matches what `release.yml` calls so the
+# precheck stays in lockstep with the real release matrix.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  precheck:
+    uses: thekevinscott/putitoutthere/.github/workflows/build.yml@v0
