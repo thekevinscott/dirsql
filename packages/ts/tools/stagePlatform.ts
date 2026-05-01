@@ -133,9 +133,12 @@ function stageOne(args: StageOneArgs): StageResult["staged"][number] {
       );
     }
   } else {
+    // `--platform` makes napi-rs emit `dirsql.<slug>.node` (suffixed)
+    // instead of `dirsql.node`. Without it the cross-build's output
+    // collides with the host's napi:build file at the package root.
     const cross = spawn(
       "npx",
-      ["napi", "build", "--release", "--target", target.triple],
+      ["napi", "build", "--release", "--platform", "--target", target.triple],
       { cwd: tsPkg, stdio: "inherit" },
     );
     if (cross.status !== 0) {
@@ -145,7 +148,10 @@ function stageOne(args: StageOneArgs): StageResult["staged"][number] {
     }
     const out = join(tsPkg, `dirsql.${triple}.node`);
     if (!existsSync(out)) {
-      throw new Error(`napi cross-build: missing ${out}`);
+      const here = readdirSync(tsPkg).filter((f) => f.endsWith(".node"));
+      throw new Error(
+        `napi cross-build: missing ${out} (saw: ${here.join(", ") || "none"})`,
+      );
     }
     napiSrc = out;
   }
