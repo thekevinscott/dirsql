@@ -91,8 +91,6 @@ Code "just works."
 | `--model <id>` | `claude-sonnet-4-6` | Override the model the sub-agent runs on |
 | `--max-files <n>` | `200` | Hard cap on files the agent is allowed to enumerate |
 | `--max-bytes <n>` | `4096` | Per-file content sample cap fed to the agent |
-| `--dry-run` | off | Print the proposed config to stdout instead of writing it |
-| `--system-prompt <path>` | (built-in) | Override the agent's system prompt (power users) |
 
 `init` refuses to clobber an existing file unless `--force` is passed:
 
@@ -103,18 +101,10 @@ dirsql init: ./.dirsql.toml already exists; pass --force to overwrite
 
 ## Reviewing the output before committing
 
-Use `--dry-run` if you want to inspect the proposed config before it
-hits disk:
-
-```bash
-dirsql init --dry-run | less
-```
-
-The proposal is deterministic for a given directory + model + system
-prompt within a session, but Claude is non-deterministic across
-sessions; treat the output as a starting point, not a contract. The
-file is meant to be checked into your repo and edited by humans like
-any other config.
+Claude is non-deterministic across sessions; treat the generated
+`.dirsql.toml` as a starting point, not a contract. The file is meant
+to be checked into your repo and edited by humans like any other
+config.
 
 ## When the agent gets it wrong
 
