@@ -6,7 +6,7 @@ canonical: https://thekevinscott.github.io/dirsql/guide/init
 
 > Online: <https://thekevinscott.github.io/dirsql/guide/init>
 
-`dirsql init` generates a `.dirsql.toml` by running `claude` over the target directory. It is the only `dirsql` subcommand that calls a model.
+`dirsql init` generates a `.dirsql.toml` by running `claude` over the target directory.
 
 ## Usage
 
