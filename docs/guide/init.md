@@ -8,9 +8,26 @@ canonical: https://thekevinscott.github.io/dirsql/guide/init
 
 `dirsql init` generates a `.dirsql.toml` by running `claude` over the target directory.
 
-## Example
+## Examples
 
-A directory of posts and threaded comments:
+### Flat directory
+
+```
+my-expenses/
+├── coffee.json
+├── lunch.json
+└── flight.json
+```
+
+Each file is a JSON object like `{"amount": 4.50, "vendor": "Blue Bottle", "date": "2025-04-12"}`.
+
+```toml
+[[table]]
+ddl = "CREATE TABLE expenses (amount REAL, vendor TEXT, date TEXT)"
+glob = "*.json"
+```
+
+### Subdirectories with path captures
 
 ```
 my-blog/
@@ -22,8 +39,6 @@ my-blog/
         └── index.jsonl
 ```
 
-`dirsql init` writes:
-
 ```toml
 [[table]]
 ddl = "CREATE TABLE posts (title TEXT, author TEXT, draft INTEGER)"
@@ -32,6 +47,29 @@ glob = "posts/*.json"
 [[table]]
 ddl = "CREATE TABLE comments (thread_id TEXT, author TEXT, body TEXT)"
 glob = "_comments/{thread_id}/index.jsonl"
+```
+
+### Mixed formats
+
+```
+docs-site/
+├── content/
+│   ├── intro.md
+│   ├── tutorial.md
+│   └── reference.md
+└── authors.csv
+```
+
+Markdown files use YAML frontmatter; the body becomes a `body` column.
+
+```toml
+[[table]]
+ddl = "CREATE TABLE content (title TEXT, author TEXT, published TEXT, body TEXT)"
+glob = "content/*.md"
+
+[[table]]
+ddl = "CREATE TABLE authors (id TEXT, name TEXT, bio TEXT)"
+glob = "authors.csv"
 ```
 
 `init` will not overwrite an existing config without `--force`.
