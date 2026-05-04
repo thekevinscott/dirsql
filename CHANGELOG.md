@@ -39,6 +39,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`dirsql init` subcommand for generating `.dirsql.toml` (#96).**
+  Two modes ship together. The default heuristic walks the directory,
+  groups files by parent + extension, and emits one `[[table]]` per
+  recognised file extension (`json`, `jsonl`, `csv`, `tsv`, `toml`,
+  `yaml`, `md`) with a placeholder `payload TEXT` DDL. The
+  `--infer` mode is the LLM-assisted variant: pair with
+  `--print-prompt` to emit the prompt for an external LLM, and
+  `--apply <file>` (or `-` for stdin) to consume the LLM's JSON
+  response and render `.dirsql.toml`. The framework validates the
+  response (non-empty `tables`, every entry has `ddl` + `glob`) and
+  refuses partial writes. Splitting the LLM call out of the binary
+  keeps the pipeline provider-agnostic, fully testable without API
+  keys, and auditable. `--root`, `--output`, `--force` honour the
+  same conventions as the rest of the CLI. See
+  [`docs/guide/init.md`](docs/guide/init.md). The in-process
+  HTTP-client variant of `dirsql init --infer` is planned as a
+  follow-up.
+
 - **Persistent on-disk SQLite cache.** Opt-in `persist` / `persist_path`
   option on `DirSQL` (and `[dirsql] persist = true` in
   `.dirsql.toml`). When enabled, the database is written to

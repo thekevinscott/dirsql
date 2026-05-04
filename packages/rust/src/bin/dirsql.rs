@@ -1,11 +1,14 @@
-//! `dirsql` CLI binary. Starts the HTTP server documented in
-//! `docs/guide/cli.md`. Only compiled with `--features cli`.
+//! `dirsql` CLI binary. The default invocation starts the HTTP server
+//! documented in `docs/guide/cli.md`. The `init` subcommand generates a
+//! starter `.dirsql.toml` (see `docs/guide/init.md`). Only compiled with
+//! `--features cli`.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use dirsql::DirSQL;
+use dirsql::cli::init::{InitArgs, run as run_init};
 use dirsql::cli::{AppState, ServerConfig, serve_with_state};
 
 #[derive(Debug, Parser)]
@@ -14,28 +17,47 @@ use dirsql::cli::{AppState, ServerConfig, serve_with_state};
     version,
     about = "Ephemeral SQL index over a local directory, exposed over HTTP.",
     long_about = "Runs an HTTP server that exposes a SQL view of the directory \
-                  described by `.dirsql.toml`. See the CLI guide for endpoints \
-                  and SSE schema."
+                  described by `.dirsql.toml`. Use `dirsql init` to generate a \
+                  starter config. See the CLI guide for endpoints and SSE schema."
 )]
 struct Cli {
     /// Path to the config file (default: `./.dirsql.toml`). The index is
     /// rooted at the directory containing this file.
-    #[arg(long, default_value = "./.dirsql.toml")]
+    #[arg(long, default_value = "./.dirsql.toml", global = true)]
     config: PathBuf,
 
     /// Bind address.
-    #[arg(long, default_value = "localhost")]
+    #[arg(long, default_value = "localhost", global = true)]
     host: String,
 
     /// TCP port to bind.
-    #[arg(long, default_value_t = 7117)]
+    #[arg(long, default_value_t = 7117, global = true)]
     port: u16,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Generate a starter `.dirsql.toml` (heuristic by default; pass
+    /// `--infer` for the LLM-assisted variant).
+    Init(InitArgs),
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
 
+    if let Some(Command::Init(args)) = cli.command {
+        let code = run_init(args);
+        return ExitCode::from(u8::try_from(code).unwrap_or(1));
+    }
+
+    serve(cli).await
+}
+
+async fn serve(cli: Cli) -> ExitCode {
     let state = load_state(&cli);
     let server_config = ServerConfig::bind(cli.host.clone(), cli.port);
 

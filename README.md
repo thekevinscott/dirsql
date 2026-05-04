@@ -64,6 +64,12 @@ Declare tables, ignore patterns, and the scan root in a `.dirsql.toml` file. Tab
 
 → [`docs/guide/config.md`](docs/guide/config.md)
 
+### Generating a Config (`dirsql init`)
+
+`dirsql init` writes a starter `.dirsql.toml` so you don't have to author one by hand. The default heuristic walks the directory and emits one `[[table]]` per parent dir + recognised extension. `dirsql init --infer --print-prompt | <your LLM> | dirsql init --infer --apply -` runs the LLM-assisted variant: `dirsql` builds the prompt and parses the response, you bring your own model and credentials.
+
+→ [`docs/guide/init.md`](docs/guide/init.md)
+
 ### Defining Tables
 
 A table is a `(ddl, glob, extract)` triple. The DDL defines the SQLite schema, the glob selects files, and the extract function turns each file into rows.

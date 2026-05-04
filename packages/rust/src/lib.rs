@@ -14,6 +14,8 @@ pub mod db;
 #[doc(hidden)]
 pub mod differ;
 #[doc(hidden)]
+pub mod inference;
+#[doc(hidden)]
 pub mod matcher;
 #[doc(hidden)]
 pub mod persist;
