@@ -12,8 +12,8 @@ canonical: https://thekevinscott.github.io/dirsql/guide/init
 
 ```bash
 $ dirsql init
-dirsql init: invoking claude…
-dirsql init: wrote ./.dirsql.toml
+[claude streams its tool calls and reasoning here]
+wrote ./.dirsql.toml
 ```
 
 `init` will not overwrite an existing config without `--force`.
