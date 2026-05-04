@@ -8,12 +8,30 @@ canonical: https://thekevinscott.github.io/dirsql/guide/init
 
 `dirsql init` generates a `.dirsql.toml` by running `claude` over the target directory.
 
-## Usage
+## Example
 
-```bash
-$ dirsql init
-[claude streams its tool calls and reasoning here]
-wrote ./.dirsql.toml
+A directory of posts and threaded comments:
+
+```
+my-blog/
+├── posts/
+│   ├── hello-world.json
+│   └── second.json
+└── _comments/
+    └── hello-world/
+        └── index.jsonl
+```
+
+`dirsql init` writes:
+
+```toml
+[[table]]
+ddl = "CREATE TABLE posts (title TEXT, author TEXT, draft INTEGER)"
+glob = "posts/*.json"
+
+[[table]]
+ddl = "CREATE TABLE comments (thread_id TEXT, author TEXT, body TEXT)"
+glob = "_comments/{thread_id}/index.jsonl"
 ```
 
 `init` will not overwrite an existing config without `--force`.
