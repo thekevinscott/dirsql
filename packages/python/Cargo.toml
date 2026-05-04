@@ -1,6 +1,10 @@
 [package]
 name = "dirsql-py-ext"
-version.workspace = true
+# Explicit literal (not `version.workspace = true`) so putitoutthere's
+# pypi/maturin handler can rewrite it via `write-version` before
+# `maturin build`. `pyproject.toml` declares `dynamic = ["version"]`
+# and maturin reads this field. Mirrors `packages/rust/Cargo.toml`.
+version = "0.2.7"
 edition.workspace = true
 publish = false
 
