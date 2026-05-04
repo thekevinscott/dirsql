@@ -10,6 +10,24 @@ canonical: https://thekevinscott.github.io/dirsql/guide/init
 
 ## Examples
 
+### Mixed files
+
+```
+my-downloads/
+├── archive.zip
+├── invoice.pdf
+├── notes.txt
+└── photo.jpg
+```
+
+When no structured format is detected, `dirsql init` falls back to a metadata-only table:
+
+```toml
+[[table]]
+ddl = "CREATE TABLE files (path TEXT, ext TEXT, size INTEGER)"
+glob = "*"
+```
+
 ### Flat directory
 
 ```
@@ -47,29 +65,6 @@ glob = "posts/*.json"
 [[table]]
 ddl = "CREATE TABLE comments (thread_id TEXT, author TEXT, body TEXT)"
 glob = "_comments/{thread_id}/index.jsonl"
-```
-
-### Mixed formats
-
-```
-docs-site/
-├── content/
-│   ├── intro.md
-│   ├── tutorial.md
-│   └── reference.md
-└── authors.csv
-```
-
-Markdown files use YAML frontmatter; the body becomes a `body` column.
-
-```toml
-[[table]]
-ddl = "CREATE TABLE content (title TEXT, author TEXT, published TEXT, body TEXT)"
-glob = "content/*.md"
-
-[[table]]
-ddl = "CREATE TABLE authors (id TEXT, name TEXT, bio TEXT)"
-glob = "authors.csv"
 ```
 
 `init` will not overwrite an existing config without `--force`.
