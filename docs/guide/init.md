@@ -28,4 +28,4 @@ wrote ./.dirsql.toml
 
 ## Authentication
 
-Requires `claude` on `PATH` and signed in. There is no separate API key. If `claude` is missing, `dirsql init` exits with a link to <https://docs.claude.com/en/docs/claude-code/quickstart>.
+Requires `claude` on `PATH` and signed in. There is no separate API key. If `claude` is missing, `dirsql init` raises an exception.
