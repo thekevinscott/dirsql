@@ -66,7 +66,7 @@ Declare tables, ignore patterns, and the scan root in a `.dirsql.toml` file. Tab
 
 ### Generating a Config (`dirsql init`)
 
-`dirsql init` writes a `.dirsql.toml` for you by spawning a short-lived sub-agent via the [Anthropic Agent SDK](https://docs.claude.com/en/api/agent-sdk). The agent gets read-only filesystem tools, inspects the actual contents of your data files, and produces a config with real DDL -- column names and types drawn from observed JSON keys, CSV headers, or frontmatter fields. Auth piggybacks on your local Claude Code login, so no new credentials are required. The LLM call happens once, at init time -- the resulting config is static.
+`dirsql init` generates a `.dirsql.toml` by running `claude` over the target directory. Requires `claude` on `PATH` and signed in.
 
 → [`docs/guide/init.md`](docs/guide/init.md)
 
