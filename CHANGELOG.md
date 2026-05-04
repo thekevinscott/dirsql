@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **PyPI wheels now ship at the planned release version.** Previously
+  every wheel shipped with `0.1.0` baked in regardless of what the
+  release plan computed, because `packages/python/pyproject.toml`
+  declared a static `version = "0.1.0"` literal and maturin reads that
+  field verbatim with no env override. Switched to maturin's
+  dynamic-version mode (`dynamic = ["version"]` in `pyproject.toml`,
+  with the literal moved to `packages/python/Cargo.toml`'s
+  `[package].version`). Putitoutthere's `write-version` step
+  (added upstream in thekevinscott/putitoutthere#277) rewrites the
+  Cargo.toml literal before `maturin build`, so wheels ship at the
+  planned version. Closes #166.
+
 ### Changed
 
 - **Release pipeline rewritten on top of [putitoutthere](https://github.com/thekevinscott/putitoutthere).**

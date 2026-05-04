@@ -4,7 +4,11 @@ build-backend = "maturin"
 
 [project]
 name = "dirsql"
-version = "0.1.0"
+# Maturin reads the version from `packages/python/Cargo.toml`'s
+# `[package].version` (see `dynamic = ["version"]`). Putitoutthere's
+# `write-version` step rewrites that literal before `maturin build` so
+# wheels ship at the planned version, not the literal on disk.
+dynamic = ["version"]
 description = "Ephemeral SQL index over a local directory"
 license = "MIT"
 requires-python = ">=3.10"
