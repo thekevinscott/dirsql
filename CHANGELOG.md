@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Persistent on-disk SQLite cache.** Opt-in `persist` / `persist_path`
+  option on `DirSQL` (and `[dirsql] persist = true` in
+  `.dirsql.toml`). When enabled, the database is written to
+  `<root>/.dirsql/cache.db` (override via `persist_path`) so
+  subsequent startups only re-parse files that have actually changed.
+  Reconcile uses size + mtime when the mtime is safely outside the
+  racy window, falling back to a BLAKE3 content hash otherwise.
+  Glob/DDL changes and a `dirsql_version` bump force a full rebuild,
+  so SQL state never silently disagrees with the filesystem after
+  reconcile. `.dirsql/` is unconditionally excluded from the scan
+  walk. Available across all three SDKs (Rust `DirSQL::builder().persist(..)`,
+  Python `DirSQL(..., persist=True)`, TypeScript `new DirSQL({ ..., persist: true })`).
+  Closes #95.
+
 ### Fixed
 
 - **PyPI wheels now ship at the planned release version.** Previously

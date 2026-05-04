@@ -46,6 +46,17 @@ export interface DirSQLOptions {
    * relative to the config file's parent directory.
    */
   config?: string;
+  /**
+   * Enable persistent on-disk SQLite cache. When `true`, the database is
+   * written to `<root>/.dirsql/cache.db` (override via `persistPath`) so
+   * subsequent startups only re-parse files that have actually changed.
+   */
+  persist?: boolean;
+  /**
+   * Override the location of the persistent cache file. Ignored when
+   * `persist` is not `true`.
+   */
+  persistPath?: string;
 }
 
 /** A row-level event emitted by the file watcher. */
@@ -76,6 +87,8 @@ interface NativeDirSQLConstructor {
     tables: TableDef[] | null,
     ignore: string[] | null,
     config: string | null,
+    persist: boolean | null,
+    persistPath: string | null,
   ): Promise<NativeDirSQL>;
 }
 
@@ -163,6 +176,8 @@ export class DirSQL {
       options.tables ?? null,
       options.ignore ?? null,
       options.config ?? null,
+      options.persist ?? null,
+      options.persistPath ?? null,
     );
     this.ready = openPromise.then((inner) => {
       this._inner = inner;

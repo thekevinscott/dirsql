@@ -51,9 +51,48 @@ describe("__setCoreForTesting", () => {
       [],
       null,
       null,
+      null,
+      null,
     );
     expect(await db.query("SELECT 1")).toEqual([{ injected: true }]);
     expect(fakeInstance.query).toHaveBeenCalledWith("SELECT 1");
+  });
+
+  it("forwards persist + persistPath options to the fake core", async () => {
+    const fakeInstance = {
+      query: vi.fn(async () => []),
+      startWatcher: vi.fn(async () => {}),
+      pollEvents: vi.fn(async () => []),
+    };
+    const openAsync = vi.fn(async () => fakeInstance);
+    const FakeDirSQL = Object.assign(
+      vi.fn(function (this: unknown) {
+        throw new Error("sync ctor should not be called");
+      }),
+      { openAsync },
+    );
+
+    (
+      dirsql as unknown as {
+        __setCoreForTesting: (c: { DirSQL: unknown }) => void;
+      }
+    ).__setCoreForTesting({ DirSQL: FakeDirSQL });
+
+    const db = new dirsql.DirSQL({
+      root: "/tmp/persisted",
+      tables: [],
+      persist: true,
+      persistPath: "/tmp/cache.db",
+    });
+    await db.ready;
+    expect(openAsync).toHaveBeenCalledWith(
+      "/tmp/persisted",
+      [],
+      null,
+      null,
+      true,
+      "/tmp/cache.db",
+    );
   });
 
   it("routes `new DirSQL(configPath)` through the injected fake core", async () => {
@@ -78,7 +117,14 @@ describe("__setCoreForTesting", () => {
 
     const db = new dirsql.DirSQL("/tmp/fake.toml");
     await db.ready;
-    expect(openAsync).toHaveBeenCalledWith(null, null, null, "/tmp/fake.toml");
+    expect(openAsync).toHaveBeenCalledWith(
+      null,
+      null,
+      null,
+      "/tmp/fake.toml",
+      null,
+      null,
+    );
     expect(await db.query("x")).toEqual([{ via: "config" }]);
   });
 

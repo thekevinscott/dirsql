@@ -148,16 +148,70 @@ db = DirSQL("/path", tables=[...], config=".dirsql.toml")
 
 ### Persistent SQLite
 
-Optional on-disk SQLite database instead of in-memory. Survives restarts -- only re-indexes changed files on startup (compare mtime/hash against stored state).
+Optional on-disk SQLite database instead of in-memory. Survives restarts and uses git's racy-stat algorithm to skip re-parsing files whose filesystem metadata matches the cached state.
 
 ```toml
 [dirsql]
-persist = true                    # default: false (in-memory)
-db_path = ".dirsql/index.sqlite"  # default location
+persist = true                       # default: false (in-memory)
+persist_path = ".dirsql/cache.db"    # optional; this is the default
 ```
 
+User contract: **the rows returned by `query()` after startup are equivalent to those produced by a from-scratch rebuild** — persistence is a startup-time optimization, not a correctness compromise. See [docs/guide/persistence.md](docs/guide/persistence.md) for the full algorithm and edge-case discussion.
+
+#### Storage layout
+
+When `persist = true` (and no explicit `persist_path` is set), `dirsql` writes to `<root>/.dirsql/cache.db`. The `.dirsql/` directory is **reserved**: it is unconditionally excluded from the directory walk whether persistence is enabled or not. Any other file inside `.dirsql/` is ignored by the scanner.
+
+#### Sidecar schema
+
+Two metadata tables live alongside the user-defined data tables:
+
+```sql
+CREATE TABLE _dirsql_files (
+  path              TEXT    PRIMARY KEY,
+  table_name        TEXT    NOT NULL,
+  size              INTEGER NOT NULL,
+  mtime_ns          INTEGER NOT NULL,
+  ctime_ns          INTEGER NOT NULL,
+  inode             INTEGER NOT NULL,
+  dev               INTEGER NOT NULL,
+  content_hash      BLOB    NOT NULL,   -- BLAKE3, 32 bytes
+  snapshot_time_ns  INTEGER NOT NULL    -- when this row was last written
+);
+
+CREATE TABLE _dirsql_meta (
+  key    TEXT PRIMARY KEY,
+  value  TEXT NOT NULL
+);
+-- seeded with: schema_version, dirsql_version, glob_config_hash,
+-- parser_versions (JSON), root_canonical
+```
+
+#### Reconcile algorithm (git racy-stat, adapted)
+
+On startup, when a persistent cache exists:
+
+1. Read `_dirsql_meta`. If any of `schema_version`, `dirsql_version`, `glob_config_hash`, `parser_versions`, or `root_canonical` differs from the current build, **wipe everything and rebuild from scratch** — no partial invalidation.
+2. Walk the tree, `stat` every file matching a configured glob.
+3. For each file, classify by comparing the live stat tuple to the row in `_dirsql_files`:
+   - **Trust the cache** when `(size, mtime_ns, ctime_ns, inode, dev)` matches *and* `mtime_ns < snapshot_time_ns - epsilon` (outside the racy window).
+   - **Hash-confirm** when the tuple matches but `mtime_ns >= snapshot_time_ns - epsilon`. If the hash matches, trust the cache and update `snapshot_time_ns`. If it differs, re-parse.
+   - **Re-parse** when any field of the tuple differs.
+   - **Delete** rows for files in `_dirsql_files` that are not present on disk.
+   - **Insert** rows for files on disk that are not in `_dirsql_files`.
+4. Commit the transaction.
+
+#### Hashing
+
+BLAKE3, 32-byte digest stored as `BLOB`. Used for both per-file content hashes (`_dirsql_files.content_hash`) and the glob-config fingerprint in `_dirsql_meta`.
+
+#### Limitations
+
+- **Network filesystems (NFS, SMB):** attribute caching can produce stale `stat` results. Behavior on these filesystems is undefined for v0.3.0; document a warning and recommend in-memory mode. Auto-detection via `statfs` is a follow-up.
+- **mtime-preserving in-place edit with identical size:** the only failure mode of racy-stat. Requires `touch -r` after editing while preserving byte length. Documented; users who need stronger guarantees should disable persistence.
+
 Enables:
-- Fast startup for large directories (no full re-scan)
+- Fast startup for large directories (no full re-parse)
 - External tools querying the SQLite file directly
 - Backup/restore of index state
 

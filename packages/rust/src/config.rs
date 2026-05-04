@@ -33,6 +33,12 @@ pub struct Config {
     pub root: Option<PathBuf>,
     pub ignore: Vec<String>,
     pub tables: Vec<TableConfig>,
+    /// Enable persistent on-disk SQLite cache. When false (the default), the
+    /// database is rebuilt in memory on every startup.
+    pub persist: bool,
+    /// Optional override for the on-disk cache location. Resolved relative
+    /// to the config file's parent directory when relative.
+    pub persist_path: Option<PathBuf>,
 }
 
 /// Configuration for a single table.
@@ -58,6 +64,8 @@ struct RawConfig {
 struct RawDirsql {
     root: Option<PathBuf>,
     ignore: Option<Vec<String>>,
+    persist: Option<bool>,
+    persist_path: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -93,9 +101,14 @@ pub fn load_config(path: &Path) -> Result<Config> {
 pub fn load_config_str(content: &str) -> Result<Config> {
     let raw: RawConfig = toml::from_str(content)?;
 
-    let (root, ignore) = match raw.dirsql {
-        Some(d) => (d.root, d.ignore.unwrap_or_default()),
-        None => (None, Vec::new()),
+    let (root, ignore, persist, persist_path) = match raw.dirsql {
+        Some(d) => (
+            d.root,
+            d.ignore.unwrap_or_default(),
+            d.persist.unwrap_or(false),
+            d.persist_path,
+        ),
+        None => (None, Vec::new(), false, None),
     };
 
     let raw_tables = raw.table.unwrap_or_default();
@@ -124,6 +137,8 @@ pub fn load_config_str(content: &str) -> Result<Config> {
         root,
         ignore,
         tables,
+        persist,
+        persist_path,
     })
 }
 
@@ -417,6 +432,37 @@ glob = "*.json"
 "#;
         let config = load_config_str(toml).unwrap();
         assert_eq!(config.root.as_deref(), Some(Path::new("/tmp/data")));
+    }
+
+    #[test]
+    fn persist_defaults_to_false() {
+        let toml = r#"
+[[table]]
+ddl = "CREATE TABLE t (x TEXT)"
+glob = "*.json"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert!(!config.persist);
+        assert!(config.persist_path.is_none());
+    }
+
+    #[test]
+    fn persist_true_is_parsed() {
+        let toml = r#"
+[dirsql]
+persist = true
+persist_path = "/var/cache/dirsql.db"
+
+[[table]]
+ddl = "CREATE TABLE t (x TEXT)"
+glob = "*.json"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert!(config.persist);
+        assert_eq!(
+            config.persist_path.as_deref(),
+            Some(Path::new("/var/cache/dirsql.db"))
+        );
     }
 
     #[test]
