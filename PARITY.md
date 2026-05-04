@@ -83,20 +83,6 @@ for await (const event of db.watch()) { ... }
 - `query()`, `startWatcher()`, and `pollEvents()` all return `Promise`s and run on the libuv threadpool so the JS event loop stays responsive (even for long poll timeouts).
 - `new DirSQL(...)` returns synchronously but the initial directory scan runs on the libuv threadpool: `ready` resolves once it completes and rejects on scan error. Every method transparently awaits `ready`, so callers can issue queries immediately.
 
-## CLI Surface
-
-CLI features live only in the Rust binary (`cargo install dirsql --features cli`,
-plus the npm/PyPI wrappers). The SDK packages do not expose these as library
-APIs, so they are tracked here separately from the SDK parity table.
-
-| Subcommand | Status | Notes |
-|---|---|---|
-| `dirsql` (HTTP server) | Shipped | `POST /query`, `GET /events` |
-| `dirsql init` (template mode) | Shipped | Heuristic; one `[[table]]` per parent dir + recognised ext |
-| `dirsql init --infer --print-prompt` | Shipped | Emits prompt for an external LLM |
-| `dirsql init --infer --apply <file>` | Shipped | Consumes JSON LLM response; `-` reads stdin |
-| `dirsql init --infer` (built-in HTTP client) | Planned | Wraps `--print-prompt` → LLM call → `--apply` in one shot |
-
 ## Test Coverage Matrix
 
 | Test Scenario              | Python | Rust | TypeScript |
