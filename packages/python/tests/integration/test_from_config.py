@@ -46,7 +46,9 @@ glob = "items/*.csv"
 
             db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
-            results = await db.query("SELECT _path, _basename FROM items ORDER BY _path")
+            results = await db.query(
+                "SELECT _path, _basename FROM items ORDER BY _path"
+            )
             assert len(results) == 2
             assert results[0]["_path"] == "items/a.csv"
             assert results[0]["_basename"] == "a.csv"
@@ -218,9 +220,7 @@ glob = "items/{name}.json"
 
             db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
-            results = await db.query(
-                "SELECT name FROM items WHERE name = 'apple'"
-            )
+            results = await db.query("SELECT name FROM items WHERE name = 'apple'")
             assert len(results) == 1
             assert results[0]["name"] == "apple"
 

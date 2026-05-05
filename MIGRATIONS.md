@@ -73,12 +73,6 @@ db = DirSQL(
 `thread_id` is auto-injected from the glob capture; the user's extract only
 returns `{"body": ...}`.
 
-For tabular formats where the heavy lift is parsing, prefer
-[DuckDB](https://duckdb.org)
-(`SELECT * FROM read_csv('**/*.csv')`,
-`SELECT * FROM read_json('**/*.jsonl')`) or — for markdown frontmatter — the
-[duckdb_markdown community extension](https://github.com/teaguesterling/duckdb_markdown).
-
 #### Deprecations removed
 
 _None._ The removed keys (`format`, `each`, `[table.columns]`) and error

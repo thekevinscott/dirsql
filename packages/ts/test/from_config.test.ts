@@ -46,7 +46,9 @@ glob = "items/*.csv"
 
     const db = new DirSQL(configPath);
     await db.ready;
-    const rows = await db.query("SELECT _path, _basename FROM items ORDER BY _path");
+    const rows = await db.query(
+      "SELECT _path, _basename FROM items ORDER BY _path",
+    );
     expect(rows).toHaveLength(2);
     expect(rows[0]._path).toBe("items/a.csv");
     expect(rows[0]._basename).toBe("a.csv");

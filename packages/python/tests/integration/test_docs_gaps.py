@@ -78,9 +78,7 @@ def describe_strict_mode_gap():
                 Table(
                     ddl="CREATE TABLE items (name TEXT)",
                     glob="*.json",
-                    extract=lambda path, content: [
-                        {"name": "apple", "color": "red"}
-                    ],
+                    extract=lambda path, content: [{"name": "apple", "color": "red"}],
                     strict=True,
                 ),
             ],
@@ -100,9 +98,7 @@ def describe_strict_mode_gap():
                 Table(
                     ddl="CREATE TABLE items (name TEXT, color TEXT)",
                     glob="*.json",
-                    extract=lambda path, content: [
-                        {"name": "apple", "color": "red"}
-                    ],
+                    extract=lambda path, content: [{"name": "apple", "color": "red"}],
                     strict=True,
                 ),
             ],
