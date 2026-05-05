@@ -1,12 +1,15 @@
-//! `dirsql` CLI binary. Starts the HTTP server documented in
-//! `docs/guide/cli.md`. Only compiled with `--features cli`.
+//! `dirsql` CLI binary. Two modes:
+//! - No subcommand: HTTP server documented in `docs/guide/cli.md`.
+//! - `init`: starter `.dirsql.toml` generation; see `docs/guide/init.md`.
+//!
+//! Only compiled with `--features cli`.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use dirsql::DirSQL;
-use dirsql::cli::{AppState, ServerConfig, serve_with_state};
+use dirsql::cli::{AppState, ServerConfig, init::InitOptions, serve_with_state};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -14,28 +17,90 @@ use dirsql::cli::{AppState, ServerConfig, serve_with_state};
     version,
     about = "Ephemeral SQL index over a local directory, exposed over HTTP.",
     long_about = "Runs an HTTP server that exposes a SQL view of the directory \
-                  described by `.dirsql.toml`. See the CLI guide for endpoints \
-                  and SSE schema."
+                  described by `.dirsql.toml`. With the `init` subcommand, \
+                  generates a starter `.dirsql.toml` by running `claude` over \
+                  the target directory."
 )]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Path to the config file (default: `./.dirsql.toml`). The index is
-    /// rooted at the directory containing this file.
+    /// rooted at the directory containing this file. Used when no
+    /// subcommand is given.
     #[arg(long, default_value = "./.dirsql.toml")]
     config: PathBuf,
 
-    /// Bind address.
+    /// Bind address. Used when no subcommand is given.
     #[arg(long, default_value = "localhost")]
     host: String,
 
-    /// TCP port to bind.
+    /// TCP port to bind. Used when no subcommand is given.
     #[arg(long, default_value_t = 7117)]
     port: u16,
 }
 
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Generate a starter `.dirsql.toml` by running `claude` over the
+    /// target directory.
+    Init(InitArgs),
+}
+
+#[derive(Debug, Args)]
+struct InitArgs {
+    /// Directory to scan (default: current directory).
+    #[arg(long)]
+    root: Option<PathBuf>,
+
+    /// Where to write the generated config (default: `<root>/.dirsql.toml`).
+    #[arg(long)]
+    output: Option<PathBuf>,
+
+    /// Overwrite the output file if it already exists.
+    #[arg(long)]
+    force: bool,
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
 
+    match cli.command.take() {
+        Some(Command::Init(args)) => run_init(args),
+        None => run_server(cli).await,
+    }
+}
+
+fn run_init(args: InitArgs) -> ExitCode {
+    let root = match args.root {
+        Some(p) => p,
+        None => match std::env::current_dir() {
+            Ok(p) => p,
+            Err(err) => {
+                eprintln!("dirsql init: failed to read current directory: {err}");
+                return ExitCode::from(1);
+            }
+        },
+    };
+    let output = args.output.unwrap_or_else(|| root.join(".dirsql.toml"));
+
+    let opts = InitOptions {
+        root,
+        output,
+        force: args.force,
+    };
+
+    match dirsql::cli::init::run(opts) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("dirsql init: {err}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+async fn run_server(cli: Cli) -> ExitCode {
     let state = load_state(&cli);
     let server_config = ServerConfig::bind(cli.host.clone(), cli.port);
 

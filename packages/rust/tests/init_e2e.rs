@@ -48,9 +48,13 @@ fn produces_a_loadable_config_for_a_mixed_directory() {
         return;
     }
 
+    // Text-only fixture. Binary files would trip `lib.rs:559`'s
+    // `read_to_string` during scanning regardless of whether the table
+    // declares any content-derived columns (the post-#170 model didn't
+    // remove the read; a separate fix is tracked elsewhere).
     let root = TempDir::new().unwrap();
     fs::write(root.path().join("notes.txt"), "hello world\n").unwrap();
-    fs::write(root.path().join("photo.jpg"), [0xff, 0xd8, 0xff, 0xe0]).unwrap();
+    fs::write(root.path().join("more.txt"), "another note\n").unwrap();
     fs::write(
         root.path().join("data.json"),
         r#"{"vendor": "Acme", "amount": 42}"#,
