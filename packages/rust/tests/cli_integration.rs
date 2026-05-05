@@ -31,25 +31,24 @@ use tempfile::TempDir;
 /// Build a `DirSQL` over a two-post blog fixture driven by `.dirsql.toml`,
 /// matching the e2e fixture shape. Returns the tempdir so the caller can
 /// mutate files while the server runs.
+///
+/// `title` and `author` are captured from the file path (`posts/{author}/
+/// {title}.json`) rather than parsed from file content -- the new model
+/// derives row columns from filesystem facts only. `_size` is included so
+/// that content-only edits still change a column value and surface as
+/// `Update` events in the SSE stream.
 fn blog_fixture() -> (TempDir, DirSQL) {
     let root = TempDir::new().unwrap();
-    fs::create_dir_all(root.path().join("posts")).unwrap();
-    fs::write(
-        root.path().join("posts/hello.json"),
-        r#"{"title":"Hello World","author":"alice"}"#,
-    )
-    .unwrap();
-    fs::write(
-        root.path().join("posts/second.json"),
-        r#"{"title":"Second Post","author":"bob"}"#,
-    )
-    .unwrap();
+    fs::create_dir_all(root.path().join("posts/alice")).unwrap();
+    fs::create_dir_all(root.path().join("posts/bob")).unwrap();
+    fs::write(root.path().join("posts/alice/Hello-World.json"), "{}").unwrap();
+    fs::write(root.path().join("posts/bob/Second-Post.json"), "{}").unwrap();
     fs::write(
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT)"
-glob = "posts/*.json"
+ddl = "CREATE TABLE posts (title TEXT, author TEXT, _basename TEXT, _size INTEGER)"
+glob = "posts/{author}/{title}.json"
 "#,
     )
     .unwrap();
@@ -129,8 +128,8 @@ async fn post_query_returns_json_rows_on_success() {
     assert_eq!(
         body,
         vec![
-            json!({"title": "Hello World"}),
-            json!({"title": "Second Post"}),
+            json!({"title": "Hello-World"}),
+            json!({"title": "Second-Post"}),
         ]
     );
     handle.shutdown().await.unwrap();
@@ -263,9 +262,11 @@ async fn get_events_streams_mutation_events() {
     // exists.
     await_ready(&mut stream).await;
 
+    // Modify the file's content; `_size` is part of the row, so the diff
+    // produces an Update event even though no captured path changed.
     fs::write(
-        root.path().join("posts/hello.json"),
-        r#"{"title":"Hello, world","author":"alice"}"#,
+        root.path().join("posts/alice/Hello-World.json"),
+        r#"{"some":"larger","payload":"to change _size"}"#,
     )
     .unwrap();
 
@@ -284,7 +285,7 @@ async fn get_events_streams_mutation_events() {
 
 #[tokio::test]
 async fn get_events_surfaces_parse_errors_as_error_events_not_fatal() {
-    // Per docs/guide/cli.md: an error during extraction is a per-event problem,
+    // Per docs/guide/cli.md: an error during ingestion is a per-event problem,
     // not a server-wide one. The stream must keep delivering subsequent events.
     let (root, db) = blog_fixture();
     let handle = spawn_server(db).await;
@@ -297,13 +298,20 @@ async fn get_events_surfaces_parse_errors_as_error_events_not_fatal() {
 
     await_ready(&mut stream).await;
 
-    // Break a file — extract should fail on this one.
-    fs::write(root.path().join("posts/hello.json"), "not valid json").unwrap();
-    // Then fix another file to produce a valid event.
+    // Break a file with invalid UTF-8 -- the pipeline reads file bytes
+    // before invoking the synthesized extract, and `read_to_string` rejects
+    // non-UTF-8 bytes with InvalidData. That surfaces as a per-file error
+    // event without taking the stream down.
+    fs::write(
+        root.path().join("posts/alice/Hello-World.json"),
+        [0xff_u8, 0xfe, 0xfd, 0xfc],
+    )
+    .unwrap();
+    // Then mutate another file to produce a valid event after the error.
     tokio::time::sleep(Duration::from_millis(50)).await;
     fs::write(
-        root.path().join("posts/second.json"),
-        r#"{"title":"Second Post v2","author":"bob"}"#,
+        root.path().join("posts/bob/Second-Post.json"),
+        r#"{"some":"new content to change _size"}"#,
     )
     .unwrap();
 

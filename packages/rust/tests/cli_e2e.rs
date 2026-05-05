@@ -30,25 +30,22 @@ use tempfile::TempDir;
 
 /// Write a two-post blog fixture into a fresh tempdir and return it.
 /// The `.dirsql.toml` lives at the root so `dirsql` can discover it.
+///
+/// `title` and `author` are captured from the file path (`posts/{author}/
+/// {title}.json`) rather than parsed from file content -- the new model
+/// derives row columns from filesystem facts only.
 fn blog_fixture() -> TempDir {
     let root = TempDir::new().unwrap();
-    fs::create_dir_all(root.path().join("posts")).unwrap();
-    fs::write(
-        root.path().join("posts/hello.json"),
-        r#"{"title":"Hello World","author":"alice"}"#,
-    )
-    .unwrap();
-    fs::write(
-        root.path().join("posts/second.json"),
-        r#"{"title":"Second Post","author":"bob"}"#,
-    )
-    .unwrap();
+    fs::create_dir_all(root.path().join("posts/alice")).unwrap();
+    fs::create_dir_all(root.path().join("posts/bob")).unwrap();
+    fs::write(root.path().join("posts/alice/Hello-World.json"), "{}").unwrap();
+    fs::write(root.path().join("posts/bob/Second-Post.json"), "{}").unwrap();
     fs::write(
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT)"
-glob = "posts/*.json"
+ddl = "CREATE TABLE posts (title TEXT, author TEXT, _basename TEXT, _size INTEGER)"
+glob = "posts/{author}/{title}.json"
 "#,
     )
     .unwrap();
@@ -194,8 +191,8 @@ fn post_query_returns_rows_over_http() {
     assert_eq!(
         body,
         vec![
-            json!({"title": "Hello World"}),
-            json!({"title": "Second Post"}),
+            json!({"title": "Hello-World"}),
+            json!({"title": "Second-Post"}),
         ]
     );
 
@@ -248,11 +245,8 @@ fn get_events_emits_insert_event_when_file_created() {
         .recv_timeout(Duration::from_secs(5))
         .expect("SSE stream never produced a ready sentinel");
     std::thread::sleep(Duration::from_millis(200));
-    fs::write(
-        root.path().join("posts/third.json"),
-        r#"{"title":"Third Post","author":"carol"}"#,
-    )
-    .unwrap();
+    fs::create_dir_all(root.path().join("posts/carol")).unwrap();
+    fs::write(root.path().join("posts/carol/Third-Post.json"), "{}").unwrap();
 
     let data = rx
         .recv_timeout(Duration::from_secs(10))
