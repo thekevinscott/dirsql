@@ -41,7 +41,6 @@ cli = [
 axum = { version = "0.8", optional = true }
 blake3 = "1"
 clap = { version = "4", features = ["derive"], optional = true }
-csv = "1"
 futures = { version = "0.3", optional = true }
 futures-channel.workspace = true
 globset = "0.4"
@@ -50,7 +49,6 @@ regex.workspace = true
 rusqlite = { version = "0.34", features = ["bundled"] }
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml = "0.9"
 thiserror.workspace = true
 tokio.workspace = true
 tokio-stream = { version = "0.1", features = ["sync"], optional = true }

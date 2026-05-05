@@ -1,9 +1,6 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-
-use crate::parser::Format;
 
 /// Error type for config loading.
 #[derive(Debug, thiserror::Error)]
@@ -16,9 +13,6 @@ pub enum ConfigError {
 
     #[error("Missing required field '{0}' in [[table]] entry")]
     MissingField(&'static str),
-
-    #[error("Unknown format '{0}'")]
-    UnknownFormat(String),
 }
 
 pub type Result<T> = std::result::Result<T, ConfigError>;
@@ -42,13 +36,18 @@ pub struct Config {
 }
 
 /// Configuration for a single table.
+///
+/// A config-defined table maps a glob pattern to a SQL DDL. Each matched
+/// file produces one row whose columns are derived from filesystem facts:
+/// glob path captures (named `{placeholder}` segments) and stat virtuals
+/// (`_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`).
+/// Content interpretation (frontmatter, JSON dot-paths, CSV parsing, etc.)
+/// is intentionally out of scope; for that, register a programmatic
+/// [`crate::Table`] with your own extract closure.
 #[derive(Debug, Clone)]
 pub struct TableConfig {
     pub ddl: String,
     pub glob: String,
-    pub format: Option<Format>,
-    pub each: Option<String>,
-    pub columns: Option<HashMap<String, String>>,
     pub strict: Option<bool>,
 }
 
@@ -72,23 +71,7 @@ struct RawDirsql {
 struct RawTable {
     ddl: Option<String>,
     glob: Option<String>,
-    format: Option<String>,
-    each: Option<String>,
-    columns: Option<HashMap<String, String>>,
     strict: Option<bool>,
-}
-
-fn parse_format_str(s: &str) -> std::result::Result<Format, ConfigError> {
-    match s.to_lowercase().as_str() {
-        "json" => Ok(Format::Json),
-        "jsonl" | "ndjson" => Ok(Format::Jsonl),
-        "csv" => Ok(Format::Csv),
-        "tsv" => Ok(Format::Tsv),
-        "toml" => Ok(Format::Toml),
-        "yaml" | "yml" => Ok(Format::Yaml),
-        "frontmatter" | "md" => Ok(Format::Frontmatter),
-        other => Err(ConfigError::UnknownFormat(other.to_string())),
-    }
 }
 
 /// Load and parse a `.dirsql.toml` config file from the given path.
@@ -118,17 +101,9 @@ pub fn load_config_str(content: &str) -> Result<Config> {
         let ddl = raw_table.ddl.ok_or(ConfigError::MissingField("ddl"))?;
         let glob = raw_table.glob.ok_or(ConfigError::MissingField("glob"))?;
 
-        let format = match raw_table.format {
-            Some(f) => Some(parse_format_str(&f)?),
-            None => crate::parser::infer_format(&glob),
-        };
-
         tables.push(TableConfig {
             ddl,
             glob,
-            format,
-            each: raw_table.each,
-            columns: raw_table.columns,
             strict: raw_table.strict,
         });
     }
@@ -147,19 +122,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn valid_config_parses_all_fields() {
+    fn valid_config_parses_required_fields() {
         let toml = r#"
 [dirsql]
 ignore = ["node_modules/**", ".git/**"]
 
 [[table]]
-ddl = "CREATE TABLE comments (thread_id TEXT, body TEXT)"
+ddl = "CREATE TABLE comments (thread_id TEXT, _path TEXT)"
 glob = "_comments/{thread_id}/index.jsonl"
 
 [[table]]
-ddl = "CREATE TABLE items (name TEXT, price REAL)"
+ddl = "CREATE TABLE items (_path TEXT, _size INTEGER)"
 glob = "catalog/*.json"
-each = "data.items"
 strict = true
 "#;
         let config = load_config_str(toml).unwrap();
@@ -167,16 +141,15 @@ strict = true
         assert_eq!(config.tables.len(), 2);
 
         let t0 = &config.tables[0];
-        assert_eq!(t0.ddl, "CREATE TABLE comments (thread_id TEXT, body TEXT)");
+        assert_eq!(
+            t0.ddl,
+            "CREATE TABLE comments (thread_id TEXT, _path TEXT)"
+        );
         assert_eq!(t0.glob, "_comments/{thread_id}/index.jsonl");
-        assert_eq!(t0.format, Some(Format::Jsonl));
-        assert!(t0.each.is_none());
         assert!(t0.strict.is_none());
 
         let t1 = &config.tables[1];
-        assert_eq!(t1.each.as_deref(), Some("data.items"));
         assert_eq!(t1.strict, Some(true));
-        assert_eq!(t1.format, Some(Format::Json));
     }
 
     #[test]
@@ -197,88 +170,6 @@ ddl = "CREATE TABLE t (x TEXT)"
 "#;
         let err = load_config_str(toml).unwrap_err();
         assert!(err.to_string().contains("glob"));
-    }
-
-    #[test]
-    fn format_inferred_from_glob_extension() {
-        let cases = vec![
-            ("*.json", Some(Format::Json)),
-            ("**/*.jsonl", Some(Format::Jsonl)),
-            ("data/*.csv", Some(Format::Csv)),
-            ("*.tsv", Some(Format::Tsv)),
-            ("config/*.toml", Some(Format::Toml)),
-            ("**/*.yaml", Some(Format::Yaml)),
-            ("**/*.yml", Some(Format::Yaml)),
-            ("**/index.md", Some(Format::Frontmatter)),
-        ];
-
-        for (glob, expected_format) in cases {
-            let toml = format!(
-                r#"
-[[table]]
-ddl = "CREATE TABLE t (x TEXT)"
-glob = "{}"
-"#,
-                glob
-            );
-            let config = load_config_str(&toml).unwrap();
-            assert_eq!(
-                config.tables[0].format, expected_format,
-                "format mismatch for glob: {}",
-                glob
-            );
-        }
-    }
-
-    #[test]
-    fn explicit_format_overrides_inference() {
-        let toml = r#"
-[[table]]
-ddl = "CREATE TABLE t (x TEXT)"
-glob = "*.txt"
-format = "csv"
-"#;
-        let config = load_config_str(toml).unwrap();
-        assert_eq!(config.tables[0].format, Some(Format::Csv));
-    }
-
-    #[test]
-    fn unknown_format_returns_error() {
-        let toml = r#"
-[[table]]
-ddl = "CREATE TABLE t (x TEXT)"
-glob = "*.txt"
-format = "xml"
-"#;
-        let err = load_config_str(toml).unwrap_err();
-        assert!(err.to_string().contains("xml"));
-    }
-
-    #[test]
-    fn columns_support() {
-        let toml = r#"
-[[table]]
-ddl = "CREATE TABLE t (display_name TEXT)"
-glob = "*.json"
-
-[table.columns]
-display_name = "metadata.author.name"
-"#;
-        let config = load_config_str(toml).unwrap();
-        let cols = config.tables[0].columns.as_ref().unwrap();
-        assert_eq!(cols.get("display_name").unwrap(), "metadata.author.name");
-    }
-
-    #[test]
-    fn each_support() {
-        let toml = r#"
-[[table]]
-ddl = "CREATE TABLE items (name TEXT)"
-glob = "catalog/*.json"
-each = "data.items"
-"#;
-        let config = load_config_str(toml).unwrap();
-        assert_eq!(config.tables[0].each.as_deref(), Some("data.items"));
     }
 
     #[test]
@@ -329,14 +220,13 @@ glob = "*.json"
             &path,
             r#"
 [[table]]
-ddl = "CREATE TABLE t (x TEXT)"
+ddl = "CREATE TABLE t (_path TEXT)"
 glob = "*.csv"
 "#,
         )
         .unwrap();
         let config = load_config(&path).unwrap();
         assert_eq!(config.tables.len(), 1);
-        assert_eq!(config.tables[0].format, Some(Format::Csv));
     }
 
     #[test]
@@ -349,60 +239,13 @@ glob = "*.csv"
     }
 
     #[test]
-    fn format_string_variants() {
-        // Test various format string aliases
-        let cases = vec![
-            ("json", Format::Json),
-            ("JSON", Format::Json),
-            ("jsonl", Format::Jsonl),
-            ("ndjson", Format::Jsonl),
-            ("csv", Format::Csv),
-            ("tsv", Format::Tsv),
-            ("toml", Format::Toml),
-            ("yaml", Format::Yaml),
-            ("yml", Format::Yaml),
-            ("frontmatter", Format::Frontmatter),
-            ("md", Format::Frontmatter),
-        ];
-        for (input, expected) in cases {
-            let toml = format!(
-                r#"
-[[table]]
-ddl = "CREATE TABLE t (x TEXT)"
-glob = "*.dat"
-format = "{}"
-"#,
-                input
-            );
-            let config = load_config_str(&toml).unwrap();
-            assert_eq!(
-                config.tables[0].format,
-                Some(expected),
-                "format mismatch for input: {}",
-                input
-            );
-        }
-    }
-
-    #[test]
-    fn no_format_and_unknown_extension_yields_none() {
-        let toml = r#"
-[[table]]
-ddl = "CREATE TABLE t (x TEXT)"
-glob = "*.dat"
-"#;
-        let config = load_config_str(toml).unwrap();
-        assert_eq!(config.tables[0].format, None);
-    }
-
-    #[test]
     fn optional_root_parses_when_present() {
         let toml = r#"
 [dirsql]
 root = "docs"
 
 [[table]]
-ddl = "CREATE TABLE t (x TEXT)"
+ddl = "CREATE TABLE t (_path TEXT)"
 glob = "*.json"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -413,7 +256,7 @@ glob = "*.json"
     fn root_absent_by_default() {
         let toml = r#"
 [[table]]
-ddl = "CREATE TABLE t (x TEXT)"
+ddl = "CREATE TABLE t (_path TEXT)"
 glob = "*.json"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -427,7 +270,7 @@ glob = "*.json"
 root = "/tmp/data"
 
 [[table]]
-ddl = "CREATE TABLE t (x TEXT)"
+ddl = "CREATE TABLE t (_path TEXT)"
 glob = "*.json"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -438,7 +281,7 @@ glob = "*.json"
     fn persist_defaults_to_false() {
         let toml = r#"
 [[table]]
-ddl = "CREATE TABLE t (x TEXT)"
+ddl = "CREATE TABLE t (_path TEXT)"
 glob = "*.json"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -454,7 +297,7 @@ persist = true
 persist_path = "/var/cache/dirsql.db"
 
 [[table]]
-ddl = "CREATE TABLE t (x TEXT)"
+ddl = "CREATE TABLE t (_path TEXT)"
 glob = "*.json"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -469,15 +312,15 @@ glob = "*.json"
     fn multiple_tables_preserve_order() {
         let toml = r#"
 [[table]]
-ddl = "CREATE TABLE a (x TEXT)"
+ddl = "CREATE TABLE a (_path TEXT)"
 glob = "a/*.json"
 
 [[table]]
-ddl = "CREATE TABLE b (x TEXT)"
+ddl = "CREATE TABLE b (_path TEXT)"
 glob = "b/*.csv"
 
 [[table]]
-ddl = "CREATE TABLE c (x TEXT)"
+ddl = "CREATE TABLE c (_path TEXT)"
 glob = "c/*.yaml"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -485,5 +328,24 @@ glob = "c/*.yaml"
         assert!(config.tables[0].ddl.contains("a"));
         assert!(config.tables[1].ddl.contains("b"));
         assert!(config.tables[2].ddl.contains("c"));
+    }
+
+    #[test]
+    fn unknown_top_level_keys_in_table_are_rejected() {
+        // format/each/columns were removed from the grammar; serde's default
+        // is permissive (unknown keys are ignored), but make sure existing
+        // configs aren't silently broken: if a user still has `format = ...`
+        // their table loads (the field is just dropped).
+        let toml = r#"
+[[table]]
+ddl = "CREATE TABLE t (_path TEXT)"
+glob = "*.json"
+format = "json"
+"#;
+        // serde ignores unknown fields by default. We accept this as the
+        // migration story; the config still parses and the table works
+        // (filesystem-fact rows are produced regardless of the dropped key).
+        let config = load_config_str(toml).unwrap();
+        assert_eq!(config.tables.len(), 1);
     }
 }

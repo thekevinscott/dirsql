@@ -1,5 +1,32 @@
 # Architecture
 
+## Scope
+
+`dirsql` is a queryable index over a local filesystem. Files are rows; the
+database is the index. Columns of any dirsql table come from filesystem-level
+facts:
+
+- The path itself, and parts derived from it (`_path`, `_basename`, `_dir`,
+  `_ext`).
+- Named captures in the glob pattern (`posts/{thread_id}/*.md` →
+  `thread_id`).
+- Stat metadata (`_size`, `_mtime`, `_ctime`).
+
+**Content interpretation is intentionally out of scope.** dirsql does not
+parse markdown frontmatter, JSON, CSV, YAML, TOML, or any other file format
+on the user's behalf. If a project needs columns derived from file content,
+the consumer registers a programmatic `Table` whose `extract` callback does
+the parsing in the host language (Python / TypeScript / Rust). For tabular
+formats, [DuckDB](https://duckdb.org) and the [duckdb_markdown community
+extension](https://github.com/teaguesterling/duckdb_markdown) are first-class
+alternatives.
+
+This scope is a deliberate inversion of the original design and was settled
+in [issue #169](https://github.com/thekevinscott/dirsql/issues/169). The
+prior `[table.columns]` source-dispatch and the `format` / `each` config
+keys were ripped out; the per-format parser zoo (`Format::Json`, `Csv`,
+`Yaml`, `Toml`, `Frontmatter`, …) is gone.
+
 ## Core Principle: One Implementation, Thin Bindings
 
 **The Rust crate (`packages/rust/`) is the single source of truth for all business logic.** Every language SDK is a thin binding layer that wraps it -- it does NOT reimplement it.
@@ -62,7 +89,7 @@ Walks a directory tree and matches files against table globs. Returns a list of 
 
 ### `matcher` -- Glob-to-table mapping
 
-Maps glob patterns to table names and handles ignore patterns. A file is matched against globs in registration order; the first match wins.
+Maps glob patterns to table names and handles ignore patterns. A file is matched against globs in registration order; the first match wins. Glob patterns may contain `{name}` capture placeholders; the matcher returns captured segments alongside the table name.
 
 ### `watcher` -- Filesystem monitoring
 
@@ -71,6 +98,26 @@ Wraps the `notify` crate to watch for filesystem changes. Emits `FileEvent` vari
 ### `differ` -- Row diffing
 
 Compares old and new row sets for a file to produce `RowEvent` variants: `Insert`, `Update`, `Delete`, `Error`. Rows are compared by position (index within the file).
+
+### Filesystem-fact injection (in `lib.rs`)
+
+Between the user-supplied `extract` callback and SQLite insertion, the core
+merges two sources of filesystem-derived columns into every row:
+
+- **Glob path captures**, by capture name (`{thread_id}` → `thread_id`).
+- **Stat virtuals**, under reserved `_`-prefixed names: `_path`, `_basename`,
+  `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`.
+
+Auto-injected keys are filtered to the columns declared in the table's DDL
+(via `db.get_table_columns`), so a table with a minimal DDL is not broken by
+virtuals it didn't ask for. User-extract values win over auto-injected
+values when the keys collide.
+
+Config-defined tables (`[[table]]` entries in `.dirsql.toml`) use a
+synthesized `extract` that returns one empty row per matched file; the
+filesystem-fact layer fills it in. Programmatic tables (`Table::new` /
+`Table::strict`) get the same auto-injection applied to whatever rows their
+extract returns.
 
 ## Python SDK (`packages/python/`)
 
@@ -96,14 +143,17 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 2. Rust executes DDL to create SQLite tables
 3. `scanner` walks the directory and matches files to tables
 4. For each matched file, Python `extract` is called via PyO3
-5. Extracted rows are inserted into SQLite with tracking metadata
-6. File-to-rows mapping is stored for later diffing
+5. The core merges glob captures and stat virtuals (filtered to the DDL's
+   declared columns) into each extracted row
+6. Rows are inserted into SQLite with tracking metadata
+7. File-to-rows mapping is stored for later diffing
 
 ### File change processing
 
 1. `notify` detects a filesystem event (create/modify/delete)
 2. The matcher checks if the file belongs to a table
-3. For create/modify: file is re-read, `extract` is called, `differ` compares old and new rows
+3. For create/modify: file is re-read, `extract` is called, captures and stat
+   virtuals are merged, `differ` compares old and new rows
 4. For delete: old rows are retrieved, all emitted as delete events
 5. SQLite is updated (old rows deleted, new rows inserted)
 6. `RowEvent` objects are returned to Python

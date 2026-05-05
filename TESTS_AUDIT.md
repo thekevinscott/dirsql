@@ -1,5 +1,16 @@
 # Tests Audit (bead: dirsql-9ng)
 
+> **Note (post-#169):** dirsql's scope was narrowed in
+> [#169](https://github.com/thekevinscott/dirsql/issues/169) — content
+> parsing was removed. The rows below for "Format inference" (`.json`,
+> `.jsonl`, `.csv`, `.tsv`, `.ndjson`, `.toml`, `.yaml`/`.yml`, `.md`
+> frontmatter), explicit `format = "..."` override, `each` for nested
+> JSON navigation, and `[table.columns]` column mapping are obsolete:
+> the corresponding features and tests have been deleted. The
+> `from_config` strict-mode tests have moved from JSON-driven to
+> programmatic-Table-driven (see `test_docs_gaps.py::describe_strict_mode_gap`).
+> The remaining rows still apply.
+
 Audit mapping between documented features and tests. Produced 2026-04-14 as part
 of enforcing the "docs as spec" rule in `AGENTS.md` (every documented feature
 has a test; every test traces back to a documented feature).

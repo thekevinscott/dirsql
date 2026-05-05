@@ -2,46 +2,39 @@ use dirsql::{DirSQL, Value};
 use std::fs;
 use tempfile::TempDir;
 
-/// Helper: create a temp dir with a `.dirsql.toml` and data files, then run from_config.
-fn setup_csv_config() -> (TempDir, DirSQL) {
+/// Config-defined tables produce one row per matched file. Every row's
+/// columns come from filesystem facts: glob path captures and stat virtuals
+/// (`_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`).
+/// Content interpretation is intentionally out of scope.
+
+#[test]
+fn from_config_produces_one_row_per_matched_file() {
     let root = TempDir::new().unwrap();
 
-    // Write config
     fs::write(
         root.path().join(".dirsql.toml"),
         r#"
-[dirsql]
-ignore = ["ignored/**"]
-
 [[table]]
-ddl = "CREATE TABLE items (name TEXT, price REAL)"
+ddl = "CREATE TABLE files (_path TEXT, _basename TEXT)"
 glob = "data/*.csv"
 "#,
     )
     .unwrap();
 
-    // Write data file
     fs::create_dir_all(root.path().join("data")).unwrap();
-    fs::write(
-        root.path().join("data").join("products.csv"),
-        "name,price\napple,1.50\nbanana,0.75\n",
-    )
-    .unwrap();
+    fs::write(root.path().join("data").join("a.csv"), "anything").unwrap();
+    fs::write(root.path().join("data").join("b.csv"), "anything").unwrap();
 
     let db = DirSQL::from_config(root.path()).unwrap();
-    (root, db)
-}
-
-#[test]
-fn from_config_indexes_csv_files() {
-    let (_root, db) = setup_csv_config();
     let rows = db
-        .query("SELECT name, price FROM items ORDER BY name")
+        .query("SELECT _path, _basename FROM files ORDER BY _path")
         .unwrap();
 
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0]["name"], Value::Text("apple".into()));
-    assert_eq!(rows[1]["name"], Value::Text("banana".into()));
+    assert_eq!(rows[0]["_path"], Value::Text("data/a.csv".into()));
+    assert_eq!(rows[0]["_basename"], Value::Text("a.csv".into()));
+    assert_eq!(rows[1]["_path"], Value::Text("data/b.csv".into()));
+    assert_eq!(rows[1]["_basename"], Value::Text("b.csv".into()));
 }
 
 #[test]
@@ -55,7 +48,7 @@ fn from_config_honors_ignore_patterns() {
 ignore = ["ignored/**"]
 
 [[table]]
-ddl = "CREATE TABLE items (name TEXT)"
+ddl = "CREATE TABLE files (_path TEXT)"
 glob = "**/*.csv"
 "#,
     )
@@ -63,140 +56,119 @@ glob = "**/*.csv"
 
     fs::create_dir_all(root.path().join("data")).unwrap();
     fs::create_dir_all(root.path().join("ignored")).unwrap();
-    fs::write(root.path().join("data").join("a.csv"), "name\nvisible\n").unwrap();
-    fs::write(root.path().join("ignored").join("b.csv"), "name\nhidden\n").unwrap();
+    fs::write(root.path().join("data").join("a.csv"), "x").unwrap();
+    fs::write(root.path().join("ignored").join("b.csv"), "x").unwrap();
 
     let db = DirSQL::from_config(root.path()).unwrap();
-    let rows = db.query("SELECT name FROM items").unwrap();
+    let rows = db.query("SELECT _path FROM files").unwrap();
 
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["name"], Value::Text("visible".into()));
+    assert_eq!(rows[0]["_path"], Value::Text("data/a.csv".into()));
 }
 
 #[test]
-fn from_config_with_json_and_each() {
+fn from_config_with_path_captures_promotes_them_to_columns() {
     let root = TempDir::new().unwrap();
 
     fs::write(
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE products (name TEXT, price REAL)"
-glob = "catalog/*.json"
-each = "items"
-"#,
-    )
-    .unwrap();
-
-    fs::create_dir_all(root.path().join("catalog")).unwrap();
-    fs::write(
-        root.path().join("catalog").join("store.json"),
-        r#"{"items": [{"name": "widget", "price": 9.99}, {"name": "gadget", "price": 19.99}]}"#,
-    )
-    .unwrap();
-
-    let db = DirSQL::from_config(root.path()).unwrap();
-    let rows = db
-        .query("SELECT name, price FROM products ORDER BY name")
-        .unwrap();
-
-    assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0]["name"], Value::Text("gadget".into()));
-    assert_eq!(rows[1]["name"], Value::Text("widget".into()));
-}
-
-#[test]
-fn from_config_with_path_captures() {
-    let root = TempDir::new().unwrap();
-
-    fs::write(
-        root.path().join(".dirsql.toml"),
-        r#"
-[[table]]
-ddl = "CREATE TABLE comments (thread_id TEXT, body TEXT)"
-glob = "_comments/{thread_id}/index.jsonl"
+ddl = "CREATE TABLE comments (thread_id TEXT, _basename TEXT)"
+glob = "_comments/{thread_id}/*.txt"
 "#,
     )
     .unwrap();
 
     fs::create_dir_all(root.path().join("_comments").join("abc123")).unwrap();
+    fs::create_dir_all(root.path().join("_comments").join("def456")).unwrap();
     fs::write(
         root.path()
             .join("_comments")
             .join("abc123")
-            .join("index.jsonl"),
-        r#"{"body": "hello world"}
-{"body": "goodbye world"}
-"#,
+            .join("first.txt"),
+        "hello",
+    )
+    .unwrap();
+    fs::write(
+        root.path()
+            .join("_comments")
+            .join("def456")
+            .join("second.txt"),
+        "world",
     )
     .unwrap();
 
     let db = DirSQL::from_config(root.path()).unwrap();
     let rows = db
-        .query("SELECT thread_id, body FROM comments ORDER BY body")
+        .query("SELECT thread_id, _basename FROM comments ORDER BY thread_id")
         .unwrap();
 
     assert_eq!(rows.len(), 2);
-    // Both rows should have thread_id = "abc123" from the path capture
     assert_eq!(rows[0]["thread_id"], Value::Text("abc123".into()));
-    assert_eq!(rows[1]["thread_id"], Value::Text("abc123".into()));
+    assert_eq!(rows[0]["_basename"], Value::Text("first.txt".into()));
+    assert_eq!(rows[1]["thread_id"], Value::Text("def456".into()));
+    assert_eq!(rows[1]["_basename"], Value::Text("second.txt".into()));
 }
 
 #[test]
-fn from_config_with_column_mapping() {
+fn from_config_exposes_stat_virtuals() {
     let root = TempDir::new().unwrap();
 
     fs::write(
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE authors (display_name TEXT)"
-glob = "authors/*.json"
-
-[table.columns]
-display_name = "metadata.author.name"
+ddl = "CREATE TABLE files (_path TEXT, _basename TEXT, _dir TEXT, _ext TEXT, _size INTEGER, _mtime INTEGER)"
+glob = "docs/*.md"
 "#,
     )
     .unwrap();
 
-    fs::create_dir_all(root.path().join("authors")).unwrap();
-    fs::write(
-        root.path().join("authors").join("alice.json"),
-        r#"{"metadata": {"author": {"name": "Alice Smith"}}}"#,
-    )
-    .unwrap();
+    fs::create_dir_all(root.path().join("docs")).unwrap();
+    let body = "# title\nhello world\n";
+    fs::write(root.path().join("docs").join("readme.md"), body).unwrap();
 
     let db = DirSQL::from_config(root.path()).unwrap();
-    let rows = db.query("SELECT display_name FROM authors").unwrap();
+    let rows = db
+        .query("SELECT _path, _basename, _dir, _ext, _size, _mtime FROM files")
+        .unwrap();
 
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["display_name"], Value::Text("Alice Smith".into()));
+    let r = &rows[0];
+    assert_eq!(r["_path"], Value::Text("docs/readme.md".into()));
+    assert_eq!(r["_basename"], Value::Text("readme.md".into()));
+    assert_eq!(r["_dir"], Value::Text("docs".into()));
+    assert_eq!(r["_ext"], Value::Text("md".into()));
+    assert_eq!(r["_size"], Value::Integer(body.len() as i64));
+    // _mtime is set to a unix timestamp; just confirm it's a positive integer.
+    match &r["_mtime"] {
+        Value::Integer(n) => assert!(*n > 0, "expected positive _mtime, got {n}"),
+        other => panic!("expected Integer for _mtime, got {:?}", other),
+    }
 }
 
 #[test]
-fn from_config_with_explicit_format() {
+fn from_config_undeclared_stat_columns_are_silently_dropped() {
+    // The DDL declares only _path; _size/_mtime are not selected, but the
+    // injection layer doesn't fail when they're not in the table schema.
     let root = TempDir::new().unwrap();
 
-    // Use format = "csv" on a .txt extension file
     fs::write(
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE data (x TEXT, y TEXT)"
+ddl = "CREATE TABLE minimal (_path TEXT)"
 glob = "*.txt"
-format = "csv"
 "#,
     )
     .unwrap();
 
-    fs::write(root.path().join("data.txt"), "x,y\nfoo,bar\n").unwrap();
-
+    fs::write(root.path().join("a.txt"), "x").unwrap();
     let db = DirSQL::from_config(root.path()).unwrap();
-    let rows = db.query("SELECT x, y FROM data").unwrap();
-
+    let rows = db.query("SELECT _path FROM minimal").unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["x"], Value::Text("foo".into()));
-    assert_eq!(rows[0]["y"], Value::Text("bar".into()));
+    assert_eq!(rows[0]["_path"], Value::Text("a.txt".into()));
 }
 
 #[test]
@@ -207,22 +179,22 @@ fn from_config_missing_config_file_returns_error() {
 }
 
 #[test]
-fn from_config_no_format_and_unknown_extension_returns_error() {
+fn from_config_with_no_matching_files_yields_empty_table() {
     let root = TempDir::new().unwrap();
 
     fs::write(
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE data (x TEXT)"
-glob = "*.dat"
+ddl = "CREATE TABLE empty_t (_path TEXT)"
+glob = "nothing_here/*.txt"
 "#,
     )
     .unwrap();
 
-    // The table has no format and .dat can't be inferred -- should error
-    let result = DirSQL::from_config(root.path());
-    assert!(result.is_err());
+    let db = DirSQL::from_config(root.path()).unwrap();
+    let rows = db.query("SELECT _path FROM empty_t").unwrap();
+    assert!(rows.is_empty());
 }
 
 #[tokio::test]
@@ -235,22 +207,22 @@ async fn async_from_config_works() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE items (name TEXT)"
+ddl = "CREATE TABLE files (_path TEXT, _basename TEXT)"
 glob = "*.csv"
 "#,
     )
     .unwrap();
 
-    fs::write(root.path().join("data.csv"), "name\nhello\nworld\n").unwrap();
+    fs::write(root.path().join("data.csv"), "anything").unwrap();
 
     let db = AsyncDirSQL::from_config(root.path()).unwrap();
     db.ready().await.unwrap();
     let rows = db
-        .query("SELECT name FROM items ORDER BY name")
+        .query("SELECT _path, _basename FROM files")
         .await
         .unwrap();
 
-    assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0]["name"], Value::Text("hello".into()));
-    assert_eq!(rows[1]["name"], Value::Text("world".into()));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["_path"], Value::Text("data.csv".into()));
+    assert_eq!(rows[0]["_basename"], Value::Text("data.csv".into()));
 }

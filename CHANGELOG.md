@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Content parsing is no longer a dirsql concern.** `parser.rs` and the
+  `Format` enum (`Json` / `Jsonl` / `Csv` / `Tsv` / `Toml` / `Yaml` /
+  `Frontmatter`) are gone, along with `ColumnSource`, `apply_columns`,
+  `parse_file`, `infer_format`, and every `parse_*` / `navigate_*` helper.
+  The corresponding `format`, `each`, and `[table.columns]` keys in
+  `.dirsql.toml` are no longer recognized as part of the grammar (they parse
+  but are ignored). The `csv` and `serde_yaml` Cargo dependencies are
+  dropped. Closes #169.
+- `DirSqlError::NoFormat` and `ConfigError::UnknownFormat` variants.
+
+### Changed
+
+- **`[[table]]` entries in `.dirsql.toml` now produce filesystem-fact rows
+  instead of parsed-content rows.** Each matched file emits one row; columns
+  come from glob path captures (named `{placeholder}` segments) and reserved
+  stat virtuals (`_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`,
+  `_ctime`). The DDL declares which subset of these the SQL table exposes;
+  undeclared keys are silently dropped during normalization (in non-strict
+  mode) or rejected (in strict mode).
+- **All tables — programmatic and config-driven — now auto-inject glob
+  captures and stat virtuals into every row** (filtered to the DDL's
+  declared columns). User-extract values win over auto-injected values when
+  keys collide. Programmatic `Table::new(...)` users no longer need to parse
+  the path themselves to surface capture columns or stat metadata.
+- `ARCHITECTURE.md` now opens with an explicit scope statement — dirsql is
+  a queryable index over a filesystem; content interpretation is out of
+  scope.
+
 ### Added
 
 - **Persistent on-disk SQLite cache.** Opt-in `persist` / `persist_path`

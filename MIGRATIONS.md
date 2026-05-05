@@ -11,6 +11,140 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### Content parsing removed; `[table.columns]` / `format` / `each` no longer recognized
+
+#### Summary
+
+dirsql's scope is narrowed to its actual purpose: bridging a local filesystem
+to a SQL index. Content interpretation — frontmatter, JSON dot-paths, CSV
+parsing, the whole `Format` zoo — is no longer dirsql's job. The `parser.rs`
+module and every related symbol are deleted; the `[table.columns]`, `format`,
+and `each` keys are no longer part of the `.dirsql.toml` grammar. Affects
+every consumer that used `from_config` / `config=` / `new DirSQL(configPath)`
+to point at JSON, JSONL, CSV, TSV, TOML, YAML, or markdown-with-frontmatter
+files. Closes [#169](https://github.com/thekevinscott/dirsql/issues/169).
+
+Programmatic `Table::new(...)` consumers are unaffected at the call-site
+level: their extract callbacks already do their own parsing. They do however
+gain auto-injection of glob captures and stat virtuals into each row (see
+"Behavior changes without code changes" below).
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| `.dirsql.toml` `[[table]]` for parsed content | `ddl = "CREATE TABLE items (name TEXT, price REAL)"` + `glob = "items/*.json"` (relied on JSON parsing) | Move parsing into a programmatic `Table` whose `extract` parses the bytes in your host language. The `.dirsql.toml` entry for filesystem-fact-only tables stays as `ddl = "CREATE TABLE items (_path TEXT, _basename TEXT, ...)"` + `glob`. |
+| `.dirsql.toml` `format = "..."` | `format = "json"` (hard requirement when extension didn't match) | Key is no longer recognized. Drop it. To opt into content parsing, write a programmatic `Table` instead. |
+| `.dirsql.toml` `each = "..."` | `each = "data.items"` (dot-path navigation into JSON/YAML/TOML) | Key is no longer recognized. Drop it. Use a programmatic `Table` whose extract walks the structure (e.g. `json.loads(content)["data"]["items"]`). |
+| `.dirsql.toml` `[table.columns]` | `[table.columns]\ndisplay_name = "metadata.author.name"` | Block is no longer recognized. Drop it. To project nested values into columns, do it in a programmatic `Table` extract. |
+| Glob captures in `[[table]]` | Only worked when `[table.columns]` referenced them or relied on implicit dispatch | Captures are auto-injected as columns by name (`thread_id` from `posts/{thread_id}/*.md`) when the DDL declares them. No `[table.columns]` mapping required. |
+| `DirSqlError::NoFormat`, `ConfigError::UnknownFormat` (Rust) | Public error variants | Removed. Catch the parent `DirSqlError` / `ConfigError` instead. |
+
+Worked example. Before:
+
+```toml
+[[table]]
+ddl = "CREATE TABLE comments (thread_id TEXT, body TEXT)"
+glob = "comments/{thread_id}/index.jsonl"
+```
+
+After (Python — content parsing moves into the user's code):
+
+```python
+from dirsql import DirSQL, Table
+import json
+
+db = DirSQL(
+    "/path/to/root",
+    tables=[
+        Table(
+            ddl="CREATE TABLE comments (thread_id TEXT, body TEXT)",
+            glob="comments/{thread_id}/index.jsonl",
+            extract=lambda path, content: [
+                {"body": json.loads(line)["body"]}
+                for line in content.splitlines()
+                if line
+            ],
+        )
+    ],
+)
+```
+
+`thread_id` is auto-injected from the glob capture; the user's extract only
+returns `{"body": ...}`.
+
+For tabular formats where the heavy lift is parsing, prefer
+[DuckDB](https://duckdb.org)
+(`SELECT * FROM read_csv('**/*.csv')`,
+`SELECT * FROM read_json('**/*.jsonl')`) or — for markdown frontmatter — the
+[duckdb_markdown community extension](https://github.com/teaguesterling/duckdb_markdown).
+
+#### Deprecations removed
+
+_None._ The removed keys (`format`, `each`, `[table.columns]`) and error
+variants (`NoFormat`, `UnknownFormat`) were never deprecated; they are
+removed in a single release as part of the scope change.
+
+#### Behavior changes without code changes
+
+- **Filesystem-fact auto-injection** is now applied uniformly to every row,
+  whether produced by a programmatic or config-defined `Table`. For each
+  row the core merges in:
+  - glob path captures by capture name (e.g. `thread_id`),
+  - stat virtuals under reserved `_`-prefixed names (`_path`, `_basename`,
+    `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`).
+  Auto-injected keys are filtered to the columns declared in the table's
+  DDL, so a strict-mode table with a minimal DDL is not broken by virtuals
+  it didn't ask for. User-extract values win over auto-injected values when
+  keys collide.
+
+  *Impact on existing programmatic consumers:* if your DDL happens to
+  declare a column whose name matches a glob capture or one of the stat
+  virtuals (e.g. you had `CREATE TABLE foo (_path TEXT, ...)` in the DDL
+  and your extract did **not** populate `_path`), the column is now
+  populated automatically. If your extract does populate it, your value
+  wins — no change in observable behavior.
+
+- **`.dirsql.toml` files that still contain `format = "..."`, `each =
+  "..."`, or `[table.columns]` blocks** parse without error (TOML's default
+  permissive deserialization ignores unknown keys). The keys are silently
+  dropped. Tables produce filesystem-fact rows regardless. If you relied on
+  parsed content, you will see all-NULL or all-default values until you
+  migrate to a programmatic `Table` (see "Required changes" above).
+
+#### Verification
+
+```bash
+# 1. Confirm the parser module no longer exists in the dependency.
+cargo tree -p dirsql --target-dir /tmp/dirsql-verify | grep -E '\bcsv\b|\bserde_yaml\b' \
+  && echo 'FAIL: csv or serde_yaml still in tree' || echo 'OK: parser deps removed'
+
+# 2. Confirm `format`/`each`/`[table.columns]` are silently ignored.
+cat > /tmp/legacy.toml <<'TOML'
+[[table]]
+ddl  = "CREATE TABLE t (_path TEXT)"
+glob = "*.json"
+format = "json"
+each   = "items"
+[table.columns]
+old = "metadata.name"
+TOML
+# Parses without error; the table produces filesystem-fact rows.
+
+# 3. Confirm filesystem-fact auto-injection on a config-defined table.
+mkdir -p /tmp/dirsql-fs/posts/abc
+echo '{}' > /tmp/dirsql-fs/posts/abc/hello.md
+cat > /tmp/dirsql-fs/.dirsql.toml <<'TOML'
+[[table]]
+ddl  = "CREATE TABLE posts (thread_id TEXT, _basename TEXT, _size INTEGER)"
+glob = "posts/{thread_id}/*.md"
+TOML
+# A query of `SELECT thread_id, _basename, _size FROM posts` returns one
+# row: ("abc", "hello.md", 3).
+```
+
+---
+
 ### Release pipeline migrated to `putitoutthere`
 
 #### Summary

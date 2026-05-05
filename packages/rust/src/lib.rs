@@ -16,8 +16,6 @@ pub mod differ;
 #[doc(hidden)]
 pub mod matcher;
 #[doc(hidden)]
-pub mod parser;
-#[doc(hidden)]
 pub mod persist;
 #[doc(hidden)]
 pub mod scanner;
@@ -28,8 +26,7 @@ pub mod watcher;
 pub mod cli;
 
 use crate::db::{Db, parse_table_name};
-use crate::matcher::{TableMatcher, parse_captures};
-use crate::parser::ColumnSource;
+use crate::matcher::TableMatcher;
 use crate::persist::{
     CachedFile, FileStat, build_meta, canonical_root, compute_glob_config_hash,
     create_sidecar_tables, delete_file as cache_delete_file, drop_user_tables, ensure_parent_dir,
@@ -93,9 +90,6 @@ pub enum DirSqlError {
 
     #[error("config error: {0}")]
     Config(String),
-
-    #[error("no format for table '{0}': specify format explicitly or use a recognized extension")]
-    NoFormat(String),
 
     #[error(
         "query() only accepts read-only statements; SQLite classified this statement as a write"
@@ -455,6 +449,14 @@ impl DirSQL {
             Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
         };
 
+        let captures = self
+            .inner
+            .matcher
+            .match_file_with_captures(Path::new(rel_path))
+            .map(|m| m.captures)
+            .unwrap_or_default();
+        let stat = compute_stat_virtuals(rel_path, abs_path);
+
         let strict = *self.inner.strict_map.get(table).unwrap_or(&false);
 
         let new_rows = {
@@ -462,6 +464,11 @@ impl DirSQL {
                 Ok(g) => g,
                 Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
             };
+            let declared_columns = match db.get_table_columns(table) {
+                Ok(cols) => cols,
+                Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
+            };
+            let raw_rows = merge_filesystem_facts(raw_rows, &captures, &stat, &declared_columns);
             let mut normalized = Vec::with_capacity(raw_rows.len());
             for raw in &raw_rows {
                 match db.normalize_row(table, raw, strict) {
@@ -658,6 +665,16 @@ impl DirSQL {
                 path: rel_path.clone(),
                 message: e.to_string(),
             })?;
+
+            let abs_path = root.join(&rel_path);
+            let captures = matcher
+                .match_file_with_captures(Path::new(&rel_path))
+                .map(|m| m.captures)
+                .unwrap_or_default();
+            let stat_virtuals = compute_stat_virtuals(&rel_path, &abs_path);
+            let declared_columns = db.get_table_columns(&table_name).map_err(map_db_error)?;
+            let raw_rows =
+                merge_filesystem_facts(raw_rows, &captures, &stat_virtuals, &declared_columns);
 
             let mut rows = Vec::with_capacity(raw_rows.len());
             // When updating an existing file in the persistent cache, drop
@@ -1162,63 +1179,24 @@ fn relative_path(root: &Path, path: &Path) -> String {
         .to_string()
 }
 
-/// Build [`Table`] objects from a parsed config by synthesizing an extract
-/// closure from the declared `format` / `each` / `columns`.
+/// Build [`Table`] objects from a parsed config.
+///
+/// Config-defined tables produce one row per matched file. The row is built
+/// entirely from filesystem facts: glob path captures and stat virtuals
+/// (`_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`) are
+/// injected by the core pipeline ([`merge_filesystem_facts`]). The
+/// synthesized extract therefore emits a single empty row per file; the
+/// fact-injection layer fills it in. Content interpretation is not a dirsql
+/// concern — for that, register a programmatic [`Table`] with your own
+/// extract closure.
 fn build_tables_from_config(cfg: &config::Config) -> Result<Vec<Table>> {
     let mut tables = Vec::with_capacity(cfg.tables.len());
 
     for table_cfg in &cfg.tables {
-        let format = table_cfg.format.ok_or_else(|| {
-            let name = parse_table_name(&table_cfg.ddl).unwrap_or_else(|| table_cfg.glob.clone());
-            DirSqlError::NoFormat(name)
-        })?;
-
-        let each = table_cfg.each.clone();
-        let glob = table_cfg.glob.clone();
-        let (_, capture_names, capture_regex) = parse_captures(&glob);
-
-        let column_sources: HashMap<String, ColumnSource> = table_cfg
-            .columns
-            .as_ref()
-            .map(|cols| {
-                cols.iter()
-                    .map(|(col_name, source_str)| {
-                        (
-                            col_name.clone(),
-                            ColumnSource::parse(source_str, &capture_names),
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let mut table = Table::try_new(
+        let mut table = Table::new(
             table_cfg.ddl.clone(),
             table_cfg.glob.clone(),
-            move |path: &str, content: &str| {
-                let mut rows = parser::parse_file(format, content, each.as_deref())
-                    .map_err(|e| -> BoxError { Box::new(e) })?;
-
-                let captures: HashMap<String, String> = if let Some(ref regex) = capture_regex {
-                    regex
-                        .captures(path)
-                        .map(|caps| {
-                            capture_names
-                                .iter()
-                                .filter_map(|name| {
-                                    caps.name(name)
-                                        .map(|m| (name.clone(), m.as_str().to_string()))
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default()
-                } else {
-                    HashMap::new()
-                };
-
-                rows = parser::apply_columns(&rows, &column_sources, &captures);
-                Ok(rows)
-            },
+            |_path: &str, _content: &str| vec![Row::new()],
         );
 
         if table_cfg.strict == Some(true) {
@@ -1229,6 +1207,99 @@ fn build_tables_from_config(cfg: &config::Config) -> Result<Vec<Table>> {
     }
 
     Ok(tables)
+}
+
+/// Reserved column names for filesystem-derived virtual columns. These are
+/// always available on every row when declared in the table DDL; if not
+/// declared, they are silently dropped during normalization.
+const STAT_PATH: &str = "_path";
+const STAT_BASENAME: &str = "_basename";
+const STAT_DIR: &str = "_dir";
+const STAT_EXT: &str = "_ext";
+const STAT_SIZE: &str = "_size";
+const STAT_MTIME: &str = "_mtime";
+const STAT_CTIME: &str = "_ctime";
+
+/// Compute the filesystem-fact columns for a given file: path-derived
+/// (`_path`, `_basename`, `_dir`, `_ext`) and stat-derived (`_size`,
+/// `_mtime`, `_ctime`).
+fn compute_stat_virtuals(rel_path: &str, abs_path: &Path) -> Row {
+    let mut out = Row::new();
+
+    out.insert(STAT_PATH.into(), Value::Text(rel_path.to_string()));
+
+    let pb = Path::new(rel_path);
+    if let Some(name) = pb.file_name() {
+        out.insert(
+            STAT_BASENAME.into(),
+            Value::Text(name.to_string_lossy().to_string()),
+        );
+    }
+    if let Some(parent) = pb.parent() {
+        out.insert(
+            STAT_DIR.into(),
+            Value::Text(parent.to_string_lossy().to_string()),
+        );
+    }
+    if let Some(ext) = pb.extension() {
+        out.insert(
+            STAT_EXT.into(),
+            Value::Text(ext.to_string_lossy().to_lowercase()),
+        );
+    }
+
+    if let Ok(metadata) = std::fs::metadata(abs_path) {
+        out.insert(STAT_SIZE.into(), Value::Integer(metadata.len() as i64));
+        if let Ok(mtime) = metadata.modified()
+            && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
+        {
+            out.insert(STAT_MTIME.into(), Value::Integer(d.as_secs() as i64));
+        }
+        if let Ok(ctime) = metadata.created()
+            && let Ok(d) = ctime.duration_since(std::time::UNIX_EPOCH)
+        {
+            out.insert(STAT_CTIME.into(), Value::Integer(d.as_secs() as i64));
+        }
+    }
+
+    out
+}
+
+/// Merge filesystem-fact columns (stat virtuals + glob captures) into each
+/// raw row produced by an extract closure. Auto-injected keys are filtered
+/// to those declared in `declared_columns`, so a strict-mode table with a
+/// minimal DDL is not broken by virtuals it didn't ask for. User-provided
+/// values in `raw_rows` win over auto-injected values: an extract that
+/// explicitly emits e.g. `_path` is honored.
+fn merge_filesystem_facts(
+    raw_rows: Vec<Row>,
+    captures: &HashMap<String, String>,
+    stat: &Row,
+    declared_columns: &[String],
+) -> Vec<Row> {
+    let declared: std::collections::HashSet<&str> =
+        declared_columns.iter().map(String::as_str).collect();
+
+    raw_rows
+        .into_iter()
+        .map(|raw| {
+            let mut merged = Row::new();
+            for (k, v) in stat {
+                if declared.contains(k.as_str()) {
+                    merged.insert(k.clone(), v.clone());
+                }
+            }
+            for (k, v) in captures {
+                if declared.contains(k.as_str()) {
+                    merged.insert(k.clone(), Value::Text(v.clone()));
+                }
+            }
+            for (k, v) in raw {
+                merged.insert(k, v);
+            }
+            merged
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

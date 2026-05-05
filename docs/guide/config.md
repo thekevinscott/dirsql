@@ -6,7 +6,18 @@ canonical: https://thekevinscott.github.io/dirsql/guide/config
 
 > Online: <https://thekevinscott.github.io/dirsql/guide/config>
 
-`dirsql` can be configured with a `.dirsql.toml` file, allowing you to define tables declaratively without writing code.
+`dirsql` can be configured with a `.dirsql.toml` file. Tables defined this
+way produce **one row per matched file**. Each row's columns come from
+filesystem facts:
+
+- **Glob path captures** — named `{placeholder}` segments in the glob.
+- **Stat virtuals** — reserved `_`-prefixed columns for path-derived and
+  stat-derived metadata.
+
+Content interpretation (parsing JSON, CSV, frontmatter, etc.) is **not**
+configured in `.dirsql.toml`. If you need columns derived from file
+contents, register a programmatic [`Table`](./tables.md) whose `extract`
+function does the parsing in your host language.
 
 ## Basic Example
 
@@ -15,11 +26,12 @@ canonical: https://thekevinscott.github.io/dirsql/guide/config
 ignore = ["node_modules/**", ".git/**"]
 
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT)"
-glob = "posts/*.json"
+ddl  = "CREATE TABLE posts (_path TEXT, _basename TEXT, _size INTEGER, _mtime INTEGER)"
+glob = "posts/*.md"
 ```
 
-The `format` is inferred from the glob extension (`.json` -> JSON, `.jsonl` -> JSONL, `.csv` -> CSV, etc.). Each JSON key maps to a column with the same name.
+Each `posts/*.md` file produces one row. The DDL declares which stat
+virtuals are surfaced as SQL columns.
 
 ## Loading a Config File
 
@@ -52,11 +64,16 @@ await db.ready;
 
 :::
 
-By default, the root directory scanned is the config file's parent directory. Override it by passing `root` explicitly (the explicit value wins and a warning is emitted) or by declaring `[dirsql].root` in the config file itself.
+By default, the root directory scanned is the config file's parent
+directory. Override it by passing `root` explicitly (the explicit value
+wins and a warning is emitted) or by declaring `[dirsql].root` in the
+config file itself.
 
 ## Root Directory
 
-By default, the config file's parent directory is the scan root. To index a different location, declare `[dirsql].root` (relative paths are resolved relative to the config file's parent):
+By default, the config file's parent directory is the scan root. To index
+a different location, declare `[dirsql].root` (relative paths are resolved
+relative to the config file's parent):
 
 ```toml
 [dirsql]
@@ -64,101 +81,44 @@ root = "../data"
 ignore = ["node_modules/**"]
 ```
 
-## Supported Formats
+## Stat Virtuals
 
-| Extension | Format | Rows |
-|---|---|---|
-| `.json` | JSON | Object = 1 row, Array = many rows |
-| `.jsonl`, `.ndjson` | JSONL | One row per line |
-| `.csv` | CSV | One row per data line (header = columns) |
-| `.tsv` | TSV | One row per data line (tab-separated) |
-| `.toml` | TOML | One row per file |
-| `.yaml`, `.yml` | YAML | Mapping = 1 row, Sequence = many rows |
-| `.md` | Frontmatter | YAML frontmatter + body column |
+Every config-defined table can expose any of these reserved columns. Add
+the ones you want to your DDL; the rest are silently dropped.
+
+| Column | Type    | Source |
+|--------|---------|--------|
+| `_path`     | TEXT    | The file's path relative to the scan root. |
+| `_basename` | TEXT    | The filename including extension. |
+| `_dir`      | TEXT    | The parent directory path (relative to root). |
+| `_ext`      | TEXT    | The file extension, lowercased, no leading dot. |
+| `_size`     | INTEGER | Size in bytes. |
+| `_mtime`    | INTEGER | Last-modified time, unix seconds. |
+| `_ctime`    | INTEGER | Created/changed time, unix seconds. |
+
+Example query:
+
+```sql
+SELECT _basename, _size
+FROM posts
+WHERE _mtime > strftime('%s', '2024-01-01')
+ORDER BY _mtime DESC;
+```
 
 ## Path Captures
 
-Use `{name}` in glob patterns to extract path segments as columns:
+Use `{name}` in glob patterns to extract path segments as columns. Add a
+matching column name to the DDL and the capture is auto-populated:
 
 ```toml
 [[table]]
-ddl = "CREATE TABLE comments (thread_id TEXT, body TEXT, author TEXT)"
-glob = "_comments/{thread_id}/index.jsonl"
+ddl  = "CREATE TABLE comments (thread_id TEXT, _basename TEXT, _mtime INTEGER)"
+glob = "_comments/{thread_id}/*.jsonl"
 ```
 
-The directory name (e.g., `abc123`) becomes the `thread_id` column value for every row in that file.
-
-## Nested Data
-
-Use `each` to navigate into nested JSON structures:
-
-```toml
-[[table]]
-ddl = "CREATE TABLE items (name TEXT, price REAL)"
-glob = "catalog/*.json"
-each = "data.items"
-```
-
-This extracts rows from `{"data": {"items": [...]}}`.
-
-## Column Mapping
-
-Use `columns` to map SQL column names to nested fields or path captures:
-
-```toml
-[[table]]
-ddl = "CREATE TABLE posts (display_name TEXT, body TEXT)"
-glob = "posts/*.json"
-
-[table.columns]
-display_name = "metadata.author.name"
-body        = "body"
-```
-
-::: warning `[table.columns]` is a complete projection, not a partial rename
-When a `[table.columns]` section is present, `dirsql` switches to fully
-declarative projection: **only the columns listed in the mapping are
-populated**. Any column in the DDL that is not mentioned in the mapping
-is set to `NULL` for every row — the original key from the file is not
-auto-copied.
-
-This is intentional: `[table.columns]` means "here is exactly where
-every column comes from", not "rename these specific keys".
-
-**Trap to avoid.** A config like this:
-
-```toml
-[[table]]
-ddl = "CREATE TABLE comments (id TEXT, body TEXT, display_name TEXT)"
-glob = "*.json"
-
-[table.columns]
-display_name = "author"   # intended: "just rename author -> display_name"
-```
-
-against a file `one.json`:
-
-```json
-{"id": "a1", "body": "hello", "author": "Alice"}
-```
-
-produces:
-
-```json
-[{"id": null, "body": null, "display_name": "Alice"}]
-```
-
-`id` and `body` are `NULL` because they are not listed in
-`[table.columns]`. To keep them populated, add them to the mapping
-explicitly:
-
-```toml
-[table.columns]
-id           = "id"
-body         = "body"
-display_name = "author"
-```
-:::
+A file at `_comments/abc123/2024-05-05.jsonl` produces a row with
+`thread_id = "abc123"`, `_basename = "2024-05-05.jsonl"`, and `_mtime` set
+to the file's modification time.
 
 ## Ignore Patterns
 
@@ -169,11 +129,14 @@ The `ignore` list skips files and directories entirely (not even scanned):
 ignore = ["node_modules/**", ".git/**", "*.pyc", "__pycache__/**"]
 ```
 
-The top-level `.dirsql/` directory is always excluded, whether you list it or not -- it is a reserved namespace for `dirsql`'s own metadata (see [Persistence](./persistence.md)).
+The top-level `.dirsql/` directory is always excluded, whether you list it
+or not — it is a reserved namespace for `dirsql`'s own metadata (see
+[Persistence](./persistence.md)).
 
 ## Persistence
 
-Set `persist = true` to keep the SQLite database on disk between runs instead of rebuilding from scratch on every startup:
+Set `persist = true` to keep the SQLite database on disk between runs
+instead of rebuilding from scratch on every startup:
 
 ```toml
 [dirsql]
@@ -181,18 +144,26 @@ persist = true
 # persist_path = ".dirsql/cache.db"   # optional; this is the default
 ```
 
-See [Persistence](./persistence.md) for the full reconcile algorithm, storage layout, and limitations.
+See [Persistence](./persistence.md) for the full reconcile algorithm,
+storage layout, and limitations.
 
 ## Strict Mode
 
-By default, extra keys in file content are ignored and missing keys become NULL. Enable strict mode to error on mismatches:
+By default, auto-injected virtuals that aren't in the DDL are silently
+dropped, and undeclared user-extract keys are dropped. Enable strict mode
+to error when an extract emits keys not declared in the DDL:
 
 ```toml
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT)"
-glob = "posts/*.json"
+ddl  = "CREATE TABLE comments (thread_id TEXT)"
+glob = "_comments/{thread_id}/*.jsonl"
 strict = true
 ```
+
+Strict mode does **not** apply to auto-injected stat virtuals — those are
+always filtered to the DDL's declared columns regardless. Strict mode
+applies only to keys produced by an extract callback (relevant for
+programmatic [tables](./tables.md)).
 
 ## Full Example
 
@@ -201,19 +172,27 @@ strict = true
 ignore = ["node_modules/**", ".git/**", "dist/**"]
 
 [[table]]
-ddl = "CREATE TABLE comments (thread_id TEXT, body TEXT, author TEXT, resolved INTEGER)"
-glob = "_comments/{thread_id}/index.jsonl"
+ddl  = "CREATE TABLE comments (thread_id TEXT, _basename TEXT, _mtime INTEGER)"
+glob = "_comments/{thread_id}/*.jsonl"
 
 [[table]]
-ddl = "CREATE TABLE documents (title TEXT, draft INTEGER, body TEXT)"
+ddl  = "CREATE TABLE documents (_path TEXT, _basename TEXT, _size INTEGER)"
 glob = "**/index.md"
 
 [[table]]
-ddl = "CREATE TABLE metrics (date TEXT, requests INTEGER, errors INTEGER)"
+ddl  = "CREATE TABLE logs (_path TEXT, _size INTEGER, _mtime INTEGER)"
 glob = "logs/*.csv"
-
-[[table]]
-ddl = "CREATE TABLE config (key TEXT, value TEXT)"
-glob = "config/*.toml"
-strict = true
 ```
+
+## When you need parsed content
+
+`.dirsql.toml` does not parse file contents. For columns derived from the
+*inside* of files (frontmatter keys, JSON values, CSV cells, etc.),
+register a programmatic [`Table`](./tables.md) instead, and parse the
+bytes in your host language. Glob captures and stat virtuals are still
+auto-injected into rows produced by your extract.
+
+For tabular formats specifically, [DuckDB](https://duckdb.org) is also
+worth considering: it has built-in `read_csv`, `read_json`, and
+`read_parquet` over file globs, plus a community
+[markdown extension](https://github.com/teaguesterling/duckdb_markdown).
