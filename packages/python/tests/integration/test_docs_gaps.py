@@ -1,8 +1,6 @@
 """Gap-filling tests for features documented in docs/ but previously untested.
 
 Each test cites the canonical doc location (docs page + section) that it covers.
-These were identified by the TESTS_AUDIT.md pass for bead dirsql-9ng
-(Tests follow docs: 1:1 mapping between documented features and tests).
 """
 
 import json
@@ -63,167 +61,48 @@ def describe_tables_guide_bytes_to_blob():
 
 
 # ---------------------------------------------------------------------------
-# docs/guide/config.md -- "Supported Formats" (.tsv/.ndjson/.toml/.yaml/.yml/.md)
-# and "Strict Mode" (strict = true)
+# docs/guide/tables.md -- "Strict Mode" (programmatic Table strict=True)
 # ---------------------------------------------------------------------------
 
 
-def describe_from_config_formats_gap():
+def describe_strict_mode_gap():
     @pytest.mark.asyncio
-    async def it_loads_tsv_files_via_config(config_dir):
-        """Docs (guide/config.md "Supported Formats"): .tsv format is tab-separated."""
-        _write(
-            os.path.join(config_dir, "data.tsv"),
-            "name\tcount\napples\t10\noranges\t20\n",
-        )
-        _write(
-            os.path.join(config_dir, ".dirsql.toml"),
-            """\
-[[table]]
-ddl = "CREATE TABLE produce (name TEXT, count TEXT)"
-glob = "*.tsv"
-""",
-        )
-        db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
-        await db.ready()
-        results = await db.query("SELECT * FROM produce ORDER BY name")
-        assert len(results) == 2
-        assert results[0]["name"] == "apples"
-        assert results[0]["count"] == "10"
-        assert results[1]["name"] == "oranges"
+    async def it_raises_on_extra_keys_when_strict_true(tmp_dir):
+        """Docs (guide/tables.md "Strict Mode"): strict=True errors on extra keys."""
+        with open(os.path.join(tmp_dir, "a.json"), "w") as f:
+            f.write("{}")
 
-    @pytest.mark.asyncio
-    async def it_loads_ndjson_files_via_config(config_dir):
-        """Docs (guide/config.md "Supported Formats"): .ndjson aliases JSONL (one row per line)."""
-        _write(
-            os.path.join(config_dir, "events.ndjson"),
-            json.dumps({"type": "click", "count": 5})
-            + "\n"
-            + json.dumps({"type": "view", "count": 100})
-            + "\n",
+        db = DirSQL(
+            tmp_dir,
+            tables=[
+                Table(
+                    ddl="CREATE TABLE items (name TEXT)",
+                    glob="*.json",
+                    extract=lambda path, content: [{"name": "apple", "color": "red"}],
+                    strict=True,
+                ),
+            ],
         )
-        _write(
-            os.path.join(config_dir, ".dirsql.toml"),
-            """\
-[[table]]
-ddl = "CREATE TABLE events (type TEXT, count INTEGER)"
-glob = "*.ndjson"
-""",
-        )
-        db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
-        await db.ready()
-        results = await db.query("SELECT * FROM events ORDER BY type")
-        assert len(results) == 2
-        assert results[0]["type"] == "click"
-        assert results[0]["count"] == 5
-
-    @pytest.mark.asyncio
-    async def it_loads_toml_files_via_config(config_dir):
-        """Docs (guide/config.md "Supported Formats"): .toml format is one row per file."""
-        _write(
-            os.path.join(config_dir, "config", "app.toml"),
-            'name = "myapp"\nversion = "1.2"\n',
-        )
-        _write(
-            os.path.join(config_dir, ".dirsql.toml"),
-            """\
-[[table]]
-ddl = "CREATE TABLE app (name TEXT, version TEXT)"
-glob = "config/*.toml"
-""",
-        )
-        db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
-        await db.ready()
-        results = await db.query("SELECT * FROM app")
-        assert len(results) == 1
-        assert results[0]["name"] == "myapp"
-        assert results[0]["version"] == "1.2"
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("ext", ["yaml", "yml"])
-    async def it_loads_yaml_files_via_config(config_dir, ext):
-        """Docs (guide/config.md "Supported Formats"): .yaml/.yml mapping = 1 row."""
-        _write(
-            os.path.join(config_dir, f"data.{ext}"),
-            "name: widget\nprice: 9.99\n",
-        )
-        _write(
-            os.path.join(config_dir, ".dirsql.toml"),
-            f"""\
-[[table]]
-ddl = "CREATE TABLE items (name TEXT, price REAL)"
-glob = "*.{ext}"
-""",
-        )
-        db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
-        await db.ready()
-        results = await db.query("SELECT * FROM items")
-        assert len(results) == 1
-        assert results[0]["name"] == "widget"
-        assert results[0]["price"] == pytest.approx(9.99)
-
-    @pytest.mark.asyncio
-    async def it_loads_markdown_with_frontmatter_via_config(config_dir):
-        """Docs (guide/config.md "Supported Formats"): .md uses YAML frontmatter + body column."""
-        _write(
-            os.path.join(config_dir, "posts", "hello.md"),
-            "---\ntitle: Hello\nauthor: Alice\n---\nBody text here.\n",
-        )
-        _write(
-            os.path.join(config_dir, ".dirsql.toml"),
-            """\
-[[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT, body TEXT)"
-glob = "posts/*.md"
-""",
-        )
-        db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
-        await db.ready()
-        results = await db.query("SELECT * FROM posts")
-        assert len(results) == 1
-        assert results[0]["title"] == "Hello"
-        assert results[0]["author"] == "Alice"
-        assert "Body text here." in (results[0]["body"] or "")
-
-
-def describe_from_config_strict_mode_gap():
-    @pytest.mark.asyncio
-    async def it_raises_on_extra_keys_when_strict_true(config_dir):
-        """Docs (guide/config.md "Strict Mode"): `strict = true` errors on extra keys."""
-        _write(
-            os.path.join(config_dir, "items", "a.json"),
-            json.dumps({"name": "apple", "color": "red"}),
-        )
-        _write(
-            os.path.join(config_dir, ".dirsql.toml"),
-            """\
-[[table]]
-ddl = "CREATE TABLE items (name TEXT)"
-glob = "items/*.json"
-strict = true
-""",
-        )
-        db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
         with pytest.raises(Exception):
             await db.ready()
 
     @pytest.mark.asyncio
-    async def it_allows_exact_match_when_strict_true(config_dir):
-        """Docs (guide/config.md "Strict Mode"): strict mode passes on exact key match."""
-        _write(
-            os.path.join(config_dir, "items", "a.json"),
-            json.dumps({"name": "apple", "color": "red"}),
+    async def it_allows_exact_match_when_strict_true(tmp_dir):
+        """Docs (guide/tables.md "Strict Mode"): strict mode passes on exact key match."""
+        with open(os.path.join(tmp_dir, "a.json"), "w") as f:
+            f.write("{}")
+
+        db = DirSQL(
+            tmp_dir,
+            tables=[
+                Table(
+                    ddl="CREATE TABLE items (name TEXT, color TEXT)",
+                    glob="*.json",
+                    extract=lambda path, content: [{"name": "apple", "color": "red"}],
+                    strict=True,
+                ),
+            ],
         )
-        _write(
-            os.path.join(config_dir, ".dirsql.toml"),
-            """\
-[[table]]
-ddl = "CREATE TABLE items (name TEXT, color TEXT)"
-glob = "items/*.json"
-strict = true
-""",
-        )
-        db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
         await db.ready()
         results = await db.query("SELECT * FROM items")
         assert len(results) == 1

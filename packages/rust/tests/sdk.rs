@@ -582,12 +582,14 @@ glob = "*.json"
 #[test]
 fn builder_explicit_root_overrides_config_root() {
     // Config root points at an empty dir, but explicit .root() wins.
+    // The `name` column is populated from a glob path capture so the test
+    // doesn't depend on content parsing.
     let temp = TempDir::new().unwrap();
     let empty_dir = temp.path().join("empty");
     let data_dir = temp.path().join("data");
     fs::create_dir_all(&empty_dir).unwrap();
     fs::create_dir_all(&data_dir).unwrap();
-    fs::write(data_dir.join("x.json"), r#"{"name":"present"}"#).unwrap();
+    fs::write(data_dir.join("present.json"), "anything").unwrap();
 
     let cfg_path = temp.path().join(".dirsql.toml");
     fs::write(
@@ -598,7 +600,7 @@ root = "empty"
 
 [[table]]
 ddl = "CREATE TABLE items (name TEXT)"
-glob = "*.json"
+glob = "{name}.json"
 "#,
     )
     .unwrap();

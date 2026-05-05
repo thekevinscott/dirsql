@@ -6,9 +6,9 @@ The full documentation lives in [`docs/`](docs/) and is published at <https://th
 
 ## Why
 
-Structured data stored as flat files (JSON, JSONL, CSV, markdown) is easy to read, write, diff, and version-control. But querying across many files is slow -- "show me all records matching X across 50 files" requires opening and parsing every file.
+A folder of files is durable, diff-able, version-controllable, and legible without `dirsql` running. A SQL database is fast to query, easy to join across, and ergonomic for filtering. `dirsql` bridges the two: the filesystem stays the source of truth, and you get a SQL index over it for free.
 
-`dirsql` bridges this gap. The filesystem stays the source of truth; you get SQL queries and real-time change events for free. Define tables with a glob pattern and an extract function, and `dirsql` handles the rest.
+`dirsql` is a queryable index over a filesystem. Files are rows; columns come from filesystem facts (the path, glob captures like `posts/{thread_id}/*.md`, and stat metadata). Content interpretation — parsing markdown frontmatter, JSON, CSV, and the like — is intentionally not dirsql's job; if you need that, register a programmatic table whose extract function does the parsing.
 
 ## Installation
 
@@ -60,7 +60,7 @@ Task-oriented recipes for everyday `dirsql` use.
 
 ### Configuration File
 
-Declare tables, ignore patterns, and the scan root in a `.dirsql.toml` file -- no code required. Covers path captures (`{name}`), nested-data extraction (`each`), column mapping, supported formats, and strict mode.
+Declare tables, ignore patterns, and the scan root in a `.dirsql.toml` file. Tables defined this way produce one row per matched file, with columns auto-injected from glob path captures (`{name}` placeholders) and stat virtuals (`_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`).
 
 → [`docs/guide/config.md`](docs/guide/config.md)
 

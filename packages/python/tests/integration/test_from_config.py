@@ -1,6 +1,12 @@
-"""Integration tests for DirSQL(config=)."""
+"""Integration tests for DirSQL(config=).
 
-import json
+Config-defined tables produce one row per matched file. Each row's columns
+come from filesystem facts: glob path captures and stat virtuals (`_path`,
+`_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`). Content
+interpretation is intentionally out of scope; for that, register a
+programmatic Table with your own extract function.
+"""
+
 import os
 import tempfile
 
@@ -11,7 +17,7 @@ from dirsql import DirSQL
 
 @pytest.fixture
 def config_dir():
-    """Create a temp dir with data files and a .dirsql.toml config."""
+    """Create a temp dir for the config and data files."""
     with tempfile.TemporaryDirectory() as d:
         yield d
 
@@ -25,183 +31,99 @@ def _write(path, content):
 def describe_DirSQL_from_config():
     def describe_basic():
         @pytest.mark.asyncio
-        async def it_loads_json_files_via_config(config_dir):
-            """from_config parses a .dirsql.toml and indexes JSON files."""
-            _write(
-                os.path.join(config_dir, "items", "a.json"),
-                json.dumps({"name": "apple", "price": 1.5}),
-            )
-            _write(
-                os.path.join(config_dir, "items", "b.json"),
-                json.dumps({"name": "banana", "price": 0.75}),
-            )
+        async def it_produces_one_row_per_matched_file(config_dir):
+            """One row per file with `_path` and `_basename` populated."""
+            _write(os.path.join(config_dir, "items", "a.csv"), "anything")
+            _write(os.path.join(config_dir, "items", "b.csv"), "anything")
             _write(
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
-ddl = "CREATE TABLE items (name TEXT, price REAL)"
-glob = "items/*.json"
+ddl = "CREATE TABLE items (_path TEXT, _basename TEXT)"
+glob = "items/*.csv"
 """,
             )
 
             db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
-            results = await db.query("SELECT * FROM items ORDER BY name")
+            results = await db.query(
+                "SELECT _path, _basename FROM items ORDER BY _path"
+            )
             assert len(results) == 2
-            assert results[0]["name"] == "apple"
-            assert results[0]["price"] == 1.5
-            assert results[1]["name"] == "banana"
-
-        @pytest.mark.asyncio
-        async def it_loads_csv_files_via_config(config_dir):
-            """from_config handles CSV format."""
-            _write(
-                os.path.join(config_dir, "data.csv"),
-                "name,count\napples,10\noranges,20\n",
-            )
-            _write(
-                os.path.join(config_dir, ".dirsql.toml"),
-                """\
-[[table]]
-ddl = "CREATE TABLE produce (name TEXT, count TEXT)"
-glob = "*.csv"
-""",
-            )
-
-            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
-            await db.ready()
-            results = await db.query("SELECT * FROM produce ORDER BY name")
-            assert len(results) == 2
-            assert results[0]["name"] == "apples"
-
-        @pytest.mark.asyncio
-        async def it_loads_jsonl_files_via_config(config_dir):
-            """from_config handles JSONL format."""
-            _write(
-                os.path.join(config_dir, "events.jsonl"),
-                json.dumps({"type": "click", "count": 5})
-                + "\n"
-                + json.dumps({"type": "view", "count": 100})
-                + "\n",
-            )
-            _write(
-                os.path.join(config_dir, ".dirsql.toml"),
-                """\
-[[table]]
-ddl = "CREATE TABLE events (type TEXT, count INTEGER)"
-glob = "*.jsonl"
-""",
-            )
-
-            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
-            await db.ready()
-            results = await db.query("SELECT * FROM events ORDER BY type")
-            assert len(results) == 2
-            assert results[0]["type"] == "click"
-            assert results[0]["count"] == 5
+            assert results[0]["_path"] == "items/a.csv"
+            assert results[0]["_basename"] == "a.csv"
+            assert results[1]["_path"] == "items/b.csv"
+            assert results[1]["_basename"] == "b.csv"
 
     def describe_path_captures():
         @pytest.mark.asyncio
         async def it_injects_path_captures_into_rows(config_dir):
-            """Glob {name} placeholders become column values."""
+            """Glob `{name}` placeholders become column values."""
             _write(
-                os.path.join(config_dir, "comments", "thread-1", "index.jsonl"),
-                json.dumps({"body": "hello", "author": "alice"}) + "\n",
+                os.path.join(config_dir, "comments", "thread-1", "a.txt"),
+                "hello",
             )
             _write(
-                os.path.join(config_dir, "comments", "thread-2", "index.jsonl"),
-                json.dumps({"body": "world", "author": "bob"}) + "\n",
+                os.path.join(config_dir, "comments", "thread-2", "a.txt"),
+                "world",
             )
             _write(
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
-ddl = "CREATE TABLE comments (thread_id TEXT, body TEXT, author TEXT)"
-glob = "comments/{thread_id}/index.jsonl"
+ddl = "CREATE TABLE comments (thread_id TEXT, _basename TEXT)"
+glob = "comments/{thread_id}/*.txt"
 """,
             )
 
             db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
-            results = await db.query("SELECT * FROM comments ORDER BY thread_id")
+            results = await db.query(
+                "SELECT thread_id, _basename FROM comments ORDER BY thread_id"
+            )
             assert len(results) == 2
             assert results[0]["thread_id"] == "thread-1"
-            assert results[0]["body"] == "hello"
             assert results[1]["thread_id"] == "thread-2"
 
-    def describe_column_mapping():
+    def describe_stat_virtuals():
         @pytest.mark.asyncio
-        async def it_applies_column_mapping(config_dir):
-            """columns config maps dot-paths to SQL columns."""
-            _write(
-                os.path.join(config_dir, "people", "alice.json"),
-                json.dumps({"metadata": {"author": {"name": "Alice"}}, "age": 30}),
-            )
+        async def it_exposes_stat_virtuals(config_dir):
+            """`_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`
+            are auto-injected when declared in DDL."""
+            body = "# title\nhello world\n"
+            _write(os.path.join(config_dir, "docs", "readme.md"), body)
             _write(
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
-ddl = "CREATE TABLE people (display_name TEXT, age INTEGER)"
-glob = "people/*.json"
-
-[table.columns]
-display_name = "metadata.author.name"
-age = "age"
+ddl = "CREATE TABLE files (_path TEXT, _basename TEXT, _dir TEXT, _ext TEXT, _size INTEGER, _mtime INTEGER)"
+glob = "docs/*.md"
 """,
             )
 
             db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
-            results = await db.query("SELECT * FROM people")
+            results = await db.query(
+                "SELECT _path, _basename, _dir, _ext, _size, _mtime FROM files"
+            )
             assert len(results) == 1
-            assert results[0]["display_name"] == "Alice"
-            assert results[0]["age"] == 30
-
-    def describe_each():
-        @pytest.mark.asyncio
-        async def it_uses_each_to_navigate_into_arrays(config_dir):
-            """each config navigates into nested arrays."""
-            _write(
-                os.path.join(config_dir, "catalog.json"),
-                json.dumps(
-                    {
-                        "data": {
-                            "items": [
-                                {"name": "widget", "price": 9.99},
-                                {"name": "gadget", "price": 19.99},
-                            ]
-                        }
-                    }
-                ),
-            )
-            _write(
-                os.path.join(config_dir, ".dirsql.toml"),
-                """\
-[[table]]
-ddl = "CREATE TABLE items (name TEXT, price REAL)"
-glob = "catalog.json"
-each = "data.items"
-""",
-            )
-
-            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
-            await db.ready()
-            results = await db.query("SELECT * FROM items ORDER BY name")
-            assert len(results) == 2
-            assert results[0]["name"] == "gadget"
-            assert results[1]["name"] == "widget"
+            r = results[0]
+            assert r["_path"] == "docs/readme.md"
+            assert r["_basename"] == "readme.md"
+            assert r["_dir"] == "docs"
+            assert r["_ext"] == "md"
+            assert r["_size"] == len(body)
+            assert isinstance(r["_mtime"], int)
+            assert r["_mtime"] > 0
 
     def describe_ignore():
         @pytest.mark.asyncio
         async def it_respects_ignore_patterns(config_dir):
             """Ignore patterns from config are applied."""
-            _write(
-                os.path.join(config_dir, "data", "good.json"),
-                json.dumps({"val": 1}),
-            )
+            _write(os.path.join(config_dir, "data", "good.json"), "{}")
             _write(
                 os.path.join(config_dir, "data", "node_modules", "bad.json"),
-                json.dumps({"val": 2}),
+                "{}",
             )
             _write(
                 os.path.join(config_dir, ".dirsql.toml"),
@@ -210,50 +132,44 @@ each = "data.items"
 ignore = ["**/node_modules/**"]
 
 [[table]]
-ddl = "CREATE TABLE items (val INTEGER)"
+ddl = "CREATE TABLE items (_path TEXT)"
 glob = "data/**/*.json"
 """,
             )
 
             db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
-            results = await db.query("SELECT * FROM items")
+            results = await db.query("SELECT _path FROM items")
             assert len(results) == 1
-            assert results[0]["val"] == 1
+            assert results[0]["_path"] == "data/good.json"
 
     def describe_multiple_tables():
         @pytest.mark.asyncio
         async def it_loads_multiple_tables(config_dir):
             """Multiple [[table]] entries create multiple SQL tables."""
-            _write(
-                os.path.join(config_dir, "posts", "hello.json"),
-                json.dumps({"title": "Hello"}),
-            )
-            _write(
-                os.path.join(config_dir, "authors", "alice.json"),
-                json.dumps({"name": "Alice"}),
-            )
+            _write(os.path.join(config_dir, "posts", "hello.txt"), "x")
+            _write(os.path.join(config_dir, "authors", "alice.txt"), "x")
             _write(
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT)"
-glob = "posts/*.json"
+ddl = "CREATE TABLE posts (_basename TEXT)"
+glob = "posts/*.txt"
 
 [[table]]
-ddl = "CREATE TABLE authors (name TEXT)"
-glob = "authors/*.json"
+ddl = "CREATE TABLE authors (_basename TEXT)"
+glob = "authors/*.txt"
 """,
             )
 
             db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
-            posts = await db.query("SELECT * FROM posts")
-            authors = await db.query("SELECT * FROM authors")
+            posts = await db.query("SELECT _basename FROM posts")
+            authors = await db.query("SELECT _basename FROM authors")
             assert len(posts) == 1
             assert len(authors) == 1
-            assert posts[0]["title"] == "Hello"
-            assert authors[0]["name"] == "Alice"
+            assert posts[0]["_basename"] == "hello.txt"
+            assert authors[0]["_basename"] == "alice.txt"
 
     def describe_error_handling():
         @pytest.mark.asyncio
@@ -288,70 +204,23 @@ glob = "*.json"
             with pytest.raises(Exception):
                 await db.ready()
 
-        @pytest.mark.asyncio
-        async def it_raises_on_unsupported_format(config_dir):
-            """from_config raises when format cannot be inferred and none given."""
-            _write(
-                os.path.join(config_dir, "data.dat"),
-                "some data",
-            )
-            _write(
-                os.path.join(config_dir, ".dirsql.toml"),
-                """\
-[[table]]
-ddl = "CREATE TABLE t (x TEXT)"
-glob = "*.dat"
-""",
-            )
-            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
-            with pytest.raises(Exception, match="[Ff]ormat|[Uu]nsupported"):
-                await db.ready()
-
-    def describe_explicit_format():
-        @pytest.mark.asyncio
-        async def it_uses_explicit_format_override(config_dir):
-            """Explicit format in config overrides file extension inference."""
-            # .txt file but explicitly marked as csv
-            _write(
-                os.path.join(config_dir, "data.txt"),
-                "name,val\nfoo,1\n",
-            )
-            _write(
-                os.path.join(config_dir, ".dirsql.toml"),
-                """\
-[[table]]
-ddl = "CREATE TABLE t (name TEXT, val TEXT)"
-glob = "*.txt"
-format = "csv"
-""",
-            )
-
-            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
-            await db.ready()
-            results = await db.query("SELECT * FROM t")
-            assert len(results) == 1
-            assert results[0]["name"] == "foo"
-
     def describe_query_after_config():
         @pytest.mark.asyncio
         async def it_supports_sql_queries_after_config_init(config_dir):
-            """Queries work the same way whether created via from_config or tables=."""
-            _write(
-                os.path.join(config_dir, "items", "a.json"),
-                json.dumps({"name": "apple", "price": 1.5}),
-            )
+            """Queries work the same way whether created via config= or tables=."""
+            _write(os.path.join(config_dir, "items", "apple.json"), "x")
             _write(
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
-ddl = "CREATE TABLE items (name TEXT, price REAL)"
-glob = "items/*.json"
+ddl = "CREATE TABLE items (name TEXT, _size INTEGER)"
+glob = "items/{name}.json"
 """,
             )
 
             db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
-            results = await db.query("SELECT name FROM items WHERE price > 1.0")
+            results = await db.query("SELECT name FROM items WHERE name = 'apple'")
             assert len(results) == 1
             assert results[0]["name"] == "apple"
 

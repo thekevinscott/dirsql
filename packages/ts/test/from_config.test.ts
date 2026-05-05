@@ -1,6 +1,12 @@
 // Integration tests for config-driven construction: `new DirSQL(configPath)`.
 // TS mirror of packages/python/tests/integration/test_from_config.py and
-// packages/rust/tests/from_config.rs. See bead dirsql-hh3.
+// packages/rust/tests/from_config.rs.
+//
+// Config-defined tables produce one row per matched file. Each row's columns
+// come from filesystem facts: glob path captures and stat virtuals (`_path`,
+// `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`). Content
+// interpretation is intentionally out of scope; for that, register a
+// programmatic Table with your own extract function.
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,315 +32,83 @@ describe("new DirSQL(configPath)", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  // Basic format: JSON
-  it("loads JSON files via config", async () => {
-    writeFile(
-      join(dir, "items", "a.json"),
-      JSON.stringify({ name: "apple", price: 1.5 }),
-    );
-    writeFile(
-      join(dir, "items", "b.json"),
-      JSON.stringify({ name: "banana", price: 0.75 }),
-    );
+  it("produces one row per matched file with stat virtuals", async () => {
+    writeFile(join(dir, "items", "a.csv"), "anything");
+    writeFile(join(dir, "items", "b.csv"), "anything");
     writeFile(
       configPath,
       `
 [[table]]
-ddl = "CREATE TABLE items (name TEXT, price REAL)"
-glob = "items/*.json"
+ddl = "CREATE TABLE items (_path TEXT, _basename TEXT)"
+glob = "items/*.csv"
 `,
     );
 
     const db = new DirSQL(configPath);
     await db.ready;
-    const rows = await db.query("SELECT * FROM items ORDER BY name");
+    const rows = await db.query(
+      "SELECT _path, _basename FROM items ORDER BY _path",
+    );
     expect(rows).toHaveLength(2);
-    expect(rows[0].name).toBe("apple");
-    expect(rows[0].price).toBeCloseTo(1.5);
-    expect(rows[1].name).toBe("banana");
+    expect(rows[0]._path).toBe("items/a.csv");
+    expect(rows[0]._basename).toBe("a.csv");
+    expect(rows[1]._path).toBe("items/b.csv");
+    expect(rows[1]._basename).toBe("b.csv");
   });
 
-  // Basic format: JSONL
-  it("loads JSONL files via config", async () => {
-    writeFile(
-      join(dir, "events.jsonl"),
-      `${JSON.stringify({ type: "click", count: 5 })}\n${JSON.stringify({
-        type: "view",
-        count: 100,
-      })}\n`,
-    );
+  it("injects glob path captures into rows", async () => {
+    writeFile(join(dir, "comments", "thread-1", "a.txt"), "x");
+    writeFile(join(dir, "comments", "thread-2", "a.txt"), "x");
     writeFile(
       configPath,
       `
 [[table]]
-ddl = "CREATE TABLE events (type TEXT, count INTEGER)"
-glob = "*.jsonl"
+ddl = "CREATE TABLE comments (thread_id TEXT, _basename TEXT)"
+glob = "comments/{thread_id}/*.txt"
 `,
     );
 
     const db = new DirSQL(configPath);
     await db.ready;
-    const rows = await db.query("SELECT * FROM events ORDER BY type");
-    expect(rows).toHaveLength(2);
-    expect(rows[0].type).toBe("click");
-    expect(rows[0].count).toBe(5);
-  });
-
-  // NDJSON alias
-  it("loads NDJSON files via config", async () => {
-    writeFile(
-      join(dir, "events.ndjson"),
-      `${JSON.stringify({ type: "a" })}\n${JSON.stringify({ type: "b" })}\n`,
+    const rows = await db.query(
+      "SELECT thread_id, _basename FROM comments ORDER BY thread_id",
     );
-    writeFile(
-      configPath,
-      `
-[[table]]
-ddl = "CREATE TABLE events (type TEXT)"
-glob = "*.ndjson"
-`,
-    );
-
-    const db = new DirSQL(configPath);
-    await db.ready;
-    const rows = await db.query("SELECT type FROM events ORDER BY type");
-    expect(rows).toHaveLength(2);
-    expect(rows[0].type).toBe("a");
-    expect(rows[1].type).toBe("b");
-  });
-
-  // CSV
-  it("loads CSV files via config", async () => {
-    writeFile(join(dir, "data.csv"), "name,count\napples,10\noranges,20\n");
-    writeFile(
-      configPath,
-      `
-[[table]]
-ddl = "CREATE TABLE produce (name TEXT, count TEXT)"
-glob = "*.csv"
-`,
-    );
-
-    const db = new DirSQL(configPath);
-    await db.ready;
-    const rows = await db.query("SELECT * FROM produce ORDER BY name");
-    expect(rows).toHaveLength(2);
-    expect(rows[0].name).toBe("apples");
-    expect(rows[1].name).toBe("oranges");
-  });
-
-  // TSV
-  it("loads TSV files via config", async () => {
-    writeFile(join(dir, "data.tsv"), "name\tcount\napples\t10\noranges\t20\n");
-    writeFile(
-      configPath,
-      `
-[[table]]
-ddl = "CREATE TABLE produce (name TEXT, count TEXT)"
-glob = "*.tsv"
-`,
-    );
-
-    const db = new DirSQL(configPath);
-    await db.ready;
-    const rows = await db.query("SELECT * FROM produce ORDER BY name");
-    expect(rows).toHaveLength(2);
-    expect(rows[0].name).toBe("apples");
-    expect(rows[1].name).toBe("oranges");
-  });
-
-  // TOML
-  it("loads TOML files via config", async () => {
-    writeFile(join(dir, "settings.toml"), `name = "root"\nvalue = "42"\n`);
-    writeFile(
-      configPath,
-      `
-[[table]]
-ddl = "CREATE TABLE settings (name TEXT, value TEXT)"
-glob = "*.toml"
-`,
-    );
-
-    // The config file itself also matches "*.toml", so it must be excluded.
-    // Put it in the root and scan only a subdir instead:
-    // Simpler approach — restructure.
-    rmSync(configPath, { force: true });
-    const subdir = join(dir, "data");
-    mkdirSync(subdir, { recursive: true });
-    writeFile(join(subdir, "a.toml"), `name = "root"\nvalue = "42"\n`);
-    writeFile(
-      configPath,
-      `
-[[table]]
-ddl = "CREATE TABLE settings (name TEXT, value TEXT)"
-glob = "data/*.toml"
-`,
-    );
-
-    const db = new DirSQL(configPath);
-    await db.ready;
-    const rows = await db.query("SELECT * FROM settings");
-    expect(rows).toHaveLength(1);
-    expect(rows[0].name).toBe("root");
-    expect(rows[0].value).toBe("42");
-  });
-
-  // YAML
-  it("loads YAML files via config (.yaml)", async () => {
-    writeFile(join(dir, "data", "a.yaml"), "name: apple\ncolor: red\n");
-    writeFile(
-      configPath,
-      `
-[[table]]
-ddl = "CREATE TABLE items (name TEXT, color TEXT)"
-glob = "data/*.yaml"
-`,
-    );
-
-    const db = new DirSQL(configPath);
-    await db.ready;
-    const rows = await db.query("SELECT * FROM items");
-    expect(rows).toHaveLength(1);
-    expect(rows[0].name).toBe("apple");
-    expect(rows[0].color).toBe("red");
-  });
-
-  // YAML .yml alias
-  it("loads YAML files via config (.yml)", async () => {
-    writeFile(join(dir, "data", "a.yml"), "name: banana\n");
-    writeFile(
-      configPath,
-      `
-[[table]]
-ddl = "CREATE TABLE items (name TEXT)"
-glob = "data/*.yml"
-`,
-    );
-
-    const db = new DirSQL(configPath);
-    await db.ready;
-    const rows = await db.query("SELECT * FROM items");
-    expect(rows).toHaveLength(1);
-    expect(rows[0].name).toBe("banana");
-  });
-
-  // Markdown + frontmatter
-  it("loads markdown with frontmatter via config", async () => {
-    writeFile(
-      join(dir, "posts", "hello.md"),
-      "---\ntitle: Hello\nauthor: Alice\n---\nThe body text here.\n",
-    );
-    writeFile(
-      configPath,
-      `
-[[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT, body TEXT)"
-glob = "posts/*.md"
-`,
-    );
-
-    const db = new DirSQL(configPath);
-    await db.ready;
-    const rows = await db.query("SELECT * FROM posts");
-    expect(rows).toHaveLength(1);
-    expect(rows[0].title).toBe("Hello");
-    expect(rows[0].author).toBe("Alice");
-    expect(String(rows[0].body ?? "")).toContain("The body text");
-  });
-
-  // Path captures
-  it("injects path captures into rows", async () => {
-    writeFile(
-      join(dir, "comments", "thread-1", "index.jsonl"),
-      `${JSON.stringify({ body: "hello", author: "alice" })}\n`,
-    );
-    writeFile(
-      join(dir, "comments", "thread-2", "index.jsonl"),
-      `${JSON.stringify({ body: "world", author: "bob" })}\n`,
-    );
-    writeFile(
-      configPath,
-      `
-[[table]]
-ddl = "CREATE TABLE comments (thread_id TEXT, body TEXT, author TEXT)"
-glob = "comments/{thread_id}/index.jsonl"
-`,
-    );
-
-    const db = new DirSQL(configPath);
-    await db.ready;
-    const rows = await db.query("SELECT * FROM comments ORDER BY thread_id");
     expect(rows).toHaveLength(2);
     expect(rows[0].thread_id).toBe("thread-1");
-    expect(rows[0].body).toBe("hello");
     expect(rows[1].thread_id).toBe("thread-2");
   });
 
-  // Column mapping
-  it("applies column mapping", async () => {
-    writeFile(
-      join(dir, "people", "alice.json"),
-      JSON.stringify({ metadata: { author: { name: "Alice" } }, age: 30 }),
-    );
+  it("exposes the full set of stat virtuals when declared in DDL", async () => {
+    const body = "# title\nhello world\n";
+    writeFile(join(dir, "docs", "readme.md"), body);
     writeFile(
       configPath,
       `
 [[table]]
-ddl = "CREATE TABLE people (display_name TEXT, age INTEGER)"
-glob = "people/*.json"
-
-[table.columns]
-display_name = "metadata.author.name"
-age = "age"
+ddl = "CREATE TABLE files (_path TEXT, _basename TEXT, _dir TEXT, _ext TEXT, _size INTEGER, _mtime INTEGER)"
+glob = "docs/*.md"
 `,
     );
 
     const db = new DirSQL(configPath);
     await db.ready;
-    const rows = await db.query("SELECT * FROM people");
+    const rows = await db.query(
+      "SELECT _path, _basename, _dir, _ext, _size, _mtime FROM files",
+    );
     expect(rows).toHaveLength(1);
-    expect(rows[0].display_name).toBe("Alice");
-    expect(rows[0].age).toBe(30);
+    const r = rows[0];
+    expect(r._path).toBe("docs/readme.md");
+    expect(r._basename).toBe("readme.md");
+    expect(r._dir).toBe("docs");
+    expect(r._ext).toBe("md");
+    expect(r._size).toBe(body.length);
+    expect(typeof r._mtime).toBe("number");
+    expect(r._mtime as number).toBeGreaterThan(0);
   });
 
-  // each
-  it("uses each to navigate into arrays", async () => {
-    writeFile(
-      join(dir, "catalog.json"),
-      JSON.stringify({
-        data: {
-          items: [
-            { name: "widget", price: 9.99 },
-            { name: "gadget", price: 19.99 },
-          ],
-        },
-      }),
-    );
-    writeFile(
-      configPath,
-      `
-[[table]]
-ddl = "CREATE TABLE items (name TEXT, price REAL)"
-glob = "catalog.json"
-each = "data.items"
-`,
-    );
-
-    const db = new DirSQL(configPath);
-    await db.ready;
-    const rows = await db.query("SELECT * FROM items ORDER BY name");
-    expect(rows).toHaveLength(2);
-    expect(rows[0].name).toBe("gadget");
-    expect(rows[1].name).toBe("widget");
-  });
-
-  // ignore
-  it("respects ignore patterns", async () => {
-    writeFile(join(dir, "data", "good.json"), JSON.stringify({ val: 1 }));
-    writeFile(
-      join(dir, "data", "node_modules", "bad.json"),
-      JSON.stringify({ val: 2 }),
-    );
+  it("respects ignore patterns from config", async () => {
+    writeFile(join(dir, "data", "good.json"), "{}");
+    writeFile(join(dir, "data", "node_modules", "bad.json"), "{}");
     writeFile(
       configPath,
       `
@@ -342,130 +116,57 @@ each = "data.items"
 ignore = ["**/node_modules/**"]
 
 [[table]]
-ddl = "CREATE TABLE items (val INTEGER)"
+ddl = "CREATE TABLE items (_path TEXT)"
 glob = "data/**/*.json"
 `,
     );
 
     const db = new DirSQL(configPath);
     await db.ready;
-    const rows = await db.query("SELECT * FROM items");
+    const rows = await db.query("SELECT _path FROM items");
     expect(rows).toHaveLength(1);
-    expect(rows[0].val).toBe(1);
+    expect(rows[0]._path).toBe("data/good.json");
   });
 
-  // Multiple tables
   it("loads multiple tables", async () => {
-    writeFile(
-      join(dir, "posts", "hello.json"),
-      JSON.stringify({ title: "Hello" }),
-    );
-    writeFile(
-      join(dir, "authors", "alice.json"),
-      JSON.stringify({ name: "Alice" }),
-    );
+    writeFile(join(dir, "posts", "hello.txt"), "x");
+    writeFile(join(dir, "authors", "alice.txt"), "x");
     writeFile(
       configPath,
       `
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT)"
-glob = "posts/*.json"
+ddl = "CREATE TABLE posts (_basename TEXT)"
+glob = "posts/*.txt"
 
 [[table]]
-ddl = "CREATE TABLE authors (name TEXT)"
-glob = "authors/*.json"
+ddl = "CREATE TABLE authors (_basename TEXT)"
+glob = "authors/*.txt"
 `,
     );
 
     const db = new DirSQL(configPath);
     await db.ready;
-    const posts = await db.query("SELECT * FROM posts");
-    const authors = await db.query("SELECT * FROM authors");
+    const posts = await db.query("SELECT _basename FROM posts");
+    const authors = await db.query("SELECT _basename FROM authors");
     expect(posts).toHaveLength(1);
     expect(authors).toHaveLength(1);
-    expect(posts[0].title).toBe("Hello");
-    expect(authors[0].name).toBe("Alice");
+    expect(posts[0]._basename).toBe("hello.txt");
+    expect(authors[0]._basename).toBe("alice.txt");
   });
 
-  // Explicit format override
-  it("uses explicit format override", async () => {
-    writeFile(join(dir, "data.txt"), "name,val\nfoo,1\n");
-    writeFile(
-      configPath,
-      `
-[[table]]
-ddl = "CREATE TABLE t (name TEXT, val TEXT)"
-glob = "*.txt"
-format = "csv"
-`,
-    );
-
-    const db = new DirSQL(configPath);
-    await db.ready;
-    const rows = await db.query("SELECT * FROM t");
-    expect(rows).toHaveLength(1);
-    expect(rows[0].name).toBe("foo");
-    expect(rows[0].val).toBe("1");
+  it("rejects missing config files", async () => {
+    const missing = join(dir, "nonexistent.toml");
+    const db = new DirSQL(missing);
+    await expect(db.ready).rejects.toThrow();
   });
 
-  // Strict = true (passing)
-  it("allows rows with exact keys when strict = true in config", async () => {
-    writeFile(
-      join(dir, "items", "a.json"),
-      JSON.stringify({ name: "apple", color: "red" }),
-    );
-    writeFile(
-      configPath,
-      `
-[[table]]
-ddl = "CREATE TABLE items (name TEXT, color TEXT)"
-glob = "items/*.json"
-strict = true
-`,
-    );
-
-    const db = new DirSQL(configPath);
-    await db.ready;
-    const rows = await db.query("SELECT name, color FROM items");
-    expect(rows).toHaveLength(1);
-    expect(rows[0].name).toBe("apple");
-    expect(rows[0].color).toBe("red");
-  });
-
-  // Strict = true (rejecting)
-  it("rejects rows with extra keys when strict = true in config", async () => {
-    writeFile(
-      join(dir, "items", "a.json"),
-      JSON.stringify({ name: "apple", color: "red" }),
-    );
-    writeFile(
-      configPath,
-      `
-[[table]]
-ddl = "CREATE TABLE items (name TEXT)"
-glob = "items/*.json"
-strict = true
-`,
-    );
-
-    await expect(new DirSQL(configPath).ready).rejects.toThrow();
-  });
-
-  // Error: missing config file
-  it("throws when config file is missing", async () => {
-    await expect(
-      new DirSQL(join(dir, "nonexistent.toml")).ready,
-    ).rejects.toThrow();
-  });
-
-  // Error: invalid TOML
-  it("throws on invalid TOML", async () => {
+  it("rejects invalid TOML", async () => {
     writeFile(configPath, "this is not valid [[[");
-    await expect(new DirSQL(configPath).ready).rejects.toThrow();
+    const db = new DirSQL(configPath);
+    await expect(db.ready).rejects.toThrow();
   });
 
-  // Error: missing DDL
-  it("throws when a table entry is missing ddl", async () => {
+  it("rejects table entries missing ddl", async () => {
     writeFile(
       configPath,
       `
@@ -473,20 +174,7 @@ strict = true
 glob = "*.json"
 `,
     );
-    await expect(new DirSQL(configPath).ready).rejects.toThrow();
-  });
-
-  // Error: unsupported format
-  it("throws when format cannot be inferred and none given", async () => {
-    writeFile(join(dir, "data.dat"), "some data");
-    writeFile(
-      configPath,
-      `
-[[table]]
-ddl = "CREATE TABLE t (x TEXT)"
-glob = "*.dat"
-`,
-    );
-    await expect(new DirSQL(configPath).ready).rejects.toThrow();
+    const db = new DirSQL(configPath);
+    await expect(db.ready).rejects.toThrow();
   });
 });
