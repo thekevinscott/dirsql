@@ -191,8 +191,3 @@ glob = "logs/*.csv"
 register a programmatic [`Table`](./tables.md) instead, and parse the
 bytes in your host language. Glob captures and stat virtuals are still
 auto-injected into rows produced by your extract.
-
-For tabular formats specifically, [DuckDB](https://duckdb.org) is also
-worth considering: it has built-in `read_csv`, `read_json`, and
-`read_parquet` over file globs, plus a community
-[markdown extension](https://github.com/teaguesterling/duckdb_markdown).

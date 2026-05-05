@@ -16,10 +16,7 @@ facts:
 parse markdown frontmatter, JSON, CSV, YAML, TOML, or any other file format
 on the user's behalf. If a project needs columns derived from file content,
 the consumer registers a programmatic `Table` whose `extract` callback does
-the parsing in the host language (Python / TypeScript / Rust). For tabular
-formats, [DuckDB](https://duckdb.org) and the [duckdb_markdown community
-extension](https://github.com/teaguesterling/duckdb_markdown) are first-class
-alternatives.
+the parsing in the host language (Python / TypeScript / Rust).
 
 This scope is a deliberate inversion of the original design and was settled
 in [issue #169](https://github.com/thekevinscott/dirsql/issues/169). The
