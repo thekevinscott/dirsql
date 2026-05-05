@@ -44,7 +44,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Run coverage
-        run: cargo llvm-cov --manifest-path packages/rust/Cargo.toml --fail-under-lines 90
+        run: cargo llvm-cov --manifest-path packages/rust/Cargo.toml --features cli --fail-under-lines 90
 
       - name: Clippy
         run: cargo clippy --workspace -- -D warnings
