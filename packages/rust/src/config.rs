@@ -141,10 +141,7 @@ strict = true
         assert_eq!(config.tables.len(), 2);
 
         let t0 = &config.tables[0];
-        assert_eq!(
-            t0.ddl,
-            "CREATE TABLE comments (thread_id TEXT, _path TEXT)"
-        );
+        assert_eq!(t0.ddl, "CREATE TABLE comments (thread_id TEXT, _path TEXT)");
         assert_eq!(t0.glob, "_comments/{thread_id}/index.jsonl");
         assert!(t0.strict.is_none());
 

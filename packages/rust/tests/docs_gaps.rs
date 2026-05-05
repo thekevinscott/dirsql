@@ -32,8 +32,8 @@ fn strict_true_rejects_extra_keys_from_extract() {
         },
     );
 
-    let result =
-        DirSQL::new(root.path(), vec![table]).and_then(|db| db.query("SELECT * FROM items").map(|_| ()));
+    let result = DirSQL::new(root.path(), vec![table])
+        .and_then(|db| db.query("SELECT * FROM items").map(|_| ()));
     assert!(
         result.is_err(),
         "expected strict=true to reject extra keys, got Ok"
