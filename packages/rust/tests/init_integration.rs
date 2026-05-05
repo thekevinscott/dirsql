@@ -122,7 +122,10 @@ fn refuses_to_overwrite_existing_config() {
         String::from_utf8_lossy(&first.stderr),
     );
     let written = fs::read_to_string(cwd.path().join(".dirsql.toml")).unwrap();
-    assert!(sentinel.exists(), "claude must have been invoked on first run");
+    assert!(
+        sentinel.exists(),
+        "claude must have been invoked on first run"
+    );
 
     // Reset sentinel; second run must fail without touching the file.
     fs::remove_file(&sentinel).unwrap();
