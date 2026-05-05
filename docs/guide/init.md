@@ -8,6 +8,8 @@ canonical: https://thekevinscott.github.io/dirsql/guide/init
 
 `dirsql init` generates a `.dirsql.toml` by running `claude` over the target directory.
 
+The output is limited to filesystem-fact tables. For content-aware schemas, see [Defining Tables](./tables.md).
+
 ## Examples
 
 ### Mixed files
@@ -20,51 +22,51 @@ my-downloads/
 └── photo.jpg
 ```
 
-When no structured format is detected, `dirsql init` falls back to a metadata-only table:
-
 ```toml
 [[table]]
-ddl = "CREATE TABLE files (path TEXT, ext TEXT, size INTEGER)"
+ddl  = "CREATE TABLE files (_path TEXT, _ext TEXT, _size INTEGER)"
 glob = "*"
 ```
 
-### Flat directory
+### Path captures
 
 ```
-my-expenses/
-├── coffee.json
-├── lunch.json
-└── flight.json
+photos/
+├── 2024-01/
+│   ├── beach.jpg
+│   └── sunset.jpg
+└── 2024-02/
+    ├── snow.jpg
+    └── mountain.jpg
 ```
-
-Each file is a JSON object like `{"amount": 4.50, "vendor": "Blue Bottle", "date": "2025-04-12"}`.
 
 ```toml
 [[table]]
-ddl = "CREATE TABLE expenses (amount REAL, vendor TEXT, date TEXT)"
-glob = "*.json"
+ddl  = "CREATE TABLE photos (month TEXT, _basename TEXT, _mtime INTEGER)"
+glob = "{month}/*.jpg"
 ```
 
-### Subdirectories with path captures
+### Multiple tables
 
 ```
 my-blog/
 ├── posts/
-│   ├── hello-world.json
-│   └── second.json
+│   ├── hello-world.md
+│   └── second.md
 └── _comments/
     └── hello-world/
-        └── index.jsonl
+        ├── 2024-01-15.jsonl
+        └── 2024-02-03.jsonl
 ```
 
 ```toml
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT, draft INTEGER)"
-glob = "posts/*.json"
+ddl  = "CREATE TABLE posts (_basename TEXT, _mtime INTEGER, _size INTEGER)"
+glob = "posts/*.md"
 
 [[table]]
-ddl = "CREATE TABLE comments (thread_id TEXT, author TEXT, body TEXT)"
-glob = "_comments/{thread_id}/index.jsonl"
+ddl  = "CREATE TABLE comments (thread_id TEXT, _basename TEXT, _mtime INTEGER)"
+glob = "_comments/{thread_id}/*.jsonl"
 ```
 
 `init` will not overwrite an existing config without `--force`.
