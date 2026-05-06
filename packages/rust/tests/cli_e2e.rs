@@ -245,8 +245,15 @@ fn get_events_emits_insert_event_when_file_created() {
         .recv_timeout(Duration::from_secs(5))
         .expect("SSE stream never produced a ready sentinel");
     std::thread::sleep(Duration::from_millis(200));
-    fs::create_dir_all(root.path().join("posts/carol")).unwrap();
-    fs::write(root.path().join("posts/carol/Third-Post.json"), "{}").unwrap();
+    // Write into an author dir that already exists at startup so notify's
+    // watch is guaranteed to be installed. Creating a new dir + writing
+    // immediately races inotify's recursive-watch installation; that race
+    // is observable and flaky, not a feature under test here.
+    fs::write(
+        root.path().join("posts/alice/Brand-New-Post.json"),
+        "{}",
+    )
+    .unwrap();
 
     let data = rx
         .recv_timeout(Duration::from_secs(10))
