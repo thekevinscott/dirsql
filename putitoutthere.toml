@@ -65,7 +65,12 @@ targets = [
   # were deprecated in 2024.
   "x86_64-apple-darwin",
   "aarch64-apple-darwin",
-  "x86_64-pc-windows-msvc",
+  # Pin Windows runner explicitly: GitHub redirects `windows-2025`
+  # (the default `windows-latest` resolves to) to `windows-2025-vs2026`
+  # on 2026-05-12. Pinning lets us control the toolchain switch (VS
+  # 2022 -> VS 2026) and surfaces breakage in a release we can react
+  # to. See dirsql#175.
+  { triple = "x86_64-pc-windows-msvc", runner = "windows-2025-vs2026" },
 ]
 
 # npm: the dual-family pattern. `@dirsql/lib-{triple}` ships the napi-rs
@@ -97,5 +102,7 @@ targets = [
   # is cross-compiled from arm64.
   "darwin-x64",
   "darwin-arm64",
-  "win32-x64-msvc",
+  # See note on the PyPI Windows target above re: the 2026-05-12
+  # `windows-2025` -> `windows-2025-vs2026` redirect (dirsql#175).
+  { triple = "win32-x64-msvc", runner = "windows-2025-vs2026" },
 ]
