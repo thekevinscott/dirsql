@@ -32,6 +32,13 @@ dirsql
 The `cli` feature is **opt-in**. Adding `dirsql` as a library dependency (`cargo add dirsql`) pulls no CLI dependencies — only the core library. See the [Rust library README](https://github.com/thekevinscott/dirsql/tree/main/packages/rust) for details.
 :::
 
+## Subcommands
+
+| Command | Purpose |
+|---|---|
+| `dirsql` (no subcommand) | Start the long-lived HTTP server (default behavior, see below). |
+| `dirsql init` | Generate a starter `.dirsql.toml` from the contents of a directory. See [Generating a Config](./init.md). |
+
 ## Running the server
 
 Run `dirsql` from the directory containing your files:

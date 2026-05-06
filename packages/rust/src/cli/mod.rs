@@ -27,6 +27,7 @@ use tokio::task::JoinHandle;
 
 use crate::DirSQL;
 
+pub mod init;
 pub mod router;
 pub mod serialize;
 pub mod server;

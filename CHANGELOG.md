@@ -39,6 +39,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`dirsql init` subcommand.** Generates a starter `.dirsql.toml` for a
+  directory by shelling out to the local `claude` CLI. Filesystem-fact
+  only: emits `[[table]]` blocks whose columns come from glob path
+  captures and reserved stat virtuals (`_path`, `_basename`, `_dir`,
+  `_ext`, `_size`, `_mtime`, `_ctime`). Bails before invoking `claude`
+  if the output already exists; `--force` overrides. Refuses to run
+  with a clear error if `claude` is not on `PATH`. Flags: `--root`,
+  `--output`, `--force`. See `docs/guide/init.md`. Closes #96.
+
 - **Persistent on-disk SQLite cache.** Opt-in `persist` / `persist_path`
   option on `DirSQL` (and `[dirsql] persist = true` in
   `.dirsql.toml`). When enabled, the database is written to

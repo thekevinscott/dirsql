@@ -64,6 +64,12 @@ Declare tables, ignore patterns, and the scan root in a `.dirsql.toml` file. Tab
 
 → [`docs/guide/config.md`](docs/guide/config.md)
 
+### Generating a Config (`dirsql init`)
+
+`dirsql init` generates a `.dirsql.toml` by running `claude` over the target directory. Requires `claude` on `PATH` and signed in.
+
+→ [`docs/guide/init.md`](docs/guide/init.md)
+
 ### Defining Tables
 
 A table is a `(ddl, glob, extract)` triple. The DDL defines the SQLite schema, the glob selects files, and the extract function turns each file into rows.
