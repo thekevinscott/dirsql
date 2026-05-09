@@ -34,6 +34,7 @@
     "test": "wireit",
     "test:unit": "wireit",
     "test:integration": "wireit",
+    "test:e2e": "wireit",
     "coverage": "wireit",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
@@ -104,6 +105,19 @@
         "tools/**/*.ts",
         "test/**/*.ts",
         "vitest.config.ts"
+      ],
+      "output": []
+    },
+    "test:e2e": {
+      "command": "vitest run --dir test-e2e --passWithNoTests",
+      "dependencies": ["build"],
+      "files": [
+        "ts/**/*.ts",
+        "tools/**/*.ts",
+        "test-e2e/**/*.ts",
+        "vitest.config.ts",
+        "../rust/src/**/*.rs",
+        "../rust/Cargo.toml"
       ],
       "output": []
     },

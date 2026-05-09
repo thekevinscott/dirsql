@@ -25,6 +25,11 @@ export default defineConfig({
       "**/dist/**",
       "**/.{git,cache}/**",
       "docs/**",
+      // e2e tests live in `test-e2e/` and run via the dedicated
+      // `pnpm test:e2e` script (which depends on `pnpm build`). Excluding
+      // them here keeps the default `pnpm test` (and `vitest --dir test`)
+      // fast and free of the cargo-build prerequisite.
+      "test-e2e/**",
     ],
     coverage: {
       provider: "v8",

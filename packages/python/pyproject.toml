@@ -29,17 +29,8 @@ dev = [
     "maturin>=1.0",
 ]
 
-# [project.scripts] removed: the Rust CLI binary is no longer bundled
-# inside the PyPI wheel. Putitoutthere v0.2.3's `bundle_cli` recipe is
-# parsed but not yet wired into its reusable workflow's build job (no
-# cross-compile step reads `matrix.bundle_cli`). Restore the entry —
-#
-#   [project.scripts]
-#   dirsql = "dirsql._cli.main:main"
-#
-# — once the upstream gap is fixed and `[package.bundle_cli]` is
-# re-enabled in `putitoutthere.toml`. Until then, CLI install paths are
-# `cargo install dirsql --features cli` and `npx dirsql`.
+[project.scripts]
+dirsql = "dirsql._cli.main:main"
 
 [tool.maturin]
 features = ["extension-module"]

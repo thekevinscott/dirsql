@@ -7,8 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Python wheel ships the `dirsql` CLI again.** The `[project.scripts]`
+  console-script entry was restored in `packages/python/pyproject.toml`,
+  and `scripts/stage_cli_binary.py` stages the cargo-built `dirsql`
+  binary into `python/dirsql/_binary/` so `maturin build` bundles it
+  inside the wheel. `uvx dirsql` and `pip install dirsql && dirsql ...`
+  now work end-to-end. A `wheel-install` build-CI job builds a wheel,
+  installs it into a fresh venv, and runs `dirsql --version` so this
+  cannot regress unnoticed.
+
+### Added
+
+- **`pack-install` build-CI job for the npm package.** Builds the real
+  `dirsql` binary, packs the host's `@dirsql/cli-<slug>` sub-package and
+  the main `dirsql` package, installs both into a fresh dir, and runs
+  `node_modules/.bin/dirsql --version`. Companion to the Python
+  wheel-install job; gates publishability of the npm artifact.
+- **AGENTS.md test-boundary rules.** Integration tests target the
+  public SDK API (not the CLI launcher); e2e tests have no mocks /
+  fakes / monkeypatching; monkeypatching production-module attributes
+  is a code smell and is not allowed (use dependency injection via the
+  public API or fixtures).
+
 ### Removed
 
+- **Monkeypatch unit tests for the CLI launcher.** Deleted
+  `packages/python/python/dirsql/_cli/{main,binary_path,is_windows}_test.py`,
+  `packages/ts/ts/bin/{main,resolveBinary,die}.test.ts`, and
+  `packages/ts/test/{cli.test.ts,runLauncher.ts,fakeInstallRoot.ts}`. The
+  launchers are thin enough that the only meaningful coverage is the
+  build-CI smoke tests above; the deleted tests monkeypatched production
+  module attributes (`os.execv`, `process.exit`, `process.stderr`,
+  `binary_path`, `resolveBinary`) which the new test-boundary rules
+  forbid.
 - **Content parsing is no longer a dirsql concern.** `parser.rs` and the
   `Format` enum (`Json` / `Jsonl` / `Csv` / `Tsv` / `Toml` / `Yaml` /
   `Frontmatter`) are gone, along with `ColumnSource`, `apply_columns`,
