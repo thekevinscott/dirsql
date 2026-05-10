@@ -39,10 +39,11 @@ exclude = [
 ]
 python-source = "python"
 module-name = "dirsql._dirsql"
-# CI copies the release-built `dirsql` binary into
-# `python/dirsql/_binary/<name>` before `maturin build` so it ships
-# inside the wheel as package data. `.gitignore`d; not in source
-# control.
+# putitoutthere's `[package.bundle_cli]` recipe (see putitoutthere.toml)
+# cross-compiles the `dirsql` bin per target and stages it under
+# `python/dirsql/_binary/` before `maturin build`, so it ships inside
+# each wheel as package data. The directory is `.gitignore`d; not in
+# source control.
 include = [
     { path = "python/dirsql/_binary/*", format = "wheel" },
     { path = "docs/**/*", format = "sdist" },

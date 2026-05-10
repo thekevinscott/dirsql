@@ -9,14 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Python wheel ships the `dirsql` CLI again.** The `[project.scripts]`
-  console-script entry was restored in `packages/python/pyproject.toml`,
-  and `scripts/stage_cli_binary.py` stages the cargo-built `dirsql`
-  binary into `python/dirsql/_binary/` so `maturin build` bundles it
-  inside the wheel. `uvx dirsql` and `pip install dirsql && dirsql ...`
-  now work end-to-end. A `wheel-install` build-CI job builds a wheel,
-  installs it into a fresh venv, and runs `dirsql --version` so this
-  cannot regress unnoticed.
+- **Python wheel ships the `dirsql` CLI again.** Restored
+  `[project.scripts] dirsql = "dirsql._cli.main:main"` in
+  `packages/python/pyproject.toml` and declared `[package.bundle_cli]`
+  in `putitoutthere.toml` (requires putitoutthere ≥ v0.2.17). The
+  reusable workflow now cross-compiles the `dirsql` bin per target with
+  `--features cli`, stages it into `python/dirsql/_binary/`, and
+  maturin's `[tool.maturin].include` glob bundles it into each wheel.
+  `pip install dirsql && dirsql ...` and `uvx dirsql` work end-to-end;
+  upstream verifies wheel contents post-build.
 
 ### Added
 

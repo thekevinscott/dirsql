@@ -27,19 +27,15 @@ globs = [
 ]
 first_version = "0.2.8"
 
-# PyPI: maturin-built wheels per target. The Rust CLI binary is NOT
-# bundled — putitoutthere v0.2.3's `[package.bundle_cli]` parses but is
-# unwired in the reusable workflow (no cross-compile step reads
-# `matrix.bundle_cli`). When that lands upstream, restore the block
-# below and re-add the `dirsql` console script to pyproject.toml.
-#
-#   [package.bundle_cli]
-#   bin        = "dirsql"
-#   stage_to   = "python/dirsql/_binary"
-#   crate_path = "packages/rust"
-#
-# Until then, `pip install dirsql` gives users the SDK only. CLI install
-# paths: `cargo install dirsql --features cli`, `npx dirsql`.
+# PyPI: maturin-built wheels per target with the Rust CLI binary bundled
+# inside each wheel. `[package.bundle_cli]` below (putitoutthere ≥
+# v0.2.17) cross-compiles the `dirsql` bin per target with
+# `--features cli` (gated behind `[[bin]] required-features` in
+# `packages/rust/Cargo.toml`), stages it into
+# `packages/python/python/dirsql/_binary/`, and the
+# `[tool.maturin].include` glob picks it up so `pip install dirsql &&
+# dirsql ...` and `uvx dirsql` work end-to-end. Upstream verifies wheel
+# contents post-build (`_matrix.yml` wheel-content guard).
 [[package]]
 name  = "dirsql-py"
 pypi  = "dirsql"
@@ -72,6 +68,15 @@ targets = [
   # to. See dirsql#175.
   { triple = "x86_64-pc-windows-msvc", runner = "windows-2025-vs2026" },
 ]
+
+# crate_path defaults to "." (workspace root), which is what we want:
+# cargo's target dir is workspace-rooted, so `cargo build --bin dirsql`
+# from repo root produces `target/<triple>/release/dirsql`, which is
+# exactly where putitoutthere's stage step looks.
+[package.bundle_cli]
+bin      = "dirsql"
+stage_to = "python/dirsql/_binary"
+features = ["cli"]
 
 # npm: the dual-family pattern. `@dirsql/lib-{triple}` ships the napi-rs
 # `.node` addon; `@dirsql/cli-{triple}` ships the CLI binary. The

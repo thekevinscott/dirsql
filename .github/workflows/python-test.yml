@@ -81,34 +81,6 @@ jobs:
         run: uv run python -m pytest tests/integration/ -x -q --tb=short
         working-directory: packages/python
 
-  wheel-e2e:
-    # Build CI publishability gate: build a wheel with the bundled Rust
-    # CLI binary, install it into a fresh venv, and run `dirsql --version`
-    # against the registered console-script entry point. If this job goes
-    # red, `uvx dirsql` / `pip install dirsql && dirsql ...` are broken on
-    # PyPI and the release must not go out. No mocks / no monkeypatching;
-    # exercises the real published-artifact path.
-    name: Wheel install smoke test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.13"
-
-      - name: Install dependencies
-        run: uv sync --extra dev
-        working-directory: packages/python
-
-      - name: Run wheel smoke e2e
-        run: uv run python -m pytest tests/e2e/test_cli_smoke.py -x -q --tb=short
-        working-directory: packages/python
-
   coverage:
     name: Python coverage floor (90%)
     runs-on: ubuntu-latest
