@@ -69,14 +69,30 @@ targets = [
   { triple = "x86_64-pc-windows-msvc", runner = "windows-2025-vs2026" },
 ]
 
-# crate_path defaults to "." (workspace root), which is what we want:
-# cargo's target dir is workspace-rooted, so `cargo build --bin dirsql`
-# from repo root produces `target/<triple>/release/dirsql`, which is
-# exactly where putitoutthere's stage step looks.
+# Workaround for upstream putitoutthere bug (filed at
+# thekevinscott/putitoutthere): `[package.bundle_cli]` is unsatisfiable
+# for crates in a cargo workspace today.
+#
+#   - `crate_path = "."` (default) makes the check fail because the
+#     workspace-root Cargo.toml has no `[[bin]]` -- the check only
+#     inspects the literal manifest at `<crate_path>/Cargo.toml` and
+#     doesn't walk workspace members.
+#   - `crate_path = "packages/rust"` makes the check pass, but the
+#     build's stage step then looks for the binary at
+#     `packages/rust/target/<triple>/release/dirsql` while cargo's
+#     workspace-rooted target dir actually writes to
+#     `target/<triple>/release/dirsql`.
+#
+# We satisfy both halves: set `crate_path` to the member crate (check
+# passes), and check in a `packages/rust/target -> ../../target`
+# symlink (the stage step's lookup path resolves through the symlink
+# to the workspace target dir). Revert both once upstream lands a
+# `cargo metadata`-based fix.
 [package.bundle_cli]
-bin      = "dirsql"
-stage_to = "python/dirsql/_binary"
-features = ["cli"]
+bin        = "dirsql"
+crate_path = "packages/rust"
+stage_to   = "python/dirsql/_binary"
+features   = ["cli"]
 
 # npm: the dual-family pattern. `@dirsql/lib-{triple}` ships the napi-rs
 # `.node` addon; `@dirsql/cli-{triple}` ships the CLI binary. The
