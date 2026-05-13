@@ -1,0 +1,24 @@
+name: Release Config Check
+
+# Fast PR-time config sanity gate. Runs putitoutthere's `check` reusable
+# workflow, which parses `putitoutthere.toml`, validates the schema, checks
+# for common-mistake typos (`[[packages]]` vs `[[package]]`, etc.), enforces
+# unique package names, and detects `depends_on` cycles -- all without
+# spinning up the per-target compile matrix. Pairs with `release-precheck.yml`
+# (which exercises the full build matrix): config errors fail here in
+# seconds; build/toolchain regressions fail there.
+#
+# Structurally publish-incapable: only requests `contents: read`, never
+# reaches a publish job, no `id-token: write`. Pinned to `@v0` to match the
+# other putitoutthere workflows referenced by this repo.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    uses: thekevinscott/putitoutthere/.github/workflows/check.yml@v0
