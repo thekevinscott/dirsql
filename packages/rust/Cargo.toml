@@ -6,7 +6,7 @@ description = "Ephemeral SQL index over a local directory"
 # version stays for the binding crates (publish = false).
 version = "0.2.7"
 edition.workspace = true
-license.workspace = true
+license = "MIT"
 repository.workspace = true
 # `docs/` is a symlink to the workspace `docs/` so the markdown ships with the
 # crate; everything below is the VitePress build tooling we don't want to ship.
