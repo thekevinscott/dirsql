@@ -46,7 +46,7 @@ jobs:
         working-directory: packages/python
 
       - name: Run unit tests
-        run: uv run python -m pytest python/ -x -q --tb=short
+        run: uv run python -m pytest dirsql/ -x -q --tb=short
         working-directory: packages/python
 
   integration:
@@ -105,5 +105,5 @@ jobs:
         working-directory: packages/python
 
       - name: Run combined coverage (unit + integration, no e2e)
-        run: uv run python -m pytest python/ tests/integration/ -q --tb=short --cov=dirsql --cov-report=term-missing --cov-fail-under=90
+        run: uv run python -m pytest dirsql/ tests/integration/ -q --tb=short --cov=dirsql --cov-report=term-missing --cov-fail-under=90
         working-directory: packages/python

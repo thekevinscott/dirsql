@@ -17,7 +17,7 @@ fix:
 
 # Run Python unit tests (colocated)
 test-unit:
-    uv run python -m pytest packages/python/python/ -x -q
+    uv run python -m pytest packages/python/dirsql/ -x -q
 
 # Run integration tests
 test-integration:
@@ -29,7 +29,7 @@ test-e2e:
 
 # CI test target (unit + integration, no e2e)
 test-ci:
-    uv run python -m pytest packages/python/python/ packages/python/tests/integration/ -x -q --tb=short 2>/dev/null || echo "No tests found yet"
+    uv run python -m pytest packages/python/dirsql/ packages/python/tests/integration/ -x -q --tb=short 2>/dev/null || echo "No tests found yet"
 
 # Run Rust tests
 test-rust:
