@@ -37,7 +37,11 @@ export default defineConfig({
       exclude: [
         "**/*.test.ts",
         "test/**/*.ts",
-        "ts/bin/dirsql.ts", // 5-line entry, exercised by the integration test
+        // CLI launcher modules. AGENTS.md test-boundary rules forbid
+        // monkeypatch unit tests on production module attributes; the
+        // only meaningful coverage is end-to-end (pack-install smoke
+        // test). Excluded to keep the 90% floor honest about SDK code.
+        "ts/bin/**",
         "ts/index.ts", // needs the napi binary; covered by SDK integration tests
       ],
       thresholds: {
