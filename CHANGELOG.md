@@ -21,6 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **PR-time config-sanity gate.** New
+  `.github/workflows/release-config-check.yml` calls putitoutthere's
+  `check.yml@v0` reusable workflow on every pull request. Validates
+  `putitoutthere.toml` (parse + schema + common-mistakes detector,
+  unique package names, `depends_on` cycle / dangling-ref detection,
+  glob coverage, tag-format collisions), npm `repository` field, crates
+  `description` / `license`, pypi `bundle_cli` binary declaration, and
+  npm target triple mapping. Few seconds per PR, no per-target build.
+  Companion to the existing `release-precheck.yml` build-matrix gate.
+
 - **`pack-install` build-CI job for the npm package.** Builds the real
   `dirsql` binary, packs the host's `@dirsql/cli-<slug>` sub-package and
   the main `dirsql` package, installs both into a fresh dir, and runs
