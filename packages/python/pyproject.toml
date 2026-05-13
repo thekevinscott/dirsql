@@ -37,15 +37,22 @@ features = ["extension-module"]
 exclude = [
     "tests/",
 ]
-python-source = "python"
+# `python-source` intentionally unset: the maturin-recommended mixed
+# layout (`python-source = "python"`) is unsupported by upstream
+# putitoutthere's wheel-content verifier, which compares `stage_to`
+# against the literal in-wheel path without subtracting the
+# source-root prefix that maturin strips. Filed at
+# thekevinscott/putitoutthere; revert this flatten (and re-add
+# `python-source = "python"`) once upstream's verifier handles
+# python-source stripping.
 module-name = "dirsql._dirsql"
 # putitoutthere's `[package.bundle_cli]` recipe (see putitoutthere.toml)
 # cross-compiles the `dirsql` bin per target and stages it under
-# `python/dirsql/_binary/` before `maturin build`, so it ships inside
-# each wheel as package data. The directory is `.gitignore`d; not in
+# `dirsql/_binary/` before `maturin build`, so it ships inside each
+# wheel as package data. The directory is `.gitignore`d; not in
 # source control.
 include = [
-    { path = "python/dirsql/_binary/*", format = "wheel" },
+    { path = "dirsql/_binary/*", format = "wheel" },
     { path = "docs/**/*", format = "sdist" },
 ]
 
@@ -59,5 +66,5 @@ include = [
 # coverage floor honest about library code.
 [tool.coverage.run]
 omit = [
-    "python/dirsql/_cli/*",
+    "dirsql/_cli/*",
 ]

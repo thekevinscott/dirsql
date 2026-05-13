@@ -163,7 +163,7 @@ Orchestrators must block merges of SDK-touching PRs that miss either file when r
 
 `PARITY.md` is a **living document** that tracks API-surface parity across the Python, Rust, and TypeScript SDKs. It must stay current.
 
-On every PR that touches any SDK's public API (`packages/python/python/dirsql/`, `packages/rust/src/`, `packages/ts/ts/` or `packages/ts/src/`), the author must:
+On every PR that touches any SDK's public API (`packages/python/dirsql/`, `packages/rust/src/`, `packages/ts/ts/` or `packages/ts/src/`), the author must:
 
 1. Update `PARITY.md` to reflect the new/changed/removed API surface.
 2. Call out in the PR body whether the change is **introducing parity drift** (one SDK gets something the others don't yet) or **restoring parity** (bringing a lagging SDK in line). Drift is allowed but must be intentional and tracked.

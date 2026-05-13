@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `packages/python/pyproject.toml` and declared `[package.bundle_cli]`
   in `putitoutthere.toml` (requires putitoutthere ≥ v0.2.17). The
   reusable workflow now cross-compiles the `dirsql` bin per target with
-  `--features cli`, stages it into `python/dirsql/_binary/`, and
+  `--features cli`, stages it into `dirsql/_binary/`, and
   maturin's `[tool.maturin].include` glob bundles it into each wheel.
   `pip install dirsql && dirsql ...` and `uvx dirsql` work end-to-end;
   upstream verifies wheel contents post-build.

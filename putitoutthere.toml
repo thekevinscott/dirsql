@@ -32,10 +32,10 @@ first_version = "0.2.8"
 # v0.2.17) cross-compiles the `dirsql` bin per target with
 # `--features cli` (gated behind `[[bin]] required-features` in
 # `packages/rust/Cargo.toml`), stages it into
-# `packages/python/python/dirsql/_binary/`, and the
-# `[tool.maturin].include` glob picks it up so `pip install dirsql &&
-# dirsql ...` and `uvx dirsql` work end-to-end. Upstream verifies wheel
-# contents post-build (`_matrix.yml` wheel-content guard).
+# `packages/python/dirsql/_binary/`, and the `[tool.maturin].include`
+# glob picks it up so `pip install dirsql && dirsql ...` and `uvx
+# dirsql` work end-to-end. Upstream verifies wheel contents post-build
+# (`_matrix.yml` wheel-content guard).
 [[package]]
 name  = "dirsql-py"
 pypi  = "dirsql"
@@ -91,7 +91,7 @@ targets = [
 [package.bundle_cli]
 bin        = "dirsql"
 crate_path = "packages/rust"
-stage_to   = "python/dirsql/_binary"
+stage_to   = "dirsql/_binary"
 features   = ["cli"]
 
 # npm: the dual-family pattern. `@dirsql/lib-{triple}` ships the napi-rs
