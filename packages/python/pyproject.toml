@@ -29,30 +29,42 @@ dev = [
     "maturin>=1.0",
 ]
 
-# [project.scripts] removed: the Rust CLI binary is no longer bundled
-# inside the PyPI wheel. Putitoutthere v0.2.3's `bundle_cli` recipe is
-# parsed but not yet wired into its reusable workflow's build job (no
-# cross-compile step reads `matrix.bundle_cli`). Restore the entry —
-#
-#   [project.scripts]
-#   dirsql = "dirsql._cli.main:main"
-#
-# — once the upstream gap is fixed and `[package.bundle_cli]` is
-# re-enabled in `putitoutthere.toml`. Until then, CLI install paths are
-# `cargo install dirsql --features cli` and `npx dirsql`.
+[project.scripts]
+dirsql = "dirsql._cli.main:main"
 
 [tool.maturin]
 features = ["extension-module"]
 exclude = [
     "tests/",
 ]
-python-source = "python"
+# `python-source` intentionally unset: the maturin-recommended mixed
+# layout (`python-source = "python"`) is unsupported by upstream
+# putitoutthere's wheel-content verifier, which compares `stage_to`
+# against the literal in-wheel path without subtracting the
+# source-root prefix that maturin strips. Filed at
+# thekevinscott/putitoutthere; revert this flatten (and re-add
+# `python-source = "python"`) once upstream's verifier handles
+# python-source stripping.
 module-name = "dirsql._dirsql"
-# CI copies the release-built `dirsql` binary into
-# `python/dirsql/_binary/<name>` before `maturin build` so it ships
-# inside the wheel as package data. `.gitignore`d; not in source
-# control.
+# putitoutthere's `[package.bundle_cli]` recipe (see putitoutthere.toml)
+# cross-compiles the `dirsql` bin per target and stages it under
+# `dirsql/_binary/` before `maturin build`, so it ships inside each
+# wheel as package data. The directory is `.gitignore`d; not in
+# source control.
 include = [
-    { path = "python/dirsql/_binary/*", format = "wheel" },
+    { path = "dirsql/_binary/*", format = "wheel" },
     { path = "docs/**/*", format = "sdist" },
+]
+
+# CLI launcher modules (`_cli/main.py`, `_cli/binary_path.py`,
+# `_cli/is_windows.py`) are thin shims that exec the bundled Rust
+# binary. The AGENTS.md test-boundary rules forbid monkeypatch unit
+# tests on production module attributes (`os.execv`, `binary_path`,
+# etc.) -- the only meaningful coverage is end-to-end (real wheel
+# install + `dirsql --version`), which putitoutthere's wheel-content
+# guard verifies post-build. Omitting these files keeps the 90%
+# coverage floor honest about library code.
+[tool.coverage.run]
+omit = [
+    "dirsql/_cli/*",
 ]

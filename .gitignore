@@ -1,5 +1,11 @@
 /target
 packages/*/target
+# Exception: the symlink at packages/rust/target -> ../../target is a
+# workaround for upstream putitoutthere's workspace target-dir lookup
+# bug (see comment in putitoutthere.toml). The symlink itself is
+# tracked; the target dir it points to is still ignored via /target
+# above.
+!packages/rust/target
 .beads
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
@@ -29,7 +35,7 @@ __pycache__/
 .coverage
 .pytest_cache/
 # Rust CLI binary bundled into the wheel by CI (not in source control).
-packages/python/python/dirsql/_binary/
+packages/python/dirsql/_binary/
 
 # putitoutthere per-(mode, triple) staging outputs
 packages/ts/build/

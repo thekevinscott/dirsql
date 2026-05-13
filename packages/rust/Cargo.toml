@@ -6,7 +6,11 @@ description = "Ephemeral SQL index over a local directory"
 # version stays for the binding crates (publish = false).
 version = "0.2.7"
 edition.workspace = true
-license.workspace = true
+# Literal `license` (not `license.workspace = true`) because
+# putitoutthere's preflight check reads `[package].license` directly
+# from the crate's Cargo.toml and does not resolve workspace
+# inheritance, surfacing PIOT_CRATES_MISSING_METADATA otherwise.
+license = "MIT"
 repository.workspace = true
 # `docs/` is a symlink to the workspace `docs/` so the markdown ships with the
 # crate; everything below is the VitePress build tooling we don't want to ship.

@@ -41,8 +41,8 @@ jobs:
               # Python bindings (Rust) source
               packages/python/src/*) code_changed=true ;;
               # Python package source, excluding *_test.py
-              packages/python/python/*_test.py) ;;
-              packages/python/python/*) code_changed=true ;;
+              packages/python/dirsql/*_test.py) ;;
+              packages/python/dirsql/*) code_changed=true ;;
               # TypeScript bindings (Rust/napi) source
               packages/ts/src/*) code_changed=true ;;
               # TypeScript package source, excluding *.test.ts / *.spec.ts

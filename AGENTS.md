@@ -52,8 +52,21 @@ A feature is not done until integration tests pass and cover the new functionali
 - **Unit tests**: Colocated with source
   - Python: `foo.py` -> `foo_test.py` in same directory
   - Rust: inline `#[cfg(test)]` module at bottom of each source file
-- **Integration tests**: `tests/integration/` -- test the Python SDK layer, mock third-party deps (SQLite, LLM calls). Heavy use of pytest fixtures. Run in CI.
-- **E2E tests**: `tests/e2e/` -- real filesystem, real SQLite, real LLM calls, no mocks. Heavy use of pytest fixtures. **NOT run in CI** (eventual LLM calls make them non-free). Run locally by Claude after significant code changes.
+- **Integration tests**: `tests/integration/` -- exercise the SDK's **public API** (`DirSQL`, `Table`, `RowEvent`, etc.), with third-party modules (e.g. the `notify` filesystem watcher, network calls, future LLM clients) replaced by **fixture-injected fakes**. Run in CI.
+- **E2E tests**: `tests/e2e/` -- real filesystem, real SQLite, real LLM calls, real published-artifact install (wheel / npm tarball). **No mocks, no fakes, no monkeypatching.** Heavy use of pytest fixtures. **NOT run in CI in general** -- exception: the **wheel-install / pack-install smoke tests** are part of the `build` CI jobs because they gate publishability.
+
+### Test Boundaries -- What to Mock, What Not To
+
+**Monkeypatching is a code smell.** If a test replaces a module-level attribute on the system under test (`monkeypatch.setattr(mod, "binary_path", ...)`, `monkeypatch.setattr(os, "execv", ...)`), the test is almost certainly at the wrong layer or the production code is missing a seam. Fix the layer / inject the dependency; don't reach into the module from the test.
+
+Concrete rules:
+
+1. **Integration tests hit the SDK's public API**, not the CLI surface. The CLI is a thin launcher (`os.execv` / `spawnSync`); there is nothing in it worth integration-testing in-process. CLI behavior is verified by the e2e wheel/pack install smoke tests.
+2. **Integration tests may use fakes for third-party modules** (filesystem watchers, network clients, eventual LLM SDKs) -- but inject them through the public API or a fixture, not by patching the production module's attributes.
+3. **E2E tests mock nothing.** Real filesystem, real SQLite, real binary, real install. If an e2e test needs a stub, it isn't an e2e test.
+4. **Unit tests** test pure functions and small classes in isolation. Their dependencies are passed as arguments or constructor params -- not patched onto modules. If a unit can only be tested by monkeypatching its imports, refactor for dependency injection.
+
+If you find yourself writing `monkeypatch.setattr(some_production_module, ...)`, stop and ask: is this an integration test that should go through the public API instead? Is this a unit test whose target needs a constructor parameter? The answer is almost always yes.
 
 ### E2E Test Policy
 
@@ -150,7 +163,7 @@ Orchestrators must block merges of SDK-touching PRs that miss either file when r
 
 `PARITY.md` is a **living document** that tracks API-surface parity across the Python, Rust, and TypeScript SDKs. It must stay current.
 
-On every PR that touches any SDK's public API (`packages/python/python/dirsql/`, `packages/rust/src/`, `packages/ts/ts/` or `packages/ts/src/`), the author must:
+On every PR that touches any SDK's public API (`packages/python/dirsql/`, `packages/rust/src/`, `packages/ts/ts/` or `packages/ts/src/`), the author must:
 
 1. Update `PARITY.md` to reflect the new/changed/removed API surface.
 2. Call out in the PR body whether the change is **introducing parity drift** (one SDK gets something the others don't yet) or **restoring parity** (bringing a lagging SDK in line). Drift is allowed but must be intentional and tracked.

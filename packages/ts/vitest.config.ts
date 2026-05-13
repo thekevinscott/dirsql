@@ -25,6 +25,11 @@ export default defineConfig({
       "**/dist/**",
       "**/.{git,cache}/**",
       "docs/**",
+      // e2e tests live in `test-e2e/` and run via the dedicated
+      // `pnpm test:e2e` script (which depends on `pnpm build`). Excluding
+      // them here keeps the default `pnpm test` (and `vitest --dir test`)
+      // fast and free of the cargo-build prerequisite.
+      "test-e2e/**",
     ],
     coverage: {
       provider: "v8",
@@ -32,7 +37,11 @@ export default defineConfig({
       exclude: [
         "**/*.test.ts",
         "test/**/*.ts",
-        "ts/bin/dirsql.ts", // 5-line entry, exercised by the integration test
+        // CLI launcher modules. AGENTS.md test-boundary rules forbid
+        // monkeypatch unit tests on production module attributes; the
+        // only meaningful coverage is end-to-end (pack-install smoke
+        // test). Excluded to keep the 90% floor honest about SDK code.
+        "ts/bin/**",
         "ts/index.ts", // needs the napi binary; covered by SDK integration tests
       ],
       thresholds: {

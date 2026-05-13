@@ -27,19 +27,15 @@ globs = [
 ]
 first_version = "0.2.8"
 
-# PyPI: maturin-built wheels per target. The Rust CLI binary is NOT
-# bundled — putitoutthere v0.2.3's `[package.bundle_cli]` parses but is
-# unwired in the reusable workflow (no cross-compile step reads
-# `matrix.bundle_cli`). When that lands upstream, restore the block
-# below and re-add the `dirsql` console script to pyproject.toml.
-#
-#   [package.bundle_cli]
-#   bin        = "dirsql"
-#   stage_to   = "python/dirsql/_binary"
-#   crate_path = "packages/rust"
-#
-# Until then, `pip install dirsql` gives users the SDK only. CLI install
-# paths: `cargo install dirsql --features cli`, `npx dirsql`.
+# PyPI: maturin-built wheels per target with the Rust CLI binary bundled
+# inside each wheel. `[package.bundle_cli]` below (putitoutthere ≥
+# v0.2.17) cross-compiles the `dirsql` bin per target with
+# `--features cli` (gated behind `[[bin]] required-features` in
+# `packages/rust/Cargo.toml`), stages it into
+# `packages/python/dirsql/_binary/`, and the `[tool.maturin].include`
+# glob picks it up so `pip install dirsql && dirsql ...` and `uvx
+# dirsql` work end-to-end. Upstream verifies wheel contents post-build
+# (`_matrix.yml` wheel-content guard).
 [[package]]
 name  = "dirsql-py"
 pypi  = "dirsql"
@@ -72,6 +68,31 @@ targets = [
   # to. See dirsql#175.
   { triple = "x86_64-pc-windows-msvc", runner = "windows-2025-vs2026" },
 ]
+
+# Workaround for upstream putitoutthere bug (filed at
+# thekevinscott/putitoutthere): `[package.bundle_cli]` is unsatisfiable
+# for crates in a cargo workspace today.
+#
+#   - `crate_path = "."` (default) makes the check fail because the
+#     workspace-root Cargo.toml has no `[[bin]]` -- the check only
+#     inspects the literal manifest at `<crate_path>/Cargo.toml` and
+#     doesn't walk workspace members.
+#   - `crate_path = "packages/rust"` makes the check pass, but the
+#     build's stage step then looks for the binary at
+#     `packages/rust/target/<triple>/release/dirsql` while cargo's
+#     workspace-rooted target dir actually writes to
+#     `target/<triple>/release/dirsql`.
+#
+# We satisfy both halves: set `crate_path` to the member crate (check
+# passes), and check in a `packages/rust/target -> ../../target`
+# symlink (the stage step's lookup path resolves through the symlink
+# to the workspace target dir). Revert both once upstream lands a
+# `cargo metadata`-based fix.
+[package.bundle_cli]
+bin        = "dirsql"
+crate_path = "packages/rust"
+stage_to   = "dirsql/_binary"
+features   = ["cli"]
 
 # npm: the dual-family pattern. `@dirsql/lib-{triple}` ships the napi-rs
 # `.node` addon; `@dirsql/cli-{triple}` ships the CLI binary. The

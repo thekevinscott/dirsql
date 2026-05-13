@@ -7,8 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Python wheel ships the `dirsql` CLI again.** Restored
+  `[project.scripts] dirsql = "dirsql._cli.main:main"` in
+  `packages/python/pyproject.toml` and declared `[package.bundle_cli]`
+  in `putitoutthere.toml` (requires putitoutthere ≥ v0.2.17). The
+  reusable workflow now cross-compiles the `dirsql` bin per target with
+  `--features cli`, stages it into `dirsql/_binary/`, and
+  maturin's `[tool.maturin].include` glob bundles it into each wheel.
+  `pip install dirsql && dirsql ...` and `uvx dirsql` work end-to-end;
+  upstream verifies wheel contents post-build.
+
+### Added
+
+- **PR-time config-sanity gate.** New
+  `.github/workflows/release-config-check.yml` calls putitoutthere's
+  `check.yml@v0` reusable workflow on every pull request. Validates
+  `putitoutthere.toml` (parse + schema + common-mistakes detector,
+  unique package names, `depends_on` cycle / dangling-ref detection,
+  glob coverage, tag-format collisions), npm `repository` field, crates
+  `description` / `license`, pypi `bundle_cli` binary declaration, and
+  npm target triple mapping. Few seconds per PR, no per-target build.
+  Companion to the existing `release-precheck.yml` build-matrix gate.
+
+- **`pack-install` build-CI job for the npm package.** Builds the real
+  `dirsql` binary, packs the host's `@dirsql/cli-<slug>` sub-package and
+  the main `dirsql` package, installs both into a fresh dir, and runs
+  `node_modules/.bin/dirsql --version`. Companion to the Python
+  wheel-install job; gates publishability of the npm artifact.
+- **AGENTS.md test-boundary rules.** Integration tests target the
+  public SDK API (not the CLI launcher); e2e tests have no mocks /
+  fakes / monkeypatching; monkeypatching production-module attributes
+  is a code smell and is not allowed (use dependency injection via the
+  public API or fixtures).
+
 ### Removed
 
+- **Monkeypatch unit tests for the CLI launcher.** Deleted
+  `packages/python/python/dirsql/_cli/{main,binary_path,is_windows}_test.py`,
+  `packages/ts/ts/bin/{main,resolveBinary,die}.test.ts`, and
+  `packages/ts/test/{cli.test.ts,runLauncher.ts,fakeInstallRoot.ts}`. The
+  launchers are thin enough that the only meaningful coverage is the
+  build-CI smoke tests above; the deleted tests monkeypatched production
+  module attributes (`os.execv`, `process.exit`, `process.stderr`,
+  `binary_path`, `resolveBinary`) which the new test-boundary rules
+  forbid.
 - **Content parsing is no longer a dirsql concern.** `parser.rs` and the
   `Format` enum (`Json` / `Jsonl` / `Csv` / `Tsv` / `Toml` / `Yaml` /
   `Frontmatter`) are gone, along with `ColumnSource`, `apply_columns`,
