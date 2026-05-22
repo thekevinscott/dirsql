@@ -671,3 +671,33 @@ glob = "*.json"
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0]["body"], Value::Text("hello".into()));
 }
+
+#[test]
+fn binary_file_under_glob_does_not_break_build() {
+    // Regression for issue #184 (Part 2): dirsql must not eagerly read
+    // matched files as UTF-8 text. `extract` no longer receives content,
+    // so a non-UTF-8 file under a table's glob must not fail the build --
+    // its row is still produced from filesystem facts alone.
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("logo.png"),
+        [0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x80, 0x90],
+    )
+    .unwrap();
+
+    // NOTE: the closure still takes the legacy `(path, content)` shape so
+    // this RED commit compiles against today's API. Part 2's implementation
+    // drops the `content` parameter; this closure becomes `|_path|` then.
+    let table = Table::new(
+        "CREATE TABLE assets (_path TEXT, _basename TEXT)",
+        "*.png",
+        |_path, _content| vec![Row::new()],
+    );
+
+    let db =
+        DirSQL::new(root.path(), vec![table]).expect("build must not fail on a binary file");
+
+    let rows = db.query("SELECT _basename FROM assets").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["_basename"], Value::Text("logo.png".into()));
+}
