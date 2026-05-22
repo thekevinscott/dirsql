@@ -11,7 +11,7 @@ name = "dirsql"
 dynamic = ["version"]
 description = "Ephemeral SQL index over a local directory"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     { name = "Kevin Scott" },
 ]

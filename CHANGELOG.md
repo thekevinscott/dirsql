@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Python 3.10 support dropped.** `requires-python` is now `>=3.11`
+  (was `>=3.10`). `pip` / `uv` will refuse to install dirsql on Python
+  3.10. This is required to ship 0.3.6: putitoutthere's multi-version
+  wheel build (#369) fans a wheel row per `requires-python` version,
+  and its `bundle_cli` wheel-content verify step `import tomllib` —
+  stdlib only on CPython >= 3.11 — so the 3.10 row crashes the release
+  build. Dropping 3.10 removes that row. 3.10 can be restored once the
+  upstream verify step no longer depends on `tomllib`.
+
 ### Fixed
 
 - **`npx dirsql` and `uvx dirsql` work end-to-end again.** 0.3.5 published
