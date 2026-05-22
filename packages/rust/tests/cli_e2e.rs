@@ -327,6 +327,39 @@ fn missing_config_returns_503_on_query() {
 }
 
 #[test]
+fn no_config_serves_default_files_table() {
+    // Issue #184 Part 1: with no `.dirsql.toml`, dirsql serves a default
+    // `files` table with one row per file under the root, instead of going
+    // into the degraded (503) state.
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("readme.md"), "hello").unwrap();
+    let port = free_port();
+    let child = spawn_dirsql(dir.path(), port);
+    wait_until_ready(port, Duration::from_secs(10));
+
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT _basename FROM files"}))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let rows: Value = resp.json().unwrap();
+    let names: Vec<&str> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["_basename"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"readme.md"),
+        "expected `files` table to contain readme.md, got {names:?}"
+    );
+
+    kill_and_wait(child);
+}
+
+#[test]
 fn explicit_config_flag_overrides_cwd_default() {
     // Start in an unrelated cwd but point `--config` at the fixture.
     let fixture = blog_fixture();
