@@ -8,6 +8,10 @@ canonical: https://thekevinscott.github.io/dirsql/guide/watching
 
 `dirsql` can monitor the filesystem for changes and emit events when rows are inserted, updated, or deleted. This is useful for building reactive applications that respond to file changes in real time.
 
+::: tip From the CLI
+The `dirsql` HTTP server streams the same events over [`GET /events`](./cli.md#get-events) as a [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) stream. Each `data:` payload uses the same JSON schema described in [Event types](#event-types) below.
+:::
+
 ## Starting a watch stream
 
 ::: code-group

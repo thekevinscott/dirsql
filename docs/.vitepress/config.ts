@@ -13,6 +13,7 @@ export default defineConfig({
     nav: [
       { text: 'Getting Started', link: '/getting-started' },
       { text: 'Guide', link: '/guide/tables' },
+      { text: 'CLI', link: '/guide/cli' },
       { text: 'Reference', link: '/api/' },
       { text: 'Migrations', link: '/migrations' },
       { text: 'GitHub', link: 'https://github.com/thekevinscott/dirsql' }
@@ -29,13 +30,13 @@ export default defineConfig({
         text: 'How-to Guides',
         items: [
           { text: 'Configuration File', link: '/guide/config' },
-          { text: 'Generating a Config (`init`)', link: '/guide/init' },
           { text: 'Defining Tables', link: '/guide/tables' },
           { text: 'Querying', link: '/guide/querying' },
           { text: 'File Watching', link: '/guide/watching' },
           { text: 'Persistence', link: '/guide/persistence' },
           { text: 'Async API', link: '/guide/async' },
           { text: 'Command-Line Interface', link: '/guide/cli' },
+          { text: 'Generating a Config (`init`)', link: '/guide/init' },
           { text: 'Collaboration with CRDTs', link: '/guide/crdt' }
         ]
       },

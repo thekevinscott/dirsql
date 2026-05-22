@@ -8,6 +8,10 @@ canonical: https://thekevinscott.github.io/dirsql/guide/querying
 
 Once a `DirSQL` instance is created, the initial directory scan is complete and you can run SQL queries against the indexed data.
 
+::: tip From the CLI
+The `dirsql` HTTP server exposes the same query interface over [`POST /query`](./cli.md#post-query). Send `{"sql": "..."}` and get back the same JSON array of row objects.
+:::
+
 ## Basic queries
 
 ::: code-group
