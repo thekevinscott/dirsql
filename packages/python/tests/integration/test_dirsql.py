@@ -25,9 +25,7 @@ def describe_DirSQL():
                                 "body": row["body"],
                                 "author": row["author"],
                             }
-                            for line in open(path, encoding="utf-8")
-                            .read()
-                            .splitlines()
+                            for line in open(path, encoding="utf-8").read().splitlines()
                             for row in [json.loads(line)]
                         ],
                     ),
@@ -51,9 +49,7 @@ def describe_DirSQL():
                                 "body": row["body"],
                                 "author": row["author"],
                             }
-                            for line in open(path, encoding="utf-8")
-                            .read()
-                            .splitlines()
+                            for line in open(path, encoding="utf-8").read().splitlines()
                             for row in [json.loads(line)]
                         ],
                     ),
@@ -81,9 +77,7 @@ def describe_DirSQL():
                                 "body": row["body"],
                                 "author": row["author"],
                             }
-                            for line in open(path, encoding="utf-8")
-                            .read()
-                            .splitlines()
+                            for line in open(path, encoding="utf-8").read().splitlines()
                             for row in [json.loads(line)]
                         ],
                     ),
@@ -108,9 +102,7 @@ def describe_DirSQL():
                                 "body": row["body"],
                                 "author": row["author"],
                             }
-                            for line in open(path, encoding="utf-8")
-                            .read()
-                            .splitlines()
+                            for line in open(path, encoding="utf-8").read().splitlines()
                             for row in [json.loads(line)]
                         ],
                     ),
@@ -138,9 +130,7 @@ def describe_DirSQL():
                                 "body": row["body"],
                                 "author": row["author"],
                             }
-                            for line in open(path, encoding="utf-8")
-                            .read()
-                            .splitlines()
+                            for line in open(path, encoding="utf-8").read().splitlines()
                             for row in [json.loads(line)]
                         ],
                     ),
@@ -166,9 +156,7 @@ def describe_DirSQL():
                                 "body": row["body"],
                                 "author": row["author"],
                             }
-                            for line in open(path, encoding="utf-8")
-                            .read()
-                            .splitlines()
+                            for line in open(path, encoding="utf-8").read().splitlines()
                             for row in [json.loads(line)]
                         ],
                     ),
@@ -302,9 +290,7 @@ def describe_DirSQL():
                                 "body": row["body"],
                                 "author": row["author"],
                             }
-                            for line in open(path, encoding="utf-8")
-                            .read()
-                            .splitlines()
+                            for line in open(path, encoding="utf-8").read().splitlines()
                             for row in [json.loads(line)]
                         ],
                     ),

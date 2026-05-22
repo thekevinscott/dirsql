@@ -174,9 +174,7 @@ def describe_persist():
                             box2.__setitem__(0, box2[0] + 1)
                             or [
                                 {
-                                    **json.loads(
-                                        open(path, encoding="utf-8").read()
-                                    ),
+                                    **json.loads(open(path, encoding="utf-8").read()),
                                     "sku": "X",
                                 }
                             ]

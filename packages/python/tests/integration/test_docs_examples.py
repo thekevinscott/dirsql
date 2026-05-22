@@ -110,7 +110,9 @@ def describe_tables_guide():
                 Table(
                     ddl="CREATE TABLE items (name TEXT, value INTEGER)",
                     glob="data/*.json",
-                    extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+                    extract=lambda path: [
+                        json.loads(open(path, encoding="utf-8").read())
+                    ],
                 ),
             ],
         )
@@ -136,9 +138,7 @@ def describe_tables_guide():
                     glob="comments/**/index.jsonl",
                     extract=lambda path: [
                         json.loads(line)
-                        for line in open(path, encoding="utf-8")
-                        .read()
-                        .splitlines()
+                        for line in open(path, encoding="utf-8").read().splitlines()
                     ],
                 ),
             ],
@@ -167,9 +167,7 @@ def describe_tables_guide():
                             "id": os.path.basename(os.path.dirname(path)),
                             "body": json.loads(line)["body"],
                         }
-                        for line in open(path, encoding="utf-8")
-                        .read()
-                        .splitlines()
+                        for line in open(path, encoding="utf-8").read().splitlines()
                     ],
                 ),
             ],
@@ -227,12 +225,16 @@ def describe_tables_guide():
                 Table(
                     ddl="CREATE TABLE posts (title TEXT, author_id TEXT)",
                     glob="posts/*.json",
-                    extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+                    extract=lambda path: [
+                        json.loads(open(path, encoding="utf-8").read())
+                    ],
                 ),
                 Table(
                     ddl="CREATE TABLE authors (id TEXT, name TEXT)",
                     glob="authors/*.json",
-                    extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+                    extract=lambda path: [
+                        json.loads(open(path, encoding="utf-8").read())
+                    ],
                 ),
             ],
         )
@@ -261,7 +263,9 @@ def describe_tables_guide():
                 Table(
                     ddl="CREATE TABLE items (name TEXT)",
                     glob="**/*.json",
-                    extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+                    extract=lambda path: [
+                        json.loads(open(path, encoding="utf-8").read())
+                    ],
                 ),
             ],
         )
@@ -283,7 +287,9 @@ def describe_tables_guide():
                 Table(
                     ddl="CREATE TABLE metrics (name TEXT, value REAL, count INTEGER)",
                     glob="data/*.json",
-                    extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+                    extract=lambda path: [
+                        json.loads(open(path, encoding="utf-8").read())
+                    ],
                 ),
             ],
         )
@@ -307,7 +313,9 @@ def describe_tables_guide():
                 Table(
                     ddl="CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL)",
                     glob="data/*.json",
-                    extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+                    extract=lambda path: [
+                        json.loads(open(path, encoding="utf-8").read())
+                    ],
                 ),
             ],
         )
@@ -338,7 +346,9 @@ def describe_tables_guide():
                 Table(
                     ddl="CREATE TABLE items (text_val TEXT, int_val INTEGER, float_val REAL, bool_val INTEGER, null_val TEXT)",
                     glob="*.json",
-                    extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+                    extract=lambda path: [
+                        json.loads(open(path, encoding="utf-8").read())
+                    ],
                 ),
             ],
         )
@@ -475,7 +485,9 @@ def describe_async_guide():
                 Table(
                     ddl="CREATE TABLE items (name TEXT, value INTEGER)",
                     glob="data/*.json",
-                    extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+                    extract=lambda path: [
+                        json.loads(open(path, encoding="utf-8").read())
+                    ],
                 ),
             ],
         )
@@ -499,7 +511,9 @@ def describe_async_guide():
                 Table(
                     ddl="CREATE TABLE items (name TEXT, value INTEGER)",
                     glob="data/*.json",
-                    extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+                    extract=lambda path: [
+                        json.loads(open(path, encoding="utf-8").read())
+                    ],
                 ),
             ],
         )
@@ -524,7 +538,9 @@ def describe_async_guide():
                 Table(
                     ddl="CREATE TABLE items (name TEXT, value INTEGER)",
                     glob="data/*.json",
-                    extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+                    extract=lambda path: [
+                        json.loads(open(path, encoding="utf-8").read())
+                    ],
                 ),
             ],
         )
@@ -555,7 +571,9 @@ def describe_watching_guide():
                 Table(
                     ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                     glob="comments/**/*.json",
-                    extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+                    extract=lambda path: [
+                        json.loads(open(path, encoding="utf-8").read())
+                    ],
                 ),
             ],
         )
@@ -608,7 +626,9 @@ def describe_watching_guide():
                 Table(
                     ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                     glob="comments/**/*.json",
-                    extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+                    extract=lambda path: [
+                        json.loads(open(path, encoding="utf-8").read())
+                    ],
                 ),
             ],
         )
@@ -661,7 +681,9 @@ def describe_watching_guide():
                 Table(
                     ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                     glob="comments/**/*.json",
-                    extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+                    extract=lambda path: [
+                        json.loads(open(path, encoding="utf-8").read())
+                    ],
                 ),
             ],
         )
@@ -710,7 +732,9 @@ def describe_watching_guide():
                 Table(
                     ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                     glob="comments/**/*.json",
-                    extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+                    extract=lambda path: [
+                        json.loads(open(path, encoding="utf-8").read())
+                    ],
                 ),
             ],
         )
@@ -790,7 +814,9 @@ def describe_api_reference():
                 Table(
                     ddl="CREATE TABLE items (name TEXT)",
                     glob="data/*.json",
-                    extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+                    extract=lambda path: [
+                        json.loads(open(path, encoding="utf-8").read())
+                    ],
                 ),
             ],
         )

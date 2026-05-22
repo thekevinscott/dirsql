@@ -139,9 +139,7 @@ def describe_watching_guide_positional_identity_gap():
                     glob="*.jsonl",
                     extract=lambda path: [
                         json.loads(line)
-                        for line in open(path, encoding="utf-8")
-                        .read()
-                        .splitlines()
+                        for line in open(path, encoding="utf-8").read().splitlines()
                         if line
                     ],
                 ),
