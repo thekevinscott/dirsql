@@ -1,11 +1,5 @@
 /target
 packages/*/target
-# Exception: the symlink at packages/rust/target -> ../../target is a
-# workaround for upstream putitoutthere's workspace target-dir lookup
-# bug (see comment in putitoutthere.toml). The symlink itself is
-# tracked; the target dir it points to is still ignored via /target
-# above.
-!packages/rust/target
 .beads
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
