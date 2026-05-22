@@ -1,0 +1,41 @@
+---
+canonical: https://thekevinscott.github.io/dirsql/cli/server
+---
+
+# Running the Server
+
+> Online: <https://thekevinscott.github.io/dirsql/cli/server>
+
+The `dirsql` CLI is an HTTP server that exposes identical SDK functionality
+over [`POST /query`](./http-api.md#post-query) and [`GET /events`](./http-api.md#get-events).
+
+## Subcommands
+
+| Command | Purpose |
+|---|---|
+| `dirsql` (no subcommand) | Start the long-lived HTTP server (default behavior, see below). |
+| `dirsql init` | Generate a starter `.dirsql.toml` from the contents of a directory. See [Generating a Config](./init.md). |
+
+## Running the server
+
+Run `dirsql` from the directory containing your files:
+
+```bash
+dirsql
+
+$ Running at localhost:7117
+```
+
+The server reads tables from a [`.dirsql.toml`](./config.md) config file. By
+default it looks for `./.dirsql.toml`; override the path with `--config`.
+
+## Flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--config <path>` | `./.dirsql.toml` | Path to the config file. The index is rooted at the directory containing this file. |
+| `--host <addr>` | `localhost` | Bind address |
+| `--port <n>` | `7117` | TCP port to bind |
+
+Once the server is running, see the [HTTP API](./http-api.md) for the request
+and response formats.

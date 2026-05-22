@@ -42,6 +42,12 @@ The docs follow the [Diataxis](https://diataxis.fr/) framework:
 - **Reference** (`api/`) -- information-oriented, API details
 - **Explanation** (`architecture.md`) -- understanding-oriented, design decisions
 
+The **CLI** (`cli/`) is a self-contained section reachable from its own
+top-level `CLI` nav tab, with a path-scoped sidebar (`/cli/` key in
+`config.ts`). Everything a CLI user needs -- installation, running the server,
+`init`, the `.dirsql.toml` config file, and the HTTP API -- lives under
+`cli/`. Do not move CLI pages back into `guide/`.
+
 ## Conventions
 
 - Wrap `dirsql` in backticks in all prose text

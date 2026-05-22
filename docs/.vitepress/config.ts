@@ -13,40 +13,58 @@ export default defineConfig({
     nav: [
       { text: 'Getting Started', link: '/getting-started' },
       { text: 'Guide', link: '/guide/tables' },
+      { text: 'CLI', link: '/cli/' },
       { text: 'Reference', link: '/api/' },
       { text: 'Migrations', link: '/migrations' },
       { text: 'GitHub', link: 'https://github.com/thekevinscott/dirsql' }
     ],
 
-    sidebar: [
-      {
-        text: 'Tutorials',
-        items: [
-          { text: 'Getting Started', link: '/getting-started' }
-        ]
-      },
-      {
-        text: 'How-to Guides',
-        items: [
-          { text: 'Configuration File', link: '/guide/config' },
-          { text: 'Generating a Config (`init`)', link: '/guide/init' },
-          { text: 'Defining Tables', link: '/guide/tables' },
-          { text: 'Querying', link: '/guide/querying' },
-          { text: 'File Watching', link: '/guide/watching' },
-          { text: 'Persistence', link: '/guide/persistence' },
-          { text: 'Async API', link: '/guide/async' },
-          { text: 'Command-Line Interface', link: '/guide/cli' },
-          { text: 'Collaboration with CRDTs', link: '/guide/crdt' }
-        ]
-      },
-      {
-        text: 'Reference',
-        items: [
-          { text: 'API Reference', link: '/api/' },
-          { text: 'Migrations', link: '/migrations' }
-        ]
-      },
-    ],
+    sidebar: {
+      '/cli/': [
+        {
+          text: 'CLI',
+          items: [
+            { text: 'Overview & Installation', link: '/cli/' },
+            { text: 'Running the Server', link: '/cli/server' },
+            { text: 'Generating a Config (`init`)', link: '/cli/init' },
+            { text: 'Configuration File', link: '/cli/config' },
+            { text: 'HTTP API', link: '/cli/http-api' }
+          ]
+        }
+      ],
+      '/': [
+        {
+          text: 'Tutorials',
+          items: [
+            { text: 'Getting Started', link: '/getting-started' }
+          ]
+        },
+        {
+          text: 'How-to Guides',
+          items: [
+            { text: 'Defining Tables', link: '/guide/tables' },
+            { text: 'Querying', link: '/guide/querying' },
+            { text: 'File Watching', link: '/guide/watching' },
+            { text: 'Persistence', link: '/guide/persistence' },
+            { text: 'Async API', link: '/guide/async' },
+            { text: 'Collaboration with CRDTs', link: '/guide/crdt' }
+          ]
+        },
+        {
+          text: 'CLI',
+          items: [
+            { text: 'Using `dirsql` from the CLI', link: '/cli/' }
+          ]
+        },
+        {
+          text: 'Reference',
+          items: [
+            { text: 'API Reference', link: '/api/' },
+            { text: 'Migrations', link: '/migrations' }
+          ]
+        }
+      ]
+    },
 
     outline: {
       level: [2, 3],

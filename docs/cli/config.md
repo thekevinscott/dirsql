@@ -1,10 +1,10 @@
 ---
-canonical: https://thekevinscott.github.io/dirsql/guide/config
+canonical: https://thekevinscott.github.io/dirsql/cli/config
 ---
 
 # Configuration File
 
-> Online: <https://thekevinscott.github.io/dirsql/guide/config>
+> Online: <https://thekevinscott.github.io/dirsql/cli/config>
 
 `dirsql` can be configured with a `.dirsql.toml` file. Tables defined this
 way produce **one row per matched file**. Each row's columns come from
@@ -16,7 +16,7 @@ filesystem facts:
 
 Content interpretation (parsing JSON, CSV, frontmatter, etc.) is **not**
 configured in `.dirsql.toml`. If you need columns derived from file
-contents, register a programmatic [`Table`](./tables.md) whose `extract`
+contents, register a programmatic [`Table`](../guide/tables.md) whose `extract`
 function does the parsing in your host language.
 
 ## Basic Example
@@ -131,7 +131,7 @@ ignore = ["node_modules/**", ".git/**", "*.pyc", "__pycache__/**"]
 
 The top-level `.dirsql/` directory is always excluded, whether you list it
 or not — it is a reserved namespace for `dirsql`'s own metadata (see
-[Persistence](./persistence.md)).
+[Persistence](../guide/persistence.md)).
 
 ## Persistence
 
@@ -144,7 +144,7 @@ persist = true
 # persist_path = ".dirsql/cache.db"   # optional; this is the default
 ```
 
-See [Persistence](./persistence.md) for the full reconcile algorithm,
+See [Persistence](../guide/persistence.md) for the full reconcile algorithm,
 storage layout, and limitations.
 
 ## Strict Mode
@@ -163,7 +163,7 @@ strict = true
 Strict mode does **not** apply to auto-injected stat virtuals — those are
 always filtered to the DDL's declared columns regardless. Strict mode
 applies only to keys produced by an extract callback (relevant for
-programmatic [tables](./tables.md)).
+programmatic [tables](../guide/tables.md)).
 
 ## Full Example
 
@@ -188,6 +188,6 @@ glob = "logs/*.csv"
 
 `.dirsql.toml` does not parse file contents. For columns derived from the
 *inside* of files (frontmatter keys, JSON values, CSV cells, etc.),
-register a programmatic [`Table`](./tables.md) instead, and parse the
+register a programmatic [`Table`](../guide/tables.md) instead, and parse the
 bytes in your host language. Glob captures and stat virtuals are still
 auto-injected into rows produced by your extract.

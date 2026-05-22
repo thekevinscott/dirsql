@@ -1,65 +1,16 @@
 ---
-canonical: https://thekevinscott.github.io/dirsql/guide/cli
+canonical: https://thekevinscott.github.io/dirsql/cli/http-api
 ---
 
-# Command-Line Interface
+# HTTP API
 
-> Online: <https://thekevinscott.github.io/dirsql/guide/cli>
+> Online: <https://thekevinscott.github.io/dirsql/cli/http-api>
 
-`dirsql` starts an HTTP server that exposes identical SDK functionality.
+Once the [server is running](./server.md), `dirsql` exposes two HTTP
+endpoints: `POST /query` for SQL queries and `GET /events` for a real-time
+change stream.
 
-## Installation
-
-::: code-group
-
-```bash [npm]
-npx dirsql
-```
-
-```bash [PyPI]
-uvx dirsql
-```
-
-```bash [Cargo]
-# Installs the binary only (non-default feature)
-cargo install dirsql --features cli
-dirsql
-```
-
-:::
-
-::: tip For Rust library consumers
-The `cli` feature is **opt-in**. Adding `dirsql` as a library dependency (`cargo add dirsql`) pulls no CLI dependencies — only the core library. See the [Rust library README](https://github.com/thekevinscott/dirsql/tree/main/packages/rust) for details.
-:::
-
-## Subcommands
-
-| Command | Purpose |
-|---|---|
-| `dirsql` (no subcommand) | Start the long-lived HTTP server (default behavior, see below). |
-| `dirsql init` | Generate a starter `.dirsql.toml` from the contents of a directory. See [Generating a Config](./init.md). |
-
-## Running the server
-
-Run `dirsql` from the directory containing your files:
-
-```bash
-dirsql
-
-$ Running at localhost:7117
-```
-
-### Flags
-
-| Flag | Default | Description |
-|---|---|---|
-| `--config <path>` | `./.dirsql.toml` | Path to the config file. The index is rooted at the directory containing this file. |
-| `--host <addr>` | `localhost` | Bind address |
-| `--port <n>` | `7117` | TCP port to bind |
-
-## HTTP API
-
-### `POST /query`
+## `POST /query`
 
 Run a SQL query. Request body is JSON:
 
@@ -91,9 +42,12 @@ curl -s http://localhost:7117/query \
   | jq
 ```
 
-### `GET /events`
+The query interface is the same one the SDK exposes; see [Querying](../guide/querying.md)
+for SQL semantics, the read-only restriction, and the return format.
 
-Opens a [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) stream of change events. Each `data:` payload is the same JSON schema the SDK emits from [`db.watch()`](./watching.md#event-types):
+## `GET /events`
+
+Opens a [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) stream of change events. Each `data:` payload is the same JSON schema the SDK emits from [`db.watch()`](../guide/watching.md#event-types):
 
 ```
 event: row

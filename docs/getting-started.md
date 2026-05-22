@@ -31,7 +31,7 @@ cargo install dirsql --features cli
 
 :::
 
-See the [CLI guide](./guide/cli.md) for details on the command-line interface, and the [Rust library README](https://github.com/thekevinscott/dirsql/tree/main/packages/rust) for the library-vs-CLI feature split.
+See the [CLI section](./cli/) for details on the command-line interface, and the [Rust library README](https://github.com/thekevinscott/dirsql/tree/main/packages/rust) for the library-vs-CLI feature split.
 
 ## Quick start
 
@@ -182,5 +182,5 @@ The filesystem is always the source of truth. The database is rebuilt from files
 - [Querying](./guide/querying.md) -- SQL queries and return format
 - [File Watching](./guide/watching.md) -- real-time change events
 - [Async API](./guide/async.md) -- async ready(), query(), and watch()
-- [Command-Line Interface](./guide/cli.md) -- `dirsql` runs an HTTP server (`POST /query`, `GET /events` SSE)
+- [Using `dirsql` from the CLI](./cli/) -- `dirsql` runs an HTTP server (`POST /query`, `GET /events` SSE)
 - [Collaboration with CRDTs](./guide/crdt.md) -- multi-writer document merging alongside `dirsql`
