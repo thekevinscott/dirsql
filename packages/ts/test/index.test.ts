@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DirSQL, type RowEvent } from "dirsql";
@@ -37,7 +43,8 @@ describe("DirSQL", () => {
         {
           ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
           glob: "data/users.json",
-          extract: (_filePath: string, content: string) => JSON.parse(content),
+          extract: (filePath: string) =>
+            JSON.parse(readFileSync(filePath, "utf8")),
         },
       ],
     });
@@ -57,12 +64,14 @@ describe("DirSQL", () => {
         {
           ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
           glob: "data/users.json",
-          extract: (_filePath: string, content: string) => JSON.parse(content),
+          extract: (filePath: string) =>
+            JSON.parse(readFileSync(filePath, "utf8")),
         },
         {
           ddl: "CREATE TABLE products (name TEXT, price REAL)",
           glob: "data/products.json",
-          extract: (_filePath: string, content: string) => JSON.parse(content),
+          extract: (filePath: string) =>
+            JSON.parse(readFileSync(filePath, "utf8")),
         },
       ],
     });
@@ -83,10 +92,12 @@ describe("DirSQL", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "data/*.json",
-          extract: (_filePath: string, content: string) =>
-            JSON.parse(content).map((item: { name: string }) => ({
-              name: item.name,
-            })),
+          extract: (filePath: string) =>
+            JSON.parse(readFileSync(filePath, "utf8")).map(
+              (item: { name: string }) => ({
+                name: item.name,
+              }),
+            ),
         },
       ],
     });
@@ -102,10 +113,12 @@ describe("DirSQL", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "data/*.json",
-          extract: (_filePath: string, content: string) =>
-            JSON.parse(content).map((item: { name: string }) => ({
-              name: item.name,
-            })),
+          extract: (filePath: string) =>
+            JSON.parse(readFileSync(filePath, "utf8")).map(
+              (item: { name: string }) => ({
+                name: item.name,
+              }),
+            ),
         },
       ],
       ignore: ["data/products.json"],
@@ -122,7 +135,8 @@ describe("DirSQL", () => {
         {
           ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
           glob: "data/users.json",
-          extract: (_filePath: string, content: string) => JSON.parse(content),
+          extract: (filePath: string) =>
+            JSON.parse(readFileSync(filePath, "utf8")),
         },
       ],
     });
@@ -141,8 +155,8 @@ describe("DirSQL", () => {
           {
             ddl: "CREATE TABLE items (name TEXT)",
             glob: "**/*.json",
-            extract: (_filePath: string, content: string) =>
-              JSON.parse(content),
+            extract: (filePath: string) =>
+              JSON.parse(readFileSync(filePath, "utf8")),
           },
         ],
       });
@@ -161,7 +175,8 @@ describe("DirSQL", () => {
         {
           ddl: "CREATE TABLE users (name TEXT)",
           glob: "data/users.json",
-          extract: (_filePath: string, content: string) => JSON.parse(content),
+          extract: (filePath: string) =>
+            JSON.parse(readFileSync(filePath, "utf8")),
         },
       ],
     });
@@ -180,8 +195,8 @@ describe("DirSQL", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "items/*.json",
-          extract: (_filePath: string, content: string) => [
-            JSON.parse(content),
+          extract: (filePath: string) => [
+            JSON.parse(readFileSync(filePath, "utf8")),
           ],
         },
       ],
@@ -254,8 +269,8 @@ describe("DirSQL strict mode", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "items/*.json",
-          extract: (_filePath: string, content: string) => [
-            JSON.parse(content),
+          extract: (filePath: string) => [
+            JSON.parse(readFileSync(filePath, "utf8")),
           ],
           strict: true,
         },
@@ -277,8 +292,8 @@ describe("DirSQL strict mode", () => {
         {
           ddl: "CREATE TABLE items (name TEXT, color TEXT)",
           glob: "items/*.json",
-          extract: (_filePath: string, content: string) => [
-            JSON.parse(content),
+          extract: (filePath: string) => [
+            JSON.parse(readFileSync(filePath, "utf8")),
           ],
           strict: true,
         },
@@ -315,8 +330,8 @@ describe("DirSQL watch events", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "**/*.json",
-          extract: (_filePath: string, content: string) => [
-            JSON.parse(content),
+          extract: (filePath: string) => [
+            JSON.parse(readFileSync(filePath, "utf8")),
           ],
         },
       ],
@@ -356,8 +371,8 @@ describe("DirSQL watch events", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "**/*.json",
-          extract: (_filePath: string, content: string) => [
-            JSON.parse(content),
+          extract: (filePath: string) => [
+            JSON.parse(readFileSync(filePath, "utf8")),
           ],
         },
       ],
@@ -391,8 +406,8 @@ describe("DirSQL watch events", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "**/*.json",
-          extract: (_filePath: string, content: string) => [
-            JSON.parse(content),
+          extract: (filePath: string) => [
+            JSON.parse(readFileSync(filePath, "utf8")),
           ],
         },
       ],
@@ -429,8 +444,8 @@ describe("DirSQL watch events", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "items/*.json",
-          extract: (_filePath: string, content: string) => [
-            JSON.parse(content),
+          extract: (filePath: string) => [
+            JSON.parse(readFileSync(filePath, "utf8")),
           ],
         },
       ],
@@ -460,8 +475,8 @@ describe("DirSQL watch events", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "*.json",
-          extract: (_filePath: string, content: string) => [
-            JSON.parse(content),
+          extract: (filePath: string) => [
+            JSON.parse(readFileSync(filePath, "utf8")),
           ],
         },
       ],

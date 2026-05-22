@@ -47,13 +47,13 @@ async def main():
             Table(
                 ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                 glob="comments/**/index.jsonl",
-                extract=lambda path, content: [
+                extract=lambda path: [
                     {
                         "id": os.path.basename(os.path.dirname(path)),
                         "body": row["body"],
                         "author": row["author"],
                     }
-                    for line in content.splitlines()
+                    for line in open(path, encoding="utf-8").read().splitlines()
                     for row in [json.loads(line)]
                 ],
             ),
@@ -77,12 +77,12 @@ db = DirSQL(
         Table(
             ddl="CREATE TABLE posts (title TEXT, author_id TEXT)",
             glob="posts/*.json",
-            extract=lambda path, content: [json.loads(content)],
+            extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
         Table(
             ddl="CREATE TABLE authors (id TEXT, name TEXT)",
             glob="authors/*.json",
-            extract=lambda path, content: [json.loads(content)],
+            extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
     ],
 )
@@ -122,7 +122,7 @@ async def main():
             Table(
                 ddl="CREATE TABLE items (name TEXT)",
                 glob="**/*.json",
-                extract=lambda path, content: [json.loads(content)],
+                extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
             ),
         ],
     )
@@ -148,7 +148,7 @@ Defines how files map to a SQL table.
 
 - **`ddl`** (`str`): A `CREATE TABLE` statement defining the schema.
 - **`glob`** (`str`): A glob pattern matched against file paths relative to root.
-- **`extract`** (`Callable[[str, str], list[dict]]`): A function receiving `(relative_path, file_content)` and returning a list of row dicts. Each dict's keys must match the DDL column names.
+- **`extract`** (`Callable[[str], list[dict]]`): A function receiving the matched file's absolute filesystem path and returning a list of row dicts. dirsql does not read file contents; a callback that needs the file body reads it itself (e.g. `open(path, encoding="utf-8").read()`). Each dict's keys must match the DDL column names.
 
 ### `DirSQL(root=None, *, tables=None, ignore=None, config=None)`
 

@@ -411,8 +411,8 @@ mod tests {
 
     #[test]
     fn glob_config_hash_is_deterministic() {
-        let t1 = Table::new("CREATE TABLE a (x TEXT)", "*.json", |_, _| vec![]);
-        let t2 = Table::new("CREATE TABLE b (y TEXT)", "*.csv", |_, _| vec![]);
+        let t1 = Table::new("CREATE TABLE a (x TEXT)", "*.json", |_| vec![]);
+        let t2 = Table::new("CREATE TABLE b (y TEXT)", "*.csv", |_| vec![]);
         let h1 = compute_glob_config_hash(
             &[t1.clone(), t2.clone()],
             &["foo".to_string(), "bar".to_string()],
@@ -423,8 +423,8 @@ mod tests {
 
     #[test]
     fn glob_config_hash_changes_when_glob_changes() {
-        let t1 = Table::new("CREATE TABLE a (x TEXT)", "*.json", |_, _| vec![]);
-        let t2 = Table::new("CREATE TABLE a (x TEXT)", "*.csv", |_, _| vec![]);
+        let t1 = Table::new("CREATE TABLE a (x TEXT)", "*.json", |_| vec![]);
+        let t2 = Table::new("CREATE TABLE a (x TEXT)", "*.csv", |_| vec![]);
         let h1 = compute_glob_config_hash(&[t1], &[]);
         let h2 = compute_glob_config_hash(&[t2], &[]);
         assert_ne!(h1, h2);
@@ -432,8 +432,8 @@ mod tests {
 
     #[test]
     fn glob_config_hash_changes_when_strict_changes() {
-        let mut t1 = Table::new("CREATE TABLE a (x TEXT)", "*.json", |_, _| vec![]);
-        let mut t2 = Table::new("CREATE TABLE a (x TEXT)", "*.json", |_, _| vec![]);
+        let mut t1 = Table::new("CREATE TABLE a (x TEXT)", "*.json", |_| vec![]);
+        let mut t2 = Table::new("CREATE TABLE a (x TEXT)", "*.json", |_| vec![]);
         t2.strict = true;
         let h1 = compute_glob_config_hash(&[t1.clone()], &[]);
         let h2 = compute_glob_config_hash(&[t2], &[]);

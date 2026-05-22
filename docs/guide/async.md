@@ -24,7 +24,7 @@ async def main():
             Table(
                 ddl="CREATE TABLE items (name TEXT, value INTEGER)",
                 glob="data/*.json",
-                extract=lambda path, content: [json.loads(content)],
+                extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
             ),
         ],
     )
@@ -47,7 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Table::new(
                 "CREATE TABLE items (name TEXT, value INTEGER)",
                 "data/*.json",
-                |_path, content| vec![serde_json::from_str(content).unwrap()],
+                |path| vec![serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()],
             ),
         ],
     )?;
@@ -59,6 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 ```typescript [TypeScript]
+import { readFileSync } from 'node:fs';
 import { DirSQL, Table } from 'dirsql';
 
 const db = new DirSQL({
@@ -67,7 +68,7 @@ const db = new DirSQL({
     new Table({
       ddl: 'CREATE TABLE items (name TEXT, value INTEGER)',
       glob: 'data/*.json',
-      extract: (_path, content) => [JSON.parse(content)],
+      extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
     }),
   ],
 });

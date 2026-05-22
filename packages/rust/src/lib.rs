@@ -56,8 +56,7 @@ pub type Row = HashMap<String, Value>;
 pub type WatchStream = UnboundedReceiver<RowEvent>;
 
 type BoxError = Box<dyn StdError + Send + Sync + 'static>;
-type ExtractFn =
-    dyn Fn(&str, &str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static;
+type ExtractFn = dyn Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static;
 
 #[derive(Debug, Error)]
 pub enum DirSqlError {
@@ -101,6 +100,13 @@ pub type Result<T> = std::result::Result<T, DirSqlError>;
 
 /// A single table definition: DDL + glob + extract callback.
 ///
+/// The `extract` callback receives the **absolute filesystem path** of each
+/// matched file and returns the rows that file contributes. dirsql does not
+/// read file contents itself; a callback that needs the file body reads it
+/// inside the closure (`std::fs::read_to_string(path)` etc.). Callbacks that
+/// derive columns purely from the path or from filesystem facts never touch
+/// the file at all.
+///
 /// Use [`Table::new`] for infallible extractors or [`Table::try_new`] when the
 /// extractor can itself fail (bad file content, IO errors inside the callback,
 /// etc.). [`Table::strict`] rejects rows that don't match the DDL columns
@@ -116,16 +122,16 @@ pub struct Table {
 impl Table {
     pub fn new<F>(ddl: impl Into<String>, glob: impl Into<String>, extract: F) -> Self
     where
-        F: Fn(&str, &str) -> Vec<Row> + Send + Sync + 'static,
+        F: Fn(&str) -> Vec<Row> + Send + Sync + 'static,
     {
-        Self::try_new(ddl, glob, move |path, content| {
-            Ok::<Vec<Row>, BoxError>(extract(path, content))
+        Self::try_new(ddl, glob, move |path| {
+            Ok::<Vec<Row>, BoxError>(extract(path))
         })
     }
 
     pub fn strict<F>(ddl: impl Into<String>, glob: impl Into<String>, extract: F) -> Self
     where
-        F: Fn(&str, &str) -> Vec<Row> + Send + Sync + 'static,
+        F: Fn(&str) -> Vec<Row> + Send + Sync + 'static,
     {
         let mut table = Self::new(ddl, glob, extract);
         table.strict = true;
@@ -134,7 +140,7 @@ impl Table {
 
     pub fn try_new<F>(ddl: impl Into<String>, glob: impl Into<String>, extract: F) -> Self
     where
-        F: Fn(&str, &str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static,
+        F: Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static,
     {
         Self {
             ddl: ddl.into(),
@@ -433,18 +439,19 @@ impl DirSQL {
     }
 
     fn handle_upsert(&self, table: &str, abs_path: &Path, rel_path: &str) -> Vec<RowEvent> {
-        let content = match std::fs::read_to_string(abs_path) {
-            Ok(c) => c,
+        // The file may have vanished between the watcher event and now.
+        match std::fs::metadata(abs_path) {
+            Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
             Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
-        };
+        }
 
         let extract = match self.inner.extract_map.get(table) {
             Some(e) => e,
             None => return Vec::new(),
         };
 
-        let raw_rows = match extract(rel_path, &content) {
+        let raw_rows = match extract(&abs_path.to_string_lossy()) {
             Ok(r) => r,
             Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
         };
@@ -515,8 +522,8 @@ impl DirSQL {
     /// Split-phase construction — part 1. Performs all I/O that is safe to run
     /// off the host's main thread: validates DDL, compiles the matcher, walks
     /// the directory, opens the persistent cache (when enabled) and decides
-    /// which files need re-parsing, then reads only those files' contents
-    /// into memory. Does **not** invoke `extract`.
+    /// which files need re-parsing. Does **not** read file contents and does
+    /// **not** invoke `extract`.
     ///
     /// Pair with [`finish_build`](Self::finish_build) to complete construction
     /// on a thread where the `extract` callback can safely execute (e.g. the
@@ -556,11 +563,9 @@ impl DirSQL {
             None => {
                 let mut files = Vec::with_capacity(scanned.len());
                 for (path, table_name) in scanned {
-                    let content = std::fs::read_to_string(&path)?;
                     files.push(ScannedFile {
                         rel_path: relative_path(&root, &path),
                         table_name,
-                        content,
                         stat: None,
                     });
                 }
@@ -653,7 +658,6 @@ impl DirSQL {
         for ScannedFile {
             rel_path,
             table_name,
-            content,
             stat,
         } in scanned_files
         {
@@ -661,12 +665,13 @@ impl DirSQL {
                 DirSqlError::Ddl(format!("missing extract function for table {table_name}"))
             })?;
             let strict = *strict_map.get(&table_name).unwrap_or(&false);
-            let raw_rows = extract(&rel_path, &content).map_err(|e| DirSqlError::Extract {
-                path: rel_path.clone(),
-                message: e.to_string(),
-            })?;
-
             let abs_path = root.join(&rel_path);
+            let raw_rows =
+                extract(&abs_path.to_string_lossy()).map_err(|e| DirSqlError::Extract {
+                    path: rel_path.clone(),
+                    message: e.to_string(),
+                })?;
+
             let captures = matcher
                 .match_file_with_captures(Path::new(&rel_path))
                 .map(|m| m.captures)
@@ -942,13 +947,12 @@ pub struct ResolvedBuild {
 }
 
 /// A single file discovered during [`DirSQL::prepare_resolved`]: its
-/// root-relative path, the table it belongs to, its raw contents, and the
-/// filesystem stat tuple captured during the scan (when persist is on).
+/// root-relative path, the table it belongs to, and the filesystem stat
+/// tuple captured during the scan (when persist is on).
 #[doc(hidden)]
 pub struct ScannedFile {
     pub rel_path: String,
     pub table_name: String,
-    pub content: String,
     pub stat: Option<FileStat>,
 }
 
@@ -1055,8 +1059,7 @@ fn prepare_persist(
 }
 
 /// Decide which files are trusted, which need re-parsing, and which were
-/// removed since the last cache write. Reads file content only for
-/// to-be-reparsed files.
+/// removed since the last cache write.
 #[allow(clippy::type_complexity)]
 fn reconcile_scan(
     root: &Path,
@@ -1098,11 +1101,9 @@ fn reconcile_scan(
                 table_name,
             });
         } else {
-            let content = std::fs::read_to_string(&path)?;
             to_parse.push(ScannedFile {
                 rel_path,
                 table_name,
-                content,
                 stat: Some(stat),
             });
         }
@@ -1196,7 +1197,7 @@ fn build_tables_from_config(cfg: &config::Config) -> Result<Vec<Table>> {
         let mut table = Table::new(
             table_cfg.ddl.clone(),
             table_cfg.glob.clone(),
-            |_path: &str, _content: &str| vec![Row::new()],
+            |_path: &str| vec![Row::new()],
         );
 
         if table_cfg.strict == Some(true) {

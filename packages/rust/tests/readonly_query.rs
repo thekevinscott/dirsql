@@ -21,7 +21,8 @@ fn items_db(root: &Path) -> DirSQL {
         vec![Table::new(
             "CREATE TABLE items (name TEXT)",
             "*.txt",
-            |_, content| {
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
                 vec![HashMap::from([(
                     "name".into(),
                     Value::Text(content.trim().to_string()),

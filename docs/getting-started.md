@@ -63,12 +63,12 @@ async def main():
             Table(
                 ddl="CREATE TABLE posts (title TEXT, author TEXT)",
                 glob="posts/*.json",
-                extract=lambda path, content: [json.loads(content)],
+                extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
             ),
             Table(
                 ddl="CREATE TABLE authors (id TEXT, name TEXT)",
                 glob="authors/*.json",
-                extract=lambda path, content: [json.loads(content)],
+                extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
             ),
         ],
     )
@@ -120,12 +120,12 @@ let db = DirSQL::new(
         Table::new(
             "CREATE TABLE posts (title TEXT, author TEXT)",
             "posts/*.json",
-            |_path, content| vec![row_from_json(content)],
+            |path| vec![row_from_json(&std::fs::read_to_string(path).unwrap())],
         ),
         Table::new(
             "CREATE TABLE authors (id TEXT, name TEXT)",
             "authors/*.json",
-            |_path, content| vec![row_from_json(content)],
+            |path| vec![row_from_json(&std::fs::read_to_string(path).unwrap())],
         ),
     ],
 )?;
@@ -139,18 +139,19 @@ let results = db.query(
 ```
 
 ```typescript [TypeScript]
+import { readFileSync } from 'node:fs';
 import { DirSQL, type TableDef } from 'dirsql';
 
 const tables: TableDef[] = [
   {
     ddl: 'CREATE TABLE posts (title TEXT, author TEXT)',
     glob: 'posts/*.json',
-    extract: (_path, content) => [JSON.parse(content)],
+    extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
   },
   {
     ddl: 'CREATE TABLE authors (id TEXT, name TEXT)',
     glob: 'authors/*.json',
-    extract: (_path, content) => [JSON.parse(content)],
+    extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
   },
 ];
 
@@ -169,8 +170,8 @@ const results = await db.query(`
 ## What happens at startup
 
 1. `dirsql` walks the directory tree
-2. Files matching each table's glob pattern are read
-3. The `extract` function converts file content into rows
+2. Files matching each table's glob pattern are identified
+3. The `extract` function receives each matched file's absolute path and returns rows
 4. Rows are inserted into an in-memory SQLite database
 5. SQL queries run against that database
 

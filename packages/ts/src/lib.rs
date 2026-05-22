@@ -328,19 +328,15 @@ impl FnRef {
         Ok(result)
     }
 
-    unsafe fn call_extract(
-        &self,
-        rel_path: &str,
-        content: &str,
-    ) -> Result<Vec<HashMap<String, Value>>> {
+    unsafe fn call_extract(&self, abs_path: &str) -> Result<Vec<HashMap<String, Value>>> {
         let env = self.raw_env;
         let func = self.get_value()?;
 
         let mut js_path = std::ptr::null_mut();
         let status = napi::sys::napi_create_string_utf8(
             env,
-            rel_path.as_ptr() as *const _,
-            rel_path.len() as isize,
+            abs_path.as_ptr() as *const _,
+            abs_path.len() as isize,
             &mut js_path,
         );
         if status != napi::sys::Status::napi_ok {
@@ -350,27 +346,13 @@ impl FnRef {
             ));
         }
 
-        let mut js_content = std::ptr::null_mut();
-        let status = napi::sys::napi_create_string_utf8(
-            env,
-            content.as_ptr() as *const _,
-            content.len() as isize,
-            &mut js_content,
-        );
-        if status != napi::sys::Status::napi_ok {
-            return Err(Error::new(
-                Status::GenericFailure,
-                "Failed to create content string",
-            ));
-        }
-
         let mut undefined = std::ptr::null_mut();
         napi::sys::napi_get_undefined(env, &mut undefined);
 
-        let args = [js_path, js_content];
+        let args = [js_path];
         let mut result = std::ptr::null_mut();
         let status =
-            napi::sys::napi_call_function(env, undefined, func, 2, args.as_ptr(), &mut result);
+            napi::sys::napi_call_function(env, undefined, func, 1, args.as_ptr(), &mut result);
         if status != napi::sys::Status::napi_ok {
             let mut is_exception = false;
             napi::sys::napi_is_exception_pending(env, &mut is_exception);
@@ -400,10 +382,10 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 fn make_extract_closure(
     fn_ref: Arc<FnRef>,
-) -> impl Fn(&str, &str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static {
-    move |path: &str, content: &str| unsafe {
+) -> impl Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static {
+    move |path: &str| unsafe {
         fn_ref
-            .call_extract(path, content)
+            .call_extract(path)
             .map_err(|e| -> BoxError { Box::new(ExtractError(e.to_string())) })
     }
 }

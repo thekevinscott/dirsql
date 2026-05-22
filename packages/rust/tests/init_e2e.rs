@@ -48,10 +48,7 @@ fn produces_a_loadable_config_for_a_mixed_directory() {
         return;
     }
 
-    // Text-only fixture. Binary files would trip `lib.rs:559`'s
-    // `read_to_string` during scanning regardless of whether the table
-    // declares any content-derived columns (the post-#170 model didn't
-    // remove the read; a separate fix is tracked elsewhere).
+    // Mixed-content fixture: plain-text and JSON files for `claude` to model.
     let root = TempDir::new().unwrap();
     fs::write(root.path().join("notes.txt"), "hello world\n").unwrap();
     fs::write(root.path().join("more.txt"), "another note\n").unwrap();

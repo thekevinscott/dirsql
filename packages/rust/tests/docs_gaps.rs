@@ -21,16 +21,12 @@ fn strict_true_rejects_extra_keys_from_extract() {
     let root = TempDir::new().unwrap();
     fs::write(root.path().join("a.json"), "x").unwrap();
 
-    let table = Table::strict(
-        "CREATE TABLE items (name TEXT)",
-        "*.json",
-        |_path, _content| {
-            vec![HashMap::from([
-                ("name".into(), Value::Text("apple".into())),
-                ("color".into(), Value::Text("red".into())),
-            ])]
-        },
-    );
+    let table = Table::strict("CREATE TABLE items (name TEXT)", "*.json", |_path| {
+        vec![HashMap::from([
+            ("name".into(), Value::Text("apple".into())),
+            ("color".into(), Value::Text("red".into())),
+        ])]
+    });
 
     let result = DirSQL::new(root.path(), vec![table])
         .and_then(|db| db.query("SELECT * FROM items").map(|_| ()));
@@ -50,7 +46,7 @@ fn strict_true_allows_exact_match() {
     let table = Table::strict(
         "CREATE TABLE items (name TEXT, color TEXT)",
         "*.json",
-        |_path, _content| {
+        |_path| {
             vec![HashMap::from([
                 ("name".into(), Value::Text("apple".into())),
                 ("color".into(), Value::Text("red".into())),
@@ -81,7 +77,7 @@ fn extract_blob_values_round_trip_via_sdk() {
     let table = Table::new(
         "CREATE TABLE blobs (name TEXT, data BLOB)",
         "*.json",
-        move |_path, _content| {
+        move |_path| {
             vec![HashMap::from([
                 ("name".into(), Value::Text("bin".into())),
                 ("data".into(), Value::Blob(payload_for_closure.clone())),
@@ -111,16 +107,13 @@ fn watch_insert_event_carries_relative_file_path() {
     use std::time::Duration;
 
     let root = TempDir::new().unwrap();
-    let table = Table::new(
-        "CREATE TABLE items (name TEXT)",
-        "**/*.txt",
-        |_, content| {
-            vec![HashMap::from([(
-                "name".into(),
-                Value::Text(content.trim().to_string()),
-            )])]
-        },
-    );
+    let table = Table::new("CREATE TABLE items (name TEXT)", "**/*.txt", |path| {
+        let content = std::fs::read_to_string(path).unwrap();
+        vec![HashMap::from([(
+            "name".into(),
+            Value::Text(content.trim().to_string()),
+        )])]
+    });
     let db = DirSQL::new(root.path(), vec![table]).unwrap();
 
     let mut stream = db.watch().unwrap();

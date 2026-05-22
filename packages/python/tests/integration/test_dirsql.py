@@ -19,13 +19,15 @@ def describe_DirSQL():
                     Table(
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
-                        extract=lambda path, content: [
+                        extract=lambda path: [
                             {
                                 "id": os.path.basename(os.path.dirname(path)),
                                 "body": row["body"],
                                 "author": row["author"],
                             }
-                            for line in content.splitlines()
+                            for line in open(path, encoding="utf-8")
+                            .read()
+                            .splitlines()
                             for row in [json.loads(line)]
                         ],
                     ),
@@ -43,13 +45,15 @@ def describe_DirSQL():
                     Table(
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
-                        extract=lambda path, content: [
+                        extract=lambda path: [
                             {
                                 "id": os.path.basename(os.path.dirname(path)),
                                 "body": row["body"],
                                 "author": row["author"],
                             }
-                            for line in content.splitlines()
+                            for line in open(path, encoding="utf-8")
+                            .read()
+                            .splitlines()
                             for row in [json.loads(line)]
                         ],
                     ),
@@ -71,13 +75,15 @@ def describe_DirSQL():
                     Table(
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
-                        extract=lambda path, content: [
+                        extract=lambda path: [
                             {
                                 "id": os.path.basename(os.path.dirname(path)),
                                 "body": row["body"],
                                 "author": row["author"],
                             }
-                            for line in content.splitlines()
+                            for line in open(path, encoding="utf-8")
+                            .read()
+                            .splitlines()
                             for row in [json.loads(line)]
                         ],
                     ),
@@ -96,13 +102,15 @@ def describe_DirSQL():
                     Table(
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
-                        extract=lambda path, content: [
+                        extract=lambda path: [
                             {
                                 "id": os.path.basename(os.path.dirname(path)),
                                 "body": row["body"],
                                 "author": row["author"],
                             }
-                            for line in content.splitlines()
+                            for line in open(path, encoding="utf-8")
+                            .read()
+                            .splitlines()
                             for row in [json.loads(line)]
                         ],
                     ),
@@ -124,13 +132,15 @@ def describe_DirSQL():
                     Table(
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
-                        extract=lambda path, content: [
+                        extract=lambda path: [
                             {
                                 "id": os.path.basename(os.path.dirname(path)),
                                 "body": row["body"],
                                 "author": row["author"],
                             }
-                            for line in content.splitlines()
+                            for line in open(path, encoding="utf-8")
+                            .read()
+                            .splitlines()
                             for row in [json.loads(line)]
                         ],
                     ),
@@ -150,13 +160,15 @@ def describe_DirSQL():
                     Table(
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
-                        extract=lambda path, content: [
+                        extract=lambda path: [
                             {
                                 "id": os.path.basename(os.path.dirname(path)),
                                 "body": row["body"],
                                 "author": row["author"],
                             }
-                            for line in content.splitlines()
+                            for line in open(path, encoding="utf-8")
+                            .read()
+                            .splitlines()
                             for row in [json.loads(line)]
                         ],
                     ),
@@ -182,7 +194,9 @@ def describe_DirSQL():
                     Table(
                         ddl="CREATE TABLE items (name TEXT, count INTEGER)",
                         glob="data/*.json",
-                        extract=lambda path, content: [json.loads(content)],
+                        extract=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
                     ),
                 ],
             )
@@ -211,12 +225,16 @@ def describe_DirSQL():
                     Table(
                         ddl="CREATE TABLE posts (title TEXT, author_id TEXT)",
                         glob="posts/*.json",
-                        extract=lambda path, content: [json.loads(content)],
+                        extract=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
                     ),
                     Table(
                         ddl="CREATE TABLE authors (id TEXT, name TEXT)",
                         glob="authors/*.json",
-                        extract=lambda path, content: [json.loads(content)],
+                        extract=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
                     ),
                 ],
             )
@@ -246,12 +264,16 @@ def describe_DirSQL():
                     Table(
                         ddl="CREATE TABLE posts (title TEXT, author_id TEXT)",
                         glob="posts/*.json",
-                        extract=lambda path, content: [json.loads(content)],
+                        extract=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
                     ),
                     Table(
                         ddl="CREATE TABLE authors (id TEXT, name TEXT)",
                         glob="authors/*.json",
-                        extract=lambda path, content: [json.loads(content)],
+                        extract=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
                     ),
                 ],
             )
@@ -274,13 +296,15 @@ def describe_DirSQL():
                     Table(
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
-                        extract=lambda path, content: [
+                        extract=lambda path: [
                             {
                                 "id": os.path.basename(os.path.dirname(path)),
                                 "body": row["body"],
                                 "author": row["author"],
                             }
-                            for line in content.splitlines()
+                            for line in open(path, encoding="utf-8")
+                            .read()
+                            .splitlines()
                             for row in [json.loads(line)]
                         ],
                     ),
@@ -302,7 +326,9 @@ def describe_DirSQL():
                     Table(
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="*.json",
-                        extract=lambda path, content: [json.loads(content)],
+                        extract=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
                     ),
                 ],
             )
@@ -335,7 +361,7 @@ def describe_DirSQL():
                     Table(
                         ddl="NOT A CREATE TABLE",
                         glob="*.json",
-                        extract=lambda path, content: [],
+                        extract=lambda path: [],
                     ),
                 ],
             )
@@ -351,7 +377,9 @@ def describe_DirSQL():
                     Table(
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="**/*.json",
-                        extract=lambda path, content: [json.loads(content)],
+                        extract=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
                     ),
                 ],
             )
@@ -371,7 +399,7 @@ def describe_DirSQL():
                     Table(
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="**/*.json",
-                        extract=lambda path, content: [],
+                        extract=lambda path: [],
                     ),
                 ],
             )
@@ -379,18 +407,18 @@ def describe_DirSQL():
             results = await db.query("SELECT * FROM items")
             assert len(results) == 0
 
-    def describe_extract_receives_path_and_content():
+    def describe_extract_receives_path():
         @pytest.mark.asyncio
-        async def it_passes_relative_path_and_string_content(tmp_dir):
-            """Extract receives the file path (relative to root) and content as string."""
+        async def it_passes_absolute_path(tmp_dir):
+            """Extract receives the absolute filesystem path of the matched file."""
             with open(os.path.join(tmp_dir, "test.json"), "w") as f:
                 json.dump({"val": 1}, f)
 
             captured = {}
 
-            def extract(path, content):
+            def extract(path):
                 captured["path"] = path
-                captured["content"] = content
+                captured["content"] = open(path, encoding="utf-8").read()
                 return [{"val": 1}]
 
             db = DirSQL(
@@ -405,7 +433,8 @@ def describe_DirSQL():
             )
             await db.ready()
             await db.query("SELECT * FROM t")
-            assert captured["path"] == "test.json"
+            assert os.path.isabs(captured["path"])
+            assert os.path.basename(captured["path"]) == "test.json"
             assert '"val"' in captured["content"]
 
     def describe_relaxed_schema():
@@ -421,7 +450,9 @@ def describe_DirSQL():
                     Table(
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="*.json",
-                        extract=lambda path, content: [json.loads(content)],
+                        extract=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
                     ),
                 ],
             )
@@ -444,7 +475,9 @@ def describe_DirSQL():
                     Table(
                         ddl="CREATE TABLE items (name TEXT, color TEXT, count INTEGER)",
                         glob="*.json",
-                        extract=lambda path, content: [json.loads(content)],
+                        extract=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
                     ),
                 ],
             )
@@ -467,7 +500,9 @@ def describe_DirSQL():
                     Table(
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="*.json",
-                        extract=lambda path, content: [json.loads(content)],
+                        extract=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
                         strict=True,
                     ),
                 ],
@@ -487,7 +522,9 @@ def describe_DirSQL():
                     Table(
                         ddl="CREATE TABLE items (name TEXT, color TEXT)",
                         glob="*.json",
-                        extract=lambda path, content: [json.loads(content)],
+                        extract=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
                         strict=True,
                     ),
                 ],
@@ -507,7 +544,9 @@ def describe_DirSQL():
                     Table(
                         ddl="CREATE TABLE items (name TEXT, color TEXT)",
                         glob="*.json",
-                        extract=lambda path, content: [json.loads(content)],
+                        extract=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
                         strict=True,
                     ),
                 ],

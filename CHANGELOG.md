@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`extract` callbacks no longer receive file content.** The `extract`
+  callback on a programmatic `Table` (Rust/Python) / `TableDef`
+  (TypeScript) now takes a single argument — the absolute filesystem
+  path of the matched file — instead of `(path, content)`. `dirsql` no
+  longer reads file bodies during the scan or watch loop; a callback
+  that needs the file content reads it itself (`open(path)` /
+  `std::fs::read_to_string(path)` / `readFileSync(path)`). This removes
+  a vestigial eager UTF-8 read left over from the `format`/`each`
+  config grammar deleted in #169, and lets a table glob match binary
+  files without aborting the build. Breaking change across the Python,
+  Rust, and TypeScript SDKs; `.dirsql.toml` config users are
+  unaffected. See `MIGRATIONS.md`. (#184)
+
 ### Removed
 
 - **Python 3.10 support dropped.** `requires-python` is now `>=3.11`

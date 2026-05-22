@@ -19,9 +19,9 @@ def _write(path, content):
 def _items_table(call_count_box):
     """Build an items table whose extract callback bumps `call_count_box[0]` per call."""
 
-    def extract(_path, content):
+    def extract(path):
         call_count_box[0] += 1
-        return [json.loads(content)]
+        return [json.loads(open(path, encoding="utf-8").read())]
 
     return Table(
         ddl="CREATE TABLE items (name TEXT, price REAL)",
@@ -170,9 +170,16 @@ def describe_persist():
                     Table(
                         ddl="CREATE TABLE items (name TEXT, price REAL, sku TEXT)",
                         glob="items/*.json",
-                        extract=lambda _p, c: (
+                        extract=lambda path: (
                             box2.__setitem__(0, box2[0] + 1)
-                            or [{**json.loads(c), "sku": "X"}]
+                            or [
+                                {
+                                    **json.loads(
+                                        open(path, encoding="utf-8").read()
+                                    ),
+                                    "sku": "X",
+                                }
+                            ]
                         ),
                     )
                 ],
@@ -205,7 +212,9 @@ def describe_persist():
                     Table(
                         ddl="CREATE TABLE items (name TEXT, price REAL)",
                         glob="**/*.json",
-                        extract=lambda _p, c: [json.loads(c)],
+                        extract=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
                     )
                 ],
                 persist=True,

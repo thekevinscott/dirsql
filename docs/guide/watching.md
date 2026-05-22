@@ -26,7 +26,7 @@ db = DirSQL(
         Table(
             ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
             glob="comments/**/*.json",
-            extract=lambda path, content: [json.loads(content)],
+            extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
     ],
 )
@@ -67,7 +67,7 @@ let db = DirSQL::new(
         Table::new(
             "CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
             "comments/**/*.json",
-            |_path, content| vec![row_from_json(content)],
+            |path| vec![row_from_json(&std::fs::read_to_string(path).unwrap())],
         ),
     ],
 )?;
@@ -92,13 +92,14 @@ while let Some(event) = stream.next().await {
 ```
 
 ```typescript [TypeScript]
+import { readFileSync } from 'node:fs';
 import { DirSQL, type TableDef } from 'dirsql';
 
 const tables: TableDef[] = [
   {
     ddl: 'CREATE TABLE comments (id TEXT, body TEXT, author TEXT)',
     glob: 'comments/**/*.json',
-    extract: (_path, content) => [JSON.parse(content)],
+    extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
   },
 ];
 

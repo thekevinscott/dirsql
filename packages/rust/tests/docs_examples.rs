@@ -42,8 +42,9 @@ fn blog_tables() -> Vec<Table> {
         Table::new(
             "CREATE TABLE posts (title TEXT, author TEXT)",
             "posts/*.json",
-            |_path, content| {
-                let v: serde_json::Value = serde_json::from_str(content).unwrap();
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
+                let v: serde_json::Value = serde_json::from_str(&content).unwrap();
                 let obj = v.as_object().unwrap();
                 vec![HashMap::from([
                     (
@@ -60,8 +61,9 @@ fn blog_tables() -> Vec<Table> {
         Table::new(
             "CREATE TABLE authors (id TEXT, name TEXT)",
             "authors/*.json",
-            |_path, content| {
-                let v: serde_json::Value = serde_json::from_str(content).unwrap();
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
+                let v: serde_json::Value = serde_json::from_str(&content).unwrap();
                 let obj = v.as_object().unwrap();
                 vec![HashMap::from([
                     (
@@ -156,8 +158,9 @@ fn it_matches_tables_guide_single_object_json() {
         vec![Table::new(
             "CREATE TABLE items (name TEXT, value INTEGER)",
             "data/*.json",
-            |_, content| {
-                let v: serde_json::Value = serde_json::from_str(content).unwrap();
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
+                let v: serde_json::Value = serde_json::from_str(&content).unwrap();
                 let obj = v.as_object().unwrap();
                 vec![HashMap::from([
                     (
@@ -192,7 +195,8 @@ fn it_matches_tables_guide_multiple_rows_per_file() {
         vec![Table::new(
             "CREATE TABLE comments (body TEXT, author TEXT)",
             "comments/**/index.txt",
-            |_, content| {
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
                 content
                     .lines()
                     .filter(|l| !l.is_empty())
@@ -231,7 +235,8 @@ fn it_matches_tables_guide_derive_from_path() {
         vec![Table::new(
             "CREATE TABLE comments (id TEXT, body TEXT)",
             "comments/**/index.txt",
-            |path, content| {
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
                 let id = std::path::Path::new(path)
                     .parent()
                     .and_then(|p| p.file_name())
@@ -278,8 +283,9 @@ fn it_matches_tables_guide_skip_files() {
         vec![Table::new(
             "CREATE TABLE posts (title TEXT)",
             "*.json",
-            |_, content| {
-                let v: serde_json::Value = serde_json::from_str(content).unwrap();
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
+                let v: serde_json::Value = serde_json::from_str(&content).unwrap();
                 let obj = v.as_object().unwrap();
                 if obj.get("draft").and_then(|d| d.as_bool()).unwrap_or(false) {
                     return vec![];
@@ -310,7 +316,8 @@ fn it_matches_tables_guide_multiple_tables() {
     let posts = Table::new(
         "CREATE TABLE posts (title TEXT, author_id TEXT)",
         "posts/*.txt",
-        |_, content| {
+        |path| {
+            let content = std::fs::read_to_string(path).unwrap();
             content
                 .lines()
                 .map(|line| {
@@ -332,7 +339,8 @@ fn it_matches_tables_guide_multiple_tables() {
     let authors = Table::new(
         "CREATE TABLE authors (id TEXT, name TEXT)",
         "authors/*.txt",
-        |_, content| {
+        |path| {
+            let content = std::fs::read_to_string(path).unwrap();
             content
                 .lines()
                 .map(|line| {
@@ -373,7 +381,8 @@ fn it_matches_tables_guide_ignore_patterns() {
         vec![Table::new(
             "CREATE TABLE items (name TEXT)",
             "**/*.txt",
-            |_, content| {
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
                 vec![HashMap::from([(
                     "name".into(),
                     Value::Text(content.trim().to_string()),
@@ -405,8 +414,9 @@ fn it_matches_tables_guide_typed_columns() {
         vec![Table::new(
             "CREATE TABLE metrics (name TEXT, value REAL, count INTEGER)",
             "data/*.json",
-            |_, content| {
-                let v: serde_json::Value = serde_json::from_str(content).unwrap();
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
+                let v: serde_json::Value = serde_json::from_str(&content).unwrap();
                 let obj = v.as_object().unwrap();
                 vec![HashMap::from([
                     (
@@ -446,8 +456,9 @@ fn it_matches_tables_guide_constraints() {
         vec![Table::new(
             "CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL)",
             "data/*.json",
-            |_, content| {
-                let v: serde_json::Value = serde_json::from_str(content).unwrap();
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
+                let v: serde_json::Value = serde_json::from_str(&content).unwrap();
                 let obj = v.as_object().unwrap();
                 vec![HashMap::from([
                     (
@@ -573,7 +584,8 @@ fn it_matches_watching_guide_insert_event() {
         vec![Table::new(
             "CREATE TABLE items (name TEXT)",
             "**/*.txt",
-            |_, content| {
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
                 vec![HashMap::from([(
                     "name".into(),
                     Value::Text(content.trim().to_string()),
@@ -609,7 +621,8 @@ fn it_matches_watching_guide_delete_event() {
         vec![Table::new(
             "CREATE TABLE items (name TEXT)",
             "**/*.txt",
-            |_, content| {
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
                 vec![HashMap::from([(
                     "name".into(),
                     Value::Text(content.trim().to_string()),
@@ -649,7 +662,8 @@ fn it_matches_watching_guide_update_event() {
         vec![Table::new(
             "CREATE TABLE items (name TEXT)",
             "**/*.txt",
-            |_, content| {
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
                 vec![HashMap::from([(
                     "name".into(),
                     Value::Text(content.trim().to_string()),
@@ -708,8 +722,9 @@ async fn it_matches_async_guide_basic_usage() {
         vec![Table::new(
             "CREATE TABLE items (name TEXT, value INTEGER)",
             "data/*.json",
-            |_, content| {
-                let v: serde_json::Value = serde_json::from_str(content).unwrap();
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
+                let v: serde_json::Value = serde_json::from_str(&content).unwrap();
                 let obj = v.as_object().unwrap();
                 vec![HashMap::from([
                     (
@@ -749,8 +764,9 @@ async fn it_matches_async_guide_ready_idempotent() {
         vec![Table::new(
             "CREATE TABLE items (name TEXT, value INTEGER)",
             "data/*.json",
-            |_, content| {
-                let v: serde_json::Value = serde_json::from_str(content).unwrap();
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
+                let v: serde_json::Value = serde_json::from_str(&content).unwrap();
                 let obj = v.as_object().unwrap();
                 vec![HashMap::from([
                     (
@@ -787,8 +803,9 @@ async fn it_matches_async_guide_count_query() {
         vec![Table::new(
             "CREATE TABLE items (name TEXT, value INTEGER)",
             "data/*.json",
-            |_, content| {
-                let v: serde_json::Value = serde_json::from_str(content).unwrap();
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
+                let v: serde_json::Value = serde_json::from_str(&content).unwrap();
                 let obj = v.as_object().unwrap();
                 vec![HashMap::from([
                     (

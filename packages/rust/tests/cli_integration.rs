@@ -287,7 +287,30 @@ async fn get_events_streams_mutation_events() {
 async fn get_events_surfaces_parse_errors_as_error_events_not_fatal() {
     // Per docs/guide/cli.md: an error during ingestion is a per-event problem,
     // not a server-wide one. The stream must keep delivering subsequent events.
-    let (root, db) = blog_fixture();
+    //
+    // dirsql no longer reads file bodies itself, so a malformed file only
+    // surfaces an error when a programmatic `extract` callback fails. This
+    // table's extract reads and parses the file; invalid JSON propagates as a
+    // per-file error event.
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("posts")).unwrap();
+    fs::write(root.path().join("posts/first.json"), r#"{"ok":1}"#).unwrap();
+    fs::write(root.path().join("posts/second.json"), r#"{"ok":2}"#).unwrap();
+
+    let table = dirsql::Table::try_new(
+        "CREATE TABLE posts (ok INTEGER, _basename TEXT)",
+        "posts/*.json",
+        |path| {
+            let content = std::fs::read_to_string(path)?;
+            let value: JsonValue = serde_json::from_str(&content)?;
+            let ok = value.get("ok").and_then(JsonValue::as_i64).unwrap_or(0);
+            Ok(vec![std::collections::HashMap::from([(
+                "ok".to_string(),
+                dirsql::Value::Integer(ok),
+            )])])
+        },
+    );
+    let db = DirSQL::new(root.path(), vec![table]).unwrap();
     let handle = spawn_server(db).await;
 
     let client =
@@ -298,22 +321,12 @@ async fn get_events_surfaces_parse_errors_as_error_events_not_fatal() {
 
     await_ready(&mut stream).await;
 
-    // Break a file with invalid UTF-8 -- the pipeline reads file bytes
-    // before invoking the synthesized extract, and `read_to_string` rejects
-    // non-UTF-8 bytes with InvalidData. That surfaces as a per-file error
-    // event without taking the stream down.
-    fs::write(
-        root.path().join("posts/alice/Hello-World.json"),
-        [0xff_u8, 0xfe, 0xfd, 0xfc],
-    )
-    .unwrap();
+    // Corrupt a file so the extract's JSON parse fails -- that surfaces as a
+    // per-file error event without taking the stream down.
+    fs::write(root.path().join("posts/first.json"), "{not valid json").unwrap();
     // Then mutate another file to produce a valid event after the error.
     tokio::time::sleep(Duration::from_millis(50)).await;
-    fs::write(
-        root.path().join("posts/bob/Second-Post.json"),
-        r#"{"some":"new content to change _size"}"#,
-    )
-    .unwrap();
+    fs::write(root.path().join("posts/second.json"), r#"{"ok":99}"#).unwrap();
 
     let mut saw_error = false;
     let mut saw_normal_after_error = false;

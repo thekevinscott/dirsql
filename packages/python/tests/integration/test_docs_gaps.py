@@ -47,7 +47,7 @@ def describe_tables_guide_bytes_to_blob():
                 Table(
                     ddl="CREATE TABLE blobs (name TEXT, data BLOB)",
                     glob="*.json",
-                    extract=lambda path, content: [{"name": "bin", "data": payload}],
+                    extract=lambda path: [{"name": "bin", "data": payload}],
                 ),
             ],
         )
@@ -78,7 +78,7 @@ def describe_strict_mode_gap():
                 Table(
                     ddl="CREATE TABLE items (name TEXT)",
                     glob="*.json",
-                    extract=lambda path, content: [{"name": "apple", "color": "red"}],
+                    extract=lambda path: [{"name": "apple", "color": "red"}],
                     strict=True,
                 ),
             ],
@@ -98,7 +98,7 @@ def describe_strict_mode_gap():
                 Table(
                     ddl="CREATE TABLE items (name TEXT, color TEXT)",
                     glob="*.json",
-                    extract=lambda path, content: [{"name": "apple", "color": "red"}],
+                    extract=lambda path: [{"name": "apple", "color": "red"}],
                     strict=True,
                 ),
             ],
@@ -137,8 +137,12 @@ def describe_watching_guide_positional_identity_gap():
                 Table(
                     ddl="CREATE TABLE rows (idx INTEGER, name TEXT)",
                     glob="*.jsonl",
-                    extract=lambda path, content: [
-                        json.loads(line) for line in content.splitlines() if line
+                    extract=lambda path: [
+                        json.loads(line)
+                        for line in open(path, encoding="utf-8")
+                        .read()
+                        .splitlines()
+                        if line
                     ],
                 ),
             ],
@@ -215,7 +219,9 @@ def describe_watching_guide_positional_identity_gap():
                 Table(
                     ddl="CREATE TABLE items (name TEXT)",
                     glob="**/*.json",
-                    extract=lambda path, content: [json.loads(content)],
+                    extract=lambda path: [
+                        json.loads(open(path, encoding="utf-8").read())
+                    ],
                 ),
             ],
         )

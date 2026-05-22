@@ -60,7 +60,7 @@ db = DirSQL(
             ddl="CREATE TABLE posts (id TEXT, title TEXT, body TEXT, updated INTEGER)",
             # Match the JSON view, not the raw CRDT binary.
             glob="posts/*/view.json",
-            extract=lambda path, content: [json.loads(content)],
+            extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
     ],
 )
@@ -76,20 +76,21 @@ let db = DirSQL::new(
         Table::new(
             "CREATE TABLE posts (id TEXT, title TEXT, body TEXT, updated INTEGER)",
             "posts/*/view.json",
-            |_path, content| vec![row_from_json(content)],
+            |path| vec![row_from_json(&std::fs::read_to_string(path).unwrap())],
         ),
     ],
 )?;
 ```
 
 ```typescript [TypeScript]
+import { readFileSync } from 'node:fs';
 import { DirSQL, type TableDef } from 'dirsql';
 
 const tables: TableDef[] = [
   {
     ddl: 'CREATE TABLE posts (id TEXT, title TEXT, body TEXT, updated INTEGER)',
     glob: 'posts/*/view.json',
-    extract: (_path, content) => [JSON.parse(content)],
+    extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
   },
 ];
 

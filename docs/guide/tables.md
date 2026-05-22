@@ -18,7 +18,7 @@ from dirsql import Table
 table = Table(
     ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
     glob="comments/**/index.jsonl",
-    extract=lambda path, content: [
+    extract=lambda path: [
         {"id": "...", "body": "...", "author": "..."}
     ],
 )
@@ -31,7 +31,7 @@ use std::collections::HashMap;
 let table = Table::new(
     "CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
     "comments/**/index.jsonl",
-    |_path, _content| {
+    |_path| {
         let mut row: HashMap<String, Value> = HashMap::new();
         row.insert("id".into(), Value::Text("...".into()));
         row.insert("body".into(), Value::Text("...".into()));
@@ -47,7 +47,7 @@ import type { TableDef } from 'dirsql';
 const table: TableDef = {
   ddl: 'CREATE TABLE comments (id TEXT, body TEXT, author TEXT)',
   glob: 'comments/**/index.jsonl',
-  extract: (_path, content) => [
+  extract: (_path) => [
     { id: '...', body: '...', author: '...' },
   ],
 };
@@ -89,38 +89,38 @@ Glob syntax follows standard Unix globbing rules. `**` matches any number of dir
 
 ### `extract`
 
-A callable `(path: str, content: str) -> list[dict]` that converts a file into rows.
+A callable `(path: str) -> list[dict]` that converts a file into rows.
 
-- `path` is the file path relative to the root directory
-- `content` is the file content as a string
+- `path` is the **absolute filesystem path** of the matched file
 - Return a list of dicts, where each dict maps column names to values
 - Return an empty list to skip a file
+
+`dirsql` does not read file contents for you. If your extract needs the file
+body, read it inside the callback using `path`. Callbacks that derive columns
+only from the path (or that rely solely on the auto-injected filesystem-fact
+columns) never touch the file at all.
 
 ```python
 import json
 
 # Single-object JSON files: one row per file
-extract=lambda path, content: [json.loads(content)]
+def extract(path):
+    with open(path, encoding="utf-8") as f:
+        return [json.loads(f.read())]
 
 # JSONL files: one row per line
-extract=lambda path, content: [
-    json.loads(line) for line in content.splitlines()
-]
+def extract(path):
+    with open(path, encoding="utf-8") as f:
+        return [json.loads(line) for line in f]
 
-# Derive values from the file path
+# Derive a value from the file path alone -- no file read
 import os
-extract=lambda path, content: [
-    {
-        "id": os.path.basename(os.path.dirname(path)),
-        "body": json.loads(line)["body"],
-    }
-    for line in content.splitlines()
-    for _ in [json.loads(line)]
-]
+extract = lambda path: [{"id": os.path.basename(os.path.dirname(path))}]
 
 # Conditionally skip files
-def extract(path, content):
-    data = json.loads(content)
+def extract(path):
+    with open(path, encoding="utf-8") as f:
+        data = json.loads(f.read())
     if data.get("draft"):
         return []
     return [data]
@@ -142,12 +142,12 @@ db = DirSQL(
         Table(
             ddl="CREATE TABLE posts (title TEXT, author_id TEXT)",
             glob="posts/*.json",
-            extract=lambda path, content: [json.loads(content)],
+            extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
         Table(
             ddl="CREATE TABLE authors (id TEXT, name TEXT)",
             glob="authors/*.json",
-            extract=lambda path, content: [json.loads(content)],
+            extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
     ],
 )
@@ -184,12 +184,12 @@ let db = DirSQL::new(
         Table::new(
             "CREATE TABLE posts (title TEXT, author_id TEXT)",
             "posts/*.json",
-            |_path, content| vec![row_from_json(content)],
+            |path| vec![row_from_json(&std::fs::read_to_string(path).unwrap())],
         ),
         Table::new(
             "CREATE TABLE authors (id TEXT, name TEXT)",
             "authors/*.json",
-            |_path, content| vec![row_from_json(content)],
+            |path| vec![row_from_json(&std::fs::read_to_string(path).unwrap())],
         ),
     ],
 )?;
@@ -197,17 +197,18 @@ let db = DirSQL::new(
 
 ```typescript [TypeScript]
 import { DirSQL, type TableDef } from 'dirsql';
+import { readFileSync } from 'node:fs';
 
 const tables: TableDef[] = [
   {
     ddl: 'CREATE TABLE posts (title TEXT, author_id TEXT)',
     glob: 'posts/*.json',
-    extract: (_path, content) => [JSON.parse(content)],
+    extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
   },
   {
     ddl: 'CREATE TABLE authors (id TEXT, name TEXT)',
     glob: 'authors/*.json',
-    extract: (_path, content) => [JSON.parse(content)],
+    extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
   },
 ];
 

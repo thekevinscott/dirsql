@@ -173,12 +173,11 @@ mod python {
 
     fn make_extract_closure(
         extract: Py<PyAny>,
-    ) -> impl Fn(&str, &str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static
-    {
-        move |path: &str, content: &str| {
+    ) -> impl Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static {
+        move |path: &str| {
             Python::attach(|py| -> std::result::Result<Vec<Row>, BoxError> {
                 let result = extract
-                    .call1(py, (path, content))
+                    .call1(py, (path,))
                     .map_err(|e| -> BoxError { Box::new(ExtractError(e.to_string())) })?;
                 let raw: Vec<HashMap<String, Py<PyAny>>> = result
                     .extract(py)
