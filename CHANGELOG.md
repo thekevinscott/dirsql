@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Release pipeline no longer fails publishing the crate to crates.io.**
+  `packages/rust/Cargo.toml` now excludes `target` from the published
+  crate. The `packages/rust/target` symlink (a workaround for
+  putitoutthere's `bundle_cli` workspace target-dir lookup) caused
+  `cargo publish` to follow it and archive the entire build tree,
+  producing a ~133 MiB `.crate` that crates.io rejected with `413
+  Payload Too Large` (10 MiB cap). This failed the `release / publish`
+  job and blocked every release after 0.3.4.
 - **Python wheel ships the `dirsql` CLI again.** Restored
   `[project.scripts] dirsql = "dirsql._cli.main:main"` in
   `packages/python/pyproject.toml` and declared `[package.bundle_cli]`

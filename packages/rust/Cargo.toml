@@ -12,9 +12,20 @@ edition.workspace = true
 # inheritance, surfacing PIOT_CRATES_MISSING_METADATA otherwise.
 license = "MIT"
 repository.workspace = true
+# `target` is a symlink to the workspace `target/` (a workaround for
+# putitoutthere's bundle_cli workspace target-dir lookup; see the
+# `!packages/rust/target` exception in the root `.gitignore`). Without
+# excluding it, `cargo publish` follows the symlink and archives the
+# whole build tree -- the resulting `.crate` blows past crates.io's
+# 10 MiB upload cap (413 Payload Too Large). Remove this entry, the
+# symlink, and the gitignore exception together once upstream resolves
+# bundle_cli's target-dir lookup via `cargo metadata`.
+#
 # `docs/` is a symlink to the workspace `docs/` so the markdown ships with the
 # crate; everything below is the VitePress build tooling we don't want to ship.
 exclude = [
+    "target",
+    "target/**",
     "docs/.vitepress",
     "docs/.claude",
     "docs/tests",
