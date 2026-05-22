@@ -253,6 +253,56 @@ PY
 
 ---
 
+### Zero-config run serves a default `files` table
+
+#### Summary
+
+Running the `dirsql` server (no subcommand) in a directory without a
+`.dirsql.toml` used to leave the server degraded: it bound the port but
+every `POST /query` returned HTTP 503 with `config not found`. It now
+indexes the directory with a built-in `files` table -- one row per file,
+columns drawn entirely from filesystem facts -- and serves queries
+normally. Affects only the CLI server's no-config path; consumers who
+always run with a `.dirsql.toml`, and all programmatic SDK consumers, are
+unaffected. Part of
+[#184](https://github.com/thekevinscott/dirsql/issues/184).
+
+#### Required changes
+
+_None._ The change is additive for anyone who already ships a `.dirsql.toml`
+-- a present config fully overrules the default.
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- `dirsql` started in a directory without a `.dirsql.toml`: previously every
+  `POST /query` returned `503 Service Unavailable` with
+  `{"error":"config not found at ./.dirsql.toml"}`; now the server is
+  `Ready` and `POST /query` runs against a default `files` table (one row
+  per file, columns `_path`, `_basename`, `_dir`, `_ext`, `_size`,
+  `_mtime`, `_ctime`). Tooling that probed for the 503 to detect "no
+  config" must instead check for the `files` table or for the presence of a
+  `.dirsql.toml`. The 503 path still applies when a config file exists but
+  fails to load.
+
+#### Verification
+
+```bash
+cd "$(mktemp -d)"
+echo hi > note.txt
+dirsql --port 7117 &
+sleep 1
+curl -s localhost:7117/query -H 'content-type: application/json' \
+  -d '{"sql":"SELECT _basename FROM files"}'
+# expected: [{"_basename":"note.txt"}]
+kill %1
+```
+
+---
+
 ### Release pipeline migrated to `putitoutthere`
 
 #### Summary

@@ -6,7 +6,10 @@ canonical: https://thekevinscott.github.io/dirsql/cli/config
 
 > Online: <https://thekevinscott.github.io/dirsql/cli/config>
 
-`dirsql` can be configured with a `.dirsql.toml` file. Tables defined this
+`dirsql` can be configured with a `.dirsql.toml` file. It is optional: with
+no config the server runs in [zero-config mode](./server.md#zero-config-mode)
+and serves a default `files` table. Provide a `.dirsql.toml` to define your
+own tables — when present it fully overrules the default. Tables defined this
 way produce **one row per matched file**. Each row's columns come from
 filesystem facts:
 

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Zero-config `files` table.** Running the `dirsql` server in a
+  directory with no `.dirsql.toml` now serves a default `files` table --
+  one row per file under the directory, with the filesystem-fact columns
+  `_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime` --
+  instead of starting in the degraded (HTTP 503) state. `SELECT * FROM
+  files` and `SELECT name FROM sqlite_master` work immediately in any
+  directory; no ignores are applied, so every file is indexed. A
+  `.dirsql.toml`, when present, fully overrules the default. (#184)
+
 ### Changed
 
 - **`extract` callbacks no longer receive file content.** The `extract`

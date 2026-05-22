@@ -308,12 +308,19 @@ fn concurrent_queries_all_succeed() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn missing_config_returns_503_on_query() {
-    // Start in a dir with NO `.dirsql.toml`. The server should still start
-    // (so that a user can see the error via HTTP), but queries return 503.
-    let empty = TempDir::new().unwrap();
+fn unloadable_config_returns_503_on_query() {
+    // A `.dirsql.toml` that exists but cannot be parsed leaves the server in
+    // the degraded state: it still starts (so the error is visible over
+    // HTTP), but every query returns 503. (A *missing* config is no longer
+    // degraded -- see `no_config_serves_default_files_table`.)
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(".dirsql.toml"),
+        "this is not valid toml [[[",
+    )
+    .unwrap();
     let port = free_port();
-    let child = spawn_dirsql(empty.path(), port);
+    let child = spawn_dirsql(dir.path(), port);
     wait_until_ready(port, Duration::from_secs(10));
 
     let resp = Client::new()
