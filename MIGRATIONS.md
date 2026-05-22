@@ -11,6 +11,45 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### Python 3.10 support dropped
+
+#### Summary
+
+dirsql's `requires-python` is raised from `>=3.10` to `>=3.11`. `pip` and
+`uv` will refuse to install dirsql 0.3.6+ on Python 3.10; 3.10 wheels are
+no longer published. This affects only the Python SDK (`dirsql` on PyPI);
+the Rust crate and npm package are unchanged.
+
+The driver is release tooling, not a runtime API change. putitoutthere's
+multi-version wheel build (#369) fans one wheel row per `requires-python`
+version, and its `bundle_cli` wheel-content verify step runs `import
+tomllib` — a stdlib module only on CPython >= 3.11 — so the 3.10 row
+crashes the release build. Raising `requires-python` removes the 3.10
+row. Support can be restored once the upstream verify step no longer
+depends on `tomllib`.
+
+#### Required changes
+
+| Before | After |
+|--------|-------|
+| `pip install dirsql` on Python 3.10 | Upgrade to Python >= 3.11, then `pip install dirsql` |
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+Installation on Python 3.10 now fails at resolve time (`pip` reports the
+package requires a different Python) instead of installing. No change for
+Python 3.11+.
+
+#### Verification
+
+On Python 3.11 or newer: `pip install dirsql` resolves and installs as
+before. On Python 3.10: `pip install dirsql` exits with
+`Requires-Python >=3.11`.
+
 ### Content parsing removed; `[table.columns]` / `format` / `each` no longer recognized
 
 #### Summary

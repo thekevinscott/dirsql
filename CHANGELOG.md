@@ -7,8 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Python 3.10 support dropped.** `requires-python` is now `>=3.11`
+  (was `>=3.10`). `pip` / `uv` will refuse to install dirsql on Python
+  3.10. This is required to ship 0.3.6: putitoutthere's multi-version
+  wheel build (#369) fans a wheel row per `requires-python` version,
+  and its `bundle_cli` wheel-content verify step `import tomllib` —
+  stdlib only on CPython >= 3.11 — so the 3.10 row crashes the release
+  build. Dropping 3.10 removes that row. 3.10 can be restored once the
+  upstream verify step no longer depends on `tomllib`.
+
 ### Fixed
 
+- **`npx dirsql` and `uvx dirsql` work end-to-end again.** 0.3.5 published
+  but the CLIs were still broken: the npm-bundled binary was packed
+  without the executable bit (`spawnSync ... EACCES`) and stamped with a
+  stale version, and PyPI shipped a cp312-only wheel so non-3.12
+  interpreters fell back to a sdist build with no bundled binary. All
+  three are fixed upstream in putitoutthere (`bundled-cli` now `chmod
+  +x`es the staged binary and rewrites its version; `pypi` builds one
+  wheel per `requires-python` version). dirsql consumes the fixes via
+  `release.yml`'s `@v0` pin; 0.3.6 is the first release built by the
+  corrected pipeline.
 - **Release pipeline no longer fails publishing the crate to crates.io.**
   Removed the `packages/rust/target` symlink (and its root `.gitignore`
   exception) that worked around putitoutthere's `bundle_cli`
