@@ -1,14 +1,14 @@
 ---
-canonical: https://thekevinscott.github.io/dirsql/guide/init
+canonical: https://thekevinscott.github.io/dirsql/cli/init
 ---
 
 # Generating a config with `dirsql init`
 
-> Online: <https://thekevinscott.github.io/dirsql/guide/init>
+> Online: <https://thekevinscott.github.io/dirsql/cli/init>
 
-`dirsql init` generates a `.dirsql.toml` by running `claude` over the target directory.
+`dirsql init` generates a [`.dirsql.toml`](./config.md) by running `claude` over the target directory.
 
-The output is limited to filesystem-fact tables. For content-aware schemas, see [Defining Tables](./tables.md).
+The output is limited to filesystem-fact tables. For content-aware schemas, see [Defining Tables](../guide/tables.md).
 
 ## Examples
 
