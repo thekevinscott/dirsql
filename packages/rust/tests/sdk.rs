@@ -694,8 +694,7 @@ fn binary_file_under_glob_does_not_break_build() {
         |_path, _content| vec![Row::new()],
     );
 
-    let db =
-        DirSQL::new(root.path(), vec![table]).expect("build must not fail on a binary file");
+    let db = DirSQL::new(root.path(), vec![table]).expect("build must not fail on a binary file");
 
     let rows = db.query("SELECT _basename FROM assets").unwrap();
     assert_eq!(rows.len(), 1);
