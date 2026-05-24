@@ -6,21 +6,7 @@ canonical: https://thekevinscott.github.io/dirsql/cli/config
 
 > Online: <https://thekevinscott.github.io/dirsql/cli/config>
 
-`dirsql` can be configured with a `.dirsql.toml` file. It is optional: with
-no config the server runs in [zero-config mode](./server.md#zero-config-mode)
-and serves a default `files` table. Provide a `.dirsql.toml` to define your
-own tables — when present it fully overrules the default. Tables defined this
-way produce **one row per matched file**. Each row's columns come from
-filesystem facts:
-
-- **Glob path captures** — named `{placeholder}` segments in the glob.
-- **Stat virtuals** — reserved `_`-prefixed columns for path-derived and
-  stat-derived metadata.
-
-Content interpretation (parsing JSON, CSV, frontmatter, etc.) is **not**
-configured in `.dirsql.toml`. If you need columns derived from file
-contents, register a programmatic [`Table`](../guide/tables.md) whose `extract`
-function does the parsing in your host language.
+`dirsql` can be configured with an optional `.dirsql.toml` file (if omitted, server falls back to [defaults](./server.md#defaults)). `.dirsql.toml` defines how files are parsed into SQL tables.
 
 ## Basic Example
 
@@ -33,8 +19,7 @@ ddl  = "CREATE TABLE posts (_path TEXT, _basename TEXT, _size INTEGER, _mtime IN
 glob = "posts/*.md"
 ```
 
-Each `posts/*.md` file produces one row. The DDL declares which stat
-virtuals are surfaced as SQL columns.
+Each `posts/*.md` file produces one row in the `posts` table.
 
 ## Loading a Config File
 
