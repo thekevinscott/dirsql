@@ -16,10 +16,21 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      release_packages:
+        description: >
+          Packages to release manually, bypassing change detection.
+          Comma-separated list of name[@<bump|version>] entries, e.g.
+          "dirsql-rust@minor,dirsql-py,dirsql-npm@1.4.0". Leave empty
+          to fall back to automatic change detection (same as a push).
+        required: false
+        default: ''
 
 jobs:
   release:
     uses: thekevinscott/putitoutthere/.github/workflows/release.yml@v0
+    with:
+      release_packages: ${{ inputs.release_packages || '' }}
     permissions:
       contents: write
       id-token: write
