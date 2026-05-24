@@ -21,7 +21,10 @@ let db = DirSQL::new(
         Table::new(
             "CREATE TABLE posts (title TEXT, author TEXT)",
             "posts/*.json",
-            |_path, content| vec![serde_json::from_str(content).unwrap()],
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
+                vec![serde_json::from_str(&content).unwrap()]
+            },
         ),
     ],
 )?;

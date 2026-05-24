@@ -308,12 +308,19 @@ fn concurrent_queries_all_succeed() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn missing_config_returns_503_on_query() {
-    // Start in a dir with NO `.dirsql.toml`. The server should still start
-    // (so that a user can see the error via HTTP), but queries return 503.
-    let empty = TempDir::new().unwrap();
+fn unloadable_config_returns_503_on_query() {
+    // A `.dirsql.toml` that exists but cannot be parsed leaves the server in
+    // the degraded state: it still starts (so the error is visible over
+    // HTTP), but every query returns 503. (A *missing* config is no longer
+    // degraded -- see `no_config_serves_default_files_table`.)
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(".dirsql.toml"),
+        "this is not valid toml [[[",
+    )
+    .unwrap();
     let port = free_port();
-    let child = spawn_dirsql(empty.path(), port);
+    let child = spawn_dirsql(dir.path(), port);
     wait_until_ready(port, Duration::from_secs(10));
 
     let resp = Client::new()
@@ -322,6 +329,39 @@ fn missing_config_returns_503_on_query() {
         .send()
         .unwrap();
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    kill_and_wait(child);
+}
+
+#[test]
+fn no_config_serves_default_files_table() {
+    // Issue #184 Part 1: with no `.dirsql.toml`, dirsql serves a default
+    // `files` table with one row per file under the root, instead of going
+    // into the degraded (503) state.
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("readme.md"), "hello").unwrap();
+    let port = free_port();
+    let child = spawn_dirsql(dir.path(), port);
+    wait_until_ready(port, Duration::from_secs(10));
+
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT _basename FROM files"}))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let rows: Value = resp.json().unwrap();
+    let names: Vec<&str> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["_basename"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"readme.md"),
+        "expected `files` table to contain readme.md, got {names:?}"
+    );
 
     kill_and_wait(child);
 }

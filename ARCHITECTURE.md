@@ -98,7 +98,9 @@ Compares old and new row sets for a file to produce `RowEvent` variants: `Insert
 
 ### Filesystem-fact injection (in `lib.rs`)
 
-Between the user-supplied `extract` callback and SQLite insertion, the core
+The `extract` callback receives only the matched file's absolute path; dirsql
+does not read file contents on its behalf. A callback that needs the file body
+reads it itself. After `extract` returns, and before SQLite insertion, the core
 merges two sources of filesystem-derived columns into every row:
 
 - **Glob path captures**, by capture name (`{thread_id}` → `thread_id`).
@@ -149,8 +151,9 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 
 1. `notify` detects a filesystem event (create/modify/delete)
 2. The matcher checks if the file belongs to a table
-3. For create/modify: file is re-read, `extract` is called, captures and stat
-   virtuals are merged, `differ` compares old and new rows
+3. For create/modify: `extract` is called with the file's absolute path
+   (reading the file itself if it needs the body), captures and stat virtuals
+   are merged, `differ` compares old and new rows
 4. For delete: old rows are retrieved, all emitted as delete events
 5. SQLite is updated (old rows deleted, new rows inserted)
 6. `RowEvent` objects are returned to Python

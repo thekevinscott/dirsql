@@ -99,9 +99,9 @@ db = DirSQL(
         Table(
             ddl="CREATE TABLE comments (thread_id TEXT, body TEXT)",
             glob="comments/{thread_id}/index.jsonl",
-            extract=lambda path, content: [
+            extract=lambda path: [
                 {"body": json.loads(line)["body"]}
-                for line in content.splitlines()
+                for line in open(path, encoding="utf-8").read().splitlines()
                 if line
             ],
         )
@@ -174,6 +174,131 @@ glob = "posts/{thread_id}/*.md"
 TOML
 # A query of `SELECT thread_id, _basename, _size FROM posts` returns one
 # row: ("abc", "hello.md", 3).
+```
+
+---
+
+### `extract` callbacks no longer receive file content
+
+#### Summary
+
+The `extract` callback on a programmatic `Table` (Rust), `Table` (Python),
+or `TableDef` (TypeScript) changed from a two-argument callback
+`(path, content)` to a one-argument callback `(path)`. The single argument
+is the **absolute filesystem path** of the matched file (previously the
+first argument was the root-relative path). `dirsql` no longer reads file
+bodies during the initial scan or the watch loop, so a callback that needs
+file content must read it itself. Affects every consumer that registers a
+programmatic table with an `extract` callback in any of the three SDKs.
+Consumers who only use `.dirsql.toml` config files are unaffected — config
+tables never had a user-authored `extract`. The change removes a vestigial
+eager UTF-8 read left over from the content-parsing feature deleted in
+[#169](https://github.com/thekevinscott/dirsql/issues/169); a side effect
+is that a table glob may now match binary (non-UTF-8) files without
+aborting the build. Closes part of
+[#184](https://github.com/thekevinscott/dirsql/issues/184).
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| Python `extract` (uses content) | `extract=lambda path, content: [json.loads(content)]` | `extract=lambda path: [json.loads(open(path, encoding="utf-8").read())]` |
+| Python `extract` (ignores content) | `extract=lambda path, content: [...]` | `extract=lambda path: [...]` |
+| Rust `extract` (uses content) | `Table::new(ddl, glob, \|_path, content\| parse(content))` | `Table::new(ddl, glob, \|path\| parse(&std::fs::read_to_string(path).unwrap()))` |
+| Rust `extract` (ignores content) | `Table::new(ddl, glob, \|_path, _content\| ...)` | `Table::new(ddl, glob, \|_path\| ...)` |
+| TypeScript `extract` (uses content) | `extract: (path, content) => [JSON.parse(content)]` | `extract: (path) => [JSON.parse(readFileSync(path, "utf8"))]` |
+| TypeScript `extract` (ignores content) | `extract: (path, content) => [...]` | `extract: (path) => [...]` |
+| Path argument semantics | first argument was the root-relative path | first (only) argument is the absolute filesystem path |
+
+#### Deprecations removed
+
+_None._ The two-argument signature was never deprecated; it is replaced in a
+single release alongside the related zero-config work in #184.
+
+#### Behavior changes without code changes
+
+- A table glob that matches a binary / non-UTF-8 file no longer aborts
+  construction. Previously `dirsql` eagerly read every matched file as UTF-8
+  text and surfaced an `InvalidData` error; it now never reads file bodies
+  itself, so binary files are indexed for their filesystem facts without
+  error.
+- The path handed to `extract` is now absolute rather than root-relative.
+  Callbacks that derived columns from the path via `Path`/`os.path`
+  component accessors (`parent`, `file_name`/`basename`) are unaffected;
+  callbacks that compared the path against a hard-coded relative string must
+  be updated.
+
+#### Verification
+
+```bash
+# A programmatic table whose glob matches a binary file builds cleanly and
+# the callback receives an absolute path it can open itself.
+python - <<'PY'
+import tempfile, os
+from dirsql import DirSQL, Table
+
+root = tempfile.mkdtemp()
+open(os.path.join(root, "logo.png"), "wb").write(b"\xff\xd8\xff\x00")
+
+db = DirSQL(root, tables=[Table(
+    ddl="CREATE TABLE assets (_basename TEXT)",
+    glob="*.png",
+    extract=lambda path: (os.path.isabs(path) or 1/0) and [{}],
+)])
+import asyncio; asyncio.run(db.ready())
+print(asyncio.run(db.query("SELECT _basename FROM assets")))
+# expected: [{'_basename': 'logo.png'}]
+PY
+```
+
+---
+
+### Zero-config run serves a default `files` table
+
+#### Summary
+
+Running the `dirsql` server (no subcommand) in a directory without a
+`.dirsql.toml` used to leave the server degraded: it bound the port but
+every `POST /query` returned HTTP 503 with `config not found`. It now
+indexes the directory with a built-in `files` table -- one row per file,
+columns drawn entirely from filesystem facts -- and serves queries
+normally. Affects only the CLI server's no-config path; consumers who
+always run with a `.dirsql.toml`, and all programmatic SDK consumers, are
+unaffected. Part of
+[#184](https://github.com/thekevinscott/dirsql/issues/184).
+
+#### Required changes
+
+_None._ The change is additive for anyone who already ships a `.dirsql.toml`
+-- a present config fully overrules the default.
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- `dirsql` started in a directory without a `.dirsql.toml`: previously every
+  `POST /query` returned `503 Service Unavailable` with
+  `{"error":"config not found at ./.dirsql.toml"}`; now the server is
+  `Ready` and `POST /query` runs against a default `files` table (one row
+  per file, columns `_path`, `_basename`, `_dir`, `_ext`, `_size`,
+  `_mtime`, `_ctime`). Tooling that probed for the 503 to detect "no
+  config" must instead check for the `files` table or for the presence of a
+  `.dirsql.toml`. The 503 path still applies when a config file exists but
+  fails to load.
+
+#### Verification
+
+```bash
+cd "$(mktemp -d)"
+echo hi > note.txt
+dirsql --port 7117 &
+sleep 1
+curl -s localhost:7117/query -H 'content-type: application/json' \
+  -d '{"sql":"SELECT _basename FROM files"}'
+# expected: [{"_basename":"note.txt"}]
+kill %1
 ```
 
 ---

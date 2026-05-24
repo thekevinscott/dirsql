@@ -168,15 +168,15 @@ import { Table } from 'dirsql';
 ::: code-group
 
 ```python [Python]
-Table(*, ddl: str, glob: str, extract: Callable[[str, str], list[dict]])
+Table(*, ddl: str, glob: str, extract: Callable[[str], list[dict]])
 ```
 
 ```rust [Rust]
-Table::new(ddl: &str, glob: &str, extract: fn(&str, &str) -> Vec<Value>)
+Table::new(ddl: &str, glob: &str, extract: fn(&str) -> Vec<Value>)
 ```
 
 ```typescript [TypeScript]
-new Table({ ddl: string, glob: string, extract: (path: string, content: string) => Record<string, unknown>[] })
+new Table({ ddl: string, glob: string, extract: (path: string) => Record<string, unknown>[] })
 ```
 
 :::
@@ -187,7 +187,7 @@ Defines a mapping from files to SQLite table rows.
 
 - `ddl` -- A `CREATE TABLE` statement. The table name is parsed from this DDL.
 - `glob` -- A glob pattern matched against file paths relative to the root directory.
-- `extract` -- A callable `(path, content) -> list[dict]`. Receives the relative file path and file content as strings. Returns a list of dicts/maps mapping column names to values. Return an empty list to skip a file.
+- `extract` -- A callable `(path) -> list[dict]`. Receives the absolute filesystem path of the matched file. `dirsql` does not read file contents; a callback that needs the file body reads `path` itself. Returns a list of dicts/maps mapping column names to values. Return an empty list to skip a file.
 
 **Attributes:**
 

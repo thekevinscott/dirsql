@@ -9,7 +9,8 @@ fn comments_table() -> Table {
     Table::new(
         "CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
         "comments/**/index.txt",
-        |path, content| {
+        |path| {
+            let content = std::fs::read_to_string(path).unwrap();
             let id = std::path::Path::new(path)
                 .parent()
                 .and_then(|parent| parent.file_name())
@@ -35,16 +36,13 @@ fn comments_table() -> Table {
 }
 
 fn items_table() -> Table {
-    Table::new(
-        "CREATE TABLE items (name TEXT)",
-        "**/*.txt",
-        |_, content| {
-            vec![HashMap::from([(
-                "name".into(),
-                Value::Text(content.trim().to_string()),
-            )])]
-        },
-    )
+    Table::new("CREATE TABLE items (name TEXT)", "**/*.txt", |path| {
+        let content = std::fs::read_to_string(path).unwrap();
+        vec![HashMap::from([(
+            "name".into(),
+            Value::Text(content.trim().to_string()),
+        )])]
+    })
 }
 
 #[tokio::test]

@@ -35,7 +35,7 @@ db = DirSQL(
         Table(
             ddl="CREATE TABLE files (name TEXT, size INTEGER, type TEXT)",
             glob="data/*.json",
-            extract=lambda path, content: [json.loads(content)],
+            extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
     ],
 )
@@ -53,7 +53,7 @@ let db = DirSQL::new(
         Table::new(
             "CREATE TABLE files (name TEXT, size INTEGER, type TEXT)",
             "data/*.json",
-            |_path, content| vec![serde_json::from_str(content).unwrap()],
+            |path| vec![serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()],
         ),
     ],
 )?;
@@ -62,6 +62,7 @@ let large = db.query("SELECT * FROM files WHERE size > 1000")?;
 ```
 
 ```typescript [TypeScript]
+import { readFileSync } from 'node:fs';
 import { DirSQL, Table } from 'dirsql';
 
 const db = new DirSQL({
@@ -70,7 +71,7 @@ const db = new DirSQL({
     new Table({
       ddl: 'CREATE TABLE files (name TEXT, size INTEGER, type TEXT)',
       glob: 'data/*.json',
-      extract: (_path, content) => [JSON.parse(content)],
+      extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
     }),
   ],
 });

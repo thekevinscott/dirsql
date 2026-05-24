@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Zero-config `files` table.** Running the `dirsql` server in a
+  directory with no `.dirsql.toml` now serves a default `files` table --
+  one row per file under the directory, with the filesystem-fact columns
+  `_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime` --
+  instead of starting in the degraded (HTTP 503) state. `SELECT * FROM
+  files` and `SELECT name FROM sqlite_master` work immediately in any
+  directory; no ignores are applied, so every file is indexed. A
+  `.dirsql.toml`, when present, fully overrules the default. (#184)
+
+### Changed
+
+- **`extract` callbacks no longer receive file content.** The `extract`
+  callback on a programmatic `Table` (Rust/Python) / `TableDef`
+  (TypeScript) now takes a single argument — the absolute filesystem
+  path of the matched file — instead of `(path, content)`. `dirsql` no
+  longer reads file bodies during the scan or watch loop; a callback
+  that needs the file content reads it itself (`open(path)` /
+  `std::fs::read_to_string(path)` / `readFileSync(path)`). This removes
+  a vestigial eager UTF-8 read left over from the `format`/`each`
+  config grammar deleted in #169, and lets a table glob match binary
+  files without aborting the build. Breaking change across the Python,
+  Rust, and TypeScript SDKs; `.dirsql.toml` config users are
+  unaffected. See `MIGRATIONS.md`. (#184)
+
 ### Removed
 
 - **Python 3.10 support dropped.** `requires-python` is now `>=3.11`

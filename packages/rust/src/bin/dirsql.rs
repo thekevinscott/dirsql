@@ -4,29 +4,32 @@
 //!
 //! Only compiled with `--features cli`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use dirsql::DirSQL;
 use dirsql::cli::{AppState, ServerConfig, init::InitOptions, serve_with_state};
+use dirsql::{DirSQL, Row, Table};
 
 #[derive(Debug, Parser)]
 #[command(
     name = "dirsql",
     version,
     about = "Ephemeral SQL index over a local directory, exposed over HTTP.",
-    long_about = "Runs an HTTP server that exposes a SQL view of the directory \
-                  described by `.dirsql.toml`. With the `init` subcommand, \
-                  generates a starter `.dirsql.toml` by running `claude` over \
-                  the target directory."
+    long_about = "Runs an HTTP server that exposes a SQL view of a local \
+                  directory. Tables are defined by a `.dirsql.toml` config \
+                  file; with no config, a default `files` table over every \
+                  file in the directory is served. With the `init` \
+                  subcommand, generates a starter `.dirsql.toml` by running \
+                  `claude` over the target directory."
 )]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 
     /// Path to the config file (default: `./.dirsql.toml`). The index is
-    /// rooted at the directory containing this file. Used when no
+    /// rooted at the directory containing this file. When the file does
+    /// not exist, a default `files` table is served. Used when no
     /// subcommand is given.
     #[arg(long, default_value = "./.dirsql.toml")]
     config: PathBuf,
@@ -131,7 +134,9 @@ async fn run_server(cli: Cli) -> ExitCode {
 fn load_state(cli: &Cli) -> AppState {
     let config_path = &cli.config;
     if !config_path.exists() {
-        return AppState::Unavailable(format!("config not found at {}", config_path.display()));
+        // No config: serve a default `files` table so dirsql is queryable
+        // out of the box. A config file, when present, fully overrules this.
+        return load_default_state(config_path);
     }
 
     // Canonicalize so the root (derived from the config's parent) is
@@ -151,6 +156,46 @@ fn load_state(cli: &Cli) -> AppState {
         Ok(db) => AppState::Ready(db),
         Err(err) => AppState::Unavailable(format!("failed to load config: {err}")),
     }
+}
+
+/// Zero-config fallback. When no `.dirsql.toml` is found, dirsql indexes the
+/// directory that would have held the config with a single default `files`
+/// table — one row per file, columns drawn entirely from filesystem facts —
+/// so `SELECT * FROM files` works immediately. A config file, when present,
+/// fully overrules this default.
+fn load_default_state(config_path: &Path) -> AppState {
+    let dir = config_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    // Canonicalize for the same reason `load_state` does: `notify` misbehaves
+    // when watching relative paths.
+    let root = match dir.canonicalize() {
+        Ok(p) => p,
+        Err(err) => {
+            return AppState::Unavailable(format!("failed to resolve {}: {err}", dir.display()));
+        }
+    };
+
+    match DirSQL::new(root, vec![default_files_table()]) {
+        Ok(db) => AppState::Ready(db),
+        Err(err) => AppState::Unavailable(format!("failed to build default index: {err}")),
+    }
+}
+
+/// The default `files` table used in zero-config mode: glob `**/*` matches
+/// every file under the root at any depth (no ignores), and each row is built
+/// purely from the auto-injected filesystem-fact columns.
+fn default_files_table() -> Table {
+    Table::new(
+        "CREATE TABLE files (\
+         _path TEXT, _basename TEXT, _dir TEXT, _ext TEXT, \
+         _size INTEGER, _mtime INTEGER, _ctime INTEGER)",
+        "**/*",
+        |_path| vec![Row::new()],
+    )
 }
 
 #[cfg(unix)]

@@ -2,6 +2,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   utimesSync,
   writeFileSync,
@@ -35,9 +36,9 @@ describe("DirSQL persist", () => {
     return {
       ddl: "CREATE TABLE items (name TEXT, price REAL)",
       glob: "items/*.json",
-      extract: (_filePath: string, content: string) => {
+      extract: (filePath: string) => {
         box.count += 1;
-        return [JSON.parse(content)];
+        return [JSON.parse(readFileSync(filePath, "utf8"))];
       },
     };
   }
@@ -176,9 +177,11 @@ describe("DirSQL persist", () => {
         {
           ddl: "CREATE TABLE items (name TEXT, price REAL, sku TEXT)",
           glob: "items/*.json",
-          extract: (_filePath: string, content: string) => {
+          extract: (filePath: string) => {
             box2.count += 1;
-            return [{ ...JSON.parse(content), sku: "X" }];
+            return [
+              { ...JSON.parse(readFileSync(filePath, "utf8")), sku: "X" },
+            ];
           },
         },
       ],
@@ -203,8 +206,8 @@ describe("DirSQL persist", () => {
         {
           ddl: "CREATE TABLE items (name TEXT, price REAL)",
           glob: "**/*.json",
-          extract: (_filePath: string, content: string) => [
-            JSON.parse(content),
+          extract: (filePath: string) => [
+            JSON.parse(readFileSync(filePath, "utf8")),
           ],
         },
       ],

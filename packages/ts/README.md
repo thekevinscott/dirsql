@@ -17,6 +17,7 @@ Prebuilt binaries ship for linux-x64, linux-arm64, darwin-x64, darwin-arm64, and
 ## Usage
 
 ```typescript
+import { readFileSync } from "node:fs";
 import { DirSQL } from "dirsql";
 
 const db = new DirSQL({
@@ -25,7 +26,7 @@ const db = new DirSQL({
     {
       ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
       glob: "data/*.json",
-      extract: (_filePath, content) => JSON.parse(content),
+      extract: (filePath) => JSON.parse(readFileSync(filePath, "utf8")),
     },
   ],
 });

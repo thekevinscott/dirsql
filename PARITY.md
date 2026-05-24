@@ -7,8 +7,14 @@ API surface comparison across the three language SDKs.
 | Concept     | Python                  | Rust                     | TypeScript               |
 |-------------|-------------------------|--------------------------|--------------------------|
 | Table def   | `Table(ddl, glob, extract, strict)` | `Table::new(ddl, glob, extract)` / `Table::strict(...)` / `Table::try_new(...)` | `{ ddl, glob, extract, strict? }` (plain object) |
+| Extract callback | `(path) -> list[dict]` | `Fn(&str) -> Vec<Row>` | `(path) => Record<string, unknown>[]` |
 | Row event   | `RowEvent` (class, frozen attrs; `file_path` on all variants) | `RowEvent` (enum: Insert/Update/Delete/Error; `file_path` on all variants) | `RowEvent` (plain object with action string; `filePath` on all variants) |
 | Row type    | `dict[str, Any]`        | `HashMap<String, Value>` | `Record<string, unknown>` |
+
+The `extract` callback receives a single argument: the absolute filesystem
+path of the matched file. `dirsql` does not read file contents — a callback
+that needs the file body reads it itself. This is consistent across all three
+SDKs (no drift).
 
 ## DirSQL (synchronous)
 

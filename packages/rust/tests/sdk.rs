@@ -10,7 +10,8 @@ fn comments_table() -> Table {
     Table::new(
         "CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
         "comments/**/index.txt",
-        |path, content| {
+        |path| {
+            let content = std::fs::read_to_string(path).unwrap();
             let id = std::path::Path::new(path)
                 .parent()
                 .and_then(|parent| parent.file_name())
@@ -36,16 +37,13 @@ fn comments_table() -> Table {
 }
 
 fn items_table() -> Table {
-    Table::new(
-        "CREATE TABLE items (name TEXT)",
-        "**/*.txt",
-        |_, content| {
-            vec![HashMap::from([(
-                "name".into(),
-                Value::Text(content.trim().to_string()),
-            )])]
-        },
-    )
+    Table::new("CREATE TABLE items (name TEXT)", "**/*.txt", |path| {
+        let content = std::fs::read_to_string(path).unwrap();
+        vec![HashMap::from([(
+            "name".into(),
+            Value::Text(content.trim().to_string()),
+        )])]
+    })
 }
 
 #[test]
@@ -100,7 +98,8 @@ fn it_supports_multiple_tables_and_joins() {
     let posts = Table::new(
         "CREATE TABLE posts (title TEXT, author_id TEXT)",
         "posts/*.txt",
-        |_, content| {
+        |path| {
+            let content = std::fs::read_to_string(path).unwrap();
             content
                 .lines()
                 .map(|line| {
@@ -122,7 +121,8 @@ fn it_supports_multiple_tables_and_joins() {
     let authors = Table::new(
         "CREATE TABLE authors (id TEXT, name TEXT)",
         "authors/*.txt",
-        |_, content| {
+        |path| {
+            let content = std::fs::read_to_string(path).unwrap();
             content
                 .lines()
                 .map(|line| {
@@ -181,7 +181,8 @@ fn it_ignores_extra_keys_by_default() {
         vec![Table::new(
             "CREATE TABLE items (name TEXT)",
             "*.txt",
-            |_, content| {
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
                 let mut parts = content.trim().split('|');
                 let name = parts.next().unwrap_or("").to_string();
                 let color = parts.next().unwrap_or("").to_string();
@@ -212,7 +213,8 @@ fn it_fills_missing_keys_with_null() {
         vec![Table::new(
             "CREATE TABLE items (name TEXT, color TEXT, count INTEGER)",
             "*.txt",
-            |_, content| {
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
                 vec![HashMap::from([(
                     "name".into(),
                     Value::Text(content.trim().to_string()),
@@ -239,7 +241,8 @@ fn it_raises_on_extra_keys_in_strict_mode() {
         vec![Table::strict(
             "CREATE TABLE items (name TEXT)",
             "*.txt",
-            |_, content| {
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
                 let mut parts = content.trim().split('|');
                 let name = parts.next().unwrap_or("").to_string();
                 let color = parts.next().unwrap_or("").to_string();
@@ -264,7 +267,8 @@ fn it_raises_on_missing_keys_in_strict_mode() {
         vec![Table::strict(
             "CREATE TABLE items (name TEXT, color TEXT)",
             "*.txt",
-            |_, content| {
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
                 vec![HashMap::from([(
                     "name".into(),
                     Value::Text(content.trim().to_string()),
@@ -286,7 +290,8 @@ fn it_allows_exact_match_in_strict_mode() {
         vec![Table::strict(
             "CREATE TABLE items (name TEXT, color TEXT)",
             "*.txt",
-            |_, content| {
+            |path| {
+                let content = std::fs::read_to_string(path).unwrap();
                 let mut parts = content.trim().split('|');
                 let name = parts.next().unwrap_or("").to_string();
                 let color = parts.next().unwrap_or("").to_string();
@@ -370,7 +375,7 @@ fn it_streams_watch_error_events() {
         vec![Table::try_new(
             "CREATE TABLE items (name TEXT)",
             "**/*.txt",
-            |_, _content| Err("intentional parse failure".into()),
+            |_| Err("intentional parse failure".into()),
         )],
     )
     .unwrap();
@@ -456,17 +461,14 @@ fn it_splits_scan_and_build_for_async_bindings() {
     // `finish_build` should call it, once per scanned file.
     let extract_calls = Arc::new(AtomicUsize::new(0));
     let counter = extract_calls.clone();
-    let table = Table::new(
-        "CREATE TABLE items (name TEXT)",
-        "**/*.txt",
-        move |_path, content| {
-            counter.fetch_add(1, Ordering::SeqCst);
-            vec![HashMap::from([(
-                "name".into(),
-                Value::Text(content.trim().to_string()),
-            )])]
-        },
-    );
+    let table = Table::new("CREATE TABLE items (name TEXT)", "**/*.txt", move |path| {
+        let content = std::fs::read_to_string(path).unwrap();
+        counter.fetch_add(1, Ordering::SeqCst);
+        vec![HashMap::from([(
+            "name".into(),
+            Value::Text(content.trim().to_string()),
+        )])]
+    });
 
     let prepared = DirSQL::builder()
         .root(root.path().to_path_buf())
@@ -647,16 +649,13 @@ glob = "*.json"
     )
     .unwrap();
 
-    let notes_table = Table::new(
-        "CREATE TABLE notes (body TEXT)",
-        "notes/*.txt",
-        |_path, content| {
-            vec![HashMap::from([(
-                "body".into(),
-                Value::Text(content.trim().to_string()),
-            )])]
-        },
-    );
+    let notes_table = Table::new("CREATE TABLE notes (body TEXT)", "notes/*.txt", |path| {
+        let content = std::fs::read_to_string(path).unwrap();
+        vec![HashMap::from([(
+            "body".into(),
+            Value::Text(content.trim().to_string()),
+        )])]
+    });
 
     let db = DirSQL::builder()
         .root(root.path())
@@ -670,4 +669,30 @@ glob = "*.json"
     let notes = db.query("SELECT body FROM notes").unwrap();
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0]["body"], Value::Text("hello".into()));
+}
+
+#[test]
+fn binary_file_under_glob_does_not_break_build() {
+    // Regression for issue #184 (Part 2): dirsql must not eagerly read
+    // matched files as UTF-8 text. `extract` no longer receives content,
+    // so a non-UTF-8 file under a table's glob must not fail the build --
+    // its row is still produced from filesystem facts alone.
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("logo.png"),
+        [0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x80, 0x90],
+    )
+    .unwrap();
+
+    let table = Table::new(
+        "CREATE TABLE assets (_path TEXT, _basename TEXT)",
+        "*.png",
+        |_path| vec![Row::new()],
+    );
+
+    let db = DirSQL::new(root.path(), vec![table]).expect("build must not fail on a binary file");
+
+    let rows = db.query("SELECT _basename FROM assets").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["_basename"], Value::Text("logo.png".into()));
 }

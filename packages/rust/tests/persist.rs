@@ -16,18 +16,15 @@ use tempfile::TempDir;
 /// Returns a CSV table whose extract function increments `counter` every time
 /// it runs. Used to verify that warm starts skip extract for unchanged files.
 fn counting_csv_table(counter: Arc<AtomicUsize>) -> Table {
-    Table::new(
-        "CREATE TABLE rows (col TEXT)",
-        "**/*.csv",
-        move |_path, content| {
-            counter.fetch_add(1, Ordering::SeqCst);
-            content
-                .lines()
-                .skip(1) // header
-                .map(|line| HashMap::from([("col".into(), Value::Text(line.trim().to_string()))]))
-                .collect::<Vec<Row>>()
-        },
-    )
+    Table::new("CREATE TABLE rows (col TEXT)", "**/*.csv", move |path| {
+        let content = std::fs::read_to_string(path).unwrap();
+        counter.fetch_add(1, Ordering::SeqCst);
+        content
+            .lines()
+            .skip(1) // header
+            .map(|line| HashMap::from([("col".into(), Value::Text(line.trim().to_string()))]))
+            .collect::<Vec<Row>>()
+    })
 }
 
 fn write_csv(root: &Path, name: &str, body_lines: &[&str]) {
@@ -237,7 +234,8 @@ fn glob_config_change_forces_full_rebuild() {
     let csv_table = counting_csv_table(csv_counter.clone());
     let tsv_table = Table::new("CREATE TABLE tsv_rows (col TEXT)", "**/*.tsv", {
         let c = tsv_counter.clone();
-        move |_path, content| {
+        move |path| {
+            let content = std::fs::read_to_string(path).unwrap();
             c.fetch_add(1, Ordering::SeqCst);
             content
                 .lines()
