@@ -46,6 +46,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`npx dirsql` works on Linux hosts with glibc < 2.39 again.** The
+  npm `bundled-cli` Linux binary in 0.3.11 / 0.3.12 was dynamically
+  linked against `GLIBC_2.39` and crashed at startup on Ubuntu 22.04,
+  Debian 12, Amazon Linux 2, and any other host whose runtime glibc
+  predates Ubuntu 24.04's. Root cause was a missing
+  `[package.bundle_cli]` subtable on the `dirsql-npm` package in
+  `putitoutthere.toml`: every musl / cross-compile / stage / verify
+  step in upstream `_matrix.yml`'s npm bundled-cli row is gated on
+  `matrix.bundle_cli`, so without the subtable nothing in the upstream
+  pipeline produced a binary, and the consumer's local
+  `npm run build` (`packages/ts/tools/stagePlatform.ts`) silently fell
+  through to plain `cargo build --target x86_64-unknown-linux-gnu` on
+  the ubuntu-latest runner. Adding the subtable (mirroring the pypi
+  block) makes upstream cross-compile against the musl triple and stage
+  the static binary into `packages/ts/build/bundled-cli-{triple}/` after
+  `npm run build` (putitoutthere#386 ordering fix), so the static binary
+  is what reaches the upload-artifact step. A new vitest in
+  `packages/ts/tools/putitoutthereConfig.test.ts` keeps the invariant
+  honest: any future package that declares
+  `build = [..., { mode = "bundled-cli", ... }, ...]` must also declare
+  the matching `[package.bundle_cli]` subtable. (#189)
+
 - **`npx dirsql` and `uvx dirsql` work end-to-end again.** 0.3.5 published
   but the CLIs were still broken: the npm-bundled binary was packed
   without the executable bit (`spawnSync ... EACCES`) and stamped with a
