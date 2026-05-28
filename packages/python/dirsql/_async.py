@@ -1,6 +1,8 @@
 """Async-by-default DirSQL wrapper."""
 
 import asyncio
+import os
+import tomllib
 
 from dirsql._dirsql import DirSQL as _RustDirSQL
 
@@ -27,6 +29,77 @@ class _WatchStream:
             events = await asyncio.to_thread(self._db._poll_events, 200)
             if events:
                 self._buffer.extend(events)
+
+
+def _resolve_config(root, tables, ignore, config, persist, persist_path):
+    """Merge construction kwargs with a `.dirsql.toml` into resolved state.
+
+    Mirrors `DirSQLBuilder::resolve` in the Rust core: an explicit `root` wins
+    over a config-supplied one; programmatic tables/ignore are followed by
+    config-supplied ones; `persist=True` from either side enables persistence;
+    an explicit `persist_path` overrides the config's. Path-valued config
+    fields are resolved relative to the config file's parent.
+
+    Returns a 5-tuple `(root, tables, ignore, persist, persist_path)` where
+    `tables` is a list of `{"ddl", "glob", "strict"}` dicts (the canonical
+    serialized shape) drawn from both the programmatic `Table` instances and
+    the config's `[[table]]` entries.
+    """
+    cfg_root = None
+    cfg_tables = []
+    cfg_ignore = []
+    cfg_persist = False
+    cfg_persist_path = None
+
+    if config is not None:
+        with open(config, "rb") as f:
+            raw = tomllib.load(f)
+        cfg_parent = os.path.dirname(os.path.abspath(config)) or "."
+
+        section = raw.get("dirsql", {}) or {}
+        if "root" in section:
+            r = section["root"]
+            cfg_root = r if os.path.isabs(r) else os.path.join(cfg_parent, r)
+        else:
+            cfg_root = cfg_parent
+        cfg_ignore = list(section.get("ignore", []) or [])
+        cfg_persist = bool(section.get("persist", False))
+        if "persist_path" in section:
+            p = section["persist_path"]
+            cfg_persist_path = p if os.path.isabs(p) else os.path.join(cfg_parent, p)
+
+        for entry in raw.get("table", []) or []:
+            if "ddl" not in entry:
+                raise ValueError("Missing required field 'ddl' in [[table]] entry")
+            if "glob" not in entry:
+                raise ValueError("Missing required field 'glob' in [[table]] entry")
+            cfg_tables.append(
+                {
+                    "ddl": entry["ddl"],
+                    "glob": entry["glob"],
+                    "strict": bool(entry.get("strict", False)),
+                }
+            )
+
+    resolved_root = root if root is not None else cfg_root
+
+    programmatic = [
+        {"ddl": t.ddl, "glob": t.glob, "strict": bool(t.strict)}
+        for t in (tables or [])
+    ]
+    resolved_tables = programmatic + cfg_tables
+
+    resolved_ignore = list(ignore or []) + cfg_ignore
+    resolved_persist = bool(persist) or cfg_persist
+    resolved_persist_path = persist_path if persist_path is not None else cfg_persist_path
+
+    return (
+        resolved_root,
+        resolved_tables,
+        resolved_ignore,
+        resolved_persist,
+        resolved_persist_path,
+    )
 
 
 class DirSQL:
@@ -113,19 +186,29 @@ class DirSQL:
     def __dict__(self):
         """Resolved runtime state as a JSON-serializable dict.
 
-        ``vars(db)`` and ``json.dumps(vars(db))`` both work. The shape mirrors
-        ``DirSQLConfig`` on the Rust side and the ``toJSON()`` output in the
-        TypeScript SDK (modulo ``persist_path`` ↔ ``persistPath`` case).
+        ``vars(db)`` and ``json.dumps(vars(db))`` both work and return the
+        same shape as ``DirSQLConfig`` on the Rust side and ``toJSON()`` in
+        the TypeScript SDK (modulo ``persist_path`` ↔ ``persistPath``).
 
-        Excludes ``config`` (already absorbed into ``root`` / ``tables`` /
-        ``ignore``), ``extract`` (closures aren't serializable), and ``name``
-        (derivable from each table's DDL).
-
-        Requires the initial scan to have completed. Call ``await
-        db.ready()`` first, or raise ``RuntimeError`` if scan failed.
+        Resolution -- including reading the ``.dirsql.toml`` if ``config=``
+        was supplied -- runs on each access. Available immediately after
+        construction; no need to ``await db.ready()`` first. Excludes
+        ``config`` (already absorbed into ``root`` / ``tables`` / ``ignore``),
+        per-table ``extract`` (closures aren't serializable), and per-table
+        ``name`` (derivable from DDL).
         """
-        if self._db is None:
-            raise RuntimeError(
-                "DirSQL is not ready yet; await db.ready() before reading vars(db)"
-            )
-        return self._db._config_dict()
+        root, tables, ignore, persist, persist_path = _resolve_config(
+            self._root,
+            self._tables,
+            self._ignore,
+            self._config,
+            self._persist,
+            self._persist_path,
+        )
+        return {
+            "root": root,
+            "tables": tables,
+            "ignore": ignore,
+            "persist": persist,
+            "persist_path": persist_path,
+        }

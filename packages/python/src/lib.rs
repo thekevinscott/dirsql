@@ -47,20 +47,6 @@ mod python {
                 strict,
             }
         }
-
-        /// Plain JSON-serializable view of the table for `vars(table)` /
-        /// `table.__dict__`. Excludes `extract` (a Python callable, not
-        /// JSON-serializable) and `name` (derivable from DDL). See
-        /// `DirSQLConfig` on the Rust side for the shape parity contract.
-        #[getter]
-        #[pyo3(name = "__dict__")]
-        fn dunder_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-            let dict = PyDict::new(py);
-            dict.set_item("ddl", &self.ddl)?;
-            dict.set_item("glob", &self.glob)?;
-            dict.set_item("strict", self.strict)?;
-            Ok(dict)
-        }
     }
 
     /// A row event produced by the watch loop.
@@ -167,32 +153,6 @@ mod python {
                 .map_err(to_py_err)?;
 
             events.iter().map(|e| row_event_to_py(py, e)).collect()
-        }
-
-        /// Return the resolved runtime config as a plain JSON-serializable
-        /// dict. Used by the Python `DirSQL.__dict__` property; see
-        /// `DirSQLConfig` on the Rust side for the shape contract.
-        fn _config_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-            let cfg = self.inner.config();
-            let dict = PyDict::new(py);
-            dict.set_item("root", cfg.root.to_string_lossy().to_string())?;
-            let tables = PyList::empty(py);
-            for t in &cfg.tables {
-                let td = PyDict::new(py);
-                td.set_item("ddl", &t.ddl)?;
-                td.set_item("glob", &t.glob)?;
-                td.set_item("strict", t.strict)?;
-                tables.append(td)?;
-            }
-            dict.set_item("tables", tables)?;
-            dict.set_item("ignore", cfg.ignore.clone())?;
-            dict.set_item("persist", cfg.persist)?;
-            let persist_path = cfg
-                .persist_path
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string());
-            dict.set_item("persist_path", persist_path)?;
-            Ok(dict)
         }
     }
 

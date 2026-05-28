@@ -10,6 +10,9 @@
 // and the loader resolves the one matching the host's OS/arch. No Rust
 // toolchain is required at install time on any supported platform.
 
+import { readFileSync } from "node:fs";
+import { dirname, isAbsolute, resolve as resolvePath } from "node:path";
+import { parse as parseToml } from "smol-toml";
 import { loadNativeCore as defaultLoadNativeCore } from "./loadNativeCore.js";
 
 /** Definition of a SQL-indexed table backed by files on disk. */
@@ -115,7 +118,88 @@ interface NativeDirSQL {
   query(sql: string): Promise<Record<string, unknown>[]>;
   startWatcher(): Promise<void>;
   pollEvents(timeoutMs: number): Promise<RowEvent[]>;
-  config(): DirSQLConfig;
+}
+
+/**
+ * Merge construction options with a `.dirsql.toml` into the resolved
+ * runtime state. Mirrors `DirSQLBuilder::resolve` in the Rust core: an
+ * explicit `root` wins over a config-supplied one; programmatic tables /
+ * ignore are followed by config-supplied ones; `persist=true` from either
+ * side enables persistence; an explicit `persistPath` overrides the
+ * config's. Path-valued config fields are resolved relative to the config
+ * file's parent.
+ */
+function resolveConfig(options: DirSQLOptions): DirSQLConfig {
+  let cfgRoot: string | null = null;
+  const cfgTables: TableConfig[] = [];
+  const cfgIgnore: string[] = [];
+  let cfgPersist = false;
+  let cfgPersistPath: string | null = null;
+
+  if (options.config !== undefined) {
+    const cfgContent = readFileSync(options.config, "utf8");
+    const cfgParent = dirname(resolvePath(options.config));
+    // smol-toml returns a typed AST; cast to a flexible shape for
+    // the small subset of the grammar dirsql uses.
+    // biome-ignore lint/suspicious/noExplicitAny: TOML root is dynamic
+    const raw = parseToml(cfgContent) as Record<string, any>;
+
+    const section = (raw.dirsql ?? {}) as Record<string, unknown>;
+    if (typeof section.root === "string") {
+      cfgRoot = isAbsolute(section.root)
+        ? section.root
+        : resolvePath(cfgParent, section.root);
+    } else {
+      cfgRoot = cfgParent;
+    }
+    if (Array.isArray(section.ignore)) {
+      for (const pattern of section.ignore) {
+        if (typeof pattern === "string") cfgIgnore.push(pattern);
+      }
+    }
+    cfgPersist = section.persist === true;
+    if (typeof section.persist_path === "string") {
+      cfgPersistPath = isAbsolute(section.persist_path)
+        ? section.persist_path
+        : resolvePath(cfgParent, section.persist_path);
+    }
+
+    const tableEntries = Array.isArray(raw.table) ? raw.table : [];
+    for (const entry of tableEntries) {
+      if (typeof entry?.ddl !== "string") {
+        throw new Error("Missing required field 'ddl' in [[table]] entry");
+      }
+      if (typeof entry.glob !== "string") {
+        throw new Error("Missing required field 'glob' in [[table]] entry");
+      }
+      cfgTables.push({
+        ddl: entry.ddl,
+        glob: entry.glob,
+        strict: entry.strict === true,
+      });
+    }
+  }
+
+  const root = options.root ?? cfgRoot;
+  if (root === null || root === undefined) {
+    throw new Error(
+      "DirSQL requires either a root directory or a config= path",
+    );
+  }
+
+  const programmatic: TableConfig[] = (options.tables ?? []).map((t) => ({
+    ddl: t.ddl,
+    glob: t.glob,
+    strict: t.strict === true,
+  }));
+
+  return {
+    root,
+    tables: [...programmatic, ...cfgTables],
+    ignore: [...(options.ignore ?? []), ...cfgIgnore],
+    persist: (options.persist ?? false) || cfgPersist,
+    persistPath: options.persistPath ?? cfgPersistPath,
+  };
 }
 
 interface NativeDirSQLConstructor {
@@ -199,6 +283,9 @@ export class DirSQL {
 
   // Initialized by `ready`. Do NOT touch before awaiting `ready`.
   private _inner!: NativeDirSQL;
+  // Constructor options preserved verbatim so `toJSON()` can resolve the
+  // serialized state synchronously without waiting for `ready`.
+  private readonly _options: DirSQLOptions;
 
   /** Construct from a `.dirsql.toml` config-file path. */
   constructor(configPath: string);
@@ -207,6 +294,7 @@ export class DirSQL {
   constructor(arg: string | DirSQLOptions) {
     const options: DirSQLOptions =
       typeof arg === "string" ? { config: arg } : arg;
+    this._options = options;
     const Ctor = getCore().DirSQL;
     const openPromise = Ctor.openAsync(
       options.root ?? null,
@@ -268,24 +356,12 @@ export class DirSQL {
    * can flow through the `interpret` handshake regardless of which SDK
    * produced it.
    *
-   * Synchronous — no I/O — but requires the initial scan to have
-   * completed. Call `await db.ready` first; otherwise this throws.
+   * Resolution -- including reading the `.dirsql.toml` if `config` was
+   * supplied -- runs synchronously on each call, so this works immediately
+   * after construction without awaiting `ready`.
    */
   toJSON(): DirSQLConfig {
-    if (this._inner === undefined) {
-      throw new Error(
-        "DirSQL is not ready yet; await db.ready before calling toJSON() / JSON.stringify(db)",
-      );
-    }
-    const cfg = this._inner.config();
-    // napi-rs maps Rust `Option::None` to JS `undefined`, but JSON.stringify
-    // drops `undefined`-valued keys entirely. The contract from issue #194
-    // requires `persistPath` to serialize as JSON `null` when unset so the
-    // shape is stable across SDKs.
-    return {
-      ...cfg,
-      persistPath: cfg.persistPath ?? null,
-    };
+    return resolveConfig(this._options);
   }
 
   /**

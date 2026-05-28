@@ -208,17 +208,18 @@ const payload = JSON.stringify(db);
 :::
 
 Python uses the standard `__dict__` property so `vars(db)` and
-`json.dumps(vars(db))` both work. `vars(table)` on a standalone `Table`
-also returns `{ ddl, glob, strict }`. TypeScript uses the built-in
-`toJSON()` hook so `JSON.stringify(db)` works directly. Rust uses
+`json.dumps(vars(db))` both work. TypeScript uses the built-in `toJSON()`
+hook so `JSON.stringify(db)` works directly. Rust uses
 `serde::Serialize`-derived structs (`DirSQLConfig` and `TableConfig`) so
 callers can plug into the wider serde ecosystem.
 
-All three serialization hooks require the initial scan to have
-completed. In Python, call `await db.ready()` first; in TypeScript,
-`await db.ready`; in Rust, the synchronous builder returns a ready
-instance directly (or call `AsyncDirSQL::ready().await` on the async
-variant).
+In Python and TypeScript, serialization runs synchronously and resolves
+the construction inputs (reading the `.dirsql.toml` if `config=` was
+supplied) without waiting for the directory scan — `vars(db)` and
+`JSON.stringify(db)` work immediately after construction. In Rust, the
+synchronous `build()` returns a ready instance, so `db.config()` is
+always available; the async variant requires `AsyncDirSQL::ready().await`
+first (since `config()` lives on the inner sync instance).
 
 ---
 

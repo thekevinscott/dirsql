@@ -13,6 +13,10 @@ parameters:
 - `extract` is excluded from the table shape -- closures are not
   serializable.
 - `name` is excluded from the table shape.
+
+Resolution happens synchronously in `__init__`, so `vars(db)` works
+immediately without waiting for the initial directory scan to finish
+(no need to `await db.ready()` first).
 """
 
 import json
@@ -50,7 +54,6 @@ def describe_DirSQL_serialization():
                 ],
                 ignore=["**/skip/**"],
             )
-            await db.ready()
 
             state = vars(db)
             assert isinstance(state, dict)
@@ -75,7 +78,6 @@ def describe_DirSQL_serialization():
                     )
                 ],
             )
-            await db.ready()
 
             payload = json.dumps(vars(db))
             parsed = json.loads(payload)
@@ -88,6 +90,26 @@ def describe_DirSQL_serialization():
             assert parsed["ignore"] == []
             assert parsed["persist"] is False
             assert parsed["persist_path"] is None
+
+        @pytest.mark.asyncio
+        async def it_works_before_ready(empty_dir):
+            """`vars(db)` is available immediately, before the scan finishes."""
+            db = DirSQL(
+                empty_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE items (name TEXT)",
+                        glob="items/*.json",
+                        extract=_noop_extract,
+                    )
+                ],
+            )
+            # Read state before awaiting ready -- must not raise.
+            state = vars(db)
+            assert state["root"] == empty_dir
+            # And still works after ready, with the same shape.
+            await db.ready()
+            assert vars(db) == state
 
     def describe_table_shape():
         @pytest.mark.asyncio
@@ -103,7 +125,6 @@ def describe_DirSQL_serialization():
                     )
                 ],
             )
-            await db.ready()
 
             state = vars(db)
             assert state["tables"]
@@ -123,29 +144,10 @@ def describe_DirSQL_serialization():
                     )
                 ],
             )
-            await db.ready()
 
             state = vars(db)
             for t in state["tables"]:
                 assert "name" not in t
-
-        @pytest.mark.asyncio
-        async def it_exposes_table_state_via_vars(empty_dir):
-            """A standalone `Table` is also serializable via `vars()`."""
-            t = Table(
-                ddl="CREATE TABLE items (name TEXT)",
-                glob="items/*.json",
-                extract=_noop_extract,
-                strict=True,
-            )
-
-            state = vars(t)
-            assert isinstance(state, dict)
-            assert state == {
-                "ddl": "CREATE TABLE items (name TEXT)",
-                "glob": "items/*.json",
-                "strict": True,
-            }
 
     def describe_defaults():
         @pytest.mark.asyncio
@@ -160,7 +162,6 @@ def describe_DirSQL_serialization():
                     )
                 ],
             )
-            await db.ready()
             state = vars(db)
             assert state["tables"][0]["strict"] is False
 
@@ -176,7 +177,6 @@ def describe_DirSQL_serialization():
                     )
                 ],
             )
-            await db.ready()
             state = vars(db)
             assert state["persist"] is False
             assert state["persist_path"] is None
@@ -197,7 +197,6 @@ def describe_DirSQL_serialization():
                 persist=True,
                 persist_path=persist_path,
             )
-            await db.ready()
             state = vars(db)
             assert state["persist"] is True
             assert state["persist_path"] == persist_path
@@ -216,6 +215,42 @@ def describe_DirSQL_serialization():
                 ],
                 ignore=["**/skip/**", "**/temp/**"],
             )
-            await db.ready()
             state = vars(db)
             assert state["ignore"] == ["**/skip/**", "**/temp/**"]
+
+    def describe_config_file():
+        @pytest.mark.asyncio
+        async def it_merges_root_tables_ignore_from_config(empty_dir):
+            """A `.dirsql.toml` config feeds into the serialized state."""
+            cfg_path = os.path.join(empty_dir, ".dirsql.toml")
+            with open(cfg_path, "w") as f:
+                f.write(
+                    '[dirsql]\n'
+                    'root = "data"\n'
+                    'ignore = ["node_modules/**"]\n'
+                    'persist = true\n'
+                    'persist_path = "cache.db"\n'
+                    '\n'
+                    '[[table]]\n'
+                    'ddl = "CREATE TABLE items (_path TEXT)"\n'
+                    'glob = "*.json"\n'
+                    'strict = true\n'
+                )
+            # Create the directory the config expects so the background
+            # scan doesn't blow up later -- we don't await ready() here,
+            # but the underlying Rust constructor still needs it on its
+            # own thread.
+            os.makedirs(os.path.join(empty_dir, "data"), exist_ok=True)
+
+            db = DirSQL(config=cfg_path)
+            state = vars(db)
+            assert state["root"] == os.path.join(empty_dir, "data")
+            assert state["ignore"] == ["node_modules/**"]
+            assert state["persist"] is True
+            assert state["persist_path"] == os.path.join(empty_dir, "cache.db")
+            assert len(state["tables"]) == 1
+            assert state["tables"][0] == {
+                "ddl": "CREATE TABLE items (_path TEXT)",
+                "glob": "*.json",
+                "strict": True,
+            }

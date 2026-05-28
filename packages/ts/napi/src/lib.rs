@@ -46,28 +46,6 @@ pub struct RowEvent {
     pub file_path: Option<String>,
 }
 
-/// Serializable per-table portion of [`DirSqlConfigJs`]. Mirrors the Rust
-/// `TableConfig`; napi-rs translates field names to camelCase on the JS
-/// side (no rename here because all fields are already single-word).
-#[napi(object)]
-pub struct TableConfigJs {
-    pub ddl: String,
-    pub glob: String,
-    pub strict: bool,
-}
-
-/// Serializable snapshot of a `DirSQL` instance's resolved runtime state.
-/// Mirrors the Rust `DirSQLConfig`; napi-rs translates field names to
-/// camelCase on the JS side (so `persist_path` → `persistPath`).
-#[napi(object)]
-pub struct DirSqlConfigJs {
-    pub root: String,
-    pub tables: Vec<TableConfigJs>,
-    pub ignore: Vec<String>,
-    pub persist: bool,
-    pub persist_path: Option<String>,
-}
-
 /// The main DirSQL class. Creates an in-memory SQLite index over a directory.
 #[napi(js_name = "DirSQL")]
 pub struct DirSQL {
@@ -147,30 +125,6 @@ impl DirSQL {
             inner: self.inner.clone(),
             timeout_ms,
         })
-    }
-
-    /// Return a synchronous snapshot of the instance's resolved runtime
-    /// state. Used by the TS wrapper's `toJSON()` so that
-    /// `JSON.stringify(db)` produces the canonical shape from issue #194.
-    /// Synchronous because the data is already in-memory; no I/O.
-    #[napi]
-    pub fn config(&self) -> DirSqlConfigJs {
-        let cfg = self.inner.config();
-        DirSqlConfigJs {
-            root: cfg.root.to_string_lossy().to_string(),
-            tables: cfg
-                .tables
-                .into_iter()
-                .map(|t| TableConfigJs {
-                    ddl: t.ddl,
-                    glob: t.glob,
-                    strict: t.strict,
-                })
-                .collect(),
-            ignore: cfg.ignore,
-            persist: cfg.persist,
-            persist_path: cfg.persist_path.map(|p| p.to_string_lossy().to_string()),
-        }
     }
 }
 
