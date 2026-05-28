@@ -32,74 +32,38 @@ class _WatchStream:
 
 
 def _resolve_config(root, tables, ignore, config, persist, persist_path):
-    """Merge construction kwargs with a `.dirsql.toml` into resolved state.
+    """Merge kwargs with a `.dirsql.toml` into the serialized state shape.
 
-    Mirrors `DirSQLBuilder::resolve` in the Rust core: an explicit `root` wins
-    over a config-supplied one; programmatic tables/ignore are followed by
-    config-supplied ones; `persist=True` from either side enables persistence;
-    an explicit `persist_path` overrides the config's. Path-valued config
-    fields are resolved relative to the config file's parent.
-
-    Returns a 5-tuple `(root, tables, ignore, persist, persist_path)` where
-    `tables` is a list of `{"ddl", "glob", "strict"}` dicts (the canonical
-    serialized shape) drawn from both the programmatic `Table` instances and
-    the config's `[[table]]` entries.
+    Mirrors `DirSQLBuilder::resolve` in the Rust core: explicit kwargs win
+    for scalars; tables and ignore lists are concatenated; persist is OR-ed;
+    path-valued config fields resolve relative to the config file's parent.
     """
-    cfg_root = None
-    cfg_tables = []
-    cfg_ignore = []
-    cfg_persist = False
-    cfg_persist_path = None
-
+    cfg, cfg_tables, cfg_dir = {}, [], None
     if config is not None:
         with open(config, "rb") as f:
-            raw = tomllib.load(f)
-        cfg_parent = os.path.dirname(os.path.abspath(config)) or "."
+            doc = tomllib.load(f)
+        cfg = doc.get("dirsql") or {}
+        cfg_tables = doc.get("table") or []
+        cfg_dir = os.path.dirname(os.path.abspath(config))
 
-        section = raw.get("dirsql", {}) or {}
-        if "root" in section:
-            r = section["root"]
-            cfg_root = r if os.path.isabs(r) else os.path.join(cfg_parent, r)
-        else:
-            cfg_root = cfg_parent
-        cfg_ignore = list(section.get("ignore", []) or [])
-        cfg_persist = bool(section.get("persist", False))
-        if "persist_path" in section:
-            p = section["persist_path"]
-            cfg_persist_path = p if os.path.isabs(p) else os.path.join(cfg_parent, p)
+    def _abs(p):
+        return p if os.path.isabs(p) else os.path.join(cfg_dir, p)
 
-        for entry in raw.get("table", []) or []:
-            if "ddl" not in entry:
-                raise ValueError("Missing required field 'ddl' in [[table]] entry")
-            if "glob" not in entry:
-                raise ValueError("Missing required field 'glob' in [[table]] entry")
-            cfg_tables.append(
-                {
-                    "ddl": entry["ddl"],
-                    "glob": entry["glob"],
-                    "strict": bool(entry.get("strict", False)),
-                }
-            )
-
-    resolved_root = root if root is not None else cfg_root
-
-    programmatic = [
-        {"ddl": t.ddl, "glob": t.glob, "strict": bool(t.strict)}
-        for t in (tables or [])
-    ]
-    resolved_tables = programmatic + cfg_tables
-
-    resolved_ignore = list(ignore or []) + cfg_ignore
-    resolved_persist = bool(persist) or cfg_persist
-    resolved_persist_path = persist_path if persist_path is not None else cfg_persist_path
-
-    return (
-        resolved_root,
-        resolved_tables,
-        resolved_ignore,
-        resolved_persist,
-        resolved_persist_path,
-    )
+    return {
+        "root": root or (_abs(cfg["root"]) if "root" in cfg else cfg_dir),
+        "tables": [
+            {"ddl": t.ddl, "glob": t.glob, "strict": bool(t.strict)}
+            for t in (tables or [])
+        ]
+        + [
+            {"ddl": e.get("ddl"), "glob": e.get("glob"), "strict": bool(e.get("strict"))}
+            for e in cfg_tables
+        ],
+        "ignore": list(ignore or []) + list(cfg.get("ignore") or []),
+        "persist": bool(persist or cfg.get("persist")),
+        "persist_path": persist_path
+        or (_abs(cfg["persist_path"]) if "persist_path" in cfg else None),
+    }
 
 
 class DirSQL:
@@ -197,7 +161,7 @@ class DirSQL:
         per-table ``extract`` (closures aren't serializable), and per-table
         ``name`` (derivable from DDL).
         """
-        root, tables, ignore, persist, persist_path = _resolve_config(
+        return _resolve_config(
             self._root,
             self._tables,
             self._ignore,
@@ -205,10 +169,3 @@ class DirSQL:
             self._persist,
             self._persist_path,
         )
-        return {
-            "root": root,
-            "tables": tables,
-            "ignore": ignore,
-            "persist": persist,
-            "persist_path": persist_path,
-        }

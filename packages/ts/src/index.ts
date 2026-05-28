@@ -121,84 +121,49 @@ interface NativeDirSQL {
 }
 
 /**
- * Merge construction options with a `.dirsql.toml` into the resolved
- * runtime state. Mirrors `DirSQLBuilder::resolve` in the Rust core: an
- * explicit `root` wins over a config-supplied one; programmatic tables /
- * ignore are followed by config-supplied ones; `persist=true` from either
- * side enables persistence; an explicit `persistPath` overrides the
- * config's. Path-valued config fields are resolved relative to the config
- * file's parent.
+ * Merge construction options with a `.dirsql.toml` into the serialized
+ * state shape. Mirrors `DirSQLBuilder::resolve` in the Rust core: explicit
+ * options win for scalars; tables and ignore lists are concatenated;
+ * persist is OR-ed; path-valued config fields resolve relative to the
+ * config file's parent.
  */
+// biome-ignore lint/suspicious/noExplicitAny: TOML root has a dynamic shape.
+type Cfg = Record<string, any>;
 function resolveConfig(options: DirSQLOptions): DirSQLConfig {
-  let cfgRoot: string | null = null;
-  const cfgTables: TableConfig[] = [];
-  const cfgIgnore: string[] = [];
-  let cfgPersist = false;
-  let cfgPersistPath: string | null = null;
-
+  // When no config file is supplied, `cfg` is empty so `cfgDir` is never
+  // read (the path-resolution helper is only reached via `cfg.root` /
+  // `cfg.persist_path` lookups, both of which short-circuit on an empty cfg).
+  let cfg: Cfg = {};
+  let cfgTables: Cfg[] = [];
+  let cfgDir = "";
   if (options.config !== undefined) {
-    const cfgContent = readFileSync(options.config, "utf8");
-    const cfgParent = dirname(resolvePath(options.config));
-    // smol-toml returns a typed AST; cast to a flexible shape for
-    // the small subset of the grammar dirsql uses.
-    // biome-ignore lint/suspicious/noExplicitAny: TOML root is dynamic
-    const raw = parseToml(cfgContent) as Record<string, any>;
-
-    const section = (raw.dirsql ?? {}) as Record<string, unknown>;
-    if (typeof section.root === "string") {
-      cfgRoot = isAbsolute(section.root)
-        ? section.root
-        : resolvePath(cfgParent, section.root);
-    } else {
-      cfgRoot = cfgParent;
-    }
-    if (Array.isArray(section.ignore)) {
-      for (const pattern of section.ignore) {
-        if (typeof pattern === "string") cfgIgnore.push(pattern);
-      }
-    }
-    cfgPersist = section.persist === true;
-    if (typeof section.persist_path === "string") {
-      cfgPersistPath = isAbsolute(section.persist_path)
-        ? section.persist_path
-        : resolvePath(cfgParent, section.persist_path);
-    }
-
-    const tableEntries = Array.isArray(raw.table) ? raw.table : [];
-    for (const entry of tableEntries) {
-      if (typeof entry?.ddl !== "string") {
-        throw new Error("Missing required field 'ddl' in [[table]] entry");
-      }
-      if (typeof entry.glob !== "string") {
-        throw new Error("Missing required field 'glob' in [[table]] entry");
-      }
-      cfgTables.push({
-        ddl: entry.ddl,
-        glob: entry.glob,
-        strict: entry.strict === true,
-      });
-    }
+    const doc = parseToml(readFileSync(options.config, "utf8")) as Cfg;
+    cfg = (doc.dirsql ?? {}) as Cfg;
+    cfgTables = (Array.isArray(doc.table) ? doc.table : []) as Cfg[];
+    cfgDir = dirname(resolvePath(options.config));
   }
-
-  const root = options.root ?? cfgRoot;
-  if (root === null || root === undefined) {
-    throw new Error(
-      "DirSQL requires either a root directory or a config= path",
-    );
-  }
-
-  const programmatic: TableConfig[] = (options.tables ?? []).map((t) => ({
-    ddl: t.ddl,
-    glob: t.glob,
-    strict: t.strict === true,
-  }));
+  const abs = (p: string) => (isAbsolute(p) ? p : resolvePath(cfgDir, p));
 
   return {
-    root,
-    tables: [...programmatic, ...cfgTables],
-    ignore: [...(options.ignore ?? []), ...cfgIgnore],
-    persist: (options.persist ?? false) || cfgPersist,
-    persistPath: options.persistPath ?? cfgPersistPath,
+    root:
+      options.root ?? (typeof cfg.root === "string" ? abs(cfg.root) : cfgDir),
+    tables: [
+      ...(options.tables ?? []).map((t) => ({
+        ddl: t.ddl,
+        glob: t.glob,
+        strict: t.strict === true,
+      })),
+      ...cfgTables.map((e) => ({
+        ddl: e.ddl as string,
+        glob: e.glob as string,
+        strict: e.strict === true,
+      })),
+    ],
+    ignore: [...(options.ignore ?? []), ...((cfg.ignore ?? []) as string[])],
+    persist: (options.persist ?? false) || cfg.persist === true,
+    persistPath:
+      options.persistPath ??
+      (typeof cfg.persist_path === "string" ? abs(cfg.persist_path) : null),
   };
 }
 
