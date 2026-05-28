@@ -1,10 +1,9 @@
 """Async-by-default DirSQL wrapper."""
 
 import asyncio
-import os
-import tomllib
 
 from dirsql._dirsql import DirSQL as _RustDirSQL
+from dirsql._resolve import resolve_config
 
 
 class _WatchStream:
@@ -29,41 +28,6 @@ class _WatchStream:
             events = await asyncio.to_thread(self._db._poll_events, 200)
             if events:
                 self._buffer.extend(events)
-
-
-def _resolve_config(root, tables, ignore, config, persist, persist_path):
-    """Merge kwargs with a `.dirsql.toml` into the serialized state shape.
-
-    Mirrors `DirSQLBuilder::resolve` in the Rust core: explicit kwargs win
-    for scalars; tables and ignore lists are concatenated; persist is OR-ed;
-    path-valued config fields resolve relative to the config file's parent.
-    """
-    cfg, cfg_tables, cfg_dir = {}, [], None
-    if config is not None:
-        with open(config, "rb") as f:
-            doc = tomllib.load(f)
-        cfg = doc.get("dirsql") or {}
-        cfg_tables = doc.get("table") or []
-        cfg_dir = os.path.dirname(os.path.abspath(config))
-
-    def _abs(p):
-        return p if os.path.isabs(p) else os.path.join(cfg_dir, p)
-
-    return {
-        "root": root or (_abs(cfg["root"]) if "root" in cfg else cfg_dir),
-        "tables": [
-            {"ddl": t.ddl, "glob": t.glob, "strict": bool(t.strict)}
-            for t in (tables or [])
-        ]
-        + [
-            {"ddl": e.get("ddl"), "glob": e.get("glob"), "strict": bool(e.get("strict"))}
-            for e in cfg_tables
-        ],
-        "ignore": list(ignore or []) + list(cfg.get("ignore") or []),
-        "persist": bool(persist or cfg.get("persist")),
-        "persist_path": persist_path
-        or (_abs(cfg["persist_path"]) if "persist_path" in cfg else None),
-    }
 
 
 class DirSQL:
@@ -148,20 +112,12 @@ class DirSQL:
 
     @property
     def __dict__(self):
-        """Resolved runtime state as a JSON-serializable dict.
+        """Resolved construction state as a JSON-serializable dict.
 
-        ``vars(db)`` and ``json.dumps(vars(db))`` both work and return the
-        same shape as ``DirSQLConfig`` on the Rust side and ``toJSON()`` in
-        the TypeScript SDK (modulo ``persist_path`` ↔ ``persistPath``).
-
-        Resolution -- including reading the ``.dirsql.toml`` if ``config=``
-        was supplied -- runs on each access. Available immediately after
-        construction; no need to ``await db.ready()`` first. Excludes
-        ``config`` (already absorbed into ``root`` / ``tables`` / ``ignore``),
-        per-table ``extract`` (closures aren't serializable), and per-table
-        ``name`` (derivable from DDL).
+        Recomputed on each access; reads the ``.dirsql.toml`` if ``config=``
+        was supplied. Works before ``await db.ready()``.
         """
-        return _resolve_config(
+        return resolve_config(
             self._root,
             self._tables,
             self._ignore,
