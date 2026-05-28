@@ -23,7 +23,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type Platform, PLATFORMS, librarySlug } from "../ts/platforms.js";
+import { type Platform, PLATFORMS, librarySlug } from "../src/platforms.js";
 
 export function findHostPlatform(
   key = `${process.platform}-${process.arch}`,
@@ -33,7 +33,7 @@ export function findHostPlatform(
   );
   if (!p) {
     throw new Error(
-      `unsupported host ${key}; add a row to PLATFORMS in ts/platforms.ts`,
+      `unsupported host ${key}; add a row to PLATFORMS in src/platforms.ts`,
     );
   }
   return p;
@@ -136,9 +136,23 @@ function stageOne(args: StageOneArgs): StageResult["staged"][number] {
     // `--platform` makes napi-rs emit `dirsql.<slug>.node` (suffixed)
     // instead of `dirsql.node`. Without it the cross-build's output
     // collides with the host's napi:build file at the package root.
+    // `--manifest-path`/`--output-dir` point napi at the colocated
+    // `dirsql-napi` crate (packages/ts/napi) while still dropping the
+    // artifact into this package (packages/ts) root.
     const cross = spawn(
       "npx",
-      ["napi", "build", "--release", "--platform", "--target", target.triple],
+      [
+        "napi",
+        "build",
+        "--release",
+        "--platform",
+        "--manifest-path",
+        "napi/Cargo.toml",
+        "--output-dir",
+        ".",
+        "--target",
+        target.triple,
+      ],
       { cwd: tsPkg, stdio: "inherit" },
     );
     if (cross.status !== 0) {

@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths:
       - 'packages/rust/**'
+      - 'packages/ts/napi/**'
       - 'packages/python/src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -15,6 +16,7 @@ on:
   pull_request:
     paths:
       - 'packages/rust/**'
+      - 'packages/ts/napi/**'
       - 'packages/python/src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'

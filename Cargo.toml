@@ -1,5 +1,5 @@
 [workspace]
-members = ["packages/python", "packages/rust", "packages/ts"]
+members = ["packages/python", "packages/rust", "packages/ts/napi"]
 resolver = "2"
 
 [workspace.package]

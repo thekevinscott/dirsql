@@ -168,7 +168,7 @@ not actually provide. Per this bead's scope, they are surfaced for review and
   - `await db.ready` as "awaitable property"
   - `await db.query(sql: string): Promise<Record<string, unknown>[]>`
   - `db.watch(): AsyncIterable<RowEvent>` consumed via `for await`
-- The actual `packages/ts/ts/index.ts` public surface is:
+- The actual `packages/ts/src/index.ts` public surface is:
   - No `ready()` / `ready` at all (scanning is synchronous in the constructor).
   - `query(sql): Record<string, unknown>[]` — synchronous, not a `Promise`.
   - `startWatcher()` + `pollEvents(timeoutMs)` — no `AsyncIterable<RowEvent>`,
@@ -230,9 +230,9 @@ Discovered while mirroring the Python gap tests to Rust and TypeScript:
 
 - `docs/guide/config.md` documents `.dirsql.toml` driven `fromConfig`
   across Python and Rust.
-- **Resolved** by bead `dirsql-hh3`: `packages/ts/ts/index.ts` now
+- **Resolved** by bead `dirsql-hh3`: `packages/ts/src/index.ts` now
   exposes `DirSQL.fromConfig(configPath)` as a static factory, backed
-  by the core config loader + parser in `packages/ts/src/lib.rs`.
+  by the core config loader + parser in `packages/ts/napi/src/lib.rs`.
 - TypeScript mirrors of the format tests (`.json`, `.jsonl`, `.ndjson`,
   `.csv`, `.tsv`, `.toml`, `.yaml`/`.yml`, `.md` frontmatter,
   path captures, column mapping, `each`, ignore, multiple tables,

@@ -1,5 +1,5 @@
 // Verifies the test-only boundary `__setCoreForTesting` installed in
-// `ts/index.ts`. This proves vitest can swap in a fake core module so
+// `src/index.ts`. This proves vitest can swap in a fake core module so
 // binding-layer tests don't need the real napi-rs binary.
 //
 // The stub-file approach tried in a prior PR failed in CI because the

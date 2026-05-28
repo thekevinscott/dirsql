@@ -1,10 +1,8 @@
 # Source and build artifacts
 src/
-ts/
+# Nested napi-rs binding crate (Rust source); never shipped to npm.
+napi/
 target/
-Cargo.*
-build.rs
-*.rs
 tsconfig.json
 # napi-rs emits `index.d.ts` at the package root as a build side effect;
 # the published types come from dist/index.d.ts (see package.json `types`).
