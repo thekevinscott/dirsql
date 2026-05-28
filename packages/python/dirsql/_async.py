@@ -3,7 +3,7 @@
 import asyncio
 
 from dirsql._dirsql import DirSQL as _RustDirSQL
-from dirsql._resolve import resolve_config
+from dirsql.resolve_config import resolve_config
 
 
 class _WatchStream:
