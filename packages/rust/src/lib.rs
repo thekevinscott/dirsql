@@ -193,6 +193,15 @@ struct DirSqlInner {
     extract_map: HashMap<String, Arc<ExtractFn>>,
     /// Table name -> strict flag, resolved once.
     strict_map: HashMap<String, bool>,
+    /// Per-table serializable config (DDL, glob, strict) preserved in
+    /// registration order for [`DirSQL::config`].
+    table_configs: Vec<TableConfig>,
+    /// Resolved ignore patterns preserved for [`DirSQL::config`].
+    ignore: Vec<String>,
+    /// Whether persistent caching is enabled.
+    persist: bool,
+    /// Override location of the persistent cache file.
+    persist_path: Option<PathBuf>,
     /// Cached rows per file path for positional diffing on modify/delete.
     file_rows: Mutex<HashMap<String, (String, Vec<Row>)>>,
     /// Lazily-created filesystem watcher, shared by both the polling API
@@ -205,6 +214,42 @@ struct DirSqlInner {
     /// `true` once [`DirSQL::watch`] has spawned its background thread.
     /// Locks out [`DirSQL::poll_events`].
     watch_thread_started: AtomicBool,
+}
+
+/// Serializable snapshot of a `DirSQL` instance's resolved runtime state.
+///
+/// Produced by [`DirSQL::config`]. The shape is identical across the three
+/// SDKs (modulo `persist_path` ↔ `persistPath` case), so a serialized
+/// `DirSQLConfig` can flow through the `interpret` handshake regardless of
+/// which SDK produced it.
+///
+/// Construction artifacts that are no longer meaningful after the instance
+/// exists are intentionally excluded:
+///
+/// - `config` (the config-file path) — by the time this struct exists the
+///   file has been read and its contents merged into `root`, `tables`, and
+///   `ignore`. Re-exposing the path would be a stale construction artifact.
+/// - `extract` (the per-table row callback) — closures are not
+///   serializable.
+/// - `name` (the per-table SQL name) — derivable from the DDL and not part
+///   of the handshake contract.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DirSQLConfig {
+    pub root: PathBuf,
+    pub tables: Vec<TableConfig>,
+    pub ignore: Vec<String>,
+    pub persist: bool,
+    pub persist_path: Option<PathBuf>,
+}
+
+/// Serializable per-table portion of [`DirSQLConfig`]. Captures only the
+/// fields that survive the round-trip into the `interpret` handshake: the
+/// DDL string, the glob pattern, and the strict flag.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TableConfig {
+    pub ddl: String,
+    pub glob: String,
+    pub strict: bool,
 }
 
 #[derive(Clone)]
@@ -261,6 +306,20 @@ impl DirSQL {
         DirSQL::builder()
             .config(config_path.as_ref().to_path_buf())
             .build()
+    }
+
+    /// Return a serializable snapshot of the instance's resolved runtime
+    /// state. See [`DirSQLConfig`] for the shape; use
+    /// `serde_json::to_string(&db.config())` to produce a JSON payload
+    /// suitable for the `interpret` handshake.
+    pub fn config(&self) -> DirSQLConfig {
+        DirSQLConfig {
+            root: self.inner.root.clone(),
+            tables: self.inner.table_configs.clone(),
+            ignore: self.inner.ignore.clone(),
+            persist: self.inner.persist,
+            persist_path: self.inner.persist_path.clone(),
+        }
     }
 
     /// Run a SQL query against the in-memory database.
@@ -598,6 +657,9 @@ impl DirSQL {
                 meta: ctx.expected_meta,
                 cold_rebuild: ctx.cold_rebuild,
             }),
+            ignore,
+            persist_enabled: persist,
+            persist_path,
         })
     }
 
@@ -617,6 +679,9 @@ impl DirSQL {
             matcher,
             scanned_files,
             persist,
+            ignore,
+            persist_enabled,
+            persist_path,
         } = prepared;
 
         let (db, persist_ready) = match persist {
@@ -627,6 +692,7 @@ impl DirSQL {
         let mut extract_map: HashMap<String, Arc<ExtractFn>> = HashMap::new();
         let mut strict_map: HashMap<String, bool> = HashMap::new();
         let mut ddl_map: HashMap<String, String> = HashMap::new();
+        let mut table_configs: Vec<TableConfig> = Vec::with_capacity(tables.len());
 
         for table in tables {
             let table_name =
@@ -637,6 +703,11 @@ impl DirSQL {
             if !table_exists(&db, &table_name)? {
                 db.create_table(&table.ddl)?;
             }
+            table_configs.push(TableConfig {
+                ddl: table.ddl.clone(),
+                glob: table.glob.clone(),
+                strict: table.strict,
+            });
             extract_map.insert(table_name.clone(), table.extract);
             strict_map.insert(table_name.clone(), table.strict);
             ddl_map.insert(table_name, table.ddl);
@@ -735,6 +806,10 @@ impl DirSQL {
                 matcher,
                 extract_map,
                 strict_map,
+                table_configs,
+                ignore,
+                persist: persist_enabled,
+                persist_path,
                 file_rows: Mutex::new(file_rows),
                 watcher: Mutex::new(None),
                 poll_used: AtomicBool::new(false),
@@ -974,6 +1049,13 @@ pub struct PreparedBuild {
     matcher: TableMatcher,
     scanned_files: Vec<ScannedFile>,
     persist: Option<PreparedPersist>,
+    /// Resolved ignore patterns, preserved for [`DirSQL::config`].
+    ignore: Vec<String>,
+    /// Whether persistent caching is enabled, preserved for [`DirSQL::config`].
+    persist_enabled: bool,
+    /// Override location of the persistent cache file, preserved for
+    /// [`DirSQL::config`].
+    persist_path: Option<PathBuf>,
 }
 
 #[doc(hidden)]
@@ -1400,6 +1482,11 @@ impl AsyncDirSQL {
             .map_err(|e| DirSqlError::Lock(format!("join error: {e}")))?
     }
 
+    /// Forward to the inner [`DirSQL::config`]. Requires init to be complete.
+    pub fn config(&self) -> Result<DirSQLConfig> {
+        Ok(self.sync()?.config())
+    }
+
     pub fn watch(&self) -> Result<WatchStream> {
         self.sync()?.watch()
     }
@@ -1548,6 +1635,9 @@ mod internal_tests {
                 stat: None,
             }],
             persist: None,
+            ignore: Vec::new(),
+            persist_enabled: false,
+            persist_path: None,
         };
         // `.is_err()` keeps the assertion free of an unreachable Ok arm while
         // still executing `finish_build`'s defensive `ok_or_else` path.

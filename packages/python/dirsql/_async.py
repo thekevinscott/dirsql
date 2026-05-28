@@ -108,3 +108,24 @@ class DirSQL:
     def watch(self):
         """Start watching for file changes. Returns an async iterable of RowEvent."""
         return _WatchStream(self._db)
+
+    @property
+    def __dict__(self):
+        """Resolved runtime state as a JSON-serializable dict.
+
+        ``vars(db)`` and ``json.dumps(vars(db))`` both work. The shape mirrors
+        ``DirSQLConfig`` on the Rust side and the ``toJSON()`` output in the
+        TypeScript SDK (modulo ``persist_path`` ↔ ``persistPath`` case).
+
+        Excludes ``config`` (already absorbed into ``root`` / ``tables`` /
+        ``ignore``), ``extract`` (closures aren't serializable), and ``name``
+        (derivable from each table's DDL).
+
+        Requires the initial scan to have completed. Call ``await
+        db.ready()`` first, or raise ``RuntimeError`` if scan failed.
+        """
+        if self._db is None:
+            raise RuntimeError(
+                "DirSQL is not ready yet; await db.ready() before reading vars(db)"
+            )
+        return self._db._config_dict()

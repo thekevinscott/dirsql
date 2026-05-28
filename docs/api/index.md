@@ -141,6 +141,85 @@ for await (const event of db.watch()) {  // AsyncIterable<RowEvent>
 
 Returns an async iterable of `RowEvent` objects. The file watcher starts automatically on first iteration. The iterator never terminates on its own.
 
+#### Resolved-state serialization
+
+Each SDK exposes the instance's resolved runtime state through the host
+language's natural serialization hook. The shape is identical across all
+three SDKs (modulo `persist_path` ↔ `persistPath` case): a serialized
+payload can flow through the `interpret` handshake regardless of which
+SDK produced it.
+
+The serialized shape captures **resolved runtime state**, not
+construction parameters. The original `config` path is excluded — by the
+time the instance exists, the config file has been read and its contents
+merged into `root`, `tables`, and `ignore`. Per-table `extract`
+(closure / callable) and `name` (derivable from DDL) are also excluded.
+
+::: code-group
+
+```python [Python]
+import json
+
+db = DirSQL(root="./data", tables=[...])
+await db.ready()
+
+state = vars(db)
+# {
+#   "root": "./data",
+#   "tables": [{"ddl": "...", "glob": "...", "strict": False}, ...],
+#   "ignore": [],
+#   "persist": False,
+#   "persist_path": None,
+# }
+
+payload = json.dumps(state)
+```
+
+```rust [Rust]
+use dirsql::{DirSQL, Table};
+
+let db = DirSQL::builder().root("./data").build()?;
+let cfg = db.config();
+// DirSQLConfig {
+//   root: PathBuf,
+//   tables: Vec<TableConfig>,  // { ddl, glob, strict }
+//   ignore: Vec<String>,
+//   persist: bool,
+//   persist_path: Option<PathBuf>,
+// }
+
+let payload = serde_json::to_string(&cfg)?;
+```
+
+```typescript [TypeScript]
+const db = new DirSQL({ root: "./data", tables: [...] });
+await db.ready;
+
+const payload = JSON.stringify(db);
+// {
+//   "root": "./data",
+//   "tables": [{"ddl": "...", "glob": "...", "strict": false}, ...],
+//   "ignore": [],
+//   "persist": false,
+//   "persistPath": null
+// }
+```
+
+:::
+
+Python uses the standard `__dict__` property so `vars(db)` and
+`json.dumps(vars(db))` both work. `vars(table)` on a standalone `Table`
+also returns `{ ddl, glob, strict }`. TypeScript uses the built-in
+`toJSON()` hook so `JSON.stringify(db)` works directly. Rust uses
+`serde::Serialize`-derived structs (`DirSQLConfig` and `TableConfig`) so
+callers can plug into the wider serde ecosystem.
+
+All three serialization hooks require the initial scan to have
+completed. In Python, call `await db.ready()` first; in TypeScript,
+`await db.ready`; in Rust, the synchronous builder returns a ready
+instance directly (or call `AsyncDirSQL::ready().await` on the async
+variant).
+
 ---
 
 ## Table

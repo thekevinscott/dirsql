@@ -79,11 +79,43 @@ export interface RowEvent {
   filePath?: string | null;
 }
 
+/**
+ * Serializable per-table portion of {@link DirSQLConfig}. Excludes the
+ * `extract` callback (closures aren't serializable) and the table's SQL
+ * `name` (derivable from `ddl`).
+ */
+export interface TableConfig {
+  ddl: string;
+  glob: string;
+  strict: boolean;
+}
+
+/**
+ * Serializable snapshot of a {@link DirSQL} instance's resolved runtime
+ * state, as produced by {@link DirSQL.toJSON} / `JSON.stringify(db)`.
+ *
+ * The shape is identical across the Python, Rust, and TypeScript SDKs
+ * (modulo `persist_path` ↔ `persistPath` case): the same payload can flow
+ * through the `interpret` handshake regardless of which SDK produced it.
+ *
+ * Construction artifacts that are no longer meaningful after the instance
+ * exists are intentionally excluded — `config` (already merged into `root`
+ * / `tables` / `ignore`), per-table `extract`, and per-table `name`.
+ */
+export interface DirSQLConfig {
+  root: string;
+  tables: TableConfig[];
+  ignore: string[];
+  persist: boolean;
+  persistPath: string | null;
+}
+
 // Shape of the napi-rs-exposed class. The wrapper below drives this.
 interface NativeDirSQL {
   query(sql: string): Promise<Record<string, unknown>[]>;
   startWatcher(): Promise<void>;
   pollEvents(timeoutMs: number): Promise<RowEvent[]>;
+  config(): DirSQLConfig;
 }
 
 interface NativeDirSQLConstructor {
@@ -225,6 +257,35 @@ export class DirSQL {
   async pollEvents(timeoutMs: number): Promise<RowEvent[]> {
     await this.ready;
     return this._inner.pollEvents(timeoutMs);
+  }
+
+  /**
+   * Return a serializable snapshot of the resolved runtime state.
+   *
+   * Called automatically by `JSON.stringify(db)` (per the built-in JS
+   * `toJSON()` protocol used by `Date`, `BigInt`, etc.). The shape mirrors
+   * Python's `vars(db)` and Rust's `DirSQL::config()` so the same payload
+   * can flow through the `interpret` handshake regardless of which SDK
+   * produced it.
+   *
+   * Synchronous — no I/O — but requires the initial scan to have
+   * completed. Call `await db.ready` first; otherwise this throws.
+   */
+  toJSON(): DirSQLConfig {
+    if (this._inner === undefined) {
+      throw new Error(
+        "DirSQL is not ready yet; await db.ready before calling toJSON() / JSON.stringify(db)",
+      );
+    }
+    const cfg = this._inner.config();
+    // napi-rs maps Rust `Option::None` to JS `undefined`, but JSON.stringify
+    // drops `undefined`-valued keys entirely. The contract from issue #194
+    // requires `persistPath` to serialize as JSON `null` when unset so the
+    // shape is stable across SDKs.
+    return {
+      ...cfg,
+      persistPath: cfg.persistPath ?? null,
+    };
   }
 
   /**

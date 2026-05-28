@@ -10,6 +10,7 @@ API surface comparison across the three language SDKs.
 | Extract callback | `(path) -> list[dict]` | `Fn(&str) -> Vec<Row>` | `(path) => Record<string, unknown>[]` |
 | Row event   | `RowEvent` (class, frozen attrs; `file_path` on all variants) | `RowEvent` (enum: Insert/Update/Delete/Error; `file_path` on all variants) | `RowEvent` (plain object with action string; `filePath` on all variants) |
 | Row type    | `dict[str, Any]`        | `HashMap<String, Value>` | `Record<string, unknown>` |
+| Table serialization | `vars(table)` -> `{ddl, glob, strict}` dict | `TableConfig` (`serde::Serialize`) inside `DirSQLConfig` | per-table object inside `DirSQL.toJSON()` output |
 
 The `extract` callback receives a single argument: the absolute filesystem
 path of the matched file. `dirsql` does not read file contents — a callback
@@ -33,6 +34,7 @@ wins (a warning is emitted on stderr).
 | Start watcher              | `db._start_watcher()`                          | `db.start_watching()`                                | `await db.startWatcher()` (runs on libuv threadpool)    |
 | Poll events                | `db._poll_events(ms)`                          | `db.poll_events(duration)`                           | `await db.pollEvents(ms)` (runs on libuv threadpool)    |
 | Watch (channel/stream)     | `async for event in db.watch()` (via `_async.py`) | `db.watch() -> WatchStream` (channel)                | `for await (const ev of db.watch())`                    |
+| Resolved-state serialization | `vars(db)` / `db.__dict__` -> JSON-able dict | `db.config() -> DirSQLConfig` (`serde::Serialize`)   | `db.toJSON()` / `JSON.stringify(db)` -> `DirSQLConfig`  |
 
 All three bindings share a single Rust implementation: `dirsql::DirSQL` handles
 the initial scan, SQL, watcher, and row diffing. Python (`dirsql-py-ext`) and
