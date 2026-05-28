@@ -43,8 +43,8 @@ jobs:
               # Python package source, excluding *_test.py
               packages/python/dirsql/*_test.py) ;;
               packages/python/dirsql/*) code_changed=true ;;
-              # napi binding (Rust) source
-              packages/napi/src/*) code_changed=true ;;
+              # napi binding (Rust) source, nested under the TS package
+              packages/ts/napi/src/*) code_changed=true ;;
               # TypeScript package source, excluding *.test.ts / *.spec.ts
               packages/ts/src/*.test.ts|packages/ts/src/*.spec.ts) ;;
               packages/ts/src/*) code_changed=true ;;

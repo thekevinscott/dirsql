@@ -81,7 +81,7 @@ Agents must run the full e2e suite locally before any `git push` that includes a
 
 **"Substantial" means any change touching:**
 - `packages/rust/**` (Rust core)
-- `packages/napi/**` (napi-rs binding crate)
+- `packages/ts/napi/**` (napi-rs binding crate)
 - `packages/python/src/**` (excluding files matching `*_test.py`)
 - `packages/ts/src/**` (excluding files matching `*.test.ts` / `*.spec.ts`)
 - Any shared SDK runtime code reachable from the above

@@ -30,8 +30,7 @@ keys were ripped out; the per-format parser zoo (`Format::Json`, `Csv`,
 
 - **`packages/rust/`** -- the `dirsql` Rust crate. All business logic lives here: SQLite operations, glob matching, file scanning, row diffing, file watching, plus the ergonomic user-facing Rust API (builder pattern, async support via tokio). This is the only crate published to crates.io.
 - **`packages/python/`** -- PyO3 bindings wrapping `dirsql`. Thin glue code + async Python wrapper. The underlying binding crate (`dirsql-py-ext`) is not published to crates.io.
-- **`packages/ts/`** -- the `dirsql` npm package: a pure-TypeScript SDK (sources under `src/`) wrapping the native core.
-- **`packages/napi/`** -- the napi-rs binding crate (`dirsql-napi`) wrapping `dirsql`. Built into the `.node` addon consumed by the TS SDK; not published to crates.io.
+- **`packages/ts/`** -- the `dirsql` npm package. The TypeScript SDK sources live under `src/`; the napi-rs binding crate (`dirsql-napi`) is colocated under `napi/`, built into the `.node` addon the SDK loads at runtime. The binding crate is a Cargo workspace member but is not published to crates.io.
 
 **Never reimplement core logic in a language SDK.** If you're writing SQLite operations, glob matching, file scanning, or row diffing in Python or TypeScript, that code belongs in the Rust crate with a binding exposed to the SDK. The entire point of this architecture is a fast Rust core with language bindings, not three independent implementations.
 

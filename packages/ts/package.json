@@ -43,7 +43,7 @@
   },
   "wireit": {
     "napi:build": {
-      "command": "napi build --release --manifest-path ../napi/Cargo.toml --output-dir .",
+      "command": "napi build --release --manifest-path napi/Cargo.toml --output-dir .",
       "output": ["dirsql.node", "index.d.ts"]
     },
     "tsc": {
@@ -57,9 +57,9 @@
       "files": [
         "tools/stagePlatform.ts",
         "src/platforms.ts",
-        "../napi/src/**/*.rs",
-        "../napi/build.rs",
-        "../napi/Cargo.toml",
+        "napi/src/**/*.rs",
+        "napi/build.rs",
+        "napi/Cargo.toml",
         "../rust/src/**/*.rs",
         "../rust/Cargo.toml"
       ],
@@ -69,11 +69,11 @@
       "dependencies": ["napi:build", "tsc", "stage:platform"]
     },
     "build:debug": {
-      "command": "napi build --manifest-path ../napi/Cargo.toml --output-dir . && tsc",
+      "command": "napi build --manifest-path napi/Cargo.toml --output-dir . && tsc",
       "files": [
-        "../napi/src/**/*.rs",
-        "../napi/build.rs",
-        "../napi/Cargo.toml",
+        "napi/src/**/*.rs",
+        "napi/build.rs",
+        "napi/Cargo.toml",
         "../rust/src/**/*.rs",
         "src/**/*.ts",
         "tsconfig.json"

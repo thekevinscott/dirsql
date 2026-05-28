@@ -232,7 +232,7 @@ Discovered while mirroring the Python gap tests to Rust and TypeScript:
   across Python and Rust.
 - **Resolved** by bead `dirsql-hh3`: `packages/ts/src/index.ts` now
   exposes `DirSQL.fromConfig(configPath)` as a static factory, backed
-  by the core config loader + parser in `packages/napi/src/lib.rs`.
+  by the core config loader + parser in `packages/ts/napi/src/lib.rs`.
 - TypeScript mirrors of the format tests (`.json`, `.jsonl`, `.ndjson`,
   `.csv`, `.tsv`, `.toml`, `.yaml`/`.yml`, `.md` frontmatter,
   path captures, column mapping, `each`, ignore, multiple tables,

@@ -136,8 +136,8 @@ function stageOne(args: StageOneArgs): StageResult["staged"][number] {
     // `--platform` makes napi-rs emit `dirsql.<slug>.node` (suffixed)
     // instead of `dirsql.node`. Without it the cross-build's output
     // collides with the host's napi:build file at the package root.
-    // `--manifest-path`/`--output-dir` point napi at the sibling
-    // `dirsql-napi` crate (packages/napi) while still dropping the
+    // `--manifest-path`/`--output-dir` point napi at the colocated
+    // `dirsql-napi` crate (packages/ts/napi) while still dropping the
     // artifact into this package (packages/ts) root.
     const cross = spawn(
       "npx",
@@ -147,7 +147,7 @@ function stageOne(args: StageOneArgs): StageResult["staged"][number] {
         "--release",
         "--platform",
         "--manifest-path",
-        "../napi/Cargo.toml",
+        "napi/Cargo.toml",
         "--output-dir",
         ".",
         "--target",
