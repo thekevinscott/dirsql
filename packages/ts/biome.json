@@ -15,7 +15,7 @@
     "indentWidth": 2
   },
   "files": {
-    "include": ["ts/**/*.ts", "test/**/*.ts", "*.json"],
+    "include": ["src/**/*.ts", "test/**/*.ts", "*.json"],
     "ignore": [
       "*.node",
       "node_modules",

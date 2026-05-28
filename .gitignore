@@ -17,7 +17,7 @@ node_modules/
 packages/ts/dist/
 # TypeScript coverage output
 packages/ts/coverage/
-# napi-rs generated type definitions (authored types live in packages/ts/ts/)
+# napi-rs generated type definitions (authored types live in packages/ts/src/)
 packages/ts/index.d.ts
 
 # Python

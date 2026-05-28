@@ -8,7 +8,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
-      dirsql: resolve(__dirname, "ts/index.ts"),
+      dirsql: resolve(__dirname, "src/index.ts"),
     },
   },
   test: {
@@ -33,7 +33,7 @@ export default defineConfig({
     ],
     coverage: {
       provider: "v8",
-      include: ["ts/**/*.ts", "tools/**/*.ts"],
+      include: ["src/**/*.ts", "tools/**/*.ts"],
       exclude: [
         "**/*.test.ts",
         "test/**/*.ts",
@@ -41,8 +41,8 @@ export default defineConfig({
         // monkeypatch unit tests on production module attributes; the
         // only meaningful coverage is end-to-end (pack-install smoke
         // test). Excluded to keep the 90% floor honest about SDK code.
-        "ts/bin/**",
-        "ts/index.ts", // needs the napi binary; covered by SDK integration tests
+        "src/bin/**",
+        "src/index.ts", // needs the napi binary; covered by SDK integration tests
       ],
       thresholds: {
         lines: 90,

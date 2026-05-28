@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSetFor, findHostPlatform, stagePlatform } from "./stagePlatform.js";
-import type { Platform } from "../ts/platforms.js";
+import type { Platform } from "../src/platforms.js";
 
 let work: string;
 let tsPkg: string;

@@ -43,12 +43,12 @@
   },
   "wireit": {
     "napi:build": {
-      "command": "napi build --release",
-      "output": ["dirsql.node", "ts/index.d.ts"]
+      "command": "napi build --release --manifest-path ../napi/Cargo.toml --output-dir .",
+      "output": ["dirsql.node", "index.d.ts"]
     },
     "tsc": {
       "command": "tsc",
-      "files": ["ts/**/*.ts", "tsconfig.json"],
+      "files": ["src/**/*.ts", "tsconfig.json"],
       "output": ["dist/**"]
     },
     "stage:platform": {
@@ -56,10 +56,10 @@
       "dependencies": ["napi:build"],
       "files": [
         "tools/stagePlatform.ts",
-        "ts/platforms.ts",
-        "src/**/*.rs",
-        "build.rs",
-        "Cargo.toml",
+        "src/platforms.ts",
+        "../napi/src/**/*.rs",
+        "../napi/build.rs",
+        "../napi/Cargo.toml",
         "../rust/src/**/*.rs",
         "../rust/Cargo.toml"
       ],
@@ -69,22 +69,22 @@
       "dependencies": ["napi:build", "tsc", "stage:platform"]
     },
     "build:debug": {
-      "command": "napi build && tsc",
+      "command": "napi build --manifest-path ../napi/Cargo.toml --output-dir . && tsc",
       "files": [
-        "src/**/*.rs",
-        "build.rs",
-        "Cargo.toml",
-        "../../packages/rust/src/**/*.rs",
-        "ts/**/*.ts",
+        "../napi/src/**/*.rs",
+        "../napi/build.rs",
+        "../napi/Cargo.toml",
+        "../rust/src/**/*.rs",
+        "src/**/*.ts",
         "tsconfig.json"
       ],
-      "output": ["dirsql.node", "dist/**", "ts/index.d.ts"]
+      "output": ["dirsql.node", "dist/**", "index.d.ts"]
     },
     "test": {
       "command": "vitest run",
       "dependencies": ["napi:build"],
       "files": [
-        "ts/**/*.ts",
+        "src/**/*.ts",
         "tools/**/*.ts",
         "test/**/*.ts",
         "vitest.config.ts"
@@ -92,16 +92,16 @@
       "output": []
     },
     "test:unit": {
-      "command": "vitest run --dir src --passWithNoTests",
+      "command": "vitest run --dir src",
       "dependencies": ["napi:build"],
-      "files": ["ts/**/*.ts", "src/**/*.ts", "vitest.config.ts"],
+      "files": ["src/**/*.ts", "vitest.config.ts"],
       "output": []
     },
     "test:integration": {
       "command": "vitest run --dir test --passWithNoTests",
       "dependencies": ["napi:build"],
       "files": [
-        "ts/**/*.ts",
+        "src/**/*.ts",
         "tools/**/*.ts",
         "test/**/*.ts",
         "vitest.config.ts"
@@ -112,7 +112,7 @@
       "command": "vitest run --dir test-e2e --passWithNoTests",
       "dependencies": ["build"],
       "files": [
-        "ts/**/*.ts",
+        "src/**/*.ts",
         "tools/**/*.ts",
         "test-e2e/**/*.ts",
         "vitest.config.ts",
@@ -125,7 +125,7 @@
       "command": "vitest run --coverage",
       "dependencies": ["napi:build"],
       "files": [
-        "ts/**/*.ts",
+        "src/**/*.ts",
         "tools/**/*.ts",
         "test/**/*.ts",
         "vitest.config.ts"

@@ -3,11 +3,11 @@
 // Every target triple generates two npm sub-packages:
 //
 // 1. `@dirsql/cli-<slug>` — holds the standalone `dirsql` CLI binary
-//    (from cargo-dist). Consumed at runtime by `ts/bin/resolveBinary.ts`
+//    (from cargo-dist). Consumed at runtime by `src/bin/resolveBinary.ts`
 //    when a user runs the `dirsql` CLI.
 // 2. `@dirsql/lib-<slug>` — holds the napi-rs `.node` addon used by the
 //    TypeScript SDK. Consumed at runtime by `loadNativeCore()` in
-//    `ts/index.ts` when a user `import`s from `dirsql`.
+//    `src/index.ts` when a user `import`s from `dirsql`.
 //
 // Both sub-package sets use `optionalDependencies` on the main `dirsql`
 // package so npm/pnpm install only the one matching the host's OS/arch.

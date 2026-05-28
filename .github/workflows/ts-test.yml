@@ -8,10 +8,12 @@ on:
     branches: [main]
     paths:
       - 'packages/ts/**'
+      - 'packages/napi/**'
       - 'packages/rust/**'
   pull_request:
     paths:
       - 'packages/ts/**'
+      - 'packages/napi/**'
       - 'packages/rust/**'
 
 jobs:

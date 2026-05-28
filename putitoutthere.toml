@@ -92,6 +92,7 @@ kind  = "npm"
 path  = "packages/ts"
 globs = [
   "packages/ts/**",
+  "packages/napi/**",
   "packages/rust/**",
   "Cargo.toml",
   "Cargo.lock",
