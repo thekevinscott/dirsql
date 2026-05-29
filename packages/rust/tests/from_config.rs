@@ -226,3 +226,45 @@ glob = "*.csv"
     assert_eq!(rows[0]["_path"], Value::Text("data.csv".into()));
     assert_eq!(rows[0]["_basename"], Value::Text("data.csv".into()));
 }
+
+#[test]
+fn from_config_structured_columns_produce_schema_and_rows() {
+    let root = TempDir::new().unwrap();
+
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[table]]
+name = "files"
+glob = "data/*.csv"
+
+  [[table.column]]
+  name = "_path"
+  type = "TEXT"
+  not_null = true
+
+  [[table.column]]
+  name = "_basename"
+  type = "TEXT"
+"#,
+    )
+    .unwrap();
+
+    fs::create_dir_all(root.path().join("data")).unwrap();
+    fs::write(root.path().join("data").join("a.csv"), "x").unwrap();
+
+    let db = DirSQL::from_config(root.path()).unwrap();
+
+    let rows = db.query("SELECT _path, _basename FROM files").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["_path"], Value::Text("data/a.csv".into()));
+    assert_eq!(rows[0]["_basename"], Value::Text("a.csv".into()));
+
+    // The structured schema landed: `_path` is NOT NULL in the generated DDL.
+    let info = db
+        .query(
+            "SELECT name, \"notnull\" AS nn FROM pragma_table_info('files') WHERE name = '_path'",
+        )
+        .unwrap();
+    assert_eq!(info[0]["nn"], Value::Integer(1));
+}

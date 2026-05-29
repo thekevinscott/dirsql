@@ -99,10 +99,11 @@ const PROMPT: &str = r#"You are running inside a directory. Your job is to produ
 Inspect the directory structure (files and subdirectories). Then produce a `.dirsql.toml` with one or more `[[table]]` blocks.
 
 Each `[[table]]` block has:
-- `ddl`: a SQLite CREATE TABLE statement.
+- `name`: the SQL table name.
 - `glob`: a glob pattern matching files relative to the directory root.
+- one or more `[[table.column]]` sub-blocks. Each column has a `name` and a `type` (one of `TEXT`, `INTEGER`, `REAL`, `BLOB`, `NUMERIC`), plus optional `not_null`, `primary_key`, `unique`, `collate`, and `default`.
 
-Each row is one matched file. Columns come from these sources ONLY:
+Each row is one matched file. Column values come from these sources ONLY:
 - Glob path captures: `{name}` segments in the glob become columns named `name`.
 - Stat virtuals (reserved column names): `_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`.
 
@@ -112,13 +113,37 @@ Output ONLY the TOML, with no surrounding prose, no markdown fences, no explanat
 
 Example for a flat directory of mixed files:
 [[table]]
-ddl  = "CREATE TABLE files (_path TEXT, _ext TEXT, _size INTEGER)"
+name = "files"
 glob = "*"
+
+  [[table.column]]
+  name = "_path"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_ext"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_size"
+  type = "INTEGER"
 
 Example with path captures:
 [[table]]
-ddl  = "CREATE TABLE photos (month TEXT, _basename TEXT, _mtime INTEGER)"
+name = "photos"
 glob = "{month}/*.jpg"
+
+  [[table.column]]
+  name = "month"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_basename"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_mtime"
+  type = "INTEGER"
 "#;
 
 #[cfg(test)]
@@ -129,6 +154,7 @@ mod tests {
     fn prompt_mentions_filesystem_fact_constraints() {
         let p = build_prompt();
         assert!(p.contains("[[table]]"));
+        assert!(p.contains("[[table.column]]"));
         assert!(p.contains("_path"));
         assert!(p.contains("Output ONLY the TOML"));
     }

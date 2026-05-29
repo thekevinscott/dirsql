@@ -1348,15 +1348,26 @@ fn build_tables_from_config(cfg: &config::Config) -> Result<Vec<Table>> {
     let mut tables = Vec::with_capacity(cfg.tables.len());
 
     for table_cfg in &cfg.tables {
-        let mut table = Table::new(
-            table_cfg.ddl.clone(),
-            table_cfg.glob.clone(),
-            |_path: &str| vec![Row::new()],
-        );
+        let mut table = match &table_cfg.ddl {
+            Some(ddl) => Table::new(ddl.clone(), table_cfg.glob.clone(), |_path: &str| {
+                vec![Row::new()]
+            }),
+            None => Table::from_columns(
+                table_cfg.name.clone().unwrap_or_default(),
+                table_cfg.glob.clone(),
+                table_cfg.columns.clone(),
+                |_path: &str| vec![Row::new()],
+            ),
+        };
 
         if table_cfg.strict == Some(true) {
             table.strict = true;
         }
+        table.primary_key = table_cfg.primary_key.clone();
+        table.unique = table_cfg.unique.clone();
+        table.indexes = table_cfg.indexes.clone();
+        table.without_rowid = table_cfg.without_rowid;
+        table.strict_types = table_cfg.strict_types;
 
         tables.push(table);
     }
