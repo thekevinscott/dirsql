@@ -45,9 +45,10 @@ export default defineConfig({
         "src/index.ts", // needs the napi binary; covered by SDK integration tests
       ],
       thresholds: {
-        lines: 90,
-        branches: 90,
-        functions: 90,
+        statements: 100,
+        lines: 100,
+        branches: 100,
+        functions: 100,
       },
     },
   },

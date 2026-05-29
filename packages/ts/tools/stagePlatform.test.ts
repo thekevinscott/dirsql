@@ -224,6 +224,21 @@ describe("stagePlatform", () => {
     expect(() => stagePlatform({ tsPkg, repo, platform: darwinArm64, spawn })).toThrow(/napi cross-build: missing/);
   });
 
+  it("reports 'none' when a cross-build emits no file and the dir is empty", () => {
+    // host darwin-arm64 → build set is [darwin-x64 (cross), darwin-arm64
+    // (host)]; the cross target is staged first. With nothing seeded the
+    // package dir holds no .node files, so the missing-output message hits
+    // the `|| "none"` fallback in `here.join(", ") || "none"`.
+    const spawn = vi.fn((cmd: string) => {
+      if (cmd === "npx") return { status: 0 }; // success but writes no file
+      if (cmd === "rustup") return { status: 0 };
+      return { status: 1 };
+    }) as unknown as typeof spawnFn;
+    expect(() =>
+      stagePlatform({ tsPkg, repo, platform: darwinArm64, spawn }),
+    ).toThrow(/napi cross-build: missing .* \(saw: none\)/);
+  });
+
   it("throws when cargo build returns non-zero", () => {
     seedHostNapiOutput(linuxX64.triple, "suffixed");
     const spawn = vi.fn((cmd: string) => {

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { PLATFORMS, libTriples, nodeTriples } from "./platforms.js";
+import {
+  PLATFORMS,
+  type Platform,
+  libTriples,
+  librarySlug,
+  nodeTriples,
+} from "./platforms.js";
 
 describe("PLATFORMS", () => {
   describe("shape invariants", () => {
@@ -76,6 +82,18 @@ describe("PLATFORMS", () => {
       for (const p of PLATFORMS) {
         expect(map[`${p.nodePlatform}-${p.nodeArch}`]).toBe(p.libName);
       }
+    });
+  });
+
+  describe("librarySlug()", () => {
+    it("throws when libName does not start with the `@dirsql/lib-` prefix", () => {
+      const bad = {
+        ...PLATFORMS[0],
+        libName: "@dirsql/cli-linux-x64-gnu",
+      } as Platform;
+      expect(() => librarySlug(bad)).toThrow(
+        "libName @dirsql/cli-linux-x64-gnu missing @dirsql/lib- prefix",
+      );
     });
   });
 });

@@ -169,8 +169,39 @@ mod tests {
     }
 
     #[test]
+    fn delete_event_emits_expected_shape() {
+        let mut row: Row = HashMap::new();
+        row.insert("id".into(), CellValue::Text("gone".into()));
+        let event = RowEvent::Delete {
+            table: "posts".into(),
+            row,
+            file_path: "posts/a.json".into(),
+        };
+        let parsed: Value = serde_json::from_str(&event_to_json(&event)).unwrap();
+        assert_eq!(parsed.get("action").and_then(Value::as_str), Some("delete"));
+        assert_eq!(parsed.get("table").and_then(Value::as_str), Some("posts"));
+        assert_eq!(
+            parsed.get("file_path").and_then(Value::as_str),
+            Some("posts/a.json"),
+        );
+        assert_eq!(
+            parsed.pointer("/row/id").and_then(Value::as_str),
+            Some("gone")
+        );
+        assert!(parsed.get("old_row").unwrap().is_null());
+    }
+
+    #[test]
     fn null_cell_becomes_json_null() {
         assert!(cell_to_json(&CellValue::Null).is_null());
+    }
+
+    #[test]
+    fn blob_cell_becomes_hex_string() {
+        // The Blob arm of `cell_to_json` hex-encodes the bytes into a JSON
+        // string (BLOB columns aren't representable as JSON literals).
+        let json = cell_to_json(&CellValue::Blob(vec![0xde, 0xad, 0xbe, 0xef]));
+        assert_eq!(json.as_str(), Some("deadbeef"));
     }
 
     #[test]

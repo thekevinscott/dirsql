@@ -141,11 +141,14 @@ glob = "docs/*.md"
     assert_eq!(r["_dir"], Value::Text("docs".into()));
     assert_eq!(r["_ext"], Value::Text("md".into()));
     assert_eq!(r["_size"], Value::Integer(body.len() as i64));
-    // _mtime is set to a unix timestamp; just confirm it's a positive integer.
-    match &r["_mtime"] {
-        Value::Integer(n) => assert!(*n > 0, "expected positive _mtime, got {n}"),
-        other => panic!("expected Integer for _mtime, got {:?}", other),
-    }
+    // _mtime is set to a unix timestamp; confirm it's a positive integer.
+    // Single-line `matches!` with a guard pins the `Integer` variant and the
+    // positivity check in one branch-free expression (no dead non-Integer arm).
+    assert!(
+        matches!(&r["_mtime"], Value::Integer(n) if *n > 0),
+        "expected a positive Integer _mtime, got {:?}",
+        r["_mtime"]
+    );
 }
 
 #[test]
@@ -195,6 +198,136 @@ glob = "nothing_here/*.txt"
     let db = DirSQL::from_config(root.path()).unwrap();
     let rows = db.query("SELECT _path FROM empty_t").unwrap();
     assert!(rows.is_empty());
+}
+
+// A config with an *absolute* `root` is used verbatim (not joined to the
+// config's parent). Covers the absolute-root branch of resolve().
+#[test]
+fn from_config_absolute_root_is_used_verbatim() {
+    let data = TempDir::new().unwrap();
+    fs::write(data.path().join("a.csv"), "anything").unwrap();
+
+    let cfg_dir = TempDir::new().unwrap();
+    let cfg_path = cfg_dir.path().join(".dirsql.toml");
+    fs::write(
+        &cfg_path,
+        format!(
+            r#"
+[dirsql]
+root = "{}"
+
+[[table]]
+ddl = "CREATE TABLE files (_path TEXT)"
+glob = "*.csv"
+"#,
+            data.path().display()
+        ),
+    )
+    .unwrap();
+
+    let db = DirSQL::from_config_path(&cfg_path).unwrap();
+    let rows = db.query("SELECT _path FROM files").unwrap();
+    assert_eq!(rows.len(), 1);
+}
+
+// A config with `persist = true` and a *relative* `persist_path` enables the
+// on-disk cache, resolving the path relative to the config parent. Covers the
+// config-driven persist branches of resolve() + prepare_persist().
+#[test]
+fn from_config_persist_true_with_relative_persist_path() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("a.csv"), "anything").unwrap();
+
+    let cfg_path = root.path().join(".dirsql.toml");
+    fs::write(
+        &cfg_path,
+        r#"
+[dirsql]
+persist = true
+persist_path = "cache/db.sqlite"
+
+[[table]]
+ddl = "CREATE TABLE files (_path TEXT)"
+glob = "*.csv"
+"#,
+    )
+    .unwrap();
+
+    let db = DirSQL::from_config_path(&cfg_path).unwrap();
+    let rows = db.query("SELECT _path FROM files").unwrap();
+    assert_eq!(rows.len(), 1);
+    // The relative persist_path resolved under the config's parent dir.
+    assert!(
+        root.path().join("cache").join("db.sqlite").exists(),
+        "expected the cache db at the resolved relative persist_path",
+    );
+}
+
+// A config with `persist = true` and an *absolute* `persist_path` uses the
+// path verbatim. Covers the absolute-persist_path branch of resolve().
+#[test]
+fn from_config_persist_true_with_absolute_persist_path() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("a.csv"), "anything").unwrap();
+
+    let cache_dir = TempDir::new().unwrap();
+    let abs_cache = cache_dir.path().join("nested").join("abs-cache.db");
+
+    let cfg_path = root.path().join(".dirsql.toml");
+    fs::write(
+        &cfg_path,
+        format!(
+            r#"
+[dirsql]
+persist = true
+persist_path = "{}"
+
+[[table]]
+ddl = "CREATE TABLE files (_path TEXT)"
+glob = "*.csv"
+"#,
+            abs_cache.display()
+        ),
+    )
+    .unwrap();
+
+    let db = DirSQL::from_config_path(&cfg_path).unwrap();
+    let rows = db.query("SELECT _path FROM files").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(
+        abs_cache.exists(),
+        "expected the cache db at the absolute persist_path",
+    );
+}
+
+// A config table with `strict = true` propagates strictness; an extra,
+// undeclared injected column would error, so a minimal-DDL strict table
+// over a file with no extra columns still builds. Covers the strict branch
+// of build_tables_from_config.
+#[test]
+fn from_config_strict_table_builds() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("a.csv"), "anything").unwrap();
+
+    let cfg_path = root.path().join(".dirsql.toml");
+    // Declare only `_path` (always available) so strict normalization, which
+    // requires an exact column match, succeeds: the synthesized empty row is
+    // filled with `_path` and no undeclared virtuals leak in.
+    fs::write(
+        &cfg_path,
+        r#"
+[[table]]
+ddl = "CREATE TABLE files (_path TEXT)"
+glob = "*.csv"
+strict = true
+"#,
+    )
+    .unwrap();
+
+    let db = DirSQL::from_config_path(&cfg_path).unwrap();
+    let rows = db.query("SELECT _path FROM files").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["_path"], Value::Text("a.csv".into()));
 }
 
 #[tokio::test]

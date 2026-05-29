@@ -41,6 +41,9 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
+      # `--lib` runs only the library's in-crate unit tests (the `#[cfg(test)]`
+      # modules inside packages/rust/src/**). It does NOT run the integration
+      # tests under packages/rust/tests/**.
       - name: Run unit tests
         run: cargo test --manifest-path packages/rust/Cargo.toml --features cli --lib
 
@@ -66,7 +69,7 @@ jobs:
         run: cargo test --manifest-path packages/rust/Cargo.toml --features cli --tests
 
   coverage:
-    name: Rust coverage floor (90%)
+    name: Rust coverage floor
     runs-on: ubuntu-latest
     needs: [unit, integration]
     steps:
@@ -93,10 +96,13 @@ jobs:
       - name: Run coverage
         run: |
           set -eo pipefail
-          # cargo-llvm-cov has no --fail-under-branches; gate the branch floor by
-          # parsing the summary TOTAL row (last column = branch %). Line floor
-          # stays on the real --fail-under-lines flag. --branch needs the nightly.
-          cargo llvm-cov --manifest-path packages/rust/Cargo.toml --features cli --branch --fail-under-lines 90 --summary-only | tee /dev/stderr | awk '/^TOTAL/ { p=$NF; sub(/%/,"",p); print "branch coverage " $NF " (floor 65%)"; if (p+0 < 65) { print "::error::Rust branch coverage " $NF " below 65% floor"; exit 1 } }'
+          # Floors pinned to the current honest maximum across every dimension
+          # (measured: lines 98.63, functions 96.93, regions 97.47, branches
+          # 81.05). Lines/functions/regions use the real --fail-under-* flags;
+          # cargo-llvm-cov has no --fail-under-branches, so the branch floor is
+          # gated by parsing the summary TOTAL row (last column = branch %).
+          # --branch needs nightly; only the thin src/bin launcher is excluded.
+          cargo llvm-cov --manifest-path packages/rust/Cargo.toml --features cli --branch --ignore-filename-regex 'src/bin/' --fail-under-lines 98 --fail-under-functions 96 --fail-under-regions 97 --summary-only | tee /dev/stderr | awk '/^TOTAL/ { p=$NF; sub(/%/,"",p); print "branch coverage " $NF " (floor 81%)"; if (p+0 < 81) { print "::error::Rust branch coverage " $NF " below 81% floor"; exit 1 } }'
 
   lint:
     name: Lint

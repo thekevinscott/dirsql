@@ -671,6 +671,162 @@ glob = "*.json"
     assert_eq!(notes[0]["body"], Value::Text("hello".into()));
 }
 
+// poll_events: happy path. Create a file after start, poll, and confirm the
+// resulting RowEvent batch lands in the in-memory index.
+#[test]
+fn poll_events_returns_row_events_for_new_file() {
+    let root = TempDir::new().unwrap();
+    let db = DirSQL::new(root.path(), vec![items_table()]).unwrap();
+    db.start_watching().unwrap();
+
+    std::thread::sleep(Duration::from_millis(250));
+    fs::write(root.path().join("apple.txt"), "apple").unwrap();
+
+    let mut events = Vec::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while events.is_empty() && std::time::Instant::now() < deadline {
+        events.extend(db.poll_events(Duration::from_millis(250)).unwrap());
+    }
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, dirsql::RowEvent::Insert { .. }))
+    );
+    let rows = db.query("SELECT name FROM items").unwrap();
+    assert!(rows.iter().any(|r| matches!(
+        r.get("name"),
+        Some(Value::Text(name)) if name == "apple"
+    )));
+}
+
+// poll_events when watch() is already active returns an error (the two APIs
+// drain the same underlying watcher and are mutually exclusive).
+#[test]
+fn poll_events_after_watch_errors() {
+    let root = TempDir::new().unwrap();
+    let db = DirSQL::new(root.path(), vec![items_table()]).unwrap();
+    let _stream = db.watch().unwrap();
+    let result = db.poll_events(Duration::from_millis(50));
+    assert!(result.is_err());
+}
+
+// watch() after poll_events() returns an error (mirror of the above).
+#[test]
+fn watch_after_poll_events_errors() {
+    let root = TempDir::new().unwrap();
+    let db = DirSQL::new(root.path(), vec![items_table()]).unwrap();
+    db.poll_events(Duration::from_millis(50)).unwrap();
+    let result = db.watch();
+    assert!(result.is_err());
+}
+
+// watch() twice returns WatchAlreadyStarted.
+#[test]
+fn watch_twice_errors_with_already_started() {
+    let root = TempDir::new().unwrap();
+    let db = DirSQL::new(root.path(), vec![items_table()]).unwrap();
+    let _stream = db.watch().unwrap();
+    let result = db.watch();
+    assert!(matches!(
+        result,
+        Err(dirsql::DirSqlError::WatchAlreadyStarted)
+    ));
+}
+
+// wait_file_events() after watch() is active also errors.
+#[test]
+fn wait_file_events_after_watch_errors() {
+    let root = TempDir::new().unwrap();
+    let db = DirSQL::new(root.path(), vec![items_table()]).unwrap();
+    let _stream = db.watch().unwrap();
+    let result = db.wait_file_events(Duration::from_millis(50));
+    assert!(result.is_err());
+}
+
+// prepare() surfaces resolve() errors (e.g. no root configured) via its `?`.
+#[test]
+fn prepare_without_root_errors() {
+    let err = match DirSQL::builder().table(items_table()).prepare() {
+        Ok(_) => panic!("expected a Config error when no root is provided"),
+        Err(e) => e,
+    };
+    assert!(matches!(err, dirsql::DirSqlError::Config(_)), "got: {err}");
+}
+
+// A table whose DDL cannot be parsed for a name is rejected at matcher
+// compile time with a Ddl error (covers compile_matcher's parse `ok_or_else`).
+#[test]
+fn unparseable_ddl_errors() {
+    let root = TempDir::new().unwrap();
+    let table = Table::new("THIS IS NOT A CREATE TABLE", "*.txt", |_| vec![]);
+    let result = DirSQL::new(root.path(), vec![table]);
+    assert!(matches!(result, Err(dirsql::DirSqlError::Ddl(_))));
+}
+
+// A table with an invalid glob pattern is rejected with a Matcher error
+// (covers compile_matcher's TableMatcher::new `map_err`).
+#[test]
+fn invalid_glob_errors() {
+    let root = TempDir::new().unwrap();
+    // An unclosed character class is an invalid glob.
+    let table = Table::new("CREATE TABLE t (x TEXT)", "a[b", |_| vec![]);
+    let result = DirSQL::new(root.path(), vec![table]);
+    assert!(matches!(result, Err(dirsql::DirSqlError::Matcher(_))));
+}
+
+// An undeclared glob capture is silently dropped during fact-merging: the
+// row's only declared column is `_path`, while the `{kind}` capture is not a
+// table column. Covers the `declared.contains` false arm of
+// merge_filesystem_facts.
+#[test]
+fn undeclared_capture_is_dropped() {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("logs")).unwrap();
+    fs::write(root.path().join("logs").join("a.txt"), "x").unwrap();
+    let table = Table::new(
+        "CREATE TABLE entries (_path TEXT)",
+        "logs/{kind}.txt",
+        |_| vec![Row::new()],
+    );
+    let db = DirSQL::new(root.path(), vec![table]).unwrap();
+    let rows = db.query("SELECT * FROM entries").unwrap();
+    assert_eq!(rows.len(), 1);
+    // `kind` was captured but not declared, so it must not appear as a column.
+    assert!(!rows[0].contains_key("kind"));
+    assert!(rows[0].contains_key("_path"));
+}
+
+// Building two tables that parse to the same name is a DuplicateTable error.
+#[test]
+fn duplicate_table_name_errors() {
+    let root = TempDir::new().unwrap();
+    let t1 = Table::new("CREATE TABLE dup (a TEXT)", "*.a", |_| vec![]);
+    let t2 = Table::new("CREATE TABLE dup (b TEXT)", "*.b", |_| vec![]);
+    let result = DirSQL::new(root.path(), vec![t1, t2]);
+    assert!(matches!(result, Err(dirsql::DirSqlError::DuplicateTable(name)) if name == "dup"));
+}
+
+// An extract that returns Err surfaces as DirSqlError::Extract at build time.
+#[test]
+fn extract_error_surfaces_as_extract_error() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("boom.txt"), "data").unwrap();
+    let table = Table::try_new("CREATE TABLE items (name TEXT)", "*.txt", |_| {
+        Err("kaboom".into())
+    });
+    let err = match DirSQL::new(root.path(), vec![table]) {
+        Ok(_) => panic!("expected an Extract error from the failing extract closure"),
+        Err(e) => e,
+    };
+    match err {
+        dirsql::DirSqlError::Extract { message, path } => {
+            assert!(message.contains("kaboom"));
+            assert!(path.contains("boom.txt"));
+        }
+        other => panic!("expected Extract error, got: {other:?}"),
+    }
+}
+
 #[test]
 fn binary_file_under_glob_does_not_break_build() {
     // Regression for issue #184 (Part 2): dirsql must not eagerly read

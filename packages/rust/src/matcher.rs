@@ -149,18 +149,19 @@ impl TableMatcher {
             if entry.glob_set.is_match(path) {
                 let captures = if let Some(ref regex) = entry.capture_regex {
                     let path_str = path.to_string_lossy();
-                    if let Some(caps) = regex.captures(&path_str) {
-                        entry
-                            .capture_names
-                            .iter()
-                            .filter_map(|name| {
-                                caps.name(name)
-                                    .map(|m| (name.clone(), m.as_str().to_string()))
-                            })
-                            .collect()
-                    } else {
-                        HashMap::new()
-                    }
+                    regex
+                        .captures(&path_str)
+                        .map(|caps| {
+                            entry
+                                .capture_names
+                                .iter()
+                                .filter_map(|name| {
+                                    caps.name(name)
+                                        .map(|m| (name.clone(), m.as_str().to_string()))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
                 } else {
                     HashMap::new()
                 };
@@ -244,6 +245,34 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn invalid_ignore_pattern_returns_error() {
+        // An unparseable *ignore* glob propagates through the `?` in the
+        // ignore-pattern loop, mirroring the table-glob error path.
+        let result = TableMatcher::new(&[], &["[invalid"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn question_mark_matches_single_non_separator_char() {
+        let matcher = TableMatcher::new(&[("file?.txt", "t")], &[]).unwrap();
+        assert!(matcher.match_file(Path::new("file1.txt")).is_some());
+        assert!(matcher.match_file(Path::new("fileA.txt")).is_some());
+        assert!(matcher.match_file(Path::new("file.txt")).is_none());
+    }
+
+    #[test]
+    fn double_star_at_end_matches_any_depth() {
+        // `**` not followed by `/` — produces `.*` in the regex, matches any path suffix.
+        let matcher = TableMatcher::new(&[("logs/**", "t")], &[]).unwrap();
+        assert!(matcher.match_file(Path::new("logs/a.txt")).is_some());
+        assert!(
+            matcher
+                .match_file(Path::new("logs/deep/nested/b.txt"))
+                .is_some()
+        );
+    }
+
     // --- Path capture tests ---
 
     #[test]
@@ -316,5 +345,29 @@ mod tests {
             .match_file_with_captures(Path::new("shop/electronics/items.json"))
             .unwrap();
         assert_eq!(result.captures.get("category").unwrap(), "electronics");
+    }
+
+    #[test]
+    fn capture_with_trailing_double_star() {
+        // `**` not followed by `/` in a capture pattern exercises the
+        // `.*` branch of `glob_segment_to_regex` (the `after` segment).
+        let matcher = TableMatcher::new(&[("logs/{date}/**", "logs")], &[]).unwrap();
+        let result = matcher
+            .match_file_with_captures(Path::new("logs/2024-01-15/deep/events.jsonl"))
+            .unwrap();
+        assert_eq!(result.table_name, "logs");
+        assert_eq!(result.captures.get("date").unwrap(), "2024-01-15");
+    }
+
+    #[test]
+    fn capture_with_question_mark() {
+        // `?` in a capture pattern exercises the `[^/]` branch of
+        // `glob_segment_to_regex`.
+        let matcher = TableMatcher::new(&[("{name}?.txt", "files")], &[]).unwrap();
+        let result = matcher
+            .match_file_with_captures(Path::new("ab.txt"))
+            .unwrap();
+        assert_eq!(result.table_name, "files");
+        assert!(result.captures.contains_key("name"));
     }
 }

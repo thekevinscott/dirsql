@@ -16,7 +16,7 @@
 use std::time::Duration;
 
 use dirsql::DirSQL;
-use dirsql::cli::{ServerConfig, ServerHandle, serve};
+use dirsql::cli::{AppState, ServerConfig, ServerError, ServerHandle, serve, serve_with_state};
 use eventsource_client::{Client, SSE};
 use futures_util::StreamExt;
 use reqwest::StatusCode;
@@ -77,10 +77,10 @@ where
 {
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while let Some(evt) = stream.next().await {
-            if let Ok(SSE::Event(ev)) = evt {
-                if ev.event_type == "ready" {
-                    return;
-                }
+            if let Ok(SSE::Event(ev)) = evt
+                && ev.event_type == "ready"
+            {
+                return;
             }
         }
         panic!("stream closed before ready sentinel arrived");
@@ -421,4 +421,127 @@ async fn ephemeral_bind_picks_free_port_and_reports_it() {
     let addr = handle.local_addr();
     assert_ne!(addr.port(), 0, "ephemeral bind must resolve to a real port");
     handle.shutdown().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Degraded (Unavailable) state -> 503
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn query_in_unavailable_state_returns_503() {
+    // When `.dirsql.toml` fails to load the binary still binds, but in
+    // `AppState::Unavailable`. Every request must report 503 with the
+    // captured diagnostic rather than the server failing to start.
+    let handle = serve_with_state(
+        ServerConfig::ephemeral(),
+        AppState::Unavailable("config failed to load".into()),
+    )
+    .await
+    .expect("server should bind even in the degraded state");
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/query", base_url(&handle)))
+        .json(&json!({"sql": "SELECT 1"}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body: JsonValue = resp.json().await.unwrap();
+    assert_eq!(
+        body.get("error").and_then(JsonValue::as_str),
+        Some("config failed to load"),
+    );
+    handle.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn events_in_unavailable_state_returns_503() {
+    // The SSE endpoint short-circuits to 503 in the degraded state too,
+    // before subscribing to the (nonexistent) watcher.
+    let handle = serve_with_state(
+        ServerConfig::ephemeral(),
+        AppState::Unavailable("no config".into()),
+    )
+    .await
+    .expect("server should bind even in the degraded state");
+
+    let resp = reqwest::Client::new()
+        .get(format!("{}/events", base_url(&handle)))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    handle.shutdown().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Per-query timeout -> 408
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn slow_query_exceeding_timeout_returns_408() {
+    // Configure a sub-millisecond per-query timeout, then run a recursive CTE
+    // SQLite cannot finish in time. The handler's `tokio::time::timeout` fires
+    // and the request gets 408 Request Timeout.
+    let (_root, db) = blog_fixture();
+    let config = ServerConfig::ephemeral().with_query_timeout(Duration::from_millis(1));
+    let handle = serve(config, db)
+        .await
+        .expect("server should bind on an ephemeral port");
+
+    let slow_sql = "WITH RECURSIVE c(x) AS (\
+        SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x < 5000000\
+    ) SELECT COUNT(*) AS n FROM c";
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/query", base_url(&handle)))
+        .json(&json!({ "sql": slow_sql }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::REQUEST_TIMEOUT);
+    let body: JsonValue = resp.json().await.unwrap();
+    assert!(
+        body.get("error")
+            .and_then(JsonValue::as_str)
+            .is_some_and(|m| m.contains("timeout")),
+        "408 body should describe the timeout, got {body}",
+    );
+    handle.shutdown().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Bind failure
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn binding_an_in_use_port_surfaces_bind_error() {
+    // Bind one server on an ephemeral port, then try to bind a second server
+    // on that exact port. The OS refuses the second bind and `serve` returns
+    // `ServerError::Bind` carrying the offending address.
+    let (_root, db) = blog_fixture();
+    let first = spawn_server(db).await;
+    let addr = first.local_addr();
+    let port = addr.port();
+
+    // Re-bind the *exact* address the first server resolved to (localhost may
+    // map to 127.0.0.1 or ::1), so the conflict is deterministic.
+    let (_root2, db2) = blog_fixture();
+    let result = serve(ServerConfig::bind(addr.ip().to_string(), port), db2).await;
+
+    let err = result
+        .err()
+        .expect("second bind on the same port must fail");
+    // Pin the typed `ServerError::Bind` variant; the guard confirms the
+    // `addr` field names the conflicting port. Single-line `matches!` keeps
+    // the assertion branch-free (no dead non-Bind arm).
+    assert!(
+        matches!(&err, ServerError::Bind { addr, .. } if addr.contains(&port.to_string())),
+        "expected a Bind error naming port {port}, got {err:?}",
+    );
+
+    first.shutdown().await.unwrap();
 }

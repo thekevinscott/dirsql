@@ -192,10 +192,8 @@ ignore = ["*.tmp"]
     fn invalid_toml_returns_error() {
         let toml = "this is not valid toml [[[";
         let err = load_config_str(toml).unwrap_err();
-        match err {
-            ConfigError::Toml(_) => {}
-            other => panic!("expected Toml error, got: {}", other),
-        }
+        // Single-line `matches!` pins the variant without a dead fallback arm.
+        assert!(matches!(err, ConfigError::Toml(_)), "got: {err:?}");
     }
 
     #[test]
@@ -229,10 +227,8 @@ glob = "*.csv"
     #[test]
     fn load_config_missing_file_returns_io_error() {
         let err = load_config(Path::new("/nonexistent/.dirsql.toml")).unwrap_err();
-        match err {
-            ConfigError::Io(_) => {}
-            other => panic!("expected Io error, got: {}", other),
-        }
+        // Single-line `matches!` pins the variant without a dead fallback arm.
+        assert!(matches!(err, ConfigError::Io(_)), "got: {err:?}");
     }
 
     #[test]

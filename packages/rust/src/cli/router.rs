@@ -163,3 +163,51 @@ pub(super) fn error_response(status: StatusCode, message: impl Into<String>) -> 
     );
     resp
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::DbError;
+
+    #[test]
+    fn classify_core_error_is_bad_request() {
+        // A SQLite-level failure is the client's fault (bad SQL), so it maps
+        // to 400 rather than a server error.
+        let err = DirSqlError::Core(DbError::SchemaMismatch("nope".into()));
+        assert_eq!(classify_query_error(&err), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn classify_non_core_error_is_internal_server_error() {
+        // Lock/watch/config failures are server-side faults -> 500. This drives
+        // the `_ =>` arm of `classify_query_error`.
+        let err = DirSqlError::Lock("poisoned".into());
+        assert_eq!(
+            classify_query_error(&err),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn require_ready_returns_503_response_when_unavailable() {
+        // The degraded state yields an error `Response` (rendered as 503 by
+        // the HTTP layer) instead of a `DirSQL` handle.
+        let state = AppState::Unavailable("config failed to load".into());
+        // `DirSQL` isn't `Debug`, so go through `.err()` (which drops the Ok
+        // value) rather than `expect_err`.
+        let resp = require_ready(&state)
+            .err()
+            .expect("Unavailable must not yield a db");
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn error_response_sets_json_content_type() {
+        let resp = error_response(StatusCode::BAD_REQUEST, "boom");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+    }
+}
