@@ -19,7 +19,8 @@
 //! write either `new DirSQL(configPath)` or `new DirSQL({ root, tables, ... })`.
 
 use dirsql::{
-    DirSQL as CoreDirSQL, PreparedBuild, RawFileEvent, Row, RowEvent as CoreRowEvent, Table, Value,
+    Column, ColumnType, DefaultValue, DirSQL as CoreDirSQL, Expression, GeneratedColumn,
+    GeneratedMode, Index, PreparedBuild, RawFileEvent, Row, RowEvent as CoreRowEvent, Table, Value,
 };
 use napi::Task;
 use napi::bindgen_prelude::*;
@@ -263,26 +264,184 @@ fn parse_tables_from_js(env: Env, tables: Array) -> Result<Vec<Table>> {
     let mut rust_tables: Vec<Table> = Vec::with_capacity(tables_len as usize);
 
     for i in 0..tables_len {
-        let table_element: Unknown<'_> = tables.get(i)?.ok_or_else(|| {
+        let table_obj: Object = tables.get(i)?.ok_or_else(|| {
             Error::new(
                 Status::GenericFailure,
                 format!("Missing table at index {}", i),
             )
         })?;
-        let raw_obj = table_element.raw();
+        let raw_obj = table_obj.raw();
 
-        let ddl = unsafe { get_string_property(raw_env, raw_obj, "ddl")? };
         let glob = unsafe { get_string_property(raw_env, raw_obj, "glob")? };
+        let ddl = unsafe { get_optional_string_property(raw_env, raw_obj, "ddl")? };
+        let name = unsafe { get_optional_string_property(raw_env, raw_obj, "name")? };
         let extract_val = unsafe { get_function_property(raw_env, raw_obj, "extract")? };
         let strict = unsafe { get_bool_property(raw_env, raw_obj, "strict", false) };
 
+        let columns_objs: Option<Vec<Object>> = table_obj.get("columns")?;
+
+        if ddl.is_some() && columns_objs.is_some() {
+            return Err(Error::new(
+                Status::GenericFailure,
+                "TableDef: set either `ddl` or `columns`, not both",
+            ));
+        }
+
         let fn_ref = unsafe { Arc::new(FnRef::new(raw_env, extract_val)?) };
-        let mut table = Table::try_new(ddl, glob, make_extract_closure(fn_ref));
+        let closure = make_extract_closure(fn_ref);
+
+        let mut table = match (ddl, columns_objs) {
+            (Some(ddl), _) => Table::try_new(ddl, glob, closure),
+            (None, Some(cols)) => {
+                let name = name.ok_or_else(|| {
+                    Error::new(
+                        Status::GenericFailure,
+                        "TableDef: structured tables require a `name`",
+                    )
+                })?;
+                let parsed = cols.iter().map(parse_column).collect::<Result<Vec<_>>>()?;
+                Table::try_from_columns(name, glob, parsed, closure)
+            }
+            (None, None) => {
+                return Err(Error::new(
+                    Status::GenericFailure,
+                    "TableDef: provide structured `columns` (with a `name`) or a legacy `ddl`",
+                ));
+            }
+        };
+
         table.strict = strict;
+        table.primary_key = table_obj
+            .get::<Vec<String>>("primaryKey")?
+            .unwrap_or_default();
+        table.unique = table_obj
+            .get::<Vec<Vec<String>>>("unique")?
+            .unwrap_or_default();
+        if let Some(index_objs) = table_obj.get::<Vec<Object>>("indexes")? {
+            table.indexes = index_objs
+                .iter()
+                .map(parse_index)
+                .collect::<Result<Vec<_>>>()?;
+        }
+        table.without_rowid = unsafe { get_bool_property(raw_env, raw_obj, "withoutRowid", false) };
+        table.strict_types = unsafe { get_bool_property(raw_env, raw_obj, "strictTypes", false) };
+
         rust_tables.push(table);
     }
 
     Ok(rust_tables)
+}
+
+/// Parse one JS column object (`{ name, type, notNull?, ... }`) into a
+/// [`Column`]. The `default` union (scalar / null / `{ sql }`) is read via
+/// `serde_json::Value` and dispatched in [`json_to_default`].
+fn parse_column(col: &Object) -> Result<Column> {
+    let name: String = col
+        .get("name")?
+        .ok_or_else(|| Error::new(Status::GenericFailure, "column is missing `name`"))?;
+    let type_str: String = col.get("type")?.ok_or_else(|| {
+        Error::new(
+            Status::GenericFailure,
+            format!("column `{name}` is missing `type`"),
+        )
+    })?;
+    let ty = ColumnType::parse(&type_str).ok_or_else(|| {
+        Error::new(
+            Status::GenericFailure,
+            format!(
+                "column `{name}` has invalid type `{type_str}` \
+                 (expected TEXT, INTEGER, REAL, BLOB, or NUMERIC)"
+            ),
+        )
+    })?;
+
+    let mut column = Column::new(name.clone(), ty);
+    column.not_null = col.get::<bool>("notNull")?.unwrap_or(false);
+    column.primary_key = col.get::<bool>("primaryKey")?.unwrap_or(false);
+    column.unique = col.get::<bool>("unique")?.unwrap_or(false);
+    column.autoincrement = col.get::<bool>("autoincrement")?.unwrap_or(false);
+    column.collate = col.get::<String>("collate")?;
+    if let Some(default) = col.get::<serde_json::Value>("default")? {
+        column.default = Some(json_to_default(&default, &name)?);
+    }
+    if let Some(check) = col.get::<serde_json::Value>("check")? {
+        column.check = Some(Expression {
+            sql: json_sql(&check, "check", &name)?,
+        });
+    }
+    if let Some(generated) = col.get::<serde_json::Value>("generated")? {
+        column.generated = Some(json_to_generated(&generated, &name)?);
+    }
+    Ok(column)
+}
+
+fn parse_index(idx: &Object) -> Result<Index> {
+    let columns: Vec<String> = idx
+        .get("columns")?
+        .ok_or_else(|| Error::new(Status::GenericFailure, "index is missing `columns`"))?;
+    let name: Option<String> = idx.get("name")?;
+    let unique = idx.get::<bool>("unique")?.unwrap_or(false);
+    Ok(Index {
+        name,
+        columns,
+        unique,
+    })
+}
+
+fn json_to_default(value: &serde_json::Value, col: &str) -> Result<DefaultValue> {
+    match value {
+        serde_json::Value::Null => Ok(DefaultValue::Null),
+        serde_json::Value::Bool(b) => Ok(DefaultValue::Integer(if *b { 1 } else { 0 })),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(DefaultValue::Integer(i))
+            } else {
+                Ok(DefaultValue::Real(n.as_f64().unwrap_or(0.0)))
+            }
+        }
+        serde_json::Value::String(s) => Ok(DefaultValue::Text(s.clone())),
+        serde_json::Value::Object(_) => Ok(DefaultValue::Sql(json_sql(value, "default", col)?)),
+        serde_json::Value::Array(_) => Err(Error::new(
+            Status::GenericFailure,
+            format!("column `{col}` has an unsupported `default` value"),
+        )),
+    }
+}
+
+fn json_sql(value: &serde_json::Value, key: &str, col: &str) -> Result<String> {
+    value
+        .as_object()
+        .and_then(|m| m.get("sql"))
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            Error::new(
+                Status::GenericFailure,
+                format!("column `{col}` `{key}` must be an object with a string `sql`"),
+            )
+        })
+}
+
+fn json_to_generated(value: &serde_json::Value, col: &str) -> Result<GeneratedColumn> {
+    let sql = json_sql(value, "generated", col)?;
+    let mode = match value.as_object().and_then(|m| m.get("mode")) {
+        Some(m) => {
+            let s = m.as_str().ok_or_else(|| {
+                Error::new(
+                    Status::GenericFailure,
+                    format!("column `{col}` `generated.mode` must be a string"),
+                )
+            })?;
+            GeneratedMode::parse(s).ok_or_else(|| {
+                Error::new(
+                    Status::GenericFailure,
+                    format!("column `{col}` `generated.mode` must be 'stored' or 'virtual'"),
+                )
+            })?
+        }
+        None => GeneratedMode::Virtual,
+    };
+    Ok(GeneratedColumn { sql, mode })
 }
 
 // -- JS callback plumbing ----------------------------------------------------
@@ -568,6 +727,57 @@ unsafe fn get_string_property(
         &mut actual,
     );
     Ok(String::from_utf8_lossy(&buf[..actual]).to_string())
+}
+
+/// Read an optional string property. Returns `None` when the property is
+/// absent, `undefined`, or `null`; errors when present but not a string.
+unsafe fn get_optional_string_property(
+    env: napi::sys::napi_env,
+    obj: napi::sys::napi_value,
+    name: &str,
+) -> Result<Option<String>> {
+    let mut key = std::ptr::null_mut();
+    napi::sys::napi_create_string_utf8(
+        env,
+        name.as_ptr() as *const _,
+        name.len() as isize,
+        &mut key,
+    );
+
+    let mut has = false;
+    napi::sys::napi_has_property(env, obj, key, &mut has);
+    if !has {
+        return Ok(None);
+    }
+
+    let mut val = std::ptr::null_mut();
+    napi::sys::napi_get_property(env, obj, key, &mut val);
+
+    let mut value_type = 0i32;
+    napi::sys::napi_typeof(env, val, &mut value_type);
+    // 0 = undefined, 1 = null.
+    if value_type == 0 || value_type == 1 {
+        return Ok(None);
+    }
+    if value_type != 4 {
+        return Err(Error::new(
+            Status::GenericFailure,
+            format!("property `{name}` must be a string"),
+        ));
+    }
+
+    let mut len = 0usize;
+    napi::sys::napi_get_value_string_utf8(env, val, std::ptr::null_mut(), 0, &mut len);
+    let mut buf = vec![0u8; len + 1];
+    let mut actual = 0usize;
+    napi::sys::napi_get_value_string_utf8(
+        env,
+        val,
+        buf.as_mut_ptr() as *mut _,
+        len + 1,
+        &mut actual,
+    );
+    Ok(Some(String::from_utf8_lossy(&buf[..actual]).to_string()))
 }
 
 unsafe fn get_bool_property(

@@ -12,12 +12,56 @@
 
 import { loadNativeCore as defaultLoadNativeCore } from "./loadNativeCore.js";
 
+/** A SQLite storage class, used as a structured column's `type`. */
+export type ColumnType = "TEXT" | "INTEGER" | "REAL" | "BLOB" | "NUMERIC";
+
+/** A single structured column definition. */
+export interface ColumnDef {
+  /** Column name. */
+  name: string;
+  /** Storage class. */
+  type: ColumnType;
+  notNull?: boolean;
+  primaryKey?: boolean;
+  unique?: boolean;
+  autoincrement?: boolean;
+  /** Collating sequence, e.g. `"NOCASE"`. */
+  collate?: string;
+  /**
+   * A scalar/null literal default, or a `{ sql }` expression default rendered
+   * as `DEFAULT (<sql>)` (e.g. `{ sql: "strftime('%s', 'now')" }`).
+   */
+  default?: string | number | boolean | null | { sql: string };
+  /** A column `CHECK` constraint, e.g. `{ sql: "length(body) > 0" }`. */
+  check?: { sql: string };
+  /** A `GENERATED ALWAYS AS (<sql>)` column. */
+  generated?: { sql: string; mode?: "stored" | "virtual" };
+}
+
+/** A table-level index (`CREATE [UNIQUE] INDEX ...`). */
+export interface IndexDef {
+  /** Index name. Synthesized from the table + columns when omitted. */
+  name?: string;
+  columns: string[];
+  unique?: boolean;
+}
+
 /** Definition of a SQL-indexed table backed by files on disk. */
 export interface TableDef {
-  /** SQL DDL statement, e.g. `CREATE TABLE users (name TEXT, age INTEGER)`. */
-  ddl: string;
+  /** Table name. Required for the structured (`columns`) form. */
+  name?: string;
+  /**
+   * Raw `CREATE TABLE` DDL string.
+   *
+   * @deprecated Pass structured {@link columns} instead. The `ddl` shape still
+   * works but emits a deprecation warning and will be removed; setting both
+   * `ddl` and `columns` is an error.
+   */
+  ddl?: string;
   /** Glob pattern (relative to the DirSQL root) for files backing this table. */
   glob: string;
+  /** Structured column definitions (preferred over {@link ddl}). */
+  columns?: ColumnDef[];
   /**
    * Produce the rows a matched file contributes. Receives the absolute
    * filesystem path of the file. dirsql does not read file contents; if the
@@ -25,8 +69,29 @@ export interface TableDef {
    * `fs.readFileSync(filePath, "utf8")`). Returns an array of row objects.
    */
   extract: (filePath: string) => Record<string, unknown>[];
-  /** If true, reject rows with columns not declared in `ddl`. */
+  /** If true, reject rows with columns not declared on the table. */
   strict?: boolean;
+  /** Composite primary key (column names). */
+  primaryKey?: string[];
+  /** Composite `UNIQUE` constraints, each a list of column names. */
+  unique?: string[][];
+  /** Table-level indexes. */
+  indexes?: IndexDef[];
+  /** Emit `WITHOUT ROWID`. */
+  withoutRowid?: boolean;
+  /** Emit SQLite `STRICT` table mode (distinct from {@link strict}). */
+  strictTypes?: boolean;
+}
+
+// Module-level so the legacy-`ddl` deprecation warning fires at most once per
+// process, no matter how many tables or DirSQL instances use it.
+let ddlDeprecationWarned = false;
+function warnDdlDeprecated(): void {
+  if (ddlDeprecationWarned) return;
+  ddlDeprecationWarned = true;
+  console.warn(
+    "dirsql: TableDef `ddl` is deprecated; use structured `columns` instead (issue #202).",
+  );
 }
 
 /**
@@ -175,15 +240,27 @@ export class DirSQL {
   constructor(arg: string | DirSQLOptions) {
     const options: DirSQLOptions =
       typeof arg === "string" ? { config: arg } : arg;
+    for (const table of options.tables ?? []) {
+      if (table.ddl !== undefined) warnDdlDeprecated();
+    }
     const Ctor = getCore().DirSQL;
-    const openPromise = Ctor.openAsync(
-      options.root ?? null,
-      options.tables ?? null,
-      options.ignore ?? null,
-      options.config ?? null,
-      options.persist ?? null,
-      options.persistPath ?? null,
-    );
+    let openPromise: Promise<NativeDirSQL>;
+    try {
+      openPromise = Ctor.openAsync(
+        options.root ?? null,
+        options.tables ?? null,
+        options.ignore ?? null,
+        options.config ?? null,
+        options.persist ?? null,
+        options.persistPath ?? null,
+      );
+    } catch (err) {
+      // Table parsing runs synchronously on the JS thread, so a malformed
+      // definition (e.g. both `ddl` and `columns`) throws here rather than
+      // rejecting. Funnel it through `ready` so callers have a single
+      // construction-error channel, matching async DDL errors.
+      openPromise = Promise.reject(err);
+    }
     this.ready = openPromise.then((inner) => {
       this._inner = inner;
     });
