@@ -33,8 +33,13 @@ db = DirSQL(
     "./my-project",
     tables=[
         Table(
-            ddl="CREATE TABLE files (name TEXT, size INTEGER, type TEXT)",
+            name="files",
             glob="data/*.json",
+            columns=[
+                {"name": "name", "type": "TEXT"},
+                {"name": "size", "type": "INTEGER"},
+                {"name": "type", "type": "TEXT"},
+            ],
             extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
     ],
@@ -45,14 +50,19 @@ large = db.query("SELECT * FROM files WHERE size > 1000")
 ```
 
 ```rust [Rust]
-use dirsql::{DirSQL, Table};
+use dirsql::{Column, ColumnType, DirSQL, Table};
 
 let db = DirSQL::new(
     "./my-project",
     vec![
-        Table::new(
-            "CREATE TABLE files (name TEXT, size INTEGER, type TEXT)",
+        Table::from_columns(
+            "files",
             "data/*.json",
+            vec![
+                Column::new("name", ColumnType::Text),
+                Column::new("size", ColumnType::Integer),
+                Column::new("type", ColumnType::Text),
+            ],
             |path| vec![serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()],
         ),
     ],
@@ -69,8 +79,13 @@ const db = new DirSQL({
   root: './my-project',
   tables: [
     new Table({
-      ddl: 'CREATE TABLE files (name TEXT, size INTEGER, type TEXT)',
+      name: 'files',
       glob: 'data/*.json',
+      columns: [
+        { name: 'name', type: 'TEXT' },
+        { name: 'size', type: 'INTEGER' },
+        { name: 'type', type: 'TEXT' },
+      ],
       extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
     }),
   ],

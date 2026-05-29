@@ -6,7 +6,7 @@ canonical: https://thekevinscott.github.io/dirsql/guide/tables
 
 > Online: <https://thekevinscott.github.io/dirsql/guide/tables>
 
-Each table in `dirsql` maps a set of files to rows in an in-memory SQLite table. A table definition has three parts: DDL, a glob pattern, and an extract function.
+Each table in `dirsql` maps a set of files to rows in an in-memory SQLite table. A table definition has four parts: a name, a list of column definitions, a glob pattern, and an extract function.
 
 ## Table constructor
 
@@ -16,8 +16,13 @@ Each table in `dirsql` maps a set of files to rows in an in-memory SQLite table.
 from dirsql import Table
 
 table = Table(
-    ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
+    name="comments",
     glob="comments/**/index.jsonl",
+    columns=[
+        {"name": "id", "type": "TEXT"},
+        {"name": "body", "type": "TEXT"},
+        {"name": "author", "type": "TEXT"},
+    ],
     extract=lambda path: [
         {"id": "...", "body": "...", "author": "..."}
     ],
@@ -25,12 +30,17 @@ table = Table(
 ```
 
 ```rust [Rust]
-use dirsql::{Table, Value};
+use dirsql::{Column, ColumnType, Table, Value};
 use std::collections::HashMap;
 
-let table = Table::new(
-    "CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
+let table = Table::from_columns(
+    "comments",
     "comments/**/index.jsonl",
+    vec![
+        Column::new("id", ColumnType::Text),
+        Column::new("body", ColumnType::Text),
+        Column::new("author", ColumnType::Text),
+    ],
     |_path| {
         let mut row: HashMap<String, Value> = HashMap::new();
         row.insert("id".into(), Value::Text("...".into()));
@@ -45,8 +55,13 @@ let table = Table::new(
 import type { TableDef } from 'dirsql';
 
 const table: TableDef = {
-  ddl: 'CREATE TABLE comments (id TEXT, body TEXT, author TEXT)',
+  name: 'comments',
   glob: 'comments/**/index.jsonl',
+  columns: [
+    { name: 'id', type: 'TEXT' },
+    { name: 'body', type: 'TEXT' },
+    { name: 'author', type: 'TEXT' },
+  ],
   extract: (_path) => [
     { id: '...', body: '...', author: '...' },
   ],
@@ -55,24 +70,274 @@ const table: TableDef = {
 
 :::
 
-All three arguments are keyword-only (in Python). In Rust they are positional to `Table::new`. In TypeScript a table is a plain `TableDef` object literal — the TS SDK exports the `TableDef` type (not a class).
+The arguments are keyword-only (in Python). In Rust use the `Table::from_columns(name, glob, columns, extract)` constructor. In TypeScript a table is a plain `TableDef` object literal — the TS SDK exports the `TableDef` type (not a class).
 
-### `ddl`
+::: tip Deprecated: `ddl`
+Earlier versions defined a table with a raw `ddl="CREATE TABLE ..."` string instead of `name` + `columns`. The `ddl` form still works but is **deprecated** and slated for removal; new code should use the structured `columns` shape described here. The two forms are mutually exclusive — pass one or the other, not both.
+:::
 
-A SQLite `CREATE TABLE` statement. This defines the schema of the table. `dirsql` executes this DDL directly against the in-memory database, so any valid SQLite column types and constraints work.
+### `name`
+
+The SQLite table name. It must be a valid SQLite identifier.
+
+### `columns`
+
+A list of column definitions that describe the table's schema. `dirsql` builds the `CREATE TABLE` statement for you from these definitions, so you never hand-write DDL. Each column is a plain dict (Python), object (TypeScript), or `Column` struct (Rust).
+
+A column has a `name` and a `type` (one of `TEXT`, `INTEGER`, `REAL`, `BLOB`, `NUMERIC`):
 
 ```python
 # Simple text columns
-ddl="CREATE TABLE notes (title TEXT, body TEXT)"
+columns=[
+    {"name": "title", "type": "TEXT"},
+    {"name": "body", "type": "TEXT"},
+]
 
-# Typed columns
-ddl="CREATE TABLE metrics (name TEXT, value REAL, count INTEGER)"
-
-# With constraints
-ddl="CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL)"
+# Mixed types
+columns=[
+    {"name": "name", "type": "TEXT"},
+    {"name": "value", "type": "REAL"},
+    {"name": "count", "type": "INTEGER"},
+]
 ```
 
-The table name is parsed from the DDL. It must be a valid SQLite identifier.
+The storage-type strings are exported as constants in Python (`from dirsql import TEXT, INTEGER, REAL, BLOB, NUMERIC`); in Rust they are the `ColumnType` enum variants (`ColumnType::Text`, `ColumnType::Integer`, `ColumnType::Real`, `ColumnType::Blob`, `ColumnType::Numeric`); in TypeScript they are the `ColumnType` string-union type (`"TEXT" | "INTEGER" | "REAL" | "BLOB" | "NUMERIC"`).
+
+#### Column constraints
+
+A column may carry per-column constraints alongside `name` and `type`:
+
+- `not_null` (`notNull` in TS) — `NOT NULL`
+- `primary_key` (`primaryKey` in TS) — single-column `PRIMARY KEY`
+- `unique` — `UNIQUE`
+- `autoincrement` — `AUTOINCREMENT` (only meaningful on an `INTEGER PRIMARY KEY`)
+- `collate` — a collation name, e.g. `"NOCASE"`
+- `default` — a default value (see below)
+
+::: code-group
+
+```python [Python]
+columns=[
+    {"name": "id", "type": "INTEGER", "primary_key": True, "autoincrement": True},
+    {"name": "slug", "type": "TEXT", "not_null": True, "unique": True},
+    {"name": "title", "type": "TEXT", "not_null": True, "default": "untitled"},
+    {"name": "email", "type": "TEXT", "collate": "NOCASE"},
+]
+```
+
+```rust [Rust]
+use dirsql::{Column, ColumnType, DefaultValue};
+
+vec![
+    Column {
+        name: "id".into(),
+        ty: ColumnType::Integer,
+        primary_key: true,
+        autoincrement: true,
+        ..Default::default()
+    },
+    Column {
+        name: "slug".into(),
+        ty: ColumnType::Text,
+        not_null: true,
+        unique: true,
+        ..Default::default()
+    },
+    Column {
+        name: "title".into(),
+        ty: ColumnType::Text,
+        not_null: true,
+        default: Some(DefaultValue::Text("untitled".into())),
+        ..Default::default()
+    },
+    Column {
+        name: "email".into(),
+        ty: ColumnType::Text,
+        collate: Some("NOCASE".into()),
+        ..Default::default()
+    },
+]
+```
+
+```typescript [TypeScript]
+columns: [
+  { name: 'id', type: 'INTEGER', primaryKey: true, autoincrement: true },
+  { name: 'slug', type: 'TEXT', notNull: true, unique: true },
+  { name: 'title', type: 'TEXT', notNull: true, default: 'untitled' },
+  { name: 'email', type: 'TEXT', collate: 'NOCASE' },
+]
+```
+
+:::
+
+#### Defaults
+
+`default` accepts a scalar literal (string, number, boolean, or null). To use a SQL expression as the default — `CURRENT_TIMESTAMP`, `strftime(...)`, etc. — pass `{ sql: "..." }` instead of a bare value; it renders as `DEFAULT (<sql>)`.
+
+::: code-group
+
+```python [Python]
+columns=[
+    {"name": "title", "type": "TEXT", "default": "untitled"},  # literal
+    {"name": "created", "type": "INTEGER", "default": {"sql": "strftime('%s', 'now')"}},  # expression
+]
+```
+
+```rust [Rust]
+use dirsql::{Column, ColumnType, DefaultValue};
+
+vec![
+    Column {
+        name: "title".into(),
+        ty: ColumnType::Text,
+        default: Some(DefaultValue::Text("untitled".into())),
+        ..Default::default()
+    },
+    Column {
+        name: "created".into(),
+        ty: ColumnType::Integer,
+        default: Some(DefaultValue::Sql("strftime('%s', 'now')".into())),
+        ..Default::default()
+    },
+]
+```
+
+```typescript [TypeScript]
+columns: [
+  { name: 'title', type: 'TEXT', default: 'untitled' }, // literal
+  { name: 'created', type: 'INTEGER', default: { sql: "strftime('%s', 'now')" } }, // expression
+]
+```
+
+:::
+
+#### Check constraints and generated columns
+
+The `{ sql: "..." }` escape hatch also drives `check` and `generated` columns:
+
+- `check` — `{ sql: "..." }` renders a `CHECK (<sql>)` constraint on the column.
+- `generated` — `{ sql: "...", mode?: "stored" | "virtual" }` renders a `GENERATED ALWAYS AS (<sql>)` column. `mode` defaults to `virtual`.
+
+::: code-group
+
+```python [Python]
+columns=[
+    {"name": "price", "type": "REAL", "check": {"sql": "price >= 0"}},
+    {"name": "qty", "type": "INTEGER"},
+    {"name": "total", "type": "REAL", "generated": {"sql": "price * qty", "mode": "stored"}},
+]
+```
+
+```rust [Rust]
+use dirsql::{Column, ColumnType, Expression, GeneratedColumn};
+
+vec![
+    Column {
+        name: "price".into(),
+        ty: ColumnType::Real,
+        check: Some(Expression { sql: "price >= 0".into() }),
+        ..Default::default()
+    },
+    Column::new("qty", ColumnType::Integer),
+    Column {
+        name: "total".into(),
+        ty: ColumnType::Real,
+        generated: Some(GeneratedColumn {
+            sql: "price * qty".into(),
+            mode: Some("stored".into()),
+        }),
+        ..Default::default()
+    },
+]
+```
+
+```typescript [TypeScript]
+columns: [
+  { name: 'price', type: 'REAL', check: { sql: 'price >= 0' } },
+  { name: 'qty', type: 'INTEGER' },
+  { name: 'total', type: 'REAL', generated: { sql: 'price * qty', mode: 'stored' } },
+]
+```
+
+:::
+
+### Table-level options
+
+Beyond columns, a table accepts several optional table-level settings:
+
+- `primary_key` (`primaryKey` in TS) — a list of column names for a **composite** primary key.
+- `unique` — a list of column-name lists, each producing a composite `UNIQUE` constraint.
+- `indexes` — a list of `{ name?, columns, unique? }` index definitions.
+- `without_rowid` (`withoutRowid` in TS) — emit a `WITHOUT ROWID` table.
+- `strict_types` (`strictTypes` in TS) — emit a SQLite [`STRICT`](https://www.sqlite.org/stricttables.html) table, enforcing column types at write time.
+
+::: code-group
+
+```python [Python]
+from dirsql import Table
+
+table = Table(
+    name="memberships",
+    glob="memberships/*.json",
+    columns=[
+        {"name": "user_id", "type": "TEXT", "not_null": True},
+        {"name": "group_id", "type": "TEXT", "not_null": True},
+        {"name": "role", "type": "TEXT"},
+    ],
+    primary_key=["user_id", "group_id"],
+    unique=[["user_id", "group_id"]],
+    indexes=[{"name": "idx_role", "columns": ["role"]}],
+    without_rowid=True,
+    strict_types=True,
+    extract=lambda path: [...],
+)
+```
+
+```rust [Rust]
+use dirsql::{Column, ColumnType, Index, Table};
+
+let mut table = Table::from_columns(
+    "memberships",
+    "memberships/*.json",
+    vec![
+        Column { name: "user_id".into(), ty: ColumnType::Text, not_null: true, ..Default::default() },
+        Column { name: "group_id".into(), ty: ColumnType::Text, not_null: true, ..Default::default() },
+        Column::new("role", ColumnType::Text),
+    ],
+    |_path| vec![/* ... */],
+);
+table.primary_key = vec!["user_id".into(), "group_id".into()];
+table.unique = vec![vec!["user_id".into(), "group_id".into()]];
+table.indexes = vec![Index {
+    name: Some("idx_role".into()),
+    columns: vec!["role".into()],
+    unique: false,
+}];
+table.without_rowid = true;
+table.strict_types = true;
+```
+
+```typescript [TypeScript]
+import type { TableDef } from 'dirsql';
+
+const table: TableDef = {
+  name: 'memberships',
+  glob: 'memberships/*.json',
+  columns: [
+    { name: 'user_id', type: 'TEXT', notNull: true },
+    { name: 'group_id', type: 'TEXT', notNull: true },
+    { name: 'role', type: 'TEXT' },
+  ],
+  primaryKey: ['user_id', 'group_id'],
+  unique: [['user_id', 'group_id']],
+  indexes: [{ name: 'idx_role', columns: ['role'] }],
+  withoutRowid: true,
+  strictTypes: true,
+  extract: (_path) => [...],
+};
+```
+
+:::
 
 ### `glob`
 
@@ -140,13 +405,21 @@ db = DirSQL(
     "./workspace",
     tables=[
         Table(
-            ddl="CREATE TABLE posts (title TEXT, author_id TEXT)",
+            name="posts",
             glob="posts/*.json",
+            columns=[
+                {"name": "title", "type": "TEXT"},
+                {"name": "author_id", "type": "TEXT"},
+            ],
             extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
         Table(
-            ddl="CREATE TABLE authors (id TEXT, name TEXT)",
+            name="authors",
             glob="authors/*.json",
+            columns=[
+                {"name": "id", "type": "TEXT"},
+                {"name": "name", "type": "TEXT"},
+            ],
             extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
     ],
@@ -154,7 +427,7 @@ db = DirSQL(
 ```
 
 ```rust [Rust]
-use dirsql::{DirSQL, Table, Value};
+use dirsql::{Column, ColumnType, DirSQL, Table, Value};
 use std::collections::HashMap;
 
 // See `row_from_json` in getting-started.md for a reusable helper.
@@ -181,14 +454,22 @@ fn row_from_json(raw: &str) -> HashMap<String, Value> {
 let db = DirSQL::new(
     "./workspace",
     vec![
-        Table::new(
-            "CREATE TABLE posts (title TEXT, author_id TEXT)",
+        Table::from_columns(
+            "posts",
             "posts/*.json",
+            vec![
+                Column::new("title", ColumnType::Text),
+                Column::new("author_id", ColumnType::Text),
+            ],
             |path| vec![row_from_json(&std::fs::read_to_string(path).unwrap())],
         ),
-        Table::new(
-            "CREATE TABLE authors (id TEXT, name TEXT)",
+        Table::from_columns(
+            "authors",
             "authors/*.json",
+            vec![
+                Column::new("id", ColumnType::Text),
+                Column::new("name", ColumnType::Text),
+            ],
             |path| vec![row_from_json(&std::fs::read_to_string(path).unwrap())],
         ),
     ],
@@ -201,13 +482,21 @@ import { readFileSync } from 'node:fs';
 
 const tables: TableDef[] = [
   {
-    ddl: 'CREATE TABLE posts (title TEXT, author_id TEXT)',
+    name: 'posts',
     glob: 'posts/*.json',
+    columns: [
+      { name: 'title', type: 'TEXT' },
+      { name: 'author_id', type: 'TEXT' },
+    ],
     extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
   },
   {
-    ddl: 'CREATE TABLE authors (id TEXT, name TEXT)',
+    name: 'authors',
     glob: 'authors/*.json',
+    columns: [
+      { name: 'id', type: 'TEXT' },
+      { name: 'name', type: 'TEXT' },
+    ],
     extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
   },
 ];

@@ -168,30 +168,91 @@ import { Table } from 'dirsql';
 ::: code-group
 
 ```python [Python]
-Table(*, ddl: str, glob: str, extract: Callable[[str], list[dict]])
+Table(
+    *,
+    name: str,
+    glob: str,
+    columns: list[dict],
+    extract: Callable[[str], list[dict]],
+    primary_key: list[str] | None = None,
+    unique: list[list[str]] | None = None,
+    indexes: list[dict] | None = None,
+    without_rowid: bool = False,
+    strict_types: bool = False,
+)
 ```
 
 ```rust [Rust]
-Table::new(ddl: &str, glob: &str, extract: fn(&str) -> Vec<Value>)
+Table::from_columns(
+    name: &str,
+    glob: &str,
+    columns: Vec<Column>,
+    extract: fn(&str) -> Vec<Value>,
+) -> Table
+// Table-level options (primary_key, unique, indexes, without_rowid,
+// strict_types) are public fields set on the returned value.
 ```
 
 ```typescript [TypeScript]
-new Table({ ddl: string, glob: string, extract: (path: string) => Record<string, unknown>[] })
+new Table({
+    name: string,
+    glob: string,
+    columns: ColumnDef[],
+    extract: (path: string) => Record<string, unknown>[],
+    primaryKey?: string[],
+    unique?: string[][],
+    indexes?: IndexDef[],
+    withoutRowid?: boolean,
+    strictTypes?: boolean,
+})
 ```
 
 :::
 
-Defines a mapping from files to SQLite table rows.
+Defines a mapping from files to SQLite table rows. `dirsql` builds the `CREATE TABLE` statement from `name` and `columns`.
 
 **Parameters:**
 
-- `ddl` -- A `CREATE TABLE` statement. The table name is parsed from this DDL.
+- `name` -- The SQLite table name. Must be a valid SQLite identifier.
 - `glob` -- A glob pattern matched against file paths relative to the root directory.
+- `columns` -- A list of column definitions (see [Column fields](#column-fields) below).
 - `extract` -- A callable `(path) -> list[dict]`. Receives the absolute filesystem path of the matched file. `dirsql` does not read file contents; a callback that needs the file body reads `path` itself. Returns a list of dicts/maps mapping column names to values. Return an empty list to skip a file.
+
+**Table-level options (all optional):**
+
+- `primary_key` (`primaryKey` in TS) -- list of column names forming a composite `PRIMARY KEY`.
+- `unique` -- list of column-name lists, each a composite `UNIQUE` constraint.
+- `indexes` -- list of index definitions `{ name?, columns, unique? }`.
+- `without_rowid` (`withoutRowid` in TS) -- emit a `WITHOUT ROWID` table.
+- `strict_types` (`strictTypes` in TS) -- emit a SQLite `STRICT` table.
+
+In Rust these are public fields on `Table` (set them after `Table::from_columns(...)`); their names are `primary_key`, `unique`, `indexes`, `without_rowid`, `strict_types`.
+
+#### Column fields
+
+Each entry in `columns` is a plain dict (Python), object (TypeScript), or `Column` struct (Rust):
+
+- `name` -- column name (string).
+- `type` -- one of `TEXT`, `INTEGER`, `REAL`, `BLOB`, `NUMERIC`. In Python these are exported as constants (`from dirsql import TEXT, INTEGER, REAL, BLOB, NUMERIC`); in Rust as the `ColumnType` enum; in TypeScript as the `ColumnType` string-union type.
+- `not_null` (`notNull` in TS) -- boolean, `NOT NULL`.
+- `primary_key` (`primaryKey` in TS) -- boolean, single-column `PRIMARY KEY`.
+- `unique` -- boolean, `UNIQUE`.
+- `autoincrement` -- boolean, `AUTOINCREMENT`.
+- `collate` -- collation name (string), e.g. `"NOCASE"`.
+- `default` -- a scalar/null literal, or `{ sql: "..." }` for an expression (renders `DEFAULT (<sql>)`).
+- `check` -- `{ sql: "..." }`, renders `CHECK (<sql>)`.
+- `generated` -- `{ sql: "...", mode?: "stored" | "virtual" }`, renders `GENERATED ALWAYS AS (<sql>)`.
+
+In Rust, defaults are the `DefaultValue` enum (`DefaultValue::Text`, `DefaultValue::Integer`, `DefaultValue::Real`, `DefaultValue::Sql`, ...); `check` is `Expression { sql }`; `generated` is `GeneratedColumn { sql, mode }`; indexes are `Index { name, columns, unique }`.
+
+::: tip Deprecated: `ddl`
+A table may instead be defined with a raw `ddl="CREATE TABLE ..."` string (`Table::new(ddl, glob, extract)` in Rust). This form is **deprecated**, retained only for backward compatibility, and slated for removal. Use `name` + `columns` for new code.
+:::
 
 **Attributes:**
 
-- `ddl` -- The DDL string (read-only).
+- `name` -- The table name (read-only).
+- `columns` -- The column definitions (read-only).
 - `glob` -- The glob pattern (read-only).
 
 ---

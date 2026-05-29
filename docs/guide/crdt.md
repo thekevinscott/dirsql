@@ -57,9 +57,15 @@ db = DirSQL(
     "./workspace",
     tables=[
         Table(
-            ddl="CREATE TABLE posts (id TEXT, title TEXT, body TEXT, updated INTEGER)",
+            name="posts",
             # Match the JSON view, not the raw CRDT binary.
             glob="posts/*/view.json",
+            columns=[
+                {"name": "id", "type": "TEXT"},
+                {"name": "title", "type": "TEXT"},
+                {"name": "body", "type": "TEXT"},
+                {"name": "updated", "type": "INTEGER"},
+            ],
             extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
     ],
@@ -67,15 +73,21 @@ db = DirSQL(
 ```
 
 ```rust [Rust]
-use dirsql::{DirSQL, Table};
+use dirsql::{Column, ColumnType, DirSQL, Table};
 // See `row_from_json` in getting-started.md.
 
 let db = DirSQL::new(
     "./workspace",
     vec![
-        Table::new(
-            "CREATE TABLE posts (id TEXT, title TEXT, body TEXT, updated INTEGER)",
+        Table::from_columns(
+            "posts",
             "posts/*/view.json",
+            vec![
+                Column::new("id", ColumnType::Text),
+                Column::new("title", ColumnType::Text),
+                Column::new("body", ColumnType::Text),
+                Column::new("updated", ColumnType::Integer),
+            ],
             |path| vec![row_from_json(&std::fs::read_to_string(path).unwrap())],
         ),
     ],
@@ -88,8 +100,14 @@ import { DirSQL, type TableDef } from 'dirsql';
 
 const tables: TableDef[] = [
   {
-    ddl: 'CREATE TABLE posts (id TEXT, title TEXT, body TEXT, updated INTEGER)',
+    name: 'posts',
     glob: 'posts/*/view.json',
+    columns: [
+      { name: 'id', type: 'TEXT' },
+      { name: 'title', type: 'TEXT' },
+      { name: 'body', type: 'TEXT' },
+      { name: 'updated', type: 'INTEGER' },
+    ],
     extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
   },
 ];

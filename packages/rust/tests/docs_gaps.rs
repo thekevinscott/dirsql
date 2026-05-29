@@ -5,7 +5,7 @@
 //! These mirror `packages/python/tests/integration/test_docs_gaps.py` for the
 //! Rust SDK (bead dirsql-9ng). See TESTS_AUDIT.md.
 
-use dirsql::{DirSQL, Table, Value};
+use dirsql::{Column, ColumnType, DirSQL, Table, Value};
 use std::collections::HashMap;
 use std::fs;
 use tempfile::TempDir;
@@ -21,12 +21,18 @@ fn strict_true_rejects_extra_keys_from_extract() {
     let root = TempDir::new().unwrap();
     fs::write(root.path().join("a.json"), "x").unwrap();
 
-    let table = Table::strict("CREATE TABLE items (name TEXT)", "*.json", |_path| {
-        vec![HashMap::from([
-            ("name".into(), Value::Text("apple".into())),
-            ("color".into(), Value::Text("red".into())),
-        ])]
-    });
+    let mut table = Table::from_columns(
+        "items",
+        "*.json",
+        vec![Column::new("name", ColumnType::Text)],
+        |_path| {
+            vec![HashMap::from([
+                ("name".into(), Value::Text("apple".into())),
+                ("color".into(), Value::Text("red".into())),
+            ])]
+        },
+    );
+    table.strict = true;
 
     let result = DirSQL::new(root.path(), vec![table])
         .and_then(|db| db.query("SELECT * FROM items").map(|_| ()));
@@ -43,9 +49,13 @@ fn strict_true_allows_exact_match() {
     let root = TempDir::new().unwrap();
     fs::write(root.path().join("a.json"), "x").unwrap();
 
-    let table = Table::strict(
-        "CREATE TABLE items (name TEXT, color TEXT)",
+    let mut table = Table::from_columns(
+        "items",
         "*.json",
+        vec![
+            Column::new("name", ColumnType::Text),
+            Column::new("color", ColumnType::Text),
+        ],
         |_path| {
             vec![HashMap::from([
                 ("name".into(), Value::Text("apple".into())),
@@ -53,6 +63,7 @@ fn strict_true_allows_exact_match() {
             ])]
         },
     );
+    table.strict = true;
 
     let db = DirSQL::new(root.path(), vec![table]).unwrap();
     let rows = db.query("SELECT name, color FROM items").unwrap();
@@ -74,9 +85,13 @@ fn extract_blob_values_round_trip_via_sdk() {
     let payload: Vec<u8> = vec![0x00, 0x01, 0x02, 0xFF, 0xFE];
     let payload_for_closure = payload.clone();
 
-    let table = Table::new(
-        "CREATE TABLE blobs (name TEXT, data BLOB)",
+    let table = Table::from_columns(
+        "blobs",
         "*.json",
+        vec![
+            Column::new("name", ColumnType::Text),
+            Column::new("data", ColumnType::Blob),
+        ],
         move |_path| {
             vec![HashMap::from([
                 ("name".into(), Value::Text("bin".into())),
@@ -107,13 +122,18 @@ fn watch_insert_event_carries_relative_file_path() {
     use std::time::Duration;
 
     let root = TempDir::new().unwrap();
-    let table = Table::new("CREATE TABLE items (name TEXT)", "**/*.txt", |path| {
-        let content = std::fs::read_to_string(path).unwrap();
-        vec![HashMap::from([(
-            "name".into(),
-            Value::Text(content.trim().to_string()),
-        )])]
-    });
+    let table = Table::from_columns(
+        "items",
+        "**/*.txt",
+        vec![Column::new("name", ColumnType::Text)],
+        |path| {
+            let content = std::fs::read_to_string(path).unwrap();
+            vec![HashMap::from([(
+                "name".into(),
+                Value::Text(content.trim().to_string()),
+            )])]
+        },
+    );
     let db = DirSQL::new(root.path(), vec![table]).unwrap();
 
     let mut stream = db.watch().unwrap();

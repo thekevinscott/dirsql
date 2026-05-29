@@ -61,13 +61,21 @@ async def main():
         "./my-blog",
         tables=[
             Table(
-                ddl="CREATE TABLE posts (title TEXT, author TEXT)",
+                name="posts",
                 glob="posts/*.json",
+                columns=[
+                    {"name": "title", "type": "TEXT"},
+                    {"name": "author", "type": "TEXT"},
+                ],
                 extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
             ),
             Table(
-                ddl="CREATE TABLE authors (id TEXT, name TEXT)",
+                name="authors",
                 glob="authors/*.json",
+                columns=[
+                    {"name": "id", "type": "TEXT"},
+                    {"name": "name", "type": "TEXT"},
+                ],
                 extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
             ),
         ],
@@ -90,7 +98,7 @@ asyncio.run(main())
 ```
 
 ```rust [Rust]
-use dirsql::{DirSQL, Table, Value};
+use dirsql::{Column, ColumnType, DirSQL, Table, Value};
 use std::collections::HashMap;
 
 // Convert a JSON object string into a dirsql row.
@@ -117,14 +125,22 @@ fn row_from_json(raw: &str) -> HashMap<String, Value> {
 let db = DirSQL::new(
     "./my-blog",
     vec![
-        Table::new(
-            "CREATE TABLE posts (title TEXT, author TEXT)",
+        Table::from_columns(
+            "posts",
             "posts/*.json",
+            vec![
+                Column::new("title", ColumnType::Text),
+                Column::new("author", ColumnType::Text),
+            ],
             |path| vec![row_from_json(&std::fs::read_to_string(path).unwrap())],
         ),
-        Table::new(
-            "CREATE TABLE authors (id TEXT, name TEXT)",
+        Table::from_columns(
+            "authors",
             "authors/*.json",
+            vec![
+                Column::new("id", ColumnType::Text),
+                Column::new("name", ColumnType::Text),
+            ],
             |path| vec![row_from_json(&std::fs::read_to_string(path).unwrap())],
         ),
     ],
@@ -144,13 +160,21 @@ import { DirSQL, type TableDef } from 'dirsql';
 
 const tables: TableDef[] = [
   {
-    ddl: 'CREATE TABLE posts (title TEXT, author TEXT)',
+    name: 'posts',
     glob: 'posts/*.json',
+    columns: [
+      { name: 'title', type: 'TEXT' },
+      { name: 'author', type: 'TEXT' },
+    ],
     extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
   },
   {
-    ddl: 'CREATE TABLE authors (id TEXT, name TEXT)',
+    name: 'authors',
     glob: 'authors/*.json',
+    columns: [
+      { name: 'id', type: 'TEXT' },
+      { name: 'name', type: 'TEXT' },
+    ],
     extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
   },
 ];
@@ -179,7 +203,7 @@ The filesystem is always the source of truth. The database is rebuilt from files
 
 ## Next steps
 
-- [Defining Tables](./guide/tables.md) -- DDL, globs, and extract functions in detail
+- [Defining Tables](./guide/tables.md) -- columns, globs, and extract functions in detail
 - [Querying](./guide/querying.md) -- SQL queries and return format
 - [File Watching](./guide/watching.md) -- real-time change events
 - [Async API](./guide/async.md) -- async ready(), query(), and watch()

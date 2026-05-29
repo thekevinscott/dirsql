@@ -3,7 +3,7 @@
 //! Each test is named to match the doc page and section it verifies.
 //! If a doc example changes and these tests break, the docs need updating (or vice versa).
 
-use dirsql::{DirSQL, Table, Value};
+use dirsql::{Column, ColumnType, DirSQL, Table, Value};
 use std::collections::HashMap;
 use std::fs;
 use tempfile::TempDir;
@@ -39,9 +39,13 @@ fn blog_dir(root: &std::path::Path) {
 
 fn blog_tables() -> Vec<Table> {
     vec![
-        Table::new(
-            "CREATE TABLE posts (title TEXT, author TEXT)",
+        Table::from_columns(
+            "posts",
             "posts/*.json",
+            vec![
+                Column::new("title", ColumnType::Text),
+                Column::new("author", ColumnType::Text),
+            ],
             |path| {
                 let content = std::fs::read_to_string(path).unwrap();
                 let v: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -58,9 +62,13 @@ fn blog_tables() -> Vec<Table> {
                 ])]
             },
         ),
-        Table::new(
-            "CREATE TABLE authors (id TEXT, name TEXT)",
+        Table::from_columns(
+            "authors",
             "authors/*.json",
+            vec![
+                Column::new("id", ColumnType::Text),
+                Column::new("name", ColumnType::Text),
+            ],
             |path| {
                 let content = std::fs::read_to_string(path).unwrap();
                 let v: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -155,9 +163,13 @@ fn it_matches_tables_guide_single_object_json() {
 
     let db = DirSQL::new(
         root.path(),
-        vec![Table::new(
-            "CREATE TABLE items (name TEXT, value INTEGER)",
+        vec![Table::from_columns(
+            "items",
             "data/*.json",
+            vec![
+                Column::new("name", ColumnType::Text),
+                Column::new("value", ColumnType::Integer),
+            ],
             |path| {
                 let content = std::fs::read_to_string(path).unwrap();
                 let v: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -192,9 +204,13 @@ fn it_matches_tables_guide_multiple_rows_per_file() {
 
     let db = DirSQL::new(
         root.path(),
-        vec![Table::new(
-            "CREATE TABLE comments (body TEXT, author TEXT)",
+        vec![Table::from_columns(
+            "comments",
             "comments/**/index.txt",
+            vec![
+                Column::new("body", ColumnType::Text),
+                Column::new("author", ColumnType::Text),
+            ],
             |path| {
                 let content = std::fs::read_to_string(path).unwrap();
                 content
@@ -232,9 +248,13 @@ fn it_matches_tables_guide_derive_from_path() {
 
     let db = DirSQL::new(
         root.path(),
-        vec![Table::new(
-            "CREATE TABLE comments (id TEXT, body TEXT)",
+        vec![Table::from_columns(
+            "comments",
             "comments/**/index.txt",
+            vec![
+                Column::new("id", ColumnType::Text),
+                Column::new("body", ColumnType::Text),
+            ],
             |path| {
                 let content = std::fs::read_to_string(path).unwrap();
                 let id = std::path::Path::new(path)
@@ -280,9 +300,10 @@ fn it_matches_tables_guide_skip_files() {
 
     let db = DirSQL::new(
         root.path(),
-        vec![Table::new(
-            "CREATE TABLE posts (title TEXT)",
+        vec![Table::from_columns(
+            "posts",
             "*.json",
+            vec![Column::new("title", ColumnType::Text)],
             |path| {
                 let content = std::fs::read_to_string(path).unwrap();
                 let v: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -313,9 +334,13 @@ fn it_matches_tables_guide_multiple_tables() {
     fs::write(root.path().join("posts").join("hello.txt"), "Hello World|1").unwrap();
     fs::write(root.path().join("authors").join("alice.txt"), "1|Alice").unwrap();
 
-    let posts = Table::new(
-        "CREATE TABLE posts (title TEXT, author_id TEXT)",
+    let posts = Table::from_columns(
+        "posts",
         "posts/*.txt",
+        vec![
+            Column::new("title", ColumnType::Text),
+            Column::new("author_id", ColumnType::Text),
+        ],
         |path| {
             let content = std::fs::read_to_string(path).unwrap();
             content
@@ -336,9 +361,13 @@ fn it_matches_tables_guide_multiple_tables() {
                 .collect()
         },
     );
-    let authors = Table::new(
-        "CREATE TABLE authors (id TEXT, name TEXT)",
+    let authors = Table::from_columns(
+        "authors",
         "authors/*.txt",
+        vec![
+            Column::new("id", ColumnType::Text),
+            Column::new("name", ColumnType::Text),
+        ],
         |path| {
             let content = std::fs::read_to_string(path).unwrap();
             content
@@ -378,9 +407,10 @@ fn it_matches_tables_guide_ignore_patterns() {
 
     let db = DirSQL::with_ignore(
         root.path(),
-        vec![Table::new(
-            "CREATE TABLE items (name TEXT)",
+        vec![Table::from_columns(
+            "items",
             "**/*.txt",
+            vec![Column::new("name", ColumnType::Text)],
             |path| {
                 let content = std::fs::read_to_string(path).unwrap();
                 vec![HashMap::from([(
@@ -411,9 +441,14 @@ fn it_matches_tables_guide_typed_columns() {
 
     let db = DirSQL::new(
         root.path(),
-        vec![Table::new(
-            "CREATE TABLE metrics (name TEXT, value REAL, count INTEGER)",
+        vec![Table::from_columns(
+            "metrics",
             "data/*.json",
+            vec![
+                Column::new("name", ColumnType::Text),
+                Column::new("value", ColumnType::Real),
+                Column::new("count", ColumnType::Integer),
+            ],
             |path| {
                 let content = std::fs::read_to_string(path).unwrap();
                 let v: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -453,9 +488,23 @@ fn it_matches_tables_guide_constraints() {
 
     let db = DirSQL::new(
         root.path(),
-        vec![Table::new(
-            "CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL)",
+        vec![Table::from_columns(
+            "items",
             "data/*.json",
+            vec![
+                Column {
+                    name: "id".into(),
+                    ty: ColumnType::Text,
+                    primary_key: true,
+                    ..Default::default()
+                },
+                Column {
+                    name: "name".into(),
+                    ty: ColumnType::Text,
+                    not_null: true,
+                    ..Default::default()
+                },
+            ],
             |path| {
                 let content = std::fs::read_to_string(path).unwrap();
                 let v: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -581,9 +630,10 @@ fn it_matches_watching_guide_insert_event() {
     let root = TempDir::new().unwrap();
     let db = DirSQL::new(
         root.path(),
-        vec![Table::new(
-            "CREATE TABLE items (name TEXT)",
+        vec![Table::from_columns(
+            "items",
             "**/*.txt",
+            vec![Column::new("name", ColumnType::Text)],
             |path| {
                 let content = std::fs::read_to_string(path).unwrap();
                 vec![HashMap::from([(
@@ -618,9 +668,10 @@ fn it_matches_watching_guide_delete_event() {
 
     let db = DirSQL::new(
         root.path(),
-        vec![Table::new(
-            "CREATE TABLE items (name TEXT)",
+        vec![Table::from_columns(
+            "items",
             "**/*.txt",
+            vec![Column::new("name", ColumnType::Text)],
             |path| {
                 let content = std::fs::read_to_string(path).unwrap();
                 vec![HashMap::from([(
@@ -659,9 +710,10 @@ fn it_matches_watching_guide_update_event() {
 
     let db = DirSQL::new(
         root.path(),
-        vec![Table::new(
-            "CREATE TABLE items (name TEXT)",
+        vec![Table::from_columns(
+            "items",
             "**/*.txt",
+            vec![Column::new("name", ColumnType::Text)],
             |path| {
                 let content = std::fs::read_to_string(path).unwrap();
                 vec![HashMap::from([(
@@ -719,9 +771,13 @@ async fn it_matches_async_guide_basic_usage() {
 
     let db = dirsql::AsyncDirSQL::new(
         root.path(),
-        vec![Table::new(
-            "CREATE TABLE items (name TEXT, value INTEGER)",
+        vec![Table::from_columns(
+            "items",
             "data/*.json",
+            vec![
+                Column::new("name", ColumnType::Text),
+                Column::new("value", ColumnType::Integer),
+            ],
             |path| {
                 let content = std::fs::read_to_string(path).unwrap();
                 let v: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -761,9 +817,13 @@ async fn it_matches_async_guide_ready_idempotent() {
 
     let db = dirsql::AsyncDirSQL::new(
         root.path(),
-        vec![Table::new(
-            "CREATE TABLE items (name TEXT, value INTEGER)",
+        vec![Table::from_columns(
+            "items",
             "data/*.json",
+            vec![
+                Column::new("name", ColumnType::Text),
+                Column::new("value", ColumnType::Integer),
+            ],
             |path| {
                 let content = std::fs::read_to_string(path).unwrap();
                 let v: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -800,9 +860,13 @@ async fn it_matches_async_guide_count_query() {
 
     let db = dirsql::AsyncDirSQL::new(
         root.path(),
-        vec![Table::new(
-            "CREATE TABLE items (name TEXT, value INTEGER)",
+        vec![Table::from_columns(
+            "items",
             "data/*.json",
+            vec![
+                Column::new("name", ColumnType::Text),
+                Column::new("value", ColumnType::Integer),
+            ],
             |path| {
                 let content = std::fs::read_to_string(path).unwrap();
                 let v: serde_json::Value = serde_json::from_str(&content).unwrap();

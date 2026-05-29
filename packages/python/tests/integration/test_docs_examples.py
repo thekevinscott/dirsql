@@ -43,13 +43,21 @@ def _blog_tables():
     """Return the table definitions from the getting-started example."""
     return [
         Table(
-            ddl="CREATE TABLE posts (title TEXT, author TEXT)",
+            name="posts",
             glob="posts/*.json",
+            columns=[
+                {"name": "title", "type": "TEXT"},
+                {"name": "author", "type": "TEXT"},
+            ],
             extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
         Table(
-            ddl="CREATE TABLE authors (id TEXT, name TEXT)",
+            name="authors",
             glob="authors/*.json",
+            columns=[
+                {"name": "id", "type": "TEXT"},
+                {"name": "name", "type": "TEXT"},
+            ],
             extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
     ]
@@ -108,8 +116,12 @@ def describe_tables_guide():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE items (name TEXT, value INTEGER)",
+                    name="items",
                     glob="data/*.json",
+                    columns=[
+                        {"name": "name", "type": "TEXT"},
+                        {"name": "value", "type": "INTEGER"},
+                    ],
                     extract=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
@@ -134,8 +146,12 @@ def describe_tables_guide():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE comments (body TEXT, author TEXT)",
+                    name="comments",
                     glob="comments/**/index.jsonl",
+                    columns=[
+                        {"name": "body", "type": "TEXT"},
+                        {"name": "author", "type": "TEXT"},
+                    ],
                     extract=lambda path: [
                         json.loads(line)
                         for line in open(path, encoding="utf-8").read().splitlines()
@@ -160,8 +176,12 @@ def describe_tables_guide():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE comments (id TEXT, body TEXT)",
+                    name="comments",
                     glob="comments/**/index.jsonl",
+                    columns=[
+                        {"name": "id", "type": "TEXT"},
+                        {"name": "body", "type": "TEXT"},
+                    ],
                     extract=lambda path: [
                         {
                             "id": os.path.basename(os.path.dirname(path)),
@@ -196,8 +216,11 @@ def describe_tables_guide():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE posts (title TEXT)",
+                    name="posts",
                     glob="*.json",
+                    columns=[
+                        {"name": "title", "type": "TEXT"},
+                    ],
                     extract=extract,
                 ),
             ],
@@ -223,15 +246,23 @@ def describe_tables_guide():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE posts (title TEXT, author_id TEXT)",
+                    name="posts",
                     glob="posts/*.json",
+                    columns=[
+                        {"name": "title", "type": "TEXT"},
+                        {"name": "author_id", "type": "TEXT"},
+                    ],
                     extract=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
                 ),
                 Table(
-                    ddl="CREATE TABLE authors (id TEXT, name TEXT)",
+                    name="authors",
                     glob="authors/*.json",
+                    columns=[
+                        {"name": "id", "type": "TEXT"},
+                        {"name": "name", "type": "TEXT"},
+                    ],
                     extract=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
@@ -261,8 +292,11 @@ def describe_tables_guide():
             ignore=["**/node_modules/**"],
             tables=[
                 Table(
-                    ddl="CREATE TABLE items (name TEXT)",
+                    name="items",
                     glob="**/*.json",
+                    columns=[
+                        {"name": "name", "type": "TEXT"},
+                    ],
                     extract=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
@@ -285,8 +319,13 @@ def describe_tables_guide():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE metrics (name TEXT, value REAL, count INTEGER)",
+                    name="metrics",
                     glob="data/*.json",
+                    columns=[
+                        {"name": "name", "type": "TEXT"},
+                        {"name": "value", "type": "REAL"},
+                        {"name": "count", "type": "INTEGER"},
+                    ],
                     extract=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
@@ -311,8 +350,12 @@ def describe_tables_guide():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL)",
+                    name="items",
                     glob="data/*.json",
+                    columns=[
+                        {"name": "id", "type": "TEXT", "primary_key": True},
+                        {"name": "name", "type": "TEXT", "not_null": True},
+                    ],
                     extract=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
@@ -344,8 +387,15 @@ def describe_tables_guide():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE items (text_val TEXT, int_val INTEGER, float_val REAL, bool_val INTEGER, null_val TEXT)",
+                    name="items",
                     glob="*.json",
+                    columns=[
+                        {"name": "text_val", "type": "TEXT"},
+                        {"name": "int_val", "type": "INTEGER"},
+                        {"name": "float_val", "type": "REAL"},
+                        {"name": "bool_val", "type": "INTEGER"},
+                        {"name": "null_val", "type": "TEXT"},
+                    ],
                     extract=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
@@ -483,8 +533,12 @@ def describe_async_guide():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE items (name TEXT, value INTEGER)",
+                    name="items",
                     glob="data/*.json",
+                    columns=[
+                        {"name": "name", "type": "TEXT"},
+                        {"name": "value", "type": "INTEGER"},
+                    ],
                     extract=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
@@ -509,8 +563,12 @@ def describe_async_guide():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE items (name TEXT, value INTEGER)",
+                    name="items",
                     glob="data/*.json",
+                    columns=[
+                        {"name": "name", "type": "TEXT"},
+                        {"name": "value", "type": "INTEGER"},
+                    ],
                     extract=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
@@ -536,8 +594,12 @@ def describe_async_guide():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE items (name TEXT, value INTEGER)",
+                    name="items",
                     glob="data/*.json",
+                    columns=[
+                        {"name": "name", "type": "TEXT"},
+                        {"name": "value", "type": "INTEGER"},
+                    ],
                     extract=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
@@ -569,8 +631,13 @@ def describe_watching_guide():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
+                    name="comments",
                     glob="comments/**/*.json",
+                    columns=[
+                        {"name": "id", "type": "TEXT"},
+                        {"name": "body", "type": "TEXT"},
+                        {"name": "author", "type": "TEXT"},
+                    ],
                     extract=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
@@ -624,8 +691,13 @@ def describe_watching_guide():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
+                    name="comments",
                     glob="comments/**/*.json",
+                    columns=[
+                        {"name": "id", "type": "TEXT"},
+                        {"name": "body", "type": "TEXT"},
+                        {"name": "author", "type": "TEXT"},
+                    ],
                     extract=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
@@ -679,8 +751,13 @@ def describe_watching_guide():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
+                    name="comments",
                     glob="comments/**/*.json",
+                    columns=[
+                        {"name": "id", "type": "TEXT"},
+                        {"name": "body", "type": "TEXT"},
+                        {"name": "author", "type": "TEXT"},
+                    ],
                     extract=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
@@ -730,8 +807,13 @@ def describe_watching_guide():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
+                    name="comments",
                     glob="comments/**/*.json",
+                    columns=[
+                        {"name": "id", "type": "TEXT"},
+                        {"name": "body", "type": "TEXT"},
+                        {"name": "author", "type": "TEXT"},
+                    ],
                     extract=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
@@ -812,8 +894,11 @@ def describe_api_reference():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE items (name TEXT)",
+                    name="items",
                     glob="data/*.json",
+                    columns=[
+                        {"name": "name", "type": "TEXT"},
+                    ],
                     extract=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],

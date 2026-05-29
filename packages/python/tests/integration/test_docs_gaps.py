@@ -45,8 +45,12 @@ def describe_tables_guide_bytes_to_blob():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE blobs (name TEXT, data BLOB)",
+                    name="blobs",
                     glob="*.json",
+                    columns=[
+                        {"name": "name", "type": "TEXT"},
+                        {"name": "data", "type": "BLOB"},
+                    ],
                     extract=lambda path: [{"name": "bin", "data": payload}],
                 ),
             ],
@@ -76,8 +80,11 @@ def describe_strict_mode_gap():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE items (name TEXT)",
+                    name="items",
                     glob="*.json",
+                    columns=[
+                        {"name": "name", "type": "TEXT"},
+                    ],
                     extract=lambda path: [{"name": "apple", "color": "red"}],
                     strict=True,
                 ),
@@ -96,8 +103,12 @@ def describe_strict_mode_gap():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE items (name TEXT, color TEXT)",
+                    name="items",
                     glob="*.json",
+                    columns=[
+                        {"name": "name", "type": "TEXT"},
+                        {"name": "color", "type": "TEXT"},
+                    ],
                     extract=lambda path: [{"name": "apple", "color": "red"}],
                     strict=True,
                 ),
@@ -135,8 +146,12 @@ def describe_watching_guide_positional_identity_gap():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE rows (idx INTEGER, name TEXT)",
+                    name="rows",
                     glob="*.jsonl",
+                    columns=[
+                        {"name": "idx", "type": "INTEGER"},
+                        {"name": "name", "type": "TEXT"},
+                    ],
                     extract=lambda path: [
                         json.loads(line)
                         for line in open(path, encoding="utf-8").read().splitlines()
@@ -215,8 +230,11 @@ def describe_watching_guide_positional_identity_gap():
             tmp_dir,
             tables=[
                 Table(
-                    ddl="CREATE TABLE items (name TEXT)",
+                    name="items",
                     glob="**/*.json",
+                    columns=[
+                        {"name": "name", "type": "TEXT"},
+                    ],
                     extract=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],

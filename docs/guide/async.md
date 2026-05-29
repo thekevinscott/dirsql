@@ -22,8 +22,12 @@ async def main():
         "./my-project",
         tables=[
             Table(
-                ddl="CREATE TABLE items (name TEXT, value INTEGER)",
+                name="items",
                 glob="data/*.json",
+                columns=[
+                    {"name": "name", "type": "TEXT"},
+                    {"name": "value", "type": "INTEGER"},
+                ],
                 extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
             ),
         ],
@@ -37,16 +41,20 @@ asyncio.run(main())
 ```
 
 ```rust [Rust]
-use dirsql::{DirSQL, Table};
+use dirsql::{Column, ColumnType, DirSQL, Table};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = DirSQL::new(
         "./my-project",
         vec![
-            Table::new(
-                "CREATE TABLE items (name TEXT, value INTEGER)",
+            Table::from_columns(
+                "items",
                 "data/*.json",
+                vec![
+                    Column::new("name", ColumnType::Text),
+                    Column::new("value", ColumnType::Integer),
+                ],
                 |path| vec![serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()],
             ),
         ],
@@ -66,8 +74,12 @@ const db = new DirSQL({
   root: './my-project',
   tables: [
     new Table({
-      ddl: 'CREATE TABLE items (name TEXT, value INTEGER)',
+      name: 'items',
       glob: 'data/*.json',
+      columns: [
+        { name: 'name', type: 'TEXT' },
+        { name: 'value', type: 'INTEGER' },
+      ],
       extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
     }),
   ],

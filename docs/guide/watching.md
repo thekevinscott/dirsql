@@ -24,8 +24,13 @@ db = DirSQL(
     "./my-project",
     tables=[
         Table(
-            ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
+            name="comments",
             glob="comments/**/*.json",
+            columns=[
+                {"name": "id", "type": "TEXT"},
+                {"name": "body", "type": "TEXT"},
+                {"name": "author", "type": "TEXT"},
+            ],
             extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
     ],
@@ -36,7 +41,7 @@ async for event in db.watch():
 ```
 
 ```rust [Rust]
-use dirsql::{DirSQL, RowEvent, Table, Value};
+use dirsql::{Column, ColumnType, DirSQL, RowEvent, Table, Value};
 use futures::StreamExt;
 use std::collections::HashMap;
 
@@ -64,9 +69,14 @@ fn row_from_json(raw: &str) -> HashMap<String, Value> {
 let db = DirSQL::new(
     "./my-project",
     vec![
-        Table::new(
-            "CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
+        Table::from_columns(
+            "comments",
             "comments/**/*.json",
+            vec![
+                Column::new("id", ColumnType::Text),
+                Column::new("body", ColumnType::Text),
+                Column::new("author", ColumnType::Text),
+            ],
             |path| vec![row_from_json(&std::fs::read_to_string(path).unwrap())],
         ),
     ],
@@ -97,8 +107,13 @@ import { DirSQL, type TableDef } from 'dirsql';
 
 const tables: TableDef[] = [
   {
-    ddl: 'CREATE TABLE comments (id TEXT, body TEXT, author TEXT)',
+    name: 'comments',
     glob: 'comments/**/*.json',
+    columns: [
+      { name: 'id', type: 'TEXT' },
+      { name: 'body', type: 'TEXT' },
+      { name: 'author', type: 'TEXT' },
+    ],
     extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
   },
 ];

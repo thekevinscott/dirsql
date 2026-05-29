@@ -15,11 +15,35 @@ canonical: https://thekevinscott.github.io/dirsql/cli/config
 ignore = ["node_modules/**", ".git/**"]
 
 [[table]]
-ddl  = "CREATE TABLE posts (_path TEXT, _basename TEXT, _size INTEGER, _mtime INTEGER)"
+name = "posts"
 glob = "posts/*.md"
+
+  [[table.column]]
+  name = "_path"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_basename"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_size"
+  type = "INTEGER"
+
+  [[table.column]]
+  name = "_mtime"
+  type = "INTEGER"
 ```
 
-Each `posts/*.md` file produces one row in the `posts` table.
+Each table is defined by a `name`, a `glob`, and a list of `[[table.column]]`
+blocks (each with a `name` and a `type`). Every `posts/*.md` file produces one
+row in the `posts` table.
+
+::: tip Deprecated: `ddl`
+Earlier versions defined a table with a single `ddl = "CREATE TABLE ..."` key
+instead of `name` + `[[table.column]]` blocks. The `ddl` key still works but is
+**deprecated** and slated for removal; use the structured form for new configs.
+:::
 
 ## Loading a Config File
 
@@ -72,7 +96,7 @@ ignore = ["node_modules/**"]
 ## Stat Virtuals
 
 Every config-defined table can expose any of these reserved columns. Add
-the ones you want to your DDL; the rest are silently dropped.
+the ones you want as `[[table.column]]` entries; the rest are silently dropped.
 
 | Column | Type    | Source |
 |--------|---------|--------|
@@ -96,12 +120,24 @@ ORDER BY _mtime DESC;
 ## Path Captures
 
 Use `{name}` in glob patterns to extract path segments as columns. Add a
-matching column name to the DDL and the capture is auto-populated:
+matching `[[table.column]]` entry and the capture is auto-populated:
 
 ```toml
 [[table]]
-ddl  = "CREATE TABLE comments (thread_id TEXT, _basename TEXT, _mtime INTEGER)"
+name = "comments"
 glob = "_comments/{thread_id}/*.jsonl"
+
+  [[table.column]]
+  name = "thread_id"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_basename"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_mtime"
+  type = "INTEGER"
 ```
 
 A file at `_comments/abc123/2024-05-05.jsonl` produces a row with
@@ -137,19 +173,23 @@ storage layout, and limitations.
 
 ## Strict Mode
 
-By default, auto-injected virtuals that aren't in the DDL are silently
-dropped, and undeclared user-extract keys are dropped. Enable strict mode
-to error when an extract emits keys not declared in the DDL:
+By default, auto-injected virtuals that aren't declared as columns are
+silently dropped, and undeclared user-extract keys are dropped. Enable strict
+mode to error when an extract emits keys not declared in the table's columns:
 
 ```toml
 [[table]]
-ddl  = "CREATE TABLE comments (thread_id TEXT)"
+name = "comments"
 glob = "_comments/{thread_id}/*.jsonl"
 strict = true
+
+  [[table.column]]
+  name = "thread_id"
+  type = "TEXT"
 ```
 
 Strict mode does **not** apply to auto-injected stat virtuals — those are
-always filtered to the DDL's declared columns regardless. Strict mode
+always filtered to the declared columns regardless. Strict mode
 applies only to keys produced by an extract callback (relevant for
 programmatic [tables](../guide/tables.md)).
 
@@ -160,16 +200,52 @@ programmatic [tables](../guide/tables.md)).
 ignore = ["node_modules/**", ".git/**", "dist/**"]
 
 [[table]]
-ddl  = "CREATE TABLE comments (thread_id TEXT, _basename TEXT, _mtime INTEGER)"
+name = "comments"
 glob = "_comments/{thread_id}/*.jsonl"
 
-[[table]]
-ddl  = "CREATE TABLE documents (_path TEXT, _basename TEXT, _size INTEGER)"
-glob = "**/index.md"
+  [[table.column]]
+  name = "thread_id"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_basename"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_mtime"
+  type = "INTEGER"
 
 [[table]]
-ddl  = "CREATE TABLE logs (_path TEXT, _size INTEGER, _mtime INTEGER)"
+name = "documents"
+glob = "**/index.md"
+
+  [[table.column]]
+  name = "_path"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_basename"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_size"
+  type = "INTEGER"
+
+[[table]]
+name = "logs"
 glob = "logs/*.csv"
+
+  [[table.column]]
+  name = "_path"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_size"
+  type = "INTEGER"
+
+  [[table.column]]
+  name = "_mtime"
+  type = "INTEGER"
 ```
 
 ## When you need parsed content

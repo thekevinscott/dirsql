@@ -24,8 +24,20 @@ my-downloads/
 
 ```toml
 [[table]]
-ddl  = "CREATE TABLE files (_path TEXT, _ext TEXT, _size INTEGER)"
+name = "files"
 glob = "*"
+
+  [[table.column]]
+  name = "_path"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_ext"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_size"
+  type = "INTEGER"
 ```
 
 ### Path captures
@@ -42,8 +54,20 @@ photos/
 
 ```toml
 [[table]]
-ddl  = "CREATE TABLE photos (month TEXT, _basename TEXT, _mtime INTEGER)"
+name = "photos"
 glob = "{month}/*.jpg"
+
+  [[table.column]]
+  name = "month"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_basename"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_mtime"
+  type = "INTEGER"
 ```
 
 ### Multiple tables
@@ -61,12 +85,36 @@ my-blog/
 
 ```toml
 [[table]]
-ddl  = "CREATE TABLE posts (_basename TEXT, _mtime INTEGER, _size INTEGER)"
+name = "posts"
 glob = "posts/*.md"
 
+  [[table.column]]
+  name = "_basename"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_mtime"
+  type = "INTEGER"
+
+  [[table.column]]
+  name = "_size"
+  type = "INTEGER"
+
 [[table]]
-ddl  = "CREATE TABLE comments (thread_id TEXT, _basename TEXT, _mtime INTEGER)"
+name = "comments"
 glob = "_comments/{thread_id}/*.jsonl"
+
+  [[table.column]]
+  name = "thread_id"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_basename"
+  type = "TEXT"
+
+  [[table.column]]
+  name = "_mtime"
+  type = "INTEGER"
 ```
 
 `init` will not overwrite an existing config without `--force`.
