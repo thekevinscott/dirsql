@@ -73,7 +73,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@nightly
         with:
           components: llvm-tools-preview
 
@@ -90,7 +90,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Run coverage
-        run: cargo llvm-cov --manifest-path packages/rust/Cargo.toml --features cli --fail-under-lines 90
+        run: cargo llvm-cov --manifest-path packages/rust/Cargo.toml --features cli --branch --fail-under-branches 65 --fail-under-lines 90
 
   lint:
     name: Lint
