@@ -259,15 +259,17 @@ pub(crate) fn render_create_table(
 ) -> String {
     let mut parts: Vec<String> = columns.iter().map(Column::render).collect();
 
+    // Tracking columns are column-defs and must precede any table-level
+    // constraints (SQLite requires all column-defs before table-constraints).
+    parts.push("_dirsql_file_path TEXT NOT NULL".to_string());
+    parts.push("_dirsql_row_index INTEGER NOT NULL".to_string());
+
     if !primary_key.is_empty() {
         parts.push(format!("PRIMARY KEY ({})", primary_key.join(", ")));
     }
     for uq in unique {
         parts.push(format!("UNIQUE ({})", uq.join(", ")));
     }
-
-    parts.push("_dirsql_file_path TEXT NOT NULL".to_string());
-    parts.push("_dirsql_row_index INTEGER NOT NULL".to_string());
 
     let mut options: Vec<&str> = Vec::new();
     if without_rowid {

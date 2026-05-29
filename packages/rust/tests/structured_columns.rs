@@ -113,8 +113,9 @@ fn to_ddl_golden_table_level() {
     t.without_rowid = true;
     assert_eq!(
         t.to_ddl().unwrap(),
-        "CREATE TABLE t (a TEXT, b TEXT, PRIMARY KEY (a, b), UNIQUE (a, b), \
-         _dirsql_file_path TEXT NOT NULL, _dirsql_row_index INTEGER NOT NULL) WITHOUT ROWID"
+        "CREATE TABLE t (a TEXT, b TEXT, \
+         _dirsql_file_path TEXT NOT NULL, _dirsql_row_index INTEGER NOT NULL, \
+         PRIMARY KEY (a, b), UNIQUE (a, b)) WITHOUT ROWID"
     );
 
     t.indexes = vec![Index {
@@ -188,6 +189,42 @@ fn structured_table_indexes_data_end_to_end() {
         .unwrap();
     assert_eq!(idx.len(), 1);
     assert_eq!(idx[0]["uq"], Value::Integer(1));
+}
+
+#[test]
+fn composite_primary_key_builds_and_queries() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("a.md"), "x").unwrap();
+    let mut t = Table::from_columns(
+        "t",
+        "*.md",
+        vec![
+            Column::new("a", ColumnType::Text),
+            Column::new("b", ColumnType::Text),
+        ],
+        |_| {
+            vec![HashMap::from([
+                ("a".into(), Value::Text("1".into())),
+                ("b".into(), Value::Text("2".into())),
+            ])]
+        },
+    );
+    t.primary_key = vec!["a".into(), "b".into()];
+    t.unique = vec![vec!["a".into(), "b".into()]];
+
+    // SQLite executes the rendered DDL here, so an invalid column/constraint
+    // order would surface as a build error.
+    let db = DirSQL::new(root.path(), vec![t]).unwrap();
+
+    let rows = db.query("SELECT a, b FROM t").unwrap();
+    assert_eq!(rows.len(), 1);
+
+    let pk = db
+        .query("SELECT name, pk FROM pragma_table_info('t') WHERE pk > 0 ORDER BY pk")
+        .unwrap();
+    assert_eq!(pk.len(), 2);
+    assert_eq!(pk[0]["name"], Value::Text("a".into()));
+    assert_eq!(pk[1]["name"], Value::Text("b".into()));
 }
 
 #[test]
