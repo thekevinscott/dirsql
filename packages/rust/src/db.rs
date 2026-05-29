@@ -48,9 +48,21 @@ impl Db {
 
     /// Create a table from a user-provided DDL statement.
     /// Automatically injects internal tracking columns (_dirsql_file_path, _dirsql_row_index).
+    ///
+    /// This is the legacy `ddl=` path. Structured tables instead render a
+    /// complete statement (tracking columns already appended) via
+    /// [`crate::Table::to_ddl`] and run it through [`Db::execute_ddl`].
     pub fn create_table(&self, ddl: &str) -> Result<()> {
         let augmented = inject_tracking_columns(ddl)?;
         self.conn.execute(&augmented, [])?;
+        Ok(())
+    }
+
+    /// Execute a complete `CREATE TABLE` / `CREATE INDEX` statement verbatim,
+    /// with no tracking-column injection. Used by the structured-schema path,
+    /// where the renderer has already appended the tracking columns.
+    pub fn execute_ddl(&self, ddl: &str) -> Result<()> {
+        self.conn.execute(ddl, [])?;
         Ok(())
     }
 

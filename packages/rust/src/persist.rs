@@ -109,8 +109,21 @@ pub fn hash_file(path: &Path) -> io::Result<[u8; 32]> {
 pub fn compute_glob_config_hash(tables: &[Table], ignore: &[String]) -> String {
     let mut entries: BTreeMap<String, (String, String, bool)> = BTreeMap::new();
     for table in tables {
-        let name = crate::db::parse_table_name(&table.ddl).unwrap_or_default();
-        entries.insert(name, (table.ddl.clone(), table.glob.clone(), table.strict));
+        let name = table.resolved_name().unwrap_or_default();
+        // Schema fingerprint: the rendered DDL (+ index statements) for a
+        // structured table so a column change invalidates the cache, or the
+        // raw DDL for the legacy `ddl=` shim.
+        let schema = if table.is_columns_based() {
+            let mut s = table.to_ddl().unwrap_or_default();
+            for index_ddl in table.index_ddls().unwrap_or_default() {
+                s.push('\n');
+                s.push_str(&index_ddl);
+            }
+            s
+        } else {
+            table.ddl.clone().unwrap_or_default()
+        };
+        entries.insert(name, (schema, table.glob.clone(), table.strict));
     }
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"v1\n");

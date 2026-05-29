@@ -18,6 +18,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory; no ignores are applied, so every file is indexed. A
   `.dirsql.toml`, when present, fully overrules the default. (#184)
 
+- **Structured column definitions.** Tables can now be defined with a
+  structured `columns` list (each `{ name, type, ... }`) plus table-level
+  `primary_key`, `unique`, `indexes`, `without_rowid`, and `strict_types`
+  fields, instead of a hand-written `CREATE TABLE` DDL string. The Rust
+  core renders the schema from one shared renderer (`Table::to_ddl`), so
+  the same logical definition expressed in the Rust, Python, and
+  TypeScript SDKs and in `.dirsql.toml` produces an identical SQLite
+  schema. `type` is one of `TEXT`, `INTEGER`, `REAL`, `BLOB`, `NUMERIC`;
+  column constraints are `not_null`, `primary_key`, `unique`,
+  `autoincrement`, `collate`, and `default`. Arbitrary SQL — `CHECK`,
+  expression `DEFAULT`, and `GENERATED` columns — rides through verbatim
+  via a `{ sql: "..." }` escape hatch, with SQLite as the validator. The
+  Python SDK additionally exports the `TEXT`/`INTEGER`/`REAL`/`BLOB`/
+  `NUMERIC` type strings for autocomplete. (#202)
+
 ### Changed
 
 - **`extract` callbacks no longer receive file content.** The `extract`
@@ -32,6 +47,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   files without aborting the build. Breaking change across the Python,
   Rust, and TypeScript SDKs; `.dirsql.toml` config users are
   unaffected. See `MIGRATIONS.md`. (#184)
+
+### Deprecated
+
+- **Raw `ddl=` table definitions.** Defining a table with a raw `CREATE
+  TABLE` string — `Table(ddl=...)` (Python), `Table::new(ddl, ...)` /
+  `Table::try_new` / `Table::strict` (Rust), `{ ddl, ... }` (TypeScript),
+  and `ddl = "..."` (`.dirsql.toml`) — is deprecated in favor of the
+  structured `columns` shape above. The shim still works and emits a
+  deprecation warning on use; supplying both `ddl` and `columns` for the
+  same table is an error. Planned for removal one minor release after
+  this one. See `MIGRATIONS.md`. (#202)
 
 ### Removed
 

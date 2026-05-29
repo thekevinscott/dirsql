@@ -11,6 +11,79 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### Structured column definitions (`ddl=` deprecated)
+
+#### Summary
+
+Tables are now defined with a structured `columns` list and table-level
+fields (`primary_key`, `unique`, `indexes`, `without_rowid`,
+`strict_types`) instead of a raw `CREATE TABLE` DDL string. This affects
+every table-definition call site across the Rust, Python, and TypeScript
+SDKs and `.dirsql.toml`. The change is **additive**: the legacy `ddl=`
+shape still works behind a deprecation shim, so no existing code breaks in
+this release. Two behaviors change: using `ddl=` now emits a deprecation
+warning, and supplying both `ddl` and `columns` for the same table is a
+hard error. The `ddl=` shim is scheduled for removal one minor release
+later; migrate now to avoid the break.
+
+#### Required changes
+
+Migration is recommended (not yet required). Translate each `CREATE TABLE`
+into the structured shape:
+
+| Surface | Before | After |
+|---------|--------|-------|
+| Python | `Table(ddl="CREATE TABLE docs (title TEXT NOT NULL, body TEXT)", glob="**/*.md", extract=fn)` | `Table(name="docs", glob="**/*.md", columns=[{"name": "title", "type": "TEXT", "not_null": True}, {"name": "body", "type": "TEXT"}], extract=fn)` |
+| Rust | `Table::new("CREATE TABLE docs (title TEXT, body TEXT)", "**/*.md", fn)` | `Table::from_columns("docs", "**/*.md", vec![Column::new("title", ColumnType::Text), Column::new("body", ColumnType::Text)], fn)` |
+| TypeScript | `{ ddl: "CREATE TABLE docs (title TEXT, body TEXT)", glob: "**/*.md", extract }` | `{ name: "docs", glob: "**/*.md", columns: [{ name: "title", type: "TEXT" }, { name: "body", type: "TEXT" }], extract }` |
+| `.dirsql.toml` | `[[table]]`\n`ddl = "CREATE TABLE docs (title TEXT)"`\n`glob = "**/*.md"` | `[[table]]`\n`name = "docs"`\n`glob = "**/*.md"`\n`  [[table.column]]`\n`  name = "title"`\n`  type = "TEXT"` |
+
+`CHECK`, expression `DEFAULT`, and `GENERATED` columns use the
+`{ sql: "..." }` escape hatch, e.g. Python
+`{"name": "body", "type": "TEXT", "check": {"sql": "length(body) > 0"}}`.
+
+#### Deprecations removed
+
+_None._ The `ddl=` shape is newly deprecated this release but still
+functions; nothing is removed yet.
+
+#### Behavior changes without code changes
+
+- Defining a table with `ddl=` now emits a deprecation warning
+  (Python `DeprecationWarning`, TypeScript `console.warn`, `.dirsql.toml`
+  a stderr notice).
+- Supplying both `ddl` and `columns` for the same table now raises an
+  error (`ValueError` in Python, a rejected `ready` in TypeScript,
+  `DirSqlError::MixedTableDefinition` in Rust) instead of silently
+  preferring one.
+
+#### Verification
+
+Confirm the structured shape produces the expected schema (Python):
+
+```bash
+python - <<'PY'
+import asyncio, tempfile
+from dirsql import DirSQL, Table
+
+async def main():
+    with tempfile.TemporaryDirectory() as d:
+        db = DirSQL(d, tables=[Table(
+            name="docs", glob="**/*.md",
+            columns=[{"name": "title", "type": "TEXT", "not_null": True}],
+            extract=lambda p: [],
+        )])
+        await db.ready()
+        rows = await db.query(
+            'SELECT name, type, "notnull" AS nn FROM pragma_table_info(\'docs\')'
+        )
+        print([r for r in rows if not r["name"].startswith("_dirsql_")])
+
+asyncio.run(main())
+PY
+# Expected: [{'name': 'title', 'type': 'TEXT', 'nn': 1}]
+```
+
 ### Python 3.10 support dropped
 
 #### Summary

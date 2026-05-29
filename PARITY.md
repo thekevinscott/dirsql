@@ -6,7 +6,9 @@ API surface comparison across the three language SDKs.
 
 | Concept     | Python                  | Rust                     | TypeScript               |
 |-------------|-------------------------|--------------------------|--------------------------|
-| Table def   | `Table(ddl, glob, extract, strict)` | `Table::new(ddl, glob, extract)` / `Table::strict(...)` / `Table::try_new(...)` | `{ ddl, glob, extract, strict? }` (plain object) |
+| Table def   | `Table(name, glob, columns, extract, strict, primary_key?, unique?, indexes?, without_rowid?, strict_types?)` | `Table::from_columns(name, glob, columns, extract)` + table-level fields | `{ name, glob, columns, extract, strict?, primaryKey?, unique?, indexes?, withoutRowid?, strictTypes? }` (plain object) |
+| Table def (legacy, deprecated) | `Table(ddl, glob, extract, strict)` | `Table::new(ddl, ...)` / `Table::strict(...)` / `Table::try_new(...)` | `{ ddl, glob, extract, strict? }` |
+| Column def  | `dict` (`{"name", "type", "not_null", ...}`) | `Column { name, ty, not_null, ... }` | `{ name, type, notNull?, ... }` |
 | Extract callback | `(path) -> list[dict]` | `Fn(&str) -> Vec<Row>` | `(path) => Record<string, unknown>[]` |
 | Row event   | `RowEvent` (class, frozen attrs; `file_path` on all variants) | `RowEvent` (enum: Insert/Update/Delete/Error; `file_path` on all variants) | `RowEvent` (plain object with action string; `filePath` on all variants) |
 | Row type    | `dict[str, Any]`        | `HashMap<String, Value>` | `Record<string, unknown>` |
@@ -73,7 +75,7 @@ for await (const event of db.watch()) { ... }
 
 ### Rust
 - Uses `snake_case` for all identifiers.
-- `Table` has separate constructors: `new` (infallible extract), `try_new` (fallible extract), `strict` (shorthand).
+- `Table` has separate constructors: `from_columns` (structured, infallible extract), `try_from_columns` (structured, fallible extract), and the deprecated legacy `new` / `try_new` / `strict` (raw `ddl`). Table-level options (`primary_key`, `unique`, `indexes`, `without_rowid`, `strict_types`) are public fields set on the returned `Table`.
 - `RowEvent` is a Rust enum with variants (`Insert { table, row, file_path }`, `Update { table, old_row, new_row, file_path }`, `Delete { table, row, file_path }`, `Error { table, file_path, error }`) rather than a flat struct. `file_path` is a relative `String` on Insert/Update/Delete and a `PathBuf` on Error. `table` is `String` on Insert/Update/Delete and `Option<String>` on Error — `None` for errors that aren't tied to a specific table (e.g. a watch-channel failure). Python exposes the same field as `Optional[str]`; TypeScript as `string | null`.
 - Construction uses a builder (`DirSQL::builder()...build()`); the `new`/`with_ignore`/`from_config`/`from_config_path` shortcuts remain as thin wrappers delegating to the builder.
 - `AsyncDirSQL` uses tokio and `OnceCell` internally.
@@ -83,7 +85,7 @@ for await (const event of db.watch()) { ... }
 ### TypeScript
 - Uses `camelCase` for method names.
 - `RowEvent` field names use `camelCase` (`oldRow`, `filePath`), not `snake_case`.
-- Table definitions are plain objects (`{ ddl, glob, extract, strict? }`), not a class.
+- Table definitions are plain objects (`{ name, glob, columns, extract, strict?, ... }`; legacy `{ ddl, ... }` deprecated), not a class. Column field names use `camelCase` (`notNull`, `primaryKey`).
 - The constructor is overloaded: `new DirSQL(configPath: string)` or `new DirSQL(options: { root?, tables?, ignore?, config? })`. There is no separate `fromConfig` factory.
 - No separate `AsyncDirSQL` — JS is async by default, so `DirSQL` has `ready: Promise<void>`, `query(): Promise<Record[]>`, and `watch(): AsyncIterable<RowEvent>` built in.
 - `query()`, `startWatcher()`, and `pollEvents()` all return `Promise`s and run on the libuv threadpool so the JS event loop stays responsive (even for long poll timeouts).

@@ -20,6 +20,8 @@ pub mod persist;
 #[doc(hidden)]
 pub mod scanner;
 #[doc(hidden)]
+pub mod schema;
+#[doc(hidden)]
 pub mod watcher;
 
 #[cfg(feature = "cli")]
@@ -49,6 +51,9 @@ use thiserror::Error;
 
 pub use crate::db::{DbError, Value};
 pub use crate::differ::RowEvent;
+pub use crate::schema::{
+    Column, ColumnType, DefaultValue, Expression, GeneratedColumn, GeneratedMode, Index,
+};
 #[doc(hidden)]
 pub use crate::watcher::FileEvent as RawFileEvent;
 
@@ -80,6 +85,12 @@ pub enum DirSqlError {
 
     #[error("table DDL could not be parsed: {0}")]
     Ddl(String),
+
+    #[error("table '{0}': set either `ddl` or `columns`, not both")]
+    MixedTableDefinition(String),
+
+    #[error("invalid table definition: {0}")]
+    Schema(String),
 
     #[error("duplicate table name: {0}")]
     DuplicateTable(String),
@@ -113,13 +124,35 @@ pub type Result<T> = std::result::Result<T, DirSqlError>;
 /// exactly.
 #[derive(Clone)]
 pub struct Table {
-    pub ddl: String,
+    /// Table name. Set for structured (`columns`-based) tables; empty for
+    /// legacy `ddl`-based tables, whose name is parsed from the DDL string.
+    pub name: String,
+    /// Legacy `CREATE TABLE` DDL string. `Some` only for the deprecated
+    /// `Table::new` / `try_new` / `strict` constructors; structured tables
+    /// leave this `None` and carry [`columns`](Table::columns) instead.
+    pub ddl: Option<String>,
     pub glob: String,
     pub strict: bool,
+    /// Structured column definitions. Empty for legacy `ddl`-based tables.
+    pub columns: Vec<Column>,
+    /// Composite primary key (column names). Empty when unused.
+    pub primary_key: Vec<String>,
+    /// Composite `UNIQUE` constraints, each a list of column names.
+    pub unique: Vec<Vec<String>>,
+    /// Table-level indexes.
+    pub indexes: Vec<Index>,
+    /// Emit `WITHOUT ROWID`.
+    pub without_rowid: bool,
+    /// Emit SQLite `STRICT` table mode (distinct from dirsql [`strict`](Table::strict)).
+    pub strict_types: bool,
     extract: Arc<ExtractFn>,
 }
 
 impl Table {
+    /// Legacy constructor: build a table from a raw `CREATE TABLE` DDL string.
+    ///
+    /// Deprecated in favor of [`Table::from_columns`]; retained as a shim so
+    /// existing callers keep working. See issue #202.
     pub fn new<F>(ddl: impl Into<String>, glob: impl Into<String>, extract: F) -> Self
     where
         F: Fn(&str) -> Vec<Row> + Send + Sync + 'static,
@@ -129,6 +162,7 @@ impl Table {
         })
     }
 
+    /// Like [`Table::new`] but with dirsql `strict` row validation enabled.
     pub fn strict<F>(ddl: impl Into<String>, glob: impl Into<String>, extract: F) -> Self
     where
         F: Fn(&str) -> Vec<Row> + Send + Sync + 'static,
@@ -138,16 +172,127 @@ impl Table {
         table
     }
 
+    /// Legacy fallible constructor (raw DDL).
     pub fn try_new<F>(ddl: impl Into<String>, glob: impl Into<String>, extract: F) -> Self
     where
         F: Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static,
     {
         Self {
-            ddl: ddl.into(),
+            name: String::new(),
+            ddl: Some(ddl.into()),
             glob: glob.into(),
-            extract: Arc::new(extract),
             strict: false,
+            columns: Vec::new(),
+            primary_key: Vec::new(),
+            unique: Vec::new(),
+            indexes: Vec::new(),
+            without_rowid: false,
+            strict_types: false,
+            extract: Arc::new(extract),
         }
+    }
+
+    /// Build a table from a structured [`Column`] list (issue #202). Pair with
+    /// the table-level fields (`primary_key`, `unique`, `indexes`,
+    /// `without_rowid`, `strict_types`) by assigning them on the returned value.
+    pub fn from_columns<F>(
+        name: impl Into<String>,
+        glob: impl Into<String>,
+        columns: Vec<Column>,
+        extract: F,
+    ) -> Self
+    where
+        F: Fn(&str) -> Vec<Row> + Send + Sync + 'static,
+    {
+        Self::try_from_columns(name, glob, columns, move |path| {
+            Ok::<Vec<Row>, BoxError>(extract(path))
+        })
+    }
+
+    /// Fallible counterpart to [`Table::from_columns`].
+    pub fn try_from_columns<F>(
+        name: impl Into<String>,
+        glob: impl Into<String>,
+        columns: Vec<Column>,
+        extract: F,
+    ) -> Self
+    where
+        F: Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static,
+    {
+        Self {
+            name: name.into(),
+            ddl: None,
+            glob: glob.into(),
+            strict: false,
+            columns,
+            primary_key: Vec::new(),
+            unique: Vec::new(),
+            indexes: Vec::new(),
+            without_rowid: false,
+            strict_types: false,
+            extract: Arc::new(extract),
+        }
+    }
+
+    /// `true` when this table carries structured `columns` rather than a legacy
+    /// `ddl` string.
+    pub fn is_columns_based(&self) -> bool {
+        self.ddl.is_none()
+    }
+
+    /// Resolve the table name, validating the definition shape.
+    ///
+    /// Errors with [`DirSqlError::MixedTableDefinition`] when both `ddl` and
+    /// `columns` are set, [`DirSqlError::Ddl`] when a legacy DDL can't be
+    /// parsed, and [`DirSqlError::Schema`] when a structured table has no name.
+    pub fn resolved_name(&self) -> Result<String> {
+        if self.ddl.is_some() && !self.columns.is_empty() {
+            let label = if self.name.is_empty() {
+                self.glob.clone()
+            } else {
+                self.name.clone()
+            };
+            return Err(DirSqlError::MixedTableDefinition(label));
+        }
+        match &self.ddl {
+            Some(ddl) => parse_table_name(ddl).ok_or_else(|| DirSqlError::Ddl(ddl.clone())),
+            None => {
+                if self.name.is_empty() {
+                    Err(DirSqlError::Schema(
+                        "structured table is missing a `name`".into(),
+                    ))
+                } else {
+                    Ok(self.name.clone())
+                }
+            }
+        }
+    }
+
+    /// Render the full `CREATE TABLE` statement (including the internal
+    /// tracking columns) from the structured shape. Errors for legacy
+    /// `ddl`-based tables — use the stored `ddl` directly for those.
+    pub fn to_ddl(&self) -> Result<String> {
+        let name = self.resolved_name()?;
+        if self.is_columns_based() {
+            Ok(schema::render_create_table(
+                &name,
+                &self.columns,
+                &self.primary_key,
+                &self.unique,
+                self.without_rowid,
+                self.strict_types,
+            ))
+        } else {
+            Err(DirSqlError::Schema(format!(
+                "table '{name}' has no structured columns to render"
+            )))
+        }
+    }
+
+    /// Render the `CREATE INDEX` statements for this table's [`indexes`](Table::indexes).
+    pub fn index_ddls(&self) -> Result<Vec<String>> {
+        let name = self.resolved_name()?;
+        Ok(self.indexes.iter().map(|idx| idx.render(&name)).collect())
     }
 }
 
@@ -616,20 +761,30 @@ impl DirSQL {
 
         let mut extract_map: HashMap<String, Arc<ExtractFn>> = HashMap::new();
         let mut strict_map: HashMap<String, bool> = HashMap::new();
-        let mut ddl_map: HashMap<String, String> = HashMap::new();
 
         for table in tables {
-            let table_name =
-                parse_table_name(&table.ddl).ok_or_else(|| DirSqlError::Ddl(table.ddl.clone()))?;
+            let table_name = table.resolved_name()?;
             // When the cache already holds this table from a prior run,
             // skip CREATE TABLE: the schema is preserved verbatim across
-            // runs (the glob_config_hash captures the DDL).
+            // runs (the glob_config_hash captures the schema).
             if !table_exists(&db, &table_name)? {
-                db.create_table(&table.ddl)?;
+                if table.is_columns_based() {
+                    // Structured path: the renderer appends the tracking
+                    // columns itself, so execute the DDL verbatim (no
+                    // string-surgery injection).
+                    db.execute_ddl(&table.to_ddl()?)?;
+                    for index_ddl in table.index_ddls()? {
+                        db.execute_ddl(&index_ddl)?;
+                    }
+                } else {
+                    // Legacy `ddl=` shim: still inject tracking columns the
+                    // old way. Deprecated; see issue #202.
+                    let ddl = table.ddl.as_deref().unwrap_or_default();
+                    db.create_table(ddl)?;
+                }
             }
             extract_map.insert(table_name.clone(), table.extract);
-            strict_map.insert(table_name.clone(), table.strict);
-            ddl_map.insert(table_name, table.ddl);
+            strict_map.insert(table_name, table.strict);
         }
 
         let mut file_rows: HashMap<String, (String, Vec<Row>)> = HashMap::new();
@@ -999,8 +1154,7 @@ fn compile_matcher(
     let mut mappings: Vec<(String, String)> = Vec::with_capacity(tables.len());
     let mut names = Vec::with_capacity(tables.len());
     for table in tables {
-        let table_name =
-            parse_table_name(&table.ddl).ok_or_else(|| DirSqlError::Ddl(table.ddl.clone()))?;
+        let table_name = table.resolved_name()?;
         if seen.insert(table_name.clone(), ()).is_some() {
             return Err(DirSqlError::DuplicateTable(table_name));
         }
