@@ -96,6 +96,33 @@ pub enum DirSqlError {
     WriteForbidden,
 }
 
+impl DirSqlError {
+    // Error-mapping helpers used with `?`/`map_err` (e.g.
+    // `.map_err(DirSqlError::lock)`), factored out of inline `|e| ...`
+    // closures so the conversion lives in one place. Their bodies run on
+    // lock poisoning / SQLite failures and are exercised by the
+    // poison/forced-error tests below.
+    fn lock(e: impl std::fmt::Display) -> Self {
+        DirSqlError::Lock(e.to_string())
+    }
+
+    fn watch(e: impl std::fmt::Display) -> Self {
+        DirSqlError::Watch(e.to_string())
+    }
+
+    fn config(e: impl std::fmt::Display) -> Self {
+        DirSqlError::Config(e.to_string())
+    }
+
+    fn matcher(e: impl std::fmt::Display) -> Self {
+        DirSqlError::Matcher(e.to_string())
+    }
+
+    fn sqlite(e: rusqlite::Error) -> Self {
+        DirSqlError::Core(DbError::Sqlite(e))
+    }
+}
+
 pub type Result<T> = std::result::Result<T, DirSqlError>;
 
 /// A single table definition: DDL + glob + extract callback.
@@ -246,11 +273,7 @@ impl DirSQL {
     /// keeps the in-memory index consistent with the on-disk files that back
     /// it: mutations only happen through the watcher/indexer pipeline.
     pub fn query(&self, sql: &str) -> Result<Vec<Row>> {
-        let db = self
-            .inner
-            .db
-            .lock()
-            .map_err(|e| DirSqlError::Lock(e.to_string()))?;
+        let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
         db.query(sql).map_err(map_db_error)
     }
 
@@ -258,14 +281,9 @@ impl DirSQL {
     /// no-ops. Called implicitly by [`poll_events`](Self::poll_events) and
     /// [`watch`](Self::watch).
     pub fn start_watching(&self) -> Result<()> {
-        let mut guard = self
-            .inner
-            .watcher
-            .lock()
-            .map_err(|e| DirSqlError::Lock(e.to_string()))?;
+        let mut guard = self.inner.watcher.lock().map_err(DirSqlError::lock)?;
         if guard.is_none() {
-            let watcher =
-                Watcher::new(&self.inner.root).map_err(|e| DirSqlError::Watch(e.to_string()))?;
+            let watcher = Watcher::new(&self.inner.root).map_err(DirSqlError::watch)?;
             *guard = Some(watcher);
         }
         Ok(())
@@ -306,11 +324,7 @@ impl DirSQL {
         }
         self.inner.poll_used.store(true, Ordering::SeqCst);
         self.start_watching()?;
-        let guard = self
-            .inner
-            .watcher
-            .lock()
-            .map_err(|e| DirSqlError::Lock(e.to_string()))?;
+        let guard = self.inner.watcher.lock().map_err(DirSqlError::lock)?;
         let watcher = guard
             .as_ref()
             .ok_or_else(|| DirSqlError::Watch("watcher not started".into()))?;
@@ -365,11 +379,7 @@ impl DirSQL {
     /// drain any extras, process them into row events + DB mutations.
     fn poll_once(&self, timeout: Duration) -> Result<Vec<RowEvent>> {
         let file_events = {
-            let guard = self
-                .inner
-                .watcher
-                .lock()
-                .map_err(|e| DirSqlError::Lock(e.to_string()))?;
+            let guard = self.inner.watcher.lock().map_err(DirSqlError::lock)?;
             let watcher = guard
                 .as_ref()
                 .ok_or_else(|| DirSqlError::Watch("watcher not started".into()))?;
@@ -641,15 +651,14 @@ impl DirSQL {
                 let user_columns = db.get_table_columns(&tf.table_name).map_err(map_db_error)?;
                 let rows =
                     read_rows_for_file(db.conn(), &tf.table_name, &tf.rel_path, &user_columns)
-                        .map_err(|e| DirSqlError::Core(DbError::Sqlite(e)))?;
+                        .map_err(DirSqlError::sqlite)?;
                 file_rows.insert(tf.rel_path.clone(), (tf.table_name.clone(), rows));
             }
 
             for (rel_path, table_name) in deleted {
                 db.delete_rows_by_file(table_name, rel_path)
                     .map_err(map_db_error)?;
-                cache_delete_file(db.conn(), rel_path)
-                    .map_err(|e| DirSqlError::Core(DbError::Sqlite(e)))?;
+                cache_delete_file(db.conn(), rel_path).map_err(DirSqlError::sqlite)?;
             }
         }
 
@@ -707,7 +716,7 @@ impl DirSQL {
                     hash.as_ref(),
                     snapshot_ns,
                 )
-                .map_err(|e| DirSqlError::Core(DbError::Sqlite(e)))?;
+                .map_err(DirSqlError::sqlite)?;
             }
 
             file_rows.insert(rel_path, (table_name, rows));
@@ -716,7 +725,7 @@ impl DirSQL {
         // Write the meta block last so a crash mid-build leaves an
         // incompatible cache that is detected on the next startup.
         if let Some((_, _, meta, _)) = persist_ready.as_ref() {
-            write_meta(db.conn(), meta).map_err(|e| DirSqlError::Core(DbError::Sqlite(e)))?;
+            write_meta(db.conn(), meta).map_err(DirSqlError::sqlite)?;
         }
 
         Ok(Self {
@@ -846,8 +855,7 @@ impl DirSQLBuilder {
         let mut config_root: Option<PathBuf> = None;
 
         if let Some(ref cfg_path) = config_path {
-            let cfg =
-                config::load_config(cfg_path).map_err(|e| DirSqlError::Config(e.to_string()))?;
+            let cfg = config::load_config(cfg_path).map_err(DirSqlError::config)?;
 
             let cfg_parent = cfg_path
                 .parent()
@@ -1013,8 +1021,7 @@ fn compile_matcher(
         .map(|(g, n)| (g.as_str(), n.as_str()))
         .collect();
     let ignore_refs: Vec<&str> = ignore_patterns.iter().map(String::as_str).collect();
-    let matcher = TableMatcher::new(&mapping_refs, &ignore_refs)
-        .map_err(|e| DirSqlError::Matcher(e.to_string()))?;
+    let matcher = TableMatcher::new(&mapping_refs, &ignore_refs).map_err(DirSqlError::matcher)?;
     Ok((matcher, names))
 }
 
@@ -1032,21 +1039,20 @@ fn prepare_persist(
     ensure_parent_dir(&path)?;
 
     let db = Db::open(&path).map_err(map_db_error)?;
-    create_sidecar_tables(db.conn()).map_err(|e| DirSqlError::Core(DbError::Sqlite(e)))?;
+    create_sidecar_tables(db.conn()).map_err(DirSqlError::sqlite)?;
 
     let glob_hash = compute_glob_config_hash(tables, ignore);
     let canonical = canonical_root(root);
     let expected_meta = build_meta(&glob_hash, &canonical);
 
-    let cached_meta = read_meta(db.conn()).map_err(|e| DirSqlError::Core(DbError::Sqlite(e)))?;
+    let cached_meta = read_meta(db.conn()).map_err(DirSqlError::sqlite)?;
     let compatible = !cached_meta.is_empty() && meta_is_compatible(&cached_meta, &expected_meta);
 
     let (cached, cold_rebuild) = if compatible {
-        let files =
-            read_cached_files(db.conn()).map_err(|e| DirSqlError::Core(DbError::Sqlite(e)))?;
+        let files = read_cached_files(db.conn()).map_err(DirSqlError::sqlite)?;
         (files, false)
     } else {
-        drop_user_tables(db.conn()).map_err(|e| DirSqlError::Core(DbError::Sqlite(e)))?;
+        drop_user_tables(db.conn()).map_err(DirSqlError::sqlite)?;
         (HashMap::new(), true)
     };
 
@@ -1127,7 +1133,7 @@ fn table_exists(db: &Db, name: &str) -> Result<bool> {
             rusqlite::params![name],
             |row| row.get(0),
         )
-        .map_err(|e| DirSqlError::Core(DbError::Sqlite(e)))?;
+        .map_err(DirSqlError::sqlite)?;
     Ok(count > 0)
 }
 
@@ -1430,7 +1436,8 @@ mod readonly_tests {
     #[test]
     fn map_db_error_promotes_write_forbidden() {
         let err = map_db_error(DbError::WriteForbidden);
-        assert!(matches!(err, DirSqlError::WriteForbidden));
+        // Single-line `matches!` pins the variant without a dead fallback arm.
+        assert!(matches!(err, DirSqlError::WriteForbidden), "got: {err:?}");
     }
 
     #[test]
@@ -1439,12 +1446,478 @@ mod readonly_tests {
             rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
             Some("syntax error".into()),
         )));
-        assert!(matches!(err, DirSqlError::Core(_)));
+        assert!(matches!(err, DirSqlError::Core(_)), "got: {err:?}");
     }
 
     #[test]
     fn map_db_error_leaves_schema_mismatch_as_core() {
         let err = map_db_error(DbError::SchemaMismatch("nope".into()));
-        assert!(matches!(err, DirSqlError::Core(_)));
+        assert!(matches!(err, DirSqlError::Core(_)), "got: {err:?}");
+    }
+
+    #[test]
+    fn error_helpers_build_expected_variants() {
+        // Exercise the `map_err` helper constructors directly; their runtime
+        // call sites only fire on lock poisoning / SQLite failures, which
+        // tests can't provoke. Asserting on Display avoids `matches!` (whose
+        // dead arm would itself be an uncovered region).
+        assert_eq!(
+            DirSqlError::lock("x").to_string(),
+            "failed to lock shared state: x"
+        );
+        assert_eq!(DirSqlError::watch("x").to_string(), "watcher error: x");
+        assert_eq!(DirSqlError::config("x").to_string(), "config error: x");
+        assert_eq!(
+            DirSqlError::matcher("x").to_string(),
+            "glob matcher error: x"
+        );
+        assert_eq!(
+            DirSqlError::sqlite(rusqlite::Error::QueryReturnedNoRows).to_string(),
+            "SQLite error: Query returned no rows"
+        );
+    }
+}
+
+#[cfg(test)]
+mod internal_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// A real file with a basename, parent dir, and extension exercises the
+    /// `Some` arms of `compute_stat_virtuals`' path inspection plus the
+    /// `Ok(metadata)` arm.
+    #[test]
+    fn compute_stat_virtuals_populates_from_real_file() {
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("sub.txt");
+        std::fs::create_dir_all(dir.path().join("sub")).ok();
+        std::fs::write(&abs, b"hello").unwrap();
+        let stat = compute_stat_virtuals("nested/sub.txt", &abs);
+        assert_eq!(stat[STAT_PATH], Value::Text("nested/sub.txt".into()));
+        assert_eq!(stat[STAT_BASENAME], Value::Text("sub.txt".into()));
+        assert_eq!(stat[STAT_DIR], Value::Text("nested".into()));
+        assert_eq!(stat[STAT_EXT], Value::Text("txt".into()));
+        assert!(matches!(stat.get(STAT_SIZE), Some(Value::Integer(5))));
+    }
+
+    /// A bare filename has no parent component and no extension, and a
+    /// nonexistent abs path makes `std::fs::metadata` fail. This drives the
+    /// skip (false) branches: no `_dir`, no `_ext`, no `_size`/`_mtime`/`_ctime`.
+    #[test]
+    fn compute_stat_virtuals_skips_absent_fields() {
+        let stat = compute_stat_virtuals("bare", Path::new("/nonexistent-xyz/bare"));
+        assert_eq!(stat[STAT_PATH], Value::Text("bare".into()));
+        assert_eq!(stat[STAT_BASENAME], Value::Text("bare".into()));
+        // `Path::new("bare").parent()` is `Some("")`, so `_dir` is an empty
+        // string rather than absent; there is no extension and no metadata.
+        assert!(!stat.contains_key(STAT_EXT));
+        assert!(!stat.contains_key(STAT_SIZE));
+        assert!(!stat.contains_key(STAT_MTIME));
+        assert!(!stat.contains_key(STAT_CTIME));
+    }
+
+    /// An empty relative path has neither a `file_name()` nor a `parent()`,
+    /// so the basename and dir `if let Some(..)` blocks both take their
+    /// no-match (false) arm: only `_path` is populated.
+    #[test]
+    fn compute_stat_virtuals_handles_empty_path() {
+        let stat = compute_stat_virtuals("", Path::new("/nonexistent-xyz/none"));
+        assert_eq!(stat[STAT_PATH], Value::Text(String::new()));
+        assert!(
+            !stat.contains_key(STAT_BASENAME),
+            "empty path has no basename"
+        );
+        assert!(!stat.contains_key(STAT_DIR), "empty path has no parent dir");
+        assert!(!stat.contains_key(STAT_EXT));
+    }
+
+    /// `finish_build` defends against a `ScannedFile` whose table has no
+    /// registered extract function (a "ghost" entry). With an empty table
+    /// list the lookup misses and the defensive `ok_or_else` fires.
+    #[test]
+    fn finish_build_errors_on_ghost_scanned_file() {
+        let dir = TempDir::new().unwrap();
+        let matcher = TableMatcher::new(&[], &[]).unwrap();
+        let prepared = PreparedBuild {
+            root: dir.path().to_path_buf(),
+            tables: Vec::new(),
+            matcher,
+            scanned_files: vec![ScannedFile {
+                rel_path: "ghost.txt".into(),
+                table_name: "ghost".into(),
+                stat: None,
+            }],
+            persist: None,
+        };
+        // `.is_err()` keeps the assertion free of an unreachable Ok arm while
+        // still executing `finish_build`'s defensive `ok_or_else` path.
+        assert!(DirSQL::finish_build(prepared).is_err());
+    }
+
+    /// A filesystem event for an ignored path is dropped by
+    /// `process_file_event` before it reaches the matcher, returning no row
+    /// events. Exercises the `is_ignored` early-return branch directly,
+    /// without depending on real filesystem-watch timing. A second,
+    /// non-ignored file confirms the same table *does* extract a row when the
+    /// path is not ignored -- which also exercises the extract closure body
+    /// (so it isn't a dead coverage region).
+    #[test]
+    fn process_file_event_skips_ignored_paths() {
+        let dir = TempDir::new().unwrap();
+        let db = DirSQL::with_ignore(
+            dir.path(),
+            vec![Table::new(
+                "CREATE TABLE items (name TEXT)",
+                "**/*.txt",
+                |_| {
+                    vec![Row::from_iter([(
+                        "name".to_string(),
+                        Value::Text("x".into()),
+                    )])]
+                },
+            )],
+            vec!["skip/**"],
+        )
+        .unwrap();
+
+        // Ignored path: dropped before the matcher, no events.
+        let ignored = dir.path().join("skip").join("a.txt");
+        let events = db.process_file_event(FileEvent::Created(ignored));
+        assert!(events.is_empty(), "ignored path must produce no events");
+
+        // Non-ignored path: the extract closure runs and yields one insert.
+        let kept = dir.path().join("keep.txt");
+        std::fs::write(&kept, b"").unwrap();
+        let events = db.process_file_event(FileEvent::Created(kept));
+        assert_eq!(events.len(), 1, "non-ignored path must produce one event");
+    }
+
+    /// Drive `reconcile_scan` directly with a cached file whose
+    /// `snapshot_ns <= mtime_ns`, forcing the racy-window hash-confirm branch.
+    /// With a matching content hash the file is trusted.
+    #[test]
+    fn reconcile_scan_hash_confirms_in_racy_window() {
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("a.txt");
+        std::fs::write(&abs, b"payload").unwrap();
+        let meta = std::fs::metadata(&abs).unwrap();
+        let stat = FileStat::from_metadata(&meta);
+        let live_hash = hash_file(&abs).unwrap();
+
+        let mut cached = HashMap::new();
+        cached.insert(
+            "a.txt".to_string(),
+            CachedFile {
+                rel_path: "a.txt".into(),
+                table_name: "t".into(),
+                stat: stat.clone(),
+                content_hash: Some(live_hash),
+                // snapshot_ns <= mtime_ns => inside the racy window.
+                snapshot_ns: stat.mtime_ns,
+            },
+        );
+        let ctx = PersistContext {
+            db: Db::new().unwrap(),
+            cached,
+            expected_meta: HashMap::new(),
+            cold_rebuild: false,
+        };
+        let scanned = vec![(abs.clone(), "t".to_string())];
+        let (to_parse, trusted, deleted) = reconcile_scan(dir.path(), scanned, &ctx).unwrap();
+        assert!(to_parse.is_empty());
+        assert_eq!(trusted.len(), 1);
+        assert_eq!(trusted[0].rel_path, "a.txt");
+        assert!(deleted.is_empty());
+    }
+
+    /// Same racy-window entry but with no stored content hash falls through
+    /// the `_ => false` arm, so the file is NOT trusted and is re-parsed.
+    #[test]
+    fn reconcile_scan_racy_window_without_hash_reparses() {
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("b.txt");
+        std::fs::write(&abs, b"payload").unwrap();
+        let meta = std::fs::metadata(&abs).unwrap();
+        let stat = FileStat::from_metadata(&meta);
+
+        let mut cached = HashMap::new();
+        cached.insert(
+            "b.txt".to_string(),
+            CachedFile {
+                rel_path: "b.txt".into(),
+                table_name: "t".into(),
+                stat: stat.clone(),
+                content_hash: None,
+                snapshot_ns: stat.mtime_ns,
+            },
+        );
+        let ctx = PersistContext {
+            db: Db::new().unwrap(),
+            cached,
+            expected_meta: HashMap::new(),
+            cold_rebuild: false,
+        };
+        let scanned = vec![(abs.clone(), "t".to_string())];
+        let (to_parse, trusted, _deleted) = reconcile_scan(dir.path(), scanned, &ctx).unwrap();
+        assert_eq!(to_parse.len(), 1);
+        assert!(trusted.is_empty());
+    }
+
+    /// `reconcile_scan` stats every scanned path; a path that has vanished
+    /// makes `std::fs::metadata` fail and the `?` propagates the error.
+    #[test]
+    fn reconcile_scan_errors_when_file_vanished() {
+        let dir = TempDir::new().unwrap();
+        let ctx = PersistContext {
+            db: Db::new().unwrap(),
+            cached: HashMap::new(),
+            expected_meta: HashMap::new(),
+            cold_rebuild: false,
+        };
+        let missing = dir.path().join("ghost.txt");
+        let scanned = vec![(missing, "t".to_string())];
+        assert!(reconcile_scan(dir.path(), scanned, &ctx).is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Lock-poison error arms
+    //
+    // The `.lock().map_err(DirSqlError::lock)?` (and `match self.inner.*.lock()`)
+    // arms only fire when a mutex is poisoned -- i.e. a thread panicked while
+    // holding the guard. We provoke that deterministically with a scoped
+    // thread that locks the mutex and panics, then assert the error/Display
+    // surface. These tests reach into the private `inner` mutexes, which is
+    // why they live in the in-crate `internal_tests` module rather than the
+    // public-API integration suite.
+    // -----------------------------------------------------------------------
+
+    /// Poison a mutex by panicking while holding its guard on a scoped thread.
+    fn poison<T: Send>(m: &Mutex<T>) {
+        let _ = std::thread::scope(|s| {
+            s.spawn(|| {
+                let _g = m.lock().unwrap();
+                panic!("poison");
+            })
+            .join()
+        });
+        assert!(m.is_poisoned(), "mutex should be poisoned");
+    }
+
+    /// Build a one-table `DirSQL` over a temp dir that already contains a
+    /// matching file, so the table's extract closure runs during the initial
+    /// scan (keeping the closure body out of the uncovered set). Returns the
+    /// TempDir guard alongside the db.
+    fn simple_db() -> (TempDir, DirSQL) {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("a.txt"), b"").unwrap();
+        let db = DirSQL::with_ignore(
+            dir.path(),
+            vec![Table::new("CREATE TABLE t (name TEXT)", "*.txt", |_| {
+                vec![Row::from_iter([(
+                    "name".to_string(),
+                    Value::Text("x".into()),
+                )])]
+            })],
+            Vec::<String>::new(),
+        )
+        .unwrap();
+        (dir, db)
+    }
+
+    /// Build a one-table `DirSQL` over a temp dir with a single matching file
+    /// already written. Returns the db plus the file's absolute and relative
+    /// paths so callers can drive `handle_*` directly.
+    fn upsert_fixture() -> (TempDir, DirSQL, PathBuf, String) {
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("a.txt");
+        std::fs::write(&abs, b"hello").unwrap();
+        let db = DirSQL::with_ignore(
+            dir.path(),
+            vec![Table::new(
+                "CREATE TABLE items (name TEXT)",
+                "**/*.txt",
+                |_| {
+                    vec![Row::from_iter([(
+                        "name".to_string(),
+                        Value::Text("x".into()),
+                    )])]
+                },
+            )],
+            Vec::<String>::new(),
+        )
+        .unwrap();
+        (dir, db, abs, "a.txt".to_string())
+    }
+
+    #[test]
+    fn query_surfaces_lock_poison() {
+        let (_dir, db) = simple_db();
+        poison(&db.inner.db);
+        let err = db.query("SELECT 1").unwrap_err();
+        // Exercises both `query`'s `?` arm and the `DirSqlError::lock` helper.
+        assert!(err.to_string().starts_with("failed to lock"), "got: {err}");
+    }
+
+    #[test]
+    fn start_watching_surfaces_lock_poison() {
+        let (_dir, db) = simple_db();
+        poison(&db.inner.watcher);
+        let err = db.start_watching().unwrap_err();
+        assert!(err.to_string().starts_with("failed to lock"), "got: {err}");
+    }
+
+    #[test]
+    fn poll_once_surfaces_lock_poison() {
+        let (_dir, db) = simple_db();
+        // Start the watcher first so the guard is `Some`, then poison the
+        // mutex and call the private `poll_once` directly (the public
+        // `poll_events` would trip `start_watching`'s own lock first).
+        db.start_watching().unwrap();
+        poison(&db.inner.watcher);
+        let err = db.poll_once(Duration::from_millis(0)).unwrap_err();
+        assert!(err.to_string().starts_with("failed to lock"), "got: {err}");
+    }
+
+    /// A `RowEvent::Error` whose message reports a lock failure. Asserts on the
+    /// Debug rendering so there is no `match`/`else` fallback arm. The
+    /// `handle_*` arms forward the raw `PoisonError` (`e.to_string()`), whose
+    /// std Display contains "poisoned lock".
+    fn assert_single_lock_error(events: &[RowEvent]) {
+        assert_eq!(events.len(), 1, "expected exactly one event: {events:?}");
+        let dbg = format!("{:?}", events[0]);
+        assert!(dbg.contains("Error"), "expected an Error event: {dbg}");
+        assert!(dbg.contains("poisoned lock"), "expected poison text: {dbg}");
+    }
+
+    #[test]
+    fn handle_delete_surfaces_file_rows_poison() {
+        let (_dir, db, _abs, rel) = upsert_fixture();
+        poison(&db.inner.file_rows);
+        let events = db.handle_delete("items", &rel);
+        assert_single_lock_error(&events);
+    }
+
+    #[test]
+    fn handle_delete_surfaces_db_poison() {
+        let (_dir, db, _abs, rel) = upsert_fixture();
+        // Only the db mutex is poisoned; the file_rows lock succeeds first,
+        // so the error comes from the db-lock arm.
+        poison(&db.inner.db);
+        let events = db.handle_delete("items", &rel);
+        assert_single_lock_error(&events);
+    }
+
+    #[test]
+    fn handle_delete_surfaces_db_failure() {
+        let (_dir, db, _abs, _rel) = upsert_fixture();
+        // No SQL table named `ghost` exists, so `delete_rows_by_file` issues a
+        // `DELETE FROM ghost ...` that fails with "no such table". That drives
+        // the `delete_result` Err arm of `handle_delete`.
+        let events = db.handle_delete("ghost", "whatever.txt");
+        assert_eq!(events.len(), 1, "expected one error event: {events:?}");
+        let dbg = format!("{:?}", events[0]);
+        assert!(dbg.contains("Error"), "expected an Error event: {dbg}");
+        assert!(dbg.contains("no such table"), "expected a SQL error: {dbg}");
+    }
+
+    #[test]
+    fn handle_upsert_surfaces_db_poison() {
+        let (_dir, db, abs, rel) = upsert_fixture();
+        poison(&db.inner.db);
+        let events = db.handle_upsert("items", &abs, &rel);
+        assert_single_lock_error(&events);
+    }
+
+    #[test]
+    fn handle_upsert_surfaces_file_rows_poison() {
+        let (_dir, db, abs, rel) = upsert_fixture();
+        // db is healthy, so metadata/extract/get_table_columns/normalize all
+        // succeed and the error originates at the file_rows-lock arm.
+        poison(&db.inner.file_rows);
+        let events = db.handle_upsert("items", &abs, &rel);
+        assert_single_lock_error(&events);
+    }
+
+    // ----- handle_upsert clean early-returns --------------------------------
+
+    #[test]
+    fn handle_upsert_returns_empty_when_file_vanished() {
+        let (dir, db, _abs, _rel) = upsert_fixture();
+        let missing = dir.path().join("gone.txt");
+        // The file never existed, so `std::fs::metadata` returns NotFound and
+        // `handle_upsert` returns no events.
+        let events = db.handle_upsert("items", &missing, "gone.txt");
+        assert!(events.is_empty(), "vanished file must produce no events");
+    }
+
+    #[test]
+    fn handle_upsert_returns_empty_for_unknown_table() {
+        let (_dir, db, abs, rel) = upsert_fixture();
+        // The file exists, but no extract closure is registered for this table
+        // name, so the extract-map lookup misses and we return no events.
+        let events = db.handle_upsert("not_a_table", &abs, &rel);
+        assert!(events.is_empty(), "unknown table must produce no events");
+    }
+
+    #[test]
+    fn handle_upsert_surfaces_normalize_error_in_strict_mode() {
+        // A strict table rejects rows with columns its DDL doesn't declare.
+        // The extract emits an undeclared `extra` column, so `normalize_row`
+        // returns a SchemaMismatch and `handle_upsert` reports it as a single
+        // RowEvent::Error (the strict-mode normalize-error arm).
+        //
+        // The dir is empty at build time so the initial scan matches nothing;
+        // the file is created afterwards and reaches the DB only through
+        // `handle_upsert`, isolating the arm under test.
+        let dir = TempDir::new().unwrap();
+        let db = DirSQL::with_ignore(
+            dir.path(),
+            vec![Table::strict(
+                "CREATE TABLE items (name TEXT)",
+                "**/*.txt",
+                |_| {
+                    vec![Row::from_iter([
+                        ("name".to_string(), Value::Text("ok".into())),
+                        ("extra".to_string(), Value::Text("nope".into())),
+                    ])]
+                },
+            )],
+            Vec::<String>::new(),
+        )
+        .unwrap();
+
+        let abs = dir.path().join("a.txt");
+        std::fs::write(&abs, b"hello").unwrap();
+        let events = db.handle_upsert("items", &abs, "a.txt");
+        assert_eq!(events.len(), 1, "expected one error event: {events:?}");
+        let dbg = format!("{:?}", events[0]);
+        assert!(dbg.contains("Error"), "expected an Error event: {dbg}");
+        assert!(
+            dbg.contains("extra columns"),
+            "expected a strict schema-mismatch message: {dbg}"
+        );
+    }
+
+    // ----- run_channel_loop error arm --------------------------------------
+
+    #[test]
+    fn run_channel_loop_emits_error_event_on_poll_failure() {
+        let (_dir, db) = simple_db();
+        // Start the watcher, then poison it so the loop's first `poll_once`
+        // returns Err, driving the `Err(e)` arm: it pushes one RowEvent::Error
+        // and returns.
+        db.start_watching().unwrap();
+        poison(&db.inner.watcher);
+
+        let (tx, mut rx) = unbounded();
+        run_channel_loop(db, tx);
+
+        let event = rx.try_recv().expect("expected an error event");
+        let dbg = format!("{event:?}");
+        assert!(dbg.contains("Error"), "expected an Error event: {dbg}");
+        assert!(dbg.contains("failed to lock"), "expected lock text: {dbg}");
+        // The loop returns after the error, so the channel is now drained and
+        // its sender dropped; a further `try_recv` reports the empty channel.
+        assert!(rx.try_recv().is_err(), "loop should have ended");
     }
 }

@@ -297,12 +297,16 @@ mod tests {
             .collect();
         assert_eq!(deletes.len(), 3);
         assert_eq!(inserts.len(), 1);
-        assert!(events.iter().all(|e| match e {
-            RowEvent::Insert { file_path, .. }
-            | RowEvent::Update { file_path, .. }
-            | RowEvent::Delete { file_path, .. } => file_path == "t.jsonl",
-            RowEvent::Error { .. } => false,
-        }));
+        // Branch-free attribution check: every variant's Debug rendering
+        // includes its `file_path` field, so asserting on that string covers
+        // all variants without a `match` whose `Update`/`Error` arms this test
+        // never reaches (those arms would be dead coverage regions).
+        assert!(
+            events
+                .iter()
+                .all(|e| format!("{e:?}").contains("file_path: \"t.jsonl\"")),
+            "every event must be attributed to t.jsonl: {events:?}"
+        );
     }
 
     // --- Full replace on heavy modification ---

@@ -146,6 +146,125 @@ async fn it_supports_ignore_patterns() {
     assert_eq!(rows[0]["id"], Value::Text("abc".into()));
 }
 
+// build_async() surfaces resolve() errors (e.g. no root) via its `?`.
+#[tokio::test]
+async fn build_async_without_root_errors() {
+    let err = match dirsql::DirSQL::builder().table(items_table()).build_async() {
+        Ok(_) => panic!("expected a Config error when no root is provided"),
+        Err(e) => e,
+    };
+    assert!(matches!(err, dirsql::DirSqlError::Config(_)), "got: {err}");
+}
+
+// AsyncDirSQL::from_config_path loads a config from an explicit path.
+#[tokio::test]
+async fn from_config_path_loads_config() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("data.csv"), "anything").unwrap();
+    let cfg_path = root.path().join("custom.toml");
+    fs::write(
+        &cfg_path,
+        r#"
+[dirsql]
+root = "."
+
+[[table]]
+ddl = "CREATE TABLE files (_path TEXT)"
+glob = "*.csv"
+"#,
+    )
+    .unwrap();
+
+    let db = AsyncDirSQL::from_config_path(&cfg_path).unwrap();
+    db.ready().await.unwrap();
+    let rows = db.query("SELECT _path FROM files").await.unwrap();
+    assert_eq!(rows.len(), 1);
+}
+
+// start_watching + poll_events forward to the inner DirSQL once ready.
+#[tokio::test]
+async fn start_watching_and_poll_events_forward() {
+    let root = TempDir::new().unwrap();
+    let db = AsyncDirSQL::new(root.path(), vec![items_table()]).unwrap();
+    db.ready().await.unwrap();
+    db.start_watching().unwrap();
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    fs::write(root.path().join("apple.txt"), "apple").unwrap();
+
+    let mut events = Vec::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while events.is_empty() && std::time::Instant::now() < deadline {
+        events.extend(db.poll_events(Duration::from_millis(250)).unwrap());
+    }
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, dirsql::RowEvent::Insert { .. }))
+    );
+}
+
+// Calling sync()-backed methods before ready() errors with the not-ready arm.
+// Each forwarding method threads `self.sync()?` first, so all of them surface
+// the not-ready error before doing any work.
+#[tokio::test]
+async fn sync_backed_methods_before_ready_error() {
+    let root = TempDir::new().unwrap();
+    let db = AsyncDirSQL::new(root.path(), vec![items_table()]).unwrap();
+    // Do NOT await ready(): the OnceCell is empty, so sync() takes the None arm,
+    // which yields the not-ready `DirSqlError::Lock`. Every sync-backed method
+    // threads `self.sync()?` first, so all of them surface that same variant.
+    // (`sync()`/`watch()` return non-Debug Ok types, so match the error out.)
+    let sync_err = match db.sync() {
+        Ok(_) => panic!("sync() before ready() must error"),
+        Err(e) => e,
+    };
+    assert!(
+        matches!(sync_err, dirsql::DirSqlError::Lock(_)),
+        "got: {sync_err}"
+    );
+
+    let start_err = db.start_watching().unwrap_err();
+    assert!(
+        matches!(start_err, dirsql::DirSqlError::Lock(_)),
+        "got: {start_err}"
+    );
+
+    let poll_err = db.poll_events(Duration::from_millis(10)).unwrap_err();
+    assert!(
+        matches!(poll_err, dirsql::DirSqlError::Lock(_)),
+        "got: {poll_err}"
+    );
+
+    let watch_err = match db.watch() {
+        Ok(_) => panic!("watch() before ready() must error"),
+        Err(e) => e,
+    };
+    assert!(
+        matches!(watch_err, dirsql::DirSqlError::Lock(_)),
+        "got: {watch_err}"
+    );
+}
+
+// A config that fails to build (duplicate table) makes init fail; ready(),
+// sync(), and query() then surface the init-failed error arms.
+#[tokio::test]
+async fn init_failure_surfaces_through_ready_and_sync() {
+    let root = TempDir::new().unwrap();
+    let t1 = Table::new("CREATE TABLE dup (a TEXT)", "*.a", |_| vec![]);
+    let t2 = Table::new("CREATE TABLE dup (b TEXT)", "*.b", |_| vec![]);
+    let db = AsyncDirSQL::new(root.path(), vec![t1, t2]).unwrap();
+
+    let ready = db.ready().await;
+    assert!(ready.is_err(), "ready() must report the init failure");
+
+    let synced = db.sync();
+    assert!(synced.is_err(), "sync() must report the init failure");
+
+    let queried = db.query("SELECT 1").await;
+    assert!(queried.is_err(), "query() must report the init failure");
+}
+
 #[tokio::test]
 async fn it_streams_watch_events() {
     let root = TempDir::new().unwrap();

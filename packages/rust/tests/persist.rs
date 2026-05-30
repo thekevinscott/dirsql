@@ -5,7 +5,7 @@
 //! produce the same rows as a cold rebuild, while skipping the extract step
 //! for files whose filesystem metadata matches the cache.
 
-use dirsql::{DirSQL, Row, Table, Value};
+use dirsql::{DirSQL, DirSqlError, Row, Table, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -66,7 +66,12 @@ fn cold_start_writes_cache_at_default_path() {
     let _db = open(root.path(), counter);
 
     let cache = root.path().join(".dirsql").join("cache.db");
-    assert!(cache.exists(), "expected cache at {}", cache.display());
+    // Static failure message: a `{}` arg here is only evaluated on failure,
+    // leaving a dead coverage region on the happy path.
+    assert!(
+        cache.exists(),
+        "expected cache at default .dirsql/cache.db path"
+    );
 }
 
 #[test]
@@ -85,11 +90,42 @@ fn custom_persist_path_is_honored() {
         .build()
         .unwrap();
 
-    assert!(custom.exists(), "expected cache at {}", custom.display());
+    assert!(custom.exists(), "expected cache at the custom persist_path");
     assert!(
         !root.path().join(".dirsql").join("cache.db").exists(),
         "default path should not be created when persist_path is set",
     );
+}
+
+// A persist build whose persist_path cannot be created (its parent is an
+// existing regular file) surfaces an error from prepare_persist, propagated
+// through the build pipeline.
+#[test]
+fn persist_with_unopenable_path_errors() {
+    let root = TempDir::new().unwrap();
+    write_csv(root.path(), "a.csv", &["alpha"]);
+
+    // Make a regular file, then ask for a cache db "inside" it. ensure_parent_dir
+    // / Db::open cannot create a directory under a file, so the build fails.
+    let blocker = root.path().join("blocker");
+    fs::write(&blocker, b"x").unwrap();
+    let bad_cache = blocker.join("nested").join("cache.db");
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    let result = DirSQL::builder()
+        .root(root.path())
+        .table(counting_csv_table(counter))
+        .persist(true)
+        .persist_path(&bad_cache)
+        .build();
+    // The failure surfaces from `ensure_parent_dir`, whose `io::Error` is
+    // converted to `DirSqlError::Io` via the `#[from]` arm. (On this platform
+    // the OS reports `NotADirectory`; the variant is what we pin here.)
+    let err = match result {
+        Ok(_) => panic!("expected an error when the persist path's parent is a file"),
+        Err(e) => e,
+    };
+    assert!(matches!(err, DirSqlError::Io(_)), "got: {err}");
 }
 
 // ---------------------------------------------------------------------------

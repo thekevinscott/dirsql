@@ -145,3 +145,48 @@ pub enum ServerError {
     #[error("server task panicked: {0}")]
     Join(#[from] JoinError),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn default_config_binds_localhost_7117_with_30s_timeout() {
+        let cfg = ServerConfig::default();
+        assert_eq!(cfg.host, "localhost");
+        assert_eq!(cfg.port, 7117);
+        assert_eq!(cfg.query_timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn app_state_from_dirsql_is_ready() {
+        // `AppState: !Debug` (it wraps a `DirSQL`). Assert the `Ready` variant
+        // without a dead match arm by routing through `require_ready`, which
+        // returns `Ok` only for `Ready` -- a branch-free `.is_ok()` check.
+        let dir = TempDir::new().unwrap();
+        // Write a matching file so the extract closure runs during the initial
+        // scan (otherwise the closure body would be a dead coverage region).
+        std::fs::write(dir.path().join("a.txt"), b"").unwrap();
+        let db = DirSQL::with_ignore(
+            dir.path(),
+            vec![crate::Table::new(
+                "CREATE TABLE t (name TEXT)",
+                "*.txt",
+                |_| {
+                    vec![crate::Row::from_iter([(
+                        "name".to_string(),
+                        crate::Value::Text("x".into()),
+                    )])]
+                },
+            )],
+            Vec::<String>::new(),
+        )
+        .unwrap();
+        let state: AppState = db.into();
+        assert!(
+            router::require_ready(&state).is_ok(),
+            "From<DirSQL> must produce AppState::Ready",
+        );
+    }
+}

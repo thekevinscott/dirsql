@@ -164,7 +164,7 @@ fn force_flag_overwrites_existing_config() {
 
     let written = fs::read_to_string(cwd.path().join(".dirsql.toml")).unwrap();
     assert_ne!(written, "# old\n", "config must be replaced");
-    dirsql::DirSQL::from_config_path(&cwd.path().join(".dirsql.toml"))
+    dirsql::DirSQL::from_config_path(cwd.path().join(".dirsql.toml"))
         .expect("forced-overwrite config must load");
 }
 

@@ -563,6 +563,44 @@ mod tests {
     }
 
     #[test]
+    fn hash_file_errors_on_missing_path() {
+        // `fs::read` fails for a path that does not exist, so the `?` in
+        // hash_file propagates the IO error. A missing path is reported as
+        // `NotFound` across platforms, so pin that kind.
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("does-not-exist.txt");
+        let err = hash_file(&missing).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound, "got: {err}");
+    }
+
+    #[test]
+    fn canonical_root_falls_back_to_literal_when_canonicalize_fails() {
+        // A nonexistent path cannot be canonicalized, so canonical_root
+        // returns the literal path string via the unwrap_or_else fallback.
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("no-such-subdir");
+        let got = canonical_root(&missing);
+        assert_eq!(got, missing.to_string_lossy());
+    }
+
+    #[test]
+    fn ensure_parent_dir_errors_when_parent_is_a_file() {
+        // When the would-be parent is an existing regular file,
+        // `create_dir_all` fails and the `?` propagates. The exact
+        // `ErrorKind` is platform-fragile here: `create_dir_all` stats the
+        // existing file and may report `AlreadyExists`, `NotADirectory`, or
+        // (on some targets) `NotFound`. Rather than hardcode a brittle kind,
+        // pin that it IS an error whose kind is not `NotFound` (the
+        // missing-path case we want to distinguish it from).
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("not-a-dir");
+        fs::write(&file, b"x").unwrap();
+        let nested = file.join("child.db");
+        let err = ensure_parent_dir(&nested).unwrap_err();
+        assert_ne!(err.kind(), std::io::ErrorKind::NotFound, "got: {err}");
+    }
+
+    #[test]
     fn resolve_persist_path_defaults_to_dirsql_cache_db() {
         let p = resolve_persist_path(Path::new("/tmp/x"), None);
         assert_eq!(p, PathBuf::from("/tmp/x/.dirsql/cache.db"));
@@ -583,6 +621,39 @@ mod tests {
     }
 
     #[test]
+    fn ensure_parent_dir_is_noop_for_bare_filename() {
+        // A bare filename has an empty parent (`""`); the guard must skip
+        // `create_dir_all` and return Ok without touching the filesystem.
+        ensure_parent_dir(Path::new("bare.txt")).unwrap();
+    }
+
+    #[test]
+    fn system_time_to_ns_returns_zero_for_none() {
+        // Unavailable timestamps (e.g. platforms without ctime) map to 0.
+        assert_eq!(system_time_to_ns(None), 0);
+    }
+
+    #[test]
+    fn read_rows_for_file_handles_empty_user_columns() {
+        // With no user columns the SELECT list collapses to `1`, so the
+        // query stays valid and yields one empty map per matched row.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE rows (_dirsql_file_path TEXT NOT NULL, _dirsql_row_index INTEGER NOT NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO rows (_dirsql_file_path, _dirsql_row_index) VALUES ('f.csv', 0), ('f.csv', 1)",
+            [],
+        )
+        .unwrap();
+        let rows = read_rows_for_file(&conn, "rows", "f.csv", &[]).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].is_empty());
+    }
+
+    #[test]
     fn read_rows_for_file_returns_user_columns() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute(
@@ -599,5 +670,89 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["col"], crate::db::Value::Text("a".into()));
         assert_eq!(rows[1]["col"], crate::db::Value::Text("b".into()));
+    }
+
+    // --- rusqlite error propagation (`?` arms) ---
+    //
+    // Each sidecar accessor runs against a `_dirsql_*` table. Calling it on a
+    // connection that has *not* had `create_sidecar_tables` run yields a "no
+    // such table" SQLite error, exercising the `?` propagation in each
+    // function (rather than only the happy path covered by the round-trips).
+
+    #[test]
+    fn read_meta_propagates_missing_table_error() {
+        let conn = Connection::open_in_memory().unwrap();
+        let err = read_meta(&conn).unwrap_err();
+        assert!(
+            err.to_string().contains("no such table"),
+            "expected a missing-table error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn upsert_meta_propagates_missing_table_error() {
+        let conn = Connection::open_in_memory().unwrap();
+        let err = upsert_meta(&conn, "k", "v").unwrap_err();
+        assert!(
+            err.to_string().contains("no such table"),
+            "expected a missing-table error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn read_cached_files_propagates_missing_table_error() {
+        let conn = Connection::open_in_memory().unwrap();
+        let err = read_cached_files(&conn).unwrap_err();
+        assert!(
+            err.to_string().contains("no such table"),
+            "expected a missing-table error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn upsert_file_propagates_missing_table_error() {
+        let conn = Connection::open_in_memory().unwrap();
+        let stat = FileStat {
+            size: 1,
+            mtime_ns: 1,
+            ctime_ns: 1,
+            inode: 1,
+            dev: 1,
+        };
+        let err = upsert_file(&conn, "a.csv", "t", &stat, None, 1).unwrap_err();
+        assert!(
+            err.to_string().contains("no such table"),
+            "expected a missing-table error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn delete_file_propagates_missing_table_error() {
+        let conn = Connection::open_in_memory().unwrap();
+        let err = delete_file(&conn, "a.csv").unwrap_err();
+        assert!(
+            err.to_string().contains("no such table"),
+            "expected a missing-table error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn read_cached_files_drops_malformed_content_hash() {
+        // A `content_hash` blob whose length is not 32 bytes cannot be a valid
+        // BLAKE3 digest, so `read_cached_files` maps it to `None` (the `else`
+        // arm of the length check) rather than truncating or panicking.
+        let conn = Connection::open_in_memory().unwrap();
+        create_sidecar_tables(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO _dirsql_files
+                (rel_path, table_name, size, mtime_ns, ctime_ns, inode, dev,
+                 content_hash, snapshot_ns)
+             VALUES ('bad.csv', 't', 0, 0, 0, 0, 0, ?1, 0)",
+            params![&[1u8, 2, 3][..]],
+        )
+        .unwrap();
+        let files = read_cached_files(&conn).unwrap();
+        let cf = files.get("bad.csv").unwrap();
+        assert_eq!(cf.content_hash, None);
     }
 }

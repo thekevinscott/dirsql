@@ -65,8 +65,7 @@ fn free_port() -> u16 {
 /// The child inherits stderr so failures surface in test output.
 fn spawn_dirsql(dir: &std::path::Path, port: u16) -> Child {
     let mut cmd: StdCommand = std::process::Command::cargo_bin("dirsql")
-        .expect("`dirsql` binary must be built by `cargo test` with --features cli")
-        .into();
+        .expect("`dirsql` binary must be built by `cargo test` with --features cli");
     cmd.arg("--port")
         .arg(port.to_string())
         .arg("--host")
@@ -373,9 +372,8 @@ fn explicit_config_flag_overrides_cwd_default() {
     let elsewhere = TempDir::new().unwrap();
 
     let port = free_port();
-    let mut cmd: StdCommand = std::process::Command::cargo_bin("dirsql")
-        .expect("binary must exist")
-        .into();
+    let mut cmd: StdCommand =
+        std::process::Command::cargo_bin("dirsql").expect("binary must exist");
     cmd.arg("--port")
         .arg(port.to_string())
         .arg("--host")

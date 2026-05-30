@@ -56,15 +56,22 @@ include = [
     { path = "docs/**/*", format = "sdist" },
 ]
 
-# CLI launcher modules (`_cli/main.py`, `_cli/binary_path.py`,
-# `_cli/is_windows.py`) are thin shims that exec the bundled Rust
-# binary. The AGENTS.md test-boundary rules forbid monkeypatch unit
-# tests on production module attributes (`os.execv`, `binary_path`,
-# etc.) -- the only meaningful coverage is end-to-end (real wheel
-# install + `dirsql --version`), which putitoutthere's wheel-content
-# guard verifies post-build. Omitting these files keeps the 90%
-# coverage floor honest about library code.
+# CLI launcher shims (`_cli/main.py`, `_cli/binary_path.py`,
+# `_cli/is_windows.py`) that locate and exec the bundled Rust binary --
+# the Python analogue of the excluded `src/bin/` Rust launcher. The
+# AGENTS.md test-boundary rules forbid monkeypatch unit tests on
+# production module attributes (`os.execv`, `binary_path`, etc.) -- the
+# load-bearing line is the `os.execv` hand-off, whose only meaningful
+# coverage is end-to-end (real wheel install + `dirsql --version`),
+# verified by putitoutthere's wheel-content guard post-build. Omitting
+# these files keeps the 100% coverage floor honest about library code.
 [tool.coverage.run]
 omit = [
     "dirsql/_cli/*",
+    # Colocated unit tests live alongside the package source; instrumenting
+    # them lets a test double's own branches pad the metric (e.g. a fake's
+    # empty-list return). Exclude test files so the floor reflects only
+    # library code.
+    "dirsql/test_*.py",
+    "dirsql/*_test.py",
 ]

@@ -538,32 +538,36 @@ mod tests {
     fn value_to_sql_null() {
         let v = Value::Null;
         let result = v.to_sql().unwrap();
-        assert!(matches!(
+        // Branch-free: compare against the expected value (`ToSqlOutput: PartialEq`)
+        // rather than `matches!`, whose `_ => false` arm is a dead region here.
+        assert_eq!(
             result,
             rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Null)
-        ));
+        );
     }
 
     #[test]
     fn value_to_sql_integer() {
         let v = Value::Integer(42);
         let result = v.to_sql().unwrap();
-        assert!(matches!(
+        // Branch-free: see `value_to_sql_null` -- compare values directly.
+        assert_eq!(
             result,
             rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Integer(42))
-        ));
+        );
     }
 
     #[test]
     fn value_to_sql_real() {
         let v = Value::Real(1.5);
         let result = v.to_sql().unwrap();
-        match result {
-            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Real(f)) => {
-                assert!((f - 1.5).abs() < f64::EPSILON);
-            }
-            _ => panic!("expected Real"),
-        }
+        // Branch-free: `ToSqlOutput` derives `PartialEq`, so compare against
+        // the exact expected value instead of a `match` with a dead `_` arm.
+        // 1.5 is exactly representable in f64, so equality is precise here.
+        assert_eq!(
+            result,
+            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Real(1.5))
+        );
     }
 
     #[test]
@@ -788,5 +792,47 @@ mod tests {
         db.insert_row("t", &row, "a.json", 0).unwrap();
         let deleted = db.delete_rows_by_file("t", "nonexistent.json").unwrap();
         assert_eq!(deleted, 0);
+    }
+
+    // --- Error path: Db::open on an unopenable path ---
+
+    #[test]
+    fn open_on_unopenable_path_returns_error() {
+        // A path inside a directory that does not exist cannot be created by
+        // SQLite, so `Connection::open` fails and the `?` propagates the
+        // rusqlite error through the `#[from]` conversion. (`Db` is not
+        // `Debug`; `.map(|_| ())` discards the Ok payload so `unwrap_err`
+        // works without a dead `Ok => panic!` arm that coverage would flag.)
+        let err = Db::open(Path::new("/nonexistent-dir-xyz/sub/cache.db"))
+            .map(|_| ())
+            .unwrap_err();
+        assert!(matches!(err, DbError::Sqlite(_)), "got: {err}");
+    }
+
+    // --- Error path: create_table with a syntactically-valid-looking DDL
+    // (has a closing paren so it passes inject_tracking_columns) but invalid
+    // SQL, so the failure happens at conn.execute rather than the injector ---
+
+    #[test]
+    fn create_table_invalid_sql_with_paren_fails_at_execute() {
+        let db = Db::new().unwrap();
+        let err = db
+            .create_table("CREATE TABLE (this is not valid)")
+            .unwrap_err();
+        assert!(matches!(err, DbError::Sqlite(_)), "got: {err}");
+    }
+
+    // --- Error path: normalize_row when the underlying table lookup fails.
+    // A table name containing whitespace makes the PRAGMA prepare fail, so
+    // get_table_columns errors and normalize_row's `?` propagates. ---
+
+    #[test]
+    fn normalize_row_propagates_column_lookup_error() {
+        let db = Db::new().unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
+        let err = db
+            .normalize_row("bad name with spaces", &row, false)
+            .unwrap_err();
+        assert!(matches!(err, DbError::Sqlite(_)), "got: {err}");
     }
 }
