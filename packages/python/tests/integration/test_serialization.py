@@ -1,23 +1,4 @@
-"""Integration tests for DirSQL config serialization (issue #194).
-
-A `DirSQL` instance exposes its resolved runtime state as a plain,
-JSON-serializable dict via the standard Python `__dict__` property
-(also reachable as `vars(app)`).
-
-The serialized form captures resolved runtime state, not construction
-parameters:
-
-- `config` (the config-file path) is excluded -- by the time the instance
-  exists the config file has been read and its contents merged into
-  `root`, `tables`, and `ignore`.
-- `extract` is excluded from the table shape -- closures are not
-  serializable.
-- `name` is excluded from the table shape.
-
-Resolution happens synchronously in `__init__`, so `vars(db)` works
-immediately without waiting for the initial directory scan to finish
-(no need to `await db.ready()` first).
-"""
+"""Integration tests for DirSQL config serialization (#194)."""
 
 import json
 import os
@@ -225,16 +206,16 @@ def describe_DirSQL_serialization():
             cfg_path = os.path.join(empty_dir, ".dirsql.toml")
             with open(cfg_path, "w") as f:
                 f.write(
-                    '[dirsql]\n'
+                    "[dirsql]\n"
                     'root = "data"\n'
                     'ignore = ["node_modules/**"]\n'
-                    'persist = true\n'
+                    "persist = true\n"
                     'persist_path = "cache.db"\n'
-                    '\n'
-                    '[[table]]\n'
+                    "\n"
+                    "[[table]]\n"
                     'ddl = "CREATE TABLE items (_path TEXT)"\n'
                     'glob = "*.json"\n'
-                    'strict = true\n'
+                    "strict = true\n"
                 )
             # Create the directory the config expects so the background
             # scan doesn't blow up later -- we don't await ready() here,

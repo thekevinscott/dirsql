@@ -143,17 +143,9 @@ Returns an async iterable of `RowEvent` objects. The file watcher starts automat
 
 #### Resolved-state serialization
 
-Each SDK exposes the instance's resolved runtime state through the host
-language's natural serialization hook. The shape is identical across all
-three SDKs (modulo `persist_path` ↔ `persistPath` case): a serialized
-payload can flow through the `interpret` handshake regardless of which
-SDK produced it.
-
-The serialized shape captures **resolved runtime state**, not
-construction parameters. The original `config` path is excluded — by the
-time the instance exists, the config file has been read and its contents
-merged into `root`, `tables`, and `ignore`. Per-table `extract`
-(closure / callable) and `name` (derivable from DDL) are also excluded.
+Each SDK has a native hook returning the resolved state as a
+JSON-compatible value. Shape is identical across SDKs (modulo
+`persist_path` ↔ `persistPath`).
 
 ::: code-group
 
@@ -161,8 +153,6 @@ merged into `root`, `tables`, and `ignore`. Per-table `extract`
 import json
 
 db = DirSQL(root="./data", tables=[...])
-await db.ready()
-
 state = vars(db)
 # {
 #   "root": "./data",
@@ -193,7 +183,6 @@ let payload = serde_json::to_string(&cfg)?;
 
 ```typescript [TypeScript]
 const db = new DirSQL({ root: "./data", tables: [...] });
-await db.ready;
 
 const payload = JSON.stringify(db);
 // {
@@ -207,19 +196,10 @@ const payload = JSON.stringify(db);
 
 :::
 
-Python uses the standard `__dict__` property so `vars(db)` and
-`json.dumps(vars(db))` both work. TypeScript uses the built-in `toJSON()`
-hook so `JSON.stringify(db)` works directly. Rust uses
-`serde::Serialize`-derived structs (`DirSQLConfig` and `TableConfig`) so
-callers can plug into the wider serde ecosystem.
-
-In Python and TypeScript, serialization runs synchronously and resolves
-the construction inputs (reading the `.dirsql.toml` if `config=` was
-supplied) without waiting for the directory scan — `vars(db)` and
-`JSON.stringify(db)` work immediately after construction. In Rust, the
-synchronous `build()` returns a ready instance, so `db.config()` is
-always available; the async variant requires `AsyncDirSQL::ready().await`
-first (since `config()` lives on the inner sync instance).
+Excludes the `config` path (already merged into `root` / `tables` /
+`ignore`), per-table `extract`, and per-table `name`. Available
+immediately after construction in Python and TypeScript; Rust's sync
+`build()` returns a ready instance.
 
 ---
 

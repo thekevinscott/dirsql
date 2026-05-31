@@ -29,7 +29,11 @@ def resolve_config(root, tables, ignore, config, persist, persist_path):
             for t in (tables or [])
         ]
         + [
-            {"ddl": e.get("ddl"), "glob": e.get("glob"), "strict": bool(e.get("strict"))}
+            {
+                "ddl": e.get("ddl"),
+                "glob": e.get("glob"),
+                "strict": bool(e.get("strict")),
+            }
             for e in cfg_tables
         ],
         "ignore": list(ignore or []) + list(cfg.get("ignore") or []),

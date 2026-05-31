@@ -1,20 +1,4 @@
-// Integration tests for DirSQL config serialization (issue #194).
-//
-// A `DirSQL` instance exposes its resolved runtime state via the standard
-// JS `toJSON()` hook, so `JSON.stringify(db)` produces a stable shape.
-//
-// The serialized form captures resolved runtime state, not construction
-// parameters:
-//
-// - `config` (the config-file path) is excluded -- by the time the instance
-//   exists the config file has been read and its contents merged into
-//   `root`, `tables`, and `ignore`.
-// - `extract` is excluded from the table shape -- closures are not
-//   serializable.
-// - `name` is excluded from the table shape.
-//
-// Resolution happens synchronously inside `toJSON()`, so JSON.stringify(db)
-// works immediately after construction without awaiting `ready`.
+// Integration tests for DirSQL config serialization (#194).
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
