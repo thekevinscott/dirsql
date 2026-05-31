@@ -10,7 +10,6 @@ API surface comparison across the three language SDKs.
 | Extract callback | `(path) -> list[dict]` | `Fn(&str) -> Vec<Row>` | `(path) => Record<string, unknown>[]` |
 | Row event   | `RowEvent` (class, frozen attrs; `file_path` on all variants) | `RowEvent` (enum: Insert/Update/Delete/Error; `file_path` on all variants) | `RowEvent` (plain object with action string; `filePath` on all variants) |
 | Row type    | `dict[str, Any]`        | `HashMap<String, Value>` | `Record<string, unknown>` |
-| Table serialization | `vars(table)` -> `{ddl, glob, strict}` dict | `TableConfig` (`serde::Serialize`) inside `DirSQLConfig` | per-table object inside `DirSQL.toJSON()` output |
 
 The `extract` callback receives a single argument: the absolute filesystem
 path of the matched file. `dirsql` does not read file contents — a callback

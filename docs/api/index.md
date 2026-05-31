@@ -141,65 +141,25 @@ for await (const event of db.watch()) {  // AsyncIterable<RowEvent>
 
 Returns an async iterable of `RowEvent` objects. The file watcher starts automatically on first iteration. The iterator never terminates on its own.
 
-#### Resolved-state serialization
-
-Each SDK has a native hook returning the resolved state as a
-JSON-compatible value. Shape is identical across SDKs (modulo
-`persist_path` ↔ `persistPath`).
+#### `serialization`
 
 ::: code-group
 
 ```python [Python]
-import json
-
-db = DirSQL(root="./data", tables=[...])
-state = vars(db)
-# {
-#   "root": "./data",
-#   "tables": [{"ddl": "...", "glob": "...", "strict": False}, ...],
-#   "ignore": [],
-#   "persist": False,
-#   "persist_path": None,
-# }
-
-payload = json.dumps(state)
+vars(db) -> dict
 ```
 
 ```rust [Rust]
-use dirsql::{DirSQL, Table};
-
-let db = DirSQL::builder().root("./data").build()?;
-let cfg = db.config();
-// DirSQLConfig {
-//   root: PathBuf,
-//   tables: Vec<TableConfig>,  // { ddl, glob, strict }
-//   ignore: Vec<String>,
-//   persist: bool,
-//   persist_path: Option<PathBuf>,
-// }
-
-let payload = serde_json::to_string(&cfg)?;
+db.config() -> DirSQLConfig
 ```
 
 ```typescript [TypeScript]
-const db = new DirSQL({ root: "./data", tables: [...] });
-
-const payload = JSON.stringify(db);
-// {
-//   "root": "./data",
-//   "tables": [{"ddl": "...", "glob": "...", "strict": false}, ...],
-//   "ignore": [],
-//   "persist": false,
-//   "persistPath": null
-// }
+JSON.stringify(db)  // via db.toJSON()
 ```
 
 :::
 
-Excludes the `config` path (already merged into `root` / `tables` /
-`ignore`), per-table `extract`, and per-table `name`. Available
-immediately after construction in Python and TypeScript; Rust's sync
-`build()` returns a ready instance.
+Returns the resolved construction state as a JSON-compatible value with fields `root`, `tables`, `ignore`, `persist`, `persist_path` (camelCase `persistPath` in TypeScript). Each table is `{ ddl, glob, strict }`. Excludes the original `config` path (already merged into `root` / `tables` / `ignore`), per-table `extract`, and per-table `name`. Available immediately after construction in Python and TypeScript; Rust's sync `build()` returns a ready instance.
 
 ---
 

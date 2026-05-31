@@ -9,30 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Language-idiomatic config serialization on `DirSQL`.** Each SDK now
-  exposes the instance's resolved runtime state through the host
-  language's natural serialization hook:
-  - **Python** — `vars(db)` / `db.__dict__` returns a JSON-serializable
-    `dict` with `root`, `tables`, `ignore`, `persist`, `persist_path`.
-    Each entry in `tables` is also a `dict` (`ddl`, `glob`, `strict`),
-    and standalone `Table` instances support `vars(table)` too.
-    `json.dumps(vars(db))` works directly.
-  - **TypeScript** — `JSON.stringify(db)` calls a new `db.toJSON()` and
-    emits `{ root, tables, ignore, persist, persistPath }` (camelCase for
-    `persistPath`). Each table is `{ ddl, glob, strict }`.
-  - **Rust** — new `DirSQL::config()` returns a serde-derived
-    `DirSQLConfig` (with nested `TableConfig`). `serde_json::to_string(
-    &db.config())` produces a JSON payload identical in shape to the
-    Python / TypeScript output (modulo `persist_path` ↔ `persistPath`
-    case). `AsyncDirSQL::config()` forwards to the inner sync instance.
-
-  The shape captures **resolved runtime state**, not construction
-  parameters: the original `config` path is absorbed into `root` /
-  `tables` / `ignore`; per-table `extract` (a closure / callable) is
-  excluded; per-table `name` is excluded (derivable from DDL). The
-  identical shape across all three SDKs lets a serialized payload flow
-  through the `interpret` handshake regardless of which SDK produced
-  it. (#194)
+- **Config serialization on `DirSQL`.** Python `vars(db)` (via
+  `__dict__`), TypeScript `JSON.stringify(db)` (via `toJSON()`), and
+  Rust `db.config()` (returning a `serde::Serialize`-derived
+  `DirSQLConfig`) all return the resolved construction state as a
+  JSON-compatible value with fields `root`, `tables`, `ignore`,
+  `persist`, `persist_path` (camelCase `persistPath` in TypeScript).
+  Each table is `{ ddl, glob, strict }`. The original `config` path is
+  excluded (already merged into `root` / `tables` / `ignore`);
+  per-table `extract` and `name` are excluded. Resolution runs
+  synchronously in Python and TypeScript, so the output is available
+  immediately after construction without waiting on the scan. (#194)
 
 - **Zero-config `files` table.** Running the `dirsql` server in a
   directory with no `.dirsql.toml` now serves a default `files` table --
