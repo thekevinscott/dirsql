@@ -141,6 +141,26 @@ for await (const event of db.watch()) {  // AsyncIterable<RowEvent>
 
 Returns an async iterable of `RowEvent` objects. The file watcher starts automatically on first iteration. The iterator never terminates on its own.
 
+#### `serialization`
+
+::: code-group
+
+```python [Python]
+vars(db) -> dict
+```
+
+```rust [Rust]
+db.config() -> DirSQLConfig
+```
+
+```typescript [TypeScript]
+JSON.stringify(db)  // via db.toJSON()
+```
+
+:::
+
+Returns the resolved construction state as a JSON-compatible value with fields `root`, `tables`, `ignore`, `persist`, `persist_path` (camelCase `persistPath` in TypeScript). Each table is `{ ddl, glob, strict }`. Excludes the original `config` path (already merged into `root` / `tables` / `ignore`), per-table `extract`, and per-table `name`. Available immediately after construction in Python and TypeScript; Rust's sync `build()` returns a ready instance.
+
 ---
 
 ## Table

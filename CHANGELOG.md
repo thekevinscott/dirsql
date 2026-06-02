@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Config serialization on `DirSQL`.** Python `vars(db)` (via
+  `__dict__`), TypeScript `JSON.stringify(db)` (via `toJSON()`), and
+  Rust `db.config()` (returning a `serde::Serialize`-derived
+  `DirSQLConfig`) all return the resolved construction state as a
+  JSON-compatible value with fields `root`, `tables`, `ignore`,
+  `persist`, `persist_path` (camelCase `persistPath` in TypeScript).
+  Each table is `{ ddl, glob, strict }`. The original `config` path is
+  excluded (already merged into `root` / `tables` / `ignore`);
+  per-table `extract` and `name` are excluded. Resolution runs
+  synchronously in Python and TypeScript, so the output is available
+  immediately after construction without waiting on the scan. (#194)
+
 - **Zero-config `files` table.** Running the `dirsql` server in a
   directory with no `.dirsql.toml` now serves a default `files` table --
   one row per file under the directory, with the filesystem-fact columns

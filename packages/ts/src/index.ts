@@ -11,6 +11,7 @@
 // toolchain is required at install time on any supported platform.
 
 import { loadNativeCore as defaultLoadNativeCore } from "./loadNativeCore.js";
+import { resolveConfig } from "./resolveConfig.js";
 
 /** Definition of a SQL-indexed table backed by files on disk. */
 export interface TableDef {
@@ -77,6 +78,37 @@ export interface RowEvent {
   oldRow?: Record<string, unknown> | null;
   error?: string | null;
   filePath?: string | null;
+}
+
+/**
+ * Serializable per-table portion of {@link DirSQLConfig}. Excludes the
+ * `extract` callback (closures aren't serializable) and the table's SQL
+ * `name` (derivable from `ddl`).
+ */
+export interface TableConfig {
+  ddl: string;
+  glob: string;
+  strict: boolean;
+}
+
+/**
+ * Serializable snapshot of a {@link DirSQL} instance's resolved runtime
+ * state, as produced by {@link DirSQL.toJSON} / `JSON.stringify(db)`.
+ *
+ * The shape is identical across the Python, Rust, and TypeScript SDKs
+ * (modulo `persist_path` ↔ `persistPath` case): the same payload can flow
+ * through the `interpret` handshake regardless of which SDK produced it.
+ *
+ * Construction artifacts that are no longer meaningful after the instance
+ * exists are intentionally excluded — `config` (already merged into `root`
+ * / `tables` / `ignore`), per-table `extract`, and per-table `name`.
+ */
+export interface DirSQLConfig {
+  root: string;
+  tables: TableConfig[];
+  ignore: string[];
+  persist: boolean;
+  persistPath: string | null;
 }
 
 // Shape of the napi-rs-exposed class. The wrapper below drives this.
@@ -167,6 +199,9 @@ export class DirSQL {
 
   // Initialized by `ready`. Do NOT touch before awaiting `ready`.
   private _inner!: NativeDirSQL;
+  // Constructor options preserved verbatim so `toJSON()` can resolve the
+  // serialized state synchronously without waiting for `ready`.
+  private readonly _options: DirSQLOptions;
 
   /** Construct from a `.dirsql.toml` config-file path. */
   constructor(configPath: string);
@@ -175,6 +210,7 @@ export class DirSQL {
   constructor(arg: string | DirSQLOptions) {
     const options: DirSQLOptions =
       typeof arg === "string" ? { config: arg } : arg;
+    this._options = options;
     const Ctor = getCore().DirSQL;
     const openPromise = Ctor.openAsync(
       options.root ?? null,
@@ -225,6 +261,14 @@ export class DirSQL {
   async pollEvents(timeoutMs: number): Promise<RowEvent[]> {
     await this.ready;
     return this._inner.pollEvents(timeoutMs);
+  }
+
+  /**
+   * Resolved construction state. Recomputed on each call; reads the
+   * `.dirsql.toml` if `config` was supplied. Works before `ready`.
+   */
+  toJSON(): DirSQLConfig {
+    return resolveConfig(this._options);
   }
 
   /**

@@ -33,6 +33,7 @@ wins (a warning is emitted on stderr).
 | Start watcher              | `db._start_watcher()`                          | `db.start_watching()`                                | `await db.startWatcher()` (runs on libuv threadpool)    |
 | Poll events                | `db._poll_events(ms)`                          | `db.poll_events(duration)`                           | `await db.pollEvents(ms)` (runs on libuv threadpool)    |
 | Watch (channel/stream)     | `async for event in db.watch()` (via `_async.py`) | `db.watch() -> WatchStream` (channel)                | `for await (const ev of db.watch())`                    |
+| Resolved-state serialization | `vars(db)` / `db.__dict__` -> JSON-able dict | `db.config() -> DirSQLConfig` (`serde::Serialize`)   | `db.toJSON()` / `JSON.stringify(db)` -> `DirSQLConfig`  |
 
 All three bindings share a single Rust implementation: `dirsql::DirSQL` handles
 the initial scan, SQL, watcher, and row diffing. Python (`dirsql-py-ext`) and

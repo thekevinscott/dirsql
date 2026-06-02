@@ -3,6 +3,7 @@
 import asyncio
 
 from dirsql._dirsql import DirSQL as _RustDirSQL
+from dirsql.resolve_config import resolve_config
 
 
 class _WatchStream:
@@ -108,3 +109,19 @@ class DirSQL:
     def watch(self):
         """Start watching for file changes. Returns an async iterable of RowEvent."""
         return _WatchStream(self._db)
+
+    @property
+    def __dict__(self):
+        """Resolved construction state as a JSON-serializable dict.
+
+        Recomputed on each access; reads the ``.dirsql.toml`` if ``config=``
+        was supplied. Works before ``await db.ready()``.
+        """
+        return resolve_config(
+            self._root,
+            self._tables,
+            self._ignore,
+            self._config,
+            self._persist,
+            self._persist_path,
+        )
