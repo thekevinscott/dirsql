@@ -16,7 +16,10 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createInterface, type Interface as ReadlineInterface } from "node:readline";
+import {
+  type Interface as ReadlineInterface,
+  createInterface,
+} from "node:readline";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -55,9 +58,12 @@ interface ConfigMessage {
   };
 }
 
-function spawnInterpret(
-  configPath: string,
-): { proc: ChildProcessWithoutNullStreams; lines: AsyncIterator<string>; rl: ReadlineInterface; stderrChunks: string[] } {
+function spawnInterpret(configPath: string): {
+  proc: ChildProcessWithoutNullStreams;
+  lines: AsyncIterator<string>;
+  rl: ReadlineInterface;
+  stderrChunks: string[];
+} {
   if (!existsSync(CLI_ENTRY)) {
     throw new Error(
       `CLI entry not built: ${CLI_ENTRY} -- run \`pnpm build\` first`,
@@ -79,12 +85,19 @@ async function readLine(
   timeoutMs = 5_000,
 ): Promise<string> {
   const next = lines.next();
-  const timer = new Promise<{ done: true; value: undefined }>((_resolve, reject) => {
-    setTimeout(
-      () => reject(new Error(`timed out reading line; stderr: ${stderrChunks.join("")}`)),
-      timeoutMs,
-    );
-  });
+  const timer = new Promise<{ done: true; value: undefined }>(
+    (_resolve, reject) => {
+      setTimeout(
+        () =>
+          reject(
+            new Error(
+              `timed out reading line; stderr: ${stderrChunks.join("")}`,
+            ),
+          ),
+        timeoutMs,
+      );
+    },
+  );
   const result = (await Promise.race([next, timer])) as IteratorResult<string>;
   if (result.done) {
     throw new Error(
@@ -119,9 +132,7 @@ async function shutdown(
 }
 
 describe("dirsql interpret (#196)", () => {
-  let handle:
-    | ReturnType<typeof spawnInterpret>
-    | undefined;
+  let handle: ReturnType<typeof spawnInterpret> | undefined;
 
   beforeEach(() => {
     handle = undefined;
