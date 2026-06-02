@@ -64,6 +64,15 @@ export async function interpret(configPath: string): Promise<number> {
     return 1;
   }
 
+  // The SDK constructor kicks off a background scan that calls each
+  // table's `extract` for every matched file. If a user `extract`
+  // throws, the scan rejects -- and since interpret never awaits the
+  // scan (it dispatches to `extract` itself per request), the rejection
+  // would surface as an unhandled promise rejection and crash Node.
+  // Swallow it here; per-request errors are still reported to the
+  // caller in the extract-response.
+  app.ready.catch(() => {});
+
   const tables = new Map<string, TableDef>(
     (app._options.tables ?? []).map((t) => [tableName(t.ddl), t]),
   );
