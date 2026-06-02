@@ -30,7 +30,9 @@ const NAME_RE = /^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["'`]?(\w+)/i;
 
 function tableName(ddl: string): string {
   const m = NAME_RE.exec(ddl);
-  if (!m) throw new Error(`could not parse table name from DDL: ${ddl}`);
+  if (!m || !m[1]) {
+    throw new Error(`could not parse table name from DDL: ${ddl}`);
+  }
   return m[1];
 }
 
