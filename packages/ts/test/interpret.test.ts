@@ -3,6 +3,7 @@
 //
 // Spawns the real `dist/bin/dirsql.js` launcher as a subprocess and talks
 // NDJSON over stdin/stdout. No monkeypatching, no in-process shortcut.
+// Subprocess plumbing lives in `./interpretSubprocess.ts`.
 //
 // NDJSON protocol (per #196):
 //   handshake (helper -> caller, once on startup):
@@ -13,15 +14,18 @@
 //     {"type": "result", "id": <int>, "ok": true,  "rows": [...]}
 //     {"type": "result", "id": <int>, "ok": false, "error": "<msg>"}
 
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import {
-  type Interface as ReadlineInterface,
-  createInterface,
-} from "node:readline";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  type InterpretHandle,
+  readLine,
+  send,
+  shutdown,
+  spawnInterpret,
+} from "./interpretSubprocess.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = join(__dirname, "..");
@@ -34,151 +38,82 @@ const PKG: { bin: { dirsql: string } } = JSON.parse(
 const CLI_ENTRY = join(PKG_ROOT, PKG.bin.dirsql);
 
 const FIXTURE_DIR = join(__dirname, "__fixtures__", "interpret");
-const HAPPY_CONFIG = join(FIXTURE_DIR, "dirsql.config.mjs");
 const RAISES_CONFIG = join(FIXTURE_DIR, "dirsql.config_raises.mjs");
 const NO_DEFAULT_CONFIG = join(FIXTURE_DIR, "dirsql.config_no_default.mjs");
 const ALPHA_PATH = join(FIXTURE_DIR, "data", "a", "meta.json");
 
-function spawnInterpret(configPath: string): {
-  proc: ChildProcessWithoutNullStreams;
-  lines: AsyncIterator<string>;
-  rl: ReadlineInterface;
-  stderrChunks: string[];
-} {
-  if (!existsSync(CLI_ENTRY)) {
-    throw new Error(
-      `CLI entry not built: ${CLI_ENTRY} -- run \`pnpm build\` first`,
-    );
-  }
-  const proc = spawn(process.execPath, [CLI_ENTRY, "interpret", configPath], {
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  const rl = createInterface({ input: proc.stdout });
-  const stderrChunks: string[] = [];
-  proc.stderr.setEncoding("utf8");
-  proc.stderr.on("data", (chunk: string) => stderrChunks.push(chunk));
-  return { proc, lines: rl[Symbol.asyncIterator](), rl, stderrChunks };
-}
-
-async function readLine(
-  lines: AsyncIterator<string>,
-  stderrChunks: string[],
-  timeoutMs = 5_000,
-): Promise<string> {
-  const next = lines.next();
-  const timer = new Promise<{ done: true; value: undefined }>(
-    (_resolve, reject) => {
-      setTimeout(
-        () =>
-          reject(
-            new Error(
-              `timed out reading line; stderr: ${stderrChunks.join("")}`,
-            ),
-          ),
-        timeoutMs,
-      );
-    },
-  );
-  const result = (await Promise.race([next, timer])) as IteratorResult<string>;
-  if (result.done) {
-    throw new Error(
-      `helper exited before writing a line; stderr: ${stderrChunks.join("")}`,
-    );
-  }
-  return result.value;
-}
-
-function send(proc: ChildProcessWithoutNullStreams, msg: unknown): void {
-  proc.stdin.write(`${JSON.stringify(msg)}\n`);
-}
-
-async function shutdown(
-  proc: ChildProcessWithoutNullStreams,
-  rl: ReadlineInterface,
-): Promise<void> {
-  rl.close();
-  proc.stdin.end();
-  await new Promise<void>((resolve) => {
-    if (proc.exitCode !== null || proc.signalCode !== null) {
-      resolve();
-    } else {
-      proc.once("close", () => resolve());
-      setTimeout(() => {
-        if (proc.exitCode === null && proc.signalCode === null) {
-          proc.kill("SIGKILL");
-        }
-      }, 5_000);
-    }
-  });
-}
+/** Happy-path config exists in three loader flavors; same shape. */
+const HAPPY_EXTS = ["mjs", "js", "cjs"] as const;
+const happyConfig = (ext: (typeof HAPPY_EXTS)[number]): string =>
+  join(FIXTURE_DIR, `dirsql.config.${ext}`);
 
 describe("dirsql interpret (#196)", () => {
-  let handle: ReturnType<typeof spawnInterpret> | undefined;
+  let handle: InterpretHandle | undefined;
 
   beforeEach(() => {
     handle = undefined;
   });
 
   afterEach(async () => {
-    if (handle) await shutdown(handle.proc, handle.rl);
+    if (handle) await shutdown(handle);
   });
 
   describe("handshake", () => {
-    it("emits a config message whose state equals app.toJSON()", async () => {
-      handle = spawnInterpret(HAPPY_CONFIG);
-      expect(
-        JSON.parse(await readLine(handle.lines, handle.stderrChunks)),
-      ).toEqual({
-        type: "config",
-        state: {
-          root: join(FIXTURE_DIR, "data"),
-          tables: [
-            {
-              ddl: "CREATE TABLE papers (title TEXT)",
-              glob: "**/meta.json",
-              strict: false,
-            },
-          ],
-          ignore: [],
-          persist: false,
-          persistPath: null,
-        },
-      });
-    });
+    it.each(HAPPY_EXTS)(
+      "emits a config message whose state equals app.toJSON() (.%s loader)",
+      async (ext) => {
+        handle = spawnInterpret(CLI_ENTRY, happyConfig(ext));
+        expect(JSON.parse(await readLine(handle))).toEqual({
+          type: "config",
+          state: {
+            root: join(FIXTURE_DIR, "data"),
+            tables: [
+              {
+                ddl: "CREATE TABLE papers (title TEXT)",
+                glob: "**/meta.json",
+                strict: false,
+              },
+            ],
+            ignore: [],
+            persist: false,
+            persistPath: null,
+          },
+        });
+      },
+    );
   });
 
   describe("extract", () => {
-    it("returns ok=true with the rows extract produced", async () => {
-      handle = spawnInterpret(HAPPY_CONFIG);
-      await readLine(handle.lines, handle.stderrChunks); // drain handshake
-      send(handle.proc, {
-        type: "extract",
-        id: 1,
-        table: "papers",
-        path: ALPHA_PATH,
-      });
-      expect(
-        JSON.parse(await readLine(handle.lines, handle.stderrChunks)),
-      ).toEqual({
-        type: "result",
-        id: 1,
-        ok: true,
-        rows: [{ title: "Alpha" }],
-      });
-    });
+    it.each(HAPPY_EXTS)(
+      "returns ok=true with the rows extract produced (.%s loader)",
+      async (ext) => {
+        handle = spawnInterpret(CLI_ENTRY, happyConfig(ext));
+        await readLine(handle); // drain handshake
+        send(handle, {
+          type: "extract",
+          id: 1,
+          table: "papers",
+          path: ALPHA_PATH,
+        });
+        expect(JSON.parse(await readLine(handle))).toEqual({
+          type: "result",
+          id: 1,
+          ok: true,
+          rows: [{ title: "Alpha" }],
+        });
+      },
+    );
 
     it("returns ok=false when the user extract throws", async () => {
-      handle = spawnInterpret(RAISES_CONFIG);
-      await readLine(handle.lines, handle.stderrChunks); // drain handshake
-      send(handle.proc, {
+      handle = spawnInterpret(CLI_ENTRY, RAISES_CONFIG);
+      await readLine(handle); // drain handshake
+      send(handle, {
         type: "extract",
         id: 7,
         table: "papers",
         path: ALPHA_PATH,
       });
-      expect(
-        JSON.parse(await readLine(handle.lines, handle.stderrChunks)),
-      ).toEqual({
+      expect(JSON.parse(await readLine(handle))).toEqual({
         type: "result",
         id: 7,
         ok: false,
@@ -187,17 +122,15 @@ describe("dirsql interpret (#196)", () => {
     });
 
     it("returns ok=false when the request names an unknown table", async () => {
-      handle = spawnInterpret(HAPPY_CONFIG);
-      await readLine(handle.lines, handle.stderrChunks); // drain handshake
-      send(handle.proc, {
+      handle = spawnInterpret(CLI_ENTRY, happyConfig("mjs"));
+      await readLine(handle); // drain handshake
+      send(handle, {
         type: "extract",
         id: 3,
         table: "nonexistent",
         path: ALPHA_PATH,
       });
-      expect(
-        JSON.parse(await readLine(handle.lines, handle.stderrChunks)),
-      ).toEqual({
+      expect(JSON.parse(await readLine(handle))).toEqual({
         type: "result",
         id: 3,
         ok: false,
