@@ -38,6 +38,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checking does not need `dirsql.node` or the generated `index.d.ts`.
   Parity with the new Python type-check job.
 
+- **`dirsql interpret <config>` subcommand.** Long-running NDJSON
+  helper that loads a native-language config file (Python `.py`,
+  TypeScript / JavaScript `.js` / `.mjs` / `.cjs`), takes its
+  `app` / default export, writes a single handshake line
+  (`{"type": "config", "state": <vars(app)> | <app.toJSON()>}`),
+  then loops on stdin handling `{"type": "extract", "id", "table", "path"}`
+  requests by dispatching to the config's user-defined `extract`
+  callbacks. One request / one response, sequential. Used by the
+  forthcoming Rust orchestrator; also directly invokable for
+  debugging native configs. Python and TypeScript only — Rust has no
+  host language runtime in which user callbacks could execute
+  (intentional parity drift). The PyO3 `Table` class now exposes
+  `extract` and `name` as readable attributes; `name` comes from the
+  core `dirsql::db::parse_table_name`. The TypeScript SDK gains a
+  top-level `parseTableName(ddl)` export backed by the same Rust
+  function, and `DirSQL._options` is now public-readable so the
+  TypeScript dispatcher can reach the original `TableDef` (which
+  carries the `extract` closure that `toJSON()` intentionally drops).
+  (#196)
+
 - **Config serialization on `DirSQL`.** Python `vars(db)` (via
   `__dict__`), TypeScript `JSON.stringify(db)` (via `toJSON()`), and
   Rust `db.config()` (returning a `serde::Serialize`-derived

@@ -30,6 +30,7 @@ mod python {
         ddl: String,
         #[pyo3(get)]
         glob: String,
+        #[pyo3(get)]
         extract: Py<PyAny>,
         #[pyo3(get)]
         strict: bool,

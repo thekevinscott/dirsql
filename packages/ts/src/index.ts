@@ -200,8 +200,10 @@ export class DirSQL {
   // Initialized by `ready`. Do NOT touch before awaiting `ready`.
   private _inner!: NativeDirSQL;
   // Constructor options preserved verbatim so `toJSON()` can resolve the
-  // serialized state synchronously without waiting for `ready`.
-  private readonly _options: DirSQLOptions;
+  // serialized state synchronously without waiting for `ready`, and so
+  // `dirsql interpret` (#196) can reach the user-supplied `extract`
+  // callbacks (which `toJSON()` deliberately drops). Public-by-design.
+  readonly _options: DirSQLOptions;
 
   /** Construct from a `.dirsql.toml` config-file path. */
   constructor(configPath: string);
