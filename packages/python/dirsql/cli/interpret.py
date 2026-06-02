@@ -111,8 +111,6 @@ def run(argv: list[str]) -> int:
             rows = table.extract(path)
             _write({"type": "result", "id": rid, "ok": True, "rows": rows})
         except Exception as exc:
-            _write(
-                {"type": "result", "id": rid, "ok": False, "error": str(exc)}
-            )
+            _write({"type": "result", "id": rid, "ok": False, "error": str(exc)})
 
     return 0
