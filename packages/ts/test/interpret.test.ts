@@ -39,25 +39,6 @@ const RAISES_CONFIG = join(FIXTURE_DIR, "dirsql.config_raises.mjs");
 const NO_DEFAULT_CONFIG = join(FIXTURE_DIR, "dirsql.config_no_default.mjs");
 const ALPHA_PATH = join(FIXTURE_DIR, "data", "a", "meta.json");
 
-interface ResultMessage {
-  type: "result";
-  id: number;
-  ok: boolean;
-  rows?: unknown[];
-  error?: string;
-}
-
-interface ConfigMessage {
-  type: "config";
-  state: {
-    root: string;
-    tables: { ddl: string; glob: string; strict: boolean }[];
-    ignore: string[];
-    persist: boolean;
-    persistPath: string | null;
-  };
-}
-
 function spawnInterpret(configPath: string): {
   proc: ChildProcessWithoutNullStreams;
   lines: AsyncIterator<string>;
@@ -142,102 +123,113 @@ describe("dirsql interpret (#196)", () => {
     if (handle) await shutdown(handle.proc, handle.rl);
   });
 
-  it("handshake `state` matches `app.toJSON()`", async () => {
-    handle = spawnInterpret(HAPPY_CONFIG);
-    const msg = JSON.parse(
-      await readLine(handle.lines, handle.stderrChunks),
-    ) as ConfigMessage;
-    expect(msg.type).toBe("config");
-    // Same keys as `app.toJSON()` per test/serialization.test.ts.
-    expect(Object.keys(msg.state).sort()).toEqual(
-      ["ignore", "persist", "persistPath", "root", "tables"].sort(),
-    );
-    expect(msg.state.root).toBe(join(FIXTURE_DIR, "data"));
-    expect(msg.state.tables).toHaveLength(1);
-    expect(msg.state.tables[0].ddl).toBe("CREATE TABLE papers (title TEXT)");
-    expect(msg.state.tables[0].glob).toBe("**/meta.json");
-    expect(msg.state.tables[0].strict).toBe(false);
-    expect(msg.state.ignore).toEqual([]);
-    expect(msg.state.persist).toBe(false);
-    expect(msg.state.persistPath).toBeNull();
+  describe("handshake", () => {
+    it("emits a config message whose state equals app.toJSON()", async () => {
+      handle = spawnInterpret(HAPPY_CONFIG);
+      expect(
+        JSON.parse(await readLine(handle.lines, handle.stderrChunks)),
+      ).toEqual({
+        type: "config",
+        state: {
+          root: join(FIXTURE_DIR, "data"),
+          tables: [
+            {
+              ddl: "CREATE TABLE papers (title TEXT)",
+              glob: "**/meta.json",
+              strict: false,
+            },
+          ],
+          ignore: [],
+          persist: false,
+          persistPath: null,
+        },
+      });
+    });
   });
 
-  it("single extract request returns ok=true with fixture rows", async () => {
-    handle = spawnInterpret(HAPPY_CONFIG);
-    await readLine(handle.lines, handle.stderrChunks); // handshake
-    send(handle.proc, {
-      type: "extract",
-      id: 1,
-      table: "papers",
-      path: ALPHA_PATH,
+  describe("extract", () => {
+    it("returns ok=true with the rows extract produced", async () => {
+      handle = spawnInterpret(HAPPY_CONFIG);
+      await readLine(handle.lines, handle.stderrChunks); // drain handshake
+      send(handle.proc, {
+        type: "extract",
+        id: 1,
+        table: "papers",
+        path: ALPHA_PATH,
+      });
+      expect(
+        JSON.parse(await readLine(handle.lines, handle.stderrChunks)),
+      ).toEqual({
+        type: "result",
+        id: 1,
+        ok: true,
+        rows: [{ title: "Alpha" }],
+      });
     });
-    const response = JSON.parse(
-      await readLine(handle.lines, handle.stderrChunks),
-    ) as ResultMessage;
-    expect(response.type).toBe("result");
-    expect(response.id).toBe(1);
-    expect(response.ok).toBe(true);
-    expect(response.rows).toEqual([{ title: "Alpha" }]);
+
+    it("returns ok=false when the user extract throws", async () => {
+      handle = spawnInterpret(RAISES_CONFIG);
+      await readLine(handle.lines, handle.stderrChunks); // drain handshake
+      send(handle.proc, {
+        type: "extract",
+        id: 7,
+        table: "papers",
+        path: ALPHA_PATH,
+      });
+      expect(
+        JSON.parse(await readLine(handle.lines, handle.stderrChunks)),
+      ).toEqual({
+        type: "result",
+        id: 7,
+        ok: false,
+        error: expect.stringContaining("synthetic extract failure"),
+      });
+    });
+
+    it("returns ok=false when the request names an unknown table", async () => {
+      handle = spawnInterpret(HAPPY_CONFIG);
+      await readLine(handle.lines, handle.stderrChunks); // drain handshake
+      send(handle.proc, {
+        type: "extract",
+        id: 3,
+        table: "nonexistent",
+        path: ALPHA_PATH,
+      });
+      expect(
+        JSON.parse(await readLine(handle.lines, handle.stderrChunks)),
+      ).toEqual({
+        type: "result",
+        id: 3,
+        ok: false,
+        error: expect.stringContaining("nonexistent"),
+      });
+    });
   });
 
-  it("extract callback exception surfaces as ok=false with error string", async () => {
-    handle = spawnInterpret(RAISES_CONFIG);
-    await readLine(handle.lines, handle.stderrChunks); // handshake
-    send(handle.proc, {
-      type: "extract",
-      id: 7,
-      table: "papers",
-      path: ALPHA_PATH,
+  describe("startup", () => {
+    it("exits non-zero with clean stderr when the config has no default export", async () => {
+      // Direct spawn / communicate — no handshake expected here.
+      const proc = spawn(
+        process.execPath,
+        [CLI_ENTRY, "interpret", NO_DEFAULT_CONFIG],
+        { stdio: ["pipe", "pipe", "pipe"] },
+      );
+      let stderr = "";
+      proc.stderr.setEncoding("utf8");
+      proc.stderr.on("data", (chunk: string) => {
+        stderr += chunk;
+      });
+      proc.stdin.end();
+      const exitCode = await new Promise<number | null>((resolve) => {
+        proc.on("close", (code) => resolve(code));
+        setTimeout(() => {
+          if (proc.exitCode === null) proc.kill("SIGKILL");
+        }, 10_000);
+      });
+      expect(exitCode).not.toBe(0);
+      // "Clean": no V8 stack trace.
+      expect(stderr).not.toMatch(/\s+at [^\s]+ \(/);
+      expect(stderr.toLowerCase()).toMatch(/default|export/);
     });
-    const response = JSON.parse(
-      await readLine(handle.lines, handle.stderrChunks),
-    ) as ResultMessage;
-    expect(response.type).toBe("result");
-    expect(response.id).toBe(7);
-    expect(response.ok).toBe(false);
-    expect(response.error).toContain("synthetic extract failure");
-  });
-
-  it("unknown table name returns ok=false", async () => {
-    handle = spawnInterpret(HAPPY_CONFIG);
-    await readLine(handle.lines, handle.stderrChunks); // handshake
-    send(handle.proc, {
-      type: "extract",
-      id: 3,
-      table: "nonexistent",
-      path: ALPHA_PATH,
-    });
-    const response = JSON.parse(
-      await readLine(handle.lines, handle.stderrChunks),
-    ) as ResultMessage;
-    expect(response.type).toBe("result");
-    expect(response.id).toBe(3);
-    expect(response.ok).toBe(false);
-    expect(response.error).toContain("nonexistent");
-  });
-
-  it("config without a default export exits non-zero with clean stderr", async () => {
-    // Direct spawn / communicate — no handshake expected here.
-    const proc = spawn(
-      process.execPath,
-      [CLI_ENTRY, "interpret", NO_DEFAULT_CONFIG],
-      { stdio: ["pipe", "pipe", "pipe"] },
-    );
-    let stderr = "";
-    proc.stderr.setEncoding("utf8");
-    proc.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-    proc.stdin.end();
-    const exitCode = await new Promise<number | null>((resolve) => {
-      proc.on("close", (code) => resolve(code));
-      setTimeout(() => {
-        if (proc.exitCode === null) proc.kill("SIGKILL");
-      }, 10_000);
-    });
-    expect(exitCode).not.toBe(0);
-    // "Clean": no V8 stack trace.
-    expect(stderr).not.toMatch(/\s+at [^\s]+ \(/);
-    expect(stderr.toLowerCase()).toMatch(/default|export/);
   });
 });
