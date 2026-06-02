@@ -20,14 +20,10 @@ NDJSON protocol (per #196):
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
-import sys
 import threading
 from pathlib import Path
-
-import pytest
 
 FIXTURE_DIR = Path(__file__).parent / "__fixtures__" / "interpret"
 HAPPY_CONFIG = FIXTURE_DIR / "dirsql.config.py"
