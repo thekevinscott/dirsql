@@ -20,6 +20,7 @@
 
 use dirsql::{
     DirSQL as CoreDirSQL, PreparedBuild, RawFileEvent, Row, RowEvent as CoreRowEvent, Table, Value,
+    db::parse_table_name as core_parse_table_name,
 };
 use napi::Task;
 use napi::bindgen_prelude::*;
@@ -28,6 +29,21 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+
+// -- Public napi-rs functions -----------------------------------------------
+
+/// Parse the table name out of a `CREATE TABLE <name> (...)` DDL.
+/// Returns `null` if the DDL doesn't match (e.g. empty, missing
+/// `CREATE TABLE`, or the identifier slot is empty).
+///
+/// Surfaces the core Rust implementation in
+/// `dirsql::db::parse_table_name`. Used by the `dirsql interpret`
+/// dispatcher (#196) so the JS side and the Rust core agree on table
+/// name resolution without a duplicate regex.
+#[napi(js_name = "parseTableName")]
+pub fn parse_table_name(ddl: String) -> Option<String> {
+    core_parse_table_name(&ddl)
+}
 
 // -- Public napi-rs classes --------------------------------------------------
 

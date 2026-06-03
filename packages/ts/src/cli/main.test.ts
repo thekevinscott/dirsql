@@ -3,11 +3,13 @@
 import { spawnSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { die } from "./die.js";
+import { interpret } from "./interpret/index.js";
 import { main } from "./main.js";
 import { resolveBinary } from "./resolveBinary.js";
 
 vi.mock("./resolveBinary.js");
 vi.mock("./die.js");
+vi.mock("./interpret/index.js");
 vi.mock("node:child_process");
 
 const TEST_PID = 42;
@@ -52,42 +54,42 @@ describe("main", () => {
     vi.resetAllMocks();
   });
 
-  it("spawns the resolved binary with the argv and exits with the spawn status", () => {
+  it("spawns the resolved binary with the argv and exits with the spawn status", async () => {
     vi.mocked(spawnSync).mockReturnValue(fakeResult({ status: 0 }));
 
-    expect(() => main(["--version"])).toThrow("EXIT_0");
+    await expect(main(["--version"])).rejects.toThrow("EXIT_0");
     expect(spawnSync).toHaveBeenCalledWith("/bin/dirsql", ["--version"], {
       stdio: "inherit",
     });
     expect(exit).toHaveBeenCalledWith(0);
   });
 
-  it("falls back to exit code 1 when spawn returns a null status", () => {
+  it("falls back to exit code 1 when spawn returns a null status", async () => {
     vi.mocked(spawnSync).mockReturnValue(fakeResult({ status: null }));
 
-    expect(() => main([])).toThrow("EXIT_1");
+    await expect(main([])).rejects.toThrow("EXIT_1");
     expect(exit).toHaveBeenCalledWith(1);
   });
 
-  it("calls die with the spawn error message when spawn reports an error", () => {
+  it("calls die with the spawn error message when spawn reports an error", async () => {
     vi.mocked(spawnSync).mockReturnValue(
       fakeResult({ status: null, error: new Error("spawn ENOENT") }),
     );
 
-    expect(() => main([])).toThrow("DIE: spawn ENOENT");
+    await expect(main([])).rejects.toThrow("DIE: spawn ENOENT");
     expect(die).toHaveBeenCalledWith("spawn ENOENT", 1);
   });
 
-  it("re-raises the spawned process's signal against the current pid before exiting", () => {
+  it("re-raises the spawned process's signal against the current pid before exiting", async () => {
     vi.mocked(spawnSync).mockReturnValue(
       fakeResult({ status: 0, signal: "SIGINT" }),
     );
 
-    expect(() => main([])).toThrow("EXIT_0");
+    await expect(main([])).rejects.toThrow("EXIT_0");
     expect(kill).toHaveBeenCalledWith(TEST_PID, "SIGINT");
   });
 
-  it("defaults argv to process.argv.slice(2) when called with no args", () => {
+  it("defaults argv to process.argv.slice(2) when called with no args", async () => {
     vi.mocked(spawnSync).mockReturnValue(fakeResult({ status: 0 }));
     vi.stubGlobal("process", {
       ...process,
@@ -97,9 +99,43 @@ describe("main", () => {
       pid: TEST_PID,
     });
 
-    expect(() => main()).toThrow("EXIT_0");
+    await expect(main()).rejects.toThrow("EXIT_0");
     expect(spawnSync).toHaveBeenCalledWith("/bin/dirsql", ["--help"], {
       stdio: "inherit",
+    });
+  });
+
+  describe("when argv[0] is 'interpret'", () => {
+    it("dispatches to the interpret helper and exits with its return code", async () => {
+      vi.mocked(interpret).mockResolvedValue(0);
+
+      await expect(main(["interpret", "config.mjs"])).rejects.toThrow("EXIT_0");
+      expect(interpret).toHaveBeenCalledWith("config.mjs");
+      expect(spawnSync).not.toHaveBeenCalled();
+      expect(resolveBinary).not.toHaveBeenCalled();
+    });
+
+    it("propagates a non-zero interpret exit code", async () => {
+      vi.mocked(interpret).mockResolvedValue(2);
+
+      await expect(main(["interpret", "bad.mjs"])).rejects.toThrow("EXIT_2");
+    });
+
+    it("passes the empty string when no config path follows", async () => {
+      vi.mocked(interpret).mockResolvedValue(1);
+
+      await expect(main(["interpret"])).rejects.toThrow("EXIT_1");
+      expect(interpret).toHaveBeenCalledWith("");
+    });
+
+    it("does not intercept when 'interpret' is not the first arg", async () => {
+      vi.mocked(spawnSync).mockReturnValue(fakeResult({ status: 0 }));
+
+      await expect(
+        main(["--verbose", "interpret", "config.mjs"]),
+      ).rejects.toThrow("EXIT_0");
+      expect(interpret).not.toHaveBeenCalled();
+      expect(spawnSync).toHaveBeenCalled();
     });
   });
 });

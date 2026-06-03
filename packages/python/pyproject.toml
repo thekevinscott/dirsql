@@ -89,9 +89,8 @@ omit = [
     # Colocated unit tests live alongside the package source; instrumenting
     # them lets a test double's own branches pad the metric (e.g. a fake's
     # empty-list return). Exclude test files so the floor reflects only
-    # library code.
-    "dirsql/test_*.py",
-    "dirsql/*_test.py",
-    "dirsql/cli/test_*.py",
-    "dirsql/cli/*_test.py",
+    # library code. Recursive glob so nested packages (e.g.
+    # `dirsql/cli/interpret/`) are covered too.
+    "**/test_*.py",
+    "**/*_test.py",
 ]

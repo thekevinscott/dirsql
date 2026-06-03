@@ -63,6 +63,20 @@ const rows = await db.query("SELECT ...");
 for await (const event of db.watch()) { ... }
 ```
 
+## CLI: `interpret` subcommand
+
+The `dirsql interpret <config>` subcommand (#196) is a long-running
+NDJSON helper that the Rust orchestrator spawns when `--config` points
+to a native-language file. It reads `extract` requests from stdin,
+dispatches to user-defined callbacks loaded from the config, and writes
+results to stdout.
+
+| SDK        | Status      | Notes                                                                    |
+|------------|-------------|--------------------------------------------------------------------------|
+| Python     | Implemented | Loads `.py` config via `importlib`, takes the module-level `app` value.  |
+| TypeScript | Implemented | Loads `.js` / `.mjs` / `.cjs` config via dynamic `import()`, takes the default export. |
+| Rust       | N/A         | Rust has no host language runtime in which user `extract` callbacks could execute. Intentional parity drift. |
+
 ## Language-Idiomatic Exceptions
 
 ### Python

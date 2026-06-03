@@ -1,5 +1,8 @@
 """Console-script entry point. Execs the bundled binary on POSIX,
-subprocesses it on Windows."""
+subprocesses it on Windows. When ``argv[0] == "interpret"`` the
+in-process Python helper handles the subcommand directly so a Rust
+orchestrator can spawn this script for native-language configs (#196)
+without depending on the bundled Rust binary."""
 
 from __future__ import annotations
 
@@ -7,13 +10,22 @@ import os
 import subprocess
 import sys
 
-from dirsql.cli.binary_path import binary_path
-from dirsql.cli.is_windows import is_windows
+from .binary_path import binary_path
+from .is_windows import is_windows
 
 
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
+
+    if argv and argv[0] == "interpret":
+        from .interpret.run import run
+
+        try:
+            return run(argv[1:])
+        except KeyboardInterrupt:
+            return 130
+
     try:
         binary = binary_path()
     except FileNotFoundError as exc:

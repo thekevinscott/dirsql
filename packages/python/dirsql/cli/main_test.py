@@ -6,8 +6,8 @@ import subprocess
 import sys
 from unittest.mock import patch
 
-from dirsql.cli import main as main_module
-from dirsql.cli.main import main
+from . import main as main_module
+from .main import main
 
 
 class _Completed:
@@ -85,3 +85,46 @@ def describe_main():
             ):
                 main(argv=None)
             run.assert_called_once_with(["C:/dirsql.exe", "--help"])
+
+    def describe_when_argv0_is_interpret():
+        """`dirsql interpret <config>` is handled in-process so the Rust
+        orchestrator can spawn the launcher for native-language configs
+        (#196) without depending on the bundled Rust binary."""
+
+        def it_dispatches_to_interpret_run_and_returns_its_exit_code():
+            # main.py does `from .interpret.run import run` lazily, so
+            # patching the `run` function on the submodule is sufficient
+            # -- each call resolves the name freshly from the submodule.
+            from .interpret import run as run_submod
+
+            with (
+                patch.object(run_submod, "run", return_value=0) as interpret_run,
+                patch.object(main_module, "binary_path") as binary_path,
+            ):
+                assert main(["interpret", "config.py"]) == 0
+            interpret_run.assert_called_once_with(["config.py"])
+            binary_path.assert_not_called()
+
+        def it_propagates_a_nonzero_interpret_exit():
+            from .interpret import run as run_submod
+
+            with patch.object(run_submod, "run", return_value=2):
+                assert main(["interpret", "bad.py"]) == 2
+
+        def it_returns_130_on_keyboard_interrupt():
+            from .interpret import run as run_submod
+
+            with patch.object(run_submod, "run", side_effect=KeyboardInterrupt()):
+                assert main(["interpret", "config.py"]) == 130
+
+        def it_does_not_intercept_when_interpret_is_not_argv_0():
+            # `dirsql --verbose interpret` is the binary's problem, not
+            # ours -- the in-process route only fires on the first arg.
+            with (
+                patch.object(main_module, "binary_path", return_value="/bin/dirsql"),
+                patch.object(main_module, "is_windows", return_value=True),
+                patch.object(subprocess, "run", return_value=_Completed(0)),
+            ):
+                main(["--verbose", "interpret", "config.py"])
+            # binary_path was reached, meaning we did NOT take the
+            # interpret shortcut.

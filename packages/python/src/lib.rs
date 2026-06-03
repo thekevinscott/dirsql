@@ -12,7 +12,7 @@
 
 #[cfg(feature = "extension-module")]
 mod python {
-    use ::dirsql::{DirSQL, Row, RowEvent, Table, Value};
+    use ::dirsql::{DirSQL, Row, RowEvent, Table, Value, db::parse_table_name};
     use pyo3::exceptions::PyRuntimeError;
     use pyo3::prelude::*;
     use pyo3::types::{PyDict, PyList};
@@ -30,9 +30,21 @@ mod python {
         ddl: String,
         #[pyo3(get)]
         glob: String,
+        #[pyo3(get)]
         extract: Py<PyAny>,
         #[pyo3(get)]
         strict: bool,
+        /// Parsed table name (from `ddl`), or `None` if the DDL doesn't
+        /// match `CREATE TABLE <name> (...)`. Computed once at construction
+        /// via `dirsql::db::parse_table_name` so the `dirsql interpret`
+        /// dispatcher (#196) and other consumers share the core's single
+        /// source of truth instead of re-parsing DDL. We return `None`
+        /// rather than raising at construction so `DirSQL.ready()` keeps
+        /// surfacing malformed DDLs as the loud failure path (the Rust
+        /// core's `DirSqlError::Ddl`); callers that care about the name
+        /// before that point can check `t.name is None` themselves.
+        #[pyo3(get)]
+        name: Option<String>,
     }
 
     #[pymethods]
@@ -40,11 +52,13 @@ mod python {
         #[new]
         #[pyo3(signature = (*, ddl, glob, extract, strict=false))]
         fn new(ddl: String, glob: String, extract: Py<PyAny>, strict: bool) -> Self {
+            let name = parse_table_name(&ddl);
             PyTable {
                 ddl,
                 glob,
                 extract,
                 strict,
+                name,
             }
         }
     }
