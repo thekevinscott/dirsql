@@ -58,16 +58,21 @@ A feature is not done until integration tests pass and cover the new functionali
 
 ### Test Boundaries -- What to Mock, What Not To
 
-**Monkeypatching is a code smell.** If a test replaces a module-level attribute on the system under test (`monkeypatch.setattr(mod, "binary_path", ...)`, `monkeypatch.setattr(os, "execv", ...)`), the test is almost certainly at the wrong layer or the production code is missing a seam. Fix the layer / inject the dependency; don't reach into the module from the test.
+Unit tests isolate the unit under test. Every dependency that isn't a trivially pure function gets replaced with a fake; production wires the real implementation through the same seam. The right seam depends on what kind of dependency it is.
 
-Concrete rules:
+**Module imports the SUT calls** -- functions, classes, or values imported from another module (e.g. `binary_path`, `spawnSync`, `die`, `resolveBinary`, future LLM clients, filesystem watchers). Add a parameter with a production default; the test passes a fake by argument. Do **not** patch the SUT module's attribute table to swap them in.
 
-1. **Integration tests hit the SDK's public API**, not the CLI surface. The CLI is a thin launcher (`os.execv` / `spawnSync`); there is nothing in it worth integration-testing in-process. CLI behavior is verified by the e2e wheel/pack install smoke tests.
-2. **Integration tests may use fakes for third-party modules** (filesystem watchers, network clients, eventual LLM SDKs) -- but inject them through the public API or a fixture, not by patching the production module's attributes.
+**Process / global state the SUT reads** -- `sys.argv`, `os.environ`, `process.argv`, `process.exit`, `process.stderr`, current time, the live file system. Stub via `unittest.mock.patch.object(sys, "argv", ...)` (Python) or `vi.stubGlobal("process", ...)` (TypeScript). These tools install a stub for the duration of the test and restore on teardown; they do not require a seam on the SUT.
+
+**Never use `pytest`'s `monkeypatch` fixture.** It conflates the two cases above and its `setattr` pattern silently encourages patching SUT module attributes. Use `unittest.mock` (or `pytest-mock`'s `mocker`) for globals and dependency injection for module-imported functions.
+
+If you find yourself reaching for `monkeypatch.setattr(some_production_module, ...)` (or `mocker.patch.object` on a SUT module), the production code is missing a seam: add a parameter with a production default and a test-injected fake. The example to avoid is replacing `binary_path` or `os.execv` *on the SUT module's namespace* -- inject those instead.
+
+**Test-tier rules:**
+
+1. **Unit tests** isolate the SUT and inject fakes for every non-pure dependency as above. Coverage at the unit tier should reflect every executable branch; one-line bridges to OS calls (`() => process.exit(code)`, `lambda: sys.argv`) are the only acceptable `# pragma: no cover` / `/* v8 ignore */` annotations, and only when the same logic is exercised end-to-end by a wheel/pack install smoke test.
+2. **Integration tests hit the SDK's public API.** They may use fakes for third-party modules (filesystem watchers, network clients, eventual LLM SDKs) -- but inject them through the public API or a fixture, not by patching the production module's attributes.
 3. **E2E tests mock nothing.** Real filesystem, real SQLite, real binary, real install. If an e2e test needs a stub, it isn't an e2e test.
-4. **Unit tests** test pure functions and small classes in isolation. Their dependencies are passed as arguments or constructor params -- not patched onto modules. If a unit can only be tested by monkeypatching its imports, refactor for dependency injection.
-
-If you find yourself writing `monkeypatch.setattr(some_production_module, ...)`, stop and ask: is this an integration test that should go through the public API instead? Is this a unit test whose target needs a constructor parameter? The answer is almost always yes.
 
 ### E2E Test Policy
 

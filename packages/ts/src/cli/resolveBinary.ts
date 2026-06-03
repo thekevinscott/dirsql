@@ -19,11 +19,12 @@ export function defaultResolver(): Resolver {
 export function resolveBinary(
   key = platformKey(),
   resolver: Resolver = defaultResolver(),
+  dieFn: typeof die = die,
 ): string {
   const triples = nodeTriples();
   const pkg = triples[key];
   if (!pkg) {
-    die(
+    dieFn(
       `no prebuilt binary for ${key}. Build from source with \`cargo install dirsql --features cli\`.`,
     );
   }
@@ -31,7 +32,7 @@ export function resolveBinary(
   try {
     return resolver(`${pkg}/${bin}`);
   } catch {
-    die(
+    dieFn(
       `${pkg} is not installed. If you ran \`npm install --no-optional\` or \`--ignore-optional\`, re-install without that flag.`,
     );
   }
