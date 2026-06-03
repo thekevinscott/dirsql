@@ -37,11 +37,11 @@ export default defineConfig({
       exclude: [
         "**/*.test.ts",
         "test/**/*.ts",
-        // CLI launcher modules. AGENTS.md test-boundary rules forbid
-        // monkeypatch unit tests on production module attributes; the
-        // only meaningful coverage is end-to-end (pack-install smoke
-        // test). Excluded to keep the 90% floor honest about SDK code.
-        "src/cli/**",
+        // `dirsql.ts` is the npm `bin` entry shim: a 2-line module
+        // that imports `main` and calls it at module load. It's not
+        // a function under test; the pack-install smoke test covers
+        // it end-to-end. The rest of `src/cli/**` is unit-tested.
+        "src/cli/dirsql.ts",
         "src/index.ts", // needs the napi binary; covered by SDK integration tests
       ],
       thresholds: {

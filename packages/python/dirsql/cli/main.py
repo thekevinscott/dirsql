@@ -24,4 +24,4 @@ def main(argv: list[str] | None = None) -> int:
         completed = subprocess.run([binary, *argv])
         return completed.returncode
     os.execv(binary, [binary, *argv])
-    return 0  # unreachable
+    return 0

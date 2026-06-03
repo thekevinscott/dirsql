@@ -58,16 +58,24 @@ A feature is not done until integration tests pass and cover the new functionali
 
 ### Test Boundaries -- What to Mock, What Not To
 
-**Monkeypatching is a code smell.** If a test replaces a module-level attribute on the system under test (`monkeypatch.setattr(mod, "binary_path", ...)`, `monkeypatch.setattr(os, "execv", ...)`), the test is almost certainly at the wrong layer or the production code is missing a seam. Fix the layer / inject the dependency; don't reach into the module from the test.
+Unit tests isolate the unit under test. Every dependency that isn't a trivially pure function gets replaced with a fake; production runs the real implementation.
 
-Concrete rules:
+**Mocking is the default.** Use `unittest.mock` / `pytest-mock`'s `mocker` fixture (Python) or `vi.spyOn` / `vi.stubGlobal` / `vi.mock` (TypeScript) to fake out functions, classes, module attributes, and global state for the duration of a test. These tools are scoped (installed on entry, restored on teardown) and keep production code free of test-only seams. Reach for `mock.patch.object` first, both for module imports (`os.execv`, `subprocess.run`, `binary_path`, `is_windows`, `spawnSync`, `die`, `resolveBinary`) and for process/global state (`sys.argv`, `os.environ`, `process.argv`, `process.exit`, `process.stderr`, the system clock, the file system).
 
-1. **Integration tests hit the SDK's public API**, not the CLI surface. The CLI is a thin launcher (`os.execv` / `spawnSync`); there is nothing in it worth integration-testing in-process. CLI behavior is verified by the e2e wheel/pack install smoke tests.
-2. **Integration tests may use fakes for third-party modules** (filesystem watchers, network clients, eventual LLM SDKs) -- but inject them through the public API or a fixture, not by patching the production module's attributes.
+**Never use `pytest`'s `monkeypatch` fixture.** Use `unittest.mock.patch.object` / `mocker.patch.object` instead. Functionally similar but `monkeypatch.setattr` conflates module patching with environment mutation and silently encourages leaks.
+
+**Dependency injection is acceptable, not the default.** Reach for a constructor / argument seam only when:
+
+- The dependency is naturally a callable the SUT receives (a callback, an event handler, a strategy object) and DI makes the call graph clearer for non-test reasons.
+- Mocking would be substantially more brittle than DI -- e.g. the dependency is invoked from many sites in a tight loop and you want a single typed contract.
+
+For the typical "fake out a stdlib helper / module function" case, mock it instead of refactoring the SUT signature.
+
+**Test-tier rules:**
+
+1. **Unit tests** isolate the SUT and mock every non-pure dependency (or, occasionally, DI it). Coverage at the unit tier should reflect every executable branch.
+2. **Integration tests hit the SDK's public API.** They may use fakes for third-party modules (filesystem watchers, network clients, eventual LLM SDKs) -- but inject them through the public API or a fixture, not by patching the production module's attributes.
 3. **E2E tests mock nothing.** Real filesystem, real SQLite, real binary, real install. If an e2e test needs a stub, it isn't an e2e test.
-4. **Unit tests** test pure functions and small classes in isolation. Their dependencies are passed as arguments or constructor params -- not patched onto modules. If a unit can only be tested by monkeypatching its imports, refactor for dependency injection.
-
-If you find yourself writing `monkeypatch.setattr(some_production_module, ...)`, stop and ask: is this an integration test that should go through the public API instead? Is this a unit test whose target needs a constructor parameter? The answer is almost always yes.
 
 ### E2E Test Policy
 

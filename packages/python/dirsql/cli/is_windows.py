@@ -1,5 +1,4 @@
-"""Platform check used by the launcher. Isolated so tests can override it
-without mutating the ``os.name`` global (which upsets pathlib)."""
+"""Platform check used by the launcher."""
 
 from __future__ import annotations
 

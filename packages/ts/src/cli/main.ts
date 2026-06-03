@@ -8,7 +8,11 @@ import { resolveBinary } from "./resolveBinary.js";
 export function main(argv: string[] = process.argv.slice(2)): never {
   const binary = resolveBinary();
   const result = spawnSync(binary, argv, { stdio: "inherit" });
-  if (result.error) die(result.error.message, 1);
-  if (result.signal) process.kill(process.pid, result.signal);
+  if (result.error) {
+    die(result.error.message, 1);
+  }
+  if (result.signal) {
+    process.kill(process.pid, result.signal);
+  }
   process.exit(result.status ?? 1);
 }

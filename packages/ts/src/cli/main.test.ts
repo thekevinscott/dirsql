@@ -1,0 +1,105 @@
+// Unit tests for `main`.
+
+import { spawnSync } from "node:child_process";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { die } from "./die.js";
+import { main } from "./main.js";
+import { resolveBinary } from "./resolveBinary.js";
+
+vi.mock("./resolveBinary.js");
+vi.mock("./die.js");
+vi.mock("node:child_process");
+
+const TEST_PID = 42;
+
+type SpawnResult = ReturnType<typeof spawnSync>;
+
+function fakeResult(overrides: Record<string, unknown>): SpawnResult {
+  return {
+    pid: TEST_PID,
+    stdout: Buffer.from(""),
+    stderr: Buffer.from(""),
+    output: [],
+    status: 0,
+    signal: null,
+    ...overrides,
+  } as unknown as SpawnResult;
+}
+
+describe("main", () => {
+  let exit: ReturnType<typeof vi.fn>;
+  let kill: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.mocked(resolveBinary).mockReturnValue("/bin/dirsql");
+    vi.mocked(die).mockImplementation(((msg: string) => {
+      throw new Error(`DIE: ${msg}`);
+    }) as typeof die);
+    exit = vi.fn().mockImplementation((code: number) => {
+      throw new Error(`EXIT_${code}`);
+    });
+    kill = vi.fn();
+    vi.stubGlobal("process", {
+      ...process,
+      exit,
+      kill,
+      pid: TEST_PID,
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetAllMocks();
+  });
+
+  it("spawns the resolved binary with the argv and exits with the spawn status", () => {
+    vi.mocked(spawnSync).mockReturnValue(fakeResult({ status: 0 }));
+
+    expect(() => main(["--version"])).toThrow("EXIT_0");
+    expect(spawnSync).toHaveBeenCalledWith("/bin/dirsql", ["--version"], {
+      stdio: "inherit",
+    });
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it("falls back to exit code 1 when spawn returns a null status", () => {
+    vi.mocked(spawnSync).mockReturnValue(fakeResult({ status: null }));
+
+    expect(() => main([])).toThrow("EXIT_1");
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it("calls die with the spawn error message when spawn reports an error", () => {
+    vi.mocked(spawnSync).mockReturnValue(
+      fakeResult({ status: null, error: new Error("spawn ENOENT") }),
+    );
+
+    expect(() => main([])).toThrow("DIE: spawn ENOENT");
+    expect(die).toHaveBeenCalledWith("spawn ENOENT", 1);
+  });
+
+  it("re-raises the spawned process's signal against the current pid before exiting", () => {
+    vi.mocked(spawnSync).mockReturnValue(
+      fakeResult({ status: 0, signal: "SIGINT" }),
+    );
+
+    expect(() => main([])).toThrow("EXIT_0");
+    expect(kill).toHaveBeenCalledWith(TEST_PID, "SIGINT");
+  });
+
+  it("defaults argv to process.argv.slice(2) when called with no args", () => {
+    vi.mocked(spawnSync).mockReturnValue(fakeResult({ status: 0 }));
+    vi.stubGlobal("process", {
+      ...process,
+      argv: ["node", "dirsql", "--help"],
+      exit,
+      kill,
+      pid: TEST_PID,
+    });
+
+    expect(() => main()).toThrow("EXIT_0");
+    expect(spawnSync).toHaveBeenCalledWith("/bin/dirsql", ["--help"], {
+      stdio: "inherit",
+    });
+  });
+});
