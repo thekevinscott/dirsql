@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Python SDK ships PEP 561 type information.** The wheel now bundles
+  `dirsql/py.typed` and `dirsql/_dirsql.pyi`, so downstream consumers see
+  types for `DirSQL`, `Table`, `RowEvent`, and `__version__` in editors and
+  type checkers. The stub is hand-written and mirrors the PyO3 bindings in
+  `packages/python/src/lib.rs`; any change to that source's public surface
+  must update the stub in the same PR. Parity-restoring with the Rust core
+  (types from source) and TypeScript SDK (types from generated `.d.ts`).
+
+- **Strict type-checking in CI for the Python SDK (`ty`).** Adds
+  `.github/workflows/python-typecheck.yml` running Astral's `ty` with every
+  rule promoted to `"error"` (`--error all --error-on-warning`). Existing
+  untyped code is frozen behind line-precise `# ty:ignore[<rule>]` baseline
+  comments inserted by `ty check --add-ignore` -- effectively a TODO list
+  that shrinks as files are touched. New errors in new or edited code fail
+  CI immediately. Ruff `PGH003` is enabled to forbid bare `# type: ignore`
+  / `# ty: ignore` without a rule code. Test files (`**/test_*.py`,
+  `**/*_test.py`) are excluded for now because their `monkeypatch.setattr`
+  fakes are a separately-tracked smell (AGENTS.md "Test Boundaries").
+
+- **Dedicated TypeScript type-check job.** Adds
+  `.github/workflows/ts-typecheck.yml` running `tsc --noEmit` standalone
+  on every PR touching `packages/ts/**/*.ts`. `tsc` was already running
+  inside the `ts-test.yml` build step (`tsconfig.json` has `strict`,
+  `noUncheckedIndexedAccess`, `verbatimModuleSyntax`), but a dedicated
+  job surfaces type errors in seconds without waiting on `napi build` --
+  the native addon is loaded via `createRequire` at runtime, so type
+  checking does not need `dirsql.node` or the generated `index.d.ts`.
+  Parity with the new Python type-check job.
+
 - **Config serialization on `DirSQL`.** Python `vars(db)` (via
   `__dict__`), TypeScript `JSON.stringify(db)` (via `toJSON()`), and
   Rust `db.config()` (returning a `serde::Serialize`-derived

@@ -20,7 +20,7 @@ def resolve_config(root, tables, ignore, config, persist, persist_path):
         cfg_dir = os.path.dirname(os.path.abspath(config))
 
     def _abs(p):
-        return p if os.path.isabs(p) else os.path.join(cfg_dir, p)
+        return p if os.path.isabs(p) else os.path.join(cfg_dir, p)  # ty:ignore[no-matching-overload]
 
     return {
         "root": root or (_abs(cfg["root"]) if "root" in cfg else cfg_dir),

@@ -27,6 +27,8 @@ dev = [
     "pytest-cov>=5",
     "ruff>=0.4",
     "maturin>=1.0",
+    # ty is pre-1.0 -- pin tightly. Re-pin in lockstep with CI.
+    "ty==0.0.42",
 ]
 
 [project.scripts]
@@ -55,6 +57,32 @@ include = [
     { path = "dirsql/_binary/*", format = "wheel" },
     { path = "docs/**/*", format = "sdist" },
 ]
+
+# Type checking. Migration model: existing untyped code is frozen behind
+# `# ty: ignore[...]` baseline comments inserted by `ty check --add-ignore`;
+# any new error in new or touched code fails CI. Every rule is promoted to
+# `"error"`, matching TypeScript-strict discipline. Test files are excluded
+# because they monkeypatch fakes onto production module attributes
+# (`monkeypatch.setattr(async_mod, "_RustDirSQL", ...)`) -- AGENTS.md flags
+# that as a smell, ty surfaces it accurately, and the cleanup (constructor
+# injection) is tracked separately.
+[tool.ty.src]
+exclude = [
+    "**/test_*.py",
+    "**/*_test.py",
+    "tests/",
+    "build/",
+    "dirsql/_binary/",
+]
+
+[tool.ty.environment]
+python-version = "3.11"
+
+# Ruff enforces "every type-ignore must cite a rule code" (PGH003) so a
+# `# type: ignore` or `# ty: ignore` without `[...]` fails lint. Stops the
+# escape hatch from quietly widening.
+[tool.ruff.lint]
+extend-select = ["PGH003"]
 
 [tool.coverage.run]
 omit = [

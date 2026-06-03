@@ -1,0 +1,49 @@
+name: TS Typecheck
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/ts/**/*.ts'
+      - 'packages/ts/tsconfig.json'
+      - 'packages/ts/package.json'
+  pull_request:
+    paths:
+      - 'packages/ts/**/*.ts'
+      - 'packages/ts/tsconfig.json'
+      - 'packages/ts/package.json'
+
+# `tsc` already runs as part of `pnpm build` in `ts-test.yml`, so this is
+# redundant in the strict sense. It exists for the same reason
+# `python-typecheck.yml` does: a dedicated, fast-failing type-check signal
+# that doesn't require the napi-rs build chain (~seconds instead of minutes)
+# and shows up as its own red check rather than "Unit tests" failing on a
+# pure type error. The native addon is loaded at runtime via `createRequire`
+# (see `src/loadNativeCore.ts`), so `tsc --noEmit` does not need
+# `dirsql.node` or the generated `index.d.ts` to succeed.
+jobs:
+  tsc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        working-directory: packages/ts
+        run: pnpm install
+
+      - name: Type check
+        working-directory: packages/ts
+        run: pnpm exec tsc --noEmit
