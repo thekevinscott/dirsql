@@ -22,9 +22,9 @@ from __future__ import annotations
 import json
 import sys
 
-from dirsql.cli.interpret.dispatch_extract import dispatch_extract
-from dirsql.cli.interpret.load_app import load_app
-from dirsql.cli.interpret.write_message import write_message
+from .dispatch_extract import dispatch_extract
+from .load_app import load_app
+from .write_message import write_message
 
 
 def run(argv: list[str]) -> int:

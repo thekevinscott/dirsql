@@ -4,7 +4,7 @@ import io
 import sys
 from unittest.mock import patch
 
-from dirsql.cli.interpret.write_message import write_message
+from .write_message import write_message
 
 
 def describe_write_message():

@@ -6,8 +6,8 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from dirsql.cli.interpret import run as run_module
-from dirsql.cli.interpret.run import run
+from . import run as run_module
+from .run import run
 
 
 def _fake_table(name: str, extract):

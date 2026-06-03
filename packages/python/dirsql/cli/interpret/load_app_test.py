@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
-from dirsql.cli.interpret import load_app as load_app_mod
-from dirsql.cli.interpret.load_app import load_app
+from . import load_app as load_app_mod
+from .load_app import load_app
 
 
 def describe_load_app():

@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from dirsql.cli.interpret.dispatch_extract import dispatch_extract
+from .dispatch_extract import dispatch_extract
 
 
 def _table(extract):

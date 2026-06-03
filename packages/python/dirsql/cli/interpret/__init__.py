@@ -11,6 +11,6 @@ See the individual submodules for behavior:
 - ``dispatch_extract`` -- per-request handler
 """
 
-from dirsql.cli.interpret.run import run
+from .run import run
 
 __all__ = ["run"]

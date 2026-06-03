@@ -6,8 +6,8 @@ import subprocess
 import sys
 from unittest.mock import patch
 
-from dirsql.cli import main as main_module
-from dirsql.cli.main import main
+from . import main as main_module
+from .main import main
 
 
 class _Completed:
@@ -92,10 +92,10 @@ def describe_main():
         (#196) without depending on the bundled Rust binary."""
 
         def it_dispatches_to_interpret_run_and_returns_its_exit_code():
-            # main.py does `from dirsql.cli.interpret import run` lazily,
-            # so patching the package's `run` attribute is sufficient --
+            # main.py does `from .interpret import run` lazily, so
+            # patching the package's `run` attribute is sufficient --
             # each call resolves the name freshly from the package.
-            from dirsql.cli import interpret as interpret_pkg
+            from . import interpret as interpret_pkg
 
             with (
                 patch.object(interpret_pkg, "run", return_value=0) as interpret_run,
@@ -106,13 +106,13 @@ def describe_main():
             binary_path.assert_not_called()
 
         def it_propagates_a_nonzero_interpret_exit():
-            from dirsql.cli import interpret as interpret_pkg
+            from . import interpret as interpret_pkg
 
             with patch.object(interpret_pkg, "run", return_value=2):
                 assert main(["interpret", "bad.py"]) == 2
 
         def it_returns_130_on_keyboard_interrupt():
-            from dirsql.cli import interpret as interpret_pkg
+            from . import interpret as interpret_pkg
 
             with patch.object(interpret_pkg, "run", side_effect=KeyboardInterrupt()):
                 assert main(["interpret", "config.py"]) == 130
