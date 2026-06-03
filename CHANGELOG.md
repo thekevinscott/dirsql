@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `**/*_test.py`) are excluded for now because their `monkeypatch.setattr`
   fakes are a separately-tracked smell (AGENTS.md "Test Boundaries").
 
+- **Dedicated TypeScript type-check job.** Adds
+  `.github/workflows/ts-typecheck.yml` running `tsc --noEmit` standalone
+  on every PR touching `packages/ts/**/*.ts`. `tsc` was already running
+  inside the `ts-test.yml` build step (`tsconfig.json` has `strict`,
+  `noUncheckedIndexedAccess`, `verbatimModuleSyntax`), but a dedicated
+  job surfaces type errors in seconds without waiting on `napi build` --
+  the native addon is loaded via `createRequire` at runtime, so type
+  checking does not need `dirsql.node` or the generated `index.d.ts`.
+  Parity with the new Python type-check job.
+
 - **Config serialization on `DirSQL`.** Python `vars(db)` (via
   `__dict__`), TypeScript `JSON.stringify(db)` (via `toJSON()`), and
   Rust `db.config()` (returning a `serde::Serialize`-derived
