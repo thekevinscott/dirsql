@@ -43,8 +43,12 @@ def run(argv: list[str]) -> int:
 
     # Name comes from `dirsql::db::parse_table_name` -- the canonical
     # core parser, surfaced via PyO3 on `Table.name` (#196). No regex
-    # duplication on the Python side.
-    tables = {t.name: t for t in (app._tables or [])}
+    # duplication on the Python side. Tables with a name the parser
+    # couldn't extract are skipped here; the malformed DDL would also
+    # surface as a `DirSqlError::Ddl` during the SDK scan, which
+    # `await app.ready()` would re-raise -- not interpret's job to
+    # second-guess.
+    tables = {t.name: t for t in (app._tables or []) if t.name is not None}
     write_message({"type": "config", "state": vars(app)})
 
     for line in sys.stdin:
