@@ -66,7 +66,8 @@ describe("buildTables", () => {
 
   it("throws when parseTableName returns null for a DDL", () => {
     const t: TableDef = {
-      ddl: "this is not a CREATE TABLE statement",
+      // DDL the fake regex won't match -- no `CREATE TABLE` prefix at all.
+      ddl: "DROP TABLE old_papers",
       glob: "*.json",
       extract: noopExtract,
     };

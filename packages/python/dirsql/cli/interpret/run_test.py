@@ -73,7 +73,9 @@ def describe_run():
 
     def describe_extract_loop():
         def it_dispatches_one_extract_request_and_writes_the_response():
-            extract = lambda p: [{"row": p}]
+            def extract(p):
+                return [{"row": p}]
+
             app = _fake_app([_fake_table("papers", extract)], state={"x": 1})
             req = {"type": "extract", "id": 1, "table": "papers", "path": "/a"}
             fake_stdin = io.StringIO(json.dumps(req) + "\n")

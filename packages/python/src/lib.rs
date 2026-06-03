@@ -46,16 +46,9 @@ mod python {
     impl PyTable {
         #[new]
         #[pyo3(signature = (*, ddl, glob, extract, strict=false))]
-        fn new(
-            ddl: String,
-            glob: String,
-            extract: Py<PyAny>,
-            strict: bool,
-        ) -> PyResult<Self> {
+        fn new(ddl: String, glob: String, extract: Py<PyAny>, strict: bool) -> PyResult<Self> {
             let name = parse_table_name(&ddl).ok_or_else(|| {
-                PyValueError::new_err(format!(
-                    "could not parse table name from DDL: {ddl}"
-                ))
+                PyValueError::new_err(format!("could not parse table name from DDL: {ddl}"))
             })?;
             Ok(PyTable {
                 ddl,
