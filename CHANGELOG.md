@@ -32,6 +32,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **CLI launcher directories renamed for cross-SDK consistency.** The
+  Python `dirsql/_cli/` package and the TypeScript `src/bin/` directory
+  are both renamed to `cli/`. The Python `[project.scripts]` entry-point
+  moves from `dirsql._cli.main:main` to `dirsql.cli.main:main`; the npm
+  `bin` field points at `dist/cli/dirsql.js` instead of
+  `dist/bin/dirsql.js`. The user-facing `dirsql` command on PATH is
+  unchanged. The Python leading underscore was misleading (the directory
+  holds the public console-script entry, not internal-only code), and
+  the TypeScript `bin/` vs. Python `_cli/` mismatch made cross-SDK
+  references awkward. See `MIGRATIONS.md`. (#210)
+
 - **`extract` callbacks no longer receive file content.** The `extract`
   callback on a programmatic `Table` (Rust/Python) / `TableDef`
   (TypeScript) now takes a single argument — the absolute filesystem

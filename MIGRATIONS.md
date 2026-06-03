@@ -11,6 +11,64 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### CLI launcher directories renamed (`_cli/` -> `cli/`, `src/bin/` -> `src/cli/`)
+
+#### Summary
+
+The Python `dirsql/_cli/` package and the TypeScript `packages/ts/src/bin/`
+directory are both renamed to `cli/`. This is a cross-SDK consistency cleanup:
+Python's leading underscore was misleading (the directory holds the public
+console-script entry point, not internal-only code), and the TypeScript `bin/`
+naming did not match Python's `_cli/`. The user-facing `dirsql` command on
+PATH is unchanged; only the internal package layout and the published
+metadata that points at it move.
+
+Affects:
+
+- **Python:** `[project.scripts] dirsql = "dirsql._cli.main:main"` is now
+  `dirsql = "dirsql.cli.main:main"`. Anyone importing `dirsql._cli.*`
+  directly (the leading underscore signalled "do not") must update their
+  import path.
+- **TypeScript:** the npm `bin` field on the `dirsql` package now points at
+  `dist/cli/dirsql.js` instead of `dist/bin/dirsql.js`. The `dirsql`
+  shim in `node_modules/.bin/` is unchanged.
+- **End users running `dirsql ...`:** no change.
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| Python module imports | `from dirsql._cli.main import main` | `from dirsql.cli.main import main` |
+| Python `[project.scripts]` (wheel metadata only; not a consumer-visible API) | `dirsql = "dirsql._cli.main:main"` | `dirsql = "dirsql.cli.main:main"` |
+| npm `bin` field (package metadata; not a consumer-visible API) | `"dirsql": "dist/bin/dirsql.js"` | `"dirsql": "dist/cli/dirsql.js"` |
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+_None._ The `dirsql` command on PATH behaves identically before and after
+the rename; only the internal module path used by the wheel's console-script
+entry and the npm package's `bin` field have moved.
+
+#### Verification
+
+After upgrading, the `dirsql` command still resolves and runs:
+
+```bash
+dirsql --version
+# expected: dirsql <version>
+```
+
+Python consumers who imported the (underscore-prefixed) launcher modules
+directly should update the import path:
+
+```bash
+python -c "from dirsql.cli.main import main; print('ok')"
+# expected: ok
+```
+
 ### Python 3.10 support dropped
 
 #### Summary

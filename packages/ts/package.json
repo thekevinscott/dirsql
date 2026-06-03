@@ -14,7 +14,7 @@
     }
   },
   "bin": {
-    "dirsql": "dist/bin/dirsql.js"
+    "dirsql": "dist/cli/dirsql.js"
   },
   "files": ["dist/", "docs/", "README.md", "LICENSE"],
   "napi": {
