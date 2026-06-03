@@ -71,6 +71,7 @@ for await (const event of db.watch()) { ... }
 - `RowEvent` is a frozen class with attribute access (`event.action`, `event.row`).
 - `AsyncDirSQL` is a pure-Python wrapper using `asyncio.to_thread`.
 - Watch low-level methods are prefixed with `_` (private convention).
+- Ships PEP 561 type information (`py.typed` + `dirsql/_dirsql.pyi`) so downstream consumers see types for `DirSQL`, `Table`, `RowEvent`. Parity-restoring: Rust types come from Rust source, TypeScript types from generated `.d.ts`, Python from the bundled stub. The stub MUST be updated in lockstep with `packages/python/src/lib.rs`.
 
 ### Rust
 - Uses `snake_case` for all identifiers.

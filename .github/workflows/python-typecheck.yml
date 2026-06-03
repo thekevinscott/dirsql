@@ -1,0 +1,34 @@
+name: Python Typecheck
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/python/**/*.py'
+      - 'packages/python/**/*.pyi'
+      - 'packages/python/pyproject.toml'
+  pull_request:
+    paths:
+      - 'packages/python/**/*.py'
+      - 'packages/python/**/*.pyi'
+      - 'packages/python/pyproject.toml'
+
+jobs:
+  ty:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+        working-directory: packages/python
+
+      - name: Type check (all rules promoted to error)
+        run: uv run ty check --error all --error-on-warning dirsql/
+        working-directory: packages/python

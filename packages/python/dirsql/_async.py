@@ -104,14 +104,14 @@ class DirSQL:
 
     async def query(self, sql):
         """Execute a SQL query asynchronously."""
-        return await asyncio.to_thread(self._db.query, sql)
+        return await asyncio.to_thread(self._db.query, sql)  # ty:ignore[unresolved-attribute]
 
     def watch(self):
         """Start watching for file changes. Returns an async iterable of RowEvent."""
         return _WatchStream(self._db)
 
     @property
-    def __dict__(self):
+    def __dict__(self):  # ty:ignore[missing-override-decorator]
         """Resolved construction state as a JSON-serializable dict.
 
         Recomputed on each access; reads the ``.dirsql.toml`` if ``config=``
