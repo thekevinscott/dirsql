@@ -194,3 +194,7 @@ Coverage enforcement must stay explicit in CI for each SDK package:
 - TypeScript SDK coverage must stay at 90% or higher.
 
 When work affects more than one SDK package, split the coverage and test work across subagents so each package can be validated independently.
+
+**Coverage floors apply to unit tests only.** Integration tests (and e2e tests) verify end-to-end behavior as a black box; they spawn subprocesses, hit real filesystems, and exercise the public API surface, but they do not contribute to the coverage metric. The line of separation is intentional: the unit-coverage number measures what the library code itself reaches under direct exercise, decoupled from whether the integration scaffolding happens to drag execution through the same lines. A change that refactors implementation without changing behavior should leave integration tests untouched and unit coverage steady; a change that adds untested library code should fail the floor even if integration tests still pass.
+
+This means every covered source file needs in-process unit tests sufficient to hit the floor. If a file's only meaningful exercise path is via subprocess (e.g. the `os.execv` / `spawnSync` handoff in the CLI launchers), call that out explicitly in the coverage config's omit/exclude list with a comment, and verify it via the wheel-install / pack-install smoke tests in CI rather than the unit coverage metric.
