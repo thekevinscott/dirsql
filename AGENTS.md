@@ -58,19 +58,22 @@ A feature is not done until integration tests pass and cover the new functionali
 
 ### Test Boundaries -- What to Mock, What Not To
 
-Unit tests isolate the unit under test. Every dependency that isn't a trivially pure function gets replaced with a fake; production wires the real implementation through the same seam. The right seam depends on what kind of dependency it is.
+Unit tests isolate the unit under test. Every dependency that isn't a trivially pure function gets replaced with a fake; production runs the real implementation.
 
-**Module imports the SUT calls** -- functions, classes, or values imported from another module (e.g. `binary_path`, `spawnSync`, `die`, `resolveBinary`, future LLM clients, filesystem watchers). Add a parameter with a production default; the test passes a fake by argument. Do **not** patch the SUT module's attribute table to swap them in.
+**Mocking is the default.** Use `unittest.mock` / `pytest-mock`'s `mocker` fixture (Python) or `vi.spyOn` / `vi.stubGlobal` / `vi.mock` (TypeScript) to fake out functions, classes, module attributes, and global state for the duration of a test. These tools are scoped (installed on entry, restored on teardown) and keep production code free of test-only seams. Reach for `mock.patch.object` first, both for module imports (`os.execv`, `subprocess.run`, `binary_path`, `is_windows`, `spawnSync`, `die`, `resolveBinary`) and for process/global state (`sys.argv`, `os.environ`, `process.argv`, `process.exit`, `process.stderr`, the system clock, the file system).
 
-**Process / global state the SUT reads** -- `sys.argv`, `os.environ`, `process.argv`, `process.exit`, `process.stderr`, current time, the live file system. Stub via `unittest.mock.patch.object(sys, "argv", ...)` (Python) or `vi.stubGlobal("process", ...)` (TypeScript). These tools install a stub for the duration of the test and restore on teardown; they do not require a seam on the SUT.
+**Never use `pytest`'s `monkeypatch` fixture.** Use `unittest.mock.patch.object` / `mocker.patch.object` instead. Functionally similar but `monkeypatch.setattr` conflates module patching with environment mutation and silently encourages leaks.
 
-**Never use `pytest`'s `monkeypatch` fixture.** It conflates the two cases above and its `setattr` pattern silently encourages patching SUT module attributes. Use `unittest.mock` (or `pytest-mock`'s `mocker`) for globals and dependency injection for module-imported functions.
+**Dependency injection is acceptable, not the default.** Reach for a constructor / argument seam only when:
 
-If you find yourself reaching for `monkeypatch.setattr(some_production_module, ...)` (or `mocker.patch.object` on a SUT module), the production code is missing a seam: add a parameter with a production default and a test-injected fake. The example to avoid is replacing `binary_path` or `os.execv` *on the SUT module's namespace* -- inject those instead.
+- The dependency is naturally a callable the SUT receives (a callback, an event handler, a strategy object) and DI makes the call graph clearer for non-test reasons.
+- Mocking would be substantially more brittle than DI -- e.g. the dependency is invoked from many sites in a tight loop and you want a single typed contract.
+
+For the typical "fake out a stdlib helper / module function" case, mock it instead of refactoring the SUT signature.
 
 **Test-tier rules:**
 
-1. **Unit tests** isolate the SUT and inject fakes for every non-pure dependency as above. Coverage at the unit tier should reflect every executable branch; one-line bridges to OS calls (`() => process.exit(code)`, `lambda: sys.argv`) are the only acceptable `# pragma: no cover` / `/* v8 ignore */` annotations, and only when the same logic is exercised end-to-end by a wheel/pack install smoke test.
+1. **Unit tests** isolate the SUT and mock every non-pure dependency (or, occasionally, DI it). Coverage at the unit tier should reflect every executable branch.
 2. **Integration tests hit the SDK's public API.** They may use fakes for third-party modules (filesystem watchers, network clients, eventual LLM SDKs) -- but inject them through the public API or a fixture, not by patching the production module's attributes.
 3. **E2E tests mock nothing.** Real filesystem, real SQLite, real binary, real install. If an e2e test needs a stub, it isn't an e2e test.
 

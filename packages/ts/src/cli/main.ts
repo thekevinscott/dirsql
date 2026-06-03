@@ -22,7 +22,11 @@ export const defaultDeps: MainDeps = {
 export function main(argv: string[], deps: MainDeps): never {
   const binary = deps.resolve();
   const result = deps.spawn(binary, argv);
-  if (result.error) deps.dieFn(result.error.message, 1);
-  if (result.signal) process.kill(process.pid, result.signal);
+  if (result.error) {
+    deps.dieFn(result.error.message, 1);
+  }
+  if (result.signal) {
+    process.kill(process.pid, result.signal);
+  }
   process.exit(result.status ?? 1);
 }

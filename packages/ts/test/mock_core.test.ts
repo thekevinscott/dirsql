@@ -171,7 +171,9 @@ describe("__setCoreForTesting", () => {
     const seen: dirsql.RowEvent[] = [];
     for await (const event of db.watch()) {
       seen.push(event);
-      if (seen.length >= 2) break;
+      if (seen.length >= 2) {
+        break;
+      }
     }
 
     expect(fakeInstance.startWatcher).toHaveBeenCalledTimes(1);

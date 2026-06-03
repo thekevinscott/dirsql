@@ -6,7 +6,9 @@ describe("loadNativeCore", () => {
     it("loads via the `@dirsql/lib-<slug>` require and never hits the dev fallback", () => {
       const fakeCore = { DirSQL: vi.fn() };
       const requirer = vi.fn((spec: string) => {
-        if (spec === "@dirsql/lib-linux-x64-gnu") return fakeCore;
+        if (spec === "@dirsql/lib-linux-x64-gnu") {
+          return fakeCore;
+        }
         throw new Error(`unexpected require(${spec})`);
       });
 
@@ -30,7 +32,9 @@ describe("loadNativeCore", () => {
         if (spec === "@dirsql/lib-darwin-arm64") {
           throw new Error("Cannot find module '@dirsql/lib-darwin-arm64'");
         }
-        if (spec.endsWith("dirsql.node")) return fakeCore;
+        if (spec.endsWith("dirsql.node")) {
+          return fakeCore;
+        }
         throw new Error(`unexpected require(${spec})`);
       });
 
@@ -50,7 +54,9 @@ describe("loadNativeCore", () => {
     it("goes straight to the dev fallback without attempting a sub-package load", () => {
       const fakeCore = { DirSQL: vi.fn() };
       const requirer = vi.fn((spec: string) => {
-        if (spec.endsWith("dirsql.node")) return fakeCore;
+        if (spec.endsWith("dirsql.node")) {
+          return fakeCore;
+        }
         throw new Error(`unexpected require(${spec})`);
       });
 
