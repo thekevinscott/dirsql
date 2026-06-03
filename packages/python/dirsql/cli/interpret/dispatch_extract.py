@@ -26,7 +26,7 @@ def dispatch_extract(
     rid = req.get("id")
     name = req.get("table")
     path = req.get("path")
-    table = tables.get(name)
+    table = tables.get(name) if isinstance(name, str) else None
     if table is None:
         return {
             "type": "result",

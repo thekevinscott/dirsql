@@ -19,7 +19,7 @@ def main(argv: list[str] | None = None) -> int:
         argv = sys.argv[1:]
 
     if argv and argv[0] == "interpret":
-        from .interpret import run
+        from .interpret.run import run
 
         try:
             return run(argv[1:])

@@ -92,13 +92,13 @@ def describe_main():
         (#196) without depending on the bundled Rust binary."""
 
         def it_dispatches_to_interpret_run_and_returns_its_exit_code():
-            # main.py does `from .interpret import run` lazily, so
-            # patching the package's `run` attribute is sufficient --
-            # each call resolves the name freshly from the package.
-            from . import interpret as interpret_pkg
+            # main.py does `from .interpret.run import run` lazily, so
+            # patching the `run` function on the submodule is sufficient
+            # -- each call resolves the name freshly from the submodule.
+            from .interpret import run as run_submod
 
             with (
-                patch.object(interpret_pkg, "run", return_value=0) as interpret_run,
+                patch.object(run_submod, "run", return_value=0) as interpret_run,
                 patch.object(main_module, "binary_path") as binary_path,
             ):
                 assert main(["interpret", "config.py"]) == 0
@@ -106,15 +106,15 @@ def describe_main():
             binary_path.assert_not_called()
 
         def it_propagates_a_nonzero_interpret_exit():
-            from . import interpret as interpret_pkg
+            from .interpret import run as run_submod
 
-            with patch.object(interpret_pkg, "run", return_value=2):
+            with patch.object(run_submod, "run", return_value=2):
                 assert main(["interpret", "bad.py"]) == 2
 
         def it_returns_130_on_keyboard_interrupt():
-            from . import interpret as interpret_pkg
+            from .interpret import run as run_submod
 
-            with patch.object(interpret_pkg, "run", side_effect=KeyboardInterrupt()):
+            with patch.object(run_submod, "run", side_effect=KeyboardInterrupt()):
                 assert main(["interpret", "config.py"]) == 130
 
         def it_does_not_intercept_when_interpret_is_not_argv_0():
