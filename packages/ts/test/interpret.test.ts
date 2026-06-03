@@ -55,7 +55,9 @@ describe("dirsql interpret (#196)", () => {
   });
 
   afterEach(async () => {
-    if (handle) await shutdown(handle);
+    if (handle) {
+      await shutdown(handle);
+    }
   });
 
   describe("handshake", () => {
@@ -156,7 +158,9 @@ describe("dirsql interpret (#196)", () => {
       const exitCode = await new Promise<number | null>((resolve) => {
         proc.on("close", (code) => resolve(code));
         setTimeout(() => {
-          if (proc.exitCode === null) proc.kill("SIGKILL");
+          if (proc.exitCode === null) {
+            proc.kill("SIGKILL");
+          }
         }, 10_000);
       });
       expect(exitCode).not.toBe(0);

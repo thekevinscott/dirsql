@@ -80,14 +80,18 @@ export async function interpret(configPath: string): Promise<number> {
   writeLine({ type: "config", state: app.toJSON() });
 
   for await (const line of createInterface({ input: process.stdin })) {
-    if (!line.trim()) continue;
+    if (!line.trim()) {
+      continue;
+    }
     let req: { type?: string; id?: unknown; table?: string; path?: string };
     try {
       req = JSON.parse(line);
     } catch {
       continue;
     }
-    if (!req || typeof req !== "object" || req.type !== "extract") continue;
+    if (!req || typeof req !== "object" || req.type !== "extract") {
+      continue;
+    }
     const { id, table: name, path } = req;
     const table = name === undefined ? undefined : tables.get(name);
     if (!table) {
