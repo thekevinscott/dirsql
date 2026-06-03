@@ -12,8 +12,8 @@
 
 #[cfg(feature = "extension-module")]
 mod python {
-    use ::dirsql::{DirSQL, Row, RowEvent, Table, Value};
-    use pyo3::exceptions::PyRuntimeError;
+    use ::dirsql::{DirSQL, Row, RowEvent, Table, Value, db::parse_table_name};
+    use pyo3::exceptions::{PyRuntimeError, PyValueError};
     use pyo3::prelude::*;
     use pyo3::types::{PyDict, PyList};
     use std::collections::HashMap;
@@ -34,19 +34,36 @@ mod python {
         extract: Py<PyAny>,
         #[pyo3(get)]
         strict: bool,
+        /// Parsed table name (from `ddl`). Computed once at construction via
+        /// `dirsql::db::parse_table_name` so the `dirsql interpret` dispatcher
+        /// (#196) and other consumers share the core's single source of
+        /// truth instead of re-parsing DDL.
+        #[pyo3(get)]
+        name: String,
     }
 
     #[pymethods]
     impl PyTable {
         #[new]
         #[pyo3(signature = (*, ddl, glob, extract, strict=false))]
-        fn new(ddl: String, glob: String, extract: Py<PyAny>, strict: bool) -> Self {
-            PyTable {
+        fn new(
+            ddl: String,
+            glob: String,
+            extract: Py<PyAny>,
+            strict: bool,
+        ) -> PyResult<Self> {
+            let name = parse_table_name(&ddl).ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "could not parse table name from DDL: {ddl}"
+                ))
+            })?;
+            Ok(PyTable {
                 ddl,
                 glob,
                 extract,
                 strict,
-            }
+                name,
+            })
         }
     }
 
