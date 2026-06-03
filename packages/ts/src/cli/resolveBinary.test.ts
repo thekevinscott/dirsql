@@ -1,32 +1,44 @@
 // Unit tests for `resolveBinary` and `defaultResolver`.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { die } from "./die.js";
 import { defaultResolver, resolveBinary } from "./resolveBinary.js";
 
-const FAKE_DIE = (msg: string): never => {
-  throw new Error(`DIE: ${msg}`);
-};
+vi.mock("./die.js");
 
 describe("resolveBinary", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  beforeEach(() => {
+    vi.mocked(die).mockImplementation(((msg: string) => {
+      throw new Error(`DIE: ${msg}`);
+    }) as typeof die);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetAllMocks();
+  });
 
   describe("when the host triple is unknown", () => {
     it("calls die with a 'no prebuilt binary' message", () => {
-      expect(() =>
-        resolveBinary("unknown-triple", () => "ignored", FAKE_DIE),
-      ).toThrow(/^DIE: no prebuilt binary for unknown-triple\./);
+      expect(() => resolveBinary("unknown-triple", () => "ignored")).toThrow(
+        /^DIE: no prebuilt binary for unknown-triple\./,
+      );
     });
   });
 
   describe("when the host triple is known", () => {
     beforeEach(() => {
-      vi.stubGlobal("process", { ...process, platform: "linux", arch: "x64" });
+      vi.stubGlobal("process", {
+        ...process,
+        platform: "linux",
+        arch: "x64",
+      });
     });
 
     it("resolves the binary via the injected resolver", () => {
       const resolver = vi.fn().mockReturnValue("/abs/path/to/dirsql");
 
-      const result = resolveBinary(undefined, resolver, FAKE_DIE);
+      const result = resolveBinary(undefined, resolver);
 
       expect(result).toBe("/abs/path/to/dirsql");
       expect(resolver).toHaveBeenCalledWith("@dirsql/cli-linux-x64-gnu/dirsql");
@@ -36,7 +48,7 @@ describe("resolveBinary", () => {
       vi.stubGlobal("process", { ...process, platform: "win32", arch: "x64" });
       const resolver = vi.fn().mockReturnValue("C:/dirsql.exe");
 
-      resolveBinary(undefined, resolver, FAKE_DIE);
+      resolveBinary(undefined, resolver);
 
       expect(resolver).toHaveBeenCalledWith(
         "@dirsql/cli-win32-x64-msvc/dirsql.exe",
@@ -48,7 +60,7 @@ describe("resolveBinary", () => {
         throw new Error("MODULE_NOT_FOUND");
       };
 
-      expect(() => resolveBinary(undefined, resolver, FAKE_DIE)).toThrow(
+      expect(() => resolveBinary(undefined, resolver)).toThrow(
         /^DIE: @dirsql\/cli-linux-x64-gnu is not installed\./,
       );
     });

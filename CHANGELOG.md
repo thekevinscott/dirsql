@@ -32,16 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **CLI launcher helpers gain DI seams; coverage exclude lifted.** The
+- **CLI launcher coverage exclude lifted; launchers unit-tested.** The
   Python `dirsql.cli.main` / `binary_path` / `is_windows` and the
-  TypeScript `main` / `die` / `resolveBinary` helpers now accept their
-  external dependencies (`binary_path_fn`, `is_windows_fn`,
-  `subprocess_run`, `execv`, the npm `resolve`, `spawn`, `dieFn`, etc.)
-  as parameters with production defaults. The coverage configs no
-  longer omit the launcher directories wholesale -- only the
-  `dirsql.ts` npm `bin` shim stays excluded -- and the launcher logic
-  is now unit-tested with fakes injected through those seams. No
-  user-facing behavior change. (#211)
+  TypeScript `main` / `die` / `resolveBinary` helpers are now fully
+  unit-tested. The coverage configs no longer omit the launcher
+  directories wholesale -- only the `dirsql.ts` npm `bin` shim stays
+  excluded. Tests fake out the launchers' module imports and process
+  state via `unittest.mock.patch.object` (Python) and `vi.mock` /
+  `vi.stubGlobal` (TypeScript); the launcher production signatures
+  are unchanged. No user-facing behavior change. (#211)
 
 - **CLI launcher directories renamed for cross-SDK consistency.** The
   Python `dirsql/_cli/` package and the TypeScript `src/bin/` directory

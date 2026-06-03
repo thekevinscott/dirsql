@@ -10,6 +10,6 @@
 // guard silently skipped main() so `dirsql --version` produced no
 // output (caught by the pack-install build-CI smoke test).
 
-import { defaultDeps, main } from "./main.js";
+import { main } from "./main.js";
 
-main(process.argv.slice(2), defaultDeps);
+main();
