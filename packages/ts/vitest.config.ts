@@ -41,7 +41,7 @@ export default defineConfig({
         // monkeypatch unit tests on production module attributes; the
         // only meaningful coverage is end-to-end (pack-install smoke
         // test). Excluded to keep the 90% floor honest about SDK code.
-        "src/bin/**",
+        "src/cli/**",
         "src/index.ts", // needs the napi binary; covered by SDK integration tests
       ],
       thresholds: {

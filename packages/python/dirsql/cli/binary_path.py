@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from importlib.resources import files
 
-from dirsql._cli.is_windows import is_windows
+from dirsql.cli.is_windows import is_windows
 
 
 def binary_path() -> str:

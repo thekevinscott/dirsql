@@ -1,6 +1,6 @@
 """Stub the compiled `_dirsql` extension for unit tests that don't need it.
 
-`_cli_test.py` exercises the pure-Python launcher; it must be runnable
+`cli_test.py` exercises the pure-Python launcher; it must be runnable
 without `maturin develop` having built the PyO3 extension. We stub the
 missing module here (rather than in the test file) so the stub is in
 place before pytest imports `dirsql.__init__`, which transitively
