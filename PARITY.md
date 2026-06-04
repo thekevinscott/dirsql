@@ -77,6 +77,35 @@ results to stdout.
 | TypeScript | Implemented | Loads `.js` / `.mjs` / `.cjs` config via dynamic `import()`, takes the default export. |
 | Rust       | N/A         | Rust has no host language runtime in which user `extract` callbacks could execute. Intentional parity drift. |
 
+## CLI: Native-Language Config Files
+
+The `--config` flag accepts native-language config files in addition to
+`.dirsql.toml`. The Rust binary inspects the file extension; for
+non-TOML files it spawns `dirsql interpret <config>` as a subprocess
+(via PATH) and wires each table's `extract` callback as an NDJSON-RPC
+into that helper. The same binary handles all extensions; whether
+native-language configs work depends on whether a `dirsql` launcher
+that implements `interpret` is reachable on PATH.
+
+| Install | `--config *.toml` | `--config *.py` | `--config *.{js,mjs,cjs}` |
+|---|---|---|---|
+| `pip install dirsql` / `uvx dirsql` | Y | Y (Python launcher handles `interpret`) | N |
+| `npm install -g dirsql` / `npx dirsql` | Y | N | Y (Node launcher handles `interpret`) |
+| `cargo install dirsql --features cli` | Y | N (no launcher on PATH) | N (no launcher on PATH) |
+
+Native-language configs are always handled by the Rust binary; the
+language-specific launchers stay as thin forwarders that `exec` the
+binary unchanged.
+
+**Python config convention**: the module must define a module-level `app = DirSQL(...)`.
+
+**JS config convention**: the module must `export default new DirSQL(...)` (ESM) or
+assign to `module.exports` (CJS). Only compiled `.js` / `.mjs` / `.cjs` files are
+supported; `.ts` source files are out of scope.
+
+No MIGRATIONS.md entry is required — this is a purely additive CLI feature with no
+change to the SDK's public API.
+
 ## Language-Idiomatic Exceptions
 
 ### Python

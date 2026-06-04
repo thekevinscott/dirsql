@@ -82,7 +82,7 @@
     },
     "test": {
       "command": "vitest run",
-      "dependencies": ["napi:build"],
+      "dependencies": ["napi:build", "tsc"],
       "files": [
         "src/**/*.ts",
         "tools/**/*.ts",
@@ -99,7 +99,7 @@
     },
     "test:integration": {
       "command": "vitest run --dir test --passWithNoTests",
-      "dependencies": ["napi:build"],
+      "dependencies": ["napi:build", "tsc"],
       "files": [
         "src/**/*.ts",
         "tools/**/*.ts",
