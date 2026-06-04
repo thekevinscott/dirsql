@@ -8,9 +8,11 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
+      - '.github/workflows/docs-test.yml'
   pull_request:
     paths:
       - 'docs/**'
+      - '.github/workflows/docs-test.yml'
 
 jobs:
   unit:
@@ -72,3 +74,4 @@ jobs:
       - name: Run integration tests
         working-directory: docs
         run: pnpm test:integration
+        timeout-minutes: 1
