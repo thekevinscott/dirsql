@@ -11,6 +11,77 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### Rust SDK: code-review followup (#218)
+
+#### Summary
+
+Code review of the Rust core (#218) surfaced three changes with behavior
+or API impact: `DirSqlError::{Watch, Matcher, Config}` move from tuple to
+struct variants so they can carry an underlying `source()`; the `_ext`
+stat virtual stops lowercasing the extension; and `persist::
+PARSER_VERSIONS_JSON` drops the legacy parser-versions list (per-format
+parsing was removed in #169). The first is API-shape; the second and
+third are runtime-behavior changes with no API change. Each is
+independently opt-out via simple `LOWER()` SQL / pattern-match update.
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| Pattern-match on `DirSqlError::Watch` | `DirSqlError::Watch(msg)` | `DirSqlError::Watch { message, source }` (or `DirSqlError::Watch { .. }` to ignore fields) |
+| Pattern-match on `DirSqlError::Matcher` | `DirSqlError::Matcher(msg)` | `DirSqlError::Matcher { message, source }` (or `{ .. }`) |
+| Pattern-match on `DirSqlError::Config` | `DirSqlError::Config(msg)` | `DirSqlError::Config { message, source }` (or `{ .. }`) |
+| Reading `_ext` for `Photo.JPG` | `Value::Text("jpg")` | `Value::Text("JPG")` (use `LOWER(_ext)` in SQL for the old behavior) |
+| Persistent cache from a build before this change | Loads with the legacy parser-versions string | Rejected by `meta_is_compatible`; cache cleanly rebuilds on next startup |
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- **`_ext` now preserves the original file extension's case.** Queries that
+  matched `_ext = 'jpg'` for files named `Photo.JPG` will return zero rows
+  after the upgrade. Wrap the SQL in `LOWER(_ext) = 'jpg'` (or `_ext IN
+  ('JPG', 'jpg', 'Jpg')`) to recover the old behavior, or rely on the
+  case-sensitive contract going forward.
+- **`DirSQL::query` no longer leaks `_dirsql_*` tracking columns when the
+  column name appears only inside a comment or string literal.** Programs
+  that intentionally exploited the substring-match leak (very unlikely)
+  must instead name the column in the projection — e.g.
+  `SELECT _dirsql_file_path FROM t` — to receive it.
+- **Persistent on-disk caches written by older builds are rebuilt on first
+  startup.** The change to `PARSER_VERSIONS_JSON` triggers
+  `meta_is_compatible` to reject the cache as incompatible, which is the
+  documented reconcile path. No data loss; the rebuild is automatic.
+
+#### Verification
+
+After upgrading, all four behaviors above can be checked in a few lines.
+Spin up a tempdir with a single uppercase-extension file:
+
+```bash
+mkdir -p /tmp/dirsql-verify && cd /tmp/dirsql-verify
+touch Photo.JPG
+cat >.dirsql.toml <<'EOF'
+[[table]]
+ddl  = "CREATE TABLE pics (_ext TEXT)"
+glob = "**/*"
+EOF
+```
+
+Then in Rust:
+
+```rust
+let db = dirsql::DirSQL::from_config_path("/tmp/dirsql-verify/.dirsql.toml")?;
+// _ext preserves case.
+let rows = db.query("SELECT _ext FROM pics")?;
+assert_eq!(rows[0]["_ext"], dirsql::Value::Text("JPG".into()));
+// Comments don't leak _dirsql_file_path.
+let rows = db.query("SELECT * FROM pics /* _dirsql_file_path */")?;
+assert!(!rows[0].contains_key("_dirsql_file_path"));
+```
+
 ### CLI launcher directories renamed (`_cli/` -> `cli/`, `src/bin/` -> `src/cli/`)
 
 #### Summary

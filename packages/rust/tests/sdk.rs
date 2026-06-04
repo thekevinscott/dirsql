@@ -750,7 +750,10 @@ fn prepare_without_root_errors() {
         Ok(_) => panic!("expected a Config error when no root is provided"),
         Err(e) => e,
     };
-    assert!(matches!(err, dirsql::DirSqlError::Config(_)), "got: {err}");
+    assert!(
+        matches!(err, dirsql::DirSqlError::Config { .. }),
+        "got: {err}"
+    );
 }
 
 // A table whose DDL cannot be parsed for a name is rejected at matcher
@@ -771,7 +774,7 @@ fn invalid_glob_errors() {
     // An unclosed character class is an invalid glob.
     let table = Table::new("CREATE TABLE t (x TEXT)", "a[b", |_| vec![]);
     let result = DirSQL::new(root.path(), vec![table]);
-    assert!(matches!(result, Err(dirsql::DirSqlError::Matcher(_))));
+    assert!(matches!(result, Err(dirsql::DirSqlError::Matcher { .. })));
 }
 
 // An undeclared glob capture is silently dropped during fact-merging: the
