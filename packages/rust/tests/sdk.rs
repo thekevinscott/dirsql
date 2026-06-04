@@ -750,7 +750,10 @@ fn prepare_without_root_errors() {
         Ok(_) => panic!("expected a Config error when no root is provided"),
         Err(e) => e,
     };
-    assert!(matches!(err, dirsql::DirSqlError::Config { .. }), "got: {err}");
+    assert!(
+        matches!(err, dirsql::DirSqlError::Config { .. }),
+        "got: {err}"
+    );
 }
 
 // A table whose DDL cannot be parsed for a name is rejected at matcher

@@ -57,15 +57,11 @@ fn s1_column_name_with_sql_syntax_produces_clean_error() {
     std::fs::write(dir.path().join("a.json"), b"{}").unwrap();
     let result = DirSQL::new(
         dir.path(),
-        vec![Table::strict(
-            "CREATE TABLE t (id TEXT)",
-            "*.json",
-            |_| {
-                let mut row = Row::new();
-                row.insert("id); DROP TABLE t; --".into(), Value::Text("x".into()));
-                vec![row]
-            },
-        )],
+        vec![Table::strict("CREATE TABLE t (id TEXT)", "*.json", |_| {
+            let mut row = Row::new();
+            row.insert("id); DROP TABLE t; --".into(), Value::Text("x".into()));
+            vec![row]
+        })],
     );
     let err = match result {
         Ok(_) => panic!("column name with SQL syntax must be rejected"),
@@ -73,7 +69,9 @@ fn s1_column_name_with_sql_syntax_produces_clean_error() {
     };
     let msg = err.to_string().to_lowercase();
     assert!(
-        msg.contains("identifier") || msg.contains("invalid column") || msg.contains("invalid identifier"),
+        msg.contains("identifier")
+            || msg.contains("invalid column")
+            || msg.contains("invalid identifier"),
         "expected an identifier-validation message, got: {msg}"
     );
 }
@@ -90,15 +88,11 @@ fn one_row_db(dir: &TempDir) -> DirSQL {
     std::fs::write(dir.path().join("a.json"), b"{}").unwrap();
     DirSQL::new(
         dir.path(),
-        vec![Table::new(
-            "CREATE TABLE t (id TEXT)",
-            "*.json",
-            |_| {
-                let mut row = Row::new();
-                row.insert("id".into(), Value::Text("x".into()));
-                vec![row]
-            },
-        )],
+        vec![Table::new("CREATE TABLE t (id TEXT)", "*.json", |_| {
+            let mut row = Row::new();
+            row.insert("id".into(), Value::Text("x".into()));
+            vec![row]
+        })],
     )
     .unwrap()
 }
@@ -111,9 +105,7 @@ fn s2_dirsql_filter_not_bypassed_by_comment_mention() {
     let dir = TempDir::new().unwrap();
     let db = one_row_db(&dir);
 
-    let rows = db
-        .query("SELECT * FROM t /* _dirsql_file_path */")
-        .unwrap();
+    let rows = db.query("SELECT * FROM t /* _dirsql_file_path */").unwrap();
     assert_eq!(rows.len(), 1);
     assert!(
         !rows[0].contains_key("_dirsql_file_path"),
@@ -188,11 +180,7 @@ fn p7_builder_exposes_poll_interval() {
     let dir = TempDir::new().unwrap();
     let _db = DirSQL::builder()
         .root(dir.path())
-        .table(Table::new(
-            "CREATE TABLE t (id TEXT)",
-            "*.json",
-            |_| vec![],
-        ))
+        .table(Table::new("CREATE TABLE t (id TEXT)", "*.json", |_| vec![]))
         .poll_interval(Duration::from_millis(50))
         .build()
         .unwrap();
@@ -215,11 +203,7 @@ fn i3_watch_error_exposes_underlying_source() {
     let dir = TempDir::new().unwrap();
     let db = DirSQL::new(
         dir.path(),
-        vec![Table::new(
-            "CREATE TABLE t (id TEXT)",
-            "*.json",
-            |_| vec![],
-        )],
+        vec![Table::new("CREATE TABLE t (id TEXT)", "*.json", |_| vec![])],
     )
     .unwrap();
     // Delete the directory out from under the watcher. start_watching now
@@ -270,11 +254,9 @@ fn i8_ext_preserves_original_case() {
     std::fs::write(dir.path().join("Photo.JPG"), b"").unwrap();
     let db = DirSQL::new(
         dir.path(),
-        vec![Table::new(
-            "CREATE TABLE pics (_ext TEXT)",
-            "**/*",
-            |_| vec![Row::new()],
-        )],
+        vec![Table::new("CREATE TABLE pics (_ext TEXT)", "**/*", |_| {
+            vec![Row::new()]
+        })],
     )
     .unwrap();
     let rows = db.query("SELECT _ext FROM pics").unwrap();

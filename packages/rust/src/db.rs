@@ -83,8 +83,7 @@ impl Db {
     /// `CREATE TABLE foo;DROP_TABLE_bar--(id TEXT)` would parse to a poisoned
     /// internal table name and break downstream `format!()`-built SQL.
     pub fn create_table(&self, ddl: &str) -> Result<()> {
-        let table = parse_table_name(ddl)
-            .ok_or_else(|| DbError::DdlParse(ddl.to_string()))?;
+        let table = parse_table_name(ddl).ok_or_else(|| DbError::DdlParse(ddl.to_string()))?;
         validate_identifier(&table)?;
         let augmented = inject_tracking_columns(ddl)?;
         self.conn.execute(&augmented, [])?;
@@ -996,10 +995,7 @@ mod tests {
             "id; DROP TABLE t; --",
         ] {
             assert!(
-                matches!(
-                    validate_identifier(bad),
-                    Err(DbError::InvalidIdentifier(_))
-                ),
+                matches!(validate_identifier(bad), Err(DbError::InvalidIdentifier(_))),
                 "expected rejection for: {bad:?}"
             );
         }
@@ -1011,10 +1007,7 @@ mod tests {
         let err = db
             .create_table("CREATE TABLE evil;DROP_TABLE--(id TEXT)")
             .unwrap_err();
-        assert!(
-            matches!(err, DbError::InvalidIdentifier(_)),
-            "got: {err:?}"
-        );
+        assert!(matches!(err, DbError::InvalidIdentifier(_)), "got: {err:?}");
     }
 
     #[test]
@@ -1023,10 +1016,7 @@ mod tests {
         db.create_table("CREATE TABLE t (id TEXT)").unwrap();
         let row = HashMap::from([("id); DROP TABLE t; --".into(), Value::Text("x".into()))]);
         let err = db.insert_row("t", &row, "f.json", 0).unwrap_err();
-        assert!(
-            matches!(err, DbError::InvalidIdentifier(_)),
-            "got: {err:?}"
-        );
+        assert!(matches!(err, DbError::InvalidIdentifier(_)), "got: {err:?}");
     }
 
     // --- strip_sql_noise: comment / literal aware ---
