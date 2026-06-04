@@ -7,7 +7,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DirSQL, type RowEvent } from "dirsql";
+import { DirSQL, type RowEvent, Table, type TableDef } from "dirsql";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 describe("DirSQL", () => {
@@ -485,5 +485,114 @@ describe("DirSQL watch events", () => {
     // Do NOT await db.ready explicitly — query() must do it internally.
     const rows = await db.query("SELECT name FROM items");
     expect(rows).toEqual([{ name: "eagerly-resolved" }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Parity-restoring: `Table` class export (#216).
+// Python has `Table(ddl=..., glob=..., extract=...)` and Rust has
+// `Table::new(...)`; TS used to require plain object literals only. The new
+// `Table` class is a thin identity wrapper around `TableDef` -- constructing
+// `new Table({...})` produces something structurally identical to the literal,
+// and anything accepting `TableDef[]` must accept both forms interchangeably.
+// ---------------------------------------------------------------------------
+
+describe("Table class", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "dirsql-table-class-"));
+    mkdirSync(join(dir, "data"), { recursive: true });
+    writeFileSync(
+      join(dir, "data", "users.json"),
+      JSON.stringify([
+        { name: "Alice", age: 30 },
+        { name: "Bob", age: 25 },
+      ]),
+    );
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("is importable as a constructable class", () => {
+    const t = new Table({
+      ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
+      glob: "data/users.json",
+      extract: (filePath: string) => JSON.parse(readFileSync(filePath, "utf8")),
+    });
+    expect(t).toBeInstanceOf(Table);
+    expect(t.ddl).toBe("CREATE TABLE users (name TEXT, age INTEGER)");
+    expect(t.glob).toBe("data/users.json");
+    expect(typeof t.extract).toBe("function");
+  });
+
+  it("instances are assignable to TableDef and accepted by DirSQL", async () => {
+    const tableInstance: TableDef = new Table({
+      ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
+      glob: "data/users.json",
+      extract: (filePath: string) => JSON.parse(readFileSync(filePath, "utf8")),
+    });
+
+    const db = new DirSQL({
+      root: dir,
+      tables: [tableInstance],
+    });
+
+    const rows = await db.query("SELECT * FROM users ORDER BY name");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].name).toBe("Alice");
+    expect(rows[1].name).toBe("Bob");
+  });
+
+  it("plain object and Table instance produce identical query behavior", async () => {
+    const extract = (filePath: string) =>
+      JSON.parse(readFileSync(filePath, "utf8"));
+    const ddl = "CREATE TABLE users (name TEXT, age INTEGER)";
+    const glob = "data/users.json";
+
+    const dbFromLiteral = new DirSQL({
+      root: dir,
+      tables: [{ ddl, glob, extract }],
+    });
+    const dbFromClass = new DirSQL({
+      root: dir,
+      tables: [new Table({ ddl, glob, extract })],
+    });
+
+    const literalRows = await dbFromLiteral.query(
+      "SELECT * FROM users ORDER BY name",
+    );
+    const classRows = await dbFromClass.query(
+      "SELECT * FROM users ORDER BY name",
+    );
+    expect(classRows).toEqual(literalRows);
+  });
+
+  it("has the same enumerable keys as the equivalent plain object literal", () => {
+    const def = {
+      ddl: "CREATE TABLE users (name TEXT)",
+      glob: "data/users.json",
+      extract: (filePath: string) => JSON.parse(readFileSync(filePath, "utf8")),
+    };
+    const t = new Table(def);
+    expect(Object.keys(t).sort()).toEqual(Object.keys(def).sort());
+  });
+
+  it("propagates the optional `strict` flag", async () => {
+    writeFileSync(
+      join(dir, "data", "users.json"),
+      JSON.stringify([{ name: "Alice", age: 30, extra: "nope" }]),
+    );
+    const t = new Table({
+      ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
+      glob: "data/users.json",
+      extract: (filePath: string) => JSON.parse(readFileSync(filePath, "utf8")),
+      strict: true,
+    });
+    expect(t.strict).toBe(true);
+    const db = new DirSQL({ root: dir, tables: [t] });
+    await expect(db.ready).rejects.toThrow();
   });
 });
