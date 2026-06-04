@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checking does not need `dirsql.node` or the generated `index.d.ts`.
   Parity with the new Python type-check job.
 
+- **CLI `--config` accepts native-language config files.** The Rust
+  binary now inspects the `--config` extension. `.toml` keeps the
+  existing in-process loader. `.py` / `.js` / `.mjs` / `.cjs` spawn
+  `dirsql interpret <config>` as a subprocess (via PATH) and build a
+  `DirSQL` whose `Table::extract` closures NDJSON-RPC into it. The
+  binary owns SQL, HTTP, and the file watcher; the helper owns
+  user-defined `extract` execution. On a cargo-only install the spawn
+  fails with a clear "install via pip/uv or npm/npx" message. (#192)
+
 - **`dirsql interpret <config>` subcommand.** Long-running NDJSON
   helper that loads a native-language config file (Python `.py`,
   TypeScript / JavaScript `.js` / `.mjs` / `.cjs`), takes its

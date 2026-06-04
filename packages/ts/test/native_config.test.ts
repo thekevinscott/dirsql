@@ -9,11 +9,13 @@
 // `cli_smoke` e2e.
 
 import { type ChildProcess, spawn } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { PLATFORMS, librarySlug } from "../src/platforms.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -37,6 +39,24 @@ const BINARY = join(
 );
 
 const CONFIG_DIR = join(__dirname, "__fixtures__");
+
+// The Rust binary's native-config dispatcher spawns `dirsql interpret <X>`
+// via PATH. In a real `npm install -g dirsql` that resolves to the Node
+// launcher; in this dev tree there's no global `dirsql` on PATH yet, so
+// drop a shim that re-invokes the Node launcher into a tempdir and
+// prepend it to PATH before spawning the binary.
+const PKG = JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8"));
+const CLI_ENTRY = join(PKG_ROOT, PKG.bin.dirsql);
+let SHIM_DIR: string;
+beforeAll(() => {
+  SHIM_DIR = mkdtempSync(join(tmpdir(), "dirsql-shim-"));
+  const shim = join(SHIM_DIR, "dirsql");
+  writeFileSync(
+    shim,
+    `#!/usr/bin/env bash\nexec "${process.execPath}" "${CLI_ENTRY}" "$@"\n`,
+  );
+  chmodSync(shim, 0o755);
+});
 
 function freePort(): Promise<number> {
   return new Promise((resolve) => {
@@ -120,15 +140,49 @@ describe("dirsql CLI --config <native config file>", () => {
       const port = await freePort();
       const proc = spawn(
         BINARY,
-        ["--config", configPath, "--port", String(port)],
-        { stdio: "pipe" },
+        ["--config", configPath, "--host", "127.0.0.1", "--port", String(port)],
+        {
+          stdio: "pipe",
+          env: {
+            ...process.env,
+            PATH: `${SHIM_DIR}:${process.env.PATH ?? ""}`,
+          },
+        },
       );
 
+      // Drain stdout/stderr and capture both. With `stdio: "pipe"` and
+      // no consumer the kernel pipe buffer (~64 KiB on Linux) fills and
+      // the binary blocks on write. Capture both so any diagnostic
+      // (binary's stdout banner, interpret subprocess errors via the
+      // binary's inherited stderr) shows up in the failure message.
+      let stdout = "";
+      let stderr = "";
+      let exited: {
+        code: number | null;
+        signal: NodeJS.Signals | null;
+      } | null = null;
+      proc.stdout?.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+      proc.stderr?.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      proc.on("exit", (code, signal) => {
+        exited = { code, signal };
+      });
+
       try {
-        expect(
-          await waitForServer(proc, port),
-          `dirsql server did not start with --config .${ext}`,
-        ).toBe(true);
+        const ok = await waitForServer(proc, port);
+        if (!ok) {
+          const exitInfo = exited
+            ? `proc exited (code=${exited.code}, signal=${exited.signal})`
+            : "proc still alive (timeout)";
+          throw new Error(
+            `dirsql server did not start with --config .${ext}; ${exitInfo}\n` +
+              `--- stdout ---\n${stdout}\n` +
+              `--- stderr ---\n${stderr}`,
+          );
+        }
         const rows = await httpQuery(
           port,
           "SELECT title FROM papers ORDER BY title",

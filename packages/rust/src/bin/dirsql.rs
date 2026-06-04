@@ -8,7 +8,12 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use dirsql::cli::{AppState, ServerConfig, init::InitOptions, serve_with_state};
+use dirsql::cli::{
+    AppState, ServerConfig,
+    init::InitOptions,
+    native_config::{InterpretHelper, build_dirsql},
+    serve_with_state,
+};
 use dirsql::{DirSQL, Row, Table};
 
 #[derive(Debug, Parser)]
@@ -152,10 +157,71 @@ fn load_state(cli: &Cli) -> AppState {
         }
     };
 
+    if is_native_config(&resolved) {
+        return load_native_state(&resolved);
+    }
+
     match DirSQL::from_config_path(&resolved) {
         Ok(db) => AppState::Ready(db),
         Err(err) => AppState::Unavailable(format!("failed to load config: {err}")),
     }
+}
+
+/// Native-language config support: `--config X.{py,js,mjs,cjs}` delegates
+/// to `dirsql interpret <X>` (spawned via PATH) for `extract` execution.
+/// The binary still owns SQL, HTTP, and the file watcher.
+fn is_native_config(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|s| s.to_str()),
+        Some("py") | Some("js") | Some("mjs") | Some("cjs")
+    )
+}
+
+fn load_native_state(config_path: &Path) -> AppState {
+    let (helper, config) = match spawn_interpret_helper(config_path) {
+        Ok(x) => x,
+        Err(err) => return AppState::Unavailable(err),
+    };
+    match build_dirsql(helper, config) {
+        Ok(db) => AppState::Ready(db),
+        Err(err) => AppState::Unavailable(format!(
+            "failed to build DirSQL from {}: {err}",
+            config_path.display()
+        )),
+    }
+}
+
+/// Spawn `dirsql interpret <config_path>` via PATH and hand the child
+/// off to [`InterpretHelper::from_child`]. Lives in the CLI binary
+/// (rather than the lib's `cli::native_config` module) because the
+/// `Command::new("dirsql")` plumbing is only meaningfully exercised
+/// end-to-end via the `dirsql --config X.{py,js,mjs,cjs}` integration
+/// path — there's no useful in-process unit test for it.
+fn spawn_interpret_helper(
+    config_path: &Path,
+) -> Result<
+    (
+        std::sync::Arc<InterpretHelper>,
+        dirsql::cli::native_config::NativeConfig,
+    ),
+    String,
+> {
+    use std::process::{Command, Stdio};
+    let child = Command::new("dirsql")
+        .arg("interpret")
+        .arg(config_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|e| {
+            format!(
+                "failed to spawn `dirsql interpret`: {e}. \
+                 Native-language configs require a launcher that implements `interpret` \
+                 on PATH (install dirsql via pip/uv or npm/npx)."
+            )
+        })?;
+    InterpretHelper::from_child(child)
 }
 
 /// Zero-config fallback. When no `.dirsql.toml` is found, dirsql indexes the

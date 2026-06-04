@@ -78,7 +78,15 @@ def describe_cli_py_config():
         )
         port = _free_port()
         proc = subprocess.Popen(
-            [BINARY, "--config", CONFIG_PATH, "--port", str(port)],
+            [
+                BINARY,
+                "--config",
+                CONFIG_PATH,
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+            ],
             stderr=subprocess.PIPE,
         )
         try:

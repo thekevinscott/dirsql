@@ -111,6 +111,11 @@ jobs:
         run: uv run maturin develop
         working-directory: packages/python
 
+      - name: Build dirsql binary
+        # `test_native_config.py` spawns the bundled Rust binary directly;
+        # `maturin develop` only builds the PyO3 extension.
+        run: cargo build --release -p dirsql --features cli
+
       - name: Run combined coverage (unit + integration, no e2e)
         run: uv run python -m pytest dirsql/ tests/integration/ -q --tb=short --cov=dirsql --cov-branch --cov-report=term-missing --cov-fail-under=100
         working-directory: packages/python
