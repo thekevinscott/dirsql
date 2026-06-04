@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **TypeScript SDK exports a `Table` class (parity with Python / Rust).**
+  `import { Table } from "dirsql"` now resolves to a constructable class
+  implementing `TableDef`. `new Table({ ddl, glob, extract, strict? })` is
+  a thin identity wrapper — structurally identical to the equivalent plain
+  object literal, with the same enumerable keys — so every call site that
+  accepts `TableDef[]` (notably `new DirSQL({ tables: [...] })`) accepts
+  either form interchangeably. Pre-existing TS code using plain object
+  literals continues to compile and run unchanged. Parity-restoring with
+  Python's `Table(ddl=..., glob=..., extract=...)` and Rust's
+  `Table::new(...)` / `Table::strict(...)` / `Table::try_new(...)`. (#216)
+
 - **Python SDK ships PEP 561 type information.** The wheel now bundles
   `dirsql/py.typed` and `dirsql/_dirsql.pyi`, so downstream consumers see
   types for `DirSQL`, `Table`, `RowEvent`, and `__version__` in editors and
