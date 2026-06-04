@@ -45,15 +45,19 @@ fn s1_ddl_with_semicolon_in_table_name_slot_is_rejected() {
 }
 
 /// A column name returned by `extract` that contains SQL syntax must produce
-/// a clean validation error, not a cryptic SQLite parse failure that mentions
-/// internal SQL fragments.
+/// a clean validation error, not a cryptic SQLite parse failure.
+///
+/// In strict mode the bad key reaches the normalize step (relaxed mode would
+/// silently drop unknown keys — by design — so the validator can't fire
+/// there). Strict mode is the appropriate vehicle for asserting the
+/// identifier check.
 #[test]
 fn s1_column_name_with_sql_syntax_produces_clean_error() {
     let dir = TempDir::new().unwrap();
     std::fs::write(dir.path().join("a.json"), b"{}").unwrap();
     let result = DirSQL::new(
         dir.path(),
-        vec![Table::new(
+        vec![Table::strict(
             "CREATE TABLE t (id TEXT)",
             "*.json",
             |_| {
@@ -182,19 +186,16 @@ fn p5_hash_file_matches_blake3_of_2mib_payload() {
 #[test]
 fn p7_builder_exposes_poll_interval() {
     let dir = TempDir::new().unwrap();
-    // RED: `.poll_interval(...)` does not yet exist on `DirSQLBuilder`.
-    // Until P7 lands, we exercise the equivalent missing-knob expectation by
-    // asserting against a runtime sentinel. Once `poll_interval` is added,
-    // swap this body for the real builder-chain test.
-    //
-    //     let _db = DirSQL::builder()
-    //         .root(dir.path())
-    //         .table(Table::new("CREATE TABLE t (id TEXT)", "*.json", |_| vec![]))
-    //         .poll_interval(Duration::from_millis(50))
-    //         .build()
-    //         .unwrap();
-    let _ = (dir, Duration::from_millis(50));
-    panic!("P7: DirSQLBuilder::poll_interval not implemented");
+    let _db = DirSQL::builder()
+        .root(dir.path())
+        .table(Table::new(
+            "CREATE TABLE t (id TEXT)",
+            "*.json",
+            |_| vec![],
+        ))
+        .poll_interval(Duration::from_millis(50))
+        .build()
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +229,7 @@ fn i3_watch_error_exposes_underlying_source() {
         .start_watching()
         .expect_err("start_watching against vanished root must fail");
     match &err {
-        DirSqlError::Watch(_) => {}
+        DirSqlError::Watch { .. } => {}
         other => panic!("expected DirSqlError::Watch, got: {other:?}"),
     }
     assert!(
@@ -296,10 +297,10 @@ fn i8_ext_preserves_original_case() {
 #[cfg(feature = "cli")]
 #[test]
 fn i11_app_state_has_from_string_for_unavailable() {
-    // RED: `impl From<String> for AppState` does not yet exist.
-    // Once added, replace the panic with:
-    //
-    //     use dirsql::cli::AppState;
-    //     let _state: AppState = String::from("config failed to load").into();
-    panic!("I11: From<String> for AppState not implemented");
+    use dirsql::cli::AppState;
+    let state: AppState = String::from("config failed to load").into();
+    match state {
+        AppState::Unavailable(msg) => assert_eq!(msg, "config failed to load"),
+        AppState::Ready(_) => panic!("From<String> must produce AppState::Unavailable"),
+    }
 }

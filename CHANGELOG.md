@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Rust SDK: `DirSQLBuilder::poll_interval(Duration)`.** Tunes the channel-
+  based `watch()` loop's poll cadence (default 200ms). Lower values trade
+  idle CPU for tighter event-to-stream latency. Addresses P7 of #218.
+
+- **Rust SDK: `impl From<String> for AppState`.** Symmetric with
+  `From<DirSQL>` so the degraded `AppState::Unavailable` arm can be built
+  with the same `.into()` ergonomics as the ready arm. Addresses I11 of
+  #218.
+
+- **Rust SDK: `db::validate_identifier` + `DbError::InvalidIdentifier`.**
+  Validates table names (parsed from DDL) and column names (from
+  `extract`-returned rows) against `[A-Za-z_][A-Za-z0-9_]*` before they are
+  interpolated into formatted SQL. Closes the latent identifier-injection
+  surface in `Db::create_table`, `Db::insert_row`, `Db::delete_rows_by_file`,
+  and `Db::get_table_columns` — rusqlite's single-statement `execute`
+  defangs most payloads today, but the validator surfaces the issue as a
+  clean `InvalidIdentifier` error instead of relying on that accident.
+  Addresses S1 of #218.
+
 - **TypeScript SDK exports a `Table` class (parity with Python / Rust).**
   `import { Table } from "dirsql"` now resolves to a constructable class
   implementing `TableDef`. `new Table({ ddl, glob, extract, strict? })` is
@@ -100,6 +119,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.dirsql.toml`, when present, fully overrules the default. (#184)
 
 ### Changed
+
+- **Rust SDK: `DirSQL::query`'s `_dirsql_*` projection filter is comment-
+  and string-literal-aware.** Previously the column-filter logic used
+  `sql.contains("_dirsql_file_path")`, which leaked the tracking column
+  when the name appeared only inside a `/* comment */` or
+  `'string literal'`. The filter is now backed by `db::strip_sql_noise`,
+  which removes comments and string literals before scanning for explicit
+  `_dirsql_*` references. Quoted identifiers (`"_dirsql_file_path"`) still
+  count as explicit. Addresses S2 of #218.
+
+- **Rust SDK: `DirSqlError::Watch`, `Matcher`, `Config` carry an optional
+  underlying source.** The three variants moved from `(String)` tuple form
+  to `{ message: String, source: Option<Box<dyn Error + Send + Sync>> }`
+  struct form. `Error::source()` now returns the underlying `notify`,
+  `globset`, or `config::ConfigError` for downcasting / chained diagnostics.
+  Display output is unchanged. Addresses I3 of #218; see `MIGRATIONS.md`
+  for the pattern-matching update.
+
+- **Rust SDK: `_ext` stat virtual preserves the file extension's original
+  case.** Previously lowercased; now passes through verbatim so case-
+  sensitive filesystems can distinguish `Photo.JPG` from `photo.jpg`.
+  Consumers wanting case-insensitive matching can `LOWER(_ext)` in SQL.
+  Addresses I8 of #218; see `MIGRATIONS.md`.
+
+- **Rust SDK: `persist::PARSER_VERSIONS_JSON` is now `{}` (was the legacy
+  parser-versions list).** Per-format parsing was removed in #169; the
+  meta key was carrying dead metadata. Existing on-disk caches will be
+  cleanly rebuilt on next startup via the normal `meta_is_compatible`
+  rejection path. Addresses I6 of #218.
 
 - **CLI launcher coverage exclude lifted; launchers unit-tested.** The
   Python `dirsql.cli.main` / `binary_path` / `is_windows` and the

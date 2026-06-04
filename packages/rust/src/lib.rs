@@ -69,14 +69,22 @@ pub enum DirSqlError {
     #[error("failed to lock shared state: {0}")]
     Lock(String),
 
-    #[error("glob matcher error: {0}")]
-    Matcher(String),
+    #[error("glob matcher error: {message}")]
+    Matcher {
+        message: String,
+        #[source]
+        source: Option<BoxError>,
+    },
 
     #[error("watch already started")]
     WatchAlreadyStarted,
 
-    #[error("watcher error: {0}")]
-    Watch(String),
+    #[error("watcher error: {message}")]
+    Watch {
+        message: String,
+        #[source]
+        source: Option<BoxError>,
+    },
 
     #[error("table DDL could not be parsed: {0}")]
     Ddl(String),
@@ -87,8 +95,12 @@ pub enum DirSqlError {
     #[error("extract error for {path}: {message}")]
     Extract { path: String, message: String },
 
-    #[error("config error: {0}")]
-    Config(String),
+    #[error("config error: {message}")]
+    Config {
+        message: String,
+        #[source]
+        source: Option<BoxError>,
+    },
 
     #[error(
         "query() only accepts read-only statements; SQLite classified this statement as a write"
@@ -106,16 +118,38 @@ impl DirSqlError {
         DirSqlError::Lock(e.to_string())
     }
 
-    fn watch(e: impl std::fmt::Display) -> Self {
-        DirSqlError::Watch(e.to_string())
+    /// Wrap a typed error in `Watch`, preserving the underlying error as a
+    /// source so callers can `.source()` / downcast. Used by the
+    /// `notify`-backed code paths.
+    fn watch<E: StdError + Send + Sync + 'static>(e: E) -> Self {
+        DirSqlError::Watch {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        }
     }
 
-    fn config(e: impl std::fmt::Display) -> Self {
-        DirSqlError::Config(e.to_string())
+    /// Build a `Watch` error with only a message (no underlying source).
+    /// Used by the mutually-exclusive-API guards and other internal
+    /// invariants that aren't backed by a third-party error type.
+    fn watch_msg(msg: impl Into<String>) -> Self {
+        DirSqlError::Watch {
+            message: msg.into(),
+            source: None,
+        }
     }
 
-    fn matcher(e: impl std::fmt::Display) -> Self {
-        DirSqlError::Matcher(e.to_string())
+    fn config<E: StdError + Send + Sync + 'static>(e: E) -> Self {
+        DirSqlError::Config {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        }
+    }
+
+    fn matcher<E: StdError + Send + Sync + 'static>(e: E) -> Self {
+        DirSqlError::Matcher {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        }
     }
 
     fn sqlite(e: rusqlite::Error) -> Self {
@@ -214,6 +248,10 @@ struct DirSqlInner {
     /// `true` once [`DirSQL::watch`] has spawned its background thread.
     /// Locks out [`DirSQL::poll_events`].
     watch_thread_started: AtomicBool,
+    /// Poll interval used by the channel-based [`watch`](DirSQL::watch)
+    /// loop. Bounds event-to-stream latency from above (and idle CPU from
+    /// below). Defaults to 200ms — see [`DirSQLBuilder::poll_interval`].
+    poll_interval: Duration,
 }
 
 /// Serializable snapshot of a `DirSQL` instance's resolved runtime state.
@@ -359,8 +397,8 @@ impl DirSQL {
     /// drain the same underlying filesystem watcher.
     pub fn poll_events(&self, timeout: Duration) -> Result<Vec<RowEvent>> {
         if self.inner.watch_thread_started.load(Ordering::SeqCst) {
-            return Err(DirSqlError::Watch(
-                "watch() is active; cannot mix with poll_events()".into(),
+            return Err(DirSqlError::watch_msg(
+                "watch() is active; cannot mix with poll_events()",
             ));
         }
         self.inner.poll_used.store(true, Ordering::SeqCst);
@@ -377,8 +415,8 @@ impl DirSQL {
     #[doc(hidden)]
     pub fn wait_file_events(&self, timeout: Duration) -> Result<Vec<FileEvent>> {
         if self.inner.watch_thread_started.load(Ordering::SeqCst) {
-            return Err(DirSqlError::Watch(
-                "watch() is active; cannot mix with poll_events()".into(),
+            return Err(DirSqlError::watch_msg(
+                "watch() is active; cannot mix with poll_events()",
             ));
         }
         self.inner.poll_used.store(true, Ordering::SeqCst);
@@ -386,7 +424,7 @@ impl DirSQL {
         let guard = self.inner.watcher.lock().map_err(DirSqlError::lock)?;
         let watcher = guard
             .as_ref()
-            .ok_or_else(|| DirSqlError::Watch("watcher not started".into()))?;
+            .ok_or_else(|| DirSqlError::watch_msg("watcher not started"))?;
         let mut events = Vec::new();
         if let Some(first) = watcher.recv_timeout(timeout) {
             events.push(first);
@@ -417,8 +455,8 @@ impl DirSQL {
     /// Mutually exclusive with [`poll_events`](Self::poll_events).
     pub fn watch(&self) -> Result<WatchStream> {
         if self.inner.poll_used.load(Ordering::SeqCst) {
-            return Err(DirSqlError::Watch(
-                "poll_events() already in use; cannot call watch()".into(),
+            return Err(DirSqlError::watch_msg(
+                "poll_events() already in use; cannot call watch()",
             ));
         }
         if self.inner.watch_thread_started.swap(true, Ordering::SeqCst) {
@@ -441,7 +479,7 @@ impl DirSQL {
             let guard = self.inner.watcher.lock().map_err(DirSqlError::lock)?;
             let watcher = guard
                 .as_ref()
-                .ok_or_else(|| DirSqlError::Watch("watcher not started".into()))?;
+                .ok_or_else(|| DirSqlError::watch_msg("watcher not started"))?;
             let mut events = Vec::new();
             if let Some(first) = watcher.recv_timeout(timeout) {
                 events.push(first);
@@ -605,6 +643,7 @@ impl DirSQL {
             ignore,
             persist,
             persist_path,
+            poll_interval,
         } = resolved;
 
         let (matcher, table_names) = compile_matcher(&tables, &ignore)?;
@@ -660,6 +699,7 @@ impl DirSQL {
             ignore,
             persist_enabled: persist,
             persist_path,
+            poll_interval,
         })
     }
 
@@ -682,6 +722,7 @@ impl DirSQL {
             ignore,
             persist_enabled,
             persist_path,
+            poll_interval,
         } = prepared;
 
         let (db, persist_ready) = match persist {
@@ -814,6 +855,7 @@ impl DirSQL {
                 watcher: Mutex::new(None),
                 poll_used: AtomicBool::new(false),
                 watch_thread_started: AtomicBool::new(false),
+                poll_interval,
             }),
         })
     }
@@ -853,6 +895,7 @@ pub struct DirSQLBuilder {
     config_path: Option<PathBuf>,
     persist: bool,
     persist_path: Option<PathBuf>,
+    poll_interval: Option<Duration>,
 }
 
 impl DirSQLBuilder {
@@ -913,6 +956,16 @@ impl DirSQLBuilder {
         self
     }
 
+    /// Set the poll interval used by the channel-based
+    /// [`watch`](DirSQL::watch) loop. Bounds event-to-stream latency from
+    /// above (low values: tighter latency, higher idle CPU) and from below
+    /// (high values: lower idle CPU, slower reaction). Defaults to 200ms
+    /// when not set.
+    pub fn poll_interval(mut self, interval: Duration) -> Self {
+        self.poll_interval = Some(interval);
+        self
+    }
+
     /// Resolve all inputs (reading the config file if one was supplied) into
     /// a [`ResolvedBuild`] used by the construction pipeline. Emits a warning
     /// on stderr if both an explicit root and a config-supplied root are
@@ -925,6 +978,7 @@ impl DirSQLBuilder {
             config_path,
             mut persist,
             mut persist_path,
+            poll_interval,
         } = self;
 
         let mut config_root: Option<PathBuf> = None;
@@ -980,9 +1034,10 @@ impl DirSQLBuilder {
             (Some(explicit), None) => explicit,
             (None, Some(cfg)) => cfg,
             (None, None) => {
-                return Err(DirSqlError::Config(
-                    "no root directory: call .root(...) or .config(path)".into(),
-                ));
+                return Err(DirSqlError::Config {
+                    message: "no root directory: call .root(...) or .config(path)".into(),
+                    source: None,
+                });
             }
         };
 
@@ -992,6 +1047,7 @@ impl DirSQLBuilder {
             ignore,
             persist,
             persist_path,
+            poll_interval: poll_interval.unwrap_or(DEFAULT_POLL_INTERVAL),
         })
     }
 
@@ -1018,6 +1074,12 @@ impl DirSQLBuilder {
     }
 }
 
+/// Default poll interval for the channel-based watch loop. Used when the
+/// builder doesn't supply an explicit `poll_interval`. Bounds event-to-
+/// stream latency from above; lower values trade idle CPU for tighter
+/// reaction time.
+const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
 /// Fully-resolved builder inputs: the result of merging programmatic
 /// settings with values loaded from a `.dirsql.toml` config file.
 #[doc(hidden)]
@@ -1027,6 +1089,7 @@ pub struct ResolvedBuild {
     pub ignore: Vec<String>,
     pub persist: bool,
     pub persist_path: Option<PathBuf>,
+    pub poll_interval: Duration,
 }
 
 /// A single file discovered during [`DirSQL::prepare_resolved`]: its
@@ -1056,6 +1119,9 @@ pub struct PreparedBuild {
     /// Override location of the persistent cache file, preserved for
     /// [`DirSQL::config`].
     persist_path: Option<PathBuf>,
+    /// Poll interval for the channel-based watch loop. Sourced from
+    /// [`DirSQLBuilder::poll_interval`] or [`DEFAULT_POLL_INTERVAL`].
+    poll_interval: Duration,
 }
 
 #[doc(hidden)]
@@ -1091,6 +1157,10 @@ fn compile_matcher(
     for table in tables {
         let table_name =
             parse_table_name(&table.ddl).ok_or_else(|| DirSqlError::Ddl(table.ddl.clone()))?;
+        // Validate up front so a poisoned name from a stored cache or a
+        // would-be-injection DDL can't propagate into `extract_map`,
+        // `strict_map`, or any format!()-built SQL down the line.
+        crate::db::validate_identifier(&table_name).map_err(map_db_error)?;
         if seen.insert(table_name.clone(), ()).is_some() {
             return Err(DirSqlError::DuplicateTable(table_name));
         }
@@ -1240,8 +1310,9 @@ fn error_event(table: Option<&str>, rel_path: &str, error: String) -> RowEvent {
 }
 
 fn run_channel_loop(db: DirSQL, tx: UnboundedSender<RowEvent>) {
+    let interval = db.inner.poll_interval;
     loop {
-        match db.poll_once(Duration::from_millis(200)) {
+        match db.poll_once(interval) {
             Ok(events) => {
                 for event in events {
                     if tx.unbounded_send(event).is_err() {
@@ -1331,9 +1402,12 @@ fn compute_stat_virtuals(rel_path: &str, abs_path: &Path) -> Row {
         );
     }
     if let Some(ext) = pb.extension() {
+        // Preserve the original case: on case-sensitive filesystems
+        // `Photo.JPG` and `photo.jpg` are distinct files. Consumers wanting
+        // case-insensitive matching can `LOWER(_ext)` in SQL.
         out.insert(
             STAT_EXT.into(),
-            Value::Text(ext.to_string_lossy().to_lowercase()),
+            Value::Text(ext.to_string_lossy().into_owned()),
         );
     }
 
@@ -1552,12 +1626,26 @@ mod readonly_tests {
             DirSqlError::lock("x").to_string(),
             "failed to lock shared state: x"
         );
-        assert_eq!(DirSqlError::watch("x").to_string(), "watcher error: x");
-        assert_eq!(DirSqlError::config("x").to_string(), "config error: x");
-        assert_eq!(
-            DirSqlError::matcher("x").to_string(),
-            "glob matcher error: x"
-        );
+        // `watch`, `config`, `matcher` now wrap a typed StdError to preserve
+        // a `source()` chain. Use `std::io::Error` as a portable witness.
+        let io = || std::io::Error::new(std::io::ErrorKind::Other, "x");
+        let watch_err = DirSqlError::watch(io());
+        assert_eq!(watch_err.to_string(), "watcher error: x");
+        assert!(StdError::source(&watch_err).is_some());
+
+        let cfg_err = DirSqlError::config(io());
+        assert_eq!(cfg_err.to_string(), "config error: x");
+        assert!(StdError::source(&cfg_err).is_some());
+
+        let m_err = DirSqlError::matcher(io());
+        assert_eq!(m_err.to_string(), "glob matcher error: x");
+        assert!(StdError::source(&m_err).is_some());
+
+        // `watch_msg` is the source-less form for internal invariants.
+        let watch_msg = DirSqlError::watch_msg("x");
+        assert_eq!(watch_msg.to_string(), "watcher error: x");
+        assert!(StdError::source(&watch_msg).is_none());
+
         assert_eq!(
             DirSqlError::sqlite(rusqlite::Error::QueryReturnedNoRows).to_string(),
             "SQLite error: Query returned no rows"
@@ -1634,6 +1722,7 @@ mod internal_tests {
                 table_name: "ghost".into(),
                 stat: None,
             }],
+            poll_interval: DEFAULT_POLL_INTERVAL,
             persist: None,
             ignore: Vec::new(),
             persist_enabled: false,

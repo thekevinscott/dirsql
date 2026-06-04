@@ -153,7 +153,7 @@ async fn build_async_without_root_errors() {
         Ok(_) => panic!("expected a Config error when no root is provided"),
         Err(e) => e,
     };
-    assert!(matches!(err, dirsql::DirSqlError::Config(_)), "got: {err}");
+    assert!(matches!(err, dirsql::DirSqlError::Config { .. }), "got: {err}");
 }
 
 // AsyncDirSQL::from_config_path loads a config from an explicit path.

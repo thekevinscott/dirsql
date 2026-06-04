@@ -23,8 +23,15 @@ pub const SCHEMA_VERSION: &str = "1";
 
 /// Bumped whenever any built-in parser changes its row-shape contract. A
 /// mismatch forces a full rebuild.
-pub const PARSER_VERSIONS_JSON: &str =
-    r#"{"json":"1","jsonl":"1","csv":"1","tsv":"1","toml":"1","yaml":"1","md":"1"}"#;
+///
+/// As of #169 dirsql no longer parses file content on the user's behalf, so
+/// the only "parser" surface is the filesystem-fact layer. The meta key is
+/// kept (empty JSON object) so the on-disk cache layout doesn't shift in
+/// shape; a future reintroduction of per-format parsers would slot back in
+/// here without bumping `SCHEMA_VERSION`. Existing caches written by older
+/// builds will fail `meta_is_compatible` against this empty value and
+/// cleanly rebuild on next startup.
+pub const PARSER_VERSIONS_JSON: &str = "{}";
 
 pub const META_TABLE: &str = "_dirsql_meta";
 pub const FILES_TABLE: &str = "_dirsql_files";

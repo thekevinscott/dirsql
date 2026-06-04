@@ -14,10 +14,39 @@ pub enum DbError {
     #[error("DDL parse error: {0}")]
     DdlParse(String),
 
+    #[error("invalid identifier: {0:?} (must match [A-Za-z_][A-Za-z0-9_]*)")]
+    InvalidIdentifier(String),
+
     #[error(
         "query() only accepts read-only statements; SQLite classified this statement as a write"
     )]
     WriteForbidden,
+}
+
+/// Validate that `s` is a safe unquoted SQL identifier: starts with an
+/// ASCII letter or underscore, followed by ASCII letters / digits /
+/// underscores. Used at every entry point that interpolates an identifier
+/// into formatted SQL (`INSERT INTO {table} ...`, `PRAGMA table_info({table})`,
+/// `INSERT INTO {table} ({col}, ...)`).
+///
+/// Why a strict character class instead of quoting? Quoting would let us
+/// accept arbitrary identifiers, but every downstream caller (and every
+/// language-binding consumer) would then need to follow the same quoting
+/// discipline. The strict-class is simpler to audit and matches typical
+/// dirsql usage (DDL-defined table names + extract-produced column names
+/// both fit the class).
+pub fn validate_identifier(s: &str) -> Result<()> {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return Err(DbError::InvalidIdentifier(s.to_string())),
+    }
+    for c in chars {
+        if !(c.is_ascii_alphanumeric() || c == '_') {
+            return Err(DbError::InvalidIdentifier(s.to_string()));
+        }
+    }
+    Ok(())
 }
 
 pub type Result<T> = std::result::Result<T, DbError>;
@@ -48,7 +77,15 @@ impl Db {
 
     /// Create a table from a user-provided DDL statement.
     /// Automatically injects internal tracking columns (_dirsql_file_path, _dirsql_row_index).
+    ///
+    /// Validates that the parsed table name is a safe unquoted SQL identifier
+    /// before handing the DDL to SQLite — closes the gap where a DDL like
+    /// `CREATE TABLE foo;DROP_TABLE_bar--(id TEXT)` would parse to a poisoned
+    /// internal table name and break downstream `format!()`-built SQL.
     pub fn create_table(&self, ddl: &str) -> Result<()> {
+        let table = parse_table_name(ddl)
+            .ok_or_else(|| DbError::DdlParse(ddl.to_string()))?;
+        validate_identifier(&table)?;
         let augmented = inject_tracking_columns(ddl)?;
         self.conn.execute(&augmented, [])?;
         Ok(())
@@ -56,6 +93,7 @@ impl Db {
 
     /// Return the user-defined column names for `table` (excludes `_dirsql_*` tracking columns).
     pub fn get_table_columns(&self, table: &str) -> Result<Vec<String>> {
+        validate_identifier(table)?;
         let mut stmt = self
             .conn
             .prepare(&format!("PRAGMA table_info({})", table))?;
@@ -70,7 +108,12 @@ impl Db {
     /// Normalize a row to match the table schema.
     ///
     /// In relaxed mode (strict=false): extra keys are dropped, missing keys become NULL.
-    /// In strict mode (strict=true): extra or missing keys produce a SchemaMismatch error.
+    /// In strict mode (strict=true): every row key is validated as a safe
+    /// SQL identifier, then any extra or missing key produces a
+    /// SchemaMismatch error. The identifier check runs *first* so a
+    /// malformed key (e.g. one containing SQL syntax) reports as
+    /// [`DbError::InvalidIdentifier`] rather than as a less-actionable
+    /// "extra columns" mismatch.
     pub fn normalize_row(
         &self,
         table: &str,
@@ -83,6 +126,9 @@ impl Db {
         let row_keys: std::collections::HashSet<&str> = row.keys().map(|s| s.as_str()).collect();
 
         if strict {
+            for key in row.keys() {
+                validate_identifier(key)?;
+            }
             let extra: Vec<&str> = row_keys.difference(&column_set).copied().collect();
             if !extra.is_empty() {
                 return Err(DbError::SchemaMismatch(format!(
@@ -112,6 +158,12 @@ impl Db {
 
     /// Insert a row into a table.
     /// `row` contains user-defined columns only. `file_path` and `row_index` are tracked internally.
+    ///
+    /// Both the table name and every user-provided column name are validated
+    /// as safe SQL identifiers before being interpolated. A column key with
+    /// SQL syntax (e.g. `id); DROP TABLE t; --`) produces a clean
+    /// [`DbError::InvalidIdentifier`] rather than a cryptic SQLite parse
+    /// failure.
     pub fn insert_row(
         &self,
         table: &str,
@@ -119,6 +171,11 @@ impl Db {
         file_path: &str,
         row_index: usize,
     ) -> Result<()> {
+        validate_identifier(table)?;
+        for key in row.keys() {
+            validate_identifier(key)?;
+        }
+
         let mut columns: Vec<String> = row.keys().cloned().collect();
         columns.push("_dirsql_file_path".to_string());
         columns.push("_dirsql_row_index".to_string());
@@ -147,6 +204,7 @@ impl Db {
 
     /// Delete all rows that were produced by a given file path.
     pub fn delete_rows_by_file(&self, table: &str, file_path: &str) -> Result<usize> {
+        validate_identifier(table)?;
         let sql = format!("DELETE FROM {} WHERE _dirsql_file_path = ?1", table);
         let count = self.conn.execute(&sql, [file_path])?;
         Ok(count)
@@ -163,6 +221,13 @@ impl Db {
     /// results so they don't leak. But if the user names one explicitly in the
     /// projection (e.g. `SELECT _dirsql_file_path FROM t`), it's returned —
     /// users opt into the tracking surface by typing the column name.
+    ///
+    /// The "names one explicitly" check is **comment- and string-literal-
+    /// aware**: a comment that happens to mention `_dirsql_file_path`, or
+    /// the same name appearing only inside a string literal, does NOT count
+    /// as an opt-in. The check inspects the SQL with those regions stripped
+    /// (see [`strip_sql_noise`]) so the projection filter is a real
+    /// boundary rather than a substring match.
     pub fn query(&self, sql: &str) -> Result<Vec<HashMap<String, Value>>> {
         let mut stmt = self.conn.prepare(sql)?;
         if !stmt.readonly() {
@@ -170,10 +235,21 @@ impl Db {
         }
         let column_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
 
+        // Strip comments and string literals once, up front. The result is
+        // the projection-relevant SQL that we scan for explicit `_dirsql_*`
+        // references; doing it once also collapses the per-row, per-column
+        // `sql.contains(name)` from O(rows × cols × |sql|) into O(|sql|).
+        let projection_sql = strip_sql_noise(sql);
+        let explicit_dirsql: std::collections::HashSet<&str> = column_names
+            .iter()
+            .filter(|n| n.starts_with("_dirsql_") && projection_sql.contains(n.as_str()))
+            .map(String::as_str)
+            .collect();
+
         let rows = stmt.query_map([], |row| {
             let mut map = HashMap::new();
             for (i, name) in column_names.iter().enumerate() {
-                if name.starts_with("_dirsql_") && !sql.contains(name) {
+                if name.starts_with("_dirsql_") && !explicit_dirsql.contains(name.as_str()) {
                     continue;
                 }
                 let val: rusqlite::types::Value = row.get(i)?;
@@ -188,6 +264,60 @@ impl Db {
         }
         Ok(results)
     }
+}
+
+/// Strip SQL comments and string literals from `sql`, returning a copy whose
+/// remaining text is the projection-relevant part: identifiers, keywords,
+/// punctuation. Used by [`Db::query`] to decide whether the user explicitly
+/// named a `_dirsql_*` column without being fooled by the name appearing
+/// inside `-- ...`, `/* ... */`, or `'...'`.
+///
+/// This is intentionally not a full SQL parser. It recognises:
+/// - `-- ...` to end of line / end of input.
+/// - `/* ... */` block comments (non-nesting, per SQL standard).
+/// - `'...'` string literals, with the `''` escape for embedded quotes.
+///
+/// Identifier-quoting forms (`"..."`, `` `...` ``, `[...]`) are passed
+/// through verbatim, so an explicit `SELECT "_dirsql_file_path" FROM t`
+/// still counts as a mention.
+fn strip_sql_noise(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let mut chars = sql.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '-' if chars.peek() == Some(&'-') => {
+                chars.next();
+                for ch in chars.by_ref() {
+                    if ch == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                while let Some(ch) = chars.next() {
+                    if ch == '*' && chars.peek() == Some(&'/') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            '\'' => {
+                while let Some(ch) = chars.next() {
+                    if ch == '\'' {
+                        if chars.peek() == Some(&'\'') {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// Inject _dirsql_file_path and _dirsql_row_index columns into a CREATE TABLE DDL statement.
@@ -809,22 +939,23 @@ mod tests {
         assert!(matches!(err, DbError::Sqlite(_)), "got: {err}");
     }
 
-    // --- Error path: create_table with a syntactically-valid-looking DDL
-    // (has a closing paren so it passes inject_tracking_columns) but invalid
-    // SQL, so the failure happens at conn.execute rather than the injector ---
+    // --- Error path: create_table with a DDL that has no parseable table name.
+    // `CREATE TABLE (...)` (no name between TABLE and the paren) is rejected
+    // by `parse_table_name` before SQLite ever sees it. Previously this fell
+    // through to a SQLite syntax error; now it fails fast with DdlParse.
 
     #[test]
-    fn create_table_invalid_sql_with_paren_fails_at_execute() {
+    fn create_table_without_parseable_name_fails_at_parse() {
         let db = Db::new().unwrap();
         let err = db
             .create_table("CREATE TABLE (this is not valid)")
             .unwrap_err();
-        assert!(matches!(err, DbError::Sqlite(_)), "got: {err}");
+        assert!(matches!(err, DbError::DdlParse(_)), "got: {err}");
     }
 
-    // --- Error path: normalize_row when the underlying table lookup fails.
-    // A table name containing whitespace makes the PRAGMA prepare fail, so
-    // get_table_columns errors and normalize_row's `?` propagates. ---
+    // --- Error path: normalize_row with a table name that isn't a safe
+    // identifier. `validate_identifier` rejects whitespace before
+    // `get_table_columns` ever runs the PRAGMA. ---
 
     #[test]
     fn normalize_row_propagates_column_lookup_error() {
@@ -833,6 +964,128 @@ mod tests {
         let err = db
             .normalize_row("bad name with spaces", &row, false)
             .unwrap_err();
-        assert!(matches!(err, DbError::Sqlite(_)), "got: {err}");
+        assert!(matches!(err, DbError::InvalidIdentifier(_)), "got: {err}");
+    }
+
+    // --- validate_identifier: identifier hygiene at every interpolation site ---
+
+    #[test]
+    fn validate_identifier_accepts_simple_names() {
+        for name in ["t", "_t", "_dirsql_file_path", "Photos2024", "Snake_Case"] {
+            validate_identifier(name).unwrap_or_else(|e| panic!("{name:?} rejected: {e}"));
+        }
+    }
+
+    #[test]
+    fn validate_identifier_rejects_empty() {
+        assert!(matches!(
+            validate_identifier(""),
+            Err(DbError::InvalidIdentifier(_))
+        ));
+    }
+
+    #[test]
+    fn validate_identifier_rejects_sql_syntax() {
+        for bad in [
+            "foo;DROP",
+            "foo bar",
+            "foo)",
+            "1leading_digit",
+            "evil--",
+            "\"quoted\"",
+            "id; DROP TABLE t; --",
+        ] {
+            assert!(
+                matches!(
+                    validate_identifier(bad),
+                    Err(DbError::InvalidIdentifier(_))
+                ),
+                "expected rejection for: {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn create_table_rejects_ddl_with_sql_syntax_in_name_slot() {
+        let db = Db::new().unwrap();
+        let err = db
+            .create_table("CREATE TABLE evil;DROP_TABLE--(id TEXT)")
+            .unwrap_err();
+        assert!(
+            matches!(err, DbError::InvalidIdentifier(_)),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn insert_row_rejects_column_name_with_sql_syntax() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        let row = HashMap::from([("id); DROP TABLE t; --".into(), Value::Text("x".into()))]);
+        let err = db.insert_row("t", &row, "f.json", 0).unwrap_err();
+        assert!(
+            matches!(err, DbError::InvalidIdentifier(_)),
+            "got: {err:?}"
+        );
+    }
+
+    // --- strip_sql_noise: comment / literal aware ---
+
+    #[test]
+    fn strip_sql_noise_removes_line_comments() {
+        let s = strip_sql_noise("SELECT * FROM t -- _dirsql_file_path leak\nWHERE 1=1");
+        assert!(!s.contains("_dirsql_file_path"), "got: {s}");
+        assert!(s.contains("SELECT * FROM t"));
+        assert!(s.contains("WHERE 1=1"));
+    }
+
+    #[test]
+    fn strip_sql_noise_removes_block_comments() {
+        let s = strip_sql_noise("SELECT /* _dirsql_file_path */ x FROM t");
+        assert!(!s.contains("_dirsql_file_path"), "got: {s}");
+    }
+
+    #[test]
+    fn strip_sql_noise_removes_string_literals() {
+        let s = strip_sql_noise("SELECT * FROM t WHERE id != '_dirsql_file_path'");
+        assert!(!s.contains("_dirsql_file_path"), "got: {s}");
+    }
+
+    #[test]
+    fn strip_sql_noise_handles_escaped_quote() {
+        // `''` inside a string is an escaped quote; the literal continues.
+        let s = strip_sql_noise("SELECT 'it''s _dirsql_file_path' FROM t");
+        assert!(!s.contains("_dirsql_file_path"), "got: {s}");
+    }
+
+    #[test]
+    fn strip_sql_noise_preserves_quoted_identifiers() {
+        // Double-quoted identifiers must survive — they ARE the column name.
+        let s = strip_sql_noise(r#"SELECT "_dirsql_file_path" FROM t"#);
+        assert!(s.contains("_dirsql_file_path"), "got: {s}");
+    }
+
+    #[test]
+    fn query_does_not_leak_dirsql_for_comment_mention() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
+        db.insert_row("t", &row, "file.json", 0).unwrap();
+        let rows = db.query("SELECT * FROM t /* _dirsql_file_path */").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].contains_key("_dirsql_file_path"));
+    }
+
+    #[test]
+    fn query_does_not_leak_dirsql_for_string_literal_mention() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("x".into()))]);
+        db.insert_row("t", &row, "file.json", 0).unwrap();
+        let rows = db
+            .query("SELECT * FROM t WHERE id != '_dirsql_file_path'")
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].contains_key("_dirsql_file_path"));
     }
 }

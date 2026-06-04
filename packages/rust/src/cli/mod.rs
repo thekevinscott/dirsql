@@ -97,6 +97,16 @@ impl From<DirSQL> for AppState {
     }
 }
 
+/// Symmetric construction for the degraded arm. Lets call sites build the
+/// degraded state with the same `.into()` ergonomics as the ready arm
+/// instead of typing the variant name. The string is the diagnostic that
+/// `/query` and `/events` echo back as a 503 body.
+impl From<String> for AppState {
+    fn from(reason: String) -> Self {
+        Self::Unavailable(reason)
+    }
+}
+
 /// Running server handle.
 ///
 /// Always call [`shutdown`](Self::shutdown) to release the bound port
