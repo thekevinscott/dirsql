@@ -14,6 +14,6 @@ jobs:
     name: 'CI Gate'
     runs-on: ubuntu-latest
     steps:
-      - uses: clankerbot/pr-monitor@v1
+      - uses: thekevinscott/pr-monitor@v1
         with:
           job-name: 'CI Gate'
