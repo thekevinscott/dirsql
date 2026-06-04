@@ -26,8 +26,10 @@ dirsql
 $ Running at localhost:7117
 ```
 
-The server reads tables from a [`.dirsql.toml`](./config.md) config file. By
-default it looks for `./.dirsql.toml`; override the path with `--config`.
+The server reads tables from a [config file](./config.md). By default it
+looks for `./.dirsql.toml`; pass `--config <path>` to point at a different
+`.toml` file or a [native-language config](./config.md#native-language-configs)
+(`.py` / `.js`).
 
 ## Defaults
 
@@ -45,13 +47,13 @@ curl -s localhost:7117/query -H 'content-type: application/json' \
   -d '{"sql":"SELECT _basename, _size FROM files ORDER BY _size DESC LIMIT 5"}'
 ```
 
-A `.dirsql.toml` file will override the default.
+A config file will override the default.
 
 ## Flags
 
 | Flag | Default | Description |
 |---|---|---|
-| `--config <path>` | `./.dirsql.toml` | Path to the config file. The index is rooted at the directory containing this file. |
+| `--config <path>` | `./.dirsql.toml` | Path to the config file (`.toml` or [native-language](./config.md#native-language-configs)). The index is rooted at the directory containing this file. |
 | `--host <addr>` | `localhost` | Bind address |
 | `--port <n>` | `7117` | TCP port to bind |
 

@@ -6,7 +6,10 @@ canonical: https://thekevinscott.github.io/dirsql/cli/config
 
 > Online: <https://thekevinscott.github.io/dirsql/cli/config>
 
-`dirsql` can be configured with an optional `.dirsql.toml` file (if omitted, server falls back to [defaults](./server.md#defaults)). `.dirsql.toml` defines how files are parsed into SQL tables.
+`dirsql` can be configured with an optional config file (if omitted, server falls back to [defaults](./server.md#defaults)). Two formats are accepted:
+
+- **`dirsql.toml`** — declarative; covers filesystem-fact tables. Works with any installation.
+- **`.py` / `.js`** — native-language; lets you write `extract` callbacks in Python or JavaScript. CLI-only, and only the launcher matching the file's language can run it. See [Native-Language Configs](#native-language-configs).
 
 ## Basic Example
 
@@ -172,10 +175,76 @@ ddl  = "CREATE TABLE logs (_path TEXT, _size INTEGER, _mtime INTEGER)"
 glob = "logs/*.csv"
 ```
 
-## When you need parsed content
+## Native-Language Configs
 
-`.dirsql.toml` does not parse file contents. For columns derived from the
-*inside* of files (frontmatter keys, JSON values, CSV cells, etc.),
-register a programmatic [`Table`](../guide/tables.md) instead, and parse the
-bytes in your host language. Glob captures and stat virtuals are still
-auto-injected into rows produced by your extract.
+You can provide a config file in a particular language, allowing you to define a dynamic extract function. This can be useful for building a database based on the _contents_ of a file.
+
+```bash
+dirsql --config dirsql.config.py
+dirsql --config dirsql.config.js
+```
+
+The file looks exactly like the in-process SDK construction — same
+`DirSQL` / `Table` API:
+
+::: code-group
+
+```python [dirsql.config.py]
+import json
+from dirsql import DirSQL, Table
+
+def extract_meta(path):
+    with open(path) as f:
+        return [json.load(f)]
+
+# Python must export an `app` variable
+app = DirSQL(
+    tables=[
+        Table(
+            ddl="CREATE TABLE papers (title TEXT, _path TEXT)",
+            glob="**/meta.json",
+            extract=extract_meta,
+        ),
+    ],
+)
+```
+
+```javascript [dirsql.config.mjs]
+import { readFileSync } from "node:fs";
+import { DirSQL } from "dirsql";
+
+export default new DirSQL({
+  tables: [
+    {
+      ddl: "CREATE TABLE papers (title TEXT, _path TEXT)",
+      glob: "**/meta.json",
+      extract: (path) => [JSON.parse(readFileSync(path, "utf8"))],
+    },
+  ],
+});
+```
+
+```javascript [dirsql.config.cjs]
+const { readFileSync } = require("node:fs");
+const { DirSQL } = require("dirsql");
+
+module.exports = new DirSQL({
+  tables: [
+    {
+      ddl: "CREATE TABLE papers (title TEXT, _path TEXT)",
+      glob: "**/meta.json",
+      extract: (path) => [JSON.parse(readFileSync(path, "utf8"))],
+    },
+  ],
+});
+```
+
+:::
+
+Only the extension matters — the file can be named anything. `dirsql.config.{py,mjs,cjs}` is the suggested convention but not required.
+
+### Module conventions
+
+- **Python (`.py`)** — module-level `app = DirSQL(...)`.
+- **ESM (`.mjs`, or `.js` in an ESM package)** — `export default new DirSQL(...)`.
+- **CommonJS (`.cjs`, or `.js` in a CJS package)** — `module.exports = new DirSQL(...)`.
