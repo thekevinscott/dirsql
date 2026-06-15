@@ -8,7 +8,7 @@ imports real types from `dirsql._dirsql`.
 
 The stub is installed ONLY when the real extension can't be imported.
 When `maturin develop` has been run (as in CI), the real extension wins
-and tests that depend on it — `test_async.py`, the integration suites —
+and tests that depend on it — `_async_test.py`, the integration suites —
 see the real bindings.
 """
 
