@@ -64,9 +64,23 @@ A feature is not done until integration tests pass and cover the new functionali
 
 - **Unit tests**: Colocated with source
   - Python: `foo.py` -> `foo_test.py` in same directory
+  - TypeScript: `foo.ts` -> `foo.test.ts` in same directory
   - Rust: inline `#[cfg(test)]` module at bottom of each source file
 - **Integration tests**: `tests/integration/` -- exercise the SDK's **public API** (`DirSQL`, `Table`, `RowEvent`, etc.), with third-party modules (e.g. the `notify` filesystem watcher, network calls, future LLM clients) replaced by **fixture-injected fakes**. Run in CI.
 - **E2E tests**: `tests/e2e/` -- real filesystem, real SQLite, real LLM calls, real published-artifact install (wheel / npm tarball). **No mocks, no fakes, no monkeypatching.** Heavy use of pytest fixtures. **NOT run in CI in general** -- exception: the **wheel-install / pack-install smoke tests** are part of the `build` CI jobs because they gate publishability.
+
+### Enforcing Colocation (testing-conventions)
+
+The Python/TypeScript colocation rule above is enforced as a **blocking CI gate** by [`testing-conventions`](https://github.com/thekevinscott/testing-conventions), a config-driven CLI that scans each SDK's source tree and fails on any source file lacking a colocated unit test. The wiring lives in `.github/workflows/testing-conventions.yml` (it pins the CLI version) and `scripts/check-testing-conventions.sh`.
+
+Run it locally before pushing:
+
+```bash
+pip install "testing-conventions==<version>"   # version pinned in the workflow
+just test-conventions                          # or: ./scripts/check-testing-conventions.sh
+```
+
+**Exemptions.** The CLI has no per-file ignore flag yet, so the wrapper carries an explicit allow-list (`EXEMPT` in the script) for the handful of genuine entry shims that are deliberately not unit-tested (e.g. the npm `bin` launcher `packages/ts/src/cli/dirsql.ts`, covered by the pack-install smoke test). Keep that list minimal and in lockstep with the coverage-omit configs it mirrors; remove an entry the moment its file gains a real colocated test. Barrel `index.ts` re-export files are ignored by the CLI itself. Adding a *new* untested source file fails the gate -- exemptions are the rare, documented exception, not the escape hatch.
 
 ### Test Boundaries -- What to Mock, What Not To
 
