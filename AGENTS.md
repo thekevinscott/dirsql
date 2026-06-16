@@ -71,7 +71,7 @@ A feature is not done until integration tests pass and cover the new functionali
 
 ### Enforcing Colocation (testing-conventions)
 
-The Python/TypeScript colocation rule above is enforced as a **blocking CI gate** by [`testing-conventions`](https://github.com/thekevinscott/testing-conventions), a config-driven CLI that scans each SDK's source tree and fails on any source file lacking a colocated unit test. The wiring lives in `.github/workflows/testing-conventions.yml` (it pins the CLI version) and `scripts/check-testing-conventions.sh`.
+The Python/TypeScript colocation rule above is enforced as a **blocking CI gate** by [`testing-conventions`](https://github.com/thekevinscott/testing-conventions), a config-driven CLI that scans each SDK's source tree and fails on any source file lacking a colocated unit test. The wiring lives in `.github/workflows/testing-conventions.yml` (it pins the CLI version), `scripts/check-testing-conventions.sh` (runs both language scans), and `testing-conventions.toml` (the exempt list).
 
 Run it locally before pushing:
 
@@ -80,7 +80,7 @@ pip install "testing-conventions==<version>"   # version pinned in the workflow
 just test-conventions                          # or: ./scripts/check-testing-conventions.sh
 ```
 
-**Exemptions.** The CLI has no per-file ignore flag yet, so the wrapper carries an explicit allow-list (`EXEMPT` in the script) for the handful of genuine entry shims that are deliberately not unit-tested (e.g. the npm `bin` launcher `packages/ts/src/cli/dirsql.ts`, covered by the pack-install smoke test). Keep that list minimal and in lockstep with the coverage-omit configs it mirrors; remove an entry the moment its file gains a real colocated test. Barrel `index.ts` re-export files are ignored by the CLI itself. Adding a *new* untested source file fails the gate -- exemptions are the rare, documented exception, not the escape hatch.
+**Exemptions.** Genuine entry shims that are deliberately not unit-tested are declared in `testing-conventions.toml` as `[[python.exempt]]` / `[[typescript.exempt]]` entries, each carrying a `path` (relative to the scanned source dir), the `rules` it waives (`location`), and a required `reason`. Today that covers the package barrels (`dirsql/__init__.py`, `src/index.ts`, `src/cli/interpret/index.ts`), the docstring-only CLI packages (`dirsql/cli/__init__.py`, `dirsql/cli/interpret/__init__.py`), and the npm `bin` launcher (`src/cli/dirsql.ts`, covered by the pack-install smoke test). Keep the list minimal and in lockstep with the coverage-omit configs it mirrors (`packages/python/pyproject.toml`, `packages/ts/vitest.config.ts`); the CLI **rejects a stale exempt entry whose `path` matches no file**, so remove an entry the moment its file gains a real colocated test or is deleted. Adding a *new* untested source file fails the gate -- exemptions are the rare, documented exception, not the escape hatch.
 
 ### Test Boundaries -- What to Mock, What Not To
 
