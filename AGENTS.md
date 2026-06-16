@@ -64,9 +64,23 @@ A feature is not done until integration tests pass and cover the new functionali
 
 - **Unit tests**: Colocated with source
   - Python: `foo.py` -> `foo_test.py` in same directory
+  - TypeScript: `foo.ts` -> `foo.test.ts` in same directory
   - Rust: inline `#[cfg(test)]` module at bottom of each source file
 - **Integration tests**: `tests/integration/` -- exercise the SDK's **public API** (`DirSQL`, `Table`, `RowEvent`, etc.), with third-party modules (e.g. the `notify` filesystem watcher, network calls, future LLM clients) replaced by **fixture-injected fakes**. Run in CI.
 - **E2E tests**: `tests/e2e/` -- real filesystem, real SQLite, real LLM calls, real published-artifact install (wheel / npm tarball). **No mocks, no fakes, no monkeypatching.** Heavy use of pytest fixtures. **NOT run in CI in general** -- exception: the **wheel-install / pack-install smoke tests** are part of the `build` CI jobs because they gate publishability.
+
+### Enforcing Colocation (testing-conventions)
+
+The Python/TypeScript colocation rule above is enforced as a **blocking CI gate** by [`testing-conventions`](https://github.com/thekevinscott/testing-conventions), a config-driven CLI that scans each SDK's source tree and fails on any source file lacking a colocated unit test. The wiring lives in `.github/workflows/testing-conventions.yml` (it pins the CLI version and runs the per-language `unit location` scans) and `testing-conventions.toml` (the exempt list).
+
+Run it locally before pushing:
+
+```bash
+pip install "testing-conventions==<version>"   # version pinned in the workflow
+just test-conventions
+```
+
+**Exemptions.** Genuine entry shims that are deliberately not unit-tested are declared in `testing-conventions.toml` as `[[python.exempt]]` / `[[typescript.exempt]]` entries, each carrying a `path` (relative to the scanned source dir), the `rules` it waives (`location`), and a required `reason`. Today that covers the package barrels (`dirsql/__init__.py`, `src/index.ts`, `src/cli/interpret/index.ts`), the docstring-only CLI packages (`dirsql/cli/__init__.py`, `dirsql/cli/interpret/__init__.py`), and the npm `bin` launcher (`src/cli/dirsql.ts`, covered by the pack-install smoke test). Keep the list minimal and in lockstep with the coverage-omit configs it mirrors (`packages/python/pyproject.toml`, `packages/ts/vitest.config.ts`); the CLI **rejects a stale exempt entry whose `path` matches no file**, so remove an entry the moment its file gains a real colocated test or is deleted. Adding a *new* untested source file fails the gate -- exemptions are the rare, documented exception, not the escape hatch.
 
 ### Test Boundaries -- What to Mock, What Not To
 

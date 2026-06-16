@@ -1,0 +1,49 @@
+name: Testing Conventions
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Pinned in lockstep with CI (see AGENTS.md). Bump deliberately and re-run
+  # `just test-conventions` locally before changing this.
+  TESTING_CONVENTIONS_VERSION: "0.0.9"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/python/dirsql/**/*.py'
+      - 'packages/ts/src/**/*.ts'
+      - 'testing-conventions.toml'
+      - '.github/workflows/testing-conventions.yml'
+  pull_request:
+    paths:
+      - 'packages/python/dirsql/**/*.py'
+      - 'packages/ts/src/**/*.ts'
+      - 'testing-conventions.toml'
+      - '.github/workflows/testing-conventions.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  colocation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install testing-conventions
+        run: pip install "testing-conventions==${TESTING_CONVENTIONS_VERSION}"
+
+      - name: Check colocated unit tests
+        # Exemptions (package barrels, the npm launcher) live in
+        # testing-conventions.toml, which the CLI reads by default. Run both
+        # languages and aggregate so one run reports every violation.
+        run: |
+          rc=0
+          testing-conventions unit location --language python packages/python/dirsql || rc=1
+          testing-conventions unit location --language typescript packages/ts/src || rc=1
+          exit $rc
