@@ -47,6 +47,7 @@ use std::thread;
 use std::time::Duration;
 use thiserror::Error;
 
+pub use crate::config::ExtensionSpec as Extension;
 pub use crate::db::{DbError, Value};
 pub use crate::differ::RowEvent;
 #[doc(hidden)]
@@ -641,6 +642,7 @@ impl DirSQL {
             root,
             tables,
             ignore,
+            extensions,
             persist,
             persist_path,
             poll_interval,
@@ -687,6 +689,7 @@ impl DirSQL {
         Ok(PreparedBuild {
             root,
             tables,
+            extensions,
             matcher,
             scanned_files,
             persist: persist_ctx.map(|ctx| PreparedPersist {
@@ -716,6 +719,7 @@ impl DirSQL {
         let PreparedBuild {
             root,
             tables,
+            extensions,
             matcher,
             scanned_files,
             persist,
@@ -729,6 +733,14 @@ impl DirSQL {
             Some(p) => (p.db, Some((p.trusted, p.deleted, p.meta, p.cold_rebuild))),
             None => (Db::new()?, None),
         };
+
+        // Load configured SQLite extensions onto the connection before any
+        // CREATE TABLE so a table's DDL may reference extension-provided
+        // objects (e.g. a virtual table). Loading is enabled only for the
+        // duration of each load and disabled again afterwards.
+        for ext in &extensions {
+            db.load_extension(&ext.path, ext.entrypoint.as_deref())?;
+        }
 
         let mut extract_map: HashMap<String, Arc<ExtractFn>> = HashMap::new();
         let mut strict_map: HashMap<String, bool> = HashMap::new();
@@ -892,6 +904,7 @@ pub struct DirSQLBuilder {
     root: Option<PathBuf>,
     tables: Vec<Table>,
     ignore: Vec<String>,
+    extensions: Vec<Extension>,
     config_path: Option<PathBuf>,
     persist: bool,
     persist_path: Option<PathBuf>,
@@ -926,6 +939,23 @@ impl DirSQLBuilder {
         S: Into<String>,
     {
         self.ignore = ignore.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Append a single SQLite extension to load at startup. Extensions are
+    /// loaded onto the connection before any `CREATE TABLE`, then loading is
+    /// disabled again. See [`Extension`].
+    pub fn extension(mut self, extension: Extension) -> Self {
+        self.extensions.push(extension);
+        self
+    }
+
+    /// Replace the accumulated extension list with `extensions`.
+    pub fn extensions<I>(mut self, extensions: I) -> Self
+    where
+        I: IntoIterator<Item = Extension>,
+    {
+        self.extensions = extensions.into_iter().collect();
         self
     }
 
@@ -975,6 +1005,7 @@ impl DirSQLBuilder {
             root: explicit_root,
             mut tables,
             mut ignore,
+            mut extensions,
             config_path,
             mut persist,
             mut persist_path,
@@ -1004,6 +1035,21 @@ impl DirSQLBuilder {
             let cfg_tables = build_tables_from_config(&cfg)?;
             tables.extend(cfg_tables);
             ignore.extend(cfg.ignore);
+
+            // Resolve config-supplied extension paths against the config
+            // file's parent directory (absolute paths pass through). Appended
+            // after any programmatically-supplied extensions.
+            for ext in cfg.extensions {
+                let path = if ext.path.is_absolute() {
+                    ext.path
+                } else {
+                    cfg_parent.join(&ext.path)
+                };
+                extensions.push(Extension {
+                    path,
+                    entrypoint: ext.entrypoint,
+                });
+            }
 
             if cfg.persist {
                 persist = true;
@@ -1045,6 +1091,7 @@ impl DirSQLBuilder {
             root,
             tables,
             ignore,
+            extensions,
             persist,
             persist_path,
             poll_interval: poll_interval.unwrap_or(DEFAULT_POLL_INTERVAL),
@@ -1087,6 +1134,7 @@ pub struct ResolvedBuild {
     pub root: PathBuf,
     pub tables: Vec<Table>,
     pub ignore: Vec<String>,
+    pub extensions: Vec<Extension>,
     pub persist: bool,
     pub persist_path: Option<PathBuf>,
     pub poll_interval: Duration,
@@ -1109,6 +1157,8 @@ pub struct ScannedFile {
 pub struct PreparedBuild {
     root: PathBuf,
     tables: Vec<Table>,
+    /// SQLite extensions to load onto the connection before any table DDL.
+    extensions: Vec<Extension>,
     matcher: TableMatcher,
     scanned_files: Vec<ScannedFile>,
     persist: Option<PreparedPersist>,
@@ -1716,6 +1766,7 @@ mod internal_tests {
         let prepared = PreparedBuild {
             root: dir.path().to_path_buf(),
             tables: Vec::new(),
+            extensions: Vec::new(),
             matcher,
             scanned_files: vec![ScannedFile {
                 rel_path: "ghost.txt".into(),

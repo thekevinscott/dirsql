@@ -13,6 +13,9 @@ pub enum ConfigError {
 
     #[error("Missing required field '{0}' in [[table]] entry")]
     MissingField(&'static str),
+
+    #[error("Missing required field '{0}' in [[dirsql.extension]] entry")]
+    MissingExtensionField(&'static str),
 }
 
 pub type Result<T> = std::result::Result<T, ConfigError>;
@@ -33,6 +36,29 @@ pub struct Config {
     /// Optional override for the on-disk cache location. Resolved relative
     /// to the config file's parent directory when relative.
     pub persist_path: Option<PathBuf>,
+    /// SQLite extensions to load at startup, declared via
+    /// `[[dirsql.extension]]`. Paths are taken verbatim from the file here;
+    /// relative paths are resolved against the config file's parent directory
+    /// by the caller (`DirSQLBuilder::resolve`).
+    pub extensions: Vec<ExtensionSpec>,
+}
+
+/// A SQLite extension to load at startup.
+///
+/// Declared as a `[[dirsql.extension]]` array entry. dirsql loads each
+/// extension onto the connection before any `CREATE TABLE` runs, then
+/// disables loading again so the SQL `load_extension()` function is never
+/// left exposed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionSpec {
+    /// Local path to the extension's shared library (`.so` / `.dylib` /
+    /// `.dll`). Relative paths resolve against the config file's parent
+    /// directory.
+    pub path: PathBuf,
+    /// Optional init-symbol override. When `None`, SQLite derives the entry
+    /// point from the filename, which often does not match — set this when
+    /// the extension's init function isn't `sqlite3_<filename>_init`.
+    pub entrypoint: Option<String>,
 }
 
 /// Configuration for a single table.
@@ -65,6 +91,13 @@ struct RawDirsql {
     ignore: Option<Vec<String>>,
     persist: Option<bool>,
     persist_path: Option<PathBuf>,
+    extension: Option<Vec<RawExtension>>,
+}
+
+#[derive(Deserialize)]
+struct RawExtension {
+    path: Option<String>,
+    entrypoint: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -84,15 +117,27 @@ pub fn load_config(path: &Path) -> Result<Config> {
 pub fn load_config_str(content: &str) -> Result<Config> {
     let raw: RawConfig = toml::from_str(content)?;
 
-    let (root, ignore, persist, persist_path) = match raw.dirsql {
+    let (root, ignore, persist, persist_path, raw_extensions) = match raw.dirsql {
         Some(d) => (
             d.root,
             d.ignore.unwrap_or_default(),
             d.persist.unwrap_or(false),
             d.persist_path,
+            d.extension.unwrap_or_default(),
         ),
-        None => (None, Vec::new(), false, None),
+        None => (None, Vec::new(), false, None, Vec::new()),
     };
+
+    let mut extensions = Vec::with_capacity(raw_extensions.len());
+    for raw_ext in raw_extensions {
+        let path = raw_ext
+            .path
+            .ok_or(ConfigError::MissingExtensionField("path"))?;
+        extensions.push(ExtensionSpec {
+            path: PathBuf::from(path),
+            entrypoint: raw_ext.entrypoint,
+        });
+    }
 
     let raw_tables = raw.table.unwrap_or_default();
     let mut tables = Vec::with_capacity(raw_tables.len());
@@ -114,6 +159,7 @@ pub fn load_config_str(content: &str) -> Result<Config> {
         tables,
         persist,
         persist_path,
+        extensions,
     })
 }
 
@@ -340,5 +386,75 @@ format = "json"
         // (filesystem-fact rows are produced regardless of the dropped key).
         let config = load_config_str(toml).unwrap();
         assert_eq!(config.tables.len(), 1);
+    }
+
+    #[test]
+    fn extensions_parse_path_and_entrypoint() {
+        let toml = r#"
+[[dirsql.extension]]
+path = "./ext/vec0.dylib"
+entrypoint = "sqlite3_vec_init"
+
+[[table]]
+ddl = "CREATE TABLE t (_path TEXT)"
+glob = "*.json"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert_eq!(config.extensions.len(), 1);
+        assert_eq!(config.extensions[0].path, PathBuf::from("./ext/vec0.dylib"));
+        assert_eq!(
+            config.extensions[0].entrypoint.as_deref(),
+            Some("sqlite3_vec_init")
+        );
+    }
+
+    #[test]
+    fn extension_entrypoint_is_optional() {
+        let toml = r#"
+[[dirsql.extension]]
+path = "ext.so"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert_eq!(config.extensions.len(), 1);
+        assert!(config.extensions[0].entrypoint.is_none());
+    }
+
+    #[test]
+    fn extension_missing_path_errors() {
+        let toml = r#"
+[[dirsql.extension]]
+entrypoint = "sqlite3_x_init"
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::MissingExtensionField("path")),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn extensions_default_empty_when_absent() {
+        let toml = r#"
+[[table]]
+ddl = "CREATE TABLE t (_path TEXT)"
+glob = "*.json"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert!(config.extensions.is_empty());
+    }
+
+    #[test]
+    fn multiple_extensions_preserve_order() {
+        let toml = r#"
+[[dirsql.extension]]
+path = "a.so"
+
+[[dirsql.extension]]
+path = "b.so"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert_eq!(config.extensions.len(), 2);
+        assert_eq!(config.extensions[0].path, PathBuf::from("a.so"));
+        assert_eq!(config.extensions[1].path, PathBuf::from("b.so"));
     }
 }

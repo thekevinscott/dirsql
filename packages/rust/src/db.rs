@@ -75,6 +75,27 @@ impl Db {
         &self.conn
     }
 
+    /// Load a SQLite extension shared library onto this connection.
+    ///
+    /// `entrypoint` overrides the init symbol; when `None`, SQLite derives it
+    /// from the filename. Extension loading is enabled for the duration of the
+    /// call via [`rusqlite::LoadExtensionGuard`] and disabled again on return,
+    /// so the SQL `load_extension()` function is never left exposed to later
+    /// queries. A missing or unloadable file surfaces as [`DbError::Sqlite`].
+    pub fn load_extension(&self, path: &Path, entrypoint: Option<&str>) -> Result<()> {
+        // SAFETY: loading an extension executes native code from `path`. The
+        // path is operator-supplied configuration (a `[[dirsql.extension]]`
+        // entry), at the same trust level as the DDL the operator already
+        // controls. The guard enables loading on construction and disables it
+        // on drop at the end of this block — after the load — so the SQL
+        // `load_extension()` function is never left exposed to later queries.
+        unsafe {
+            let _guard = rusqlite::LoadExtensionGuard::new(&self.conn)?;
+            self.conn.load_extension(path, entrypoint)?;
+        }
+        Ok(())
+    }
+
     /// Create a table from a user-provided DDL statement.
     /// Automatically injects internal tracking columns (_dirsql_file_path, _dirsql_row_index).
     ///
@@ -1077,5 +1098,20 @@ mod tests {
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert!(!rows[0].contains_key("_dirsql_file_path"));
+    }
+
+    // --- load_extension: error path (missing shared library) ---
+
+    #[test]
+    fn load_extension_missing_file_errors() {
+        // Loading is enabled for the call (the guard succeeds), the load of a
+        // nonexistent shared library fails, and the error propagates as
+        // DbError::Sqlite. Exercises the enable→load path; the success arm is
+        // covered by the integration suite against a real extension.
+        let db = Db::new().unwrap();
+        let err = db
+            .load_extension(Path::new("/nonexistent/dirsql-no-such-ext.so"), None)
+            .unwrap_err();
+        assert!(matches!(err, DbError::Sqlite(_)), "got: {err}");
     }
 }
