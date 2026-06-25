@@ -138,12 +138,9 @@ persist = true
 See [Persistence](../guide/persistence.md) for the full reconcile algorithm,
 storage layout, and limitations.
 
-## Loading SQLite Extensions
+## Loading extensions
 
-When you need SQL beyond core SQLite — vector search, extra math functions,
-specialized virtual tables — point `dirsql` at a compiled SQLite extension and
-it is loaded onto the connection at startup, before any table is created, so
-both your queries and your table DDL can use what the extension provides.
+You can load SQLite extensions by specifying them in a config.
 
 Declare each extension as a `[[dirsql.extension]]` entry:
 
@@ -159,13 +156,8 @@ entrypoint = "sqlite3_myext_init"
   SQLite derives a default from the filename; set it when that default does not
   match (for example, `sqlite-vec`'s entry point is `sqlite3_vec_init`).
 
-You supply the extension binary yourself — `dirsql` ships and blesses nothing.
-Multiple entries load in order, before any `CREATE TABLE`.
-
-`dirsql` enables extension loading only while loading the configured libraries,
-then disables it again, so the SQL `load_extension()` function is never left
-exposed to later queries. With no `[[dirsql.extension]]` entries, extension
-loading stays off entirely.
+**Note**: `dirsql` enables extension loading only while loading the configured libraries,
+then disables it again, so `load_extension()` is not exposed via SQL to the user.
 
 ## Strict Mode
 
