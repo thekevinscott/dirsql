@@ -6,9 +6,62 @@
 //! `CREATE TABLE`, then disables loading again so the SQL `load_extension()`
 //! function is never left open.
 
-use dirsql::{DirSQL, Extension};
+use dirsql::{DirSQL, Extension, Value};
 use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
 use tempfile::TempDir;
+
+/// Build the test-only loadable extension fixture
+/// (`tests/fixtures/testext`) and return the path to its compiled shared
+/// library. Built into `CARGO_TARGET_TMPDIR` with coverage/instrumentation
+/// env removed so the nested build is independent of an outer
+/// `cargo llvm-cov` invocation.
+fn build_fixture_extension() -> PathBuf {
+    let manifest = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/testext/Cargo.toml"
+    );
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "build",
+            "--manifest-path",
+            manifest,
+            "--target-dir",
+            env!("CARGO_TARGET_TMPDIR"),
+            "--message-format=json",
+        ])
+        .env_remove("RUSTFLAGS")
+        .env_remove("RUSTDOCFLAGS")
+        .env_remove("LLVM_PROFILE_FILE")
+        .output()
+        .expect("failed to spawn cargo build for the extension fixture");
+    assert!(
+        output.status.success(),
+        "fixture build failed:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    // Parse cargo's JSON output for the cdylib artifact path (platform-
+    // independent: .so / .dylib / .dll).
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let mut artifact: Option<PathBuf> = None;
+    for line in stdout.lines() {
+        let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if msg["reason"] == "compiler-artifact" {
+            if let Some(files) = msg["filenames"].as_array() {
+                for f in files.iter().filter_map(|f| f.as_str()) {
+                    if f.ends_with(".so") || f.ends_with(".dylib") || f.ends_with(".dll") {
+                        artifact = Some(PathBuf::from(f));
+                    }
+                }
+            }
+        }
+    }
+    artifact.expect("no cdylib artifact in cargo build output for the fixture")
+}
 
 /// A config that names an extension file which does not exist on disk must
 /// fail construction. dirsql loads configured extensions at startup and
@@ -87,4 +140,48 @@ path = "ext/local-extension.so"
 
     let result = DirSQL::from_config(root.path());
     assert!(result.is_err());
+}
+
+/// End to end: a real extension declared in config is loaded onto the
+/// connection at startup, so a query can call the function it registered. Also
+/// asserts the security outcome — `load_extension()` issued through the public
+/// query surface is rejected after startup.
+#[test]
+fn loads_real_extension_and_calls_registered_function() {
+    let ext = build_fixture_extension();
+
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        format!(
+            r#"
+[[dirsql.extension]]
+path = "{}"
+entrypoint = "sqlite3_extension_init"
+
+[[table]]
+ddl = "CREATE TABLE files (_path TEXT)"
+glob = "*.txt"
+"#,
+            ext.display(),
+        ),
+    )
+    .unwrap();
+    fs::write(root.path().join("a.txt"), "x").unwrap();
+
+    let db = DirSQL::from_config(root.path())
+        .expect("construction with a real extension should succeed");
+
+    // The fixture registered dirsql_testext_answer() -> 42.
+    let rows = db.query("SELECT dirsql_testext_answer() AS a").unwrap();
+    assert_eq!(rows[0]["a"], Value::Integer(42));
+
+    // Loading was disabled again after startup: a load_extension() call through
+    // the public query surface is rejected (whether by prohibition or the
+    // read-only guard — either way it cannot load).
+    assert!(
+        db.query(&format!("SELECT load_extension('{}')", ext.display()))
+            .is_err(),
+        "load_extension() via query() must be rejected after startup",
+    );
 }

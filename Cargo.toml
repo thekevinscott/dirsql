@@ -1,5 +1,9 @@
 [workspace]
 members = ["packages/python", "packages/rust", "packages/ts/napi"]
+# Test-only loadable-extension fixture, built on demand by
+# packages/rust/tests/extensions.rs. Excluded so it isn't built/linted by
+# `cargo build --workspace` / `cargo clippy --workspace`.
+exclude = ["packages/rust/tests/fixtures/testext"]
 resolver = "2"
 
 [workspace.package]
