@@ -4,7 +4,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # Pinned in lockstep with CI (see AGENTS.md). Bump deliberately and re-run
   # `just test-conventions` locally before changing this.
-  TESTING_CONVENTIONS_VERSION: "0.0.9"
+  TESTING_CONVENTIONS_VERSION: "0.0.41"
 
 on:
   push:
@@ -44,6 +44,6 @@ jobs:
         # languages and aggregate so one run reports every violation.
         run: |
           rc=0
-          testing-conventions unit location --language python packages/python/dirsql || rc=1
-          testing-conventions unit location --language typescript packages/ts/src || rc=1
+          testing-conventions unit colocated-test --language python packages/python/dirsql || rc=1
+          testing-conventions unit colocated-test --language typescript packages/ts/src || rc=1
           exit $rc
