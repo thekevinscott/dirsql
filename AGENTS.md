@@ -71,7 +71,7 @@ A feature is not done until integration tests pass and cover the new functionali
 
 ### Enforcing Colocation (testing-conventions)
 
-The Python/TypeScript colocation rule above is enforced as a **blocking CI gate** by [`testing-conventions`](https://github.com/thekevinscott/testing-conventions), a config-driven CLI that scans each SDK's source tree and fails on any source file lacking a colocated unit test. The wiring lives in `.github/workflows/testing-conventions.yml` (it pins the CLI version and runs the per-language `unit location` scans) and `testing-conventions.toml` (the exempt list).
+The Python/TypeScript colocation rule above is enforced as a **blocking CI gate** by [`testing-conventions`](https://github.com/thekevinscott/testing-conventions), a config-driven CLI that scans each SDK's source tree and fails on any source file lacking a colocated unit test. The wiring lives in `.github/workflows/testing-conventions.yml` (it pins the CLI version and runs the per-language `unit colocated-test` scans) and `testing-conventions.toml` (the exempt list).
 
 Run it locally before pushing:
 

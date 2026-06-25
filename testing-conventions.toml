@@ -1,7 +1,6 @@
 # testing-conventions CLI config (https://github.com/thekevinscott/testing-conventions).
 #
-# Drives the `unit location` colocation gate wired up in
-# scripts/check-testing-conventions.sh and
+# Drives the `unit colocated-test` colocation gate wired up in
 # .github/workflows/testing-conventions.yml. The CLI reads this file by
 # default and fails on any source file that lacks a colocated unit test and
 # is not listed below -- so the gate is blocking, and exemptions are the rare,
@@ -18,32 +17,32 @@
 
 [[python.exempt]]
 path = "__init__.py"
-rules = ["location"]
+rules = ["colocated-test"]
 reason = "Package barrel: re-exports the public API (DirSQL, Table, RowEvent, __version__). Covered by the SDK integration tests; no isolated logic to unit-test."
 
 [[python.exempt]]
 path = "cli/__init__.py"
-rules = ["location"]
+rules = ["colocated-test"]
 reason = "Package docstring only; no logic to unit-test."
 
 [[python.exempt]]
 path = "cli/interpret/__init__.py"
-rules = ["location"]
+rules = ["colocated-test"]
 reason = "Package docstring only (no top-level re-exports, by design); no logic to unit-test."
 
 # --- TypeScript (scanned: packages/ts/src) ---------------------------------
 
 [[typescript.exempt]]
 path = "index.ts"
-rules = ["location"]
+rules = ["colocated-test"]
 reason = "Barrel: re-exports the public API surface (DirSQL, Table, types). Covered by the SDK integration tests; no isolated logic to unit-test."
 
 [[typescript.exempt]]
 path = "cli/interpret/index.ts"
-rules = ["location"]
+rules = ["colocated-test"]
 reason = "Barrel: single re-export of `interpret`. Covered transitively by the interpret unit tests; no isolated logic to unit-test."
 
 [[typescript.exempt]]
 path = "cli/dirsql.ts"
-rules = ["location"]
+rules = ["colocated-test"]
 reason = "npm `bin` launcher shim: imports `main` and invokes it at load. Exercised end-to-end by the pack-install smoke test; mirrors the coverage-omit in packages/ts/vitest.config.ts."

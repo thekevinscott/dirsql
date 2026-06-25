@@ -31,8 +31,8 @@ test-e2e:
 # (install: pip install "testing-conventions==<version>"). Exemptions live in
 # testing-conventions.toml, which the CLI reads by default.
 test-conventions:
-    testing-conventions unit location --language python packages/python/dirsql
-    testing-conventions unit location --language typescript packages/ts/src
+    testing-conventions unit colocated-test --language python packages/python/dirsql
+    testing-conventions unit colocated-test --language typescript packages/ts/src
 
 # CI test target (unit + integration, no e2e)
 test-ci:
