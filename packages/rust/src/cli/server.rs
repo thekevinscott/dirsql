@@ -89,3 +89,27 @@ fn start_watch_task(db: DirSQL, tx: broadcast::Sender<String>) {
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Binding with an `Unavailable` state needs no DB/filesystem, so this
+    // exercises the real bind / local-addr / graceful-shutdown plumbing
+    // without standing up a full index. Port 0 lets the OS pick a free port.
+    #[tokio::test]
+    async fn serve_with_state_binds_an_ephemeral_port_then_shuts_down() {
+        let config = ServerConfig::bind("127.0.0.1".to_string(), 0);
+        let handle = serve_with_state(config, AppState::Unavailable("test".to_string()))
+            .await
+            .expect("bind on an ephemeral port");
+
+        assert_ne!(
+            handle.local_addr().port(),
+            0,
+            "the OS should have assigned a concrete port"
+        );
+
+        handle.shutdown().await.expect("graceful shutdown");
+    }
+}

@@ -281,3 +281,31 @@ async fn wait_for_shutdown() -> std::io::Result<()> {
 async fn wait_for_shutdown() -> std::io::Result<()> {
     tokio::signal::ctrl_c().await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_native_config_matches_script_extensions() {
+        for ext in ["py", "js", "mjs", "cjs"] {
+            let path = format!("cfg.{ext}");
+            assert!(
+                is_native_config(Path::new(&path)),
+                "expected .{ext} to be treated as a native config"
+            );
+        }
+    }
+
+    #[test]
+    fn is_native_config_rejects_other_extensions_and_casing() {
+        // `.toml` is the built-in format; bare/uppercase extensions are not
+        // delegated to the `interpret` helper.
+        for name in ["cfg.toml", "cfg.txt", "cfg", "cfg.PY", "cfg.JS"] {
+            assert!(
+                !is_native_config(Path::new(name)),
+                "expected {name} not to be treated as a native config"
+            );
+        }
+    }
+}
