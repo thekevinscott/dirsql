@@ -53,7 +53,7 @@ for the library-vs-CLI feature split.
 
 ## Quick start
 
-From a directory containing your files and a [`.dirsql.toml`](./config.md):
+From any directory containing your files (no config needed):
 
 ```bash
 dirsql
@@ -66,7 +66,7 @@ Then query it over HTTP:
 ```bash
 curl -s http://localhost:7117/query \
   -H 'content-type: application/json' \
-  -d '{"sql":"SELECT COUNT(*) AS n FROM posts"}' \
+  -d '{"sql":"SELECT COUNT(*) AS n FROM files"}' \
   | jq
 ```
 

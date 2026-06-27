@@ -38,7 +38,7 @@ Malformed SQL returns `400`, not `500` — the client sent bad input. Missing / 
 ```bash
 curl -s http://localhost:7117/query \
   -H 'content-type: application/json' \
-  -d '{"sql":"SELECT COUNT(*) AS n FROM posts"}' \
+  -d '{"sql":"SELECT COUNT(*) AS n FROM files"}' \
   | jq
 ```
 
