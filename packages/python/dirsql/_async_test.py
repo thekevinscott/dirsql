@@ -1,10 +1,10 @@
 """Unit tests for the DirSQL async wrapper."""
 
-from __future__ import annotations
+from unittest.mock import patch
 
 import pytest
 
-from dirsql import _async as async_mod
+import dirsql._async as async_mod
 
 
 class _FakeRustDirSQL:
@@ -50,32 +50,32 @@ class _FakeWatcherDb:
 def describe_DirSQL_async():
     def describe_ready_and_query():
         @pytest.mark.asyncio
-        async def it_uses_the_background_db(monkeypatch):
-            monkeypatch.setattr(async_mod, "_RustDirSQL", _FakeRustDirSQL)
+        async def it_uses_the_background_db():
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                db = async_mod.DirSQL(
+                    "/tmp/root", tables=["table-a"], ignore=["**/*.tmp"]
+                )
+                await db.ready()
 
-            db = async_mod.DirSQL("/tmp/root", tables=["table-a"], ignore=["**/*.tmp"])
-            await db.ready()
+                results = await db.query("SELECT 1")
 
-            results = await db.query("SELECT 1")
-
-            assert db._db.root == "/tmp/root"
-            assert db._db.tables == ["table-a"]
-            assert db._db.ignore == ["**/*.tmp"]
-            assert db._db.query_calls == ["SELECT 1"]
-            assert results == [{"sql": "SELECT 1"}]
+                assert db._db.root == "/tmp/root"
+                assert db._db.tables == ["table-a"]
+                assert db._db.ignore == ["**/*.tmp"]
+                assert db._db.query_calls == ["SELECT 1"]
+                assert results == [{"sql": "SELECT 1"}]
 
         @pytest.mark.asyncio
-        async def it_propagates_initialization_errors(monkeypatch):
+        async def it_propagates_initialization_errors():
             class _BoomDirSQL:
                 def __init__(self, *args, **kwargs):
                     raise RuntimeError("boom")
 
-            monkeypatch.setattr(async_mod, "_RustDirSQL", _BoomDirSQL)
+            with patch.object(async_mod, "_RustDirSQL", _BoomDirSQL):
+                db = async_mod.DirSQL("/tmp/root", tables=["table-a"])
 
-            db = async_mod.DirSQL("/tmp/root", tables=["table-a"])
-
-            with pytest.raises(RuntimeError, match="boom"):
-                await db.ready()
+                with pytest.raises(RuntimeError, match="boom"):
+                    await db.ready()
 
     def describe_watch_stream():
         @pytest.mark.asyncio

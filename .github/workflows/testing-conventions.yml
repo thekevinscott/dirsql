@@ -69,3 +69,15 @@ jobs:
           testing-conventions unit colocated-test --language python --base "$BASE" packages/python/dirsql || rc=1
           testing-conventions unit colocated-test --language typescript --base "$BASE" packages/ts/src || rc=1
           exit $rc
+
+      - name: Check unit-test isolation (lint)
+        # Isolation: a unit test must mock every collaborator. Python +
+        # TypeScript only for now -- Rust's trait-injected-double refactor is
+        # large and lands as its own PR (intentional, tracked parity drift;
+        # see issue #233 / epic #231). Waivers (none today) live in
+        # testing-conventions.toml, read by default.
+        run: |
+          rc=0
+          testing-conventions unit lint --language python packages/python/dirsql || rc=1
+          testing-conventions unit lint --language typescript packages/ts/src || rc=1
+          exit $rc

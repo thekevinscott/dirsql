@@ -2,7 +2,6 @@
 
 import io
 import os
-import subprocess
 import sys
 from unittest.mock import patch
 
@@ -35,7 +34,9 @@ def describe_main():
             with (
                 patch.object(main_module, "binary_path", return_value="C:/dirsql.exe"),
                 patch.object(main_module, "is_windows", return_value=True),
-                patch.object(subprocess, "run", return_value=_Completed(7)) as run,
+                patch(
+                    "dirsql.cli.main.subprocess.run", return_value=_Completed(7)
+                ) as run,
             ):
                 assert main(["--version"]) == 7
             run.assert_called_once_with(["C:/dirsql.exe", "--version"])
@@ -44,7 +45,7 @@ def describe_main():
             with (
                 patch.object(main_module, "binary_path", return_value="C:/dirsql.exe"),
                 patch.object(main_module, "is_windows", return_value=True),
-                patch.object(subprocess, "run", return_value=_Completed(0)),
+                patch("dirsql.cli.main.subprocess.run", return_value=_Completed(0)),
                 patch.object(os, "execv") as execv,
             ):
                 main([])
@@ -81,7 +82,9 @@ def describe_main():
                 patch.object(sys, "argv", ["dirsql", "--help"]),
                 patch.object(main_module, "binary_path", return_value="C:/dirsql.exe"),
                 patch.object(main_module, "is_windows", return_value=True),
-                patch.object(subprocess, "run", return_value=_Completed(0)) as run,
+                patch(
+                    "dirsql.cli.main.subprocess.run", return_value=_Completed(0)
+                ) as run,
             ):
                 main(argv=None)
             run.assert_called_once_with(["C:/dirsql.exe", "--help"])
@@ -93,12 +96,10 @@ def describe_main():
 
         def it_dispatches_to_interpret_run_and_returns_its_exit_code():
             # main.py does `from .interpret.run import run` lazily, so
-            # patching the `run` function on the submodule is sufficient
-            # -- each call resolves the name freshly from the submodule.
-            from .interpret import run as run_submod
-
+            # patching the `run` function on its module by its dotted path
+            # is sufficient -- each call resolves the name freshly.
             with (
-                patch.object(run_submod, "run", return_value=0) as interpret_run,
+                patch("dirsql.cli.interpret.run.run", return_value=0) as interpret_run,
                 patch.object(main_module, "binary_path") as binary_path,
             ):
                 assert main(["interpret", "config.py"]) == 0
@@ -106,15 +107,11 @@ def describe_main():
             binary_path.assert_not_called()
 
         def it_propagates_a_nonzero_interpret_exit():
-            from .interpret import run as run_submod
-
-            with patch.object(run_submod, "run", return_value=2):
+            with patch("dirsql.cli.interpret.run.run", return_value=2):
                 assert main(["interpret", "bad.py"]) == 2
 
         def it_returns_130_on_keyboard_interrupt():
-            from .interpret import run as run_submod
-
-            with patch.object(run_submod, "run", side_effect=KeyboardInterrupt()):
+            with patch("dirsql.cli.interpret.run.run", side_effect=KeyboardInterrupt()):
                 assert main(["interpret", "config.py"]) == 130
 
         def it_does_not_intercept_when_interpret_is_not_argv_0():
@@ -123,7 +120,7 @@ def describe_main():
             with (
                 patch.object(main_module, "binary_path", return_value="/bin/dirsql"),
                 patch.object(main_module, "is_windows", return_value=True),
-                patch.object(subprocess, "run", return_value=_Completed(0)),
+                patch("dirsql.cli.main.subprocess.run", return_value=_Completed(0)),
             ):
                 main(["--verbose", "interpret", "config.py"])
             # binary_path was reached, meaning we did NOT take the
