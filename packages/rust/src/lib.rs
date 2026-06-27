@@ -1484,6 +1484,40 @@ const STAT_CTIME: &str = "_ctime";
 /// (`_path`, `_basename`, `_dir`, `_ext`) and stat-derived (`_size`,
 /// `_mtime`, `_ctime`).
 fn compute_stat_virtuals(rel_path: &str, abs_path: &Path) -> Row {
+    // Read the file's stats once; a missing/unreadable file yields all-`None`,
+    // which `stat_virtuals` renders as absent `_size`/`_mtime`/`_ctime`
+    // columns. `_mtime`/`_ctime` are `None` when the platform can't supply
+    // them (or the value predates the epoch). The pure column-building logic
+    // lives in `stat_virtuals`.
+    let (size, mtime_secs, ctime_secs) = match std::fs::metadata(abs_path) {
+        Ok(metadata) => {
+            let to_secs = |t: std::io::Result<std::time::SystemTime>| {
+                t.ok()
+                    .and_then(|st| st.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+            };
+            (
+                Some(metadata.len() as i64),
+                to_secs(metadata.modified()),
+                to_secs(metadata.created()),
+            )
+        }
+        Err(_) => (None, None, None),
+    };
+    stat_virtuals(rel_path, size, mtime_secs, ctime_secs)
+}
+
+/// Pure core of [`compute_stat_virtuals`]: build the filesystem-fact columns
+/// from the relative path plus already-read stat values (each `None` when the
+/// corresponding fact is unavailable). Split out so the column-mapping logic
+/// is unit-testable without touching the filesystem; the metadata read lives
+/// in the caller.
+fn stat_virtuals(
+    rel_path: &str,
+    size: Option<i64>,
+    mtime_secs: Option<i64>,
+    ctime_secs: Option<i64>,
+) -> Row {
     let mut out = Row::new();
 
     out.insert(STAT_PATH.into(), Value::Text(rel_path.to_string()));
@@ -1511,18 +1545,14 @@ fn compute_stat_virtuals(rel_path: &str, abs_path: &Path) -> Row {
         );
     }
 
-    if let Ok(metadata) = std::fs::metadata(abs_path) {
-        out.insert(STAT_SIZE.into(), Value::Integer(metadata.len() as i64));
-        if let Ok(mtime) = metadata.modified()
-            && let Ok(d) = mtime.duration_since(std::time::UNIX_EPOCH)
-        {
-            out.insert(STAT_MTIME.into(), Value::Integer(d.as_secs() as i64));
-        }
-        if let Ok(ctime) = metadata.created()
-            && let Ok(d) = ctime.duration_since(std::time::UNIX_EPOCH)
-        {
-            out.insert(STAT_CTIME.into(), Value::Integer(d.as_secs() as i64));
-        }
+    if let Some(size) = size {
+        out.insert(STAT_SIZE.into(), Value::Integer(size));
+    }
+    if let Some(mtime) = mtime_secs {
+        out.insert(STAT_MTIME.into(), Value::Integer(mtime));
+    }
+    if let Some(ctime) = ctime_secs {
+        out.insert(STAT_CTIME.into(), Value::Integer(ctime));
     }
 
     out
@@ -1780,26 +1810,29 @@ mod internal_tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// A real file with a basename, parent dir, and extension exercises the
-    /// `Some` arms of `compute_stat_virtuals`' path inspection plus the
-    /// `Ok(metadata)` arm.
+    /// A relative path with a basename, parent dir, and extension exercises the
+    /// `Some` arms of `stat_virtuals`' path inspection, plus the `Some` arms of
+    /// the size/mtime/ctime inserts. The metadata read that supplies those
+    /// values lives in `compute_stat_virtuals` and is covered by the
+    /// integration suite (real-file scans).
     #[test]
-    fn compute_stat_virtuals_populates_from_real_file() {
-        let dir = TempDir::new().unwrap();
-        let abs = dir.path().join("sub.txt");
-        std::fs::create_dir_all(dir.path().join("sub")).ok();
-        std::fs::write(&abs, b"hello").unwrap();
-        let stat = compute_stat_virtuals("nested/sub.txt", &abs);
+    fn stat_virtuals_populates_all_fields() {
+        let stat = stat_virtuals("nested/sub.txt", Some(5), Some(100), Some(50));
         assert_eq!(stat[STAT_PATH], Value::Text("nested/sub.txt".into()));
         assert_eq!(stat[STAT_BASENAME], Value::Text("sub.txt".into()));
         assert_eq!(stat[STAT_DIR], Value::Text("nested".into()));
         assert_eq!(stat[STAT_EXT], Value::Text("txt".into()));
         assert!(matches!(stat.get(STAT_SIZE), Some(Value::Integer(5))));
+        assert!(matches!(stat.get(STAT_MTIME), Some(Value::Integer(100))));
+        assert!(matches!(stat.get(STAT_CTIME), Some(Value::Integer(50))));
     }
 
     /// A bare filename has no parent component and no extension, and a
-    /// nonexistent abs path makes `std::fs::metadata` fail. This drives the
-    /// skip (false) branches: no `_dir`, no `_ext`, no `_size`/`_mtime`/`_ctime`.
+    /// nonexistent abs path makes `compute_stat_virtuals`' `std::fs::metadata`
+    /// read fail (its `Err` arm -> all-`None`). This drives the skip branches:
+    /// no `_ext`, no `_size`/`_mtime`/`_ctime`. (Calling the real
+    /// `compute_stat_virtuals` with a nonexistent path keeps the test free of a
+    /// direct `std::fs` call while still covering the read-failure arm.)
     #[test]
     fn compute_stat_virtuals_skips_absent_fields() {
         let stat = compute_stat_virtuals("bare", Path::new("/nonexistent-xyz/bare"));
@@ -2158,36 +2191,26 @@ mod internal_tests {
     // public-API integration suite.
     // -----------------------------------------------------------------------
 
-    /// Poison a mutex by panicking while holding its guard on a scoped thread.
+    /// Poison a mutex by panicking while holding its guard. `catch_unwind` on
+    /// the current thread does this without `std::thread` (the `unit lint`
+    /// isolation rule keeps effectful std out of unit tests): the guard's
+    /// `Drop` runs during unwinding and marks the mutex poisoned.
     fn poison<T: Send>(m: &Mutex<T>) {
-        let _ = std::thread::scope(|s| {
-            s.spawn(|| {
-                let _g = m.lock().unwrap();
-                panic!("poison");
-            })
-            .join()
-        });
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _g = m.lock().unwrap();
+            panic!("poison");
+        }));
         assert!(m.is_poisoned(), "mutex should be poisoned");
     }
 
-    /// Build a one-table `DirSQL` over a temp dir that already contains a
-    /// matching file, so the table's extract closure runs during the initial
-    /// scan (keeping the closure body out of the uncovered set). Returns the
-    /// TempDir guard alongside the db.
+    /// Build a tableless `DirSQL` over an empty temp dir. These tests only
+    /// need a live instance whose inner mutexes can be poisoned, so there is no
+    /// table or file to stage (which keeps `std::fs` out of this unit module).
+    /// Extract-closure coverage lives in the `process_file_event_*` tests.
     fn simple_db() -> (TempDir, DirSQL) {
         let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("a.txt"), b"").unwrap();
-        let db = DirSQL::with_ignore(
-            dir.path(),
-            vec![Table::new("CREATE TABLE t (name TEXT)", "*.txt", |_| {
-                vec![Row::from_iter([(
-                    "name".to_string(),
-                    Value::Text("x".into()),
-                )])]
-            })],
-            Vec::<String>::new(),
-        )
-        .unwrap();
+        let db =
+            DirSQL::with_ignore(dir.path(), Vec::<Table>::new(), Vec::<String>::new()).unwrap();
         (dir, db)
     }
 
