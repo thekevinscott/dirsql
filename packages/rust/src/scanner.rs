@@ -16,10 +16,7 @@ pub fn scan_directory(root: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, Stri
 
     let walker = WalkDir::new(root).into_iter().filter_entry(|entry| {
         // Skip the reserved `.dirsql/` directory at the top level.
-        if entry.depth() == 1 && entry.file_type().is_dir() && entry.file_name() == RESERVED_DIR {
-            return false;
-        }
-        true
+        !is_reserved_dir(entry.depth(), entry.file_type().is_dir(), entry.file_name())
     });
 
     for entry in walker.filter_map(|e| e.ok()) {
@@ -45,92 +42,42 @@ pub fn scan_directory(root: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, Stri
     results
 }
 
+/// True for the reserved top-level `.dirsql/` directory (`depth == 1`), which
+/// the scan unconditionally excludes. Factored out as a pure predicate over the
+/// facts `WalkDir` exposes so it can be unit-tested without walking a real tree
+/// -- the directory-walk behavior itself is covered by `tests/scanner.rs`.
+fn is_reserved_dir(depth: usize, is_dir: bool, file_name: &std::ffi::OsStr) -> bool {
+    depth == 1 && is_dir && file_name == RESERVED_DIR
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::TempDir;
+    use std::ffi::OsStr;
+
+    // The directory-walk behavior of `scan_directory` (real temp trees, real
+    // files) is exercised by `tests/scanner.rs` -- those are integration tests
+    // and stay out of this inline unit module, which the `unit lint` isolation
+    // rule keeps free of effectful std. What remains here is the pure
+    // reserved-dir predicate the walker filters on.
 
     #[test]
-    fn scan_finds_matching_files() {
-        let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("data.csv"), "a,b\n1,2").unwrap();
-        fs::write(dir.path().join("readme.md"), "# hi").unwrap();
-
-        let matcher = TableMatcher::new(&[("**/*.csv", "csv_table")], &[]).unwrap();
-        let results = scan_directory(dir.path(), &matcher);
-
-        assert_eq!(results.len(), 1);
-        assert!(results[0].0.ends_with("data.csv"));
-        assert_eq!(results[0].1, "csv_table");
+    fn is_reserved_dir_matches_top_level_dirsql() {
+        assert!(is_reserved_dir(1, true, OsStr::new(RESERVED_DIR)));
     }
 
     #[test]
-    fn scan_skips_ignored_files() {
-        let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("data.csv"), "a,b").unwrap();
-        fs::write(dir.path().join("data.tmp"), "junk").unwrap();
-
-        let matcher =
-            TableMatcher::new(&[("**/*.csv", "t"), ("**/*.tmp", "t2")], &["**/*.tmp"]).unwrap();
-        let results = scan_directory(dir.path(), &matcher);
-
-        assert_eq!(results.len(), 1);
-        assert!(results[0].0.ends_with("data.csv"));
+    fn is_reserved_dir_rejects_nested_dirsql() {
+        // Only the *top-level* `.dirsql/` (depth 1) is reserved; a nested one
+        // (e.g. `sub/.dirsql/`) is an ordinary directory.
+        assert!(!is_reserved_dir(2, true, OsStr::new(RESERVED_DIR)));
     }
 
     #[test]
-    fn scan_recurses_into_subdirectories() {
-        let dir = TempDir::new().unwrap();
-        let sub = dir.path().join("nested").join("deep");
-        fs::create_dir_all(&sub).unwrap();
-        fs::write(sub.join("events.jsonl"), "{}").unwrap();
-
-        let matcher = TableMatcher::new(&[("**/*.jsonl", "events")], &[]).unwrap();
-        let results = scan_directory(dir.path(), &matcher);
-
-        assert_eq!(results.len(), 1);
-        assert!(results[0].0.ends_with("events.jsonl"));
-        assert_eq!(results[0].1, "events");
-    }
-
-    #[test]
-    fn scan_returns_empty_for_no_matches() {
-        let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("readme.md"), "# hi").unwrap();
-
-        let matcher = TableMatcher::new(&[("**/*.csv", "t")], &[]).unwrap();
-        let results = scan_directory(dir.path(), &matcher);
-
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn scan_skips_directories() {
-        let dir = TempDir::new().unwrap();
-        // Create a directory that matches the glob -- it should not appear in results
-        fs::create_dir(dir.path().join("data.csv")).unwrap();
-
-        let matcher = TableMatcher::new(&[("**/*.csv", "t")], &[]).unwrap();
-        let results = scan_directory(dir.path(), &matcher);
-
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn scan_excludes_top_level_dirsql_directory() {
-        let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("real.csv"), "a,b\n1,2").unwrap();
-
-        // Files inside the reserved `.dirsql/` directory (e.g. the cache db)
-        // must never be picked up by the scanner.
-        fs::create_dir(dir.path().join(".dirsql")).unwrap();
-        fs::write(dir.path().join(".dirsql").join("cache.csv"), "a,b\n1,2").unwrap();
-
-        let matcher = TableMatcher::new(&[("**/*.csv", "t")], &[]).unwrap();
-        let results = scan_directory(dir.path(), &matcher);
-
-        assert_eq!(results.len(), 1);
-        assert!(results[0].0.ends_with("real.csv"));
+    fn is_reserved_dir_rejects_files_and_other_names() {
+        // A file named `.dirsql` is not the reserved directory ...
+        assert!(!is_reserved_dir(1, false, OsStr::new(RESERVED_DIR)));
+        // ... and an ordinary top-level directory is not reserved.
+        assert!(!is_reserved_dir(1, true, OsStr::new("data")));
     }
 }
