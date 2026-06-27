@@ -36,6 +36,10 @@ async for event in db.watch():
 ```
 
 ```rust [Rust]
+// `StreamExt` (for `.next()`) comes from the `futures` crate. dirsql only
+// depends on `futures` under its `cli` feature, so add it to your project:
+//
+//     cargo add futures
 use dirsql::{DirSQL, RowEvent, Table, Value};
 use futures::StreamExt;
 use std::collections::HashMap;
@@ -84,8 +88,8 @@ while let Some(event) = stream.next().await {
         RowEvent::Delete { table, row, file_path } => {
             println!("delete on {table} ({file_path}): {row:?}")
         }
-        RowEvent::Error { file_path, error } => {
-            println!("error on {file_path:?}: {error}")
+        RowEvent::Error { table, file_path, error } => {
+            println!("error on {table:?} {file_path:?}: {error}")
         }
     }
 }

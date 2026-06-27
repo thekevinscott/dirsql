@@ -171,7 +171,7 @@ const results = await db.query(`
 
 1. `dirsql` walks the directory tree
 2. Files matching each table's glob pattern are identified
-3. The `extract` function receives each matched file's absolute path and returns rows
+3. The `extract` function receives each matched file's path (relative to the scan root, or absolute when `root` is absolute) and returns rows
 4. Rows are inserted into an in-memory SQLite database
 5. SQL queries run against that database
 
