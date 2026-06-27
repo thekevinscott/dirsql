@@ -7,14 +7,37 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-// `node:sqlite` is experimental in Node 22 but stable enough for tests.
-// Used only to corrupt the on-disk cache so we can exercise the racy-window
-// and dirsql_version-bump reconcile paths.
-import { DatabaseSync } from "node:sqlite";
+import { dirname, join } from "node:path";
 import { DirSQL } from "dirsql";
+import initSqlJs from "sql.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+// The two tests below reach into dirsql's on-disk cache (`.dirsql/cache.db`,
+// written by the Rust core) out-of-band to corrupt internal bookkeeping and
+// exercise the racy-window and dirsql_version-bump reconcile paths. We use
+// sql.js (WASM SQLite) instead of `node:sqlite` so the integration suite runs
+// on every supported Node -- `node:sqlite` only exists on 22.5+. sql.js is
+// in-memory, so we read the cache bytes, mutate, and write them back; the
+// cache uses SQLite's default rollback journal (no WAL sidecar), so the main
+// db file is complete at rest. See #245.
+const resolveModule = createRequire(import.meta.url).resolve;
+const sqlJsReady = initSqlJs({
+  locateFile: (file) => join(dirname(resolveModule("sql.js")), file),
+});
+
+/** Open `.dirsql/cache.db` with sql.js, run `sql`, write the bytes back. */
+async function corruptCache(cachePath: string, sql: string): Promise<void> {
+  const SQL = await sqlJsReady;
+  const db = new SQL.Database(readFileSync(cachePath));
+  try {
+    db.run(sql);
+    writeFileSync(cachePath, db.export());
+  } finally {
+    db.close();
+  }
+}
 
 describe("DirSQL persist", () => {
   let dir: string;
@@ -232,11 +255,10 @@ describe("DirSQL persist", () => {
     expect(box1.count).toBe(1);
 
     const cache = join(dir, ".dirsql", "cache.db");
-    const conn = new DatabaseSync(cache);
-    conn.exec(
+    await corruptCache(
+      cache,
       "UPDATE _dirsql_files SET snapshot_ns = 0, content_hash = zeroblob(32)",
     );
-    conn.close();
 
     const box2 = { count: 0 };
     const db2 = new DirSQL({
@@ -262,11 +284,10 @@ describe("DirSQL persist", () => {
     expect(box1.count).toBe(1);
 
     const cache = join(dir, ".dirsql", "cache.db");
-    const conn = new DatabaseSync(cache);
-    conn.exec(
+    await corruptCache(
+      cache,
       "UPDATE _dirsql_meta SET value = 'bogus-version' WHERE key = 'dirsql_version'",
     );
-    conn.close();
 
     const box2 = { count: 0 };
     const db2 = new DirSQL({
