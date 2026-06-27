@@ -33,7 +33,7 @@ On error, the server returns a non-2xx status with a JSON body:
 {"error": "syntax error near \"SLECT\""}
 ```
 
-Malformed SQL returns `400`, not `500` — the client sent bad input. Missing / unreadable config returns `503`.
+Malformed SQL returns `400`. An unreadable or malformed config returns `503`; a *missing* config is not an error — the server serves the default `files` table.
 
 ```bash
 curl -s http://localhost:7117/query \
@@ -47,9 +47,14 @@ for SQL semantics, the read-only restriction, and the return format.
 
 ## `GET /events`
 
-Opens a [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) stream of change events. Each `data:` payload is the same JSON schema the SDK emits from [`db.watch()`](../guide/watching.md#event-types):
+Opens a [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) stream of change events.
+
+On stream open the server emits a single `ready` frame so clients have a reliable signal that the subscription is attached. Every subsequent frame is named `row`, and its `data:` payload is the same JSON schema the SDK emits from [`db.watch()`](../guide/watching.md#event-types):
 
 ```
+event: ready
+data: {}
+
 event: row
 data: {"action":"insert","table":"posts","file_path":"posts/hello.json","row":{"title":"Hello World","author":"alice"},"old_row":null}
 
@@ -60,7 +65,14 @@ event: row
 data: {"action":"delete","table":"posts","file_path":"posts/second.json","row":{"title":"Second Post","author":"bob"},"old_row":null}
 ```
 
-Errors during extraction appear as `{"action":"error",...}` events on the same stream. They do **not** terminate the stream — a malformed file is a per-event problem, not a server-wide one.
+Errors during extraction appear as `error` action events on the same `row` stream. An error event carries an `error` message string and does **not** include `row` or `old_row`:
+
+```
+event: row
+data: {"action":"error","table":"posts","file_path":"posts/broken.json","error":"Extract error: ..."}
+```
+
+(`table` is `null` when the failure isn't tied to a specific table.) Errors do **not** terminate the stream — a malformed file is a per-event problem, not a server-wide one.
 
 ```bash
 curl -N http://localhost:7117/events

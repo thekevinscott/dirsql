@@ -36,7 +36,7 @@ async def main():
             Table(
                 ddl="CREATE TABLE posts (title TEXT, author TEXT)",
                 glob="posts/*.json",
-                extract=lambda path, content: [json.loads(content)],
+                extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
             ),
         ],
     )

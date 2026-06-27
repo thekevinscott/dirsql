@@ -188,11 +188,12 @@ import { Table } from 'dirsql';
 ::: code-group
 
 ```python [Python]
-Table(*, ddl: str, glob: str, extract: Callable[[str], list[dict]])
+Table(*, ddl: str, glob: str, extract: Callable[[str], list[dict]], strict: bool = False)
 ```
 
 ```rust [Rust]
-Table::new(ddl: &str, glob: &str, extract: fn(&str) -> Vec<Value>)
+// Row = HashMap<String, Value>
+Table::new(ddl: &str, glob: &str, extract: fn(&str) -> Vec<HashMap<String, Value>>)
 ```
 
 ```typescript [TypeScript]
@@ -207,7 +208,8 @@ Defines a mapping from files to SQLite table rows.
 
 - `ddl` -- A `CREATE TABLE` statement. The table name is parsed from this DDL.
 - `glob` -- A glob pattern matched against file paths relative to the root directory.
-- `extract` -- A callable `(path) -> list[dict]`. Receives the absolute filesystem path of the matched file. `dirsql` does not read file contents; a callback that needs the file body reads `path` itself. Returns a list of dicts/maps mapping column names to values. Return an empty list to skip a file.
+- `extract` -- A callable `(path) -> list[dict]`. Receives the path of the matched file -- relative to the scan root, or absolute when `root` is absolute. `dirsql` does not read file contents; a callback that needs the file body reads `path` itself. Returns a list of dicts/maps mapping column names to values. Return an empty list to skip a file.
+- `strict` -- Optional (default `False`). Controls row/schema validation. In the default relaxed mode, extra row keys are dropped and missing columns become `NULL`. When `True`, every row key must be a valid column identifier and any extra or missing key raises an error. Surfaced in [serialization](#serialization) above as part of each table's `{ ddl, glob, strict }`.
 
 **Attributes:**
 
@@ -231,7 +233,7 @@ use dirsql::RowEvent;
 ```
 
 ```typescript [TypeScript]
-import { RowEvent } from 'dirsql';
+import type { RowEvent } from 'dirsql';
 ```
 
 :::

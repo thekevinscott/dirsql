@@ -160,8 +160,9 @@ assert!(matches!(err, dirsql::DirSqlError::WriteForbidden));
 ```
 
 ```typescript [TypeScript]
-// Throws an Error whose message explains writes are not accepted.
-expect(() => db.query('DELETE FROM posts')).toThrow(/read-only/i);
+// Rejects with an Error whose message explains writes are not accepted.
+// `db.query` is async, so assert on the rejected promise.
+await expect(db.query('DELETE FROM posts')).rejects.toThrow(/read-only/i);
 ```
 
 :::

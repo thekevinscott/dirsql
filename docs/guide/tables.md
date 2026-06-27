@@ -91,7 +91,7 @@ Glob syntax follows standard Unix globbing rules. `**` matches any number of dir
 
 A callable `(path: str) -> list[dict]` that converts a file into rows.
 
-- `path` is the **absolute filesystem path** of the matched file
+- `path` is the path of the matched file, **relative to the scan root** (or absolute when the `root` passed to `DirSQL` is absolute)
 - Return a list of dicts, where each dict maps column names to values
 - Return an empty list to skip a file
 

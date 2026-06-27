@@ -28,6 +28,7 @@ async def main():
             ),
         ],
     )
+    await db.ready()
 
     # Query (runs in a thread, does not block the event loop)
     results = await db.query("SELECT * FROM items WHERE value > 10")
@@ -37,7 +38,31 @@ asyncio.run(main())
 ```
 
 ```rust [Rust]
-use dirsql::{DirSQL, Table};
+use dirsql::{DirSQL, Table, Value};
+use std::collections::HashMap;
+
+// See `row_from_json` in getting-started.md for a reusable helper that
+// turns a JSON object into a dirsql row (dirsql::Value is not Deserialize,
+// so a row can't be produced by serde_json::from_str directly).
+fn row_from_json(raw: &str) -> HashMap<String, Value> {
+    let v: serde_json::Value = serde_json::from_str(raw).unwrap();
+    let serde_json::Value::Object(obj) = v else { return HashMap::new() };
+    obj.into_iter()
+        .map(|(k, val)| {
+            let v = match val {
+                serde_json::Value::String(s) => Value::Text(s),
+                serde_json::Value::Number(n) => n
+                    .as_i64()
+                    .map(Value::Integer)
+                    .unwrap_or_else(|| Value::Real(n.as_f64().unwrap_or(0.0))),
+                serde_json::Value::Bool(b) => Value::Integer(b as i64),
+                serde_json::Value::Null => Value::Null,
+                other => Value::Text(other.to_string()),
+            };
+            (k, v)
+        })
+        .collect()
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -47,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Table::new(
                 "CREATE TABLE items (name TEXT, value INTEGER)",
                 "data/*.json",
-                |path| vec![serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()],
+                |path| vec![row_from_json(&std::fs::read_to_string(path).unwrap())],
             ),
         ],
     )?;
@@ -83,7 +108,7 @@ console.log(results);
 ## Constructor
 
 ```python
-DirSQL(root=None, *, tables=None, ignore=None, config=None)
+DirSQL(root=None, *, tables=None, ignore=None, config=None, persist=False, persist_path=None)
 ```
 
 The constructor immediately starts scanning in a background thread via `asyncio.ensure_future`. The constructor itself returns immediately without blocking.
@@ -132,15 +157,29 @@ async for event in db.watch():
 ```
 
 ```rust [Rust]
+// `RowEvent` is an enum; match on the variant to destructure its fields.
+// `StreamExt` (for `.next()`) comes from the `futures` crate, which is only a
+// dirsql dependency under its `cli` feature -- add it to your own project:
+//
+//     cargo add futures
+use dirsql::RowEvent;
 use futures::StreamExt;
 
-let mut stream = db.watch();
+let mut stream = db.watch()?; // watch() returns Result<WatchStream>
 while let Some(event) = stream.next().await {
-    match event.action {
-        Action::Insert => println!("New row in {}: {:?}", event.table, event.row),
-        Action::Update => println!("Updated row in {}: {:?}", event.table, event.row),
-        Action::Delete => println!("Deleted row from {}: {:?}", event.table, event.row),
-        Action::Error => eprintln!("Error: {:?}", event.error),
+    match event {
+        RowEvent::Insert { table, row, file_path } => {
+            println!("New row in {table} ({file_path}): {row:?}")
+        }
+        RowEvent::Update { table, new_row, file_path, .. } => {
+            println!("Updated row in {table} ({file_path}): {new_row:?}")
+        }
+        RowEvent::Delete { table, row, file_path } => {
+            println!("Deleted row from {table} ({file_path}): {row:?}")
+        }
+        RowEvent::Error { file_path, error, .. } => {
+            eprintln!("Error on {file_path:?}: {error}")
+        }
     }
 }
 ```
@@ -188,16 +227,20 @@ async def main():
 ```
 
 ```rust [Rust]
-async fn watch_and_serve(db: &DirSQL) {
-    let mut stream = db.watch();
+// `.next()` needs `StreamExt` from the `futures` crate (`cargo add futures`).
+use futures::StreamExt;
+
+async fn watch_and_serve(db: &DirSQL) -> Result<(), Box<dyn std::error::Error>> {
+    let mut stream = db.watch()?; // watch() returns Result<WatchStream>
     while let Some(event) = stream.next().await {
         notify_clients(&event).await;
     }
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let db = DirSQL::new("./data", vec![...])?;
+    let db = DirSQL::new("./data", vec![/* tables */])?;
 
     tokio::join!(
         watch_and_serve(&db),

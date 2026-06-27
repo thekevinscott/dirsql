@@ -94,7 +94,7 @@ const tables: TableDef[] = [
   },
 ];
 
-const db = new DirSQL('./workspace', tables);
+const db = new DirSQL({ root: './workspace', tables });
 ```
 
 :::
