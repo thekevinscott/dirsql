@@ -17,6 +17,7 @@ class _FakeRustDirSQL:
         config=None,
         persist=False,
         persist_path=None,
+        extensions=None,
     ):
         self.root = root
         self.tables = tables
@@ -24,6 +25,7 @@ class _FakeRustDirSQL:
         self.config = config
         self.persist = persist
         self.persist_path = persist_path
+        self.extensions = extensions
         self.query_calls = []
 
     def query(self, sql):
@@ -53,7 +55,10 @@ def describe_DirSQL_async():
         async def it_uses_the_background_db():
             with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
                 db = async_mod.DirSQL(
-                    "/tmp/root", tables=["table-a"], ignore=["**/*.tmp"]
+                    "/tmp/root",
+                    tables=["table-a"],
+                    ignore=["**/*.tmp"],
+                    extensions=[{"path": "ext/a.so"}],
                 )
                 await db.ready()
 
@@ -62,6 +67,7 @@ def describe_DirSQL_async():
                 assert db._db.root == "/tmp/root"
                 assert db._db.tables == ["table-a"]
                 assert db._db.ignore == ["**/*.tmp"]
+                assert db._db.extensions == [{"path": "ext/a.so"}]
                 assert db._db.query_calls == ["SELECT 1"]
                 assert results == [{"sql": "SELECT 1"}]
 

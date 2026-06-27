@@ -26,6 +26,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supported" error — extension-backed virtual tables are not dirsql-managed
   tables, so extensions provide functions for queries and regular-table DDL.
 
+- **Python SDK: `DirSQL(extensions=[...])` constructor parameter (parity with
+  Rust #225).** Pass a list of `{"path": ..., "entrypoint": ...}` dicts
+  (`entrypoint` optional) to load SQLite extensions onto the connection at
+  startup, marshaled into the shared Rust core (enable → load → disable). The
+  resolved-state snapshot `vars(db)` now includes an `extensions` array (each
+  entry `{path, entrypoint}`, empty when none configured), and the `interpret`
+  native-config handshake carries it (Rust `HandshakeState` / `NativeConfig`)
+  so a `.py` config that declares `extensions=` propagates to the orchestrating
+  binary. Programmatic entries load first, followed by any `[[dirsql.extension]]`
+  entries from a `config` file (relative config paths resolve against the
+  config's parent directory). TypeScript parity is tracked in #230. (#229)
+
 - **Rust SDK: `DirSQLBuilder::poll_interval(Duration)`.** Tunes the channel-
   based `watch()` loop's poll cadence (default 200ms). Lower values trade
   idle CPU for tighter event-to-stream latency. Addresses P7 of #218.

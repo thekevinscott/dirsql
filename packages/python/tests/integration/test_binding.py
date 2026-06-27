@@ -36,6 +36,7 @@ class _FakeRustDirSQL:
         config=None,
         persist=False,
         persist_path=None,
+        extensions=None,
     ):
         self.root = root
         self.tables = tables
@@ -43,6 +44,7 @@ class _FakeRustDirSQL:
         self.config = config
         self.persist = persist
         self.persist_path = persist_path
+        self.extensions = extensions
         self.queries: list[str] = []
         self.query_results: list = (
             [{"from_config": config}] if config is not None else [{"ok": 1}]

@@ -11,11 +11,19 @@ same PR -- and ``PARITY.md`` is the canonical reminder.
 
 from collections.abc import Callable
 from os import PathLike
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 
 __version__: str
 
 Row = dict[str, Any]
+
+class ExtensionSpec(TypedDict):
+    """A SQLite extension to load at startup: a shared-library ``path`` and an
+    optional ``entrypoint`` init-symbol override. Mirrors a
+    ``[[dirsql.extension]]`` config entry."""
+
+    path: str
+    entrypoint: NotRequired[str]
 
 class Table:
     """A table definition. Construct via keyword arguments only."""
@@ -57,6 +65,7 @@ class DirSQL:
         config: str | None = None,
         persist: bool = False,
         persist_path: str | PathLike[str] | None = None,
+        extensions: list[ExtensionSpec] | None = None,
     ) -> None: ...
     def query(self, sql: str) -> list[Row]: ...
     def _start_watcher(self) -> None: ...

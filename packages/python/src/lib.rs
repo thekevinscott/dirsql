@@ -12,7 +12,7 @@
 
 #[cfg(feature = "extension-module")]
 mod python {
-    use ::dirsql::{DirSQL, Row, RowEvent, Table, Value, db::parse_table_name};
+    use ::dirsql::{DirSQL, Extension, Row, RowEvent, Table, Value, db::parse_table_name};
     use pyo3::exceptions::PyRuntimeError;
     use pyo3::prelude::*;
     use pyo3::types::{PyDict, PyList};
@@ -63,6 +63,20 @@ mod python {
         }
     }
 
+    /// Marshals a Python `{"path": str, "entrypoint"?: str}` mapping from the
+    /// `extensions=` constructor argument into a [`dirsql::Extension`]. Mirrors
+    /// the `[[dirsql.extension]]` config-file fields and the Rust builder's
+    /// `Extension { path, entrypoint }`. Paths are taken verbatim (the
+    /// programmatic surface does not resolve relative paths), matching
+    /// `DirSQLBuilder::extensions`.
+    #[derive(FromPyObject)]
+    struct PyExtensionSpec {
+        #[pyo3(item)]
+        path: String,
+        #[pyo3(item, default)]
+        entrypoint: Option<String>,
+    }
+
     /// A row event produced by the watch loop.
     ///
     /// `table` is `Optional[str]` because error events may occur before a
@@ -101,7 +115,7 @@ mod python {
     #[pymethods]
     impl PyDirSQL {
         #[new]
-        #[pyo3(signature = (root=None, *, tables=None, ignore=None, config=None, persist=false, persist_path=None))]
+        #[pyo3(signature = (root=None, *, tables=None, ignore=None, config=None, persist=false, persist_path=None, extensions=None))]
         fn new(
             py: Python<'_>,
             root: Option<String>,
@@ -110,11 +124,21 @@ mod python {
             config: Option<String>,
             persist: bool,
             persist_path: Option<PathBuf>,
+            extensions: Option<Vec<PyExtensionSpec>>,
         ) -> PyResult<Self> {
             let rust_tables: Vec<Table> = tables
                 .as_deref()
                 .map(|ts| ts.iter().map(|t| build_table(py, t)).collect())
                 .unwrap_or_default();
+
+            let rust_extensions: Vec<Extension> = extensions
+                .unwrap_or_default()
+                .into_iter()
+                .map(|e| Extension {
+                    path: PathBuf::from(e.path),
+                    entrypoint: e.entrypoint,
+                })
+                .collect();
 
             let inner = py
                 .detach(move || {
@@ -136,6 +160,9 @@ mod python {
                     }
                     if let Some(p) = persist_path {
                         builder = builder.persist_path(p);
+                    }
+                    if !rust_extensions.is_empty() {
+                        builder = builder.extensions(rust_extensions);
                     }
                     builder.build()
                 })

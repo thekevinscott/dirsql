@@ -59,6 +59,7 @@ def describe_dirsql_interpret():
                         "ignore": [],
                         "persist": False,
                         "persist_path": None,
+                        "extensions": [],
                     },
                 }
             finally:

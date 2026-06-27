@@ -53,6 +53,47 @@ Expected: passes — a Rust `DirSQL` built with a `[[dirsql.extension]]` entry
 serializes a config whose JSON contains `extensions` with the entry's `path`
 and `entrypoint`.
 
+### Python SDK: `DirSQL(extensions=...)` and `vars(db)` carries `extensions` (#229)
+
+#### Summary
+
+The Python `DirSQL` constructor gains an additive `extensions` parameter (a list
+of `{"path", "entrypoint"?}` dicts) that loads SQLite extensions onto the
+connection at startup, marshaled into the shared Rust core. As a consequence the
+resolved-state snapshot `vars(db)` — which also backs the `interpret`
+native-config handshake `state` — now always includes an `extensions` array,
+empty when none are configured. This brings the Python snapshot in line with the
+Rust `DirSQL::config()` change already landed in #225. Only consumers asserting
+the *exact key set* of `vars(db)` are affected; the constructor parameter itself
+is backward compatible (it defaults to no extensions).
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| `set(vars(db))` / exact-shape assertions on the Python serialized config | `{root, tables, ignore, persist, persist_path}` | additionally contains `extensions` (array of `{path, entrypoint}`) |
+| Loading a SQLite extension from the Python SDK | _not available — only `[[dirsql.extension]]` config-file entries_ | `DirSQL(root, extensions=[{"path": "...", "entrypoint": "..."}])` |
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- `vars(db)` / `db.__dict__` (the Python serialized construction state, also
+  emitted as the `interpret` handshake `state`) now always includes an
+  `extensions` key — an empty list when no extensions are configured. Consumers
+  asserting the exact key set of the serialized config must accept the new key.
+  (The Rust `DirSQL::config()` equivalent changed in #225.)
+
+#### Verification
+
+```bash
+cd packages/python
+uv run python -c "import tempfile; from dirsql import DirSQL; print('extensions' in vars(DirSQL(tempfile.mkdtemp())))"
+# expected: True
+```
+
 ### Rust SDK: code-review followup (#218)
 
 #### Summary

@@ -106,6 +106,27 @@ db = DirSQL(
 )
 ```
 
+## Loading SQLite Extensions
+
+Pass `extensions` to load SQLite extension shared libraries onto the connection at startup (before any `CREATE TABLE`). Each entry is a dict with a `path` and an optional `entrypoint` init-symbol override:
+
+```python
+db = DirSQL(
+    root,
+    tables=[...],
+    extensions=[
+        {"path": "./ext/vec0.dylib", "entrypoint": "sqlite3_vec_init"},
+        {"path": "./ext/myext.so"},  # entrypoint derived from the filename
+    ],
+)
+await db.ready()
+
+# The extension's functions are now callable in queries:
+rows = await db.query("SELECT vec_version() AS v")
+```
+
+`dirsql` enables extension loading only while loading the configured libraries, then disables it again, so the SQL `load_extension()` function is never exposed to your queries. Programmatic entries load first, followed by any `[[dirsql.extension]]` entries declared in a `config` file. See the [config reference](https://github.com/thekevinscott/dirsql/blob/main/docs/cli/config.md#loading-extensions).
+
 ## Watching for Changes
 
 `DirSQL` is async by default. The `watch()` method returns an async iterator of row-level change events.
@@ -159,7 +180,8 @@ At least one of `root` or `config` must be supplied. When both `root` and `confi
 - **`root`** (`str | None`): Path to the directory to index. Optional when `config` supplies one.
 - **`tables`** (`list[Table] | None`): Programmatic table definitions. Appended to any tables in the config file.
 - **`ignore`** (`list[str] | None`): Glob patterns for paths to skip. Appended to any `[dirsql].ignore` patterns in the config file.
-- **`config`** (`str | None`): Optional path to a `.dirsql.toml` file. Its `[[table]]` entries, `[dirsql].ignore`, and optional `[dirsql].root` are merged into the constructor's inputs.
+- **`config`** (`str | None`): Optional path to a `.dirsql.toml` file. Its `[[table]]` entries, `[dirsql].ignore`, optional `[dirsql].root`, and any `[[dirsql.extension]]` entries are merged into the constructor's inputs.
+- **`extensions`** (`list[dict] | None`): SQLite extensions to load onto the connection at startup, before any table DDL. Each entry is `{"path": str, "entrypoint": str}` (`entrypoint` optional -- when omitted, SQLite derives it from the filename). Programmatic entries load first, followed by any `[[dirsql.extension]]` entries from `config`.
 
 #### `await DirSQL.ready()`
 

@@ -39,6 +39,7 @@ def describe_resolve_config():
                 "ignore": [],
                 "persist": False,
                 "persist_path": None,
+                "extensions": [],
             }
 
         def it_serializes_a_programmatic_table_with_default_strict():
@@ -229,3 +230,97 @@ def describe_resolve_config():
                 "/from-kwarg.db",
             )
             assert out["persist_path"] == "/from-kwarg.db"
+
+    def describe_extensions():
+        def it_defaults_to_an_empty_list(cfg_dir):
+            out = resolve_config("/r", None, None, None, False, None)
+            assert out["extensions"] == []
+
+        def it_serializes_a_kwarg_extension_with_path_and_entrypoint():
+            out = resolve_config(
+                "/r",
+                None,
+                None,
+                None,
+                False,
+                None,
+                extensions=[{"path": "ext/a.so", "entrypoint": "init_a"}],
+            )
+            assert out["extensions"] == [{"path": "ext/a.so", "entrypoint": "init_a"}]
+
+        def it_defaults_kwarg_entrypoint_to_none_when_omitted():
+            out = resolve_config(
+                "/r",
+                None,
+                None,
+                None,
+                False,
+                None,
+                extensions=[{"path": "a.so"}],
+            )
+            assert out["extensions"] == [{"path": "a.so", "entrypoint": None}]
+
+        def it_takes_kwarg_extension_paths_verbatim():
+            # Programmatic paths are not resolved (mirrors the Rust
+            # `DirSQLBuilder::extensions`, which takes paths verbatim).
+            out = resolve_config(
+                "/r",
+                None,
+                None,
+                None,
+                False,
+                None,
+                extensions=[{"path": "relative/ext.so"}],
+            )
+            assert out["extensions"][0]["path"] == "relative/ext.so"
+
+        def it_reads_config_extensions_and_resolves_relative_paths(cfg_dir):
+            path = os.path.join(cfg_dir, ".dirsql.toml")
+            _write(
+                path,
+                "[[dirsql.extension]]\n"
+                'path = "ext/vec0.so"\n'
+                'entrypoint = "sqlite3_vec_init"\n',
+            )
+            out = resolve_config(None, None, None, path, False, None)
+            assert out["extensions"] == [
+                {
+                    "path": os.path.join(cfg_dir, "ext/vec0.so"),
+                    "entrypoint": "sqlite3_vec_init",
+                }
+            ]
+
+        def it_defaults_config_extension_entrypoint_to_none(cfg_dir):
+            path = os.path.join(cfg_dir, ".dirsql.toml")
+            _write(path, '[[dirsql.extension]]\npath = "/abs/ext.so"\n')
+            out = resolve_config(None, None, None, path, False, None)
+            assert out["extensions"] == [{"path": "/abs/ext.so", "entrypoint": None}]
+
+        def it_preserves_an_absolute_config_extension_path(cfg_dir):
+            path = os.path.join(cfg_dir, ".dirsql.toml")
+            _write(path, '[[dirsql.extension]]\npath = "/var/lib/ext.so"\n')
+            out = resolve_config(None, None, None, path, False, None)
+            assert out["extensions"][0]["path"] == "/var/lib/ext.so"
+
+        def it_returns_empty_extensions_when_config_declares_none(cfg_dir):
+            path = os.path.join(cfg_dir, ".dirsql.toml")
+            _write(path, '[dirsql]\nignore = ["x"]\n')
+            out = resolve_config(None, None, None, path, False, None)
+            assert out["extensions"] == []
+
+        def it_concatenates_kwarg_extensions_then_config_extensions(cfg_dir):
+            path = os.path.join(cfg_dir, ".dirsql.toml")
+            _write(path, '[[dirsql.extension]]\npath = "c.so"\n')
+            out = resolve_config(
+                "/r",
+                None,
+                None,
+                path,
+                False,
+                None,
+                extensions=[{"path": "k.so"}],
+            )
+            assert [e["path"] for e in out["extensions"]] == [
+                "k.so",
+                os.path.join(cfg_dir, "c.so"),
+            ]
