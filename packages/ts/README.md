@@ -35,21 +35,6 @@ const rows = await db.query("SELECT * FROM users WHERE age > 25");
 console.log(rows);
 ```
 
-## Building (from source)
-
-Building from source requires a Rust toolchain.
-
-```bash
-pnpm install
-pnpm build
-```
-
-## Testing
-
-```bash
-pnpm test
-```
-
 ## License
 
 MIT
