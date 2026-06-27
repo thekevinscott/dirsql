@@ -132,68 +132,89 @@ function httpQuery(port: number, sql: string): Promise<unknown[]> {
   });
 }
 
+// Spawn the binary against `configPath`, wait for the server, run `sql`,
+// and return the rows. Captures stdout/stderr (and drains them so the
+// kernel pipe buffer never fills) for a useful failure message.
+async function serveAndQuery(
+  configPath: string,
+  label: string,
+  sql: string,
+): Promise<unknown[]> {
+  const port = await freePort();
+  const proc = spawn(
+    BINARY,
+    ["--config", configPath, "--host", "127.0.0.1", "--port", String(port)],
+    {
+      stdio: "pipe",
+      env: {
+        ...process.env,
+        PATH: `${SHIM_DIR}:${process.env.PATH ?? ""}`,
+      },
+    },
+  );
+
+  let stdout = "";
+  let stderr = "";
+  let exited: {
+    code: number | null;
+    signal: NodeJS.Signals | null;
+  } | null = null;
+  proc.stdout?.on("data", (chunk: Buffer) => {
+    stdout += chunk.toString();
+  });
+  proc.stderr?.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
+  proc.on("exit", (code, signal) => {
+    exited = { code, signal };
+  });
+
+  try {
+    const ok = await waitForServer(proc, port);
+    if (!ok) {
+      const exitInfo = exited
+        ? `proc exited (code=${exited.code}, signal=${exited.signal})`
+        : "proc still alive (timeout)";
+      throw new Error(
+        `dirsql server did not start with --config ${label}; ${exitInfo}\n` +
+          `--- stdout ---\n${stdout}\n` +
+          `--- stderr ---\n${stderr}`,
+      );
+    }
+    return await httpQuery(port, sql);
+  } finally {
+    proc.kill("SIGTERM");
+    await new Promise<void>((resolve) => proc.once("exit", () => resolve()));
+  }
+}
+
 describe("dirsql CLI --config <native config file>", () => {
   it.each(["js", "mjs", "cjs"] as const)(
     "starts an HTTP server serving the config tables (.%s)",
     async (ext) => {
-      const configPath = join(CONFIG_DIR, `dirsql.config.${ext}`);
-      const port = await freePort();
-      const proc = spawn(
-        BINARY,
-        ["--config", configPath, "--host", "127.0.0.1", "--port", String(port)],
-        {
-          stdio: "pipe",
-          env: {
-            ...process.env,
-            PATH: `${SHIM_DIR}:${process.env.PATH ?? ""}`,
-          },
-        },
+      const rows = await serveAndQuery(
+        join(CONFIG_DIR, `dirsql.config.${ext}`),
+        `.${ext}`,
+        "SELECT title FROM papers ORDER BY title",
       );
+      expect(rows).toEqual([{ title: "Alpha" }, { title: "Beta" }]);
+    },
+    10_000,
+  );
 
-      // Drain stdout/stderr and capture both. With `stdio: "pipe"` and
-      // no consumer the kernel pipe buffer (~64 KiB on Linux) fills and
-      // the binary blocks on write. Capture both so any diagnostic
-      // (binary's stdout banner, interpret subprocess errors via the
-      // binary's inherited stderr) shows up in the failure message.
-      let stdout = "";
-      let stderr = "";
-      let exited: {
-        code: number | null;
-        signal: NodeJS.Signals | null;
-      } | null = null;
-      proc.stdout?.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString();
-      });
-      proc.stderr?.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString();
-      });
-      proc.on("exit", (code, signal) => {
-        exited = { code, signal };
-      });
-
-      try {
-        const ok = await waitForServer(proc, port);
-        if (!ok) {
-          const exitInfo = exited
-            ? `proc exited (code=${exited.code}, signal=${exited.signal})`
-            : "proc still alive (timeout)";
-          throw new Error(
-            `dirsql server did not start with --config .${ext}; ${exitInfo}\n` +
-              `--- stdout ---\n${stdout}\n` +
-              `--- stderr ---\n${stderr}`,
-          );
-        }
-        const rows = await httpQuery(
-          port,
-          "SELECT title FROM papers ORDER BY title",
-        );
-        expect(rows).toEqual([{ title: "Alpha" }, { title: "Beta" }]);
-      } finally {
-        proc.kill("SIGTERM");
-        await new Promise<void>((resolve) =>
-          proc.once("exit", () => resolve()),
-        );
-      }
+  it(
+    "defaults root to the config dir when root is omitted (#251)",
+    async () => {
+      // A native config with no explicit `root` must scan the config file's
+      // parent directory (where `data/**/meta.json` lives), matching how a
+      // `.dirsql.toml` defaults its root. Before the fix this returned HTTP
+      // 200 with an empty `[]` (an empty/cwd root, scanning nothing).
+      const rows = await serveAndQuery(
+        join(CONFIG_DIR, "noroot", "dirsql.config.mjs"),
+        "noroot/dirsql.config.mjs",
+        "SELECT title FROM papers ORDER BY title",
+      );
+      expect(rows).toEqual([{ title: "Alpha" }, { title: "Beta" }]);
     },
     10_000,
   );
