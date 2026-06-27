@@ -44,6 +44,9 @@ loader. The Python and TypeScript SDK constructors do not yet expose an
 `extensions` parameter, nor does the `interpret` native-config handshake carry
 it; tracked in [#229](https://github.com/thekevinscott/dirsql/issues/229)
 (Python) and [#230](https://github.com/thekevinscott/dirsql/issues/230) (TS).
+The Rust resolved-state snapshot (`DirSQL::config()` / `DirSQLConfig`) now
+serializes an `extensions` array; the Python and TypeScript `toJSON` snapshots
+will gain it when they pick up the feature.
 
 All three bindings share a single Rust implementation: `dirsql::DirSQL` handles
 the initial scan, SQL, watcher, and row diffing. Python (`dirsql-py-ext`) and

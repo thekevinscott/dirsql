@@ -104,6 +104,20 @@ impl Db {
     /// `CREATE TABLE foo;DROP_TABLE_bar--(id TEXT)` would parse to a poisoned
     /// internal table name and break downstream `format!()`-built SQL.
     pub fn create_table(&self, ddl: &str) -> Result<()> {
+        // A dirsql table is a per-file row table: create_table injects
+        // `_dirsql_` tracking columns and the engine inserts one row per file.
+        // That is structurally incompatible with an extension-backed virtual
+        // table, so reject `CREATE VIRTUAL TABLE` with a clear message instead
+        // of mangling the DDL via column injection. Load the extension and use
+        // its functions in queries instead.
+        if is_virtual_table_ddl(ddl) {
+            return Err(DbError::DdlParse(
+                "CREATE VIRTUAL TABLE is not supported as a dirsql table \
+                 (dirsql tables are per-file row tables); load the extension \
+                 and call its functions in queries instead"
+                    .to_string(),
+            ));
+        }
         let table = parse_table_name(ddl).ok_or_else(|| DbError::DdlParse(ddl.to_string()))?;
         validate_identifier(&table)?;
         let augmented = inject_tracking_columns(ddl)?;
@@ -409,6 +423,16 @@ pub fn parse_table_name(ddl: &str) -> Option<String> {
         .collect();
 
     if name.is_empty() { None } else { Some(name) }
+}
+
+/// True if `ddl` is a `CREATE VIRTUAL TABLE` statement. dirsql tables are
+/// per-file row tables (create_table injects `_dirsql_` tracking columns and
+/// inserts one row per file), which is structurally incompatible with an
+/// extension-backed virtual table — those are rejected with a clear error
+/// rather than mangled by column injection.
+fn is_virtual_table_ddl(ddl: &str) -> bool {
+    let normalized = ddl.split_whitespace().collect::<Vec<_>>().join(" ");
+    normalized.to_uppercase().contains("CREATE VIRTUAL TABLE")
 }
 
 impl From<rusqlite::types::Value> for Value {
@@ -1137,5 +1161,17 @@ mod tests {
             msg.contains("virtual table") && msg.contains("not supported"),
             "expected a clear 'virtual table not supported' error, not a generic DDL-parse echo, got: {err}"
         );
+    }
+
+    #[test]
+    fn is_virtual_table_ddl_detects_variants() {
+        assert!(is_virtual_table_ddl("CREATE VIRTUAL TABLE x USING vec0(a)"));
+        assert!(is_virtual_table_ddl(
+            "create   virtual   table x using fts5(a)"
+        ));
+        assert!(!is_virtual_table_ddl("CREATE TABLE x (a TEXT)"));
+        assert!(!is_virtual_table_ddl(
+            "CREATE TABLE IF NOT EXISTS x (a TEXT)"
+        ));
     }
 }

@@ -49,7 +49,7 @@ pub struct Config {
 /// extension onto the connection before any `CREATE TABLE` runs, then
 /// disables loading again so the SQL `load_extension()` function is never
 /// left exposed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ExtensionSpec {
     /// Local path to the extension's shared library (`.so` / `.dylib` /
     /// `.dll`). Relative paths resolve against the config file's parent
@@ -130,8 +130,11 @@ pub fn load_config_str(content: &str) -> Result<Config> {
 
     let mut extensions = Vec::with_capacity(raw_extensions.len());
     for raw_ext in raw_extensions {
+        // An empty `path = ""` is as unusable as a missing key: reject it at
+        // parse time rather than silently resolving it to a directory later.
         let path = raw_ext
             .path
+            .filter(|p| !p.is_empty())
             .ok_or(ConfigError::MissingExtensionField("path"))?;
         extensions.push(ExtensionSpec {
             path: PathBuf::from(path),

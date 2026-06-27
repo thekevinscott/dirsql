@@ -159,6 +159,12 @@ entrypoint = "sqlite3_myext_init"
 **Note**: `dirsql` enables extension loading only while loading the configured libraries,
 then disables it again, so `load_extension()` is not exposed via SQL to the user.
 
+Extensions add **functions** you can call in queries and in a regular table's
+DDL (defaults, generated columns). An extension-backed **virtual table** cannot
+be declared as a `[[table]]` — `dirsql` tables are per-file row tables — so a
+`CREATE VIRTUAL TABLE` DDL is rejected; call the extension's functions in your
+queries instead.
+
 ## Strict Mode
 
 By default, auto-injected virtuals that aren't in the DDL are silently

@@ -176,9 +176,11 @@ glob = "*.txt"
     let rows = db.query("SELECT dirsql_testext_answer() AS a").unwrap();
     assert_eq!(rows[0]["a"], Value::Integer(42));
 
-    // Loading was disabled again after startup: a load_extension() call through
-    // the public query surface is rejected (whether by prohibition or the
-    // read-only guard — either way it cannot load).
+    // Loading was disabled again after startup, so a load_extension() call
+    // through the public query surface is rejected. NB: the read-only query
+    // guard is NOT what blocks it — SQLite classifies `SELECT load_extension()`
+    // as read-only, so it sails past that guard — the sole protection is that
+    // extension loading itself is disabled after startup.
     assert!(
         db.query(&format!("SELECT load_extension('{}')", ext.display()))
             .is_err(),

@@ -90,6 +90,13 @@ pub enum DirSqlError {
     #[error("table DDL could not be parsed: {0}")]
     Ddl(String),
 
+    #[error("failed to load extension '{}': {source}", .path.display())]
+    Extension {
+        path: PathBuf,
+        #[source]
+        source: DbError,
+    },
+
     #[error("duplicate table name: {0}")]
     DuplicateTable(String),
 
@@ -233,6 +240,8 @@ struct DirSqlInner {
     table_configs: Vec<TableConfig>,
     /// Resolved ignore patterns preserved for [`DirSQL::config`].
     ignore: Vec<String>,
+    /// Configured SQLite extensions, preserved for [`DirSQL::config`].
+    extensions: Vec<Extension>,
     /// Whether persistent caching is enabled.
     persist: bool,
     /// Override location of the persistent cache file.
@@ -279,6 +288,8 @@ pub struct DirSQLConfig {
     pub ignore: Vec<String>,
     pub persist: bool,
     pub persist_path: Option<PathBuf>,
+    /// SQLite extensions loaded onto the connection at startup, in load order.
+    pub extensions: Vec<Extension>,
 }
 
 /// Serializable per-table portion of [`DirSQLConfig`]. Captures only the
@@ -358,6 +369,7 @@ impl DirSQL {
             ignore: self.inner.ignore.clone(),
             persist: self.inner.persist,
             persist_path: self.inner.persist_path.clone(),
+            extensions: self.inner.extensions.clone(),
         }
     }
 
@@ -735,11 +747,17 @@ impl DirSQL {
         };
 
         // Load configured SQLite extensions onto the connection before any
-        // CREATE TABLE so a table's DDL may reference extension-provided
-        // objects (e.g. a virtual table). Loading is enabled only for the
-        // duration of each load and disabled again afterwards.
+        // CREATE TABLE so a table's DDL and later queries can use
+        // extension-provided functions. (An extension-backed *virtual table*
+        // cannot be a dirsql-managed `[[table]]` — those inject per-file
+        // tracking columns; see Db::create_table.) Loading is enabled only for
+        // the duration of each load and disabled again afterwards.
         for ext in &extensions {
-            db.load_extension(&ext.path, ext.entrypoint.as_deref())?;
+            db.load_extension(&ext.path, ext.entrypoint.as_deref())
+                .map_err(|source| DirSqlError::Extension {
+                    path: ext.path.clone(),
+                    source,
+                })?;
         }
 
         let mut extract_map: HashMap<String, Arc<ExtractFn>> = HashMap::new();
@@ -861,6 +879,7 @@ impl DirSQL {
                 strict_map,
                 table_configs,
                 ignore,
+                extensions,
                 persist: persist_enabled,
                 persist_path,
                 file_rows: Mutex::new(file_rows),
@@ -945,6 +964,10 @@ impl DirSQLBuilder {
     /// Append a single SQLite extension to load at startup. Extensions are
     /// loaded onto the connection before any `CREATE TABLE`, then loading is
     /// disabled again. See [`Extension`].
+    ///
+    /// A relative `path` here is used verbatim — the OS resolves it against the
+    /// process working directory at load time. Config-file paths, by contrast,
+    /// resolve against the config file's parent directory.
     pub fn extension(mut self, extension: Extension) -> Self {
         self.extensions.push(extension);
         self
@@ -1664,6 +1687,28 @@ mod readonly_tests {
     fn map_db_error_leaves_schema_mismatch_as_core() {
         let err = map_db_error(DbError::SchemaMismatch("nope".into()));
         assert!(matches!(err, DirSqlError::Core(_)), "got: {err:?}");
+    }
+
+    #[test]
+    fn missing_extension_build_fails_with_extension_error() {
+        // The .extension() builder surface loads at startup; a missing file
+        // must surface as DirSqlError::Extension (naming the library), not the
+        // generic Core(Sqlite) error. (#225 review finding #9; also exercises
+        // the .extension() builder method in-process.)
+        let dir = tempfile::tempdir().unwrap();
+        let err = match DirSQL::builder()
+            .root(dir.path())
+            .extension(Extension {
+                path: "/nonexistent/dirsql-no-such.so".into(),
+                entrypoint: None,
+            })
+            .build()
+        {
+            Ok(_) => panic!("expected build to fail on a missing extension"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, DirSqlError::Extension { .. }), "got: {err:?}");
+        assert!(err.to_string().contains("failed to load extension"));
     }
 
     #[test]
