@@ -1114,4 +1114,28 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, DbError::Sqlite(_)), "got: {err}");
     }
+
+    // --- create_table: virtual tables are not supported as dirsql tables ---
+
+    #[test]
+    fn create_table_rejects_virtual_table_with_clear_error() {
+        // A dirsql table is a per-file row table: create_table injects
+        // _dirsql_ tracking columns and the engine inserts one row per file.
+        // That is structurally incompatible with an extension-backed virtual
+        // table, so a `CREATE VIRTUAL TABLE` DDL must fail with a clear,
+        // specific error rather than a confusing "no such module" / mangled
+        // DDL. (RED for #225 review finding #1.)
+        let db = Db::new().unwrap();
+        let err = db
+            .create_table("CREATE VIRTUAL TABLE vss USING vec0(embedding float[4])")
+            .unwrap_err();
+        // Must be a clear "not supported" message, NOT the generic
+        // `DdlParse` echo (which trivially contains "virtual table" because it
+        // echoes the DDL back).
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("virtual table") && msg.contains("not supported"),
+            "expected a clear 'virtual table not supported' error, not a generic DDL-parse echo, got: {err}"
+        );
+    }
 }

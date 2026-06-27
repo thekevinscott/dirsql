@@ -185,3 +185,61 @@ glob = "*.txt"
         "load_extension() via query() must be rejected after startup",
     );
 }
+
+/// The serialized resolved-state snapshot (`DirSQL::config()`) must expose the
+/// configured extensions. Every other resolved field (root/tables/ignore/
+/// persist) is carried through the `interpret` handshake; extensions must not
+/// be the lone silent omission. (RED for #225 review finding #2.)
+#[test]
+fn config_serialization_includes_extensions() {
+    let ext = build_fixture_extension();
+
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        format!(
+            r#"
+[[dirsql.extension]]
+path = "{}"
+entrypoint = "sqlite3_extension_init"
+"#,
+            ext.display(),
+        ),
+    )
+    .unwrap();
+
+    let db = DirSQL::from_config(root.path())
+        .expect("construction with a real extension should succeed");
+
+    let json = serde_json::to_string(&db.config()).unwrap();
+    assert!(
+        json.contains("sqlite3_extension_init"),
+        "config() serialization should expose loaded extensions, got: {json}"
+    );
+}
+
+/// A failed extension load must surface a dirsql extension-specific error that
+/// names the offending library, not an opaque generic SQLite error. (RED for
+/// #225 review finding #9.)
+#[test]
+fn missing_extension_error_names_the_extension() {
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[dirsql.extension]]
+path = "/nonexistent/dirsql-no-such-extension.so"
+"#,
+    )
+    .unwrap();
+
+    // `DirSQL` is not `Debug`, so match rather than `unwrap_err()`.
+    let err = match DirSQL::from_config(root.path()) {
+        Ok(_) => panic!("expected construction to fail for a missing extension"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("failed to load extension"),
+        "error should name the failed extension, got: {err}"
+    );
+}

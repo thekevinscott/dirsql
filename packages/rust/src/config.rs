@@ -457,4 +457,20 @@ path = "b.so"
         assert_eq!(config.extensions[0].path, PathBuf::from("a.so"));
         assert_eq!(config.extensions[1].path, PathBuf::from("b.so"));
     }
+
+    #[test]
+    fn extension_empty_path_errors() {
+        // An empty `path = ""` is as unusable as a missing key — it must be
+        // rejected at parse time, not silently accepted and later resolved to
+        // the config's parent directory. (RED for #225 review finding #4.)
+        let toml = r#"
+[[dirsql.extension]]
+path = ""
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::MissingExtensionField("path")),
+            "got: {err:?}"
+        );
+    }
 }
