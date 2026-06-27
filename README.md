@@ -23,6 +23,8 @@ uvx dirsql                         # via PyPI
 cargo install dirsql --features cli
 ```
 
+> The npm CLI requires **Node ≥ 20.11**.
+
 ## Quick start
 
 ```python

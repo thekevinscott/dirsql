@@ -44,11 +44,13 @@ dirsql
 
 :::
 
+::: warning Node version
+Requires **Node ≥ 20.11**.
+:::
+
 ::: tip For Rust library consumers
-The `cli` feature is **opt-in**. Adding `dirsql` as a library dependency
-(`cargo add dirsql`) pulls no CLI dependencies — only the core library. See the
-[Rust library README](https://github.com/thekevinscott/dirsql/tree/main/packages/rust)
-for the library-vs-CLI feature split.
+The `cli` feature is **opt-in**. See the
+[Rust library README](https://github.com/thekevinscott/dirsql/tree/main/packages/rust) for instructions on how to include.
 :::
 
 ## Quick start
