@@ -20,8 +20,10 @@ line on stderr if the config can't be loaded.
 from __future__ import annotations
 
 import json
+import os
 import sys
 
+from ...resolve_config import INTERPRET_ROOT_ENV
 from .dispatch_extract import dispatch_extract
 from .load_app import load_app
 from .write_message import write_message
@@ -34,6 +36,13 @@ def run(argv: list[str]) -> int:
         )
         return 1
     config_path = argv[0]
+
+    # Expose the config file's parent directory as the implicit default root
+    # for the user module we're about to import. A native config that omits
+    # both `root` and `config` resolves its scan root to this value, matching
+    # how a `.dirsql.toml` defaults its root (#251). Set before `load_app` so
+    # the user's `DirSQL(...)` line sees it during construction.
+    os.environ[INTERPRET_ROOT_ENV] = os.path.dirname(os.path.abspath(config_path))
 
     try:
         app = load_app(config_path)

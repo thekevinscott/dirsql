@@ -123,8 +123,26 @@ binary unchanged.
 assign to `module.exports` (CJS). Only compiled `.js` / `.mjs` / `.cjs` files are
 supported; `.ts` source files are out of scope.
 
-No MIGRATIONS.md entry is required — this is a purely additive CLI feature with no
-change to the SDK's public API.
+**Implicit root default for native configs (#251) — parity restored.** A native
+config that omits `root` now defaults its scan root to the config file's parent
+directory, exactly as a `.dirsql.toml` does. Before the fix the two launchers
+diverged: the Python launcher hard-errored (the `dirsql interpret` child raised
+"requires a root or a config", so the server returned HTTP 503) while the
+TypeScript launcher silently served an empty table (an empty root scanning
+nothing). The fix lives in the launcher + binding layers (not the Rust core):
+the `dirsql interpret` launcher exports `DIRSQL_INTERPRET_ROOT` (the config's
+parent dir) before importing the user module, and the Python `DirSQL.__init__` /
+`resolve_config` and TypeScript `resolveConfig` fall back to it only when neither
+`root` nor `config` is given. Python and TypeScript are now aligned with each
+other and with the TOML default; the Rust core's builder contract (error on no
+root) is unchanged. Rust has no native-config launcher (no host runtime for user
+`extract` callbacks — intentional drift, see the `interpret` table above), so it
+is unaffected.
+
+No MIGRATIONS.md entry is required for the original native-config feature — it was
+a purely additive CLI feature with no change to the SDK's public API. The #251
+root-default fix above *is* a runtime-behavior change and carries a MIGRATIONS.md
+entry.
 
 ## Language-Idiomatic Exceptions
 

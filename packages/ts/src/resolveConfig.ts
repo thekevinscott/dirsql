@@ -9,6 +9,17 @@ import { dirname, isAbsolute, resolve as resolvePath } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import type { DirSQLConfig, DirSQLOptions } from "./index.js";
 
+/**
+ * Environment variable the `dirsql interpret` launcher sets, before
+ * importing a user's native config module, to the config file's parent
+ * directory. A native config that supplies neither `root` nor `config`
+ * defaults its scan root to this value -- matching how a `.dirsql.toml`
+ * defaults its root to the config's parent directory (#251). Outside the
+ * interpret subprocess the variable is unset, so normal SDK use is
+ * unaffected.
+ */
+export const INTERPRET_ROOT_ENV = "DIRSQL_INTERPRET_ROOT";
+
 // biome-ignore lint/suspicious/noExplicitAny: TOML root has a dynamic shape.
 type Cfg = Record<string, any>;
 
@@ -27,9 +38,20 @@ export function resolveConfig(options: DirSQLOptions): DirSQLConfig {
   }
   const abs = (p: string) => (isAbsolute(p) ? p : resolvePath(cfgDir, p));
 
+  // Precedence for `root`: explicit option > config-derived (`[dirsql].root`
+  // or the config's parent dir) > the interpret launcher's implicit root.
+  // The implicit root only applies when neither a root nor a config was
+  // given -- i.e. a native config with no `root` (#251). Falls back to ""
+  // (the prior behavior) when the var is unset, e.g. normal SDK use.
+  const implicitRoot =
+    options.config !== undefined
+      ? typeof cfg.root === "string"
+        ? abs(cfg.root)
+        : cfgDir
+      : (process.env[INTERPRET_ROOT_ENV] ?? "");
+
   return {
-    root:
-      options.root ?? (typeof cfg.root === "string" ? abs(cfg.root) : cfgDir),
+    root: options.root ?? implicitRoot,
     tables: [
       ...(options.tables ?? []).map((t) => ({
         ddl: t.ddl,

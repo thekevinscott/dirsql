@@ -14,6 +14,12 @@ import { interpret } from "./interpret.js";
 import { loadApp } from "./loadApp.js";
 import { writeMessage } from "./writeMessage.js";
 
+// Literal copy of `INTERPRET_ROOT_ENV` from `../../resolveConfig.js`. Inlined
+// rather than imported so this unit test stays isolated from that collaborator
+// module (testing-conventions `unit lint`); the integration tests exercise the
+// two sides agreeing on the name.
+const INTERPRET_ROOT_ENV = "DIRSQL_INTERPRET_ROOT";
+
 // Every collaborator is mocked so the test isolates `interpret`'s glue logic.
 // `node:readline`'s `createInterface` is faked to return an async iterable of
 // lines directly -- this stands in for the line-buffered read over stdin, so
@@ -57,8 +63,12 @@ describe("interpret", () => {
 
   beforeEach(() => {
     stderrWrite = vi.fn();
+    // Copy `env` (not the shared reference) so `interpret`'s write of
+    // DIRSQL_INTERPRET_ROOT (#251) stays scoped to the test and never leaks
+    // into the real process environment.
     vi.stubGlobal("process", {
       ...process,
+      env: { ...process.env },
       stderr: { write: stderrWrite },
     });
     stubLines([]);
@@ -99,6 +109,22 @@ describe("interpret", () => {
       expect(stderrWrite).toHaveBeenCalledExactlyOnceWith(
         "dirsql interpret: plain string\n",
       );
+    });
+
+    it("sets DIRSQL_INTERPRET_ROOT to the config's parent dir before loadApp (#251)", async () => {
+      // The implicit root must be published before the user module is
+      // imported, so loadApp observes it. Capture the env value loadApp sees.
+      let seen: string | undefined;
+      vi.mocked(loadApp).mockImplementation(async () => {
+        seen = process.env[INTERPRET_ROOT_ENV];
+        return fakeApp();
+      });
+
+      expect(await interpret("/cfg/dir/dirsql.config.mjs")).toBe(0);
+      const { dirname, resolve } = await import("node:path");
+      const expected = dirname(resolve("/cfg/dir/dirsql.config.mjs"));
+      expect(seen).toBe(expected);
+      expect(process.env[INTERPRET_ROOT_ENV]).toBe(expected);
     });
   });
 

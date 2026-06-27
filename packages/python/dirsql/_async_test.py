@@ -6,6 +6,12 @@ import pytest
 
 import dirsql._async as async_mod
 
+# Literal copy of `dirsql.resolve_config.INTERPRET_ROOT_ENV`. Inlined rather
+# than imported so this unit test stays isolated from that collaborator
+# module (testing-conventions `unit lint`); the integration tests exercise
+# the two sides agreeing on the name.
+INTERPRET_ROOT_ENV = "DIRSQL_INTERPRET_ROOT"
+
 
 class _FakeRustDirSQL:
     def __init__(
@@ -76,6 +82,44 @@ def describe_DirSQL_async():
 
                 with pytest.raises(RuntimeError, match="boom"):
                     await db.ready()
+
+    def describe_root_resolution():
+        @pytest.mark.asyncio
+        async def it_raises_when_no_root_no_config_and_no_interpret_env():
+            # Normal SDK use: neither root, config, nor the interpret
+            # launcher's env var -> the original TypeError must still fire.
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                with patch.object(async_mod.os, "environ", {}):
+                    with pytest.raises(
+                        TypeError,
+                        match="requires either a root directory or a config",
+                    ):
+                        async_mod.DirSQL(tables=["table-a"])
+
+        @pytest.mark.asyncio
+        async def it_defaults_root_to_the_interpret_env_when_root_and_config_unset():
+            # Inside `dirsql interpret`, DIRSQL_INTERPRET_ROOT carries the
+            # config file's parent directory; a config with no explicit root
+            # adopts it instead of raising (#251).
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                with patch.object(
+                    async_mod.os, "environ", {INTERPRET_ROOT_ENV: "/cfg/parent"}
+                ):
+                    db = async_mod.DirSQL(tables=["table-a"])
+                    await db.ready()
+                    assert db._root == "/cfg/parent"
+                    assert db._db.root == "/cfg/parent"
+
+        @pytest.mark.asyncio
+        async def it_prefers_an_explicit_root_over_the_interpret_env():
+            # An explicit root always wins; the env var is a last resort.
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                with patch.object(
+                    async_mod.os, "environ", {INTERPRET_ROOT_ENV: "/cfg/parent"}
+                ):
+                    db = async_mod.DirSQL("/explicit", tables=["table-a"])
+                    await db.ready()
+                    assert db._root == "/explicit"
 
     def describe_watch_stream():
         @pytest.mark.asyncio

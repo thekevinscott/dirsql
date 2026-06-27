@@ -12,10 +12,13 @@ by the Rust core's own unit tests and by the local-only e2e suite.
 """
 
 import asyncio
+import os
+from unittest.mock import patch
 
 import pytest
 
 from dirsql import _async as async_mod
+from dirsql.resolve_config import INTERPRET_ROOT_ENV
 
 
 class _FakeRustDirSQL:
@@ -243,8 +246,14 @@ def describe_binding_layer():
                 await db.ready()
 
         def it_rejects_construction_without_root_or_config():
-            with pytest.raises(TypeError):
-                async_mod.DirSQL()
+            # Normal SDK use (outside `dirsql interpret`): with no root, no
+            # config, and no DIRSQL_INTERPRET_ROOT, construction must still
+            # raise the same TypeError as before (#251). Clear the env var so
+            # the assertion holds regardless of the surrounding process env.
+            env = {k: v for k, v in os.environ.items() if k != INTERPRET_ROOT_ENV}
+            with patch.object(async_mod.os, "environ", env):
+                with pytest.raises(TypeError):
+                    async_mod.DirSQL()
 
     def describe_ignore_kwarg():
         # Feature: ignore patterns. See docs/guide/tables.md and

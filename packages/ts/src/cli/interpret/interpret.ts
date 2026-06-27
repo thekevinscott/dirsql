@@ -17,8 +17,10 @@
 // Exits 0 when stdin closes; non-zero with a single `dirsql interpret:`
 // line on stderr if the config can't be loaded.
 
+import { dirname, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
 import type { DirSQL } from "../../index.js";
+import { INTERPRET_ROOT_ENV } from "../../resolveConfig.js";
 import { buildTables } from "./buildTables.js";
 import { dispatchExtract } from "./dispatchExtract.js";
 import { errMessage } from "./errMessage.js";
@@ -30,6 +32,13 @@ export async function interpret(configPath: string): Promise<number> {
     process.stderr.write("dirsql interpret: expected one config path, got 0\n");
     return 1;
   }
+
+  // Expose the config file's parent directory as the implicit default root
+  // for the user module we're about to import. A native config that omits
+  // both `root` and `config` resolves its scan root to this value, matching
+  // how a `.dirsql.toml` defaults its root (#251). Set before `loadApp` so
+  // the user's `new DirSQL(...)` sees it during construction.
+  process.env[INTERPRET_ROOT_ENV] = dirname(resolvePath(configPath));
 
   let app: DirSQL;
   try {

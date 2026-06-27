@@ -105,9 +105,7 @@ def _serve_and_query(config_path: str, sql: str) -> list:
 
 def describe_cli_py_config():
     def it_starts_an_http_server_serving_the_config_tables():
-        rows = _serve_and_query(
-            CONFIG_PATH, "SELECT title FROM papers ORDER BY title"
-        )
+        rows = _serve_and_query(CONFIG_PATH, "SELECT title FROM papers ORDER BY title")
         assert rows == [{"title": "Alpha"}, {"title": "Beta"}]
 
     def it_defaults_root_to_config_dir_when_root_is_omitted():

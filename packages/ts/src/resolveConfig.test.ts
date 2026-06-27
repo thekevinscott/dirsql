@@ -1,8 +1,8 @@
 // Unit tests for `resolveConfig`.
 
 import { readFileSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
-import { resolveConfig } from "./resolveConfig.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { INTERPRET_ROOT_ENV, resolveConfig } from "./resolveConfig.js";
 
 // `resolveConfig`'s only effectful collaborator is `readFileSync`; `node:path`
 // and `smol-toml` are pure. Mock fs so the test never touches a real file --
@@ -11,6 +11,12 @@ vi.mock("node:fs", async () => ({
   ...(await vi.importActual<typeof import("node:fs")>("node:fs")),
   readFileSync: vi.fn(),
 }));
+
+// The interpret implicit-root path reads process.env; stub it per test and
+// restore after each so no env leaks between cases (or from the shell).
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 const noopExtract = () => [];
 
@@ -72,6 +78,42 @@ describe("resolveConfig", () => {
       });
       expect(out.persist).toBe(true);
       expect(out.persistPath).toBe("/abs/cache.db");
+    });
+  });
+
+  describe("interpret implicit root (#251)", () => {
+    it("defaults root to DIRSQL_INTERPRET_ROOT when root and config are unset", () => {
+      // The `dirsql interpret` launcher sets this to the config file's
+      // parent dir; a native config with no `root` adopts it so the
+      // serialized handshake carries a real scan root.
+      vi.stubEnv(INTERPRET_ROOT_ENV, "/cfg/parent");
+      const out = resolveConfig({
+        tables: [{ ddl: "x", glob: "*", extract: noopExtract }],
+      });
+      expect(out.root).toBe("/cfg/parent");
+    });
+
+    it("prefers an explicit root over DIRSQL_INTERPRET_ROOT", () => {
+      vi.stubEnv(INTERPRET_ROOT_ENV, "/cfg/parent");
+      const out = resolveConfig({ root: "/explicit" });
+      expect(out.root).toBe("/explicit");
+    });
+
+    it("falls back to empty string when the env var is unset", () => {
+      vi.stubEnv(INTERPRET_ROOT_ENV, undefined);
+      const out = resolveConfig({
+        tables: [{ ddl: "x", glob: "*", extract: noopExtract }],
+      });
+      expect(out.root).toBe("");
+    });
+
+    it("ignores DIRSQL_INTERPRET_ROOT when a config is supplied", () => {
+      // With a config present, the config's parent dir (or [dirsql].root)
+      // wins; the env var is only a no-config fallback.
+      vi.stubEnv(INTERPRET_ROOT_ENV, "/should/not/be/used");
+      writeCfg('[dirsql]\nignore = ["x"]\n');
+      const out = resolveConfig({ config: cfgPath });
+      expect(out.root).toBe(cfgDir);
     });
   });
 

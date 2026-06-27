@@ -2,10 +2,12 @@
 
 import os
 import tempfile
+from unittest.mock import patch
 
 import pytest
 
-from dirsql.resolve_config import resolve_config
+import dirsql.resolve_config as resolve_config_mod
+from dirsql.resolve_config import INTERPRET_ROOT_ENV, resolve_config
 
 
 class _FakeTable:
@@ -78,6 +80,46 @@ def describe_resolve_config():
             )
             assert out["persist"] is True
             assert out["persist_path"] == "/abs/cache.db"
+
+    def describe_interpret_implicit_root():
+        def it_defaults_root_to_the_interpret_env_when_root_and_config_unset():
+            # #251: the `dirsql interpret` launcher sets DIRSQL_INTERPRET_ROOT
+            # to the config file's parent dir; a config with no `root` adopts
+            # it so the serialized handshake carries a real scan root.
+            with patch.object(
+                resolve_config_mod.os,
+                "environ",
+                {INTERPRET_ROOT_ENV: "/cfg/parent"},
+            ):
+                out = resolve_config(None, None, None, None, False, None)
+            assert out["root"] == "/cfg/parent"
+
+        def it_prefers_an_explicit_root_over_the_interpret_env():
+            with patch.object(
+                resolve_config_mod.os,
+                "environ",
+                {INTERPRET_ROOT_ENV: "/cfg/parent"},
+            ):
+                out = resolve_config("/explicit", None, None, None, False, None)
+            assert out["root"] == "/explicit"
+
+        def it_leaves_root_none_when_no_root_no_config_and_no_interpret_env():
+            with patch.object(resolve_config_mod.os, "environ", {}):
+                out = resolve_config(None, None, None, None, False, None)
+            assert out["root"] is None
+
+        def it_ignores_the_interpret_env_when_a_config_is_supplied(cfg_dir):
+            # With a config present, the config's parent dir (or [dirsql].root)
+            # wins; the interpret env var is only a no-config fallback.
+            path = os.path.join(cfg_dir, ".dirsql.toml")
+            _write(path, '[dirsql]\nignore = ["x"]\n')
+            with patch.object(
+                resolve_config_mod.os,
+                "environ",
+                {INTERPRET_ROOT_ENV: "/should/not/be/used"},
+            ):
+                out = resolve_config(None, None, None, path, False, None)
+            assert out["root"] == cfg_dir
 
     def describe_with_a_config_file():
         def it_resolves_a_relative_dirsql_root_against_the_config_parent(cfg_dir):

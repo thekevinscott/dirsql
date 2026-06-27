@@ -1,9 +1,10 @@
 """Async-by-default DirSQL wrapper."""
 
 import asyncio
+import os
 
 from dirsql._dirsql import DirSQL as _RustDirSQL
-from dirsql.resolve_config import resolve_config
+from dirsql.resolve_config import INTERPRET_ROOT_ENV, resolve_config
 
 
 class _WatchStream:
@@ -46,7 +47,10 @@ class DirSQL:
 
     At least one of ``root`` or ``config`` must be supplied. When both are
     set, the explicit ``root`` wins over any ``[dirsql].root`` in the config
-    file (a warning is emitted on stderr).
+    file (a warning is emitted on stderr). The sole exception is inside the
+    ``dirsql interpret`` subprocess: when a native config supplies neither,
+    the launcher's ``DIRSQL_INTERPRET_ROOT`` (the config file's parent
+    directory) is used, mirroring a ``.dirsql.toml``'s root default (#251).
 
     Pass ``persist=True`` to keep an on-disk SQLite cache (default location:
     ``<root>/.dirsql/cache.db``). Override the location with ``persist_path``.
@@ -63,7 +67,16 @@ class DirSQL:
         persist_path=None,
     ):
         if root is None and config is None:
-            raise TypeError("DirSQL requires either a root directory or a config= path")
+            # Inside `dirsql interpret`, the launcher sets DIRSQL_INTERPRET_ROOT
+            # to the native config file's parent directory. A config that omits
+            # both `root` and `config` defaults its root to that value, matching
+            # a `.dirsql.toml` (#251). Outside interpret the var is unset, so
+            # normal SDK use still requires an explicit root or config.
+            root = os.environ.get(INTERPRET_ROOT_ENV)
+            if root is None:
+                raise TypeError(
+                    "DirSQL requires either a root directory or a config= path"
+                )
         self._root = root
         self._tables = tables
         self._ignore = ignore

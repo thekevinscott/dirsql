@@ -11,6 +11,71 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### Native-language configs default `root` to the config file's parent dir (#251)
+
+#### Summary
+
+A native-language config (`.py` / `.js` / `.mjs` / `.cjs`) that omits `root`
+previously did **not** inherit the config-parent-directory root default that a
+`.dirsql.toml` already had, and the two `dirsql interpret` launchers failed
+differently: the Python launcher's `DirSQL(tables=[...])` raised "requires
+either a root directory or a config" (the interpret child died before the
+handshake → the server returned **HTTP 503**), while the JavaScript launcher's
+`new DirSQL({ tables })` serialized an empty root → the server returned **HTTP
+200 with an empty table** (it scanned nothing). The launchers now publish the
+config file's parent directory through a `DIRSQL_INTERPRET_ROOT` environment
+variable before importing the user module, and the Python `DirSQL.__init__` /
+`resolve_config` and TypeScript `resolveConfig` adopt it as the scan root —
+**only** when neither `root` nor `config` was supplied. This is a runtime
+behavior change for native configs served via `dirsql --config <file>`; it does
+not change any function signature or config key. Affected SDKs: Python and
+TypeScript (the launcher and SDK layers); the Rust core builder is unchanged.
+
+#### Required changes
+
+No call-site changes are required — the change is purely a more useful default.
+Native configs that already passed an explicit `root` are unaffected. Configs
+that relied on the previous broken behavior (there was none useful to rely on)
+gain working output. The documented native-config examples that omit `root`
+now work as written.
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| `dirsql --config app.py` where `app = DirSQL(tables=[...])` (no `root`) | interpret child errored; `POST /query` → HTTP 503 | scan root defaults to `app.py`'s parent dir; rows are served |
+| `dirsql --config app.mjs` where `export default new DirSQL({ tables })` (no `root`) | served HTTP 200 but an empty `[]` (empty root, scanned nothing) | scan root defaults to `app.mjs`'s parent dir; rows are served |
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- **Native config served via `dirsql --config <file>` with no `root`**:
+  previously the Python path hard-errored (HTTP 503) and the JS path returned
+  an empty table (HTTP 200, `[]`); now both default the scan root to the config
+  file's parent directory and serve the indexed rows, matching `.dirsql.toml`.
+- **`DIRSQL_INTERPRET_ROOT` environment variable** (new): the `dirsql
+  interpret` launcher now sets this to the config file's parent directory
+  before importing the user module. It is an internal launcher mechanism, not a
+  public SDK knob; outside the interpret subprocess it is unset and normal SDK
+  use is unaffected (constructing `DirSQL` with no `root` and no `config` still
+  raises the same `TypeError` in Python and serializes the same empty root in
+  TypeScript).
+
+#### Verification
+
+```bash
+# A native config that omits `root`, in a dir holding data/**/meta.json:
+#   app = DirSQL(tables=[Table(ddl="CREATE TABLE papers (title TEXT)",
+#                              glob="**/meta.json", extract=...)])
+dirsql --config ./app.py --port 7117 &
+curl -s -XPOST localhost:7117/query \
+  -H 'content-type: application/json' \
+  -d '{"sql":"SELECT title FROM papers ORDER BY title"}'
+# expected: [{"title":"Alpha"},{"title":"Beta"}]
+# (before this change: HTTP 503 for a .py config, or [] for a .mjs config)
+```
+
 ### Rust SDK: extension-loading review followup (#225)
 
 #### Summary

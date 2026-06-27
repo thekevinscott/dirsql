@@ -2,12 +2,30 @@
 
 import io
 import json
+import os
 import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from . import run as run_module
 from .run import run
+
+# Literal copy of `dirsql.resolve_config.INTERPRET_ROOT_ENV`. Inlined rather
+# than imported so this unit test stays isolated from that collaborator
+# module (testing-conventions `unit lint`); the integration tests exercise
+# the two sides agreeing on the name.
+INTERPRET_ROOT_ENV = "DIRSQL_INTERPRET_ROOT"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_environ():
+    """`run` writes DIRSQL_INTERPRET_ROOT into ``os.environ`` (#251). Scope
+    that mutation to a per-test copy so it never leaks into the process
+    environment other tests observe."""
+    with patch.object(run_module.os, "environ", dict(os.environ)):
+        yield
 
 
 def _fake_table(name: str, extract):
@@ -55,6 +73,34 @@ def describe_run():
             ):
                 assert run(["bad.py"]) == 1
             assert fake_stderr.getvalue() == "dirsql interpret: missing app\n"
+
+    def describe_interpret_root_env():
+        def it_sets_the_interpret_root_env_to_the_config_parent_before_load():
+            # #251: the launcher must publish DIRSQL_INTERPRET_ROOT (the
+            # config file's parent directory) so a no-root native config
+            # resolves its scan root. It must be set *before* load_app, so
+            # capture the env value seen by a fake load_app.
+            app = _fake_app(tables=[], state={})
+            fake_env: dict = {}
+            seen: dict = {}
+
+            def fake_load_app(_path):
+                seen["root"] = fake_env.get(INTERPRET_ROOT_ENV)
+                return app
+
+            with (
+                patch.object(run_module.os, "environ", fake_env),
+                patch.object(run_module, "load_app", side_effect=fake_load_app),
+                patch.object(run_module, "write_message"),
+                patch.object(sys, "stdin", io.StringIO("")),
+            ):
+                assert run([os.path.join("some", "dir", "cfg.py")]) == 0
+
+            expected = os.path.dirname(
+                os.path.abspath(os.path.join("some", "dir", "cfg.py"))
+            )
+            assert seen["root"] == expected
+            assert fake_env[INTERPRET_ROOT_ENV] == expected
 
     def describe_handshake():
         def it_writes_a_config_message_with_vars_app_as_state():

@@ -8,6 +8,15 @@ path-valued config fields resolve relative to the config file's parent.
 import os
 import tomllib
 
+# Environment variable that the `dirsql interpret` launcher sets, before
+# importing a user's native config module, to the config file's parent
+# directory. A native config that supplies neither `root` nor `config`
+# defaults its scan root to this value -- matching how a `.dirsql.toml`
+# defaults its root to the config's parent directory (#251). Outside the
+# interpret subprocess the variable is unset, so normal SDK use is
+# unaffected.
+INTERPRET_ROOT_ENV = "DIRSQL_INTERPRET_ROOT"
+
 
 def resolve_config(root, tables, ignore, config, persist, persist_path):
     """Merge kwargs with a `.dirsql.toml` into the serialized state shape."""
@@ -22,8 +31,18 @@ def resolve_config(root, tables, ignore, config, persist, persist_path):
     def _abs(p):
         return p if os.path.isabs(p) else os.path.join(cfg_dir, p)  # ty:ignore[no-matching-overload]
 
+    # Precedence for `root`: explicit kwarg > config-derived (`[dirsql].root`
+    # or the config's parent dir) > the interpret launcher's implicit root.
+    # The implicit root only applies when neither a root nor a config was
+    # given -- i.e. a native config with no `root` (#251).
+    resolved_root = root or (
+        (_abs(cfg["root"]) if "root" in cfg else cfg_dir)
+        if config is not None
+        else os.environ.get(INTERPRET_ROOT_ENV)
+    )
+
     return {
-        "root": root or (_abs(cfg["root"]) if "root" in cfg else cfg_dir),
+        "root": resolved_root,
         "tables": [
             {"ddl": t.ddl, "glob": t.glob, "strict": bool(t.strict)}
             for t in (tables or [])

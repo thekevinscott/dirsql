@@ -202,20 +202,16 @@ describe("dirsql CLI --config <native config file>", () => {
     10_000,
   );
 
-  it(
-    "defaults root to the config dir when root is omitted (#251)",
-    async () => {
-      // A native config with no explicit `root` must scan the config file's
-      // parent directory (where `data/**/meta.json` lives), matching how a
-      // `.dirsql.toml` defaults its root. Before the fix this returned HTTP
-      // 200 with an empty `[]` (an empty/cwd root, scanning nothing).
-      const rows = await serveAndQuery(
-        join(CONFIG_DIR, "noroot", "dirsql.config.mjs"),
-        "noroot/dirsql.config.mjs",
-        "SELECT title FROM papers ORDER BY title",
-      );
-      expect(rows).toEqual([{ title: "Alpha" }, { title: "Beta" }]);
-    },
-    10_000,
-  );
+  it("defaults root to the config dir when root is omitted (#251)", async () => {
+    // A native config with no explicit `root` must scan the config file's
+    // parent directory (where `data/**/meta.json` lives), matching how a
+    // `.dirsql.toml` defaults its root. Before the fix this returned HTTP
+    // 200 with an empty `[]` (an empty/cwd root, scanning nothing).
+    const rows = await serveAndQuery(
+      join(CONFIG_DIR, "noroot", "dirsql.config.mjs"),
+      "noroot/dirsql.config.mjs",
+      "SELECT title FROM papers ORDER BY title",
+    );
+    expect(rows).toEqual([{ title: "Alpha" }, { title: "Beta" }]);
+  }, 10_000);
 });

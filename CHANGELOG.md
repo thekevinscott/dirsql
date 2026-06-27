@@ -221,6 +221,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Native-language configs (`.py` / `.js` / `.mjs` / `.cjs`) now default
+  `root` to the config file's parent directory.** A `.dirsql.toml` already
+  defaulted its scan root to the config's parent dir, but a native config that
+  omitted `root` did not — and the two launchers failed differently: the
+  Python launcher's `DirSQL(tables=[...])` raised "requires either a root
+  directory or a config" (the `dirsql interpret` child died before the
+  handshake, so the server returned **HTTP 503**), while the JavaScript
+  launcher's `new DirSQL({ tables })` serialized an empty root and the server
+  returned **HTTP 200 with an empty table** (scanning nothing). Now the
+  `dirsql interpret` launcher publishes the config file's parent directory via
+  a `DIRSQL_INTERPRET_ROOT` environment variable before importing the user
+  module, and the Python `DirSQL.__init__` / `resolve_config` and the
+  TypeScript `resolveConfig` fall back to it **only** when neither `root` nor
+  `config` was supplied. Normal SDK use (no root, no config, no env) still
+  raises the same `TypeError` / serializes the same empty root as before; the
+  Rust core's builder contract is untouched. This also restores parity between
+  the Python and TypeScript launchers' native-config root handling. (#251)
+
 - **File watcher now emits events when `root` is relative.** Building a
   `DirSQL` with a relative root (e.g. `DirSQL::new("./data", tables)` or
   `DirSQL::new(".", tables)`) handed that relative path straight to `notify`,
