@@ -64,9 +64,10 @@ include = [
     { path = "docs/**/*", format = "sdist" },
 ]
 
-# Type checking. Migration model: existing untyped code is frozen behind
-# `# ty: ignore[...]` baseline comments inserted by `ty check --add-ignore`;
-# any new error in new or touched code fails CI. Every rule is promoted to
+# Type checking. The source tree currently type-checks clean: the initial
+# `# ty: ignore[...]` baseline (seeded by `ty check --add-ignore`) has been
+# driven to zero, so any new error in new or touched code fails CI with no
+# pre-existing suppressions to hide behind. Every rule is promoted to
 # `"error"`, matching TypeScript-strict discipline. Test files are excluded
 # because they monkeypatch fakes onto production module attributes
 # (`monkeypatch.setattr(async_mod, "_RustDirSQL", ...)`) -- AGENTS.md flags

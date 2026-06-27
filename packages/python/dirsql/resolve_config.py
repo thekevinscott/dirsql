@@ -23,7 +23,11 @@ def resolve_config(
         cfg_dir = os.path.dirname(os.path.abspath(config))
 
     def _abs(p):
-        return p if os.path.isabs(p) else os.path.join(cfg_dir, p)  # ty:ignore[no-matching-overload]
+        # Only reached from the `"<key>" in cfg` branches below, and cfg is
+        # non-empty only after a config file was loaded -- which sets cfg_dir.
+        base = cfg_dir
+        assert base is not None
+        return p if os.path.isabs(p) else os.path.join(base, p)
 
     return {
         "root": root or (_abs(cfg["root"]) if "root" in cfg else cfg_dir),

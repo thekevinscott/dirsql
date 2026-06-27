@@ -79,9 +79,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Strict type-checking in CI for the Python SDK (`ty`).** Adds
   `.github/workflows/python-typecheck.yml` running Astral's `ty` with every
   rule promoted to `"error"` (`--error all --error-on-warning`). Existing
-  untyped code is frozen behind line-precise `# ty:ignore[<rule>]` baseline
-  comments inserted by `ty check --add-ignore` -- effectively a TODO list
-  that shrinks as files are touched. New errors in new or edited code fail
+  findings were initially frozen behind line-precise `# ty:ignore[<rule>]`
+  baseline comments inserted by `ty check --add-ignore` -- a TODO list that
+  has since been driven to zero (see _Fixed_), so the tree now type-checks
+  clean with no suppressions. New errors in new or edited code fail
   CI immediately. Ruff `PGH003` is enabled to forbid bare `# type: ignore`
   / `# ty: ignore` without a rule code. Test files (`**/test_*.py`,
   `**/*_test.py`) are excluded for now because their `monkeypatch.setattr`
@@ -254,6 +255,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code as package data. Enforced going forward by the new `packaging` gate
   (testing-conventions). (#238)
 
+- **Python SDK: `await db.query(...)` before `await db.ready()` no longer
+  raises `AttributeError`.** `query()` now awaits `ready()` itself, so a query
+  issued before the background scan finishes waits for it (and re-raises any
+  initialization error) instead of dereferencing the still-`None` internal
+  handle. This matches the TypeScript SDK, where every method transparently
+  awaits readiness (Rust's `AsyncDirSQL` stays explicit by design). The public
+  `query(sql)` signature is unchanged.
+- **Python SDK: the `ty` baseline is now empty — the source tree type-checks
+  clean with no suppressions.** Resolved the four `# ty:ignore[...]` baseline
+  comments seeded by the type-checker rollout: the unguarded `self._db.query`
+  in `_async.py` (the bug above), the `cfg_dir` narrowing in
+  `resolve_config.py`'s `_abs`, and the `missing-override-decorator` findings on
+  `_async.py`'s `__dict__` property and the `_dirsql.pyi` stub's
+  `RowEvent.__repr__` (both now carry `@override`, sourced from
+  `typing_extensions` for the type checker only so Python 3.11 keeps working
+  with no new runtime dependency).
 - **File watcher now emits events when `root` is relative.** Building a
   `DirSQL` with a relative root (e.g. `DirSQL::new("./data", tables)` or
   `DirSQL::new(".", tables)`) handed that relative path straight to `notify`,

@@ -13,6 +13,8 @@ from collections.abc import Callable
 from os import PathLike
 from typing import Any, NotRequired, TypedDict
 
+from typing_extensions import override
+
 __version__: str
 
 Row = dict[str, Any]
@@ -51,7 +53,8 @@ class RowEvent:
     error: str | None
     file_path: str | None
 
-    def __repr__(self) -> str: ...  # ty:ignore[missing-override-decorator]
+    @override
+    def __repr__(self) -> str: ...
 
 class DirSQL:
     """Synchronous binding class. ``dirsql._async.DirSQL`` wraps it."""
