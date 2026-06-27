@@ -939,7 +939,7 @@ impl DirSQL {
         // construction point reached by both `build()` and `build_async()`,
         // so the live watcher never sees a relative path (#250). `root` itself
         // is left untouched.
-        let watch_root = PathBuf::from(canonical_root(&root));
+        let watch_root = PathBuf::from(fs.canonical_root(&root));
 
         Ok(Self {
             inner: Arc::new(DirSqlInner {
@@ -1373,6 +1373,9 @@ trait FileSystem: Send + Sync {
     fn stat(&self, path: &Path) -> std::io::Result<FileStat>;
     /// BLAKE3-hash a file's contents. Mirrors [`hash_file`].
     fn hash(&self, path: &Path) -> std::io::Result<[u8; 32]>;
+    /// Canonicalize the watch root (literal fallback). Mirrors
+    /// [`canonical_root`](persist::canonical_root).
+    fn canonical_root(&self, root: &Path) -> String;
 }
 
 /// Production [`FileSystem`]: delegates to the real `std::fs` / [`hash_file`]
@@ -1386,6 +1389,10 @@ impl FileSystem for RealFs {
 
     fn hash(&self, path: &Path) -> std::io::Result<[u8; 32]> {
         hash_file(path)
+    }
+
+    fn canonical_root(&self, root: &Path) -> String {
+        canonical_root(root)
     }
 }
 
@@ -1894,6 +1901,7 @@ mod internal_tests {
     struct FakeFs {
         stats: StdHashMap<PathBuf, FileStat>,
         hashes: StdHashMap<PathBuf, [u8; 32]>,
+        canonical_roots: StdHashMap<PathBuf, String>,
     }
 
     impl FakeFs {
@@ -1905,6 +1913,18 @@ mod internal_tests {
 
         fn set_hash(&mut self, path: impl Into<PathBuf>, hash: [u8; 32]) {
             self.hashes.insert(path.into(), hash);
+        }
+
+        /// Builder: register a canned canonicalization for `root`, so the
+        /// `watch_root` computation in `finish_build_with_fs` becomes
+        /// deterministic without touching the real filesystem or process CWD.
+        fn with_canonical_root(
+            mut self,
+            root: impl Into<PathBuf>,
+            canonical: impl Into<String>,
+        ) -> Self {
+            self.canonical_roots.insert(root.into(), canonical.into());
+            self
         }
     }
 
@@ -1919,6 +1939,13 @@ mod internal_tests {
             self.hashes.get(path).copied().ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::NotFound, "fake: no such file")
             })
+        }
+
+        fn canonical_root(&self, root: &Path) -> String {
+            self.canonical_roots
+                .get(root)
+                .cloned()
+                .unwrap_or_else(|| root.to_string_lossy().into_owned())
         }
     }
 
@@ -2058,14 +2085,10 @@ mod internal_tests {
     // -----------------------------------------------------------------------
     // #250: canonical `watch_root` and the strip-prefix fallbacks.
     //
-    // `std::env::set_current_dir` is process-global, so the relative-root test
-    // serializes through this lock and restores the cwd on the way out.
+    // The canonicalization runs through the `FileSystem` seam, so these tests
+    // inject a `FakeFs` with a canned `canonical_root` mapping instead of
+    // mutating the process CWD or staging real files (#233).
     // -----------------------------------------------------------------------
-
-    fn cwd_lock() -> &'static Mutex<()> {
-        static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     /// Building with a **relative** root canonicalizes `watch_root` to an
     /// absolute path while leaving `root` (and therefore `config()` / `_path`)
@@ -2073,32 +2096,28 @@ mod internal_tests {
     /// `start_watching` watches `watch_root`, so `notify` never sees `.`.
     #[test]
     fn relative_root_canonicalizes_watch_root_only() {
-        let dir = TempDir::new().unwrap();
-        let canonical = std::fs::canonicalize(dir.path()).unwrap();
-
-        let _guard = cwd_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let original = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&canonical).unwrap();
-
-        let db = DirSQL::new(
+        // FakeFs canonicalizes the relative root `.` to a fixed absolute
+        // string, so the watch_root computation is deterministic with no CWD
+        // juggling.
+        let fake = FakeFs::default().with_canonical_root(".", "/ws/canonical");
+        let db = DirSQL::with_ignore_and_fs(
             ".",
             vec![Table::new("CREATE TABLE t (x TEXT)", "*.txt", |_| vec![])],
+            Vec::<String>::new(),
+            Arc::new(fake),
         )
         .unwrap();
-
-        // Restore cwd before asserting so a failure can't strand the process.
-        std::env::set_current_dir(&original).unwrap();
 
         // `root` is preserved verbatim; `config()` echoes it.
         assert_eq!(db.inner.root, PathBuf::from("."));
         assert_eq!(db.config().root, PathBuf::from("."));
-        // `watch_root` is absolute and points at the canonical temp dir.
+        // `watch_root` is absolute and points at the canonical dir.
         assert!(
             db.inner.watch_root.is_absolute(),
             "watch_root must be absolute, got {:?}",
             db.inner.watch_root
         );
-        assert_eq!(db.inner.watch_root, canonical);
+        assert_eq!(db.inner.watch_root, PathBuf::from("/ws/canonical"));
     }
 
     /// With an absolute root the canonical `watch_root` equals the (already
@@ -2107,10 +2126,14 @@ mod internal_tests {
     /// (watch_root) arm.
     #[test]
     fn process_file_event_strips_watch_root_prefix() {
-        let dir = TempDir::new().unwrap();
-        let canonical = std::fs::canonicalize(dir.path()).unwrap();
-        let db = DirSQL::new(
-            &canonical,
+        let root = PathBuf::from("/ws");
+        let abs = root.join("nested").join("a.txt");
+        // FakeFs canonicalizes the root to itself (already-canonical case) and
+        // stats the event path so the upsert's existence check passes — no real
+        // file is staged.
+        let fake = FakeFs::with_stat(abs.clone(), fake_stat()).with_canonical_root(&root, "/ws");
+        let db = DirSQL::with_ignore_and_fs(
+            &root,
             vec![Table::new(
                 "CREATE TABLE items (name TEXT, _path TEXT)",
                 "**/*.txt",
@@ -2121,12 +2144,10 @@ mod internal_tests {
                     )])]
                 },
             )],
+            Vec::<String>::new(),
+            Arc::new(fake),
         )
         .unwrap();
-
-        let abs = canonical.join("nested").join("a.txt");
-        std::fs::create_dir_all(canonical.join("nested")).unwrap();
-        std::fs::write(&abs, b"").unwrap();
 
         let events = db.process_file_event(FileEvent::Created(abs));
         assert_eq!(events.len(), 1, "expected one insert: {events:?}");
@@ -2148,10 +2169,11 @@ mod internal_tests {
     /// is not a prefix of the event path, leaving `root` as the real dir.
     #[test]
     fn process_file_event_falls_back_to_root_prefix() {
-        let dir = TempDir::new().unwrap();
-        let canonical = std::fs::canonicalize(dir.path()).unwrap();
-        let mut db = DirSQL::new(
-            &canonical,
+        let root = PathBuf::from("/ws");
+        let abs = root.join("b.txt");
+        let fake = FakeFs::with_stat(abs.clone(), fake_stat()).with_canonical_root(&root, "/ws");
+        let mut db = DirSQL::with_ignore_and_fs(
+            &root,
             vec![Table::new(
                 "CREATE TABLE items (name TEXT, _path TEXT)",
                 "**/*.txt",
@@ -2162,15 +2184,15 @@ mod internal_tests {
                     )])]
                 },
             )],
+            Vec::<String>::new(),
+            Arc::new(fake),
         )
         .unwrap();
 
         // Repoint watch_root to a non-prefix sibling so the first strip misses
         // and the `.or_else(root)` arm runs. `root` stays the real dir.
-        Arc::get_mut(&mut db.inner).unwrap().watch_root = canonical.join("does-not-prefix");
+        Arc::get_mut(&mut db.inner).unwrap().watch_root = root.join("does-not-prefix");
 
-        let abs = canonical.join("b.txt");
-        std::fs::write(&abs, b"").unwrap();
         let events = db.process_file_event(FileEvent::Created(abs));
         assert_eq!(events.len(), 1, "expected one insert: {events:?}");
         match &events[0] {
@@ -2192,10 +2214,10 @@ mod internal_tests {
     /// on a row.
     #[test]
     fn process_file_event_keeps_absolute_path_when_no_prefix_matches() {
-        let dir = TempDir::new().unwrap();
-        let canonical = std::fs::canonicalize(dir.path()).unwrap();
-        let db = DirSQL::new(
-            &canonical,
+        let root = PathBuf::from("/ws");
+        let fake = FakeFs::default().with_canonical_root(&root, "/ws");
+        let db = DirSQL::with_ignore_and_fs(
+            &root,
             vec![Table::new(
                 "CREATE TABLE items (name TEXT)",
                 "*.txt",
@@ -2206,12 +2228,15 @@ mod internal_tests {
                     )])]
                 },
             )],
+            Vec::<String>::new(),
+            Arc::new(fake),
         )
         .unwrap();
 
         // A path outside both roots: neither strip matches, so the absolute
         // path is used as the relative path. It does not match `*.txt` at the
-        // root, so no events are produced.
+        // root, so no events are produced. (The non-matching glob returns before
+        // any stat, so the FakeFs needs no entry for this path.)
         let outside = PathBuf::from("/some/elsewhere/c.md");
         let events = db.process_file_event(FileEvent::Created(outside));
         assert!(
@@ -2336,6 +2361,15 @@ mod internal_tests {
         assert!(
             fs.hash(&missing).is_err(),
             "hash of a missing path must error"
+        );
+        // `canonical_root` of a nonexistent path can't canonicalize, so it
+        // takes the literal fallback (the path's lossy string) — exercising the
+        // RealFs delegation to `persist::canonical_root` without a direct
+        // `std::fs` call in the test.
+        assert_eq!(
+            fs.canonical_root(&missing),
+            missing.to_string_lossy(),
+            "canonical_root must fall back to the literal path when it can't canonicalize"
         );
     }
 
