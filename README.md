@@ -15,7 +15,7 @@ A folder of files is durable, diff-able, version-controllable, and legible witho
 ```bash
 pip install dirsql                 # Python
 cargo add dirsql                   # Rust (library)
-pnpm add dirsql                    # TypeScript
+npm add dirsql                     # TypeScript
 
 # CLI (HTTP server, identical functionality)
 npx dirsql                         # via npm
