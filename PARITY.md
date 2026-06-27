@@ -53,6 +53,13 @@ the initial scan, SQL, watcher, and row diffing. Python (`dirsql-py-ext`) and
 TypeScript (`dirsql-napi`) bindings are thin shims that only marshal values
 between the host language and Rust.
 
+**Relative-root watching (#250) — parity maintained, no drift.** The watcher
+now canonicalizes its watch-root before handing it to `notify`, so a relative
+`root` emits events identically to an absolute one. The fix is entirely in the
+shared Rust core (`start_watching` / `process_file_event`), so all three SDKs
+gain it at once with no binding changes; the user-supplied `root` and the
+`config()`/`toJSON` snapshot are unchanged across all three.
+
 ## AsyncDirSQL
 
 | API                        | Python                                | Rust                                   |

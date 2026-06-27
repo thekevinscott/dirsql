@@ -56,13 +56,17 @@ impl Drop for CwdGuard {
 }
 
 fn items_table() -> Table {
-    Table::new("CREATE TABLE items (name TEXT, _path TEXT)", "**/*.txt", |path| {
-        let content = std::fs::read_to_string(path).unwrap_or_default();
-        vec![std::collections::HashMap::from([(
-            "name".to_string(),
-            Value::Text(content.trim().to_string()),
-        )])]
-    })
+    Table::new(
+        "CREATE TABLE items (name TEXT, _path TEXT)",
+        "**/*.txt",
+        |path| {
+            let content = std::fs::read_to_string(path).unwrap_or_default();
+            vec![std::collections::HashMap::from([(
+                "name".to_string(),
+                Value::Text(content.trim().to_string()),
+            )])]
+        },
+    )
 }
 
 /// #250: a watcher built on a relative `root` (`"."`) must still emit an insert

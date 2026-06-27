@@ -227,6 +227,17 @@ impl Table {
 struct DirSqlInner {
     db: Mutex<Db>,
     root: PathBuf,
+    /// Canonicalized form of `root`, used **only** for the live filesystem
+    /// watcher. `notify` has surprising behavior when handed a relative path
+    /// like `.` / `./data` (it may deliver no events at all, or deliver them
+    /// under the cwd-joined path so the relative prefix no longer strips):
+    /// the CLI binary works around this by canonicalizing its root before
+    /// watching, and the SDK now does the same (#250). Derived once at
+    /// construction via [`canonical_root`] (literal fallback when
+    /// canonicalization fails, e.g. a not-yet-created root), so the user's
+    /// `root` — and therefore the initial scan, [`DirSQL::config`], and the
+    /// `_path` virtual column — stay byte-for-byte unchanged.
+    watch_root: PathBuf,
     /// Pre-compiled matcher over all table globs plus ignore patterns.
     /// Built once at construction, reused by the initial scan and every
     /// subsequent watch iteration.
@@ -393,7 +404,9 @@ impl DirSQL {
     pub fn start_watching(&self) -> Result<()> {
         let mut guard = self.inner.watcher.lock().map_err(DirSqlError::lock)?;
         if guard.is_none() {
-            let watcher = Watcher::new(&self.inner.root).map_err(DirSqlError::watch)?;
+            // Watch the canonicalized root, never the (possibly relative)
+            // user-supplied one — `notify` misbehaves on relative paths (#250).
+            let watcher = Watcher::new(&self.inner.watch_root).map_err(DirSqlError::watch)?;
             *guard = Some(watcher);
         }
         Ok(())
@@ -515,8 +528,15 @@ impl DirSQL {
         let abs_path = match &event {
             FileEvent::Created(p) | FileEvent::Modified(p) | FileEvent::Deleted(p) => p.clone(),
         };
+        // Events now arrive under the canonical `watch_root` (the watcher was
+        // started on it), so strip that first; fall back to the user-supplied
+        // `root` (covers the already-canonical/absolute-root case and any
+        // event whose path predates the watch-root change), then to the raw
+        // absolute path. This keeps the computed relative `_path` identical to
+        // the pre-#250 behavior for both absolute and relative roots.
         let rel_path_buf = abs_path
-            .strip_prefix(&self.inner.root)
+            .strip_prefix(&self.inner.watch_root)
+            .or_else(|_| abs_path.strip_prefix(&self.inner.root))
             .unwrap_or(&abs_path)
             .to_path_buf();
 
@@ -870,10 +890,17 @@ impl DirSQL {
             write_meta(db.conn(), meta).map_err(DirSqlError::sqlite)?;
         }
 
+        // Canonicalize the watch root once, here at the single shared
+        // construction point reached by both `build()` and `build_async()`,
+        // so the live watcher never sees a relative path (#250). `root` itself
+        // is left untouched.
+        let watch_root = PathBuf::from(canonical_root(&root));
+
         Ok(Self {
             inner: Arc::new(DirSqlInner {
                 db: Mutex::new(db),
                 root,
+                watch_root,
                 matcher,
                 extract_map,
                 strict_map,
@@ -1865,6 +1892,171 @@ mod internal_tests {
         std::fs::write(&kept, b"").unwrap();
         let events = db.process_file_event(FileEvent::Created(kept));
         assert_eq!(events.len(), 1, "non-ignored path must produce one event");
+    }
+
+    // -----------------------------------------------------------------------
+    // #250: canonical `watch_root` and the strip-prefix fallbacks.
+    //
+    // `std::env::set_current_dir` is process-global, so the relative-root test
+    // serializes through this lock and restores the cwd on the way out.
+    // -----------------------------------------------------------------------
+
+    fn cwd_lock() -> &'static Mutex<()> {
+        static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    /// Building with a **relative** root canonicalizes `watch_root` to an
+    /// absolute path while leaving `root` (and therefore `config()` / `_path`)
+    /// exactly as the caller supplied it. This is the core of the #250 fix:
+    /// `start_watching` watches `watch_root`, so `notify` never sees `.`.
+    #[test]
+    fn relative_root_canonicalizes_watch_root_only() {
+        let dir = TempDir::new().unwrap();
+        let canonical = std::fs::canonicalize(dir.path()).unwrap();
+
+        let _guard = cwd_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&canonical).unwrap();
+
+        let db = DirSQL::new(
+            ".",
+            vec![Table::new("CREATE TABLE t (x TEXT)", "*.txt", |_| vec![])],
+        )
+        .unwrap();
+
+        // Restore cwd before asserting so a failure can't strand the process.
+        std::env::set_current_dir(&original).unwrap();
+
+        // `root` is preserved verbatim; `config()` echoes it.
+        assert_eq!(db.inner.root, PathBuf::from("."));
+        assert_eq!(db.config().root, PathBuf::from("."));
+        // `watch_root` is absolute and points at the canonical temp dir.
+        assert!(
+            db.inner.watch_root.is_absolute(),
+            "watch_root must be absolute, got {:?}",
+            db.inner.watch_root
+        );
+        assert_eq!(db.inner.watch_root, canonical);
+    }
+
+    /// With an absolute root the canonical `watch_root` equals the (already
+    /// canonical) root on this platform, and `process_file_event` strips that
+    /// prefix to yield a root-relative `_path` — the first `strip_prefix`
+    /// (watch_root) arm.
+    #[test]
+    fn process_file_event_strips_watch_root_prefix() {
+        let dir = TempDir::new().unwrap();
+        let canonical = std::fs::canonicalize(dir.path()).unwrap();
+        let db = DirSQL::new(
+            &canonical,
+            vec![Table::new(
+                "CREATE TABLE items (name TEXT, _path TEXT)",
+                "**/*.txt",
+                |_| {
+                    vec![Row::from_iter([(
+                        "name".to_string(),
+                        Value::Text("x".into()),
+                    )])]
+                },
+            )],
+        )
+        .unwrap();
+
+        let abs = canonical.join("nested").join("a.txt");
+        std::fs::create_dir_all(canonical.join("nested")).unwrap();
+        std::fs::write(&abs, b"").unwrap();
+
+        let events = db.process_file_event(FileEvent::Created(abs));
+        assert_eq!(events.len(), 1, "expected one insert: {events:?}");
+        match &events[0] {
+            RowEvent::Insert { row, .. } => {
+                assert_eq!(
+                    row.get("_path"),
+                    Some(&Value::Text("nested/a.txt".to_string())),
+                    "watch_root prefix must be stripped to a root-relative path"
+                );
+            }
+            other => panic!("expected Insert, got {other:?}"),
+        }
+    }
+
+    /// When an event path lies under the user-supplied `root` but not under
+    /// the canonical `watch_root`, the `.or_else` fallback strips `root`
+    /// instead. We force that split by pointing `watch_root` at a sibling that
+    /// is not a prefix of the event path, leaving `root` as the real dir.
+    #[test]
+    fn process_file_event_falls_back_to_root_prefix() {
+        let dir = TempDir::new().unwrap();
+        let canonical = std::fs::canonicalize(dir.path()).unwrap();
+        let mut db = DirSQL::new(
+            &canonical,
+            vec![Table::new(
+                "CREATE TABLE items (name TEXT, _path TEXT)",
+                "**/*.txt",
+                |_| {
+                    vec![Row::from_iter([(
+                        "name".to_string(),
+                        Value::Text("x".into()),
+                    )])]
+                },
+            )],
+        )
+        .unwrap();
+
+        // Repoint watch_root to a non-prefix sibling so the first strip misses
+        // and the `.or_else(root)` arm runs. `root` stays the real dir.
+        Arc::get_mut(&mut db.inner).unwrap().watch_root = canonical.join("does-not-prefix");
+
+        let abs = canonical.join("b.txt");
+        std::fs::write(&abs, b"").unwrap();
+        let events = db.process_file_event(FileEvent::Created(abs));
+        assert_eq!(events.len(), 1, "expected one insert: {events:?}");
+        match &events[0] {
+            RowEvent::Insert { row, .. } => {
+                assert_eq!(
+                    row.get("_path"),
+                    Some(&Value::Text("b.txt".to_string())),
+                    "root fallback must strip the user-supplied root prefix"
+                );
+            }
+            other => panic!("expected Insert, got {other:?}"),
+        }
+    }
+
+    /// When the event path is under neither `watch_root` nor `root`, the final
+    /// `unwrap_or(&abs_path)` arm keeps the absolute path. A path that matches
+    /// no table glob then yields no events, but the strip fallback is still
+    /// executed — we assert the no-event outcome to pin the arm without relying
+    /// on a row.
+    #[test]
+    fn process_file_event_keeps_absolute_path_when_no_prefix_matches() {
+        let dir = TempDir::new().unwrap();
+        let canonical = std::fs::canonicalize(dir.path()).unwrap();
+        let db = DirSQL::new(
+            &canonical,
+            vec![Table::new(
+                "CREATE TABLE items (name TEXT)",
+                "*.txt",
+                |_| {
+                    vec![Row::from_iter([(
+                        "name".to_string(),
+                        Value::Text("x".into()),
+                    )])]
+                },
+            )],
+        )
+        .unwrap();
+
+        // A path outside both roots: neither strip matches, so the absolute
+        // path is used as the relative path. It does not match `*.txt` at the
+        // root, so no events are produced.
+        let outside = PathBuf::from("/some/elsewhere/c.md");
+        let events = db.process_file_event(FileEvent::Created(outside));
+        assert!(
+            events.is_empty(),
+            "unmatched absolute path must produce no events: {events:?}"
+        );
     }
 
     /// Drive `reconcile_scan` directly with a cached file whose

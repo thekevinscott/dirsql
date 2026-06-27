@@ -213,6 +213,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **File watcher now emits events when `root` is relative.** Building a
+  `DirSQL` with a relative root (e.g. `DirSQL::new("./data", tables)` or
+  `DirSQL::new(".", tables)`) handed that relative path straight to `notify`,
+  which misbehaves on relative paths — depending on platform it delivered
+  **no events at all** or delivered them under the cwd-joined absolute path
+  so the `_path` virtual column leaked the absolute prefix. The initial scan
+  was unaffected; only the live `watch()` / `poll_events()` stream was broken.
+  The watcher now runs against a canonicalized watch-root (matching the CLI,
+  which already did this), while the user-supplied `root` is preserved
+  verbatim — so the initial scan, `config()` serialization, and `_path`
+  output are unchanged. Fix lives in the shared Rust core, so all three SDKs
+  (Rust, Python, TypeScript) are fixed with no binding changes. (#250)
+
 - **`npx dirsql` works on Linux hosts with glibc < 2.39 again.** The
   npm `bundled-cli` Linux binary in 0.3.11 / 0.3.12 was dynamically
   linked against `GLIBC_2.39` and crashed at startup on Ubuntu 22.04,
