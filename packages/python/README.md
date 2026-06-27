@@ -1,8 +1,10 @@
 # `dirsql` (Python SDK)
 
-Ephemeral SQL index over a local directory. Watches a filesystem, ingests structured files into an in-memory SQLite database, and exposes a SQL query interface. The database is purely in-memory -- the filesystem is always the source of truth.
+Ephemeral SQL index over a local directory. `dirsql` watches a filesystem, ingests structured files into an in-memory SQLite database, and exposes a SQL query interface -- the filesystem is always the source of truth.
 
 [Documentation](https://thekevinscott.github.io/dirsql/?lang=python)
+
+Also available as [`dirsql` on crates.io](https://crates.io/crates/dirsql) and [`dirsql` on npm](https://www.npmjs.com/package/dirsql).
 
 ## Installation
 
@@ -10,69 +12,41 @@ Ephemeral SQL index over a local directory. Watches a filesystem, ingests struct
 pip install dirsql
 ```
 
-Requires Python >= 3.12. Ships as a native extension (Rust via PyO3) -- binary wheels are provided for common platforms.
+Requires Python >= 3.12. Ships as a native extension (Rust via PyO3); prebuilt binary wheels are provided for common platforms.
 
-Each wheel also bundles the `dirsql` HTTP-server CLI as a console script, so `pip install dirsql` also gives you a `dirsql` command on `$PATH`. See the [CLI guide](https://github.com/thekevinscott/dirsql/blob/main/docs/guide/cli.md).
+## Quick start
 
-## Publishing (maintainers)
-
-Handled by `.github/workflows/publish.yml` (invoked from `minor-release.yml` / `patch-release.yml`). For each target triple the `build` job `cargo build`s the Rust CLI with `--features cli`, stages the binary into `dirsql/_binary/`, runs `maturin build` (which picks the binary up via the `[tool.maturin] include` rule in `pyproject.toml`), and the wheels + sdist are then trusted-published to PyPI.
-
-## Quick Start
+`DirSQL` is async by default: the constructor returns immediately, scanning runs in a background thread, and you `await db.ready()` before querying. Each table is a `(ddl, glob, extract)` triple: the DDL defines the SQLite schema, the glob selects files (relative to the root), and `extract` turns a matched file into a list of row dicts. `dirsql` does not read file contents -- if `extract` needs the file body it reads `path` itself; return an empty list to skip a file.
 
 ```python
 import asyncio
 import json
-import os
-import tempfile
 from dirsql import DirSQL, Table
 
 async def main():
-    # Create some data files
-    root = tempfile.mkdtemp()
-    os.makedirs(os.path.join(root, "comments", "abc"), exist_ok=True)
-    os.makedirs(os.path.join(root, "comments", "def"), exist_ok=True)
-
-    with open(os.path.join(root, "comments", "abc", "index.jsonl"), "w") as f:
-        f.write(json.dumps({"body": "looks good", "author": "alice"}) + "\n")
-        f.write(json.dumps({"body": "needs work", "author": "bob"}) + "\n")
-
-    with open(os.path.join(root, "comments", "def", "index.jsonl"), "w") as f:
-        f.write(json.dumps({"body": "agreed", "author": "carol"}) + "\n")
-
-    # Define a table: DDL, glob pattern, and an extract function
     db = DirSQL(
-        root,
+        "./my-blog",
         tables=[
             Table(
-                ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
-                glob="comments/**/index.jsonl",
-                extract=lambda path: [
-                    {
-                        "id": os.path.basename(os.path.dirname(path)),
-                        "body": row["body"],
-                        "author": row["author"],
-                    }
-                    for line in open(path, encoding="utf-8").read().splitlines()
-                    for row in [json.loads(line)]
-                ],
+                ddl="CREATE TABLE posts (title TEXT, author TEXT)",
+                glob="posts/*.json",
+                extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
             ),
         ],
     )
     await db.ready()
 
-    # Query with SQL
-    results = await db.query("SELECT * FROM comments WHERE author = 'alice'")
-    # [{"id": "abc", "body": "looks good", "author": "alice"}]
+    posts = await db.query("SELECT * FROM posts WHERE author = 'alice'")
+    print(posts)
 
 asyncio.run(main())
 ```
 
-## Multiple Tables and Joins
+## Multiple tables and joins
 
 ```python
 db = DirSQL(
-    root,
+    "./my-blog",
     tables=[
         Table(
             ddl="CREATE TABLE posts (title TEXT, author_id TEXT)",
@@ -94,95 +68,34 @@ results = await db.query("""
 """)
 ```
 
-## Ignoring Files
+## Ignoring files
 
 Pass `ignore` patterns to skip files during scanning and watching:
 
 ```python
 db = DirSQL(
-    root,
+    "./my-blog",
     ignore=["**/drafts/**", "**/.git/**"],
     tables=[...],
 )
 ```
 
-## Watching for Changes
+## Watching for changes
 
-`DirSQL` is async by default. The `watch()` method returns an async iterator of row-level change events.
+`db.watch()` returns an async iterator of row-level change events as files change on disk:
 
 ```python
-import asyncio
-import json
-from dirsql import DirSQL, Table
-
-async def main():
-    db = DirSQL(
-        "/path/to/data",
-        tables=[
-            Table(
-                ddl="CREATE TABLE items (name TEXT)",
-                glob="**/*.json",
-                extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
-            ),
-        ],
-    )
-    await db.ready()
-
-    # Query
-    results = await db.query("SELECT * FROM items")
-
-    # Watch for file changes (insert/update/delete/error events)
-    async for event in db.watch():
-        print(f"{event.action} on {event.table}: {event.row}")
-        if event.action == "error":
-            print(f"  error: {event.error}")
-
-asyncio.run(main())
+async for event in db.watch():
+    print(f"{event.action} on {event.table}: {event.row}")
+    if event.action == "error":
+        print(f"  error: {event.error}")
 ```
 
-## API Reference
+Each event has `.action` (`"insert"`, `"update"`, `"delete"`, or `"error"`), `.table`, `.row` (the new row, or the deleted row on `delete`), `.old_row` (the previous row, on `update`), `.file_path`, and `.error` (on `error`).
 
-### `Table(*, ddl, glob, extract)`
+## CLI
 
-Defines how files map to a SQL table.
-
-- **`ddl`** (`str`): A `CREATE TABLE` statement defining the schema.
-- **`glob`** (`str`): A glob pattern matched against file paths relative to root.
-- **`extract`** (`Callable[[str], list[dict]]`): A function receiving the matched file's absolute filesystem path and returning a list of row dicts. dirsql does not read file contents; a callback that needs the file body reads it itself (e.g. `open(path, encoding="utf-8").read()`). Each dict's keys must match the DDL column names.
-
-### `DirSQL(root=None, *, tables=None, ignore=None, config=None)`
-
-Creates an in-memory SQLite database indexed from the directory at `root`. The constructor is sync and returns immediately; scanning runs in a background thread.
-
-At least one of `root` or `config` must be supplied. When both `root` and `config` are passed (or `config` declares `[dirsql].root`), the explicit `root` wins and a warning is emitted on stderr.
-
-- **`root`** (`str | None`): Path to the directory to index. Optional when `config` supplies one.
-- **`tables`** (`list[Table] | None`): Programmatic table definitions. Appended to any tables in the config file.
-- **`ignore`** (`list[str] | None`): Glob patterns for paths to skip. Appended to any `[dirsql].ignore` patterns in the config file.
-- **`config`** (`str | None`): Optional path to a `.dirsql.toml` file. Its `[[table]]` entries, `[dirsql].ignore`, and optional `[dirsql].root` are merged into the constructor's inputs.
-
-#### `await DirSQL.ready()`
-
-Wait for the initial scan to complete. Idempotent -- safe to call multiple times. Raises any exception that occurred during init.
-
-#### `await DirSQL.query(sql) -> list[dict]`
-
-Execute a SQL query. Returns a list of dicts keyed by column name. Internal tracking columns (`_dirsql_*`) are excluded from results.
-
-#### `DirSQL.watch() -> AsyncIterator[RowEvent]`
-
-Returns an async iterator that yields `RowEvent` objects as files change on disk. Starts the filesystem watcher on first iteration.
-
-### `RowEvent`
-
-Emitted by `watch()` when a file change produces row-level diffs.
-
-- **`table`** (`str`): The affected table name.
-- **`action`** (`str`): One of `"insert"`, `"update"`, `"delete"`, `"error"`.
-- **`row`** (`dict | None`): The new row (for insert/update) or deleted row (for delete).
-- **`old_row`** (`dict | None`): The previous row (for update only).
-- **`error`** (`str | None`): Error message (for error events).
-- **`file_path`** (`str | None`): The relative file path that triggered the event.
+`pip install dirsql` also installs a `dirsql` console script that runs an HTTP server exposing the SDK over HTTP: `POST /query` for SQL and `GET /events` for a Server-Sent Events change stream. Run `dirsql` (or `uvx dirsql`) to start it. See the [CLI guide](https://thekevinscott.github.io/dirsql/cli/).
 
 ## License
 
