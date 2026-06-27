@@ -7,7 +7,7 @@
 import { spawnSync } from "node:child_process";
 import { die } from "./die.js";
 import { interpret } from "./interpret/index.js";
-import { resolveBinary } from "./resolveBinary.js";
+import { resolveBinary } from "./resolve-binary.js";
 
 export async function main(
   argv: string[] = process.argv.slice(2),

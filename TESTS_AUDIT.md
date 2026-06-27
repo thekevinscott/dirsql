@@ -237,7 +237,7 @@ Discovered while mirroring the Python gap tests to Rust and TypeScript:
   `.csv`, `.tsv`, `.toml`, `.yaml`/`.yml`, `.md` frontmatter,
   path captures, column mapping, `each`, ignore, multiple tables,
   explicit format override, `strict = true`, and the error cases) now
-  live in `packages/ts/test/from_config.test.ts`.
+  live in `packages/ts/test/from-config.test.ts`.
 - Signature matches Python's (`configPath` is the path to the TOML
   file, not the root dir); this divergence from Rust's `from_config(root_dir)`
   is documented in `PARITY.md` under "Language-Idiomatic Exceptions".

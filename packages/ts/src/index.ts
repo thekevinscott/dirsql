@@ -2,7 +2,7 @@
 //
 // The public surface is implemented in Rust via napi-rs. In development
 // `pnpm build` runs `napi build` which drops `dirsql.node` at the
-// package root; the loader in `loadNativeCore.ts` falls back to that
+// package root; the loader in `load-native-core.ts` falls back to that
 // file so running from source works.
 //
 // In a published install the napi binary ships inside a per-platform
@@ -10,8 +10,8 @@
 // and the loader resolves the one matching the host's OS/arch. No Rust
 // toolchain is required at install time on any supported platform.
 
-import { loadNativeCore as defaultLoadNativeCore } from "./loadNativeCore.js";
-import { resolveConfig } from "./resolveConfig.js";
+import { loadNativeCore as defaultLoadNativeCore } from "./load-native-core.js";
+import { resolveConfig } from "./resolve-config.js";
 
 /** Definition of a SQL-indexed table backed by files on disk. */
 export interface TableDef {

@@ -8,20 +8,20 @@ import {
   vi,
 } from "vitest";
 import type { DirSQL } from "../../index.js";
-import { buildTables } from "./buildTables.js";
-import { dispatchExtract } from "./dispatchExtract.js";
+import { buildTables } from "./build-tables.js";
+import { dispatchExtract } from "./dispatch-extract.js";
 import { interpret } from "./interpret.js";
-import { loadApp } from "./loadApp.js";
-import { writeMessage } from "./writeMessage.js";
+import { loadApp } from "./load-app.js";
+import { writeMessage } from "./write-message.js";
 
 // Every collaborator is mocked so the test isolates `interpret`'s glue logic.
 // `node:readline`'s `createInterface` is faked to return an async iterable of
 // lines directly -- this stands in for the line-buffered read over stdin, so
 // the test never needs a real `Readable` stream.
-vi.mock("./buildTables.js");
-vi.mock("./dispatchExtract.js");
-vi.mock("./loadApp.js");
-vi.mock("./writeMessage.js");
+vi.mock("./build-tables.js");
+vi.mock("./dispatch-extract.js");
+vi.mock("./load-app.js");
+vi.mock("./write-message.js");
 vi.mock("node:readline", async () => ({
   ...(await vi.importActual<typeof import("node:readline")>("node:readline")),
   createInterface: vi.fn(),

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadNativeCore } from "./loadNativeCore.js";
+import { loadNativeCore } from "./load-native-core.js";
 
 describe("loadNativeCore", () => {
   describe("when the platform sub-package is installed", () => {

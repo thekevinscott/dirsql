@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DirSQL, TableDef } from "../../index.js";
-import { buildTables } from "./buildTables.js";
+import { buildTables } from "./build-tables.js";
 
 // `buildTables`'s only collaborator is `parseTableName` from the core barrel.
 // Mock it so the SUT picks up the fake directly -- no real core, no

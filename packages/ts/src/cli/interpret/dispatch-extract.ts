@@ -4,7 +4,7 @@
 // will write back.
 
 import type { TableDef } from "../../index.js";
-import { errMessage } from "./errMessage.js";
+import { errMessage } from "./err-message.js";
 
 export interface ExtractRequest {
   type?: string;

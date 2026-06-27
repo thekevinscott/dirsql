@@ -29,8 +29,8 @@
     "build": "wireit",
     "build:debug": "wireit",
     "stage:platform": "wireit",
-    "prepack": "tsx tools/stageDocs.ts pre",
-    "postpack": "tsx tools/stageDocs.ts post",
+    "prepack": "tsx tools/stage-docs.ts pre",
+    "postpack": "tsx tools/stage-docs.ts post",
     "test": "wireit",
     "test:unit": "wireit",
     "test:integration": "wireit",
@@ -51,10 +51,10 @@
       "output": ["dist/**"]
     },
     "stage:platform": {
-      "command": "tsx tools/stagePlatform.ts",
+      "command": "tsx tools/stage-platform.ts",
       "dependencies": ["napi:build"],
       "files": [
-        "tools/stagePlatform.ts",
+        "tools/stage-platform.ts",
         "src/platforms.ts",
         "napi/src/**/*.rs",
         "napi/build.rs",

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TableDef } from "../../index.js";
-import { dispatchExtract } from "./dispatchExtract.js";
+import { dispatchExtract } from "./dispatch-extract.js";
 
 function tableMap(
   entries: Array<[string, TableDef["extract"]]>,

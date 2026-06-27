@@ -5,9 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { die } from "./die.js";
 import { interpret } from "./interpret/index.js";
 import { main } from "./main.js";
-import { resolveBinary } from "./resolveBinary.js";
+import { resolveBinary } from "./resolve-binary.js";
 
-vi.mock("./resolveBinary.js");
+vi.mock("./resolve-binary.js");
 vi.mock("./die.js");
 vi.mock("./interpret/index.js");
 vi.mock("node:child_process");

@@ -3,7 +3,7 @@
 //
 // Spawns the real `dist/cli/dirsql.js` launcher as a subprocess and talks
 // NDJSON over stdin/stdout. No monkeypatching, no in-process shortcut.
-// Subprocess plumbing lives in `./interpretSubprocess.ts`.
+// Subprocess plumbing lives in `./interpret-subprocess.ts`.
 //
 // NDJSON protocol (per #196):
 //   handshake (helper -> caller, once on startup):
@@ -25,7 +25,7 @@ import {
   send,
   shutdown,
   spawnInterpret,
-} from "./interpretSubprocess.js";
+} from "./interpret-subprocess.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = join(__dirname, "..");
@@ -39,8 +39,8 @@ const PKG: { bin: { dirsql: string } } = JSON.parse(
 const CLI_ENTRY = join(PKG_ROOT, PKG.bin.dirsql);
 
 const FIXTURE_DIR = join(__dirname, "__fixtures__", "interpret");
-const RAISES_CONFIG = join(FIXTURE_DIR, "dirsql.config_raises.mjs");
-const NO_DEFAULT_CONFIG = join(FIXTURE_DIR, "dirsql.config_no_default.mjs");
+const RAISES_CONFIG = join(FIXTURE_DIR, "dirsql.config-raises.mjs");
+const NO_DEFAULT_CONFIG = join(FIXTURE_DIR, "dirsql.config-no-default.mjs");
 const ALPHA_PATH = join(FIXTURE_DIR, "data", "a", "meta.json");
 
 /** Happy-path config exists in three loader flavors; same shape. */

@@ -22,7 +22,7 @@ on:
 # that doesn't require the napi-rs build chain (~seconds instead of minutes)
 # and shows up as its own red check rather than "Unit tests" failing on a
 # pure type error. The native addon is loaded at runtime via `createRequire`
-# (see `src/loadNativeCore.ts`), so `tsc --noEmit` does not need
+# (see `src/load-native-core.ts`), so `tsc --noEmit` does not need
 # `dirsql.node` or the generated `index.d.ts` to succeed.
 jobs:
   tsc:

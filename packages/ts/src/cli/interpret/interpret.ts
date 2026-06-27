@@ -19,11 +19,11 @@
 
 import { createInterface } from "node:readline";
 import type { DirSQL } from "../../index.js";
-import { buildTables } from "./buildTables.js";
-import { dispatchExtract } from "./dispatchExtract.js";
-import { errMessage } from "./errMessage.js";
-import { loadApp } from "./loadApp.js";
-import { writeMessage } from "./writeMessage.js";
+import { buildTables } from "./build-tables.js";
+import { dispatchExtract } from "./dispatch-extract.js";
+import { errMessage } from "./err-message.js";
+import { loadApp } from "./load-app.js";
+import { writeMessage } from "./write-message.js";
 
 export async function interpret(configPath: string): Promise<number> {
   if (!configPath) {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { platformKey } from "./platformKey.js";
+import { platformKey } from "./platform-key.js";
 
 afterEach(() => vi.restoreAllMocks());
 
