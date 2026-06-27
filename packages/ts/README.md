@@ -9,10 +9,10 @@ Also available as [`dirsql` on crates.io](https://crates.io/crates/dirsql) and [
 ## Installation
 
 ```bash
-pnpm add dirsql
+npm add dirsql
 ```
 
-Prebuilt binaries ship for linux-x64, linux-arm64, darwin-x64, darwin-arm64, and win32-x64; npm / pnpm pick up the right one via `optionalDependencies`, so no Rust toolchain is required. The npm CLI requires **Node >= 20.11**.
+Prebuilt binaries ship for linux-x64, linux-arm64, darwin-x64, darwin-arm64, and win32-x64; npm picks up the right one via `optionalDependencies`, so no Rust toolchain is required. The npm CLI requires **Node >= 20.11**.
 
 ## Quick start
 
