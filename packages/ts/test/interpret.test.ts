@@ -15,7 +15,7 @@
 //     {"type": "result", "id": <int>, "ok": false, "error": "<msg>"}
 
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -31,9 +31,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = join(__dirname, "..");
 
 // Resolve the CLI entry from package.json's `bin` field so a future rename
-// of bin's location is picked up automatically.
+// of bin's location is picked up automatically. Top-level await reads the
+// manifest once at module load; the value is a module constant the tests read.
 const PKG: { bin: { dirsql: string } } = JSON.parse(
-  readFileSync(join(PKG_ROOT, "package.json"), "utf8"),
+  await readFile(join(PKG_ROOT, "package.json"), "utf8"),
 );
 const CLI_ENTRY = join(PKG_ROOT, PKG.bin.dirsql);
 
@@ -64,7 +65,7 @@ describe("dirsql interpret (#196)", () => {
     it.each(HAPPY_EXTS)(
       "emits a config message whose state equals app.toJSON() (.%s loader)",
       async (ext) => {
-        handle = spawnInterpret(CLI_ENTRY, happyConfig(ext));
+        handle = await spawnInterpret(CLI_ENTRY, happyConfig(ext));
         expect(JSON.parse(await readLine(handle))).toEqual({
           type: "config",
           state: {
@@ -89,7 +90,7 @@ describe("dirsql interpret (#196)", () => {
     it.each(HAPPY_EXTS)(
       "returns ok=true with the rows extract produced (.%s loader)",
       async (ext) => {
-        handle = spawnInterpret(CLI_ENTRY, happyConfig(ext));
+        handle = await spawnInterpret(CLI_ENTRY, happyConfig(ext));
         await readLine(handle); // drain handshake
         send(handle, {
           type: "extract",
@@ -107,7 +108,7 @@ describe("dirsql interpret (#196)", () => {
     );
 
     it("returns ok=false when the user extract throws", async () => {
-      handle = spawnInterpret(CLI_ENTRY, RAISES_CONFIG);
+      handle = await spawnInterpret(CLI_ENTRY, RAISES_CONFIG);
       await readLine(handle); // drain handshake
       send(handle, {
         type: "extract",
@@ -124,7 +125,7 @@ describe("dirsql interpret (#196)", () => {
     });
 
     it("returns ok=false when the request names an unknown table", async () => {
-      handle = spawnInterpret(CLI_ENTRY, happyConfig("mjs"));
+      handle = await spawnInterpret(CLI_ENTRY, happyConfig("mjs"));
       await readLine(handle); // drain handshake
       send(handle, {
         type: "extract",

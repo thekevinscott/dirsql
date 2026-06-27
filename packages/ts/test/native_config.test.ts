@@ -9,7 +9,7 @@
 // `cli_smoke` e2e.
 
 import { type ChildProcess, spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -44,18 +44,21 @@ const CONFIG_DIR = join(__dirname, "__fixtures__");
 // via PATH. In a real `npm install -g dirsql` that resolves to the Node
 // launcher; in this dev tree there's no global `dirsql` on PATH yet, so
 // drop a shim that re-invokes the Node launcher into a tempdir and
-// prepend it to PATH before spawning the binary.
-const PKG = JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8"));
-const CLI_ENTRY = join(PKG_ROOT, PKG.bin.dirsql);
+// prepend it to PATH before spawning the binary. The CLI entry is read from
+// package.json's `bin` field inside the hook (it's only needed there).
 let SHIM_DIR: string;
-beforeAll(() => {
-  SHIM_DIR = mkdtempSync(join(tmpdir(), "dirsql-shim-"));
+beforeAll(async () => {
+  const pkg = JSON.parse(
+    await readFile(join(PKG_ROOT, "package.json"), "utf8"),
+  ) as { bin: { dirsql: string } };
+  const cliEntry = join(PKG_ROOT, pkg.bin.dirsql);
+  SHIM_DIR = await mkdtemp(join(tmpdir(), "dirsql-shim-"));
   const shim = join(SHIM_DIR, "dirsql");
-  writeFileSync(
+  await writeFile(
     shim,
-    `#!/usr/bin/env bash\nexec "${process.execPath}" "${CLI_ENTRY}" "$@"\n`,
+    `#!/usr/bin/env bash\nexec "${process.execPath}" "${cliEntry}" "$@"\n`,
   );
-  chmodSync(shim, 0o755);
+  await chmod(shim, 0o755);
 });
 
 function freePort(): Promise<number> {
