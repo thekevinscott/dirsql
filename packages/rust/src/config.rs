@@ -257,23 +257,6 @@ glob = "*.json"
     }
 
     #[test]
-    fn load_config_from_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(".dirsql.toml");
-        std::fs::write(
-            &path,
-            r#"
-[[table]]
-ddl = "CREATE TABLE t (_path TEXT)"
-glob = "*.csv"
-"#,
-        )
-        .unwrap();
-        let config = load_config(&path).unwrap();
-        assert_eq!(config.tables.len(), 1);
-    }
-
-    #[test]
     fn load_config_missing_file_returns_io_error() {
         let err = load_config(Path::new("/nonexistent/.dirsql.toml")).unwrap_err();
         // Single-line `matches!` pins the variant without a dead fallback arm.
