@@ -137,6 +137,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **TypeScript SDK: lowered the supported Node floor to `>=20.11`** (from
+  `>=22`). Nothing in the shipped SDK or CLI requires Node 22: the native
+  addon targets the `napi6` ABI (Node 10/12/14+), the only runtime
+  dependency (`smol-toml`) needs Node 18, and the newest API used
+  (`import.meta.dirname`) landed in Node 20.11. Lowering the floor also lets
+  a bare `npx dirsql` resolve to the current release on Node 20 instead of
+  down-selecting to a bin-less pre-`0.1.11` version. (#246, #243)
+
 - **Rust SDK: `DirSQL::query`'s `_dirsql_*` projection filter is comment-
   and string-literal-aware.** Previously the column-filter logic used
   `sql.contains("_dirsql_file_path")`, which leaked the tracking column

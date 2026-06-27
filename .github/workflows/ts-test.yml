@@ -16,8 +16,12 @@ on:
 
 jobs:
   unit:
-    name: Unit tests
+    name: Unit tests (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
     steps:
       - uses: actions/checkout@v6
 
@@ -32,7 +36,7 @@ jobs:
       - name: Install Node
         uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: ${{ matrix.node }}
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -52,8 +56,12 @@ jobs:
         run: pnpm test:unit
 
   integration:
-    name: Integration tests
+    name: Integration tests (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
     steps:
       - uses: actions/checkout@v6
 
@@ -68,7 +76,7 @@ jobs:
       - name: Install Node
         uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: ${{ matrix.node }}
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -96,8 +104,12 @@ jobs:
     # npm release is broken (`npx dirsql` would fail) and must not go
     # out. No mocks / no monkeypatching; exercises the real
     # published-artifact path.
-    name: Pack install smoke test
+    name: Pack install smoke test (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
     steps:
       - uses: actions/checkout@v6
 
@@ -112,7 +124,7 @@ jobs:
       - name: Install Node
         uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: ${{ matrix.node }}
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
