@@ -33,6 +33,7 @@ test-e2e:
 test-conventions:
     testing-conventions unit colocated-test --language python packages/python/dirsql
     testing-conventions unit colocated-test --language typescript packages/ts/src
+    testing-conventions unit colocated-test --language rust packages/rust/src
 
 # CI test target (unit + integration, no e2e)
 test-ci:
