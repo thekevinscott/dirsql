@@ -273,6 +273,10 @@ struct DirSqlInner {
     /// loop. Bounds event-to-stream latency from above (and idle CPU from
     /// below). Defaults to 200ms — see [`DirSQLBuilder::poll_interval`].
     poll_interval: Duration,
+    /// Filesystem seam used by the watch-upsert path. Always [`RealFs`] in
+    /// production; unit tests inject a deterministic double via the
+    /// `with_ignore_and_fs` test-seam constructor.
+    fs: Arc<dyn FileSystem>,
 }
 
 /// Serializable snapshot of a `DirSQL` instance's resolved runtime state.
@@ -580,7 +584,7 @@ impl DirSQL {
 
     fn handle_upsert(&self, table: &str, abs_path: &Path, rel_path: &str) -> Vec<RowEvent> {
         // The file may have vanished between the watcher event and now.
-        match std::fs::metadata(abs_path) {
+        match self.inner.fs.stat(abs_path) {
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
             Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
@@ -659,6 +663,36 @@ impl DirSQL {
         Self::finish_build(prepared)
     }
 
+    /// Test-seam build path: identical to [`build_from_resolved`] but stores
+    /// the supplied [`FileSystem`] double on the resulting instance so the
+    /// watch-upsert path's filesystem read can be faked deterministically.
+    /// The prepare phase still uses [`RealFs`] (it has no instance yet), but
+    /// the unit tests that exercise this seam build over an empty temp dir, so
+    /// the scan touches nothing.
+    #[cfg(test)]
+    pub(crate) fn with_ignore_and_fs<I, S>(
+        root: impl Into<PathBuf>,
+        tables: Vec<Table>,
+        ignore: I,
+        fs: Arc<dyn FileSystem>,
+    ) -> Result<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let resolved = ResolvedBuild {
+            root: root.into(),
+            tables,
+            ignore: ignore.into_iter().map(Into::into).collect(),
+            extensions: Vec::new(),
+            persist: false,
+            persist_path: None,
+            poll_interval: DEFAULT_POLL_INTERVAL,
+        };
+        let prepared = Self::prepare_resolved(resolved)?;
+        Self::finish_build_with_fs(prepared, fs)
+    }
+
     /// Split-phase construction — part 1. Performs all I/O that is safe to run
     /// off the host's main thread: validates DDL, compiles the matcher, walks
     /// the directory, opens the persistent cache (when enabled) and decides
@@ -713,7 +747,7 @@ impl DirSQL {
                 }
                 (files, Vec::new(), Vec::new())
             }
-            Some(ctx) => reconcile_scan(&root, scanned, ctx)?,
+            Some(ctx) => reconcile_scan(&root, scanned, ctx, &RealFs)?,
         };
 
         let _ = table_names;
@@ -748,6 +782,17 @@ impl DirSQL {
     /// run. For the napi-rs binding that is the JS main thread.
     #[doc(hidden)]
     pub fn finish_build(prepared: PreparedBuild) -> Result<Self> {
+        Self::finish_build_with_fs(prepared, Arc::new(RealFs))
+    }
+
+    /// Test-seam variant of [`finish_build`] that takes the [`FileSystem`]
+    /// double to store on the instance. Production always passes
+    /// `Arc::new(RealFs)` (via [`finish_build`]); unit tests inject a fake so
+    /// the watch-upsert path's `stat` read is deterministic.
+    pub(crate) fn finish_build_with_fs(
+        prepared: PreparedBuild,
+        fs: Arc<dyn FileSystem>,
+    ) -> Result<Self> {
         let PreparedBuild {
             root,
             tables,
@@ -914,6 +959,7 @@ impl DirSQL {
                 poll_used: AtomicBool::new(false),
                 watch_thread_started: AtomicBool::new(false),
                 poll_interval,
+                fs,
             }),
         })
     }
@@ -1316,6 +1362,33 @@ fn prepare_persist(
     })
 }
 
+/// Internal filesystem seam. Every effectful filesystem read performed by the
+/// persist/reconcile and watch-upsert paths goes through this trait so unit
+/// tests can inject a deterministic double (avoiding real `std::fs` calls and
+/// the racy timing windows they imply). Production always uses [`RealFs`],
+/// which replicates the previous inline `std::fs`/`hash_file` calls exactly --
+/// this is purely a test seam, not a behavioral change.
+trait FileSystem: Send + Sync {
+    /// Stat a path. Mirrors `std::fs::metadata(path).map(|m| FileStat::from_metadata(&m))`.
+    fn stat(&self, path: &Path) -> std::io::Result<FileStat>;
+    /// BLAKE3-hash a file's contents. Mirrors [`hash_file`].
+    fn hash(&self, path: &Path) -> std::io::Result<[u8; 32]>;
+}
+
+/// Production [`FileSystem`]: delegates to the real `std::fs` / [`hash_file`]
+/// calls that the persist and watch paths used inline before the seam existed.
+struct RealFs;
+
+impl FileSystem for RealFs {
+    fn stat(&self, path: &Path) -> std::io::Result<FileStat> {
+        std::fs::metadata(path).map(|m| FileStat::from_metadata(&m))
+    }
+
+    fn hash(&self, path: &Path) -> std::io::Result<[u8; 32]> {
+        hash_file(path)
+    }
+}
+
 /// Decide which files are trusted, which need re-parsing, and which were
 /// removed since the last cache write.
 #[allow(clippy::type_complexity)]
@@ -1323,6 +1396,7 @@ fn reconcile_scan(
     root: &Path,
     scanned: Vec<(PathBuf, String)>,
     ctx: &PersistContext,
+    fs: &dyn FileSystem,
 ) -> Result<(Vec<ScannedFile>, Vec<TrustedFile>, Vec<(String, String)>)> {
     let mut to_parse = Vec::new();
     let mut trusted = Vec::new();
@@ -1333,8 +1407,7 @@ fn reconcile_scan(
         let rel_path = relative_path(root, &path);
         seen_paths.insert(rel_path.clone());
 
-        let metadata = std::fs::metadata(&path)?;
-        let stat = FileStat::from_metadata(&metadata);
+        let stat = fs.stat(&path)?;
 
         let cached = ctx.cached.get(&rel_path);
         let trust = match cached {
@@ -1344,7 +1417,7 @@ fn reconcile_scan(
                     true
                 } else {
                     // Hash-confirm.
-                    match (hash_file(&path).ok(), c.content_hash) {
+                    match (fs.hash(&path).ok(), c.content_hash) {
                         (Some(live), Some(cached_hash)) => live == cached_hash,
                         _ => false,
                     }
@@ -1808,7 +1881,59 @@ mod readonly_tests {
 #[cfg(test)]
 mod internal_tests {
     use super::*;
+    use std::collections::HashMap as StdHashMap;
     use tempfile::TempDir;
+
+    /// Deterministic [`FileSystem`] double for unit tests. Backed by a map of
+    /// canned [`FileStat`]s (and an optional canned hash); any path not present
+    /// stats/hashes as an `io::Error` of kind `NotFound`. Lets the tests of the
+    /// persist/reconcile and watch-upsert paths exercise the metadata-read and
+    /// racy-window branches without touching the real filesystem (and without
+    /// depending on real mtime timing).
+    #[derive(Default)]
+    struct FakeFs {
+        stats: StdHashMap<PathBuf, FileStat>,
+        hashes: StdHashMap<PathBuf, [u8; 32]>,
+    }
+
+    impl FakeFs {
+        fn with_stat(path: impl Into<PathBuf>, stat: FileStat) -> Self {
+            let mut fs = FakeFs::default();
+            fs.stats.insert(path.into(), stat);
+            fs
+        }
+
+        fn set_hash(&mut self, path: impl Into<PathBuf>, hash: [u8; 32]) {
+            self.hashes.insert(path.into(), hash);
+        }
+    }
+
+    impl FileSystem for FakeFs {
+        fn stat(&self, path: &Path) -> std::io::Result<FileStat> {
+            self.stats.get(path).cloned().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "fake: no such file")
+            })
+        }
+
+        fn hash(&self, path: &Path) -> std::io::Result<[u8; 32]> {
+            self.hashes.get(path).copied().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "fake: no such file")
+            })
+        }
+    }
+
+    /// A canned [`FileStat`] for unit tests that don't care about specific
+    /// values, only that a stat succeeds. `snapshot_ns`-comparable via
+    /// `mtime_ns`.
+    fn fake_stat() -> FileStat {
+        FileStat {
+            size: 5,
+            mtime_ns: 1_000,
+            ctime_ns: 1_000,
+            inode: 1,
+            dev: 1,
+        }
+    }
 
     /// A relative path with a basename, parent dir, and extension exercises the
     /// `Some` arms of `stat_virtuals`' path inspection, plus the `Some` arms of
@@ -1899,7 +2024,11 @@ mod internal_tests {
     #[test]
     fn process_file_event_skips_ignored_paths() {
         let dir = TempDir::new().unwrap();
-        let db = DirSQL::with_ignore(
+        let kept = dir.path().join("keep.txt");
+        // Inject a fake fs so the non-ignored path's stat read succeeds without
+        // staging a real file. The ignored path is dropped before any stat.
+        let fake = FakeFs::with_stat(kept.clone(), fake_stat());
+        let db = DirSQL::with_ignore_and_fs(
             dir.path(),
             vec![Table::new(
                 "CREATE TABLE items (name TEXT)",
@@ -1912,6 +2041,7 @@ mod internal_tests {
                 },
             )],
             vec!["skip/**"],
+            Arc::new(fake),
         )
         .unwrap();
 
@@ -1921,8 +2051,6 @@ mod internal_tests {
         assert!(events.is_empty(), "ignored path must produce no events");
 
         // Non-ignored path: the extract closure runs and yields one insert.
-        let kept = dir.path().join("keep.txt");
-        std::fs::write(&kept, b"").unwrap();
         let events = db.process_file_event(FileEvent::Created(kept));
         assert_eq!(events.len(), 1, "non-ignored path must produce one event");
     }
@@ -2099,10 +2227,12 @@ mod internal_tests {
     fn reconcile_scan_hash_confirms_in_racy_window() {
         let dir = TempDir::new().unwrap();
         let abs = dir.path().join("a.txt");
-        std::fs::write(&abs, b"payload").unwrap();
-        let meta = std::fs::metadata(&abs).unwrap();
-        let stat = FileStat::from_metadata(&meta);
-        let live_hash = hash_file(&abs).unwrap();
+        let stat = fake_stat();
+        let live_hash = [7u8; 32];
+        // Fake fs: canned stat + matching hash, so the racy-window hash-confirm
+        // branch sees a live hash equal to the cached one and trusts the file.
+        let mut fake = FakeFs::with_stat(abs.clone(), stat.clone());
+        fake.set_hash(abs.clone(), live_hash);
 
         let mut cached = HashMap::new();
         cached.insert(
@@ -2123,7 +2253,8 @@ mod internal_tests {
             cold_rebuild: false,
         };
         let scanned = vec![(abs.clone(), "t".to_string())];
-        let (to_parse, trusted, deleted) = reconcile_scan(dir.path(), scanned, &ctx).unwrap();
+        let (to_parse, trusted, deleted) =
+            reconcile_scan(dir.path(), scanned, &ctx, &fake).unwrap();
         assert!(to_parse.is_empty());
         assert_eq!(trusted.len(), 1);
         assert_eq!(trusted[0].rel_path, "a.txt");
@@ -2136,9 +2267,12 @@ mod internal_tests {
     fn reconcile_scan_racy_window_without_hash_reparses() {
         let dir = TempDir::new().unwrap();
         let abs = dir.path().join("b.txt");
-        std::fs::write(&abs, b"payload").unwrap();
-        let meta = std::fs::metadata(&abs).unwrap();
-        let stat = FileStat::from_metadata(&meta);
+        let stat = fake_stat();
+        // The live hash is available (file present) but the cache stored no
+        // content hash, so the `(Some(live), None)` pair falls through the
+        // `_ => false` arm: the file is NOT trusted and is re-parsed.
+        let mut fake = FakeFs::with_stat(abs.clone(), stat.clone());
+        fake.set_hash(abs.clone(), [9u8; 32]);
 
         let mut cached = HashMap::new();
         cached.insert(
@@ -2158,7 +2292,8 @@ mod internal_tests {
             cold_rebuild: false,
         };
         let scanned = vec![(abs.clone(), "t".to_string())];
-        let (to_parse, trusted, _deleted) = reconcile_scan(dir.path(), scanned, &ctx).unwrap();
+        let (to_parse, trusted, _deleted) =
+            reconcile_scan(dir.path(), scanned, &ctx, &fake).unwrap();
         assert_eq!(to_parse.len(), 1);
         assert!(trusted.is_empty());
     }
@@ -2176,7 +2311,32 @@ mod internal_tests {
         };
         let missing = dir.path().join("ghost.txt");
         let scanned = vec![(missing, "t".to_string())];
-        assert!(reconcile_scan(dir.path(), scanned, &ctx).is_err());
+        // An empty fake fs stats every path as NotFound; the `?` in
+        // `reconcile_scan` propagates that error.
+        let fake = FakeFs::default();
+        assert!(reconcile_scan(dir.path(), scanned, &ctx, &fake).is_err());
+    }
+
+    /// Exercise the production [`RealFs`] [`FileSystem`] impl directly so its
+    /// `stat`/`hash` method bodies are covered without the integration suite
+    /// having to deterministically land in `reconcile_scan`'s racy window.
+    /// Both methods run against a path that does not exist (inside a temp dir,
+    /// so no direct `std::fs` call lives in the test): each delegates to its
+    /// real backing (`std::fs::metadata` / `hash_file`) and surfaces the
+    /// resulting `NotFound` error, executing the body either way.
+    #[test]
+    fn real_fs_delegates_stat_and_hash() {
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("nope.txt");
+        let fs = RealFs;
+        assert!(
+            fs.stat(&missing).is_err(),
+            "stat of a missing path must error"
+        );
+        assert!(
+            fs.hash(&missing).is_err(),
+            "hash of a missing path must error"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2220,8 +2380,12 @@ mod internal_tests {
     fn upsert_fixture() -> (TempDir, DirSQL, PathBuf, String) {
         let dir = TempDir::new().unwrap();
         let abs = dir.path().join("a.txt");
-        std::fs::write(&abs, b"hello").unwrap();
-        let db = DirSQL::with_ignore(
+        // Inject a fake fs that stats the fixture path successfully (so
+        // `handle_upsert`'s vanished-file guard passes) without staging a real
+        // file. Any other path stats as NotFound, which the vanished-file test
+        // relies on.
+        let fake = FakeFs::with_stat(abs.clone(), fake_stat());
+        let db = DirSQL::with_ignore_and_fs(
             dir.path(),
             vec![Table::new(
                 "CREATE TABLE items (name TEXT)",
@@ -2234,6 +2398,7 @@ mod internal_tests {
                 },
             )],
             Vec::<String>::new(),
+            Arc::new(fake),
         )
         .unwrap();
         (dir, db, abs, "a.txt".to_string())
@@ -2360,7 +2525,12 @@ mod internal_tests {
         // the file is created afterwards and reaches the DB only through
         // `handle_upsert`, isolating the arm under test.
         let dir = TempDir::new().unwrap();
-        let db = DirSQL::with_ignore(
+        let abs = dir.path().join("a.txt");
+        // Inject a fake fs so the strict table's `handle_upsert` stat read
+        // succeeds without staging a real file; the normalize-error arm is the
+        // arm under test.
+        let fake = FakeFs::with_stat(abs.clone(), fake_stat());
+        let db = DirSQL::with_ignore_and_fs(
             dir.path(),
             vec![Table::strict(
                 "CREATE TABLE items (name TEXT)",
@@ -2373,11 +2543,10 @@ mod internal_tests {
                 },
             )],
             Vec::<String>::new(),
+            Arc::new(fake),
         )
         .unwrap();
 
-        let abs = dir.path().join("a.txt");
-        std::fs::write(&abs, b"hello").unwrap();
         let events = db.handle_upsert("items", &abs, "a.txt");
         assert_eq!(events.len(), 1, "expected one error event: {events:?}");
         let dbg = format!("{:?}", events[0]);
