@@ -22,7 +22,7 @@
     "triples": {}
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=20.11.0"
   },
   "scripts": {
     "artifacts": "napi artifacts",
