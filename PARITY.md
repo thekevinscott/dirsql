@@ -34,6 +34,19 @@ wins (a warning is emitted on stderr).
 | Poll events                | `db._poll_events(ms)`                          | `db.poll_events(duration)`                           | `await db.pollEvents(ms)` (runs on libuv threadpool)    |
 | Watch (channel/stream)     | `async for event in db.watch()` (via `_async.py`) | `db.watch() -> WatchStream` (channel)                | `for await (const ev of db.watch())`                    |
 | Resolved-state serialization | `vars(db)` / `db.__dict__` -> JSON-able dict | `db.config() -> DirSQLConfig` (`serde::Serialize`)   | `db.toJSON()` / `JSON.stringify(db)` -> `DirSQLConfig`  |
+| Load SQLite extension(s)   | _not yet — [#229](https://github.com/thekevinscott/dirsql/issues/229)_ | `.extension(Extension)` / `.extensions(I)` builder; `[[dirsql.extension]]` config entries (`path` + optional `entrypoint`) | _not yet — [#230](https://github.com/thekevinscott/dirsql/issues/230)_ |
+
+**Extension loading — parity drift (Rust ahead), see #225.** The Rust core loads
+SQLite extensions declared as `[[dirsql.extension]]` config entries or via
+`DirSQLBuilder::extension` / `extensions`, before any `CREATE TABLE` (enable →
+load → disable). The `.dirsql.toml` form is parsed by the shared Rust config
+loader. The Python and TypeScript SDK constructors do not yet expose an
+`extensions` parameter, nor does the `interpret` native-config handshake carry
+it; tracked in [#229](https://github.com/thekevinscott/dirsql/issues/229)
+(Python) and [#230](https://github.com/thekevinscott/dirsql/issues/230) (TS).
+The Rust resolved-state snapshot (`DirSQL::config()` / `DirSQLConfig`) now
+serializes an `extensions` array; the Python and TypeScript `toJSON` snapshots
+will gain it when they pick up the feature.
 
 All three bindings share a single Rust implementation: `dirsql::DirSQL` handles
 the initial scan, SQL, watcher, and row diffing. Python (`dirsql-py-ext`) and

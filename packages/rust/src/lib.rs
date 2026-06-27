@@ -47,6 +47,7 @@ use std::thread;
 use std::time::Duration;
 use thiserror::Error;
 
+pub use crate::config::ExtensionSpec as Extension;
 pub use crate::db::{DbError, Value};
 pub use crate::differ::RowEvent;
 #[doc(hidden)]
@@ -88,6 +89,13 @@ pub enum DirSqlError {
 
     #[error("table DDL could not be parsed: {0}")]
     Ddl(String),
+
+    #[error("failed to load extension '{}': {source}", .path.display())]
+    Extension {
+        path: PathBuf,
+        #[source]
+        source: DbError,
+    },
 
     #[error("duplicate table name: {0}")]
     DuplicateTable(String),
@@ -232,6 +240,8 @@ struct DirSqlInner {
     table_configs: Vec<TableConfig>,
     /// Resolved ignore patterns preserved for [`DirSQL::config`].
     ignore: Vec<String>,
+    /// Configured SQLite extensions, preserved for [`DirSQL::config`].
+    extensions: Vec<Extension>,
     /// Whether persistent caching is enabled.
     persist: bool,
     /// Override location of the persistent cache file.
@@ -278,6 +288,8 @@ pub struct DirSQLConfig {
     pub ignore: Vec<String>,
     pub persist: bool,
     pub persist_path: Option<PathBuf>,
+    /// SQLite extensions loaded onto the connection at startup, in load order.
+    pub extensions: Vec<Extension>,
 }
 
 /// Serializable per-table portion of [`DirSQLConfig`]. Captures only the
@@ -357,6 +369,7 @@ impl DirSQL {
             ignore: self.inner.ignore.clone(),
             persist: self.inner.persist,
             persist_path: self.inner.persist_path.clone(),
+            extensions: self.inner.extensions.clone(),
         }
     }
 
@@ -641,6 +654,7 @@ impl DirSQL {
             root,
             tables,
             ignore,
+            extensions,
             persist,
             persist_path,
             poll_interval,
@@ -687,6 +701,7 @@ impl DirSQL {
         Ok(PreparedBuild {
             root,
             tables,
+            extensions,
             matcher,
             scanned_files,
             persist: persist_ctx.map(|ctx| PreparedPersist {
@@ -716,6 +731,7 @@ impl DirSQL {
         let PreparedBuild {
             root,
             tables,
+            extensions,
             matcher,
             scanned_files,
             persist,
@@ -729,6 +745,20 @@ impl DirSQL {
             Some(p) => (p.db, Some((p.trusted, p.deleted, p.meta, p.cold_rebuild))),
             None => (Db::new()?, None),
         };
+
+        // Load configured SQLite extensions onto the connection before any
+        // CREATE TABLE so a table's DDL and later queries can use
+        // extension-provided functions. (An extension-backed *virtual table*
+        // cannot be a dirsql-managed `[[table]]` — those inject per-file
+        // tracking columns; see Db::create_table.) Loading is enabled only for
+        // the duration of each load and disabled again afterwards.
+        for ext in &extensions {
+            db.load_extension(&ext.path, ext.entrypoint.as_deref())
+                .map_err(|source| DirSqlError::Extension {
+                    path: ext.path.clone(),
+                    source,
+                })?;
+        }
 
         let mut extract_map: HashMap<String, Arc<ExtractFn>> = HashMap::new();
         let mut strict_map: HashMap<String, bool> = HashMap::new();
@@ -849,6 +879,7 @@ impl DirSQL {
                 strict_map,
                 table_configs,
                 ignore,
+                extensions,
                 persist: persist_enabled,
                 persist_path,
                 file_rows: Mutex::new(file_rows),
@@ -892,6 +923,7 @@ pub struct DirSQLBuilder {
     root: Option<PathBuf>,
     tables: Vec<Table>,
     ignore: Vec<String>,
+    extensions: Vec<Extension>,
     config_path: Option<PathBuf>,
     persist: bool,
     persist_path: Option<PathBuf>,
@@ -926,6 +958,27 @@ impl DirSQLBuilder {
         S: Into<String>,
     {
         self.ignore = ignore.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Append a single SQLite extension to load at startup. Extensions are
+    /// loaded onto the connection before any `CREATE TABLE`, then loading is
+    /// disabled again. See [`Extension`].
+    ///
+    /// A relative `path` here is used verbatim — the OS resolves it against the
+    /// process working directory at load time. Config-file paths, by contrast,
+    /// resolve against the config file's parent directory.
+    pub fn extension(mut self, extension: Extension) -> Self {
+        self.extensions.push(extension);
+        self
+    }
+
+    /// Replace the accumulated extension list with `extensions`.
+    pub fn extensions<I>(mut self, extensions: I) -> Self
+    where
+        I: IntoIterator<Item = Extension>,
+    {
+        self.extensions = extensions.into_iter().collect();
         self
     }
 
@@ -975,6 +1028,7 @@ impl DirSQLBuilder {
             root: explicit_root,
             mut tables,
             mut ignore,
+            mut extensions,
             config_path,
             mut persist,
             mut persist_path,
@@ -1004,6 +1058,21 @@ impl DirSQLBuilder {
             let cfg_tables = build_tables_from_config(&cfg)?;
             tables.extend(cfg_tables);
             ignore.extend(cfg.ignore);
+
+            // Resolve config-supplied extension paths against the config
+            // file's parent directory (absolute paths pass through). Appended
+            // after any programmatically-supplied extensions.
+            for ext in cfg.extensions {
+                let path = if ext.path.is_absolute() {
+                    ext.path
+                } else {
+                    cfg_parent.join(&ext.path)
+                };
+                extensions.push(Extension {
+                    path,
+                    entrypoint: ext.entrypoint,
+                });
+            }
 
             if cfg.persist {
                 persist = true;
@@ -1045,6 +1114,7 @@ impl DirSQLBuilder {
             root,
             tables,
             ignore,
+            extensions,
             persist,
             persist_path,
             poll_interval: poll_interval.unwrap_or(DEFAULT_POLL_INTERVAL),
@@ -1087,6 +1157,7 @@ pub struct ResolvedBuild {
     pub root: PathBuf,
     pub tables: Vec<Table>,
     pub ignore: Vec<String>,
+    pub extensions: Vec<Extension>,
     pub persist: bool,
     pub persist_path: Option<PathBuf>,
     pub poll_interval: Duration,
@@ -1109,6 +1180,8 @@ pub struct ScannedFile {
 pub struct PreparedBuild {
     root: PathBuf,
     tables: Vec<Table>,
+    /// SQLite extensions to load onto the connection before any table DDL.
+    extensions: Vec<Extension>,
     matcher: TableMatcher,
     scanned_files: Vec<ScannedFile>,
     persist: Option<PreparedPersist>,
@@ -1617,6 +1690,28 @@ mod readonly_tests {
     }
 
     #[test]
+    fn missing_extension_build_fails_with_extension_error() {
+        // The .extension() builder surface loads at startup; a missing file
+        // must surface as DirSqlError::Extension (naming the library), not the
+        // generic Core(Sqlite) error. (#225 review finding #9; also exercises
+        // the .extension() builder method in-process.)
+        let dir = tempfile::tempdir().unwrap();
+        let err = match DirSQL::builder()
+            .root(dir.path())
+            .extension(Extension {
+                path: "/nonexistent/dirsql-no-such.so".into(),
+                entrypoint: None,
+            })
+            .build()
+        {
+            Ok(_) => panic!("expected build to fail on a missing extension"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, DirSqlError::Extension { .. }), "got: {err:?}");
+        assert!(err.to_string().contains("failed to load extension"));
+    }
+
+    #[test]
     fn error_helpers_build_expected_variants() {
         // Exercise the `map_err` helper constructors directly; their runtime
         // call sites only fire on lock poisoning / SQLite failures, which
@@ -1716,6 +1811,7 @@ mod internal_tests {
         let prepared = PreparedBuild {
             root: dir.path().to_path_buf(),
             tables: Vec::new(),
+            extensions: Vec::new(),
             matcher,
             scanned_files: vec![ScannedFile {
                 rel_path: "ghost.txt".into(),

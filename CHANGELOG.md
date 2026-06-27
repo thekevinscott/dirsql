@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Rust SDK: load SQLite extensions via config (`[[dirsql.extension]]` /
+  `DirSQLBuilder::extension`).** Declare a local extension shared-library path
+  (with an optional `entrypoint` init-symbol override) and dirsql loads it onto
+  the connection at startup, before any `CREATE TABLE`, then disables loading
+  again so the SQL `load_extension()` function is never left exposed to later
+  queries. Config-file paths resolve relative to the config's parent directory.
+  Opt-in and additive: with no `[[dirsql.extension]]` entries, extension
+  loading stays disabled. (#225)
+
+- **Extension loading — review hardening (#225).** Load failures now surface as
+  a dedicated `DirSqlError::Extension` naming the library (was a generic
+  `DbError::Sqlite`); `DirSQL::config()` serialization now includes the
+  configured `extensions`; an empty `path = ""` is rejected at config-parse
+  time; and a `CREATE VIRTUAL TABLE` `[[table]]` is rejected with a clear "not
+  supported" error — extension-backed virtual tables are not dirsql-managed
+  tables, so extensions provide functions for queries and regular-table DDL.
+
 - **Rust SDK: `DirSQLBuilder::poll_interval(Duration)`.** Tunes the channel-
   based `watch()` loop's poll cadence (default 200ms). Lower values trade
   idle CPU for tighter event-to-stream latency. Addresses P7 of #218.

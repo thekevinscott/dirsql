@@ -138,6 +138,33 @@ persist = true
 See [Persistence](../guide/persistence.md) for the full reconcile algorithm,
 storage layout, and limitations.
 
+## Loading extensions
+
+You can load SQLite extensions by specifying them in a config.
+
+Declare each extension as a `[[dirsql.extension]]` entry:
+
+```toml
+[[dirsql.extension]]
+path       = "./ext/myext.dylib"
+entrypoint = "sqlite3_myext_init"
+```
+
+- **`path`** — a path to the extension's shared library (`.so` / `.dylib` /
+  `.dll`). Relative paths resolve against the config file's parent directory.
+- **`entrypoint`** *(optional)* — the extension's init symbol. When omitted,
+  SQLite derives a default from the filename; set it when that default does not
+  match (for example, `sqlite-vec`'s entry point is `sqlite3_vec_init`).
+
+**Note**: `dirsql` enables extension loading only while loading the configured libraries,
+then disables it again, so `load_extension()` is not exposed via SQL to the user.
+
+Extensions add **functions** you can call in queries and in a regular table's
+DDL (defaults, generated columns). An extension-backed **virtual table** cannot
+be declared as a `[[table]]` — `dirsql` tables are per-file row tables — so a
+`CREATE VIRTUAL TABLE` DDL is rejected; call the extension's functions in your
+queries instead.
+
 ## Strict Mode
 
 By default, auto-injected virtuals that aren't in the DDL are silently

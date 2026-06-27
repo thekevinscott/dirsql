@@ -1,0 +1,23 @@
+# Minimal SQLite loadable extension, built on demand by the extension
+# integration tests (packages/rust/tests/extensions.rs) and loaded through
+# dirsql's public config surface to prove a real extension is loaded onto the
+# connection. Excluded from the workspace (see root Cargo.toml) so it is built
+# only by the test that needs it, not by `cargo build --workspace` / clippy.
+# Standalone workspace root: decouples this fixture from the parent workspace
+# so it can be built directly via `--manifest-path` from the integration test.
+[workspace]
+
+[package]
+name = "dirsql-testext"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# `loadable_extension` (not `bundled`): the host SQLite provides the symbols at
+# load time, so this links against whatever SQLite loads it — including the
+# bundled SQLite inside dirsql, since both resolve the same libsqlite3-sys.
+rusqlite = { version = "0.34", features = ["loadable_extension", "functions"] }

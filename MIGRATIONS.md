@@ -11,6 +11,48 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### Rust SDK: extension-loading review followup (#225)
+
+#### Summary
+
+Code review of the unreleased SQLite-extension-loading feature (#225) added a
+dedicated `DirSqlError::Extension` variant — load failures previously surfaced
+as `DirSqlError::Core(DbError::Sqlite(_))` — and extended the resolved-state
+snapshot: `DirSQL::config()` / `DirSQLConfig` now carries an `extensions`
+array, so every serialized config (including the `interpret` handshake payload)
+gains an `extensions` key, empty when none are configured. Exhaustive matches
+on `DirSqlError` and exact-shape assertions on the serialized config are
+affected; both are simple updates.
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| Exhaustive `match` on `DirSqlError` | (no `Extension` arm) | add `DirSqlError::Extension { .. }` (or a `_` arm) |
+| Error from a failed extension load | `DirSqlError::Core(DbError::Sqlite(_))` | `DirSqlError::Extension { path, source }` |
+| Serialized `DirSQLConfig` / `db.config()` JSON | `{root, tables, ignore, persist, persist_path}` | adds `extensions: []` (array of `{path, entrypoint}`) |
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- `DirSQL::config()` (and `toJSON` / the `interpret` handshake payload) now
+  always includes an `extensions` array — empty when no extensions are
+  configured. Consumers asserting the exact key set of the serialized config
+  must accept the new key.
+
+#### Verification
+
+```bash
+cargo test -p dirsql --test extensions config_serialization_includes_extensions
+```
+
+Expected: passes — a Rust `DirSQL` built with a `[[dirsql.extension]]` entry
+serializes a config whose JSON contains `extensions` with the entry's `path`
+and `entrypoint`.
+
 ### Rust SDK: code-review followup (#218)
 
 #### Summary
