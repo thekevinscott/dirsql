@@ -31,6 +31,8 @@ cargo install dirsql --features cli
 
 :::
 
+The npm CLI requires **Node ≥ 20.11**. On older Node, `npx dirsql` may resolve to an outdated, CLI-less version (failing with `could not determine executable to run`) — upgrade Node or use `npx dirsql@latest`.
+
 See the [CLI section](./cli/) for details on the command-line interface, and the [Rust library README](https://github.com/thekevinscott/dirsql/tree/main/packages/rust) for the library-vs-CLI feature split.
 
 ## Quick start

@@ -44,6 +44,13 @@ dirsql
 
 :::
 
+::: warning Node version
+The npm CLI requires **Node ≥ 20.11**. A bare `npx dirsql` on older Node can
+resolve to an outdated, CLI-less version and fail with `could not determine
+executable to run` — upgrade Node, or pin the current release with
+`npx dirsql@latest`.
+:::
+
 ::: tip For Rust library consumers
 The `cli` feature is **opt-in**. Adding `dirsql` as a library dependency
 (`cargo add dirsql`) pulls no CLI dependencies — only the core library. See the
