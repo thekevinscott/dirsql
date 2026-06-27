@@ -1,28 +1,27 @@
 // Unit tests for `resolveConfig`.
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { describe, expect, it, vi } from "vitest";
 import { resolveConfig } from "./resolveConfig.js";
+
+// `resolveConfig`'s only effectful collaborator is `readFileSync`; `node:path`
+// and `smol-toml` are pure. Mock fs so the test never touches a real file --
+// each "with a config file" case stubs the TOML body it wants to parse.
+vi.mock("node:fs", async () => ({
+  ...(await vi.importActual<typeof import("node:fs")>("node:fs")),
+  readFileSync: vi.fn(),
+}));
 
 const noopExtract = () => [];
 
+// Fixed posix config path. CI is linux, so `dirname(resolve(cfgPath))` is
+// deterministically `/cfg` -- relative config paths resolve against it.
+const cfgPath = "/cfg/.dirsql.toml";
+const cfgDir = "/cfg";
+
 describe("resolveConfig", () => {
-  let dir: string;
-  let cfgPath: string;
-
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "dirsql-resolveConfig-"));
-    cfgPath = join(dir, ".dirsql.toml");
-  });
-
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
-
   const writeCfg = (body: string) => {
-    writeFileSync(cfgPath, body);
+    vi.mocked(readFileSync).mockReturnValue(body);
   };
 
   describe("without a config file", () => {
@@ -80,8 +79,7 @@ describe("resolveConfig", () => {
     it("resolves a relative [dirsql].root against the config file's parent", () => {
       writeCfg('[dirsql]\nroot = "data"\n');
       const out = resolveConfig({ config: cfgPath });
-      expect(out.root).toBe(join(dir, "data"));
-      expect(isAbsolute(out.root)).toBe(true);
+      expect(out.root).toBe("/cfg/data");
     });
 
     it("preserves an absolute [dirsql].root verbatim", () => {
@@ -93,19 +91,19 @@ describe("resolveConfig", () => {
     it("defaults the root to the config file's parent when [dirsql].root is absent", () => {
       writeCfg('[dirsql]\nignore = ["x"]\n');
       const out = resolveConfig({ config: cfgPath });
-      expect(out.root).toBe(dir);
+      expect(out.root).toBe(cfgDir);
     });
 
     it("defaults the root to the config file's parent when [dirsql] is absent entirely", () => {
       writeCfg('[[table]]\nddl = "CREATE TABLE t (x TEXT)"\nglob = "*.json"\n');
       const out = resolveConfig({ config: cfgPath });
-      expect(out.root).toBe(dir);
+      expect(out.root).toBe(cfgDir);
     });
 
     it("handles a non-string [dirsql].root by falling back to the config dir", () => {
       writeCfg("[dirsql]\nroot = 42\n");
       const out = resolveConfig({ config: cfgPath });
-      expect(out.root).toBe(dir);
+      expect(out.root).toBe(cfgDir);
     });
 
     it("reads [[table]] entries with strict defaulting to false", () => {
@@ -161,7 +159,7 @@ describe("resolveConfig", () => {
     it("resolves a relative [dirsql].persist_path against the config dir", () => {
       writeCfg('[dirsql]\npersist = true\npersist_path = "cache/dirsql.db"\n');
       const out = resolveConfig({ config: cfgPath });
-      expect(out.persistPath).toBe(join(dir, "cache/dirsql.db"));
+      expect(out.persistPath).toBe("/cfg/cache/dirsql.db");
     });
 
     it("preserves an absolute [dirsql].persist_path verbatim", () => {

@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from dirsql.cli import binary_path as bp_module
+import dirsql.cli.binary_path as bp_module
 from dirsql.cli.binary_path import binary_path
 
 

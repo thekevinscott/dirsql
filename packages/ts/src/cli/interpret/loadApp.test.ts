@@ -1,50 +1,47 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadApp } from "./loadApp.js";
 
 describe("loadApp", () => {
-  let dir: string;
-
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "dirsql-loadapp-"));
-  });
-
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it("returns the default export of an .mjs config", async () => {
-    const path = join(dir, "config.mjs");
-    writeFileSync(path, "export default { sentinel: 'value' };\n");
-    const app = (await loadApp(path)) as unknown as { sentinel: string };
+  it("returns the default export the importer yields", async () => {
+    const importer = vi
+      .fn()
+      .mockResolvedValue({ default: { sentinel: "value" } });
+    const app = (await loadApp("/cfg/config.mjs", importer)) as unknown as {
+      sentinel: string;
+    };
     expect(app.sentinel).toBe("value");
-  });
-
-  it("returns the module.exports of a .cjs config", async () => {
-    const path = join(dir, "config.cjs");
-    writeFileSync(path, "module.exports = { sentinel: 'cjs' };\n");
-    const app = (await loadApp(path)) as unknown as { sentinel: string };
-    expect(app.sentinel).toBe("cjs");
+    // The importer receives the file:// URL form of the config path.
+    expect(importer).toHaveBeenCalledWith(
+      expect.stringMatching(/^file:.*config\.mjs$/),
+    );
   });
 
   it("throws a path-aware error when the module has no default export", async () => {
-    const path = join(dir, "no_default.mjs");
-    writeFileSync(path, "export const x = 1;\n");
-    await expect(loadApp(path)).rejects.toThrow(
+    const importer = vi.fn().mockResolvedValue({ x: 1 });
+    await expect(loadApp("/cfg/no_default.mjs", importer)).rejects.toThrow(
       /must default-export a DirSQL instance/,
     );
-    await expect(loadApp(path)).rejects.toThrow(path);
+    await expect(loadApp("/cfg/no_default.mjs", importer)).rejects.toThrow(
+      "/cfg/no_default.mjs",
+    );
   });
 
   it("propagates errors thrown during module evaluation", async () => {
-    const path = join(dir, "boom.mjs");
-    writeFileSync(path, "throw new Error('synthetic boom');\n");
-    await expect(loadApp(path)).rejects.toThrow(/synthetic boom/);
+    const importer = vi.fn().mockRejectedValue(new Error("synthetic boom"));
+    await expect(loadApp("/cfg/boom.mjs", importer)).rejects.toThrow(
+      /synthetic boom/,
+    );
   });
 
-  it("rejects when the file does not exist", async () => {
-    await expect(loadApp(join(dir, "nope.mjs"))).rejects.toThrow();
+  it("rejects when the importer rejects (missing file)", async () => {
+    const importer = vi.fn().mockRejectedValue(new Error("Cannot find module"));
+    await expect(loadApp("/cfg/nope.mjs", importer)).rejects.toThrow();
+  });
+
+  it("defaults to the real dynamic import when no importer is injected", async () => {
+    // Exercises the default `importer` arg (a real `import()`). The path
+    // doesn't exist, so the underlying import rejects -- which is all we
+    // need to drive the default callback's single line.
+    await expect(loadApp("/no/such/dirsql.config.mjs")).rejects.toThrow();
   });
 });

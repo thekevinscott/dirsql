@@ -11,8 +11,16 @@
 import { pathToFileURL } from "node:url";
 import type { DirSQL } from "../../index.js";
 
-export async function loadApp(configPath: string): Promise<DirSQL> {
-  const mod = await import(pathToFileURL(configPath).href);
+// The dynamic `import()` is the effectful collaborator. It can't be
+// `vi.mock()`-ed (the specifier is a computed file URL), so it's exposed as
+// an injected `importer` callback. The default preserves production behavior
+// exactly; tests pass a fake `importer` to isolate the unit.
+export async function loadApp(
+  configPath: string,
+  importer: (url: string) => Promise<{ default?: unknown }> = (url) =>
+    import(url),
+): Promise<DirSQL> {
+  const mod = await importer(pathToFileURL(configPath).href);
   if (!mod.default) {
     throw new Error(
       `${configPath}: module must default-export a DirSQL instance`,

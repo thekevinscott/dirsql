@@ -1,10 +1,20 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  type DirSQL,
-  type TableDef,
-  __setCoreForTesting,
-} from "../../index.js";
+import { describe, expect, it, vi } from "vitest";
+import type { DirSQL, TableDef } from "../../index.js";
 import { buildTables } from "./buildTables.js";
+
+// `buildTables`'s only collaborator is `parseTableName` from the core barrel.
+// Mock it so the SUT picks up the fake directly -- no real core, no
+// `__setCoreForTesting` seam.
+// Anchor the double to the real barrel (so it can't drift), then override the
+// only collaborator `buildTables` reaches for. The barrel's `parseTableName`
+// lazy-loads the native core *when called*; the fake below is what runs, so
+// the real native implementation is never invoked.
+vi.mock("../../index.js", async () => ({
+  ...(await vi.importActual<typeof import("../../index.js")>("../../index.js")),
+  parseTableName: vi.fn(
+    (ddl: string) => /CREATE\s+TABLE\s+(\w+)/i.exec(ddl)?.[1] ?? null,
+  ),
+}));
 
 const noopExtract: TableDef["extract"] = () => [];
 
@@ -13,22 +23,6 @@ function fakeApp(tables: TableDef[] | undefined): DirSQL {
 }
 
 describe("buildTables", () => {
-  beforeEach(() => {
-    __setCoreForTesting({
-      // biome-ignore lint/suspicious/noExplicitAny: minimal core stub
-      DirSQL: {} as any,
-      parseTableName: vi
-        .fn()
-        .mockImplementation(
-          (ddl: string) => /CREATE\s+TABLE\s+(\w+)/i.exec(ddl)?.[1] ?? null,
-        ),
-    });
-  });
-
-  afterEach(() => {
-    __setCoreForTesting(null);
-  });
-
   it("returns an empty map when the app has no tables", () => {
     expect(buildTables(fakeApp([]))).toEqual(new Map());
   });

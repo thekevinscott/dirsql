@@ -1,4 +1,3 @@
-import { Readable } from "node:stream";
 import {
   type Mock,
   afterEach,
@@ -9,11 +8,27 @@ import {
   vi,
 } from "vitest";
 import type { DirSQL } from "../../index.js";
-import * as buildTablesMod from "./buildTables.js";
-import * as dispatchMod from "./dispatchExtract.js";
+import { buildTables } from "./buildTables.js";
+import { dispatchExtract } from "./dispatchExtract.js";
 import { interpret } from "./interpret.js";
-import * as loadAppMod from "./loadApp.js";
-import * as writeMod from "./writeMessage.js";
+import { loadApp } from "./loadApp.js";
+import { writeMessage } from "./writeMessage.js";
+
+// Every collaborator is mocked so the test isolates `interpret`'s glue logic.
+// `node:readline`'s `createInterface` is faked to return an async iterable of
+// lines directly -- this stands in for the line-buffered read over stdin, so
+// the test never needs a real `Readable` stream.
+vi.mock("./buildTables.js");
+vi.mock("./dispatchExtract.js");
+vi.mock("./loadApp.js");
+vi.mock("./writeMessage.js");
+vi.mock("node:readline", async () => ({
+  ...(await vi.importActual<typeof import("node:readline")>("node:readline")),
+  createInterface: vi.fn(),
+}));
+
+// Imported after the mock so we get the mocked module.
+const { createInterface } = await import("node:readline");
 
 function fakeApp(overrides: Partial<DirSQL> = {}): DirSQL {
   const app = {
@@ -25,8 +40,16 @@ function fakeApp(overrides: Partial<DirSQL> = {}): DirSQL {
   return app;
 }
 
-function asLines(lines: string[]): Readable {
-  return Readable.from(lines.map((l) => `${l}\n`));
+// Fake the readline interface as an async iterable yielding the given lines.
+function stubLines(lines: string[]): void {
+  vi.mocked(createInterface).mockReturnValue(
+    (async function* () {
+      for (const l of lines) {
+        yield l;
+      }
+      // biome-ignore lint/suspicious/noExplicitAny: minimal readline stub
+    })() as any,
+  );
 }
 
 describe("interpret", () => {
@@ -36,12 +59,12 @@ describe("interpret", () => {
     stderrWrite = vi.fn();
     vi.stubGlobal("process", {
       ...process,
-      stdin: asLines([]),
       stderr: { write: stderrWrite },
     });
-    vi.spyOn(writeMod, "writeMessage").mockImplementation(() => {});
-    vi.spyOn(buildTablesMod, "buildTables").mockReturnValue(new Map());
-    vi.spyOn(dispatchMod, "dispatchExtract").mockResolvedValue({
+    stubLines([]);
+    vi.mocked(writeMessage).mockImplementation(() => {});
+    vi.mocked(buildTables).mockReturnValue(new Map());
+    vi.mocked(dispatchExtract).mockResolvedValue({
       type: "result",
       id: 1,
       ok: true,
@@ -63,7 +86,7 @@ describe("interpret", () => {
     });
 
     it("returns 1 and writes a dirsql-prefixed line when loadApp throws", async () => {
-      vi.spyOn(loadAppMod, "loadApp").mockRejectedValue(new Error("no app"));
+      vi.mocked(loadApp).mockRejectedValue(new Error("no app"));
       expect(await interpret("bad.mjs")).toBe(1);
       expect(stderrWrite).toHaveBeenCalledExactlyOnceWith(
         "dirsql interpret: no app\n",
@@ -71,7 +94,7 @@ describe("interpret", () => {
     });
 
     it("coerces non-Error throws via String() in the stderr message", async () => {
-      vi.spyOn(loadAppMod, "loadApp").mockRejectedValue("plain string");
+      vi.mocked(loadApp).mockRejectedValue("plain string");
       expect(await interpret("bad.mjs")).toBe(1);
       expect(stderrWrite).toHaveBeenCalledExactlyOnceWith(
         "dirsql interpret: plain string\n",
@@ -85,9 +108,9 @@ describe("interpret", () => {
         toJSON: () =>
           ({ root: "/here", tables: [], ignore: [], persist: false }) as never,
       });
-      vi.spyOn(loadAppMod, "loadApp").mockResolvedValue(app);
+      vi.mocked(loadApp).mockResolvedValue(app);
       await interpret("good.mjs");
-      expect(writeMod.writeMessage).toHaveBeenCalledWith({
+      expect(writeMessage).toHaveBeenCalledWith({
         type: "config",
         state: { root: "/here", tables: [], ignore: [], persist: false },
       });
@@ -101,7 +124,7 @@ describe("interpret", () => {
       const app = fakeApp({
         ready: { catch: catchSpy } as unknown as Promise<void>,
       });
-      vi.spyOn(loadAppMod, "loadApp").mockResolvedValue(app);
+      vi.mocked(loadApp).mockResolvedValue(app);
 
       await interpret("good.mjs");
       expect(catchSpy).toHaveBeenCalledOnce();
@@ -110,13 +133,9 @@ describe("interpret", () => {
 
   describe("extract loop", () => {
     it("dispatches one extract request and writes the response", async () => {
-      vi.spyOn(loadAppMod, "loadApp").mockResolvedValue(fakeApp());
+      vi.mocked(loadApp).mockResolvedValue(fakeApp());
       const req = { type: "extract", id: 1, table: "t", path: "/a" };
-      vi.stubGlobal("process", {
-        ...process,
-        stdin: asLines([JSON.stringify(req)]),
-        stderr: { write: stderrWrite },
-      });
+      stubLines([JSON.stringify(req)]);
 
       const expected = {
         type: "result" as const,
@@ -124,63 +143,47 @@ describe("interpret", () => {
         ok: true,
         rows: [{ row: "/a" }],
       };
-      vi.mocked(dispatchMod.dispatchExtract).mockResolvedValue(expected);
+      vi.mocked(dispatchExtract).mockResolvedValue(expected);
 
       expect(await interpret("good.mjs")).toBe(0);
-      expect(dispatchMod.dispatchExtract).toHaveBeenCalledWith(req, new Map());
+      expect(dispatchExtract).toHaveBeenCalledWith(req, new Map());
       // handshake first, then response
-      expect(writeMod.writeMessage).toHaveBeenCalledTimes(2);
-      expect(writeMod.writeMessage).toHaveBeenLastCalledWith(expected);
+      expect(writeMessage).toHaveBeenCalledTimes(2);
+      expect(writeMessage).toHaveBeenLastCalledWith(expected);
     });
 
     it("skips blank lines silently", async () => {
-      vi.spyOn(loadAppMod, "loadApp").mockResolvedValue(fakeApp());
-      vi.stubGlobal("process", {
-        ...process,
-        stdin: asLines(["", "   "]),
-        stderr: { write: stderrWrite },
-      });
+      vi.mocked(loadApp).mockResolvedValue(fakeApp());
+      stubLines(["", "   "]);
       expect(await interpret("good.mjs")).toBe(0);
-      expect(dispatchMod.dispatchExtract).not.toHaveBeenCalled();
+      expect(dispatchExtract).not.toHaveBeenCalled();
       // handshake only
-      expect(writeMod.writeMessage).toHaveBeenCalledOnce();
+      expect(writeMessage).toHaveBeenCalledOnce();
     });
 
     it("skips malformed JSON silently", async () => {
-      vi.spyOn(loadAppMod, "loadApp").mockResolvedValue(fakeApp());
-      vi.stubGlobal("process", {
-        ...process,
-        stdin: asLines(["not json", "{also bad"]),
-        stderr: { write: stderrWrite },
-      });
+      vi.mocked(loadApp).mockResolvedValue(fakeApp());
+      stubLines(["not json", "{also bad"]);
       expect(await interpret("good.mjs")).toBe(0);
-      expect(dispatchMod.dispatchExtract).not.toHaveBeenCalled();
+      expect(dispatchExtract).not.toHaveBeenCalled();
     });
 
     it("skips non-extract messages silently", async () => {
-      vi.spyOn(loadAppMod, "loadApp").mockResolvedValue(fakeApp());
-      vi.stubGlobal("process", {
-        ...process,
-        stdin: asLines([JSON.stringify({ type: "ping" })]),
-        stderr: { write: stderrWrite },
-      });
+      vi.mocked(loadApp).mockResolvedValue(fakeApp());
+      stubLines([JSON.stringify({ type: "ping" })]);
       expect(await interpret("good.mjs")).toBe(0);
-      expect(dispatchMod.dispatchExtract).not.toHaveBeenCalled();
+      expect(dispatchExtract).not.toHaveBeenCalled();
     });
 
     it("skips a null / non-object JSON payload silently", async () => {
-      vi.spyOn(loadAppMod, "loadApp").mockResolvedValue(fakeApp());
-      vi.stubGlobal("process", {
-        ...process,
-        stdin: asLines(["null", "42", "[]"]),
-        stderr: { write: stderrWrite },
-      });
+      vi.mocked(loadApp).mockResolvedValue(fakeApp());
+      stubLines(["null", "42", "[]"]);
       expect(await interpret("good.mjs")).toBe(0);
-      expect(dispatchMod.dispatchExtract).not.toHaveBeenCalled();
+      expect(dispatchExtract).not.toHaveBeenCalled();
     });
 
     it("returns 0 when stdin closes", async () => {
-      vi.spyOn(loadAppMod, "loadApp").mockResolvedValue(fakeApp());
+      vi.mocked(loadApp).mockResolvedValue(fakeApp());
       expect(await interpret("good.mjs")).toBe(0);
     });
   });
