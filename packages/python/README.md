@@ -184,15 +184,6 @@ Emitted by `watch()` when a file change produces row-level diffs.
 - **`error`** (`str | None`): Error message (for error events).
 - **`file_path`** (`str | None`): The relative file path that triggered the event.
 
-## How It Works
-
-The Rust core (`rusqlite` + `notify` + `walkdir`) does the heavy lifting:
-
-1. **Startup scan**: Walks the directory tree, matches files to tables via glob patterns, calls the user-provided `extract` function for each file, and inserts rows into an in-memory SQLite database.
-2. **File watching**: Uses the `notify` crate (inotify on Linux, FSEvents on macOS) to detect file creates, modifications, and deletions.
-3. **Row diffing**: When a file changes, the new rows are diffed against the previous rows for that file, producing granular insert/update/delete events.
-4. **Python bindings**: PyO3 exposes the Rust core as a native Python extension module. The async layer runs blocking operations in a thread pool via `asyncio.to_thread`.
-
 ## License
 
 MIT
