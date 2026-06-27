@@ -6,12 +6,24 @@ canonical: https://thekevinscott.github.io/dirsql/cli/config
 
 > Online: <https://thekevinscott.github.io/dirsql/cli/config>
 
-`dirsql` can be configured with an optional config file (if omitted, server falls back to [defaults](./server.md#defaults)). Two formats are accepted:
+`dirsql` is configured with an optional config file; with none, the server
+falls back to [zero-config defaults](./server.md#defaults). Choose a format by
+what you need:
 
-- **`dirsql.toml`** — declarative; covers filesystem-fact tables. Works with any installation.
-- **`.py` / `.js`** — native-language; lets you write `extract` callbacks in Python or JavaScript. CLI-only, and only the launcher matching the file's language can run it. See [Native-Language Configs](#native-language-configs).
+- **[TOML](#toml)** — declarative; defines filesystem-fact tables (the path,
+  glob captures, and stat metadata). Works with any installation.
+- **[Python](#python)** and **[JavaScript](#javascript)** — native-language
+  configs that build tables from the *contents* of files (frontmatter, JSON
+  values, CSV cells) through a dynamic `extract` callback. CLI-only; only the
+  launcher matching the file's language can run it.
 
-## Basic Example
+## TOML
+
+Reach for a TOML config — the default `.dirsql.toml` — to declare tables from
+filesystem facts: a glob selects files, and columns come from path captures and
+stat metadata. No code required, and it works with every installation.
+
+### Basic Example
 
 ```toml
 [dirsql]
@@ -24,9 +36,11 @@ glob = "posts/*.md"
 
 Each `posts/*.md` file produces one row in the `posts` table.
 
-## Loading a Config File
+### Loading a Config File
 
-Pass the config file path to the `DirSQL` constructor:
+The CLI loads `./.dirsql.toml` by default; pass `--config <path>` to point at
+another file. To load the same `.toml` from the SDK, pass its path to the
+`DirSQL` constructor:
 
 ::: code-group
 
@@ -60,7 +74,7 @@ directory. Override it by passing `root` explicitly (the explicit value
 wins and a warning is emitted) or by declaring `[dirsql].root` in the
 config file itself.
 
-## Root Directory
+### Root Directory
 
 By default, the config file's parent directory is the scan root. To index
 a different location, declare `[dirsql].root` (relative paths are resolved
@@ -72,7 +86,7 @@ root = "../data"
 ignore = ["node_modules/**"]
 ```
 
-## Stat Virtuals
+### Stat Virtuals
 
 Every config-defined table can expose any of these reserved columns. Add
 the ones you want to your DDL; the rest are silently dropped.
@@ -96,7 +110,7 @@ WHERE _mtime > strftime('%s', '2024-01-01')
 ORDER BY _mtime DESC;
 ```
 
-## Path Captures
+### Path Captures
 
 Use `{name}` in glob patterns to extract path segments as columns. Add a
 matching column name to the DDL and the capture is auto-populated:
@@ -111,7 +125,7 @@ A file at `_comments/abc123/2024-05-05.jsonl` produces a row with
 `thread_id = "abc123"`, `_basename = "2024-05-05.jsonl"`, and `_mtime` set
 to the file's modification time.
 
-## Ignore Patterns
+### Ignore Patterns
 
 The `ignore` list skips files and directories entirely (not even scanned):
 
@@ -124,7 +138,7 @@ The top-level `.dirsql/` directory is always excluded, whether you list it
 or not — it is a reserved namespace for `dirsql`'s own metadata (see
 [Persistence](../guide/persistence.md)).
 
-## Persistence
+### Persistence
 
 Set `persist = true` to keep the SQLite database on disk between runs
 instead of rebuilding from scratch on every startup:
@@ -138,7 +152,7 @@ persist = true
 See [Persistence](../guide/persistence.md) for the full reconcile algorithm,
 storage layout, and limitations.
 
-## Loading extensions
+### Loading extensions
 
 You can load SQLite extensions by specifying them in a config.
 
@@ -165,7 +179,7 @@ be declared as a `[[table]]` — `dirsql` tables are per-file row tables — so 
 `CREATE VIRTUAL TABLE` DDL is rejected; call the extension's functions in your
 queries instead.
 
-## Strict Mode
+### Strict Mode
 
 By default, auto-injected virtuals that aren't in the DDL are silently
 dropped, and undeclared user-extract keys are dropped. Enable strict mode
@@ -180,10 +194,11 @@ strict = true
 
 Strict mode does **not** apply to auto-injected stat virtuals — those are
 always filtered to the DDL's declared columns regardless. Strict mode
-applies only to keys produced by an extract callback (relevant for
-programmatic [tables](../guide/tables.md)).
+applies only to keys produced by an extract callback (relevant for the
+[Python](#python) / [JavaScript](#javascript) configs below and programmatic
+[tables](../guide/tables.md)).
 
-## Full Example
+### Full Example
 
 ```toml
 [dirsql]
@@ -202,19 +217,17 @@ ddl  = "CREATE TABLE logs (_path TEXT, _size INTEGER, _mtime INTEGER)"
 glob = "logs/*.csv"
 ```
 
-## Native-Language Configs
+## Python
 
-You can provide a config file in a particular language, allowing you to define a dynamic extract function. This can be useful for building a database based on the _contents_ of a file.
+Reach for a Python config when your columns come from the *contents* of a
+file — parsed JSON, frontmatter, CSV cells — rather than from filesystem
+facts alone. You write a dynamic `extract` callback in Python, and the file
+otherwise looks exactly like the in-process SDK construction (same `DirSQL` /
+`Table` API):
 
 ```bash
 dirsql --config dirsql.config.py
-dirsql --config dirsql.config.js
 ```
-
-The file looks exactly like the in-process SDK construction — same
-`DirSQL` / `Table` API:
-
-::: code-group
 
 ```python [dirsql.config.py]
 import json
@@ -224,8 +237,9 @@ def extract_meta(path):
     with open(path) as f:
         return [json.load(f)]
 
-# Python must export an `app` variable
+# Python must export a module-level `app`.
 app = DirSQL(
+    root="papers",  # required — see "Set a root" below
     tables=[
         Table(
             ddl="CREATE TABLE papers (title TEXT, _path TEXT)",
@@ -236,11 +250,26 @@ app = DirSQL(
 )
 ```
 
+`extract` receives the path of each matched file and returns a list of rows
+(one dict per row).
+
+## JavaScript
+
+A JavaScript config gives you the same contents-driven `extract` in Node,
+in either ES module or CommonJS form:
+
+```bash
+dirsql --config dirsql.config.mjs
+```
+
+::: code-group
+
 ```javascript [dirsql.config.mjs]
 import { readFileSync } from "node:fs";
 import { DirSQL } from "dirsql";
 
 export default new DirSQL({
+  root: "papers", // required — see "Set a root" below
   tables: [
     {
       ddl: "CREATE TABLE papers (title TEXT, _path TEXT)",
@@ -256,6 +285,7 @@ const { readFileSync } = require("node:fs");
 const { DirSQL } = require("dirsql");
 
 module.exports = new DirSQL({
+  root: "papers", // required — see "Set a root" below
   tables: [
     {
       ddl: "CREATE TABLE papers (title TEXT, _path TEXT)",
@@ -268,10 +298,36 @@ module.exports = new DirSQL({
 
 :::
 
-Only the extension matters — the file can be named anything. `dirsql.config.{py,mjs,cjs}` is the suggested convention but not required.
+## Notes for native-language configs
 
-### Module conventions
+These apply to both the Python and JavaScript forms above.
 
-- **Python (`.py`)** — module-level `app = DirSQL(...)`.
-- **ESM (`.mjs`, or `.js` in an ESM package)** — `export default new DirSQL(...)`.
-- **CommonJS (`.cjs`, or `.js` in a CJS package)** — `module.exports = new DirSQL(...)`.
+- **Export the config.** Python exposes a module-level `app = DirSQL(...)`; an
+  ES module (`.mjs`, or `.js` in an ESM package) uses
+  `export default new DirSQL(...)`; CommonJS (`.cjs`, or `.js` in a CJS
+  package) uses `module.exports = new DirSQL(...)`. Only the extension
+  matters — the file can be named anything; `dirsql.config.{py,mjs,cjs}` is the
+  suggested convention, not a requirement.
+- **Set a `root`.** Unlike TOML configs (which default the scan root to the
+  config file's directory), native-language configs require an explicit `root`.
+  Without one the Python launcher errors and the JavaScript launcher silently
+  indexes nothing.
+- **Install the launcher on your `PATH`.** To run your `extract`, the server
+  spawns `dirsql interpret`, so the matching `dirsql` launcher must be installed
+  and on your `PATH` — a global `pip`/`uv` install for `.py`, or `npm` for
+  `.mjs` / `.cjs`. Only the launcher matching the file's language can run it.
+
+## Why no Rust config?
+
+`dirsql` accepts native-language configs in Python and JavaScript because the
+CLI runs your `extract` by spawning an interpreter (`dirsql interpret`). Rust is
+compiled ahead of time, so there is no interpreter to spawn — a Rust config
+would mean compiling your code at server startup. Rust users have two better
+options:
+
+- **Embed the [Rust SDK](https://github.com/thekevinscott/dirsql/tree/main/packages/rust)
+  directly** — `DirSQL::builder()` with an `extract` written in Rust, no config
+  file needed.
+- **Load a compiled SQLite extension** via
+  [`[[dirsql.extension]]`](#loading-extensions) — a `.so` / `.dylib` / `.dll`
+  you can write in Rust — to add functions you call from your queries.
