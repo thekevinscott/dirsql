@@ -316,18 +316,3 @@ These apply to both the Python and JavaScript forms above.
   spawns `dirsql interpret`, so the matching `dirsql` launcher must be installed
   and on your `PATH` — a global `pip`/`uv` install for `.py`, or `npm` for
   `.mjs` / `.cjs`. Only the launcher matching the file's language can run it.
-
-## Why no Rust config?
-
-`dirsql` accepts native-language configs in Python and JavaScript because the
-CLI runs your `extract` by spawning an interpreter (`dirsql interpret`). Rust is
-compiled ahead of time, so there is no interpreter to spawn — a Rust config
-would mean compiling your code at server startup. Rust users have two better
-options:
-
-- **Embed the [Rust SDK](https://github.com/thekevinscott/dirsql/tree/main/packages/rust)
-  directly** — `DirSQL::builder()` with an `extract` written in Rust, no config
-  file needed.
-- **Load a compiled SQLite extension** via
-  [`[[dirsql.extension]]`](#loading-extensions) — a `.so` / `.dylib` / `.dll`
-  you can write in Rust — to add functions you call from your queries.
