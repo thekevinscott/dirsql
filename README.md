@@ -23,7 +23,7 @@ uvx dirsql                         # via PyPI
 cargo install dirsql --features cli
 ```
 
-> The npm CLI requires **Node ≥ 20.11**. On older Node, `npx dirsql` may resolve to an outdated, CLI-less version (failing with `could not determine executable to run`) — upgrade Node or use `npx dirsql@latest`.
+> The npm CLI requires **Node ≥ 20.11**.
 
 ## Quick start
 
