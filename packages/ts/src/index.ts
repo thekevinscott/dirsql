@@ -63,10 +63,7 @@ export class Table implements TableDef {
  *
  * At least one of `root` or `config` must be supplied. When both are set,
  * the explicit `root` wins over any `[dirsql].root` declared in the config
- * file (a warning is emitted by the native layer). The sole exception is
- * inside the `dirsql interpret` subprocess: when a native config supplies
- * neither, the launcher's `DIRSQL_INTERPRET_ROOT` (the config file's parent
- * directory) is used, mirroring a `.dirsql.toml`'s root default (#251).
+ * file (a warning is emitted by the native layer).
  */
 export interface DirSQLOptions {
   /** Root directory to scan. */
