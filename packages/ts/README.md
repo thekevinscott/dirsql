@@ -12,8 +12,6 @@ Also available as [`dirsql` on crates.io](https://crates.io/crates/dirsql) and [
 npm add dirsql
 ```
 
-Prebuilt binaries ship for linux-x64, linux-arm64, darwin-x64, darwin-arm64, and win32-x64. npm picks up the right one via `optionalDependencies` — no Rust toolchain required.
-
 ## Usage
 
 ```typescript
