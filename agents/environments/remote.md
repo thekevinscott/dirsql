@@ -50,6 +50,15 @@ Do **NOT** hardcode `/home/duncan/...`. Use `$PWD` or the actual sandbox root (e
 
 E2E suites that make live LLM calls cannot run in the hosted sandbox. In the PR body's `## E2E Verification` section, state this explicitly (e.g. `blocked-remote: no LLM credentials in sandbox`) instead of claiming pass/fail.
 
+The python and TS `tests/e2e` suites have no LLM dependency, so they run here. When a PR changes a package, refresh that package's e2e attestation in the sandbox (see AGENTS.md, "E2E Attestation"). `pip install testing-conventions` fails to build in the sandbox and `just` is absent, so use `uvx` and the recipe bodies directly:
+
+```bash
+cd packages/python && uvx testing-conventions e2e attest 'uv run python -m pytest tests/e2e/ -x -q'   # = just test-e2e
+cd packages/ts && uvx testing-conventions e2e attest 'pnpm test:e2e'
+```
+
+Attest each package as the last commit touching it. Some e2e suites need a prior build (the Rust binary / native ext); build first if a run reports a missing artifact. Only suites that later grow live-LLM cases stay blocked here; note those in the PR body.
+
 CI on GitHub remains the authoritative gate; the orchestrator continues to monitor it via `mcp__github__*` tools.
 
 ## Subagent / Orchestrator adjustments

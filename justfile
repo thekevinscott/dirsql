@@ -27,6 +27,24 @@ test-integration:
 test-e2e:
     uv run python -m pytest packages/python/tests/e2e/ -x -q
 
+# Refresh packages/python/e2e-attestation.json: runs the python e2e suite and
+# commits the attestation. The CI gate (.github/workflows/e2e-attestation.yml)
+# verifies it per-package on PRs that touch packages/python. Install
+# testing-conventions first (version pinned in the workflow):
+#   pip install "testing-conventions==<version>"
+e2e-attest-python:
+    cd packages/python && testing-conventions e2e attest 'just test-e2e'
+
+# Refresh packages/ts/e2e-attestation.json: runs the TS pack-install e2e suite
+# and commits the attestation.
+e2e-attest-ts:
+    cd packages/ts && testing-conventions e2e attest 'pnpm test:e2e'
+
+# Verify each package's e2e attestation is fresh (the CI gate, run per-package).
+e2e-verify:
+    cd packages/python && testing-conventions e2e verify
+    cd packages/ts && testing-conventions e2e verify
+
 # Enforce colocated unit tests via the testing-conventions CLI
 # (install: pip install "testing-conventions==<version>"). Exemptions live in
 # testing-conventions.toml, which the CLI reads by default.

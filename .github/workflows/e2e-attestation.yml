@@ -1,0 +1,71 @@
+name: E2E Attestation
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Pinned in lockstep with .github/workflows/testing-conventions.yml and
+  # AGENTS.md. Bump deliberately and re-run the per-package
+  # `testing-conventions e2e verify` locally before changing this.
+  TESTING_CONVENTIONS_VERSION: "0.0.41"
+
+# Pull-request only, by design. `e2e verify` (run inside a package) asserts
+# that the package's committed e2e-attestation.json names the latest commit
+# touching that package's subtree. That holds on a PR branch whose tip is
+# the per-package attestation commit, but NOT on `main` after a squash merge
+# (the squash rewrites the attested commit into a hash the attestation can
+# no longer name). The PR gate is what guarantees each changed package's e2e
+# ran against the code before it lands.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: E2E attestation freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Check out the PR HEAD, not the synthetic merge ref. A package's
+          # attestation names a commit on the branch; the merge ref's tip is
+          # a commit the attestation can never name, and it drifts as `main`
+          # advances -- both make the gate spuriously stale. `fetch-depth: 0`
+          # gives `verify` the full history it walks per subtree.
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      # Scope logic (which packages changed, excluding their own attestation
+      # files) lives in a tested script per AGENTS.md "CI Workflows". It emits
+      # `python`/`ts` booleans to $GITHUB_OUTPUT.
+      - name: Detect which SDK packages changed
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/e2e_attestation_scope.py "$BASE_SHA" "$HEAD_SHA"
+
+      - name: Set up Python
+        if: steps.scope.outputs.python == 'true' || steps.scope.outputs.ts == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install testing-conventions
+        if: steps.scope.outputs.python == 'true' || steps.scope.outputs.ts == 'true'
+        run: pip install "testing-conventions==${TESTING_CONVENTIONS_VERSION}"
+
+      # Static gates: each confirms its package's e2e-attestation.json names
+      # the latest commit in that package's subtree. They do NOT run the
+      # suites (no build, no LLM in CI). Regenerate locally with, e.g.:
+      #   cd packages/python && testing-conventions e2e attest '<python e2e cmd>'
+      - name: Verify python e2e attestation
+        if: steps.scope.outputs.python == 'true'
+        working-directory: packages/python
+        run: testing-conventions e2e verify
+
+      - name: Verify ts e2e attestation
+        if: steps.scope.outputs.ts == 'true'
+        working-directory: packages/ts
+        run: testing-conventions e2e verify

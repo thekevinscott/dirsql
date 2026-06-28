@@ -1,0 +1,38 @@
+name: GHA Scripts
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+# CI logic extracted out of workflow YAML lives in .github/scripts/ with
+# colocated unit tests (AGENTS.md "CI Workflows"). This gate runs those tests
+# under a 100% coverage floor so the extracted logic stays tested. The job is
+# itself trivial glue -- install pytest, run it -- per the rule it enforces.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/scripts/**'
+  pull_request:
+    paths:
+      - '.github/scripts/**'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: scripts unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pytest
+        run: pip install pytest pytest-cov pytest-describe
+
+      - name: Run .github/scripts unit tests (100% coverage)
+        run: python -m pytest .github/scripts/ --cov=.github/scripts --cov-report=term-missing --cov-fail-under=100

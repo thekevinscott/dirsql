@@ -97,6 +97,8 @@ The "substantial change" definition and PR body template live in `AGENTS.md`. In
 - TypeScript SDK: no standalone e2e suite (the bespoke pack-install smoke test was retired in favor of the `packaging` gate; the npm artifact's functional install is verified by the release matrix)
 - Rust core: covered by `cargo test --workspace`; run `cargo bench -p dirsql` after Rust-heavy changes
 
+Then refresh the e2e attestation for each package you changed so the CI freshness gate stays green (see AGENTS.md, "E2E Attestation"): `just e2e-attest-python` and/or `just e2e-attest-ts` run that package's suite and commit its `e2e-attestation.json` as the last commit touching the package.
+
 Record the exact commands run and their outcomes in the PR body.
 
 ## Post-Merge Cleanup
