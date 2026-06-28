@@ -25,7 +25,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          mapfile -t changed < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          # Three-dot (BASE...HEAD) diffs from the MERGE-BASE of base and head,
+          # so it lists only the files THIS PR's own commits changed. Two-dot
+          # ("$BASE" "$HEAD") compares the branch tips directly, which also
+          # surfaces files that main changed after this branch forked (i.e. the
+          # branch merely trailing main) -- that would demand a CHANGELOG entry
+          # for a change the PR never made and that its merge won't even apply.
+          # The skip-changelog `git log BASE..HEAD` below is already PR-scoped.
+          mapfile -t changed < <(git diff --name-only "$BASE_SHA...$HEAD_SHA")
 
           # Decide whether this PR touches code that requires a CHANGELOG entry.
           # Scope matches AGENTS.md "substantial" definition: any SDK source,
@@ -97,7 +104,7 @@ jobs:
 
           # Require net-positive additions to CHANGELOG.md so a no-op touch
           # (e.g. whitespace) cannot satisfy the gate.
-          added=$(git diff "$BASE_SHA" "$HEAD_SHA" -- CHANGELOG.md \
+          added=$(git diff "$BASE_SHA...$HEAD_SHA" -- CHANGELOG.md \
             | grep -E '^\+[^+]' \
             | grep -vE '^\+\s*$' \
             | wc -l)
