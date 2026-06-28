@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use serde::Deserialize;
 
 use crate::db::parse_table_name;
-use crate::{DirSQL, Row, Table, Value};
+use crate::{DirSQL, Extension, Row, Table, Value};
 
 /// NDJSON helper subprocess + the shared IO it dispatches over.
 pub struct InterpretHelper {
@@ -57,6 +57,12 @@ struct HandshakeState {
     persist: bool,
     #[serde(default, alias = "persistPath")]
     persist_path: Option<String>,
+    /// SQLite extensions the config declared (`{path, entrypoint?}` each).
+    /// Defaults to empty so a handshake from an SDK that doesn't yet emit
+    /// the key still parses. Paths are taken verbatim — the SDK already
+    /// resolved config-relative paths before serializing the snapshot.
+    #[serde(default)]
+    extensions: Vec<HandshakeExtension>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,6 +71,13 @@ struct HandshakeTable {
     glob: String,
     #[serde(default)]
     strict: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct HandshakeExtension {
+    path: String,
+    #[serde(default)]
+    entrypoint: Option<String>,
 }
 
 /// Response per extract request. The discriminator `type` field and the
@@ -149,6 +162,14 @@ fn parse_handshake(stdout: &mut dyn BufRead) -> Result<NativeConfig, String> {
         ignore: state.ignore,
         persist: state.persist,
         persist_path: state.persist_path.map(PathBuf::from),
+        extensions: state
+            .extensions
+            .into_iter()
+            .map(|e| Extension {
+                path: PathBuf::from(e.path),
+                entrypoint: e.entrypoint,
+            })
+            .collect(),
     })
 }
 
@@ -203,6 +224,10 @@ pub struct NativeConfig {
     pub ignore: Vec<String>,
     pub persist: bool,
     pub persist_path: Option<PathBuf>,
+    /// SQLite extensions to load onto the connection at startup. Resolved
+    /// verbatim from the handshake (the SDK already merged config-file and
+    /// programmatic entries and resolved relative paths). See [`Extension`].
+    pub extensions: Vec<Extension>,
 }
 
 /// Build a [`DirSQL`] from a spawned interpret helper. Each table's
@@ -229,7 +254,8 @@ pub fn build_dirsql(helper: Arc<InterpretHelper>, config: NativeConfig) -> Resul
     let mut builder = DirSQL::builder()
         .root(config.root)
         .tables(tables)
-        .ignore(config.ignore);
+        .ignore(config.ignore)
+        .extensions(config.extensions);
     if config.persist {
         builder = builder.persist(true);
     }
@@ -315,6 +341,39 @@ mod tests {
         let cfg = parse_handshake(&mut Cursor::new(line.as_slice())).unwrap();
         assert!(cfg.tables[0].strict);
         assert_eq!(cfg.ignore, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn parse_handshake_carries_extensions_with_path_and_entrypoint() {
+        // A `.py` / `.js` config that declares `extensions=[...]` serializes
+        // them into the handshake `state`; the parser must carry both `path`
+        // and the optional `entrypoint` through to the resolved config (#229).
+        let line = br#"{"type":"config","state":{"root":"/r","tables":[],"extensions":[{"path":"/ext/vec0.so","entrypoint":"sqlite3_vec_init"}]}}
+"#;
+        let cfg = parse_handshake(&mut Cursor::new(line.as_slice())).unwrap();
+        assert_eq!(cfg.extensions.len(), 1);
+        assert_eq!(cfg.extensions[0].path, PathBuf::from("/ext/vec0.so"));
+        assert_eq!(
+            cfg.extensions[0].entrypoint.as_deref(),
+            Some("sqlite3_vec_init"),
+        );
+    }
+
+    #[test]
+    fn parse_handshake_extension_entrypoint_is_optional() {
+        let line = br#"{"type":"config","state":{"root":"/r","tables":[],"extensions":[{"path":"/ext/a.so"}]}}
+"#;
+        let cfg = parse_handshake(&mut Cursor::new(line.as_slice())).unwrap();
+        assert_eq!(cfg.extensions.len(), 1);
+        assert!(cfg.extensions[0].entrypoint.is_none());
+    }
+
+    #[test]
+    fn parse_handshake_defaults_extensions_to_empty_when_absent() {
+        let line = br#"{"type":"config","state":{"root":"/r","tables":[]}}
+"#;
+        let cfg = parse_handshake(&mut Cursor::new(line.as_slice())).unwrap();
+        assert!(cfg.extensions.is_empty());
     }
 
     #[test]
@@ -506,6 +565,35 @@ mod tests {
     }
 
     #[test]
+    fn build_dirsql_threads_extensions_into_the_builder() {
+        // A handshake whose `extensions` names a missing shared library must
+        // fail the build, proving the parsed extensions reach the core's
+        // load-at-startup path (enable -> load -> disable). (#229)
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.json"), b"{}").unwrap();
+
+        let handshake = format!(
+            r#"{{"type":"config","state":{{"root":"{}","tables":[{{"ddl":"CREATE TABLE papers (title TEXT)","glob":"*.json"}}],"extensions":[{{"path":"/nonexistent/dirsql-no-such-ext.so"}}]}}}}"#,
+            tmp.path().display(),
+        );
+        let (helper, config) = spawn_fake_helper(
+            &handshake,
+            r#"{"type":"result","id":1,"ok":true,"rows":[{"title":"y"}]}"#,
+        );
+        assert_eq!(config.extensions.len(), 1);
+        assert_eq!(
+            config.extensions[0].path,
+            PathBuf::from("/nonexistent/dirsql-no-such-ext.so"),
+        );
+
+        let err = match build_dirsql(helper, config) {
+            Ok(_) => panic!("expected build to fail on a missing extension"),
+            Err(e) => e,
+        };
+        assert!(err.contains("failed to load extension"), "got: {err}");
+    }
+
+    #[test]
     fn build_dirsql_round_trip_with_fake_helper_invokes_extract_per_matched_file() {
         // Create a tempdir with two matching files so the scan invokes
         // `extract` twice — exercising the closure created inside
@@ -683,6 +771,7 @@ mod tests {
             ignore: Vec::new(),
             persist: false,
             persist_path: None,
+            extensions: Vec::new(),
         };
         // `DirSQL` doesn't impl Debug, so we can't use `unwrap_err` directly.
         let err = match build_dirsql(helper, config) {

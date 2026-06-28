@@ -44,6 +44,7 @@ def describe_DirSQL_serialization():
                 "ignore",
                 "persist",
                 "persist_path",
+                "extensions",
             }
 
         @pytest.mark.asyncio
@@ -235,3 +236,72 @@ def describe_DirSQL_serialization():
                 "glob": "*.json",
                 "strict": True,
             }
+
+    def describe_extensions():
+        @pytest.mark.asyncio
+        async def it_defaults_extensions_to_empty_list(empty_dir):
+            db = DirSQL(
+                empty_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE items (name TEXT)",
+                        glob="items/*.json",
+                        extract=_noop_extract,
+                    )
+                ],
+            )
+            assert vars(db)["extensions"] == []
+
+        @pytest.mark.asyncio
+        async def it_reflects_extensions_passed_to_the_constructor(empty_dir):
+            """`extensions=[...]` surfaces in the serialized state, with each
+            entry as `{path, entrypoint}` (entrypoint defaulting to None)."""
+            db = DirSQL(
+                empty_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE items (name TEXT)",
+                        glob="items/*.json",
+                        extract=_noop_extract,
+                    )
+                ],
+                extensions=[
+                    {"path": "ext/vec0.so", "entrypoint": "sqlite3_vec_init"},
+                    {"path": "ext/plain.so"},
+                ],
+            )
+            assert vars(db)["extensions"] == [
+                {"path": "ext/vec0.so", "entrypoint": "sqlite3_vec_init"},
+                {"path": "ext/plain.so", "entrypoint": None},
+            ]
+
+        @pytest.mark.asyncio
+        async def it_is_json_serializable_with_extensions(empty_dir):
+            db = DirSQL(
+                empty_dir,
+                extensions=[{"path": "ext/a.so", "entrypoint": "init_a"}],
+            )
+            parsed = json.loads(json.dumps(vars(db)))
+            assert parsed["extensions"] == [
+                {"path": "ext/a.so", "entrypoint": "init_a"}
+            ]
+
+        @pytest.mark.asyncio
+        async def it_reads_config_file_extensions_into_state(empty_dir):
+            """A `.dirsql.toml` `[[dirsql.extension]]` entry feeds into the
+            serialized state, with its relative path resolved against the
+            config's parent directory."""
+            cfg_path = os.path.join(empty_dir, ".dirsql.toml")
+            with open(cfg_path, "w") as f:
+                f.write(
+                    "[[dirsql.extension]]\n"
+                    'path = "ext/vec0.so"\n'
+                    'entrypoint = "sqlite3_vec_init"\n'
+                )
+            db = DirSQL(config=cfg_path)
+            assert vars(db)["extensions"] == [
+                {
+                    "path": os.path.join(empty_dir, "ext/vec0.so"),
+                    "entrypoint": "sqlite3_vec_init",
+                }
+            ]

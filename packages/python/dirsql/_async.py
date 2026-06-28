@@ -50,6 +50,11 @@ class DirSQL:
 
     Pass ``persist=True`` to keep an on-disk SQLite cache (default location:
     ``<root>/.dirsql/cache.db``). Override the location with ``persist_path``.
+
+    Pass ``extensions`` -- a list of ``{"path": ..., "entrypoint": ...}`` dicts
+    (``entrypoint`` optional) -- to load SQLite extensions onto the connection
+    at startup. Any ``[[dirsql.extension]]`` entries in a ``config`` file are
+    appended after the programmatic ones.
     """
 
     def __init__(
@@ -61,6 +66,7 @@ class DirSQL:
         config=None,
         persist=False,
         persist_path=None,
+        extensions=None,
     ):
         if root is None and config is None:
             raise TypeError("DirSQL requires either a root directory or a config= path")
@@ -70,6 +76,7 @@ class DirSQL:
         self._config = config
         self._persist = persist
         self._persist_path = persist_path
+        self._extensions = extensions
         self._db = None
         self._ready_event = asyncio.Event()
         self._init_error = None
@@ -86,6 +93,7 @@ class DirSQL:
                 config=self._config,
                 persist=self._persist,
                 persist_path=self._persist_path,
+                extensions=self._extensions,
             )
         except Exception as exc:
             self._init_error = exc
@@ -124,4 +132,5 @@ class DirSQL:
             self._config,
             self._persist,
             self._persist_path,
+            self._extensions,
         )

@@ -80,6 +80,27 @@ db = DirSQL(
 )
 ```
 
+## Loading SQLite extensions
+
+Pass `extensions` to load SQLite extension shared libraries onto the connection at startup (before any `CREATE TABLE`). Each entry is a dict with a `path` and an optional `entrypoint` init-symbol override:
+
+```python
+db = DirSQL(
+    "./my-blog",
+    tables=[...],
+    extensions=[
+        {"path": "./ext/vec0.dylib", "entrypoint": "sqlite3_vec_init"},
+        {"path": "./ext/myext.so"},  # entrypoint derived from the filename
+    ],
+)
+await db.ready()
+
+# The extension's functions are now callable in queries:
+rows = await db.query("SELECT vec_version() AS v")
+```
+
+`dirsql` enables extension loading only while loading the configured libraries, then disables it again, so the SQL `load_extension()` function is never exposed to your queries. Programmatic entries load first, followed by any `[[dirsql.extension]]` entries declared in a `config` file. See the [config reference](https://github.com/thekevinscott/dirsql/blob/main/docs/cli/config.md#loading-extensions).
+
 ## Watching for changes
 
 `db.watch()` returns an async iterator of row-level change events as files change on disk:
