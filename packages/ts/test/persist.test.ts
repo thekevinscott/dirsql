@@ -3,7 +3,6 @@
 // surgery, existence checks) moves to `node:fs/promises`.
 import { readFileSync } from "node:fs";
 import {
-  access,
   mkdir,
   mkdtemp,
   readFile,
@@ -17,6 +16,7 @@ import { dirname, join } from "node:path";
 import { DirSQL } from "dirsql";
 import initSqlJs from "sql.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { exists } from "./exists.js";
 
 // The two tests below reach into dirsql's on-disk cache (`.dirsql/cache.db`,
 // written by the Rust core) out-of-band to corrupt internal bookkeeping and
@@ -30,16 +30,6 @@ const resolveModule = createRequire(import.meta.url).resolve;
 const sqlJsReady = initSqlJs({
   locateFile: (file) => join(dirname(resolveModule("sql.js")), file),
 });
-
-/** True if `path` exists -- the `node:fs/promises` analog of `existsSync`. */
-async function exists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 /** Open `.dirsql/cache.db` with sql.js, run `sql`, write the bytes back. */
 async function corruptCache(cachePath: string, sql: string): Promise<void> {

@@ -22,7 +22,6 @@
 
 import { spawnSync } from "node:child_process";
 import {
-  access,
   chmod,
   copyFile,
   mkdir,
@@ -36,17 +35,8 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { librarySlug } from "../src/platforms.js";
+import { exists } from "../test/exists.js";
 import { findHostPlatform } from "../tools/stagePlatform.js";
-
-/** True if `path` exists -- the `node:fs/promises` analog of `existsSync`. */
-async function exists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 const TS_PKG = resolve(fileURLToPath(import.meta.url), "..", "..");
 const REPO = resolve(TS_PKG, "..", "..");
