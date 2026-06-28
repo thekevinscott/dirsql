@@ -48,13 +48,25 @@ fn produces_a_loadable_config_for_a_mixed_directory() {
         return;
     }
 
-    // Mixed-content fixture: plain-text and JSON files for `claude` to model.
+    // Mixed-content fixture: plain-text and JSON files for `claude` to model,
+    // plus a genuinely **binary** file. The binary file is a regression guard
+    // for #174 / #184 (Part 2): `dirsql init` must model a directory that
+    // contains binary files, and the generated config must round-trip through
+    // `DirSQL::from_config_path` without the scan eagerly reading that file as
+    // UTF-8 (which previously crashed the build with `InvalidData`).
     let root = TempDir::new().unwrap();
     fs::write(root.path().join("notes.txt"), "hello world\n").unwrap();
     fs::write(root.path().join("more.txt"), "another note\n").unwrap();
     fs::write(
         root.path().join("data.json"),
         r#"{"vendor": "Acme", "amount": 42}"#,
+    )
+    .unwrap();
+    // JPEG magic bytes: `0xFF` is not valid UTF-8, so an eager `read_to_string`
+    // over this file fails with `InvalidData` — the original #174 symptom.
+    fs::write(
+        root.path().join("photo.jpg"),
+        [0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x10],
     )
     .unwrap();
 
