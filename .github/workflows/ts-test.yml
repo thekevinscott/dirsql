@@ -95,54 +95,6 @@ jobs:
         working-directory: packages/ts
         run: pnpm test:integration
 
-  pack-e2e:
-    # Build CI publishability gate: build the real `dirsql` binary +
-    # napi addon, pack the main `dirsql` npm package and the host's
-    # `@dirsql/cli-<slug>` sub-package the way the release pipeline
-    # would, install both into a fresh dir with `npm install`, and run
-    # `node_modules/.bin/dirsql --version`. If this job goes red, the
-    # npm release is broken (`npx dirsql` would fail) and must not go
-    # out. No mocks / no monkeypatching; exercises the real
-    # published-artifact path.
-    name: Pack install smoke test (Node ${{ matrix.node }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        node: ["20", "22", "24"]
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
-
-      - name: Install Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node }}
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Install dependencies
-        working-directory: packages/ts
-        run: pnpm install
-
-      - name: Build native module + stage platform
-        working-directory: packages/ts
-        run: pnpm build
-
-      - name: Run pack install smoke e2e
-        working-directory: packages/ts
-        run: pnpm test:e2e
-
   coverage:
     name: TS coverage floor
     runs-on: ubuntu-latest

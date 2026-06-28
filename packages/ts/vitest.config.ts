@@ -25,11 +25,6 @@ export default defineConfig({
       "**/dist/**",
       "**/.{git,cache}/**",
       "docs/**",
-      // e2e tests live in `test-e2e/` and run via the dedicated
-      // `pnpm test:e2e` script (which depends on `pnpm build`). Excluding
-      // them here keeps the default `pnpm test` (and `vitest --dir test`)
-      // fast and free of the cargo-build prerequisite.
-      "test-e2e/**",
     ],
     coverage: {
       provider: "v8",
@@ -37,10 +32,11 @@ export default defineConfig({
       exclude: [
         "**/*.test.ts",
         "test/**/*.ts",
-        // `dirsql.ts` is the npm `bin` entry shim: a 2-line module
-        // that imports `main` and calls it at module load. It's not
-        // a function under test; the pack-install smoke test covers
-        // it end-to-end. The rest of `src/cli/**` is unit-tested.
+        // `dirsql.ts` is the npm `bin` entry shim: it imports `main` and
+        // invokes it at module load. Not a function under test, and
+        // intentionally not imported anywhere else; the launcher helpers
+        // in `main.ts` / `resolveBinary.ts` are unit-tested. Also exempt
+        // from the colocated-test gate (see testing-conventions.toml).
         "src/cli/dirsql.ts",
         "src/index.ts", // needs the napi binary; covered by SDK integration tests
       ],

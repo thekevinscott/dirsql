@@ -233,6 +233,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Test files no longer ship in built distributions.** The Python wheel
+  bundled the colocated `dirsql/**/*_test.py` unit tests, the npm tarball
+  shipped compiled `dist/**/*.test.*`, and the crate shipped `tests/**`. Each
+  is now excluded at build time (maturin `exclude`; a `tsconfig.build.json`
+  that drops `*.test.ts` / `*.spec.ts` from the emitted `dist/`; and `tests/`
+  in the crate's `[package].exclude`), so consumers no longer receive test
+  code as package data. Enforced going forward by the new `packaging` gate
+  (testing-conventions). (#238)
+
 - **File watcher now emits events when `root` is relative.** Building a
   `DirSQL` with a relative root (e.g. `DirSQL::new("./data", tables)` or
   `DirSQL::new(".", tables)`) handed that relative path straight to `notify`,

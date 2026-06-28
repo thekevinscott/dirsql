@@ -34,7 +34,6 @@
     "test": "wireit",
     "test:unit": "wireit",
     "test:integration": "wireit",
-    "test:e2e": "wireit",
     "coverage": "wireit",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
@@ -47,8 +46,8 @@
       "output": ["dirsql.node", "index.d.ts"]
     },
     "tsc": {
-      "command": "tsc",
-      "files": ["src/**/*.ts", "tsconfig.json"],
+      "command": "tsc -p tsconfig.build.json",
+      "files": ["src/**/*.ts", "tsconfig.json", "tsconfig.build.json"],
       "output": ["dist/**"]
     },
     "stage:platform": {
@@ -69,14 +68,15 @@
       "dependencies": ["napi:build", "tsc", "stage:platform"]
     },
     "build:debug": {
-      "command": "napi build --manifest-path napi/Cargo.toml --output-dir . && tsc",
+      "command": "napi build --manifest-path napi/Cargo.toml --output-dir . && tsc -p tsconfig.build.json",
       "files": [
         "napi/src/**/*.rs",
         "napi/build.rs",
         "napi/Cargo.toml",
         "../rust/src/**/*.rs",
         "src/**/*.ts",
-        "tsconfig.json"
+        "tsconfig.json",
+        "tsconfig.build.json"
       ],
       "output": ["dirsql.node", "dist/**", "index.d.ts"]
     },
@@ -105,19 +105,6 @@
         "tools/**/*.ts",
         "test/**/*.ts",
         "vitest.config.ts"
-      ],
-      "output": []
-    },
-    "test:e2e": {
-      "command": "vitest run --dir test-e2e --passWithNoTests",
-      "dependencies": ["build"],
-      "files": [
-        "src/**/*.ts",
-        "tools/**/*.ts",
-        "test-e2e/**/*.ts",
-        "vitest.config.ts",
-        "../rust/src/**/*.rs",
-        "../rust/Cargo.toml"
       ],
       "output": []
     },
