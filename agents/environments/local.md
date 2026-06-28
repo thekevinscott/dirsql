@@ -94,7 +94,7 @@ The orchestrator (main Claude session) must proactively:
 The "substantial change" definition and PR body template live in `AGENTS.md`. In the local environment, run e2e via:
 
 - Python SDK: `just test-e2e`
-- TypeScript SDK: `pnpm --dir packages/ts run test:e2e` (when a TS e2e target exists)
+- TypeScript SDK: no standalone e2e suite (the bespoke pack-install smoke test was retired in favor of the `packaging` gate; the npm artifact's functional install is verified by the release matrix)
 - Rust core: covered by `cargo test --workspace`; run `cargo bench -p dirsql` after Rust-heavy changes
 
 Record the exact commands run and their outcomes in the PR body.

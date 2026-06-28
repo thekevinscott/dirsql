@@ -38,6 +38,23 @@ test-conventions:
     testing-conventions unit lint --language python packages/python/dirsql
     testing-conventions unit lint --language typescript packages/ts/src
 
+# Packaging gate: assert no test files ship in the built .whl / .tgz / .crate.
+# Mirrors .github/workflows/packaging.yml; requires uv, pnpm, cargo, and
+# `pip install "testing-conventions==<version>"`.
+test-packaging:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    work="$(mktemp -d)"
+    cd packages/python && uv run maturin build --out dist && cd ../..
+    python3 -m zipfile -e packages/python/dist/*.whl "$work/wheel"
+    testing-conventions packaging --language python "$work/wheel"
+    cd packages/ts && pnpm build && mkdir -p dist-pack && pnpm pack --pack-destination dist-pack && cd ../..
+    mkdir -p "$work/tgz" && tar -xzf packages/ts/dist-pack/*.tgz -C "$work/tgz"
+    testing-conventions packaging --language typescript "$work/tgz/package"
+    cargo package -p dirsql --no-verify --allow-dirty
+    mkdir -p "$work/crate" && python3 -m tarfile -e target/package/*.crate "$work/crate"
+    testing-conventions packaging --language rust "$work"/crate/dirsql-*
+
 # CI test target (unit + integration, no e2e)
 test-ci:
     uv run python -m pytest packages/python/dirsql/ packages/python/tests/integration/ -x -q --tb=short 2>/dev/null || echo "No tests found yet"
