@@ -119,7 +119,7 @@ targets = [
 # musl / cross-compile / stage / verify step on the npm bundled-cli row
 # is gated on `matrix.bundle_cli`, so without this subtable the upstream
 # pipeline produces no binary at all and the consumer's local
-# `npm run build` (`packages/ts/tools/stagePlatform.ts`) silently fills
+# `npm run build` (`packages/ts/tools/stage-platform.ts`) silently fills
 # the gap with `cargo build --target x86_64-unknown-linux-gnu` on the
 # ubuntu-latest runner — yielding the glibc-2.39-linked binary that
 # shipped in 0.3.11 / 0.3.12 (dirsql#189). With this block, upstream

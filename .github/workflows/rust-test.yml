@@ -106,7 +106,7 @@ jobs:
           # `cli/native_config.rs` (#192) added subprocess-RPC closures that
           # are only fully exercised via the integration tests
           # (`packages/python/tests/integration/test_native_config.py`,
-          # `packages/ts/test/native_config.test.ts`), dragging the functions
+          # `packages/ts/test/native-config.test.ts`), dragging the functions
           # floor from 96.93 down to ~95.6. Functions floor is temporarily
           # lowered to 95; a follow-up should add tests that lift it back to
           # 96 once the helper's monomorphization landscape settles.

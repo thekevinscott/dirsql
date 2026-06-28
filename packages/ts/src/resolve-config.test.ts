@@ -2,7 +2,7 @@
 
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { resolveConfig } from "./resolveConfig.js";
+import { resolveConfig } from "./resolve-config.js";
 
 // `resolveConfig`'s only effectful collaborator is `readFileSync`; `node:path`
 // and `smol-toml` are pure. Mock fs so the test never touches a real file --

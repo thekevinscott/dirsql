@@ -149,6 +149,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **TypeScript SDK: all `packages/ts/` filenames standardized to dash-case
+  (kebab-case).** Source and test modules that were `camelCase` or
+  `snake_case` were renamed (e.g. `loadNativeCore.ts` ->
+  `load-native-core.ts`, `resolveBinary.ts` -> `resolve-binary.ts`,
+  `from_config.test.ts` -> `from-config.test.ts`); single-word files
+  (`index.ts`, `die.ts`, `main.ts`) are unchanged. Only filenames moved --
+  exported symbols keep their `camelCase` / `PascalCase` names, and the
+  package's public entry points (`dist/index.js`, `dist/cli/dirsql.js`) are
+  unchanged, so installed consumers are unaffected. The convention is now
+  enforced for `src/` and `test/` by biome's `style/useFilenamingConvention`
+  rule and documented in `AGENTS.md`. (#193)
+
 - **TypeScript SDK: lowered the supported Node floor to `>=20.11`** (from
   `>=22`). Nothing in the shipped SDK or CLI requires Node 22: the native
   addon targets the `napi6` ABI (Node 10/12/14+), the only runtime

@@ -6,7 +6,7 @@
 // architectural property under test ("the Rust binary dispatches
 // non-TOML configs to `dirsql interpret`") is the binary's job — the
 // launcher is a transparent forwarder already covered by the
-// `cli_smoke` e2e.
+// `cli-smoke` e2e.
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
@@ -21,7 +21,7 @@ import { PLATFORMS, librarySlug } from "../src/platforms.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = join(__dirname, "..");
 
-// Bundled Rust binary, staged by `tools/stagePlatform.ts` under
+// Bundled Rust binary, staged by `tools/stage-platform.ts` under
 // `build/bundled-cli-<slug>/`. `pnpm build` is a dependency of the
 // `test:integration` wireit task.
 const HOST = PLATFORMS.find(

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadApp } from "./loadApp.js";
+import { loadApp } from "./load-app.js";
 
 describe("loadApp", () => {
   it("returns the default export the importer yields", async () => {

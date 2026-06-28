@@ -6,7 +6,7 @@
 import { createRequire } from "node:module";
 import { nodeTriples } from "../platforms.js";
 import { die } from "./die.js";
-import { platformKey } from "./platformKey.js";
+import { platformKey } from "./platform-key.js";
 
 /** A minimal `require.resolve`-shaped function. Injectable for tests. */
 export type Resolver = (specifier: string) => string;

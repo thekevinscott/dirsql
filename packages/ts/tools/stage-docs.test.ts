@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { KEEP_DIRS, KEEP_FILES, restoreSymlink, stageDocs } from "./stageDocs.js";
+import { KEEP_DIRS, KEEP_FILES, restoreSymlink, stageDocs } from "./stage-docs.js";
 
 let work: string;
 let workspaceDocs: string;

@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { die } from "./die.js";
-import { defaultResolver, resolveBinary } from "./resolveBinary.js";
+import { defaultResolver, resolveBinary } from "./resolve-binary.js";
 
 vi.mock("./die.js");
 

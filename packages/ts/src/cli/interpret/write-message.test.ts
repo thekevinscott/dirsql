@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writeMessage } from "./writeMessage.js";
+import { writeMessage } from "./write-message.js";
 
 describe("writeMessage", () => {
   let write: ReturnType<typeof vi.fn>;
