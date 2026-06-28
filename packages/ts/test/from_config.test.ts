@@ -8,34 +8,36 @@
 // interpretation is intentionally out of scope; for that, register a
 // programmatic Table with your own extract function.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DirSQL } from "dirsql";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-function writeFile(path: string, content: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, content);
+// Renamed from `writeFile` to avoid shadowing the `node:fs/promises` import;
+// it ensures the parent directory exists before writing.
+async function seedFile(path: string, content: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content);
 }
 
 describe("new DirSQL(configPath)", () => {
   let dir: string;
   let configPath: string;
 
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "dirsql-fromconfig-"));
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "dirsql-fromconfig-"));
     configPath = join(dir, ".dirsql.toml");
   });
 
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
   });
 
   it("produces one row per matched file with stat virtuals", async () => {
-    writeFile(join(dir, "items", "a.csv"), "anything");
-    writeFile(join(dir, "items", "b.csv"), "anything");
-    writeFile(
+    await seedFile(join(dir, "items", "a.csv"), "anything");
+    await seedFile(join(dir, "items", "b.csv"), "anything");
+    await seedFile(
       configPath,
       `
 [[table]]
@@ -57,9 +59,9 @@ glob = "items/*.csv"
   });
 
   it("injects glob path captures into rows", async () => {
-    writeFile(join(dir, "comments", "thread-1", "a.txt"), "x");
-    writeFile(join(dir, "comments", "thread-2", "a.txt"), "x");
-    writeFile(
+    await seedFile(join(dir, "comments", "thread-1", "a.txt"), "x");
+    await seedFile(join(dir, "comments", "thread-2", "a.txt"), "x");
+    await seedFile(
       configPath,
       `
 [[table]]
@@ -80,8 +82,8 @@ glob = "comments/{thread_id}/*.txt"
 
   it("exposes the full set of stat virtuals when declared in DDL", async () => {
     const body = "# title\nhello world\n";
-    writeFile(join(dir, "docs", "readme.md"), body);
-    writeFile(
+    await seedFile(join(dir, "docs", "readme.md"), body);
+    await seedFile(
       configPath,
       `
 [[table]]
@@ -107,9 +109,9 @@ glob = "docs/*.md"
   });
 
   it("respects ignore patterns from config", async () => {
-    writeFile(join(dir, "data", "good.json"), "{}");
-    writeFile(join(dir, "data", "node_modules", "bad.json"), "{}");
-    writeFile(
+    await seedFile(join(dir, "data", "good.json"), "{}");
+    await seedFile(join(dir, "data", "node_modules", "bad.json"), "{}");
+    await seedFile(
       configPath,
       `
 [dirsql]
@@ -129,9 +131,9 @@ glob = "data/**/*.json"
   });
 
   it("loads multiple tables", async () => {
-    writeFile(join(dir, "posts", "hello.txt"), "x");
-    writeFile(join(dir, "authors", "alice.txt"), "x");
-    writeFile(
+    await seedFile(join(dir, "posts", "hello.txt"), "x");
+    await seedFile(join(dir, "authors", "alice.txt"), "x");
+    await seedFile(
       configPath,
       `
 [[table]]
@@ -161,13 +163,13 @@ glob = "authors/*.txt"
   });
 
   it("rejects invalid TOML", async () => {
-    writeFile(configPath, "this is not valid [[[");
+    await seedFile(configPath, "this is not valid [[[");
     const db = new DirSQL(configPath);
     await expect(db.ready).rejects.toThrow();
   });
 
   it("rejects table entries missing ddl", async () => {
-    writeFile(
+    await seedFile(
       configPath,
       `
 [[table]]

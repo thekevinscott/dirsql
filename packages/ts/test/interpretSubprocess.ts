@@ -5,7 +5,7 @@
 // shipped TS SDK.
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { access } from "node:fs/promises";
 import {
   type Interface as ReadlineInterface,
   createInterface,
@@ -19,11 +19,13 @@ export interface InterpretHandle {
 }
 
 /** Start `<node> <cliEntry> interpret <configPath>` with piped streams. */
-export function spawnInterpret(
+export async function spawnInterpret(
   cliEntry: string,
   configPath: string,
-): InterpretHandle {
-  if (!existsSync(cliEntry)) {
+): Promise<InterpretHandle> {
+  try {
+    await access(cliEntry);
+  } catch {
     throw new Error(
       `CLI entry not built: ${cliEntry} -- run \`pnpm build\` first`,
     );

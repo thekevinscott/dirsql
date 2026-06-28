@@ -1,10 +1,8 @@
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+// `readFileSync` stays sync: it runs inside `extract` callbacks, and the
+// public `TableDef.extract` signature is synchronous `(filePath) => rows[]`.
+// Only the test's own setup/teardown plumbing moves to `node:fs/promises`.
+import { readFileSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DirSQL, type RowEvent, Table, type TableDef } from "dirsql";
@@ -13,17 +11,17 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 describe("DirSQL", () => {
   let dir: string;
 
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "dirsql-test-"));
-    mkdirSync(join(dir, "data"), { recursive: true });
-    writeFileSync(
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "dirsql-test-"));
+    await mkdir(join(dir, "data"), { recursive: true });
+    await writeFile(
       join(dir, "data", "users.json"),
       JSON.stringify([
         { name: "Alice", age: 30 },
         { name: "Bob", age: 25 },
       ]),
     );
-    writeFileSync(
+    await writeFile(
       join(dir, "data", "products.json"),
       JSON.stringify([
         { name: "Widget", price: 9.99 },
@@ -32,8 +30,8 @@ describe("DirSQL", () => {
     );
   });
 
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
   });
 
   it("creates an instance and queries data", async () => {
@@ -147,7 +145,7 @@ describe("DirSQL", () => {
   });
 
   it("handles empty directories gracefully", async () => {
-    const emptyDir = mkdtempSync(join(tmpdir(), "dirsql-empty-"));
+    const emptyDir = await mkdtemp(join(tmpdir(), "dirsql-empty-"));
     try {
       const db = new DirSQL({
         root: emptyDir,
@@ -164,7 +162,7 @@ describe("DirSQL", () => {
       const rows = await db.query("SELECT * FROM items");
       expect(rows).toHaveLength(0);
     } finally {
-      rmSync(emptyDir, { recursive: true, force: true });
+      await rm(emptyDir, { recursive: true, force: true });
     }
   });
 
@@ -186,8 +184,8 @@ describe("DirSQL", () => {
 
   it("rejects write statements via query", async () => {
     const itemDir = join(dir, "items");
-    mkdirSync(itemDir, { recursive: true });
-    writeFileSync(join(itemDir, "a.json"), JSON.stringify({ name: "apple" }));
+    await mkdir(itemDir, { recursive: true });
+    await writeFile(join(itemDir, "a.json"), JSON.stringify({ name: "apple" }));
 
     const db = new DirSQL({
       root: dir,
@@ -246,19 +244,19 @@ describe("DirSQL", () => {
 describe("DirSQL strict mode", () => {
   let dir: string;
 
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "dirsql-strict-"));
-    mkdirSync(join(dir, "items"), { recursive: true });
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "dirsql-strict-"));
+    await mkdir(join(dir, "items"), { recursive: true });
   });
 
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
   });
 
   // Docs (guide/tables.md / guide/config.md "Strict Mode"):
   // `strict: true` on a Table def rejects rows with keys not in the DDL.
   it("rejects rows with extra keys when strict is true", async () => {
-    writeFileSync(
+    await writeFile(
       join(dir, "items", "a.json"),
       JSON.stringify({ name: "apple", color: "red" }),
     );
@@ -281,7 +279,7 @@ describe("DirSQL strict mode", () => {
 
   // Docs: strict mode passes on exact key match.
   it("allows rows with exact key match when strict is true", async () => {
-    writeFileSync(
+    await writeFile(
       join(dir, "items", "a.json"),
       JSON.stringify({ name: "apple", color: "red" }),
     );
@@ -310,19 +308,19 @@ describe("DirSQL strict mode", () => {
 describe("DirSQL watch events", () => {
   let dir: string;
 
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "dirsql-watch-"));
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "dirsql-watch-"));
   });
 
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
   });
 
   // Docs (guide/watching.md event payloads): `filePath` is relative to the root.
   // All examples in watching.md show relative paths (e.g. "comments/abc/index.json")
   // rather than absolute paths.
   it("sets filePath as a relative path on watch events", async () => {
-    mkdirSync(join(dir, "nested", "dir"), { recursive: true });
+    await mkdir(join(dir, "nested", "dir"), { recursive: true });
 
     const db = new DirSQL({
       root: dir,
@@ -342,7 +340,7 @@ describe("DirSQL watch events", () => {
     // Give the watcher a moment to settle before writing, so the file event
     // is definitely captured.
     const relPath = join("nested", "dir", "new.json");
-    writeFileSync(join(dir, relPath), JSON.stringify({ name: "relative" }));
+    await writeFile(join(dir, relPath), JSON.stringify({ name: "relative" }));
 
     // Poll until we see at least one event, up to ~5s total.
     const events: RowEvent[] = [];
@@ -425,9 +423,9 @@ describe("DirSQL watch events", () => {
   // should fire before or during the scan, not after it.
   it("does not block the JS event loop during construction", async () => {
     // Seed with a handful of files so the scan has real work to do.
-    mkdirSync(join(dir, "items"), { recursive: true });
+    await mkdir(join(dir, "items"), { recursive: true });
     for (let i = 0; i < 20; i++) {
-      writeFileSync(
+      await writeFile(
         join(dir, "items", `f${i}.json`),
         JSON.stringify({ name: `item-${i}` }),
       );
@@ -464,7 +462,7 @@ describe("DirSQL watch events", () => {
   // #146: `query()` transparently awaits `ready`, so callers can issue it
   // before the initial scan has finished and it just works.
   it("query awaits ready so callers can issue it eagerly", async () => {
-    writeFileSync(
+    await writeFile(
       join(dir, "x.json"),
       JSON.stringify({ name: "eagerly-resolved" }),
     );
@@ -500,10 +498,10 @@ describe("DirSQL watch events", () => {
 describe("Table class", () => {
   let dir: string;
 
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "dirsql-table-class-"));
-    mkdirSync(join(dir, "data"), { recursive: true });
-    writeFileSync(
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "dirsql-table-class-"));
+    await mkdir(join(dir, "data"), { recursive: true });
+    await writeFile(
       join(dir, "data", "users.json"),
       JSON.stringify([
         { name: "Alice", age: 30 },
@@ -512,8 +510,8 @@ describe("Table class", () => {
     );
   });
 
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
   });
 
   it("is importable as a constructable class", () => {
@@ -581,7 +579,7 @@ describe("Table class", () => {
   });
 
   it("propagates the optional `strict` flag", async () => {
-    writeFileSync(
+    await writeFile(
       join(dir, "data", "users.json"),
       JSON.stringify([{ name: "Alice", age: 30, extra: "nope" }]),
     );

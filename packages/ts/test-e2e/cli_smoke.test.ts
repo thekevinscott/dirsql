@@ -22,20 +22,20 @@
 
 import { spawnSync } from "node:child_process";
 import {
-  chmodSync,
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  writeFileSync,
-} from "node:fs";
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { librarySlug } from "../src/platforms.js";
+import { exists } from "../test/exists.js";
 import { findHostPlatform } from "../tools/stagePlatform.js";
 
 const TS_PKG = resolve(fileURLToPath(import.meta.url), "..", "..");
@@ -49,7 +49,7 @@ interface BuiltArtifacts {
 
 let artifacts: BuiltArtifacts;
 
-beforeAll(() => {
+beforeAll(async () => {
   // pnpm build runs napi:build + tsc + stage:platform. We rely on it
   // having been run by the CI job before this test (the wireit task
   // graph caches it across runs locally). Sanity-check the outputs are
@@ -59,32 +59,32 @@ beforeAll(() => {
   const stagedCli = join(TS_PKG, "build", `bundled-cli-${slug}`);
   const binName = host.exe === true ? "dirsql.exe" : "dirsql";
   const stagedBinary = join(stagedCli, binName);
-  if (!existsSync(stagedBinary)) {
+  if (!(await exists(stagedBinary))) {
     throw new Error(
       `prerequisite missing: ${stagedBinary}. Run \`pnpm build\` from packages/ts before this test.`,
     );
   }
 
-  const stagingRoot = mkdtempSync(join(tmpdir(), "dirsql-e2e-"));
+  const stagingRoot = await mkdtemp(join(tmpdir(), "dirsql-e2e-"));
 
   // 1. Pack the host platform's `@dirsql/cli-<slug>` package. In the
   //    real release flow this is produced and published by the release
   //    tool; here we reconstruct the minimum shape that the launcher's
   //    `require.resolve('<pkg>/dirsql')` needs.
   const cliPkgDir = join(stagingRoot, "cli-pkg");
-  mkdirSync(cliPkgDir, { recursive: true });
+  await mkdir(cliPkgDir, { recursive: true });
   const cliPkgJson = {
     name: host.name,
     version: "0.0.0-e2e",
     os: host.os,
     cpu: host.cpu,
   };
-  writeFileSync(
+  await writeFile(
     join(cliPkgDir, "package.json"),
     JSON.stringify(cliPkgJson, null, 2),
   );
-  copyFileSync(stagedBinary, join(cliPkgDir, binName));
-  chmodSync(join(cliPkgDir, binName), 0o755);
+  await copyFile(stagedBinary, join(cliPkgDir, binName));
+  await chmod(join(cliPkgDir, binName), 0o755);
 
   const cliPack = spawnSync("npm", ["pack", "--pack-destination", stagingRoot], {
     cwd: cliPkgDir,
@@ -93,12 +93,12 @@ beforeAll(() => {
   if (cliPack.status !== 0) {
     throw new Error(`cli npm pack failed: ${cliPack.stderr || cliPack.stdout}`);
   }
-  const cliTarball = readdirSync(stagingRoot)
+  const cliTarball = (await readdir(stagingRoot))
     .filter((f) => f.startsWith("dirsql-cli-") && f.endsWith(".tgz"))
     .map((f) => join(stagingRoot, f))[0];
   if (!cliTarball) {
     throw new Error(
-      `cli npm pack produced no tarball in ${stagingRoot} (saw ${readdirSync(stagingRoot).join(", ")})`,
+      `cli npm pack produced no tarball in ${stagingRoot} (saw ${(await readdir(stagingRoot)).join(", ")})`,
     );
   }
 
@@ -112,12 +112,12 @@ beforeAll(() => {
   if (mainPack.status !== 0) {
     throw new Error(`main pnpm pack failed: ${mainPack.stderr || mainPack.stdout}`);
   }
-  const mainTarball = readdirSync(stagingRoot)
+  const mainTarball = (await readdir(stagingRoot))
     .filter((f) => f.startsWith("dirsql-") && !f.startsWith("dirsql-cli-") && f.endsWith(".tgz"))
     .map((f) => join(stagingRoot, f))[0];
   if (!mainTarball) {
     throw new Error(
-      `main pnpm pack produced no tarball in ${stagingRoot} (saw ${readdirSync(stagingRoot).join(", ")})`,
+      `main pnpm pack produced no tarball in ${stagingRoot} (saw ${(await readdir(stagingRoot)).join(", ")})`,
     );
   }
 
@@ -129,9 +129,9 @@ beforeAll(() => {
 });
 
 describe("npm-installed dirsql CLI", () => {
-  it("registers a `dirsql` bin script that execs the bundled binary", () => {
-    const installRoot = mkdtempSync(join(tmpdir(), "dirsql-e2e-install-"));
-    writeFileSync(
+  it("registers a `dirsql` bin script that execs the bundled binary", async () => {
+    const installRoot = await mkdtemp(join(tmpdir(), "dirsql-e2e-install-"));
+    await writeFile(
       join(installRoot, "package.json"),
       JSON.stringify({ name: "dirsql-e2e-host", version: "0.0.0", private: true }),
     );
@@ -155,7 +155,7 @@ describe("npm-installed dirsql CLI", () => {
     // 3. The `dirsql` bin should exist and execute against the
     //    cargo-built binary.
     const binPath = join(installRoot, "node_modules", ".bin", "dirsql");
-    expect(existsSync(binPath), `bin missing at ${binPath}`).toBe(true);
+    expect(await exists(binPath), `bin missing at ${binPath}`).toBe(true);
 
     const result = spawnSync(binPath, ["--version"], { encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0);
@@ -164,9 +164,9 @@ describe("npm-installed dirsql CLI", () => {
     // 4. Cross-check the published package layout: the launcher should
     //    resolve to a real binary inside @dirsql/cli-<slug>.
     const cliPkgDir = join(installRoot, "node_modules", artifacts.cliPackageName);
-    expect(existsSync(cliPkgDir), `cli sub-pkg missing at ${cliPkgDir}`).toBe(true);
+    expect(await exists(cliPkgDir), `cli sub-pkg missing at ${cliPkgDir}`).toBe(true);
     const cliPkgJson = JSON.parse(
-      readFileSync(join(cliPkgDir, "package.json"), "utf8"),
+      await readFile(join(cliPkgDir, "package.json"), "utf8"),
     );
     expect(cliPkgJson.name).toBe(artifacts.cliPackageName);
   });

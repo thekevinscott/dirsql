@@ -1,6 +1,6 @@
 // Integration tests for DirSQL config serialization (#194).
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DirSQL } from "dirsql";
@@ -9,12 +9,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 describe("DirSQL serialization (toJSON / JSON.stringify)", () => {
   let dir: string;
 
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "dirsql-serialize-"));
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "dirsql-serialize-"));
   });
 
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
   });
 
   const noopExtract = () => [];
@@ -178,7 +178,7 @@ describe("DirSQL serialization (toJSON / JSON.stringify)", () => {
 
   it("merges root, tables, ignore, persist from .dirsql.toml", async () => {
     const cfgPath = join(dir, ".dirsql.toml");
-    writeFileSync(
+    await writeFile(
       cfgPath,
       `[dirsql]
 root = "data"
@@ -194,7 +194,7 @@ strict = true
     );
     // Create the directory the config points at so the background scan
     // succeeds and ready doesn't reject.
-    mkdirSync(join(dir, "data"), { recursive: true });
+    await mkdir(join(dir, "data"), { recursive: true });
 
     const db = new DirSQL(cfgPath);
     const serialized = JSON.parse(JSON.stringify(db));

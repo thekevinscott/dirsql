@@ -1,18 +1,22 @@
+// `readFileSync` stays sync: it runs inside `extract` callbacks, whose public
+// signature is synchronous. All other fs access (setup/teardown, cache
+// surgery, existence checks) moves to `node:fs/promises`.
+import { readFileSync } from "node:fs";
 import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DirSQL } from "dirsql";
 import initSqlJs from "sql.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { exists } from "./exists.js";
 
 // The two tests below reach into dirsql's on-disk cache (`.dirsql/cache.db`,
 // written by the Rust core) out-of-band to corrupt internal bookkeeping and
@@ -30,10 +34,10 @@ const sqlJsReady = initSqlJs({
 /** Open `.dirsql/cache.db` with sql.js, run `sql`, write the bytes back. */
 async function corruptCache(cachePath: string, sql: string): Promise<void> {
   const SQL = await sqlJsReady;
-  const db = new SQL.Database(readFileSync(cachePath));
+  const db = new SQL.Database(await readFile(cachePath));
   try {
     db.run(sql);
-    writeFileSync(cachePath, db.export());
+    await writeFile(cachePath, db.export());
   } finally {
     db.close();
   }
@@ -42,17 +46,17 @@ async function corruptCache(cachePath: string, sql: string): Promise<void> {
 describe("DirSQL persist", () => {
   let dir: string;
 
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "dirsql-persist-"));
-    mkdirSync(join(dir, "items"), { recursive: true });
-    writeFileSync(
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "dirsql-persist-"));
+    await mkdir(join(dir, "items"), { recursive: true });
+    await writeFile(
       join(dir, "items", "a.json"),
       JSON.stringify({ name: "apple", price: 1.5 }),
     );
   });
 
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
   });
 
   function makeTable(box: { count: number }) {
@@ -75,7 +79,7 @@ describe("DirSQL persist", () => {
     });
     const rows = await db.query("SELECT * FROM items");
     expect(rows).toHaveLength(1);
-    expect(existsSync(join(dir, ".dirsql", "cache.db"))).toBe(true);
+    expect(await exists(join(dir, ".dirsql", "cache.db"))).toBe(true);
   });
 
   it("trusts unchanged files on warm start", async () => {
@@ -112,12 +116,12 @@ describe("DirSQL persist", () => {
 
     // Bump mtime far enough into the future to escape the racy window.
     await new Promise((r) => setTimeout(r, 50));
-    writeFileSync(
+    await writeFile(
       join(dir, "items", "a.json"),
       JSON.stringify({ name: "cherry", price: 9.99 }),
     );
     const future = new Date(Date.now() + 5000);
-    utimesSync(join(dir, "items", "a.json"), future, future);
+    await utimes(join(dir, "items", "a.json"), future, future);
 
     const box2 = { count: 0 };
     const db2 = new DirSQL({
@@ -132,7 +136,7 @@ describe("DirSQL persist", () => {
   });
 
   it("drops rows for files removed between runs", async () => {
-    writeFileSync(
+    await writeFile(
       join(dir, "items", "b.json"),
       JSON.stringify({ name: "banana", price: 0.75 }),
     );
@@ -145,7 +149,7 @@ describe("DirSQL persist", () => {
     });
     await db1.ready;
 
-    rmSync(join(dir, "items", "b.json"));
+    await rm(join(dir, "items", "b.json"));
 
     const box2 = { count: 0 };
     const db2 = new DirSQL({
@@ -167,7 +171,7 @@ describe("DirSQL persist", () => {
     });
     await db1.ready;
 
-    writeFileSync(
+    await writeFile(
       join(dir, "items", "b.json"),
       JSON.stringify({ name: "banana", price: 0.75 }),
     );
@@ -217,8 +221,8 @@ describe("DirSQL persist", () => {
   });
 
   it("never indexes files inside the .dirsql directory", async () => {
-    mkdirSync(join(dir, ".dirsql", "items"), { recursive: true });
-    writeFileSync(
+    await mkdir(join(dir, ".dirsql", "items"), { recursive: true });
+    await writeFile(
       join(dir, ".dirsql", "items", "boom.json"),
       JSON.stringify({ name: "BOOM", price: -1 }),
     );
@@ -310,7 +314,7 @@ describe("DirSQL persist", () => {
       persistPath: custom,
     });
     await db.ready;
-    expect(existsSync(custom)).toBe(true);
-    expect(existsSync(join(dir, ".dirsql", "cache.db"))).toBe(false);
+    expect(await exists(custom)).toBe(true);
+    expect(await exists(join(dir, ".dirsql", "cache.db"))).toBe(false);
   });
 });
