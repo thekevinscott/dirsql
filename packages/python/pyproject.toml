@@ -36,8 +36,14 @@ dirsql = "dirsql.cli.main:main"
 
 [tool.maturin]
 features = ["extension-module"]
+# Keep test files out of the built wheel/sdist. `tests/` is the integration
+# suite; `**/*_test.py` / `**/test_*.py` are the colocated unit tests that live
+# inside the `dirsql/` package and would otherwise ship as package data.
+# Enforced by the `packaging` gate (testing-conventions) in CI.
 exclude = [
     "tests/",
+    "**/*_test.py",
+    "**/test_*.py",
 ]
 # `python-source` intentionally unset: the maturin-recommended mixed
 # layout (`python-source = "python"`) is unsupported by upstream
