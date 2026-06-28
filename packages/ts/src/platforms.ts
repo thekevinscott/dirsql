@@ -3,7 +3,7 @@
 // Every target triple generates two npm sub-packages:
 //
 // 1. `@dirsql/cli-<slug>` — holds the standalone `dirsql` CLI binary
-//    (from cargo-dist). Consumed at runtime by `src/cli/resolve-binary.ts`
+//    (from cargo-dist). Consumed at runtime by `src/cli/resolveBinary.ts`
 //    when a user runs the `dirsql` CLI.
 // 2. `@dirsql/lib-<slug>` — holds the napi-rs `.node` addon used by the
 //    TypeScript SDK. Consumed at runtime by `loadNativeCore()` in
