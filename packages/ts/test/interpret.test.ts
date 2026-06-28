@@ -1,7 +1,7 @@
 // Integration tests for `dirsql interpret` -- the long-running native
 // config helper (#196).
 //
-// Spawns the real `dist/bin/dirsql.js` launcher as a subprocess and talks
+// Spawns the real `dist/cli/dirsql.js` launcher as a subprocess and talks
 // NDJSON over stdin/stdout. No monkeypatching, no in-process shortcut.
 // Subprocess plumbing lives in `./interpretSubprocess.ts`.
 //
