@@ -19,6 +19,10 @@ Temporary scripts, including Node or shell helpers, must also be written to `/tm
 
 Exceptions: piping (`|`) is fine when it's genuinely one logical operation (e.g., `cmd | jq`). Heredocs (`cat <<EOF`) are fine. `cd path && cmd` is NOT fine -- use `cd` as a separate call (or pass absolute paths).
 
+## CI Workflows
+
+**CI logic lives in scripts, not workflow YAML.** `run:` / `github-script` steps stay trivial glue -- check out, set up a toolchain, invoke one command. Anything with iteration, `case` dispatch, conditionals, or text-munging moves to a script under `.github/scripts/`, invoked as a one-liner, and carries **colocated unit tests** (the same testing-conventions standard as the rest of the tree -- `foo.py` ↔ `foo_test.py`). Those tests run under a 100% coverage floor in `.github/workflows/gha-scripts.yml`. Inline workflow logic is untestable, un-runnable locally, and silently duplicated across runners; a script is none of those.
+
 ## Imports
 
 **Prefer relative imports for intra-package references.** Inside a package (Python or TypeScript), use `from .sibling import x` / `import { x } from "./sibling.js"` rather than the absolute `from packagename.sub.sibling import x` / `from "packagename/sub/sibling"`. Relative paths survive renames, signal that the import is internal, and keep cross-cutting refactors (e.g. the `_cli/` → `cli/` rename in #210) from rippling through every import statement. Absolute imports are appropriate when crossing a package boundary or referring to a public re-export.
@@ -115,7 +119,7 @@ For the typical "fake out a stdlib helper / module function" case, mock it inste
 
 ### E2E Test Policy
 
-E2E tests are your primary feedback mechanism. Run them liberally after significant changes -- they catch issues that integration tests miss because integration tests mock out SQLite and (eventually) LLM calls. But do NOT add them to CI workflows. They are a local development tool.
+E2E tests are your primary feedback mechanism. Run them liberally after significant changes -- they catch issues that integration tests miss because integration tests mock out SQLite and (eventually) LLM calls. But do NOT add them to CI workflows. They are a local development tool. CI only verifies the per-package *attestation* that they ran (see *E2E Attestation* below); it never runs the suites themselves.
 
 See skillet or karat for examples of test organization, fixtures, and pytest-describe patterns.
 
@@ -146,11 +150,34 @@ Agents must run the full e2e suite locally before any `git push` that includes a
 - [ ] Python SDK e2e: pass / fail / N/A
 - [ ] TypeScript SDK e2e: pass / fail / N/A
 - [ ] Rust core e2e (if applicable): pass / fail / N/A
+- [ ] `packages/python/e2e-attestation.json` refreshed if `packages/python` changed (`just e2e-attest-python`)
+- [ ] `packages/ts/e2e-attestation.json` refreshed if `packages/ts` changed (`just e2e-attest-ts`)
 - Command(s) run:
 - Result summary:
 ```
 
 For docs/lint/typo-only PRs, include the section with a single line: `N/A - docs/lint/typo only`.
+
+### E2E Attestation
+
+CI does not run the e2e suites -- they need real binaries, and some need live LLM calls -- but it enforces, **per package**, that they *were* run against that package's current code. Each SDK package carries its own attestation at its root -- `packages/python/e2e-attestation.json` and `packages/ts/e2e-attestation.json` -- recording (via [`testing-conventions`](https://github.com/thekevinscott/testing-conventions)) the e2e command, its exit code, and the commit it ran against. `.github/workflows/e2e-attestation.yml` runs `testing-conventions e2e verify` **inside each package the PR changed**; verify walks history *scoped to that package's subtree* and fails if the package's attestation does not name the latest commit touching it. It is a **freshness gate, not a test runner** -- no suite, no build, and no LLM run in CI, so it does not violate the E2E Test Policy above.
+
+The subtree scoping makes the gate per-SDK by construction: a change under `packages/python` stales only the python attestation, a change under `packages/ts` only the ts one, and a PR that does not touch a package never runs that package's verify.
+
+**Regenerate the attestation for each package you changed**, as the last commit touching that package before you push. From the repo root:
+
+```bash
+just e2e-attest-python   # cd packages/python && testing-conventions e2e attest 'just test-e2e'
+just e2e-attest-ts       # cd packages/ts && testing-conventions e2e attest 'pnpm test:e2e'
+```
+
+`attest` runs the command, writes `<package>/e2e-attestation.json` naming the current commit, and commits it for you. **The attestation must be the last commit touching that package** -- any later non-attestation commit under the package re-stales it and the gate goes red.
+
+**Multi-package PRs:** because `attest` records `HEAD`, attest each package right after finishing *its* changes (complete + attest python, then complete + attest ts). Attesting both only at the very end leaves whichever you attest second naming the other's attestation commit -- outside its subtree -- which verify rejects.
+
+**Out of scope:** the shared Rust core (`packages/rust`) is compiled into both bindings but lives in neither subtree, so a core-only change does not stale either binding attestation; the binding attestations track binding-layer source only.
+
+The CLI version is pinned in `.github/workflows/e2e-attestation.yml` (and mirrored in `testing-conventions.yml`); install the same version locally before attesting: `pip install "testing-conventions==<version>"`.
 
 ### Docs as Spec
 
