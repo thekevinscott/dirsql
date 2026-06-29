@@ -38,13 +38,12 @@ export default defineConfig({
       exclude: [
         "**/*.test.ts",
         "tests/**/*.ts",
-        // `dirsql.ts` is the npm `bin` entry shim: it imports `main` and
-        // invokes it at module load. Not a function under test, and
-        // intentionally not imported anywhere else; the launcher helpers
-        // in `main.ts` / `resolveBinary.ts` are unit-tested. Also exempt
-        // from the colocated-test gate (see testing-conventions.toml).
-        "src/cli/dirsql.ts",
-        "src/index.ts", // needs the napi binary; covered by SDK integration tests
+        // `index.ts` is a true re-export barrel (its logic was extracted
+        // into the colocated-tested table.ts / core.ts / parse-table-name.ts
+        // / dirsql.ts modules). It needs the napi binary when loaded for
+        // real and is covered by the SDK integration tests; exempt from the
+        // colocated-test gate too (see testing-conventions.toml).
+        "src/index.ts",
       ],
       thresholds: {
         statements: 100,
