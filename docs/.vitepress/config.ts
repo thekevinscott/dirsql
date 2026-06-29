@@ -19,19 +19,12 @@ export default defineConfig({
       { text: 'GitHub', link: 'https://github.com/thekevinscott/dirsql' }
     ],
 
+    // A single global sidebar shown on every page. The CLI section is a
+    // self-contained group with all its subpages -- but it never *replaces*
+    // the rest of the nav. There is intentionally no path-scoped (`/cli/`)
+    // key: a path-scoped sidebar swaps the whole tree out, which deletes the
+    // other sections when you enter CLI (see #301). Keep one sidebar.
     sidebar: {
-      '/cli/': [
-        {
-          text: 'CLI',
-          items: [
-            { text: 'Overview & Installation', link: '/cli/' },
-            { text: 'Running the Server', link: '/cli/server' },
-            { text: 'Generating a Config (`init`)', link: '/cli/init' },
-            { text: 'Configuration File', link: '/cli/config' },
-            { text: 'HTTP API', link: '/cli/http-api' }
-          ]
-        }
-      ],
       '/': [
         {
           text: 'Tutorials',
@@ -53,7 +46,11 @@ export default defineConfig({
         {
           text: 'CLI',
           items: [
-            { text: 'Using `dirsql` from the CLI', link: '/cli/' }
+            { text: 'Overview & Installation', link: '/cli/' },
+            { text: 'Running the Server', link: '/cli/server' },
+            { text: 'Generating a Config (`init`)', link: '/cli/init' },
+            { text: 'Configuration File', link: '/cli/config' },
+            { text: 'HTTP API', link: '/cli/http-api' }
           ]
         },
         {
