@@ -11,15 +11,21 @@ on:
     branches: [main]
     paths:
       - 'packages/python/dirsql/**/*.py'
+      - 'packages/python/tests/integration/**/*.py'
       - 'packages/ts/src/**/*.ts'
+      - 'packages/ts/test/**/*.ts'
       - 'packages/rust/src/**/*.rs'
+      - 'packages/rust/tests/**/*.rs'
       - 'testing-conventions.toml'
       - '.github/workflows/testing-conventions.yml'
   pull_request:
     paths:
       - 'packages/python/dirsql/**/*.py'
+      - 'packages/python/tests/integration/**/*.py'
       - 'packages/ts/src/**/*.ts'
+      - 'packages/ts/test/**/*.ts'
       - 'packages/rust/src/**/*.rs'
+      - 'packages/rust/tests/**/*.rs'
       - 'testing-conventions.toml'
       - '.github/workflows/testing-conventions.yml'
 
@@ -81,4 +87,17 @@ jobs:
           testing-conventions unit lint --language python packages/python/dirsql || rc=1
           testing-conventions unit lint --language typescript packages/ts/src || rc=1
           testing-conventions unit lint --language rust packages/rust/src || rc=1
+          exit $rc
+
+      - name: Check integration-test mocking style (lint)
+        # Integration lint: integration test files must use the sanctioned
+        # mocking mechanism (Python: `unittest.mock`, not pytest's
+        # `monkeypatch` fixture; TS: `vi.*`; Rust: trait doubles). Wired for
+        # all three SDKs (#236 / epic #231). Waivers (none today) live in
+        # testing-conventions.toml, read by default.
+        run: |
+          rc=0
+          testing-conventions integration lint --language python packages/python/tests/integration || rc=1
+          testing-conventions integration lint --language typescript packages/ts/test || rc=1
+          testing-conventions integration lint --language rust packages/rust/tests || rc=1
           exit $rc
