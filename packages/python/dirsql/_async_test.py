@@ -139,9 +139,17 @@ def describe_DirSQL_async():
             assert stream._db.poll_calls == [200, 200]
 
     def describe_construction():
-        def it_requires_either_a_root_or_a_config():
-            with pytest.raises(TypeError, match="root directory or a config"):
-                async_mod.DirSQL()
+        @pytest.mark.asyncio
+        async def it_constructs_without_a_root_or_config():
+            # The guard that raised TypeError on (None, None) is gone; the
+            # wrapper forwards both to the core, which owns "no root"
+            # validation (DirSQLBuilder::resolve). Construction must not raise.
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                db = async_mod.DirSQL()
+                await db.ready()
+
+                assert db._db.root is None
+                assert db._db.config is None
 
     def describe_watch():
         @pytest.mark.asyncio

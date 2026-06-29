@@ -22,6 +22,7 @@ export interface InterpretHandle {
 export async function spawnInterpret(
   cliEntry: string,
   configPath: string,
+  opts: { cwd?: string } = {},
 ): Promise<InterpretHandle> {
   try {
     await access(cliEntry);
@@ -32,6 +33,7 @@ export async function spawnInterpret(
   }
   const proc = spawn(process.execPath, [cliEntry, "interpret", configPath], {
     stdio: ["pipe", "pipe", "pipe"],
+    cwd: opts.cwd,
   });
   const rl = createInterface({ input: proc.stdout });
   const stderrChunks: string[] = [];

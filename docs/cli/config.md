@@ -239,7 +239,7 @@ def extract_meta(path):
 
 # Python must export a module-level `app`.
 app = DirSQL(
-    root="papers",  # required — see "Set a root" below
+    root="papers",  # optional; defaults to the current directory
     tables=[
         Table(
             ddl="CREATE TABLE papers (title TEXT, _path TEXT)",
@@ -269,7 +269,7 @@ import { readFileSync } from "node:fs";
 import { DirSQL } from "dirsql";
 
 export default new DirSQL({
-  root: "papers", // required — see "Set a root" below
+  root: "papers", // optional; defaults to the current directory
   tables: [
     {
       ddl: "CREATE TABLE papers (title TEXT, _path TEXT)",
@@ -285,7 +285,7 @@ const { readFileSync } = require("node:fs");
 const { DirSQL } = require("dirsql");
 
 module.exports = new DirSQL({
-  root: "papers", // required — see "Set a root" below
+  root: "papers", // optional; defaults to the current directory
   tables: [
     {
       ddl: "CREATE TABLE papers (title TEXT, _path TEXT)",
@@ -308,10 +308,15 @@ These apply to both the Python and JavaScript forms above.
   package) uses `module.exports = new DirSQL(...)`. Only the extension
   matters — the file can be named anything; `dirsql.config.{py,mjs,cjs}` is the
   suggested convention, not a requirement.
-- **Set a `root`.** Unlike TOML configs (which default the scan root to the
-  config file's directory), native-language configs require an explicit `root`.
-  Without one the Python launcher errors and the JavaScript launcher silently
-  indexes nothing.
+- **`root` defaults to the current directory.** A native-language config with
+  no `root` indexes the process's current working directory — the directory you
+  ran `dirsql` from. (This differs from TOML configs, which default the scan
+  root to the config file's own directory.) Pass `root` explicitly to index
+  somewhere else.
+- **No nested `config=`.** A native-language config builds its `DirSQL` from
+  `tables` and an optional `root`; it must not itself set `config=` to delegate
+  to another config file. `dirsql interpret` rejects such a config (a nested
+  config can't be represented in the handshake and would recurse).
 - **Install the launcher on your `PATH`.** To run your `extract`, the server
   spawns `dirsql interpret`, so the matching `dirsql` launcher must be installed
   and on your `PATH` — a global `pip`/`uv` install for `.py`, or `npm` for

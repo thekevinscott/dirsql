@@ -11,6 +11,73 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### CLI: native-language configs default `root` to the cwd; nested `config=` rejected; Python construction no longer guards `(None, None)` (#260)
+
+#### Summary
+
+`dirsql --config <native config>` (`.py` / `.js` / `.mjs` / `.cjs`) previously
+required the config's `DirSQL` to set an explicit `root`: without one the Python
+launcher exited non-zero (`DirSQL requires either a root directory or a config=
+path`) and the JavaScript launcher started but indexed nothing. The `dirsql
+interpret` handshake now defaults a missing `root` to the launcher process's
+current working directory — the directory the command was run from — for both
+the Python and TypeScript launchers. Two related changes ship with it: `dirsql
+interpret` now rejects a native config whose `DirSQL` itself sets `config=`
+(nested config loading is unsupported and would recurse), and the Python
+`DirSQL(...)` constructor no longer raises `TypeError` when neither `root` nor
+`config` is supplied — that check is delegated to the Rust core and now surfaces
+from `await db.ready()` / `db.query(...)`, matching Rust and the TypeScript SDK.
+Affects CLI users of native-language configs and any Python caller relying on the
+constructor-time `TypeError`.
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| Native config (`.py`/`.js`) with no `root` | Python launcher errors; JS launcher indexes nothing | indexes the launcher's cwd; pass `root=` to override |
+| Native config whose `DirSQL` sets `config=` | loaded (the nested config was read and merged) | rejected: `dirsql interpret` exits non-zero with a `config=` error |
+| Python `DirSQL()` with neither `root` nor `config` | raises `TypeError` at construction | constructs; the "no root" error surfaces from `await db.ready()` / `query()` |
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- A native-language config with no `root` now scans the current working
+  directory instead of erroring (Python) or indexing nothing (JavaScript).
+- `dirsql interpret` exits non-zero for a config that sets `config=` (previously
+  it read and merged the nested config).
+- Python `DirSQL(...)` defers the "no root or config" error from construction
+  time to readiness time (`await db.ready()` / `query()`); the raised exception
+  is the core's error, not a `TypeError`.
+
+#### Verification
+
+```bash
+mkdir -p /tmp/dirsql-mig/a
+echo '{"title":"Gamma"}' > /tmp/dirsql-mig/a/meta.json
+cat > /tmp/dirsql-mig/dirsql.config.py <<'EOF'
+import json
+from dirsql import DirSQL, Table
+
+app = DirSQL(tables=[Table(
+    ddl="CREATE TABLE papers (title TEXT)",
+    glob="**/meta.json",
+    extract=lambda p: [json.load(open(p))],
+)])
+EOF
+cd /tmp/dirsql-mig
+dirsql --config dirsql.config.py --port 8080 &
+sleep 1
+curl -s localhost:8080/query -H 'content-type: application/json' \
+  -d '{"sql":"SELECT title FROM papers"}'
+kill %1
+```
+
+Expected: `[{"title":"Gamma"}]` — the root-less config indexes the cwd
+(`/tmp/dirsql-mig`, where `a/meta.json` lives) instead of failing to start.
+
 ### Rust SDK: extension-loading review followup (#225)
 
 #### Summary

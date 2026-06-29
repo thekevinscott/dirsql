@@ -100,6 +100,13 @@ describe("interpret", () => {
         "dirsql interpret: plain string\n",
       );
     });
+
+    it("returns 1 and writes a config-mentioning line when the app sets config=", async () => {
+      const app = fakeApp({ _options: { tables: [], config: "/nested.toml" } });
+      vi.mocked(loadApp).mockResolvedValue(app);
+      expect(await interpret("good.mjs")).toBe(1);
+      expect(stderrWrite).toHaveBeenCalledWith(expect.stringMatching(/config/));
+    });
   });
 
   describe("handshake", () => {
@@ -128,6 +135,25 @@ describe("interpret", () => {
 
       await interpret("good.mjs");
       expect(catchSpy).toHaveBeenCalledOnce();
+    });
+
+    it("defaults root to process.cwd() when the resolved root is empty", async () => {
+      vi.stubGlobal("process", {
+        ...process,
+        stderr: { write: stderrWrite },
+        cwd: () => "/cwd",
+      });
+      const app = fakeApp({
+        toJSON: () =>
+          ({ root: "", tables: [], ignore: [], persist: false }) as never,
+      });
+      vi.mocked(loadApp).mockResolvedValue(app);
+
+      await interpret("good.mjs");
+      expect(writeMessage).toHaveBeenCalledWith({
+        type: "config",
+        state: { root: "/cwd", tables: [], ignore: [], persist: false },
+      });
     });
   });
 

@@ -10,7 +10,14 @@
 // in `src/cli/main.test.ts`).
 
 import { type ChildProcess, spawn } from "node:child_process";
-import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  writeFile,
+} from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -201,4 +208,48 @@ describe("dirsql CLI --config <native config file>", () => {
     },
     10_000,
   );
+
+  it("roots at the server's cwd when the config omits root", async () => {
+    // A `.mjs` config with no `root` indexes the server's current working
+    // directory -- not the config file's directory.
+    const cwd = await realpath(
+      await mkdtemp(join(tmpdir(), "dirsql-cwd-e2e-")),
+    );
+    await mkdir(join(cwd, "a"));
+    await writeFile(
+      join(cwd, "a", "meta.json"),
+      JSON.stringify({ title: "Gamma" }),
+    );
+    const configPath = join(
+      CONFIG_DIR,
+      "interpret",
+      "dirsql.config-no-root.mjs",
+    );
+    const port = await freePort();
+    const proc = spawn(
+      BINARY,
+      ["--config", configPath, "--host", "127.0.0.1", "--port", String(port)],
+      {
+        stdio: "pipe",
+        cwd,
+        env: { ...process.env, PATH: `${SHIM_DIR}:${process.env.PATH ?? ""}` },
+      },
+    );
+    proc.stdout?.on("data", () => {});
+    proc.stderr?.on("data", () => {});
+
+    try {
+      const ok = await waitForServer(proc, port);
+      if (!ok) {
+        throw new Error(
+          "dirsql server did not start with a root-less --config",
+        );
+      }
+      const rows = await httpQuery(port, "SELECT title FROM papers");
+      expect(rows).toEqual([{ title: "Gamma" }]);
+    } finally {
+      proc.kill("SIGTERM");
+      await new Promise<void>((resolve) => proc.once("exit", () => resolve()));
+    }
+  }, 10_000);
 });

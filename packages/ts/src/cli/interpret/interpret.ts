@@ -44,13 +44,32 @@ export async function interpret(configPath: string): Promise<number> {
   // throws, the scan rejects -- and since interpret never awaits the
   // scan (it dispatches to `extract` itself per request), the rejection
   // would surface as an unhandled promise rejection and crash Node.
-  // Swallow it here; per-request errors are still reported to the
-  // caller in the extract-response.
+  // Swallow it here, before any early return, so a rejected scan never
+  // escapes; per-request errors are still reported in the extract-response.
   app.ready.catch(() => {});
+
+  // A config file describes a single DirSQL; it must not itself delegate to
+  // another `config=` path. The interpret handshake has no field for a nested
+  // config and would recurse, so reject it up front.
+  if (app._options.config !== undefined) {
+    process.stderr.write(
+      "dirsql interpret: a config file cannot itself set config= " +
+        "(nested config is not supported)\n",
+    );
+    return 1;
+  }
 
   const tables = buildTables(app);
 
-  writeMessage({ type: "config", state: app.toJSON() });
+  // When the config supplies neither `root` nor `config=`, the resolved root
+  // is "". Default it to the process cwd -- the directory the `dirsql` command
+  // was launched from, which interpret inherits from the parent binary -- so a
+  // root-less config indexes "here".
+  const state = app.toJSON();
+  if (!state.root) {
+    state.root = process.cwd();
+  }
+  writeMessage({ type: "config", state });
 
   for await (const line of createInterface({ input: process.stdin })) {
     if (!line.trim()) {

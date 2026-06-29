@@ -25,6 +25,8 @@ import urllib.request
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "__fixtures__")
 CONFIG_PATH = os.path.join(FIXTURE_DIR, "dirsql.config.py")
+INTERPRET_DIR = os.path.join(FIXTURE_DIR, "interpret")
+NO_ROOT_CONFIG = os.path.join(INTERPRET_DIR, "dirsql.config_no_root.py")
 
 # Workspace root → cargo's target dir. The CI workflow builds the
 # binary with `cargo build --release -p dirsql --features cli` before
@@ -97,6 +99,40 @@ def describe_cli_py_config():
             )
             rows = _query(port, "SELECT title FROM papers ORDER BY title")
             assert rows == [{"title": "Alpha"}, {"title": "Beta"}]
+        finally:
+            proc.terminate()
+            proc.wait(timeout=5)
+
+    def it_roots_at_cwd_when_the_config_omits_root(tmp_path):
+        """A `.py` config with no `root` indexes the server's current working
+        directory -- the directory the command was run from -- not the config
+        file's directory."""
+        assert os.path.exists(BINARY), f"dirsql binary not built at {BINARY}"
+        meta_dir = tmp_path / "a"
+        meta_dir.mkdir()
+        (meta_dir / "meta.json").write_text(json.dumps({"title": "Gamma"}))
+        cwd = os.path.realpath(tmp_path)
+
+        port = _free_port()
+        proc = subprocess.Popen(
+            [
+                BINARY,
+                "--config",
+                NO_ROOT_CONFIG,
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+            ],
+            stderr=subprocess.PIPE,
+            cwd=cwd,
+        )
+        try:
+            assert _wait_for_server(proc, port), (
+                "dirsql server did not start with a root-less --config .py"
+            )
+            rows = _query(port, "SELECT title FROM papers")
+            assert rows == [{"title": "Gamma"}]
         finally:
             proc.terminate()
             proc.wait(timeout=5)

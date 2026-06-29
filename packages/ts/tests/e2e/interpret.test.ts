@@ -17,7 +17,8 @@
 //     {"type": "result", "id": <int>, "ok": false, "error": "<msg>"}
 
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -43,6 +44,8 @@ const CLI_ENTRY = join(PKG_ROOT, PKG.bin.dirsql);
 const FIXTURE_DIR = join(__dirname, "__fixtures__", "interpret");
 const RAISES_CONFIG = join(FIXTURE_DIR, "dirsql.config-raises.mjs");
 const NO_DEFAULT_CONFIG = join(FIXTURE_DIR, "dirsql.config-no-default.mjs");
+const NO_ROOT_CONFIG = join(FIXTURE_DIR, "dirsql.config-no-root.mjs");
+const NESTED_CONFIG = join(FIXTURE_DIR, "dirsql.config-nested.mjs");
 const ALPHA_PATH = join(FIXTURE_DIR, "data", "a", "meta.json");
 
 /** Happy-path config exists in three loader flavors; same shape. */
@@ -86,6 +89,13 @@ describe("dirsql interpret (#196)", () => {
         });
       },
     );
+
+    it("defaults root to the helper's cwd when the config omits root", async () => {
+      const cwd = await realpath(await mkdtemp(join(tmpdir(), "dirsql-cwd-")));
+      handle = await spawnInterpret(CLI_ENTRY, NO_ROOT_CONFIG, { cwd });
+      const msg = JSON.parse(await readLine(handle));
+      expect(msg.state.root).toBe(cwd);
+    });
   });
 
   describe("extract", () => {
@@ -170,6 +180,31 @@ describe("dirsql interpret (#196)", () => {
       // "Clean": no V8 stack trace.
       expect(stderr).not.toMatch(/\s+at [^\s]+ \(/);
       expect(stderr.toLowerCase()).toMatch(/default|export/);
+    });
+
+    it("exits non-zero with clean stderr when the config sets config=", async () => {
+      const proc = spawn(
+        process.execPath,
+        [CLI_ENTRY, "interpret", NESTED_CONFIG],
+        { stdio: ["pipe", "pipe", "pipe"] },
+      );
+      let stderr = "";
+      proc.stderr.setEncoding("utf8");
+      proc.stderr.on("data", (chunk: string) => {
+        stderr += chunk;
+      });
+      proc.stdin.end();
+      const exitCode = await new Promise<number | null>((resolve) => {
+        proc.on("close", (code) => resolve(code));
+        setTimeout(() => {
+          if (proc.exitCode === null) {
+            proc.kill("SIGKILL");
+          }
+        }, 10_000);
+      });
+      expect(exitCode).not.toBe(0);
+      expect(stderr).not.toMatch(/\s+at [^\s]+ \(/);
+      expect(stderr.toLowerCase()).toMatch(/config/);
     });
   });
 });

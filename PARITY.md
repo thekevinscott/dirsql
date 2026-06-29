@@ -109,6 +109,19 @@ results to stdout.
 | TypeScript | Implemented | Loads `.js` / `.mjs` / `.cjs` config via dynamic `import()`, takes the default export. |
 | Rust       | N/A         | Rust has no host language runtime in which user `extract` callbacks could execute. Intentional parity drift. |
 
+**Root defaulting + nested-config rejection (#260) — parity maintained
+(Python + TypeScript), no drift.** When a native config omits `root`, both the
+Python and TypeScript `interpret` helpers default the handshake root to the
+helper process's current working directory (the directory `dirsql` was invoked
+from) rather than erroring; and both reject a config whose `DirSQL` itself sets
+`config=` (a nested config is unrepresentable in the handshake and would
+recurse), exiting non-zero with a `config=` error. Rust is `N/A` (no `interpret`
+helper). As part of this the Python `DirSQL(...)` constructor no longer raises
+`TypeError` when neither `root` nor `config` is given — the "no root" check is
+delegated to the shared Rust core (surfacing from `ready()` / `query()`),
+matching Rust and TypeScript, whose constructors already forwarded `(None, None)`
+to the core.
+
 ## CLI: Native-Language Config Files
 
 The `--config` flag accepts native-language config files in addition to
