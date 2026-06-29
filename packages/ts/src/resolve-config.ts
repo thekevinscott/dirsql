@@ -47,5 +47,7 @@ export function resolveConfig(options: DirSQLOptions): DirSQLConfig {
     persistPath:
       options.persistPath ??
       (typeof cfg.persist_path === "string" ? abs(cfg.persist_path) : null),
+    // TODO(#230): resolve programmatic + config-file extensions.
+    extensions: [],
   };
 }

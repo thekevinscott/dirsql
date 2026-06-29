@@ -10,6 +10,36 @@ import { resolveConfig } from "./resolve-config.js";
 import type { TableDef } from "./table.js";
 
 /**
+ * A SQLite extension to load at startup, as accepted by the {@link DirSQL}
+ * constructor's `extensions` option. Mirrors the Rust `Extension { path,
+ * entrypoint }` and the Python `{"path", "entrypoint"?}` dict.
+ */
+export interface ExtensionSpec {
+  /**
+   * Path to the extension's shared library (`.so` / `.dylib` / `.dll`).
+   * Taken verbatim — relative paths resolve against the process working
+   * directory at load time (config-file paths, by contrast, resolve against
+   * the config file's parent directory).
+   */
+  path: string;
+  /**
+   * Optional init-symbol override. When omitted, SQLite derives the entry
+   * point from the filename, which often does not match — set this when the
+   * extension's init function isn't `sqlite3_<filename>_init`.
+   */
+  entrypoint?: string;
+}
+
+/**
+ * A resolved SQLite extension as it appears in the {@link DirSQLConfig}
+ * snapshot: `entrypoint` is normalized to `null` when no override was given.
+ */
+export interface ResolvedExtension {
+  path: string;
+  entrypoint: string | null;
+}
+
+/**
  * Options accepted by the {@link DirSQL} constructor.
  *
  * At least one of `root` or `config` must be supplied. When both are set,
@@ -42,6 +72,13 @@ export interface DirSQLOptions {
    * `persist` is not `true`.
    */
   persistPath?: string;
+  /**
+   * SQLite extensions to load onto the connection at startup, before any
+   * table DDL (enable → load → disable, so the SQL `load_extension()`
+   * function is never left exposed). Programmatic entries load first, then
+   * any `[[dirsql.extension]]` declared in `config`.
+   */
+  extensions?: ExtensionSpec[];
 }
 
 /** A row-level event emitted by the file watcher. */
@@ -88,6 +125,13 @@ export interface DirSQLConfig {
   ignore: string[];
   persist: boolean;
   persistPath: string | null;
+  /**
+   * SQLite extensions to load at startup, in load order. Programmatic
+   * entries (verbatim paths) first, then config-file `[[dirsql.extension]]`
+   * entries with relative paths resolved against the config's parent
+   * directory. Empty when none are configured.
+   */
+  extensions: ResolvedExtension[];
 }
 
 /**

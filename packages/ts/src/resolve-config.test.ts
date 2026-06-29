@@ -32,7 +32,23 @@ describe("resolveConfig", () => {
         ignore: [],
         persist: false,
         persistPath: null,
+        extensions: [],
       });
+    });
+
+    it("maps programmatic extensions verbatim, normalizing entrypoint to null", () => {
+      const out = resolveConfig({
+        root: "/r",
+        extensions: [
+          { path: "/ext/vec0.so", entrypoint: "sqlite3_vec_init" },
+          { path: "rel/spellfix.so" },
+        ],
+      });
+      expect(out.extensions).toEqual([
+        { path: "/ext/vec0.so", entrypoint: "sqlite3_vec_init" },
+        // Programmatic paths are NOT resolved (verbatim, mirroring Rust).
+        { path: "rel/spellfix.so", entrypoint: null },
+      ]);
     });
 
     it("normalizes programmatic strict: undefined to false", () => {
@@ -179,6 +195,30 @@ describe("resolveConfig", () => {
       const out = resolveConfig({ config: cfgPath });
       expect(out.persistPath).toBeNull();
     });
+
+    it("defaults extensions to [] when no [[dirsql.extension]] entries exist", () => {
+      writeCfg('[dirsql]\nignore = ["x"]\n');
+      const out = resolveConfig({ config: cfgPath });
+      expect(out.extensions).toEqual([]);
+    });
+
+    it("resolves a relative [[dirsql.extension]].path against the config dir", () => {
+      writeCfg(
+        '[[dirsql.extension]]\npath = "ext/vec0.so"\nentrypoint = "sqlite3_vec_init"\n',
+      );
+      const out = resolveConfig({ config: cfgPath });
+      expect(out.extensions).toEqual([
+        { path: "/cfg/ext/vec0.so", entrypoint: "sqlite3_vec_init" },
+      ]);
+    });
+
+    it("preserves an absolute [[dirsql.extension]].path and defaults entrypoint to null", () => {
+      writeCfg('[[dirsql.extension]]\npath = "/abs/spellfix.so"\n');
+      const out = resolveConfig({ config: cfgPath });
+      expect(out.extensions).toEqual([
+        { path: "/abs/spellfix.so", entrypoint: null },
+      ]);
+    });
   });
 
   describe("merging kwargs with a config file", () => {
@@ -225,6 +265,19 @@ describe("resolveConfig", () => {
       writeCfg("[dirsql]\npersist = true\n");
       const out = resolveConfig({ root: "/r", config: cfgPath });
       expect(out.persist).toBe(true);
+    });
+
+    it("concatenates programmatic extensions first, then config extensions", () => {
+      writeCfg('[[dirsql.extension]]\npath = "from-config.so"\n');
+      const out = resolveConfig({
+        root: "/r",
+        extensions: [{ path: "/prog/from-kwarg.so", entrypoint: "init_kw" }],
+        config: cfgPath,
+      });
+      expect(out.extensions).toEqual([
+        { path: "/prog/from-kwarg.so", entrypoint: "init_kw" },
+        { path: "/cfg/from-config.so", entrypoint: null },
+      ]);
     });
 
     it("kwarg persistPath wins over config persist_path", () => {

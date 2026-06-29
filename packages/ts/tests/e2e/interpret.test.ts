@@ -46,6 +46,7 @@ const RAISES_CONFIG = join(FIXTURE_DIR, "dirsql.config-raises.mjs");
 const NO_DEFAULT_CONFIG = join(FIXTURE_DIR, "dirsql.config-no-default.mjs");
 const NO_ROOT_CONFIG = join(FIXTURE_DIR, "dirsql.config-no-root.mjs");
 const NESTED_CONFIG = join(FIXTURE_DIR, "dirsql.config-nested.mjs");
+const EXTENSIONS_CONFIG = join(FIXTURE_DIR, "dirsql.config-extensions.mjs");
 const ALPHA_PATH = join(FIXTURE_DIR, "data", "a", "meta.json");
 
 /** Happy-path config exists in three loader flavors; same shape. */
@@ -85,6 +86,7 @@ describe("dirsql interpret (#196)", () => {
             ignore: [],
             persist: false,
             persistPath: null,
+            extensions: [],
           },
         });
       },
@@ -95,6 +97,16 @@ describe("dirsql interpret (#196)", () => {
       handle = await spawnInterpret(CLI_ENTRY, NO_ROOT_CONFIG, { cwd });
       const msg = JSON.parse(await readLine(handle));
       expect(msg.state.root).toBe(cwd);
+    });
+
+    it("carries the extensions declared by the config into the handshake state", async () => {
+      handle = await spawnInterpret(CLI_ENTRY, EXTENSIONS_CONFIG);
+      const message = JSON.parse(await readLine(handle));
+      expect(message.type).toBe("config");
+      expect(message.state.extensions).toEqual([
+        { path: "/opt/ext/vec0.so", entrypoint: "sqlite3_vec_init" },
+        { path: "/opt/ext/spellfix.so", entrypoint: null },
+      ]);
     });
   });
 
