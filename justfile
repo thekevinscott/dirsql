@@ -34,9 +34,10 @@ test-conventions:
     testing-conventions unit colocated-test --language python packages/python/dirsql
     testing-conventions unit colocated-test --language typescript packages/ts/src
     testing-conventions unit colocated-test --language rust packages/rust/src
-    # Isolation (unit lint): Python + TS only; Rust's refactor lands separately.
+    # Isolation (unit lint): all three SDKs.
     testing-conventions unit lint --language python packages/python/dirsql
     testing-conventions unit lint --language typescript packages/ts/src
+    testing-conventions unit lint --language rust packages/rust/src
 
 # Packaging gate: assert no test files ship in the built .whl / .tgz / .crate.
 # Mirrors .github/workflows/packaging.yml; requires uv, pnpm, cargo, and
