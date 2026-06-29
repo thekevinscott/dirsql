@@ -86,6 +86,13 @@ describe("PLATFORMS", () => {
   });
 
   describe("librarySlug()", () => {
+    it("returns the slug after the `@dirsql/lib-` prefix for every platform", () => {
+      for (const p of PLATFORMS) {
+        expect(librarySlug(p)).toBe(p.libName.slice("@dirsql/lib-".length));
+      }
+      expect(librarySlug(PLATFORMS[0] as Platform)).toBe("linux-x64-gnu");
+    });
+
     it("throws when libName does not start with the `@dirsql/lib-` prefix", () => {
       const bad = {
         ...PLATFORMS[0],

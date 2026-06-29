@@ -50,6 +50,30 @@ describe("loadNativeCore", () => {
     });
   });
 
+  describe("with the default dirname resolver", () => {
+    it("resolves the dev fallback relative to this module's own directory", () => {
+      const fakeCore = { DirSQL: vi.fn() };
+      const requirer = vi.fn((spec: string) => {
+        if (spec.endsWith("dirsql.node")) {
+          return fakeCore;
+        }
+        throw new Error(`unexpected require(${spec})`);
+      });
+
+      // Omit the third arg so the default `() => import.meta.dirname` arrow
+      // runs (the function the unit suite otherwise never invokes).
+      const core = loadNativeCore(
+        "freebsd-x64",
+        requirer as unknown as (s: string) => unknown,
+      );
+
+      expect(core).toBe(fakeCore);
+      expect(requirer).toHaveBeenCalledExactlyOnceWith(
+        expect.stringMatching(/dirsql\.node$/),
+      );
+    });
+  });
+
   describe("on a platform with no corresponding sub-package", () => {
     it("goes straight to the dev fallback without attempting a sub-package load", () => {
       const fakeCore = { DirSQL: vi.fn() };
