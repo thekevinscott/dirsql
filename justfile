@@ -57,6 +57,14 @@ test-conventions:
     testing-conventions unit lint --language typescript packages/ts/src
     testing-conventions unit lint --language rust packages/rust/src
 
+# Enforce the unit-only coverage floor via testing-conventions (#234). Floors
+# live in testing-conventions.toml ([python.coverage] / [typescript.coverage]).
+# Needs the native build first (maturin / napi); run `just build` if missing.
+# Rust is not here yet -- it keeps `cargo llvm-cov` in rust-test.yml (#295).
+unit-coverage:
+    cd packages/python && uv run testing-conventions unit coverage --language python --config ../../testing-conventions.toml dirsql
+    cd packages/ts && testing-conventions unit coverage --language typescript --config ../../testing-conventions.toml src
+
 # Packaging gate: assert no test files ship in the built .whl / .tgz / .crate.
 # Mirrors .github/workflows/packaging.yml; requires uv, pnpm, cargo, and
 # `pip install "testing-conventions==<version>"`.

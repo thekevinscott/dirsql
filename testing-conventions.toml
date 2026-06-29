@@ -1,10 +1,14 @@
 # testing-conventions CLI config (https://github.com/thekevinscott/testing-conventions).
 #
-# Drives the `unit colocated-test` colocation gate wired up in
-# .github/workflows/testing-conventions.yml. The CLI reads this file by
-# default and fails on any source file that lacks a colocated unit test and
-# is not listed below -- so the gate is blocking, and exemptions are the rare,
-# documented exception rather than the escape hatch.
+# Drives the testing-conventions gates wired up in
+# .github/workflows/testing-conventions.yml (colocated-test + unit lint) and
+# the per-package `unit coverage` jobs in python-test.yml / ts-test.yml. The
+# CLI reads this file by default.
+#
+# The `[[<lang>.exempt]]` array lists files waived from a rule (the colocation
+# gate fails on any source file lacking a colocated unit test that is not
+# listed). The `[<lang>.coverage]` table sets the unit-only coverage floor the
+# `unit coverage` job enforces.
 #
 # `path` is relative to the scanned source dir (packages/python/dirsql for the
 # `[[python.exempt]]` entries, packages/ts/src for the `[[typescript.exempt]]`
@@ -12,6 +16,12 @@
 # this list self-cleans: delete an entry the moment its file gains a real
 # colocated test (or is removed). Keep it in lockstep with the coverage-omit
 # rationale in packages/python/pyproject.toml and packages/ts/vitest.config.ts.
+#
+# Floors: AGENTS.md mandates >=90% per SDK; both bindings currently hold the
+# stricter 100% unit-only floor below (the honest maximum, no waivers needed).
+# Rust is NOT here: the CLI can't measure it unit-only yet (it runs the
+# integration tests too and can't enable the `cli` feature) -- tracked in #295;
+# Rust keeps its bespoke `cargo llvm-cov` coverage in rust-test.yml until then.
 
 # --- Python (scanned: packages/python/dirsql) ------------------------------
 
@@ -30,6 +40,11 @@ path = "cli/interpret/__init__.py"
 rules = ["colocated-test"]
 reason = "Package docstring only (no top-level re-exports, by design); no logic to unit-test."
 
+# Unit-only coverage floor (branch coverage on, matching the prior --cov-branch).
+[python.coverage]
+fail_under = 100
+branch = true
+
 # --- TypeScript (scanned: packages/ts/src) ---------------------------------
 
 [[typescript.exempt]]
@@ -41,3 +56,10 @@ reason = "True barrel: re-exports the public API surface (DirSQL, Table, parseTa
 path = "cli/interpret/index.ts"
 rules = ["colocated-test"]
 reason = "True barrel: single re-export of `interpret` from the colocated-tested `interpret.ts`. No isolated logic to unit-test."
+
+# Unit-only coverage floor, per vitest metric.
+[typescript.coverage]
+lines = 100
+functions = 100
+statements = 100
+branches = 100
