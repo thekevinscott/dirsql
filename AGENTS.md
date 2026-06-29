@@ -1,5 +1,7 @@
 # dirsql Development
 
+In your responses, strive for brevity. As concise as possible.
+
 ## Architecture
 
 All architectural decisions and constraints (including cross-language parity rules, the one-implementation principle, and SDK design) are in `ARCHITECTURE.md`. Do NOT put architectural information in this file -- AGENTS.md is for workflow and process only.
