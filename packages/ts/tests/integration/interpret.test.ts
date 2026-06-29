@@ -1,20 +1,21 @@
 // Integration tests for the `dirsql interpret` entry point.
 //
-// In-process: drives `interpret()` directly with a real `DirSQL` (loadApp is
-// mocked to return it), stubbing only the I/O boundaries (process.stdin /
-// stdout / cwd). The cheaper, CI-running mirror of the subprocess e2e tests
-// in `tests/e2e/interpret.test.ts`.
+// In-process: drives the real `interpret()` against real config fixtures (real
+// `loadApp` + real `DirSQL`), mocking only Node built-ins -- the stdio streams
+// (so the handshake is captured and stdin ends immediately) and `process.cwd`.
+// The cheaper, CI-running mirror of the subprocess e2e tests in
+// `tests/e2e/interpret.test.ts` (no spawned process, no HTTP server).
 
-import { mkdtemp, realpath, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
-import { DirSQL } from "dirsql";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { interpret } from "../../src/cli/interpret/interpret.js";
-import { loadApp } from "../../src/cli/interpret/load-app.js";
 
-vi.mock("../../src/cli/interpret/load-app.js", () => ({ loadApp: vi.fn() }));
+const __dirname = dirname(fileURLToPath(import.meta.url));
+// Reuse the e2e fixtures: real `.mjs` configs that `import { DirSQL } from
+// "dirsql"`. They live inside the package tree so the self-reference resolves.
+const FIXTURES = join(__dirname, "..", "e2e", "__fixtures__", "interpret");
 
 describe("dirsql interpret (integration)", () => {
   let stdout: string[];
@@ -51,19 +52,8 @@ describe("dirsql interpret (integration)", () => {
 
   it("defaults root to the process cwd when the config omits root", async () => {
     vi.spyOn(process, "cwd").mockReturnValue("/fake/cwd");
-    vi.mocked(loadApp).mockResolvedValue(
-      new DirSQL({
-        tables: [
-          {
-            ddl: "CREATE TABLE papers (title TEXT)",
-            glob: "**/meta.json",
-            extract: () => [],
-          },
-        ],
-      }),
-    );
 
-    const rc = await interpret("/whatever.mjs");
+    const rc = await interpret(join(FIXTURES, "dirsql.config-no-root.mjs"));
 
     expect(rc).toBe(0);
     const handshake = JSON.parse(stdout.join("").split("\n")[0]);
@@ -71,17 +61,7 @@ describe("dirsql interpret (integration)", () => {
   });
 
   it("rejects a config that sets config=", async () => {
-    // A valid TOML so the handshake path (toJSON) would otherwise succeed --
-    // the rejection must come from the loader recognizing the nested config.
-    const dir = await realpath(await mkdtemp(join(tmpdir(), "dirsql-nested-")));
-    const toml = join(dir, "nested.dirsql.toml");
-    await writeFile(
-      toml,
-      '[[table]]\nddl = "CREATE TABLE papers (title TEXT)"\nglob = "**/meta.json"\n',
-    );
-    vi.mocked(loadApp).mockResolvedValue(new DirSQL({ config: toml }));
-
-    const rc = await interpret("/whatever.mjs");
+    const rc = await interpret(join(FIXTURES, "dirsql.config-nested.mjs"));
 
     expect(rc).not.toBe(0);
     expect(stderr.join("").toLowerCase()).toMatch(/config/);
