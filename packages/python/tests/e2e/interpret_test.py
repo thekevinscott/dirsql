@@ -1,9 +1,11 @@
-"""Integration tests for `dirsql interpret` -- the long-running native
-config helper (#196).
+"""E2E tests for `dirsql interpret` -- the long-running native config
+helper (#196).
 
 Each test spawns the real `dirsql` console script as a subprocess and
-talks NDJSON over stdin/stdout. No monkeypatching, no in-process
-shortcut. Subprocess plumbing lives in `interpret_subprocess.py`.
+talks NDJSON over stdin/stdout. No mocking of any kind (real process,
+real filesystem); the interpret loop's logic is unit-tested in
+`dirsql/cli/interpret/run_test.py`. Subprocess plumbing lives in
+`interpret_subprocess.py`.
 
 NDJSON protocol (per #196):
 
@@ -24,7 +26,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from tests.integration.interpret_subprocess import (
+from tests.e2e.interpret_subprocess import (
     cli_argv,
     readline,
     send,

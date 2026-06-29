@@ -23,8 +23,8 @@ Scope of docs surveyed:
 - `packages/python/README.md`, `packages/ts/README.md`
 
 Scope of tests surveyed:
-- `packages/python/tests/integration/*.py`
-- `packages/ts/test/*.test.ts`
+- `packages/python/tests/{integration,e2e}/*.py`
+- `packages/ts/tests/{integration,e2e}/*.test.ts`
 - `packages/rust/tests/*.rs` (plus inline `#[cfg(test)]` in `packages/rust/src/*.rs`
   where relevant)
 
@@ -148,7 +148,7 @@ for either promotion into the docs or removal.
   **Recommendation:** keep as internal unit tests; no doc action needed.
 - `packages/rust/src/db.rs` inline tests exercising `Value::Blob` — correspond
   to documented `bytes -> BLOB` mapping. **Recommendation:** keep.
-- `packages/ts/test/index.test.ts "handles empty directories gracefully"` /
+- `packages/ts/tests/integration/index.test.ts "handles empty directories gracefully"` /
   `"throws on invalid DDL"` — mirror Python tests above; same recommendations.
 
 No tests were found that had no plausible link back to a documented feature, so
@@ -237,7 +237,7 @@ Discovered while mirroring the Python gap tests to Rust and TypeScript:
   `.csv`, `.tsv`, `.toml`, `.yaml`/`.yml`, `.md` frontmatter,
   path captures, column mapping, `each`, ignore, multiple tables,
   explicit format override, `strict = true`, and the error cases) now
-  live in `packages/ts/test/from-config.test.ts`.
+  live in `packages/ts/tests/integration/from-config.test.ts`.
 - Signature matches Python's (`configPath` is the path to the TOML
   file, not the root dir); this divergence from Rust's `from_config(root_dir)`
   is documented in `PARITY.md` under "Language-Idiomatic Exceptions".

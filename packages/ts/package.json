@@ -34,6 +34,8 @@
     "test": "wireit",
     "test:unit": "wireit",
     "test:integration": "wireit",
+    "test:e2e": "wireit",
+    "test:smoke": "wireit",
     "coverage": "wireit",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
@@ -86,7 +88,7 @@
       "files": [
         "src/**/*.ts",
         "tools/**/*.ts",
-        "test/**/*.ts",
+        "tests/**/*.ts",
         "vitest.config.ts"
       ],
       "output": []
@@ -98,13 +100,41 @@
       "output": []
     },
     "test:integration": {
-      "command": "vitest run --dir test --passWithNoTests",
+      "command": "vitest run --dir tests/integration --passWithNoTests",
       "dependencies": ["napi:build", "tsc"],
       "files": [
         "src/**/*.ts",
         "tools/**/*.ts",
-        "test/**/*.ts",
+        "tests/integration/**/*.ts",
+        "tests/exists.ts",
         "vitest.config.ts"
+      ],
+      "output": []
+    },
+    "test:e2e": {
+      "command": "vitest run --dir tests/e2e --passWithNoTests",
+      "dependencies": ["build"],
+      "files": [
+        "src/**/*.ts",
+        "tools/**/*.ts",
+        "tests/e2e/**/*.ts",
+        "vitest.config.ts",
+        "../rust/src/**/*.rs",
+        "../rust/Cargo.toml"
+      ],
+      "output": []
+    },
+    "test:smoke": {
+      "command": "vitest run --dir tests/smoke",
+      "dependencies": ["build"],
+      "files": [
+        "src/**/*.ts",
+        "tools/**/*.ts",
+        "tests/smoke/**/*.ts",
+        "tests/exists.ts",
+        "vitest.config.ts",
+        "../rust/src/**/*.rs",
+        "../rust/Cargo.toml"
       ],
       "output": []
     },
@@ -114,7 +144,8 @@
       "files": [
         "src/**/*.ts",
         "tools/**/*.ts",
-        "test/**/*.ts",
+        "tests/integration/**/*.ts",
+        "tests/exists.ts",
         "vitest.config.ts"
       ],
       "output": ["coverage/**"]

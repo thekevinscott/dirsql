@@ -1,11 +1,13 @@
-"""CLI integration test for native Python config file support.
+"""CLI e2e test for native Python config file support.
 
 Spawns the bundled Rust binary directly against the
 ``__fixtures__/dirsql.config.py`` fixture and asserts the HTTP server
-serves the ``papers`` table. Bypasses the Python launcher because the
+serves the ``papers`` table. No mocking of any kind (real binary, real
+process, real filesystem). Bypasses the Python launcher because the
 architectural property under test ("the Rust binary dispatches
 non-TOML configs to ``dirsql interpret``") is the binary's job — the
-launcher is a transparent forwarder.
+launcher is a transparent forwarder (its argv forwarding is unit-tested
+in ``dirsql/cli/main_test.py``).
 
 The binary's `dirsql interpret <X>` subprocess resolves via PATH; in
 this dev/CI tree the pip-installed `dirsql` console script (entry

@@ -1,4 +1,4 @@
-"""Subprocess plumbing for the `dirsql interpret` integration tests.
+"""Subprocess plumbing for the `dirsql interpret` e2e tests.
 
 Kept in its own module (rather than `conftest.py` or inline in the
 test file) because these helpers are not pytest fixtures -- they are

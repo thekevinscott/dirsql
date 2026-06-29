@@ -1,9 +1,11 @@
-// Integration tests for `dirsql interpret` -- the long-running native
-// config helper (#196).
+// E2E tests for `dirsql interpret` -- the long-running native config
+// helper (#196).
 //
 // Spawns the real `dist/cli/dirsql.js` launcher as a subprocess and talks
-// NDJSON over stdin/stdout. No monkeypatching, no in-process shortcut.
-// Subprocess plumbing lives in `./interpret-subprocess.ts`.
+// NDJSON over stdin/stdout. No mocks of any kind (real process, real
+// filesystem); the interpret loop's logic is unit-tested in
+// `src/cli/interpret/interpret.test.ts`. Subprocess plumbing lives in
+// `./interpret-subprocess.ts`.
 //
 // NDJSON protocol (per #196):
 //   handshake (helper -> caller, once on startup):
@@ -28,7 +30,7 @@ import {
 } from "./interpret-subprocess.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PKG_ROOT = join(__dirname, "..");
+const PKG_ROOT = join(__dirname, "..", "..");
 
 // Resolve the CLI entry from package.json's `bin` field so a future rename
 // of bin's location is picked up automatically. Top-level await reads the

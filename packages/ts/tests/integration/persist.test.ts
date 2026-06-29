@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { DirSQL } from "dirsql";
 import initSqlJs from "sql.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { exists } from "./exists.js";
+import { exists } from "../exists.js";
 
 // The two tests below reach into dirsql's on-disk cache (`.dirsql/cache.db`,
 // written by the Rust core) out-of-band to corrupt internal bookkeeping and

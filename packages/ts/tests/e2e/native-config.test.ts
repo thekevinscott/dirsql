@@ -1,12 +1,13 @@
-// CLI integration test for native JavaScript config file support.
+// CLI e2e test for native JavaScript config file support.
 //
 // Spawns the bundled Rust binary directly against the
 // `__fixtures__/dirsql.config.mjs` fixture and asserts the HTTP server
-// serves the `papers` table. Bypasses the TS launcher because the
+// serves the `papers` table. No mocks of any kind (real binary, real
+// process, real filesystem). Bypasses the TS launcher because the
 // architectural property under test ("the Rust binary dispatches
 // non-TOML configs to `dirsql interpret`") is the binary's job — the
-// launcher is a transparent forwarder already covered by the
-// `cli-smoke` e2e.
+// launcher is a transparent forwarder (its argv forwarding is unit-tested
+// in `src/cli/main.test.ts`).
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
@@ -16,10 +17,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
-import { PLATFORMS, librarySlug } from "../src/platforms.js";
+import { PLATFORMS, librarySlug } from "../../src/platforms.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PKG_ROOT = join(__dirname, "..");
+const PKG_ROOT = join(__dirname, "..", "..");
 
 // Bundled Rust binary, staged by `tools/stage-platform.ts` under
 // `build/bundled-cli-<slug>/`. `pnpm build` is a dependency of the
