@@ -14,8 +14,6 @@ name: Packaging
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  # Keep in lockstep with .github/workflows/testing-conventions.yml.
-  TESTING_CONVENTIONS_VERSION: "0.0.41"
 
 on:
   push:
@@ -52,7 +50,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install testing-conventions
-        run: pip install "testing-conventions==${TESTING_CONVENTIONS_VERSION}"
+        run: pip install testing-conventions
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

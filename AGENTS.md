@@ -91,7 +91,7 @@ The same workflow also runs `unit lint` -- the **isolation** rule: a unit test m
 Run it locally before pushing:
 
 ```bash
-pip install "testing-conventions==<version>"   # version pinned in the workflow
+pip install testing-conventions   # CI always uses the latest release
 just test-conventions
 ```
 
@@ -179,7 +179,7 @@ just e2e-attest-ts       # cd packages/ts && testing-conventions e2e attest 'pnp
 
 **Out of scope:** the shared Rust core (`packages/rust`) is compiled into both bindings but lives in neither subtree, so a core-only change does not stale either binding attestation; the binding attestations track binding-layer source only.
 
-The CLI version is pinned in `.github/workflows/e2e-attestation.yml` (and mirrored in `testing-conventions.yml`); install the same version locally before attesting: `pip install "testing-conventions==<version>"`.
+CI installs the latest `testing-conventions` release (unpinned); install it locally before attesting: `pip install testing-conventions`.
 
 ### Docs as Spec
 

@@ -2,9 +2,6 @@ name: TS Test
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  # Pinned in lockstep with .github/workflows/testing-conventions.yml. Bump
-  # deliberately and re-run the floor locally before changing this.
-  TESTING_CONVENTIONS_VERSION: "0.0.41"
 
 on:
   push:
@@ -133,7 +130,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install testing-conventions
-        run: pip install "testing-conventions==${TESTING_CONVENTIONS_VERSION}"
+        run: pip install testing-conventions
 
       - name: Install dependencies
         working-directory: packages/ts
