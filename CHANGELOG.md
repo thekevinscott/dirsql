@@ -262,6 +262,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CLI: a native-language config (`.py` / `.js` / `.mjs` / `.cjs`) with no
+  `root` now indexes the current working directory instead of failing.**
+  Previously `dirsql --config <native config>` with no `root` errored on the
+  Python launcher (`DirSQL requires either a root directory or a config= path`)
+  and silently indexed nothing on the JavaScript launcher. The `dirsql
+  interpret` handshake now defaults the resolved root to the process's current
+  working directory — the directory the command was run from — for both the
+  Python and TypeScript launchers. Two related changes ship with it:
+  `dirsql interpret` now rejects a config whose `DirSQL` itself sets `config=`
+  (a nested config can't be represented in the handshake and would recurse),
+  and the Python `DirSQL(...)` constructor no longer raises `TypeError` when
+  neither `root` nor `config` is given — the "no root" check is delegated to the
+  core and surfaces from `await db.ready()` / `query()`, matching Rust. (#260)
+
 - **Test files no longer ship in built distributions.** The Python wheel
   bundled the colocated `dirsql/**/*_test.py` unit tests, the npm tarball
   shipped compiled `dist/**/*.test.*`, and the crate shipped `tests/**`. Each

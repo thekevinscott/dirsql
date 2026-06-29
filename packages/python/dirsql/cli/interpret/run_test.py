@@ -14,12 +14,13 @@ def _fake_table(name: str, extract):
     return SimpleNamespace(name=name, extract=extract)
 
 
-def _fake_app(tables: list, state: dict):
-    """Build a duck-typed `app` -- `_tables` for dispatch, `__dict__`
-    handled by overriding `vars`."""
+def _fake_app(tables: list, state: dict, config=None):
+    """Build a duck-typed `app` -- `_tables` for dispatch, `_config` for the
+    nested-config guard, `__dict__` handled by overriding `vars`."""
 
     class _App:
         _tables = tables
+        _config = config
 
     a = _App()
     # vars(a) needs to return `state` -- bind it through __dict__.
@@ -71,6 +72,34 @@ def describe_run():
                 {"type": "config", "state": {"root": "/x", "ignore": []}}
             ]
 
+    def describe_root_default():
+        def it_defaults_a_none_root_to_the_process_cwd():
+            # A config that resolves to no root (neither root nor config=) gets
+            # the process cwd injected into the handshake state.
+            app = _fake_app([], state={"root": None})
+            written: list[dict] = []
+            with (
+                patch.object(run_module, "load_app", return_value=app),
+                patch.object(run_module, "write_message", side_effect=written.append),
+                patch.object(run_module.os, "getcwd", return_value="/cwd"),
+                patch.object(sys, "stdin", io.StringIO("")),
+            ):
+                assert run(["good.py"]) == 0
+            assert written == [{"type": "config", "state": {"root": "/cwd"}}]
+
+    def describe_nested_config():
+        def it_returns_1_when_the_app_itself_sets_config():
+            # A config file whose `app` was built with `config=` is rejected:
+            # nested config loading is unsupported.
+            app = _fake_app([], state={"root": "/x"}, config="/nested.toml")
+            fake_stderr = io.StringIO()
+            with (
+                patch.object(run_module, "load_app", return_value=app),
+                patch.object(sys, "stderr", fake_stderr),
+            ):
+                assert run(["good.py"]) == 1
+            assert "config" in fake_stderr.getvalue().lower()
+
     def describe_extract_loop():
         def it_dispatches_one_extract_request_and_writes_the_response():
             def extract(p):
@@ -95,7 +124,7 @@ def describe_run():
             }
 
         def it_skips_blank_lines_silently():
-            app = _fake_app([], state={})
+            app = _fake_app([], state={"root": "/x"})
             fake_stdin = io.StringIO("\n\n   \n")
             written: list[dict] = []
             with (
@@ -104,10 +133,12 @@ def describe_run():
                 patch.object(sys, "stdin", fake_stdin),
             ):
                 assert run(["good.py"]) == 0
-            assert written == [{"type": "config", "state": {}}]  # only handshake
+            assert written == [
+                {"type": "config", "state": {"root": "/x"}}
+            ]  # only handshake
 
         def it_skips_malformed_json_silently():
-            app = _fake_app([], state={})
+            app = _fake_app([], state={"root": "/x"})
             fake_stdin = io.StringIO("not json\n{also not\n")
             written: list[dict] = []
             with (
@@ -116,10 +147,10 @@ def describe_run():
                 patch.object(sys, "stdin", fake_stdin),
             ):
                 assert run(["good.py"]) == 0
-            assert written == [{"type": "config", "state": {}}]
+            assert written == [{"type": "config", "state": {"root": "/x"}}]
 
         def it_skips_non_extract_messages_silently():
-            app = _fake_app([], state={})
+            app = _fake_app([], state={"root": "/x"})
             fake_stdin = io.StringIO('{"type": "ping"}\n')
             written: list[dict] = []
             with (
@@ -128,10 +159,10 @@ def describe_run():
                 patch.object(sys, "stdin", fake_stdin),
             ):
                 assert run(["good.py"]) == 0
-            assert written == [{"type": "config", "state": {}}]
+            assert written == [{"type": "config", "state": {"root": "/x"}}]
 
         def it_skips_non_dict_json_silently():
-            app = _fake_app([], state={})
+            app = _fake_app([], state={"root": "/x"})
             fake_stdin = io.StringIO("42\n[]\n")
             written: list[dict] = []
             with (
@@ -140,7 +171,7 @@ def describe_run():
                 patch.object(sys, "stdin", fake_stdin),
             ):
                 assert run(["good.py"]) == 0
-            assert written == [{"type": "config", "state": {}}]
+            assert written == [{"type": "config", "state": {"root": "/x"}}]
 
         def it_treats_a_none_tables_attribute_as_empty():
             app = _fake_app(tables=None, state={})  # type: ignore[arg-type]

@@ -257,9 +257,19 @@ def describe_binding_layer():
             with pytest.raises(FileNotFoundError):
                 await db.ready()
 
-        def it_rejects_construction_without_root_or_config():
-            with pytest.raises(TypeError):
-                async_mod.DirSQL()
+        @pytest.mark.asyncio
+        async def it_forwards_construction_without_root_or_config_to_the_core(
+            mock_core,
+        ):
+            # The wrapper no longer raises on (None, None); the core owns that
+            # validation (DirSQLBuilder::resolve). Construction forwards both
+            # as None.
+            db = async_mod.DirSQL()
+            await db.ready()
+
+            inst = _FakeRustDirSQL.instances[-1]
+            assert inst.root is None
+            assert inst.config is None
 
     def describe_ignore_kwarg():
         # Feature: ignore patterns. See docs/guide/tables.md and
