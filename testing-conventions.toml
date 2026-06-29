@@ -35,14 +35,9 @@ reason = "Package docstring only (no top-level re-exports, by design); no logic 
 [[typescript.exempt]]
 path = "index.ts"
 rules = ["colocated-test", "co-change"]
-reason = "Barrel + DirSQL facade that needs the native binary: re-exports the public API surface (DirSQL, Table, types) and is covered by the SDK integration tests; no isolated logic to unit-test. `co-change` is waived for the same reason -- there is no colocated unit test to co-change when its imports/wiring are updated (e.g. the #193 filename rename touched its import paths)."
+reason = "True barrel: re-exports the public API surface (DirSQL, Table, parseTableName, types) from the colocated-tested implementation modules (table.ts, core.ts, parse-table-name.ts, dirsql.ts). The logic that used to live here was extracted into those unit-tested modules (#239), leaving only re-exports. `co-change` is waived because there is no colocated unit test to co-change when a submodule rename moves an import path here."
 
 [[typescript.exempt]]
 path = "cli/interpret/index.ts"
 rules = ["colocated-test"]
-reason = "Barrel: single re-export of `interpret`. Covered transitively by the interpret unit tests; no isolated logic to unit-test."
-
-[[typescript.exempt]]
-path = "cli/dirsql.ts"
-rules = ["colocated-test", "co-change"]
-reason = "npm `bin` launcher shim: imports `main` and invokes it at load. Trivial entry point with no isolable logic to unit-test -- the launcher helpers in `main.ts` / `resolve-binary.ts` are unit-tested. Mirrors the coverage-omit in packages/ts/vitest.config.ts. `co-change` is waived for the same reason -- with no colocated unit test there is nothing to co-change when the shim is touched."
+reason = "True barrel: single re-export of `interpret` from the colocated-tested `interpret.ts`. No isolated logic to unit-test."
