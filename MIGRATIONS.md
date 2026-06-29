@@ -161,6 +161,52 @@ uv run python -c "import tempfile; from dirsql import DirSQL; print('extensions'
 # expected: True
 ```
 
+### TypeScript SDK: `new DirSQL({ extensions })` and `toJSON()` carries `extensions` (#230)
+
+#### Summary
+
+The TypeScript `DirSQL` constructor gains an additive `extensions` option (an
+array of `{ path, entrypoint? }` objects) that loads SQLite extensions onto the
+connection at startup, marshaled through the napi binding into the shared Rust
+core. As a consequence the resolved-state snapshot `toJSON()` /
+`JSON.stringify(db)` — which also backs the `dirsql interpret` native-config
+handshake `state` — now always includes an `extensions` array, empty when none
+are configured. This brings the TypeScript snapshot in line with the Rust
+`DirSQL::config()` (#225) and Python `vars(db)` (#229) changes, closing the last
+extension-loading parity gap. Only consumers asserting the *exact key set* of
+`toJSON()` are affected; the constructor option itself is backward compatible
+(it defaults to no extensions).
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| Exact-shape assertions on the TypeScript serialized config (`toJSON()` / `JSON.stringify(db)`) | `{root, tables, ignore, persist, persistPath}` | additionally contains `extensions` (array of `{path, entrypoint}`) |
+| Loading a SQLite extension from the TypeScript SDK | _not available — only `[[dirsql.extension]]` config-file entries_ | `new DirSQL({ root, extensions: [{ path: "...", entrypoint: "..." }] })` |
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- `toJSON()` / `JSON.stringify(db)` (the TypeScript serialized construction
+  state, also emitted as the `interpret` handshake `state`) now always includes
+  an `extensions` key — an empty array when no extensions are configured, with
+  each entry's `entrypoint` normalized to `null` when no override is supplied.
+  Consumers asserting the exact key set of the serialized config must accept the
+  new key. (The Rust `DirSQL::config()` equivalent changed in #225; the Python
+  `vars(db)` equivalent in #229.)
+
+#### Verification
+
+```bash
+cd packages/ts
+pnpm build
+node --input-type=module -e "import { DirSQL } from './dist/index.js'; const db = new DirSQL({ root: '.' }); console.log('extensions' in db.toJSON()); db.ready.catch(() => {});"
+# expected: true
+```
+
 ### Rust SDK: code-review followup (#218)
 
 #### Summary

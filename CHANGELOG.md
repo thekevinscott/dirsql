@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **TypeScript SDK: `new DirSQL({ extensions: [...] })` constructor option
+  (restores parity with Rust #225 / Python #229).** Pass an array of
+  `{ path, entrypoint? }` objects (`entrypoint` optional) to load SQLite
+  extensions onto the connection at startup, marshaled through the napi
+  binding into the shared Rust core (enable → load → disable). The
+  `toJSON()` / `JSON.stringify(db)` snapshot now includes an `extensions`
+  array (each entry `{ path, entrypoint }`, `entrypoint` normalized to `null`
+  when no override is supplied, empty when none configured), and the
+  `dirsql interpret` native-config handshake carries it (its `state` is
+  `app.toJSON()`), so a `.js` / `.mjs` / `.cjs` config that declares
+  `extensions` propagates to the orchestrating binary. Programmatic entries
+  load first, followed by any `[[dirsql.extension]]` entries from a `config`
+  file (relative config paths resolve against the config's parent directory;
+  programmatic paths are taken verbatim). Closes the last extension-loading
+  parity gap in `PARITY.md`. (#230)
+
 - **Rust SDK: load SQLite extensions via config (`[[dirsql.extension]]` /
   `DirSQLBuilder::extension`).** Declare a local extension shared-library path
   (with an optional `entrypoint` init-symbol override) and dirsql loads it onto

@@ -4,7 +4,7 @@
 // Split out of the public barrel (`index.ts`) so it carries a colocated
 // unit test instead of an exemption (#239).
 
-import type { RowEvent } from "./dirsql.js";
+import type { ExtensionSpec, RowEvent } from "./dirsql.js";
 import { loadNativeCore as defaultLoadNativeCore } from "./load-native-core.js";
 import type { TableDef } from "./table.js";
 
@@ -23,6 +23,7 @@ export interface NativeDirSQLConstructor {
     config: string | null,
     persist: boolean | null,
     persistPath: string | null,
+    extensions: ExtensionSpec[] | null,
   ): Promise<NativeDirSQL>;
 }
 

@@ -197,6 +197,7 @@ export class DirSQL {
       options.config ?? null,
       options.persist ?? null,
       options.persistPath ?? null,
+      options.extensions ?? null,
     );
     this.ready = openPromise.then((inner) => {
       this._inner = inner;

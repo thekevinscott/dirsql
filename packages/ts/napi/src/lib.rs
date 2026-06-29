@@ -19,8 +19,8 @@
 //! write either `new DirSQL(configPath)` or `new DirSQL({ root, tables, ... })`.
 
 use dirsql::{
-    DirSQL as CoreDirSQL, PreparedBuild, RawFileEvent, Row, RowEvent as CoreRowEvent, Table, Value,
-    db::parse_table_name as core_parse_table_name,
+    DirSQL as CoreDirSQL, Extension, PreparedBuild, RawFileEvent, Row, RowEvent as CoreRowEvent,
+    Table, Value, db::parse_table_name as core_parse_table_name,
 };
 use napi::Task;
 use napi::bindgen_prelude::*;
@@ -62,6 +62,17 @@ pub struct RowEvent {
     pub file_path: Option<String>,
 }
 
+/// A SQLite extension to load at startup, marshaled from the JS
+/// `{ path, entrypoint? }` object passed via the `extensions` constructor
+/// option into a [`dirsql::Extension`]. Paths are taken verbatim — the
+/// programmatic surface does not resolve relative paths, matching
+/// `DirSQLBuilder::extensions` and the Python binding's `PyExtensionSpec`.
+#[napi(object)]
+pub struct ExtensionSpec {
+    pub path: String,
+    pub entrypoint: Option<String>,
+}
+
 /// The main DirSQL class. Creates an in-memory SQLite index over a directory.
 #[napi(js_name = "DirSQL")]
 pub struct DirSQL {
@@ -83,6 +94,11 @@ impl DirSQL {
     /// any programmatic `tables` and its `[dirsql].ignore` is appended after
     /// any explicit `ignore`. When both `root` and config's `[dirsql].root`
     /// are supplied, the explicit `root` wins and a warning is emitted.
+    // The single construction entry point mirrors the SDK's wide options
+    // object (root / tables / ignore / config / persist / persistPath /
+    // extensions); each is a distinct optional knob, so collapsing them into
+    // a struct would only obscure the napi signature the TS wrapper calls.
+    #[allow(clippy::too_many_arguments)]
     #[napi(js_name = "openAsync", ts_return_type = "Promise<DirSQL>")]
     pub fn open_async(
         env: Env,
@@ -92,11 +108,20 @@ impl DirSQL {
         config: Option<String>,
         persist: Option<bool>,
         persist_path: Option<String>,
+        extensions: Option<Vec<ExtensionSpec>>,
     ) -> Result<AsyncTask<OpenTask>> {
         let rust_tables = match tables {
             Some(ts) => parse_tables_from_js(env, ts)?,
             None => Vec::new(),
         };
+        let rust_extensions = extensions
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| Extension {
+                path: PathBuf::from(e.path),
+                entrypoint: e.entrypoint,
+            })
+            .collect();
         Ok(AsyncTask::new(OpenTask {
             root: root.map(PathBuf::from),
             config_path: config.map(PathBuf::from),
@@ -104,6 +129,7 @@ impl DirSQL {
             ignore: ignore.unwrap_or_default(),
             persist: persist.unwrap_or(false),
             persist_path: persist_path.map(PathBuf::from),
+            extensions: rust_extensions,
         }))
     }
 
@@ -163,6 +189,11 @@ pub struct OpenTask {
     ignore: Vec<String>,
     persist: bool,
     persist_path: Option<PathBuf>,
+    /// SQLite extensions to load onto the connection before any table DDL,
+    /// forwarded to the core builder's `extensions`. Empty when none were
+    /// passed; config-file `[[dirsql.extension]]` entries are appended by
+    /// the builder when `config` is supplied.
+    extensions: Vec<Extension>,
 }
 
 impl Task for OpenTask {
@@ -174,8 +205,12 @@ impl Task for OpenTask {
             Error::new(Status::GenericFailure, "OpenTask computed more than once")
         })?;
         let ignore = std::mem::take(&mut self.ignore);
+        let extensions = std::mem::take(&mut self.extensions);
 
-        let mut builder = CoreDirSQL::builder().tables(tables).ignore(ignore);
+        let mut builder = CoreDirSQL::builder()
+            .tables(tables)
+            .ignore(ignore)
+            .extensions(extensions);
         if let Some(root) = self.root.take() {
             builder = builder.root(root);
         }
