@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // npm `bin` entry for `dirsql`. The package.json `bin` field points at
 // the compiled version of this file; npm symlinks `node_modules/.bin/dirsql`
-// to it. Always runs the launcher -- nothing else should import this
-// file (test the helpers in `main.ts` / `resolve-binary.ts` instead).
+// to it. All it does is invoke `runCli()` (see `run-cli.ts`); the launcher
+// logic and its error handling live there so they can be unit-tested.
 //
 // A prior `process.argv[1] === import.meta.filename` self-detection
 // guard tripped up the npm-bin symlink: argv[1] is the (unresolved)
@@ -10,11 +10,6 @@
 // guard silently skipped main() so `dirsql --version` produced no
 // output (caught by the pack-install build-CI smoke test).
 
-import { main } from "./main.js";
+import { runCli } from "./run-cli.js";
 
-main().catch((e: unknown) => {
-  process.stderr.write(
-    `dirsql: ${e instanceof Error ? e.message : String(e)}\n`,
-  );
-  process.exit(1);
-});
+runCli();
