@@ -128,9 +128,9 @@ def describe_binding_layer():
             db = async_mod.DirSQL("/root", tables=["t"])
             await db.ready()
 
-            assert any(
-                "DirSQL" in c or "FakeRustDirSQL" in c for c in to_thread_spy
-            ), to_thread_spy
+            assert any("DirSQL" in c or "FakeRustDirSQL" in c for c in to_thread_spy), (
+                to_thread_spy
+            )
 
         @pytest.mark.asyncio
         async def it_offloads_query_via_to_thread(mock_core, to_thread_spy):
