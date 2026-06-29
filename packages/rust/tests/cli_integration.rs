@@ -108,6 +108,27 @@ where
 }
 
 // ---------------------------------------------------------------------------
+// AppState construction
+// ---------------------------------------------------------------------------
+
+/// `From<DirSQL> for AppState` produces the ready arm. Built over a real
+/// scanned directory (the `blog_fixture` writes matching files so the
+/// initial scan runs the extract path) and asserted through the public
+/// `AppState::Ready` variant. Relocated here from `cli/mod.rs`'s inline
+/// unit module because populating the scanned directory needs effectful
+/// `std::fs::write`, which the `unit lint` isolation rule bars from a unit
+/// test.
+#[test]
+fn from_dirsql_yields_ready_state() {
+    let (_root, db) = blog_fixture();
+    let state: AppState = db.into();
+    assert!(
+        matches!(state, AppState::Ready(_)),
+        "From<DirSQL> must produce AppState::Ready",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // POST /query
 // ---------------------------------------------------------------------------
 

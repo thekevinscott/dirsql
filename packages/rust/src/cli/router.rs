@@ -167,15 +167,16 @@ pub(super) fn error_response(status: StatusCode, message: impl Into<String>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::DbError;
 
-    #[test]
-    fn classify_core_error_is_bad_request() {
-        // A SQLite-level failure is the client's fault (bad SQL), so it maps
-        // to 400 rather than a server error.
-        let err = DirSqlError::Core(DbError::SchemaMismatch("nope".into()));
-        assert_eq!(classify_query_error(&err), StatusCode::BAD_REQUEST);
-    }
+    // The `DirSqlError::Core => 400` arm of `classify_query_error` is
+    // exercised end-to-end at the integration tier by
+    // `post_query_malformed_sql_returns_400_not_500` in
+    // `tests/cli_integration.rs`, which posts malformed SQL to `/query` and
+    // asserts the 400. Constructing a `Core` value inline would require
+    // importing the first-party `crate::db::DbError`, which the
+    // `testing-conventions` `unit lint` isolation rule forbids (a unit test
+    // may reach only `super::` and pure `std`). The non-Core arm below is
+    // pure -- it builds a `super::DirSqlError::Lock` -- so it stays inline.
 
     #[test]
     fn classify_non_core_error_is_internal_server_error() {
