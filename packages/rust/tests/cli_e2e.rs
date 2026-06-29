@@ -52,6 +52,28 @@ glob = "posts/{author}/{title}.json"
     root
 }
 
+/// A blog fixture whose `.dirsql.toml` names the table with a **quoted**
+/// identifier (`"posts"`) -- the canonical DDL shape emitted by ORMs / schema
+/// tools. Until #204 resolves the name via `sqlite_master`, the hand-rolled
+/// scanner keeps the quotes, the table is rejected at build time, and the
+/// server is left degraded (503).
+fn quoted_blog_fixture() -> TempDir {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("posts/alice")).unwrap();
+    fs::write(root.path().join("posts/alice/Hello-World.json"), "{}").unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        // Single-quoted TOML string so the embedded double quotes are literal.
+        r#"
+[[table]]
+ddl = 'CREATE TABLE "posts" (title TEXT, author TEXT, _basename TEXT)'
+glob = "posts/{author}/{title}.json"
+"#,
+    )
+    .unwrap();
+    root
+}
+
 /// Pick a free TCP port by opening and immediately dropping a listener.
 fn free_port() -> u16 {
     TcpListener::bind("localhost:0")
@@ -328,6 +350,29 @@ fn unloadable_config_returns_503_on_query() {
         .send()
         .unwrap();
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    kill_and_wait(child);
+}
+
+#[test]
+fn quoted_identifier_table_in_toml_is_served_over_http() {
+    // #204: a `.dirsql.toml` table whose DDL uses a quoted identifier must be
+    // served like any other -- SQLite resolves the name to the bare `posts`.
+    // Today the quoted name is rejected at build time, so the server degrades
+    // to 503; this asserts the post-fix behavior (200 + the indexed row).
+    let root = quoted_blog_fixture();
+    let port = free_port();
+    let child = spawn_dirsql(root.path(), port);
+    wait_until_ready(port, Duration::from_secs(10));
+
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Vec<Value> = resp.json().unwrap();
+    assert_eq!(body, vec![json!({"title": "Hello-World"})]);
 
     kill_and_wait(child);
 }

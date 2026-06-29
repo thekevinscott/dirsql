@@ -402,27 +402,89 @@ impl rusqlite::types::ToSql for Value {
     }
 }
 
-/// Extract the table name from a CREATE TABLE DDL statement.
-/// Handles: CREATE TABLE name (...), CREATE TABLE IF NOT EXISTS name (...)
+/// Extract the table name from a `CREATE TABLE` DDL statement.
+///
+/// The name token in `CREATE TABLE [IF NOT EXISTS] <name> (...)` may be:
+///   - a bare identifier:    `comments`
+///   - a quoted identifier:  `"comments"`, `` `comments` ``, `[comments]`
+///   - schema-qualified:     `main.comments`, `"main"."comments"`
+///
+/// Surrounding quotes are SQL *delimiters*, not part of the name, so they are
+/// stripped: a tool that emits `CREATE TABLE "comments" (...)` (as ORMs and
+/// schema generators routinely do) names the table `comments`. Schema-qualified
+/// names resolve to the table segment. Returns `None` when the input isn't a
+/// `CREATE TABLE` or carries no name token.
+///
+/// This is deliberately a small, pure tokenizer rather than a full SQL parser
+/// (or a round-trip through SQLite): dirsql constrains table names to safe
+/// unquoted identifiers via [`validate_identifier`], so the handful of forms
+/// above are the only ones that can actually resolve to a usable table.
 pub fn parse_table_name(ddl: &str) -> Option<String> {
     let upper = ddl.to_uppercase();
     let idx = upper.find("CREATE TABLE")?;
-    let rest = &ddl[idx + "CREATE TABLE".len()..].trim_start();
+    let mut rest = ddl[idx + "CREATE TABLE".len()..].trim_start();
 
-    // Skip optional "IF NOT EXISTS"
-    let rest = if rest.to_uppercase().starts_with("IF NOT EXISTS") {
-        rest["IF NOT EXISTS".len()..].trim_start()
-    } else {
-        rest
+    // Skip optional "IF NOT EXISTS". `.get()` avoids slicing on a non-char
+    // boundary when the name itself begins with a multi-byte character.
+    const IF_NOT_EXISTS: &str = "IF NOT EXISTS";
+    if rest
+        .get(..IF_NOT_EXISTS.len())
+        .is_some_and(|p| p.eq_ignore_ascii_case(IF_NOT_EXISTS))
+    {
+        rest = rest[IF_NOT_EXISTS.len()..].trim_start();
+    }
+
+    // Parse dot-separated identifier segments (`schema.table`) and keep the
+    // last one: the table name. Each segment may be quoted independently.
+    let mut chars = rest.chars().peekable();
+    let mut table = parse_identifier(&mut chars)?;
+    while chars.peek() == Some(&'.') {
+        chars.next();
+        table = parse_identifier(&mut chars)?;
+    }
+
+    if table.is_empty() { None } else { Some(table) }
+}
+
+/// Read one identifier segment from `chars`: a quoted identifier
+/// (`"..."`, `` `...` ``, or `[...]`, with the doubled-delimiter escape for the
+/// matching close on the SQL-standard quote forms) or a bare run up to the
+/// first whitespace, `(`, or `.`. Returns the *unquoted* text. Returns `None`
+/// only when the cursor is already exhausted.
+fn parse_identifier(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
+    let (open, close) = match *chars.peek()? {
+        '"' => ('"', '"'),
+        '`' => ('`', '`'),
+        '[' => ('[', ']'),
+        _ => {
+            let mut bare = String::new();
+            while let Some(&c) = chars.peek() {
+                if c.is_whitespace() || c == '(' || c == '.' {
+                    break;
+                }
+                bare.push(c);
+                chars.next();
+            }
+            return Some(bare);
+        }
     };
 
-    // Table name is everything up to the first whitespace or '('
-    let name: String = rest
-        .chars()
-        .take_while(|c| !c.is_whitespace() && *c != '(')
-        .collect();
-
-    if name.is_empty() { None } else { Some(name) }
+    chars.next(); // consume the opening delimiter
+    let mut name = String::new();
+    while let Some(c) = chars.next() {
+        if c == close {
+            // On `"` / `` ` ``, a doubled close delimiter is an escaped literal
+            // (`""` -> `"`); SQLite's `[...]` form has no such escape.
+            if open != '[' && chars.peek() == Some(&close) {
+                chars.next();
+                name.push(close);
+                continue;
+            }
+            break;
+        }
+        name.push(c);
+    }
+    Some(name)
 }
 
 /// True if `ddl` is a `CREATE VIRTUAL TABLE` statement. dirsql tables are
@@ -628,6 +690,93 @@ mod tests {
     #[test]
     fn parse_table_name_empty_after_create_table() {
         assert_eq!(parse_table_name("CREATE TABLE "), None);
+    }
+
+    #[test]
+    fn parse_table_name_double_quoted() {
+        // The canonical ORM / schema-generator shape: the quotes are SQL
+        // delimiters and must be stripped to the bare `comments`.
+        assert_eq!(
+            parse_table_name(r#"CREATE TABLE "comments" (id TEXT)"#),
+            Some("comments".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_table_name_double_quoted_no_space_before_paren() {
+        assert_eq!(
+            parse_table_name(r#"CREATE TABLE "comments"(id TEXT)"#),
+            Some("comments".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_table_name_backtick_quoted() {
+        assert_eq!(
+            parse_table_name("CREATE TABLE `comments` (id TEXT)"),
+            Some("comments".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_table_name_bracket_quoted() {
+        // SQLite's `[ident]` form ends at the first `]` -- no doubling escape.
+        assert_eq!(
+            parse_table_name("CREATE TABLE [comments] (id TEXT)"),
+            Some("comments".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_table_name_double_quote_escape() {
+        // `""` inside a double-quoted identifier is one literal `"`. The
+        // extracted name is later rejected by `validate_identifier`; here we
+        // only assert the tokenizer unescapes correctly.
+        assert_eq!(
+            parse_table_name(r#"CREATE TABLE "we""ird" (id TEXT)"#),
+            Some("we\"ird".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_table_name_if_not_exists_quoted_mixed_case() {
+        assert_eq!(
+            parse_table_name(r#"CREATE TABLE if not exists "comments" (id TEXT)"#),
+            Some("comments".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_table_name_schema_qualified() {
+        // `schema.table` resolves to the table segment (the name SQLite stores
+        // in `sqlite_master`).
+        assert_eq!(
+            parse_table_name("CREATE TABLE main.comments (id TEXT)"),
+            Some("comments".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_table_name_schema_qualified_quoted() {
+        assert_eq!(
+            parse_table_name(r#"CREATE TABLE "main"."comments" (id TEXT)"#),
+            Some("comments".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_table_name_runs_to_end_of_input() {
+        // Bare identifier terminated by EOF rather than whitespace/paren.
+        assert_eq!(
+            parse_table_name("CREATE TABLE comments"),
+            Some("comments".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_table_name_missing_name_is_none() {
+        // A `(` where the name should be yields an empty token -> None.
+        assert_eq!(parse_table_name("CREATE TABLE (id TEXT)"), None);
     }
 
     #[test]
