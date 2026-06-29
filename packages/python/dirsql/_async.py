@@ -1,9 +1,20 @@
 """Async-by-default DirSQL wrapper."""
 
 import asyncio
+from typing import TYPE_CHECKING
 
 from dirsql._dirsql import DirSQL as _RustDirSQL
 from dirsql.resolve_config import resolve_config
+
+if TYPE_CHECKING:
+    # `typing.override` is 3.12+; the package supports 3.11, so source it from
+    # `typing_extensions` for the type checker only. At runtime `@override` is
+    # a pure marker, so a no-op identity avoids the runtime dependency.
+    from typing_extensions import override
+else:
+
+    def override(func):
+        return func
 
 
 class _WatchStream:
@@ -111,15 +122,24 @@ class DirSQL:
             raise self._init_error
 
     async def query(self, sql):
-        """Execute a SQL query asynchronously."""
-        return await asyncio.to_thread(self._db.query, sql)  # ty:ignore[unresolved-attribute]
+        """Execute a SQL query asynchronously.
+
+        Awaits :meth:`ready` first, so calling ``query`` before an explicit
+        ``await db.ready()`` waits for the background scan (and re-raises any
+        initialization error) instead of failing on a still-``None`` ``_db``.
+        """
+        await self.ready()
+        db = self._db
+        assert db is not None  # ready() returned, so _init_bg set _db
+        return await asyncio.to_thread(db.query, sql)
 
     def watch(self):
         """Start watching for file changes. Returns an async iterable of RowEvent."""
         return _WatchStream(self._db)
 
     @property
-    def __dict__(self):  # ty:ignore[missing-override-decorator]
+    @override
+    def __dict__(self):
         """Resolved construction state as a JSON-serializable dict.
 
         Recomputed on each access; reads the ``.dirsql.toml`` if ``config=``

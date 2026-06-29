@@ -72,6 +72,33 @@ def describe_DirSQL_async():
                 assert results == [{"sql": "SELECT 1"}]
 
         @pytest.mark.asyncio
+        async def it_awaits_readiness_when_query_is_called_before_ready():
+            # query() must await initialization itself: calling it without a
+            # prior `await db.ready()` should still return rows, not raise
+            # AttributeError from `self._db` still being None.
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                db = async_mod.DirSQL("/tmp/root", tables=["table-a"])
+
+                results = await db.query("SELECT 1")
+
+                assert results == [{"sql": "SELECT 1"}]
+                assert db._db.query_calls == ["SELECT 1"]
+
+        @pytest.mark.asyncio
+        async def it_propagates_initialization_errors_from_query():
+            # An init failure must surface through query() too (it awaits
+            # ready(), which re-raises), not as an AttributeError.
+            class _BoomDirSQL:
+                def __init__(self, *args, **kwargs):
+                    raise RuntimeError("boom")
+
+            with patch.object(async_mod, "_RustDirSQL", _BoomDirSQL):
+                db = async_mod.DirSQL("/tmp/root", tables=["table-a"])
+
+                with pytest.raises(RuntimeError, match="boom"):
+                    await db.query("SELECT 1")
+
+        @pytest.mark.asyncio
         async def it_propagates_initialization_errors():
             class _BoomDirSQL:
                 def __init__(self, *args, **kwargs):

@@ -72,6 +72,15 @@ gain it at once with no binding changes; the user-supplied `root` and the
 | Query                      | `await db.query(sql)`                 | `db.query(sql).await?`                 |
 | Watch                      | `async for event in db.watch()`       | `db.watch()? -> WatchStream` (Stream trait) |
 
+**Ready semantics — Python and TypeScript transparently await `ready`.** The
+Python `DirSQL.query()` and the TypeScript `db.query()` await readiness
+internally, so a query issued immediately after construction (before an
+explicit `await db.ready()`) waits for the scan instead of failing. (Python
+previously raised `AttributeError` in that window; now fixed to wait like
+TypeScript.) Rust's `AsyncDirSQL` is intentionally more explicit: its methods
+require a prior `ready().await` and return a `"not ready"` error otherwise — a
+language-idiomatic difference, not unintended drift.
+
 **TypeScript note:** JS is async by default, so there is no separate `AsyncDirSQL` class.
 The single `DirSQL` class has `ready: Promise<void>` (an awaitable property) and
 `watch(): AsyncIterable<RowEvent>` built in.  Usage:

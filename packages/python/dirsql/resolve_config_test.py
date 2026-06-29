@@ -161,6 +161,21 @@ def describe_resolve_config():
             out = resolve_config(None, None, None, path, False, None)
             assert out["persist_path"] == "/var/cache/dirsql.db"
 
+        def it_resolves_relative_root_and_persist_path_in_one_config(cfg_dir):
+            # Both fields flow through the cfg_dir-relative `_abs` helper in a
+            # single resolve, exercising the narrowed cfg_dir closure for each
+            # call site at once.
+            path = os.path.join(cfg_dir, ".dirsql.toml")
+            _write(
+                path,
+                '[dirsql]\nroot = "data"\n'
+                'persist = true\npersist_path = "cache/db.sqlite"\n',
+            )
+            out = resolve_config(None, None, None, path, False, None)
+            assert out["root"] == os.path.join(cfg_dir, "data")
+            assert out["persist_path"] == os.path.join(cfg_dir, "cache/db.sqlite")
+            assert out["persist"] is True
+
         def it_leaves_persist_path_none_when_absent(cfg_dir):
             path = os.path.join(cfg_dir, ".dirsql.toml")
             _write(path, '[dirsql]\nignore = ["x"]\n')
