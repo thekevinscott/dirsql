@@ -20,7 +20,7 @@ Everything you need to run `dirsql` as a CLI lives in this section:
 - **[Configuration File](./config.md)** — the `.dirsql.toml` format and the
   `.py` / `.js` native-language alternative. Custom tables
   are defined through a config file; without one, the server runs in
-  [zero-config mode](./server.md#zero-config-mode).
+  [zero-config mode](./server.md#defaults).
 - **[HTTP API](./http-api.md)** — the `POST /query` and `GET /events`
   endpoints, status codes, and event streaming.
 
