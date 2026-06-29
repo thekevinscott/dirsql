@@ -1,5 +1,11 @@
 // Synchronous config resolver for `DirSQL.toJSON()`.
 //
+// Stays synchronous on purpose (and so does the `readFileSync` below): it is
+// reached via `toJSON()`, which implements the `JSON.stringify(db)` contract
+// and is therefore invoked synchronously. Migrating this read to
+// `node:fs/promises` (the #272 cleanup) would force `toJSON()` async and break
+// `JSON.stringify`, so this file is intentionally exempt from that refactor.
+//
 // Mirrors `DirSQLBuilder::resolve` in the Rust core: explicit options win
 // for scalars; tables and ignore lists are concatenated; persist is OR-ed;
 // path-valued config fields resolve relative to the config file's parent.
@@ -20,6 +26,7 @@ export function resolveConfig(options: DirSQLOptions): DirSQLConfig {
   let cfgTables: Cfg[] = [];
   let cfgDir = "";
   if (options.config !== undefined) {
+    // Sync by contract -- see file header: this runs under `JSON.stringify`.
     const doc = parseToml(readFileSync(options.config, "utf8")) as Cfg;
     cfg = (doc.dirsql ?? {}) as Cfg;
     cfgTables = (Array.isArray(doc.table) ? doc.table : []) as Cfg[];
