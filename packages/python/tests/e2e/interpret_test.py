@@ -23,6 +23,7 @@ NDJSON protocol (per #196):
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -38,6 +39,8 @@ FIXTURE_DIR = Path(__file__).parent / "__fixtures__" / "interpret"
 HAPPY_CONFIG = FIXTURE_DIR / "dirsql.config.py"
 RAISES_CONFIG = FIXTURE_DIR / "dirsql.config_raises.py"
 NO_APP_CONFIG = FIXTURE_DIR / "dirsql.config_no_app.py"
+NO_ROOT_CONFIG = FIXTURE_DIR / "dirsql.config_no_root.py"
+NESTED_CONFIG = FIXTURE_DIR / "dirsql.config_nested.py"
 ALPHA_PATH = FIXTURE_DIR / "data" / "a" / "meta.json"
 
 
@@ -64,6 +67,25 @@ def describe_dirsql_interpret():
                         "extensions": [],
                     },
                 }
+            finally:
+                shutdown(proc)
+
+        def it_defaults_root_to_cwd_when_the_app_omits_root(tmp_path):
+            """A config that omits `root` reports the helper's cwd as root --
+            not null, and not the config file's directory."""
+            cwd = os.path.realpath(tmp_path)
+            proc = subprocess.Popen(
+                [*cli_argv(), "interpret", str(NO_ROOT_CONFIG)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                cwd=cwd,
+            )
+            try:
+                state = json.loads(readline(proc))["state"]
+                assert state["root"] == cwd
             finally:
                 shutdown(proc)
 
@@ -146,3 +168,20 @@ def describe_dirsql_interpret():
             # "Clean": a single human-readable line, not a Python traceback.
             assert "Traceback" not in stderr
             assert "app" in stderr.lower()
+
+        def it_exits_nonzero_with_clean_stderr_when_the_app_sets_config():
+            """A native config whose `app` delegates to another config file is
+            rejected: nested config loading is not supported."""
+            proc = subprocess.Popen(
+                [*cli_argv(), "interpret", str(NESTED_CONFIG)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            stdout, stderr = proc.communicate(timeout=10)
+            assert proc.returncode != 0, (
+                f"expected non-zero exit; stdout={stdout!r}, stderr={stderr!r}"
+            )
+            assert "Traceback" not in stderr
+            assert "config" in stderr.lower()
