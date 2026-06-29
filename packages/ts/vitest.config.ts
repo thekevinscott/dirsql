@@ -25,13 +25,19 @@ export default defineConfig({
       "**/dist/**",
       "**/.{git,cache}/**",
       "docs/**",
+      // e2e (`tests/e2e/`) and smoke (`tests/smoke/`) run via their own
+      // `pnpm test:e2e` / `pnpm test:smoke` scripts (which depend on
+      // `pnpm build`). Excluding them keeps the default `pnpm test` and
+      // `test:integration` fast and free of the cargo-build prerequisite.
+      "tests/e2e/**",
+      "tests/smoke/**",
     ],
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts", "tools/**/*.ts"],
       exclude: [
         "**/*.test.ts",
-        "test/**/*.ts",
+        "tests/**/*.ts",
         // `dirsql.ts` is the npm `bin` entry shim: it imports `main` and
         // invokes it at module load. Not a function under test, and
         // intentionally not imported anywhere else; the launcher helpers

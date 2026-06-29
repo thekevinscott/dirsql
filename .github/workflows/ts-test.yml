@@ -131,3 +131,46 @@ jobs:
       - name: Run coverage (unit + integration, no e2e)
         working-directory: packages/ts
         run: pnpm coverage
+
+  smoke:
+    # Functional publishability gate: build the real binary + napi addon,
+    # pack the main `dirsql` package and the host's `@dirsql/cli-<slug>`
+    # sub-package the way the release pipeline would, `npm install` both
+    # into a fresh dir, and run `node_modules/.bin/dirsql --version`. Red
+    # here means the npm release is broken and must not go out. This is the
+    # install-and-run check `packaging.yml` does NOT do (that gate only
+    # asserts no test files ship in the artifact). No mocks.
+    name: Packaging smoke (install + run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        working-directory: packages/ts
+        run: pnpm install
+
+      - name: Build native module + stage platform
+        working-directory: packages/ts
+        run: pnpm build
+
+      - name: Run packaging smoke (build -> pack -> install -> run)
+        working-directory: packages/ts
+        run: pnpm test:smoke

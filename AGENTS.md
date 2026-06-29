@@ -29,7 +29,7 @@ Exceptions: piping (`|`) is fine when it's genuinely one logical operation (e.g.
 
 ## File Naming
 
-**TypeScript filenames are dash-case (kebab-case).** Every `.ts` / `.mjs` / `.cjs` / `.json` file under `packages/ts/` uses kebab-case (`load-native-core.ts`, `resolve-binary.test.ts`, `dirsql.config-raises.mjs`); a single lowercase word (`index.ts`, `die.ts`, `main.ts`) is already valid kebab-case and stays. Only filenames follow this rule -- symbols *inside* a file keep their idiomatic `camelCase` / `PascalCase` names (the function in `resolve-binary.ts` is still `resolveBinary`). The convention is enforced for `src/` and `test/` by biome's `style/useFilenamingConvention` rule (`filenameCases: ["kebab-case"]`) and applies package-wide (`tools/`, `test-e2e/`, fixtures) by hand. Python (`snake_case.py`) and Rust (`snake_case.rs`) keep their own ecosystem conventions.
+**TypeScript filenames are dash-case (kebab-case).** Every `.ts` / `.mjs` / `.cjs` / `.json` file under `packages/ts/` uses kebab-case (`load-native-core.ts`, `resolve-binary.test.ts`, `dirsql.config-raises.mjs`); a single lowercase word (`index.ts`, `die.ts`, `main.ts`) is already valid kebab-case and stays. Only filenames follow this rule -- symbols *inside* a file keep their idiomatic `camelCase` / `PascalCase` names (the function in `resolve-binary.ts` is still `resolveBinary`). The convention is enforced for `src/` and `tests/` by biome's `style/useFilenamingConvention` rule (`filenameCases: ["kebab-case"]`) and applies package-wide (`tools/`, fixtures) by hand. Python (`snake_case.py`) and Rust (`snake_case.rs`) keep their own ecosystem conventions.
 
 **Python test files use the `_test.py` suffix, not the `test_` prefix** -- a test for `foo.py` is `foo_test.py` (colocated unit tests) or `<feature>_test.py` (integration tests under `tests/integration/`), never `test_foo.py`.
 
@@ -78,8 +78,9 @@ A feature is not done until integration tests pass and cover the new functionali
   - Python: `foo.py` -> `foo_test.py` in same directory
   - TypeScript: `foo.ts` -> `foo.test.ts` in same directory
   - Rust: inline `#[cfg(test)]` module at bottom of each source file
-- **Integration tests**: `tests/integration/` -- exercise the SDK's **public API** (`DirSQL`, `Table`, `RowEvent`, etc.), with third-party modules (e.g. the `notify` filesystem watcher, network calls, future LLM clients) replaced by **fixture-injected fakes**. Run in CI.
-- **E2E tests**: `tests/e2e/` -- real filesystem, real SQLite, real LLM calls, real published-artifact install (wheel / npm tarball). **No mocks, no fakes, no monkeypatching.** Heavy use of pytest fixtures. **NOT run in CI.** Artifact *hygiene* -- that no test files ship in the built `.whl` / `.tgz` / `.crate` -- is enforced in CI by the **`packaging` gate** (testing-conventions; `.github/workflows/packaging.yml`); *functional* publishability (a real install + run of the published artifact) is covered by the release pipeline's cross-triple matrix, not an in-CI smoke test.
+- **Integration tests**: `tests/integration/` -- exercise the **SDK** public API (`DirSQL`, `Table`, `RowEvent`, etc.) **only, never the CLI**, with **every** third-party dependency mocked (the `notify` watcher, network, future LLM clients, and **SQLite and the filesystem** too). Run in CI. (Existing SDK integration tests still use the real core + temp files; migrating them to fully mocked SQLite/FS is tracked in #289.)
+- **E2E tests**: `tests/e2e/` -- exercise the **CLI** only (the `dirsql` binary, the `dirsql interpret` subprocess, the launcher) with **nothing mocked**. **No mocks, no fakes, no monkeypatching. NOT run in CI** -- CI verifies only the per-package *attestation* that they ran (see *E2E Attestation*).
+- **Smoke tests**: `tests/smoke/` -- *functional* publishability: build, pack, install, and run the published artifact (`build.test.ts`). **Run in CI.** Distinct from the **`packaging` gate** (testing-conventions; `.github/workflows/packaging.yml`), which only asserts no test files *ship* in the `.whl` / `.tgz` / `.crate` and never installs or runs it.
 
 ### Enforcing Colocation (testing-conventions)
 
@@ -114,12 +115,13 @@ For the typical "fake out a stdlib helper / module function" case, mock it inste
 **Test-tier rules:**
 
 1. **Unit tests** isolate the SUT and mock every non-pure dependency (or, occasionally, DI it). Coverage at the unit tier should reflect every executable branch.
-2. **Integration tests hit the SDK's public API.** They may use fakes for third-party modules (filesystem watchers, network clients, eventual LLM SDKs) -- but inject them through the public API or a fixture, not by patching the production module's attributes.
-3. **E2E tests mock nothing.** Real filesystem, real SQLite, real binary, real install. If an e2e test needs a stub, it isn't an e2e test.
+2. **Integration tests hit the SDK's public API only -- never the CLI.** Mock every third-party dependency (filesystem watchers, network clients, eventual LLM SDKs, SQLite, the filesystem). The CLI is covered by unit (logic) + e2e (full stack), not here.
+3. **E2E tests exercise the CLI and mock nothing.** Real process, real filesystem, real SQLite, real binary. If an e2e test needs a stub, it isn't an e2e test.
+4. **Smoke tests validate the built/packed artifact, not features:** install the published package and run the CLI. The one no-mock tier that runs in CI (functional publishability); complements `packaging.yml`'s file-hygiene check.
 
 ### E2E Test Policy
 
-E2E tests are your primary feedback mechanism. Run them liberally after significant changes -- they catch issues that integration tests miss because integration tests mock out SQLite and (eventually) LLM calls. But do NOT add them to CI workflows. They are a local development tool. CI only verifies the per-package *attestation* that they ran (see *E2E Attestation* below); it never runs the suites themselves.
+E2E tests exercise the CLI and are your primary local feedback mechanism. Run them liberally after significant changes -- they catch issues integration tests miss because integration mocks out SQLite, the filesystem, and (eventually) LLM calls. Do NOT add the e2e suites to CI; CI verifies only the per-package *attestation* that they ran (see *E2E Attestation* below). The one no-mock tier that *does* run in CI is the **smoke** tier (`tests/smoke/`), the functional publishability gate.
 
 See skillet or karat for examples of test organization, fixtures, and pytest-describe patterns.
 

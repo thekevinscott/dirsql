@@ -2,8 +2,8 @@
 //
 // `node:fs/promises` has no `existsSync`; the idiom is `access()` in a
 // try/catch. Kept in its own module (not a `.test.ts` file) so vitest
-// doesn't collect it. Imported by both the integration suite (`persist`)
-// and the pack-install e2e (`cli_smoke`).
+// doesn't collect it. Imported by the integration suite (`persist`) and
+// the packaging smoke test (`smoke/build`).
 
 import { access } from "node:fs/promises";
 

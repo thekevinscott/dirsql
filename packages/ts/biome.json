@@ -29,7 +29,7 @@
     }
   },
   "files": {
-    "include": ["src/**/*.ts", "test/**/*.ts", "*.json"],
+    "include": ["src/**/*.ts", "tests/**/*.ts", "*.json"],
     "ignore": [
       "*.node",
       "node_modules",
@@ -37,7 +37,8 @@
       "dist",
       "coverage",
       "index.d.ts",
-      "pnpm-lock.yaml"
+      "pnpm-lock.yaml",
+      "docs"
     ]
   }
 }
