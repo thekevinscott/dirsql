@@ -131,9 +131,7 @@ def describe_DirSQL_async():
         async def it_polls_again_when_a_poll_returns_no_events():
             # An empty poll loops back for another poll rather than yielding;
             # the second poll's events are what surface.
-            stream = async_mod._WatchStream(
-                _FakeWatcherDb(events=[[], ["event-a"]])
-            )
+            stream = async_mod._WatchStream(_FakeWatcherDb(events=[[], ["event-a"]]))
 
             first = await stream.__anext__()
 
@@ -142,9 +140,7 @@ def describe_DirSQL_async():
 
     def describe_construction():
         def it_requires_either_a_root_or_a_config():
-            with pytest.raises(
-                TypeError, match="root directory or a config"
-            ):
+            with pytest.raises(TypeError, match="root directory or a config"):
                 async_mod.DirSQL()
 
     def describe_watch():
