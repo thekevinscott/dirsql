@@ -72,7 +72,7 @@ ddl="CREATE TABLE metrics (name TEXT, value REAL, count INTEGER)"
 ddl="CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL)"
 ```
 
-The table name is parsed from the DDL. It must be a valid SQLite identifier.
+The table name is parsed from the DDL and must resolve to a valid SQLite identifier.
 
 ### `glob`
 

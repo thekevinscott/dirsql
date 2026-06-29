@@ -271,6 +271,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RowEvent.__repr__` (both now carry `@override`, sourced from
   `typing_extensions` for the type checker only so Python 3.11 keeps working
   with no new runtime dependency).
+- **Quoted and schema-qualified table names in `CREATE TABLE` DDL now resolve
+  correctly.** `parse_table_name` — which provides the name dirsql indexes a
+  table under, and backs the Python `Table.name` attribute and the TypeScript
+  `parseTableName` export — previously used a hand-rolled splitter that stopped
+  at the first space or `(` and kept any surrounding quotes. So a quoted
+  identifier like `CREATE TABLE "comments" (...)` (the shape ORMs and schema
+  generators routinely emit) resolved to `"comments"`, which then failed
+  identifier validation and the table was rejected at registration. The name is
+  now parsed by a small quote-aware tokenizer that strips the three SQLite
+  quoting forms (`"..."`, `` `...` ``, `[...]`) and resolves a schema-qualified
+  `main.comments` to the bare table segment. The function stays pure and
+  synchronous; the fix lives in the shared Rust core, so all three SDKs (Rust,
+  Python, TypeScript) are fixed with no binding changes. (#204)
+
 - **File watcher now emits events when `root` is relative.** Building a
   `DirSQL` with a relative root (e.g. `DirSQL::new("./data", tables)` or
   `DirSQL::new(".", tables)`) handed that relative path straight to `notify`,
