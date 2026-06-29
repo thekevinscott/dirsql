@@ -50,6 +50,26 @@ describe("DirSQL", () => {
         null,
         true,
         "/cache.db",
+        null,
+      );
+    });
+
+    it("forwards the extensions option as openAsync's seventh arg", async () => {
+      const openAsync = installFakeCore(makeInner());
+      const extensions = [
+        { path: "/ext/vec0.so", entrypoint: "sqlite3_vec_init" },
+        { path: "/ext/spellfix.so" },
+      ];
+      const db = new DirSQL({ root: "/data", extensions });
+      await db.ready;
+      expect(openAsync).toHaveBeenCalledWith(
+        "/data",
+        null,
+        null,
+        null,
+        null,
+        null,
+        extensions,
       );
     });
 
@@ -62,6 +82,7 @@ describe("DirSQL", () => {
         null,
         null,
         "/cfg.toml",
+        null,
         null,
         null,
       );
@@ -104,6 +125,7 @@ describe("DirSQL", () => {
       ignore: [],
       persist: false,
       persistPath: null,
+      extensions: [],
     };
     vi.mocked(resolveConfig).mockReturnValue(resolved);
     const db = new DirSQL({ root: "/d" });

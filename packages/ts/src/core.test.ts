@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { getCore } from "./core.js";
+import { type NativeDirSQLConstructor, getCore } from "./core.js";
 import { loadNativeCore } from "./load-native-core.js";
 
 vi.mock("./load-native-core.js");
@@ -16,5 +16,21 @@ describe("getCore", () => {
     expect(getCore()).toBe(fake);
     expect(getCore()).toBe(fake);
     expect(loadNativeCore).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("NativeDirSQLConstructor contract", () => {
+  it("accepts extensions as openAsync's seventh argument (#230)", () => {
+    const openAsync = vi.fn().mockResolvedValue({});
+    const ctor = { openAsync } as unknown as NativeDirSQLConstructor;
+    // Typed against the real interface: dropping the 7th argument would fail
+    // to compile, so this call pins the extensions parameter into the
+    // contract the `DirSQL` wrapper relies on.
+    ctor.openAsync("/r", null, null, null, null, null, [
+      { path: "/ext/vec0.so", entrypoint: "sqlite3_vec_init" },
+    ]);
+    expect(openAsync).toHaveBeenCalledWith("/r", null, null, null, null, null, [
+      { path: "/ext/vec0.so", entrypoint: "sqlite3_vec_init" },
+    ]);
   });
 });

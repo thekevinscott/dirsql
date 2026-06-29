@@ -59,6 +59,7 @@ new DirSQL({
     tables?: TableDef[],
     ignore?: string[],
     config?: string,
+    extensions?: ExtensionSpec[],  // [{ path: string, entrypoint?: string }]
 })
 ```
 
@@ -76,7 +77,7 @@ In Python, the constructor starts scanning in a background thread and returns im
 - `tables` -- List of `Table` definitions. Each defines a SQLite table, a glob pattern, and an extract function.
 - `ignore` -- Optional list of glob patterns. Files matching any ignore pattern are skipped regardless of table globs.
 - `config` -- Optional path to a `.dirsql.toml` config file. Its `[[table]]` entries are appended to any programmatic `tables`; its `[dirsql].ignore` patterns are appended to any explicit `ignore`; its optional `[dirsql].root` supplies the root directory when `root` is not passed explicitly; its `[[dirsql.extension]]` entries are appended to any programmatic `extensions`.
-- `extensions` -- Optional SQLite extensions to load onto the connection at startup, before any table DDL (enable → load → disable, so the SQL `load_extension()` function is never left exposed). Each entry pairs a shared-library `path` with an optional `entrypoint` init-symbol override (Python: `{ "path", "entrypoint"? }` dicts; Rust: `Extension { path, entrypoint }`). Programmatic entries load first, then any `[[dirsql.extension]]` from `config`. Available in the Python and Rust SDKs; the TypeScript constructor parameter is tracked in [#230](https://github.com/thekevinscott/dirsql/issues/230). See [Loading extensions](../cli/config.md#loading-extensions).
+- `extensions` -- Optional SQLite extensions to load onto the connection at startup, before any table DDL (enable → load → disable, so the SQL `load_extension()` function is never left exposed). Each entry pairs a shared-library `path` with an optional `entrypoint` init-symbol override (Python: `{ "path", "entrypoint"? }` dicts; Rust: `Extension { path, entrypoint }`; TypeScript: `{ path, entrypoint? }` objects). Programmatic entries load first, then any `[[dirsql.extension]]` from `config`. Available in the Python, Rust, and TypeScript SDKs. See [Loading extensions](../cli/config.md#loading-extensions).
 
 ### Methods
 
@@ -162,7 +163,7 @@ JSON.stringify(db)  // via db.toJSON()
 
 :::
 
-Returns the resolved construction state as a JSON-compatible value with fields `root`, `tables`, `ignore`, `persist`, `persist_path` (camelCase `persistPath` in TypeScript). Each table is `{ ddl, glob, strict }`. The Python and Rust snapshots also include `extensions` -- an array of `{ path, entrypoint }` (empty when none are configured); the TypeScript `toJSON` snapshot will gain it with [#230](https://github.com/thekevinscott/dirsql/issues/230). Excludes the original `config` path (already merged into `root` / `tables` / `ignore`), per-table `extract`, and per-table `name`. Available immediately after construction in Python and TypeScript; Rust's sync `build()` returns a ready instance.
+Returns the resolved construction state as a JSON-compatible value with fields `root`, `tables`, `ignore`, `persist`, `persist_path` (camelCase `persistPath` in TypeScript). Each table is `{ ddl, glob, strict }`. All three SDK snapshots also include `extensions` -- an array of `{ path, entrypoint }` (empty when none are configured; `entrypoint` is `null` when no override was supplied). Excludes the original `config` path (already merged into `root` / `tables` / `ignore`), per-table `extract`, and per-table `name`. Available immediately after construction in Python and TypeScript; Rust's sync `build()` returns a ready instance.
 
 ---
 

@@ -18,11 +18,15 @@ export function resolveConfig(options: DirSQLOptions): DirSQLConfig {
   // `cfg.persist_path` lookups, both of which short-circuit on an empty cfg).
   let cfg: Cfg = {};
   let cfgTables: Cfg[] = [];
+  let cfgExtensions: Cfg[] = [];
   let cfgDir = "";
   if (options.config !== undefined) {
     const doc = parseToml(readFileSync(options.config, "utf8")) as Cfg;
     cfg = (doc.dirsql ?? {}) as Cfg;
     cfgTables = (Array.isArray(doc.table) ? doc.table : []) as Cfg[];
+    cfgExtensions = (
+      Array.isArray(cfg.extension) ? cfg.extension : []
+    ) as Cfg[];
     cfgDir = dirname(resolvePath(options.config));
   }
   const abs = (p: string) => (isAbsolute(p) ? p : resolvePath(cfgDir, p));
@@ -47,5 +51,18 @@ export function resolveConfig(options: DirSQLOptions): DirSQLConfig {
     persistPath:
       options.persistPath ??
       (typeof cfg.persist_path === "string" ? abs(cfg.persist_path) : null),
+    // Programmatic extensions first (verbatim paths, mirroring the Rust
+    // builder), then config-file `[[dirsql.extension]]` entries with
+    // relative paths resolved against the config's parent directory.
+    extensions: [
+      ...(options.extensions ?? []).map((e) => ({
+        path: e.path,
+        entrypoint: e.entrypoint ?? null,
+      })),
+      ...cfgExtensions.map((e) => ({
+        path: abs(e.path as string),
+        entrypoint: (e.entrypoint as string | undefined) ?? null,
+      })),
+    ],
   };
 }

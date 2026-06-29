@@ -19,6 +19,8 @@ export { DirSQL } from "./dirsql.js";
 export type {
   DirSQLConfig,
   DirSQLOptions,
+  ExtensionSpec,
+  ResolvedExtension,
   RowEvent,
   TableConfig,
 } from "./dirsql.js";

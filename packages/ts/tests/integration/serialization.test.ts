@@ -42,6 +42,25 @@ describe("DirSQL serialization (toJSON / JSON.stringify)", () => {
     expect(json.ignore).toEqual([]);
     expect(json.persist).toBe(false);
     expect(json.persistPath).toBeNull();
+    expect(json.extensions).toEqual([]);
+  });
+
+  it("reflects programmatic extensions, normalizing entrypoint to null", async () => {
+    const db = new DirSQL({
+      root: dir,
+      extensions: [
+        { path: "/ext/vec0.so", entrypoint: "sqlite3_vec_init" },
+        { path: "/ext/spellfix.so" },
+      ],
+    });
+    // toJSON is synchronous and never loads the extension, so no real
+    // shared library is required here; drain ready below.
+    const serialized = JSON.parse(JSON.stringify(db));
+    expect(serialized.extensions).toEqual([
+      { path: "/ext/vec0.so", entrypoint: "sqlite3_vec_init" },
+      { path: "/ext/spellfix.so", entrypoint: null },
+    ]);
+    await db.ready.catch(() => {});
   });
 
   it("uses camelCase persistPath", async () => {
@@ -210,5 +229,28 @@ strict = true
     });
     // Drain the ready promise so vitest doesn't see an unhandled rejection.
     await db.ready;
+  });
+
+  it("merges [[dirsql.extension]] entries from .dirsql.toml, resolving relative paths", async () => {
+    const cfgPath = join(dir, ".dirsql.toml");
+    await writeFile(
+      cfgPath,
+      `[[dirsql.extension]]
+path = "ext/vec0.so"
+entrypoint = "sqlite3_vec_init"
+
+[[dirsql.extension]]
+path = "/abs/spellfix.so"
+`,
+    );
+    // toJSON resolves the snapshot synchronously from the config file; the
+    // extensions are never loaded here, so no real shared library is needed.
+    const db = new DirSQL({ root: dir, config: cfgPath });
+    const serialized = JSON.parse(JSON.stringify(db));
+    expect(serialized.extensions).toEqual([
+      { path: join(dir, "ext", "vec0.so"), entrypoint: "sqlite3_vec_init" },
+      { path: "/abs/spellfix.so", entrypoint: null },
+    ]);
+    await db.ready.catch(() => {});
   });
 });
