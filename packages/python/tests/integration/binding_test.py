@@ -12,6 +12,7 @@ by the Rust core's own unit tests and by the local-only e2e suite.
 """
 
 import asyncio
+from unittest.mock import patch
 
 import pytest
 
@@ -77,10 +78,45 @@ def _reset_instances():
 
 
 @pytest.fixture
-def mock_core(monkeypatch):
+def mock_core():
     """Replace the Rust-backed ``_RustDirSQL`` alias in ``dirsql._async``."""
-    monkeypatch.setattr(async_mod, "_RustDirSQL", _FakeRustDirSQL)
-    return _FakeRustDirSQL
+    with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+        yield _FakeRustDirSQL
+
+
+@pytest.fixture
+def to_thread_spy():
+    """Wrap ``asyncio.to_thread`` to record the names of offloaded callables.
+
+    Yields the recording list so a test can assert which work was pushed
+    off the event loop.
+    """
+    calls: list[str] = []
+    real_to_thread = asyncio.to_thread
+
+    async def spy(func, *args, **kwargs):
+        calls.append(getattr(func, "__name__", repr(func)))
+        return await real_to_thread(func, *args, **kwargs)
+
+    with patch.object(async_mod.asyncio, "to_thread", spy):
+        yield calls
+
+
+@pytest.fixture
+def core_init_raises(request):
+    """Patch the Rust core with a constructor that raises ``request.param``.
+
+    Parametrize indirectly with the exception instance the core should
+    raise on construction (init / config-load failure paths).
+    """
+    exc = request.param
+
+    class Boom(_FakeRustDirSQL):
+        def __init__(self, *a, **kw):
+            raise exc
+
+    with patch.object(async_mod, "_RustDirSQL", Boom):
+        yield exc
 
 
 def describe_binding_layer():
@@ -88,49 +124,30 @@ def describe_binding_layer():
         # Feature: async-by-default API. See docs/guide/async.md and
         # packages/python/README.md ("DirSQL is async by default").
         @pytest.mark.asyncio
-        async def it_offloads_init_via_to_thread(mock_core, monkeypatch):
-            calls: list[str] = []
-            real_to_thread = asyncio.to_thread
-
-            async def spy(func, *args, **kwargs):
-                calls.append(getattr(func, "__name__", repr(func)))
-                return await real_to_thread(func, *args, **kwargs)
-
-            monkeypatch.setattr(async_mod.asyncio, "to_thread", spy)
-
+        async def it_offloads_init_via_to_thread(mock_core, to_thread_spy):
             db = async_mod.DirSQL("/root", tables=["t"])
             await db.ready()
 
-            assert any("DirSQL" in c or "FakeRustDirSQL" in c for c in calls), calls
+            assert any(
+                "DirSQL" in c or "FakeRustDirSQL" in c for c in to_thread_spy
+            ), to_thread_spy
 
         @pytest.mark.asyncio
-        async def it_offloads_query_via_to_thread(mock_core, monkeypatch):
+        async def it_offloads_query_via_to_thread(mock_core, to_thread_spy):
             db = async_mod.DirSQL("/root", tables=["t"])
             await db.ready()
 
-            calls: list[str] = []
-            real_to_thread = asyncio.to_thread
-
-            async def spy(func, *args, **kwargs):
-                calls.append(getattr(func, "__name__", repr(func)))
-                return await real_to_thread(func, *args, **kwargs)
-
-            monkeypatch.setattr(async_mod.asyncio, "to_thread", spy)
-
             await db.query("SELECT 1")
-            assert "query" in calls
+            assert "query" in to_thread_spy
 
     def describe_ready():
         # Feature: ready() awaits initial scan and surfaces init errors.
         # See docs/guide/async.md and packages/python/README.md.
         @pytest.mark.asyncio
-        async def it_surfaces_init_exceptions(monkeypatch):
-            class Boom(_FakeRustDirSQL):
-                def __init__(self, *a, **kw):
-                    raise RuntimeError("init failed")
-
-            monkeypatch.setattr(async_mod, "_RustDirSQL", Boom)
-
+        @pytest.mark.parametrize(
+            "core_init_raises", [RuntimeError("init failed")], indirect=True
+        )
+        async def it_surfaces_init_exceptions(core_init_raises):
             db = async_mod.DirSQL("/root", tables=["t"])
             with pytest.raises(RuntimeError, match="init failed"):
                 await db.ready()
@@ -145,12 +162,10 @@ def describe_binding_layer():
             assert len(_FakeRustDirSQL.instances) == 1
 
         @pytest.mark.asyncio
-        async def it_re_raises_init_error_on_every_ready_call(monkeypatch):
-            class Boom(_FakeRustDirSQL):
-                def __init__(self, *a, **kw):
-                    raise ValueError("bad config")
-
-            monkeypatch.setattr(async_mod, "_RustDirSQL", Boom)
+        @pytest.mark.parametrize(
+            "core_init_raises", [ValueError("bad config")], indirect=True
+        )
+        async def it_re_raises_init_error_on_every_ready_call(core_init_raises):
             db = async_mod.DirSQL("/root", tables=["t"])
             with pytest.raises(ValueError):
                 await db.ready()
@@ -234,12 +249,10 @@ def describe_binding_layer():
             assert result == [{"from_config": "/some/.dirsql.toml"}]
 
         @pytest.mark.asyncio
-        async def it_surfaces_config_load_errors(monkeypatch):
-            class Boom(_FakeRustDirSQL):
-                def __init__(self, root=None, **kwargs):
-                    raise FileNotFoundError(kwargs.get("config") or root)
-
-            monkeypatch.setattr(async_mod, "_RustDirSQL", Boom)
+        @pytest.mark.parametrize(
+            "core_init_raises", [FileNotFoundError("/missing.toml")], indirect=True
+        )
+        async def it_surfaces_config_load_errors(core_init_raises):
             db = async_mod.DirSQL(config="/missing.toml")
             with pytest.raises(FileNotFoundError):
                 await db.ready()
