@@ -71,13 +71,14 @@ jobs:
           exit $rc
 
       - name: Check unit-test isolation (lint)
-        # Isolation: a unit test must mock every collaborator. Python +
-        # TypeScript only for now -- Rust's trait-injected-double refactor is
-        # large and lands as its own PR (intentional, tracked parity drift;
-        # see issue #233 / epic #231). Waivers (none today) live in
-        # testing-conventions.toml, read by default.
+        # Isolation: a unit test must mock every collaborator (Rust: no
+        # effectful-std call out of the unit's own module). Wired for all three
+        # SDKs -- the Rust core's tests were moved to the integration tier or
+        # routed through a trait-injected `FileSystem` double (#233 / epic #231).
+        # Waivers (none today) live in testing-conventions.toml, read by default.
         run: |
           rc=0
           testing-conventions unit lint --language python packages/python/dirsql || rc=1
           testing-conventions unit lint --language typescript packages/ts/src || rc=1
+          testing-conventions unit lint --language rust packages/rust/src || rc=1
           exit $rc
