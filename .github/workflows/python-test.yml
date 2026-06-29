@@ -112,7 +112,7 @@ jobs:
         working-directory: packages/python
 
       - name: Build dirsql binary
-        # `test_native_config.py` spawns the bundled Rust binary directly;
+        # `native_config_test.py` spawns the bundled Rust binary directly;
         # `maturin develop` only builds the PyO3 extension.
         run: cargo build --release -p dirsql --features cli
 
