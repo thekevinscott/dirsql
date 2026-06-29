@@ -25,5 +25,3 @@ export type {
 export { parseTableName } from "./parse-table-name.js";
 export { Table } from "./table.js";
 export type { TableDef } from "./table.js";
-// Test-only escape hatch for swapping the native core (see `core.ts`).
-export { __setCoreForTesting } from "./core.js";

@@ -34,7 +34,9 @@ export interface CoreModule {
 }
 
 // Lazy-loaded reference to the core module. Populated on first access by
-// `defaultLoadNativeCore()`, or by `__setCoreForTesting()` for tests.
+// `defaultLoadNativeCore()`. Unit tests don't reach this state: they
+// `vi.mock("./core.js")` to fake `getCore` directly, so production carries
+// no test-only injection seam.
 let core: CoreModule | null = null;
 
 export function getCore(): CoreModule {
@@ -42,16 +44,4 @@ export function getCore(): CoreModule {
     core = defaultLoadNativeCore() as CoreModule;
   }
   return core;
-}
-
-/**
- * **Test-only.** Replace the core module used by the SDK with a fake.
- *
- * This is an internal escape hatch for unit tests that want to mock the
- * napi-rs binding layer without loading the real native binary. Passing
- * `null` resets to the default (lazy native load on next access). Not
- * part of the public API; do not use in application code.
- */
-export function __setCoreForTesting(fake: CoreModule | null): void {
-  core = fake;
 }

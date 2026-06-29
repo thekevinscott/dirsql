@@ -112,8 +112,15 @@ describe("DirSQL", () => {
   });
 
   describe("watch", () => {
-    it("starts the watcher once and yields each polled event", async () => {
-      const batches = [[], [{ table: "t", action: "insert" as const }]];
+    it("starts the watcher once and yields each polled event across polls", async () => {
+      // Two events split across two non-empty polls (with an empty poll
+      // first) so the test exercises the generator continuing its loop after
+      // a yield, not just the first event.
+      const batches = [
+        [],
+        [{ table: "t", action: "insert" as const, row: { n: 1 } }],
+        [{ table: "t", action: "insert" as const, row: { n: 2 } }],
+      ];
       const inner = makeInner({
         pollEvents: vi.fn(async () => batches.shift() ?? []),
       });
@@ -123,10 +130,58 @@ describe("DirSQL", () => {
       const seen = [];
       for await (const ev of db.watch()) {
         seen.push(ev);
-        break;
+        if (seen.length >= 2) {
+          break;
+        }
       }
       expect(inner.startWatcher).toHaveBeenCalledOnce();
-      expect(seen).toEqual([{ table: "t", action: "insert" }]);
+      expect(seen).toEqual([
+        { table: "t", action: "insert", row: { n: 1 } },
+        { table: "t", action: "insert", row: { n: 2 } },
+      ]);
+    });
+
+    // Regression for https://github.com/thekevinscott/dirsql/issues/119 (the
+    // wrapper must `await` between polls) and #147 (the native poll runs on
+    // the libuv threadpool). Even a tight loop over pollEvents returning []
+    // must yield to the event loop each iteration, so a same-process
+    // setTimeout still fires.
+    it("yields to the event loop between polls so same-process timers fire", async () => {
+      let calls = 0;
+      const inner = makeInner({
+        pollEvents: vi.fn(async () => {
+          calls += 1;
+          if (calls > 200) {
+            throw new Error(
+              "watch() did not yield to the event loop between polls",
+            );
+          }
+          return [];
+        }),
+      });
+      installFakeCore(inner);
+
+      const db = new DirSQL({ root: "/d" });
+      await db.ready;
+
+      let timerFired = false;
+      setTimeout(() => {
+        timerFired = true;
+      }, 5);
+
+      const iter = db.watch()[Symbol.asyncIterator]();
+      // pollEvents always returns [], so the generator never hits `yield`;
+      // start it without awaiting and force-terminate via iter.return below.
+      const pending = iter.next();
+      pending.catch(() => {
+        /* swallow -- force-terminated below */
+      });
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 60));
+      await iter.return?.();
+
+      expect(timerFired).toBe(true);
+      expect(inner.pollEvents).toHaveBeenCalled();
     });
   });
 });
