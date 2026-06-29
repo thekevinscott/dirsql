@@ -2,10 +2,6 @@ name: E2E Attestation
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  # Pinned in lockstep with .github/workflows/testing-conventions.yml and
-  # AGENTS.md. Bump deliberately and re-run the per-package
-  # `testing-conventions e2e verify` locally before changing this.
-  TESTING_CONVENTIONS_VERSION: "0.0.41"
 
 # Pull-request only, by design. `e2e verify` (run inside a package) asserts
 # that the package's committed e2e-attestation.json names the latest commit
@@ -54,7 +50,7 @@ jobs:
 
       - name: Install testing-conventions
         if: steps.scope.outputs.python == 'true' || steps.scope.outputs.ts == 'true'
-        run: pip install "testing-conventions==${TESTING_CONVENTIONS_VERSION}"
+        run: pip install testing-conventions
 
       # Static gates: each confirms its package's e2e-attestation.json names
       # the latest commit in that package's subtree. They do NOT run the

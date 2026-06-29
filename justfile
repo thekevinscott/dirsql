@@ -30,8 +30,8 @@ test-e2e:
 # Refresh packages/python/e2e-attestation.json: runs the python e2e suite and
 # commits the attestation. The CI gate (.github/workflows/e2e-attestation.yml)
 # verifies it per-package on PRs that touch packages/python. Install
-# testing-conventions first (version pinned in the workflow):
-#   pip install "testing-conventions==<version>"
+# testing-conventions first (CI always uses the latest release):
+#   pip install testing-conventions
 e2e-attest-python:
     cd packages/python && testing-conventions e2e attest 'just test-e2e'
 
@@ -46,7 +46,7 @@ e2e-verify:
     cd packages/ts && testing-conventions e2e verify
 
 # Enforce colocated unit tests via the testing-conventions CLI
-# (install: pip install "testing-conventions==<version>"). Exemptions live in
+# (install: pip install testing-conventions). Exemptions live in
 # testing-conventions.toml, which the CLI reads by default.
 test-conventions:
     testing-conventions unit colocated-test --language python packages/python/dirsql
@@ -57,9 +57,17 @@ test-conventions:
     testing-conventions unit lint --language typescript packages/ts/src
     testing-conventions unit lint --language rust packages/rust/src
 
+# Enforce the unit-only coverage floor via testing-conventions (#234). Floors
+# live in testing-conventions.toml ([python.coverage] / [typescript.coverage]).
+# Needs the native build first (maturin / napi); run `just build` if missing.
+# Rust is not here yet -- it keeps `cargo llvm-cov` in rust-test.yml (#295).
+unit-coverage:
+    cd packages/python && uv run testing-conventions unit coverage --language python --config ../../testing-conventions.toml dirsql
+    cd packages/ts && testing-conventions unit coverage --language typescript --config ../../testing-conventions.toml src
+
 # Packaging gate: assert no test files ship in the built .whl / .tgz / .crate.
 # Mirrors .github/workflows/packaging.yml; requires uv, pnpm, cargo, and
-# `pip install "testing-conventions==<version>"`.
+# `pip install testing-conventions`.
 test-packaging:
     #!/usr/bin/env bash
     set -euo pipefail

@@ -150,6 +150,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Unit coverage for the Python and TypeScript SDKs is now enforced by
+  testing-conventions `unit coverage`, measured unit-only.** The bespoke
+  per-package floors (`pytest --cov --cov-fail-under` and the vitest
+  `thresholds` block) are retired in favor of `testing-conventions unit
+  coverage` (full + a PR-only `--base` changed-lines check), wired into
+  `python-test.yml` / `ts-test.yml`. The floor is now measured over the
+  colocated unit suite only -- integration tests no longer pad the metric --
+  with per-package floors in `testing-conventions.toml`
+  (`[python.coverage]` / `[typescript.coverage]`), held at 100%. Reaching 100%
+  unit-only added the unit tests the combined run had let slip: the
+  `_async.py` async-wrapper branches (Python) and `librarySlug`'s success path
+  plus `loadNativeCore`'s default dirname resolver (TypeScript). The Rust core
+  keeps its bespoke `cargo llvm-cov` job for now -- the tool can't yet measure
+  it unit-only (#295). Separately, the testing-conventions CLI version is no
+  longer pinned in CI (always installs the latest release). (#234)
+
 - **TypeScript SDK: all `packages/ts/` filenames standardized to dash-case
   (kebab-case).** Source and test modules that were `camelCase` or
   `snake_case` were renamed (e.g. `loadNativeCore.ts` ->

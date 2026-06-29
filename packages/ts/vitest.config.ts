@@ -32,25 +32,14 @@ export default defineConfig({
       "tests/e2e/**",
       "tests/smoke/**",
     ],
+    // Coverage shape for local `pnpm coverage` runs. The enforced unit-only
+    // floor lives in testing-conventions.toml `[typescript.coverage]` and is
+    // gated in CI by `testing-conventions unit coverage` (ts-test.yml), which
+    // passes its own include/exclude -- so there is no bespoke threshold here.
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts", "tools/**/*.ts"],
-      exclude: [
-        "**/*.test.ts",
-        "tests/**/*.ts",
-        // `index.ts` is a true re-export barrel (its logic was extracted
-        // into the colocated-tested table.ts / core.ts / parse-table-name.ts
-        // / dirsql.ts modules). It needs the napi binary when loaded for
-        // real and is covered by the SDK integration tests; exempt from the
-        // colocated-test gate too (see testing-conventions.toml).
-        "src/index.ts",
-      ],
-      thresholds: {
-        statements: 100,
-        lines: 100,
-        branches: 100,
-        functions: 100,
-      },
+      exclude: ["**/*.test.ts", "tests/**/*.ts"],
     },
   },
 });

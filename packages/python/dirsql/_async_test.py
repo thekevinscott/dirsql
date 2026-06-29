@@ -126,3 +126,62 @@ def describe_DirSQL_async():
             assert second == "event-b"
             assert stream._db.started == 1
             assert stream._db.poll_calls == [200]
+
+        @pytest.mark.asyncio
+        async def it_polls_again_when_a_poll_returns_no_events():
+            # An empty poll loops back for another poll rather than yielding;
+            # the second poll's events are what surface.
+            stream = async_mod._WatchStream(_FakeWatcherDb(events=[[], ["event-a"]]))
+
+            first = await stream.__anext__()
+
+            assert first == "event-a"
+            assert stream._db.poll_calls == [200, 200]
+
+    def describe_construction():
+        def it_requires_either_a_root_or_a_config():
+            with pytest.raises(TypeError, match="root directory or a config"):
+                async_mod.DirSQL()
+
+    def describe_watch():
+        @pytest.mark.asyncio
+        async def it_returns_a_watch_stream_over_the_background_db():
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                db = async_mod.DirSQL("/tmp/root")
+                await db.ready()
+
+                stream = db.watch()
+
+                assert isinstance(stream, async_mod._WatchStream)
+                assert stream._db is db._db
+
+    def describe_to_dict():
+        @pytest.mark.asyncio
+        async def it_resolves_construction_state_via_resolve_config():
+            sentinel = {"root": "/tmp/root"}
+            with (
+                patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
+                patch.object(
+                    async_mod, "resolve_config", return_value=sentinel
+                ) as resolve,
+            ):
+                db = async_mod.DirSQL(
+                    "/tmp/root",
+                    tables=["table-a"],
+                    ignore=["**/*.tmp"],
+                    persist=True,
+                    persist_path="/tmp/cache.db",
+                    extensions=[{"path": "ext/a.so"}],
+                )
+                await db.ready()
+
+                assert db.__dict__ is sentinel
+                resolve.assert_called_once_with(
+                    "/tmp/root",
+                    ["table-a"],
+                    ["**/*.tmp"],
+                    None,
+                    True,
+                    "/tmp/cache.db",
+                    [{"path": "ext/a.so"}],
+                )

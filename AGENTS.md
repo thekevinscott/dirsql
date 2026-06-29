@@ -91,7 +91,7 @@ The same workflow also runs `unit lint` -- the **isolation** rule: a unit test m
 Run it locally before pushing:
 
 ```bash
-pip install "testing-conventions==<version>"   # version pinned in the workflow
+pip install testing-conventions   # CI always uses the latest release
 just test-conventions
 ```
 
@@ -179,7 +179,7 @@ just e2e-attest-ts       # cd packages/ts && testing-conventions e2e attest 'pnp
 
 **Out of scope:** the shared Rust core (`packages/rust`) is compiled into both bindings but lives in neither subtree, so a core-only change does not stale either binding attestation; the binding attestations track binding-layer source only.
 
-The CLI version is pinned in `.github/workflows/e2e-attestation.yml` (and mirrored in `testing-conventions.yml`); install the same version locally before attesting: `pip install "testing-conventions==<version>"`.
+CI installs the latest `testing-conventions` release (unpinned); install it locally before attesting: `pip install testing-conventions`.
 
 ### Docs as Spec
 
@@ -252,14 +252,13 @@ Run `cargo bench -p dirsql` after significant changes to the Rust codebase. Not 
 
 ### Coverage Floor
 
-Coverage enforcement must stay explicit in CI for each SDK package:
+Coverage enforcement must stay explicit in CI for each SDK package, at 90% or higher:
 
-- Rust core coverage must stay at 90% or higher.
-- Python SDK coverage must stay at 90% or higher.
-- TypeScript SDK coverage must stay at 90% or higher.
+- **Python / TypeScript** are enforced by [`testing-conventions`](https://github.com/thekevinscott/testing-conventions) `unit coverage` (full tree + a PR-only `--base` changed-lines check), wired into `python-test.yml` / `ts-test.yml`. The per-package floors live in `testing-conventions.toml` (`[python.coverage]` = `fail_under` / `branch`; `[typescript.coverage]` = `lines` / `branches` / `functions` / `statements`) and are currently held at the stricter **100%**.
+- **Rust core** keeps its bespoke `cargo llvm-cov` job in `rust-test.yml` for now: the testing-conventions CLI cannot yet measure it unit-only (it runs the integration tests too and can't enable the `cli` feature). Migration is tracked in #295.
 
 When work affects more than one SDK package, split the coverage and test work across subagents so each package can be validated independently.
 
-**Coverage floors apply to unit tests only.** Integration tests (and e2e tests) verify end-to-end behavior as a black box; they spawn subprocesses, hit real filesystems, and exercise the public API surface, but they do not contribute to the coverage metric. The line of separation is intentional: the unit-coverage number measures what the library code itself reaches under direct exercise, decoupled from whether the integration scaffolding happens to drag execution through the same lines. A change that refactors implementation without changing behavior should leave integration tests untouched and unit coverage steady; a change that adds untested library code should fail the floor even if integration tests still pass.
+**Coverage floors apply to unit tests only.** Integration tests (and e2e tests) verify end-to-end behavior as a black box; they spawn subprocesses, hit real filesystems, and exercise the public API surface, but they do not contribute to the coverage metric. The line of separation is intentional: the unit-coverage number measures what the library code itself reaches under direct exercise, decoupled from whether the integration scaffolding happens to drag execution through the same lines. `unit coverage` enforces this by construction -- it runs the colocated unit suite only (the Python/TS source dir, not the sibling `tests/` / `test/`), so integration tests never pad the number. A change that refactors implementation without changing behavior should leave integration tests untouched and unit coverage steady; a change that adds untested library code should fail the floor even if integration tests still pass.
 
-This means every covered source file needs in-process unit tests sufficient to hit the floor. If a file's only meaningful exercise path is via subprocess (e.g. the `os.execv` / `spawnSync` handoff in the CLI launchers), call that out explicitly in the coverage config's omit/exclude list with a comment. Functional exercise of the published launcher happens in the release pipeline's install matrix rather than the unit-coverage metric; the in-CI `packaging` gate additionally asserts such artifacts ship no test files.
+This means every covered source file needs in-process unit tests sufficient to hit the floor. **testing-conventions has no whole-file coverage exclusion** -- a file is either unit-tested or its specific uncovered lines are waived with a reason-required line-scoped `[[<lang>.exempt]] rules = ["coverage"]` entry; whole-file waivers are for the presence/lint rules only. So a facade that "needs the native binary" is not an excuse to exclude it -- inject and mock the binding layer and unit-test it (the TS `DirSQL` facade and `dirsql` bin shim are unit-tested this way; today neither binding needs any coverage waiver). Only *test* files are dropped from the metric: for Python via the omit list in `packages/python/pyproject.toml` (`[tool.coverage.run]`, which `coverage run` reads), for TypeScript via the tool's own `**/*.test.*` exclude. Functional exercise of the published launcher happens in the release pipeline's install matrix; the in-CI `packaging` gate additionally asserts such artifacts ship no test files.
