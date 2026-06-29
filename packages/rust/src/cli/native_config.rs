@@ -296,7 +296,16 @@ fn json_to_value(v: serde_json::Value) -> Value {
 mod tests {
     use super::*;
     use std::io::Cursor;
-    use std::process::{Command, Stdio};
+
+    // The subprocess-driven tests (`InterpretHelper::from_child` against a
+    // real `bash`/`true` child, and the `build_dirsql` round-trips that
+    // spawn a fake helper and write real fixture files) live in
+    // `tests/native_config.rs`. They exercise effectful std
+    // (`std::process::Command`, `std::fs::write`) and so belong at the
+    // integration tier per the `testing-conventions` `unit lint` isolation
+    // rule. The pure wire-format tests below operate on in-memory
+    // `Cursor`/`Vec` streams and stay inline next to the private functions
+    // they cover.
 
     // -- parse_handshake -----------------------------------------------
 
@@ -511,160 +520,10 @@ mod tests {
     }
 
     // -- build_dirsql --------------------------------------------------
-
-    // -- InterpretHelper end-to-end (subprocess via bash) -------------
-
-    /// Spawn a fake helper that prints `handshake` once on stdout then
-    /// emits one canned response per line received on stdin (an infinite
-    /// loop until stdin closes). Returns the helper paired with the
-    /// parsed [`NativeConfig`]. Drives the production
-    /// `InterpretHelper::from_child` constructor so the post-spawn
-    /// plumbing is exercised by these tests.
-    fn spawn_fake_helper(
-        handshake: &str,
-        response_per_request: &str,
-    ) -> (Arc<InterpretHelper>, NativeConfig) {
-        let child = Command::new("bash")
-            .arg("-c")
-            .arg(format!(
-                "printf '%s\\n' '{handshake}'; while IFS= read -r line; do printf '%s\\n' '{response_per_request}'; done",
-            ))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        InterpretHelper::from_child(child).unwrap()
-    }
-
-    #[test]
-    fn build_dirsql_threads_persist_and_persist_path_into_the_builder() {
-        // Cover the `if config.persist` and `if let Some(p) = config.persist_path`
-        // branches in `build_dirsql`. A real persist build needs the cache file
-        // to live under root, so point persist_path at a path inside the
-        // tempdir and pass persist=true.
-        let tmp = tempfile::TempDir::new().unwrap();
-        std::fs::write(tmp.path().join("a.json"), b"{}").unwrap();
-        let cache_path = tmp.path().join(".dirsql/cache.db");
-
-        let handshake = format!(
-            r#"{{"type":"config","state":{{"root":"{}","tables":[{{"ddl":"CREATE TABLE papers (title TEXT)","glob":"*.json"}}],"persist":true,"persist_path":"{}"}}}}"#,
-            tmp.path().display(),
-            cache_path.display(),
-        );
-        let (helper, config) = spawn_fake_helper(
-            &handshake,
-            r#"{"type":"result","id":1,"ok":true,"rows":[{"title":"y"}]}"#,
-        );
-        assert!(config.persist);
-        assert_eq!(config.persist_path.as_ref().unwrap(), &cache_path);
-
-        let db = build_dirsql(helper, config).unwrap();
-        let rows = db.query("SELECT COUNT(*) AS n FROM papers").unwrap();
-        assert_eq!(rows[0].get("n"), Some(&Value::Integer(1)));
-        assert!(cache_path.exists(), "persist build should create the cache");
-    }
-
-    #[test]
-    fn build_dirsql_threads_extensions_into_the_builder() {
-        // A handshake whose `extensions` names a missing shared library must
-        // fail the build, proving the parsed extensions reach the core's
-        // load-at-startup path (enable -> load -> disable). (#229)
-        let tmp = tempfile::TempDir::new().unwrap();
-        std::fs::write(tmp.path().join("a.json"), b"{}").unwrap();
-
-        let handshake = format!(
-            r#"{{"type":"config","state":{{"root":"{}","tables":[{{"ddl":"CREATE TABLE papers (title TEXT)","glob":"*.json"}}],"extensions":[{{"path":"/nonexistent/dirsql-no-such-ext.so"}}]}}}}"#,
-            tmp.path().display(),
-        );
-        let (helper, config) = spawn_fake_helper(
-            &handshake,
-            r#"{"type":"result","id":1,"ok":true,"rows":[{"title":"y"}]}"#,
-        );
-        assert_eq!(config.extensions.len(), 1);
-        assert_eq!(
-            config.extensions[0].path,
-            PathBuf::from("/nonexistent/dirsql-no-such-ext.so"),
-        );
-
-        let err = match build_dirsql(helper, config) {
-            Ok(_) => panic!("expected build to fail on a missing extension"),
-            Err(e) => e,
-        };
-        assert!(err.contains("failed to load extension"), "got: {err}");
-    }
-
-    #[test]
-    fn build_dirsql_round_trip_with_fake_helper_invokes_extract_per_matched_file() {
-        // Create a tempdir with two matching files so the scan invokes
-        // `extract` twice — exercising the closure created inside
-        // `build_dirsql`, the `dispatch_extract` path through the
-        // helper's IO mutex, and end-to-end DDL/glob wiring.
-        let tmp = tempfile::TempDir::new().unwrap();
-        std::fs::write(tmp.path().join("a.json"), b"{}").unwrap();
-        std::fs::write(tmp.path().join("b.json"), b"{}").unwrap();
-
-        let handshake = format!(
-            r#"{{"type":"config","state":{{"root":"{}","tables":[{{"ddl":"CREATE TABLE papers (title TEXT)","glob":"*.json"}}]}}}}"#,
-            tmp.path().display(),
-        );
-        let (helper, config) = spawn_fake_helper(
-            &handshake,
-            r#"{"type":"result","id":1,"ok":true,"rows":[{"title":"x"}]}"#,
-        );
-
-        let db = build_dirsql(helper, config).unwrap();
-        let rows = db.query("SELECT COUNT(*) AS n FROM papers").unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get("n"), Some(&Value::Integer(2)));
-    }
-
-    #[test]
-    fn helper_extract_round_trip_succeeds_against_a_fake_subprocess() {
-        let (helper, _config) = spawn_fake_helper(
-            r#"{"type":"config","state":{"root":"/tmp","tables":[{"ddl":"CREATE TABLE papers (title TEXT)","glob":"*"}]}}"#,
-            r#"{"type":"result","id":1,"ok":true,"rows":[{"title":"Alpha"}]}"#,
-        );
-
-        let rows = helper.extract("papers", "/x/a.json").unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get("title"), Some(&Value::Text("Alpha".into())));
-
-        // Second request increments the id counter and still works against
-        // the canned response (the fake echoes the same line per request).
-        let rows2 = helper.extract("papers", "/x/b.json").unwrap();
-        assert_eq!(rows2.len(), 1);
-    }
-
-    #[test]
-    fn helper_from_child_errors_when_stdin_was_not_piped() {
-        // `Command::spawn` without `.stdin(Stdio::piped())` inherits the
-        // parent's stdin — `child.stdin.take()` returns `None`, driving
-        // the first `.ok_or_else` arm in `from_child`.
-        let child = Command::new("true").spawn().unwrap();
-        let err = match InterpretHelper::from_child(child) {
-            Ok(_) => panic!("expected error when stdin is not piped"),
-            Err(e) => e,
-        };
-        assert!(
-            err.contains("failed to capture interpret stdin"),
-            "got: {err}",
-        );
-    }
-
-    #[test]
-    fn helper_from_child_errors_when_stdout_was_not_piped() {
-        // Pipe stdin but leave stdout inherited — `child.stdout.take()`
-        // returns `None`, driving the second `.ok_or_else` arm.
-        let child = Command::new("true").stdin(Stdio::piped()).spawn().unwrap();
-        let err = match InterpretHelper::from_child(child) {
-            Ok(_) => panic!("expected error when stdout is not piped"),
-            Err(e) => e,
-        };
-        assert!(
-            err.contains("failed to capture interpret stdout"),
-            "got: {err}",
-        );
-    }
+    //
+    // The `build_dirsql` round-trips and the `InterpretHelper::from_child`
+    // success/error paths spawn a real subprocess (`bash`/`true`) and write
+    // real fixture files, so they live in `tests/native_config.rs`.
 
     /// A writer that fails every write with the given `io::ErrorKind`,
     /// used to exercise `dispatch_extract`'s IO-error arms.
@@ -719,65 +578,5 @@ mod tests {
         let mut stdin: Vec<u8> = Vec::new();
         let err = dispatch_extract(&mut stdout, &mut stdin, 1, "t", "p").unwrap_err();
         assert!(err.contains("read from interpret"), "got: {err}");
-    }
-
-    #[test]
-    fn helper_from_child_errors_when_subprocess_emits_no_handshake() {
-        // A subprocess that exits without writing anything drives
-        // `from_child` through to `parse_handshake`'s empty-line arm.
-        let child = Command::new("true")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let err = match InterpretHelper::from_child(child) {
-            Ok(_) => panic!("expected error from empty-stdout subprocess"),
-            Err(e) => e,
-        };
-        assert!(
-            err.contains("exited before sending handshake"),
-            "got: {err}"
-        );
-    }
-
-    #[test]
-    fn build_dirsql_errors_when_ddl_has_no_table_name() {
-        // The DDL is rejected by `parse_table_name` before any extract
-        // closure is created, so the helper's IO is never touched. Use a
-        // real child (`true` exits cleanly) just to satisfy the
-        // `InterpretHelper` shape.
-        let mut child = Command::new("true")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let helper = Arc::new(InterpretHelper {
-            _child: child,
-            io: Arc::new(Mutex::new(HelperIo {
-                stdin: BufWriter::new(stdin),
-                stdout: BufReader::new(stdout),
-            })),
-            next_id: AtomicU64::new(1),
-        });
-        let config = NativeConfig {
-            root: PathBuf::from("/tmp"),
-            tables: vec![HandshakeTable {
-                ddl: "NOT VALID DDL".into(),
-                glob: "*.json".into(),
-                strict: false,
-            }],
-            ignore: Vec::new(),
-            persist: false,
-            persist_path: None,
-            extensions: Vec::new(),
-        };
-        // `DirSQL` doesn't impl Debug, so we can't use `unwrap_err` directly.
-        let err = match build_dirsql(helper, config) {
-            Ok(_) => panic!("expected build_dirsql to fail on invalid DDL"),
-            Err(e) => e,
-        };
-        assert!(err.contains("could not parse table name"), "got: {err}");
     }
 }

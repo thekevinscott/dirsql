@@ -160,7 +160,15 @@ pub enum ServerError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
+
+    // `From<DirSQL> for AppState` produces the `Ready` arm -- this is
+    // verified at the integration tier by `from_dirsql_yields_ready_state`
+    // in `tests/cli_integration.rs`, which builds a real `DirSQL` over a
+    // temp directory (so the initial scan runs) and asserts the public
+    // `AppState::Ready` variant. It lived here once but needed
+    // `std::fs::write` to populate the scanned directory, which the
+    // `testing-conventions` `unit lint` isolation rule forbids in a unit
+    // test (effectful std). The pure config-default test below stays inline.
 
     #[test]
     fn default_config_binds_localhost_7117_with_30s_timeout() {
@@ -168,36 +176,5 @@ mod tests {
         assert_eq!(cfg.host, "localhost");
         assert_eq!(cfg.port, 7117);
         assert_eq!(cfg.query_timeout, Duration::from_secs(30));
-    }
-
-    #[test]
-    fn app_state_from_dirsql_is_ready() {
-        // `AppState: !Debug` (it wraps a `DirSQL`). Assert the `Ready` variant
-        // without a dead match arm by routing through `require_ready`, which
-        // returns `Ok` only for `Ready` -- a branch-free `.is_ok()` check.
-        let dir = TempDir::new().unwrap();
-        // Write a matching file so the extract closure runs during the initial
-        // scan (otherwise the closure body would be a dead coverage region).
-        std::fs::write(dir.path().join("a.txt"), b"").unwrap();
-        let db = DirSQL::with_ignore(
-            dir.path(),
-            vec![crate::Table::new(
-                "CREATE TABLE t (name TEXT)",
-                "*.txt",
-                |_| {
-                    vec![crate::Row::from_iter([(
-                        "name".to_string(),
-                        crate::Value::Text("x".into()),
-                    )])]
-                },
-            )],
-            Vec::<String>::new(),
-        )
-        .unwrap();
-        let state: AppState = db.into();
-        assert!(
-            router::require_ready(&state).is_ok(),
-            "From<DirSQL> must produce AppState::Ready",
-        );
     }
 }
