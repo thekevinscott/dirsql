@@ -13,7 +13,7 @@ on:
       - 'packages/python/dirsql/**/*.py'
       - 'packages/python/tests/integration/**/*.py'
       - 'packages/ts/src/**/*.ts'
-      - 'packages/ts/test/**/*.ts'
+      - 'packages/ts/tests/integration/**/*.ts'
       - 'packages/rust/src/**/*.rs'
       - 'packages/rust/tests/**/*.rs'
       - 'testing-conventions.toml'
@@ -23,7 +23,7 @@ on:
       - 'packages/python/dirsql/**/*.py'
       - 'packages/python/tests/integration/**/*.py'
       - 'packages/ts/src/**/*.ts'
-      - 'packages/ts/test/**/*.ts'
+      - 'packages/ts/tests/integration/**/*.ts'
       - 'packages/rust/src/**/*.rs'
       - 'packages/rust/tests/**/*.rs'
       - 'testing-conventions.toml'
@@ -98,6 +98,6 @@ jobs:
         run: |
           rc=0
           testing-conventions integration lint --language python packages/python/tests/integration || rc=1
-          testing-conventions integration lint --language typescript packages/ts/test || rc=1
+          testing-conventions integration lint --language typescript packages/ts/tests/integration || rc=1
           testing-conventions integration lint --language rust packages/rust/tests || rc=1
           exit $rc
