@@ -89,8 +89,8 @@ All gaps identified in section 1 have been filled. Summary of tests added by thi
 
 | Gap | New test |
 |---|---|
-| `bytes -> BLOB` (docs/guide/tables.md) | `packages/python/tests/integration/test_docs_gaps.py::describe_tables_guide_bytes_to_blob::it_maps_python_bytes_to_sqlite_blob` |
-| `.tsv` via `from_config` | `test_docs_gaps.py::describe_from_config_formats_gap::it_loads_tsv_files_via_config` |
+| `bytes -> BLOB` (docs/guide/tables.md) | `packages/python/tests/integration/docs_gaps_test.py::describe_tables_guide_bytes_to_blob::it_maps_python_bytes_to_sqlite_blob` |
+| `.tsv` via `from_config` | `docs_gaps_test.py::describe_from_config_formats_gap::it_loads_tsv_files_via_config` |
 | `.ndjson` via `from_config` | same describe, `it_loads_ndjson_files_via_config` |
 | `.toml` via `from_config` | same describe, `it_loads_toml_files_via_config` |
 | `.yaml` / `.yml` via `from_config` | same describe, `it_loads_yaml_files_via_config[yaml\|yml]` |
