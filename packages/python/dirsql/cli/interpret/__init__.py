@@ -1,17 +1,14 @@
-"""`dirsql interpret <config>` -- long-running native config helper (#196).
+"""Empty package shell — the native-config ``interpret`` helper was removed.
 
-Loads a Python config file, takes its module-level ``app = DirSQL(...)``,
-and serves ``extract`` requests over NDJSON on stdin/stdout. One line in,
-one line out, sequential.
+The ``dirsql interpret`` subcommand and its NDJSON ``extract`` loop (``run``,
+``load_app``, ``dispatch_extract``, ``write_message``) were removed in #321
+(#323). The CLI now accepts only ``.dirsql.toml``; to run user-defined
+``extract`` callbacks, use the programmatic SDK (``DirSQL(...)`` with
+in-process closures).
 
-See the individual submodules for behavior:
-- ``run`` -- subcommand entry point invoked from ``dirsql.cli.main``
-- ``load_app`` -- importlib-based config loader
-- ``write_message`` -- single-line NDJSON writer
-- ``dispatch_extract`` -- per-request handler
-
-No top-level re-exports: the function is at ``.run.run``. Re-exporting
-``run`` at the package level would shadow the submodule (so
-``from . import run`` in tests would resolve to the function and break
-``patch.object(run_module, "load_app", ...)``).
+This ``__init__.py`` carries no logic and no re-exports. It remains only
+because the colocated-test tooling cannot yet express *deleting* an exempt
+package barrel (the co-change check flags a deleted source that has no
+co-deleted colocated test, and a retained exempt for a deleted path is
+rejected as stale). The directory is removed once that is resolved.
 """

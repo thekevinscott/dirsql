@@ -11,6 +11,56 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### Python: native-language (`.py`) configs and `dirsql interpret` removed; serialization snapshot retired (#323)
+
+#### Summary
+
+The Python SDK's native-language config path and the `dirsql interpret`
+subcommand are **hard-removed** (A1 of epic #321), with no deprecation window.
+`dirsql --config <file>.py` is no longer supported, and `dirsql interpret …`
+is no longer a subcommand (the Python launcher forwards it to the binary, which
+rejects it). The Python side of the cross-language config-serialization
+snapshot (#194) is retired with it: `DirSQL.__dict__` / `vars(db)` and the
+`resolve_config` helper are gone. The **programmatic SDK** — `DirSQL(...)` with
+in-process `Table(extract=fn)` closures — is unaffected, and
+`DirSQL(config="…toml")` still loads TOML. Affects anyone running a Python
+`.py` config via the CLI, invoking `dirsql interpret`, or reading `vars(db)` /
+`db.__dict__`. (TypeScript is #324; Rust + docs #325.)
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| CLI Python config | `dirsql --config dirsql.config.py` | Not supported. Use a `.dirsql.toml`, or embed the SDK programmatically (`DirSQL(...)` + `Table(extract=fn)`) and query it in-process. |
+| `dirsql interpret <config>` | long-running NDJSON helper subcommand | Removed; exits non-zero (unknown subcommand). |
+| Python serialized state | `vars(db)` / `db.__dict__` → resolved-config dict | Removed. Pass `config=` / `root=` / `tables=` into the core and query. |
+
+#### Deprecations removed
+
+_None._ Native configs, `interpret`, and the serialization snapshot were never
+deprecated; removed in a single release (the feature never shipped a stable
+release).
+
+#### Behavior changes without code changes
+
+- `dirsql --config <file>.py` no longer spawns an interpreter. Once the Rust
+  side lands (#325) the non-TOML file fails to parse as TOML and the server
+  starts degraded (HTTP 503); until then the binary still spawns `dirsql
+  interpret`, which the Python launcher no longer handles, so the helper exits
+  non-zero and the server reports the spawn failure.
+- `dirsql interpret …` (invoked directly) exits non-zero instead of starting an
+  NDJSON helper.
+
+#### Verification
+
+```bash
+cd packages/python
+uv run dirsql interpret whatever.py; echo "exit=$?"
+# expected: non-zero exit ("unrecognized subcommand 'interpret'")
+uv run python -c "import dirsql.cli.interpret"; echo "exit=$?"
+# expected: non-zero exit (ModuleNotFoundError — the interpret package is gone)
+```
+
 ### CLI: native-language configs default `root` to the cwd; nested `config=` rejected; Python construction no longer guards `(None, None)` (#260)
 
 #### Summary

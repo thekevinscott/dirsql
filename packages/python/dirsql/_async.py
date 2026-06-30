@@ -1,20 +1,8 @@
 """Async-by-default DirSQL wrapper."""
 
 import asyncio
-from typing import TYPE_CHECKING
 
 from dirsql._dirsql import DirSQL as _RustDirSQL
-from dirsql.resolve_config import resolve_config
-
-if TYPE_CHECKING:
-    # `typing.override` is 3.12+; the package supports 3.11, so source it from
-    # `typing_extensions` for the type checker only. At runtime `@override` is
-    # a pure marker, so a no-op identity avoids the runtime dependency.
-    from typing_extensions import override
-else:
-
-    def override(func):
-        return func
 
 
 class _WatchStream:
@@ -135,21 +123,3 @@ class DirSQL:
     def watch(self):
         """Start watching for file changes. Returns an async iterable of RowEvent."""
         return _WatchStream(self._db)
-
-    @property
-    @override
-    def __dict__(self):
-        """Resolved construction state as a JSON-serializable dict.
-
-        Recomputed on each access; reads the ``.dirsql.toml`` if ``config=``
-        was supplied. Works before ``await db.ready()``.
-        """
-        return resolve_config(
-            self._root,
-            self._tables,
-            self._ignore,
-            self._config,
-            self._persist,
-            self._persist_path,
-            self._extensions,
-        )
