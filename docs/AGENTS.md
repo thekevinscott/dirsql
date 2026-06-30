@@ -45,19 +45,17 @@ The docs follow the [Diataxis](https://diataxis.fr/) framework:
 The **CLI** (`cli/`) is a self-contained section reachable from its own
 top-level `CLI` nav tab, with a path-scoped sidebar (`/cli/` key in
 `config.ts`). Everything a CLI user needs -- installation, running the server,
-`init`, config files (`.dirsql.toml` or native-language), and the HTTP API --
-lives under `cli/`. Do not move CLI pages back into `guide/`.
+`init`, the `.dirsql.toml` config file, and the HTTP API -- lives under
+`cli/`. Do not move CLI pages back into `guide/`.
 
 ## Conventions
 
 - **Lead with the use case.** Open each feature description with *why* a
   reader would reach for it before *how* it works. Don't frame a feature
   by what an adjacent feature can't do.
-  *Don't:* "`.dirsql.toml` can't parse contents — you need code in
-  `extract`. Point `--config` at a Python module..."
-  *Do:* "Native-language configs let you build tables from the
-  *contents* of files — frontmatter, JSON values, CSV cells — by
-  writing a dynamic `extract` callback."
+  *Don't:* "Persistence avoids the thing the default mode can't do..."
+  *Do:* "Persistence keeps the SQLite index on disk between runs so large
+  directories don't re-scan on every startup."
 - Wrap `dirsql` in backticks in all prose text
 - Use VitePress [code group](https://vitepress.dev/guide/markdown#code-groups) syntax (`::: code-group`) for multi-language examples with `Python`, `Rust`, and `TypeScript` tabs
 - Internal links use relative paths (e.g., `./guide/tables.md`)

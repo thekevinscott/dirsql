@@ -79,7 +79,7 @@ A feature is not done until integration tests pass and cover the new functionali
   - TypeScript: `foo.ts` -> `foo.test.ts` in same directory
   - Rust: inline `#[cfg(test)]` module at bottom of each source file
 - **Integration tests**: `tests/integration/` -- exercise the **SDK** public API (`DirSQL`, `Table`, `RowEvent`, etc.) **only, never the CLI**, with **every** third-party dependency mocked (the `notify` watcher, network, future LLM clients, and **SQLite and the filesystem** too). Run in CI. (Existing SDK integration tests still use the real core + temp files; migrating them to fully mocked SQLite/FS is tracked in #289.)
-- **E2E tests**: `tests/e2e/` -- exercise the **CLI** only (the `dirsql` binary, the `dirsql interpret` subprocess, the launcher) with **nothing mocked**. **No mocks, no fakes, no monkeypatching. NOT run in CI** -- CI verifies only the per-package *attestation* that they ran (see *E2E Attestation*).
+- **E2E tests**: `tests/e2e/` -- exercise the **CLI** only (the `dirsql` binary and the launcher) with **nothing mocked**. **No mocks, no fakes, no monkeypatching. NOT run in CI** -- CI verifies only the per-package *attestation* that they ran (see *E2E Attestation*).
 - **Smoke tests**: `tests/smoke/` -- *functional* publishability: build, pack, install, and run the published artifact (`build.test.ts`). **Run in CI.** Distinct from the **`packaging` gate** (testing-conventions; `.github/workflows/packaging.yml`), which only asserts no test files *ship* in the `.whl` / `.tgz` / `.crate` and never installs or runs it.
 
 ### Enforcing Colocation (testing-conventions)

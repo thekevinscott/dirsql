@@ -35,11 +35,6 @@ path = "cli/__init__.py"
 rules = ["colocated-test"]
 reason = "Package docstring only; no logic to unit-test."
 
-[[python.exempt]]
-path = "cli/interpret/__init__.py"
-rules = ["colocated-test"]
-reason = "Package docstring only (no top-level re-exports, by design); no logic to unit-test."
-
 # Unit-only coverage floor (branch coverage on, matching the prior --cov-branch).
 [python.coverage]
 fail_under = 100
@@ -51,11 +46,6 @@ branch = true
 path = "index.ts"
 rules = ["colocated-test", "co-change"]
 reason = "True barrel: re-exports the public API surface (DirSQL, Table, parseTableName, types) from the colocated-tested implementation modules (table.ts, core.ts, parse-table-name.ts, dirsql.ts). The logic that used to live here was extracted into those unit-tested modules (#239), leaving only re-exports. `co-change` is waived because there is no colocated unit test to co-change when a submodule rename moves an import path here."
-
-[[typescript.exempt]]
-path = "cli/interpret/index.ts"
-rules = ["colocated-test"]
-reason = "True barrel: single re-export of `interpret` from the colocated-tested `interpret.ts`. No isolated logic to unit-test."
 
 # Unit-only coverage floor, per vitest metric.
 [typescript.coverage]

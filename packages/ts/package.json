@@ -166,8 +166,5 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": ["@biomejs/biome", "esbuild"]
-  },
-  "dependencies": {
-    "smol-toml": "^1.6.1"
   }
 }

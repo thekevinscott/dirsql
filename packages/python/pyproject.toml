@@ -97,7 +97,7 @@ omit = [
     # them lets a test double's own branches pad the metric (e.g. a fake's
     # empty-list return). Exclude test files so the floor reflects only
     # library code. Recursive glob so nested packages (e.g.
-    # `dirsql/cli/interpret/`) are covered too.
+    # `dirsql/cli/`) are covered too.
     "**/test_*.py",
     "**/*_test.py",
 ]

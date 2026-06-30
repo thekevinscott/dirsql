@@ -33,7 +33,6 @@ wins (a warning is emitted on stderr).
 | Start watcher              | `db._start_watcher()`                          | `db.start_watching()`                                | `await db.startWatcher()` (runs on libuv threadpool)    |
 | Poll events                | `db._poll_events(ms)`                          | `db.poll_events(duration)`                           | `await db.pollEvents(ms)` (runs on libuv threadpool)    |
 | Watch (channel/stream)     | `async for event in db.watch()` (via `_async.py`) | `db.watch() -> WatchStream` (channel)                | `for await (const ev of db.watch())`                    |
-| Resolved-state serialization | `vars(db)` / `db.__dict__` -> JSON-able dict | `db.config() -> DirSQLConfig` (`serde::Serialize`)   | `db.toJSON()` / `JSON.stringify(db)` -> `DirSQLConfig`  |
 | Load SQLite extension(s)   | `DirSQL(extensions=[{path, entrypoint?}])`; `[[dirsql.extension]]` config entries | `.extension(Extension)` / `.extensions(I)` builder; `[[dirsql.extension]]` config entries (`path` + optional `entrypoint`) | `new DirSQL({ extensions: [{ path, entrypoint? }] })`; `[[dirsql.extension]]` config entries |
 
 **Extension loading — at parity across all three SDKs, see #225 / #229 / #230.**
@@ -44,12 +43,7 @@ the shared Rust config loader. The Python `DirSQL(extensions=[{path, entrypoint?
 ([#229](https://github.com/thekevinscott/dirsql/issues/229)) and TypeScript
 `new DirSQL({ extensions: [{ path, entrypoint? }] })`
 ([#230](https://github.com/thekevinscott/dirsql/issues/230)) constructor
-parameters marshal into that same core, and the `interpret` native-config
-handshake carries an `extensions` array (`HandshakeState` / `NativeConfig`), so
-a `.py` / `.js` config that declares extensions propagates. All three
-resolved-state snapshots (`DirSQL::config()` / `vars(db)` / `toJSON()`) serialize
-an `extensions` array (each entry `{path, entrypoint}`, empty when none
-configured).
+parameters marshal into that same core.
 
 All three bindings share a single Rust implementation: `dirsql::DirSQL` handles
 the initial scan, SQL, watcher, and row diffing. Python (`dirsql-py-ext`) and
@@ -60,8 +54,8 @@ between the host language and Rust.
 now canonicalizes its watch-root before handing it to `notify`, so a relative
 `root` emits events identically to an absolute one. The fix is entirely in the
 shared Rust core (`start_watching` / `process_file_event`), so all three SDKs
-gain it at once with no binding changes; the user-supplied `root` and the
-`config()`/`toJSON` snapshot are unchanged across all three.
+gain it at once with no binding changes; the user-supplied `root` is unchanged
+across all three.
 
 ## AsyncDirSQL
 
@@ -95,61 +89,16 @@ const rows = await db.query("SELECT ...");
 for await (const event of db.watch()) { ... }
 ```
 
-## CLI: `interpret` subcommand
+## CLI: config files
 
-The `dirsql interpret <config>` subcommand (#196) is a long-running
-NDJSON helper that the Rust orchestrator spawns when `--config` points
-to a native-language file. It reads `extract` requests from stdin,
-dispatches to user-defined callbacks loaded from the config, and writes
-results to stdout.
-
-| SDK        | Status      | Notes                                                                    |
-|------------|-------------|--------------------------------------------------------------------------|
-| Python     | Implemented | Loads `.py` config via `importlib`, takes the module-level `app` value.  |
-| TypeScript | Implemented | Loads `.js` / `.mjs` / `.cjs` config via dynamic `import()`, takes the default export. |
-| Rust       | N/A         | Rust has no host language runtime in which user `extract` callbacks could execute. Intentional parity drift. |
-
-**Root defaulting + nested-config rejection (#260) — parity maintained
-(Python + TypeScript), no drift.** When a native config omits `root`, both the
-Python and TypeScript `interpret` helpers default the handshake root to the
-helper process's current working directory (the directory `dirsql` was invoked
-from) rather than erroring; and both reject a config whose `DirSQL` itself sets
-`config=` (a nested config is unrepresentable in the handshake and would
-recurse), exiting non-zero with a `config=` error. Rust is `N/A` (no `interpret`
-helper). As part of this the Python `DirSQL(...)` constructor no longer raises
-`TypeError` when neither `root` nor `config` is given — the "no root" check is
-delegated to the shared Rust core (surfacing from `ready()` / `query()`),
-matching Rust and TypeScript, whose constructors already forwarded `(None, None)`
-to the core.
-
-## CLI: Native-Language Config Files
-
-The `--config` flag accepts native-language config files in addition to
-`.dirsql.toml`. The Rust binary inspects the file extension; for
-non-TOML files it spawns `dirsql interpret <config>` as a subprocess
-(via PATH) and wires each table's `extract` callback as an NDJSON-RPC
-into that helper. The same binary handles all extensions; whether
-native-language configs work depends on whether a `dirsql` launcher
-that implements `interpret` is reachable on PATH.
-
-| Install | `--config *.toml` | `--config *.py` | `--config *.{js,mjs,cjs}` |
-|---|---|---|---|
-| `pip install dirsql` / `uvx dirsql` | Y | Y (Python launcher handles `interpret`) | N |
-| `npm install -g dirsql` / `npx dirsql` | Y | N | Y (Node launcher handles `interpret`) |
-| `cargo install dirsql --features cli` | Y | N (no launcher on PATH) | N (no launcher on PATH) |
-
-Native-language configs are always handled by the Rust binary; the
-language-specific launchers stay as thin forwarders that `exec` the
-binary unchanged.
-
-**Python config convention**: the module must define a module-level `app = DirSQL(...)`.
-
-**JS config convention**: the module must `export default new DirSQL(...)` (ESM) or
-assign to `module.exports` (CJS). Only compiled `.js` / `.mjs` / `.cjs` files are
-supported; `.ts` source files are out of scope.
-
-No MIGRATIONS.md entry is required — this is a purely additive CLI feature with no
-change to the SDK's public API.
+The `--config` flag accepts a single format: `.dirsql.toml`, parsed by the
+shared Rust config loader. Native-language config files (`.py` / `.js` /
+`.mjs` / `.cjs`) and the `dirsql interpret` NDJSON helper that backed them were
+removed in epic #321 (#323 / #324 / #325), along with the cross-language
+config-serialization snapshot (#194) that fed the handshake — there is no
+parity surface here anymore. To run user-defined `extract` callbacks, embed the
+programmatic SDK (`DirSQL(...)` + `Table(extract=fn)`) in your own host program;
+this is at parity across Python, Rust, and TypeScript (see *Core Types* above).
 
 ## Language-Idiomatic Exceptions
 

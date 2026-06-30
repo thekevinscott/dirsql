@@ -90,38 +90,17 @@ def describe_main():
             run.assert_called_once_with(["C:/dirsql.exe", "--help"])
 
     def describe_when_argv0_is_interpret():
-        """`dirsql interpret <config>` is handled in-process so the Rust
-        orchestrator can spawn the launcher for native-language configs
-        (#196) without depending on the bundled Rust binary."""
+        """`interpret` is no longer intercepted in-process -- it is forwarded
+        to the bundled Rust binary like any other argv (the binary rejects it
+        as an unknown subcommand)."""
 
-        def it_dispatches_to_interpret_run_and_returns_its_exit_code():
-            # main.py does `from .interpret.run import run` lazily, so
-            # patching the `run` function on its module by its dotted path
-            # is sufficient -- each call resolves the name freshly.
-            with (
-                patch("dirsql.cli.interpret.run.run", return_value=0) as interpret_run,
-                patch.object(main_module, "binary_path") as binary_path,
-            ):
-                assert main(["interpret", "config.py"]) == 0
-            interpret_run.assert_called_once_with(["config.py"])
-            binary_path.assert_not_called()
-
-        def it_propagates_a_nonzero_interpret_exit():
-            with patch("dirsql.cli.interpret.run.run", return_value=2):
-                assert main(["interpret", "bad.py"]) == 2
-
-        def it_returns_130_on_keyboard_interrupt():
-            with patch("dirsql.cli.interpret.run.run", side_effect=KeyboardInterrupt()):
-                assert main(["interpret", "config.py"]) == 130
-
-        def it_does_not_intercept_when_interpret_is_not_argv_0():
-            # `dirsql --verbose interpret` is the binary's problem, not
-            # ours -- the in-process route only fires on the first arg.
+        def it_forwards_interpret_to_the_binary_instead_of_intercepting():
             with (
                 patch.object(main_module, "binary_path", return_value="/bin/dirsql"),
                 patch.object(main_module, "is_windows", return_value=True),
-                patch("dirsql.cli.main.subprocess.run", return_value=_Completed(0)),
+                patch(
+                    "dirsql.cli.main.subprocess.run", return_value=_Completed(2)
+                ) as run,
             ):
-                main(["--verbose", "interpret", "config.py"])
-            # binary_path was reached, meaning we did NOT take the
-            # interpret shortcut.
+                assert main(["interpret", "config.py"]) == 2
+            run.assert_called_once_with(["/bin/dirsql", "interpret", "config.py"])

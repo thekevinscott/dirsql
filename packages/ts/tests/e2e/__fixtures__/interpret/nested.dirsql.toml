@@ -1,6 +1,0 @@
-# Valid config referenced by `dirsql.config-nested.mjs`. Its validity is the
-# point: the interpret loader must reject the *nesting*, not fail on a bad
-# TOML read.
-[[table]]
-ddl = "CREATE TABLE papers (title TEXT)"
-glob = "**/meta.json"
