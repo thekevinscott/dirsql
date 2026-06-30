@@ -40,8 +40,7 @@ def describe_dirsql_interpret_removed():
             timeout=10,
         )
         assert proc.returncode != 0, (
-            f"expected non-zero exit; stdout={proc.stdout!r}, "
-            f"stderr={proc.stderr!r}"
+            f"expected non-zero exit; stdout={proc.stdout!r}, stderr={proc.stderr!r}"
         )
 
     def it_fails_with_a_clean_error_not_a_python_traceback():
