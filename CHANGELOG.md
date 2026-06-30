@@ -23,23 +23,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the core. TypeScript (#324) and Rust + docs (#325) are removed in the
   follow-up PRs of this epic.
 
+- **TypeScript SDK: native-language (`.js` / `.mjs` / `.cjs`) config support
+  and the `interpret` CLI dispatch — hard removal, no deprecation window (A2
+  of epic #321, #324).** The launcher (`cli/main.ts`) no longer dispatches
+  `argv[0] === "interpret"`; the `src/cli/interpret/` modules (the NDJSON
+  `interpret` loop, `load-app`, `dispatch-extract`, `build-tables`,
+  `err-message`, `write-message`) are deleted, and `dirsql interpret …` now
+  exits non-zero (the launcher forwards it to the binary, which rejects the
+  unknown subcommand). The TypeScript side of the cross-language
+  config-serialization snapshot (#194) is retired with it: `DirSQL.toJSON()` /
+  `JSON.stringify(db)` and the `resolveConfig` helper are removed, along with
+  the now-unused `DirSQLConfig` / `TableConfig` / `ResolvedExtension` exported
+  types (the unused `smol-toml` dependency is dropped). The **programmatic
+  SDK** — `new DirSQL(...)` with in-process `extract` closures — is
+  unaffected, and `new DirSQL("…toml")` still loads TOML via the core. Rust +
+  docs (#325) follow. (#324)
+
 ### Added
 
 - **TypeScript SDK: `new DirSQL({ extensions: [...] })` constructor option
   (restores parity with Rust #225 / Python #229).** Pass an array of
   `{ path, entrypoint? }` objects (`entrypoint` optional) to load SQLite
   extensions onto the connection at startup, marshaled through the napi
-  binding into the shared Rust core (enable → load → disable). The
-  `toJSON()` / `JSON.stringify(db)` snapshot now includes an `extensions`
-  array (each entry `{ path, entrypoint }`, `entrypoint` normalized to `null`
-  when no override is supplied, empty when none configured), and the
-  `dirsql interpret` native-config handshake carries it (its `state` is
-  `app.toJSON()`), so a `.js` / `.mjs` / `.cjs` config that declares
-  `extensions` propagates to the orchestrating binary. Programmatic entries
-  load first, followed by any `[[dirsql.extension]]` entries from a `config`
-  file (relative config paths resolve against the config's parent directory;
-  programmatic paths are taken verbatim). Closes the last extension-loading
-  parity gap in `PARITY.md`. (#230)
+  binding into the shared Rust core (enable → load → disable). Programmatic
+  entries load first, followed by any `[[dirsql.extension]]` entries from a
+  `config` file (relative config paths resolve against the config's parent
+  directory; programmatic paths are taken verbatim). Closes the last
+  extension-loading parity gap in `PARITY.md`. (#230)
 
 - **Rust SDK: load SQLite extensions via config (`[[dirsql.extension]]` /
   `DirSQLBuilder::extension`).** Declare a local extension shared-library path

@@ -3,13 +3,11 @@
 import { spawnSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { die } from "./die.js";
-import { interpret } from "./interpret/index.js";
 import { main } from "./main.js";
 import { resolveBinary } from "./resolve-binary.js";
 
 vi.mock("./resolve-binary.js");
 vi.mock("./die.js");
-vi.mock("./interpret/index.js");
 vi.mock("node:child_process");
 
 const TEST_PID = 42;
@@ -105,37 +103,14 @@ describe("main", () => {
     });
   });
 
-  describe("when argv[0] is 'interpret'", () => {
-    it("dispatches to the interpret helper and exits with its return code", async () => {
-      vi.mocked(interpret).mockResolvedValue(0);
+  it("forwards a subcommand verbatim to the binary instead of intercepting it", async () => {
+    vi.mocked(spawnSync).mockReturnValue(fakeResult({ status: 0 }));
 
-      await expect(main(["interpret", "config.mjs"])).rejects.toThrow("EXIT_0");
-      expect(interpret).toHaveBeenCalledWith("config.mjs");
-      expect(spawnSync).not.toHaveBeenCalled();
-      expect(resolveBinary).not.toHaveBeenCalled();
-    });
-
-    it("propagates a non-zero interpret exit code", async () => {
-      vi.mocked(interpret).mockResolvedValue(2);
-
-      await expect(main(["interpret", "bad.mjs"])).rejects.toThrow("EXIT_2");
-    });
-
-    it("passes the empty string when no config path follows", async () => {
-      vi.mocked(interpret).mockResolvedValue(1);
-
-      await expect(main(["interpret"])).rejects.toThrow("EXIT_1");
-      expect(interpret).toHaveBeenCalledWith("");
-    });
-
-    it("does not intercept when 'interpret' is not the first arg", async () => {
-      vi.mocked(spawnSync).mockReturnValue(fakeResult({ status: 0 }));
-
-      await expect(
-        main(["--verbose", "interpret", "config.mjs"]),
-      ).rejects.toThrow("EXIT_0");
-      expect(interpret).not.toHaveBeenCalled();
-      expect(spawnSync).toHaveBeenCalled();
-    });
+    await expect(main(["interpret", "config.mjs"])).rejects.toThrow("EXIT_0");
+    expect(spawnSync).toHaveBeenCalledWith(
+      "/bin/dirsql",
+      ["interpret", "config.mjs"],
+      { stdio: "inherit" },
+    );
   });
 });

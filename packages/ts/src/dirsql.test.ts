@@ -1,10 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCore } from "./core.js";
 import { DirSQL } from "./dirsql.js";
-import { resolveConfig } from "./resolve-config.js";
 
 vi.mock("./core.js");
-vi.mock("./resolve-config.js");
 
 type FakeInner = {
   query: ReturnType<typeof vi.fn>;
@@ -115,22 +113,6 @@ describe("DirSQL", () => {
       await db.pollEvents(50);
       expect(inner.pollEvents).toHaveBeenCalledWith(50);
     });
-  });
-
-  it("toJSON delegates to resolveConfig with the stored options", () => {
-    installFakeCore(makeInner());
-    const resolved = {
-      root: "/d",
-      tables: [],
-      ignore: [],
-      persist: false,
-      persistPath: null,
-      extensions: [],
-    };
-    vi.mocked(resolveConfig).mockReturnValue(resolved);
-    const db = new DirSQL({ root: "/d" });
-    expect(db.toJSON()).toBe(resolved);
-    expect(resolveConfig).toHaveBeenCalledWith({ root: "/d" });
   });
 
   describe("watch", () => {

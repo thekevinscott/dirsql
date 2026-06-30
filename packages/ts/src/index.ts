@@ -12,17 +12,14 @@
 //
 // This file is a thin re-export barrel: the implementation lives in
 // colocated-tested modules (`table.ts`, `core.ts`, `parse-table-name.ts`,
-// `dirsql.ts`), each carrying its own unit test. The barrel itself is
-// covered by `index.test.ts` (#239).
+// `dirsql.ts`), each carrying its own unit test. The barrel's re-export
+// statements are covered by `index.test.ts`.
 
 export { DirSQL } from "./dirsql.js";
 export type {
-  DirSQLConfig,
   DirSQLOptions,
   ExtensionSpec,
-  ResolvedExtension,
   RowEvent,
-  TableConfig,
 } from "./dirsql.js";
 export { parseTableName } from "./parse-table-name.js";
 export { Table } from "./table.js";

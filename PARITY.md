@@ -33,7 +33,7 @@ wins (a warning is emitted on stderr).
 | Start watcher              | `db._start_watcher()`                          | `db.start_watching()`                                | `await db.startWatcher()` (runs on libuv threadpool)    |
 | Poll events                | `db._poll_events(ms)`                          | `db.poll_events(duration)`                           | `await db.pollEvents(ms)` (runs on libuv threadpool)    |
 | Watch (channel/stream)     | `async for event in db.watch()` (via `_async.py`) | `db.watch() -> WatchStream` (channel)                | `for await (const ev of db.watch())`                    |
-| Resolved-state serialization | _removed (#323)_ | `db.config() -> DirSQLConfig` (`serde::Serialize`)   | `db.toJSON()` / `JSON.stringify(db)` -> `DirSQLConfig`  |
+| Resolved-state serialization | _removed (#323)_ | `db.config() -> DirSQLConfig` (`serde::Serialize`)   | _removed (#324)_  |
 | Load SQLite extension(s)   | `DirSQL(extensions=[{path, entrypoint?}])`; `[[dirsql.extension]]` config entries | `.extension(Extension)` / `.extensions(I)` builder; `[[dirsql.extension]]` config entries (`path` + optional `entrypoint`) | `new DirSQL({ extensions: [{ path, entrypoint? }] })`; `[[dirsql.extension]]` config entries |
 
 **Extension loading — at parity across all three SDKs, see #225 / #229 / #230.**
@@ -106,7 +106,7 @@ results to stdout.
 | SDK        | Status      | Notes                                                                    |
 |------------|-------------|--------------------------------------------------------------------------|
 | Python     | **Removed (#323)** | Native `.py` config + `interpret` deleted from the Python SDK (epic #321, A1). |
-| TypeScript | Implemented | Loads `.js` / `.mjs` / `.cjs` config via dynamic `import()`, takes the default export. |
+| TypeScript | **Removed (#324)** | Native `.js` / `.mjs` / `.cjs` config + `interpret` dispatch deleted from the TS SDK (epic #321, A2). |
 | Rust       | N/A         | Rust has no host language runtime in which user `extract` callbacks could execute. Intentional parity drift. |
 
 **Root defaulting + nested-config rejection (#260) — parity maintained
@@ -135,7 +135,7 @@ that implements `interpret` is reachable on PATH.
 | Install | `--config *.toml` | `--config *.py` | `--config *.{js,mjs,cjs}` |
 |---|---|---|---|
 | `pip install dirsql` / `uvx dirsql` | Y | **N (removed #323)** | N |
-| `npm install -g dirsql` / `npx dirsql` | Y | N | Y (Node launcher handles `interpret`) |
+| `npm install -g dirsql` / `npx dirsql` | Y | N | **N (removed #324)** |
 | `cargo install dirsql --features cli` | Y | N (no launcher on PATH) | N (no launcher on PATH) |
 
 Native-language configs are always handled by the Rust binary; the

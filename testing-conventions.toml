@@ -54,8 +54,8 @@ reason = "True barrel: re-exports the public API surface (DirSQL, Table, parseTa
 
 [[typescript.exempt]]
 path = "cli/interpret/index.ts"
-rules = ["colocated-test"]
-reason = "True barrel: single re-export of `interpret` from the colocated-tested `interpret.ts`. No isolated logic to unit-test."
+rules = ["colocated-test", "co-change"]
+reason = "Empty package shell left after the native-config `interpret` removal (#321/#324): a comment + `export {}`, no logic, no re-exports. `co-change` is waived because a barrel has no colocated test to co-change when it is edited. The directory cannot be fully deleted yet -- the co-change check flags a deleted source lacking a co-deleted test, and a retained exempt for a deleted path is rejected as stale."
 
 # Unit-only coverage floor, per vitest metric.
 [typescript.coverage]
