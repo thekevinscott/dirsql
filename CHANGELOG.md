@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Python SDK: native-language (`.py`) config support and the `dirsql
+  interpret` subcommand — hard removal, no deprecation window (A1 of epic
+  #321, #323).** The Python launcher no longer intercepts `interpret`; the
+  `dirsql/cli/interpret/` package (the NDJSON `run` loop, `load_app`,
+  `dispatch_extract`, `write_message`) is deleted, and `dirsql interpret …`
+  now exits non-zero (the launcher forwards it to the binary, which rejects
+  the unknown subcommand). The Python side of the cross-language
+  config-serialization snapshot (#194) is retired with it: `DirSQL.__dict__`
+  / `vars(db)` and the `resolve_config` helper are removed. The
+  **programmatic SDK** — `DirSQL(...)` with in-process `Table(extract=fn)`
+  closures — is unaffected, and `DirSQL(config="…toml")` still loads TOML via
+  the core. TypeScript (#324) and Rust + docs (#325) are removed in the
+  follow-up PRs of this epic.
+
 ### Added
 
 - **TypeScript SDK: `new DirSQL({ extensions: [...] })` constructor option

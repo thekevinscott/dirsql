@@ -162,34 +162,3 @@ def describe_DirSQL_async():
 
                 assert isinstance(stream, async_mod._WatchStream)
                 assert stream._db is db._db
-
-    def describe_to_dict():
-        @pytest.mark.asyncio
-        async def it_resolves_construction_state_via_resolve_config():
-            sentinel = {"root": "/tmp/root"}
-            with (
-                patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
-                patch.object(
-                    async_mod, "resolve_config", return_value=sentinel
-                ) as resolve,
-            ):
-                db = async_mod.DirSQL(
-                    "/tmp/root",
-                    tables=["table-a"],
-                    ignore=["**/*.tmp"],
-                    persist=True,
-                    persist_path="/tmp/cache.db",
-                    extensions=[{"path": "ext/a.so"}],
-                )
-                await db.ready()
-
-                assert db.__dict__ is sentinel
-                resolve.assert_called_once_with(
-                    "/tmp/root",
-                    ["table-a"],
-                    ["**/*.tmp"],
-                    None,
-                    True,
-                    "/tmp/cache.db",
-                    [{"path": "ext/a.so"}],
-                )
