@@ -18,6 +18,7 @@ class _FakeRustDirSQL:
         persist=False,
         persist_path=None,
         extensions=None,
+        suppress_config_extensions=False,
     ):
         self.root = root
         self.tables = tables
@@ -26,6 +27,7 @@ class _FakeRustDirSQL:
         self.persist = persist
         self.persist_path = persist_path
         self.extensions = extensions
+        self.suppress_config_extensions = suppress_config_extensions
         self.query_calls = []
 
     def query(self, sql):
@@ -90,6 +92,89 @@ def describe_DirSQL_async():
                 await db.ready()
                 assert db._db.extensions is None
                 resolver.assert_not_called()
+
+    def describe_config_file_extensions():
+        @pytest.mark.asyncio
+        async def it_appends_resolved_config_extensions_and_suppresses_the_core():
+            # When the config resolver intervenes (a bare package name in the
+            # config, #313), its resolved specs are appended after the
+            # programmatic ones and the core's own config-extension loading is
+            # suppressed.
+            with (
+                patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
+                patch.object(
+                    async_mod,
+                    "resolve_extension_path",
+                    side_effect=lambda path, base, resolve_relative: f"R:{path}",
+                ),
+                patch.object(
+                    async_mod,
+                    "resolve_config_extension_specs",
+                    return_value=[{"path": "/env/pkg/ext.so", "entrypoint": "init"}],
+                ) as config_resolver,
+            ):
+                db = async_mod.DirSQL(
+                    config="/cfg/.dirsql.toml",
+                    extensions=[{"path": "ext/a.so"}],
+                )
+                await db.ready()
+
+                config_resolver.assert_called_once_with("/cfg/.dirsql.toml")
+                assert db._db.extensions == [
+                    {"path": "R:ext/a.so", "entrypoint": None},
+                    {"path": "/env/pkg/ext.so", "entrypoint": "init"},
+                ]
+                assert db._db.suppress_config_extensions is True
+
+        @pytest.mark.asyncio
+        async def it_passes_config_extensions_alone_when_no_programmatic_ones():
+            with (
+                patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
+                patch.object(
+                    async_mod,
+                    "resolve_config_extension_specs",
+                    return_value=[{"path": "/env/pkg/ext.so", "entrypoint": None}],
+                ),
+            ):
+                db = async_mod.DirSQL(config="/cfg/.dirsql.toml")
+                await db.ready()
+
+                assert db._db.extensions == [
+                    {"path": "/env/pkg/ext.so", "entrypoint": None}
+                ]
+                assert db._db.suppress_config_extensions is True
+
+        @pytest.mark.asyncio
+        async def it_leaves_the_core_loading_when_the_resolver_declines():
+            # `None` from the resolver (no bare package name in the config)
+            # keeps the pre-#313 behavior: the core loads the config's own
+            # extension entries.
+            with (
+                patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
+                patch.object(
+                    async_mod, "resolve_config_extension_specs", return_value=None
+                ) as config_resolver,
+            ):
+                db = async_mod.DirSQL(config="/cfg/.dirsql.toml")
+                await db.ready()
+
+                config_resolver.assert_called_once_with("/cfg/.dirsql.toml")
+                assert db._db.extensions is None
+                assert db._db.suppress_config_extensions is False
+
+        @pytest.mark.asyncio
+        async def it_never_consults_the_config_resolver_without_a_config():
+            with (
+                patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
+                patch.object(
+                    async_mod, "resolve_config_extension_specs"
+                ) as config_resolver,
+            ):
+                db = async_mod.DirSQL("/tmp/root")
+                await db.ready()
+
+                config_resolver.assert_not_called()
+                assert db._db.suppress_config_extensions is False
 
         @pytest.mark.asyncio
         async def it_awaits_readiness_when_query_is_called_before_ready():
