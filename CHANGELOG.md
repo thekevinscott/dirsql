@@ -73,6 +73,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Python SDK: resolve a constructor extension by package name (#298).** An
+  `extensions=[{ "path": ... }]` entry whose `path` is a bare **package name**
+  (no path separator and no loadable-file suffix) is resolved from the package
+  installed in the runtime env: dirsql locates it via `importlib` and globs the
+  current platform's loadable file (`*.so` / `*.dylib` / `*.dll` / `*.pyd`)
+  inside it. A same-named local file takes precedence (file-first probe); zero
+  or multiple matching loadables is an error. Path-looking values keep their
+  #229 behavior unchanged. Resolution runs in the SDK before the file-path-only
+  Rust core. (#298, part of #227)
+
+- **CLI: resolve a `.dirsql.toml` `[[dirsql.extension]]` by package name (#227).**
+  Running `dirsql --config .dirsql.toml` through the Python launcher now resolves
+  an extension whose `path` is a bare package name from the installed package,
+  before invoking the engine. The compiled binary can't resolve package names
+  (no `importlib`), so the launcher parses the config, resolves each extension,
+  and passes the resolved literal paths to the binary through a new repeatable
+  `--extension <path>[::entrypoint]` flag; the binary loads those and skips the
+  config's own `[[dirsql.extension]]` entries. The Rust core gains a
+  `DirSQLBuilder::suppress_config_extensions(bool)` toggle backing this (the core
+  stays file-path-only). Configs with only literal paths are untouched. (Node
+  launcher parity tracked alongside; #227.)
+
 - **`.dirsql.toml`: `on-file` per-table command event — the first
   command-backed event (Epic B, #322 / B2 #327).** Add `on-file = "<command>"`
   to a `[[table]]` to derive that table's rows from each matched file's

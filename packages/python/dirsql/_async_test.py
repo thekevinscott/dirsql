@@ -53,7 +53,14 @@ def describe_DirSQL_async():
     def describe_ready_and_query():
         @pytest.mark.asyncio
         async def it_uses_the_background_db():
-            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+            with (
+                patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
+                patch.object(
+                    async_mod,
+                    "resolve_extension_path",
+                    side_effect=lambda path, base, resolve_relative: f"R:{path}",
+                ),
+            ):
                 db = async_mod.DirSQL(
                     "/tmp/root",
                     tables=["table-a"],
@@ -67,9 +74,22 @@ def describe_DirSQL_async():
                 assert db._db.root == "/tmp/root"
                 assert db._db.tables == ["table-a"]
                 assert db._db.ignore == ["**/*.tmp"]
-                assert db._db.extensions == [{"path": "ext/a.so"}]
+                # Programmatic extension paths are resolved (bare names ->
+                # installed package) before reaching the core (#298).
+                assert db._db.extensions == [{"path": "R:ext/a.so", "entrypoint": None}]
                 assert db._db.query_calls == ["SELECT 1"]
                 assert results == [{"sql": "SELECT 1"}]
+
+        @pytest.mark.asyncio
+        async def it_passes_no_extensions_through_unresolved():
+            with (
+                patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
+                patch.object(async_mod, "resolve_extension_path") as resolver,
+            ):
+                db = async_mod.DirSQL("/tmp/root")
+                await db.ready()
+                assert db._db.extensions is None
+                resolver.assert_not_called()
 
         @pytest.mark.asyncio
         async def it_awaits_readiness_when_query_is_called_before_ready():

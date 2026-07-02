@@ -10,6 +10,7 @@ import sys
 
 from .binary_path import binary_path
 from .is_windows import is_windows
+from .resolve_config_extensions import with_resolved_extensions
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -19,6 +20,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         binary = binary_path()
     except FileNotFoundError as exc:
+        print(f"dirsql: {exc}", file=sys.stderr)
+        return 1
+
+    # Resolve any package-name extensions in a TOML config here (the binary
+    # can't) and pass them as `--extension` flags; a no-op otherwise (#227).
+    try:
+        argv = with_resolved_extensions(argv)
+    except Exception as exc:
         print(f"dirsql: {exc}", file=sys.stderr)
         return 1
 

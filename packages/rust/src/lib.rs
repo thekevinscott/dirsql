@@ -920,6 +920,7 @@ pub struct DirSQLBuilder {
     ignore: Vec<String>,
     extensions: Vec<Extension>,
     config_path: Option<PathBuf>,
+    suppress_config_extensions: bool,
     persist: bool,
     persist_path: Option<PathBuf>,
     poll_interval: Option<Duration>,
@@ -987,6 +988,20 @@ impl DirSQLBuilder {
         self
     }
 
+    /// Suppress loading of a config file's `[[dirsql.extension]]` entries.
+    ///
+    /// The core resolves config-file extension paths only literally (relative
+    /// to the config's parent). A launcher that resolves extensions itself —
+    /// e.g. by **package name**, which needs an interpreter the compiled core
+    /// lacks (Python `importlib`, Node `require.resolve`; see #227) — sets this
+    /// and supplies the already-resolved literal paths via
+    /// [`extensions`](Self::extensions) instead, so the config's own extension
+    /// entries are not loaded a second time.
+    pub fn suppress_config_extensions(mut self, suppress: bool) -> Self {
+        self.suppress_config_extensions = suppress;
+        self
+    }
+
     /// Enable persistent on-disk storage. When `true`, the SQLite database is
     /// written to `<root>/.dirsql/cache.db` (override via
     /// [`persist_path`](Self::persist_path)) so subsequent startups only
@@ -1025,6 +1040,7 @@ impl DirSQLBuilder {
             mut ignore,
             mut extensions,
             config_path,
+            suppress_config_extensions,
             mut persist,
             mut persist_path,
             poll_interval,
@@ -1058,17 +1074,22 @@ impl DirSQLBuilder {
 
             // Resolve config-supplied extension paths against the config
             // file's parent directory (absolute paths pass through). Appended
-            // after any programmatically-supplied extensions.
-            for ext in cfg.extensions {
-                let path = if ext.path.is_absolute() {
-                    ext.path
-                } else {
-                    cfg_parent.join(&ext.path)
-                };
-                extensions.push(Extension {
-                    path,
-                    entrypoint: ext.entrypoint,
-                });
+            // after any programmatically-supplied extensions. Skipped entirely
+            // when the caller has pre-resolved the config's extensions itself
+            // (e.g. a launcher resolving package names) and supplied them via
+            // `.extensions(...)` — see `suppress_config_extensions`.
+            if !suppress_config_extensions {
+                for ext in cfg.extensions {
+                    let path = if ext.path.is_absolute() {
+                        ext.path
+                    } else {
+                        cfg_parent.join(&ext.path)
+                    };
+                    extensions.push(Extension {
+                        path,
+                        entrypoint: ext.entrypoint,
+                    });
+                }
             }
 
             if cfg.persist {
