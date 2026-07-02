@@ -42,6 +42,19 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 .github/scripts/e2e_attestation_scope.py "$BASE_SHA" "$HEAD_SHA"
 
+      # Shared-core blind spot (#337): a non-`cli` change under
+      # `packages/rust/src/**` links into BOTH bindings and changes their
+      # runtime behavior, but lives in neither binding subtree -- so the
+      # per-binding `verify` below (which walks only the binding subtree)
+      # never sees it. This gate fails until each binding whose linked core
+      # changed has been re-attested. `cli`-only core (`src/cli/**`,
+      # `src/bin/**`) is feature-gated out of the bindings and excluded.
+      - name: Verify bindings re-attested for shared-core changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/e2e_core_freshness.py "$BASE_SHA" "$HEAD_SHA"
+
       - name: Set up Python
         if: steps.scope.outputs.python == 'true' || steps.scope.outputs.ts == 'true'
         uses: actions/setup-python@v5
