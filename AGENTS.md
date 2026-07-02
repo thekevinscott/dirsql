@@ -97,6 +97,25 @@ just test-conventions
 
 **Exemptions.** The principle is narrow: a file is exempt only if it is a **true barrel** (a re-export–only module -- `index.ts` / package `__init__.py`) or an init carrying no executable logic; anything with real code gets a colocated unit test, never an exemption (#239). When a file is exempt as a "barrel" but actually holds logic, the fix is to **extract that logic into colocated-tested modules** until what remains is a genuine barrel -- not to test the barrel. Exemptions are declared in `testing-conventions.toml` as `[[python.exempt]]` / `[[typescript.exempt]]` entries, each carrying a `path` (relative to the scanned source dir), the `rules` it waives (`colocated-test`, plus `co-change` for the testless barrels whose imports can move in a rename with no sibling test to co-update), and a required `reason`. Today that covers the public package barrel (`dirsql/__init__.py`), the docstring-only CLI packages (`dirsql/cli/__init__.py`, `dirsql/cli/interpret/__init__.py`), and the two TS re-export barrels (`src/index.ts` -- whose Table/DirSQL/parseTableName/core logic was extracted into `table.ts`/`core.ts`/`parse-table-name.ts`/`dirsql.ts` -- and `src/cli/interpret/index.ts`). The npm `bin` shim `src/cli/dirsql.ts` is *not* exempt: its error-handling logic lives in the unit-tested `cli/run-cli.ts`, leaving a trivial `runCli()` shim covered by a mocked smoke-test. Keep the list minimal and in lockstep with the coverage-omit configs it mirrors (`packages/python/pyproject.toml`, `packages/ts/vitest.config.ts`); the CLI **rejects a stale exempt entry whose `path` matches no file**, so remove an entry the moment its file gains a real colocated test or is deleted. Adding a *new* untested source file fails the gate -- exemptions are the rare, documented exception, not the escape hatch.
 
+### Mutation (testing-conventions)
+
+The rung above coverage is the **`unit mutation`** gate (#235 / epic #231): testing-conventions mutates the source and fails on any **surviving** mutant -- one no unit test caught. Engines: **cosmic-ray** (Python), **Stryker** (TypeScript), **cargo-mutants** (Rust). It is **PR-only and diff-scoped** (`--base <base.sha>...HEAD`): only the lines a PR added/modified are mutated, so each PR's surface stays bounded. A PR that changes no SDK source has nothing to mutate and passes trivially.
+
+The gate reruns the real unit suite per mutant, so it needs the native bindings built -- and the testing-conventions reusable workflow has no build step (epic #231's constraint). So each language gets its own build-capable workflow that builds the artifact and drives the CLI (invoked unpinned via `npx -y testing-conventions`, so CI always runs the latest): `.github/workflows/python-mutation.yml` (`maturin develop`), `ts-mutation.yml` (`pnpm build`), `rust-mutation.yml` (cargo). The CLI **self-provisions Stryker and cargo-mutants**, so there are no mutation engine deps or config in this repo; only **cosmic-ray** is installed by the job (into the maturin venv, so the `python3 -m pytest` baseline resolves the built `_dirsql`). Adopting the reusable workflow instead is blocked upstream (job scoping + a second-toolchain hook -- see #240).
+
+Run a language locally (after building its native artifact), against your PR's base:
+
+```bash
+# from packages/python (maturin venv active, cosmic-ray installed)
+npx -y testing-conventions unit mutation --language python --base origin/main dirsql
+# from packages/ts (after pnpm build)
+npx -y testing-conventions unit mutation --language typescript --base origin/main src
+# from repo root (cargo-mutants installed)
+npx -y testing-conventions unit mutation --language rust --base origin/main packages/rust/src
+```
+
+**Survivors.** The fix is almost always a **new assertion** that kills the mutant. Only a genuinely *equivalent* or intentionally-defensive mutant is lifted, via a `[[<language>.exempt]]` entry in `testing-conventions.toml` whose `rules` includes `"mutation"` (with a real `path` and a `reason`) -- never weaken a test to make a survivor pass. There are none today.
+
 ### Test Boundaries -- What to Mock, What Not To
 
 Unit tests isolate the unit under test. Every dependency that isn't a trivially pure function gets replaced with a fake; production runs the real implementation.
