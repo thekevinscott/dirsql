@@ -27,6 +27,7 @@ pub mod watcher;
 #[cfg(feature = "cli")]
 pub mod cli;
 
+use crate::command::Placeholder;
 use crate::db::{Db, parse_table_name};
 use crate::matcher::TableMatcher;
 use crate::persist::{
@@ -1054,18 +1055,20 @@ impl DirSQLBuilder {
                 .parent()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
-            if let Some(cfg_root) = cfg.root.clone() {
-                let resolved = if cfg_root.is_absolute() {
+            let resolved_root = if let Some(cfg_root) = cfg.root.clone() {
+                if cfg_root.is_absolute() {
                     cfg_root
                 } else {
                     cfg_parent.join(cfg_root)
-                };
-                config_root = Some(resolved);
+                }
             } else {
-                config_root = Some(cfg_parent.clone());
-            }
+                cfg_parent.clone()
+            };
+            config_root = Some(resolved_root.clone());
 
-            let cfg_tables = build_tables_from_config(&cfg)?;
+            // `on-file` commands run in the config file's directory and compute
+            // `{path}` relative to the resolved index root.
+            let cfg_tables = build_tables_from_config(&cfg, &cfg_parent, &resolved_root)?;
             tables.extend(cfg_tables);
             ignore.extend(cfg.ignore);
 
@@ -1454,25 +1457,53 @@ fn relative_path(root: &Path, path: &Path) -> String {
         .to_string()
 }
 
+/// Fixed timeout for an `on-file` command. There is no per-table timeout key
+/// yet (#327); this module constant is the documented current default.
+const ON_FILE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Build [`Table`] objects from a parsed config.
 ///
-/// Config-defined tables produce one row per matched file. The row is built
+/// A plain config-defined table produces one row per matched file built
 /// entirely from filesystem facts: glob path captures and stat virtuals
 /// (`_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`) are
-/// injected by the core pipeline ([`merge_filesystem_facts`]). The
-/// synthesized extract therefore emits a single empty row per file; the
-/// fact-injection layer fills it in. Content interpretation is not a dirsql
-/// concern — for that, register a programmatic [`Table`] with your own
-/// extract closure.
-fn build_tables_from_config(cfg: &config::Config) -> Result<Vec<Table>> {
+/// injected by the core pipeline ([`merge_filesystem_facts`]). Its synthesized
+/// extract emits a single empty row per file; the fact-injection layer fills it
+/// in.
+///
+/// A table with an `on-file` command instead runs that command once per matched
+/// file (see [`run_on_file`]): the command reads the file and prints a JSON
+/// array of row objects on stdout, which becomes the file's rows (filesystem
+/// facts are still merged on top, user values winning). `config_dir` is the
+/// command's working directory (the config file's parent) and `root` is the
+/// resolved index root used to compute the `{path}` placeholder.
+fn build_tables_from_config(
+    cfg: &config::Config,
+    config_dir: &Path,
+    root: &Path,
+) -> Result<Vec<Table>> {
     let mut tables = Vec::with_capacity(cfg.tables.len());
 
     for table_cfg in &cfg.tables {
-        let mut table = Table::new(
-            table_cfg.ddl.clone(),
-            table_cfg.glob.clone(),
-            |_path: &str| vec![Row::new()],
-        );
+        let mut table = match &table_cfg.on_file {
+            Some(command) => {
+                let command = command.clone();
+                let config_dir = config_dir.to_path_buf();
+                let root = root.to_path_buf();
+                // `Table::new` (infallible): `run_on_file` isolates its own
+                // errors to an empty row set so one bad file never aborts the
+                // scan (the scan aborts on an extract `Err`).
+                Table::new(
+                    table_cfg.ddl.clone(),
+                    table_cfg.glob.clone(),
+                    move |abs_path: &str| run_on_file(&command, abs_path, &config_dir, &root),
+                )
+            }
+            None => Table::new(
+                table_cfg.ddl.clone(),
+                table_cfg.glob.clone(),
+                |_path: &str| vec![Row::new()],
+            ),
+        };
 
         if table_cfg.strict == Some(true) {
             table.strict = true;
@@ -1482,6 +1513,89 @@ fn build_tables_from_config(cfg: &config::Config) -> Result<Vec<Table>> {
     }
 
     Ok(tables)
+}
+
+/// Run a table's `on-file` command for one matched file and parse its output
+/// into rows.
+///
+/// Placeholders: `{path}` (the file relative to `root`, append-if-absent so
+/// `cmd` and `cmd {path}` behave identically), `{abspath}` (the absolute path),
+/// and `{root}` (the index root). The relative path is computed with a single
+/// [`Path::strip_prefix`] (#251/#252), falling back to the absolute path when
+/// the file is not under `root`.
+///
+/// Per-file isolation: any failure — a spawn/exit/timeout error from
+/// [`command::run_command`], or output that is not a JSON array of objects —
+/// is logged to stderr and yields no rows (`vec![]`). Returning `Err` here
+/// would abort the whole scan, so it never does.
+fn run_on_file(command: &str, abs_path: &str, config_dir: &Path, root: &Path) -> Vec<Row> {
+    let abs = Path::new(abs_path);
+    let rel = abs
+        .strip_prefix(root)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| abs_path.to_string());
+    let placeholders = [
+        Placeholder::append("path", rel),
+        Placeholder::new("abspath", abs_path),
+        Placeholder::new("root", root.to_string_lossy().into_owned()),
+    ];
+
+    match command::run_command(command, &placeholders, config_dir, ON_FILE_TIMEOUT, None) {
+        Ok(output) => match parse_command_rows(&output.payload) {
+            Ok(rows) => rows,
+            Err(message) => {
+                eprintln!(
+                    "dirsql: skipping `{abs_path}`: on-file output was not a JSON array of rows: {message}"
+                );
+                Vec::new()
+            }
+        },
+        Err(error) => {
+            eprintln!("dirsql: skipping `{abs_path}`: on-file command failed: {error}");
+            Vec::new()
+        }
+    }
+}
+
+/// Parse an `on-file` command's stdout payload — a JSON array of row objects —
+/// into [`Row`]s. Returns `Err(msg)` when the top-level JSON is not an array or
+/// any element is not an object. Pure (no IO), so it stays colocated-unit-
+/// testable; the effectful spawn lives in [`run_on_file`].
+fn parse_command_rows(payload: &str) -> std::result::Result<Vec<Row>, String> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(payload).map_err(|e| format!("invalid JSON: {e}"))?;
+    let array = parsed
+        .as_array()
+        .ok_or_else(|| "expected a JSON array of row objects".to_string())?;
+
+    let mut rows = Vec::with_capacity(array.len());
+    for element in array {
+        let object = element
+            .as_object()
+            .ok_or_else(|| "expected each array element to be a JSON object".to_string())?;
+        let mut row = Row::with_capacity(object.len());
+        for (key, value) in object {
+            row.insert(key.clone(), json_to_value(value));
+        }
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+/// Map a JSON value to a SQLite [`Value`]: `null` → `Null`; `bool` → `Integer`
+/// (0/1); an integral number → `Integer`, otherwise `Real`; `string` → `Text`;
+/// an array/object → its JSON text as `Text`. Pure.
+fn json_to_value(value: &serde_json::Value) -> Value {
+    match value {
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(b) => Value::Integer(i64::from(*b)),
+        serde_json::Value::Number(n) => match n.as_i64() {
+            Some(i) => Value::Integer(i),
+            None => Value::Real(n.as_f64().unwrap_or(f64::NAN)),
+        },
+        serde_json::Value::String(s) => Value::Text(s.clone()),
+        other => Value::Text(other.to_string()),
+    }
 }
 
 /// Reserved column names for filesystem-derived virtual columns. These are
@@ -2538,5 +2652,85 @@ mod internal_tests {
         // The loop returns after the error, so the channel is now drained and
         // its sender dropped; a further `try_recv` reports the empty channel.
         assert!(rx.try_recv().is_err(), "loop should have ended");
+    }
+}
+
+#[cfg(test)]
+mod command_rows_tests {
+    use super::*;
+
+    #[test]
+    fn parses_an_array_of_row_objects() {
+        let rows = parse_command_rows(r#"[{"id":"a","n":1},{"id":"b","n":2}]"#).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["id"], Value::Text("a".into()));
+        assert_eq!(rows[0]["n"], Value::Integer(1));
+        assert_eq!(rows[1]["id"], Value::Text("b".into()));
+        assert_eq!(rows[1]["n"], Value::Integer(2));
+    }
+
+    #[test]
+    fn parses_an_empty_array_to_no_rows() {
+        assert_eq!(parse_command_rows("[]").unwrap(), Vec::<Row>::new());
+    }
+
+    #[test]
+    fn maps_every_json_value_type_including_nested_to_text_json() {
+        let rows = parse_command_rows(
+            r#"[{"nul":null,"t":true,"f":false,"i":42,"r":1.5,"s":"hi","arr":[1,2],"obj":{"k":"v"}}]"#,
+        )
+        .unwrap();
+        let row = &rows[0];
+        assert_eq!(row["nul"], Value::Null);
+        assert_eq!(row["t"], Value::Integer(1));
+        assert_eq!(row["f"], Value::Integer(0));
+        assert_eq!(row["i"], Value::Integer(42));
+        assert_eq!(row["r"], Value::Real(1.5));
+        assert_eq!(row["s"], Value::Text("hi".into()));
+        assert_eq!(row["arr"], Value::Text("[1,2]".into()));
+        assert_eq!(row["obj"], Value::Text(r#"{"k":"v"}"#.into()));
+    }
+
+    #[test]
+    fn a_number_that_does_not_fit_i64_becomes_real() {
+        // 10^19 exceeds i64::MAX (~9.2e18) but fits u64, so `as_i64` is None and
+        // it falls through to `Real`.
+        let rows = parse_command_rows(r#"[{"big":10000000000000000000}]"#).unwrap();
+        assert!(matches!(rows[0]["big"], Value::Real(_)));
+    }
+
+    #[test]
+    fn a_non_array_payload_is_an_error() {
+        let err = parse_command_rows(r#"{"id":"a"}"#).unwrap_err();
+        assert!(err.contains("array"), "got: {err}");
+    }
+
+    #[test]
+    fn an_element_that_is_not_an_object_is_an_error() {
+        let err = parse_command_rows(r#"[{"id":"a"}, 3]"#).unwrap_err();
+        assert!(err.contains("object"), "got: {err}");
+    }
+
+    #[test]
+    fn invalid_json_is_an_error() {
+        let err = parse_command_rows("not json at all").unwrap_err();
+        assert!(err.contains("invalid JSON"), "got: {err}");
+    }
+
+    #[test]
+    fn json_to_value_maps_each_variant() {
+        assert_eq!(json_to_value(&serde_json::Value::Null), Value::Null);
+        assert_eq!(json_to_value(&serde_json::json!(true)), Value::Integer(1));
+        assert_eq!(json_to_value(&serde_json::json!(false)), Value::Integer(0));
+        assert_eq!(json_to_value(&serde_json::json!(7)), Value::Integer(7));
+        assert_eq!(json_to_value(&serde_json::json!(2.5)), Value::Real(2.5));
+        assert_eq!(
+            json_to_value(&serde_json::json!("x")),
+            Value::Text("x".into())
+        );
+        assert_eq!(
+            json_to_value(&serde_json::json!([1, 2])),
+            Value::Text("[1,2]".into())
+        );
     }
 }
