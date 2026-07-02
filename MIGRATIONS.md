@@ -57,8 +57,63 @@ release).
 cd packages/python
 uv run dirsql interpret whatever.py; echo "exit=$?"
 # expected: non-zero exit ("unrecognized subcommand 'interpret'")
-uv run python -c "import dirsql.cli.interpret"; echo "exit=$?"
-# expected: non-zero exit (ModuleNotFoundError — the interpret package is gone)
+uv run python -c "from dirsql.cli.interpret import run"; echo "exit=$?"
+# expected: non-zero exit (ImportError — the interpret loop is gone; only an
+# empty package shell remains, pending the tooling fix that lets the directory
+# be deleted outright)
+```
+
+### TypeScript: native-language (`.js`/`.mjs`/`.cjs`) configs and `interpret` removed; serialization snapshot retired (#324)
+
+#### Summary
+
+The TypeScript SDK's native-language config path and the `interpret` CLI
+dispatch are **hard-removed** (A2 of epic #321), with no deprecation window.
+`dirsql --config <file>.{js,mjs,cjs}` is no longer supported, and `dirsql
+interpret …` is no longer dispatched (the launcher forwards it to the binary,
+which rejects it). The TypeScript side of the cross-language
+config-serialization snapshot (#194) is retired with it: `DirSQL.toJSON()` /
+`JSON.stringify(db)` and the `resolveConfig` helper are gone, along with the
+now-unused `DirSQLConfig` / `TableConfig` / `ResolvedExtension` exported types.
+The **programmatic SDK** — `new DirSQL(...)` with in-process `extract` closures
+— is unaffected, and `new DirSQL("…toml")` still loads TOML. Affects anyone
+running a `.js`/`.mjs`/`.cjs` config via the CLI, invoking `dirsql interpret`,
+or calling `db.toJSON()` / `JSON.stringify(db)` / importing those types. (Rust
++ docs is #325.)
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| CLI JS config | `dirsql --config dirsql.config.mjs` (or `.js`/`.cjs`) | Not supported. Use a `.dirsql.toml`, or embed the SDK programmatically (`new DirSQL(...)` + `extract` closures) and query it in-process. |
+| `dirsql interpret <config>` | long-running NDJSON helper subcommand | Removed; exits non-zero (unknown subcommand). |
+| TypeScript serialized state | `db.toJSON()` / `JSON.stringify(db)` → `DirSQLConfig` | Removed, along with the `DirSQLConfig` / `TableConfig` / `ResolvedExtension` exported types. Pass `config` / `root` / `tables` into the constructor and query. |
+
+#### Deprecations removed
+
+_None._ Native configs, `interpret`, and the serialization snapshot were never
+deprecated; removed in a single release (the feature never shipped a stable
+release).
+
+#### Behavior changes without code changes
+
+- `dirsql --config <file>.{js,mjs,cjs}` no longer spawns an interpreter. Once
+  the Rust side lands (#325) the non-TOML file fails to parse as TOML and the
+  server starts degraded (HTTP 503); until then the binary still spawns `dirsql
+  interpret`, which the launcher no longer handles, so the helper exits
+  non-zero and the server reports the spawn failure.
+- `dirsql interpret …` (invoked directly) exits non-zero instead of starting an
+  NDJSON helper.
+
+#### Verification
+
+```bash
+cd packages/ts
+pnpm build
+node dist/cli/dirsql.js interpret whatever.mjs; echo "exit=$?"
+# expected: non-zero exit ("unrecognized subcommand 'interpret'")
+node --input-type=module -e "import { DirSQL } from './dist/index.js'; const db = new DirSQL({ root: '.' }); console.log(typeof db.toJSON); db.ready.catch(() => {});"
+# expected: undefined (toJSON was removed)
 ```
 
 ### CLI: native-language configs default `root` to the cwd; nested `config=` rejected; Python construction no longer guards `(None, None)` (#260)

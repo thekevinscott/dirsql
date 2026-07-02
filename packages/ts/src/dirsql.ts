@@ -6,7 +6,6 @@
 
 import type { NativeDirSQL } from "./core.js";
 import { getCore } from "./core.js";
-import { resolveConfig } from "./resolve-config.js";
 import type { TableDef } from "./table.js";
 
 /**
@@ -28,15 +27,6 @@ export interface ExtensionSpec {
    * extension's init function isn't `sqlite3_<filename>_init`.
    */
   entrypoint?: string;
-}
-
-/**
- * A resolved SQLite extension as it appears in the {@link DirSQLConfig}
- * snapshot: `entrypoint` is normalized to `null` when no override was given.
- */
-export interface ResolvedExtension {
-  path: string;
-  entrypoint: string | null;
 }
 
 /**
@@ -97,44 +87,6 @@ export interface RowEvent {
 }
 
 /**
- * Serializable per-table portion of {@link DirSQLConfig}. Excludes the
- * `extract` callback (closures aren't serializable) and the table's SQL
- * `name` (derivable from `ddl`).
- */
-export interface TableConfig {
-  ddl: string;
-  glob: string;
-  strict: boolean;
-}
-
-/**
- * Serializable snapshot of a {@link DirSQL} instance's resolved runtime
- * state, as produced by {@link DirSQL.toJSON} / `JSON.stringify(db)`.
- *
- * The shape is identical across the Python, Rust, and TypeScript SDKs
- * (modulo `persist_path` ↔ `persistPath` case): the same payload can flow
- * through the `interpret` handshake regardless of which SDK produced it.
- *
- * Construction artifacts that are no longer meaningful after the instance
- * exists are intentionally excluded — `config` (already merged into `root`
- * / `tables` / `ignore`), per-table `extract`, and per-table `name`.
- */
-export interface DirSQLConfig {
-  root: string;
-  tables: TableConfig[];
-  ignore: string[];
-  persist: boolean;
-  persistPath: string | null;
-  /**
-   * SQLite extensions to load at startup, in load order. Programmatic
-   * entries (verbatim paths) first, then config-file `[[dirsql.extension]]`
-   * entries with relative paths resolved against the config's parent
-   * directory. Empty when none are configured.
-   */
-  extensions: ResolvedExtension[];
-}
-
-/**
  * Ephemeral SQL index over a local directory.
  *
  * The constructor is overloaded: pass a config-file path directly, or an
@@ -175,10 +127,8 @@ export class DirSQL {
 
   // Initialized by `ready`. Do NOT touch before awaiting `ready`.
   private _inner!: NativeDirSQL;
-  // Constructor options preserved verbatim so `toJSON()` can resolve the
-  // serialized state synchronously without waiting for `ready`, and so
-  // `dirsql interpret` (#196) can reach the user-supplied `extract`
-  // callbacks (which `toJSON()` deliberately drops). Public-by-design.
+  // Constructor options preserved verbatim for inspection without waiting on
+  // `ready`. Public-by-design.
   readonly _options: DirSQLOptions;
 
   /** Construct from a `.dirsql.toml` config-file path. */
@@ -240,14 +190,6 @@ export class DirSQL {
   async pollEvents(timeoutMs: number): Promise<RowEvent[]> {
     await this.ready;
     return this._inner.pollEvents(timeoutMs);
-  }
-
-  /**
-   * Resolved construction state. Recomputed on each call; reads the
-   * `.dirsql.toml` if `config` was supplied. Works before `ready`.
-   */
-  toJSON(): DirSQLConfig {
-    return resolveConfig(this._options);
   }
 
   /**
