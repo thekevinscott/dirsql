@@ -6,6 +6,7 @@
 
 import type { NativeDirSQL } from "./core.js";
 import { getCore } from "./core.js";
+import { resolveConfigExtensionSpecs } from "./resolve-config-extensions.js";
 import { resolveExtensionPath } from "./resolve-extension.js";
 import type { TableDef } from "./table.js";
 
@@ -67,7 +68,9 @@ export interface DirSQLOptions {
    * SQLite extensions to load onto the connection at startup, before any
    * table DDL (enable → load → disable, so the SQL `load_extension()`
    * function is never left exposed). Programmatic entries load first, then
-   * any `[[dirsql.extension]]` declared in `config`.
+   * any `[[dirsql.extension]]` declared in `config`. A `path` (programmatic
+   * or config-file) may be a bare **package name**, resolved from the
+   * installed package under `node_modules` (#299 / #313).
    */
   extensions?: ExtensionSpec[];
 }
@@ -152,6 +155,20 @@ export class DirSQL {
             path: resolveExtensionPath(e.path, process.cwd(), false),
             entrypoint: e.entrypoint,
           })) ?? null;
+        // When the config file names an extension by bare package name, the
+        // SDK resolves every one of the config's [[dirsql.extension]] entries
+        // itself (#313) -- appended after the programmatic ones, matching the
+        // core's ordering -- and suppresses the core's own config-extension
+        // loading so the entries are not loaded a second time (and the core
+        // never sees the unresolvable bare name).
+        const configExtensions =
+          options.config != null
+            ? resolveConfigExtensionSpecs(options.config)
+            : null;
+        const merged =
+          configExtensions !== null
+            ? [...(extensions ?? []), ...configExtensions]
+            : extensions;
         return Ctor.openAsync(
           options.root ?? null,
           options.tables ?? null,
@@ -159,7 +176,8 @@ export class DirSQL {
           options.config ?? null,
           options.persist ?? null,
           options.persistPath ?? null,
-          extensions,
+          merged,
+          configExtensions !== null,
         );
       })
       .then((inner) => {

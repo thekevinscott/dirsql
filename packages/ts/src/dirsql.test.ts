@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCore } from "./core.js";
 import { DirSQL } from "./dirsql.js";
+import { resolveConfigExtensionSpecs } from "./resolve-config-extensions.js";
 import { resolveExtensionPath } from "./resolve-extension.js";
 
 vi.mock("./core.js");
@@ -12,6 +13,16 @@ vi.mock("./resolve-extension.js", async () => ({
     "./resolve-extension.js",
   )),
   resolveExtensionPath: vi.fn((path: string) => `R:${path}`),
+}));
+// Config-file extension resolution (TOML parsing + package-name gating) is
+// unit-tested in `resolve-config-extensions.test`; here it is mocked so
+// construction asserts only the merge + suppress plumbing. Defaults to `null`
+// (do not intervene).
+vi.mock("./resolve-config-extensions.js", async () => ({
+  ...(await vi.importActual<typeof import("./resolve-config-extensions.js")>(
+    "./resolve-config-extensions.js",
+  )),
+  resolveConfigExtensionSpecs: vi.fn(() => null),
 }));
 
 type FakeInner = {
@@ -59,7 +70,10 @@ describe("DirSQL", () => {
         true,
         "/cache.db",
         null,
+        false,
       );
+      // No config option -> the config-extension resolver is never consulted.
+      expect(resolveConfigExtensionSpecs).not.toHaveBeenCalled();
     });
 
     it("resolves extension paths before forwarding them as openAsync's seventh arg", async () => {
@@ -90,11 +104,13 @@ describe("DirSQL", () => {
           { path: "R:sqlite-vec", entrypoint: "sqlite3_vec_init" },
           { path: "R:/ext/spellfix.so", entrypoint: undefined },
         ],
+        false,
       );
     });
 
     it("treats a string argument as a config path", async () => {
       const openAsync = installFakeCore(makeInner());
+      vi.mocked(resolveConfigExtensionSpecs).mockReturnValue(null);
       const db = new DirSQL("/cfg.toml");
       await db.ready;
       expect(openAsync).toHaveBeenCalledWith(
@@ -105,8 +121,81 @@ describe("DirSQL", () => {
         null,
         null,
         null,
+        false,
       );
       expect(db._options).toEqual({ config: "/cfg.toml" });
+    });
+
+    it("appends resolved config extensions and suppresses the core's own loading", async () => {
+      // When the config resolver intervenes (a bare package name in the
+      // config, #313), its resolved specs are appended after the programmatic
+      // ones and the core's config-extension loading is suppressed.
+      const openAsync = installFakeCore(makeInner());
+      vi.mocked(resolveConfigExtensionSpecs).mockReturnValue([
+        { path: "/env/pkg/ext.so", entrypoint: "init" },
+      ]);
+      const db = new DirSQL({
+        config: "/cfg/.dirsql.toml",
+        extensions: [{ path: "ext/a.so" }],
+      });
+      await db.ready;
+      expect(resolveConfigExtensionSpecs).toHaveBeenCalledWith(
+        "/cfg/.dirsql.toml",
+      );
+      expect(openAsync).toHaveBeenCalledWith(
+        null,
+        null,
+        null,
+        "/cfg/.dirsql.toml",
+        null,
+        null,
+        [
+          { path: "R:ext/a.so", entrypoint: undefined },
+          { path: "/env/pkg/ext.so", entrypoint: "init" },
+        ],
+        true,
+      );
+    });
+
+    it("passes config extensions alone when there are no programmatic ones", async () => {
+      const openAsync = installFakeCore(makeInner());
+      vi.mocked(resolveConfigExtensionSpecs).mockReturnValue([
+        { path: "/env/pkg/ext.so", entrypoint: undefined },
+      ]);
+      const db = new DirSQL("/cfg/.dirsql.toml");
+      await db.ready;
+      expect(openAsync).toHaveBeenCalledWith(
+        null,
+        null,
+        null,
+        "/cfg/.dirsql.toml",
+        null,
+        null,
+        [{ path: "/env/pkg/ext.so", entrypoint: undefined }],
+        true,
+      );
+    });
+
+    it("leaves the core's loading untouched when the resolver declines", async () => {
+      // `null` from the resolver (no bare package name in the config) keeps
+      // the pre-#313 behavior: the core loads the config's own entries.
+      const openAsync = installFakeCore(makeInner());
+      vi.mocked(resolveConfigExtensionSpecs).mockReturnValue(null);
+      const db = new DirSQL({
+        config: "/cfg/.dirsql.toml",
+        extensions: [{ path: "ext/a.so" }],
+      });
+      await db.ready;
+      expect(openAsync).toHaveBeenCalledWith(
+        null,
+        null,
+        null,
+        "/cfg/.dirsql.toml",
+        null,
+        null,
+        [{ path: "R:ext/a.so", entrypoint: undefined }],
+        false,
+      );
     });
   });
 
