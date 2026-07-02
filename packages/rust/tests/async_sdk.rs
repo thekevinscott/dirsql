@@ -213,9 +213,25 @@ async fn start_watching_and_poll_events_forward() {
 #[tokio::test]
 async fn sync_backed_methods_before_ready_error() {
     let root = TempDir::new().unwrap();
-    let db = AsyncDirSQL::new(root.path(), vec![items_table()]).unwrap();
-    // Do NOT await ready(): the OnceCell is empty, so sync() takes the None arm,
-    // which yields the not-ready `DirSqlError::Lock`. Every sync-backed method
+    fs::write(root.path().join("gate.txt"), "apple").unwrap();
+
+    // Background init runs eagerly, so merely "not awaiting ready()" races it
+    // (#333). Instead, park init deterministically: the extract closure blocks
+    // on a barrier the test releases only after the assertions, so the initial
+    // scan -- and therefore init -- cannot complete during the assertion window.
+    let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let gate_in_extract = gate.clone();
+    let gated_table = Table::new("CREATE TABLE items (name TEXT)", "**/*.txt", move |_| {
+        gate_in_extract.wait();
+        vec![HashMap::from([(
+            "name".into(),
+            Value::Text("apple".into()),
+        )])]
+    });
+
+    let db = AsyncDirSQL::new(root.path(), vec![gated_table]).unwrap();
+    // Init is parked inside the scan, so sync() takes the None arm, which
+    // yields the not-ready `DirSqlError::Lock`. Every sync-backed method
     // threads `self.sync()?` first, so all of them surface that same variant.
     // (`sync()`/`watch()` return non-Debug Ok types, so match the error out.)
     let sync_err = match db.sync() {
@@ -247,6 +263,11 @@ async fn sync_backed_methods_before_ready_error() {
         matches!(watch_err, dirsql::DirSqlError::Lock(_)),
         "got: {watch_err}"
     );
+
+    // Release init and let it finish so the background thread does not
+    // outlive the TempDir.
+    gate.wait();
+    db.ready().await.unwrap();
 }
 
 // A config that fails to build (duplicate table) makes init fail; ready(),
