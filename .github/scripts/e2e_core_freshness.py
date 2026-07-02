@@ -50,14 +50,19 @@ CORE_PATHSPEC = (
 
 
 def latest_core_commit(base: str, head: str) -> str | None:
-    """SHA of the most recent commit in ``base...head`` touching binding-linked
-    core source, or ``None`` if the PR touches no such source.
+    """SHA of the most recent commit reachable from ``head`` but not ``base``
+    that touches binding-linked core source, or ``None`` if the PR touches no
+    such source.
 
-    Three-dot range (merge-base..head) so commits that landed on ``base``
-    after the branch diverged don't masquerade as this PR's changes -- matching
-    the scope script's diff semantics."""
+    Two-dot ``base..head`` -- i.e. the PR's own commits since the merge-base --
+    so commits that landed on ``base`` after the branch diverged don't
+    masquerade as this PR's changes. (Note the dot convention inverts between
+    ``git diff`` and ``git rev-list``: the scope script's ``git diff
+    base...head`` and this ``git rev-list base..head`` both mean
+    "merge-base..head"; ``git rev-list base...head`` would instead be the
+    *symmetric* difference and wrongly pick up ``base``-side core commits.)"""
     result = subprocess.run(
-        ["git", "rev-list", "-1", f"{base}...{head}", "--", *CORE_PATHSPEC],
+        ["git", "rev-list", "-1", f"{base}..{head}", "--", *CORE_PATHSPEC],
         capture_output=True,
         text=True,
         check=True,

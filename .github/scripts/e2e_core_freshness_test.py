@@ -17,8 +17,10 @@ def describe_latest_core_commit():
         ) as run:
             assert fresh.latest_core_commit("BASE", "HEAD") == "abc123"
         argv = run.call_args.args[0]
-        # three-dot range (merge-base..head), newest commit only
-        assert argv[:4] == ["git", "rev-list", "-1", "BASE...HEAD"]
+        # two-dot range (the PR's own commits since merge-base), newest only --
+        # three-dot rev-list would be the symmetric diff and pick up base-side
+        # core commits the PR never made
+        assert argv[:4] == ["git", "rev-list", "-1", "BASE..HEAD"]
         # cli-gated core is excluded from the staling set
         assert ":(exclude)packages/rust/src/cli" in argv
         assert ":(exclude)packages/rust/src/bin" in argv
