@@ -17,7 +17,7 @@ use tokio::sync::{broadcast, watch};
 use tokio_stream::wrappers::BroadcastStream;
 
 use super::serialize::rows_to_json;
-use super::{AppState, PreQuery};
+use super::{AppState, PostQuery, PreQuery};
 use crate::command::{Placeholder, run_command};
 use crate::{DirSQL, DirSqlError};
 
@@ -25,6 +25,16 @@ use crate::{DirSQL, DirSqlError};
 /// key yet; this module constant is the documented current default (mirrors
 /// `on-file`'s `ON_FILE_TIMEOUT`).
 const PRE_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Fixed timeout for a server-wide `post-query` command (mirrors
+/// `PRE_QUERY_TIMEOUT`).
+const POST_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Cap on the serialized result payload passed as the `{args}` argv token.
+/// Beyond this, `{args}` is emptied and the operator is directed to stdin
+/// (which always carries the full payload) — comfortably under Linux's 128 KiB
+/// single-arg `MAX_ARG_STRLEN`.
+const POST_QUERY_ARGS_MAX: usize = 96 * 1024;
 
 pub(super) struct AppContext {
     pub state: AppState,
@@ -35,6 +45,10 @@ pub(super) struct AppContext {
     /// rewrites the request body through the command; when `None`, the body
     /// is parsed as `{"sql": …}`.
     pub pre_query: Option<PreQuery>,
+    /// Optional server-wide `post-query` hook. When `Some`, a successful
+    /// `POST /query` result set is reshaped by the command before responding;
+    /// when `None`, the rows are returned as-is.
+    pub post_query: Option<PostQuery>,
 }
 
 pub(super) type SharedCtx = Arc<AppContext>;
@@ -81,7 +95,16 @@ async fn handle_query(State(ctx): State<SharedCtx>, body: String) -> Response {
         tokio::time::timeout(timeout, tokio::task::spawn_blocking(move || db.query(&sql))).await;
 
     match join {
-        Ok(Ok(Ok(rows))) => Json(rows_to_json(&rows)).into_response(),
+        Ok(Ok(Ok(rows))) => {
+            let rows_json = rows_to_json(&rows);
+            match &ctx.post_query {
+                Some(pq) => match run_post_query(pq, rows_json).await {
+                    Ok(value) => Json(value).into_response(),
+                    Err(resp) => resp,
+                },
+                None => Json(rows_json).into_response(),
+            }
+        }
         Ok(Ok(Err(err))) => {
             let status = classify_query_error(&err);
             error_response(status, err.to_string())
@@ -152,6 +175,66 @@ async fn run_pre_query(pq: &PreQuery, raw_body: String) -> Result<String, Respon
     outcome
         .map(|out| out.payload)
         .map_err(|err| error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
+}
+
+/// Run the server-wide `post-query` hook over a successful result set and
+/// return the JSON body it prints. The rows are serialized to a JSON array and
+/// delivered two ways: always on the child's stdin (unbounded, injection-safe),
+/// and as the `{args}` placeholder when the payload is within
+/// [`POST_QUERY_ARGS_MAX`] (beyond that `{args}` is emptied and a warning names
+/// the size, directing the operator to stdin — never silent truncation). The
+/// command's last non-empty stdout line is parsed as JSON and returned as the
+/// `200` body; anything that isn't valid JSON, or any failure (non-zero exit,
+/// timeout, spawn error), maps to `500`.
+///
+/// `Response` is large (see [`parse_sql_body`]); returned by value for the same
+/// reason.
+#[allow(clippy::result_large_err)]
+async fn run_post_query(
+    pq: &PostQuery,
+    rows: Vec<serde_json::Value>,
+) -> Result<serde_json::Value, Response> {
+    let payload = serde_json::to_string(&rows)
+        .map_err(|err| error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+    let command = pq.command.clone();
+    let config_dir = pq.config_dir.clone();
+    // `run_command` is blocking — it spawns a child and joins drain threads —
+    // so run it off the async runtime. It enforces `POST_QUERY_TIMEOUT`
+    // internally, so no outer `tokio::time::timeout` is needed.
+    let outcome = tokio::task::spawn_blocking(move || {
+        let args_value = if payload.len() <= POST_QUERY_ARGS_MAX {
+            payload.clone()
+        } else {
+            eprintln!(
+                "dirsql: post-query result payload is {} bytes, exceeding the \
+                 {POST_QUERY_ARGS_MAX}-byte argv threshold; `{{args}}` is emptied — \
+                 read the rows from stdin instead",
+                payload.len()
+            );
+            String::new()
+        };
+        run_command(
+            &command,
+            &[Placeholder::new("args", &args_value)],
+            &config_dir,
+            POST_QUERY_TIMEOUT,
+            Some(payload.as_bytes()),
+        )
+    })
+    .await
+    .map_err(|join_err| error_response(StatusCode::INTERNAL_SERVER_ERROR, join_err.to_string()))?;
+
+    let out = outcome
+        .map_err(|err| error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+    // The command's payload (last non-empty stdout line) is the JSON response
+    // body; reject anything that doesn't parse as JSON.
+    serde_json::from_str(&out.payload).map_err(|err| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("post-query did not return valid JSON: {err}"),
+        )
+    })
 }
 
 async fn handle_events(State(ctx): State<SharedCtx>) -> Response {

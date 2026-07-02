@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use dirsql::cli::{AppState, PreQuery, ServerConfig, init::InitOptions, serve_with_state};
+use dirsql::cli::{
+    AppState, PostQuery, PreQuery, ServerConfig, init::InitOptions, serve_with_state,
+};
 use dirsql::{DirSQL, Extension, Row, Table};
 
 #[derive(Debug, Parser)]
@@ -122,6 +124,9 @@ async fn run_server(cli: Cli) -> ExitCode {
     if let Some(pre_query) = load_pre_query(&cli) {
         server_config = server_config.with_pre_query(pre_query);
     }
+    if let Some(post_query) = load_post_query(&cli) {
+        server_config = server_config.with_post_query(post_query);
+    }
 
     let host = cli.host.clone();
     let handle = match serve_with_state(server_config, state).await {
@@ -226,6 +231,23 @@ fn load_pre_query(cli: &Cli) -> Option<PreQuery> {
     let command = dirsql::config::load_config(&resolved).ok()?.pre_query?;
     let config_dir = resolved.parent()?.to_path_buf();
     Some(PreQuery::new(command, config_dir))
+}
+
+/// Extract the server-wide `post-query` hook from the config, if any.
+///
+/// Returns `None` when the config is absent, unresolvable, unparsable, or
+/// declares no `post-query` — the server then returns `POST /query` result rows
+/// as-is (the degraded / zero-config paths never get a hook). The command's
+/// working directory is the config file's parent, mirroring [`load_pre_query`].
+fn load_post_query(cli: &Cli) -> Option<PostQuery> {
+    let config_path = &cli.config;
+    if !config_path.exists() {
+        return None;
+    }
+    let resolved = config_path.canonicalize().ok()?;
+    let command = dirsql::config::load_config(&resolved).ok()?.post_query?;
+    let config_dir = resolved.parent()?.to_path_buf();
+    Some(PostQuery::new(command, config_dir))
 }
 
 /// Zero-config fallback. When no `.dirsql.toml` is found, dirsql indexes the

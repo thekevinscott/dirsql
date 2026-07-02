@@ -44,6 +44,15 @@ command's stderr tail. With no `pre-query` key, the `{"sql": …}` contract abov
 applies.
 :::
 
+::: tip `post-query` changes the response body
+When [`[dirsql].post-query`](./config.md#reshaping-responses-post-query) is
+configured, the result rows are handed to the hook command (as a JSON array on
+stdin, and as `{args}` for small sets) and the JSON body it prints is returned
+instead of the bare array above. A hook that fails (non-zero exit, timeout,
+spawn error) or prints invalid JSON returns `500`. With no `post-query` key, the
+array-of-rows response above applies.
+:::
+
 ```bash
 curl -s http://localhost:7117/query \
   -H 'content-type: application/json' \

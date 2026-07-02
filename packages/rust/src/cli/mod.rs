@@ -63,6 +63,31 @@ impl PreQuery {
     }
 }
 
+/// A server-wide `post-query` command hook, carrying the command template plus
+/// the directory it runs in (the config file's parent). When set on a
+/// [`ServerConfig`], the server hands each successful `POST /query` result set
+/// (the rows serialized as a JSON array) to the command as `{args}` and on
+/// stdin, and returns the JSON body the command prints instead of the rows
+/// as-is. See [`crate::command`] for the execution contract.
+#[derive(Debug, Clone)]
+pub struct PostQuery {
+    /// The command template (argv-split, no shell). Receives the serialized
+    /// result rows as the `{args}` placeholder (and on stdin).
+    pub command: String,
+    /// The command's working directory — the config file's parent.
+    pub config_dir: PathBuf,
+}
+
+impl PostQuery {
+    /// Build a [`PostQuery`] from a command template and its working directory.
+    pub fn new(command: impl Into<String>, config_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            command: command.into(),
+            config_dir: config_dir.into(),
+        }
+    }
+}
+
 /// Configure how the server binds. Defaults to `localhost:7117` with a
 /// 30-second per-query timeout and no `pre-query` hook.
 #[derive(Debug, Clone)]
@@ -73,6 +98,9 @@ pub struct ServerConfig {
     /// Optional server-wide `pre-query` command. When `None` (the default),
     /// `POST /query` parses its body as `{"sql": …}`.
     pub pre_query: Option<PreQuery>,
+    /// Optional server-wide `post-query` command. When `None` (the default),
+    /// `POST /query` returns the result rows as-is.
+    pub post_query: Option<PostQuery>,
 }
 
 impl ServerConfig {
@@ -84,6 +112,7 @@ impl ServerConfig {
             port: 0,
             query_timeout: Duration::from_secs(30),
             pre_query: None,
+            post_query: None,
         }
     }
 
@@ -94,6 +123,7 @@ impl ServerConfig {
             port,
             query_timeout: Duration::from_secs(30),
             pre_query: None,
+            post_query: None,
         }
     }
 
@@ -109,6 +139,14 @@ impl ServerConfig {
     /// instead of parsing the body as `{"sql": …}`.
     pub fn with_pre_query(mut self, pre_query: PreQuery) -> Self {
         self.pre_query = Some(pre_query);
+        self
+    }
+
+    /// Attach a server-wide [`PostQuery`] hook. With it set, `POST /query`
+    /// hands each successful result set to the command and returns the JSON
+    /// body it prints instead of returning the rows as-is.
+    pub fn with_post_query(mut self, post_query: PostQuery) -> Self {
+        self.post_query = Some(post_query);
         self
     }
 }
@@ -214,6 +252,7 @@ mod tests {
         assert_eq!(cfg.port, 7117);
         assert_eq!(cfg.query_timeout, Duration::from_secs(30));
         assert!(cfg.pre_query.is_none());
+        assert!(cfg.post_query.is_none());
     }
 
     #[test]
@@ -230,6 +269,24 @@ mod tests {
         let cfg = ServerConfig::ephemeral().with_pre_query(PreQuery::new("cmd {args}", "/proj"));
         let pq = cfg.pre_query.expect("hook must be set");
         assert_eq!(pq.command, "cmd {args}");
+        assert_eq!(pq.config_dir, PathBuf::from("/proj"));
+    }
+
+    #[test]
+    fn post_query_constructor_carries_command_and_dir() {
+        // `PostQuery::new` is pure data plumbing: the command template and the
+        // working directory it will run in.
+        let pq = PostQuery::new("jq '{results: .}'", "/proj");
+        assert_eq!(pq.command, "jq '{results: .}'");
+        assert_eq!(pq.config_dir, PathBuf::from("/proj"));
+    }
+
+    #[test]
+    fn with_post_query_sets_the_hook() {
+        let cfg =
+            ServerConfig::ephemeral().with_post_query(PostQuery::new("reshape {args}", "/proj"));
+        let pq = cfg.post_query.expect("hook must be set");
+        assert_eq!(pq.command, "reshape {args}");
         assert_eq!(pq.config_dir, PathBuf::from("/proj"));
     }
 }

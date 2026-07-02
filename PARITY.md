@@ -147,6 +147,16 @@ behavior with no per-SDK code. Individual event rows land here as B2–B4 ship.
   handler) — a **CLI-only** surface with **no** Python/TypeScript public-API
   binding, identical across every install, no drift.
 
+- **`post-query` (B4 #329).** A **server-wide** `[dirsql]` key naming a command
+  that reshapes each successful `POST /query` result set (rows serialized as a
+  JSON array, delivered on stdin and as the `{args}` placeholder for payloads
+  ≤ 96 KiB) into the JSON response body it prints; invalid JSON or a failure
+  (non-zero exit, timeout, spawn error) → 500; 30s timeout. Parsed by the shared
+  Rust config loader (`config::Config::post_query`) and wired through the CLI
+  server (`cli::ServerConfig::post_query` / the `/query` handler) — a
+  **CLI-only** surface with **no** Python/TypeScript public-API binding,
+  identical across every install, no drift.
+
 ## Language-Idiomatic Exceptions
 
 ### Python
