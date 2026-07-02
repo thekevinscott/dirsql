@@ -247,23 +247,39 @@ describe("DirSQL watch() async iterator", () => {
       });
       expect(await db.query("SELECT * FROM rows")).toHaveLength(3);
 
-      const collector = collectFromWatch(db, {
-        until: (events) =>
-          events.some((e) => e.action === "delete" && e.row?.name === "row-2"),
-      });
+      // Keep consuming events until the dropped row's delete has been seen
+      // AND the database reflects the 2-row end state. The DB is only
+      // brought up to date while the stream is being polled, so breaking
+      // out on the first row-2 delete could freeze it mid-replace (e.g.
+      // when a full-replace's deletes and re-inserts arrive in separate
+      // poll batches).
+      const collector = (async () => {
+        const deletedNames = new Set<unknown>();
+        for await (const event of db.watch()) {
+          if (event.action === "delete") {
+            deletedNames.add(event.row?.name);
+          }
+          if (deletedNames.has("row-2")) {
+            const post = await db.query("SELECT idx FROM rows ORDER BY idx");
+            if (post.length === 2) {
+              return { deletedNames, post };
+            }
+          }
+        }
+        throw new Error("watch stream ended unexpectedly");
+      })();
       await sleep(300);
 
-      // Shrink from 3 -> 2 rows (drop the third).
-      await writeFile(path, line(0) + line(1));
+      // Shrink from 3 -> 2 rows (drop the third). Written atomically so the
+      // watcher never observes a truncated mid-write file.
+      const tmp = `${path}.tmp`;
+      await writeFile(tmp, line(0) + line(1));
+      await rename(tmp, path);
 
-      const events = await collector;
-      const deletedNames = new Set(
-        events.filter((e) => e.action === "delete").map((e) => e.row?.name),
-      );
+      const { deletedNames, post } = await collector;
       expect(deletedNames.has("row-2")).toBe(true);
 
       // The database reflects only the two surviving rows.
-      const post = await db.query("SELECT * FROM rows ORDER BY idx");
       expect(post.map((r) => r.idx)).toEqual([0, 1]);
     },
     TEST_TIMEOUT,
