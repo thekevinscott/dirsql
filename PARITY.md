@@ -101,6 +101,14 @@ Rust + docs) — there is no parity surface here anymore. To run user-defined
 in your own host program and query it in-process; this is at parity across
 Python, Rust, and TypeScript (see *Core Types* and *DirSQL* above).
 
+**Command-backed events (Epic B, #322) — parity by construction, no drift.**
+The command runner primitive (`dirsql::command::run_command`, B1 #326) lives entirely in
+the Rust core and is **not exposed on any binding's public API** — it has no
+Python/TypeScript surface to keep in parity. The events built on it (`on-file`,
+`pre-query`, `post-query`) are `.dirsql.toml` keys parsed by the shared Rust
+config loader, so every install (`pip` / `npm` / `cargo`) gets identical
+behavior with no per-SDK code. Individual event rows land here as B2–B4 ship.
+
 ## Language-Idiomatic Exceptions
 
 ### Python

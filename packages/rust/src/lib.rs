@@ -7,6 +7,8 @@
 //! bindings in this workspace can reach them, but they are not part of the
 //! stable public API.
 
+/// Reusable command runner backing the command-backed events (#322).
+pub mod command;
 #[doc(hidden)]
 pub mod config;
 #[doc(hidden)]
