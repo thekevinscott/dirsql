@@ -56,6 +56,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`.dirsql.toml`: `on-file` per-table command event — the first
+  command-backed event (Epic B, #322 / B2 #327).** Add `on-file = "<command>"`
+  to a `[[table]]` to derive that table's rows from each matched file's
+  *contents*: `dirsql` runs the command once per file (the command reads the
+  file and prints a JSON array of row objects on stdout), and each object
+  becomes a row. Placeholders: `{path}` (the match relative to the index root,
+  appended automatically when the template omits it), `{abspath}` (absolute
+  path), and `{root}` (the index root). The command runs in the config file's
+  directory with the inherited environment and a fixed 30-second timeout, no
+  shell (argv-split with shell-like quoting; `sh -c '…'` is the explicit
+  opt-in). JSON values map to SQLite as `null`→NULL, `bool`→`0/1`,
+  integer→INTEGER / other number→REAL, string→TEXT, nested array/object→JSON
+  TEXT. Filesystem facts (stat virtuals and glob captures) are still merged
+  onto every row, with command-emitted columns winning. **Per-file error
+  isolation:** a command that fails (non-zero exit, timeout, spawn error) or
+  emits output that isn't a JSON array of objects skips only that file (with a
+  stderr warning) and never aborts the scan. Handled entirely by the shared
+  Rust core, so it is identical across the `pip` / `npm` / `cargo` installs.
+  (#327)
+
 - **Rust core: a reusable command runner (`dirsql::command::run_command`), the
   foundation for command-backed events (Epic B, #322 / B1 #326).** Splits a
   command template into argv with shell-like quoting but runs **no shell**
