@@ -97,20 +97,21 @@ jobs:
         run: |
           set -eo pipefail
           # Floors pinned to the current honest maximum across every dimension
-          # (measured: lines 98.63, functions 96.93, regions 97.47, branches
-          # 81.05). Lines/functions/regions use the real --fail-under-* flags;
+          # (measured after the native-config removal in #325: lines 97.28,
+          # functions 96.47, regions 98.37, branches 83.10).
+          # Lines/functions/regions use the real --fail-under-* flags;
           # cargo-llvm-cov has no --fail-under-branches, so the branch floor is
           # gated by parsing the summary TOTAL row (last column = branch %).
           # --branch needs nightly; only the thin src/bin launcher is excluded.
           #
-          # `cli/native_config.rs` (#192) added subprocess-RPC closures that
-          # are only fully exercised via the cross-language e2e tests
-          # (`packages/python/tests/e2e/native_config_test.py`,
-          # `packages/ts/tests/e2e/native-config.test.ts`), dragging the functions
-          # floor from 96.93 down to ~95.6. Functions floor is temporarily
-          # lowered to 95; a follow-up should add tests that lift it back to
-          # 96 once the helper's monomorphization landscape settles.
-          cargo llvm-cov --manifest-path packages/rust/Cargo.toml --features cli --branch --ignore-filename-regex 'src/bin/' --fail-under-lines 98 --fail-under-functions 95 --fail-under-regions 97 --summary-only | tee /dev/stderr | awk '/^TOTAL/ { p=$NF; sub(/%/,"",p); print "branch coverage " $NF " (floor 81%)"; if (p+0 < 81) { print "::error::Rust branch coverage " $NF " below 81% floor"; exit 1 } }'
+          # `cli/native_config.rs` (#192) — a well-line-covered file whose
+          # subprocess-RPC functions were only fully exercised by the
+          # cross-language e2e tests — was removed in #325 (epic #321). Its
+          # removal lowered the line max (it had padded the total) and lifted
+          # the branch/function maxima (its e2e-only paths no longer drag them),
+          # so the lines floor moves 98 -> 97 and the functions floor returns to
+          # 96 (the value the old comment earmarked to restore).
+          cargo llvm-cov --manifest-path packages/rust/Cargo.toml --features cli --branch --ignore-filename-regex 'src/bin/' --fail-under-lines 97 --fail-under-functions 96 --fail-under-regions 97 --summary-only | tee /dev/stderr | awk '/^TOTAL/ { p=$NF; sub(/%/,"",p); print "branch coverage " $NF " (floor 81%)"; if (p+0 < 81) { print "::error::Rust branch coverage " $NF " below 81% floor"; exit 1 } }'
 
   lint:
     name: Lint

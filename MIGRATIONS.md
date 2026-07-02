@@ -116,31 +116,73 @@ node --input-type=module -e "import { DirSQL } from './dist/index.js'; const db 
 # expected: undefined (toJSON was removed)
 ```
 
-### CLI: native-language configs default `root` to the cwd; nested `config=` rejected; Python construction no longer guards `(None, None)` (#260)
+### Rust: native-config orchestration and `DirSQL::config()` / `DirSQLConfig` removed; `.dirsql.toml` is the only CLI config (#325)
 
 #### Summary
 
-`dirsql --config <native config>` (`.py` / `.js` / `.mjs` / `.cjs`) previously
-required the config's `DirSQL` to set an explicit `root`: without one the Python
-launcher exited non-zero (`DirSQL requires either a root directory or a config=
-path`) and the JavaScript launcher started but indexed nothing. The `dirsql
-interpret` handshake now defaults a missing `root` to the launcher process's
-current working directory — the directory the command was run from — for both
-the Python and TypeScript launchers. Two related changes ship with it: `dirsql
-interpret` now rejects a native config whose `DirSQL` itself sets `config=`
-(nested config loading is unsupported and would recurse), and the Python
-`DirSQL(...)` constructor no longer raises `TypeError` when neither `root` nor
-`config` is supplied — that check is delegated to the Rust core and now surfaces
-from `await db.ready()` / `db.query(...)`, matching Rust and the TypeScript SDK.
-Affects CLI users of native-language configs and any Python caller relying on the
-constructor-time `TypeError`.
+The Rust core and CLI binary drop the native-language config path (A3 of epic
+#321, lands last), completing the epic across all three SDKs. The `dirsql`
+binary no longer inspects the `--config` extension or spawns a `dirsql
+interpret` helper, and `cli::native_config` (the NDJSON spawn/handshake
+protocol) is deleted. `.dirsql.toml` is the only config format the CLI accepts
+(unchanged for TOML users). The cross-language config-serialization snapshot
+(#194) is retired: `DirSQL::config()` and the `DirSQLConfig` type are removed
+from the Rust SDK — nothing consumed the serialized state once `interpret` was
+gone. Affects anyone passing a `.py`/`.js`/`.mjs`/`.cjs` file to `dirsql
+--config`, and any Rust caller of `db.config()` / `DirSQLConfig`.
 
 #### Required changes
 
 | Surface | Before | After |
 | ------- | ------ | ----- |
-| Native config (`.py`/`.js`) with no `root` | Python launcher errors; JS launcher indexes nothing | indexes the launcher's cwd; pass `root=` to override |
-| Native config whose `DirSQL` sets `config=` | loaded (the nested config was read and merged) | rejected: `dirsql interpret` exits non-zero with a `config=` error |
+| CLI native-language config | `dirsql --config config.py` (or `.js`/`.mjs`/`.cjs`) — binary spawned `dirsql interpret` | Not supported. The non-TOML file fails to parse as TOML; the server starts degraded (HTTP 503). Use a `.dirsql.toml`, or embed a binding SDK programmatically. |
+| Rust serialized state | `db.config() -> DirSQLConfig` (`serde::Serialize`) | Removed, along with the `DirSQLConfig` / snapshot `TableConfig` types. `DirSQLBuilder::config(path)` (loads a `.dirsql.toml`) and `DirSQL::from_config_path` are unchanged. |
+
+#### Deprecations removed
+
+_None._ Native configs, `interpret`, and the serialization snapshot were never
+deprecated; removed in a single release (the feature never shipped a stable
+release).
+
+#### Behavior changes without code changes
+
+- `dirsql --config <file>.{py,js,mjs,cjs}` no longer spawns a `dirsql
+  interpret` helper. The binary treats every `--config` as TOML, so a
+  non-TOML file fails to parse and the server starts in the degraded
+  (HTTP 503) state with the parse diagnostic, instead of serving the config's
+  tables.
+- `dirsql interpret …` (any SDK's launcher) exits non-zero — the subcommand no
+  longer exists.
+
+#### Verification
+
+```bash
+cargo build -p dirsql --features cli
+# A `.py` config no longer serves tables; the binary reports a TOML parse error.
+printf 'app = 1\n' > /tmp/dirsql-a3.py
+cargo run -q -p dirsql --features cli -- --config /tmp/dirsql-a3.py --port 8099 &
+sleep 1
+curl -s localhost:8099/query -H 'content-type: application/json' -d '{"sql":"SELECT 1"}'
+# expected: a 503 with a "failed to load config" / TOML parse diagnostic
+kill %1
+```
+
+### CLI: Python `DirSQL(...)` no longer guards `(None, None)` (#260)
+
+#### Summary
+
+The Python `DirSQL(...)` constructor no longer raises `TypeError` when neither
+`root` nor `config` is supplied — that check is delegated to the Rust core and
+now surfaces from `await db.ready()` / `db.query(...)`, matching Rust and the
+TypeScript SDK. Affects any Python caller relying on the constructor-time
+`TypeError`. (The native-config root-defaulting and nested-`config=` rejection
+that originally shipped under #260 are gone with the `interpret` removal in
+#323 / #324 / #325.)
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
 | Python `DirSQL()` with neither `root` nor `config` | raises `TypeError` at construction | constructs; the "no root" error surfaces from `await db.ready()` / `query()` |
 
 #### Deprecations removed
@@ -149,10 +191,6 @@ _None._
 
 #### Behavior changes without code changes
 
-- A native-language config with no `root` now scans the current working
-  directory instead of erroring (Python) or indexing nothing (JavaScript).
-- `dirsql interpret` exits non-zero for a config that sets `config=` (previously
-  it read and merged the nested config).
 - Python `DirSQL(...)` defers the "no root or config" error from construction
   time to readiness time (`await db.ready()` / `query()`); the raised exception
   is the core's error, not a `TypeError`.
@@ -160,28 +198,10 @@ _None._
 #### Verification
 
 ```bash
-mkdir -p /tmp/dirsql-mig/a
-echo '{"title":"Gamma"}' > /tmp/dirsql-mig/a/meta.json
-cat > /tmp/dirsql-mig/dirsql.config.py <<'EOF'
-import json
-from dirsql import DirSQL, Table
-
-app = DirSQL(tables=[Table(
-    ddl="CREATE TABLE papers (title TEXT)",
-    glob="**/meta.json",
-    extract=lambda p: [json.load(open(p))],
-)])
-EOF
-cd /tmp/dirsql-mig
-dirsql --config dirsql.config.py --port 8080 &
-sleep 1
-curl -s localhost:8080/query -H 'content-type: application/json' \
-  -d '{"sql":"SELECT title FROM papers"}'
-kill %1
+cd packages/python
+uv run python -c "from dirsql import DirSQL; DirSQL(); print('constructed without TypeError')"
+# expected: constructed without TypeError
 ```
-
-Expected: `[{"title":"Gamma"}]` — the root-less config indexes the cwd
-(`/tmp/dirsql-mig`, where `a/meta.json` lives) instead of failing to start.
 
 ### Rust SDK: extension-loading review followup (#225)
 
@@ -189,12 +209,8 @@ Expected: `[{"title":"Gamma"}]` — the root-less config indexes the cwd
 
 Code review of the unreleased SQLite-extension-loading feature (#225) added a
 dedicated `DirSqlError::Extension` variant — load failures previously surfaced
-as `DirSqlError::Core(DbError::Sqlite(_))` — and extended the resolved-state
-snapshot: `DirSQL::config()` / `DirSQLConfig` now carries an `extensions`
-array, so every serialized config (including the `interpret` handshake payload)
-gains an `extensions` key, empty when none are configured. Exhaustive matches
-on `DirSqlError` and exact-shape assertions on the serialized config are
-affected; both are simple updates.
+as `DirSqlError::Core(DbError::Sqlite(_))`. Exhaustive matches on `DirSqlError`
+are affected; it is a simple update.
 
 #### Required changes
 
@@ -202,7 +218,6 @@ affected; both are simple updates.
 | ------- | ------ | ----- |
 | Exhaustive `match` on `DirSqlError` | (no `Extension` arm) | add `DirSqlError::Extension { .. }` (or a `_` arm) |
 | Error from a failed extension load | `DirSqlError::Core(DbError::Sqlite(_))` | `DirSqlError::Extension { path, source }` |
-| Serialized `DirSQLConfig` / `db.config()` JSON | `{root, tables, ignore, persist, persist_path}` | adds `extensions: []` (array of `{path, entrypoint}`) |
 
 #### Deprecations removed
 
@@ -210,40 +225,32 @@ _None._
 
 #### Behavior changes without code changes
 
-- `DirSQL::config()` (and `toJSON` / the `interpret` handshake payload) now
-  always includes an `extensions` array — empty when no extensions are
-  configured. Consumers asserting the exact key set of the serialized config
-  must accept the new key.
+- A failed extension load now surfaces as `DirSqlError::Extension { path,
+  source }` (naming the library) instead of a generic
+  `DirSqlError::Core(DbError::Sqlite(_))`.
 
 #### Verification
 
 ```bash
-cargo test -p dirsql --test extensions config_serialization_includes_extensions
+cargo test -p dirsql --test extensions
 ```
 
-Expected: passes — a Rust `DirSQL` built with a `[[dirsql.extension]]` entry
-serializes a config whose JSON contains `extensions` with the entry's `path`
-and `entrypoint`.
+Expected: passes — extension loading works and a failed load surfaces the
+dedicated `DirSqlError::Extension` variant.
 
-### Python SDK: `DirSQL(extensions=...)` and `vars(db)` carries `extensions` (#229)
+### Python SDK: `DirSQL(extensions=...)` (#229)
 
 #### Summary
 
 The Python `DirSQL` constructor gains an additive `extensions` parameter (a list
 of `{"path", "entrypoint"?}` dicts) that loads SQLite extensions onto the
-connection at startup, marshaled into the shared Rust core. As a consequence the
-resolved-state snapshot `vars(db)` — which also backs the `interpret`
-native-config handshake `state` — now always includes an `extensions` array,
-empty when none are configured. This brings the Python snapshot in line with the
-Rust `DirSQL::config()` change already landed in #225. Only consumers asserting
-the *exact key set* of `vars(db)` are affected; the constructor parameter itself
-is backward compatible (it defaults to no extensions).
+connection at startup, marshaled into the shared Rust core. The constructor
+parameter is backward compatible (it defaults to no extensions).
 
 #### Required changes
 
 | Surface | Before | After |
 | ------- | ------ | ----- |
-| `set(vars(db))` / exact-shape assertions on the Python serialized config | `{root, tables, ignore, persist, persist_path}` | additionally contains `extensions` (array of `{path, entrypoint}`) |
 | Loading a SQLite extension from the Python SDK | _not available — only `[[dirsql.extension]]` config-file entries_ | `DirSQL(root, extensions=[{"path": "...", "entrypoint": "..."}])` |
 
 #### Deprecations removed
@@ -252,41 +259,30 @@ _None._
 
 #### Behavior changes without code changes
 
-- `vars(db)` / `db.__dict__` (the Python serialized construction state, also
-  emitted as the `interpret` handshake `state`) now always includes an
-  `extensions` key — an empty list when no extensions are configured. Consumers
-  asserting the exact key set of the serialized config must accept the new key.
-  (The Rust `DirSQL::config()` equivalent changed in #225.)
+_None._ The parameter is additive and defaults to no extensions.
 
 #### Verification
 
 ```bash
 cd packages/python
-uv run python -c "import tempfile; from dirsql import DirSQL; print('extensions' in vars(DirSQL(tempfile.mkdtemp())))"
-# expected: True
+uv run python -c "from dirsql import DirSQL; DirSQL('.', extensions=[]); print('accepts extensions=')"
+# expected: accepts extensions=
 ```
 
-### TypeScript SDK: `new DirSQL({ extensions })` and `toJSON()` carries `extensions` (#230)
+### TypeScript SDK: `new DirSQL({ extensions })` (#230)
 
 #### Summary
 
 The TypeScript `DirSQL` constructor gains an additive `extensions` option (an
 array of `{ path, entrypoint? }` objects) that loads SQLite extensions onto the
 connection at startup, marshaled through the napi binding into the shared Rust
-core. As a consequence the resolved-state snapshot `toJSON()` /
-`JSON.stringify(db)` — which also backs the `dirsql interpret` native-config
-handshake `state` — now always includes an `extensions` array, empty when none
-are configured. This brings the TypeScript snapshot in line with the Rust
-`DirSQL::config()` (#225) and Python `vars(db)` (#229) changes, closing the last
-extension-loading parity gap. Only consumers asserting the *exact key set* of
-`toJSON()` are affected; the constructor option itself is backward compatible
-(it defaults to no extensions).
+core. The constructor option is backward compatible (it defaults to no
+extensions).
 
 #### Required changes
 
 | Surface | Before | After |
 | ------- | ------ | ----- |
-| Exact-shape assertions on the TypeScript serialized config (`toJSON()` / `JSON.stringify(db)`) | `{root, tables, ignore, persist, persistPath}` | additionally contains `extensions` (array of `{path, entrypoint}`) |
 | Loading a SQLite extension from the TypeScript SDK | _not available — only `[[dirsql.extension]]` config-file entries_ | `new DirSQL({ root, extensions: [{ path: "...", entrypoint: "..." }] })` |
 
 #### Deprecations removed
@@ -295,21 +291,15 @@ _None._
 
 #### Behavior changes without code changes
 
-- `toJSON()` / `JSON.stringify(db)` (the TypeScript serialized construction
-  state, also emitted as the `interpret` handshake `state`) now always includes
-  an `extensions` key — an empty array when no extensions are configured, with
-  each entry's `entrypoint` normalized to `null` when no override is supplied.
-  Consumers asserting the exact key set of the serialized config must accept the
-  new key. (The Rust `DirSQL::config()` equivalent changed in #225; the Python
-  `vars(db)` equivalent in #229.)
+_None._ The option is additive and defaults to no extensions.
 
 #### Verification
 
 ```bash
 cd packages/ts
 pnpm build
-node --input-type=module -e "import { DirSQL } from './dist/index.js'; const db = new DirSQL({ root: '.' }); console.log('extensions' in db.toJSON()); db.ready.catch(() => {});"
-# expected: true
+node --input-type=module -e "import { DirSQL } from './dist/index.js'; const db = new DirSQL({ root: '.', extensions: [] }); console.log('accepts extensions'); db.ready.catch(() => {});"
+# expected: accepts extensions
 ```
 
 ### Rust SDK: code-review followup (#218)
