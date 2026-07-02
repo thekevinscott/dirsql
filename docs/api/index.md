@@ -145,26 +145,6 @@ for await (const event of db.watch()) {  // AsyncIterable<RowEvent>
 
 Returns an async iterable of `RowEvent` objects. The file watcher starts automatically on first iteration. The iterator never terminates on its own.
 
-#### `serialization`
-
-::: code-group
-
-```python [Python]
-vars(db) -> dict
-```
-
-```rust [Rust]
-db.config() -> DirSQLConfig
-```
-
-```typescript [TypeScript]
-JSON.stringify(db)  // via db.toJSON()
-```
-
-:::
-
-Returns the resolved construction state as a JSON-compatible value with fields `root`, `tables`, `ignore`, `persist`, `persist_path` (camelCase `persistPath` in TypeScript). Each table is `{ ddl, glob, strict }`. All three SDK snapshots also include `extensions` -- an array of `{ path, entrypoint }` (empty when none are configured; `entrypoint` is `null` when no override was supplied). Excludes the original `config` path (already merged into `root` / `tables` / `ignore`), per-table `extract`, and per-table `name`. Available immediately after construction in Python and TypeScript; Rust's sync `build()` returns a ready instance.
-
 ---
 
 ## Table
@@ -213,7 +193,7 @@ Defines a mapping from files to SQLite table rows.
 - `ddl` -- A `CREATE TABLE` statement. The table name is parsed from this DDL.
 - `glob` -- A glob pattern matched against file paths relative to the root directory.
 - `extract` -- A callable `(path) -> list[dict]`. Receives the path of the matched file -- relative to the scan root, or absolute when `root` is absolute. `dirsql` does not read file contents; a callback that needs the file body reads `path` itself. Returns a list of dicts/maps mapping column names to values. Return an empty list to skip a file.
-- `strict` -- Optional (default `False`). Controls row/schema validation. In the default relaxed mode, extra row keys are dropped and missing columns become `NULL`. When `True`, every row key must be a valid column identifier and any extra or missing key raises an error. Surfaced in [serialization](#serialization) above as part of each table's `{ ddl, glob, strict }`.
+- `strict` -- Optional (default `False`). Controls row/schema validation. In the default relaxed mode, extra row keys are dropped and missing columns become `NULL`. When `True`, every row key must be a valid column identifier and any extra or missing key raises an error.
 
 **Attributes:**
 
