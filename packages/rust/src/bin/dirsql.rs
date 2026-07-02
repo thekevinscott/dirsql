@@ -8,12 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use dirsql::cli::{
-    AppState, ServerConfig,
-    init::InitOptions,
-    native_config::{InterpretHelper, build_dirsql},
-    serve_with_state,
-};
+use dirsql::cli::{AppState, ServerConfig, init::InitOptions, serve_with_state};
 use dirsql::{DirSQL, Row, Table};
 
 #[derive(Debug, Parser)]
@@ -157,71 +152,10 @@ fn load_state(cli: &Cli) -> AppState {
         }
     };
 
-    if is_native_config(&resolved) {
-        return load_native_state(&resolved);
-    }
-
     match DirSQL::from_config_path(&resolved) {
         Ok(db) => AppState::Ready(db),
         Err(err) => AppState::Unavailable(format!("failed to load config: {err}")),
     }
-}
-
-/// Native-language config support: `--config X.{py,js,mjs,cjs}` delegates
-/// to `dirsql interpret <X>` (spawned via PATH) for `extract` execution.
-/// The binary still owns SQL, HTTP, and the file watcher.
-fn is_native_config(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(|s| s.to_str()),
-        Some("py") | Some("js") | Some("mjs") | Some("cjs")
-    )
-}
-
-fn load_native_state(config_path: &Path) -> AppState {
-    let (helper, config) = match spawn_interpret_helper(config_path) {
-        Ok(x) => x,
-        Err(err) => return AppState::Unavailable(err),
-    };
-    match build_dirsql(helper, config) {
-        Ok(db) => AppState::Ready(db),
-        Err(err) => AppState::Unavailable(format!(
-            "failed to build DirSQL from {}: {err}",
-            config_path.display()
-        )),
-    }
-}
-
-/// Spawn `dirsql interpret <config_path>` via PATH and hand the child
-/// off to [`InterpretHelper::from_child`]. Lives in the CLI binary
-/// (rather than the lib's `cli::native_config` module) because the
-/// `Command::new("dirsql")` plumbing is only meaningfully exercised
-/// end-to-end via the `dirsql --config X.{py,js,mjs,cjs}` integration
-/// path — there's no useful in-process unit test for it.
-fn spawn_interpret_helper(
-    config_path: &Path,
-) -> Result<
-    (
-        std::sync::Arc<InterpretHelper>,
-        dirsql::cli::native_config::NativeConfig,
-    ),
-    String,
-> {
-    use std::process::{Command, Stdio};
-    let child = Command::new("dirsql")
-        .arg("interpret")
-        .arg(config_path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .map_err(|e| {
-            format!(
-                "failed to spawn `dirsql interpret`: {e}. \
-                 Native-language configs require a launcher that implements `interpret` \
-                 on PATH (install dirsql via pip/uv or npm/npx)."
-            )
-        })?;
-    InterpretHelper::from_child(child)
 }
 
 /// Zero-config fallback. When no `.dirsql.toml` is found, dirsql indexes the
@@ -287,24 +221,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn is_native_config_matches_script_extensions() {
-        for ext in ["py", "js", "mjs", "cjs"] {
-            let path = format!("cfg.{ext}");
+    fn default_files_table_declares_filesystem_fact_columns_over_recursive_glob() {
+        // The zero-config fallback table is pure data: a fixed DDL naming only
+        // the auto-injected filesystem-fact columns and a `**/*` glob that
+        // matches every file at any depth. The extract closure is never
+        // invoked here, so this stays a pure unit test.
+        let table = default_files_table();
+        assert_eq!(table.glob, "**/*");
+        assert!(table.ddl.starts_with("CREATE TABLE files ("));
+        for col in [
+            "_path",
+            "_basename",
+            "_dir",
+            "_ext",
+            "_size",
+            "_mtime",
+            "_ctime",
+        ] {
             assert!(
-                is_native_config(Path::new(&path)),
-                "expected .{ext} to be treated as a native config"
-            );
-        }
-    }
-
-    #[test]
-    fn is_native_config_rejects_other_extensions_and_casing() {
-        // `.toml` is the built-in format; bare/uppercase extensions are not
-        // delegated to the `interpret` helper.
-        for name in ["cfg.toml", "cfg.txt", "cfg", "cfg.PY", "cfg.JS"] {
-            assert!(
-                !is_native_config(Path::new(name)),
-                "expected {name} not to be treated as a native config"
+                table.ddl.contains(col),
+                "default files DDL must declare {col}, got: {}",
+                table.ddl
             );
         }
     }

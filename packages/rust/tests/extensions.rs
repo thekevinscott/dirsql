@@ -188,38 +188,6 @@ glob = "*.txt"
     );
 }
 
-/// The serialized resolved-state snapshot (`DirSQL::config()`) must expose the
-/// configured extensions. Every other resolved field (root/tables/ignore/
-/// persist) is carried through the `interpret` handshake; extensions must not
-/// be the lone silent omission. (RED for #225 review finding #2.)
-#[test]
-fn config_serialization_includes_extensions() {
-    let ext = build_fixture_extension();
-
-    let root = TempDir::new().unwrap();
-    fs::write(
-        root.path().join(".dirsql.toml"),
-        format!(
-            r#"
-[[dirsql.extension]]
-path = "{}"
-entrypoint = "sqlite3_extension_init"
-"#,
-            ext.display(),
-        ),
-    )
-    .unwrap();
-
-    let db = DirSQL::from_config(root.path())
-        .expect("construction with a real extension should succeed");
-
-    let json = serde_json::to_string(&db.config()).unwrap();
-    assert!(
-        json.contains("sqlite3_extension_init"),
-        "config() serialization should expose loaded extensions, got: {json}"
-    );
-}
-
 /// A failed extension load must surface a dirsql extension-specific error that
 /// names the offending library, not an opaque generic SQLite error. (RED for
 /// #225 review finding #9.)

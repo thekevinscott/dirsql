@@ -6,16 +6,10 @@ canonical: https://thekevinscott.github.io/dirsql/cli/config
 
 > Online: <https://thekevinscott.github.io/dirsql/cli/config>
 
-`dirsql` is configured with an optional config file; with none, the server
-falls back to [zero-config defaults](./server.md#defaults). Choose a format by
-what you need:
-
-- **[TOML](#toml)** — declarative; defines filesystem-fact tables (the path,
-  glob captures, and stat metadata). Works with any installation.
-- **[Python](#python)** and **[JavaScript](#javascript)** — native-language
-  configs that build tables from the *contents* of files (frontmatter, JSON
-  values, CSV cells) through a dynamic `extract` callback. CLI-only; only the
-  launcher matching the file's language can run it.
+`dirsql` is configured with an optional `.dirsql.toml` file; with none, the
+server falls back to [zero-config defaults](./server.md#defaults). A
+[TOML](#toml) config is declarative: it defines filesystem-fact tables (the
+path, glob captures, and stat metadata) and works with any installation.
 
 ## TOML
 
@@ -194,9 +188,8 @@ strict = true
 
 Strict mode does **not** apply to auto-injected stat virtuals — those are
 always filtered to the DDL's declared columns regardless. Strict mode
-applies only to keys produced by an extract callback (relevant for the
-[Python](#python) / [JavaScript](#javascript) configs below and programmatic
-[tables](../guide/tables.md)).
+applies only to keys produced by an extract callback (relevant for
+programmatic [tables](../guide/tables.md)).
 
 ### Full Example
 
@@ -216,108 +209,3 @@ glob = "**/index.md"
 ddl  = "CREATE TABLE logs (_path TEXT, _size INTEGER, _mtime INTEGER)"
 glob = "logs/*.csv"
 ```
-
-## Python
-
-Reach for a Python config when your columns come from the *contents* of a
-file — parsed JSON, frontmatter, CSV cells — rather than from filesystem
-facts alone. You write a dynamic `extract` callback in Python, and the file
-otherwise looks exactly like the in-process SDK construction (same `DirSQL` /
-`Table` API):
-
-```bash
-dirsql --config dirsql.config.py
-```
-
-```python [dirsql.config.py]
-import json
-from dirsql import DirSQL, Table
-
-def extract_meta(path):
-    with open(path) as f:
-        return [json.load(f)]
-
-# Python must export a module-level `app`.
-app = DirSQL(
-    root="papers",  # optional; defaults to the current directory
-    tables=[
-        Table(
-            ddl="CREATE TABLE papers (title TEXT, _path TEXT)",
-            glob="**/meta.json",
-            extract=extract_meta,
-        ),
-    ],
-)
-```
-
-`extract` receives the path of each matched file and returns a list of rows
-(one dict per row).
-
-## JavaScript
-
-A JavaScript config gives you the same contents-driven `extract` in Node,
-in either ES module or CommonJS form:
-
-```bash
-dirsql --config dirsql.config.mjs
-```
-
-::: code-group
-
-```javascript [dirsql.config.mjs]
-import { readFileSync } from "node:fs";
-import { DirSQL } from "dirsql";
-
-export default new DirSQL({
-  root: "papers", // optional; defaults to the current directory
-  tables: [
-    {
-      ddl: "CREATE TABLE papers (title TEXT, _path TEXT)",
-      glob: "**/meta.json",
-      extract: (path) => [JSON.parse(readFileSync(path, "utf8"))],
-    },
-  ],
-});
-```
-
-```javascript [dirsql.config.cjs]
-const { readFileSync } = require("node:fs");
-const { DirSQL } = require("dirsql");
-
-module.exports = new DirSQL({
-  root: "papers", // optional; defaults to the current directory
-  tables: [
-    {
-      ddl: "CREATE TABLE papers (title TEXT, _path TEXT)",
-      glob: "**/meta.json",
-      extract: (path) => [JSON.parse(readFileSync(path, "utf8"))],
-    },
-  ],
-});
-```
-
-:::
-
-## Notes for native-language configs
-
-These apply to both the Python and JavaScript forms above.
-
-- **Export the config.** Python exposes a module-level `app = DirSQL(...)`; an
-  ES module (`.mjs`, or `.js` in an ESM package) uses
-  `export default new DirSQL(...)`; CommonJS (`.cjs`, or `.js` in a CJS
-  package) uses `module.exports = new DirSQL(...)`. Only the extension
-  matters — the file can be named anything; `dirsql.config.{py,mjs,cjs}` is the
-  suggested convention, not a requirement.
-- **`root` defaults to the current directory.** A native-language config with
-  no `root` indexes the process's current working directory — the directory you
-  ran `dirsql` from. (This differs from TOML configs, which default the scan
-  root to the config file's own directory.) Pass `root` explicitly to index
-  somewhere else.
-- **No nested `config=`.** A native-language config builds its `DirSQL` from
-  `tables` and an optional `root`; it must not itself set `config=` to delegate
-  to another config file. `dirsql interpret` rejects such a config (a nested
-  config can't be represented in the handshake and would recurse).
-- **Install the launcher on your `PATH`.** To run your `extract`, the server
-  spawns `dirsql interpret`, so the matching `dirsql` launcher must be installed
-  and on your `PATH` — a global `pip`/`uv` install for `.py`, or `npm` for
-  `.mjs` / `.cjs`. Only the launcher matching the file's language can run it.

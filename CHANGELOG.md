@@ -39,6 +39,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unaffected, and `new DirSQL("…toml")` still loads TOML via the core. Rust +
   docs (#325) follow. (#324)
 
+- **Rust core / CLI binary: native-language config orchestration, the
+  cross-language config-serialization snapshot (#194), and the native-config
+  docs — hard removal (A3 of epic #321, #325; lands last).** The `dirsql`
+  binary no longer inspects the `--config` extension or spawns a `dirsql
+  interpret` helper; `cli::native_config` (the NDJSON spawn/handshake
+  protocol) is deleted, so a non-TOML `--config` now fails to parse as TOML
+  and the server starts degraded (HTTP 503). The `DirSQL::config()` snapshot
+  and its `DirSQLConfig` type are removed — nothing consumed the serialized
+  state once `interpret` was gone (retires #194). `.dirsql.toml` is the only
+  config format the CLI accepts (unchanged for TOML users). The
+  **native-language config documentation** (the *Native-Language Configs*
+  sections of `docs/cli/config.md`, and the `.py`/`.js` references in
+  `docs/cli/server.md` / `docs/cli/index.md`) is removed with the feature
+  (docs-as-spec). Completes the epic across all three SDKs. (#325)
+
 ### Added
 
 - **TypeScript SDK: `new DirSQL({ extensions: [...] })` constructor option
@@ -62,8 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Extension loading — review hardening (#225).** Load failures now surface as
   a dedicated `DirSqlError::Extension` naming the library (was a generic
-  `DbError::Sqlite`); `DirSQL::config()` serialization now includes the
-  configured `extensions`; an empty `path = ""` is rejected at config-parse
+  `DbError::Sqlite`); an empty `path = ""` is rejected at config-parse
   time; and a `CREATE VIRTUAL TABLE` `[[table]]` is rejected with a clear "not
   supported" error — extension-backed virtual tables are not dirsql-managed
   tables, so extensions provide functions for queries and regular-table DDL.
@@ -71,12 +85,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Python SDK: `DirSQL(extensions=[...])` constructor parameter (parity with
   Rust #225).** Pass a list of `{"path": ..., "entrypoint": ...}` dicts
   (`entrypoint` optional) to load SQLite extensions onto the connection at
-  startup, marshaled into the shared Rust core (enable → load → disable). The
-  resolved-state snapshot `vars(db)` now includes an `extensions` array (each
-  entry `{path, entrypoint}`, empty when none configured), and the `interpret`
-  native-config handshake carries it (Rust `HandshakeState` / `NativeConfig`)
-  so a `.py` config that declares `extensions=` propagates to the orchestrating
-  binary. Programmatic entries load first, followed by any `[[dirsql.extension]]`
+  startup, marshaled into the shared Rust core (enable → load → disable).
+  Programmatic entries load first, followed by any `[[dirsql.extension]]`
   entries from a `config` file (relative config paths resolve against the
   config's parent directory). TypeScript parity is tracked in #230. (#229)
 
@@ -140,46 +150,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checking does not need `dirsql.node` or the generated `index.d.ts`.
   Parity with the new Python type-check job.
 
-- **CLI `--config` accepts native-language config files.** The Rust
-  binary now inspects the `--config` extension. `.toml` keeps the
-  existing in-process loader. `.py` / `.js` / `.mjs` / `.cjs` spawn
-  `dirsql interpret <config>` as a subprocess (via PATH) and build a
-  `DirSQL` whose `Table::extract` closures NDJSON-RPC into it. The
-  binary owns SQL, HTTP, and the file watcher; the helper owns
-  user-defined `extract` execution. On a cargo-only install the spawn
-  fails with a clear "install via pip/uv or npm/npx" message. (#192)
-
-- **`dirsql interpret <config>` subcommand.** Long-running NDJSON
-  helper that loads a native-language config file (Python `.py`,
-  TypeScript / JavaScript `.js` / `.mjs` / `.cjs`), takes its
-  `app` / default export, writes a single handshake line
-  (`{"type": "config", "state": <vars(app)> | <app.toJSON()>}`),
-  then loops on stdin handling `{"type": "extract", "id", "table", "path"}`
-  requests by dispatching to the config's user-defined `extract`
-  callbacks. One request / one response, sequential. Used by the
-  forthcoming Rust orchestrator; also directly invokable for
-  debugging native configs. Python and TypeScript only — Rust has no
-  host language runtime in which user callbacks could execute
-  (intentional parity drift). The PyO3 `Table` class now exposes
-  `extract` and `name` as readable attributes; `name` comes from the
-  core `dirsql::db::parse_table_name`. The TypeScript SDK gains a
-  top-level `parseTableName(ddl)` export backed by the same Rust
-  function, and `DirSQL._options` is now public-readable so the
-  TypeScript dispatcher can reach the original `TableDef` (which
-  carries the `extract` closure that `toJSON()` intentionally drops).
-  (#196)
-
-- **Config serialization on `DirSQL`.** Python `vars(db)` (via
-  `__dict__`), TypeScript `JSON.stringify(db)` (via `toJSON()`), and
-  Rust `db.config()` (returning a `serde::Serialize`-derived
-  `DirSQLConfig`) all return the resolved construction state as a
-  JSON-compatible value with fields `root`, `tables`, `ignore`,
-  `persist`, `persist_path` (camelCase `persistPath` in TypeScript).
-  Each table is `{ ddl, glob, strict }`. The original `config` path is
-  excluded (already merged into `root` / `tables` / `ignore`);
-  per-table `extract` and `name` are excluded. Resolution runs
-  synchronously in Python and TypeScript, so the output is available
-  immediately after construction without waiting on the scan. (#194)
+- **TypeScript SDK: top-level `parseTableName(ddl)` export** backed by the
+  Rust `dirsql::db::parse_table_name`, and the PyO3 `Table` class exposes
+  `extract` and `name` as readable attributes. (#196)
 
 - **Zero-config `files` table.** Running the `dirsql` server in a
   directory with no `.dirsql.toml` now serves a default `files` table --
@@ -304,19 +277,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **CLI: a native-language config (`.py` / `.js` / `.mjs` / `.cjs`) with no
-  `root` now indexes the current working directory instead of failing.**
-  Previously `dirsql --config <native config>` with no `root` errored on the
-  Python launcher (`DirSQL requires either a root directory or a config= path`)
-  and silently indexed nothing on the JavaScript launcher. The `dirsql
-  interpret` handshake now defaults the resolved root to the process's current
-  working directory — the directory the command was run from — for both the
-  Python and TypeScript launchers. Two related changes ship with it:
-  `dirsql interpret` now rejects a config whose `DirSQL` itself sets `config=`
-  (a nested config can't be represented in the handshake and would recurse),
-  and the Python `DirSQL(...)` constructor no longer raises `TypeError` when
-  neither `root` nor `config` is given — the "no root" check is delegated to the
-  core and surfaces from `await db.ready()` / `query()`, matching Rust. (#260)
+- **Python: `DirSQL(...)` no longer raises `TypeError` when neither `root`
+  nor `config` is given.** The "no root" check is delegated to the core and
+  surfaces from `await db.ready()` / `query()`, matching Rust. (#260)
 
 - **Test files no longer ship in built distributions.** The Python wheel
   bundled the colocated `dirsql/**/*_test.py` unit tests, the npm tarball
