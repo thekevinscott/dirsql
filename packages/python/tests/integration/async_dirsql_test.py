@@ -137,6 +137,34 @@ def describe_DirSQL_async():
             assert results[0]["author"] == "alice"
 
         @pytest.mark.asyncio
+        async def it_awaits_ready_transparently_for_eager_queries(jsonl_dir):
+            """query() issued before ready() waits for the scan (parity with
+            the TS `query awaits ready` test, #146 / PARITY.md "Ready
+            semantics")."""
+            db = DirSQL(
+                jsonl_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
+                        glob="comments/**/index.jsonl",
+                        extract=lambda path: [
+                            {
+                                "id": os.path.basename(os.path.dirname(path)),
+                                "body": row["body"],
+                                "author": row["author"],
+                            }
+                            for line in open(path, encoding="utf-8").read().splitlines()
+                            for row in [json.loads(line)]
+                        ],
+                    ),
+                ],
+            )
+            # No explicit ready() -- query() must await readiness internally
+            # instead of failing in the pre-ready window.
+            results = await db.query("SELECT * FROM comments")
+            assert len(results) == 3
+
+        @pytest.mark.asyncio
         async def it_raises_on_invalid_sql(jsonl_dir):
             """Invalid SQL raises an exception."""
             db = DirSQL(
