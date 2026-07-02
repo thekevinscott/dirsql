@@ -1,8 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCore } from "./core.js";
 import { DirSQL } from "./dirsql.js";
+import { resolveExtensionPath } from "./resolve-extension.js";
 
 vi.mock("./core.js");
+// Extension path resolution (file-vs-package) is unit-tested in
+// `resolve-extension.test`; here it is mocked so construction asserts only that
+// the resolved specs reach `openAsync`.
+vi.mock("./resolve-extension.js", async () => ({
+  ...(await vi.importActual<typeof import("./resolve-extension.js")>(
+    "./resolve-extension.js",
+  )),
+  resolveExtensionPath: vi.fn((path: string) => `R:${path}`),
+}));
 
 type FakeInner = {
   query: ReturnType<typeof vi.fn>;
@@ -52,14 +62,23 @@ describe("DirSQL", () => {
       );
     });
 
-    it("forwards the extensions option as openAsync's seventh arg", async () => {
+    it("resolves extension paths before forwarding them as openAsync's seventh arg", async () => {
       const openAsync = installFakeCore(makeInner());
-      const extensions = [
-        { path: "/ext/vec0.so", entrypoint: "sqlite3_vec_init" },
-        { path: "/ext/spellfix.so" },
-      ];
-      const db = new DirSQL({ root: "/data", extensions });
+      const db = new DirSQL({
+        root: "/data",
+        extensions: [
+          { path: "sqlite-vec", entrypoint: "sqlite3_vec_init" },
+          { path: "/ext/spellfix.so" },
+        ],
+      });
       await db.ready;
+      // Each path is routed through the (mocked) resolver before reaching the
+      // core; a bare name resolves against cwd without being made absolute.
+      expect(resolveExtensionPath).toHaveBeenCalledWith(
+        "sqlite-vec",
+        process.cwd(),
+        false,
+      );
       expect(openAsync).toHaveBeenCalledWith(
         "/data",
         null,
@@ -67,7 +86,10 @@ describe("DirSQL", () => {
         null,
         null,
         null,
-        extensions,
+        [
+          { path: "R:sqlite-vec", entrypoint: "sqlite3_vec_init" },
+          { path: "R:/ext/spellfix.so", entrypoint: undefined },
+        ],
       );
     });
 

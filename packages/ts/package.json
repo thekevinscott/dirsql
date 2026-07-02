@@ -151,6 +151,9 @@
       "output": ["coverage/**"]
     }
   },
+  "dependencies": {
+    "smol-toml": "^1.6.1"
+  },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
     "@napi-rs/cli": "^3.0.0",

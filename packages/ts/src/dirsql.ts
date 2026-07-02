@@ -6,6 +6,7 @@
 
 import type { NativeDirSQL } from "./core.js";
 import { getCore } from "./core.js";
+import { resolveExtensionPath } from "./resolve-extension.js";
 import type { TableDef } from "./table.js";
 
 /**
@@ -140,18 +141,30 @@ export class DirSQL {
       typeof arg === "string" ? { config: arg } : arg;
     this._options = options;
     const Ctor = getCore().DirSQL;
-    const openPromise = Ctor.openAsync(
-      options.root ?? null,
-      options.tables ?? null,
-      options.ignore ?? null,
-      options.config ?? null,
-      options.persist ?? null,
-      options.persistPath ?? null,
-      options.extensions ?? null,
-    );
-    this.ready = openPromise.then((inner) => {
-      this._inner = inner;
-    });
+    // Resolve programmatic extension paths (a bare package name -> the loadable
+    // installed under `node_modules`, #299) before handing them to the
+    // file-path-only core. Done inside the promise chain so a resolution error
+    // rejects `ready` rather than throwing from the constructor.
+    this.ready = Promise.resolve()
+      .then(() => {
+        const extensions =
+          options.extensions?.map((e) => ({
+            path: resolveExtensionPath(e.path, process.cwd(), false),
+            entrypoint: e.entrypoint,
+          })) ?? null;
+        return Ctor.openAsync(
+          options.root ?? null,
+          options.tables ?? null,
+          options.ignore ?? null,
+          options.config ?? null,
+          options.persist ?? null,
+          options.persistPath ?? null,
+          extensions,
+        );
+      })
+      .then((inner) => {
+        this._inner = inner;
+      });
   }
 
   /**
