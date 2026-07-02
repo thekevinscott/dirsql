@@ -95,6 +95,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays file-path-only). Configs with only literal paths are untouched. (Node
   launcher parity tracked alongside; #227.)
 
+- **TypeScript SDK: resolve an extension by package name — constructor + TOML
+  CLI (#299).** Restores parity with the Python sibling (#298). A
+  `extensions: [{ path }]` entry (or a `.dirsql.toml` `[[dirsql.extension]]`
+  run through the Node launcher) whose `path` is a bare **package name** is
+  resolved from the package installed under `node_modules`: dirsql locates it
+  via `require.resolve` and globs the current platform's loadable file
+  (`*.so` / `*.dylib` / `*.dll` / `*.node`) inside it. A same-named local file
+  takes precedence (file-first probe); zero or multiple matching loadables is
+  an error. Path-looking values keep their #230 behavior unchanged.
+  Constructor resolution runs in the SDK before the file-path-only Rust core;
+  the CLI form is resolved by the Node launcher, which passes the resolved
+  literal paths to the binary via `--extension` (as the Python launcher does).
+  (#299, part of #227)
+
 - **`.dirsql.toml`: `on-file` per-table command event — the first
   command-backed event (Epic B, #322 / B2 #327).** Add `on-file = "<command>"`
   to a `[[table]]` to derive that table's rows from each matched file's

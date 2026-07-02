@@ -5,10 +5,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { die } from "./die.js";
 import { main } from "./main.js";
 import { resolveBinary } from "./resolve-binary.js";
+import { withResolvedExtensions } from "./resolve-config-extensions.js";
 
 vi.mock("./resolve-binary.js");
 vi.mock("./die.js");
 vi.mock("node:child_process");
+// Config-extension resolution is unit-tested in resolve-config-extensions.test;
+// here it's an identity so `main`'s argv forwarding is asserted directly.
+vi.mock("./resolve-config-extensions.js", async () => ({
+  ...(await vi.importActual<typeof import("./resolve-config-extensions.js")>(
+    "./resolve-config-extensions.js",
+  )),
+  withResolvedExtensions: vi.fn((argv: string[]) => argv),
+}));
 
 const TEST_PID = 42;
 
@@ -32,6 +41,7 @@ describe("main", () => {
 
   beforeEach(() => {
     vi.mocked(resolveBinary).mockReturnValue("/bin/dirsql");
+    vi.mocked(withResolvedExtensions).mockImplementation((argv) => argv);
     vi.mocked(die).mockImplementation(((msg: string) => {
       throw new Error(`DIE: ${msg}`);
     }) as typeof die);
@@ -56,6 +66,8 @@ describe("main", () => {
     vi.mocked(spawnSync).mockReturnValue(fakeResult({ status: 0 }));
 
     await expect(main(["--version"])).rejects.toThrow("EXIT_0");
+    // argv is routed through withResolvedExtensions before the binary spawns.
+    expect(withResolvedExtensions).toHaveBeenCalledWith(["--version"]);
     expect(spawnSync).toHaveBeenCalledWith("/bin/dirsql", ["--version"], {
       stdio: "inherit",
     });
