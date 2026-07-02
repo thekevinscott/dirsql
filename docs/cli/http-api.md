@@ -35,6 +35,15 @@ On error, the server returns a non-2xx status with a JSON body:
 
 Malformed SQL returns `400`. An unreadable or malformed config returns `503`; a *missing* config is not an error — the server serves the default `files` table.
 
+::: tip `pre-query` changes the body contract
+When [`[dirsql].pre-query`](./config.md#rewriting-queries-pre-query) is
+configured, the request body is **not** parsed as `{"sql": …}`. Instead the raw
+body is passed verbatim to the hook command, which prints the SQL to run. A hook
+that fails (non-zero exit, timeout, or spawn error) returns `500` with the
+command's stderr tail. With no `pre-query` key, the `{"sql": …}` contract above
+applies.
+:::
+
 ```bash
 curl -s http://localhost:7117/query \
   -H 'content-type: application/json' \

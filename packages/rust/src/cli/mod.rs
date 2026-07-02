@@ -19,6 +19,7 @@
 //! - [`serialize`] — row + event → JSON.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use tokio::sync::{oneshot, watch};
@@ -38,13 +39,40 @@ pub use server::{serve, serve_with_state};
 // Public types
 // ---------------------------------------------------------------------------
 
+/// A server-wide `pre-query` command hook, carrying the command template plus
+/// the directory it runs in (the config file's parent). When set on a
+/// [`ServerConfig`], the server passes each `POST /query` request body to the
+/// command as `{args}` and runs the plain-text SQL it prints. See
+/// [`crate::command`] for the execution contract.
+#[derive(Debug, Clone)]
+pub struct PreQuery {
+    /// The command template (argv-split, no shell). Receives the raw request
+    /// body as the `{args}` placeholder.
+    pub command: String,
+    /// The command's working directory — the config file's parent.
+    pub config_dir: PathBuf,
+}
+
+impl PreQuery {
+    /// Build a [`PreQuery`] from a command template and its working directory.
+    pub fn new(command: impl Into<String>, config_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            command: command.into(),
+            config_dir: config_dir.into(),
+        }
+    }
+}
+
 /// Configure how the server binds. Defaults to `localhost:7117` with a
-/// 30-second per-query timeout.
+/// 30-second per-query timeout and no `pre-query` hook.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub query_timeout: Duration,
+    /// Optional server-wide `pre-query` command. When `None` (the default),
+    /// `POST /query` parses its body as `{"sql": …}`.
+    pub pre_query: Option<PreQuery>,
 }
 
 impl ServerConfig {
@@ -55,6 +83,7 @@ impl ServerConfig {
             host: "localhost".into(),
             port: 0,
             query_timeout: Duration::from_secs(30),
+            pre_query: None,
         }
     }
 
@@ -64,6 +93,7 @@ impl ServerConfig {
             host: host.into(),
             port,
             query_timeout: Duration::from_secs(30),
+            pre_query: None,
         }
     }
 
@@ -71,6 +101,14 @@ impl ServerConfig {
     /// return `408 Request Timeout` and release the blocking thread.
     pub fn with_query_timeout(mut self, timeout: Duration) -> Self {
         self.query_timeout = timeout;
+        self
+    }
+
+    /// Attach a server-wide [`PreQuery`] hook. With it set, `POST /query`
+    /// passes the raw request body to the command and runs the SQL it prints
+    /// instead of parsing the body as `{"sql": …}`.
+    pub fn with_pre_query(mut self, pre_query: PreQuery) -> Self {
+        self.pre_query = Some(pre_query);
         self
     }
 }
@@ -175,5 +213,23 @@ mod tests {
         assert_eq!(cfg.host, "localhost");
         assert_eq!(cfg.port, 7117);
         assert_eq!(cfg.query_timeout, Duration::from_secs(30));
+        assert!(cfg.pre_query.is_none());
+    }
+
+    #[test]
+    fn pre_query_constructor_carries_command_and_dir() {
+        // `PreQuery::new` is pure data plumbing: the command template and the
+        // working directory it will run in.
+        let pq = PreQuery::new("to_sql.py {args}", "/proj");
+        assert_eq!(pq.command, "to_sql.py {args}");
+        assert_eq!(pq.config_dir, PathBuf::from("/proj"));
+    }
+
+    #[test]
+    fn with_pre_query_sets_the_hook() {
+        let cfg = ServerConfig::ephemeral().with_pre_query(PreQuery::new("cmd {args}", "/proj"));
+        let pq = cfg.pre_query.expect("hook must be set");
+        assert_eq!(pq.command, "cmd {args}");
+        assert_eq!(pq.config_dir, PathBuf::from("/proj"));
     }
 }
