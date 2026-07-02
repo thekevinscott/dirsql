@@ -34,6 +34,7 @@ def describe_main():
             with (
                 patch.object(main_module, "binary_path", return_value="C:/dirsql.exe"),
                 patch.object(main_module, "is_windows", return_value=True),
+                patch.object(main_module, "with_resolved_extensions", lambda a: a),
                 patch(
                     "dirsql.cli.main.subprocess.run", return_value=_Completed(7)
                 ) as run,
@@ -45,6 +46,7 @@ def describe_main():
             with (
                 patch.object(main_module, "binary_path", return_value="C:/dirsql.exe"),
                 patch.object(main_module, "is_windows", return_value=True),
+                patch.object(main_module, "with_resolved_extensions", lambda a: a),
                 patch("dirsql.cli.main.subprocess.run", return_value=_Completed(0)),
                 patch.object(os, "execv") as execv,
             ):
@@ -58,6 +60,7 @@ def describe_main():
                     main_module, "binary_path", return_value="/usr/local/bin/dirsql"
                 ),
                 patch.object(main_module, "is_windows", return_value=False),
+                patch.object(main_module, "with_resolved_extensions", lambda a: a),
                 patch.object(os, "execv") as execv,
             ):
                 main(["query", "select 1"])
@@ -66,12 +69,46 @@ def describe_main():
                 ["/usr/local/bin/dirsql", "query", "select 1"],
             )
 
+        def it_resolves_config_extensions_before_handing_off():
+            # argv is routed through with_resolved_extensions; execv receives
+            # its (here, marker-augmented) result.
+            with (
+                patch.object(main_module, "binary_path", return_value="/bin/dirsql"),
+                patch.object(main_module, "is_windows", return_value=False),
+                patch.object(
+                    main_module,
+                    "with_resolved_extensions",
+                    lambda a: [*a, "--extension", "/abs/x.so"],
+                ),
+                patch.object(os, "execv") as execv,
+            ):
+                main(["--config", "cfg.toml"])
+            execv.assert_called_once_with(
+                "/bin/dirsql",
+                ["/bin/dirsql", "--config", "cfg.toml", "--extension", "/abs/x.so"],
+            )
+
+        def it_returns_1_when_extension_resolution_fails():
+            fake_stderr = io.StringIO()
+            with (
+                patch.object(main_module, "binary_path", return_value="/bin/dirsql"),
+                patch.object(
+                    main_module,
+                    "with_resolved_extensions",
+                    side_effect=ValueError("not installed"),
+                ),
+                patch.object(sys, "stderr", fake_stderr),
+            ):
+                assert main(["--config", "cfg.toml"]) == 1
+            assert "not installed" in fake_stderr.getvalue()
+
         def it_returns_0_when_execv_returns():
             # In production `os.execv` never returns. The mock returns,
             # so `main` falls through to `return 0`.
             with (
                 patch.object(main_module, "binary_path", return_value="/bin/dirsql"),
                 patch.object(main_module, "is_windows", return_value=False),
+                patch.object(main_module, "with_resolved_extensions", lambda a: a),
                 patch.object(os, "execv"),
             ):
                 assert main([]) == 0
@@ -82,6 +119,7 @@ def describe_main():
                 patch.object(sys, "argv", ["dirsql", "--help"]),
                 patch.object(main_module, "binary_path", return_value="C:/dirsql.exe"),
                 patch.object(main_module, "is_windows", return_value=True),
+                patch.object(main_module, "with_resolved_extensions", lambda a: a),
                 patch(
                     "dirsql.cli.main.subprocess.run", return_value=_Completed(0)
                 ) as run,
@@ -98,6 +136,7 @@ def describe_main():
             with (
                 patch.object(main_module, "binary_path", return_value="/bin/dirsql"),
                 patch.object(main_module, "is_windows", return_value=True),
+                patch.object(main_module, "with_resolved_extensions", lambda a: a),
                 patch(
                     "dirsql.cli.main.subprocess.run", return_value=_Completed(2)
                 ) as run,

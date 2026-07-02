@@ -45,6 +45,29 @@ the shared Rust config loader. The Python `DirSQL(extensions=[{path, entrypoint?
 ([#230](https://github.com/thekevinscott/dirsql/issues/230)) constructor
 parameters marshal into that same core.
 
+**Extension `path` by package name — see epic #227.** A `path` may be a bare
+**package name** (no path separator and no loadable-file suffix), resolved from
+the installed package in the runtime env: the SDK/launcher locates the package
+dir and globs the current platform's loadable inside it (file-first probe — a
+same-named local file wins; zero or multiple loadables error). This is a
+per-ecosystem concern because the discovery mechanism is ecosystem-specific and
+the shared Rust core stays file-path-only (epic
+[#227](https://github.com/thekevinscott/dirsql/issues/227) carve-out).
+
+| Surface | Python ([#298](https://github.com/thekevinscott/dirsql/issues/298)) | Rust | TypeScript ([#299](https://github.com/thekevinscott/dirsql/issues/299)) |
+|---|---|---|---|
+| Constructor `extensions` path = package name | Y (`importlib`) | N/A (file-path-only by design) | Y (`require.resolve`) |
+| `.dirsql.toml` `[[dirsql.extension]]` path = package name, via SDK `config=` | N/A (hands the file to the file-path-only core) | N/A | N/A |
+| `.dirsql.toml` `[[dirsql.extension]]` path = package name, via CLI | Y (Python launcher resolves) | N/A | Y (Node launcher resolves) |
+
+The `.dirsql.toml` package-name form is resolved by the **launcher** (`dirsql`
+CLI), not the compiled engine: the launcher parses the config, resolves each
+extension (`importlib` / `require.resolve`), and passes resolved literal paths to
+the binary via `--extension` (the core's `suppress_config_extensions` toggle
+stops the config's own entries from loading too). Constructing a `DirSQL` from a
+`config=` path in-SDK does **not** resolve config-file package names — use the
+`extensions=` constructor argument, or the CLI.
+
 All three bindings share a single Rust implementation: `dirsql::DirSQL` handles
 the initial scan, SQL, watcher, and row diffing. Python (`dirsql-py-ext`) and
 TypeScript (`dirsql-napi`) bindings are thin shims that only marshal values

@@ -158,8 +158,16 @@ path       = "./ext/myext.dylib"
 entrypoint = "sqlite3_myext_init"
 ```
 
-- **`path`** — a path to the extension's shared library (`.so` / `.dylib` /
-  `.dll`). Relative paths resolve against the config file's parent directory.
+- **`path`** — the extension's shared library, as either a file path (`.so` /
+  `.dylib` / `.dll`; relative paths resolve against the config file's parent
+  directory) or a bare **package name**. A package name (no path separator and
+  no loadable-file suffix) is resolved from the package installed in the
+  runtime env: the Python `dirsql` launcher locates it via `importlib`, the
+  Node launcher via `node_modules`, then globs the current platform's loadable
+  inside it (a same-named local file wins; zero or multiple matches is an
+  error). Package-name resolution needs an interpreter, so it works when the
+  config is run through the `dirsql` **CLI** (installed via pip/uv or npm); the
+  standalone Rust binary and Rust SDK are file-path-only.
 - **`entrypoint`** *(optional)* — the extension's init symbol. When omitted,
   SQLite derives a default from the filename; set it when that default does not
   match (for example, `sqlite-vec`'s entry point is `sqlite3_vec_init`).

@@ -1,8 +1,10 @@
 """Async-by-default DirSQL wrapper."""
 
 import asyncio
+import os
 
 from dirsql._dirsql import DirSQL as _RustDirSQL
+from dirsql.resolve_extension import resolve_extension_path
 
 
 class _WatchStream:
@@ -91,12 +93,32 @@ class DirSQL:
                 config=self._config,
                 persist=self._persist,
                 persist_path=self._persist_path,
-                extensions=self._extensions,
+                extensions=self._resolved_extensions(),
             )
         except Exception as exc:
             self._init_error = exc
         finally:
             self._ready_event.set()
+
+    def _resolved_extensions(self):
+        """Resolve each programmatic extension's ``path`` to a loadable file.
+
+        A bare package name is resolved to the loadable installed in the runtime
+        env (#298); path-looking values are passed through verbatim (mirroring
+        the Rust builder, which takes programmatic paths as-is). Config-file
+        ``[[dirsql.extension]]`` entries are resolved by the Rust core, not here.
+        """
+        if not self._extensions:
+            return self._extensions
+        return [
+            {
+                "path": resolve_extension_path(
+                    e["path"], base=os.getcwd(), resolve_relative=False
+                ),
+                "entrypoint": e.get("entrypoint"),
+            }
+            for e in self._extensions
+        ]
 
     async def ready(self):
         """Wait until the initial scan is complete.

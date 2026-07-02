@@ -9,7 +9,7 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use dirsql::cli::{AppState, ServerConfig, init::InitOptions, serve_with_state};
-use dirsql::{DirSQL, Row, Table};
+use dirsql::{DirSQL, Extension, Row, Table};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -41,6 +41,19 @@ struct Cli {
     /// TCP port to bind. Used when no subcommand is given.
     #[arg(long, default_value_t = 7117)]
     port: u16,
+
+    /// Load a SQLite extension by literal path, overriding a TOML config's
+    /// `[[dirsql.extension]]` entries. Repeatable. Format: `<path>` or
+    /// `<path>::<entrypoint>`.
+    ///
+    /// Intended for the language launcher (pip/npm), not end users: the
+    /// launcher resolves config extensions — including bare **package names**,
+    /// which need an interpreter this compiled binary lacks (see #227) — and
+    /// passes the resolved literal paths here. When any are present, the TOML
+    /// config's own extension entries are not loaded (the launcher already
+    /// merged and resolved them).
+    #[arg(long = "extension")]
+    extension: Vec<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -152,10 +165,44 @@ fn load_state(cli: &Cli) -> AppState {
         }
     };
 
-    match DirSQL::from_config_path(&resolved) {
+    // Launcher-resolved extensions (`--extension`) override the TOML config's
+    // own `[[dirsql.extension]]` entries: the launcher has already merged and
+    // resolved them (including package names the compiled binary can't resolve;
+    // #227), so build from the config but suppress its extension loading and
+    // supply the resolved literal paths instead.
+    let build = if cli.extension.is_empty() {
+        DirSQL::from_config_path(&resolved)
+    } else {
+        DirSQL::builder()
+            .config(&resolved)
+            .extensions(parse_extension_specs(&cli.extension))
+            .suppress_config_extensions(true)
+            .build()
+    };
+    match build {
         Ok(db) => AppState::Ready(db),
         Err(err) => AppState::Unavailable(format!("failed to load config: {err}")),
     }
+}
+
+/// Parse `--extension` specs (`<path>` or `<path>::<entrypoint>`) into
+/// [`Extension`]s. Splitting on the first `::` keeps a path that itself
+/// contains `::` unambiguous only after the entrypoint boundary — entrypoints
+/// are C identifiers, so the first `::` is the boundary.
+fn parse_extension_specs(specs: &[String]) -> Vec<Extension> {
+    specs
+        .iter()
+        .map(|spec| match spec.split_once("::") {
+            Some((path, entrypoint)) => Extension {
+                path: PathBuf::from(path),
+                entrypoint: Some(entrypoint.to_string()),
+            },
+            None => Extension {
+                path: PathBuf::from(spec),
+                entrypoint: None,
+            },
+        })
+        .collect()
 }
 
 /// Zero-config fallback. When no `.dirsql.toml` is found, dirsql indexes the
@@ -219,6 +266,28 @@ async fn wait_for_shutdown() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_extension_specs_handles_bare_path_and_entrypoint() {
+        let specs = vec![
+            "/abs/vec0.so".to_string(),
+            "/abs/spellfix.so::sqlite3_spellfix_init".to_string(),
+        ];
+        let exts = parse_extension_specs(&specs);
+        assert_eq!(exts.len(), 2);
+        assert_eq!(exts[0].path, PathBuf::from("/abs/vec0.so"));
+        assert!(exts[0].entrypoint.is_none());
+        assert_eq!(exts[1].path, PathBuf::from("/abs/spellfix.so"));
+        assert_eq!(exts[1].entrypoint.as_deref(), Some("sqlite3_spellfix_init"));
+    }
+
+    #[test]
+    fn parse_extension_specs_splits_on_first_double_colon() {
+        let specs = vec!["/a.so::init::extra".to_string()];
+        let exts = parse_extension_specs(&specs);
+        assert_eq!(exts[0].path, PathBuf::from("/a.so"));
+        assert_eq!(exts[0].entrypoint.as_deref(), Some("init::extra"));
+    }
 
     #[test]
     fn default_files_table_declares_filesystem_fact_columns_over_recursive_glob() {

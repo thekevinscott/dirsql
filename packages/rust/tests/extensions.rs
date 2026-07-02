@@ -189,6 +189,70 @@ glob = "*.txt"
 }
 
 /// A failed extension load must surface a dirsql extension-specific error that
+/// `suppress_config_extensions(true)` makes the builder ignore a config file's
+/// own `[[dirsql.extension]]` entries and use only the programmatically-supplied
+/// ones. This is the seam the CLI launcher uses to hand the core already-resolved
+/// (e.g. package-name → path) extensions without the core loading the config's
+/// unresolved entries a second time (#227). The config here declares a bogus
+/// relative extension path that would fail to load if it were honored; the build
+/// succeeds and the real (overriding) extension's function is callable.
+#[test]
+fn suppress_config_extensions_ignores_config_entries_and_uses_overrides() {
+    let ext = build_fixture_extension();
+
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[dirsql.extension]]
+path = "does/not/exist.so"
+
+[[table]]
+ddl = "CREATE TABLE files (_path TEXT)"
+glob = "*.txt"
+"#,
+    )
+    .unwrap();
+    fs::write(root.path().join("a.txt"), "x").unwrap();
+
+    let db = DirSQL::builder()
+        .config(root.path().join(".dirsql.toml"))
+        .suppress_config_extensions(true)
+        .extensions(vec![Extension {
+            path: ext,
+            entrypoint: Some("sqlite3_extension_init".into()),
+        }])
+        .build()
+        .expect("build should ignore the config's bogus extension and load the override");
+
+    let rows = db.query("SELECT dirsql_testext_answer() AS a").unwrap();
+    assert_eq!(rows[0]["a"], Value::Integer(42));
+}
+
+/// Guard: without `suppress_config_extensions`, the config's bogus extension is
+/// honored and the build fails — proving the suppression above is what changed
+/// the outcome.
+#[test]
+fn config_extensions_are_loaded_by_default() {
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[dirsql.extension]]
+path = "does/not/exist.so"
+"#,
+    )
+    .unwrap();
+
+    let result = DirSQL::builder()
+        .config(root.path().join(".dirsql.toml"))
+        .build();
+    assert!(
+        result.is_err(),
+        "a config's extension entry must load by default (no suppression)",
+    );
+}
+
 /// names the offending library, not an opaque generic SQLite error. (RED for
 /// #225 review finding #9.)
 #[test]
