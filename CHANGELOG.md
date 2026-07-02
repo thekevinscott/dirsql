@@ -56,6 +56,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Rust core: a reusable command runner (`dirsql::command::run_command`), the
+  foundation for command-backed events (Epic B, #322 / B1 #326).** Splits a
+  command template into argv with shell-like quoting but runs **no shell**
+  (`sh -c '…'` is the explicit opt-in), substitutes named placeholders
+  (`{path}`, `{args}`, `{abspath}`, `{root}`, …) into whole argv tokens so
+  untrusted values stay a single injection-safe argument, and supports an
+  append-if-absent placeholder. Runs the child in a given working directory
+  with the inherited environment (so `uvx`/`npx` shims resolve), an optional
+  stdin payload, and a timeout that kills a runaway child. The result payload
+  is the last non-empty line of stdout (stderr is never data); a non-zero
+  exit or timeout is a failure carrying the stderr tail. Exposed as
+  the `command::{run_command, Placeholder, CommandOutput, CommandError}` items.
+  Internal plumbing (a low-level core primitive, not re-exported at the crate
+  root) with no user-facing (CLI/config) surface yet — the events that expose
+  it in `.dirsql.toml`, and their user docs, land with `on-file` (#327),
+  `pre-query` (#328), and `post-query` (#329). (#326)
+
 - **TypeScript SDK: `new DirSQL({ extensions: [...] })` constructor option
   (restores parity with Rust #225 / Python #229).** Pass an array of
   `{ path, entrypoint? }` objects (`entrypoint` optional) to load SQLite
