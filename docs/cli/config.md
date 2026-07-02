@@ -244,11 +244,12 @@ splitting, injection safety, cwd, environment, timeout, and output framing).
 
 ### Rewriting queries (`pre-query`)
 
-Reach for `pre-query` when the server should accept something other than raw
-SQL on `POST /query` — a natural-language question, a saved-query name, a
-templating DSL — and translate it to SQL before running it. Unlike `on-file`
-(a per-`[[table]]` key), `pre-query` is a **server-wide** `[dirsql]` key: every
-query flows through it.
+The `pre-query` hook intercepts every incoming request and transforms it into
+the SQL that runs against the index. Because the hook owns SQL construction,
+`POST /query` can accept whatever shape you want — a natural-language question,
+a saved-query name, a templating DSL — and your command translates it to SQL
+before it runs. Unlike `on-file` (a per-`[[table]]` key), `pre-query` is a
+**server-wide** `[dirsql]` key: every query flows through it.
 
 ```toml
 [dirsql]
