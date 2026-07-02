@@ -245,6 +245,71 @@ other files' rows are indexed normally.
 See [Command execution](#command-execution) for the full contract (argv
 splitting, injection safety, cwd, environment, timeout, and output framing).
 
+### Rewriting queries (`pre-query`)
+
+The `pre-query` hook intercepts every incoming request and transforms it into
+the SQL that runs against the index. Because the hook owns SQL construction,
+`POST /query` can accept whatever shape you want — a natural-language question,
+a saved-query name, a templating DSL — and your command translates it to SQL
+before it runs. Unlike `on-file` (a per-`[[table]]` key), `pre-query` is a
+**server-wide** `[dirsql]` key: every query flows through it.
+
+```toml
+[dirsql]
+pre-query = "uv run python to_sql.py {args}"
+```
+
+With `pre-query` set, the **raw `POST /query` request body** is passed to the
+command as the `{args}` placeholder — a single, injection-safe argv token even
+though the body is untrusted. The command prints **plain-text SQL** on stdout
+(the last non-empty line is used); `dirsql` runs that SQL and returns rows
+exactly as it would for a normal query.
+
+| Placeholder | Value |
+|-------------|-------|
+| `{args}`    | The raw `POST /query` request body, verbatim, as one argv token. |
+
+When `pre-query` is **absent**, nothing changes: the request body is parsed as
+`{"sql": "…"}` JSON and executed — the [HTTP API](./http-api.md#post-query)
+default. Enabling the hook is fully backward compatible in reverse: remove the
+key and the `{"sql": …}` contract returns.
+
+**On failure** — a non-zero exit, a timeout, or a spawn error — the request
+returns `500 Internal Server Error` with the command's stderr tail in the JSON
+`error` body. The command runs in the config file's directory and is bounded by
+a fixed **30-second** timeout.
+
+#### The hook owns SQL safety
+
+Because the hook returns **plain SQL** (not a parameterized query), it is the
+**trusted component** that turns the untrusted request body into safe SQL. The
+`{args}` substitution keeps the body inert *as an argv token* — it can never
+break out into extra command arguments — but whatever SQL string the hook
+prints is executed as-is. Validate, escape, or parameterize **inside** the
+hook. This trade-off is intentional for v1: it keeps the contract a simple
+plain-text-SQL pipe and puts translation logic — and its safety — in your hook.
+
+Worked example — a hook that maps a saved-query name to SQL:
+
+```python
+# to_sql.py
+import sys
+
+QUERIES = {
+    "recent-posts": "SELECT title, author FROM posts ORDER BY _mtime DESC LIMIT 10",
+}
+name = sys.argv[1].strip() if len(sys.argv) > 1 else ""
+# Fall back to an empty result rather than trusting arbitrary input.
+print(QUERIES.get(name, "SELECT 1 WHERE 0"))
+```
+
+```bash
+curl -s http://localhost:7117/query -d 'recent-posts' | jq
+```
+
+See [Command execution](#command-execution) for the full contract (argv
+splitting, injection safety, cwd, environment, timeout, and output framing).
+
 ### Full Example
 
 ```toml
@@ -266,8 +331,8 @@ glob = "logs/*.csv"
 
 ## Command execution
 
-Config keys that run an external command — today `on-file`, with more events to
-follow — share one execution contract:
+Config keys that run an external command — today `on-file` and `pre-query`,
+with more events to follow — share one execution contract:
 
 - **argv, not a shell.** The command string is split into an argv with
   shell-like quoting (spaces separate arguments; quotes group them), but **no

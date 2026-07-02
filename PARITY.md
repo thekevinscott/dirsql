@@ -139,6 +139,14 @@ behavior with no per-SDK code. Individual event rows land here as B2–B4 ship.
   extract path), with **no** Python/TypeScript public-API surface — identical
   across all three installs, no drift.
 
+- **`pre-query` (B3 #328).** A **server-wide** `[dirsql]` key naming a command
+  that rewrites each `POST /query` body (passed as the `{args}` placeholder) into
+  the plain-text SQL to run; failure → 500 with the stderr tail; 30s timeout.
+  Parsed by the shared Rust config loader (`config::Config::pre_query`) and
+  wired through the CLI server (`cli::ServerConfig::pre_query` / the `/query`
+  handler) — a **CLI-only** surface with **no** Python/TypeScript public-API
+  binding, identical across every install, no drift.
+
 ## Language-Idiomatic Exceptions
 
 ### Python

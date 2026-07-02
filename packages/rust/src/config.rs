@@ -17,7 +17,7 @@ pub enum ConfigError {
     #[error("Missing required field '{0}' in [[dirsql.extension]] entry")]
     MissingExtensionField(&'static str),
 
-    #[error("Field '{0}' in [[table]] entry must not be empty")]
+    #[error("Field '{0}' must not be empty")]
     EmptyField(&'static str),
 }
 
@@ -44,6 +44,13 @@ pub struct Config {
     /// relative paths are resolved against the config file's parent directory
     /// by the caller (`DirSQLBuilder::resolve`).
     pub extensions: Vec<ExtensionSpec>,
+    /// Optional server-wide `pre-query` command (`[dirsql].pre-query`). When
+    /// set, the HTTP server passes each `POST /query` request body to this
+    /// command as `{args}` and runs the plain-text SQL it prints, instead of
+    /// parsing the body as `{"sql": …}`. See `dirsql::command` for the
+    /// execution contract. Only the CLI server consults this; the SDK ignores
+    /// it.
+    pub pre_query: Option<String>,
 }
 
 /// A SQLite extension to load at startup.
@@ -100,6 +107,8 @@ struct RawDirsql {
     persist: Option<bool>,
     persist_path: Option<PathBuf>,
     extension: Option<Vec<RawExtension>>,
+    #[serde(rename = "pre-query")]
+    pre_query: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -127,15 +136,26 @@ pub fn load_config(path: &Path) -> Result<Config> {
 pub fn load_config_str(content: &str) -> Result<Config> {
     let raw: RawConfig = toml::from_str(content)?;
 
-    let (root, ignore, persist, persist_path, raw_extensions) = match raw.dirsql {
+    let (root, ignore, persist, persist_path, raw_extensions, raw_pre_query) = match raw.dirsql {
         Some(d) => (
             d.root,
             d.ignore.unwrap_or_default(),
             d.persist.unwrap_or(false),
             d.persist_path,
             d.extension.unwrap_or_default(),
+            d.pre_query,
         ),
-        None => (None, Vec::new(), false, None, Vec::new()),
+        None => (None, Vec::new(), false, None, Vec::new(), None),
+    };
+
+    // A present-but-empty `pre-query = ""` is as unusable as a missing key:
+    // reject it at parse time rather than spawning an empty command later
+    // (mirrors the `on-file` handling below).
+    let pre_query = match raw_pre_query {
+        Some(cmd) if cmd.trim().is_empty() => {
+            return Err(ConfigError::EmptyField("pre-query"));
+        }
+        other => other,
     };
 
     let mut extensions = Vec::with_capacity(raw_extensions.len());
@@ -183,6 +203,7 @@ pub fn load_config_str(content: &str) -> Result<Config> {
         persist,
         persist_path,
         extensions,
+        pre_query,
     })
 }
 
@@ -502,6 +523,47 @@ on-file = "   "
         let err = load_config_str(toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::EmptyField("on-file")),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn pre_query_parses_when_present() {
+        let toml = r#"
+[dirsql]
+pre-query = "uv run python to_sql.py {args}"
+
+[[table]]
+ddl = "CREATE TABLE t (_path TEXT)"
+glob = "*.json"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert_eq!(
+            config.pre_query.as_deref(),
+            Some("uv run python to_sql.py {args}")
+        );
+    }
+
+    #[test]
+    fn pre_query_absent_is_none() {
+        let toml = r#"
+[[table]]
+ddl = "CREATE TABLE t (_path TEXT)"
+glob = "*.json"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert!(config.pre_query.is_none());
+    }
+
+    #[test]
+    fn pre_query_empty_errors() {
+        let toml = r#"
+[dirsql]
+pre-query = "   "
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::EmptyField("pre-query")),
             "got: {err:?}"
         );
     }

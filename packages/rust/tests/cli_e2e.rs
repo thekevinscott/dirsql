@@ -410,6 +410,56 @@ fn no_config_serves_default_files_table() {
     kill_and_wait(child);
 }
 
+#[cfg(unix)]
+#[test]
+fn pre_query_hook_rewrites_body_into_sql_over_http() {
+    // #328: with `[dirsql].pre-query` set, `POST /query` passes the raw request
+    // body to the hook and runs the SQL it prints. The hook here ignores the
+    // (non-JSON) body and emits a SELECT over the posts table; getting rows
+    // back proves the hook ran (the `{sql}` passthrough would have 400'd on
+    // this body). The hook script is referenced by a bare relative name to
+    // exercise cwd = the config file's directory.
+    let root = blog_fixture();
+    fs::write(
+        root.path().join("to_sql.sh"),
+        "echo \"SELECT title FROM posts ORDER BY title\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[dirsql]
+pre-query = "sh to_sql.sh {args}"
+
+[[table]]
+ddl = "CREATE TABLE posts (title TEXT, author TEXT, _basename TEXT, _size INTEGER)"
+glob = "posts/{author}/{title}.json"
+"#,
+    )
+    .unwrap();
+
+    let port = free_port();
+    let child = spawn_dirsql(root.path(), port);
+    wait_until_ready(port, Duration::from_secs(10));
+
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .body("please give me the posts")
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Vec<Value> = resp.json().unwrap();
+    assert_eq!(
+        body,
+        vec![
+            json!({"title": "Hello-World"}),
+            json!({"title": "Second-Post"}),
+        ]
+    );
+
+    kill_and_wait(child);
+}
+
 #[test]
 fn explicit_config_flag_overrides_cwd_default() {
     // Start in an unrelated cwd but point `--config` at the fixture.

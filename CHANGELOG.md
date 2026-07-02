@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CLI server: a server-wide `pre-query` command hook (B3 of epic #322,
+  #328).** Set `[dirsql].pre-query = "…"` in `.dirsql.toml` and the HTTP server
+  routes every `POST /query` through it: the raw request body is passed to the
+  command as the injection-safe `{args}` placeholder, and the plain-text SQL the
+  command prints on stdout (last non-empty line) is what runs — so clients can
+  post natural language, a saved-query name, or any DSL and have the hook
+  translate it to SQL. The hook runs in the config file's directory with the
+  inherited environment and a fixed 30-second timeout; a failure (non-zero exit,
+  timeout, or spawn error) returns `500` with the command's stderr tail. When
+  `pre-query` is absent the body is still parsed as `{"sql": …}` (fully backward
+  compatible). Because the hook returns plain SQL, it is the trusted component
+  that turns the untrusted body into safe SQL — intentional for v1. Handled
+  entirely in the shared Rust core, so every install behaves identically with no
+  per-SDK surface.
+
 ### Removed
 
 - **Python SDK: native-language (`.py`) config support and the `dirsql

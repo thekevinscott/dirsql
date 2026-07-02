@@ -48,6 +48,7 @@ pub async fn serve_with_state(
         events: event_tx,
         cancel: cancel_rx,
         query_timeout: config.query_timeout,
+        pre_query: config.pre_query,
     });
     let app = router(shared);
 

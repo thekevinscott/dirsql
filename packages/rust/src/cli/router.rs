@@ -16,15 +16,25 @@ use serde_json::json;
 use tokio::sync::{broadcast, watch};
 use tokio_stream::wrappers::BroadcastStream;
 
-use super::AppState;
 use super::serialize::rows_to_json;
+use super::{AppState, PreQuery};
+use crate::command::{Placeholder, run_command};
 use crate::{DirSQL, DirSqlError};
+
+/// Fixed timeout for a server-wide `pre-query` command. There is no override
+/// key yet; this module constant is the documented current default (mirrors
+/// `on-file`'s `ON_FILE_TIMEOUT`).
+const PRE_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) struct AppContext {
     pub state: AppState,
     pub events: broadcast::Sender<String>,
     pub cancel: watch::Receiver<bool>,
     pub query_timeout: Duration,
+    /// Optional server-wide `pre-query` hook. When `Some`, `POST /query`
+    /// rewrites the request body through the command; when `None`, the body
+    /// is parsed as `{"sql": …}`.
+    pub pre_query: Option<PreQuery>,
 }
 
 pub(super) type SharedCtx = Arc<AppContext>;
@@ -47,19 +57,18 @@ struct QueryBody {
     sql: Option<String>,
 }
 
-async fn handle_query(
-    State(ctx): State<SharedCtx>,
-    body: Result<Json<QueryBody>, axum::extract::rejection::JsonRejection>,
-) -> Response {
-    let Json(body) = match body {
-        Ok(body) => body,
-        Err(rej) => return error_response(StatusCode::BAD_REQUEST, rej.body_text()),
-    };
-
-    let sql = match body.sql.as_deref().map(str::trim) {
-        Some(s) if !s.is_empty() => s.to_string(),
-        Some(_) => return error_response(StatusCode::BAD_REQUEST, "`sql` must not be empty"),
-        None => return error_response(StatusCode::BAD_REQUEST, "missing `sql` field"),
+async fn handle_query(State(ctx): State<SharedCtx>, body: String) -> Response {
+    // Resolve the SQL to run. With a `pre-query` hook the raw body is rewritten
+    // by the command; without one it is parsed as `{"sql": …}` (today's path).
+    let sql = match &ctx.pre_query {
+        Some(pq) => match run_pre_query(pq, body).await {
+            Ok(sql) => sql,
+            Err(resp) => return resp,
+        },
+        None => match parse_sql_body(&body) {
+            Ok(sql) => sql,
+            Err(resp) => return resp,
+        },
     };
 
     let db = match require_ready(&ctx.state) {
@@ -85,6 +94,64 @@ async fn handle_query(
             format!("query exceeded {:?} timeout", timeout),
         ),
     }
+}
+
+/// Parse a `POST /query` body as `{"sql": …}` and return the trimmed SQL.
+/// Reproduces the pre-hook behavior: 400 on malformed JSON, 400 on a
+/// missing/empty `sql` field.
+///
+/// `Response` is large (clippy flags the error variant), but returning it
+/// directly matches the axum handler contract and avoids boxing on the hot
+/// path — same trade-off as [`require_ready`].
+#[allow(clippy::result_large_err)]
+fn parse_sql_body(body: &str) -> Result<String, Response> {
+    let parsed: QueryBody = serde_json::from_str(body)
+        .map_err(|err| error_response(StatusCode::BAD_REQUEST, err.to_string()))?;
+    match parsed.sql.as_deref().map(str::trim) {
+        Some(s) if !s.is_empty() => Ok(s.to_string()),
+        Some(_) => Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "`sql` must not be empty",
+        )),
+        None => Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "missing `sql` field",
+        )),
+    }
+}
+
+/// Run the server-wide `pre-query` hook over the raw request body and return
+/// the SQL it prints. The body is passed as the injection-safe `{args}`
+/// placeholder (a single argv token); the command's last non-empty stdout line
+/// is the SQL to run. Any failure (non-zero exit, timeout, spawn error) maps to
+/// `500` carrying the command's stderr tail.
+///
+/// `Response` is large (see [`parse_sql_body`]); returned by value for the same
+/// reason.
+#[allow(clippy::result_large_err)]
+async fn run_pre_query(pq: &PreQuery, raw_body: String) -> Result<String, Response> {
+    let command = pq.command.clone();
+    let config_dir = pq.config_dir.clone();
+    // `run_command` is blocking — it spawns a child and joins drain threads —
+    // so run it off the async runtime. It enforces `PRE_QUERY_TIMEOUT`
+    // internally, so no outer `tokio::time::timeout` is needed.
+    let outcome = tokio::task::spawn_blocking(move || {
+        run_command(
+            &command,
+            &[Placeholder::new("args", &raw_body)],
+            &config_dir,
+            PRE_QUERY_TIMEOUT,
+            None,
+        )
+    })
+    .await
+    .map_err(|join_err| error_response(StatusCode::INTERNAL_SERVER_ERROR, join_err.to_string()))?;
+
+    // `run_command` only returns `Ok` with a non-empty last stdout line
+    // (`EmptyOutput` otherwise), so the payload is the SQL as-is.
+    outcome
+        .map(|out| out.payload)
+        .map_err(|err| error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
 }
 
 async fn handle_events(State(ctx): State<SharedCtx>) -> Response {

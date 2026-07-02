@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use dirsql::cli::{AppState, ServerConfig, init::InitOptions, serve_with_state};
+use dirsql::cli::{AppState, PreQuery, ServerConfig, init::InitOptions, serve_with_state};
 use dirsql::{DirSQL, Extension, Row, Table};
 
 #[derive(Debug, Parser)]
@@ -118,7 +118,10 @@ fn run_init(args: InitArgs) -> ExitCode {
 
 async fn run_server(cli: Cli) -> ExitCode {
     let state = load_state(&cli);
-    let server_config = ServerConfig::bind(cli.host.clone(), cli.port);
+    let mut server_config = ServerConfig::bind(cli.host.clone(), cli.port);
+    if let Some(pre_query) = load_pre_query(&cli) {
+        server_config = server_config.with_pre_query(pre_query);
+    }
 
     let host = cli.host.clone();
     let handle = match serve_with_state(server_config, state).await {
@@ -203,6 +206,26 @@ fn parse_extension_specs(specs: &[String]) -> Vec<Extension> {
             },
         })
         .collect()
+}
+
+/// Extract the server-wide `pre-query` hook from the config, if any.
+///
+/// Returns `None` when the config is absent, unresolvable, unparsable, or
+/// declares no `pre-query` — the server then parses `POST /query` bodies as
+/// `{"sql": …}` (the degraded / zero-config paths never get a hook). The
+/// command's working directory is the config file's parent, mirroring the
+/// `on-file` contract. Config resolution mirrors [`load_state`]: a config that
+/// fails here also fails there (leaving the server degraded), so the hook is
+/// simply skipped.
+fn load_pre_query(cli: &Cli) -> Option<PreQuery> {
+    let config_path = &cli.config;
+    if !config_path.exists() {
+        return None;
+    }
+    let resolved = config_path.canonicalize().ok()?;
+    let command = dirsql::config::load_config(&resolved).ok()?.pre_query?;
+    let config_dir = resolved.parent()?.to_path_buf();
+    Some(PreQuery::new(command, config_dir))
 }
 
 /// Zero-config fallback. When no `.dirsql.toml` is found, dirsql indexes the

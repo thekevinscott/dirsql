@@ -16,7 +16,9 @@
 use std::time::Duration;
 
 use dirsql::DirSQL;
-use dirsql::cli::{AppState, ServerConfig, ServerError, ServerHandle, serve, serve_with_state};
+use dirsql::cli::{
+    AppState, PreQuery, ServerConfig, ServerError, ServerHandle, serve, serve_with_state,
+};
 use eventsource_client::{Client, SSE};
 use futures_util::StreamExt;
 use reqwest::StatusCode;
@@ -224,6 +226,99 @@ async fn post_query_non_json_body_returns_400() {
         .unwrap();
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    handle.shutdown().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// POST /query with a server-wide `pre-query` hook (#328)
+// ---------------------------------------------------------------------------
+
+/// Write a shell script fixture into `dir` and return its path. Invoked via
+/// `sh <path>` so no executable bit is needed. Unix-only: the hook fixtures use
+/// `sh`, and the Rust CI test job is Linux.
+#[cfg(unix)]
+fn write_script(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+    let path = dir.join(name);
+    fs::write(&path, body).unwrap();
+    path
+}
+
+/// Bind an ephemeral server whose `POST /query` is fronted by a `pre-query`
+/// hook running `command` in `config_dir`.
+#[cfg(unix)]
+async fn spawn_server_with_pre_query(
+    db: DirSQL,
+    command: String,
+    config_dir: &std::path::Path,
+) -> ServerHandle {
+    let config = ServerConfig::ephemeral().with_pre_query(PreQuery::new(command, config_dir));
+    serve(config, db)
+        .await
+        .expect("server should bind on an ephemeral port")
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn pre_query_rewrites_request_body_into_sql() {
+    // The hook receives the raw request body as `$1` and prints SQL that echoes
+    // it back, proving the body flows through as `{args}`. The body posted is
+    // NOT `{"sql": …}` JSON, which the passthrough path would reject — so a 200
+    // with the echoed value can only come from the hook rewriting the request.
+    let (_root, db) = blog_fixture();
+    let scripts = TempDir::new().unwrap();
+    let script = write_script(
+        scripts.path(),
+        "to_sql.sh",
+        "echo \"SELECT '$1' AS echoed\"\n",
+    );
+    let command = format!("sh {} {{args}}", script.display());
+    let handle = spawn_server_with_pre_query(db, command, scripts.path()).await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/query", base_url(&handle)))
+        .body("helloworld")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Vec<JsonValue> = resp.json().await.unwrap();
+    assert_eq!(body, vec![json!({"echoed": "helloworld"})]);
+    handle.shutdown().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn pre_query_command_failure_returns_5xx_with_stderr_tail() {
+    // A hook that exits non-zero maps to 500, carrying the command's stderr
+    // tail in the JSON `error` body.
+    let (_root, db) = blog_fixture();
+    let scripts = TempDir::new().unwrap();
+    let script = write_script(
+        scripts.path(),
+        "boom.sh",
+        "echo boom-from-hook >&2\nexit 1\n",
+    );
+    let command = format!("sh {} {{args}}", script.display());
+    let handle = spawn_server_with_pre_query(db, command, scripts.path()).await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/query", base_url(&handle)))
+        .body("anything")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body: JsonValue = resp.json().await.unwrap();
+    let msg = body
+        .get("error")
+        .and_then(JsonValue::as_str)
+        .unwrap_or_default();
+    assert!(
+        msg.contains("boom-from-hook"),
+        "5xx body should surface the command's stderr tail, got {body}",
+    );
     handle.shutdown().await.unwrap();
 }
 
