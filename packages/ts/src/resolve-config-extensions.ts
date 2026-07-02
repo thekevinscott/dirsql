@@ -46,14 +46,13 @@ export function resolveConfigExtensionSpecs(
     return null;
   }
   const dirsql = (doc.dirsql ?? {}) as Toml;
-  const entries: Toml[] = Array.isArray(dirsql.extension)
-    ? dirsql.extension
-    : [];
-  if (entries.length === 0) {
+  if (!Array.isArray(dirsql.extension)) {
     return null;
   }
+  const entries: Toml[] = dirsql.extension;
   // Only intervene when at least one path is a bare package name; a config
-  // with only literal paths keeps the core's existing behavior untouched.
+  // with only literal paths (or no entries at all) keeps the core's existing
+  // behavior untouched.
   const hasPackageName = entries.some(
     (e) => typeof e.path === "string" && isBareName(e.path),
   );
