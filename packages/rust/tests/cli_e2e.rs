@@ -460,6 +460,53 @@ glob = "posts/{author}/{title}.json"
     kill_and_wait(child);
 }
 
+#[cfg(unix)]
+#[test]
+fn post_query_hook_reshapes_response_over_http() {
+    // #329: with `[dirsql].post-query` set, a successful `POST /query` result
+    // set is handed to the hook, which reads the rows (on stdin) and prints the
+    // JSON body to return. The hook here wraps the rows in a `{results: …}`
+    // envelope; getting that envelope back proves the hook reshaped the
+    // response. The hook script is referenced by a bare relative name to
+    // exercise cwd = the config file's directory.
+    let root = blog_fixture();
+    fs::write(
+        root.path().join("wrap.sh"),
+        "data=$(cat)\necho \"{\\\"results\\\": $data}\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[dirsql]
+post-query = "sh wrap.sh {args}"
+
+[[table]]
+ddl = "CREATE TABLE posts (title TEXT, author TEXT, _basename TEXT, _size INTEGER)"
+glob = "posts/{author}/{title}.json"
+"#,
+    )
+    .unwrap();
+
+    let port = free_port();
+    let child = spawn_dirsql(root.path(), port);
+    wait_until_ready(port, Duration::from_secs(10));
+
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Value = resp.json().unwrap();
+    assert_eq!(
+        body,
+        json!({"results": [{"title": "Hello-World"}, {"title": "Second-Post"}]})
+    );
+
+    kill_and_wait(child);
+}
+
 #[test]
 fn explicit_config_flag_overrides_cwd_default() {
     // Start in an unrelated cwd but point `--config` at the fixture.

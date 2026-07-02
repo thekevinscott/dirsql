@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CLI server: a server-wide `post-query` command hook (B4 of epic #322,
+  #329).** Set `[dirsql].post-query = "…"` in `.dirsql.toml` and the HTTP server
+  reshapes every successful `POST /query` response through it: the result rows
+  are serialized to a JSON array and handed to the command on stdin (always,
+  unbounded and injection-safe) and as the `{args}` placeholder (for payloads
+  ≤ 96 KiB; beyond that `{args}` is emptied with a stderr warning and stdin
+  carries the full set — not truncation). The JSON body the command prints on
+  stdout (last non-empty line) becomes the `200 application/json` response, so
+  clients can receive an envelope, projected fields, or any shape — the
+  canonical example is `jq -c '{results: .}'` (compact, since the body is the
+  command's last stdout line). Output that isn't valid JSON returns
+  `500 post-query did not return valid JSON: …`; a failure (non-zero exit,
+  timeout, spawn error) returns `500` with the command's stderr tail. The hook
+  runs in the config file's directory with the inherited environment and a fixed
+  30-second timeout. When `post-query` is absent the rows are returned as-is
+  (fully backward compatible). Handled entirely in the shared Rust core, so
+  every install behaves identically with no per-SDK surface.
 - **CLI server: a server-wide `pre-query` command hook (B3 of epic #322,
   #328).** Set `[dirsql].pre-query = "…"` in `.dirsql.toml` and the HTTP server
   routes every `POST /query` through it: the raw request body is passed to the

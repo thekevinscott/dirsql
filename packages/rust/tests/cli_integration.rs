@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use dirsql::DirSQL;
 use dirsql::cli::{
-    AppState, PreQuery, ServerConfig, ServerError, ServerHandle, serve, serve_with_state,
+    AppState, PostQuery, PreQuery, ServerConfig, ServerError, ServerHandle, serve, serve_with_state,
 };
 use eventsource_client::{Client, SSE};
 use futures_util::StreamExt;
@@ -318,6 +318,148 @@ async fn pre_query_command_failure_returns_5xx_with_stderr_tail() {
     assert!(
         msg.contains("boom-from-hook"),
         "5xx body should surface the command's stderr tail, got {body}",
+    );
+    handle.shutdown().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// POST /query with a server-wide `post-query` hook (#329)
+// ---------------------------------------------------------------------------
+
+/// Bind an ephemeral server whose `POST /query` responses are reshaped by a
+/// `post-query` hook running `command` in `config_dir`.
+#[cfg(unix)]
+async fn spawn_server_with_post_query(
+    db: DirSQL,
+    command: String,
+    config_dir: &std::path::Path,
+) -> ServerHandle {
+    let config = ServerConfig::ephemeral().with_post_query(PostQuery::new(command, config_dir));
+    serve(config, db)
+        .await
+        .expect("server should bind on an ephemeral port")
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn post_query_reshapes_response_body() {
+    // The hook reads the serialized result rows from stdin and wraps them in a
+    // `{results: …}` envelope. Getting that envelope back proves the rows flow
+    // in on stdin and the wrapped JSON body flows out as the response.
+    let (_root, db) = blog_fixture();
+    let scripts = TempDir::new().unwrap();
+    let script = write_script(
+        scripts.path(),
+        "wrap.sh",
+        "data=$(cat)\necho \"{\\\"results\\\": $data}\"\n",
+    );
+    let command = format!("sh {} {{args}}", script.display());
+    let handle = spawn_server_with_post_query(db, command, scripts.path()).await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/query", base_url(&handle)))
+        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: JsonValue = resp.json().await.unwrap();
+    assert_eq!(
+        body,
+        json!({"results": [{"title": "Hello-World"}, {"title": "Second-Post"}]})
+    );
+    handle.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn post_query_absent_returns_rows_unchanged() {
+    // With no `post-query` hook, `POST /query` returns the raw rows array
+    // (today's passthrough behavior) — backward compatible.
+    let (_root, db) = blog_fixture();
+    let handle = spawn_server(db).await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/query", base_url(&handle)))
+        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Vec<JsonValue> = resp.json().await.unwrap();
+    assert_eq!(
+        body,
+        vec![
+            json!({"title": "Hello-World"}),
+            json!({"title": "Second-Post"}),
+        ]
+    );
+    handle.shutdown().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn post_query_command_failure_returns_5xx_with_stderr_tail() {
+    // A hook that exits non-zero maps to 500, carrying the command's stderr
+    // tail in the JSON `error` body.
+    let (_root, db) = blog_fixture();
+    let scripts = TempDir::new().unwrap();
+    let script = write_script(
+        scripts.path(),
+        "boom.sh",
+        "echo boom-from-post >&2\nexit 1\n",
+    );
+    let command = format!("sh {} {{args}}", script.display());
+    let handle = spawn_server_with_post_query(db, command, scripts.path()).await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/query", base_url(&handle)))
+        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body: JsonValue = resp.json().await.unwrap();
+    let msg = body
+        .get("error")
+        .and_then(JsonValue::as_str)
+        .unwrap_or_default();
+    assert!(
+        msg.contains("boom-from-post"),
+        "5xx body should surface the command's stderr tail, got {body}",
+    );
+    handle.shutdown().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn post_query_invalid_json_returns_5xx() {
+    // A hook whose stdout isn't valid JSON maps to 500 with a diagnostic
+    // naming the failure.
+    let (_root, db) = blog_fixture();
+    let scripts = TempDir::new().unwrap();
+    let script = write_script(scripts.path(), "not_json.sh", "echo not-json\n");
+    let command = format!("sh {} {{args}}", script.display());
+    let handle = spawn_server_with_post_query(db, command, scripts.path()).await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/query", base_url(&handle)))
+        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body: JsonValue = resp.json().await.unwrap();
+    let msg = body
+        .get("error")
+        .and_then(JsonValue::as_str)
+        .unwrap_or_default();
+    assert!(
+        msg.contains("post-query did not return valid JSON"),
+        "5xx body should name the invalid-JSON failure, got {body}",
     );
     handle.shutdown().await.unwrap();
 }

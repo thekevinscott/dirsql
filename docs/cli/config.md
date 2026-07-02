@@ -310,6 +310,60 @@ curl -s http://localhost:7117/query -d 'recent-posts' | jq
 See [Command execution](#command-execution) for the full contract (argv
 splitting, injection safety, cwd, environment, timeout, and output framing).
 
+### Reshaping responses (`post-query`)
+
+The `post-query` hook lets you reshape every query response before it's
+returned — wrap the rows in an envelope, rename or project fields, add
+metadata, or emit whatever JSON shape your clients expect. Because the hook
+owns the response body, `POST /query` can return any structure you like instead
+of the default bare array of row objects. Like [`pre-query`](#rewriting-queries-pre-query),
+`post-query` is a **server-wide** `[dirsql]` key: every successful query flows
+through it.
+
+```toml
+[dirsql]
+post-query = "jq -c '{results: .}'"
+```
+
+The `-c` (compact) flag matters: the response body is the command's **last
+non-empty stdout line** (see [Command execution](#command-execution)), so the
+command must print its JSON on a single line — `jq`'s default multi-line
+pretty-printing would leave only a trailing `}` as the last line.
+
+After a successful query, `dirsql` serializes the result rows to a **JSON
+array** and hands it to the command two ways:
+
+- **On stdin** — always, unbounded and injection-safe. This is the recommended
+  path, and it's what the canonical `jq -c '{results: .}'` example reads.
+- **As the `{args}` placeholder** — for small result sets. When the serialized
+  payload exceeds **96 KiB** (comfortably under the OS single-argument limit),
+  `{args}` is substituted with an **empty string** and a warning naming the byte
+  size is logged to stderr, directing the operator to read stdin instead. The
+  full payload is still delivered on stdin — this is a fallback, **not**
+  truncation.
+
+| Placeholder | Value |
+|-------------|-------|
+| `{args}`    | The result rows as a JSON array, as one argv token — emptied (with a stderr warning) when the payload exceeds 96 KiB; read stdin for the full set. |
+
+The command prints the **JSON response body** on stdout (the last non-empty
+line is used); `dirsql` parses it with `serde_json` and returns it as `200
+application/json`. If that line is **not valid JSON**, the request returns `500
+Internal Server Error` with `post-query did not return valid JSON: <err>`.
+
+When `post-query` is **absent**, nothing changes: the rows are returned as-is —
+the [HTTP API](./http-api.md#post-query) default. Enabling the hook is fully
+backward compatible in reverse: remove the key and the bare-array contract
+returns.
+
+**On failure** — a non-zero exit, a timeout, or a spawn error — the request
+returns `500 Internal Server Error` with the command's stderr tail in the JSON
+`error` body. The command runs in the config file's directory and is bounded by
+a fixed **30-second** timeout.
+
+See [Command execution](#command-execution) for the full contract (argv
+splitting, injection safety, cwd, environment, timeout, and output framing).
+
 ### Full Example
 
 ```toml
@@ -331,8 +385,8 @@ glob = "logs/*.csv"
 
 ## Command execution
 
-Config keys that run an external command — today `on-file` and `pre-query`,
-with more events to follow — share one execution contract:
+Config keys that run an external command — today `on-file`, `pre-query`, and
+`post-query`, with more events to follow — share one execution contract:
 
 - **argv, not a shell.** The command string is split into an argv with
   shell-like quoting (spaces separate arguments; quotes group them), but **no

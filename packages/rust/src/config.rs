@@ -51,6 +51,13 @@ pub struct Config {
     /// execution contract. Only the CLI server consults this; the SDK ignores
     /// it.
     pub pre_query: Option<String>,
+    /// Optional server-wide `post-query` command (`[dirsql].post-query`). When
+    /// set, the HTTP server hands each successful `POST /query` result set (the
+    /// rows serialized as a JSON array) to this command as `{args}` and on
+    /// stdin, and returns the JSON body the command prints, instead of returning
+    /// the rows as-is. See `dirsql::command` for the execution contract. Only
+    /// the CLI server consults this; the SDK ignores it.
+    pub post_query: Option<String>,
 }
 
 /// A SQLite extension to load at startup.
@@ -109,6 +116,8 @@ struct RawDirsql {
     extension: Option<Vec<RawExtension>>,
     #[serde(rename = "pre-query")]
     pre_query: Option<String>,
+    #[serde(rename = "post-query")]
+    post_query: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -136,17 +145,19 @@ pub fn load_config(path: &Path) -> Result<Config> {
 pub fn load_config_str(content: &str) -> Result<Config> {
     let raw: RawConfig = toml::from_str(content)?;
 
-    let (root, ignore, persist, persist_path, raw_extensions, raw_pre_query) = match raw.dirsql {
-        Some(d) => (
-            d.root,
-            d.ignore.unwrap_or_default(),
-            d.persist.unwrap_or(false),
-            d.persist_path,
-            d.extension.unwrap_or_default(),
-            d.pre_query,
-        ),
-        None => (None, Vec::new(), false, None, Vec::new(), None),
-    };
+    let (root, ignore, persist, persist_path, raw_extensions, raw_pre_query, raw_post_query) =
+        match raw.dirsql {
+            Some(d) => (
+                d.root,
+                d.ignore.unwrap_or_default(),
+                d.persist.unwrap_or(false),
+                d.persist_path,
+                d.extension.unwrap_or_default(),
+                d.pre_query,
+                d.post_query,
+            ),
+            None => (None, Vec::new(), false, None, Vec::new(), None, None),
+        };
 
     // A present-but-empty `pre-query = ""` is as unusable as a missing key:
     // reject it at parse time rather than spawning an empty command later
@@ -154,6 +165,16 @@ pub fn load_config_str(content: &str) -> Result<Config> {
     let pre_query = match raw_pre_query {
         Some(cmd) if cmd.trim().is_empty() => {
             return Err(ConfigError::EmptyField("pre-query"));
+        }
+        other => other,
+    };
+
+    // A present-but-empty `post-query = ""` is as unusable as a missing key:
+    // reject it at parse time rather than spawning an empty command later
+    // (mirrors the `pre-query` handling above).
+    let post_query = match raw_post_query {
+        Some(cmd) if cmd.trim().is_empty() => {
+            return Err(ConfigError::EmptyField("post-query"));
         }
         other => other,
     };
@@ -204,6 +225,7 @@ pub fn load_config_str(content: &str) -> Result<Config> {
         persist_path,
         extensions,
         pre_query,
+        post_query,
     })
 }
 
@@ -564,6 +586,44 @@ pre-query = "   "
         let err = load_config_str(toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::EmptyField("pre-query")),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn post_query_parses_when_present() {
+        let toml = r#"
+[dirsql]
+post-query = "jq '{results: .}'"
+
+[[table]]
+ddl = "CREATE TABLE t (_path TEXT)"
+glob = "*.json"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert_eq!(config.post_query.as_deref(), Some("jq '{results: .}'"));
+    }
+
+    #[test]
+    fn post_query_absent_is_none() {
+        let toml = r#"
+[[table]]
+ddl = "CREATE TABLE t (_path TEXT)"
+glob = "*.json"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert!(config.post_query.is_none());
+    }
+
+    #[test]
+    fn post_query_empty_errors() {
+        let toml = r#"
+[dirsql]
+post-query = "   "
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::EmptyField("post-query")),
             "got: {err:?}"
         );
     }
