@@ -109,6 +109,13 @@ Python/TypeScript surface to keep in parity. The events built on it (`on-file`,
 config loader, so every install (`pip` / `npm` / `cargo`) gets identical
 behavior with no per-SDK code. Individual event rows land here as B2–B4 ship.
 
+- **`on-file` (B2 #327).** A `[[table]]` key naming a per-file command whose
+  JSON-array stdout becomes the table's rows (placeholders `{path}` / `{abspath}`
+  / `{root}`; per-file error isolation; 30s timeout). Parsed and executed in the
+  shared Rust core (`config::TableConfig::on_file` + the `build_tables_from_config`
+  extract path), with **no** Python/TypeScript public-API surface — identical
+  across all three installs, no drift.
+
 ## Language-Idiomatic Exceptions
 
 ### Python
