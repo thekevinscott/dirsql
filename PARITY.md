@@ -187,35 +187,158 @@ behavior with no per-SDK code. Individual event rows land here as B2–B4 ship.
 
 ## Test Coverage Matrix
 
+Feature × SDK × tier coverage parity (#294). Unless a cell says otherwise,
+`Y` means the scenario is covered in that SDK's **integration** tier (SDK
+public API against the real core). `core` means the behavior lives in the
+shared Rust core and is deliberately covered once, at the Rust
+integration/unit tier — per the one-implementation principle, the bindings
+prove marshaling, not the core logic itself. `unit` means the SDK covers it
+at its colocated-unit tier (idiomatic for Rust inline `#[cfg(test)]`
+modules). `N/A` means the surface does not exist in that SDK by design (see
+Language-Idiomatic Exceptions).
+
+Integration-tier file map:
+
+| Area | Python (`packages/python/tests/integration/`) | Rust (`packages/rust/tests/`) | TypeScript (`packages/ts/tests/integration/`) |
+|---|---|---|---|
+| Core SDK | `dirsql_test.py` | `sdk.rs` | `index.test.ts`, `docs-gaps.test.ts` |
+| Async / ready | `async_dirsql_test.py`, `binding_test.py` (mocked core) | `async_sdk.rs` | `index.test.ts` |
+| Watch events | `async_dirsql_test.py`, `docs_gaps_test.py` | `sdk.rs`, `watcher.rs`, `watch_relative_root.rs` | `watch.test.ts`, `index.test.ts` |
+| Config file | `from_config_test.py` | `from_config.rs`, `config.rs` | `from-config.test.ts` |
+| Persistence | `persist_test.py` | `persist.rs` | `persist.test.ts` |
+| Extensions | `extensions_test.py`, `extension_package_test.py` | `extensions.rs` | `extensions.test.ts`, `extension-package.test.ts` |
+| Table-name resolution (#204) | `table_name_resolution_test.py` | `table_name_resolution.rs` | `table-name-resolution.test.ts` |
+| Docs examples | `docs_examples_test.py` | `docs_examples.rs` | `docs-examples.test.ts` |
+| Docs gap-fills | `docs_gaps_test.py` | `docs_gaps.rs` | `docs-gaps.test.ts` |
+
+### Construction & querying
+
 | Test Scenario              | Python | Rust | TypeScript |
 |----------------------------|--------|------|------------|
 | Basic init + query         | Y      | Y    | Y          |
 | Multiple tables            | Y      | Y    | Y          |
+| JOIN across tables         | Y      | Y    | Y          |
 | Ignore patterns            | Y      | Y    | Y          |
-| Construct from config file | Y      | Y    | Y          |
-| Explicit root overrides config root | Y      | Y    | Y          |
-| Load SQLite extension(s)   | Y      | Y    | Y          |
-| Watch: insert              | Y      | Y    | Y          |
-| Watch: delete              | Y      | Y    | Y          |
-| Watch: update              | Y      | Y    | Y          |
-| Watch: error               | Y      | Y    | Y          |
+| Extract receives the matched file's path | Y | Y | Y |
+| Extract returns `[]` to skip a file | Y | Y | Y |
+| Value types (str/int/float/bool/None) | Y | Y | Y |
+| `bytes`/`Vec<u8>` → BLOB round-trip | Y | Y | **N — drift (#343)**: the napi binding coerces a `Buffer` to a string |
+| Invalid SQL raises         | Y      | Y    | Y          |
+| Invalid DDL raises         | Y      | Y    | Y          |
 | Query rejects writes       | Y      | Y    | Y          |
+| Write-rejection edge matrix (leading comments, mixed case, CTE/whitespace allowed) | core | Y (`readonly_query.rs`) | core |
+| Internal `_dirsql_*` columns hidden from `SELECT *` | Y | Y | Y |
+| `_dirsql_*` filter robustness (comment/string-literal bypass) | core | Y (`code_review_findings.rs`) | core |
+| Empty directory / empty result set | Y | Y | Y |
+| Error taxonomy (duplicate table, invalid glob, unparseable DDL, extract error) | core | Y (`sdk.rs`) | core |
 | Relaxed schema (extra keys)| Y      | Y    | Y          |
 | Relaxed schema (missing)   | Y      | Y    | Y          |
 | Strict mode (extra keys)   | Y      | Y    | Y          |
 | Strict mode (missing keys) | Y      | Y    | Y          |
 | Strict mode (exact match)  | Y      | Y    | Y          |
+| `Table` construction + `ddl`/`glob` attributes | Y | Y | Y (`Table` class + plain-object interchangeability) |
+| Quoted-identifier DDL registers/queries by bare name (#204) | Y | Y | Y |
+
+### Ready / async semantics
+
+| Test Scenario              | Python | Rust | TypeScript |
+|----------------------------|--------|------|------------|
+| Constructor returns before the scan completes | Y | Y (`async_sdk.rs`) | Y (#146) |
 | AsyncDirSQL: ready + query | Y      | Y    | Y (via DirSQL.ready) |
 | AsyncDirSQL: multiple ready| Y      | Y    | Y (via DirSQL.ready) |
 | AsyncDirSQL: from config   | Y      | Y    | Y (via `new DirSQL(string)` + ready) |
 | AsyncDirSQL: watch         | Y      | Y    | Y (via DirSQL.watch) |
+| ready re-raises scan/init errors | Y | Y | Y (`ready` rejection) |
+| Query issued eagerly awaits ready transparently | Y | N/A — explicit `ready().await` by design | Y (#146) |
+| Methods before ready error (`not ready`) | N/A | Y (`async_sdk.rs`) | N/A |
+| Event-loop / host-thread non-blocking | unit (`binding_test.py` offload seams) | N/A | Y (#146/#147 libuv-threadpool tests) |
+
+### Watching
+
+| Test Scenario              | Python | Rust | TypeScript |
+|----------------------------|--------|------|------------|
+| Watch: insert (via async iterator/stream) | Y | Y | Y |
+| Watch: delete              | Y      | Y    | Y          |
+| Watch: update              | Y      | Y    | Y          |
+| Watch: error               | Y      | Y    | Y          |
+| Error events carry table attribution | Y | Y | Y |
+| DB kept in sync after events | Y | Y | Y |
+| `file_path`/`filePath` is relative to root | Y | Y | Y |
+| Shrinking file ends with dropped row deleted | Y | unit (`differ.rs`) | Y |
+| Low-level start-watcher + poll primitives | unit (`binding_test.py`) | Y (`sdk.rs`) | Y (`index.test.ts`) |
+| Relative-root watching (#250) | core | Y (`watch_relative_root.rs`) | core |
+| watch/poll mutual-exclusion errors | core | Y (`sdk.rs`) | core |
+
+### Config file (`.dirsql.toml` via the SDK)
+
+| Test Scenario              | Python | Rust | TypeScript |
+|----------------------------|--------|------|------------|
+| Construct from config file | Y      | Y    | Y          |
+| Explicit root overrides config root | Y      | Y    | Y          |
+| One row per matched file + stat virtuals (`_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`) | Y | Y | Y |
+| Glob path captures promoted to columns | Y | Y | Y |
+| Config `[dirsql].ignore` respected | Y | Y | Y |
+| Multiple `[[table]]` entries | Y | Y | Y |
+| Missing config file errors | Y | Y | Y |
+| Invalid TOML errors        | Y | core | Y |
+| `[[table]]` missing `ddl` errors | Y | core | Y |
+| Config `persist` / `persist_path` resolution | core | Y (`from_config.rs`) | core |
+
+### Persistence
+
+| Test Scenario              | Python | Rust | TypeScript |
+|----------------------------|--------|------|------------|
 | Persist: cold start writes cache       | Y      | Y    | Y          |
 | Persist: warm start trusts cache       | Y      | Y    | Y          |
 | Persist: changed file is re-parsed     | Y      | Y    | Y          |
 | Persist: deleted file rows removed     | Y      | Y    | Y          |
 | Persist: new file ingested             | Y      | Y    | Y          |
-| Persist: racy-window triggers hash     | Y      | Y    | Y          |
+| Persist: racy-window triggers hash     | Y      | unit (`lib.rs` reconcile tests) | Y |
 | Persist: glob change forces rebuild    | Y      | Y    | Y          |
 | Persist: dirsql_version bump rebuilds  | Y      | Y    | Y          |
 | Persist: `.dirsql/` excluded from walk | Y      | Y    | Y          |
 | Persist: custom persist_path honored   | Y      | Y    | Y          |
+
+### Extensions
+
+| Test Scenario              | Python | Rust | TypeScript |
+|----------------------------|--------|------|------------|
+| Load SQLite extension(s)   | Y      | Y    | Y          |
+| Missing constructor extension fails ready/build | Y | Y | Y |
+| Optional `entrypoint` carried into the load call | Y | Y | Y |
+| No extensions → normal build | Y | Y | Y |
+| Missing `[[dirsql.extension]]` config entry fails ready/build | Y | Y | Y |
+| Real extension loaded + function callable (fixture cdylib) | Y (`extension_package_test.py`) | Y (`extensions.rs`) | Y (`extension-package.test.ts`) |
+| `path` as bare package name (constructor, #298/#299) | Y | N/A — file-path-only by design | Y |
+| `load_extension()` locked after startup; `suppress_config_extensions` seam | core | Y (`extensions.rs`) | core |
+
+### E2E (CLI / launcher) and smoke tiers
+
+The CLI is a single Rust binary shipped through three channels, so its
+*behavior* (HTTP `/query` + `/events`, status codes, zero-config `files`
+table, `init`, `on-file` / `pre-query` / `post-query` hooks, signal
+handling) is covered once, in the Rust e2e/CLI suites (`cli_e2e.rs`,
+`cli_integration.rs`, `init_e2e.rs`, `init_integration.rs`,
+`on_file_e2e.rs`). The per-binding e2e suites cover what is genuinely
+per-launcher: resolving/staging the bundled binary, forwarding argv, and
+ecosystem-specific extension resolution.
+
+| Test Scenario              | Python (`tests/e2e/`) | Rust (`tests/`) | TypeScript (`tests/e2e/`, `tests/smoke/`) |
+|----------------------------|--------|------|------------|
+| `--version` exits 0 and prints the version | Y (`cli_version_test.py`) | Y (`cli_e2e.rs`) | Y (smoke `build.test.ts`, against the packed npm install) |
+| Launcher starts server; `POST /query` over HTTP | Y (`extension_package_test.py`) | Y | Y (`extension-package.test.ts`) |
+| `[[dirsql.extension]]` package name resolved by the launcher (#227) | Y | N/A | Y |
+| `interpret` subcommand removed; argv forwarded to clap (#321) | Y | core (clap dispatch) | Y |
+| HTTP semantics, SSE `/events`, hooks, `init`, zero-config `files` table | core | Y | core |
+| Smoke: pack → install → run the published artifact | **N — gap (#344)** | N/A | Y |
+
+### Known gaps / follow-ups
+
+- **#343** — TypeScript `Buffer → BLOB` mapping missing (documented for
+  Python only today; surfaced as drift above).
+- **#344** — Python has no smoke tier mirroring
+  `packages/ts/tests/smoke/build.test.ts`.
+- **#289** — migrating the real-core integration suites to fully mocked
+  SQLite/FS is still open; Python's `binding_test.py` (mocked core) is the
+  model. TypeScript covers its facade seams at the colocated-unit tier
+  (`src/dirsql.test.ts`) instead — equivalent isolation, different tier.
