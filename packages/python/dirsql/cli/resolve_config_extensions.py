@@ -26,14 +26,12 @@ _NATIVE_SUFFIXES = (".py", ".js", ".mjs", ".cjs")
 
 def _config_path_from_argv(argv: list[str]) -> str:
     """The ``--config`` value (``--config X`` or ``--config=X``), or the default."""
-    i = 0
-    while i < len(argv):
-        a = argv[i]
+    for i, a in enumerate(argv):
         if a == "--config":
-            return argv[i + 1] if i + 1 < len(argv) else ""
+            # A bare trailing `--config` (no following value) yields "".
+            return next(iter(argv[i + 1 :]), "")
         if a.startswith("--config="):
             return a[len("--config=") :]
-        i += 1
     return "./.dirsql.toml"
 
 

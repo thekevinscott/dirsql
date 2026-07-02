@@ -1,5 +1,6 @@
 """Unit tests for the DirSQL async wrapper."""
 
+import os
 from unittest.mock import patch
 
 import pytest
@@ -61,7 +62,7 @@ def describe_DirSQL_async():
                     async_mod,
                     "resolve_extension_path",
                     side_effect=lambda path, base, resolve_relative: f"R:{path}",
-                ),
+                ) as resolver,
             ):
                 db = async_mod.DirSQL(
                     "/tmp/root",
@@ -77,7 +78,12 @@ def describe_DirSQL_async():
                 assert db._db.tables == ["table-a"]
                 assert db._db.ignore == ["**/*.tmp"]
                 # Programmatic extension paths are resolved (bare names ->
-                # installed package) before reaching the core (#298).
+                # installed package) before reaching the core (#298), against
+                # the cwd and without making relative paths absolute
+                # (programmatic semantics, unlike config-file entries).
+                resolver.assert_called_once_with(
+                    "ext/a.so", base=os.getcwd(), resolve_relative=False
+                )
                 assert db._db.extensions == [{"path": "R:ext/a.so", "entrypoint": None}]
                 assert db._db.query_calls == ["SELECT 1"]
                 assert results == [{"sql": "SELECT 1"}]

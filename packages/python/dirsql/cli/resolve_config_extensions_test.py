@@ -67,3 +67,38 @@ def describe_with_resolved_extensions():
             argv = ["--config"]
             assert rce.with_resolved_extensions(argv) is argv
         resolver.assert_called_once_with("")
+
+    def it_reads_the_config_value_at_any_argv_position():
+        # `--config` mid-argv with arguments on both sides: the value is the
+        # element immediately after the flag, not one at a fixed offset.
+        with _patch(None) as resolver:
+            rce.with_resolved_extensions(["-v", "--config", "/x/y", "tail"])
+        resolver.assert_called_once_with("/x/y")
+
+    def it_matches_the_config_flag_by_value_not_identity_or_ordering():
+        # A runtime-built "--config" (not the interned literal) must match,
+        # and flags sorting on either side of "--config" must not.
+        with _patch(None) as resolver:
+            rce.with_resolved_extensions(["".join(["--con", "fig"]), "/x/y"])
+        resolver.assert_called_once_with("/x/y")
+        with _patch(None) as resolver:
+            rce.with_resolved_extensions(["--a", "val"])
+        resolver.assert_called_once_with("./.dirsql.toml")
+
+    def it_matches_init_by_value_not_identity_or_ordering():
+        # Only the exact first argument "init" skips resolution: a
+        # runtime-built "init" still skips; other subcommands (sorting above
+        # or below "init") do not.
+        with _patch(None) as resolver:
+            argv = ["".join(["in", "it"])]
+            assert rce.with_resolved_extensions(argv) is argv
+            resolver.assert_not_called()
+        with _patch(None) as resolver:
+            rce.with_resolved_extensions(["zzz"])
+        resolver.assert_called_once_with("./.dirsql.toml")
+
+    def it_consults_the_resolver_for_an_empty_argv():
+        with _patch(None) as resolver:
+            argv: list[str] = []
+            assert rce.with_resolved_extensions(argv) is argv
+        resolver.assert_called_once_with("./.dirsql.toml")

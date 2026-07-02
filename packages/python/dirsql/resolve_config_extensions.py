@@ -42,11 +42,12 @@ def resolve_config_extension_specs(config_path):
         return None
 
     cfg = doc.get("dirsql") or {}
-    entries = cfg.get("extension") or []
-    if not isinstance(entries, list) or not entries:
+    entries = cfg.get("extension")
+    if not isinstance(entries, list):
         return None
     # Only intervene when at least one path is a bare package name; a config
-    # with only literal paths keeps the core's existing behavior untouched.
+    # with only literal paths (or no entries at all) keeps the core's existing
+    # behavior untouched.
     if not any(
         isinstance(e, dict)
         and isinstance(e.get("path"), str)
