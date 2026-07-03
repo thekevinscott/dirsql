@@ -149,7 +149,7 @@ async fn run_pre_query(pq: &PreQuery, raw_body: String) -> Result<String, Respon
     let timeout = pq.timeout;
     // `run_command` is blocking — it spawns a child and joins drain threads —
     // so run it off the async runtime. It enforces the hook's timeout
-    // (`[dirsql].pre-query-timeout`, default 30s) internally, so no outer
+    // (the global `[dirsql].hook-timeout`, default 30s) internally, so no outer
     // `tokio::time::timeout` is needed.
     let outcome = tokio::task::spawn_blocking(move || {
         run_command(
@@ -194,7 +194,7 @@ async fn run_post_query(
     let timeout = pq.timeout;
     // `run_command` is blocking — it spawns a child and joins drain threads —
     // so run it off the async runtime. It enforces the hook's timeout
-    // (`[dirsql].post-query-timeout`, default 30s) internally, so no outer
+    // (the global `[dirsql].hook-timeout`, default 30s) internally, so no outer
     // `tokio::time::timeout` is needed.
     let outcome = tokio::task::spawn_blocking(move || {
         let args_value = if payload.len() <= POST_QUERY_ARGS_MAX {

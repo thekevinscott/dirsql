@@ -510,7 +510,7 @@ glob = "posts/{author}/{title}.json"
 #[cfg(unix)]
 #[test]
 fn pre_query_hook_exceeding_configured_timeout_returns_500() {
-    // #351: `[dirsql].pre-query-timeout` bounds each pre-query run. A hook
+    // #351: the global `[dirsql].hook-timeout` bounds each pre-query run. A hook
     // that sleeps past a 1-second timeout is killed and the request returns
     // 500 with the timeout in the error body — under the default 30-second
     // timeout the hook would have finished and the request succeeded.
@@ -525,7 +525,7 @@ fn pre_query_hook_exceeding_configured_timeout_returns_500() {
         r#"
 [dirsql]
 pre-query = "sh slow_to_sql.sh {args}"
-pre-query-timeout = 1
+hook-timeout = 1
 
 [[table]]
 ddl = "CREATE TABLE posts (title TEXT, author TEXT, _basename TEXT, _size INTEGER)"
@@ -560,9 +560,9 @@ glob = "posts/{author}/{title}.json"
 #[cfg(unix)]
 #[test]
 fn pre_query_hook_within_generous_configured_timeout_succeeds() {
-    // #351: a generous `pre-query-timeout` admits a hook slower than the old
-    // fixed bound would matter for — and proves the value is read as seconds
-    // (a 60 read as milliseconds would kill this 2-second hook).
+    // #351: a generous `hook-timeout` admits a hook slower than the old fixed
+    // bound would matter for — and proves the value is read as seconds (a 60
+    // read as milliseconds would kill this 2-second hook).
     let root = blog_fixture();
     fs::write(
         root.path().join("slowish_to_sql.sh"),
@@ -574,7 +574,7 @@ fn pre_query_hook_within_generous_configured_timeout_succeeds() {
         r#"
 [dirsql]
 pre-query = "sh slowish_to_sql.sh {args}"
-pre-query-timeout = 60
+hook-timeout = 60
 
 [[table]]
 ddl = "CREATE TABLE posts (title TEXT, author TEXT, _basename TEXT, _size INTEGER)"
@@ -611,8 +611,8 @@ glob = "posts/{author}/{title}.json"
 #[cfg(unix)]
 #[test]
 fn post_query_hook_exceeding_configured_timeout_returns_500() {
-    // #351: `[dirsql].post-query-timeout` bounds each post-query run, the same
-    // way `pre-query-timeout` bounds pre-query.
+    // #351: the global `[dirsql].hook-timeout` bounds each post-query run, the
+    // same single key that bounds on-file and pre-query.
     let root = blog_fixture();
     fs::write(
         root.path().join("slow_wrap.sh"),
@@ -624,7 +624,7 @@ fn post_query_hook_exceeding_configured_timeout_returns_500() {
         r#"
 [dirsql]
 post-query = "sh slow_wrap.sh {args}"
-post-query-timeout = 1
+hook-timeout = 1
 
 [[table]]
 ddl = "CREATE TABLE posts (title TEXT, author TEXT, _basename TEXT, _size INTEGER)"

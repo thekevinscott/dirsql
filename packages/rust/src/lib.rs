@@ -1472,14 +1472,16 @@ fn relative_path(root: &Path, path: &Path) -> String {
 /// facts are still merged on top, user values winning). `config_dir` is the
 /// command's working directory (the config file's parent) and `root` is the
 /// resolved index root used to compute the `{path}` placeholder. Each run is
-/// bounded by the table's `timeout` key when present (#351), falling back to
-/// the shared 30-second default ([`command::DEFAULT_COMMAND_TIMEOUT`]).
+/// bounded by the global `[dirsql].hook-timeout` key when present (#351),
+/// falling back to the shared 30-second default
+/// ([`command::DEFAULT_COMMAND_TIMEOUT`]).
 fn build_tables_from_config(
     cfg: &config::Config,
     config_dir: &Path,
     root: &Path,
 ) -> Result<Vec<Table>> {
     let mut tables = Vec::with_capacity(cfg.tables.len());
+    let timeout = cfg.hook_timeout.unwrap_or(command::DEFAULT_COMMAND_TIMEOUT);
 
     for table_cfg in &cfg.tables {
         let mut table = match &table_cfg.on_file {
@@ -1487,9 +1489,6 @@ fn build_tables_from_config(
                 let command = command.clone();
                 let config_dir = config_dir.to_path_buf();
                 let root = root.to_path_buf();
-                let timeout = table_cfg
-                    .timeout
-                    .unwrap_or(command::DEFAULT_COMMAND_TIMEOUT);
                 // `Table::new` (infallible): `run_on_file` isolates its own
                 // errors to an empty row set so one bad file never aborts the
                 // scan (the scan aborts on an extract `Err`).

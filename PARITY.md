@@ -137,21 +137,22 @@ Python/TypeScript surface to keep in parity. The events built on it (`on-file`,
 `pre-query`, `post-query`) are `.dirsql.toml` keys parsed by the shared Rust
 config loader, so every install (`pip` / `npm` / `cargo`) gets identical
 behavior with no per-SDK code. Individual event rows land here as B2–B4 ship.
+All three share one global timeout override, `[dirsql].hook-timeout`
+(`config::Config::hook_timeout`, positive seconds, default 30s; #351).
 
 - **`on-file` (B2 #327).** A `[[table]]` key naming a per-file command whose
   JSON-array stdout becomes the table's rows (placeholders `{path}` / `{abspath}`
-  / `{root}`; per-file error isolation; 30s default timeout, overridable per
-  table with the `timeout` key in positive seconds, #351). Parsed and executed in the
-  shared Rust core (`config::TableConfig::on_file` / `::timeout` + the `build_tables_from_config`
+  / `{root}`; per-file error isolation; 30s default timeout, overridable via the
+  global `[dirsql].hook-timeout` key in positive seconds, #351). Parsed and executed in the
+  shared Rust core (`config::TableConfig::on_file` + the `build_tables_from_config`
   extract path), with **no** Python/TypeScript public-API surface — identical
   across all three installs, no drift.
 
 - **`pre-query` (B3 #328).** A **server-wide** `[dirsql]` key naming a command
   that rewrites each `POST /query` body (passed as the `{args}` placeholder) into
   the plain-text SQL to run; failure → 500 with the stderr tail; 30s default
-  timeout, overridable with `[dirsql].pre-query-timeout` (positive seconds, #351).
-  Parsed by the shared Rust config loader (`config::Config::pre_query` /
-  `::pre_query_timeout`) and
+  timeout, overridable via the global `[dirsql].hook-timeout` (positive seconds, #351).
+  Parsed by the shared Rust config loader (`config::Config::pre_query`) and
   wired through the CLI server (`cli::ServerConfig::pre_query` / the `/query`
   handler; `cli::PreQuery` carries the timeout) — a **CLI-only** surface with
   **no** Python/TypeScript public-API
@@ -162,8 +163,8 @@ behavior with no per-SDK code. Individual event rows land here as B2–B4 ship.
   JSON array, delivered on stdin and as the `{args}` placeholder for payloads
   ≤ 96 KiB) into the JSON response body it prints; invalid JSON or a failure
   (non-zero exit, timeout, spawn error) → 500; 30s default timeout, overridable
-  with `[dirsql].post-query-timeout` (positive seconds, #351). Parsed by the shared
-  Rust config loader (`config::Config::post_query` / `::post_query_timeout`) and
+  via the global `[dirsql].hook-timeout` (positive seconds, #351). Parsed by the shared
+  Rust config loader (`config::Config::post_query`) and
   wired through the CLI
   server (`cli::ServerConfig::post_query` / the `/query` handler;
   `cli::PostQuery` carries the timeout) — a

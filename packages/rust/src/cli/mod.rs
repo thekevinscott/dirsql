@@ -54,7 +54,7 @@ pub struct PreQuery {
     pub config_dir: PathBuf,
     /// Per-run timeout. Defaults to the shared 30-second
     /// [`DEFAULT_COMMAND_TIMEOUT`]; override it via [`Self::with_timeout`]
-    /// (the CLI wires `[dirsql].pre-query-timeout` here, #351).
+    /// (the CLI wires the global `[dirsql].hook-timeout` here, #351).
     pub timeout: Duration,
 }
 
@@ -69,8 +69,8 @@ impl PreQuery {
         }
     }
 
-    /// Override the per-run timeout (`[dirsql].pre-query-timeout`). A run
-    /// exceeding it is killed and the request returns 500.
+    /// Override the per-run timeout (from the global `[dirsql].hook-timeout`).
+    /// A run exceeding it is killed and the request returns 500.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -92,7 +92,7 @@ pub struct PostQuery {
     pub config_dir: PathBuf,
     /// Per-run timeout. Defaults to the shared 30-second
     /// [`DEFAULT_COMMAND_TIMEOUT`]; override it via [`Self::with_timeout`]
-    /// (the CLI wires `[dirsql].post-query-timeout` here, #351).
+    /// (the CLI wires the global `[dirsql].hook-timeout` here, #351).
     pub timeout: Duration,
 }
 
@@ -107,8 +107,8 @@ impl PostQuery {
         }
     }
 
-    /// Override the per-run timeout (`[dirsql].post-query-timeout`). A run
-    /// exceeding it is killed and the request returns 500.
+    /// Override the per-run timeout (from the global `[dirsql].hook-timeout`).
+    /// A run exceeding it is killed and the request returns 500.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self

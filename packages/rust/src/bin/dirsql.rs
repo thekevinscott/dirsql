@@ -232,7 +232,7 @@ fn load_pre_query(cli: &Cli) -> Option<PreQuery> {
     let command = config.pre_query?;
     let config_dir = resolved.parent()?.to_path_buf();
     let mut pre_query = PreQuery::new(command, config_dir);
-    if let Some(timeout) = config.pre_query_timeout {
+    if let Some(timeout) = config.hook_timeout {
         pre_query = pre_query.with_timeout(timeout);
     }
     Some(pre_query)
@@ -254,7 +254,7 @@ fn load_post_query(cli: &Cli) -> Option<PostQuery> {
     let command = config.post_query?;
     let config_dir = resolved.parent()?.to_path_buf();
     let mut post_query = PostQuery::new(command, config_dir);
-    if let Some(timeout) = config.post_query_timeout {
+    if let Some(timeout) = config.hook_timeout {
         post_query = post_query.with_timeout(timeout);
     }
     Some(post_query)

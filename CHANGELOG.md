@@ -9,19 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Configurable command-hook timeouts (#351).** Every command-backed event's
-  30-second timeout can now be raised (or tightened) in `.dirsql.toml`, in
-  positive whole seconds: a per-`[[table]]` `timeout` key bounds that table's
-  `on-file` runs (an embeddings extractor that downloads a model on first run
-  no longer silently loses files to the 30s bound), and server-wide
-  `[dirsql].pre-query-timeout` / `[dirsql].post-query-timeout` keys bound the
-  query hooks (slow, e.g. LLM-backed, translators). Zero and negative values
-  are rejected with a config error naming the field. Defaults are unchanged at
-  30 seconds — existing configs behave identically. Parsed by the shared Rust
-  config loader, so every install (pip/npm/cargo) gets identical behavior with
-  no per-SDK code; the Rust CLI server API grows
-  `PreQuery::with_timeout` / `PostQuery::with_timeout` (and a public `timeout`
-  field on both) to carry the configured value.
+- **Configurable command-hook timeout (#351).** A single global
+  `[dirsql].hook-timeout` key (positive whole seconds) raises or tightens the
+  30-second timeout for **all** command-backed hooks at once — `on-file`,
+  `pre-query`, and `post-query` — so an embeddings extractor that downloads a
+  model on first run, or a slow (e.g. LLM-backed) query translator, no longer
+  silently hits the fixed 30s bound. Zero and negative values are rejected with
+  a config error naming the field. The default is unchanged at 30 seconds —
+  existing configs behave identically. Parsed by the shared Rust config loader,
+  so every install (pip/npm/cargo) gets identical behavior with no per-SDK code;
+  the Rust CLI server API grows `PreQuery::with_timeout` /
+  `PostQuery::with_timeout` (and a public `timeout` field on both) to carry the
+  configured value.
 
 - **TypeScript SDK: `Buffer`/`Uint8Array` → SQLite BLOB (#343).** An `extract`
   callback can now return a `Buffer` or `Uint8Array` and it is stored as a real
