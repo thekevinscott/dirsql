@@ -3106,6 +3106,7 @@ mod internal_tests {
             &abs.to_string_lossy(),
             dir.path(),
             dir.path(),
+            command::DEFAULT_COMMAND_TIMEOUT,
         );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["n"], Value::Integer(1));
@@ -3121,6 +3122,7 @@ mod internal_tests {
             "/outside/f.txt",
             dir.path(),
             dir.path(),
+            command::DEFAULT_COMMAND_TIMEOUT,
         );
         assert!(rows.is_empty());
     }
@@ -3129,7 +3131,13 @@ mod internal_tests {
     #[test]
     fn run_on_file_returns_no_rows_on_non_json_output() {
         let dir = TempDir::new().unwrap();
-        let rows = run_on_file("echo not-json", "/outside/f.txt", dir.path(), dir.path());
+        let rows = run_on_file(
+            "echo not-json",
+            "/outside/f.txt",
+            dir.path(),
+            dir.path(),
+            command::DEFAULT_COMMAND_TIMEOUT,
+        );
         assert!(rows.is_empty());
     }
 
