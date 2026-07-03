@@ -4,6 +4,7 @@ import asyncio
 import os
 
 from dirsql._dirsql import DirSQL as _RustDirSQL
+from dirsql.resolve_config_extensions import resolve_config_extension_specs
 from dirsql.resolve_extension import resolve_extension_path
 
 
@@ -56,7 +57,9 @@ class DirSQL:
     Pass ``extensions`` -- a list of ``{"path": ..., "entrypoint": ...}`` dicts
     (``entrypoint`` optional) -- to load SQLite extensions onto the connection
     at startup. Any ``[[dirsql.extension]]`` entries in a ``config`` file are
-    appended after the programmatic ones.
+    appended after the programmatic ones. A ``path`` (programmatic or
+    config-file) may be a bare **package name**, resolved from the installed
+    package in the runtime env (#298 / #313).
     """
 
     def __init__(
@@ -85,20 +88,43 @@ class DirSQL:
     async def _init_bg(self):
         """Run the scan in the background."""
         try:
-            self._db = await asyncio.to_thread(
-                _RustDirSQL,
-                self._root,
-                tables=self._tables,
-                ignore=self._ignore,
-                config=self._config,
-                persist=self._persist,
-                persist_path=self._persist_path,
-                extensions=self._resolved_extensions(),
-            )
+            self._db = await asyncio.to_thread(self._build_db)
         except Exception as exc:
             self._init_error = exc
         finally:
             self._ready_event.set()
+
+    def _build_db(self):
+        """Resolve extensions and construct the Rust-backed instance.
+
+        Runs on a worker thread (via ``asyncio.to_thread``): both the
+        package-name resolution (``importlib`` + filesystem globs) and the
+        core's initial scan are blocking work.
+
+        When the ``config`` file names an extension by bare package name, the
+        SDK resolves every one of the config's ``[[dirsql.extension]]`` entries
+        itself (#313) -- appended after the programmatic ones, matching the
+        core's ordering -- and suppresses the core's own config-extension
+        loading so the entries are not loaded a second time (and the core never
+        sees the unresolvable bare name).
+        """
+        extensions = self._resolved_extensions()
+        suppress = False
+        if self._config is not None:
+            config_extensions = resolve_config_extension_specs(self._config)
+            if config_extensions is not None:
+                extensions = [*(extensions or []), *config_extensions]
+                suppress = True
+        return _RustDirSQL(
+            self._root,
+            tables=self._tables,
+            ignore=self._ignore,
+            config=self._config,
+            persist=self._persist,
+            persist_path=self._persist_path,
+            extensions=extensions,
+            suppress_config_extensions=suppress,
+        )
 
     def _resolved_extensions(self):
         """Resolve each programmatic extension's ``path`` to a loadable file.
@@ -106,7 +132,7 @@ class DirSQL:
         A bare package name is resolved to the loadable installed in the runtime
         env (#298); path-looking values are passed through verbatim (mirroring
         the Rust builder, which takes programmatic paths as-is). Config-file
-        ``[[dirsql.extension]]`` entries are resolved by the Rust core, not here.
+        ``[[dirsql.extension]]`` entries are handled by ``_build_db``.
         """
         if not self._extensions:
             return self._extensions

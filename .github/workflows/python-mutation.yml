@@ -59,9 +59,12 @@ jobs:
       # install it -- into the same venv as the built extension, so the baseline
       # (`python3 -m pytest`) the CLI shells out to resolves `_dirsql`, `dirsql`,
       # pytest and cosmic-ray from one interpreter (guaranteed by activating the
-      # venv before the run below).
-      - name: Install cosmic-ray (mutation engine)
-        run: uv pip install cosmic-ray
+      # venv before the run below). The testing-conventions pip package ships
+      # the cosmic-ray adapter the CLI spawns
+      # (`python3 -m testing_conventions.mutation.main`), so it must resolve
+      # from that same interpreter too.
+      - name: Install cosmic-ray (mutation engine) and the adapter
+        run: uv pip install cosmic-ray testing-conventions
         working-directory: packages/python
 
       - name: Mutation on the lines changed vs base

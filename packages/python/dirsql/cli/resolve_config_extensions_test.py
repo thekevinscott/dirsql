@@ -1,142 +1,104 @@
 """Unit tests for `with_resolved_extensions`.
 
-Real `.dirsql.toml` files are parsed (matching the `resolve_config_test`
-pattern); the only mocked collaborator is `resolve_extension_path` (the
-effectful file-vs-package resolver, unit-tested in `resolve_extension_test`).
-The pure `is_bare_name` stays real.
+The shared SDK resolver (`dirsql.resolve_config_extensions`, mocked here) owns
+the TOML parsing and package-name gating and carries its own colocated tests;
+this file covers only the launcher-side argv plumbing: config-path extraction,
+the `init` / native-config guards, and `--extension` flag construction.
 """
 
-import os
-import tempfile
 from unittest import mock
-
-import pytest
 
 import dirsql.cli.resolve_config_extensions as rce
 
 
-@pytest.fixture
-def cfg_dir():
-    with tempfile.TemporaryDirectory() as d:
-        yield d
-
-
-def _write(path, body):
-    with open(path, "w") as f:
-        f.write(body)
-
-
-def _patch():
-    return mock.patch.object(
-        rce,
-        "resolve_extension_path",
-        side_effect=lambda path, base, resolve_relative: f"R:{path}",
-    )
+def _patch(specs):
+    return mock.patch.object(rce, "resolve_config_extension_specs", return_value=specs)
 
 
 def describe_with_resolved_extensions():
     def it_passes_init_through_untouched():
         argv = ["init", "--root", "."]
-        assert rce.with_resolved_extensions(argv) is argv
-
-    def it_passes_a_native_config_through_untouched():
-        argv = ["--config", "dirsql.config.py"]
-        assert rce.with_resolved_extensions(argv) is argv
-
-    def it_passes_through_when_the_config_is_missing():
-        argv = ["--config", "/nope/.dirsql.toml"]
-        assert rce.with_resolved_extensions(argv) is argv
-
-    def it_passes_through_on_malformed_toml(cfg_dir):
-        path = os.path.join(cfg_dir, ".dirsql.toml")
-        _write(path, "this is not = valid = toml")
-        argv = ["--config", path]
-        assert rce.with_resolved_extensions(argv) is argv
-
-    def it_passes_through_when_there_is_no_dirsql_section(cfg_dir):
-        path = os.path.join(cfg_dir, ".dirsql.toml")
-        _write(path, '[[table]]\nddl = "CREATE TABLE t (x TEXT)"\nglob = "*"\n')
-        argv = ["--config", path]
-        assert rce.with_resolved_extensions(argv) is argv
-
-    def it_passes_through_when_no_extensions_are_declared(cfg_dir):
-        path = os.path.join(cfg_dir, ".dirsql.toml")
-        _write(path, '[dirsql]\nignore = ["x"]\n')
-        argv = ["--config", path]
-        assert rce.with_resolved_extensions(argv) is argv
-
-    def it_passes_through_when_extension_is_not_a_list(cfg_dir):
-        path = os.path.join(cfg_dir, ".dirsql.toml")
-        _write(path, '[dirsql]\nextension = "not-a-list"\n')
-        argv = ["--config", path]
-        assert rce.with_resolved_extensions(argv) is argv
-
-    def it_passes_through_when_extension_entries_are_not_tables(cfg_dir):
-        path = os.path.join(cfg_dir, ".dirsql.toml")
-        _write(path, "[dirsql]\nextension = [1, 2]\n")
-        argv = ["--config", path]
-        assert rce.with_resolved_extensions(argv) is argv
-
-    def it_passes_through_when_all_paths_are_literal(cfg_dir):
-        path = os.path.join(cfg_dir, ".dirsql.toml")
-        _write(path, '[[dirsql.extension]]\npath = "ext/a.so"\n')
-        argv = ["--config", path]
-        with _patch() as resolver:
+        with _patch([{"path": "R:pkg", "entrypoint": None}]) as resolver:
             assert rce.with_resolved_extensions(argv) is argv
             resolver.assert_not_called()
 
-    def it_appends_extension_flags_for_a_bare_package_name(cfg_dir):
-        path = os.path.join(cfg_dir, ".dirsql.toml")
-        _write(
-            path,
-            "[[dirsql.extension]]\n"
-            'path = "sqlite_vec"\n'
-            'entrypoint = "sqlite3_vec_init"\n\n'
-            "[[dirsql.extension]]\n"
-            'path = "ext/local.so"\n',
-        )
-        with _patch() as resolver:
-            out = rce.with_resolved_extensions(["--config", path])
+    def it_passes_a_native_config_through_untouched():
+        argv = ["--config", "dirsql.config.py"]
+        with _patch([{"path": "R:pkg", "entrypoint": None}]) as resolver:
+            assert rce.with_resolved_extensions(argv) is argv
+            resolver.assert_not_called()
+
+    def it_passes_through_when_the_resolver_does_not_intervene():
+        argv = ["--config", "/x/.dirsql.toml"]
+        with _patch(None) as resolver:
+            assert rce.with_resolved_extensions(argv) is argv
+        resolver.assert_called_once_with("/x/.dirsql.toml")
+
+    def it_appends_extension_flags_for_resolved_specs():
+        specs = [
+            {"path": "R:sqlite_vec", "entrypoint": "sqlite3_vec_init"},
+            {"path": "R:ext/local.so", "entrypoint": None},
+        ]
+        with _patch(specs):
+            out = rce.with_resolved_extensions(["--config", "/cfg/.dirsql.toml"])
         assert out == [
             "--config",
-            path,
+            "/cfg/.dirsql.toml",
             "--extension",
             "R:sqlite_vec::sqlite3_vec_init",
             "--extension",
             "R:ext/local.so",
         ]
-        resolver.assert_any_call("sqlite_vec", base=cfg_dir, resolve_relative=True)
 
-    def it_skips_a_non_string_path_in_the_package_name_probe(cfg_dir):
-        # A dict entry whose `path` isn't a string is not treated as a package
-        # name; a sibling bare name still triggers resolution.
-        path = os.path.join(cfg_dir, ".dirsql.toml")
-        _write(
-            path,
-            "[[dirsql.extension]]\npath = 42\n\n"
-            '[[dirsql.extension]]\npath = "sqlite_vec"\n',
-        )
-        with _patch():
-            out = rce.with_resolved_extensions(["--config", path])
-        assert out[-4:] == [
-            "--extension",
-            "R:42",
-            "--extension",
-            "R:sqlite_vec",
-        ]
-
-    def it_reads_the_config_equals_form(cfg_dir):
-        path = os.path.join(cfg_dir, ".dirsql.toml")
-        _write(path, '[[dirsql.extension]]\npath = "pkg"\n')
-        with _patch():
-            out = rce.with_resolved_extensions([f"--config={path}"])
-        assert out == [f"--config={path}", "--extension", "R:pkg"]
+    def it_reads_the_config_equals_form():
+        with _patch([{"path": "R:pkg", "entrypoint": None}]) as resolver:
+            out = rce.with_resolved_extensions(["--config=/c/.dirsql.toml"])
+        assert out == ["--config=/c/.dirsql.toml", "--extension", "R:pkg"]
+        resolver.assert_called_once_with("/c/.dirsql.toml")
 
     def it_defaults_to_dot_dirsql_toml_when_no_config_given():
-        # No `--config` and no `./.dirsql.toml` in cwd -> unchanged.
-        argv = ["--port", "9000"]
-        assert rce.with_resolved_extensions(argv) is argv
+        with _patch([{"path": "R:pkg", "entrypoint": None}]) as resolver:
+            out = rce.with_resolved_extensions(["--port", "9000"])
+        assert out == ["--port", "9000", "--extension", "R:pkg"]
+        resolver.assert_called_once_with("./.dirsql.toml")
 
     def it_treats_a_bare_trailing_config_as_empty_path():
-        argv = ["--config"]
-        assert rce.with_resolved_extensions(argv) is argv
+        with _patch(None) as resolver:
+            argv = ["--config"]
+            assert rce.with_resolved_extensions(argv) is argv
+        resolver.assert_called_once_with("")
+
+    def it_reads_the_config_value_at_any_argv_position():
+        # `--config` mid-argv with arguments on both sides: the value is the
+        # element immediately after the flag, not one at a fixed offset.
+        with _patch(None) as resolver:
+            rce.with_resolved_extensions(["-v", "--config", "/x/y", "tail"])
+        resolver.assert_called_once_with("/x/y")
+
+    def it_matches_the_config_flag_by_value_not_identity_or_ordering():
+        # A runtime-built "--config" (not the interned literal) must match,
+        # and flags sorting on either side of "--config" must not.
+        with _patch(None) as resolver:
+            rce.with_resolved_extensions(["".join(["--con", "fig"]), "/x/y"])
+        resolver.assert_called_once_with("/x/y")
+        with _patch(None) as resolver:
+            rce.with_resolved_extensions(["--a", "val"])
+        resolver.assert_called_once_with("./.dirsql.toml")
+
+    def it_matches_init_by_value_not_identity_or_ordering():
+        # Only the exact first argument "init" skips resolution: a
+        # runtime-built "init" still skips; other subcommands (sorting above
+        # or below "init") do not.
+        with _patch(None) as resolver:
+            argv = ["".join(["in", "it"])]
+            assert rce.with_resolved_extensions(argv) is argv
+            resolver.assert_not_called()
+        with _patch(None) as resolver:
+            rce.with_resolved_extensions(["zzz"])
+        resolver.assert_called_once_with("./.dirsql.toml")
+
+    def it_consults_the_resolver_for_an_empty_argv():
+        with _patch(None) as resolver:
+            argv: list[str] = []
+            assert rce.with_resolved_extensions(argv) is argv
+        resolver.assert_called_once_with("./.dirsql.toml")

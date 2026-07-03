@@ -161,7 +161,9 @@ entrypoint = "sqlite3_myext_init"
 - **`path`** — the extension's shared library: either a file path (`.so` /
   `.dylib` / `.dll`, relative to the config file's directory) or a bare
   **package name**. A package name is resolved from the installed package when
-  run through the pip/npm `dirsql` CLI; the standalone Rust binary is
+  run through the pip/npm `dirsql` CLI, or when a Python/TypeScript `DirSQL`
+  loads the config in-process (`DirSQL(config=...)` /
+  `new DirSQL(configPath)`); the standalone Rust binary and the Rust SDK are
   file-path-only.
 - **`entrypoint`** *(optional)* — the extension's init symbol. When omitted,
   SQLite derives a default from the filename; set it when that default does not

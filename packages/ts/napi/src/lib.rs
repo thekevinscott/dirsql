@@ -98,6 +98,11 @@ impl DirSQL {
     // object (root / tables / ignore / config / persist / persistPath /
     // extensions); each is a distinct optional knob, so collapsing them into
     // a struct would only obscure the napi signature the TS wrapper calls.
+    /// `suppress_config_extensions` skips the core's own loading of the
+    /// config's `[[dirsql.extension]]` entries; the TS wrapper sets it after
+    /// resolving those entries itself (package names need `require.resolve`,
+    /// which the core lacks -- #313) and passing the resolved literal paths
+    /// via `extensions`, so the entries are not loaded twice.
     #[allow(clippy::too_many_arguments)]
     #[napi(js_name = "openAsync", ts_return_type = "Promise<DirSQL>")]
     pub fn open_async(
@@ -109,6 +114,7 @@ impl DirSQL {
         persist: Option<bool>,
         persist_path: Option<String>,
         extensions: Option<Vec<ExtensionSpec>>,
+        suppress_config_extensions: Option<bool>,
     ) -> Result<AsyncTask<OpenTask>> {
         let rust_tables = match tables {
             Some(ts) => parse_tables_from_js(env, ts)?,
@@ -130,6 +136,7 @@ impl DirSQL {
             persist: persist.unwrap_or(false),
             persist_path: persist_path.map(PathBuf::from),
             extensions: rust_extensions,
+            suppress_config_extensions: suppress_config_extensions.unwrap_or(false),
         }))
     }
 
@@ -192,8 +199,11 @@ pub struct OpenTask {
     /// SQLite extensions to load onto the connection before any table DDL,
     /// forwarded to the core builder's `extensions`. Empty when none were
     /// passed; config-file `[[dirsql.extension]]` entries are appended by
-    /// the builder when `config` is supplied.
+    /// the builder when `config` is supplied -- unless
+    /// `suppress_config_extensions` is set because the TS wrapper already
+    /// resolved and included them (#313).
     extensions: Vec<Extension>,
+    suppress_config_extensions: bool,
 }
 
 impl Task for OpenTask {
@@ -210,7 +220,8 @@ impl Task for OpenTask {
         let mut builder = CoreDirSQL::builder()
             .tables(tables)
             .ignore(ignore)
-            .extensions(extensions);
+            .extensions(extensions)
+            .suppress_config_extensions(self.suppress_config_extensions);
         if let Some(root) = self.root.take() {
             builder = builder.root(root);
         }
