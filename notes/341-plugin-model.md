@@ -87,6 +87,25 @@ consumption styles where possible:
 Known gap: `pre-query`/`post-query` exist only on the CLI server, so a
 plugin's query-side behavior has no SDK equivalent in either style.
 
+## Implementation plan
+
+Precursors first — each valuable even if the plugin idea dies — then one thin
+epic that is mostly launcher glue:
+
+1. **#351** — configurable hook timeouts (embedding hooks survive model
+   downloads / slow APIs).
+2. **#352** — `combine_configs` in the Rust core: source-labeled variadic
+   merge, throws on conflicts. The one hard blocker for the epic.
+3. **#358** (epic; #359 → #360 → #361, one release each) — replace injected
+   `_dirsql_` columns with internal `_dirsql_rows` bookkeeping, then support
+   virtual tables as `[[table]]` (vec0, FTS5). ANN-scale semantic search,
+   hand-wireable before any plugin code exists.
+4. **#363** (epic) — the plugin build: launcher discovery + whitelist +
+   `--no-plugin`, the internal launcher→binary fragment channel, wire
+   `combine_configs` into config load, "Writing a plugin" docs. Test
+   scaffolding is a path-installed fixture package; a published reference
+   plugin is explicitly not a deliverable.
+
 ## Why a plugin architecture
 
 Epic B (#322) made a `dirsql` capability equal to a script plus a config
