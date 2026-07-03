@@ -19,9 +19,167 @@ pub enum ConfigError {
 
     #[error("Field '{0}' must not be empty")]
     EmptyField(&'static str),
+
+    #[error("Cannot combine an empty list of configs")]
+    NoConfigs,
+
+    #[error("Table '{name}' is defined by both {first} and {second}")]
+    DuplicateTable {
+        name: String,
+        first: Source,
+        second: Source,
+    },
+
+    #[error("Key '{key}' is set by both {first} and {second}")]
+    ConflictingKey {
+        key: &'static str,
+        first: Source,
+        second: Source,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, ConfigError>;
+
+/// Where a config participating in [`combine_configs`] came from, so merge
+/// conflict errors can name both sides.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Source {
+    /// A config file path (e.g. `/proj/.dirsql.toml`).
+    Path(PathBuf),
+    /// A plugin package name (e.g. `dirsql-plugin-notes`).
+    Package(String),
+}
+
+impl std::fmt::Display for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Source::Path(path) => write!(f, "{}", path.display()),
+            Source::Package(name) => f.write_str(name),
+        }
+    }
+}
+
+/// Merge multiple parsed configs into one (#352).
+///
+/// Substrate for the plugin model (#341): plugin TOML fragments merge
+/// additively into the project config. Implemented once, here in the shared
+/// core, per the one-implementation principle — launchers and bindings only
+/// *discover* fragments and hand them down.
+///
+/// Order-significant; at least one entry is required and a single entry is
+/// returned unchanged. List-shaped config (`[[table]]`, `[[dirsql.extension]]`,
+/// `ignore`) concatenates in input order. A table-name collision anywhere in
+/// the combined set errors, naming both sources. Single-valued keys (`root`,
+/// `persist`, `persist_path`, `pre-query`, `post-query`) defined by more than
+/// one config error, naming both sources — no silent shadowing, no precedence;
+/// defined in exactly one config they merge through unchanged. (`persist`
+/// counts as defined only when `true`: the parsed [`Config`] cannot
+/// distinguish an explicit `persist = false` from the default.)
+///
+/// Tables whose DDL yields no parseable table name are concatenated without a
+/// collision check; `Db::create_table` rejects them downstream.
+///
+/// Plugin whitelist enforcement ("a fragment may not set `root`") is the
+/// discovery layer's job, per fragment, *before* calling this — the merge
+/// stays plugin-agnostic.
+pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
+    let (first, rest) = configs.split_first().ok_or(ConfigError::NoConfigs)?;
+    if rest.is_empty() {
+        return Ok(first.1.clone());
+    }
+
+    let mut tables = Vec::new();
+    let mut ignore = Vec::new();
+    let mut extensions = Vec::new();
+    // Table name -> the source that first defined it, for collision errors.
+    let mut table_sources: std::collections::HashMap<String, &Source> =
+        std::collections::HashMap::new();
+
+    let mut root: Option<(&Source, PathBuf)> = None;
+    let mut persist: Option<&Source> = None;
+    let mut persist_path: Option<(&Source, PathBuf)> = None;
+    let mut pre_query: Option<(&Source, String)> = None;
+    let mut post_query: Option<(&Source, String)> = None;
+
+    for (source, config) in configs {
+        for table in &config.tables {
+            if let Some(name) = crate::db::parse_table_name(&table.ddl)
+                && let Some(prior) = table_sources.insert(name.clone(), source)
+            {
+                return Err(ConfigError::DuplicateTable {
+                    name,
+                    first: prior.clone(),
+                    second: source.clone(),
+                });
+            }
+            tables.push(table.clone());
+        }
+        ignore.extend(config.ignore.iter().cloned());
+        extensions.extend(config.extensions.iter().cloned());
+
+        merge_single("root", &mut root, config.root.as_ref(), source)?;
+        merge_single(
+            "persist_path",
+            &mut persist_path,
+            config.persist_path.as_ref(),
+            source,
+        )?;
+        merge_single(
+            "pre-query",
+            &mut pre_query,
+            config.pre_query.as_ref(),
+            source,
+        )?;
+        merge_single(
+            "post-query",
+            &mut post_query,
+            config.post_query.as_ref(),
+            source,
+        )?;
+        if config.persist {
+            if let Some(prior) = persist {
+                return Err(ConfigError::ConflictingKey {
+                    key: "persist",
+                    first: prior.clone(),
+                    second: source.clone(),
+                });
+            }
+            persist = Some(source);
+        }
+    }
+
+    Ok(Config {
+        root: root.map(|(_, value)| value),
+        ignore,
+        tables,
+        persist: persist.is_some(),
+        persist_path: persist_path.map(|(_, value)| value),
+        extensions,
+        pre_query: pre_query.map(|(_, value)| value),
+        post_query: post_query.map(|(_, value)| value),
+    })
+}
+
+/// Fold one config's value for a single-valued key into the merge `slot`,
+/// erroring when a prior config already defined it.
+fn merge_single<'a, T: Clone>(
+    key: &'static str,
+    slot: &mut Option<(&'a Source, T)>,
+    value: Option<&T>,
+    source: &'a Source,
+) -> Result<()> {
+    if let Some(value) = value {
+        if let Some((prior, _)) = slot {
+            return Err(ConfigError::ConflictingKey {
+                key,
+                first: (*prior).clone(),
+                second: source.clone(),
+            });
+        }
+        *slot = Some((source, value.clone()));
+    }
+    Ok(())
+}
 
 /// Parsed configuration from a `.dirsql.toml` file.
 #[derive(Debug, Clone)]
@@ -625,6 +783,361 @@ post-query = "   "
         assert!(
             matches!(err, ConfigError::EmptyField("post-query")),
             "got: {err:?}"
+        );
+    }
+
+    // --- combine_configs (#352) ---
+
+    /// Shorthand: a `Source::Path` label.
+    fn src(label: &str) -> Source {
+        Source::Path(PathBuf::from(label))
+    }
+
+    /// Shorthand: parse a config fragment, panicking on parse errors.
+    fn cfg(toml: &str) -> Config {
+        load_config_str(toml).unwrap()
+    }
+
+    #[test]
+    fn combine_empty_slice_rejected() {
+        let err = combine_configs(&[]).unwrap_err();
+        assert!(matches!(err, ConfigError::NoConfigs), "got: {err:?}");
+    }
+
+    #[test]
+    fn combine_singleton_returns_config_unchanged() {
+        let config = cfg(r#"
+[dirsql]
+root = "docs"
+ignore = ["*.tmp"]
+persist = true
+persist_path = "cache.db"
+pre-query = "to_sql {args}"
+post-query = "jq '{results: .}'"
+
+[[dirsql.extension]]
+path = "vec0.so"
+entrypoint = "sqlite3_vec_init"
+
+[[table]]
+ddl = "CREATE TABLE t (_path TEXT)"
+glob = "*.json"
+"#);
+        let merged = combine_configs(&[(src("/proj/.dirsql.toml"), config.clone())]).unwrap();
+        assert_eq!(merged.root, config.root);
+        assert_eq!(merged.ignore, config.ignore);
+        assert_eq!(merged.persist, config.persist);
+        assert_eq!(merged.persist_path, config.persist_path);
+        assert_eq!(merged.extensions, config.extensions);
+        assert_eq!(merged.pre_query, config.pre_query);
+        assert_eq!(merged.post_query, config.post_query);
+        assert_eq!(merged.tables.len(), 1);
+        assert_eq!(merged.tables[0].ddl, config.tables[0].ddl);
+        assert_eq!(merged.tables[0].glob, config.tables[0].glob);
+    }
+
+    #[test]
+    fn combine_concatenates_tables_in_input_order() {
+        let a = cfg(r#"
+[[table]]
+ddl = "CREATE TABLE a (_path TEXT)"
+glob = "a/*.json"
+
+[[table]]
+ddl = "CREATE TABLE b (_path TEXT)"
+glob = "b/*.json"
+"#);
+        let b = cfg(r#"
+[[table]]
+ddl = "CREATE TABLE c (_path TEXT)"
+glob = "c/*.json"
+"#);
+        let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
+        let ddls: Vec<&str> = merged.tables.iter().map(|t| t.ddl.as_str()).collect();
+        assert_eq!(
+            ddls,
+            vec![
+                "CREATE TABLE a (_path TEXT)",
+                "CREATE TABLE b (_path TEXT)",
+                "CREATE TABLE c (_path TEXT)",
+            ]
+        );
+        assert_eq!(merged.tables[2].glob, "c/*.json");
+    }
+
+    #[test]
+    fn combine_concatenates_ignore_in_input_order() {
+        let a = cfg("[dirsql]\nignore = [\"a/**\", \"b/**\"]\n");
+        let b = cfg("[dirsql]\nignore = [\"c/**\"]\n");
+        let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
+        assert_eq!(merged.ignore, vec!["a/**", "b/**", "c/**"]);
+    }
+
+    #[test]
+    fn combine_concatenates_extensions_in_input_order() {
+        let a = cfg("[[dirsql.extension]]\npath = \"a.so\"\n");
+        let b = cfg("[[dirsql.extension]]\npath = \"b.so\"\nentrypoint = \"init_b\"\n");
+        let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
+        assert_eq!(
+            merged.extensions,
+            vec![
+                ExtensionSpec {
+                    path: PathBuf::from("a.so"),
+                    entrypoint: None,
+                },
+                ExtensionSpec {
+                    path: PathBuf::from("b.so"),
+                    entrypoint: Some("init_b".to_string()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn combine_duplicate_table_name_errors_naming_both_sources() {
+        let a = cfg("[[table]]\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\n");
+        let b = cfg("[[table]]\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\n");
+        let err = combine_configs(&[
+            (src("/proj/.dirsql.toml"), a),
+            (src("/plugin/frag.toml"), b),
+        ])
+        .unwrap_err();
+        match &err {
+            ConfigError::DuplicateTable {
+                name,
+                first,
+                second,
+            } => {
+                assert_eq!(name, "t");
+                assert_eq!(first, &src("/proj/.dirsql.toml"));
+                assert_eq!(second, &src("/plugin/frag.toml"));
+            }
+            other => panic!("got: {other:?}"),
+        }
+        let msg = err.to_string();
+        assert!(msg.contains("'t'"), "got: {msg}");
+        assert!(msg.contains("/proj/.dirsql.toml"), "got: {msg}");
+        assert!(msg.contains("/plugin/frag.toml"), "got: {msg}");
+    }
+
+    #[test]
+    fn combine_singleton_with_internal_duplicate_returns_unchanged() {
+        // "A single entry returns it unchanged" holds even when the config
+        // carries an internal duplicate table name: the identity path runs no
+        // collision check, exactly like a plain single-config load.
+        let config = cfg(concat!(
+            "[[table]]\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\n",
+            "[[table]]\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\n",
+        ));
+        let merged = combine_configs(&[(src("/a"), config)]).unwrap();
+        assert_eq!(merged.tables.len(), 2);
+    }
+
+    #[test]
+    fn combine_intra_config_duplicate_in_multi_merge_errors() {
+        // A collision *anywhere* in a multi-config merge errors — including a
+        // duplicate within one source, which names that source on both sides.
+        let a = cfg(concat!(
+            "[[table]]\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\n",
+            "[[table]]\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\n",
+        ));
+        let b = cfg("[dirsql]\nignore = [\"c/**\"]\n");
+        let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
+        match &err {
+            ConfigError::DuplicateTable {
+                name,
+                first,
+                second,
+            } => {
+                assert_eq!(name, "t");
+                assert_eq!(first, &src("/a"));
+                assert_eq!(second, &src("/a"));
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn combine_duplicate_table_name_detected_through_quoting() {
+        // `CREATE TABLE "t"` and `CREATE TABLE t` name the same table: the
+        // collision check compares parsed names, not raw DDL strings.
+        let a = cfg("[[table]]\nddl = 'CREATE TABLE \"t\" (x TEXT)'\nglob = \"a/*.json\"\n");
+        let b = cfg("[[table]]\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\n");
+        let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
+        assert!(
+            matches!(&err, ConfigError::DuplicateTable { name, .. } if name == "t"),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn combine_unparseable_ddl_concatenates_without_collision_check() {
+        // Tables whose DDL yields no parseable name cannot collide here; they
+        // pass through and `Db::create_table` rejects them downstream.
+        let a = cfg("[[table]]\nddl = \"not a create table\"\nglob = \"a/*.json\"\n");
+        let b = cfg("[[table]]\nddl = \"also not a create table\"\nglob = \"b/*.json\"\n");
+        let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
+        assert_eq!(merged.tables.len(), 2);
+    }
+
+    #[test]
+    fn combine_pre_query_in_two_configs_errors_naming_both_sources() {
+        let a = cfg("[dirsql]\npre-query = \"to_sql_a {args}\"\n");
+        let b = cfg("[dirsql]\npre-query = \"to_sql_b {args}\"\n");
+        let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
+        match &err {
+            ConfigError::ConflictingKey { key, first, second } => {
+                assert_eq!(*key, "pre-query");
+                assert_eq!(first, &src("/a"));
+                assert_eq!(second, &src("/b"));
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn combine_post_query_in_two_configs_errors_naming_both_sources() {
+        let a = cfg("[dirsql]\npost-query = \"jq_a\"\n");
+        let b = cfg("[dirsql]\npost-query = \"jq_b\"\n");
+        let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
+        match &err {
+            ConfigError::ConflictingKey { key, first, second } => {
+                assert_eq!(*key, "post-query");
+                assert_eq!(first, &src("/a"));
+                assert_eq!(second, &src("/b"));
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn combine_hooks_in_one_config_merge_through() {
+        let a = cfg("[dirsql]\npre-query = \"to_sql {args}\"\npost-query = \"jq -c .\"\n");
+        let b = cfg("[dirsql]\nignore = [\"c/**\"]\n");
+        let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
+        assert_eq!(merged.pre_query.as_deref(), Some("to_sql {args}"));
+        assert_eq!(merged.post_query.as_deref(), Some("jq -c ."));
+    }
+
+    #[test]
+    fn combine_root_in_two_configs_errors_naming_both_sources() {
+        let a = cfg("[dirsql]\nroot = \"docs\"\n");
+        let b = cfg("[dirsql]\nroot = \"data\"\n");
+        let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
+        match &err {
+            ConfigError::ConflictingKey { key, first, second } => {
+                assert_eq!(*key, "root");
+                assert_eq!(first, &src("/a"));
+                assert_eq!(second, &src("/b"));
+            }
+            other => panic!("got: {other:?}"),
+        }
+        let msg = err.to_string();
+        assert!(msg.contains("'root'"), "got: {msg}");
+        assert!(msg.contains("/a"), "got: {msg}");
+        assert!(msg.contains("/b"), "got: {msg}");
+    }
+
+    #[test]
+    fn combine_root_in_one_config_merges_through() {
+        let a = cfg("[dirsql]\nignore = [\"a/**\"]\n");
+        let b = cfg("[dirsql]\nroot = \"docs\"\n");
+        let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
+        assert_eq!(merged.root.as_deref(), Some(Path::new("docs")));
+    }
+
+    #[test]
+    fn combine_persist_true_in_two_configs_errors_naming_both_sources() {
+        let a = cfg("[dirsql]\npersist = true\n");
+        let b = cfg("[dirsql]\npersist = true\n");
+        let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
+        match &err {
+            ConfigError::ConflictingKey { key, first, second } => {
+                assert_eq!(*key, "persist");
+                assert_eq!(first, &src("/a"));
+                assert_eq!(second, &src("/b"));
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn combine_persist_true_in_one_config_merges_through() {
+        let a = cfg("[dirsql]\npersist = true\npersist_path = \"cache.db\"\n");
+        let b = cfg("[dirsql]\nignore = [\"c/**\"]\n");
+        let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
+        assert!(merged.persist);
+        assert_eq!(merged.persist_path.as_deref(), Some(Path::new("cache.db")));
+    }
+
+    #[test]
+    fn combine_persist_false_everywhere_stays_false() {
+        let a = cfg("[dirsql]\nignore = [\"a/**\"]\n");
+        let b = cfg("[dirsql]\nignore = [\"b/**\"]\n");
+        let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
+        assert!(!merged.persist);
+        assert!(merged.persist_path.is_none());
+    }
+
+    #[test]
+    fn combine_persist_path_in_two_configs_errors_naming_both_sources() {
+        let a = cfg("[dirsql]\npersist_path = \"a.db\"\n");
+        let b = cfg("[dirsql]\npersist_path = \"b.db\"\n");
+        let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
+        match &err {
+            ConfigError::ConflictingKey { key, first, second } => {
+                assert_eq!(*key, "persist_path");
+                assert_eq!(first, &src("/a"));
+                assert_eq!(second, &src("/b"));
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn combine_error_display_includes_package_source_verbatim() {
+        // A plugin fragment is labeled by package name, not path; the error
+        // message carries the label verbatim for both `Source` variants.
+        let a = cfg("[[table]]\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\n");
+        let b = cfg("[[table]]\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\n");
+        let err = combine_configs(&[
+            (src("/proj/.dirsql.toml"), a),
+            (Source::Package("dirsql-plugin-notes".to_string()), b),
+        ])
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("/proj/.dirsql.toml"), "got: {msg}");
+        assert!(msg.contains("dirsql-plugin-notes"), "got: {msg}");
+    }
+
+    #[test]
+    fn combine_three_configs_concatenates_across_all() {
+        let a = cfg(
+            "[dirsql]\nignore = [\"a/**\"]\n\n[[table]]\nddl = \"CREATE TABLE a (x TEXT)\"\nglob = \"a/*\"\n",
+        );
+        let b = cfg("[[table]]\nddl = \"CREATE TABLE b (x TEXT)\"\nglob = \"b/*\"\n");
+        let c = cfg(
+            "[dirsql]\nignore = [\"c/**\"]\n\n[[table]]\nddl = \"CREATE TABLE c (x TEXT)\"\nglob = \"c/*\"\n",
+        );
+        let merged = combine_configs(&[(src("/a"), a), (src("/b"), b), (src("/c"), c)]).unwrap();
+        assert_eq!(merged.ignore, vec!["a/**", "c/**"]);
+        let ddls: Vec<&str> = merged.tables.iter().map(|t| t.ddl.as_str()).collect();
+        assert_eq!(
+            ddls,
+            vec![
+                "CREATE TABLE a (x TEXT)",
+                "CREATE TABLE b (x TEXT)",
+                "CREATE TABLE c (x TEXT)",
+            ]
+        );
+    }
+
+    #[test]
+    fn source_display_path_and_package() {
+        assert_eq!(src("/proj/.dirsql.toml").to_string(), "/proj/.dirsql.toml");
+        assert_eq!(
+            Source::Package("dirsql-plugin-notes".to_string()).to_string(),
+            "dirsql-plugin-notes"
         );
     }
 
