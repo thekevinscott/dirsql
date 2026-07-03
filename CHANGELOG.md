@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **TypeScript SDK: `Buffer`/`Uint8Array` → SQLite BLOB (#343).** An `extract`
+  callback can now return a `Buffer` or `Uint8Array` and it is stored as a real
+  BLOB, restoring parity with Python's documented `bytes → BLOB` mapping.
+  Previously the value was silently coerced to its string representation
+  (`"0,1,2,…"`) before it reached the database.
+
 - **Python/TypeScript SDKs: config-file `[[dirsql.extension]]` entries may name
   an extension by package name (#313, epic #227).** Constructing a `DirSQL`
   from a `.dirsql.toml` (`DirSQL(config=...)` / `new DirSQL(configPath)`) now
@@ -57,6 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that turns the untrusted body into safe SQL — intentional for v1. Handled
   entirely in the shared Rust core, so every install behaves identically with no
   per-SDK surface.
+
+### Changed
+
+- **TypeScript SDK: BLOB columns now come back as `Buffer` (#343).** `query()`
+  results and watcher `RowEvent` rows return BLOB values as Node `Buffer`s
+  instead of lowercase hex strings. The CLI's HTTP/JSON surface is unchanged
+  (JSON cannot carry binary; blobs stay hex-encoded there). See
+  `MIGRATIONS.md` for the upgrade note.
 
 ### Removed
 
