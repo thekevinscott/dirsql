@@ -507,6 +507,155 @@ glob = "posts/{author}/{title}.json"
     kill_and_wait(child);
 }
 
+#[cfg(unix)]
+#[test]
+fn pre_query_hook_exceeding_configured_timeout_returns_500() {
+    // #351: `[dirsql].pre-query-timeout` bounds each pre-query run. A hook
+    // that sleeps past a 1-second timeout is killed and the request returns
+    // 500 with the timeout in the error body — under the default 30-second
+    // timeout the hook would have finished and the request succeeded.
+    let root = blog_fixture();
+    fs::write(
+        root.path().join("slow_to_sql.sh"),
+        "sleep 3\necho \"SELECT title FROM posts ORDER BY title\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[dirsql]
+pre-query = "sh slow_to_sql.sh {args}"
+pre-query-timeout = 1
+
+[[table]]
+ddl = "CREATE TABLE posts (title TEXT, author TEXT, _basename TEXT, _size INTEGER)"
+glob = "posts/{author}/{title}.json"
+"#,
+    )
+    .unwrap();
+
+    let port = free_port();
+    let child = spawn_dirsql(root.path(), port);
+    wait_until_ready(port, Duration::from_secs(10));
+
+    let resp = Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .unwrap()
+        .post(format!("http://localhost:{port}/query"))
+        .body("please give me the posts")
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body: Value = resp.json().unwrap();
+    let error = body["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("timed out"),
+        "500 body should describe the timeout, got {error:?}"
+    );
+
+    kill_and_wait(child);
+}
+
+#[cfg(unix)]
+#[test]
+fn pre_query_hook_within_generous_configured_timeout_succeeds() {
+    // #351: a generous `pre-query-timeout` admits a hook slower than the old
+    // fixed bound would matter for — and proves the value is read as seconds
+    // (a 60 read as milliseconds would kill this 2-second hook).
+    let root = blog_fixture();
+    fs::write(
+        root.path().join("slowish_to_sql.sh"),
+        "sleep 2\necho \"SELECT title FROM posts ORDER BY title\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[dirsql]
+pre-query = "sh slowish_to_sql.sh {args}"
+pre-query-timeout = 60
+
+[[table]]
+ddl = "CREATE TABLE posts (title TEXT, author TEXT, _basename TEXT, _size INTEGER)"
+glob = "posts/{author}/{title}.json"
+"#,
+    )
+    .unwrap();
+
+    let port = free_port();
+    let child = spawn_dirsql(root.path(), port);
+    wait_until_ready(port, Duration::from_secs(10));
+
+    let resp = Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .unwrap()
+        .post(format!("http://localhost:{port}/query"))
+        .body("please give me the posts")
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Vec<Value> = resp.json().unwrap();
+    assert_eq!(
+        body,
+        vec![
+            json!({"title": "Hello-World"}),
+            json!({"title": "Second-Post"}),
+        ]
+    );
+
+    kill_and_wait(child);
+}
+
+#[cfg(unix)]
+#[test]
+fn post_query_hook_exceeding_configured_timeout_returns_500() {
+    // #351: `[dirsql].post-query-timeout` bounds each post-query run, the same
+    // way `pre-query-timeout` bounds pre-query.
+    let root = blog_fixture();
+    fs::write(
+        root.path().join("slow_wrap.sh"),
+        "data=$(cat)\nsleep 3\necho \"{\\\"results\\\": $data}\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[dirsql]
+post-query = "sh slow_wrap.sh {args}"
+post-query-timeout = 1
+
+[[table]]
+ddl = "CREATE TABLE posts (title TEXT, author TEXT, _basename TEXT, _size INTEGER)"
+glob = "posts/{author}/{title}.json"
+"#,
+    )
+    .unwrap();
+
+    let port = free_port();
+    let child = spawn_dirsql(root.path(), port);
+    wait_until_ready(port, Duration::from_secs(10));
+
+    let resp = Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .unwrap()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body: Value = resp.json().unwrap();
+    let error = body["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("timed out"),
+        "500 body should describe the timeout, got {error:?}"
+    );
+
+    kill_and_wait(child);
+}
+
 #[test]
 fn explicit_config_flag_overrides_cwd_default() {
     // Start in an unrelated cwd but point `--config` at the fixture.

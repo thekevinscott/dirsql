@@ -137,3 +137,67 @@ on-file = "sh extract.sh {path}"
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["name"], Value::Text("ok".into()));
 }
+
+/// #351: a per-table `timeout` key bounds each `on-file` run. A command that
+/// sleeps past a 1-second timeout is killed and the file is skipped (the usual
+/// per-file error isolation) — under the default 30-second timeout the command
+/// would have finished and its row would have landed.
+#[test]
+fn on_file_exceeding_configured_timeout_skips_the_file() {
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("slow.sh"),
+        "#!/bin/sh\nsleep 2\nprintf '[{\"name\":\"late\"}]'\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[table]]
+ddl = "CREATE TABLE items (name TEXT)"
+glob = "*.txt"
+on-file = "sh slow.sh {path}"
+timeout = 1
+"#,
+    )
+    .unwrap();
+    fs::write(root.path().join("a.txt"), "x\n").unwrap();
+
+    // The scan must succeed; the timed-out file contributes no rows.
+    let db = DirSQL::from_config(root.path()).unwrap();
+    let rows = db.query("SELECT name FROM items").unwrap();
+    assert!(
+        rows.is_empty(),
+        "a file whose on-file run exceeds `timeout = 1` must be skipped, got {rows:?}"
+    );
+}
+
+/// #351: a generous per-table `timeout` admits a command slower than the
+/// configured bound would otherwise suggest — `timeout = 5` with a 2-second
+/// command lands rows (and proves the value is read as seconds).
+#[test]
+fn on_file_within_generous_configured_timeout_lands_rows() {
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("slowish.sh"),
+        "#!/bin/sh\nsleep 2\nprintf '[{\"name\":\"ok\"}]'\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[table]]
+ddl = "CREATE TABLE items (name TEXT)"
+glob = "*.txt"
+on-file = "sh slowish.sh {path}"
+timeout = 5
+"#,
+    )
+    .unwrap();
+    fs::write(root.path().join("a.txt"), "x\n").unwrap();
+
+    let db = DirSQL::from_config(root.path()).unwrap();
+    let rows = db.query("SELECT name FROM items").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["name"], Value::Text("ok".into()));
+}
