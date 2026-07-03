@@ -21,15 +21,6 @@ use super::{AppState, PostQuery, PreQuery};
 use crate::command::{Placeholder, run_command};
 use crate::{DirSQL, DirSqlError};
 
-/// Fixed timeout for a server-wide `pre-query` command. There is no override
-/// key yet; this module constant is the documented current default (mirrors
-/// `on-file`'s `ON_FILE_TIMEOUT`).
-const PRE_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Fixed timeout for a server-wide `post-query` command (mirrors
-/// `PRE_QUERY_TIMEOUT`).
-const POST_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// Cap on the serialized result payload passed as the `{args}` argv token.
 /// Beyond this, `{args}` is emptied and the operator is directed to stdin
 /// (which always carries the full payload) — comfortably under Linux's 128 KiB
@@ -155,15 +146,17 @@ fn parse_sql_body(body: &str) -> Result<String, Response> {
 async fn run_pre_query(pq: &PreQuery, raw_body: String) -> Result<String, Response> {
     let command = pq.command.clone();
     let config_dir = pq.config_dir.clone();
+    let timeout = pq.timeout;
     // `run_command` is blocking — it spawns a child and joins drain threads —
-    // so run it off the async runtime. It enforces `PRE_QUERY_TIMEOUT`
-    // internally, so no outer `tokio::time::timeout` is needed.
+    // so run it off the async runtime. It enforces the hook's timeout
+    // (the global `[dirsql].hook-timeout`, default 30s) internally, so no outer
+    // `tokio::time::timeout` is needed.
     let outcome = tokio::task::spawn_blocking(move || {
         run_command(
             &command,
             &[Placeholder::new("args", &raw_body)],
             &config_dir,
-            PRE_QUERY_TIMEOUT,
+            timeout,
             None,
         )
     })
@@ -198,9 +191,11 @@ async fn run_post_query(
         .map_err(|err| error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
     let command = pq.command.clone();
     let config_dir = pq.config_dir.clone();
+    let timeout = pq.timeout;
     // `run_command` is blocking — it spawns a child and joins drain threads —
-    // so run it off the async runtime. It enforces `POST_QUERY_TIMEOUT`
-    // internally, so no outer `tokio::time::timeout` is needed.
+    // so run it off the async runtime. It enforces the hook's timeout
+    // (the global `[dirsql].hook-timeout`, default 30s) internally, so no outer
+    // `tokio::time::timeout` is needed.
     let outcome = tokio::task::spawn_blocking(move || {
         let args_value = if payload.len() <= POST_QUERY_ARGS_MAX {
             payload.clone()
@@ -217,7 +212,7 @@ async fn run_post_query(
             &command,
             &[Placeholder::new("args", &args_value)],
             &config_dir,
-            POST_QUERY_TIMEOUT,
+            timeout,
             Some(payload.as_bytes()),
         )
     })

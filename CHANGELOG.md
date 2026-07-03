@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Configurable command-hook timeout (#351).** A single global
+  `[dirsql].hook-timeout` key (positive whole seconds) raises or tightens the
+  30-second timeout for **all** command-backed hooks at once — `on-file`,
+  `pre-query`, and `post-query` — so an embeddings extractor that downloads a
+  model on first run, or a slow (e.g. LLM-backed) query translator, no longer
+  silently hits the fixed 30s bound. Zero and negative values are rejected with
+  a config error naming the field. The default is unchanged at 30 seconds —
+  existing configs behave identically. Parsed by the shared Rust config loader,
+  so every install (pip/npm/cargo) gets identical behavior with no per-SDK code;
+  the Rust CLI server API grows `PreQuery::with_timeout` /
+  `PostQuery::with_timeout` (and a public `timeout` field on both) to carry the
+  configured value.
 - **Rust core: `combine_configs` merges multiple TOML configs (#352).** A pure,
   order-significant merge function in the core's `config` module — substrate
   for the plugin model explored in #341, where plugin TOML fragments merge

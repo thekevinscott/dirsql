@@ -27,6 +27,7 @@ use tokio::task::JoinError;
 use tokio::task::JoinHandle;
 
 use crate::DirSQL;
+use crate::command::DEFAULT_COMMAND_TIMEOUT;
 
 pub mod init;
 pub mod router;
@@ -51,15 +52,28 @@ pub struct PreQuery {
     pub command: String,
     /// The command's working directory — the config file's parent.
     pub config_dir: PathBuf,
+    /// Per-run timeout. Defaults to the shared 30-second
+    /// [`DEFAULT_COMMAND_TIMEOUT`]; override it via [`Self::with_timeout`]
+    /// (the CLI wires the global `[dirsql].hook-timeout` here, #351).
+    pub timeout: Duration,
 }
 
 impl PreQuery {
-    /// Build a [`PreQuery`] from a command template and its working directory.
+    /// Build a [`PreQuery`] from a command template and its working directory,
+    /// with the default 30-second timeout.
     pub fn new(command: impl Into<String>, config_dir: impl Into<PathBuf>) -> Self {
         Self {
             command: command.into(),
             config_dir: config_dir.into(),
+            timeout: DEFAULT_COMMAND_TIMEOUT,
         }
+    }
+
+    /// Override the per-run timeout (from the global `[dirsql].hook-timeout`).
+    /// A run exceeding it is killed and the request returns 500.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 }
 
@@ -76,15 +90,28 @@ pub struct PostQuery {
     pub command: String,
     /// The command's working directory — the config file's parent.
     pub config_dir: PathBuf,
+    /// Per-run timeout. Defaults to the shared 30-second
+    /// [`DEFAULT_COMMAND_TIMEOUT`]; override it via [`Self::with_timeout`]
+    /// (the CLI wires the global `[dirsql].hook-timeout` here, #351).
+    pub timeout: Duration,
 }
 
 impl PostQuery {
-    /// Build a [`PostQuery`] from a command template and its working directory.
+    /// Build a [`PostQuery`] from a command template and its working directory,
+    /// with the default 30-second timeout.
     pub fn new(command: impl Into<String>, config_dir: impl Into<PathBuf>) -> Self {
         Self {
             command: command.into(),
             config_dir: config_dir.into(),
+            timeout: DEFAULT_COMMAND_TIMEOUT,
         }
+    }
+
+    /// Override the per-run timeout (from the global `[dirsql].hook-timeout`).
+    /// A run exceeding it is killed and the request returns 500.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 }
 
@@ -258,10 +285,17 @@ mod tests {
     #[test]
     fn pre_query_constructor_carries_command_and_dir() {
         // `PreQuery::new` is pure data plumbing: the command template and the
-        // working directory it will run in.
+        // working directory it will run in, with the shared default timeout.
         let pq = PreQuery::new("to_sql.py {args}", "/proj");
         assert_eq!(pq.command, "to_sql.py {args}");
         assert_eq!(pq.config_dir, PathBuf::from("/proj"));
+        assert_eq!(pq.timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn pre_query_with_timeout_overrides_the_default() {
+        let pq = PreQuery::new("cmd {args}", "/proj").with_timeout(Duration::from_secs(60));
+        assert_eq!(pq.timeout, Duration::from_secs(60));
     }
 
     #[test]
@@ -275,10 +309,17 @@ mod tests {
     #[test]
     fn post_query_constructor_carries_command_and_dir() {
         // `PostQuery::new` is pure data plumbing: the command template and the
-        // working directory it will run in.
+        // working directory it will run in, with the shared default timeout.
         let pq = PostQuery::new("jq '{results: .}'", "/proj");
         assert_eq!(pq.command, "jq '{results: .}'");
         assert_eq!(pq.config_dir, PathBuf::from("/proj"));
+        assert_eq!(pq.timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn post_query_with_timeout_overrides_the_default() {
+        let pq = PostQuery::new("reshape {args}", "/proj").with_timeout(Duration::from_secs(60));
+        assert_eq!(pq.timeout, Duration::from_secs(60));
     }
 
     #[test]

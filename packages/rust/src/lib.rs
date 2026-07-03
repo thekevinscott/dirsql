@@ -1457,10 +1457,6 @@ fn relative_path(root: &Path, path: &Path) -> String {
         .to_string()
 }
 
-/// Fixed timeout for an `on-file` command. There is no per-table timeout key
-/// yet (#327); this module constant is the documented current default.
-const ON_FILE_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// Build [`Table`] objects from a parsed config.
 ///
 /// A plain config-defined table produces one row per matched file built
@@ -1475,13 +1471,17 @@ const ON_FILE_TIMEOUT: Duration = Duration::from_secs(30);
 /// array of row objects on stdout, which becomes the file's rows (filesystem
 /// facts are still merged on top, user values winning). `config_dir` is the
 /// command's working directory (the config file's parent) and `root` is the
-/// resolved index root used to compute the `{path}` placeholder.
+/// resolved index root used to compute the `{path}` placeholder. Each run is
+/// bounded by the global `[dirsql].hook-timeout` key when present (#351),
+/// falling back to the shared 30-second default
+/// ([`command::DEFAULT_COMMAND_TIMEOUT`]).
 fn build_tables_from_config(
     cfg: &config::Config,
     config_dir: &Path,
     root: &Path,
 ) -> Result<Vec<Table>> {
     let mut tables = Vec::with_capacity(cfg.tables.len());
+    let timeout = cfg.hook_timeout.unwrap_or(command::DEFAULT_COMMAND_TIMEOUT);
 
     for table_cfg in &cfg.tables {
         let mut table = match &table_cfg.on_file {
@@ -1495,7 +1495,9 @@ fn build_tables_from_config(
                 Table::new(
                     table_cfg.ddl.clone(),
                     table_cfg.glob.clone(),
-                    move |abs_path: &str| run_on_file(&command, abs_path, &config_dir, &root),
+                    move |abs_path: &str| {
+                        run_on_file(&command, abs_path, &config_dir, &root, timeout)
+                    },
                 )
             }
             None => Table::new(
@@ -1527,8 +1529,15 @@ fn build_tables_from_config(
 /// Per-file isolation: any failure — a spawn/exit/timeout error from
 /// [`command::run_command`], or output that is not a JSON array of objects —
 /// is logged to stderr and yields no rows (`vec![]`). Returning `Err` here
-/// would abort the whole scan, so it never does.
-fn run_on_file(command: &str, abs_path: &str, config_dir: &Path, root: &Path) -> Vec<Row> {
+/// would abort the whole scan, so it never does. `timeout` bounds the run —
+/// the table's configured value, or the shared default.
+fn run_on_file(
+    command: &str,
+    abs_path: &str,
+    config_dir: &Path,
+    root: &Path,
+    timeout: Duration,
+) -> Vec<Row> {
     let abs = Path::new(abs_path);
     let rel = abs
         .strip_prefix(root)
@@ -1540,7 +1549,7 @@ fn run_on_file(command: &str, abs_path: &str, config_dir: &Path, root: &Path) ->
         Placeholder::new("root", root.to_string_lossy().into_owned()),
     ];
 
-    match command::run_command(command, &placeholders, config_dir, ON_FILE_TIMEOUT, None) {
+    match command::run_command(command, &placeholders, config_dir, timeout, None) {
         Ok(output) => match parse_command_rows(&output.payload) {
             Ok(rows) => rows,
             Err(message) => {
@@ -3097,6 +3106,7 @@ mod internal_tests {
             &abs.to_string_lossy(),
             dir.path(),
             dir.path(),
+            command::DEFAULT_COMMAND_TIMEOUT,
         );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["n"], Value::Integer(1));
@@ -3112,6 +3122,7 @@ mod internal_tests {
             "/outside/f.txt",
             dir.path(),
             dir.path(),
+            command::DEFAULT_COMMAND_TIMEOUT,
         );
         assert!(rows.is_empty());
     }
@@ -3120,7 +3131,13 @@ mod internal_tests {
     #[test]
     fn run_on_file_returns_no_rows_on_non_json_output() {
         let dir = TempDir::new().unwrap();
-        let rows = run_on_file("echo not-json", "/outside/f.txt", dir.path(), dir.path());
+        let rows = run_on_file(
+            "echo not-json",
+            "/outside/f.txt",
+            dir.path(),
+            dir.path(),
+            command::DEFAULT_COMMAND_TIMEOUT,
+        );
         assert!(rows.is_empty());
     }
 

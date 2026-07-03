@@ -244,6 +244,13 @@ file is skipped (it contributes no rows) and a one-line warning naming the file
 and the error is written to stderr. One bad file never aborts the scan; the
 other files' rows are indexed normally.
 
+**Timeout.** Each run is bounded by the default 30-second timeout. When a
+command legitimately needs longer — it downloads a model on first run, or calls
+a rate-limited API — raise the bound with the global
+[`[dirsql].hook-timeout`](#command-execution) key (positive whole seconds). A
+run exceeding the bound is killed and handled with the per-file error isolation
+above (the file is skipped with a stderr warning).
+
 See [Command execution](#command-execution) for the full contract (argv
 splitting, injection safety, cwd, environment, timeout, and output framing).
 
@@ -279,7 +286,8 @@ key and the `{"sql": …}` contract returns.
 **On failure** — a non-zero exit, a timeout, or a spawn error — the request
 returns `500 Internal Server Error` with the command's stderr tail in the JSON
 `error` body. The command runs in the config file's directory and is bounded by
-a fixed **30-second** timeout.
+a **30-second** timeout by default; a slow translator (e.g. LLM-backed) can
+raise it with the global [`[dirsql].hook-timeout`](#command-execution) key.
 
 #### The hook owns SQL safety
 
@@ -361,7 +369,8 @@ returns.
 **On failure** — a non-zero exit, a timeout, or a spawn error — the request
 returns `500 Internal Server Error` with the command's stderr tail in the JSON
 `error` body. The command runs in the config file's directory and is bounded by
-a fixed **30-second** timeout.
+a **30-second** timeout by default; raise it with the global
+[`[dirsql].hook-timeout`](#command-execution) key.
 
 See [Command execution](#command-execution) for the full contract (argv
 splitting, injection safety, cwd, environment, timeout, and output framing).
@@ -409,9 +418,18 @@ Config keys that run an external command — today `on-file`, `pre-query`, and
 - **Output framing.** The command's result is the **last non-empty line of
   stdout**; any log/chatter lines above it are ignored. stderr is never data —
   it is captured only to enrich error messages.
-- **Timeout.** Each command run is bounded by a fixed **30-second** timeout (no
-  per-table override yet); a command that exceeds it is killed and treated as a
-  failure.
+- **Timeout.** Each command run is bounded by a **30-second** timeout by
+  default; a command that exceeds it is killed and treated as a failure. Raise
+  (or tighten) it for **all** hooks — `on-file`, `pre-query`, and `post-query`
+  alike — with a single global `[dirsql].hook-timeout` key, in positive whole
+  seconds:
+
+  ```toml
+  [dirsql]
+  hook-timeout = 300
+  ```
+
+  Zero and negative values are rejected as a config error.
 - **Errors.** A non-zero exit, a timeout, a spawn failure, or output that does
   not parse as expected is a per-file failure: the file is skipped with a
   stderr warning and the scan continues.

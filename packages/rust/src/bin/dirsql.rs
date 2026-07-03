@@ -228,9 +228,14 @@ fn load_pre_query(cli: &Cli) -> Option<PreQuery> {
         return None;
     }
     let resolved = config_path.canonicalize().ok()?;
-    let command = dirsql::config::load_config(&resolved).ok()?.pre_query?;
+    let config = dirsql::config::load_config(&resolved).ok()?;
+    let command = config.pre_query?;
     let config_dir = resolved.parent()?.to_path_buf();
-    Some(PreQuery::new(command, config_dir))
+    let mut pre_query = PreQuery::new(command, config_dir);
+    if let Some(timeout) = config.hook_timeout {
+        pre_query = pre_query.with_timeout(timeout);
+    }
+    Some(pre_query)
 }
 
 /// Extract the server-wide `post-query` hook from the config, if any.
@@ -245,9 +250,14 @@ fn load_post_query(cli: &Cli) -> Option<PostQuery> {
         return None;
     }
     let resolved = config_path.canonicalize().ok()?;
-    let command = dirsql::config::load_config(&resolved).ok()?.post_query?;
+    let config = dirsql::config::load_config(&resolved).ok()?;
+    let command = config.post_query?;
     let config_dir = resolved.parent()?.to_path_buf();
-    Some(PostQuery::new(command, config_dir))
+    let mut post_query = PostQuery::new(command, config_dir);
+    if let Some(timeout) = config.hook_timeout {
+        post_query = post_query.with_timeout(timeout);
+    }
+    Some(post_query)
 }
 
 /// Zero-config fallback. When no `.dirsql.toml` is found, dirsql indexes the

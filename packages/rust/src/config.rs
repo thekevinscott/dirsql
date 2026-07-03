@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::Deserialize;
 
@@ -19,6 +20,9 @@ pub enum ConfigError {
 
     #[error("Field '{0}' must not be empty")]
     EmptyField(&'static str),
+
+    #[error("Field '{field}' must be a positive number of seconds, got {value}")]
+    InvalidTimeout { field: &'static str, value: i64 },
 
     #[error("Cannot combine an empty list of configs")]
     NoConfigs,
@@ -70,7 +74,7 @@ impl std::fmt::Display for Source {
 /// returned unchanged. List-shaped config (`[[table]]`, `[[dirsql.extension]]`,
 /// `ignore`) concatenates in input order. A table-name collision anywhere in
 /// the combined set errors, naming both sources. Single-valued keys (`root`,
-/// `persist`, `persist_path`, `pre-query`, `post-query`) defined by more than
+/// `persist`, `persist_path`, `pre-query`, `post-query`, `hook-timeout`) defined by more than
 /// one config error, naming both sources — no silent shadowing, no precedence;
 /// defined in exactly one config they merge through unchanged. (`persist`
 /// counts as defined only when `true`: the parsed [`Config`] cannot
@@ -100,6 +104,7 @@ pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
     let mut persist_path: Option<(&Source, PathBuf)> = None;
     let mut pre_query: Option<(&Source, String)> = None;
     let mut post_query: Option<(&Source, String)> = None;
+    let mut hook_timeout: Option<(&Source, Duration)> = None;
 
     for (source, config) in configs {
         for table in &config.tables {
@@ -136,6 +141,12 @@ pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
             config.post_query.as_ref(),
             source,
         )?;
+        merge_single(
+            "hook-timeout",
+            &mut hook_timeout,
+            config.hook_timeout.as_ref(),
+            source,
+        )?;
         if config.persist {
             if let Some(prior) = persist {
                 return Err(ConfigError::ConflictingKey {
@@ -157,6 +168,7 @@ pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
         extensions,
         pre_query: pre_query.map(|(_, value)| value),
         post_query: post_query.map(|(_, value)| value),
+        hook_timeout: hook_timeout.map(|(_, value)| value),
     })
 }
 
@@ -216,6 +228,11 @@ pub struct Config {
     /// the rows as-is. See `dirsql::command` for the execution contract. Only
     /// the CLI server consults this; the SDK ignores it.
     pub post_query: Option<String>,
+    /// Optional timeout for every command-backed hook — `on-file`, `pre-query`,
+    /// and `post-query` alike (`[dirsql].hook-timeout`, positive seconds). One
+    /// global bound rather than a per-hook knob. When absent, hooks fall back to
+    /// the shared 30-second default ([`crate::command::DEFAULT_COMMAND_TIMEOUT`]).
+    pub hook_timeout: Option<Duration>,
 }
 
 /// A SQLite extension to load at startup.
@@ -265,7 +282,7 @@ struct RawConfig {
     table: Option<Vec<RawTable>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct RawDirsql {
     root: Option<PathBuf>,
     ignore: Option<Vec<String>>,
@@ -276,6 +293,8 @@ struct RawDirsql {
     pre_query: Option<String>,
     #[serde(rename = "post-query")]
     post_query: Option<String>,
+    #[serde(rename = "hook-timeout")]
+    hook_timeout: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -303,19 +322,16 @@ pub fn load_config(path: &Path) -> Result<Config> {
 pub fn load_config_str(content: &str) -> Result<Config> {
     let raw: RawConfig = toml::from_str(content)?;
 
-    let (root, ignore, persist, persist_path, raw_extensions, raw_pre_query, raw_post_query) =
-        match raw.dirsql {
-            Some(d) => (
-                d.root,
-                d.ignore.unwrap_or_default(),
-                d.persist.unwrap_or(false),
-                d.persist_path,
-                d.extension.unwrap_or_default(),
-                d.pre_query,
-                d.post_query,
-            ),
-            None => (None, Vec::new(), false, None, Vec::new(), None, None),
-        };
+    // A missing `[dirsql]` section behaves as an all-defaults one.
+    let d = raw.dirsql.unwrap_or_default();
+    let root = d.root;
+    let ignore = d.ignore.unwrap_or_default();
+    let persist = d.persist.unwrap_or(false);
+    let persist_path = d.persist_path;
+    let raw_extensions = d.extension.unwrap_or_default();
+    let raw_pre_query = d.pre_query;
+    let raw_post_query = d.post_query;
+    let hook_timeout = parse_timeout_secs("hook-timeout", d.hook_timeout)?;
 
     // A present-but-empty `pre-query = ""` is as unusable as a missing key:
     // reject it at parse time rather than spawning an empty command later
@@ -384,7 +400,21 @@ pub fn load_config_str(content: &str) -> Result<Config> {
         extensions,
         pre_query,
         post_query,
+        hook_timeout,
     })
+}
+
+/// Validate an optional timeout config value (whole seconds) and convert it
+/// to a [`Duration`]. Zero and negative values are as unusable as a garbage
+/// string — reject them at parse time with the offending field's name rather
+/// than silently producing a command that can never run (`0`) or a bogus
+/// cast (negative).
+fn parse_timeout_secs(field: &'static str, raw: Option<i64>) -> Result<Option<Duration>> {
+    match raw {
+        Some(secs) if secs <= 0 => Err(ConfigError::InvalidTimeout { field, value: secs }),
+        Some(secs) => Ok(Some(Duration::from_secs(secs as u64))),
+        None => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -1138,6 +1168,79 @@ glob = "c/*.json"
         assert_eq!(
             Source::Package("dirsql-plugin-notes".to_string()).to_string(),
             "dirsql-plugin-notes"
+        );
+    }
+
+    #[test]
+    fn hook_timeout_parses_to_duration_seconds() {
+        let toml = r#"
+[dirsql]
+hook-timeout = 300
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert_eq!(config.hook_timeout, Some(Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn hook_timeout_absent_is_none() {
+        let toml = r#"
+[[table]]
+ddl = "CREATE TABLE t (x TEXT)"
+glob = "*.json"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert!(config.hook_timeout.is_none());
+    }
+
+    #[test]
+    fn hook_timeout_zero_errors() {
+        let toml = r#"
+[dirsql]
+hook-timeout = 0
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfigError::InvalidTimeout {
+                    field: "hook-timeout",
+                    value: 0
+                }
+            ),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn hook_timeout_negative_errors() {
+        let toml = r#"
+[dirsql]
+hook-timeout = -5
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfigError::InvalidTimeout {
+                    field: "hook-timeout",
+                    value: -5
+                }
+            ),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn invalid_timeout_error_names_the_field_and_value() {
+        // The message is the user's only pointer to the bad key — it must name
+        // both the field and the offending value.
+        let err = ConfigError::InvalidTimeout {
+            field: "hook-timeout",
+            value: -1,
+        };
+        assert_eq!(
+            err.to_string(),
+            "Field 'hook-timeout' must be a positive number of seconds, got -1"
         );
     }
 
