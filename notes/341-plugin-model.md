@@ -41,7 +41,8 @@ Installing a plugin is consenting to run it.
 ## 2. Plugins define a TOML identical to dirsql's
 
 A plugin ships a `.dirsql.toml` fragment in the same format as the project
-config. Merging is **additive**:
+config. Merging is **additive**, implemented once as `combine_configs` in the
+Rust core (#352):
 
 - List-shaped config (`[[table]]`, `[[dirsql.extension]]`, `setup-sql`)
   concatenates naturally across plugins and user config.
