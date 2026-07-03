@@ -273,10 +273,10 @@ Run `cargo bench -p dirsql` after significant changes to the Rust codebase. Not 
 
 ### Coverage Floor
 
-Coverage enforcement must stay explicit in CI for each SDK package, at 90% or higher:
+Coverage enforcement must stay explicit in CI for each SDK package. All three SDKs are now enforced by [`testing-conventions`](https://github.com/thekevinscott/testing-conventions) `unit coverage`; the per-package floors live in `testing-conventions.toml`:
 
-- **Python / TypeScript** are enforced by [`testing-conventions`](https://github.com/thekevinscott/testing-conventions) `unit coverage` (full tree + a PR-only `--base` changed-lines check), wired into `python-test.yml` / `ts-test.yml`. The per-package floors live in `testing-conventions.toml` (`[python.coverage]` = `fail_under` / `branch`; `[typescript.coverage]` = `lines` / `branches` / `functions` / `statements`) and are currently held at the stricter **100%**.
-- **Rust core** keeps its bespoke `cargo llvm-cov` job in `rust-test.yml` for now: the testing-conventions CLI cannot yet measure it unit-only (it runs the integration tests too and can't enable the `cli` feature). Migration is tracked in #295.
+- **Python / TypeScript** run full tree + a PR-only `--base` changed-lines check, wired into `python-test.yml` / `ts-test.yml`. Floors: `[python.coverage]` = `fail_under` / `branch`; `[typescript.coverage]` = `lines` / `branches` / `functions` / `statements` -- both held at the stricter **100%** (every line unit-reachable).
+- **Rust core** (#295) is measured unit-only via `cargo llvm-cov --lib --features cli --branch`, wired into `rust-test.yml`'s coverage job (nightly toolchain for `--branch`). The CLI now scopes to `--lib` and passes `[rust].features` through (testing-conventions #269/#270/#271). Floors in `[rust.coverage]`: `lines` **90**, `regions` **90**, `functions` **80**, `branch` **70**. These sit below the ≥90%-across-the-board ideal because Rust's effectful paths (filesystem / subprocess / HTTP / `notify`) live in the integration tier by design (#233), so the unit tier cannot reach them; `functions`/`branch` are an honest interim and raising them toward ≥90% is tracked in #354. The Rust job is **whole-tree only** (no `--base` changed-lines check) for the same reason -- a per-PR changed-lines floor would fail legitimate integration-tier edits.
 
 When work affects more than one SDK package, split the coverage and test work across subagents so each package can be validated independently.
 

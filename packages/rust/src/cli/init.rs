@@ -149,4 +149,21 @@ mod tests {
         let msg = format!("{err}").to_lowercase();
         assert!(msg.contains("claude"));
     }
+
+    /// `run` bails before spawning the agent when the output already exists and
+    /// `--force` was not passed (the temp dir itself is an existing path).
+    #[test]
+    fn run_bails_when_output_exists_without_force() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = InitOptions {
+            root: dir.path().to_path_buf(),
+            output: dir.path().to_path_buf(),
+            force: false,
+        };
+        let err = run(opts).unwrap_err();
+        assert!(
+            matches!(err, InitError::AlreadyExists { .. }),
+            "got: {err:?}"
+        );
+    }
 }

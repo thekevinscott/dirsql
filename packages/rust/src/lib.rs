@@ -2662,6 +2662,565 @@ mod internal_tests {
         // its sender dropped; a further `try_recv` reports the empty channel.
         assert!(rx.try_recv().is_err(), "loop should have ended");
     }
+
+    // ----- constructors & simple query -------------------------------------
+
+    /// `DirSQL::new` builds a tableless instance and a read-only query against
+    /// the empty in-memory DB succeeds (exercising `query`'s Ok arm, which the
+    /// poison tests only exercise on the error side).
+    #[test]
+    fn new_builds_a_tableless_instance_and_query_runs() {
+        let dir = TempDir::new().unwrap();
+        let db = DirSQL::new(dir.path(), Vec::<Table>::new()).unwrap();
+        let rows = db.query("SELECT 1 AS n").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["n"], Value::Integer(1));
+    }
+
+    /// A directory with no `.dirsql.toml` makes `load_config` fail, and both
+    /// config shortcuts surface that as an error from the resolve step.
+    #[test]
+    fn from_config_variants_error_when_no_config_present() {
+        let dir = TempDir::new().unwrap();
+        assert!(DirSQL::from_config(dir.path()).is_err());
+        let missing = dir.path().join("nope.toml");
+        assert!(DirSQL::from_config_path(&missing).is_err());
+    }
+
+    /// A builder with neither an explicit root nor a config takes the
+    /// `(None, None)` arm of `resolve` and errors with a Config diagnostic.
+    #[test]
+    fn builder_without_root_or_config_errors() {
+        // `build` returns `Result<DirSQL, _>`; DirSQL is not Debug, so match.
+        let err = match DirSQL::builder().build() {
+            Ok(_) => panic!("expected a config error"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, DirSqlError::Config { .. }), "got: {err:?}");
+    }
+
+    /// Two tables whose DDL names collide are rejected by `compile_matcher`.
+    #[test]
+    fn duplicate_table_names_are_rejected() {
+        let dir = TempDir::new().unwrap();
+        let err = match DirSQL::new(
+            dir.path(),
+            vec![
+                Table::new("CREATE TABLE t (a TEXT)", "*.a", |_| vec![]),
+                Table::new("CREATE TABLE t (b TEXT)", "*.b", |_| vec![]),
+            ],
+        ) {
+            Ok(_) => panic!("expected a duplicate-table error"),
+            Err(e) => e,
+        };
+        assert!(
+            matches!(err, DirSqlError::DuplicateTable(ref n) if n == "t"),
+            "got: {err:?}"
+        );
+    }
+
+    // ----- watch/poll lifecycle (real notify watcher over a temp dir) ------
+
+    /// `start_watching` lazily creates the watcher and is idempotent; a second
+    /// call sees the guard already `Some` and no-ops.
+    #[test]
+    fn start_watching_is_idempotent() {
+        let (_dir, db) = simple_db();
+        db.start_watching().unwrap();
+        db.start_watching().unwrap();
+    }
+
+    /// A zero-timeout `poll_events` starts the watcher and returns immediately
+    /// with no events (the `recv_timeout` None arm of `poll_once`).
+    #[test]
+    fn poll_events_returns_empty_without_activity() {
+        let (_dir, db) = simple_db();
+        assert!(db.poll_events(Duration::from_millis(0)).unwrap().is_empty());
+    }
+
+    /// The split-phase `wait_file_events` likewise returns an empty batch when
+    /// nothing has changed.
+    #[test]
+    fn wait_file_events_returns_empty_batch_without_activity() {
+        let (_dir, db) = simple_db();
+        assert!(
+            db.wait_file_events(Duration::from_millis(0))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// `watch` and the poll APIs are mutually exclusive. After `watch` marks
+    /// the thread started, both `poll_events` and `wait_file_events` reject.
+    #[test]
+    fn watch_locks_out_the_poll_apis() {
+        let (_dir, db) = simple_db();
+        let _stream = db.watch().unwrap();
+        let e1 = db.poll_events(Duration::from_millis(0)).unwrap_err();
+        assert!(e1.to_string().contains("watch() is active"), "got: {e1}");
+        let e2 = db.wait_file_events(Duration::from_millis(0)).unwrap_err();
+        assert!(e2.to_string().contains("watch() is active"), "got: {e2}");
+    }
+
+    /// Conversely, once `poll_events` has run, `watch` is rejected because both
+    /// would drain the same underlying watcher.
+    #[test]
+    fn poll_events_locks_out_watch() {
+        let (_dir, db) = simple_db();
+        db.poll_events(Duration::from_millis(0)).unwrap();
+        let err = db.watch().unwrap_err();
+        assert!(
+            err.to_string().contains("poll_events() already in use"),
+            "got: {err}"
+        );
+    }
+
+    /// Calling `watch` twice reports [`DirSqlError::WatchAlreadyStarted`] on the
+    /// second call (the `swap` guard already `true`).
+    #[test]
+    fn watch_twice_reports_already_started() {
+        let (_dir, db) = simple_db();
+        let _stream = db.watch().unwrap();
+        let err = db.watch().unwrap_err();
+        assert!(
+            matches!(err, DirSqlError::WatchAlreadyStarted),
+            "got: {err:?}"
+        );
+    }
+
+    /// `apply_file_events` runs the extract/DB pipeline for a batch: a create
+    /// for a matching file inserts a row; a subsequent delete removes it. Also
+    /// drives `process_file_event`'s `Deleted` arm and `handle_delete`'s
+    /// success path.
+    #[test]
+    fn apply_file_events_processes_create_then_delete() {
+        let (_dir, db, abs, _rel) = upsert_fixture();
+        let created = db.apply_file_events(vec![FileEvent::Created(abs.clone())]);
+        assert_eq!(created.len(), 1, "expected one insert: {created:?}");
+        assert!(matches!(&created[0], RowEvent::Insert { .. }));
+
+        let deleted = db.apply_file_events(vec![FileEvent::Deleted(abs)]);
+        assert_eq!(deleted.len(), 1, "expected one delete: {deleted:?}");
+        assert!(matches!(&deleted[0], RowEvent::Delete { .. }));
+    }
+
+    // ----- handle_upsert success + extract error ---------------------------
+
+    /// The full success path of `handle_upsert`: stat OK, extract runs, columns
+    /// resolved, rows normalized and inserted, cache updated. Returns one
+    /// Insert; the cached row then diffs to a Delete on removal.
+    #[test]
+    fn handle_upsert_inserts_and_caches_rows() {
+        let (_dir, db, abs, rel) = upsert_fixture();
+        let events = db.handle_upsert("items", &abs, &rel);
+        assert_eq!(events.len(), 1, "got: {events:?}");
+        assert!(matches!(&events[0], RowEvent::Insert { .. }));
+
+        let del = db.handle_delete("items", &rel);
+        assert_eq!(del.len(), 1, "got: {del:?}");
+        assert!(matches!(&del[0], RowEvent::Delete { .. }));
+    }
+
+    /// An extract closure that returns `Err` makes `handle_upsert` surface a
+    /// single [`RowEvent::Error`] carrying the message.
+    #[test]
+    fn handle_upsert_surfaces_extract_error() {
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("a.txt");
+        let fake = FakeFs::with_stat(abs.clone(), fake_stat());
+        let db = DirSQL::with_ignore_and_fs(
+            dir.path(),
+            vec![Table::try_new(
+                "CREATE TABLE items (name TEXT)",
+                "**/*.txt",
+                |_| Err("boom".into()),
+            )],
+            Vec::<String>::new(),
+            Arc::new(fake),
+        )
+        .unwrap();
+        let events = db.handle_upsert("items", &abs, "a.txt");
+        assert_eq!(events.len(), 1, "got: {events:?}");
+        let dbg = format!("{:?}", events[0]);
+        assert!(dbg.contains("Error"), "got: {dbg}");
+        assert!(dbg.contains("boom"), "got: {dbg}");
+    }
+
+    // ----- builder surface + persist warm/cold ------------------------------
+
+    /// Exercise every remaining builder setter and build a two-table,
+    /// persist-enabled instance. `.tables()` replaces then `.table()` appends,
+    /// so both tables exist; the custom `poll_interval` is stored.
+    #[test]
+    fn builder_setters_configure_and_build() {
+        let dir = TempDir::new().unwrap();
+        let cache = dir.path().join("custom-cache.db");
+        let db = DirSQL::builder()
+            .root(dir.path())
+            .tables(vec![Table::new(
+                "CREATE TABLE b (y TEXT)",
+                "*.b",
+                |_| vec![],
+            )])
+            .table(Table::new("CREATE TABLE a (x TEXT)", "*.a", |_| vec![]))
+            .ignore(["skip/**"])
+            .extensions(Vec::<Extension>::new())
+            .suppress_config_extensions(true)
+            .persist(true)
+            .persist_path(&cache)
+            .poll_interval(Duration::from_millis(50))
+            .build()
+            .unwrap();
+        assert!(db.query("SELECT * FROM a").is_ok());
+        assert!(db.query("SELECT * FROM b").is_ok());
+        assert_eq!(db.inner.poll_interval, Duration::from_millis(50));
+    }
+
+    /// A second persist build over the same root+cache finds a compatible meta
+    /// block written by the first build and takes `prepare_persist`'s warm
+    /// `read_cached_files` branch instead of a cold rebuild.
+    #[test]
+    fn persist_second_build_reuses_compatible_cache() {
+        let dir = TempDir::new().unwrap();
+        let cache = dir.path().join("cache.db");
+        let first = DirSQL::builder()
+            .root(dir.path())
+            .tables(vec![Table::new(
+                "CREATE TABLE t (x TEXT)",
+                "*.txt",
+                |_| vec![],
+            )])
+            .persist(true)
+            .persist_path(&cache)
+            .build()
+            .unwrap();
+        drop(first);
+        let second = DirSQL::builder()
+            .root(dir.path())
+            .tables(vec![Table::new(
+                "CREATE TABLE t (x TEXT)",
+                "*.txt",
+                |_| vec![],
+            )])
+            .persist(true)
+            .persist_path(&cache)
+            .build()
+            .unwrap();
+        assert!(second.query("SELECT * FROM t").is_ok());
+    }
+
+    /// `prepare_persist` on a fresh cache reports a cold rebuild with an empty
+    /// file index and a populated expected-meta map.
+    #[test]
+    fn prepare_persist_cold_start_reports_rebuild() {
+        let dir = TempDir::new().unwrap();
+        let tables = vec![Table::new("CREATE TABLE t (x TEXT)", "*.txt", |_| vec![])];
+        let ctx = prepare_persist(dir.path(), &tables, &[], None).unwrap();
+        assert!(ctx.cold_rebuild);
+        assert!(ctx.cached.is_empty());
+        assert!(!ctx.expected_meta.is_empty());
+    }
+
+    // ----- reconcile_scan trust/delete arms --------------------------------
+
+    /// `snapshot_ns > mtime_ns`: the file is outside the racy window, so a
+    /// matching stat is trusted without a hash confirmation.
+    #[test]
+    fn reconcile_scan_trusts_cache_outside_racy_window() {
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("a.txt");
+        let stat = fake_stat();
+        let fake = FakeFs::with_stat(abs.clone(), stat.clone());
+        let mut cached = HashMap::new();
+        cached.insert(
+            "a.txt".to_string(),
+            CachedFile {
+                rel_path: "a.txt".into(),
+                table_name: "t".into(),
+                stat: stat.clone(),
+                content_hash: None,
+                snapshot_ns: stat.mtime_ns + 1,
+            },
+        );
+        let ctx = PersistContext {
+            db: Db::new().unwrap(),
+            cached,
+            expected_meta: HashMap::new(),
+            cold_rebuild: false,
+        };
+        let scanned = vec![(abs, "t".to_string())];
+        let (to_parse, trusted, deleted) =
+            reconcile_scan(dir.path(), scanned, &ctx, &fake).unwrap();
+        assert!(to_parse.is_empty());
+        assert_eq!(trusted.len(), 1);
+        assert!(deleted.is_empty());
+    }
+
+    /// A stat match but a *different* cached `table_name` falls through the
+    /// outer `_ => false` arm, so the file is re-parsed rather than trusted.
+    #[test]
+    fn reconcile_scan_reparses_when_cached_table_differs() {
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("a.txt");
+        let stat = fake_stat();
+        let fake = FakeFs::with_stat(abs.clone(), stat.clone());
+        let mut cached = HashMap::new();
+        cached.insert(
+            "a.txt".to_string(),
+            CachedFile {
+                rel_path: "a.txt".into(),
+                table_name: "other".into(),
+                stat: stat.clone(),
+                content_hash: None,
+                snapshot_ns: stat.mtime_ns + 1,
+            },
+        );
+        let ctx = PersistContext {
+            db: Db::new().unwrap(),
+            cached,
+            expected_meta: HashMap::new(),
+            cold_rebuild: false,
+        };
+        let scanned = vec![(abs, "t".to_string())];
+        let (to_parse, trusted, _deleted) =
+            reconcile_scan(dir.path(), scanned, &ctx, &fake).unwrap();
+        assert_eq!(to_parse.len(), 1);
+        assert!(trusted.is_empty());
+    }
+
+    /// A cached file absent from the current scan is reported as deleted.
+    #[test]
+    fn reconcile_scan_reports_deleted_cached_files() {
+        let dir = TempDir::new().unwrap();
+        let mut cached = HashMap::new();
+        cached.insert(
+            "gone.txt".to_string(),
+            CachedFile {
+                rel_path: "gone.txt".into(),
+                table_name: "t".into(),
+                stat: fake_stat(),
+                content_hash: None,
+                snapshot_ns: 0,
+            },
+        );
+        let ctx = PersistContext {
+            db: Db::new().unwrap(),
+            cached,
+            expected_meta: HashMap::new(),
+            cold_rebuild: false,
+        };
+        let fake = FakeFs::default();
+        let (to_parse, trusted, deleted) =
+            reconcile_scan(dir.path(), Vec::new(), &ctx, &fake).unwrap();
+        assert!(to_parse.is_empty());
+        assert!(trusted.is_empty());
+        assert_eq!(deleted, vec![("gone.txt".to_string(), "t".to_string())]);
+    }
+
+    // ----- stat virtuals real-metadata + merge captures --------------------
+
+    /// A real existing path (the temp dir itself) makes the metadata read
+    /// succeed, populating `_size`/`_mtime` (the Ok arm of the read in
+    /// `compute_stat_virtuals`).
+    #[test]
+    fn compute_stat_virtuals_reads_real_metadata() {
+        let dir = TempDir::new().unwrap();
+        let stat = compute_stat_virtuals("d", dir.path());
+        assert_eq!(stat[STAT_PATH], Value::Text("d".into()));
+        assert!(
+            matches!(stat.get(STAT_SIZE), Some(Value::Integer(_))),
+            "size present"
+        );
+        assert!(
+            matches!(stat.get(STAT_MTIME), Some(Value::Integer(_))),
+            "mtime present"
+        );
+    }
+
+    /// `merge_filesystem_facts` injects only *declared* stat virtuals and glob
+    /// captures, drops undeclared ones, and lets user-emitted values win.
+    #[test]
+    fn merge_filesystem_facts_filters_to_declared_columns() {
+        let mut captures = HashMap::new();
+        captures.insert("month".to_string(), "2024-01".to_string());
+        captures.insert("undeclared".to_string(), "drop".to_string());
+        let mut stat = Row::new();
+        stat.insert("_path".to_string(), Value::Text("2024-01/a.txt".into()));
+        stat.insert("_size".to_string(), Value::Integer(9));
+        let raw = vec![Row::from_iter([(
+            "name".to_string(),
+            Value::Text("x".into()),
+        )])];
+        let declared = vec!["name".to_string(), "month".to_string(), "_path".to_string()];
+        let merged = merge_filesystem_facts(raw, &captures, &stat, &declared);
+        assert_eq!(merged.len(), 1);
+        let row = &merged[0];
+        assert_eq!(row["month"], Value::Text("2024-01".into()));
+        assert_eq!(row["_path"], Value::Text("2024-01/a.txt".into()));
+        assert!(
+            !row.contains_key("undeclared"),
+            "undeclared capture dropped"
+        );
+        assert!(!row.contains_key("_size"), "undeclared stat dropped");
+        assert_eq!(row["name"], Value::Text("x".into()));
+    }
+
+    // ----- config-backed tables + on-file runner ---------------------------
+
+    /// `build_tables_from_config` produces a plain filesystem-fact table (one
+    /// empty row per file) and an `on-file` table (carrying its strict flag).
+    #[test]
+    fn build_tables_from_config_creates_plain_and_on_file_tables() {
+        let cfg = config::load_config_str(concat!(
+            "[[table]]\n",
+            "ddl = \"CREATE TABLE a (x TEXT)\"\n",
+            "glob = \"*.a\"\n\n",
+            "[[table]]\n",
+            "ddl = \"CREATE TABLE b (y TEXT)\"\n",
+            "glob = \"*.b\"\n",
+            "on-file = \"echo hi\"\n",
+            "strict = true\n",
+        ))
+        .unwrap();
+        let dir = TempDir::new().unwrap();
+        let tables = build_tables_from_config(&cfg, dir.path(), dir.path()).unwrap();
+        assert_eq!(tables.len(), 2);
+        // The plain table's synthesized extract yields exactly one empty row.
+        assert_eq!((tables[0].extract)("/whatever").unwrap().len(), 1);
+        assert!(tables[1].strict, "on-file table preserves strict flag");
+    }
+
+    /// `run_on_file` runs the command and parses its JSON payload into rows.
+    /// The abs path lies under `root`, so the `{path}` placeholder strips to a
+    /// relative path (the `strip_prefix` Ok arm).
+    #[test]
+    fn run_on_file_parses_command_json_output() {
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("f.txt");
+        // The `{path}` placeholder is append-if-absent, so the file path is
+        // appended as a trailing argv element. `printf` with a conversion-free
+        // format prints it once and ignores that extra arg, keeping the JSON
+        // payload clean.
+        let rows = run_on_file(
+            "printf '[{\"n\":1}]'",
+            &abs.to_string_lossy(),
+            dir.path(),
+            dir.path(),
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["n"], Value::Integer(1));
+    }
+
+    /// A command that cannot be spawned yields no rows (per-file isolation) and
+    /// takes the `strip_prefix` fallback since the abs path is outside `root`.
+    #[test]
+    fn run_on_file_returns_no_rows_on_spawn_failure() {
+        let dir = TempDir::new().unwrap();
+        let rows = run_on_file(
+            "definitely-not-a-real-binary-xyzzy",
+            "/outside/f.txt",
+            dir.path(),
+            dir.path(),
+        );
+        assert!(rows.is_empty());
+    }
+
+    /// A command whose output is not a JSON array of objects yields no rows.
+    #[test]
+    fn run_on_file_returns_no_rows_on_non_json_output() {
+        let dir = TempDir::new().unwrap();
+        let rows = run_on_file("echo not-json", "/outside/f.txt", dir.path(), dir.path());
+        assert!(rows.is_empty());
+    }
+
+    // ----- AsyncDirSQL -----------------------------------------------------
+
+    /// End-to-end async happy path: build, await readiness, query, `sync`, and
+    /// the poll-forwarding methods.
+    #[tokio::test]
+    async fn async_dirsql_builds_queries_and_forwards() {
+        let dir = TempDir::new().unwrap();
+        let adb = AsyncDirSQL::new(dir.path(), Vec::<Table>::new()).unwrap();
+        adb.ready().await.unwrap();
+        let rows = adb.query("SELECT 1 AS n").await.unwrap();
+        assert_eq!(rows[0]["n"], Value::Integer(1));
+        assert!(adb.sync().unwrap().query("SELECT 1").is_ok());
+        adb.start_watching().unwrap();
+        assert!(
+            adb.poll_events(Duration::from_millis(0))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// `AsyncDirSQL::watch` forwards to the inner instance once ready.
+    #[tokio::test]
+    async fn async_dirsql_watch_forwards() {
+        let dir = TempDir::new().unwrap();
+        let adb = AsyncDirSQL::new(dir.path(), Vec::<Table>::new()).unwrap();
+        adb.ready().await.unwrap();
+        let _stream = adb.watch().unwrap();
+    }
+
+    /// `AsyncDirSQL::with_ignore` constructs successfully.
+    #[test]
+    fn async_dirsql_with_ignore_constructs() {
+        let dir = TempDir::new().unwrap();
+        assert!(
+            AsyncDirSQL::with_ignore(dir.path(), Vec::<Table>::new(), Vec::<String>::new()).is_ok()
+        );
+    }
+
+    /// The async config shortcuts fail fast (before spawning) when the config
+    /// file is missing, because `resolve` errors inside `build_async`.
+    #[test]
+    fn async_dirsql_from_config_errors_on_missing_file() {
+        let dir = TempDir::new().unwrap();
+        assert!(AsyncDirSQL::from_config(dir.path()).is_err());
+        let missing = dir.path().join("no.toml");
+        assert!(AsyncDirSQL::from_config_path(&missing).is_err());
+    }
+
+    /// `sync` before init completes reports "not ready". Built directly from an
+    /// empty `OnceCell` so the state is deterministic (no build race).
+    #[test]
+    fn async_dirsql_sync_before_ready_is_not_ready() {
+        let inner = Arc::new(AsyncDirSqlInner {
+            db: tokio::sync::OnceCell::new(),
+            ready_notify: tokio::sync::Notify::new(),
+        });
+        let adb = AsyncDirSQL { inner };
+        // `sync` returns `Result<DirSQL, _>`; DirSQL is not Debug, so match
+        // rather than `unwrap_err`.
+        let err = match adb.sync() {
+            Ok(_) => panic!("expected not-ready error"),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("not ready"), "got: {err}");
+    }
+
+    /// When init completed with an error, both `ready` and `sync` surface an
+    /// "init failed" error carrying the underlying diagnostic.
+    #[tokio::test]
+    async fn async_dirsql_surfaces_init_failure() {
+        let inner = Arc::new(AsyncDirSqlInner {
+            db: tokio::sync::OnceCell::new(),
+            ready_notify: tokio::sync::Notify::new(),
+        });
+        inner
+            .db
+            .set(Err(DirSqlError::Ddl("boom".into())))
+            .ok()
+            .expect("cell was empty");
+        let adb = AsyncDirSQL { inner };
+        let rerr = adb.ready().await.unwrap_err();
+        assert!(rerr.to_string().contains("init failed"), "got: {rerr}");
+        let serr = match adb.sync() {
+            Ok(_) => panic!("expected init-failed error"),
+            Err(e) => e,
+        };
+        assert!(serr.to_string().contains("init failed"), "got: {serr}");
+    }
 }
 
 #[cfg(test)]

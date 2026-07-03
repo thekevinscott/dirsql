@@ -51,6 +51,37 @@ pub fn validate_identifier(s: &str) -> Result<()> {
 
 pub type Result<T> = std::result::Result<T, DbError>;
 
+/// Name of the internal row-bookkeeping table (issue #359, epic #358).
+///
+/// Maps every inserted user row back to the file that produced it —
+/// `(table_name, file_path, row_index, rowid_ref)` — mirroring the injected
+/// `_dirsql_file_path` / `_dirsql_row_index` tracking columns. Stage 1 keeps
+/// the injected columns authoritative and *dual-writes* this table in the same
+/// SQLite transaction as each row write, so a later release can drop the
+/// columns and read ownership from here instead.
+pub const INTERNAL_ROWS_TABLE: &str = "_dirsql_internal_rows";
+
+/// Create the internal `_dirsql_internal_rows` bookkeeping table and its
+/// by-file index if they don't already exist. Idempotent, so it is safe to
+/// call on every `Db` construction and on every persistent-cache open.
+///
+/// A **real** table (not virtual): it lives in the persisted cache and is
+/// written inside the same transaction as the row inserts/deletes it
+/// describes, which is what gives the mapping crash-atomicity with the user
+/// rows.
+pub fn ensure_internal_rows_table(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS _dirsql_internal_rows (
+            table_name TEXT NOT NULL,
+            file_path  TEXT NOT NULL,
+            row_index  INTEGER NOT NULL,
+            rowid_ref  INTEGER NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS _dirsql_internal_rows_by_file
+            ON _dirsql_internal_rows(table_name, file_path);",
+    )
+}
+
 pub struct Db {
     conn: Connection,
 }
@@ -58,6 +89,7 @@ pub struct Db {
 impl Db {
     pub fn new() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
+        ensure_internal_rows_table(&conn)?;
         Ok(Self { conn })
     }
 
@@ -65,6 +97,7 @@ impl Db {
     /// cache path; in-memory mode is the default.
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
+        ensure_internal_rows_table(&conn)?;
         Ok(Self { conn })
     }
 
@@ -120,6 +153,18 @@ impl Db {
         }
         let table = parse_table_name(ddl).ok_or_else(|| DbError::DdlParse(ddl.to_string()))?;
         validate_identifier(&table)?;
+        // A `WITHOUT ROWID` table has no rowid, so `last_insert_rowid()` cannot
+        // identify the inserted row and the `_dirsql_internal_rows.rowid_ref`
+        // mapping (epic #358) would be meaningless. Stage 1 only warns; the hard
+        // rejection lands in stage 3. The injected columns stay authoritative
+        // here, so the table still works today.
+        if is_without_rowid_ddl(ddl) {
+            eprintln!(
+                "dirsql: table `{table}` is declared WITHOUT ROWID; internal row \
+                 bookkeeping relies on rowid and WITHOUT ROWID tables will be \
+                 rejected in a future release"
+            );
+        }
         let augmented = inject_tracking_columns(ddl)?;
         self.conn.execute(&augmented, [])?;
         Ok(())
@@ -232,16 +277,120 @@ impl Db {
 
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params.iter().map(|p| p.as_ref()).collect();
-        self.conn.execute(&sql, param_refs.as_slice())?;
+
+        // Dual-write (epic #358): the user-row insert and its
+        // `_dirsql_internal_rows` mapping row commit in ONE transaction, so a
+        // crash between them can never leave a row without its mapping (or vice
+        // versa). `last_insert_rowid()` is read *after* the user insert and
+        // *before* the mapping insert, so it captures the user row's rowid
+        // (including a user-declared `INTEGER PRIMARY KEY` rowid alias).
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(&sql, param_refs.as_slice())?;
+        let rowid = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO _dirsql_internal_rows (table_name, file_path, row_index, rowid_ref) \
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![table, file_path, row_index as i64, rowid],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
     /// Delete all rows that were produced by a given file path.
+    ///
+    /// The user-row deletes and the matching `_dirsql_internal_rows` mapping
+    /// deletes commit in ONE transaction (epic #358), so the mapping never
+    /// outlives the rows it describes.
+    ///
+    /// Stage 2 (epic #358): row ownership is read from the mapping, not the
+    /// injected `_dirsql_file_path` column (now write-only). The user rows to
+    /// drop are those whose `rowid` the mapping attributes to `file_path` under
+    /// `table`; the mapping rows are then removed in the same transaction.
     pub fn delete_rows_by_file(&self, table: &str, file_path: &str) -> Result<usize> {
         validate_identifier(table)?;
-        let sql = format!("DELETE FROM {} WHERE _dirsql_file_path = ?1", table);
-        let count = self.conn.execute(&sql, [file_path])?;
+        let tx = self.conn.unchecked_transaction()?;
+        let sql = format!(
+            "DELETE FROM {} WHERE rowid IN \
+             (SELECT rowid_ref FROM _dirsql_internal_rows \
+              WHERE table_name = ?1 AND file_path = ?2)",
+            table
+        );
+        let count = tx.execute(&sql, rusqlite::params![table, file_path])?;
+        tx.execute(
+            "DELETE FROM _dirsql_internal_rows WHERE table_name = ?1 AND file_path = ?2",
+            rusqlite::params![table, file_path],
+        )?;
+        tx.commit()?;
         Ok(count)
+    }
+
+    /// Debug/test equivalence guard for the dual-write mirror (epic #358).
+    ///
+    /// Asserts that the `_dirsql_internal_rows` mapping for `table` exactly
+    /// matches the column-derived tracking state of the live user rows: every
+    /// user row's `(rowid, _dirsql_file_path, _dirsql_row_index)` triple must
+    /// have one corresponding mapping row `(rowid_ref, file_path, row_index)`,
+    /// and vice versa. Returns [`DbError::SchemaMismatch`] describing the drift
+    /// otherwise. While the injected columns remain authoritative (stages 1–2),
+    /// this is the guard that the new bookkeeping never diverges.
+    ///
+    /// Not valid for `WITHOUT ROWID` tables (they have no `rowid` column).
+    pub fn check_row_mapping_equivalence(&self, table: &str) -> Result<()> {
+        validate_identifier(table)?;
+        let mut column_state = self.column_tracking_triples(table)?;
+        let mut mapping_state = self.mapping_triples(table)?;
+        column_state.sort();
+        mapping_state.sort();
+        if column_state != mapping_state {
+            return Err(DbError::SchemaMismatch(format!(
+                "row mapping drift for table {table}: \
+                 column-derived {column_state:?} != mapping-derived {mapping_state:?}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Column-derived tracking triples for `table`: `(rowid,
+    /// _dirsql_file_path, _dirsql_row_index)` for every live user row.
+    fn column_tracking_triples(&self, table: &str) -> Result<Vec<(i64, String, i64)>> {
+        let sql = format!(
+            "SELECT rowid, _dirsql_file_path, _dirsql_row_index FROM {}",
+            table
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Mapping-derived tracking triples for `table`: `(rowid_ref, file_path,
+    /// row_index)` from `_dirsql_internal_rows`.
+    fn mapping_triples(&self, table: &str) -> Result<Vec<(i64, String, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT rowid_ref, file_path, row_index FROM _dirsql_internal_rows \
+             WHERE table_name = ?1",
+        )?;
+        let rows = stmt.query_map([table], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     /// Query the database, returning rows as a list of column-name -> value maps.
@@ -495,6 +644,16 @@ fn parse_identifier(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Opt
 fn is_virtual_table_ddl(ddl: &str) -> bool {
     let normalized = ddl.split_whitespace().collect::<Vec<_>>().join(" ");
     normalized.to_uppercase().contains("CREATE VIRTUAL TABLE")
+}
+
+/// True if `ddl` declares a `WITHOUT ROWID` table. Such tables have no rowid,
+/// so `last_insert_rowid()` cannot identify an inserted row and the
+/// `_dirsql_internal_rows.rowid_ref` mapping (epic #358) is meaningless. Stage
+/// 1 warns; stage 3 rejects. Whitespace is normalized so `WITHOUT   ROWID`
+/// and newline-separated forms are still detected.
+fn is_without_rowid_ddl(ddl: &str) -> bool {
+    let normalized = ddl.split_whitespace().collect::<Vec<_>>().join(" ");
+    normalized.to_uppercase().contains("WITHOUT ROWID")
 }
 
 impl From<rusqlite::types::Value> for Value {
@@ -1322,5 +1481,302 @@ mod tests {
         assert!(!is_virtual_table_ddl(
             "CREATE TABLE IF NOT EXISTS x (a TEXT)"
         ));
+    }
+
+    // --- _dirsql_internal_rows mapping (epic #358, stage 1) ---
+
+    /// Read the raw mapping rows for a table, ordered for stable assertions.
+    fn mapping_rows(db: &Db, table: &str) -> Vec<(String, i64, i64)> {
+        let mut stmt = db
+            .conn
+            .prepare(
+                "SELECT file_path, row_index, rowid_ref FROM _dirsql_internal_rows \
+                 WHERE table_name = ?1 ORDER BY rowid_ref",
+            )
+            .unwrap();
+        stmt.query_map([table], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect()
+    }
+
+    #[test]
+    fn ensure_internal_rows_table_is_idempotent() {
+        let db = Db::new().unwrap();
+        // Db::new already created it; calling again must not error.
+        ensure_internal_rows_table(&db.conn).unwrap();
+        ensure_internal_rows_table(&db.conn).unwrap();
+        // The table and its by-file index both exist.
+        let table_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [INTERNAL_ROWS_TABLE],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_count, 1);
+        let index_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='_dirsql_internal_rows_by_file'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(index_count, 1);
+    }
+
+    #[test]
+    fn insert_row_records_mapping() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.insert_row(
+            "t",
+            &HashMap::from([("id".into(), Value::Text("a".into()))]),
+            "f.jsonl",
+            3,
+        )
+        .unwrap();
+
+        let rows = mapping_rows(&db, "t");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "f.jsonl");
+        assert_eq!(rows[0].1, 3);
+        // The captured rowid_ref points at the user row.
+        let user_rowid: i64 = db
+            .conn
+            .query_row("SELECT rowid FROM t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows[0].2, user_rowid);
+    }
+
+    #[test]
+    fn insert_row_captures_user_declared_rowid_alias() {
+        // A user-declared `INTEGER PRIMARY KEY` is a rowid alias: the inserted
+        // value becomes the rowid, and `last_insert_rowid()` must capture it.
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+            .unwrap();
+        db.insert_row(
+            "t",
+            &HashMap::from([
+                ("id".into(), Value::Integer(42)),
+                ("name".into(), Value::Text("x".into())),
+            ]),
+            "f.json",
+            0,
+        )
+        .unwrap();
+
+        let rows = mapping_rows(&db, "t");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].2, 42, "rowid_ref must be the user-declared rowid");
+        db.check_row_mapping_equivalence("t").unwrap();
+    }
+
+    #[test]
+    fn delete_rows_by_file_removes_mapping() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        for (i, file) in ["a.jsonl", "a.jsonl", "b.jsonl"].iter().enumerate() {
+            db.insert_row(
+                "t",
+                &HashMap::from([("id".into(), Value::Text(i.to_string()))]),
+                file,
+                i,
+            )
+            .unwrap();
+        }
+        db.delete_rows_by_file("t", "a.jsonl").unwrap();
+
+        // Only b.jsonl's mapping survives, in lockstep with the user rows.
+        let rows = mapping_rows(&db, "t");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "b.jsonl");
+        db.check_row_mapping_equivalence("t").unwrap();
+    }
+
+    #[test]
+    fn delete_rows_by_file_reads_mapping_not_columns() {
+        // Stage 2 (epic #358): delete-by-file resolves ownership through the
+        // mapping, not the now-write-only `_dirsql_file_path` column. Corrupt
+        // the column so it disagrees with the mapping and confirm the delete
+        // still follows the mapping.
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.insert_row(
+            "t",
+            &HashMap::from([("id".into(), Value::Text("a".into()))]),
+            "real.json",
+            0,
+        )
+        .unwrap();
+        // Desync the write-only column from the mapping.
+        db.conn
+            .execute("UPDATE t SET _dirsql_file_path = 'wrong.json'", [])
+            .unwrap();
+
+        // Deleting by the mapping's file removes the row; deleting by the
+        // stale column value is a no-op.
+        assert_eq!(db.delete_rows_by_file("t", "wrong.json").unwrap(), 0);
+        assert_eq!(db.delete_rows_by_file("t", "real.json").unwrap(), 1);
+        let remaining: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, 0);
+        db.check_row_mapping_equivalence("t").unwrap();
+    }
+
+    #[test]
+    fn delete_rows_by_file_is_scoped_to_its_table() {
+        // The mapping subquery is keyed on (table_name, file_path): a delete on
+        // one table must not touch another table's rows for the same file path,
+        // even when they share a rowid.
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t1 (id TEXT)").unwrap();
+        db.create_table("CREATE TABLE t2 (id TEXT)").unwrap();
+        db.insert_row(
+            "t1",
+            &HashMap::from([("id".into(), Value::Text("x".into()))]),
+            "shared.json",
+            0,
+        )
+        .unwrap();
+        db.insert_row(
+            "t2",
+            &HashMap::from([("id".into(), Value::Text("y".into()))]),
+            "shared.json",
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(db.delete_rows_by_file("t1", "shared.json").unwrap(), 1);
+        let t2_rows: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM t2", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(t2_rows, 1, "t2's row for the same path must be untouched");
+        db.check_row_mapping_equivalence("t1").unwrap();
+        db.check_row_mapping_equivalence("t2").unwrap();
+    }
+
+    #[test]
+    fn failed_row_insert_leaves_no_mapping_row() {
+        // Transactional coupling, forward direction: when the user-row insert
+        // fails, its mapping row must not be written either.
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT UNIQUE)").unwrap();
+        db.insert_row(
+            "t",
+            &HashMap::from([("id".into(), Value::Text("dup".into()))]),
+            "a.json",
+            0,
+        )
+        .unwrap();
+        // Second insert of the same UNIQUE value fails.
+        let err = db
+            .insert_row(
+                "t",
+                &HashMap::from([("id".into(), Value::Text("dup".into()))]),
+                "b.json",
+                0,
+            )
+            .unwrap_err();
+        assert!(matches!(err, DbError::Sqlite(_)), "got: {err}");
+
+        let rows = mapping_rows(&db, "t");
+        assert_eq!(
+            rows.len(),
+            1,
+            "the failed insert must not add a mapping row"
+        );
+        assert_eq!(rows[0].0, "a.json");
+        db.check_row_mapping_equivalence("t").unwrap();
+    }
+
+    #[test]
+    fn failed_mapping_insert_rolls_back_row_insert() {
+        // Transactional coupling, reverse direction: if the mapping insert
+        // fails, the user-row insert must roll back too (nothing left behind).
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        // Remove the mapping table so the second statement in the transaction
+        // errors with "no such table".
+        db.conn
+            .execute("DROP TABLE _dirsql_internal_rows", [])
+            .unwrap();
+        let err = db
+            .insert_row(
+                "t",
+                &HashMap::from([("id".into(), Value::Text("x".into()))]),
+                "a.json",
+                0,
+            )
+            .unwrap_err();
+        assert!(matches!(err, DbError::Sqlite(_)), "got: {err}");
+
+        let count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "the user row must have rolled back");
+    }
+
+    #[test]
+    fn check_row_mapping_equivalence_detects_drift() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.insert_row(
+            "t",
+            &HashMap::from([("id".into(), Value::Text("a".into()))]),
+            "f.json",
+            0,
+        )
+        .unwrap();
+        db.check_row_mapping_equivalence("t").unwrap();
+
+        // Corrupt the mapping directly, bypassing the dual-write path.
+        db.conn
+            .execute("DELETE FROM _dirsql_internal_rows", [])
+            .unwrap();
+        let err = db.check_row_mapping_equivalence("t").unwrap_err();
+        assert!(matches!(err, DbError::SchemaMismatch(_)), "got: {err}");
+        assert!(err.to_string().contains("row mapping drift"));
+    }
+
+    #[test]
+    fn check_row_mapping_equivalence_rejects_bad_table_name() {
+        let db = Db::new().unwrap();
+        let err = db.check_row_mapping_equivalence("bad name").unwrap_err();
+        assert!(matches!(err, DbError::InvalidIdentifier(_)), "got: {err}");
+    }
+
+    #[test]
+    fn create_table_allows_without_rowid_and_warns() {
+        // Stage 1 only warns (via eprintln); the table is still created.
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT PRIMARY KEY) WITHOUT ROWID")
+            .unwrap();
+        let rows = db.query("SELECT * FROM t").unwrap();
+        assert_eq!(rows.len(), 0);
+    }
+
+    #[test]
+    fn is_without_rowid_ddl_detects_variants() {
+        assert!(is_without_rowid_ddl(
+            "CREATE TABLE t (id TEXT PRIMARY KEY) WITHOUT ROWID"
+        ));
+        assert!(is_without_rowid_ddl(
+            "create table t (id text primary key)\n  without   rowid"
+        ));
+        assert!(!is_without_rowid_ddl("CREATE TABLE t (id TEXT)"));
     }
 }

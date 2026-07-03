@@ -21,6 +21,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Rust CLI server API grows `PreQuery::with_timeout` /
   `PostQuery::with_timeout` (and a public `timeout` field on both) to carry the
   configured value.
+- **Rust core: `combine_configs` merges multiple TOML configs (#352).** A pure,
+  order-significant merge function in the core's `config` module — substrate
+  for the plugin model explored in #341, where plugin TOML fragments merge
+  additively into the project config. Each input carries a `Source` label (a
+  config file path or a plugin package name) so conflict errors can name both
+  sides. List-shaped config (`[[table]]`, `[[dirsql.extension]]`, `ignore`)
+  concatenates in input order; a table-name collision across configs errors
+  naming both sources; single-valued keys (`root`, `persist`, `persist_path`,
+  `pre-query`, `post-query`) defined by more than one config error naming both
+  sources — no silent shadowing, no precedence — and merge through unchanged
+  when defined in exactly one. A single entry returns unchanged; an empty slice
+  is rejected. Implemented once in the shared core per the one-implementation
+  principle; no binding surface yet, and existing single-config loads are
+  unaffected.
+
+- **Internal row-bookkeeping table `_dirsql_internal_rows` (#359, epic #358,
+  stage 1).** The engine now maintains an internal mapping table —
+  `(table_name, file_path, row_index, rowid_ref)` — that mirrors the injected
+  `_dirsql_file_path` / `_dirsql_row_index` tracking columns, dual-written in
+  the same SQLite transaction as each row insert/delete so it can never diverge
+  from the rows it describes. This is foundational plumbing for eventually
+  dropping the injected columns (and unlocking `CREATE VIRTUAL TABLE` dirsql
+  tables); the injected columns remain authoritative and **there is no
+  user-visible change**. `WITHOUT ROWID` tables emit a stderr warning (they
+  break rowid-based bookkeeping and will be rejected in a later stage). The
+  persistent-cache schema version is bumped, so the first startup after
+  upgrading performs a one-time, penalty-free full rebuild to populate the
+  mapping.
 
 - **TypeScript SDK: `Buffer`/`Uint8Array` → SQLite BLOB (#343).** An `extract`
   callback can now return a `Buffer` or `Uint8Array` and it is stored as a real
@@ -78,6 +106,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-SDK surface.
 
 ### Changed
+
+- **Internal row ownership is now read from `_dirsql_internal_rows` (#360, epic
+  #358, stage 2).** The engine's row readers — delete-by-file and the warm-start
+  row rebuild — now resolve which rows belong to a file through the internal
+  mapping table (joined on `rowid`) instead of the injected `_dirsql_file_path`
+  / `_dirsql_row_index` columns, which become **write-only**. Behavior is
+  unchanged and there is no user-visible difference; this is the second step of
+  removing the injected columns (stage 3 stops writing them and deletes the
+  `SELECT *` laundering layer). No cache rebuild is needed — the mapping was
+  already populated in stage 1.
 
 - **TypeScript SDK: BLOB columns now come back as `Buffer` (#343).** `query()`
   results and watcher `RowEvent` rows return BLOB values as Node `Buffer`s
