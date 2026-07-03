@@ -1,8 +1,8 @@
-// Integration tests that mirror the code examples in the docs (#294 test
-// parity).
+// Binding-tier tests (real core, real fs) that mirror the code examples in
+// the docs (#294 test parity).
 //
 // The Python and Rust SDKs each carry a docs-examples suite
-// (packages/python/tests/integration/docs_examples_test.py,
+// (packages/python/tests/binding/docs_examples_test.py,
 // packages/rust/tests/docs_examples.rs); this is the TypeScript mirror. Each
 // test is named for the doc page and section it verifies — if a doc example
 // changes and these tests break, the docs need updating (or vice versa).

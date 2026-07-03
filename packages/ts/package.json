@@ -34,6 +34,7 @@
     "test": "wireit",
     "test:unit": "wireit",
     "test:integration": "wireit",
+    "test:binding": "wireit",
     "test:e2e": "wireit",
     "test:smoke": "wireit",
     "coverage": "wireit",
@@ -101,11 +102,16 @@
     },
     "test:integration": {
       "command": "vitest run --dir tests/integration --passWithNoTests",
+      "files": ["src/**/*.ts", "tests/integration/**/*.ts", "vitest.config.ts"],
+      "output": []
+    },
+    "test:binding": {
+      "command": "vitest run --dir tests/binding --passWithNoTests",
       "dependencies": ["napi:build", "tsc"],
       "files": [
         "src/**/*.ts",
         "tools/**/*.ts",
-        "tests/integration/**/*.ts",
+        "tests/binding/**/*.ts",
         "tests/exists.ts",
         "vitest.config.ts"
       ],
@@ -145,6 +151,7 @@
         "src/**/*.ts",
         "tools/**/*.ts",
         "tests/integration/**/*.ts",
+        "tests/binding/**/*.ts",
         "tests/exists.ts",
         "vitest.config.ts"
       ],

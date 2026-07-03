@@ -1,4 +1,4 @@
-"""Integration tests for DirSQL persistent on-disk cache."""
+"""Binding-tier tests (real core, real fs) for DirSQL persistent on-disk cache."""
 
 import json
 import os

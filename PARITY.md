@@ -194,28 +194,40 @@ behavior with no per-SDK code. Individual event rows land here as B2–B4 ship.
 ## Test Coverage Matrix
 
 Feature × SDK × tier coverage parity (#294). Unless a cell says otherwise,
-`Y` means the scenario is covered in that SDK's **integration** tier (SDK
-public API against the real core). `core` means the behavior lives in the
-shared Rust core and is deliberately covered once, at the Rust
-integration/unit tier — per the one-implementation principle, the bindings
-prove marshaling, not the core logic itself. `unit` means the SDK covers it
-at its colocated-unit tier (idiomatic for Rust inline `#[cfg(test)]`
-modules). `N/A` means the surface does not exist in that SDK by design (see
-Language-Idiomatic Exceptions).
+`Y` means the scenario is covered in that SDK's **real-core tier**: for
+Python/TypeScript the **binding** tier (`tests/binding/`, SDK public API
+against the real core + real temp dirs, #289), for Rust the integration
+tier (`packages/rust/tests/` — Rust *is* the core, so it has no binding
+tier). `integration` means the Python/TS **hermetic integration** tier
+(`tests/integration/`, SDK public API with the core and filesystem mocked,
+#289). `core` means the behavior lives in the shared Rust core and is
+deliberately covered once, at the Rust integration/unit tier — per the
+one-implementation principle, the bindings prove marshaling, not the core
+logic itself. `unit` means the SDK covers it at its colocated-unit tier
+(idiomatic for Rust inline `#[cfg(test)]` modules). `N/A` means the surface
+does not exist in that SDK by design (see Language-Idiomatic Exceptions).
 
-Integration-tier file map:
+Real-core file map:
 
-| Area | Python (`packages/python/tests/integration/`) | Rust (`packages/rust/tests/`) | TypeScript (`packages/ts/tests/integration/`) |
+| Area | Python (`packages/python/tests/binding/`) | Rust (`packages/rust/tests/`) | TypeScript (`packages/ts/tests/binding/`) |
 |---|---|---|---|
 | Core SDK | `dirsql_test.py` | `sdk.rs` | `index.test.ts`, `docs-gaps.test.ts` |
-| Async / ready | `async_dirsql_test.py`, `binding_test.py` (mocked core) | `async_sdk.rs` | `index.test.ts` |
+| Async / ready | `async_dirsql_test.py` | `async_sdk.rs` | `index.test.ts` |
 | Watch events | `async_dirsql_test.py`, `docs_gaps_test.py` | `sdk.rs`, `watcher.rs`, `watch_relative_root.rs` | `watch.test.ts`, `index.test.ts` |
 | Config file | `from_config_test.py` | `from_config.rs`, `config.rs` | `from-config.test.ts` |
 | Persistence | `persist_test.py` | `persist.rs` | `persist.test.ts` |
-| Extensions | `extensions_test.py`, `extension_package_test.py` | `extensions.rs` | `extensions.test.ts`, `extension-package.test.ts` |
+| Extensions | `extensions_test.py`, `extension_package_test.py`, `config_extension_package_test.py` | `extensions.rs` | `extensions.test.ts`, `extension-package.test.ts`, `config-extension-package.test.ts` |
 | Table-name resolution (#204) | `table_name_resolution_test.py` | `table_name_resolution.rs` | `table-name-resolution.test.ts` |
 | Docs examples | `docs_examples_test.py` | `docs_examples.rs` | `docs-examples.test.ts` |
 | Docs gap-fills | `docs_gaps_test.py` | `docs_gaps.rs` | `docs-gaps.test.ts` |
+
+Hermetic integration tier (mocked core + fs, both bindings, #289): Python
+`tests/integration/dirsql_test.py` (ready/query/watch/kwarg forwarding) and
+`tests/integration/extensions_test.py` (extension-path resolution, incl. the
+#313 config-entry resolution + suppress toggle); TypeScript
+`tests/integration/index.test.ts` (constructor overloads, positional
+marshaling, delegation, watch) and `tests/integration/extensions.test.ts`
+(extension-path resolution, incl. #313).
 
 ### Construction & querying
 
@@ -257,7 +269,7 @@ Integration-tier file map:
 | ready re-raises scan/init errors | Y | Y | Y (`ready` rejection) |
 | Query issued eagerly awaits ready transparently | Y | N/A — explicit `ready().await` by design | Y (#146) |
 | Methods before ready error (`not ready`) | N/A | Y (`async_sdk.rs`) | N/A |
-| Event-loop / host-thread non-blocking | unit (`binding_test.py` offload seams) | N/A | Y (#146/#147 libuv-threadpool tests) |
+| Event-loop / host-thread non-blocking | integration (`dirsql_test.py` offload seams) | N/A | Y (#146/#147 libuv-threadpool tests) |
 
 ### Watching
 
@@ -271,7 +283,7 @@ Integration-tier file map:
 | DB kept in sync after events | Y | Y | Y |
 | `file_path`/`filePath` is relative to root | Y | Y | Y |
 | Shrinking file ends with dropped row deleted | Y | unit (`differ.rs`) | Y |
-| Low-level start-watcher + poll primitives | unit (`binding_test.py`) | Y (`sdk.rs`) | Y (`index.test.ts`) |
+| Low-level start-watcher + poll primitives | integration (`dirsql_test.py`) | Y (`sdk.rs`) | Y (`index.test.ts`) |
 | Relative-root watching (#250) | core | Y (`watch_relative_root.rs`) | core |
 | watch/poll mutual-exclusion errors | core | Y (`sdk.rs`) | core |
 
@@ -316,6 +328,7 @@ Integration-tier file map:
 | Missing `[[dirsql.extension]]` config entry fails ready/build | Y | Y | Y |
 | Real extension loaded + function callable (fixture cdylib) | Y (`extension_package_test.py`) | Y (`extensions.rs`) | Y (`extension-package.test.ts`) |
 | `path` as bare package name (constructor, #298/#299) | Y | N/A — file-path-only by design | Y |
+| Config `[[dirsql.extension]]` `path` as bare package name via SDK `config=` (#313) | Y + integration | N/A | Y + integration |
 | `load_extension()` locked after startup; `suppress_config_extensions` seam | core | Y (`extensions.rs`) | core |
 
 ### E2E (CLI / launcher) and smoke tiers
@@ -340,7 +353,8 @@ ecosystem-specific extension resolution.
 
 ### Known gaps / follow-ups
 
-- **#289** — migrating the real-core integration suites to fully mocked
-  SQLite/FS is still open; Python's `binding_test.py` (mocked core) is the
-  model. TypeScript covers its facade seams at the colocated-unit tier
-  (`src/dirsql.test.ts`) instead — equivalent isolation, different tier.
+- **#289** — resolved: the integration tier is hermetic in both bindings
+  (Python patches `_RustDirSQL` via `unittest.mock`; TypeScript delivers a
+  fake core module through a mocked `node:module` `createRequire`), and the
+  former real-core integration suites moved to the per-binding
+  `tests/binding/` tier, which still runs in CI.

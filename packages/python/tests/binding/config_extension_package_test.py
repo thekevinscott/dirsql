@@ -1,4 +1,4 @@
-"""Integration: resolve a config-file extension by bare package name (#313).
+"""Binding tier: resolve a config-file extension by bare package name (#313).
 
 Lays a real compiled loadable inside a real package directory on `sys.path`,
 declares it in a `.dirsql.toml` as a `[[dirsql.extension]]` entry whose `path`

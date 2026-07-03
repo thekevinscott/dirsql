@@ -1,7 +1,7 @@
 // Gap-filling tests for documented features previously untested on the TS
 // SDK (#294 test parity).
 //
-// Mirrors packages/python/tests/integration/dirsql_test.py
+// Mirrors packages/python/tests/binding/dirsql_test.py
 // (describe_relaxed_schema, describe_extract_receives_path) and
 // packages/rust/tests/sdk.rs (it_ignores_extra_keys_by_default,
 // it_fills_missing_keys_with_null, it_raises_on_missing_keys_in_strict_mode).

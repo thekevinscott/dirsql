@@ -1,544 +1,318 @@
-"""Integration tests for the DirSQL Python SDK."""
+"""Hermetic integration tests for the Python SDK (#289).
 
-import json
-import os
+These tests exercise the SDK public API with the Rust core
+(``dirsql._dirsql.DirSQL``) mocked and no filesystem access. They
+verify the SDK's glue -- offloading to threads, ready()/error
+propagation, lazy watcher startup, event iteration, config-based
+construction, and kwarg forwarding -- without touching the real
+PyO3-backed engine.
+
+Real-core behaviour (SQL semantics, scanning, diffing, watching) is
+covered by ``tests/binding/`` (the SDK against the real core) and by
+the Rust core's own suites.
+"""
+
+import asyncio
+from unittest.mock import patch
 
 import pytest
 
-from dirsql import DirSQL, Table
+from dirsql import _async as async_mod
 
 
-def describe_DirSQL():
-    def describe_init():
+class _FakeRustDirSQL:
+    """Test double for the PyO3 ``DirSQL`` class.
+
+    Records constructor args and method calls so tests can assert the
+    binding layer passes them through untouched.
+    """
+
+    instances: list = []
+
+    def __init__(
+        self,
+        root=None,
+        *,
+        tables=None,
+        ignore=None,
+        config=None,
+        persist=False,
+        persist_path=None,
+        extensions=None,
+        suppress_config_extensions=False,
+    ):
+        self.root = root
+        self.tables = tables
+        self.ignore = ignore
+        self.config = config
+        self.persist = persist
+        self.persist_path = persist_path
+        self.extensions = extensions
+        self.suppress_config_extensions = suppress_config_extensions
+        self.queries: list[str] = []
+        self.query_results: list = (
+            [{"from_config": config}] if config is not None else [{"ok": 1}]
+        )
+        self.started = False
+        self.poll_calls: list[int] = []
+        # Scripted event batches; each poll returns the next batch.
+        self.poll_batches: list[list] = []
+        _FakeRustDirSQL.instances.append(self)
+
+    def query(self, sql):
+        self.queries.append(sql)
+        return self.query_results
+
+    def _start_watcher(self):
+        self.started = True
+
+    def _poll_events(self, timeout_ms):
+        self.poll_calls.append(timeout_ms)
+        if self.poll_batches:
+            return self.poll_batches.pop(0)
+        return []
+
+
+@pytest.fixture(autouse=True)
+def _reset_instances():
+    _FakeRustDirSQL.instances = []
+    yield
+    _FakeRustDirSQL.instances = []
+
+
+@pytest.fixture
+def mock_core():
+    """Replace the Rust-backed ``_RustDirSQL`` alias in ``dirsql._async``."""
+    with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+        yield _FakeRustDirSQL
+
+
+@pytest.fixture
+def to_thread_spy():
+    """Wrap ``asyncio.to_thread`` to record the names of offloaded callables.
+
+    Yields the recording list so a test can assert which work was pushed
+    off the event loop.
+    """
+    calls: list[str] = []
+    real_to_thread = asyncio.to_thread
+
+    async def spy(func, *args, **kwargs):
+        calls.append(getattr(func, "__name__", repr(func)))
+        return await real_to_thread(func, *args, **kwargs)
+
+    with patch.object(async_mod.asyncio, "to_thread", spy):
+        yield calls
+
+
+@pytest.fixture
+def core_init_raises(request):
+    """Patch the Rust core with a constructor that raises ``request.param``.
+
+    Parametrize indirectly with the exception instance the core should
+    raise on construction (init / config-load failure paths).
+    """
+    exc = request.param
+
+    class Boom(_FakeRustDirSQL):
+        def __init__(self, *a, **kw):
+            raise exc
+
+    with patch.object(async_mod, "_RustDirSQL", Boom):
+        yield exc
+
+
+def describe_binding_layer():
+    def describe_async_offloading():
+        # Feature: async-by-default API. See docs/guide/async.md and
+        # packages/python/README.md ("DirSQL is async by default").
         @pytest.mark.asyncio
-        async def it_creates_instance_with_tables(jsonl_dir):
-            """DirSQL can be initialized with a root path and table definitions."""
-            db = DirSQL(
-                jsonl_dir,
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
-                        glob="comments/**/index.jsonl",
-                        extract=lambda path: [
-                            {
-                                "id": os.path.basename(os.path.dirname(path)),
-                                "body": row["body"],
-                                "author": row["author"],
-                            }
-                            for line in open(path, encoding="utf-8").read().splitlines()
-                            for row in [json.loads(line)]
-                        ],
-                    ),
-                ],
-            )
-            assert db is not None
-
-        @pytest.mark.asyncio
-        async def it_accepts_ignore_patterns(jsonl_dir):
-            """DirSQL accepts an ignore list to skip matching paths."""
-            db = DirSQL(
-                jsonl_dir,
-                ignore=["**/def/**"],
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
-                        glob="comments/**/index.jsonl",
-                        extract=lambda path: [
-                            {
-                                "id": os.path.basename(os.path.dirname(path)),
-                                "body": row["body"],
-                                "author": row["author"],
-                            }
-                            for line in open(path, encoding="utf-8").read().splitlines()
-                            for row in [json.loads(line)]
-                        ],
-                    ),
-                ],
-            )
+        async def it_offloads_init_via_to_thread(mock_core, to_thread_spy):
+            db = async_mod.DirSQL("/root", tables=["t"])
             await db.ready()
-            # Only the "abc" directory should be indexed, not "def"
-            results = await db.query("SELECT DISTINCT id FROM comments")
-            ids = {r["id"] for r in results}
-            assert ids == {"abc"}
+
+            # Construction (extension resolution + core init) is offloaded as
+            # the `_build_db` bound method.
+            assert "_build_db" in to_thread_spy, to_thread_spy
+
+        @pytest.mark.asyncio
+        async def it_offloads_query_via_to_thread(mock_core, to_thread_spy):
+            db = async_mod.DirSQL("/root", tables=["t"])
+            await db.ready()
+
+            await db.query("SELECT 1")
+            assert "query" in to_thread_spy
+
+    def describe_ready():
+        # Feature: ready() awaits initial scan and surfaces init errors.
+        # See docs/guide/async.md and packages/python/README.md.
+        @pytest.mark.asyncio
+        @pytest.mark.parametrize(
+            "core_init_raises", [RuntimeError("init failed")], indirect=True
+        )
+        async def it_surfaces_init_exceptions(core_init_raises):
+            db = async_mod.DirSQL("/root", tables=["t"])
+            with pytest.raises(RuntimeError, match="init failed"):
+                await db.ready()
+
+        @pytest.mark.asyncio
+        async def it_is_safe_to_call_repeatedly(mock_core):
+            db = async_mod.DirSQL("/root", tables=["t"])
+            await db.ready()
+            await db.ready()
+            await db.ready()
+            # Only one underlying instance should have been constructed.
+            assert len(_FakeRustDirSQL.instances) == 1
+
+        @pytest.mark.asyncio
+        @pytest.mark.parametrize(
+            "core_init_raises", [ValueError("bad config")], indirect=True
+        )
+        async def it_re_raises_init_error_on_every_ready_call(core_init_raises):
+            db = async_mod.DirSQL("/root", tables=["t"])
+            with pytest.raises(ValueError):
+                await db.ready()
+            with pytest.raises(ValueError):
+                await db.ready()
 
     def describe_query():
+        # Feature: query() passes SQL to the engine. See
+        # docs/guide/querying.md and packages/python/README.md.
         @pytest.mark.asyncio
-        async def it_returns_all_rows(jsonl_dir):
-            """query returns all indexed rows when no WHERE clause."""
-            db = DirSQL(
-                jsonl_dir,
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
-                        glob="comments/**/index.jsonl",
-                        extract=lambda path: [
-                            {
-                                "id": os.path.basename(os.path.dirname(path)),
-                                "body": row["body"],
-                                "author": row["author"],
-                            }
-                            for line in open(path, encoding="utf-8").read().splitlines()
-                            for row in [json.loads(line)]
-                        ],
-                    ),
-                ],
-            )
-            await db.ready()
-            results = await db.query("SELECT * FROM comments")
-            assert len(results) == 3
-
-        @pytest.mark.asyncio
-        async def it_returns_dicts_with_column_names(jsonl_dir):
-            """Each result row is a dict keyed by column name."""
-            db = DirSQL(
-                jsonl_dir,
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
-                        glob="comments/**/index.jsonl",
-                        extract=lambda path: [
-                            {
-                                "id": os.path.basename(os.path.dirname(path)),
-                                "body": row["body"],
-                                "author": row["author"],
-                            }
-                            for line in open(path, encoding="utf-8").read().splitlines()
-                            for row in [json.loads(line)]
-                        ],
-                    ),
-                ],
-            )
-            await db.ready()
-            results = await db.query(
-                "SELECT author FROM comments WHERE body = 'first comment'"
-            )
-            assert len(results) == 1
-            assert results[0]["author"] == "alice"
-
-        @pytest.mark.asyncio
-        async def it_filters_with_where_clause(jsonl_dir):
-            """SQL WHERE clauses work correctly on indexed data."""
-            db = DirSQL(
-                jsonl_dir,
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
-                        glob="comments/**/index.jsonl",
-                        extract=lambda path: [
-                            {
-                                "id": os.path.basename(os.path.dirname(path)),
-                                "body": row["body"],
-                                "author": row["author"],
-                            }
-                            for line in open(path, encoding="utf-8").read().splitlines()
-                            for row in [json.loads(line)]
-                        ],
-                    ),
-                ],
-            )
-            await db.ready()
-            results = await db.query("SELECT * FROM comments WHERE id = 'abc'")
-            assert len(results) == 2
-            assert all(r["id"] == "abc" for r in results)
-
-        @pytest.mark.asyncio
-        async def it_excludes_internal_tracking_columns(jsonl_dir):
-            """Internal _dirsql_* columns are not exposed in query results."""
-            db = DirSQL(
-                jsonl_dir,
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
-                        glob="comments/**/index.jsonl",
-                        extract=lambda path: [
-                            {
-                                "id": os.path.basename(os.path.dirname(path)),
-                                "body": row["body"],
-                                "author": row["author"],
-                            }
-                            for line in open(path, encoding="utf-8").read().splitlines()
-                            for row in [json.loads(line)]
-                        ],
-                    ),
-                ],
-            )
-            await db.ready()
-            results = await db.query("SELECT * FROM comments LIMIT 1")
-            assert len(results) == 1
-            row = results[0]
-            assert "_dirsql_file_path" not in row
-            assert "_dirsql_row_index" not in row
-
-        @pytest.mark.asyncio
-        async def it_handles_integer_values(tmp_dir):
-            """Integer values in extracted data are preserved correctly."""
-            os.makedirs(os.path.join(tmp_dir, "data"), exist_ok=True)
-            with open(os.path.join(tmp_dir, "data", "counts.json"), "w") as f:
-                json.dump({"name": "apples", "count": 42}, f)
-
-            db = DirSQL(
-                tmp_dir,
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE items (name TEXT, count INTEGER)",
-                        glob="data/*.json",
-                        extract=lambda path: [
-                            json.loads(open(path, encoding="utf-8").read())
-                        ],
-                    ),
-                ],
-            )
-            await db.ready()
-            results = await db.query("SELECT * FROM items")
-            assert len(results) == 1
-            assert results[0]["name"] == "apples"
-            assert results[0]["count"] == 42
-
-    def describe_multiple_tables():
-        @pytest.mark.asyncio
-        async def it_supports_multiple_table_definitions(tmp_dir):
-            """Multiple tables can be defined with different globs and extractors."""
-            os.makedirs(os.path.join(tmp_dir, "posts"), exist_ok=True)
-            os.makedirs(os.path.join(tmp_dir, "authors"), exist_ok=True)
-
-            with open(os.path.join(tmp_dir, "posts", "hello.json"), "w") as f:
-                json.dump({"title": "Hello World", "author_id": "1"}, f)
-
-            with open(os.path.join(tmp_dir, "authors", "alice.json"), "w") as f:
-                json.dump({"id": "1", "name": "Alice"}, f)
-
-            db = DirSQL(
-                tmp_dir,
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE posts (title TEXT, author_id TEXT)",
-                        glob="posts/*.json",
-                        extract=lambda path: [
-                            json.loads(open(path, encoding="utf-8").read())
-                        ],
-                    ),
-                    Table(
-                        ddl="CREATE TABLE authors (id TEXT, name TEXT)",
-                        glob="authors/*.json",
-                        extract=lambda path: [
-                            json.loads(open(path, encoding="utf-8").read())
-                        ],
-                    ),
-                ],
-            )
-            await db.ready()
-            posts = await db.query("SELECT * FROM posts")
-            authors = await db.query("SELECT * FROM authors")
-            assert len(posts) == 1
-            assert len(authors) == 1
-            assert posts[0]["title"] == "Hello World"
-            assert authors[0]["name"] == "Alice"
-
-        @pytest.mark.asyncio
-        async def it_supports_joins_across_tables(tmp_dir):
-            """SQL JOINs work across different tables."""
-            os.makedirs(os.path.join(tmp_dir, "posts"), exist_ok=True)
-            os.makedirs(os.path.join(tmp_dir, "authors"), exist_ok=True)
-
-            with open(os.path.join(tmp_dir, "posts", "hello.json"), "w") as f:
-                json.dump({"title": "Hello World", "author_id": "1"}, f)
-
-            with open(os.path.join(tmp_dir, "authors", "alice.json"), "w") as f:
-                json.dump({"id": "1", "name": "Alice"}, f)
-
-            db = DirSQL(
-                tmp_dir,
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE posts (title TEXT, author_id TEXT)",
-                        glob="posts/*.json",
-                        extract=lambda path: [
-                            json.loads(open(path, encoding="utf-8").read())
-                        ],
-                    ),
-                    Table(
-                        ddl="CREATE TABLE authors (id TEXT, name TEXT)",
-                        glob="authors/*.json",
-                        extract=lambda path: [
-                            json.loads(open(path, encoding="utf-8").read())
-                        ],
-                    ),
-                ],
-            )
-            await db.ready()
-            results = await db.query(
-                "SELECT posts.title, authors.name "
-                "FROM posts JOIN authors ON posts.author_id = authors.id"
-            )
-            assert len(results) == 1
-            assert results[0]["title"] == "Hello World"
-            assert results[0]["name"] == "Alice"
-
-    def describe_error_handling():
-        @pytest.mark.asyncio
-        async def it_raises_on_invalid_sql(jsonl_dir):
-            """Invalid SQL raises an exception."""
-            db = DirSQL(
-                jsonl_dir,
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
-                        glob="comments/**/index.jsonl",
-                        extract=lambda path: [
-                            {
-                                "id": os.path.basename(os.path.dirname(path)),
-                                "body": row["body"],
-                                "author": row["author"],
-                            }
-                            for line in open(path, encoding="utf-8").read().splitlines()
-                            for row in [json.loads(line)]
-                        ],
-                    ),
-                ],
-            )
-            await db.ready()
-            with pytest.raises(Exception):
-                await db.query("NOT VALID SQL")
-
-        @pytest.mark.asyncio
-        async def it_rejects_write_statements_via_query(tmp_dir):
-            """`query()` rejects non-SELECT statements so a caller can't mutate the index."""
-            with open(os.path.join(tmp_dir, "item.json"), "w") as f:
-                json.dump({"name": "apple"}, f)
-
-            db = DirSQL(
-                tmp_dir,
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE items (name TEXT)",
-                        glob="*.json",
-                        extract=lambda path: [
-                            json.loads(open(path, encoding="utf-8").read())
-                        ],
-                    ),
-                ],
-            )
+        async def it_passes_sql_through_untouched(mock_core):
+            db = async_mod.DirSQL("/root", tables=["t"])
             await db.ready()
 
-            for stmt in [
-                "DELETE FROM items",
-                "DROP TABLE items",
-                "INSERT INTO items (name) VALUES ('evil')",
-                "UPDATE items SET name = 'x'",
-                "CREATE TABLE evil (id TEXT)",
-                "ALTER TABLE items ADD COLUMN evil TEXT",
-                "REPLACE INTO items (name) VALUES ('x')",
-                "VACUUM",
-            ]:
-                with pytest.raises(Exception, match="(?i)read-only|writeforbidden"):
-                    await db.query(stmt)
+            sql = "SELECT name, age FROM users WHERE age > 30 -- comment"
+            result = await db.query(sql)
 
-            # Index remains intact.
-            results = await db.query("SELECT name FROM items")
-            assert len(results) == 1
-            assert results[0]["name"] == "apple"
+            assert _FakeRustDirSQL.instances[0].queries == [sql]
+            assert result == [{"ok": 1}]
+
+    def describe_watch():
+        # Feature: watch() is an async iterator of RowEvent. See
+        # docs/guide/watching.md and packages/python/README.md.
+        @pytest.mark.asyncio
+        async def it_lazily_starts_watcher_on_first_iteration(mock_core):
+            db = async_mod.DirSQL("/root", tables=["t"])
+            await db.ready()
+
+            stream = db.watch()
+            assert _FakeRustDirSQL.instances[0].started is False
+
+            # Queue a single event so __anext__ returns.
+            _FakeRustDirSQL.instances[0].poll_batches = [["evt-1"]]
+
+            event = await stream.__anext__()
+            assert event == "evt-1"
+            assert _FakeRustDirSQL.instances[0].started is True
 
         @pytest.mark.asyncio
-        async def it_raises_on_invalid_ddl(tmp_dir):
-            """Invalid DDL raises an exception during init."""
-            db = DirSQL(
-                tmp_dir,
-                tables=[
-                    Table(
-                        ddl="NOT A CREATE TABLE",
-                        glob="*.json",
-                        extract=lambda path: [],
-                    ),
-                ],
-            )
-            with pytest.raises(Exception):
+        async def it_drains_buffered_events_before_polling_again(mock_core):
+            db = async_mod.DirSQL("/root", tables=["t"])
+            await db.ready()
+
+            fake = _FakeRustDirSQL.instances[0]
+            fake.poll_batches = [["a", "b", "c"]]
+
+            stream = db.watch()
+            assert await stream.__anext__() == "a"
+            assert await stream.__anext__() == "b"
+            assert await stream.__anext__() == "c"
+            # Only one poll happened; the rest came from the buffer.
+            assert len(fake.poll_calls) == 1
+            assert fake.poll_calls[0] == 200
+
+        @pytest.mark.asyncio
+        async def it_polls_until_events_arrive(mock_core):
+            db = async_mod.DirSQL("/root", tables=["t"])
+            await db.ready()
+
+            fake = _FakeRustDirSQL.instances[0]
+            fake.poll_batches = [[], [], ["late"]]
+
+            stream = db.watch()
+            event = await stream.__anext__()
+            assert event == "late"
+            assert len(fake.poll_calls) == 3
+
+    def describe_config_kwarg():
+        # Feature: DirSQL(config=path) forwards to the Rust core. See
+        # docs/guide/config.md and packages/python/README.md.
+        @pytest.mark.asyncio
+        async def it_forwards_config_path_to_core(mock_core):
+            db = async_mod.DirSQL(config="/some/.dirsql.toml")
+            await db.ready()
+
+            inst = _FakeRustDirSQL.instances[-1]
+            assert inst.config == "/some/.dirsql.toml"
+            assert inst.root is None
+
+            result = await db.query("SELECT 1")
+            assert result == [{"from_config": "/some/.dirsql.toml"}]
+
+        @pytest.mark.asyncio
+        @pytest.mark.parametrize(
+            "core_init_raises", [FileNotFoundError("/missing.toml")], indirect=True
+        )
+        async def it_surfaces_config_load_errors(core_init_raises):
+            db = async_mod.DirSQL(config="/missing.toml")
+            with pytest.raises(FileNotFoundError):
                 await db.ready()
 
         @pytest.mark.asyncio
-        async def it_handles_empty_directory(tmp_dir):
-            """An empty directory produces zero rows."""
-            db = DirSQL(
-                tmp_dir,
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE items (name TEXT)",
-                        glob="**/*.json",
-                        extract=lambda path: [
-                            json.loads(open(path, encoding="utf-8").read())
-                        ],
-                    ),
-                ],
+        async def it_forwards_construction_without_root_or_config_to_the_core(
+            mock_core,
+        ):
+            # The wrapper no longer raises on (None, None); the core owns that
+            # validation (DirSQLBuilder::resolve). Construction forwards both
+            # as None.
+            db = async_mod.DirSQL()
+            await db.ready()
+
+            inst = _FakeRustDirSQL.instances[-1]
+            assert inst.root is None
+            assert inst.config is None
+
+    def describe_ignore_kwarg():
+        # Feature: ignore patterns. See docs/guide/tables.md and
+        # packages/python/README.md (ignore= kwarg on DirSQL).
+        @pytest.mark.asyncio
+        async def it_forwards_ignore_to_core(mock_core):
+            ignore = ["**/node_modules/**", ".git"]
+            db = async_mod.DirSQL("/root", tables=["t"], ignore=ignore)
+            await db.ready()
+
+            inst = _FakeRustDirSQL.instances[0]
+            assert inst.root == "/root"
+            assert inst.tables == ["t"]
+            assert inst.ignore == ignore
+
+        @pytest.mark.asyncio
+        async def it_defaults_ignore_to_none(mock_core):
+            db = async_mod.DirSQL("/root", tables=["t"])
+            await db.ready()
+            assert _FakeRustDirSQL.instances[0].ignore is None
+
+    def describe_persist_kwargs():
+        # Feature: persist / persist_path. See docs/guide/persistence.md.
+        @pytest.mark.asyncio
+        async def it_forwards_persist_kwargs_to_core(mock_core):
+            db = async_mod.DirSQL(
+                "/root",
+                tables=["t"],
+                persist=True,
+                persist_path="/tmp/cache.db",
             )
             await db.ready()
-            results = await db.query("SELECT * FROM items")
-            assert len(results) == 0
+            inst = _FakeRustDirSQL.instances[0]
+            assert inst.persist is True
+            assert inst.persist_path == "/tmp/cache.db"
 
         @pytest.mark.asyncio
-        async def it_handles_extract_returning_empty_list(tmp_dir):
-            """Extract function returning [] produces no rows for that file."""
-            with open(os.path.join(tmp_dir, "skip.json"), "w") as f:
-                json.dump({"ignore": True}, f)
-
-            db = DirSQL(
-                tmp_dir,
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE items (name TEXT)",
-                        glob="**/*.json",
-                        extract=lambda path: [],
-                    ),
-                ],
-            )
+        async def it_defaults_persist_to_false(mock_core):
+            db = async_mod.DirSQL("/root", tables=["t"])
             await db.ready()
-            results = await db.query("SELECT * FROM items")
-            assert len(results) == 0
-
-    def describe_extract_receives_path():
-        @pytest.mark.asyncio
-        async def it_passes_absolute_path(tmp_dir):
-            """Extract receives the absolute filesystem path of the matched file."""
-            with open(os.path.join(tmp_dir, "test.json"), "w") as f:
-                json.dump({"val": 1}, f)
-
-            captured = {}
-
-            def extract(path):
-                captured["path"] = path
-                captured["content"] = open(path, encoding="utf-8").read()
-                return [{"val": 1}]
-
-            db = DirSQL(
-                tmp_dir,
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE t (val INTEGER)",
-                        glob="*.json",
-                        extract=extract,
-                    ),
-                ],
-            )
-            await db.ready()
-            await db.query("SELECT * FROM t")
-            assert os.path.isabs(captured["path"])
-            assert os.path.basename(captured["path"]) == "test.json"
-            assert '"val"' in captured["content"]
-
-    def describe_relaxed_schema():
-        @pytest.mark.asyncio
-        async def it_ignores_extra_keys_by_default(tmp_dir):
-            """Extra keys returned by extract are silently dropped."""
-            with open(os.path.join(tmp_dir, "item.json"), "w") as f:
-                json.dump({"name": "apple", "color": "red", "weight": 150}, f)
-
-            db = DirSQL(
-                tmp_dir,
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE items (name TEXT)",
-                        glob="*.json",
-                        extract=lambda path: [
-                            json.loads(open(path, encoding="utf-8").read())
-                        ],
-                    ),
-                ],
-            )
-            await db.ready()
-            results = await db.query("SELECT * FROM items")
-            assert len(results) == 1
-            assert results[0]["name"] == "apple"
-            assert "color" not in results[0]
-            assert "weight" not in results[0]
-
-        @pytest.mark.asyncio
-        async def it_fills_missing_keys_with_null(tmp_dir):
-            """Missing keys become NULL in the database."""
-            with open(os.path.join(tmp_dir, "item.json"), "w") as f:
-                json.dump({"name": "apple"}, f)
-
-            db = DirSQL(
-                tmp_dir,
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE items (name TEXT, color TEXT, count INTEGER)",
-                        glob="*.json",
-                        extract=lambda path: [
-                            json.loads(open(path, encoding="utf-8").read())
-                        ],
-                    ),
-                ],
-            )
-            await db.ready()
-            results = await db.query("SELECT * FROM items")
-            assert len(results) == 1
-            assert results[0]["name"] == "apple"
-            assert results[0]["color"] is None
-            assert results[0]["count"] is None
-
-        @pytest.mark.asyncio
-        async def it_raises_on_extra_keys_in_strict_mode(tmp_dir):
-            """Strict mode raises when extract returns keys not in the DDL."""
-            with open(os.path.join(tmp_dir, "item.json"), "w") as f:
-                json.dump({"name": "apple", "color": "red"}, f)
-
-            db = DirSQL(
-                tmp_dir,
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE items (name TEXT)",
-                        glob="*.json",
-                        extract=lambda path: [
-                            json.loads(open(path, encoding="utf-8").read())
-                        ],
-                        strict=True,
-                    ),
-                ],
-            )
-            with pytest.raises(Exception):
-                await db.ready()
-
-        @pytest.mark.asyncio
-        async def it_raises_on_missing_keys_in_strict_mode(tmp_dir):
-            """Strict mode raises when extract is missing declared columns."""
-            with open(os.path.join(tmp_dir, "item.json"), "w") as f:
-                json.dump({"name": "apple"}, f)
-
-            db = DirSQL(
-                tmp_dir,
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE items (name TEXT, color TEXT)",
-                        glob="*.json",
-                        extract=lambda path: [
-                            json.loads(open(path, encoding="utf-8").read())
-                        ],
-                        strict=True,
-                    ),
-                ],
-            )
-            with pytest.raises(Exception):
-                await db.ready()
-
-        @pytest.mark.asyncio
-        async def it_allows_exact_match_in_strict_mode(tmp_dir):
-            """Strict mode works when keys exactly match DDL columns."""
-            with open(os.path.join(tmp_dir, "item.json"), "w") as f:
-                json.dump({"name": "apple", "color": "red"}, f)
-
-            db = DirSQL(
-                tmp_dir,
-                tables=[
-                    Table(
-                        ddl="CREATE TABLE items (name TEXT, color TEXT)",
-                        glob="*.json",
-                        extract=lambda path: [
-                            json.loads(open(path, encoding="utf-8").read())
-                        ],
-                        strict=True,
-                    ),
-                ],
-            )
-            await db.ready()
-            results = await db.query("SELECT * FROM items")
-            assert len(results) == 1
-            assert results[0]["name"] == "apple"
-            assert results[0]["color"] == "red"
+            inst = _FakeRustDirSQL.instances[0]
+            assert inst.persist is False
+            assert inst.persist_path is None

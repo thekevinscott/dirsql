@@ -21,7 +21,7 @@ import { exists } from "../exists.js";
 // The two tests below reach into dirsql's on-disk cache (`.dirsql/cache.db`,
 // written by the Rust core) out-of-band to corrupt internal bookkeeping and
 // exercise the racy-window and dirsql_version-bump reconcile paths. We use
-// sql.js (WASM SQLite) instead of `node:sqlite` so the integration suite runs
+// sql.js (WASM SQLite) instead of `node:sqlite` so the binding suite runs
 // on every supported Node -- `node:sqlite` only exists on 22.5+. sql.js is
 // in-memory, so we read the cache bytes, mutate, and write them back; the
 // cache uses SQLite's default rollback journal (no WAL sidecar), so the main

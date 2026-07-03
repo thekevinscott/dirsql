@@ -1,6 +1,7 @@
-// Integration tests for the `watch()` async-iterator API (#294 test parity).
+// Binding-tier tests (real core, real fs) for the `watch()` async-iterator
+// API (#294 test parity).
 //
-// Mirrors packages/python/tests/integration/async_dirsql_test.py
+// Mirrors packages/python/tests/binding/async_dirsql_test.py
 // (describe_watch) and packages/rust/tests/sdk.rs
 // (it_streams_watch_*_events): the TS SDK exposes the same event stream as
 // `for await (const event of db.watch())`, which was previously only covered

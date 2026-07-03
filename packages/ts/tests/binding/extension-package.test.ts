@@ -1,13 +1,11 @@
-// Integration: resolve a config-file extension by bare package name (#313).
+// Binding tier: resolve a SQLite extension by bare package name (#299).
 //
 // Lays a real compiled loadable inside a real installed-package directory under
-// `node_modules`, declares it in a `.dirsql.toml` as a `[[dirsql.extension]]`
-// entry whose `path` is a bare **package name**, and asserts that constructing
-// `DirSQL` from that config resolves the actual on-disk file via
-// `require.resolve`, loads it, and the function it registers is callable. Real
-// layout, no mocks -- the shape mirrors the programmatic sibling
-// (`extension-package.test.ts`, #299) and the Python sibling (#298):
-// resolve -> load -> callable.
+// `node_modules`, points `DirSQL` at it by **bare package name**, and asserts
+// the SDK resolves the actual on-disk file via `require.resolve`, loads it, and
+// the function it registers is callable. Real layout, no mocks -- the shape
+// mirrors the Python sibling (#298) and the Rust end-to-end test: resolve ->
+// load -> callable.
 //
 // The loadable is the repo's `tests/fixtures/testext` cdylib (registers
 // `dirsql_testext_answer() -> 42`), built on the fly with cargo.
@@ -64,17 +62,15 @@ function buildFixtureExtension(targetDir: string): string {
   return artifact;
 }
 
-describe("DirSQL config-file extension by package name (#313)", () => {
-  // Unique to this suite: `extension-package.test.ts` installs its own fake
-  // package in the same shared `node_modules`, and vitest runs the two files
-  // in parallel workers — a shared name lets one suite's cleanup delete the
-  // other's fixture mid-test (#349).
-  const pkgName = "dirsql-testext-pkg-config";
+describe("DirSQL extension by package name (#299)", () => {
+  // Must stay unique across test files: suites run in parallel workers and
+  // share this `node_modules`, so a reused name races on setup/cleanup (#349).
+  const pkgName = "dirsql-testext-pkg";
   const pkgDir = join(tsNodeModules, pkgName);
   let tmp: string;
 
   beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), "dirsql-cfg-ext-pkg-"));
+    tmp = mkdtempSync(join(tmpdir(), "dirsql-ext-pkg-"));
     const so = buildFixtureExtension(join(tmp, "target"));
     // A real installed-package layout under the SDK's node_modules so
     // `require.resolve` finds it.
@@ -91,18 +87,11 @@ describe("DirSQL config-file extension by package name (#313)", () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("resolves, loads, and calls a config extension referenced by package name", async () => {
-    // The config names the extension by bare package name; its root defaults
-    // to the config file's parent directory.
-    const root = join(tmp, "root");
-    mkdirSync(root);
-    const config = join(root, ".dirsql.toml");
-    writeFileSync(
-      config,
-      `[[dirsql.extension]]\npath = "${pkgName}"\nentrypoint = "sqlite3_extension_init"\n`,
-    );
-
-    const db = new DirSQL(config);
+  it("resolves, loads, and calls an extension referenced by package name", async () => {
+    const db = new DirSQL({
+      root: tmp,
+      extensions: [{ path: pkgName, entrypoint: "sqlite3_extension_init" }],
+    });
     await db.ready;
     expect(await db.query("SELECT dirsql_testext_answer() AS a")).toEqual([
       { a: 42 },
