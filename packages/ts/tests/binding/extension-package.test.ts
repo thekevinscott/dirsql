@@ -1,4 +1,4 @@
-// Integration: resolve a SQLite extension by bare package name (#299).
+// Binding tier: resolve a SQLite extension by bare package name (#299).
 //
 // Lays a real compiled loadable inside a real installed-package directory under
 // `node_modules`, points `DirSQL` at it by **bare package name**, and asserts
