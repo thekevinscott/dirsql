@@ -24,6 +24,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   principle; no binding surface yet, and existing single-config loads are
   unaffected.
 
+- **Internal row-bookkeeping table `_dirsql_internal_rows` (#359, epic #358,
+  stage 1).** The engine now maintains an internal mapping table —
+  `(table_name, file_path, row_index, rowid_ref)` — that mirrors the injected
+  `_dirsql_file_path` / `_dirsql_row_index` tracking columns, dual-written in
+  the same SQLite transaction as each row insert/delete so it can never diverge
+  from the rows it describes. This is foundational plumbing for eventually
+  dropping the injected columns (and unlocking `CREATE VIRTUAL TABLE` dirsql
+  tables); the injected columns remain authoritative and **there is no
+  user-visible change**. `WITHOUT ROWID` tables emit a stderr warning (they
+  break rowid-based bookkeeping and will be rejected in a later stage). The
+  persistent-cache schema version is bumped, so the first startup after
+  upgrading performs a one-time, penalty-free full rebuild to populate the
+  mapping.
+
 - **TypeScript SDK: `Buffer`/`Uint8Array` → SQLite BLOB (#343).** An `extract`
   callback can now return a `Buffer` or `Uint8Array` and it is stored as a real
   BLOB, restoring parity with Python's documented `bytes → BLOB` mapping.
