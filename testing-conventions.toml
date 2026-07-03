@@ -28,7 +28,7 @@
 # because effectful code (filesystem / subprocess / HTTP / `notify`) lives in
 # the integration tier by design (#233), so the unit tier cannot reach it. The
 # `functions`/`branch` floors are an honest interim below the >=90% ideal;
-# raising them is tracked in the #295 follow-up.
+# raising them is tracked in #354.
 
 # --- Python (scanned: packages/python/dirsql) ------------------------------
 
@@ -89,7 +89,7 @@ features = ["cli"]
 # bindings' 100% (and `functions`/`branch` below the >=90% ideal) because the
 # effectful paths in lib.rs / cli/*.rs / watcher.rs are exercised at the
 # integration/e2e tier by design (#233), not the unit tier. Raising them toward
-# >=90% across the board is tracked in the #295 follow-up issue.
+# >=90% across the board is tracked in #354.
 [rust.coverage]
 lines = 90
 functions = 80
