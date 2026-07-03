@@ -921,6 +921,43 @@ glob = "c/*.json"
     }
 
     #[test]
+    fn combine_singleton_with_internal_duplicate_returns_unchanged() {
+        // "A single entry returns it unchanged" holds even when the config
+        // carries an internal duplicate table name: the identity path runs no
+        // collision check, exactly like a plain single-config load.
+        let config = cfg(concat!(
+            "[[table]]\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\n",
+            "[[table]]\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\n",
+        ));
+        let merged = combine_configs(&[(src("/a"), config)]).unwrap();
+        assert_eq!(merged.tables.len(), 2);
+    }
+
+    #[test]
+    fn combine_intra_config_duplicate_in_multi_merge_errors() {
+        // A collision *anywhere* in a multi-config merge errors — including a
+        // duplicate within one source, which names that source on both sides.
+        let a = cfg(concat!(
+            "[[table]]\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\n",
+            "[[table]]\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\n",
+        ));
+        let b = cfg("[dirsql]\nignore = [\"c/**\"]\n");
+        let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
+        match &err {
+            ConfigError::DuplicateTable {
+                name,
+                first,
+                second,
+            } => {
+                assert_eq!(name, "t");
+                assert_eq!(first, &src("/a"));
+                assert_eq!(second, &src("/a"));
+            }
+            other => panic!("got: {other:?}"),
+        }
+    }
+
+    #[test]
     fn combine_duplicate_table_name_detected_through_quoting() {
         // `CREATE TABLE "t"` and `CREATE TABLE t` name the same table: the
         // collision check compares parsed names, not raw DDL strings.
