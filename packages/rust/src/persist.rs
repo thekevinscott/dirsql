@@ -19,7 +19,12 @@ use crate::Table;
 
 /// Sidecar schema version. Bumped on any breaking change to the layout of
 /// `_dirsql_files` / `_dirsql_meta`.
-pub const SCHEMA_VERSION: &str = "1";
+///
+/// `2` (epic #358, stage 1): adds the `_dirsql_internal_rows` bookkeeping
+/// table. A cache written by an older build lacks the mapping, so the version
+/// mismatch forces a penalty-free full rebuild on first startup after upgrade,
+/// which populates the mapping from scratch.
+pub const SCHEMA_VERSION: &str = "2";
 
 /// Bumped whenever any built-in parser changes its row-shape contract. A
 /// mismatch forces a full rebuild.
@@ -372,6 +377,10 @@ pub fn drop_user_tables(conn: &Connection) -> rusqlite::Result<()> {
         conn.execute(&format!("DROP TABLE IF EXISTS \"{name}\""), [])?;
     }
     conn.execute("DELETE FROM _dirsql_files", [])?;
+    // Wipe the row mapping too (epic #358): a cold rebuild re-ingests every
+    // file, and `insert_row` repopulates the mapping, so any stale rows here
+    // must go or they would duplicate / orphan the fresh state.
+    conn.execute("DELETE FROM _dirsql_internal_rows", [])?;
     Ok(())
 }
 
@@ -530,9 +539,26 @@ mod tests {
     fn drop_user_tables_clears_user_data_and_files_index() {
         let conn = Connection::open_in_memory().unwrap();
         create_sidecar_tables(&conn).unwrap();
+        // The internal row mapping (epic #358) is created by `Db::open` in
+        // production; declare it inline here since this test uses a raw
+        // connection (calling the `db` helper would break unit isolation).
+        conn.execute(
+            "CREATE TABLE _dirsql_internal_rows (
+                table_name TEXT NOT NULL, file_path TEXT NOT NULL,
+                row_index INTEGER NOT NULL, rowid_ref INTEGER NOT NULL)",
+            [],
+        )
+        .unwrap();
         conn.execute("CREATE TABLE rows (x TEXT)", []).unwrap();
         conn.execute("INSERT INTO rows (x) VALUES ('a')", [])
             .unwrap();
+        // A stale mapping row that a cold rebuild must wipe.
+        conn.execute(
+            "INSERT INTO _dirsql_internal_rows (table_name, file_path, row_index, rowid_ref) \
+             VALUES ('rows', 'a.csv', 0, 1)",
+            [],
+        )
+        .unwrap();
         let stat = FileStat {
             size: 1,
             mtime_ns: 1,
@@ -554,6 +580,13 @@ mod tests {
             .unwrap();
         assert_eq!(table_count, 0);
         assert!(read_cached_files(&conn).unwrap().is_empty());
+        // The internal row mapping is wiped too, ready for a fresh re-ingest.
+        let mapping_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _dirsql_internal_rows", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(mapping_count, 0);
         // Meta is preserved by drop_user_tables -- we replace it explicitly.
         let m = read_meta(&conn).unwrap();
         assert_eq!(m.get("x"), Some(&"y".to_string()));
