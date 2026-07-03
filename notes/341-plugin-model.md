@@ -6,119 +6,120 @@ machinery as possible on top of Epic B (#322).
 
 ## Summary
 
-A plugin is **a directory: a descriptor plus scripts**. Installing one vendors
-the directory into `.dirsql/plugins/<name>/` and merges its config fragment
-into `.dirsql.toml`. At runtime there is **no plugin system at all** — the
-merged config is ordinary hook config, and the core stays a command runner.
-The entire feature is a CLI-side installer: fetch, consent, merge, unmerge.
+A plugin is **an ordinary ecosystem package** (pip / npm) that ships hook
+scripts as console commands. There is no `dirsql plugin` subcommand, no
+fetching, no vendoring, no config rewriting — distribution and dependency
+resolution are entirely the package manager's job:
+
+```bash
+uvx --with dirsql-plugin-embeddings dirsql
+# or
+npx -y --package dirsql-plugin-embeddings dirsql
+```
+
+`--with` puts the plugin's console scripts on the spawned environment's PATH,
+and hook commands inherit `dirsql`'s environment (already part of the
+command-execution contract) — so the hooks in `.dirsql.toml` can invoke the
+plugin's commands by name. At runtime there is **no plugin system at all**:
+the core stays a command runner.
 
 ## Anatomy of a plugin
 
+A pip package `dirsql-plugin-embeddings` exposing one console script with a
+subcommand per hook:
+
 ```
-embeddings/
-  plugin.toml       # descriptor
-  embed_file.py     # on-file hook
-  to_sql.py         # pre-query hook
+dirsql_plugin_embeddings/
+  pyproject.toml     # deps: sentence-transformers, …  entry point: dirsql-embeddings
+  main.py            # on-file / pre-query subcommands
+  README.md          # the .dirsql.toml snippet to paste
 ```
 
-`plugin.toml`:
+Wiring it is the snippet from the plugin's README:
 
 ```toml
-[plugin]
-name        = "embeddings"
-description = "Semantic search over indexed files"
-requires    = ["uv"]   # binaries that must be on PATH; preflight-checked at install
-
-# The exact TOML to merge into .dirsql.toml — no plugin vocabulary to learn.
-[[config.table]]
+[[table]]
 ddl     = "CREATE TABLE embeddings (_path TEXT, chunk TEXT, embedding TEXT)"
 glob    = "**/*.md"
-on-file = "uv run --with sentence-transformers {plugin}/embed_file.py {path}"
+on-file = "dirsql-embeddings on-file {path}"
 
-[config.dirsql]
-pre-query = "uv run --with sentence-transformers {plugin}/to_sql.py {args}"
+[dirsql]
+pre-query = "dirsql-embeddings pre-query {args}"
 ```
 
 Key choices:
 
-- **The fragment is literal config.** `[config]` holds exactly the TOML that
-  lands in `.dirsql.toml`, so what a plugin can do is by definition what a
-  hand-written hook can do — the docs for `on-file`/`pre-query`/`post-query`
-  *are* the plugin API.
-- **One placeholder, resolved at install time.** `{plugin}` expands to the
-  vendored directory path when the fragment is merged — plain string
-  substitution in the CLI. The runtime placeholder set (`{path}`, `{args}`, …)
-  is untouched, so there is zero new runtime surface.
-- **Dependencies stay out-of-process and per-ecosystem.** The command string
-  itself carries them (`uv run --with …`, `npx -y …`). `dirsql` never installs
-  packages; `requires` is just a `which` check with a friendly error.
+- **The package manager is the installer.** Deps (models, tokenizers, numpy)
+  live in the plugin package's own metadata; `uvx --with` / `npx --package`
+  resolve them. `dirsql` never fetches, vendors, or installs anything.
+- **The config is literal hook config.** What a plugin can do is by definition
+  what a hand-written hook can do — the docs for
+  `on-file`/`pre-query`/`post-query` *are* the plugin API. No manifest, no new
+  placeholder, no new vocabulary.
+- **Naming convention, not registry:** `dirsql-plugin-<name>` on PyPI/npm,
+  exposing a `dirsql-<name>` command. Discoverable by search; nothing to
+  maintain.
+- **Alternative invocation without `--with`:** a hook command can carry its
+  own deps per-invocation (`on-file = "uvx --from dirsql-plugin-embeddings
+  dirsql-embeddings on-file {path}"`). Slower per spawn (resolution is
+  cached but checked), so the launch-time `--with` is the documented default.
 
-## CLI surface
+## Trust
 
-```
-dirsql plugin add <local-path | git-url>   # vendor + consent + merge
-dirsql plugin remove <name>                # unmerge + delete vendored dir
-dirsql plugin list
-```
-
-`add` does three things:
-
-1. **Fetch.** A local path is copied, a git URL shallow-cloned, into
-   `.dirsql/plugins/<name>/`. `.dirsql/` is already the reserved, never-scanned
-   namespace, so vendored scripts can never leak into a table.
-2. **Consent.** Print the full config fragment — i.e. the exact command lines
-   that will execute — and require an interactive `y` (or `--yes` for
-   automation). This is the trust story: same threat model as hand-writing a
-   hook, but the commands are shown, not buried. Refuse if a server-wide key
-   (`pre-query` / `post-query`) is already set by the user or another plugin —
-   those keys are single-valued; chaining is out of scope.
-3. **Merge.** Edit `.dirsql.toml` with `toml_edit` (format- and
-   comment-preserving), tagging each inserted item
-   (`# managed by dirsql plugin: embeddings`) and recording the inserted
-   keys/tables in the vendored copy of `plugin.toml`.
-
-`remove` deletes exactly the recorded items, then the vendored directory. Hand
-edits elsewhere survive because edits are surgical, never a re-serialization.
-`add` on an installed plugin errors; `--force` = remove + add.
+Consent is structural rather than interactive: nothing activates by mere
+installation. Running with `--with` *and* pasting the snippet are both
+explicit user actions, and the snippet shows the exact command lines that
+will run — the same threat model as hand-writing a hook, because it *is*
+hand-writing a hook. No sandboxing, same as every other hook.
 
 ## The motivating case rides on existing features
 
-The embeddings plugin needs **no new core code** — every line of its fragment
-is documented config today:
+The embeddings plugin needs **no new code anywhere** — every line of its
+snippet is documented config today:
 
-- `embed_file.py {path}` (via `on-file`): reads the file, chunks it, prints
+- `dirsql-embeddings on-file {path}`: reads the file, chunks it, prints
   `[{"chunk": …, "embedding": "[0.12, …]"}, …]`; stat virtuals merge `_path` in.
-- `to_sql.py {args}` (via `pre-query`): treats the request body as a natural-
-  language query, computes its embedding in-process, and prints
+- `dirsql-embeddings pre-query {args}`: treats the request body as a
+  natural-language query, computes its embedding in-process, and prints
   `SELECT _path, chunk, vec_distance_cosine(embedding, '<query vec>') AS score
   FROM embeddings ORDER BY score LIMIT 10`.
-- The fragment can also carry a `[[config.dirsql.extension]]` entry to load
-  sqlite-vec, using the existing package-name resolution in the pip/npm CLIs.
+- The snippet can include a `[[dirsql.extension]]` entry to load sqlite-vec,
+  using the existing package-name resolution in the pip/npm CLIs. A
+  pure-Python fallback (cosine in the hook) also works; the extension path is
+  just faster.
 
-A pure-Python fallback (cosine in the hook, no extension) also works; the
-extension path is just faster.
+## Possible later sugar (not v0)
+
+If pasting the snippet proves to be real friction, one small addition closes
+it without an installer:
+
+```toml
+[dirsql]
+plugins = ["dirsql-plugin-embeddings"]
+```
+
+Each named package ships a config fragment; the pip/npm launcher resolves the
+package (the same binding-layer seam that already resolves extension package
+names — the standalone Rust binary stays file-path-only, same caveat) and the
+fragment is merged in-memory at config load. Uninstall = delete the line.
+This keeps `.dirsql.toml` untouched by tooling but does add a small amount of
+config-load surface, so it stays out of v0 until the copy-paste friction is
+demonstrated.
 
 ## Open questions → positions
 
-- **Distribution:** v0 is local path + git URL. No registry. A
-  `gh:user/repo` shorthand is a cheap later add.
-- **Manifest:** a separate `plugin.toml` inside the plugin dir — never extra
-  keys in `.dirsql.toml`, which stays purely config the user owns.
-- **Trust:** install-time consent showing the exact commands, plus the
-  single-valued-key refusal. No sandboxing — hand-written hooks have none
-  either, and pretending otherwise would be false comfort.
-- **Merge/uninstall:** `toml_edit` + a per-plugin record of inserted items
-  (above). Idempotent by construction.
-- **Core support needed:** none. Everything lives under the `cli` Cargo
-  feature (`packages/rust/src/cli/`), which is never compiled into the SDK
-  bindings — no SDK surface, no PARITY drift, and per the `cli`-only carve-out
-  (#337/#328), no binding re-attestation.
-
-## Known limitation
-
-`pre-query`/`post-query` are server-wide and single-valued, so two plugins
-cannot both hook the same query event. Punted: chaining/multiplexing is a
-hook-substrate question (#322 follow-up), not a plugin-installer one.
+- **Distribution:** PyPI/npm under the `dirsql-plugin-*` convention. No
+  registry, no git fetching, no local-path machinery — a local plugin is just
+  a path-installed package (`uv pip install -e …`).
+- **Manifest:** none. The package's own metadata carries deps; the README
+  carries the snippet.
+- **Config merge/uninstall:** nothing merges; the user owns `.dirsql.toml`.
+  Removal = delete the snippet and drop the `--with`.
+- **Core support needed:** none for v0. The `plugins` key sugar, if it ever
+  lands, touches the binding-layer config load only.
+- **Hook chaining:** `pre-query`/`post-query` are server-wide and
+  single-valued, so two plugins cannot hook the same query event. Punted:
+  that is a hook-substrate question (#322 follow-up), not a plugin one.
 
 ## Non-goals (unchanged from the issue)
 
