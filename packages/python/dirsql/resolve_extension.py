@@ -73,18 +73,22 @@ def _resolve_package(name):
             matches.update(_glob.glob(os.path.join(d, "**", pat), recursive=True))
     found = sorted(matches)
 
-    pat_desc = " / ".join(patterns)
-    if not found:
-        raise ValueError(
-            f"no loadable extension file ({pat_desc}) found in package "
-            f"{name!r} (searched {', '.join(dirs)})"
-        )
-    if len(found) > 1:
+    # Exactly one loadable resolves; unpacking (rather than a guarded
+    # subscript) makes the zero- and multiple-match failures each observable.
+    try:
+        (single,) = found
+    except ValueError:
+        pat_desc = " / ".join(patterns)
+        if not found:
+            raise ValueError(
+                f"no loadable extension file ({pat_desc}) found in package "
+                f"{name!r} (searched {', '.join(dirs)})"
+            ) from None
         raise ValueError(
             f"multiple loadable extension files found in package {name!r}: "
             f"{', '.join(found)}; disambiguate with a literal path"
-        )
-    return found[0]
+        ) from None
+    return single
 
 
 def resolve_extension_path(path, base, resolve_relative):

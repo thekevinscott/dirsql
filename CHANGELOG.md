@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Python/TypeScript SDKs: config-file `[[dirsql.extension]]` entries may name
+  an extension by package name (#313, epic #227).** Constructing a `DirSQL`
+  from a `.dirsql.toml` (`DirSQL(config=...)` / `new DirSQL(configPath)`) now
+  resolves a `[[dirsql.extension]]` `path` that is a bare **package name** from
+  the installed package in the runtime env — previously only the programmatic
+  `extensions` argument (#298/#299) and the CLI launchers could do this, and
+  the SDK `config=` form was literal-path-only. When any config entry names a
+  package, the SDK resolves *every* entry itself (via the shared
+  `resolve_config_extension_specs` / `resolveConfigExtensionSpecs` helper, also
+  now backing the CLI launchers), appends the resolved literal paths after the
+  programmatic extensions, and suppresses the core's own config-extension
+  loading through a new `suppress_config_extensions` /
+  `suppressConfigExtensions` binding parameter (wired to the existing
+  `DirSQLBuilder::suppress_config_extensions` toggle) so entries are not loaded
+  twice. Configs with only literal paths keep the core's existing loading and
+  error reporting untouched. The Rust core and SDK remain file-path-only by
+  design (epic #227 carve-out).
 - **CLI server: a server-wide `post-query` command hook (B4 of epic #322,
   #329).** Set `[dirsql].post-query = "…"` in `.dirsql.toml` and the HTTP server
   reshapes every successful `POST /query` response through it: the result rows

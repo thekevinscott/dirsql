@@ -38,6 +38,7 @@ class _FakeRustDirSQL:
         persist=False,
         persist_path=None,
         extensions=None,
+        suppress_config_extensions=False,
     ):
         self.root = root
         self.tables = tables
@@ -46,6 +47,7 @@ class _FakeRustDirSQL:
         self.persist = persist
         self.persist_path = persist_path
         self.extensions = extensions
+        self.suppress_config_extensions = suppress_config_extensions
         self.queries: list[str] = []
         self.query_results: list = (
             [{"from_config": config}] if config is not None else [{"ok": 1}]
@@ -128,9 +130,9 @@ def describe_binding_layer():
             db = async_mod.DirSQL("/root", tables=["t"])
             await db.ready()
 
-            assert any("DirSQL" in c or "FakeRustDirSQL" in c for c in to_thread_spy), (
-                to_thread_spy
-            )
+            # Construction (extension resolution + core init) is offloaded as
+            # the `_build_db` bound method.
+            assert "_build_db" in to_thread_spy, to_thread_spy
 
         @pytest.mark.asyncio
         async def it_offloads_query_via_to_thread(mock_core, to_thread_spy):

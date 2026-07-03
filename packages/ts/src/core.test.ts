@@ -20,17 +20,32 @@ describe("getCore", () => {
 });
 
 describe("NativeDirSQLConstructor contract", () => {
-  it("accepts extensions as openAsync's seventh argument (#230)", () => {
+  it("accepts extensions and suppressConfigExtensions as openAsync's trailing arguments (#230 / #313)", () => {
     const openAsync = vi.fn().mockResolvedValue({});
     const ctor = { openAsync } as unknown as NativeDirSQLConstructor;
-    // Typed against the real interface: dropping the 7th argument would fail
-    // to compile, so this call pins the extensions parameter into the
-    // contract the `DirSQL` wrapper relies on.
-    ctor.openAsync("/r", null, null, null, null, null, [
-      { path: "/ext/vec0.so", entrypoint: "sqlite3_vec_init" },
-    ]);
-    expect(openAsync).toHaveBeenCalledWith("/r", null, null, null, null, null, [
-      { path: "/ext/vec0.so", entrypoint: "sqlite3_vec_init" },
-    ]);
+    // Typed against the real interface: dropping the 7th or 8th argument
+    // would fail to compile, so this call pins the extensions and
+    // suppressConfigExtensions parameters into the contract the `DirSQL`
+    // wrapper relies on.
+    ctor.openAsync(
+      "/r",
+      null,
+      null,
+      null,
+      null,
+      null,
+      [{ path: "/ext/vec0.so", entrypoint: "sqlite3_vec_init" }],
+      true,
+    );
+    expect(openAsync).toHaveBeenCalledWith(
+      "/r",
+      null,
+      null,
+      null,
+      null,
+      null,
+      [{ path: "/ext/vec0.so", entrypoint: "sqlite3_vec_init" }],
+      true,
+    );
   });
 });
