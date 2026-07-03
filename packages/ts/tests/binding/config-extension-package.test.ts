@@ -65,10 +65,11 @@ function buildFixtureExtension(targetDir: string): string {
 }
 
 describe("DirSQL config-file extension by package name (#313)", () => {
-  // Must differ from extension-package.test.ts's package name: vitest runs
-  // test files in parallel forks, and a shared node_modules path races one
-  // file's afterEach cleanup against the other's resolution.
-  const pkgName = "dirsql-testext-config-pkg";
+  // Unique to this suite: `extension-package.test.ts` installs its own fake
+  // package in the same shared `node_modules`, and vitest runs the two files
+  // in parallel workers — a shared name lets one suite's cleanup delete the
+  // other's fixture mid-test (#349).
+  const pkgName = "dirsql-testext-pkg-config";
   const pkgDir = join(tsNodeModules, pkgName);
   let tmp: string;
 
