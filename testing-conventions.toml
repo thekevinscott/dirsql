@@ -22,9 +22,13 @@
 #
 # Floors: AGENTS.md mandates >=90% per SDK; both bindings currently hold the
 # stricter 100% unit-only floor below (the honest maximum, no waivers needed).
-# Rust is NOT here: the CLI can't measure it unit-only yet (it runs the
-# integration tests too and can't enable the `cli` feature) -- tracked in #295;
-# Rust keeps its bespoke `cargo llvm-cov` coverage in rust-test.yml until then.
+# Rust (added #295) is measured unit-only via `cargo llvm-cov --lib --features
+# cli`: the CLI now scopes to `--lib` and passes `[rust].features` through
+# (testing-conventions #269/#270/#271). Its floors sit below the bindings' 100%
+# because effectful code (filesystem / subprocess / HTTP / `notify`) lives in
+# the integration tier by design (#233), so the unit tier cannot reach it. The
+# `functions`/`branch` floors are an honest interim below the >=90% ideal;
+# raising them is tracked in the #295 follow-up.
 
 # --- Python (scanned: packages/python/dirsql) ------------------------------
 
@@ -66,3 +70,28 @@ lines = 100
 functions = 100
 statements = 100
 branches = 100
+
+# --- Rust (scanned: packages/rust/src) -------------------------------------
+
+# `features` is forwarded to `cargo llvm-cov --features` (and cargo-mutants) so
+# the `#[cfg(feature = "cli")]` module is compiled, measured, and mutated
+# (testing-conventions #270). Without it the whole CLI module compiles out and
+# is silently unmeasured.
+[rust]
+features = ["cli"]
+
+# Unit-only coverage floor: measured by `cargo llvm-cov --lib --features cli`
+# (the `--lib` scoping keeps the integration tier under packages/rust/tests/ out
+# of the number -- testing-conventions #269). `branch` runs under `--branch`,
+# which needs the nightly toolchain pinned in rust-test.yml's coverage job.
+#
+# Floors are the honest unit-only maxima less a small margin. They are BELOW the
+# bindings' 100% (and `functions`/`branch` below the >=90% ideal) because the
+# effectful paths in lib.rs / cli/*.rs / watcher.rs are exercised at the
+# integration/e2e tier by design (#233), not the unit tier. Raising them toward
+# >=90% across the board is tracked in the #295 follow-up issue.
+[rust.coverage]
+lines = 90
+functions = 80
+regions = 90
+branch = 70
