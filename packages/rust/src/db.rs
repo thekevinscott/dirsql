@@ -301,11 +301,21 @@ impl Db {
     /// The user-row deletes and the matching `_dirsql_internal_rows` mapping
     /// deletes commit in ONE transaction (epic #358), so the mapping never
     /// outlives the rows it describes.
+    ///
+    /// Stage 2 (epic #358): row ownership is read from the mapping, not the
+    /// injected `_dirsql_file_path` column (now write-only). The user rows to
+    /// drop are those whose `rowid` the mapping attributes to `file_path` under
+    /// `table`; the mapping rows are then removed in the same transaction.
     pub fn delete_rows_by_file(&self, table: &str, file_path: &str) -> Result<usize> {
         validate_identifier(table)?;
         let tx = self.conn.unchecked_transaction()?;
-        let sql = format!("DELETE FROM {} WHERE _dirsql_file_path = ?1", table);
-        let count = tx.execute(&sql, [file_path])?;
+        let sql = format!(
+            "DELETE FROM {} WHERE rowid IN \
+             (SELECT rowid_ref FROM _dirsql_internal_rows \
+              WHERE table_name = ?1 AND file_path = ?2)",
+            table
+        );
+        let count = tx.execute(&sql, rusqlite::params![table, file_path])?;
         tx.execute(
             "DELETE FROM _dirsql_internal_rows WHERE table_name = ?1 AND file_path = ?2",
             rusqlite::params![table, file_path],
@@ -1591,6 +1601,71 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, "b.jsonl");
         db.check_row_mapping_equivalence("t").unwrap();
+    }
+
+    #[test]
+    fn delete_rows_by_file_reads_mapping_not_columns() {
+        // Stage 2 (epic #358): delete-by-file resolves ownership through the
+        // mapping, not the now-write-only `_dirsql_file_path` column. Corrupt
+        // the column so it disagrees with the mapping and confirm the delete
+        // still follows the mapping.
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.insert_row(
+            "t",
+            &HashMap::from([("id".into(), Value::Text("a".into()))]),
+            "real.json",
+            0,
+        )
+        .unwrap();
+        // Desync the write-only column from the mapping.
+        db.conn
+            .execute("UPDATE t SET _dirsql_file_path = 'wrong.json'", [])
+            .unwrap();
+
+        // Deleting by the mapping's file removes the row; deleting by the
+        // stale column value is a no-op.
+        assert_eq!(db.delete_rows_by_file("t", "wrong.json").unwrap(), 0);
+        assert_eq!(db.delete_rows_by_file("t", "real.json").unwrap(), 1);
+        let remaining: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, 0);
+        db.check_row_mapping_equivalence("t").unwrap();
+    }
+
+    #[test]
+    fn delete_rows_by_file_is_scoped_to_its_table() {
+        // The mapping subquery is keyed on (table_name, file_path): a delete on
+        // one table must not touch another table's rows for the same file path,
+        // even when they share a rowid.
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t1 (id TEXT)").unwrap();
+        db.create_table("CREATE TABLE t2 (id TEXT)").unwrap();
+        db.insert_row(
+            "t1",
+            &HashMap::from([("id".into(), Value::Text("x".into()))]),
+            "shared.json",
+            0,
+        )
+        .unwrap();
+        db.insert_row(
+            "t2",
+            &HashMap::from([("id".into(), Value::Text("y".into()))]),
+            "shared.json",
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(db.delete_rows_by_file("t1", "shared.json").unwrap(), 1);
+        let t2_rows: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM t2", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(t2_rows, 1, "t2's row for the same path must be untouched");
+        db.check_row_mapping_equivalence("t1").unwrap();
+        db.check_row_mapping_equivalence("t2").unwrap();
     }
 
     #[test]

@@ -384,9 +384,15 @@ pub fn drop_user_tables(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Look up the existing `dirsql_*` tracking column rows for one file. Used
-/// on warm start to rebuild the in-memory `file_rows` cache that the
-/// watcher's diffing path requires.
+/// Look up the row store's rows for one file, ordered by row index. Used on
+/// warm start to rebuild the in-memory `file_rows` cache that the watcher's
+/// diffing path requires.
+///
+/// Stage 2 (epic #358): ownership and ordering are read from the
+/// `_dirsql_internal_rows` mapping (joined on `rowid`), not the injected
+/// `_dirsql_file_path` / `_dirsql_row_index` columns (now write-only). User
+/// columns are qualified with the table alias so a user column named like a
+/// mapping column stays unambiguous.
 pub fn read_rows_for_file(
     conn: &Connection,
     table: &str,
@@ -395,17 +401,19 @@ pub fn read_rows_for_file(
 ) -> rusqlite::Result<Vec<HashMap<String, crate::db::Value>>> {
     let mut col_list = user_columns
         .iter()
-        .map(|c| format!("\"{c}\""))
+        .map(|c| format!("t.\"{c}\""))
         .collect::<Vec<_>>()
         .join(", ");
     if col_list.is_empty() {
         col_list = "1".to_string();
     }
     let sql = format!(
-        "SELECT {col_list} FROM \"{table}\" WHERE _dirsql_file_path = ?1 ORDER BY _dirsql_row_index"
+        "SELECT {col_list} FROM \"{table}\" AS t \
+         JOIN _dirsql_internal_rows AS m ON m.rowid_ref = t.rowid \
+         WHERE m.table_name = ?1 AND m.file_path = ?2 ORDER BY m.row_index"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params![rel_path], |row| {
+    let rows = stmt.query_map(params![table, rel_path], |row| {
         let mut map = HashMap::new();
         for (i, name) in user_columns.iter().enumerate() {
             let v: rusqlite::types::Value = row.get(i)?;
@@ -673,6 +681,18 @@ mod tests {
         assert_eq!(system_time_to_ns(None), 0);
     }
 
+    /// Declare the internal mapping table on a raw connection (the `db` helper
+    /// would break unit isolation). Stage 2 reads through this table.
+    fn create_internal_rows_table(conn: &Connection) {
+        conn.execute(
+            "CREATE TABLE _dirsql_internal_rows (
+                table_name TEXT NOT NULL, file_path TEXT NOT NULL,
+                row_index INTEGER NOT NULL, rowid_ref INTEGER NOT NULL)",
+            [],
+        )
+        .unwrap();
+    }
+
     #[test]
     fn read_rows_for_file_handles_empty_user_columns() {
         // With no user columns the SELECT list collapses to `1`, so the
@@ -683,8 +703,16 @@ mod tests {
             [],
         )
         .unwrap();
+        create_internal_rows_table(&conn);
         conn.execute(
             "INSERT INTO rows (_dirsql_file_path, _dirsql_row_index) VALUES ('f.csv', 0), ('f.csv', 1)",
+            [],
+        )
+        .unwrap();
+        // Map the two inserted rows (rowids 1, 2) to f.csv.
+        conn.execute(
+            "INSERT INTO _dirsql_internal_rows (table_name, file_path, row_index, rowid_ref) \
+             VALUES ('rows', 'f.csv', 0, 1), ('rows', 'f.csv', 1, 2)",
             [],
         )
         .unwrap();
@@ -701,8 +729,16 @@ mod tests {
             [],
         )
         .unwrap();
+        create_internal_rows_table(&conn);
         conn.execute(
             "INSERT INTO rows (col, _dirsql_file_path, _dirsql_row_index) VALUES ('a', 'f.csv', 0), ('b', 'f.csv', 1), ('c', 'g.csv', 0)",
+            [],
+        )
+        .unwrap();
+        // rowids 1, 2 belong to f.csv; rowid 3 to g.csv.
+        conn.execute(
+            "INSERT INTO _dirsql_internal_rows (table_name, file_path, row_index, rowid_ref) \
+             VALUES ('rows', 'f.csv', 0, 1), ('rows', 'f.csv', 1, 2), ('rows', 'g.csv', 0, 3)",
             [],
         )
         .unwrap();
@@ -710,6 +746,40 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["col"], crate::db::Value::Text("a".into()));
         assert_eq!(rows[1]["col"], crate::db::Value::Text("b".into()));
+    }
+
+    #[test]
+    fn read_rows_for_file_reads_mapping_not_columns() {
+        // Stage 2: ownership + ordering come from the mapping, not the
+        // write-only injected columns. Store a row whose `_dirsql_file_path` /
+        // `_dirsql_row_index` columns DISAGREE with the mapping, and confirm
+        // the read follows the mapping.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE rows (col TEXT, _dirsql_file_path TEXT, _dirsql_row_index INTEGER)",
+            [],
+        )
+        .unwrap();
+        create_internal_rows_table(&conn);
+        // Column says wrong.csv / index 9; mapping says right.csv / index 0.
+        conn.execute(
+            "INSERT INTO rows (col, _dirsql_file_path, _dirsql_row_index) VALUES ('a', 'wrong.csv', 9)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO _dirsql_internal_rows (table_name, file_path, row_index, rowid_ref) \
+             VALUES ('rows', 'right.csv', 0, 1)",
+            [],
+        )
+        .unwrap();
+        // Querying the mapping's file returns the row...
+        let hit = read_rows_for_file(&conn, "rows", "right.csv", &["col".to_string()]).unwrap();
+        assert_eq!(hit.len(), 1);
+        assert_eq!(hit[0]["col"], crate::db::Value::Text("a".into()));
+        // ...and the column's (stale) file returns nothing.
+        let miss = read_rows_for_file(&conn, "rows", "wrong.csv", &["col".to_string()]).unwrap();
+        assert!(miss.is_empty());
     }
 
     // --- rusqlite error propagation (`?` arms) ---

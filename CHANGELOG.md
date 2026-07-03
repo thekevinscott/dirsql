@@ -95,6 +95,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Internal row ownership is now read from `_dirsql_internal_rows` (#360, epic
+  #358, stage 2).** The engine's row readers — delete-by-file and the warm-start
+  row rebuild — now resolve which rows belong to a file through the internal
+  mapping table (joined on `rowid`) instead of the injected `_dirsql_file_path`
+  / `_dirsql_row_index` columns, which become **write-only**. Behavior is
+  unchanged and there is no user-visible difference; this is the second step of
+  removing the injected columns (stage 3 stops writing them and deletes the
+  `SELECT *` laundering layer). No cache rebuild is needed — the mapping was
+  already populated in stage 1.
+
 - **TypeScript SDK: BLOB columns now come back as `Buffer` (#343).** `query()`
   results and watcher `RowEvent` rows return BLOB values as Node `Buffer`s
   instead of lowercase hex strings. The CLI's HTTP/JSON surface is unchanged
