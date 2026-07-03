@@ -63,6 +63,8 @@ function buildFixtureExtension(targetDir: string): string {
 }
 
 describe("DirSQL extension by package name (#299)", () => {
+  // Must stay unique across test files: suites run in parallel workers and
+  // share this `node_modules`, so a reused name races on setup/cleanup (#349).
   const pkgName = "dirsql-testext-pkg";
   const pkgDir = join(tsNodeModules, pkgName);
   let tmp: string;
