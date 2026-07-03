@@ -114,8 +114,13 @@ mod python {
 
     #[pymethods]
     impl PyDirSQL {
+        /// `suppress_config_extensions` skips the core's own loading of the
+        /// config's `[[dirsql.extension]]` entries; the SDK sets it after
+        /// resolving those entries itself (package names need `importlib`,
+        /// which the core lacks -- #313) and passing the resolved literal
+        /// paths via `extensions`, so the entries are not loaded twice.
         #[new]
-        #[pyo3(signature = (root=None, *, tables=None, ignore=None, config=None, persist=false, persist_path=None, extensions=None))]
+        #[pyo3(signature = (root=None, *, tables=None, ignore=None, config=None, persist=false, persist_path=None, extensions=None, suppress_config_extensions=false))]
         fn new(
             py: Python<'_>,
             root: Option<String>,
@@ -125,6 +130,7 @@ mod python {
             persist: bool,
             persist_path: Option<PathBuf>,
             extensions: Option<Vec<PyExtensionSpec>>,
+            suppress_config_extensions: bool,
         ) -> PyResult<Self> {
             let rust_tables: Vec<Table> = tables
                 .as_deref()
@@ -164,7 +170,9 @@ mod python {
                     if !rust_extensions.is_empty() {
                         builder = builder.extensions(rust_extensions);
                     }
-                    builder.build()
+                    builder
+                        .suppress_config_extensions(suppress_config_extensions)
+                        .build()
                 })
                 .map_err(to_py_err)?;
 

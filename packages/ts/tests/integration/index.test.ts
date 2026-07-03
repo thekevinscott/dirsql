@@ -75,6 +75,7 @@ describe("DirSQL construction", () => {
       null,
       null,
       null,
+      false,
     );
   });
 
@@ -104,6 +105,7 @@ describe("DirSQL construction", () => {
       true,
       "/cache.db",
       null,
+      false,
     );
   });
 

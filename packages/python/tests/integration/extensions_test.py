@@ -14,7 +14,7 @@ import glob
 import importlib.util
 import os
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import mock_open, patch
 
 import pytest
 
@@ -26,9 +26,17 @@ class _FakeRustDirSQL:
 
     instances: list = []
 
-    def __init__(self, root=None, *, extensions=None, **kwargs):
+    def __init__(
+        self,
+        root=None,
+        *,
+        extensions=None,
+        suppress_config_extensions=False,
+        **kwargs,
+    ):
         self.root = root
         self.extensions = extensions
+        self.suppress_config_extensions = suppress_config_extensions
         self.kwargs = kwargs
         _FakeRustDirSQL.instances.append(self)
 
@@ -72,6 +80,14 @@ def mock_find_spec():
 def mock_glob():
     """Fake the loadable-file glob inside a resolved package dir."""
     with patch.object(glob, "glob") as m:
+        yield m
+
+
+@pytest.fixture
+def mock_config_file():
+    """Fake a ``.dirsql.toml`` whose ``[[dirsql.extension]]`` names a package."""
+    data = b'[[dirsql.extension]]\npath = "sqlite_vec"\n'
+    with patch("builtins.open", mock_open(read_data=data)) as m:
         yield m
 
 
@@ -148,6 +164,28 @@ def describe_extensions_kwarg():
         assert _FakeRustDirSQL.instances[0].extensions == [
             {"path": os.path.join("/cwd", "sqlite_vec"), "entrypoint": None}
         ]
+
+    @pytest.mark.asyncio
+    async def it_resolves_config_extension_package_names_and_suppresses_core_loading(
+        mock_core, mock_cwd, mock_isfile, mock_find_spec, mock_glob, mock_config_file
+    ):
+        # A config-file [[dirsql.extension]] entry naming a package is resolved
+        # by the SDK, and the core's own config-extension loading is suppressed
+        # so the entries are not loaded twice (#313).
+        mock_isfile.side_effect = lambda p: p == "/cfg/.dirsql.toml"
+        mock_find_spec.return_value = SimpleNamespace(
+            submodule_search_locations=["/site-packages/sqlite_vec"], origin=None
+        )
+        mock_glob.return_value = ["/site-packages/sqlite_vec/vec0.so"]
+
+        db = async_mod.DirSQL(config="/cfg/.dirsql.toml")
+        await db.ready()
+
+        inst = _FakeRustDirSQL.instances[0]
+        assert inst.extensions == [
+            {"path": "/site-packages/sqlite_vec/vec0.so", "entrypoint": None}
+        ]
+        assert inst.suppress_config_extensions is True
 
     @pytest.mark.asyncio
     async def it_rejects_ready_when_a_bare_package_name_is_not_installed(

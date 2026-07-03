@@ -31,6 +31,12 @@ test-binding:
 test-e2e:
     uv run python -m pytest packages/python/tests/e2e/ -x -q
 
+# Run Python packaging smoke tests (build the wheel, install into a fresh
+# venv, run the installed CLI). Runs in CI (python-test.yml `smoke` job).
+# Needs `cargo build -p dirsql --features cli` first.
+test-smoke:
+    uv run python -m pytest packages/python/tests/smoke/ -x -q
+
 # Refresh packages/python/e2e-attestation.json: runs the python e2e suite and
 # commits the attestation. The CI gate (.github/workflows/e2e-attestation.yml)
 # verifies it per-package on PRs that touch packages/python. Install

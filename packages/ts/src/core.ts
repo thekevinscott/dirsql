@@ -24,6 +24,9 @@ export interface NativeDirSQLConstructor {
     persist: boolean | null,
     persistPath: string | null,
     extensions: ExtensionSpec[] | null,
+    // Skip the core's own loading of the config's [[dirsql.extension]]
+    // entries; set by the wrapper after resolving them itself (#313).
+    suppressConfigExtensions: boolean | null,
   ): Promise<NativeDirSQL>;
 }
 

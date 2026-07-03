@@ -9,7 +9,7 @@
 // resolved. Real extension *loading* (a missing `.so` failing ready, a
 // fixture cdylib registering a function) is covered by `tests/binding/`.
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { DirSQL } from "dirsql";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -22,6 +22,7 @@ const { fakeCore } = vi.hoisted(() => ({
 vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
   existsSync: vi.fn(),
+  readFileSync: vi.fn(),
   readdirSync: vi.fn(),
   statSync: vi.fn(),
 }));
@@ -47,7 +48,8 @@ vi.mock("node:module", async (importOriginal) => {
 const openAsync = fakeCore.DirSQL.openAsync;
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  // Reset (not just clear) so per-test fs implementations never leak.
+  vi.resetAllMocks();
   openAsync.mockResolvedValue({
     query: vi.fn().mockResolvedValue([]),
     startWatcher: vi.fn().mockResolvedValue(undefined),
@@ -114,6 +116,28 @@ describe("extensions option (hermetic, #230/#299)", () => {
       { path: "/cwd/dirsql-testext-pkg", entrypoint: undefined },
     ]);
     cwd.mockRestore();
+  });
+
+  it("resolves config [[dirsql.extension]] package names and suppresses the core's own loading (#313)", async () => {
+    // The config file exists; nothing else does (in particular no local file
+    // shadows the package name).
+    vi.mocked(existsSync).mockImplementation((p) => p === "/cfg/.dirsql.toml");
+    vi.mocked(readFileSync).mockReturnValue(
+      '[[dirsql.extension]]\npath = "dirsql-testext-pkg"\n',
+    );
+    vi.mocked(readdirSync).mockReturnValue([
+      "libtestext.so",
+    ] as unknown as ReturnType<typeof readdirSync>);
+
+    const db = new DirSQL({ root: "/data", config: "/cfg/.dirsql.toml" });
+    await db.ready;
+    const call = openAsync.mock.calls[0];
+    expect(call?.[6]).toEqual([
+      { path: "/nm/dirsql-testext-pkg/libtestext.so", entrypoint: undefined },
+    ]);
+    // The core's own config-extension loading is suppressed so the entries
+    // are not loaded twice.
+    expect(call?.[7]).toBe(true);
   });
 
   it("rejects ready when a bare package name is not installed", async () => {

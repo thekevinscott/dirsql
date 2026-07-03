@@ -57,16 +57,22 @@ the shared Rust core stays file-path-only (epic
 | Surface | Python ([#298](https://github.com/thekevinscott/dirsql/issues/298)) | Rust | TypeScript ([#299](https://github.com/thekevinscott/dirsql/issues/299)) |
 |---|---|---|---|
 | Constructor `extensions` path = package name | Y (`importlib`) | N/A (file-path-only by design) | Y (`require.resolve`) |
-| `.dirsql.toml` `[[dirsql.extension]]` path = package name, via SDK `config=` | N/A (hands the file to the file-path-only core) | N/A | N/A |
+| `.dirsql.toml` `[[dirsql.extension]]` path = package name, via SDK `config=` | Y ([#313](https://github.com/thekevinscott/dirsql/issues/313)) | N/A | Y ([#313](https://github.com/thekevinscott/dirsql/issues/313)) |
 | `.dirsql.toml` `[[dirsql.extension]]` path = package name, via CLI | Y (Python launcher resolves) | N/A | Y (Node launcher resolves) |
 
-The `.dirsql.toml` package-name form is resolved by the **launcher** (`dirsql`
-CLI), not the compiled engine: the launcher parses the config, resolves each
-extension (`importlib` / `require.resolve`), and passes resolved literal paths to
-the binary via `--extension` (the core's `suppress_config_extensions` toggle
-stops the config's own entries from loading too). Constructing a `DirSQL` from a
-`config=` path in-SDK does **not** resolve config-file package names — use the
-`extensions=` constructor argument, or the CLI.
+The `.dirsql.toml` package-name form is resolved by the **SDK/launcher**, not
+the compiled engine. Both the CLI launchers and (since
+[#313](https://github.com/thekevinscott/dirsql/issues/313)) the SDK `config=`
+construction path share one per-language helper
+(`resolve_config_extension_specs` / `resolveConfigExtensionSpecs`): when a
+config entry names a package, it parses the config, resolves each extension
+(`importlib` / `require.resolve`), and hands the core resolved literal paths
+while the core's `suppress_config_extensions` toggle stops the config's own
+entries from loading too (the launchers pass the paths via `--extension`; the
+SDKs via the binding's `extensions` + `suppress_config_extensions` /
+`suppressConfigExtensions` parameters). Configs with only literal paths are
+still loaded by the core directly. Parity restored across Python and
+TypeScript; Rust stays file-path-only by design (epic #227 carve-out).
 
 All three bindings share a single Rust implementation: `dirsql::DirSQL` handles
 the initial scan, SQL, watcher, and row diffing. Python (`dirsql-py-ext`) and
@@ -210,17 +216,18 @@ Real-core file map:
 | Watch events | `async_dirsql_test.py`, `docs_gaps_test.py` | `sdk.rs`, `watcher.rs`, `watch_relative_root.rs` | `watch.test.ts`, `index.test.ts` |
 | Config file | `from_config_test.py` | `from_config.rs`, `config.rs` | `from-config.test.ts` |
 | Persistence | `persist_test.py` | `persist.rs` | `persist.test.ts` |
-| Extensions | `extensions_test.py`, `extension_package_test.py` | `extensions.rs` | `extensions.test.ts`, `extension-package.test.ts` |
+| Extensions | `extensions_test.py`, `extension_package_test.py`, `config_extension_package_test.py` | `extensions.rs` | `extensions.test.ts`, `extension-package.test.ts`, `config-extension-package.test.ts` |
 | Table-name resolution (#204) | `table_name_resolution_test.py` | `table_name_resolution.rs` | `table-name-resolution.test.ts` |
 | Docs examples | `docs_examples_test.py` | `docs_examples.rs` | `docs-examples.test.ts` |
 | Docs gap-fills | `docs_gaps_test.py` | `docs_gaps.rs` | `docs-gaps.test.ts` |
 
 Hermetic integration tier (mocked core + fs, both bindings, #289): Python
 `tests/integration/dirsql_test.py` (ready/query/watch/kwarg forwarding) and
-`tests/integration/extensions_test.py` (extension-path resolution);
-TypeScript `tests/integration/index.test.ts` (constructor overloads,
-positional marshaling, delegation, watch) and
-`tests/integration/extensions.test.ts` (extension-path resolution).
+`tests/integration/extensions_test.py` (extension-path resolution, incl. the
+#313 config-entry resolution + suppress toggle); TypeScript
+`tests/integration/index.test.ts` (constructor overloads, positional
+marshaling, delegation, watch) and `tests/integration/extensions.test.ts`
+(extension-path resolution, incl. #313).
 
 ### Construction & querying
 
@@ -321,6 +328,7 @@ positional marshaling, delegation, watch) and
 | Missing `[[dirsql.extension]]` config entry fails ready/build | Y | Y | Y |
 | Real extension loaded + function callable (fixture cdylib) | Y (`extension_package_test.py`) | Y (`extensions.rs`) | Y (`extension-package.test.ts`) |
 | `path` as bare package name (constructor, #298/#299) | Y | N/A — file-path-only by design | Y |
+| Config `[[dirsql.extension]]` `path` as bare package name via SDK `config=` (#313) | Y + integration | N/A | Y + integration |
 | `load_extension()` locked after startup; `suppress_config_extensions` seam | core | Y (`extensions.rs`) | core |
 
 ### E2E (CLI / launcher) and smoke tiers
@@ -334,22 +342,21 @@ handling) is covered once, in the Rust e2e/CLI suites (`cli_e2e.rs`,
 per-launcher: resolving/staging the bundled binary, forwarding argv, and
 ecosystem-specific extension resolution.
 
-| Test Scenario              | Python (`tests/e2e/`) | Rust (`tests/`) | TypeScript (`tests/e2e/`, `tests/smoke/`) |
+| Test Scenario              | Python (`tests/e2e/`, `tests/smoke/`) | Rust (`tests/`) | TypeScript (`tests/e2e/`, `tests/smoke/`) |
 |----------------------------|--------|------|------------|
 | `--version` exits 0 and prints the version | Y (`cli_version_test.py`) | Y (`cli_e2e.rs`) | Y (smoke `build.test.ts`, against the packed npm install) |
 | Launcher starts server; `POST /query` over HTTP | Y (`extension_package_test.py`) | Y | Y (`extension-package.test.ts`) |
 | `[[dirsql.extension]]` package name resolved by the launcher (#227) | Y | N/A | Y |
 | `interpret` subcommand removed; argv forwarded to clap (#321) | Y | core (clap dispatch) | Y |
 | HTTP semantics, SSE `/events`, hooks, `init`, zero-config `files` table | core | Y | core |
-| Smoke: pack → install → run the published artifact | **N — gap (#344)** | N/A | Y |
+| Smoke: pack → install → run the published artifact | Y (smoke `build_test.py`, against the packed wheel install) | N/A | Y |
 
 ### Known gaps / follow-ups
 
 - **#343** — TypeScript `Buffer → BLOB` mapping missing (documented for
   Python only today; surfaced as drift above).
-- **#344** — Python has no smoke tier mirroring
-  `packages/ts/tests/smoke/build.test.ts`.
 - **#289** — resolved: the integration tier is hermetic in both bindings
-  (Python patches `_RustDirSQL` via `unittest.mock`; TypeScript `vi.mock`s
-  `src/core.ts`), and the former real-core integration suites moved to the
-  per-binding `tests/binding/` tier, which still runs in CI.
+  (Python patches `_RustDirSQL` via `unittest.mock`; TypeScript delivers a
+  fake core module through a mocked `node:module` `createRequire`), and the
+  former real-core integration suites moved to the per-binding
+  `tests/binding/` tier, which still runs in CI.

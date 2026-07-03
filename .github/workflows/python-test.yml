@@ -169,3 +169,42 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: uv run testing-conventions unit coverage --language python --base "$BASE" --config ../../testing-conventions.toml dirsql
         working-directory: packages/python
+
+  smoke:
+    # Functional publishability gate (#344, mirroring ts-test.yml's smoke
+    # job): build the real `dirsql` CLI binary via cargo, stage it under
+    # `dirsql/_binary/` the way the release pipeline's bundle_cli step
+    # would, build the wheel with `maturin build`, `pip install` it into a
+    # fresh venv, and run the installed `dirsql --version` console script
+    # plus `import dirsql`. Red here means the PyPI release is broken and
+    # must not go out. This is the install-and-run check `packaging.yml`
+    # does NOT do (that gate only asserts no test files ship in the
+    # artifact). No mocks.
+    name: Packaging smoke (install + run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+        working-directory: packages/python
+
+      - name: Build dirsql CLI binary
+        run: cargo build -p dirsql --features cli
+
+      - name: Run packaging smoke (build -> pack -> install -> run)
+        run: uv run python -m pytest tests/smoke/ -x -q --tb=short
+        working-directory: packages/python
