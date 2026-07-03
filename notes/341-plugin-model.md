@@ -14,13 +14,29 @@ npx -y --package @dirsql/embeddings dirsql
 
 Four requirements define the model:
 
-## 1. Plugins are automatically loaded when present
+## 1. Plugins are automatically loaded when present — CLI only
 
-If a plugin package is installed (a Python package / in `node_modules`), it is
-active — no snippet-pasting, no registration step. Discovery lives in the
-pip/npm launcher, the same binding-layer seam that already resolves extension
-package names; the standalone Rust binary is discovery-free (same caveat as
-extensions). Installing a plugin is consenting to run it.
+If a plugin package is installed (a Python package / in `node_modules`), the
+**CLI** activates it — no snippet-pasting, no registration step. With
+`uvx --with dirsql-plugin-embeddings dirsql`, the `--with` *is* the activation
+gesture; requiring a config line on top would make it silently do nothing.
+Precedent: pytest, flake8, and Datasette (the closest analog) all treat
+installed-in-the-environment as active. Escape hatch worth copying from
+pytest: a `--no-plugin <name>` flag / env-var disable.
+
+The **SDK does not auto-discover**: a `DirSQL(...)` constructor whose behavior
+changes because something appeared in `site-packages` — possibly via a
+transitive dependency — is ambient action inside an application (Prettier
+shipped exactly this in v2 and removed it in v3). SDK users splice plugin
+config explicitly (see requirement 4).
+
+The principled line, which also matches the implementation seam: ambient
+discovery is a property of the environment-driven entrypoint (the pip/npm
+launcher), never the core or SDKs. Distinct from extension package-name
+resolution, which works in SDK config loads too — that resolves something the
+config explicitly *names*; discovery activates something named nowhere. The
+standalone Rust binary is discovery-free (same caveat as extensions).
+Installing a plugin is consenting to run it.
 
 ## 2. Plugins define a TOML identical to dirsql's
 
