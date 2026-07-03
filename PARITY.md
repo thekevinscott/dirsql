@@ -240,7 +240,7 @@ marshaling, delegation, watch) and `tests/integration/extensions.test.ts`
 | Extract receives the matched file's path | Y | Y | Y |
 | Extract returns `[]` to skip a file | Y | Y | Y |
 | Value types (str/int/float/bool/None) | Y | Y | Y |
-| `bytes`/`Vec<u8>` → BLOB round-trip | Y | Y | **N — drift (#343)**: the napi binding coerces a `Buffer` to a string |
+| `bytes`/`Vec<u8>`/`Buffer` → BLOB round-trip | Y | Y | Y (#343: `Buffer`/`Uint8Array` in, `Buffer` out) |
 | Invalid SQL raises         | Y      | Y    | Y          |
 | Invalid DDL raises         | Y      | Y    | Y          |
 | Query rejects writes       | Y      | Y    | Y          |
@@ -353,8 +353,6 @@ ecosystem-specific extension resolution.
 
 ### Known gaps / follow-ups
 
-- **#343** — TypeScript `Buffer → BLOB` mapping missing (documented for
-  Python only today; surfaced as drift above).
 - **#289** — resolved: the integration tier is hermetic in both bindings
   (Python patches `_RustDirSQL` via `unittest.mock`; TypeScript delivers a
   fake core module through a mocked `node:module` `createRequire`), and the

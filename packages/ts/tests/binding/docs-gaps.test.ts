@@ -7,12 +7,10 @@
 // it_fills_missing_keys_with_null, it_raises_on_missing_keys_in_strict_mode).
 // The strict extra-keys / exact-match cases already live in index.test.ts.
 //
-// NOTE on `bytes -> BLOB` (guide/tables.md "Supported value types"): the
-// mapping is documented for Python and covered there and in Rust
-// (docs_gaps_test.py / docs_gaps.rs). The TS binding has no
-// Buffer -> BLOB mapping (a Buffer coerces to its string representation),
-// so there is deliberately no TS mirror — the drift is tracked in
-// PARITY.md's test coverage matrix.
+// The `Buffer -> BLOB` describe below mirrors
+// docs_gaps_test.py::it_maps_python_bytes_to_sqlite_blob and
+// packages/rust/tests/docs_gaps.rs::extract_blob_values_round_trip_via_sdk
+// (#343 parity restoration).
 
 import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -101,6 +99,43 @@ describe("DirSQL strict mode (missing keys)", () => {
     });
 
     await expect(db.ready).rejects.toThrow();
+  });
+});
+
+// Docs (guide/tables.md "Supported value types"): `Buffer` / `Uint8Array`
+// -> SQLite BLOB; BLOB columns come back from `query()` as `Buffer`.
+// Round-trips the same payload as the Python/Rust mirrors.
+describe("DirSQL Buffer -> BLOB", () => {
+  const payload = Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe]);
+
+  async function roundTrip(data: unknown): Promise<unknown> {
+    await writeFile(join(dir, "marker.json"), "{}");
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE blobs (name TEXT, data BLOB)",
+          glob: "*.json",
+          extract: () => [{ name: "bin", data }],
+        },
+      ],
+    });
+    const rows = await db.query("SELECT * FROM blobs");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].name).toBe("bin");
+    return rows[0].data;
+  }
+
+  it("round-trips a Buffer through a BLOB column", async () => {
+    const data = await roundTrip(payload);
+    expect(Buffer.isBuffer(data)).toBe(true);
+    expect(Buffer.compare(data as Buffer, payload)).toBe(0);
+  });
+
+  it("maps a Uint8Array to a BLOB and returns it as a Buffer", async () => {
+    const data = await roundTrip(new Uint8Array(payload));
+    expect(Buffer.isBuffer(data)).toBe(true);
+    expect(Buffer.compare(data as Buffer, payload)).toBe(0);
   });
 });
 
