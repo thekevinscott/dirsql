@@ -878,12 +878,18 @@ mod tests {
     #[test]
     fn build_meta_populates_every_expected_key() {
         let m = build_meta("globhash123", "/canonical/root");
-        assert_eq!(m.get(META_KEY_SCHEMA_VERSION), Some(&SCHEMA_VERSION.to_string()));
+        assert_eq!(
+            m.get(META_KEY_SCHEMA_VERSION),
+            Some(&SCHEMA_VERSION.to_string())
+        );
         assert_eq!(
             m.get(META_KEY_DIRSQL_VERSION),
             Some(&env!("CARGO_PKG_VERSION").to_string())
         );
-        assert_eq!(m.get(META_KEY_GLOB_CONFIG_HASH), Some(&"globhash123".to_string()));
+        assert_eq!(
+            m.get(META_KEY_GLOB_CONFIG_HASH),
+            Some(&"globhash123".to_string())
+        );
         assert_eq!(
             m.get(META_KEY_PARSER_VERSIONS),
             Some(&PARSER_VERSIONS_JSON.to_string())

@@ -161,6 +161,9 @@ mod tests {
             force: false,
         };
         let err = run(opts).unwrap_err();
-        assert!(matches!(err, InitError::AlreadyExists { .. }), "got: {err:?}");
+        assert!(
+            matches!(err, InitError::AlreadyExists { .. }),
+            "got: {err:?}"
+        );
     }
 }

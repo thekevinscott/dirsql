@@ -2848,7 +2848,11 @@ mod internal_tests {
         let cache = dir.path().join("custom-cache.db");
         let db = DirSQL::builder()
             .root(dir.path())
-            .tables(vec![Table::new("CREATE TABLE b (y TEXT)", "*.b", |_| vec![])])
+            .tables(vec![Table::new(
+                "CREATE TABLE b (y TEXT)",
+                "*.b",
+                |_| vec![],
+            )])
             .table(Table::new("CREATE TABLE a (x TEXT)", "*.a", |_| vec![]))
             .ignore(["skip/**"])
             .extensions(Vec::<Extension>::new())
@@ -2872,7 +2876,11 @@ mod internal_tests {
         let cache = dir.path().join("cache.db");
         let first = DirSQL::builder()
             .root(dir.path())
-            .tables(vec![Table::new("CREATE TABLE t (x TEXT)", "*.txt", |_| vec![])])
+            .tables(vec![Table::new(
+                "CREATE TABLE t (x TEXT)",
+                "*.txt",
+                |_| vec![],
+            )])
             .persist(true)
             .persist_path(&cache)
             .build()
@@ -2880,7 +2888,11 @@ mod internal_tests {
         drop(first);
         let second = DirSQL::builder()
             .root(dir.path())
-            .tables(vec![Table::new("CREATE TABLE t (x TEXT)", "*.txt", |_| vec![])])
+            .tables(vec![Table::new(
+                "CREATE TABLE t (x TEXT)",
+                "*.txt",
+                |_| vec![],
+            )])
             .persist(true)
             .persist_path(&cache)
             .build()
@@ -3026,14 +3038,20 @@ mod internal_tests {
         let mut stat = Row::new();
         stat.insert("_path".to_string(), Value::Text("2024-01/a.txt".into()));
         stat.insert("_size".to_string(), Value::Integer(9));
-        let raw = vec![Row::from_iter([("name".to_string(), Value::Text("x".into()))])];
+        let raw = vec![Row::from_iter([(
+            "name".to_string(),
+            Value::Text("x".into()),
+        )])];
         let declared = vec!["name".to_string(), "month".to_string(), "_path".to_string()];
         let merged = merge_filesystem_facts(raw, &captures, &stat, &declared);
         assert_eq!(merged.len(), 1);
         let row = &merged[0];
         assert_eq!(row["month"], Value::Text("2024-01".into()));
         assert_eq!(row["_path"], Value::Text("2024-01/a.txt".into()));
-        assert!(!row.contains_key("undeclared"), "undeclared capture dropped");
+        assert!(
+            !row.contains_key("undeclared"),
+            "undeclared capture dropped"
+        );
         assert!(!row.contains_key("_size"), "undeclared stat dropped");
         assert_eq!(row["name"], Value::Text("x".into()));
     }
@@ -3119,7 +3137,11 @@ mod internal_tests {
         assert_eq!(rows[0]["n"], Value::Integer(1));
         assert!(adb.sync().unwrap().query("SELECT 1").is_ok());
         adb.start_watching().unwrap();
-        assert!(adb.poll_events(Duration::from_millis(0)).unwrap().is_empty());
+        assert!(
+            adb.poll_events(Duration::from_millis(0))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     /// `AsyncDirSQL::watch` forwards to the inner instance once ready.

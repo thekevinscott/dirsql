@@ -514,8 +514,14 @@ mod tests {
     fn run_command_writes_stdin_payload_to_the_child() {
         // `cat` echoes its stdin, so the payload round-trips through the
         // stdin-writer thread and the stdout drain.
-        let out = run_command("cat", &[], &cwd(), Duration::from_secs(30), Some(b"hello-stdin"))
-            .unwrap();
+        let out = run_command(
+            "cat",
+            &[],
+            &cwd(),
+            Duration::from_secs(30),
+            Some(b"hello-stdin"),
+        )
+        .unwrap();
         assert_eq!(out.payload, "hello-stdin");
     }
 
