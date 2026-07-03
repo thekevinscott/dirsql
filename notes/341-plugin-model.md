@@ -45,9 +45,11 @@ config. Merging is **additive**:
 
 - List-shaped config (`[[table]]`, `[[dirsql.extension]]`, `setup-sql`)
   concatenates naturally across plugins and user config.
-- Single-valued keys (`pre-query`, `post-query`) conflict: a conflict is a
-  **hard error naming both sources**, and user config always wins over any
-  plugin.
+- Single-valued keys (`pre-query`, `post-query`): **two definitions throw**,
+  with an error naming both sources — plugin vs. plugin and plugin vs. user
+  config alike. No silent shadowing, no chaining. (Additive hooks as a
+  pass-through middleware pipeline is a plausible future direction, but the
+  ordering story under auto-loading needs its own design — punted.)
 - Plugin TOML is **whitelisted** to tables, extensions, `setup-sql`, and query
   hooks — a plugin may not set `root`, `persist`, `ignore`, or other
   project-owned keys.
