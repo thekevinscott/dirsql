@@ -847,6 +847,76 @@ mod tests {
     }
 
     #[test]
+    fn write_meta_replaces_the_entire_meta_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_sidecar_tables(&conn).unwrap();
+        // Seed a stale entry that write_meta must clear.
+        upsert_meta(&conn, "stale", "old").unwrap();
+
+        let mut entries = HashMap::new();
+        entries.insert("k1".to_string(), "v1".to_string());
+        entries.insert("k2".to_string(), "v2".to_string());
+        write_meta(&conn, &entries).unwrap();
+
+        let m = read_meta(&conn).unwrap();
+        assert_eq!(m.len(), 2, "stale entry must be dropped: {m:?}");
+        assert_eq!(m.get("k1"), Some(&"v1".to_string()));
+        assert_eq!(m.get("k2"), Some(&"v2".to_string()));
+        assert!(!m.contains_key("stale"));
+    }
+
+    #[test]
+    fn write_meta_propagates_missing_table_error() {
+        let conn = Connection::open_in_memory().unwrap();
+        let err = write_meta(&conn, &HashMap::new()).unwrap_err();
+        assert!(
+            err.to_string().contains("no such table"),
+            "expected a missing-table error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn build_meta_populates_every_expected_key() {
+        let m = build_meta("globhash123", "/canonical/root");
+        assert_eq!(
+            m.get(META_KEY_SCHEMA_VERSION),
+            Some(&SCHEMA_VERSION.to_string())
+        );
+        assert_eq!(
+            m.get(META_KEY_DIRSQL_VERSION),
+            Some(&env!("CARGO_PKG_VERSION").to_string())
+        );
+        assert_eq!(
+            m.get(META_KEY_GLOB_CONFIG_HASH),
+            Some(&"globhash123".to_string())
+        );
+        assert_eq!(
+            m.get(META_KEY_PARSER_VERSIONS),
+            Some(&PARSER_VERSIONS_JSON.to_string())
+        );
+        assert_eq!(
+            m.get(META_KEY_ROOT_CANONICAL),
+            Some(&"/canonical/root".to_string())
+        );
+    }
+
+    #[test]
+    fn from_metadata_captures_size_and_timestamps() {
+        // Read real metadata for a staged file so `from_metadata` (and, on
+        // unix, `inode_dev`) run against a live `fs::Metadata`. The five-byte
+        // body pins the size; mtime is non-zero for a just-written file.
+        let dir = TempDir::new().unwrap();
+        let p = dir.path().join("a.txt");
+        fs::write(&p, b"hello").unwrap();
+        let meta = fs::metadata(&p).unwrap();
+        let stat = FileStat::from_metadata(&meta);
+        assert_eq!(stat.size, 5);
+        assert!(stat.mtime_ns > 0, "mtime should be a real timestamp");
+        #[cfg(unix)]
+        assert!(stat.inode > 0, "unix inode should be populated");
+    }
+
+    #[test]
     fn read_cached_files_drops_malformed_content_hash() {
         // A `content_hash` blob whose length is not 32 bytes cannot be a valid
         // BLAKE3 digest, so `read_cached_files` maps it to `None` (the `else`

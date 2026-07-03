@@ -114,4 +114,33 @@ mod tests {
 
         handle.shutdown().await.expect("graceful shutdown");
     }
+
+    // A `Ready` state drives the `serve` convenience wrapper plus
+    // `start_watch_task` (which attaches `DirSQL::watch` and pumps its stream
+    // into the broadcast channel). Built over an empty temp dir so the scan
+    // touches nothing; the port-0 bind and graceful shutdown are real.
+    #[tokio::test]
+    async fn serve_with_a_ready_db_attaches_the_watcher_then_shuts_down() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = DirSQL::new(dir.path(), Vec::new()).unwrap();
+        let config = ServerConfig::bind("127.0.0.1".to_string(), 0);
+        let handle = serve(config, db).await.expect("bind on an ephemeral port");
+        assert_ne!(handle.local_addr().port(), 0);
+        handle.shutdown().await.expect("graceful shutdown");
+    }
+
+    // Binding to a non-local TEST-NET address (RFC 5737) fails with
+    // "cannot assign requested address", surfacing `ServerError::Bind` rather
+    // than panicking — deterministic and DNS-free.
+    #[tokio::test]
+    async fn serve_with_state_surfaces_a_bind_error_for_a_nonlocal_address() {
+        let config = ServerConfig::bind("192.0.2.1".to_string(), 9);
+        // `serve_with_state` returns `Result<ServerHandle, _>`; ServerHandle is
+        // not Debug, so match rather than `unwrap_err`.
+        let err = match serve_with_state(config, AppState::Unavailable("x".to_string())).await {
+            Ok(_) => panic!("expected a bind error"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, ServerError::Bind { .. }), "got: {err:?}");
+    }
 }

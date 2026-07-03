@@ -484,4 +484,103 @@ mod tests {
         assert!(!Placeholder::new("a", "b").append_if_absent);
         assert!(Placeholder::append("a", "b").append_if_absent);
     }
+
+    // ----- run_command end-to-end (spawns trivial POSIX commands) ----------
+    //
+    // `run_command` can only be exercised by actually spawning a child, so
+    // these drive `sh`/`echo`/`cat` — universally present on the Linux CI
+    // runners. The test code itself statically references only `super::` items,
+    // `Duration`, and `std::path::Path`, so the `unit lint` isolation rule is
+    // satisfied; the effectful process/thread work lives in production code.
+
+    fn cwd() -> std::path::PathBuf {
+        std::path::PathBuf::from(".")
+    }
+
+    #[test]
+    fn run_command_returns_last_nonempty_stdout_line() {
+        let out = run_command(
+            "sh -c 'echo chatter; echo PAYLOAD'",
+            &[],
+            &cwd(),
+            Duration::from_secs(30),
+            None,
+        )
+        .unwrap();
+        assert_eq!(out.payload, "PAYLOAD");
+    }
+
+    #[test]
+    fn run_command_writes_stdin_payload_to_the_child() {
+        // `cat` echoes its stdin, so the payload round-trips through the
+        // stdin-writer thread and the stdout drain.
+        let out = run_command(
+            "cat",
+            &[],
+            &cwd(),
+            Duration::from_secs(30),
+            Some(b"hello-stdin"),
+        )
+        .unwrap();
+        assert_eq!(out.payload, "hello-stdin");
+    }
+
+    #[test]
+    fn run_command_reports_nonzero_exit_with_stderr_tail() {
+        let err = run_command(
+            "sh -c 'echo oops >&2; exit 3'",
+            &[],
+            &cwd(),
+            Duration::from_secs(30),
+            None,
+        )
+        .unwrap_err();
+        match err {
+            CommandError::NonZeroExit {
+                code, stderr_tail, ..
+            } => {
+                assert_eq!(code, "3");
+                assert!(stderr_tail.contains("oops"), "got: {stderr_tail}");
+            }
+            other => panic!("expected NonZeroExit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_command_reports_empty_output_when_stdout_is_blank() {
+        let err = run_command("true", &[], &cwd(), Duration::from_secs(30), None).unwrap_err();
+        assert!(
+            matches!(err, CommandError::EmptyOutput { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn run_command_reports_spawn_failure_for_a_missing_program() {
+        let err = run_command(
+            "definitely-not-a-real-binary-xyzzy",
+            &[],
+            &cwd(),
+            Duration::from_secs(30),
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(err, CommandError::Spawn { .. }), "got: {err:?}");
+    }
+
+    #[test]
+    fn run_command_kills_and_reports_timeout_even_with_stdin() {
+        // A short timeout against a long sleep drives the timeout branch,
+        // including joining the stdin-writer thread. `sh` ignoring stdin closes
+        // the pipe early, which the writer treats as a clean EOF.
+        let err = run_command(
+            "sh -c 'sleep 30'",
+            &[],
+            &cwd(),
+            Duration::from_millis(50),
+            Some(b"x"),
+        )
+        .unwrap_err();
+        assert!(matches!(err, CommandError::Timeout { .. }), "got: {err:?}");
+    }
 }
