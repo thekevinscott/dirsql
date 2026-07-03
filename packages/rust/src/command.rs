@@ -36,6 +36,12 @@ use std::time::Duration;
 
 use wait_timeout::ChildExt;
 
+/// The default timeout for every command-backed event (`on-file`,
+/// `pre-query`, `post-query`) when its config declares no override
+/// (per-table `timeout`, `[dirsql].pre-query-timeout` /
+/// `.post-query-timeout` — all positive whole seconds).
+pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// A named placeholder substituted into a command's argv.
 ///
 /// `name` is the bare identifier (no braces): a `name` of `path` matches the

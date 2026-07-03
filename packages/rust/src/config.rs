@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::Deserialize;
 
@@ -19,6 +20,9 @@ pub enum ConfigError {
 
     #[error("Field '{0}' must not be empty")]
     EmptyField(&'static str),
+
+    #[error("Field '{field}' must be a positive number of seconds, got {value}")]
+    InvalidTimeout { field: &'static str, value: i64 },
 }
 
 pub type Result<T> = std::result::Result<T, ConfigError>;
@@ -58,6 +62,16 @@ pub struct Config {
     /// the rows as-is. See `dirsql::command` for the execution contract. Only
     /// the CLI server consults this; the SDK ignores it.
     pub post_query: Option<String>,
+    /// Optional timeout override for the `pre-query` command
+    /// (`[dirsql].pre-query-timeout`, positive seconds). When absent, the
+    /// server falls back to the shared 30-second default
+    /// ([`crate::command::DEFAULT_COMMAND_TIMEOUT`]).
+    pub pre_query_timeout: Option<Duration>,
+    /// Optional timeout override for the `post-query` command
+    /// (`[dirsql].post-query-timeout`, positive seconds). When absent, the
+    /// server falls back to the shared 30-second default
+    /// ([`crate::command::DEFAULT_COMMAND_TIMEOUT`]).
+    pub post_query_timeout: Option<Duration>,
 }
 
 /// A SQLite extension to load at startup.
@@ -97,6 +111,10 @@ pub struct TableConfig {
     /// JSON array of row objects) instead of the empty filesystem-facts-only
     /// row. See `dirsql::command` for the execution contract.
     pub on_file: Option<String>,
+    /// Optional timeout override for this table's `on-file` runs (`timeout`,
+    /// positive seconds). When absent, each run falls back to the shared
+    /// 30-second default ([`crate::command::DEFAULT_COMMAND_TIMEOUT`]).
+    pub timeout: Option<Duration>,
 }
 
 // --- Raw deserialization types (serde) ---
@@ -107,7 +125,7 @@ struct RawConfig {
     table: Option<Vec<RawTable>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct RawDirsql {
     root: Option<PathBuf>,
     ignore: Option<Vec<String>>,
@@ -118,6 +136,10 @@ struct RawDirsql {
     pre_query: Option<String>,
     #[serde(rename = "post-query")]
     post_query: Option<String>,
+    #[serde(rename = "pre-query-timeout")]
+    pre_query_timeout: Option<i64>,
+    #[serde(rename = "post-query-timeout")]
+    post_query_timeout: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -133,6 +155,7 @@ struct RawTable {
     strict: Option<bool>,
     #[serde(rename = "on-file")]
     on_file: Option<String>,
+    timeout: Option<i64>,
 }
 
 /// Load and parse a `.dirsql.toml` config file from the given path.
@@ -145,19 +168,17 @@ pub fn load_config(path: &Path) -> Result<Config> {
 pub fn load_config_str(content: &str) -> Result<Config> {
     let raw: RawConfig = toml::from_str(content)?;
 
-    let (root, ignore, persist, persist_path, raw_extensions, raw_pre_query, raw_post_query) =
-        match raw.dirsql {
-            Some(d) => (
-                d.root,
-                d.ignore.unwrap_or_default(),
-                d.persist.unwrap_or(false),
-                d.persist_path,
-                d.extension.unwrap_or_default(),
-                d.pre_query,
-                d.post_query,
-            ),
-            None => (None, Vec::new(), false, None, Vec::new(), None, None),
-        };
+    // A missing `[dirsql]` section behaves as an all-defaults one.
+    let d = raw.dirsql.unwrap_or_default();
+    let root = d.root;
+    let ignore = d.ignore.unwrap_or_default();
+    let persist = d.persist.unwrap_or(false);
+    let persist_path = d.persist_path;
+    let raw_extensions = d.extension.unwrap_or_default();
+    let raw_pre_query = d.pre_query;
+    let raw_post_query = d.post_query;
+    let pre_query_timeout = parse_timeout_secs("pre-query-timeout", d.pre_query_timeout)?;
+    let post_query_timeout = parse_timeout_secs("post-query-timeout", d.post_query_timeout)?;
 
     // A present-but-empty `pre-query = ""` is as unusable as a missing key:
     // reject it at parse time rather than spawning an empty command later
@@ -214,6 +235,7 @@ pub fn load_config_str(content: &str) -> Result<Config> {
             glob,
             strict: raw_table.strict,
             on_file,
+            timeout: parse_timeout_secs("timeout", raw_table.timeout)?,
         });
     }
 
@@ -226,7 +248,22 @@ pub fn load_config_str(content: &str) -> Result<Config> {
         extensions,
         pre_query,
         post_query,
+        pre_query_timeout,
+        post_query_timeout,
     })
+}
+
+/// Validate an optional timeout config value (whole seconds) and convert it
+/// to a [`Duration`]. Zero and negative values are as unusable as a garbage
+/// string — reject them at parse time with the offending field's name rather
+/// than silently producing a command that can never run (`0`) or a bogus
+/// cast (negative).
+fn parse_timeout_secs(field: &'static str, raw: Option<i64>) -> Result<Option<Duration>> {
+    match raw {
+        Some(secs) if secs <= 0 => Err(ConfigError::InvalidTimeout { field, value: secs }),
+        Some(secs) => Ok(Some(Duration::from_secs(secs as u64))),
+        None => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -624,6 +661,211 @@ post-query = "   "
         let err = load_config_str(toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::EmptyField("post-query")),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn table_timeout_parses_to_duration_seconds() {
+        let toml = r#"
+[[table]]
+ddl = "CREATE TABLE t (x TEXT)"
+glob = "*.json"
+on-file = "extract {path}"
+timeout = 300
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert_eq!(config.tables[0].timeout, Some(Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn table_timeout_absent_is_none() {
+        let toml = r#"
+[[table]]
+ddl = "CREATE TABLE t (x TEXT)"
+glob = "*.json"
+on-file = "extract {path}"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert!(config.tables[0].timeout.is_none());
+    }
+
+    #[test]
+    fn table_timeout_zero_errors() {
+        let toml = r#"
+[[table]]
+ddl = "CREATE TABLE t (x TEXT)"
+glob = "*.json"
+on-file = "extract {path}"
+timeout = 0
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfigError::InvalidTimeout {
+                    field: "timeout",
+                    value: 0
+                }
+            ),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn table_timeout_negative_errors() {
+        let toml = r#"
+[[table]]
+ddl = "CREATE TABLE t (x TEXT)"
+glob = "*.json"
+on-file = "extract {path}"
+timeout = -5
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfigError::InvalidTimeout {
+                    field: "timeout",
+                    value: -5
+                }
+            ),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn invalid_timeout_error_names_the_field_and_value() {
+        // The message is the user's only pointer to the bad key — it must name
+        // both the field and the offending value.
+        let err = ConfigError::InvalidTimeout {
+            field: "pre-query-timeout",
+            value: -1,
+        };
+        assert_eq!(
+            err.to_string(),
+            "Field 'pre-query-timeout' must be a positive number of seconds, got -1"
+        );
+    }
+
+    #[test]
+    fn pre_query_timeout_parses_to_duration_seconds() {
+        let toml = r#"
+[dirsql]
+pre-query = "to-sql {args}"
+pre-query-timeout = 60
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert_eq!(config.pre_query_timeout, Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn pre_query_timeout_absent_is_none() {
+        let toml = r#"
+[dirsql]
+pre-query = "to-sql {args}"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert!(config.pre_query_timeout.is_none());
+    }
+
+    #[test]
+    fn pre_query_timeout_zero_errors() {
+        let toml = r#"
+[dirsql]
+pre-query = "to-sql {args}"
+pre-query-timeout = 0
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfigError::InvalidTimeout {
+                    field: "pre-query-timeout",
+                    value: 0
+                }
+            ),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn pre_query_timeout_negative_errors() {
+        let toml = r#"
+[dirsql]
+pre-query = "to-sql {args}"
+pre-query-timeout = -1
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfigError::InvalidTimeout {
+                    field: "pre-query-timeout",
+                    value: -1
+                }
+            ),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn post_query_timeout_parses_to_duration_seconds() {
+        let toml = r#"
+[dirsql]
+post-query = "jq -c '{results: .}'"
+post-query-timeout = 45
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert_eq!(config.post_query_timeout, Some(Duration::from_secs(45)));
+    }
+
+    #[test]
+    fn post_query_timeout_absent_is_none() {
+        let toml = r#"
+[dirsql]
+post-query = "jq -c '{results: .}'"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert!(config.post_query_timeout.is_none());
+    }
+
+    #[test]
+    fn post_query_timeout_zero_errors() {
+        let toml = r#"
+[dirsql]
+post-query = "jq -c '{results: .}'"
+post-query-timeout = 0
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfigError::InvalidTimeout {
+                    field: "post-query-timeout",
+                    value: 0
+                }
+            ),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn post_query_timeout_negative_errors() {
+        let toml = r#"
+[dirsql]
+post-query = "jq -c '{results: .}'"
+post-query-timeout = -30
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfigError::InvalidTimeout {
+                    field: "post-query-timeout",
+                    value: -30
+                }
+            ),
             "got: {err:?}"
         );
     }
