@@ -19,9 +19,13 @@ fix:
 test-unit:
     uv run python -m pytest packages/python/dirsql/ -x -q
 
-# Run integration tests
+# Run integration tests (hermetic: mocked core + fs)
 test-integration:
     uv run python -m pytest packages/python/tests/integration/ -x -q
+
+# Run binding tests (real core, real fs)
+test-binding:
+    uv run python -m pytest packages/python/tests/binding/ -x -q
 
 # Run e2e tests (local only, not CI)
 test-e2e:
@@ -82,9 +86,9 @@ test-packaging:
     mkdir -p "$work/crate" && python3 -m tarfile -e target/package/*.crate "$work/crate"
     testing-conventions packaging --language rust "$work"/crate/dirsql-*
 
-# CI test target (unit + integration, no e2e)
+# CI test target (unit + integration + binding, no e2e)
 test-ci:
-    uv run python -m pytest packages/python/dirsql/ packages/python/tests/integration/ -x -q --tb=short 2>/dev/null || echo "No tests found yet"
+    uv run python -m pytest packages/python/dirsql/ packages/python/tests/integration/ packages/python/tests/binding/ -x -q --tb=short 2>/dev/null || echo "No tests found yet"
 
 # Run Rust tests
 test-rust:

@@ -50,6 +50,9 @@ jobs:
         working-directory: packages/python
 
   integration:
+    # Hermetic tier (#289): SDK public API with the Rust core and the
+    # filesystem mocked. The PyO3 extension is still built because
+    # `dirsql/__init__.py` imports `dirsql._dirsql` at module load.
     name: Integration tests
     runs-on: ubuntu-latest
     strategy:
@@ -81,10 +84,45 @@ jobs:
         run: uv run python -m pytest tests/integration/ -x -q --tb=short
         working-directory: packages/python
 
+  binding:
+    # Binding tier (#289): the SDK public API against the real PyO3 core and
+    # a real filesystem — proves the SDK↔core marshaling that the hermetic
+    # integration tier mocks out.
+    name: Binding tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+        working-directory: packages/python
+
+      - name: Build Rust extension
+        run: uv run maturin develop
+        working-directory: packages/python
+
+      - name: Run binding tests
+        run: uv run python -m pytest tests/binding/ -x -q --tb=short
+        working-directory: packages/python
+
   coverage:
     name: Python unit coverage floor
     runs-on: ubuntu-latest
-    needs: [unit, integration]
+    needs: [unit, integration, binding]
     steps:
       - uses: actions/checkout@v6
         with:

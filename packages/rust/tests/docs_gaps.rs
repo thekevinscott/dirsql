@@ -2,7 +2,7 @@
 //! on the Rust SDK side.
 //!
 //! Each test cites the canonical doc location (docs page + section) it covers.
-//! These mirror `packages/python/tests/integration/test_docs_gaps.py` for the
+//! These mirror `packages/python/tests/binding/docs_gaps_test.py` for the
 //! Rust SDK (bead dirsql-9ng). See TESTS_AUDIT.md.
 
 use dirsql::{DirSQL, Table, Value};
