@@ -255,15 +255,15 @@ Ignore patterns are applied before glob matching. Any file matching an ignore pa
 
 ## Supported value types
 
-The extract function can return these Python types, which map to SQLite types:
+The extract function can return these types, which map to SQLite types:
 
-| Python type | SQLite type |
-|-------------|-------------|
-| `str`       | TEXT        |
-| `int`       | INTEGER     |
-| `float`     | REAL        |
-| `bool`      | INTEGER (0/1) |
-| `bytes`     | BLOB        |
-| `None`      | NULL        |
+| SQLite type   | Python  | TypeScript              | Rust             |
+|---------------|---------|-------------------------|------------------|
+| TEXT          | `str`   | `string`                | `Value::Text`    |
+| INTEGER       | `int`   | integral `number`       | `Value::Integer` |
+| REAL          | `float` | fractional `number`     | `Value::Real`    |
+| INTEGER (0/1) | `bool`  | `boolean`               | `Value::Integer` |
+| BLOB          | `bytes` | `Buffer` / `Uint8Array` | `Value::Blob`    |
+| NULL          | `None`  | `null` / `undefined`    | `Value::Null`    |
 
-Any other type is converted to its string representation via `str()`.
+Any other type is converted to its string representation (`str()` in Python, string coercion in TypeScript).

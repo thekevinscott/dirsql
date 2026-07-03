@@ -228,7 +228,7 @@ Integration-tier file map:
 | Extract receives the matched file's path | Y | Y | Y |
 | Extract returns `[]` to skip a file | Y | Y | Y |
 | Value types (str/int/float/bool/None) | Y | Y | Y |
-| `bytes`/`Vec<u8>` → BLOB round-trip | Y | Y | **N — drift (#343)**: the napi binding coerces a `Buffer` to a string |
+| `bytes`/`Vec<u8>`/`Buffer` → BLOB round-trip | Y | Y | Y (#343: `Buffer`/`Uint8Array` in, `Buffer` out) |
 | Invalid SQL raises         | Y      | Y    | Y          |
 | Invalid DDL raises         | Y      | Y    | Y          |
 | Query rejects writes       | Y      | Y    | Y          |
@@ -340,8 +340,6 @@ ecosystem-specific extension resolution.
 
 ### Known gaps / follow-ups
 
-- **#343** — TypeScript `Buffer → BLOB` mapping missing (documented for
-  Python only today; surfaced as drift above).
 - **#289** — migrating the real-core integration suites to fully mocked
   SQLite/FS is still open; Python's `binding_test.py` (mocked core) is the
   model. TypeScript covers its facade seams at the colocated-unit tier

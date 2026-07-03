@@ -11,6 +11,66 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### TypeScript: BLOB columns return `Buffer` instead of hex strings (#343)
+
+#### Summary
+
+The TypeScript SDK now round-trips binary values as real SQLite BLOBs,
+restoring parity with Python's documented `bytes → BLOB` mapping. Two runtime
+behaviors change for TypeScript consumers only: a `Buffer`/`Uint8Array`
+returned from an `extract` callback is stored as a BLOB (previously it was
+silently coerced to its string representation, e.g. `"0,1,2"`), and BLOB
+columns come back from `query()` and watcher `RowEvent` rows as Node
+`Buffer`s (previously lowercase hex strings). The API surface (signatures,
+types) is unchanged — row values were already typed `unknown`. The CLI's
+HTTP/JSON responses are unaffected (JSON cannot carry binary; blobs stay
+hex-encoded there). Python and Rust are unaffected.
+
+#### Required changes
+
+_None_ for code that treated binary correctly end-to-end. Code that depended
+on the old lossy representations must drop the workaround:
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| TS `query()` / `RowEvent` BLOB value | `const hex = row.data as string` | `const buf = row.data as Buffer` (render hex explicitly if needed: `buf.toString("hex")`) |
+| TS `extract` returning binary | pre-encode to a string (e.g. `data.toString("hex")`) to control what was stored | return the `Buffer`/`Uint8Array` directly; it is stored as a BLOB |
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- TS `extract` values: previously a `Buffer`/`Uint8Array` was coerced to its
+  string representation and stored as TEXT; now it is stored as a BLOB.
+- TS `query()` results and `RowEvent.row` / `RowEvent.oldRow`: previously a
+  BLOB column surfaced as a lowercase hex string; now it surfaces as a
+  `Buffer`. Code that compared against hex strings must compare `Buffer`s
+  (or call `.toString("hex")`).
+
+#### Verification
+
+```bash
+cd packages/ts && pnpm build
+node --input-type=module -e '
+import { DirSQL } from "./dist/index.js";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+const dir = mkdtempSync(join(tmpdir(), "dirsql-blob-"));
+writeFileSync(join(dir, "a.json"), "{}");
+const db = new DirSQL({ root: dir, tables: [{
+  ddl: "CREATE TABLE blobs (data BLOB)",
+  glob: "*.json",
+  extract: () => [{ data: Buffer.from([0, 1, 2, 255]) }],
+}]});
+const rows = await db.query("SELECT * FROM blobs");
+console.log(Buffer.isBuffer(rows[0].data), rows[0].data);
+'
+# expected: true <Buffer 00 01 02 ff>
+```
+
 ### Python: native-language (`.py`) configs and `dirsql interpret` removed; serialization snapshot retired (#323)
 
 #### Summary

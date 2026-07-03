@@ -103,15 +103,15 @@ const results = await db.query('SELECT title, author FROM posts');
 
 :::
 
-SQLite types map back to Python types:
+SQLite types map back to language types:
 
-| SQLite type | Python type |
-|-------------|-------------|
-| TEXT        | `str`       |
-| INTEGER     | `int`       |
-| REAL        | `float`     |
-| BLOB        | `bytes`     |
-| NULL        | `None`      |
+| SQLite type | Python  | TypeScript | Rust             |
+|-------------|---------|------------|------------------|
+| TEXT        | `str`   | `string`   | `Value::Text`    |
+| INTEGER     | `int`   | `number`   | `Value::Integer` |
+| REAL        | `float` | `number`   | `Value::Real`    |
+| BLOB        | `bytes` | `Buffer`   | `Value::Blob`    |
+| NULL        | `None`  | `null`     | `Value::Null`    |
 
 ## Internal columns
 

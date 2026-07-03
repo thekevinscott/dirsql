@@ -9,9 +9,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 dirsql.workspace = true
-napi = { version = "3", features = ["napi6", "serde-json"] }
+napi = { version = "3", features = ["napi6"] }
 napi-derive = "3"
-serde_json.workspace = true
 
 [build-dependencies]
 napi-build = "2"

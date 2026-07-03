@@ -8,8 +8,8 @@
 //!
 //! - wraps a JS `extract` callable in a Rust closure (via a persistent napi
 //!   reference) so it can be handed to [`dirsql::Table`]
-//! - converts row values and events between Rust and serde_json shapes napi
-//!   exposes to JS
+//! - converts row values and events between Rust and the napi shapes exposed
+//!   to JS (BLOB columns cross as Node `Buffer`s via [`JsRowValue`])
 //! - forwards `openAsync` / `query` / `startWatcher` / `pollEvents` to the
 //!   corresponding `DirSQL` methods
 //!
@@ -52,12 +52,17 @@ pub fn parse_table_name(ddl: String) -> Option<String> {
 /// `table` is nullable because error events may occur before a file has
 /// been attributed to any table (e.g. a watch-channel failure). For
 /// insert / update / delete events it is always set.
-#[napi(object)]
+///
+/// Output-only (`object_from_js = false`): JS never constructs one, so
+/// [`JsRowValue`] only needs the Rust -> JS direction.
+#[napi(object, object_from_js = false)]
 pub struct RowEvent {
     pub table: Option<String>,
     pub action: String,
-    pub row: Option<HashMap<String, serde_json::Value>>,
-    pub old_row: Option<HashMap<String, serde_json::Value>>,
+    #[napi(ts_type = "Record<string, unknown>")]
+    pub row: Option<HashMap<String, JsRowValue>>,
+    #[napi(ts_type = "Record<string, unknown>")]
+    pub old_row: Option<HashMap<String, JsRowValue>>,
     pub error: Option<String>,
     pub file_path: Option<String>,
 }
@@ -252,12 +257,12 @@ pub struct QueryTask {
 }
 
 impl Task for QueryTask {
-    type Output = Vec<HashMap<String, serde_json::Value>>;
-    type JsValue = Vec<HashMap<String, serde_json::Value>>;
+    type Output = Vec<HashMap<String, JsRowValue>>;
+    type JsValue = Vec<HashMap<String, JsRowValue>>;
 
     fn compute(&mut self) -> Result<Self::Output> {
         let rows = self.inner.query(&self.sql).map_err(to_napi_err)?;
-        Ok(rows.iter().map(value_row_to_json).collect())
+        Ok(rows.iter().map(value_row_to_js).collect())
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -570,6 +575,13 @@ unsafe fn js_val_to_value(env: napi::sys::napi_env, val: napi::sys::napi_value) 
             ))
         }
         _ => {
+            // `Buffer` / `Uint8Array` (Buffer is a Uint8Array subclass)
+            // marshals to a BLOB, mirroring Python's `bytes -> BLOB`
+            // (guide/tables.md "Supported value types"). Any other object
+            // shape falls through to string coercion.
+            if let Some(bytes) = get_u8_array_bytes(env, val) {
+                return Ok(Value::Blob(bytes));
+            }
             let mut str_val = std::ptr::null_mut();
             let status = napi::sys::napi_coerce_to_string(env, val, &mut str_val);
             if status != napi::sys::Status::napi_ok {
@@ -591,6 +603,53 @@ unsafe fn js_val_to_value(env: napi::sys::napi_env, val: napi::sys::napi_value) 
             ))
         }
     }
+}
+
+/// The bytes of a `Buffer` / `Uint8Array` / `Uint8ClampedArray`, or `None`
+/// for any other JS value (including other TypedArray element types, whose
+/// numeric interpretation would be lossy — they keep the string-coercion
+/// fallback).
+unsafe fn get_u8_array_bytes(
+    env: napi::sys::napi_env,
+    val: napi::sys::napi_value,
+) -> Option<Vec<u8>> {
+    let mut is_typedarray = false;
+    napi::sys::napi_is_typedarray(env, val, &mut is_typedarray);
+    if !is_typedarray {
+        return None;
+    }
+
+    let mut ty: napi::sys::napi_typedarray_type = -1;
+    let mut length = 0usize;
+    let mut data = std::ptr::null_mut();
+    let mut arraybuffer = std::ptr::null_mut();
+    let mut byte_offset = 0usize;
+    let status = napi::sys::napi_get_typedarray_info(
+        env,
+        val,
+        &mut ty,
+        &mut length,
+        &mut data,
+        &mut arraybuffer,
+        &mut byte_offset,
+    );
+    if status != napi::sys::Status::napi_ok {
+        return None;
+    }
+    if ty != napi::sys::TypedarrayType::uint8_array
+        && ty != napi::sys::TypedarrayType::uint8_clamped_array
+    {
+        return None;
+    }
+    if length == 0 || data.is_null() {
+        // A zero-length view (or a detached backing store) has no bytes to
+        // copy; `data` may legitimately be null in that case.
+        return Some(Vec::new());
+    }
+    // `data` already points at the first element (napi adjusts it by
+    // `byte_offset`), and u8 elements are 1 byte, so `length` is the byte
+    // count.
+    Some(std::slice::from_raw_parts(data as *const u8, length).to_vec())
 }
 
 unsafe fn get_string_property(
@@ -705,26 +764,43 @@ unsafe fn get_function_property(
 
 // -- Row/event conversion ----------------------------------------------------
 
-fn value_to_json(v: &Value) -> serde_json::Value {
-    match v {
-        Value::Null => serde_json::Value::Null,
-        Value::Integer(i) => serde_json::Value::Number((*i).into()),
-        Value::Real(f) => serde_json::json!(*f),
-        Value::Text(s) => serde_json::Value::String(s.clone()),
-        Value::Blob(b) => {
-            use std::fmt::Write;
-            let mut hex = String::with_capacity(b.len() * 2);
-            for byte in b {
-                write!(hex, "{:02x}", byte).unwrap();
-            }
-            serde_json::Value::String(hex)
+/// A row value crossing from Rust to JS. Mirrors [`dirsql::Value`] but
+/// converts straight to napi values, so a BLOB surfaces as a Node `Buffer`
+/// (the previous serde_json-shaped path had no binary variant and
+/// hex-encoded blobs — the #343 drift).
+pub enum JsRowValue {
+    Null,
+    Integer(i64),
+    Real(f64),
+    Text(String),
+    Blob(Vec<u8>),
+}
+
+impl ToNapiValue for JsRowValue {
+    unsafe fn to_napi_value(env: napi::sys::napi_env, val: Self) -> Result<napi::sys::napi_value> {
+        match val {
+            JsRowValue::Null => Null::to_napi_value(env, Null),
+            JsRowValue::Integer(i) => i64::to_napi_value(env, i),
+            JsRowValue::Real(f) => f64::to_napi_value(env, f),
+            JsRowValue::Text(s) => String::to_napi_value(env, s),
+            JsRowValue::Blob(b) => Buffer::to_napi_value(env, Buffer::from(b)),
         }
     }
 }
 
-fn value_row_to_json(row: &HashMap<String, Value>) -> HashMap<String, serde_json::Value> {
+fn value_to_js(v: &Value) -> JsRowValue {
+    match v {
+        Value::Null => JsRowValue::Null,
+        Value::Integer(i) => JsRowValue::Integer(*i),
+        Value::Real(f) => JsRowValue::Real(*f),
+        Value::Text(s) => JsRowValue::Text(s.clone()),
+        Value::Blob(b) => JsRowValue::Blob(b.clone()),
+    }
+}
+
+fn value_row_to_js(row: &HashMap<String, Value>) -> HashMap<String, JsRowValue> {
     row.iter()
-        .map(|(k, v)| (k.clone(), value_to_json(v)))
+        .map(|(k, v)| (k.clone(), value_to_js(v)))
         .collect()
 }
 
@@ -737,7 +813,7 @@ fn row_event_to_js(event: &CoreRowEvent) -> RowEvent {
         } => RowEvent {
             table: Some(table.clone()),
             action: "insert".to_string(),
-            row: Some(value_row_to_json(row)),
+            row: Some(value_row_to_js(row)),
             old_row: None,
             error: None,
             file_path: Some(file_path.clone()),
@@ -750,8 +826,8 @@ fn row_event_to_js(event: &CoreRowEvent) -> RowEvent {
         } => RowEvent {
             table: Some(table.clone()),
             action: "update".to_string(),
-            row: Some(value_row_to_json(new_row)),
-            old_row: Some(value_row_to_json(old_row)),
+            row: Some(value_row_to_js(new_row)),
+            old_row: Some(value_row_to_js(old_row)),
             error: None,
             file_path: Some(file_path.clone()),
         },
@@ -762,7 +838,7 @@ fn row_event_to_js(event: &CoreRowEvent) -> RowEvent {
         } => RowEvent {
             table: Some(table.clone()),
             action: "delete".to_string(),
-            row: Some(value_row_to_json(row)),
+            row: Some(value_row_to_js(row)),
             old_row: None,
             error: None,
             file_path: Some(file_path.clone()),
