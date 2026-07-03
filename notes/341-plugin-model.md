@@ -39,10 +39,15 @@ pre-query = "uv run python dirsql-embeddings pre-query {args}"
 
 ## The motivating case, end to end
 
-With the two MVP additions, the plugin's snippet is: one `[[table]]` with
-`on-file` + `timeout`, the `[[dirsql.extension]]` entry for sqlite-vec
-(existing feature, package-name resolution already works via pip/npm),
-`setup-sql` for the vec0 index + triggers, and `pre-query` translating a
-natural-language body into a `MATCH`-based KNN query. At small scale the
-plugin can skip the extension and `setup-sql` entirely and brute-force cosine
-in SQL or in the hook.
+Two small core additions make this viable: **configurable hook timeouts**
+(#351) and a **`setup-sql`** config key — raw SQL statements dirsql runs once
+per startup (after extensions load, before the scan) for schema it executes
+but does not own: e.g. a vec0 virtual table plus the sync triggers that fire
+on dirsql's own INSERT/DELETE row maintenance.
+
+The plugin's TOML is then: one `[[table]]` with `on-file` + `timeout`, a
+`[[dirsql.extension]]` entry for sqlite-vec (existing feature, package-name
+resolution already works via pip/npm), `setup-sql` for the vec0 index +
+triggers, and `pre-query` translating a natural-language body into a
+`MATCH`-based KNN query. At small scale the plugin can skip the extension and
+`setup-sql` entirely and brute-force cosine in SQL or in the hook.
