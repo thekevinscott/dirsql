@@ -329,21 +329,19 @@ handling) is covered once, in the Rust e2e/CLI suites (`cli_e2e.rs`,
 per-launcher: resolving/staging the bundled binary, forwarding argv, and
 ecosystem-specific extension resolution.
 
-| Test Scenario              | Python (`tests/e2e/`) | Rust (`tests/`) | TypeScript (`tests/e2e/`, `tests/smoke/`) |
+| Test Scenario              | Python (`tests/e2e/`, `tests/smoke/`) | Rust (`tests/`) | TypeScript (`tests/e2e/`, `tests/smoke/`) |
 |----------------------------|--------|------|------------|
 | `--version` exits 0 and prints the version | Y (`cli_version_test.py`) | Y (`cli_e2e.rs`) | Y (smoke `build.test.ts`, against the packed npm install) |
 | Launcher starts server; `POST /query` over HTTP | Y (`extension_package_test.py`) | Y | Y (`extension-package.test.ts`) |
 | `[[dirsql.extension]]` package name resolved by the launcher (#227) | Y | N/A | Y |
 | `interpret` subcommand removed; argv forwarded to clap (#321) | Y | core (clap dispatch) | Y |
 | HTTP semantics, SSE `/events`, hooks, `init`, zero-config `files` table | core | Y | core |
-| Smoke: pack → install → run the published artifact | **N — gap (#344)** | N/A | Y |
+| Smoke: pack → install → run the published artifact | Y (smoke `build_test.py`, against the packed wheel install) | N/A | Y |
 
 ### Known gaps / follow-ups
 
 - **#343** — TypeScript `Buffer → BLOB` mapping missing (documented for
   Python only today; surfaced as drift above).
-- **#344** — Python has no smoke tier mirroring
-  `packages/ts/tests/smoke/build.test.ts`.
 - **#289** — migrating the real-core integration suites to fully mocked
   SQLite/FS is still open; Python's `binding_test.py` (mocked core) is the
   model. TypeScript covers its facade seams at the colocated-unit tier
