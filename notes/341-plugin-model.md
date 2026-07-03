@@ -86,17 +86,18 @@ consumption styles where possible:
 Known gap: `pre-query`/`post-query` exist only on the CLI server, so a
 plugin's query-side behavior has no SDK equivalent in either style.
 
-## The motivating case, end to end
+## Why a plugin architecture
 
-Two small core additions make embeddings viable: **configurable hook
-timeouts** (#351) and a **`setup-sql`** config key — raw SQL statements dirsql
-runs once per startup (after extensions load, before the scan) for schema it
-executes but does not own: e.g. a vec0 virtual table plus the sync triggers
-that fire on dirsql's own INSERT/DELETE row maintenance.
+Epic B (#322) made a `dirsql` capability equal to a script plus a config
+snippet: no SDK code, no rebuild, works on every install. Semantic search is
+the proof — embed each file's contents via `on-file`, translate a
+natural-language query into vector SQL via `pre-query` — and it needs zero
+new core code.
 
-The plugin's TOML is then: one `[[table]]` with `on-file` + `timeout`, a
-`[[dirsql.extension]]` entry for sqlite-vec (existing feature, package-name
-resolution already works via pip/npm), `setup-sql` for the vec0 index +
-triggers, and `pre-query` translating a natural-language body into a
-`MATCH`-based KNN query. At small scale the plugin can skip the extension and
-`setup-sql` entirely and brute-force cosine in SQL or in the hook.
+But "zero core code" isn't "zero friction": today a user must write the
+script, manage its dependencies, and hand-wire the config. That work is
+identical for everyone who wants the capability, which is exactly the shape a
+package solves. A plugin architecture turns each hook-backed capability —
+embeddings, full-text search, LLM enrichment, whatever comes next — into one
+installable, shareable unit, while `dirsql`'s core stays a command runner
+that knows nothing about any of them.
