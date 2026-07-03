@@ -1,4 +1,4 @@
-"""Integration tests for robust table-name resolution (issue #204).
+"""Binding-tier tests (real core) for robust table-name resolution (issue #204).
 
 dirsql keeps ``ddl`` as the schema input (bring-your-own DDL, hand-written or
 emitted by any ORM / schema tool). The only thing dirsql needs from the DDL is

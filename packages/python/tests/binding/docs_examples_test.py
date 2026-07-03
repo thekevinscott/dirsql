@@ -1,4 +1,4 @@
-"""Integration tests that mirror every code example in the docs.
+"""Binding-tier tests (real core, real fs) that mirror every code example in the docs.
 
 Each test is named to match the doc page and section it verifies.
 If a doc example changes and these tests break, the docs need updating (or vice versa).

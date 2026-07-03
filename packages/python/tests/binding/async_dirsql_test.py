@@ -1,4 +1,4 @@
-"""Integration tests for the async DirSQL Python API."""
+"""Binding-tier tests (real core, real fs) for the async DirSQL Python API."""
 
 import asyncio
 import json

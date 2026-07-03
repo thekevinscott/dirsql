@@ -1,4 +1,4 @@
-"""Integration tests for DirSQL(config=).
+"""Binding-tier tests (real core, real fs) for DirSQL(config=).
 
 Config-defined tables produce one row per matched file. Each row's columns
 come from filesystem facts: glob path captures and stat virtuals (`_path`,

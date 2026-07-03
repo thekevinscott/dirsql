@@ -1,4 +1,4 @@
-"""Integration: resolve a SQLite extension by bare package name (#298).
+"""Binding tier: resolve a SQLite extension by bare package name (#298).
 
 Lays a real compiled loadable inside a real package directory on `sys.path`,
 points `DirSQL` at it by **bare package name**, and asserts the SDK resolves
