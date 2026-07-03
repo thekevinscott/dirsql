@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Rust core: `combine_configs` merges multiple TOML configs (#352).** A pure,
+  order-significant merge function in the core's `config` module — substrate
+  for the plugin model explored in #341, where plugin TOML fragments merge
+  additively into the project config. Each input carries a `Source` label (a
+  config file path or a plugin package name) so conflict errors can name both
+  sides. List-shaped config (`[[table]]`, `[[dirsql.extension]]`, `ignore`)
+  concatenates in input order; a table-name collision across configs errors
+  naming both sources; single-valued keys (`root`, `persist`, `persist_path`,
+  `pre-query`, `post-query`) defined by more than one config error naming both
+  sources — no silent shadowing, no precedence — and merge through unchanged
+  when defined in exactly one. A single entry returns unchanged; an empty slice
+  is rejected. Implemented once in the shared core per the one-implementation
+  principle; no binding surface yet, and existing single-config loads are
+  unaffected.
+
 - **TypeScript SDK: `Buffer`/`Uint8Array` → SQLite BLOB (#343).** An `extract`
   callback can now return a `Buffer` or `Uint8Array` and it is stored as a real
   BLOB, restoring parity with Python's documented `bytes → BLOB` mapping.

@@ -83,8 +83,102 @@ impl std::fmt::Display for Source {
 /// discovery layer's job, per fragment, *before* calling this — the merge
 /// stays plugin-agnostic.
 pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
-    let _ = configs;
-    todo!("implemented in the GREEN commit for #352")
+    let (first, rest) = configs.split_first().ok_or(ConfigError::NoConfigs)?;
+    if rest.is_empty() {
+        return Ok(first.1.clone());
+    }
+
+    let mut tables = Vec::new();
+    let mut ignore = Vec::new();
+    let mut extensions = Vec::new();
+    // Table name -> the source that first defined it, for collision errors.
+    let mut table_sources: std::collections::HashMap<String, &Source> =
+        std::collections::HashMap::new();
+
+    let mut root: Option<(&Source, PathBuf)> = None;
+    let mut persist: Option<&Source> = None;
+    let mut persist_path: Option<(&Source, PathBuf)> = None;
+    let mut pre_query: Option<(&Source, String)> = None;
+    let mut post_query: Option<(&Source, String)> = None;
+
+    for (source, config) in configs {
+        for table in &config.tables {
+            if let Some(name) = crate::db::parse_table_name(&table.ddl)
+                && let Some(prior) = table_sources.insert(name.clone(), source)
+            {
+                return Err(ConfigError::DuplicateTable {
+                    name,
+                    first: prior.clone(),
+                    second: source.clone(),
+                });
+            }
+            tables.push(table.clone());
+        }
+        ignore.extend(config.ignore.iter().cloned());
+        extensions.extend(config.extensions.iter().cloned());
+
+        merge_single("root", &mut root, config.root.as_ref(), source)?;
+        merge_single(
+            "persist_path",
+            &mut persist_path,
+            config.persist_path.as_ref(),
+            source,
+        )?;
+        merge_single(
+            "pre-query",
+            &mut pre_query,
+            config.pre_query.as_ref(),
+            source,
+        )?;
+        merge_single(
+            "post-query",
+            &mut post_query,
+            config.post_query.as_ref(),
+            source,
+        )?;
+        if config.persist {
+            if let Some(prior) = persist {
+                return Err(ConfigError::ConflictingKey {
+                    key: "persist",
+                    first: prior.clone(),
+                    second: source.clone(),
+                });
+            }
+            persist = Some(source);
+        }
+    }
+
+    Ok(Config {
+        root: root.map(|(_, value)| value),
+        ignore,
+        tables,
+        persist: persist.is_some(),
+        persist_path: persist_path.map(|(_, value)| value),
+        extensions,
+        pre_query: pre_query.map(|(_, value)| value),
+        post_query: post_query.map(|(_, value)| value),
+    })
+}
+
+/// Fold one config's value for a single-valued key into the merge `slot`,
+/// erroring when a prior config already defined it.
+fn merge_single<'a, T: Clone>(
+    key: &'static str,
+    slot: &mut Option<(&'a Source, T)>,
+    value: Option<&T>,
+    source: &'a Source,
+) -> Result<()> {
+    if let Some(value) = value {
+        if let Some((prior, _)) = slot {
+            return Err(ConfigError::ConflictingKey {
+                key,
+                first: (*prior).clone(),
+                second: source.clone(),
+            });
+        }
+        *slot = Some((source, value.clone()));
+    }
+    Ok(())
 }
 
 /// Parsed configuration from a `.dirsql.toml` file.
