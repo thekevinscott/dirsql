@@ -12,38 +12,69 @@ uvx --with dirsql-plugin-embeddings dirsql
 npx -y --package @dirsql/embeddings dirsql
 ```
 
-## Anatomy of a plugin
+Four requirements define the model:
 
-A pip package `dirsql-plugin-embeddings` looks like the following:
+## 1. Plugins are automatically loaded when present
 
-```
-dirsql-plugin-embeddings/
-  pyproject.toml     # deps: sentence-transformers, …  entry point: dirsql-embeddings
-  main.py            # on-file / pre-query subcommands
-  README.md          # the .dirsql.toml snippet to paste
-```
+If a plugin package is installed (a Python package / in `node_modules`), it is
+active — no snippet-pasting, no registration step. Discovery lives in the
+pip/npm launcher, the same binding-layer seam that already resolves extension
+package names; the standalone Rust binary is discovery-free (same caveat as
+extensions). Installing a plugin is consenting to run it.
 
-Plugins are automatically loaded when present. 
+## 2. Plugins define a TOML identical to dirsql's
 
-A plugin's TOML can look like:
+A plugin ships a `.dirsql.toml` fragment in the same format as the project
+config. Merging is **additive**:
+
+- List-shaped config (`[[table]]`, `[[dirsql.extension]]`, `setup-sql`)
+  concatenates naturally across plugins and user config.
+- Single-valued keys (`pre-query`, `post-query`) conflict: a conflict is a
+  **hard error naming both sources**, and user config always wins over any
+  plugin.
+- Plugin TOML is **whitelisted** to tables, extensions, `setup-sql`, and query
+  hooks — a plugin may not set `root`, `persist`, `ignore`, or other
+  project-owned keys.
 
 ```toml
 [[table]]
 ddl     = "CREATE TABLE embeddings (_path TEXT, chunk TEXT, embedding TEXT)"
 glob    = "**/*.md"
-on-file = "uv run python dirsql-embeddings on-file {path}"
+on-file = "dirsql-embeddings on-file {path}"
 
 [dirsql]
-pre-query = "uv run python dirsql-embeddings pre-query {args}"
+pre-query = "dirsql-embeddings pre-query {args}"
 ```
+
+## 3. Plugins ship scripts, resolved appropriately
+
+Hook commands are the plugin's own executables. Packaging solves resolution:
+console entry points (`dirsql-embeddings`) need no path resolution at all —
+`uvx --with` / `npx --package` put them on the spawned environment's PATH, and
+hooks inherit dirsql's environment. Anything else resolves relative to the
+package's install location.
+
+## 4. Plugins are language-specific but support both config styles
+
+A plugin targets one ecosystem (PyPI or npm). It should support both
+consumption styles where possible:
+
+- **TOML** (the auto-loaded fragment above) — the only style dirsql itself
+  implements.
+- **SDK** — a zero-dirsql-code authoring convention: the package also exports
+  its config programmatically (e.g. `dirsql_plugin_embeddings.tables()`) for
+  users to splice into `DirSQL(...)`.
+
+Known gap: `pre-query`/`post-query` exist only on the CLI server, so a
+plugin's query-side behavior has no SDK equivalent in either style.
 
 ## The motivating case, end to end
 
-Two small core additions make this viable: **configurable hook timeouts**
-(#351) and a **`setup-sql`** config key — raw SQL statements dirsql runs once
-per startup (after extensions load, before the scan) for schema it executes
-but does not own: e.g. a vec0 virtual table plus the sync triggers that fire
-on dirsql's own INSERT/DELETE row maintenance.
+Two small core additions make embeddings viable: **configurable hook
+timeouts** (#351) and a **`setup-sql`** config key — raw SQL statements dirsql
+runs once per startup (after extensions load, before the scan) for schema it
+executes but does not own: e.g. a vec0 virtual table plus the sync triggers
+that fire on dirsql's own INSERT/DELETE row maintenance.
 
 The plugin's TOML is then: one `[[table]]` with `on-file` + `timeout`, a
 `[[dirsql.extension]]` entry for sqlite-vec (existing feature, package-name
