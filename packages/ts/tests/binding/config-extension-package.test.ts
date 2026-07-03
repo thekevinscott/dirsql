@@ -65,7 +65,10 @@ function buildFixtureExtension(targetDir: string): string {
 }
 
 describe("DirSQL config-file extension by package name (#313)", () => {
-  const pkgName = "dirsql-testext-pkg";
+  // Must differ from extension-package.test.ts's package name: vitest runs
+  // test files in parallel forks, and a shared node_modules path races one
+  // file's afterEach cleanup against the other's resolution.
+  const pkgName = "dirsql-testext-config-pkg";
   const pkgDir = join(tsNodeModules, pkgName);
   let tmp: string;
 
