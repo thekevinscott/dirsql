@@ -35,12 +35,15 @@ export default defineConfig({
         {
           text: 'How-to Guides',
           items: [
-            { text: 'Defining Tables', link: '/guide/tables' },
-            { text: 'Querying', link: '/guide/querying' },
-            { text: 'File Watching', link: '/guide/watching' },
-            { text: 'Persistence', link: '/guide/persistence' },
-            { text: 'Async API', link: '/guide/async' },
-            { text: 'Collaboration with CRDTs', link: '/guide/crdt' }
+            { text: 'Define tables for your files', link: '/howto/define-tables' },
+            { text: 'Derive columns from file paths', link: '/howto/columns-from-paths' },
+            { text: 'Extract rows from file contents', link: '/howto/extract-from-contents' },
+            { text: 'Search documents by meaning', link: '/howto/search-by-meaning' },
+            { text: "Skip files you don't want indexed", link: '/howto/skip-files' },
+            { text: 'Load a SQLite extension', link: '/howto/load-extension' },
+            { text: 'Keep the index across restarts', link: '/howto/persist' },
+            { text: 'React to file changes', link: '/howto/react-to-changes' },
+            { text: 'Embed dirsql in your application', link: '/howto/embed' }
           ]
         },
         {

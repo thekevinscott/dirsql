@@ -20,6 +20,25 @@ describe('vitepress config', () => {
     expect(links).not.toContain('/guide/config')
   })
 
+  // The How-to tree (#376): nine goal-named guides, in the epic's order
+  // (#353 blessed target tree).
+  it('lists the nine goal-named how-to guides in the How-to Guides group', () => {
+    const sidebar = config.themeConfig!.sidebar as Record<string, SidebarItem[]>
+    const howTo = sidebar['/'].find((group) => group.text === 'How-to Guides')
+    const links = (howTo!.items ?? []).map((item) => item.link)
+    expect(links).toEqual([
+      '/howto/define-tables',
+      '/howto/columns-from-paths',
+      '/howto/extract-from-contents',
+      '/howto/search-by-meaning',
+      '/howto/skip-files',
+      '/howto/load-extension',
+      '/howto/persist',
+      '/howto/react-to-changes',
+      '/howto/embed'
+    ])
+  })
+
   // Regression guard: the sidebar must never *replace* itself when entering a
   // section. A path-scoped key (e.g. `/cli/`) swaps the whole tree out, which
   // deletes the other sections and reads as the nav breaking (see #301). There

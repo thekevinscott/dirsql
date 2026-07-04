@@ -13,7 +13,7 @@ async function sidebarSections(page: import('@playwright/test').Page) {
   )
 }
 
-for (const path of ['guide/tables.html', 'cli/index.html', 'cli/server.html']) {
+for (const path of ['howto/define-tables.html', 'guide/tables.html', 'cli/index.html', 'cli/server.html']) {
   test(`every section stays in the sidebar on ${path}`, async ({ page }) => {
     await page.goto(`./${path}`)
     await page.waitForSelector('.VPSidebar .group')
@@ -42,6 +42,32 @@ test('the CLI sidebar group lists all CLI subpages', async ({ page }) => {
     '/dirsql/cli/init.html',
     '/dirsql/cli/config.html',
     '/dirsql/cli/http-api.html'
+  ])
+})
+
+// The How-to tree (#376): nine goal-named guides, in the epic's order.
+test('the How-to Guides sidebar group lists the nine goal-named guides', async ({ page }) => {
+  await page.goto('./howto/define-tables.html')
+  await page.waitForSelector('.VPSidebar .group')
+  const howtoLinks = await page.evaluate(() => {
+    const groups = Array.from(document.querySelectorAll('.VPSidebar .group'))
+    const howto = groups.find(
+      (g) => g.querySelector('.text')?.textContent?.trim() === 'How-to Guides'
+    )
+    return Array.from(howto?.querySelectorAll('a') ?? []).map(
+      (a) => new URL((a as HTMLAnchorElement).href).pathname
+    )
+  })
+  expect(howtoLinks).toEqual([
+    '/dirsql/howto/define-tables.html',
+    '/dirsql/howto/columns-from-paths.html',
+    '/dirsql/howto/extract-from-contents.html',
+    '/dirsql/howto/search-by-meaning.html',
+    '/dirsql/howto/skip-files.html',
+    '/dirsql/howto/load-extension.html',
+    '/dirsql/howto/persist.html',
+    '/dirsql/howto/react-to-changes.html',
+    '/dirsql/howto/embed.html'
   ])
 })
 
