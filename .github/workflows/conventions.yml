@@ -31,7 +31,14 @@ jobs:
       path: packages/python/dirsql
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint"]'
+      # unit-coverage added (#393 migration): the reusable suite-executing job
+      # provisions stable Rust + cache (rust_toolchain) and runs build_command
+      # from the repo root before the coverage suite, so it can build the PyO3
+      # native ext the unit suite imports. The bespoke coverage job in
+      # python-test.yml stays until this proves green in CI, then retires.
+      gates: '["colocated-test", "unit-lint", "unit-coverage"]'
+      rust_toolchain: true
+      build_command: cd packages/python && uv run maturin develop
 
   python-integration:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
@@ -49,7 +56,13 @@ jobs:
       path: packages/ts/src
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint"]'
+      # unit-coverage added (#393 migration): build_command builds the napi
+      # native module the vitest suite loads; rust_toolchain provisions the Rust
+      # the napi build shells out to. Bespoke ts-test.yml coverage stays until
+      # this proves green, then retires.
+      gates: '["colocated-test", "unit-lint", "unit-coverage"]'
+      rust_toolchain: true
+      build_command: cd packages/ts && pnpm build
 
   typescript-integration:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
