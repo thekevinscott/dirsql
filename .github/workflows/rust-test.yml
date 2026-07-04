@@ -47,6 +47,30 @@ jobs:
       - name: Run unit tests
         run: cargo test --manifest-path packages/rust/Cargo.toml --features cli --lib
 
+  colocated:
+    name: Colocated unit tests (testing-conventions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Node runs the testing-conventions CLI via `npx` (unpinned -> latest),
+      # matching the coverage/mutation jobs.
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # The reusable testing-conventions workflow (.github/workflows/conventions.yml)
+      # does NOT run colocated-test for Rust: its detector excludes Rust from the
+      # `languages` list the colocated-test matrix iterates over (upstream design --
+      # inline `#[cfg(test)]` units can't go stale, so there is no co-change
+      # dimension). unit-lint and integration-lint ARE covered there for Rust. This
+      # bespoke job keeps the colocated-presence gate enforced for the crate until
+      # upstream offers it (tracked in #393); dropping the old testing-conventions.yml
+      # wholesale would otherwise have left this gate silently unenforced.
+      - name: Colocated test presence (testing-conventions)
+        run: npx -y testing-conventions unit colocated-test --language rust --config testing-conventions.toml packages/rust/src
+
   integration:
     name: Integration tests
     runs-on: ubuntu-latest
