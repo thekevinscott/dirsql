@@ -107,6 +107,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Internal bookkeeping tables are now unreachable through `query()` (#378,
+  epic #358).** dirsql's internal tables — `_dirsql_internal_rows`,
+  `_dirsql_files`, `_dirsql_meta` — were private only by the `_dirsql_` naming
+  convention; the engine now enforces it. A SQLite authorizer installed on the
+  `query()` path denies any read (or schema `PRAGMA`) targeting the reserved
+  `_dirsql_*` namespace, so a `SELECT` / `PRAGMA` against an internal table
+  fails at prepare time with a clear "not authorized" error (surfaced as HTTP
+  `400` on the CLI's `POST /query`) instead of leaking the rows. The authorizer
+  scopes to the user-facing query surface only — the engine still writes the
+  internal tables in the same transaction as the user rows, so crash-atomicity
+  is preserved and normal user queries are unaffected. Enforced once in the
+  shared Rust core, so every SDK and the CLI behave identically.
+
 - **Internal row ownership is now read from `_dirsql_internal_rows` (#360, epic
   #358, stage 2).** The engine's row readers — delete-by-file and the warm-start
   row rebuild — now resolve which rows belong to a file through the internal

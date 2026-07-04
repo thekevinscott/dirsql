@@ -21,6 +21,26 @@ pub enum DbError {
         "query() only accepts read-only statements; SQLite classified this statement as a write"
     )]
     WriteForbidden,
+
+    #[error("{0}")]
+    Unauthorized(String),
+}
+
+/// The reserved namespace for dirsql's internal bookkeeping tables. Every
+/// engine table (`_dirsql_internal_rows`, `_dirsql_files`, `_dirsql_meta`, and
+/// any future sibling) lives here; [`Db::query`] treats the whole namespace as
+/// unreachable, so the internal schema is a genuine private surface.
+const INTERNAL_TABLE_PREFIX: &str = "_dirsql_";
+
+/// The message carried by [`DbError::Unauthorized`] when `query()` rejects a
+/// read of an internal table.
+const INTERNAL_TABLE_DENIED_MSG: &str = "not authorized: dirsql's internal bookkeeping tables (the `_dirsql_*` namespace) \
+     are not readable through query()";
+
+/// Whether `name` refers to a dirsql-internal bookkeeping table — anything in
+/// the reserved [`INTERNAL_TABLE_PREFIX`] namespace.
+fn is_internal_table(name: &str) -> bool {
+    name.starts_with(INTERNAL_TABLE_PREFIX)
 }
 
 /// Validate that `s` is a safe unquoted SQL identifier: starts with an
@@ -330,8 +350,45 @@ impl Db {
     /// Results are vanilla SQLite: dirsql injects no tracking columns (epic
     /// #358), so a table's columns are exactly the user's DDL and `SELECT *`
     /// returns exactly those columns — no filtering.
+    ///
+    /// A SQLite authorizer (issue #378) makes dirsql's internal bookkeeping
+    /// tables unreachable through this surface: any read (or schema `PRAGMA`)
+    /// targeting the reserved `_dirsql_*` namespace is denied at prepare time,
+    /// surfaced as [`DbError::Unauthorized`]. The authorizer is installed only
+    /// around this `prepare` and cleared immediately after, so the engine's own
+    /// internal writes (`insert_row`, delete-by-file, persist), which never go
+    /// through `query()`, are unaffected and stay transactional with the user
+    /// rows they describe.
     pub fn query(&self, sql: &str) -> Result<Vec<HashMap<String, Value>>> {
-        let mut stmt = self.conn.prepare(sql)?;
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+
+        self.conn
+            .authorizer(Some(|ctx: AuthContext<'_>| match ctx.action {
+                AuthAction::Read { table_name, .. } if is_internal_table(table_name) => {
+                    Authorization::Deny
+                }
+                AuthAction::Pragma {
+                    pragma_value: Some(value),
+                    ..
+                } if is_internal_table(value) => Authorization::Deny,
+                _ => Authorization::Allow,
+            }));
+        let prepared = self.conn.prepare(sql);
+        // Clear the authorizer so it only ever gates this one user query; the
+        // shared connection's internal write paths must not see it.
+        self.conn
+            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+
+        let mut stmt = match prepared {
+            Ok(stmt) => stmt,
+            Err(e)
+                if e.sqlite_error_code()
+                    == Some(rusqlite::ErrorCode::AuthorizationForStatementDenied) =>
+            {
+                return Err(DbError::Unauthorized(INTERNAL_TABLE_DENIED_MSG.to_string()));
+            }
+            Err(e) => return Err(DbError::Sqlite(e)),
+        };
         if !stmt.readonly() {
             return Err(DbError::WriteForbidden);
         }
@@ -998,6 +1055,95 @@ mod tests {
         let err = db.query("SELECT _dirsql_file_path FROM t").unwrap_err();
         assert!(matches!(err, DbError::Sqlite(_)), "got: {err}");
         assert!(err.to_string().contains("no such column"), "got: {err}");
+    }
+
+    // --- Internal-table authorizer (issue #378) ---
+
+    #[test]
+    fn is_internal_table_recognizes_the_reserved_namespace() {
+        assert!(is_internal_table("_dirsql_internal_rows"));
+        assert!(is_internal_table("_dirsql_files"));
+        assert!(is_internal_table("_dirsql_meta"));
+        assert!(is_internal_table("_dirsql_anything_future"));
+    }
+
+    #[test]
+    fn is_internal_table_allows_user_tables_and_fs_columns() {
+        // User tables and the documented `_`-prefixed filesystem columns are
+        // NOT in the reserved `_dirsql_` namespace.
+        assert!(!is_internal_table("items"));
+        assert!(!is_internal_table("posts"));
+        assert!(!is_internal_table("_path"));
+        assert!(!is_internal_table("_dirsq"));
+        assert!(!is_internal_table("dirsql_internal_rows"));
+    }
+
+    #[test]
+    fn query_denies_reading_internal_rows_table() {
+        // `_dirsql_internal_rows` exists on every `Db`; reading it through
+        // query() is rejected at prepare time as Unauthorized.
+        let db = Db::new().unwrap();
+        let err = db.query("SELECT * FROM _dirsql_internal_rows").unwrap_err();
+        assert!(matches!(err, DbError::Unauthorized(_)), "got: {err}");
+        assert!(
+            err.to_string().contains("not authorized"),
+            "message should say not authorized, got: {err}"
+        );
+    }
+
+    #[test]
+    fn query_denies_pragma_targeting_internal_table() {
+        // A schema PRAGMA naming an internal table is denied too — the internal
+        // schema is unreachable, not just its rows.
+        let db = Db::new().unwrap();
+        let err = db
+            .query("PRAGMA table_info(_dirsql_internal_rows)")
+            .unwrap_err();
+        assert!(matches!(err, DbError::Unauthorized(_)), "got: {err}");
+    }
+
+    #[test]
+    fn query_allows_pragma_on_a_user_table() {
+        // The Pragma authorizer only denies the internal namespace; a PRAGMA on
+        // a user table is served.
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        let rows = db.query("PRAGMA table_info(t)").unwrap();
+        assert_eq!(rows.len(), 1, "expected one column row, got {rows:?}");
+        assert_eq!(rows[0]["name"], Value::Text("id".into()));
+    }
+
+    #[test]
+    fn query_authorizer_is_cleared_after_each_query() {
+        // The authorizer must not leak onto the shared connection. The strong
+        // proof: `delete_rows_by_file` itself READS `_dirsql_internal_rows` (it
+        // resolves ownership through the mapping) without routing through
+        // query(), so if a prior query() left the authorizer installed, that
+        // internal read would be denied and the delete would fail.
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
+        db.insert_row("t", &row, "file.json", 0).unwrap();
+
+        // A denied read and a normal read each install the authorizer for their
+        // own prepare; both must clear it afterward.
+        let _ = db.query("SELECT * FROM _dirsql_internal_rows").unwrap_err();
+        let rows = db.query("SELECT id FROM t").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["id"], Value::Text("1".into()));
+
+        let deleted = db.delete_rows_by_file("t", "file.json").unwrap();
+        assert_eq!(
+            deleted, 1,
+            "delete-by-file reads _dirsql_internal_rows internally; a leaked \
+             authorizer would have denied that read"
+        );
+    }
+
+    #[test]
+    fn internal_table_denied_message_mentions_the_namespace() {
+        assert!(INTERNAL_TABLE_DENIED_MSG.contains("not authorized"));
+        assert!(INTERNAL_TABLE_DENIED_MSG.contains("_dirsql_"));
     }
 
     // --- Error path: query with invalid SQL ---

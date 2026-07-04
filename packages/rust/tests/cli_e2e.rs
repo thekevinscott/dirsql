@@ -221,6 +221,37 @@ fn post_query_returns_rows_over_http() {
 }
 
 #[test]
+fn post_query_rejects_read_of_internal_bookkeeping_table() {
+    // #378: dirsql's internal bookkeeping tables are unreachable through the CLI
+    // query surface. `_dirsql_internal_rows` is populated by the engine while
+    // indexing the fixture, but selecting from it is rejected at prepare time
+    // rather than leaking the internal rows.
+    let root = blog_fixture();
+    let port = free_port();
+    let child = spawn_dirsql(root.path(), port);
+    wait_until_ready(port, Duration::from_secs(10));
+
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT * FROM _dirsql_internal_rows"}))
+        .send()
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "reading an internal table must be rejected, not served"
+    );
+    let body: Value = resp.json().unwrap();
+    let error = body["error"].as_str().unwrap_or_default();
+    assert!(
+        error.to_lowercase().contains("not authorized"),
+        "400 body should explain the read is not authorized, got {error:?}"
+    );
+
+    kill_and_wait(child);
+}
+
+#[test]
 fn get_events_emits_insert_event_when_file_created() {
     let root = blog_fixture();
     let port = free_port();
