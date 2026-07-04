@@ -93,6 +93,13 @@ This lives entirely in the shared Rust core (`create_table` runs DDL verbatim;
 `query` returns vanilla rows), so `PRAGMA table_info` and `SELECT *` report the
 same user-only columns across all three SDKs.
 
+**Internal tables unreachable through `query()` (#378, epic #358) — parity by
+construction, no drift.** The internal bookkeeping tables (`_dirsql_internal_rows`,
+`_dirsql_files`, `_dirsql_meta`) are denied on the `query()` path by a SQLite
+authorizer in the shared Rust core (`db::query`), so a read of any `_dirsql_*`
+table fails identically across all three SDKs (and the CLI's `POST /query`) with
+a "not authorized" error — no per-binding surface.
+
 ## AsyncDirSQL
 
 | API                        | Python                                | Rust                                   |

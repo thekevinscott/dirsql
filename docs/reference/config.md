@@ -50,7 +50,7 @@ the SQL `load_extension()` function is never exposed to queries.
 
 | Key | Required | Description |
 |---|---|---|
-| `path` | yes (non-empty) | The extension's shared library. Either a **file path** (`.so` / `.dylib` / `.dll`; relative paths resolve against the config file's parent directory) or a bare **package name** (no path separator, no loadable-file suffix). |
+| `path` | yes (non-empty) | The extension's shared library. Either a **file path** (`.so` / `.dylib` / `.dll`; relative paths resolve against the config file's parent directory) or a bare **package name** (no path separator, no loadable-file suffix). The package name is runtime-specific — see [package-name resolution](#package-name-resolution) below. |
 | `entrypoint` | no | Init-symbol override. When omitted, SQLite derives the entry point from the filename (`sqlite3_<filename>_init`); set this when that default does not match (e.g. `sqlite-vec`'s entry point is `sqlite3_vec_init`). |
 
 ```toml
@@ -59,13 +59,27 @@ path       = "./ext/vec0.dylib"
 entrypoint = "sqlite3_vec_init"
 ```
 
-**Package-name resolution.** A `path` naming a package is resolved from the
+### Package-name resolution
+
+A `path` naming a package is resolved from the
 installed package in the runtime environment: the Python launcher and SDK
 use `importlib`, the Node launcher and SDK use `require.resolve` against
 `node_modules`. Resolution is file-first (a same-named local file wins) and
 errors when the package contains zero or multiple loadables for the current
 platform. The **standalone Rust binary and the Rust SDK are
 file-path-only** — they have no interpreter to resolve package names with.
+
+The name must be what the runtime's resolver knows, which is not always the
+name you installed:
+
+- **Python** resolves the **importable module name** — underscores, not the
+  pip distribution name. `pip install sqlite-vec` is loaded as
+  `path = "sqlite_vec"`; `path = "sqlite-vec"` does not resolve.
+- **Node** resolves the package whose install actually **contains the
+  loadable**. Meta-packages that split binaries per platform resolve via the
+  platform package — e.g. `npm install sqlite-vec` is loaded as
+  `path = "sqlite-vec-linux-x64"` (matching your platform), not
+  `path = "sqlite-vec"`, whose meta-package ships no loadable.
 
 Extensions add **functions** callable in queries and in a table's DDL. An
 extension-backed **virtual table** cannot be declared as a `[[table]]` —
@@ -138,7 +152,8 @@ post-query = "jq -c '{results: .}'"
 hook-timeout = 120
 
 [[dirsql.extension]]
-path       = "sqlite-vec"            # package name (pip/npm installs)
+path       = "sqlite_vec"            # Python module name; on Node use the
+                                     # platform package, e.g. sqlite-vec-linux-x64
 entrypoint = "sqlite3_vec_init"
 
 [[table]]

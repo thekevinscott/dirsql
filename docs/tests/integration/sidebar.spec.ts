@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test'
 
-// Regression for #301: entering the CLI section must NOT replace the sidebar.
-// The full set of sections has to stay visible on every page, including
-// `/cli/*`, so navigation never loses its place.
-const SECTIONS = ['Tutorial', 'How-to Guides', 'CLI', 'Reference', 'Explanation']
+// Regression for #301: entering a section must NOT replace the sidebar.
+// The full set of sections has to stay visible on every page, so
+// navigation never loses its place. The sections are exactly the four
+// Diataxis groups (#353/#387).
+const SECTIONS = ['Tutorial', 'How-to Guides', 'Reference', 'Explanation']
 
 async function sidebarSections(page: import('@playwright/test').Page) {
   return await page.evaluate(() =>
@@ -13,7 +14,12 @@ async function sidebarSections(page: import('@playwright/test').Page) {
   )
 }
 
-for (const path of ['howto/define-tables.html', 'guide/tables.html', 'cli/index.html', 'cli/server.html']) {
+for (const path of [
+  'getting-started.html',
+  'howto/define-tables.html',
+  'reference/cli.html',
+  'explanation.html'
+]) {
   test(`every section stays in the sidebar on ${path}`, async ({ page }) => {
     await page.goto(`./${path}`)
     await page.waitForSelector('.VPSidebar .group')
@@ -24,25 +30,20 @@ for (const path of ['howto/define-tables.html', 'guide/tables.html', 'cli/index.
   })
 }
 
-test('the CLI sidebar group lists all CLI subpages', async ({ page }) => {
-  await page.goto('./cli/index.html')
+// The closing sweep (#387): the sidebar shows the four Diataxis groups and
+// nothing else -- no `CLI` group, no leftover product-area sections. Group
+// titles are the level-0 items; their pages nest below.
+test('the sidebar shows exactly the four Diataxis groups', async ({ page }) => {
+  await page.goto('./getting-started.html')
   await page.waitForSelector('.VPSidebar .group')
-  const cliLinks = await page.evaluate(() => {
-    const groups = Array.from(document.querySelectorAll('.VPSidebar .group'))
-    const cli = groups.find(
-      (g) => g.querySelector('.text')?.textContent?.trim() === 'CLI'
+  const groupTitles = await page.evaluate(() =>
+    Array.from(
+      document.querySelectorAll('.VPSidebar .group .VPSidebarItem.level-0 > .item .text')
     )
-    return Array.from(cli?.querySelectorAll('a') ?? []).map(
-      (a) => new URL((a as HTMLAnchorElement).href).pathname
-    )
-  })
-  expect(cliLinks).toEqual([
-    '/dirsql/cli/',
-    '/dirsql/cli/server.html',
-    '/dirsql/cli/init.html',
-    '/dirsql/cli/config.html',
-    '/dirsql/cli/http-api.html'
-  ])
+      .map((el) => el.textContent?.trim())
+      .filter(Boolean)
+  )
+  expect(groupTitles).toEqual(SECTIONS)
 })
 
 // The How-to tree (#376): nine goal-named guides, in the epic's order.

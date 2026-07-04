@@ -11,6 +11,49 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### Internal `_dirsql_*` bookkeeping tables are unreachable through `query()` (#378)
+
+#### Summary
+
+dirsql's internal bookkeeping tables — `_dirsql_internal_rows`, `_dirsql_files`,
+`_dirsql_meta` — are no longer readable through the public `query()` surface. A
+SQLite authorizer on the query path denies any read (or schema `PRAGMA`)
+targeting the reserved `_dirsql_*` namespace, so such a query now errors at
+prepare time ("not authorized") instead of returning the internal rows. This is
+an engine-enforced encapsulation of an always-internal, always-undocumented
+surface; documented usage is unaffected.
+
+#### Required changes
+
+_None for documented usage._ If you were relying on reading dirsql's internal
+tables directly (e.g. `SELECT * FROM _dirsql_internal_rows` for row-ownership
+bookkeeping), there is no supported replacement — that data is internal by
+design. Query your own user tables instead.
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- A `SELECT` / `PRAGMA` reading a `_dirsql_*` table through `query()` (SDK) or
+  the CLI's `POST /query` now fails: an SDK `query()` returns a "not authorized"
+  error, and `POST /query` responds `400` with a `not authorized` message,
+  where both previously returned the internal rows.
+- Normal user queries, and the engine's own internal read/write paths (indexing,
+  delete-by-file, persistence), are unchanged.
+
+#### Verification
+
+```sh
+# Start dirsql over a directory (serves on localhost:7117 by default), then
+# post a read of an internal table to the query surface:
+curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:7117/query \
+  -H 'content-type: application/json' \
+  -d '{"sql": "SELECT * FROM _dirsql_internal_rows"}'
+# expected: 400 (was 200 with the internal rows before this change)
+```
+
 ### Internal `_dirsql_*` tracking columns removed; one-time cache rebuild (#361)
 
 #### Summary
