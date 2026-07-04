@@ -78,7 +78,7 @@ The `dirsql` Rust crate handles all heavy lifting:
 
 ### `db` -- In-memory SQLite
 
-Wraps `rusqlite` with an in-memory database. Handles DDL execution, row insertion with internal tracking columns (`_dirsql_file_path`, `_dirsql_row_index`), querying with automatic exclusion of tracking columns, and row deletion by file path.
+Wraps `rusqlite` with an in-memory database. Handles DDL execution (run verbatim -- no injected columns, epic #358), row insertion with per-file ownership recorded in the internal `_dirsql_internal_rows` table, querying, and row deletion by file path. The internal bookkeeping tables (`_dirsql_internal_rows`, `_dirsql_files`, `_dirsql_meta`) are a private surface: a SQLite authorizer installed on the `query()` path denies any read (or schema `PRAGMA`) targeting the reserved `_dirsql_*` namespace, so they are unreachable through the public query surface (issue #378) while the engine still writes them in the same transaction as the user rows.
 
 ### `scanner` -- Directory traversal
 
@@ -161,6 +161,6 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 ### Query execution
 
 1. Python calls `db.query(sql)`
-2. Rust executes the SQL against in-memory SQLite
-3. Results are converted from `HashMap<String, Value>` to Python dicts
-4. Internal `_dirsql_*` columns are filtered out before returning
+2. A SQLite authorizer is installed for the prepare, denying reads of the internal `_dirsql_*` bookkeeping tables (issue #378); a query touching one fails with a "not authorized" error
+3. Rust executes the SQL against in-memory SQLite
+4. Results are converted from `HashMap<String, Value>` to Python dicts -- exactly the user's declared columns, no filtering (epic #358)
