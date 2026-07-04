@@ -11,23 +11,25 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
-### Injected `_dirsql_*` tracking columns removed (#361)
+### Internal `_dirsql_*` tracking columns removed; one-time cache rebuild (#361)
 
 #### Summary
 
-dirsql no longer rewrites user DDL to inject `_dirsql_file_path` /
-`_dirsql_row_index` tracking columns. `create_table` runs the DDL verbatim, row
-ownership is tracked entirely in the internal `_dirsql_internal_rows` table, and
-query results are exactly what the user declared. This affects every SDK and the
-CLI equally (the change is in the shared Rust core).
+dirsql no longer injects internal `_dirsql_file_path` / `_dirsql_row_index`
+tracking columns into user tables; row ownership now lives entirely in the
+internal `_dirsql_internal_rows` table. This is an internal change with no
+effect on documented usage — `SELECT *` never returned these columns. The one
+observable consequence is on-disk: the persistent-cache schema version is bumped
+(`2` → `3`), so the first startup after upgrading discards and rebuilds the
+cache once, automatically.
 
 #### Required changes
 
-| Surface | Before | After |
-| ------- | ------ | ----- |
-| Query selecting the tracking column | `SELECT _dirsql_file_path FROM t` (returned the file path) | `SELECT _path FROM t` — the documented filesystem-fact column (`_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`) |
-| `SELECT _dirsql_row_index FROM t` | returned the per-file row index | no built-in equivalent; add your own column in `extract` if you need it |
-| `SELECT *` result columns | user columns only (tracking columns were laundered out) | user columns only — **unchanged**, but now because they are the only columns that exist |
+_None for documented usage._ If you explicitly selected the (undocumented)
+`_dirsql_file_path` / `_dirsql_row_index` columns, switch to the documented
+filesystem-fact columns (`_path`, `_basename`, `_dir`, `_ext`, `_size`,
+`_mtime`, `_ctime`); the `_dirsql_*` columns no longer exist and naming them
+now errors with "no such column".
 
 #### Deprecations removed
 
@@ -35,18 +37,18 @@ _None._
 
 #### Behavior changes without code changes
 
-- `PRAGMA table_info(<table>)` and `SELECT *` now report **exactly** the user's
-  declared columns; the `_dirsql_file_path` / `_dirsql_row_index` columns no
-  longer exist, so explicitly naming them in a query is a "no such column"
-  error rather than a returned value.
 - The persistent-cache schema version is bumped (`2` → `3`). A cache written by
   an older build is discarded and rebuilt once, automatically, on first startup
   — no action required, and penalty-free per the persistence design.
+- `PRAGMA table_info(<table>)` and `SELECT *` now report exactly the user's
+  declared columns. `SELECT *` results are unchanged (it already excluded the
+  internal columns); the difference is that the columns no longer exist at all.
 
 #### Verification
 
-After upgrading, confirm a table's schema is now verbatim. With a `.dirsql.toml`
-declaring `[[table]] ddl = "CREATE TABLE files (_path TEXT)"`:
+After upgrading, the first run rebuilds the cache and a table's schema is
+verbatim. With a `.dirsql.toml` declaring
+`[[table]] ddl = "CREATE TABLE files (_path TEXT)"`:
 
 ```sh
 dirsql query "SELECT name FROM pragma_table_info('files')"

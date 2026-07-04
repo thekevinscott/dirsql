@@ -125,15 +125,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- **Injected `_dirsql_file_path` / `_dirsql_row_index` columns (#361, epic
-  #358).** *Breaking.* dirsql no longer rewrites user DDL to add tracking
-  columns — `create_table` runs the DDL verbatim, so `PRAGMA table_info` and
-  `SELECT *` return exactly the columns the user declared, and query results are
-  vanilla SQLite. Row ownership is tracked entirely in the internal
-  `_dirsql_internal_rows` table. Explicitly selecting `_dirsql_file_path` /
-  `_dirsql_row_index` now errors; use the documented `_path` and friends. The
-  persistent-cache schema version is bumped, so the first startup after
-  upgrading performs one automatic full rebuild. See `MIGRATIONS.md`.
+- **Injected `_dirsql_file_path` / `_dirsql_row_index` tracking columns (#361,
+  epic #358).** dirsql no longer rewrites user DDL to add tracking columns —
+  `create_table` runs the DDL verbatim, so `PRAGMA table_info` and `SELECT *`
+  return exactly the columns the user declared, and query results are vanilla
+  SQLite. Row ownership now lives entirely in the internal `_dirsql_internal_rows`
+  table, completing the stage 1–3 migration. Documented usage is unaffected:
+  `SELECT *` already excluded these columns, so its results are unchanged. The
+  only observable differences are that explicitly naming the (always-undocumented)
+  `_dirsql_*` columns in a query now returns a "no such column" error — use the
+  documented `_path` and friends instead — and the persistent-cache schema version
+  is bumped, so the first startup after upgrading performs one automatic,
+  penalty-free rebuild. See `MIGRATIONS.md`.
 
 - **Python SDK: native-language (`.py`) config support and the `dirsql
   interpret` subcommand — hard removal, no deprecation window (A1 of epic
