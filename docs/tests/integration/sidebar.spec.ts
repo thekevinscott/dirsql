@@ -44,3 +44,27 @@ test('the CLI sidebar group lists all CLI subpages', async ({ page }) => {
     '/dirsql/cli/http-api.html'
   ])
 })
+
+// The Reference tree (#375): the six reference pages plus Migrations.
+test('the Reference sidebar group lists all reference pages', async ({ page }) => {
+  await page.goto('./reference/cli.html')
+  await page.waitForSelector('.VPSidebar .group')
+  const referenceLinks = await page.evaluate(() => {
+    const groups = Array.from(document.querySelectorAll('.VPSidebar .group'))
+    const reference = groups.find(
+      (g) => g.querySelector('.text')?.textContent?.trim() === 'Reference'
+    )
+    return Array.from(reference?.querySelectorAll('a') ?? []).map(
+      (a) => new URL((a as HTMLAnchorElement).href).pathname
+    )
+  })
+  expect(referenceLinks).toEqual([
+    '/dirsql/reference/cli.html',
+    '/dirsql/reference/config.html',
+    '/dirsql/reference/hooks.html',
+    '/dirsql/reference/columns.html',
+    '/dirsql/reference/http-api.html',
+    '/dirsql/reference/sdk.html',
+    '/dirsql/migrations.html'
+  ])
+})

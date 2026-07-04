@@ -56,7 +56,12 @@ export default defineConfig({
         {
           text: 'Reference',
           items: [
-            { text: 'API Reference', link: '/api/' },
+            { text: 'CLI', link: '/reference/cli' },
+            { text: 'Configuration File', link: '/reference/config' },
+            { text: 'Command Hooks', link: '/reference/hooks' },
+            { text: 'Virtual Columns & Glob Captures', link: '/reference/columns' },
+            { text: 'HTTP API', link: '/reference/http-api' },
+            { text: 'SDK', link: '/reference/sdk' },
             { text: 'Migrations', link: '/migrations' }
           ]
         },
