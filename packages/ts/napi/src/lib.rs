@@ -78,7 +78,7 @@ pub struct ExtensionSpec {
     pub entrypoint: Option<String>,
 }
 
-/// The main DirSQL class. Creates an in-memory SQLite index over a directory.
+/// The main DirSQL class. Creates an ephemeral SQLite index over a directory.
 #[napi(js_name = "DirSQL")]
 pub struct DirSQL {
     inner: CoreDirSQL,

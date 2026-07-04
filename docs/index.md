@@ -2,7 +2,7 @@
 layout: home
 hero:
   name: dirsql
-  tagline: Ephemeral SQL index over a local directory. `dirsql` watches a filesystem, ingests structured files into an in-memory SQLite database, and exposes a SQL query interface. The filesystem is always the source of truth.
+  tagline: Ephemeral SQL index over a local directory. `dirsql` watches a filesystem, ingests structured files into an ephemeral SQLite database, and exposes a SQL query interface. The filesystem is always the source of truth.
   actions:
     - theme: brand
       text: Get Started

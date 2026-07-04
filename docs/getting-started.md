@@ -85,7 +85,7 @@ The first run downloads the package (`npx` asks for confirmation — answer
 Running at localhost:7117
 ```
 
-That one command scanned the directory, built an in-memory SQLite database
+That one command scanned the directory, built an ephemeral SQLite database
 with one row per file, and started an HTTP server. Leave it running and
 open a **second terminal** for the next step.
 

@@ -1,7 +1,7 @@
 # Keep the index across restarts
 
-By default the database lives in memory and is rebuilt from your files on
-every startup. [`persist`](../reference/config.md#dirsql-keys) keeps the
+By default the database is ephemeral: rebuilt from your files on every
+startup and discarded on exit. [`persist`](../reference/config.md#dirsql-keys) keeps the
 SQLite index on disk instead, so a restart only re-parses files that
 actually changed — the difference between seconds and milliseconds on large
 trees, and between re-running and skipping expensive

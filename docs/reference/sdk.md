@@ -109,7 +109,7 @@ directory" error.
   When both an explicit `root` and a config root are present, the explicit
   value wins and a warning is emitted on stderr.
 - `persist` — Keep the SQLite index on disk between runs (default off:
-  in-memory, rebuilt every startup). The cache lives at
+  ephemeral, rebuilt every startup). The cache lives at
   `<root>/.dirsql/cache.db` by default; on restart, only files whose stat
   changed are re-parsed. `persist = true` in the config also enables it.
 - `persist_path` / `persistPath` — Override the cache location. An

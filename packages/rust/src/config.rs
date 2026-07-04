@@ -204,7 +204,8 @@ pub struct Config {
     pub ignore: Vec<String>,
     pub tables: Vec<TableConfig>,
     /// Enable persistent on-disk SQLite cache. When false (the default), the
-    /// database is rebuilt in memory on every startup.
+    /// database is rebuilt from scratch on every startup (in an anonymous
+    /// disk-backed temp database, #402).
     pub persist: bool,
     /// Optional override for the on-disk cache location. Resolved relative
     /// to the config file's parent directory when relative.
