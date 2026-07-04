@@ -292,6 +292,56 @@ impl Db {
         Ok(())
     }
 
+    /// Read back the rows a given file produced for `table`, ordered by row
+    /// index. Ownership and ordering come from the `_dirsql_internal_rows`
+    /// mapping (joined on `rowid`); user columns are qualified with the table
+    /// alias so a user column named like a mapping column stays unambiguous.
+    ///
+    /// This is the watcher's diffing source (#401): `handle_upsert` /
+    /// `handle_delete` snapshot a file's previous rows here instead of holding
+    /// a corpus-wide in-memory copy. A row read back compares equal to the
+    /// normalized row that was inserted as long as the extract's value types
+    /// match the declared column affinities (SQLite coerces on insert
+    /// otherwise, e.g. `Integer(5)` into a TEXT column comes back
+    /// `Text("5")`).
+    pub fn get_rows_by_file(
+        &self,
+        table: &str,
+        file_path: &str,
+    ) -> Result<Vec<HashMap<String, Value>>> {
+        let user_columns = self.get_table_columns(table)?;
+        let mut col_list = user_columns
+            .iter()
+            .map(|c| format!("t.\"{c}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if col_list.is_empty() {
+            // No columns can only happen for a nonexistent table (SQLite
+            // requires ≥1 declared column); keep the SELECT list valid and
+            // let SQLite report "no such table".
+            col_list = "1".to_string();
+        }
+        let sql = format!(
+            "SELECT {col_list} FROM \"{table}\" AS t \
+             JOIN _dirsql_internal_rows AS m ON m.rowid_ref = t.rowid \
+             WHERE m.table_name = ?1 AND m.file_path = ?2 ORDER BY m.row_index"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params![table, file_path], |row| {
+            let mut map = HashMap::new();
+            for (i, name) in user_columns.iter().enumerate() {
+                let v: rusqlite::types::Value = row.get(i)?;
+                map.insert(name.clone(), Value::from(v));
+            }
+            Ok(map)
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     /// Delete all rows that were produced by a given file path.
     ///
     /// The user-row deletes and the matching `_dirsql_internal_rows` mapping
@@ -1058,6 +1108,78 @@ mod tests {
         db.insert_row("t", &row, "a.json", 0).unwrap();
         let deleted = db.delete_rows_by_file("t", "nonexistent.json").unwrap();
         assert_eq!(deleted, 0);
+    }
+
+    // --- get_rows_by_file: the watcher's diffing source (#401) ---
+
+    #[test]
+    fn get_rows_by_file_returns_rows_in_row_index_order() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        // Insert with row indices out of insertion order; the read must
+        // follow row_index, not rowid / insertion order.
+        let second = HashMap::from([("id".into(), Value::Text("second".into()))]);
+        let first = HashMap::from([("id".into(), Value::Text("first".into()))]);
+        db.insert_row("t", &second, "a.json", 1).unwrap();
+        db.insert_row("t", &first, "a.json", 0).unwrap();
+
+        let rows = db.get_rows_by_file("t", "a.json").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["id"], Value::Text("first".into()));
+        assert_eq!(rows[1]["id"], Value::Text("second".into()));
+    }
+
+    #[test]
+    fn get_rows_by_file_scopes_by_file_and_table() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.create_table("CREATE TABLE u (id TEXT)").unwrap();
+        let t_row = HashMap::from([("id".into(), Value::Text("t-row".into()))]);
+        let u_row = HashMap::from([("id".into(), Value::Text("u-row".into()))]);
+        let other = HashMap::from([("id".into(), Value::Text("other-file".into()))]);
+        db.insert_row("t", &t_row, "a.json", 0).unwrap();
+        db.insert_row("u", &u_row, "a.json", 0).unwrap();
+        db.insert_row("t", &other, "b.json", 0).unwrap();
+
+        let rows = db.get_rows_by_file("t", "a.json").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["id"], Value::Text("t-row".into()));
+
+        // A file with no rows in this table reads back empty.
+        let none = db.get_rows_by_file("u", "b.json").unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn get_rows_by_file_round_trips_all_value_variants() {
+        // The watcher's positional diff compares a read-back row against a
+        // freshly normalized one, so every Value variant must survive
+        // insert -> select unchanged when the declared column affinity
+        // matches the value type.
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (i INTEGER, r REAL, s TEXT, b BLOB, n TEXT)")
+            .unwrap();
+        let row = HashMap::from([
+            ("i".to_string(), Value::Integer(42)),
+            ("r".to_string(), Value::Real(1.5)),
+            ("s".to_string(), Value::Text("hello".into())),
+            ("b".to_string(), Value::Blob(vec![0, 1, 2])),
+            ("n".to_string(), Value::Null),
+        ]);
+        db.insert_row("t", &row, "a.json", 0).unwrap();
+
+        let rows = db.get_rows_by_file("t", "a.json").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0], row);
+    }
+
+    #[test]
+    fn get_rows_by_file_missing_table_returns_error() {
+        // A nonexistent table has no columns, so the SELECT list falls back
+        // to `1` and SQLite reports the missing table.
+        let db = Db::new().unwrap();
+        let err = db.get_rows_by_file("ghost", "a.json").unwrap_err();
+        assert!(err.to_string().contains("no such table"), "got: {err}");
     }
 
     // --- Error path: Db::open on an unopenable path ---
