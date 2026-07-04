@@ -35,18 +35,50 @@ Before pushing any docs changes:
 
 ## Structure
 
-The docs follow the [Diataxis](https://diataxis.fr/) framework:
+The docs follow the [Diataxis](https://diataxis.fr/) framework. **Type is
+the only organizational axis** -- there are no product-area sections (no
+"CLI" section; #353). The nav and the sidebar mirror the four types exactly.
 
-- **Tutorials** (`getting-started.md`) -- learning-oriented, step-by-step
-- **How-to Guides** (`guide/`) -- task-oriented, practical recipes
-- **Reference** (`api/`) -- information-oriented, API details
-- **Explanation** (`architecture.md`) -- understanding-oriented, design decisions
+The **primary reader is the CLI user**: someone with a directory of files,
+one command (`uvx` / `npx dirsql`), and a `.dirsql.toml`. The SDKs are the
+secondary audience and appear **only in Reference**, plus the single
+"Embed `dirsql` in your application" how-to.
 
-The **CLI** (`cli/`) is a self-contained section reachable from its own
-top-level `CLI` nav tab, with a path-scoped sidebar (`/cli/` key in
-`config.ts`). Everything a CLI user needs -- installation, running the server,
-`init`, the `.dirsql.toml` config file, and the HTTP API -- lives under
-`cli/`. Do not move CLI pages back into `guide/`.
+Target tree (the spec for #353; existing pages are *quarried* into it, not
+migrated -- a page survives only if a slot wants its content):
+
+- **Tutorial** -- one lesson: *Your first dirsql database*. The reader
+  performs every step and sees output at each one; success is
+  author-guaranteed (toy dataset, no branching).
+- **How-to Guides** -- goal-named recipes: define tables for your files;
+  derive columns from file paths; extract rows from file contents
+  (`on-file`); search documents by meaning; skip files; load a SQLite
+  extension; keep the index across restarts; react to file changes; embed
+  `dirsql` in an application.
+- **Reference** -- CLI flags and defaults; the complete `.dirsql.toml`
+  schema; the command hook contract (placeholders, stdout protocol, exit
+  codes, timeouts); virtual columns and glob captures; the HTTP API;
+  per-language SDK pages (the sole SDK home).
+- **Explanation** -- one page: how `dirsql` thinks (the filesystem is the
+  source of truth; the database is a derived, ephemeral, read-only view;
+  reconcile and diffing). Its canonical home is the root `ARCHITECTURE.md`;
+  #374 surfaces it via an include page, the same mechanism
+  `docs/migrations.md` uses for `MIGRATIONS.md`. Edit the root file, never
+  a rendered include.
+
+Working rules:
+
+- **Facts live once, in Reference.** Tutorials and how-tos link to reference
+  material; they never re-list constructor parameters or duplicate API tables.
+- **A how-to opens with a 1-2 line goal/motivation statement.** Deep
+  rationale (tradeoffs, alternatives considered, theory) moves to Explanation
+  only when it is substantial enough to stand alone and is reused across
+  pages. Do not manufacture stub pages for a paragraph of "why".
+- **Tutorial vs how-to:** a tutorial is a lesson along a path the author
+  guarantees; a how-to serves a competent reader pursuing their own goal.
+- **One global sidebar.** Never add a path-scoped sidebar key -- it swaps
+  out the whole tree and hides every other section while inside one (#301;
+  see the comment above `sidebar` in `config.ts`).
 
 ## Conventions
 
