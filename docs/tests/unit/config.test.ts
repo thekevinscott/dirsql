@@ -34,7 +34,7 @@ describe('vitepress config', () => {
   it('shows every CLI subpage in a self-contained CLI group', () => {
     const sidebar = config.themeConfig!.sidebar as Record<string, SidebarItem[]>
     const groupTexts = sidebar['/'].map((group) => group.text)
-    expect(groupTexts).toEqual(['Tutorials', 'How-to Guides', 'CLI', 'Reference', 'Explanation'])
+    expect(groupTexts).toEqual(['Tutorial', 'How-to Guides', 'CLI', 'Reference', 'Explanation'])
 
     const cli = sidebar['/'].find((group) => group.text === 'CLI')
     const links = (cli!.items ?? []).map((item) => item.link)

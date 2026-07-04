@@ -1,190 +1,257 @@
----
-canonical: https://thekevinscott.github.io/dirsql/getting-started
----
+# Your first dirsql database
 
-# Getting Started
+In this tutorial you will turn a directory of three tiny markdown files into
+a SQL database you can query over HTTP — without writing any code. You will:
 
-> Online: <https://thekevinscott.github.io/dirsql/getting-started>
+1. Create the directory and files.
+2. Start `dirsql` with zero configuration and query it with `curl`.
+3. Define your own table in a `.dirsql.toml` and query the new shape.
 
-## Installation
+It takes about five minutes.
+
+**You need:** a terminal with `curl` and [`jq`](https://jqlang.org/), and
+Node ≥ 20.11 (for `npx`). Every `npx dirsql` step below also has a `uvx`
+tab that behaves identically, if you prefer Python tooling
+([`uv`](https://docs.astral.sh/uv/)).
+
+## 1. Create three files
+
+Make a working directory with two subfolders — one per note author:
+
+```bash
+mkdir -p my-notes/notes/alice my-notes/notes/bob
+cd my-notes
+```
+
+Create the three notes by pasting each block exactly as shown:
+
+```bash
+cat > notes/alice/welcome.md <<'EOF'
+# Welcome
+
+Start here. This folder is about to become a database.
+EOF
+```
+
+```bash
+cat > notes/alice/ideas.md <<'EOF'
+# Ideas
+
+- query files with SQL
+- watch for changes
+EOF
+```
+
+```bash
+cat > notes/bob/reading-list.md <<'EOF'
+# Reading list
+
+- The SQLite file format
+EOF
+```
+
+Check that all three files are in place:
+
+```bash
+find notes -type f | sort
+```
+
+```
+notes/alice/ideas.md
+notes/alice/welcome.md
+notes/bob/reading-list.md
+```
+
+## 2. Start the server
+
+From inside `my-notes`, start `dirsql`:
 
 ::: code-group
 
-```bash [Python]
-pip install dirsql
+```bash [npm]
+npx dirsql
 ```
 
-```bash [Rust]
-cargo add dirsql
-```
-
-```bash [TypeScript]
-# The npm CLI requires **Node ≥ 20.11**.
-npm add dirsql
-```
-
-```bash [CLI]
-# Pick whichever install path you already have handy
-npx dirsql --version
-uvx dirsql --version
-cargo install dirsql --features cli
+```bash [PyPI]
+uvx dirsql
 ```
 
 :::
 
-
-
-See the [CLI section](./cli/) for details on the command-line interface, and the [Rust library README](https://github.com/thekevinscott/dirsql/tree/main/packages/rust) for the library-vs-CLI feature split.
-
-## Quick start
-
-Suppose you have a directory of JSON files representing blog posts:
+The first run downloads the package (`npx` asks for confirmation — answer
+`y`; `uvx` prints download progress), then the server starts:
 
 ```
-my-blog/
-  posts/
-    hello.json      # {"title": "Hello World", "author": "alice"}
-    second.json     # {"title": "Second Post", "author": "bob"}
-  authors/
-    alice.json      # {"id": "alice", "name": "Alice"}
-    bob.json        # {"id": "bob", "name": "Bob"}
+Running at localhost:7117
 ```
 
-Index and query them with `dirsql`:
+That one command scanned the directory, built an in-memory SQLite database
+with one row per file, and started an HTTP server. Leave it running and
+open a **second terminal** for the next step.
+
+## 3. Query your files
+
+You gave `dirsql` no configuration, so it serves a single default table
+named `files` ([zero-config mode](./reference/cli.md#zero-config-mode)).
+Ask it how many rows it has:
+
+```bash
+curl -s http://localhost:7117/query \
+  -H 'content-type: application/json' \
+  -d '{"sql":"SELECT COUNT(*) AS files FROM files"}'
+```
+
+```
+[{"files":3}]
+```
+
+Three files, three rows. The response is always a JSON array of row
+objects ([HTTP API](./reference/http-api.md)) — from here on we pipe it
+through `jq` to pretty-print. Now select some columns:
+
+```bash
+curl -s http://localhost:7117/query \
+  -H 'content-type: application/json' \
+  -d '{"sql":"SELECT _path, _size FROM files ORDER BY _path"}' \
+  | jq
+```
+
+```json
+[
+  {
+    "_path": "notes/alice/ideas.md",
+    "_size": 52
+  },
+  {
+    "_path": "notes/alice/welcome.md",
+    "_size": 66
+  },
+  {
+    "_path": "notes/bob/reading-list.md",
+    "_size": 41
+  }
+]
+```
+
+`_path` and `_size` are two of the built-in file columns `dirsql` collects
+for every file — see [virtual columns](./reference/columns.md#virtual-columns)
+for the full list. (The `_size` values are byte counts; they match the
+output above because you pasted the files exactly.)
+
+You have a working SQL database over your files. Next, teach it the
+structure your folders already encode.
+
+## 4. Define a table
+
+Look at the paths again: `notes/alice/ideas.md`, `notes/bob/reading-list.md`
+— the author's name is a directory segment. A config file can capture it as
+a real column.
+
+In your second terminal, still inside `my-notes`, create a `.dirsql.toml`:
+
+```bash
+cat > .dirsql.toml <<'EOF'
+[[table]]
+ddl  = "CREATE TABLE notes (author TEXT, _basename TEXT, _size INTEGER)"
+glob = "notes/{author}/*.md"
+EOF
+```
+
+Two keys define the table:
+
+- `glob` selects which files feed the table, and `{author}` is a
+  [glob capture](./reference/columns.md#glob-captures): whatever directory
+  name matches that segment becomes the row's `author` value.
+- `ddl` is ordinary `CREATE TABLE` SQL naming the columns you want to keep.
+
+## 5. Restart and query the new shape
+
+Config is read at startup, so go back to the **first terminal**, stop the
+server with `Ctrl-C`, and start it again:
 
 ::: code-group
 
-```python [Python]
-import asyncio
-import json
-from dirsql import DirSQL, Table
-
-async def main():
-    db = DirSQL(
-        "./my-blog",
-        tables=[
-            Table(
-                ddl="CREATE TABLE posts (title TEXT, author TEXT)",
-                glob="posts/*.json",
-                extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
-            ),
-            Table(
-                ddl="CREATE TABLE authors (id TEXT, name TEXT)",
-                glob="authors/*.json",
-                extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
-            ),
-        ],
-    )
-    await db.ready()
-
-    # Query all posts
-    posts = await db.query("SELECT * FROM posts")
-    # [{"title": "Hello World", "author": "alice"}, {"title": "Second Post", "author": "bob"}]
-
-    # Join across tables
-    results = await db.query("""
-        SELECT posts.title, authors.name
-        FROM posts
-        JOIN authors ON posts.author = authors.id
-    """)
-    # [{"title": "Hello World", "name": "Alice"}, {"title": "Second Post", "name": "Bob"}]
-
-asyncio.run(main())
+```bash [npm]
+npx dirsql
 ```
 
-```rust [Rust]
-use dirsql::{DirSQL, Table, Value};
-use std::collections::HashMap;
-
-// Convert a JSON object string into a dirsql row.
-fn row_from_json(raw: &str) -> HashMap<String, Value> {
-    let v: serde_json::Value = serde_json::from_str(raw).unwrap();
-    let serde_json::Value::Object(obj) = v else { return HashMap::new() };
-    obj.into_iter()
-        .map(|(k, val)| {
-            let v = match val {
-                serde_json::Value::String(s) => Value::Text(s),
-                serde_json::Value::Number(n) => n
-                    .as_i64()
-                    .map(Value::Integer)
-                    .unwrap_or_else(|| Value::Real(n.as_f64().unwrap_or(0.0))),
-                serde_json::Value::Bool(b) => Value::Integer(b as i64),
-                serde_json::Value::Null => Value::Null,
-                other => Value::Text(other.to_string()),
-            };
-            (k, v)
-        })
-        .collect()
-}
-
-let db = DirSQL::new(
-    "./my-blog",
-    vec![
-        Table::new(
-            "CREATE TABLE posts (title TEXT, author TEXT)",
-            "posts/*.json",
-            |path| vec![row_from_json(&std::fs::read_to_string(path).unwrap())],
-        ),
-        Table::new(
-            "CREATE TABLE authors (id TEXT, name TEXT)",
-            "authors/*.json",
-            |path| vec![row_from_json(&std::fs::read_to_string(path).unwrap())],
-        ),
-    ],
-)?;
-
-let posts = db.query("SELECT * FROM posts")?;
-
-let results = db.query(
-    "SELECT posts.title, authors.name \
-     FROM posts JOIN authors ON posts.author = authors.id"
-)?;
-```
-
-```typescript [TypeScript]
-import { readFileSync } from 'node:fs';
-import { DirSQL, type TableDef } from 'dirsql';
-
-const tables: TableDef[] = [
-  {
-    ddl: 'CREATE TABLE posts (title TEXT, author TEXT)',
-    glob: 'posts/*.json',
-    extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
-  },
-  {
-    ddl: 'CREATE TABLE authors (id TEXT, name TEXT)',
-    glob: 'authors/*.json',
-    extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
-  },
-];
-
-const db = new DirSQL({ root: './my-blog', tables });
-
-const posts = await db.query('SELECT * FROM posts');
-
-const results = await db.query(`
-  SELECT posts.title, authors.name
-  FROM posts JOIN authors ON posts.author = authors.id
-`);
+```bash [PyPI]
+uvx dirsql
 ```
 
 :::
 
-## What happens at startup
+```
+Running at localhost:7117
+```
 
-1. `dirsql` walks the directory tree
-2. Files matching each table's glob pattern are identified
-3. The `extract` function receives each matched file's path (relative to the scan root, or absolute when `root` is absolute) and returns rows
-4. Rows are inserted into an in-memory SQLite database
-5. SQL queries run against that database
+This time `dirsql` found your `.dirsql.toml` and served the `notes` table
+you defined instead of the default `files` table. Query it from the second
+terminal:
 
-The filesystem is always the source of truth. The database is rebuilt from files at startup.
+```bash
+curl -s http://localhost:7117/query \
+  -H 'content-type: application/json' \
+  -d '{"sql":"SELECT author, _basename, _size FROM notes ORDER BY author, _basename"}' \
+  | jq
+```
 
-## Next steps
+```json
+[
+  {
+    "_basename": "ideas.md",
+    "_size": 52,
+    "author": "alice"
+  },
+  {
+    "_basename": "welcome.md",
+    "_size": 66,
+    "author": "alice"
+  },
+  {
+    "_basename": "reading-list.md",
+    "_size": 41,
+    "author": "bob"
+  }
+]
+```
 
-- [Defining Tables](./guide/tables.md) -- DDL, globs, and extract functions in detail
-- [Querying](./guide/querying.md) -- SQL queries and return format
-- [File Watching](./guide/watching.md) -- real-time change events
-- [Async API](./guide/async.md) -- async ready(), query(), and watch()
-- [Using `dirsql` from the CLI](./cli/) -- `dirsql` runs an HTTP server (`POST /query`, `GET /events` SSE)
-- [Collaboration with CRDTs](./guide/crdt.md) -- multi-writer document merging alongside `dirsql`
+Every row now carries an `author` column extracted from its path — no
+extraction code, just a glob. And it is a real SQL column, so you can
+aggregate on it:
+
+```bash
+curl -s http://localhost:7117/query \
+  -H 'content-type: application/json' \
+  -d '{"sql":"SELECT author, COUNT(*) AS notes FROM notes GROUP BY author"}' \
+  | jq
+```
+
+```json
+[
+  {
+    "author": "alice",
+    "notes": 2
+  },
+  {
+    "author": "bob",
+    "notes": 1
+  }
+]
+```
+
+That's the whole loop: files in a directory, a declarative table on top,
+SQL over HTTP.
+
+## Where to go next
+
+- [Configuration file](./reference/config.md) — the complete `.dirsql.toml`
+  reference: more tables, ignore patterns, persistence, hooks.
+- [CLI](./reference/cli.md) — flags like `--port` and `--config`, plus
+  `dirsql init`.
+- [HTTP API](./reference/http-api.md) — `POST /query` in full, plus
+  `GET /events`, a live stream of row changes as files change.
+- [SDK](./reference/sdk.md) — embed `dirsql` in a Python, Rust, or
+  TypeScript program instead of running the server.
+- Why is the database rebuilt from your files on every startup? See
+  [how `dirsql` thinks](./explanation.md).

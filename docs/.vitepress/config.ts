@@ -27,9 +27,9 @@ export default defineConfig({
     sidebar: {
       '/': [
         {
-          text: 'Tutorials',
+          text: 'Tutorial',
           items: [
-            { text: 'Getting Started', link: '/getting-started' }
+            { text: 'Your first dirsql database', link: '/getting-started' }
           ]
         },
         {
