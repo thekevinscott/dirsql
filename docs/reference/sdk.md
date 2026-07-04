@@ -1,10 +1,4 @@
----
-canonical: https://thekevinscott.github.io/dirsql/reference/sdk
----
-
 # SDK
-
-> Online: <https://thekevinscott.github.io/dirsql/reference/sdk>
 
 `dirsql` ships as a library for Python (PyPI: `dirsql`), TypeScript (npm:
 `dirsql`), and Rust (crates.io: `dirsql`). All three are thin bindings over

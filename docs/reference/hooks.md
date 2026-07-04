@@ -1,10 +1,4 @@
----
-canonical: https://thekevinscott.github.io/dirsql/reference/hooks
----
-
 # Command hooks
-
-> Online: <https://thekevinscott.github.io/dirsql/reference/hooks>
 
 Three [config keys](./config.md) run an external command: `on-file` (per
 `[[table]]`), and the server-wide `pre-query` and `post-query` (under

@@ -1,10 +1,4 @@
----
-canonical: https://thekevinscott.github.io/dirsql/cli/config
----
-
 # Configuration File
-
-> Online: <https://thekevinscott.github.io/dirsql/cli/config>
 
 `dirsql` is configured with an optional `.dirsql.toml` file; with none, the
 server falls back to [zero-config defaults](./server.md#defaults). A

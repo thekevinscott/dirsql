@@ -1,10 +1,4 @@
----
-canonical: https://thekevinscott.github.io/dirsql/api/
----
-
 # API Reference
-
-> Online: <https://thekevinscott.github.io/dirsql/api/>
 
 ## DirSQL
 

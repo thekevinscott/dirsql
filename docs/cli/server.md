@@ -1,10 +1,4 @@
----
-canonical: https://thekevinscott.github.io/dirsql/cli/server
----
-
 # Running the Server
-
-> Online: <https://thekevinscott.github.io/dirsql/cli/server>
 
 The `dirsql` CLI is an HTTP server that exposes identical SDK functionality
 over [`POST /query`](./http-api.md#post-query) and [`GET /events`](./http-api.md#get-events).
