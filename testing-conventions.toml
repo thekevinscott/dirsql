@@ -1,10 +1,10 @@
 # testing-conventions CLI config (https://github.com/thekevinscott/testing-conventions).
 #
-# Drives the testing-conventions gates wired up in
-# .github/workflows/testing-conventions.yml (colocated-test + unit lint), the
-# per-package `unit coverage` jobs in python-test.yml / ts-test.yml, and the
-# per-language `unit mutation` jobs in {python,ts,rust}-mutation.yml. The CLI
-# reads this file by default.
+# Drives the testing-conventions gates wired up in the reusable-workflow calls
+# in .github/workflows/conventions.yml (colocated-test + unit lint +
+# integration-lint), the per-package `unit coverage` jobs in python-test.yml /
+# ts-test.yml / rust-test.yml, and the per-language `unit mutation` jobs in
+# {python,ts,rust}-mutation.yml. The CLI reads this file by default.
 #
 # The `[[<lang>.exempt]]` array lists files waived from a rule (the colocation
 # gate fails on any source file lacking a colocated unit test that is not
@@ -12,6 +12,16 @@
 # -- none today, since mutation is diff-scoped to a PR's own changed lines). The
 # `[<lang>.coverage]` table sets the unit-only coverage floor the `unit
 # coverage` job enforces.
+#
+# There is exactly ONE exemption below, and it is tool-blocked, not a barrel
+# waiver: every re-export/empty barrel is now handled without a colocated-test
+# waiver -- the TS `index.ts` barrel has `index.test.ts`, the python `__init__.py`
+# barrel has `__init___test.py`, empty package inits (`cli/__init__.py`) are
+# auto-skipped by the tool, and the dead `cli/interpret` shells were deleted. The
+# lone remaining entry waives the python isolation rule on the python barrel's
+# *test* (see the block below the coverage tables); it exists only because
+# testing-conventions flags a python barrel test importing its own re-exports
+# while allowing the identical TS pattern -- a parity gap filed upstream.
 #
 # `path` is relative to the scanned source dir (packages/python/dirsql for the
 # `[[python.exempt]]` entries, packages/ts/src for the `[[typescript.exempt]]`
@@ -32,20 +42,20 @@
 
 # --- Python (scanned: packages/python/dirsql) ------------------------------
 
+# The public barrel `__init__.py` is verified by its colocated test
+# `__init___test.py` (asserts it re-exports exactly DirSQL/Table/RowEvent/
+# __version__) -- so it needs no `colocated-test` waiver. But verifying a
+# re-export barrel requires importing the surface it re-exports, which the
+# python isolation rule flags as unmocked collaborators; mocking them would make
+# the test assert nothing. The TS barrel test (`index.test.ts`) imports its
+# barrel and passes the equivalent TS rule, so this is a python/ts parity gap in
+# testing-conventions (filed upstream). We waive the isolation rule on the test
+# -- not the colocated-test rule on the barrel -- so the re-exports stay
+# genuinely verified. This is the ONLY remaining exemption.
 [[python.exempt]]
-path = "__init__.py"
-rules = ["colocated-test"]
-reason = "Package barrel: re-exports the public API (DirSQL, Table, RowEvent, __version__). Covered by the SDK integration tests; no isolated logic to unit-test."
-
-[[python.exempt]]
-path = "cli/__init__.py"
-rules = ["colocated-test"]
-reason = "Package docstring only; no logic to unit-test."
-
-[[python.exempt]]
-path = "cli/interpret/__init__.py"
-rules = ["colocated-test", "co-change"]
-reason = "Empty package shell left after the native-config `interpret` removal (#321/#323): docstring only, no logic, no re-exports. `co-change` is waived because a barrel has no colocated test to co-change when its docstring is edited. The directory cannot be fully deleted yet -- the co-change check flags a deleted source lacking a co-deleted test, and a retained exempt for a deleted path is rejected as stale."
+path = "__init___test.py"
+rules = ["unmocked-collaborator"]
+reason = "Barrel test must import the public surface it verifies (`from . import DirSQL, Table, RowEvent, __version__, __all__`); the python isolation rule flags these as unmocked collaborators while the equivalent TS barrel test (index.test.ts) passes -- a testing-conventions python/ts parity gap (filed upstream). Waiving isolation on the test keeps the barrel's re-exports genuinely verified rather than leaving the barrel untested."
 
 # Unit-only coverage floor (branch coverage on, matching the prior --cov-branch).
 [python.coverage]
@@ -53,16 +63,6 @@ fail_under = 100
 branch = true
 
 # --- TypeScript (scanned: packages/ts/src) ---------------------------------
-
-[[typescript.exempt]]
-path = "index.ts"
-rules = ["colocated-test", "co-change"]
-reason = "True barrel: re-exports the public API surface (DirSQL, Table, parseTableName, types) from the colocated-tested implementation modules (table.ts, core.ts, parse-table-name.ts, dirsql.ts). The logic that used to live here was extracted into those unit-tested modules (#239), leaving only re-exports. `co-change` is waived because there is no colocated unit test to co-change when a submodule rename moves an import path here."
-
-[[typescript.exempt]]
-path = "cli/interpret/index.ts"
-rules = ["colocated-test", "co-change"]
-reason = "Empty package shell left after the native-config `interpret` removal (#321/#324): a comment + `export {}`, no logic, no re-exports. `co-change` is waived because a barrel has no colocated test to co-change when it is edited. The directory cannot be fully deleted yet -- the co-change check flags a deleted source lacking a co-deleted test, and a retained exempt for a deleted path is rejected as stale."
 
 # Unit-only coverage floor, per vitest metric.
 [typescript.coverage]
