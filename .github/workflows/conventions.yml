@@ -1,0 +1,64 @@
+name: Conventions
+
+on: [pull_request]
+
+permissions:
+  contents: read
+
+# Adopt the testing-conventions reusable workflow (@v0) for the STATIC gates
+# only — the documented split-setup pattern (docs/guide/ci.md "Scoping serves
+# split setups"): the suite-executing gates (coverage/mutation) and the
+# repo-root-scoped ones (packaging/e2e-verify) stay in our own build-capable
+# workflows, tracked for retirement in #393.
+#
+# One call per package (the intended monorepo pattern), scoped per tier because
+# the tool scans `path` recursively with no exclusions:
+#   - unit-tier static gates (colocated-test, unit-lint) at each SDK's SOURCE dir
+#   - integration-lint at each SDK's integration-test dir (python/ts) or the
+#     crate root (rust, which scans tests/ itself)
+# No gate is excluded to make it pass — a red here is a real finding to fix.
+jobs:
+  python-unit:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["python"]'
+      path: packages/python/dirsql
+      config: testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["colocated-test", "unit-lint"]'
+
+  python-integration:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["python"]'
+      path: packages/python/tests/integration
+      config: testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["integration-lint"]'
+
+  typescript-unit:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["typescript"]'
+      path: packages/ts/src
+      config: testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["colocated-test", "unit-lint"]'
+
+  typescript-integration:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["typescript"]'
+      path: packages/ts/tests/integration
+      config: testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["integration-lint"]'
+
+  rust:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["rust"]'
+      path: packages/rust
+      config: testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["colocated-test", "unit-lint", "integration-lint"]'
