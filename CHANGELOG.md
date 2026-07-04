@@ -107,6 +107,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The engine no longer keeps a full in-memory copy of every extracted row
+  (#401, epic #400).** The watcher's diffing path previously retained all rows
+  of every indexed file in native memory for the lifetime of the instance —
+  resident memory scaled with the total indexed row data, on top of SQLite
+  itself. File-change events now snapshot a file's previous rows back out of
+  SQLite (via `_dirsql_internal_rows`, ordered by row index) at event time, so
+  steady-state memory no longer grows with corpus size and the diffing working
+  set is one file's rows. `RowEvent` semantics are unchanged; the one nuance is
+  that `Update`/`Delete` old-row payloads now reflect the values as SQLite
+  stored them, so an extract whose value types disagree with the declared
+  column affinities (e.g. `Integer` into a TEXT column) sees the post-coercion
+  value — the same value `query()` returns — instead of the pre-coercion one.
+
 - **Internal bookkeeping tables are now unreachable through `query()` (#378,
   epic #358).** dirsql's internal tables — `_dirsql_internal_rows`,
   `_dirsql_files`, `_dirsql_meta` — were private only by the `_dirsql_` naming

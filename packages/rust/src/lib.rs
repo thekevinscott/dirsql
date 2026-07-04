@@ -33,8 +33,8 @@ use crate::matcher::TableMatcher;
 use crate::persist::{
     CachedFile, FileStat, build_meta, canonical_root, compute_glob_config_hash,
     create_sidecar_tables, delete_file as cache_delete_file, drop_user_tables, ensure_parent_dir,
-    hash_file, meta_is_compatible, now_ns, read_cached_files, read_meta, read_rows_for_file,
-    resolve_persist_path, upsert_file, write_meta,
+    hash_file, meta_is_compatible, now_ns, read_cached_files, read_meta, resolve_persist_path,
+    upsert_file, write_meta,
 };
 use crate::scanner::scan_directory;
 use crate::watcher::{FileEvent, Watcher};
@@ -249,8 +249,6 @@ struct DirSqlInner {
     extract_map: HashMap<String, Arc<ExtractFn>>,
     /// Table name -> strict flag, resolved once.
     strict_map: HashMap<String, bool>,
-    /// Cached rows per file path for positional diffing on modify/delete.
-    file_rows: Mutex<HashMap<String, (String, Vec<Row>)>>,
     /// Lazily-created filesystem watcher, shared by both the polling API
     /// ([`DirSQL::poll_events`]) and the channel-based API ([`DirSQL::watch`]).
     watcher: Mutex<Option<Watcher>>,
@@ -502,23 +500,26 @@ impl DirSQL {
     }
 
     fn handle_delete(&self, table: &str, rel_path: &str) -> Vec<RowEvent> {
-        let old_rows = match self.inner.file_rows.lock() {
-            Ok(mut file_rows) => file_rows.remove(rel_path).map(|(_, r)| r),
-            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
+        // Snapshot the file's rows from the row store before deleting them —
+        // the Delete events carry the old-row payloads. Read and delete under
+        // one lock acquisition so a concurrent event for the same file can't
+        // interleave between them.
+        let old_rows = {
+            let db = match self.inner.db.lock() {
+                Ok(db) => db,
+                Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
+            };
+            let old_rows = match db.get_rows_by_file(table, rel_path) {
+                Ok(rows) => rows,
+                Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
+            };
+            if let Err(e) = db.delete_rows_by_file(table, rel_path) {
+                return vec![error_event(Some(table), rel_path, e.to_string())];
+            }
+            old_rows
         };
 
-        let row_events = differ::diff(table, old_rows.as_deref(), None, rel_path);
-
-        let delete_result = match self.inner.db.lock() {
-            Ok(db) => db.delete_rows_by_file(table, rel_path),
-            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
-        };
-
-        if let Err(e) = delete_result {
-            return vec![error_event(Some(table), rel_path, e.to_string())];
-        }
-
-        row_events
+        differ::diff(table, Some(&old_rows), None, rel_path)
     }
 
     fn handle_upsert(&self, table: &str, abs_path: &Path, rel_path: &str) -> Vec<RowEvent> {
@@ -549,7 +550,11 @@ impl DirSQL {
 
         let strict = *self.inner.strict_map.get(table).unwrap_or(&false);
 
-        let new_rows = {
+        // Normalize the new rows, snapshot the file's previous rows from the
+        // row store, and apply the delete+insert — all under one lock
+        // acquisition, so a concurrent event for the same file can't
+        // interleave between the read and the write.
+        let (old_rows, new_rows) = {
             let db = match self.inner.db.lock() {
                 Ok(g) => g,
                 Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
@@ -559,42 +564,33 @@ impl DirSQL {
                 Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
             };
             let raw_rows = merge_filesystem_facts(raw_rows, &captures, &stat, &declared_columns);
-            let mut normalized = Vec::with_capacity(raw_rows.len());
+            let mut new_rows = Vec::with_capacity(raw_rows.len());
             for raw in &raw_rows {
                 match db.normalize_row(table, raw, strict) {
-                    Ok(row) => normalized.push(row),
+                    Ok(row) => new_rows.push(row),
                     Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
                 }
             }
-            normalized
-        };
 
-        let old_rows = match self.inner.file_rows.lock() {
-            Ok(guard) => guard.get(rel_path).map(|(_, r)| r.clone()),
-            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
-        };
+            let old_rows = match db.get_rows_by_file(table, rel_path) {
+                Ok(rows) => rows,
+                Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
+            };
 
-        let row_events = differ::diff(table, old_rows.as_deref(), Some(&new_rows), rel_path);
-
-        let db_result = match self.inner.db.lock() {
-            Ok(db) => db.delete_rows_by_file(table, rel_path).and_then(|_| {
+            let db_result = db.delete_rows_by_file(table, rel_path).and_then(|_| {
                 for (i, row) in new_rows.iter().enumerate() {
                     db.insert_row(table, row, rel_path, i)?;
                 }
                 Ok(())
-            }),
-            Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
+            });
+            if let Err(e) = db_result {
+                return vec![error_event(Some(table), rel_path, e.to_string())];
+            }
+
+            (old_rows, new_rows)
         };
 
-        if let Err(e) = db_result {
-            return vec![error_event(Some(table), rel_path, e.to_string())];
-        }
-
-        if let Ok(mut guard) = self.inner.file_rows.lock() {
-            guard.insert(rel_path.to_string(), (table.to_string(), new_rows));
-        }
-
-        row_events
+        differ::diff(table, Some(&old_rows), Some(&new_rows), rel_path)
     }
 
     pub(crate) fn build_from_resolved(resolved: ResolvedBuild) -> Result<Self> {
@@ -674,7 +670,7 @@ impl DirSQL {
         // Build the list of files needing re-parse. When persist is
         // enabled, files whose stat tuple matches the cache (and that pass
         // the racy-window check) are trusted instead of re-parsed.
-        let (scanned_files, trusted, deleted) = match &persist_ctx {
+        let (scanned_files, _trusted, deleted) = match &persist_ctx {
             None => {
                 let mut files = Vec::with_capacity(scanned.len());
                 for (path, table_name) in scanned {
@@ -699,10 +695,8 @@ impl DirSQL {
             scanned_files,
             persist: persist_ctx.map(|ctx| PreparedPersist {
                 db: ctx.db,
-                trusted,
                 deleted,
                 meta: ctx.expected_meta,
-                cold_rebuild: ctx.cold_rebuild,
             }),
             poll_interval,
         })
@@ -740,7 +734,7 @@ impl DirSQL {
         } = prepared;
 
         let (db, persist_ready) = match persist {
-            Some(p) => (p.db, Some((p.trusted, p.deleted, p.meta, p.cold_rebuild))),
+            Some(p) => (p.db, Some((p.deleted, p.meta))),
             None => (Db::new()?, None),
         };
 
@@ -776,19 +770,11 @@ impl DirSQL {
             ddl_map.insert(table_name, table.ddl);
         }
 
-        let mut file_rows: HashMap<String, (String, Vec<Row>)> = HashMap::new();
-
-        // First, apply trusted-file rebuilds of the in-memory file_rows
-        // cache from the on-disk SQLite. These files are NOT re-parsed.
-        if let Some((trusted, deleted, _, _)) = persist_ready.as_ref() {
-            for tf in trusted {
-                let user_columns = db.get_table_columns(&tf.table_name).map_err(map_db_error)?;
-                let rows =
-                    read_rows_for_file(db.conn(), &tf.table_name, &tf.rel_path, &user_columns)
-                        .map_err(DirSqlError::sqlite)?;
-                file_rows.insert(tf.rel_path.clone(), (tf.table_name.clone(), rows));
-            }
-
+        // Drop cached rows for files that disappeared since the last cache
+        // write. Trusted files need no work at all: their rows already live
+        // in the on-disk SQLite, and the watcher's diffing path reads a
+        // file's previous rows back from the row store on demand (#401).
+        if let Some((deleted, _)) = persist_ready.as_ref() {
             for (rel_path, table_name) in deleted {
                 db.delete_rows_by_file(table_name, rel_path)
                     .map_err(map_db_error)?;
@@ -824,7 +810,6 @@ impl DirSQL {
             let raw_rows =
                 merge_filesystem_facts(raw_rows, &captures, &stat_virtuals, &declared_columns);
 
-            let mut rows = Vec::with_capacity(raw_rows.len());
             // When updating an existing file in the persistent cache, drop
             // its old rows before inserting the new ones.
             if persist_ready.is_some() {
@@ -834,7 +819,6 @@ impl DirSQL {
             for (row_index, raw_row) in raw_rows.iter().enumerate() {
                 let row = db.normalize_row(&table_name, raw_row, strict)?;
                 db.insert_row(&table_name, &row, &rel_path, row_index)?;
-                rows.push(row);
             }
 
             // Update the persistent file index after a successful parse.
@@ -852,13 +836,11 @@ impl DirSQL {
                 )
                 .map_err(DirSqlError::sqlite)?;
             }
-
-            file_rows.insert(rel_path, (table_name, rows));
         }
 
         // Write the meta block last so a crash mid-build leaves an
         // incompatible cache that is detected on the next startup.
-        if let Some((_, _, meta, _)) = persist_ready.as_ref() {
+        if let Some((_, meta)) = persist_ready.as_ref() {
             write_meta(db.conn(), meta).map_err(DirSqlError::sqlite)?;
         }
 
@@ -876,7 +858,6 @@ impl DirSQL {
                 matcher,
                 extract_map,
                 strict_map,
-                file_rows: Mutex::new(file_rows),
                 watcher: Mutex::new(None),
                 poll_used: AtomicBool::new(false),
                 watch_thread_started: AtomicBool::new(false),
@@ -1211,12 +1192,14 @@ pub struct PreparedBuild {
 #[doc(hidden)]
 pub struct PreparedPersist {
     db: Db,
-    trusted: Vec<TrustedFile>,
     deleted: Vec<(String, String)>,
     meta: HashMap<String, String>,
-    cold_rebuild: bool,
 }
 
+/// A file the reconcile decided to trust: its cached rows are kept as-is and
+/// the file is not re-parsed. Production consumes the decision implicitly
+/// (trusted files are excluded from the re-parse list); the list itself is
+/// returned so tests can assert on the trust decision directly.
 #[doc(hidden)]
 pub struct TrustedFile {
     pub rel_path: String,
@@ -1228,7 +1211,6 @@ struct PersistContext {
     db: Db,
     cached: HashMap<String, CachedFile>,
     expected_meta: HashMap<String, String>,
-    cold_rebuild: bool,
 }
 
 fn compile_matcher(
@@ -1263,8 +1245,8 @@ fn compile_matcher(
 
 /// Open (or create) the persistent SQLite cache and read its meta. If the
 /// meta is missing or incompatible with the current build, the cache is
-/// wiped and the resulting [`PersistContext`] reports `cold_rebuild = true`
-/// so the rest of the pipeline knows to treat every file as new.
+/// wiped and the resulting [`PersistContext`] carries an empty file index,
+/// so the rest of the pipeline treats every file as new.
 fn prepare_persist(
     root: &Path,
     tables: &[Table],
@@ -1284,19 +1266,17 @@ fn prepare_persist(
     let cached_meta = read_meta(db.conn()).map_err(DirSqlError::sqlite)?;
     let compatible = !cached_meta.is_empty() && meta_is_compatible(&cached_meta, &expected_meta);
 
-    let (cached, cold_rebuild) = if compatible {
-        let files = read_cached_files(db.conn()).map_err(DirSqlError::sqlite)?;
-        (files, false)
+    let cached = if compatible {
+        read_cached_files(db.conn()).map_err(DirSqlError::sqlite)?
     } else {
         drop_user_tables(db.conn()).map_err(DirSqlError::sqlite)?;
-        (HashMap::new(), true)
+        HashMap::new()
     };
 
     Ok(PersistContext {
         db,
         cached,
         expected_meta,
-        cold_rebuild,
     })
 }
 
@@ -2324,7 +2304,6 @@ mod internal_tests {
             db: Db::new().unwrap(),
             cached,
             expected_meta: HashMap::new(),
-            cold_rebuild: false,
         };
         let scanned = vec![(abs.clone(), "t".to_string())];
         let (to_parse, trusted, deleted) =
@@ -2363,7 +2342,6 @@ mod internal_tests {
             db: Db::new().unwrap(),
             cached,
             expected_meta: HashMap::new(),
-            cold_rebuild: false,
         };
         let scanned = vec![(abs.clone(), "t".to_string())];
         let (to_parse, trusted, _deleted) =
@@ -2381,7 +2359,6 @@ mod internal_tests {
             db: Db::new().unwrap(),
             cached: HashMap::new(),
             expected_meta: HashMap::new(),
-            cold_rebuild: false,
         };
         let missing = dir.path().join("ghost.txt");
         let scanned = vec![(missing, "t".to_string())];
@@ -2528,18 +2505,8 @@ mod internal_tests {
     }
 
     #[test]
-    fn handle_delete_surfaces_file_rows_poison() {
-        let (_dir, db, _abs, rel) = upsert_fixture();
-        poison(&db.inner.file_rows);
-        let events = db.handle_delete("items", &rel);
-        assert_single_lock_error(&events);
-    }
-
-    #[test]
     fn handle_delete_surfaces_db_poison() {
         let (_dir, db, _abs, rel) = upsert_fixture();
-        // Only the db mutex is poisoned; the file_rows lock succeeds first,
-        // so the error comes from the db-lock arm.
         poison(&db.inner.db);
         let events = db.handle_delete("items", &rel);
         assert_single_lock_error(&events);
@@ -2548,14 +2515,41 @@ mod internal_tests {
     #[test]
     fn handle_delete_surfaces_db_failure() {
         let (_dir, db, _abs, _rel) = upsert_fixture();
-        // No SQL table named `ghost` exists, so `delete_rows_by_file` issues a
-        // `DELETE FROM ghost ...` that fails with "no such table". That drives
-        // the `delete_result` Err arm of `handle_delete`.
+        // No SQL table named `ghost` exists, so the old-row snapshot issues a
+        // `SELECT ... FROM "ghost" ...` that fails with "no such table". That
+        // drives the get_rows_by_file Err arm of `handle_delete`.
         let events = db.handle_delete("ghost", "whatever.txt");
         assert_eq!(events.len(), 1, "expected one error event: {events:?}");
         let dbg = format!("{:?}", events[0]);
         assert!(dbg.contains("Error"), "expected an Error event: {dbg}");
         assert!(dbg.contains("no such table"), "expected a SQL error: {dbg}");
+    }
+
+    #[test]
+    fn handle_delete_surfaces_delete_failure() {
+        // The old-row snapshot succeeds but the delete itself fails: a trigger
+        // aborts every DELETE on items, driving `handle_delete`'s
+        // delete_rows_by_file Err arm (the snapshot read runs first, so the
+        // ghost-table test above no longer reaches it).
+        let (_dir, db, abs, rel) = upsert_fixture();
+        let events = db.handle_upsert("items", &abs, &rel);
+        assert_eq!(events.len(), 1, "fixture insert failed: {events:?}");
+        {
+            let guard = db.inner.db.lock().unwrap();
+            guard
+                .conn()
+                .execute(
+                    "CREATE TRIGGER items_no_delete BEFORE DELETE ON items \
+                     BEGIN SELECT RAISE(ABORT, 'delete forbidden by test trigger'); END",
+                    [],
+                )
+                .unwrap();
+        }
+        let events = db.handle_delete("items", &rel);
+        assert_eq!(events.len(), 1, "expected one error event: {events:?}");
+        let dbg = format!("{:?}", events[0]);
+        assert!(dbg.contains("Error"), "expected an Error event: {dbg}");
+        assert!(dbg.contains("delete forbidden"), "got: {dbg}");
     }
 
     #[test]
@@ -2567,13 +2561,27 @@ mod internal_tests {
     }
 
     #[test]
-    fn handle_upsert_surfaces_file_rows_poison() {
+    fn handle_upsert_surfaces_insert_failure() {
+        // Normalize and the old-row snapshot succeed, but the write-back
+        // fails: a trigger aborts every INSERT on items, driving
+        // `handle_upsert`'s db_result Err arm.
         let (_dir, db, abs, rel) = upsert_fixture();
-        // db is healthy, so metadata/extract/get_table_columns/normalize all
-        // succeed and the error originates at the file_rows-lock arm.
-        poison(&db.inner.file_rows);
+        {
+            let guard = db.inner.db.lock().unwrap();
+            guard
+                .conn()
+                .execute(
+                    "CREATE TRIGGER items_no_insert BEFORE INSERT ON items \
+                     BEGIN SELECT RAISE(ABORT, 'insert forbidden by test trigger'); END",
+                    [],
+                )
+                .unwrap();
+        }
         let events = db.handle_upsert("items", &abs, &rel);
-        assert_single_lock_error(&events);
+        assert_eq!(events.len(), 1, "expected one error event: {events:?}");
+        let dbg = format!("{:?}", events[0]);
+        assert!(dbg.contains("Error"), "expected an Error event: {dbg}");
+        assert!(dbg.contains("insert forbidden"), "got: {dbg}");
     }
 
     // ----- handle_upsert clean early-returns --------------------------------
@@ -2807,10 +2815,10 @@ mod internal_tests {
     // ----- handle_upsert success + extract error ---------------------------
 
     /// The full success path of `handle_upsert`: stat OK, extract runs, columns
-    /// resolved, rows normalized and inserted, cache updated. Returns one
-    /// Insert; the cached row then diffs to a Delete on removal.
+    /// resolved, rows normalized and inserted. Returns one Insert; the stored
+    /// row is then read back from SQLite and diffs to a Delete on removal.
     #[test]
-    fn handle_upsert_inserts_and_caches_rows() {
+    fn handle_upsert_inserts_and_diffs_rows() {
         let (_dir, db, abs, rel) = upsert_fixture();
         let events = db.handle_upsert("items", &abs, &rel);
         assert_eq!(events.len(), 1, "got: {events:?}");
@@ -2909,14 +2917,13 @@ mod internal_tests {
         assert!(second.query("SELECT * FROM t").is_ok());
     }
 
-    /// `prepare_persist` on a fresh cache reports a cold rebuild with an empty
-    /// file index and a populated expected-meta map.
+    /// `prepare_persist` on a fresh cache reports a cold rebuild: an empty
+    /// file index (so every file re-parses) and a populated expected-meta map.
     #[test]
     fn prepare_persist_cold_start_reports_rebuild() {
         let dir = TempDir::new().unwrap();
         let tables = vec![Table::new("CREATE TABLE t (x TEXT)", "*.txt", |_| vec![])];
         let ctx = prepare_persist(dir.path(), &tables, &[], None).unwrap();
-        assert!(ctx.cold_rebuild);
         assert!(ctx.cached.is_empty());
         assert!(!ctx.expected_meta.is_empty());
     }
@@ -2946,7 +2953,6 @@ mod internal_tests {
             db: Db::new().unwrap(),
             cached,
             expected_meta: HashMap::new(),
-            cold_rebuild: false,
         };
         let scanned = vec![(abs, "t".to_string())];
         let (to_parse, trusted, deleted) =
@@ -2979,7 +2985,6 @@ mod internal_tests {
             db: Db::new().unwrap(),
             cached,
             expected_meta: HashMap::new(),
-            cold_rebuild: false,
         };
         let scanned = vec![(abs, "t".to_string())];
         let (to_parse, trusted, _deleted) =
@@ -3007,7 +3012,6 @@ mod internal_tests {
             db: Db::new().unwrap(),
             cached,
             expected_meta: HashMap::new(),
-            cold_rebuild: false,
         };
         let fake = FakeFs::default();
         let (to_parse, trusted, deleted) =
