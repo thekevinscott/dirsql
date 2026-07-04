@@ -41,7 +41,11 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 pub(super) fn event_to_json(event: &RowEvent) -> String {
-    let value = match event {
+    event_to_value(event).to_string()
+}
+
+fn event_to_value(event: &RowEvent) -> Value {
+    match event {
         RowEvent::Insert {
             table,
             row,
@@ -86,8 +90,7 @@ pub(super) fn event_to_json(event: &RowEvent) -> String {
             "file_path": file_path.to_string_lossy(),
             "error": error,
         }),
-    };
-    value.to_string()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -119,8 +122,7 @@ mod tests {
             row,
             file_path: "posts/a.json".into(),
         };
-        let s = event_to_json(&event);
-        let parsed: Value = serde_json::from_str(&s).unwrap();
+        let parsed = event_to_value(&event);
         assert_eq!(parsed.get("action").and_then(Value::as_str), Some("insert"));
         assert_eq!(parsed.get("table").and_then(Value::as_str), Some("posts"));
         assert_eq!(
@@ -128,6 +130,8 @@ mod tests {
             Some("posts/a.json"),
         );
         assert!(parsed.get("old_row").unwrap().is_null());
+        // event_to_json is the string form of the value it builds.
+        assert_eq!(event_to_json(&event), parsed.to_string());
     }
 
     #[test]
@@ -142,7 +146,7 @@ mod tests {
             new_row: new,
             file_path: "posts/a.json".into(),
         };
-        let parsed: Value = serde_json::from_str(&event_to_json(&event)).unwrap();
+        let parsed = event_to_value(&event);
         assert_eq!(
             parsed.pointer("/row/id").and_then(Value::as_str),
             Some("abc2")
@@ -160,7 +164,7 @@ mod tests {
             file_path: PathBuf::from("bad.json"),
             error: "parse failed".into(),
         };
-        let parsed: Value = serde_json::from_str(&event_to_json(&event)).unwrap();
+        let parsed = event_to_value(&event);
         assert_eq!(parsed.get("action").and_then(Value::as_str), Some("error"));
         assert_eq!(
             parsed.get("error").and_then(Value::as_str),
@@ -177,7 +181,7 @@ mod tests {
             row,
             file_path: "posts/a.json".into(),
         };
-        let parsed: Value = serde_json::from_str(&event_to_json(&event)).unwrap();
+        let parsed = event_to_value(&event);
         assert_eq!(parsed.get("action").and_then(Value::as_str), Some("delete"));
         assert_eq!(parsed.get("table").and_then(Value::as_str), Some("posts"));
         assert_eq!(

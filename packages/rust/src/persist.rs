@@ -564,7 +564,14 @@ mod tests {
         let p = dir.path().join("a.txt");
         fs::write(&p, b"hello").unwrap();
         let h = hash_file(&p).unwrap();
-        let expected = *blake3::hash(b"hello").as_bytes();
+        // Golden BLAKE3 digest of b"hello" (pins the exact algorithm + output;
+        // hardcoded so the unit test does not call the blake3 crate itself).
+        // hex: ea8f163db38682925e4491c5e58d4bb3506ef8c14eb78a86e908c5624a67200f
+        let expected: [u8; 32] = [
+            0xea, 0x8f, 0x16, 0x3d, 0xb3, 0x86, 0x82, 0x92, 0x5e, 0x44, 0x91, 0xc5, 0xe5, 0x8d,
+            0x4b, 0xb3, 0x50, 0x6e, 0xf8, 0xc1, 0x4e, 0xb7, 0x8a, 0x86, 0xe9, 0x08, 0xc5, 0x62,
+            0x4a, 0x67, 0x20, 0x0f,
+        ];
         assert_eq!(h, expected);
     }
 
