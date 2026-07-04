@@ -86,6 +86,13 @@ shared Rust core (`start_watching` / `process_file_event`), so all three SDKs
 gain it at once with no binding changes; the user-supplied `root` is unchanged
 across all three.
 
+**Verbatim table columns (#361, epic #358) — parity by construction, no drift.**
+User tables carry exactly the columns declared in their DDL (row ownership is
+tracked in the internal `_dirsql_internal_rows` table, not injected columns).
+This lives entirely in the shared Rust core (`create_table` runs DDL verbatim;
+`query` returns vanilla rows), so `PRAGMA table_info` and `SELECT *` report the
+same user-only columns across all three SDKs.
+
 ## AsyncDirSQL
 
 | API                        | Python                                | Rust                                   |

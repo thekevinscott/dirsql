@@ -17,14 +17,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::Table;
 
-/// Sidecar schema version. Bumped on any breaking change to the layout of
-/// `_dirsql_files` / `_dirsql_meta`.
+/// Sidecar schema version. Bumped on any breaking change to the on-disk layout
+/// (`_dirsql_files` / `_dirsql_meta`, or the shape of the cached user tables).
 ///
-/// `2` (epic #358, stage 1): adds the `_dirsql_internal_rows` bookkeeping
-/// table. A cache written by an older build lacks the mapping, so the version
-/// mismatch forces a penalty-free full rebuild on first startup after upgrade,
-/// which populates the mapping from scratch.
-pub const SCHEMA_VERSION: &str = "2";
+/// - `2` (epic #358): added the `_dirsql_internal_rows` bookkeeping table.
+/// - `3` (epic #358): user tables no longer carry injected tracking columns. A
+///   cache written by an older build still has them, so the version mismatch
+///   forces a penalty-free full rebuild on first startup after upgrade,
+///   re-creating the user tables from the (now verbatim) DDL.
+pub const SCHEMA_VERSION: &str = "3";
 
 /// Bumped whenever any built-in parser changes its row-shape contract. A
 /// mismatch forces a full rebuild.
