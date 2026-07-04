@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 // Regression for #301: entering the CLI section must NOT replace the sidebar.
 // The full set of sections has to stay visible on every page, including
 // `/cli/*`, so navigation never loses its place.
-const SECTIONS = ['Tutorials', 'How-to Guides', 'CLI', 'Reference', 'Explanation']
+const SECTIONS = ['Tutorial', 'How-to Guides', 'CLI', 'Reference', 'Explanation']
 
 async function sidebarSections(page: import('@playwright/test').Page) {
   return await page.evaluate(() =>

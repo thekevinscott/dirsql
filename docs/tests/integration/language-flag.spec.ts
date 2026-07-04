@@ -1,7 +1,10 @@
 import { expect, test } from '@playwright/test'
 
 const STORAGE_KEY = 'dirsql-preferred-lang'
-const PAGE = 'getting-started.html'
+// A page with Python/Rust/TypeScript code-groups. The tutorial
+// (getting-started) is CLI-first and no longer carries the three-language
+// tabs, so the flag behavior is exercised on the SDK reference instead.
+const PAGE = 'reference/sdk.html'
 
 async function readActiveLanguages(page: import('@playwright/test').Page) {
   return await page.evaluate(() =>
