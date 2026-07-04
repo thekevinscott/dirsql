@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import config from '../../.vitepress/config'
 
 type SidebarItem = { text?: string; link?: string; items?: SidebarItem[] }
+type NavItem = { text?: string; link?: string }
 
 describe('vitepress config', () => {
   it('has the expected site title and base path', () => {
@@ -9,15 +10,50 @@ describe('vitepress config', () => {
     expect(config.base).toBe('/dirsql/')
   })
 
-  // Regression guard: CLI docs live in their own `/cli/` section, not
-  // interleaved with the SDK how-to guides (see #179).
-  it('keeps CLI pages out of the How-to Guides group', () => {
+  // The closing sweep (#387): the nav mirrors the four Diataxis groups
+  // exactly (plus the GitHub link). No product-area tabs -- the old `CLI`
+  // tab is gone (#353).
+  it('shows exactly the four Diataxis groups plus GitHub in the nav', () => {
+    const nav = config.themeConfig!.nav as NavItem[]
+    expect(nav.map((item) => item.text)).toEqual([
+      'Tutorial',
+      'How-to Guides',
+      'Reference',
+      'Explanation',
+      'GitHub'
+    ])
+    expect(nav.map((item) => item.link)).toEqual([
+      '/getting-started',
+      '/howto/define-tables',
+      '/reference/cli',
+      '/explanation',
+      'https://github.com/thekevinscott/dirsql'
+    ])
+  })
+
+  // The sidebar mirrors the same four groups, in Diataxis order. No `CLI`
+  // group -- type is the only organizational axis (#353/#387).
+  it('has exactly the four Diataxis groups in the sidebar', () => {
     const sidebar = config.themeConfig!.sidebar as Record<string, SidebarItem[]>
-    const howTo = sidebar['/'].find((group) => group.text === 'How-to Guides')
-    const links = (howTo!.items ?? []).map((item) => item.link)
-    expect(links).not.toContain('/guide/cli')
-    expect(links).not.toContain('/guide/init')
-    expect(links).not.toContain('/guide/config')
+    const groupTexts = sidebar['/'].map((group) => group.text)
+    expect(groupTexts).toEqual(['Tutorial', 'How-to Guides', 'Reference', 'Explanation'])
+  })
+
+  // Regression guard: the sidebar must never *replace* itself when entering a
+  // section. A path-scoped key (e.g. `/howto/`) swaps the whole tree out,
+  // which deletes the other sections and reads as the nav breaking (see
+  // #301). There must be exactly one global `/` sidebar.
+  it('has a single global sidebar with no replacing path-scoped keys', () => {
+    const sidebar = config.themeConfig!.sidebar as Record<string, SidebarItem[]>
+    expect(Object.keys(sidebar)).toEqual(['/'])
+  })
+
+  // The Tutorial group holds the single lesson (#377).
+  it('lists the tutorial in the Tutorial group', () => {
+    const sidebar = config.themeConfig!.sidebar as Record<string, SidebarItem[]>
+    const tutorial = sidebar['/'].find((group) => group.text === 'Tutorial')
+    const links = (tutorial!.items ?? []).map((item) => item.link)
+    expect(links).toEqual(['/getting-started'])
   })
 
   // The How-to tree (#376): nine goal-named guides, in the epic's order
@@ -39,33 +75,6 @@ describe('vitepress config', () => {
     ])
   })
 
-  // Regression guard: the sidebar must never *replace* itself when entering a
-  // section. A path-scoped key (e.g. `/cli/`) swaps the whole tree out, which
-  // deletes the other sections and reads as the nav breaking (see #301). There
-  // must be exactly one global `/` sidebar.
-  it('has a single global sidebar with no replacing path-scoped keys', () => {
-    const sidebar = config.themeConfig!.sidebar as Record<string, SidebarItem[]>
-    expect(Object.keys(sidebar)).toEqual(['/'])
-  })
-
-  // The CLI section is self-contained: its group carries all CLI subpages,
-  // alongside (never instead of) the other sections (see #301).
-  it('shows every CLI subpage in a self-contained CLI group', () => {
-    const sidebar = config.themeConfig!.sidebar as Record<string, SidebarItem[]>
-    const groupTexts = sidebar['/'].map((group) => group.text)
-    expect(groupTexts).toEqual(['Tutorial', 'How-to Guides', 'CLI', 'Reference', 'Explanation'])
-
-    const cli = sidebar['/'].find((group) => group.text === 'CLI')
-    const links = (cli!.items ?? []).map((item) => item.link)
-    expect(links).toEqual([
-      '/cli/',
-      '/cli/server',
-      '/cli/init',
-      '/cli/config',
-      '/cli/http-api'
-    ])
-  })
-
   // The Reference group is the canonical fact tree (#375): the six reference
   // pages plus the Migrations include, in look-up order.
   it('lists the six reference pages plus Migrations in the Reference group', () => {
@@ -81,5 +90,13 @@ describe('vitepress config', () => {
       '/reference/sdk',
       '/migrations'
     ])
+  })
+
+  // The Explanation group holds the single "how dirsql thinks" page (#374).
+  it('lists the explanation page in the Explanation group', () => {
+    const sidebar = config.themeConfig!.sidebar as Record<string, SidebarItem[]>
+    const explanation = sidebar['/'].find((group) => group.text === 'Explanation')
+    const links = (explanation!.items ?? []).map((item) => item.link)
+    expect(links).toEqual(['/explanation'])
   })
 })

@@ -47,21 +47,24 @@ secondary audience and appear **only in Reference**, plus the single
 Target tree (the spec for #353; existing pages are *quarried* into it, not
 migrated -- a page survives only if a slot wants its content):
 
-- **Tutorial** -- one lesson: *Your first dirsql database*. The reader
-  performs every step and sees output at each one; success is
-  author-guaranteed (toy dataset, no branching).
-- **How-to Guides** -- goal-named recipes: define tables for your files;
+- **Tutorial** (`getting-started.md`) -- one lesson: *Your first dirsql
+  database*. The reader performs every step and sees output at each one;
+  success is author-guaranteed (toy dataset, no branching).
+- **How-to Guides** (`howto/`) -- goal-named recipes: define tables for your files;
   derive columns from file paths; extract rows from file contents
   (`on-file`); search documents by meaning; skip files; load a SQLite
   extension; keep the index across restarts; react to file changes; embed
   `dirsql` in an application.
-- **Reference** -- CLI flags and defaults; the complete `.dirsql.toml`
-  schema; the command hook contract (placeholders, stdout protocol, exit
-  codes, timeouts); virtual columns and glob captures; the HTTP API;
-  per-language SDK pages (the sole SDK home).
-- **Explanation** -- one page: how `dirsql` thinks (the filesystem is the
-  source of truth; the database is a derived, ephemeral, read-only view;
-  reconcile and diffing). Its canonical home is the root `ARCHITECTURE.md`;
+- **Reference** (`reference/`) -- CLI flags and defaults; the complete
+  `.dirsql.toml` schema; the command hook contract (placeholders, stdout
+  protocol, exit codes, timeouts); virtual columns and glob captures; the
+  HTTP API; the SDK page (`reference/sdk.md`, one page with
+  Python/TypeScript/Rust code-groups -- the sole SDK home); plus the
+  Migrations include (`migrations.md`).
+- **Explanation** (`explanation.md`) -- one page: how `dirsql` thinks (the
+  filesystem is the source of truth; the database is a derived, ephemeral,
+  read-only view; reconcile and diffing). Its canonical home is the root
+  `ARCHITECTURE.md`;
   #374 surfaces it via an include page, the same mechanism
   `docs/migrations.md` uses for `MIGRATIONS.md`. Edit the root file, never
   a rendered include.
@@ -90,6 +93,6 @@ Working rules:
   directories don't re-scan on every startup."
 - Wrap `dirsql` in backticks in all prose text
 - Use VitePress [code group](https://vitepress.dev/guide/markdown#code-groups) syntax (`::: code-group`) for multi-language examples with `Python`, `Rust`, and `TypeScript` tabs
-- Internal links use relative paths (e.g., `./guide/tables.md`)
+- Internal links use relative paths (e.g., `./howto/define-tables.md`)
 - The VitePress config is at `docs/.vitepress/config.ts`
 - The site is deployed under the `/dirsql/` base path
