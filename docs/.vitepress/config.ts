@@ -59,6 +59,12 @@ export default defineConfig({
             { text: 'API Reference', link: '/api/' },
             { text: 'Migrations', link: '/migrations' }
           ]
+        },
+        {
+          text: 'Explanation',
+          items: [
+            { text: 'How dirsql thinks', link: '/explanation' }
+          ]
         }
       ]
     },
