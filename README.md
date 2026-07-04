@@ -2,7 +2,7 @@
 
 **Turn a filesystem into a database**
 
-Ephemeral SQL index over a local directory. `dirsql` watches a filesystem, ingests structured files into an in-memory SQLite database, and exposes a SQL query interface. On shutdown the database is discarded -- the filesystem remains the source of truth.
+Ephemeral SQL index over a local directory. `dirsql` watches a filesystem, ingests structured files into an ephemeral SQLite database, and exposes a SQL query interface. On shutdown the database is discarded -- the filesystem remains the source of truth.
 
 The full documentation lives in [`docs/`](docs/) and is published at <https://thekevinscott.github.io/dirsql/>. This README mirrors the layout of `docs/` (every section below maps to a page) so agents and humans reading the source can navigate without leaving the repo. Each section is the bare minimum -- click through for the full guide.
 

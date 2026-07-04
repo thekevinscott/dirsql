@@ -325,14 +325,14 @@ impl DirSQL {
             .build()
     }
 
-    /// Run a SQL query against the in-memory database.
+    /// Run a SQL query against the ephemeral database.
     ///
     /// Only read-only statements are accepted. Each statement is prepared on
     /// SQLite and then classified via `sqlite3_stmt_readonly`; anything that
     /// SQLite itself flags as a write — `INSERT`, `UPDATE`, `DELETE`, `DROP`,
     /// `CREATE`, `ALTER`, `REPLACE`, `VACUUM`, `ANALYZE`, etc. — is rejected
     /// with [`DirSqlError::WriteForbidden`] before any rows are produced. This
-    /// keeps the in-memory index consistent with the on-disk files that back
+    /// keeps the ephemeral index consistent with the on-disk files that back
     /// it: mutations only happen through the watcher/indexer pipeline.
     pub fn query(&self, sql: &str) -> Result<Vec<Row>> {
         let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
@@ -355,7 +355,7 @@ impl DirSQL {
 
     /// Poll-based watch API. Blocks up to `timeout` waiting for the next
     /// filesystem event, then drains any additional events that arrived during
-    /// processing, applying all of them to the in-memory database. Returns the
+    /// processing, applying all of them to the ephemeral database. Returns the
     /// batch of [`RowEvent`]s produced (possibly empty). Safe to call in a
     /// loop.
     ///

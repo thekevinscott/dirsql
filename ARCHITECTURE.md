@@ -76,9 +76,9 @@ When adding a feature to one SDK, create beads for the other two.
 
 The `dirsql` Rust crate handles all heavy lifting:
 
-### `db` -- In-memory SQLite
+### `db` -- Ephemeral SQLite
 
-Wraps `rusqlite` with an in-memory database. Handles DDL execution (run verbatim -- no injected columns, epic #358), row insertion with per-file ownership recorded in the internal `_dirsql_internal_rows` table, querying, and row deletion by file path. The internal bookkeeping tables (`_dirsql_internal_rows`, `_dirsql_files`, `_dirsql_meta`) are a private surface: a SQLite authorizer installed on the `query()` path denies any read (or schema `PRAGMA`) targeting the reserved `_dirsql_*` namespace, so they are unreachable through the public query surface (issue #378) while the engine still writes them in the same transaction as the user rows.
+Wraps `rusqlite` with an anonymous disk-backed temp database (#402): SQLite creates a private temp file and deletes it immediately, so the OS reclaims it even on SIGKILL, index pages spill to disk instead of scaling resident memory with the corpus, and only the page cache stays in RAM. The file lands in the directory SQLite's VFS picks (`SQLITE_TMPDIR` → `TMPDIR` → `/var/tmp` → `/usr/tmp` → `/tmp`); operators can export `SQLITE_TMPDIR` to steer it off a tmpfs mount. Handles DDL execution (run verbatim -- no injected columns, epic #358), row insertion with per-file ownership recorded in the internal `_dirsql_internal_rows` table, querying, and row deletion by file path. The internal bookkeeping tables (`_dirsql_internal_rows`, `_dirsql_files`, `_dirsql_meta`) are a private surface: a SQLite authorizer installed on the `query()` path denies any read (or schema `PRAGMA`) targeting the reserved `_dirsql_*` namespace, so they are unreachable through the public query surface (issue #378) while the engine still writes them in the same transaction as the user rows.
 
 ### `scanner` -- Directory traversal
 
@@ -162,5 +162,5 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 
 1. Python calls `db.query(sql)`
 2. A SQLite authorizer is installed for the prepare, denying reads of the internal `_dirsql_*` bookkeeping tables (issue #378); a query touching one fails with a "not authorized" error
-3. Rust executes the SQL against in-memory SQLite
+3. Rust executes the SQL against the ephemeral SQLite database
 4. Results are converted from `HashMap<String, Value>` to Python dicts -- exactly the user's declared columns, no filtering (epic #358)

@@ -11,6 +11,53 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### Default (non-persist) index moved from `:memory:` to an anonymous disk-backed temp database (#402)
+
+#### Summary
+
+With `persist = false` (the default), the SQLite index used to live entirely in
+RAM (`:memory:`), so resident memory scaled with the indexed corpus and large
+directories could OOM the host process. The engine now opens an **anonymous
+SQLite temp database** instead: SQLite creates a private temp file, deletes it
+immediately (the OS reclaims it even on SIGKILL), and spills index pages to
+disk as the index grows — only the page cache stays resident. All SDKs and the
+CLI are affected identically (shared core). The API is unchanged; queries,
+watch events, and persistence semantics are identical.
+
+#### Required changes
+
+_None._ No API, config key, CLI flag, or return type changed.
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- **Index pages now live in the system temp directory instead of RAM.** SQLite
+  picks the directory via `SQLITE_TMPDIR` → `TMPDIR` → `/var/tmp` → `/usr/tmp`
+  → `/tmp`. On hosts where the chosen directory is a tmpfs (RAM-backed) mount,
+  export `SQLITE_TMPDIR` to point at a real disk to get the memory benefit.
+- **Resident memory for large corpora drops** from O(indexed data) to roughly
+  the SQLite page cache; disk usage in the temp directory grows correspondingly
+  while the process runs (the space is reclaimed on exit, including crashes).
+- Query latency on very large indexes is now bounded by the page cache rather
+  than all-in-RAM access; for typical corpora the difference is negligible.
+
+#### Verification
+
+Run any dirsql process with `persist = false` over a directory and inspect its
+open file descriptors while it runs (Linux):
+
+```bash
+ls -l /proc/<pid>/fd | grep etilqs
+# lrwx------ ... 13 -> /var/tmp/etilqs_abc123 (deleted)
+```
+
+An `etilqs_*` entry marked `(deleted)` in your temp directory is the anonymous
+index file. Before this change no such descriptor existed and the same data sat
+in anonymous heap memory instead.
+
 ### Internal `_dirsql_*` bookkeeping tables are unreachable through `query()` (#378)
 
 #### Summary

@@ -105,14 +105,25 @@ pub struct Db {
 }
 
 impl Db {
+    /// Open the default, ephemeral `Db`: an **anonymous disk-backed temp
+    /// database** (`Connection::open("")`, issue #402), not `:memory:`.
+    ///
+    /// SQLite creates a private temp file and deletes it immediately after
+    /// opening, so the OS reclaims it even on a crash or SIGKILL, and there
+    /// is never a name to collide on. Pages spill to disk as the index
+    /// grows — only the page cache stays resident — so memory no longer
+    /// scales with the indexed corpus. The file lands in the directory
+    /// SQLite's VFS picks (`SQLITE_TMPDIR` → `TMPDIR` → `/var/tmp` →
+    /// `/usr/tmp` → `/tmp`); export `SQLITE_TMPDIR` to steer it off a
+    /// tmpfs mount.
     pub fn new() -> Result<Self> {
-        let conn = Connection::open_in_memory()?;
+        let conn = Connection::open("")?;
         ensure_internal_rows_table(&conn)?;
         Ok(Self { conn })
     }
 
-    /// Open a `Db` backed by an on-disk SQLite file. Used by the persistent
-    /// cache path; in-memory mode is the default.
+    /// Open a `Db` backed by a named on-disk SQLite file. Used by the
+    /// persistent cache path; the anonymous temp database is the default.
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
         ensure_internal_rows_table(&conn)?;
@@ -1254,6 +1265,23 @@ mod tests {
         db.insert_row("t", &row, "a.json", 0).unwrap();
         let deleted = db.delete_rows_by_file("t", "nonexistent.json").unwrap();
         assert_eq!(deleted, 0);
+    }
+
+    // --- Db::new backing store (#402) ---
+
+    #[test]
+    fn new_is_disk_backed_not_memory() {
+        // An in-memory SQLite database is pinned to journal_mode=memory; a
+        // file-backed one — including the anonymous temp database `Db::new`
+        // opens — defaults to journal_mode=delete. This pins #402: the
+        // default Db must never be `:memory:`, so index pages spill to disk
+        // instead of scaling resident memory with the corpus.
+        let db = Db::new().unwrap();
+        let mode: String = db
+            .conn()
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "delete");
     }
 
     // --- get_rows_by_file: the watcher's diffing source (#401) ---

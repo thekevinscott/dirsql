@@ -1,12 +1,13 @@
 //! Persistent on-disk SQLite cache (issue #95).
 //!
-//! Stores the in-memory SQLite database on disk between runs so subsequent
-//! startups only re-parse files that have actually changed. Uses the same
-//! racy-stat algorithm as `git status`: a per-file `(size, mtime, ctime,
-//! inode, dev)` tuple is compared against the cache, with a content-hash
-//! confirmation for files whose mtime falls inside the racy window.
+//! Stores the SQLite database at a named on-disk path between runs so
+//! subsequent startups only re-parse files that have actually changed. Uses
+//! the same racy-stat algorithm as `git status`: a per-file `(size, mtime,
+//! ctime, inode, dev)` tuple is compared against the cache, with a
+//! content-hash confirmation for files whose mtime falls inside the racy
+//! window.
 //!
-//! See `docs/guide/persistence.md` for the user-facing contract.
+//! See `docs/howto/persist.md` for the user-facing contract.
 
 use rusqlite::{Connection, params};
 use std::collections::{BTreeMap, HashMap};

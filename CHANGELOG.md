@@ -107,6 +107,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The default (non-persist) index is now an anonymous disk-backed temp
+  database, never `:memory:` (#402, epic #400).** With `persist = false` the
+  engine opens SQLite's anonymous temp database (`Connection::open("")`)
+  instead of an in-memory one: SQLite creates a private temp file, deletes it
+  immediately (so the OS reclaims it even on SIGKILL — nothing to clean up,
+  no name to collide on), and spills index pages to disk as the index grows.
+  Resident memory for large corpora drops from O(indexed data) to roughly the
+  SQLite page cache. The API, query results, watch events, and persistence
+  semantics are unchanged; the file lands in the directory SQLite's VFS picks
+  (`SQLITE_TMPDIR` → `TMPDIR` → `/var/tmp` → `/usr/tmp` → `/tmp`) — export
+  `SQLITE_TMPDIR` to steer it off a tmpfs mount. See `MIGRATIONS.md`.
+
 - **The engine no longer keeps a full in-memory copy of every extracted row
   (#401, epic #400).** The watcher's diffing path previously retained all rows
   of every indexed file in native memory for the lifetime of the instance —
