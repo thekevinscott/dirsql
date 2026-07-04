@@ -46,4 +46,21 @@ describe('vitepress config', () => {
       '/cli/http-api'
     ])
   })
+
+  // The Reference group is the canonical fact tree (#375): the six reference
+  // pages plus the Migrations include, in look-up order.
+  it('lists the six reference pages plus Migrations in the Reference group', () => {
+    const sidebar = config.themeConfig!.sidebar as Record<string, SidebarItem[]>
+    const reference = sidebar['/'].find((group) => group.text === 'Reference')
+    const links = (reference!.items ?? []).map((item) => item.link)
+    expect(links).toEqual([
+      '/reference/cli',
+      '/reference/config',
+      '/reference/hooks',
+      '/reference/columns',
+      '/reference/http-api',
+      '/reference/sdk',
+      '/migrations'
+    ])
+  })
 })
