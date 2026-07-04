@@ -10,20 +10,22 @@ export default defineConfig({
       provider: 'local'
     },
 
+    // The nav mirrors the four Diataxis groups exactly (#353/#387). Type is
+    // the only organizational axis -- no product-area tabs (the old `CLI`
+    // tab is gone).
     nav: [
-      { text: 'Getting Started', link: '/getting-started' },
-      { text: 'Guide', link: '/guide/tables' },
-      { text: 'CLI', link: '/cli/' },
-      { text: 'Reference', link: '/api/' },
-      { text: 'Migrations', link: '/migrations' },
+      { text: 'Tutorial', link: '/getting-started' },
+      { text: 'How-to Guides', link: '/howto/define-tables' },
+      { text: 'Reference', link: '/reference/cli' },
+      { text: 'Explanation', link: '/explanation' },
       { text: 'GitHub', link: 'https://github.com/thekevinscott/dirsql' }
     ],
 
-    // A single global sidebar shown on every page. The CLI section is a
-    // self-contained group with all its subpages -- but it never *replaces*
-    // the rest of the nav. There is intentionally no path-scoped (`/cli/`)
-    // key: a path-scoped sidebar swaps the whole tree out, which deletes the
-    // other sections when you enter CLI (see #301). Keep one sidebar.
+    // A single global sidebar shown on every page, mirroring the four
+    // Diataxis groups. There is intentionally no path-scoped (e.g.
+    // `/howto/`) key: a path-scoped sidebar swaps the whole tree out, which
+    // deletes the other sections when you enter one (see #301). Keep one
+    // sidebar.
     sidebar: {
       '/': [
         {
@@ -44,16 +46,6 @@ export default defineConfig({
             { text: 'Keep the index across restarts', link: '/howto/persist' },
             { text: 'React to file changes', link: '/howto/react-to-changes' },
             { text: 'Embed dirsql in your application', link: '/howto/embed' }
-          ]
-        },
-        {
-          text: 'CLI',
-          items: [
-            { text: 'Overview & Installation', link: '/cli/' },
-            { text: 'Running the Server', link: '/cli/server' },
-            { text: 'Generating a Config (`init`)', link: '/cli/init' },
-            { text: 'Configuration File', link: '/cli/config' },
-            { text: 'HTTP API', link: '/cli/http-api' }
           ]
         },
         {

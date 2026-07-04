@@ -50,77 +50,45 @@ async def main():
 asyncio.run(main())
 ```
 
-Rust and TypeScript versions are in [`docs/getting-started.md`](docs/getting-started.md).
+Rust and TypeScript versions are in [`docs/howto/embed.md`](docs/howto/embed.md).
 
-## Getting Started
+## Tutorial
 
-End-to-end walkthrough: install, define tables, scan a directory, run queries, and join across tables.
+*Your first dirsql database* -- a hands-on lesson: create a toy dataset, start the server, run queries, and watch changes flow through. The reader performs every step and sees output at each one.
 
 → [`docs/getting-started.md`](docs/getting-started.md)
 
-## Guide
+## How-to Guides
 
-Task-oriented recipes for everyday `dirsql` use.
+Goal-named recipes for everyday `dirsql` use:
 
-### Configuration File
+- [Define tables for your files](docs/howto/define-tables.md)
+- [Derive columns from file paths](docs/howto/columns-from-paths.md)
+- [Extract rows from file contents](docs/howto/extract-from-contents.md)
+- [Search documents by meaning](docs/howto/search-by-meaning.md)
+- [Skip files you don't want indexed](docs/howto/skip-files.md)
+- [Load a SQLite extension](docs/howto/load-extension.md)
+- [Keep the index across restarts](docs/howto/persist.md)
+- [React to file changes](docs/howto/react-to-changes.md)
+- [Embed `dirsql` in your application](docs/howto/embed.md)
 
-Declare tables, ignore patterns, and the scan root in a `.dirsql.toml` file. Tables defined this way produce one row per matched file, with columns auto-injected from glob path captures (`{name}` placeholders) and stat virtuals (`_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`).
+## Reference
 
-→ [`docs/guide/config.md`](docs/guide/config.md)
+The canonical facts -- flags, schemas, contracts, and API shapes:
 
-### Generating a Config (`dirsql init`)
+- [CLI](docs/reference/cli.md) -- flags, `dirsql init`, defaults, exit codes
+- [Configuration file](docs/reference/config.md) -- the complete `.dirsql.toml` schema
+- [Command hooks](docs/reference/hooks.md) -- placeholders, stdout protocol, exit codes, timeouts
+- [Virtual columns & glob captures](docs/reference/columns.md) -- `_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`, and `{name}` captures
+- [HTTP API](docs/reference/http-api.md) -- `POST /query`, `GET /events`, errors
+- [SDK](docs/reference/sdk.md) -- `DirSQL`, `Table`, and `RowEvent` across Python, Rust, and TypeScript
+- [Migrations](docs/migrations.md) -- upgrade notes for breaking changes; the canonical source is [`MIGRATIONS.md`](MIGRATIONS.md) at the repo root
 
-`dirsql init` generates a `.dirsql.toml` by running `claude` over the target directory. Requires `claude` on `PATH` and signed in.
+## Explanation
 
-→ [`docs/guide/init.md`](docs/guide/init.md)
+How `dirsql` thinks: the filesystem is the source of truth; the database is a derived, ephemeral, read-only view. The canonical source is [`ARCHITECTURE.md`](ARCHITECTURE.md) at the repo root.
 
-### Defining Tables
-
-A table is a `(ddl, glob, extract)` triple. The DDL defines the SQLite schema, the glob selects files, and the extract function turns each file into rows.
-
-→ [`docs/guide/tables.md`](docs/guide/tables.md)
-
-### Querying
-
-`db.query(sql)` accepts any read-only SQLite SELECT (subqueries, CTEs, window functions, joins) and returns rows as dicts/maps/objects keyed by column name. Writes (`INSERT`, `UPDATE`, `DELETE`, ...) are rejected -- mutate the underlying files instead.
-
-→ [`docs/guide/querying.md`](docs/guide/querying.md)
-
-### File Watching
-
-`db.watch()` returns an async iterable of `RowEvent`s (`insert` / `update` / `delete` / `error`) as files change on disk. `dirsql` diffs the previous and current rows of each file to produce row-level events.
-
-→ [`docs/guide/watching.md`](docs/guide/watching.md)
-
-### Async API
-
-In Python, `DirSQL` is async by default: the constructor returns immediately, scanning runs in a background thread, and `ready()` / `query()` / `watch()` integrate with `asyncio`. Rust uses `AsyncDirSQL` under tokio; TypeScript awaits `db.ready` and `db.query()`.
-
-→ [`docs/guide/async.md`](docs/guide/async.md)
-
-### Command-Line Interface
-
-`dirsql` runs an HTTP server (default `localhost:7117`) exposing `POST /query` for SQL and `GET /events` for an SSE change stream. Same SDK functionality, language-agnostic transport.
-
-→ [`docs/guide/cli.md`](docs/guide/cli.md)
-
-### Collaboration with CRDTs
-
-For multi-writer / local-first workflows, pair `dirsql` with [Automerge](https://automerge.org/): the CRDT owns merge semantics, `dirsql` indexes the materialized JSON view. Includes the integration shape, tradeoffs vs plain files, and notes on Yjs / Loro.
-
-→ [`docs/guide/crdt.md`](docs/guide/crdt.md)
-
-## API Reference
-
-`DirSQL`, `Table`, and `RowEvent` -- constructors, methods, and field-by-field shapes across Python, Rust, and TypeScript.
-
-→ [`docs/api/index.md`](docs/api/index.md)
-
-## Migrations
-
-Upgrade notes for breaking changes. The canonical source is [`MIGRATIONS.md`](MIGRATIONS.md) at the repo root; the docs site renders it via include.
-
-→ [`docs/migrations.md`](docs/migrations.md)
+→ [`docs/explanation.md`](docs/explanation.md)
 
 ## Architecture
 
