@@ -11,6 +11,48 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### Injected `_dirsql_*` tracking columns removed (#361)
+
+#### Summary
+
+dirsql no longer rewrites user DDL to inject `_dirsql_file_path` /
+`_dirsql_row_index` tracking columns. `create_table` runs the DDL verbatim, row
+ownership is tracked entirely in the internal `_dirsql_internal_rows` table, and
+query results are exactly what the user declared. This affects every SDK and the
+CLI equally (the change is in the shared Rust core).
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| Query selecting the tracking column | `SELECT _dirsql_file_path FROM t` (returned the file path) | `SELECT _path FROM t` — the documented filesystem-fact column (`_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`) |
+| `SELECT _dirsql_row_index FROM t` | returned the per-file row index | no built-in equivalent; add your own column in `extract` if you need it |
+| `SELECT *` result columns | user columns only (tracking columns were laundered out) | user columns only — **unchanged**, but now because they are the only columns that exist |
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- `PRAGMA table_info(<table>)` and `SELECT *` now report **exactly** the user's
+  declared columns; the `_dirsql_file_path` / `_dirsql_row_index` columns no
+  longer exist, so explicitly naming them in a query is a "no such column"
+  error rather than a returned value.
+- The persistent-cache schema version is bumped (`2` → `3`). A cache written by
+  an older build is discarded and rebuilt once, automatically, on first startup
+  — no action required, and penalty-free per the persistence design.
+
+#### Verification
+
+After upgrading, confirm a table's schema is now verbatim. With a `.dirsql.toml`
+declaring `[[table]] ddl = "CREATE TABLE files (_path TEXT)"`:
+
+```sh
+dirsql query "SELECT name FROM pragma_table_info('files')"
+# expected: only the columns you declared (e.g. `_path`) — no _dirsql_file_path / _dirsql_row_index
+```
+
 ### TypeScript: BLOB columns return `Buffer` instead of hex strings (#343)
 
 #### Summary

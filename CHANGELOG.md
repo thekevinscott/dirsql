@@ -42,9 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_dirsql_file_path` / `_dirsql_row_index` tracking columns, dual-written in
   the same SQLite transaction as each row insert/delete so it can never diverge
   from the rows it describes. This is foundational plumbing for eventually
-  dropping the injected columns (and unlocking `CREATE VIRTUAL TABLE` dirsql
-  tables); the injected columns remain authoritative and **there is no
-  user-visible change**. `WITHOUT ROWID` tables emit a stderr warning (they
+  dropping the injected columns; the injected columns remain authoritative and
+  **there is no user-visible change**. `WITHOUT ROWID` tables emit a stderr
+  warning (they
   break rowid-based bookkeeping and will be rejected in a later stage). The
   persistent-cache schema version is bumped, so the first startup after
   upgrading performs a one-time, penalty-free full rebuild to populate the
@@ -124,6 +124,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MIGRATIONS.md` for the upgrade note.
 
 ### Removed
+
+- **Injected `_dirsql_file_path` / `_dirsql_row_index` columns (#361, epic
+  #358).** *Breaking.* dirsql no longer rewrites user DDL to add tracking
+  columns — `create_table` runs the DDL verbatim, so `PRAGMA table_info` and
+  `SELECT *` return exactly the columns the user declared, and query results are
+  vanilla SQLite. Row ownership is tracked entirely in the internal
+  `_dirsql_internal_rows` table. Explicitly selecting `_dirsql_file_path` /
+  `_dirsql_row_index` now errors; use the documented `_path` and friends. The
+  persistent-cache schema version is bumped, so the first startup after
+  upgrading performs one automatic full rebuild. See `MIGRATIONS.md`.
 
 - **Python SDK: native-language (`.py`) config support and the `dirsql
   interpret` subcommand — hard removal, no deprecation window (A1 of epic
