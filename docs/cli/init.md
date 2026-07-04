@@ -1,10 +1,4 @@
----
-canonical: https://thekevinscott.github.io/dirsql/cli/init
----
-
 # Generating a config with `dirsql init`
-
-> Online: <https://thekevinscott.github.io/dirsql/cli/init>
 
 `dirsql init` generates a [`.dirsql.toml`](./config.md) by running `claude` over the target directory.
 

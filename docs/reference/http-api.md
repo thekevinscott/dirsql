@@ -1,10 +1,4 @@
----
-canonical: https://thekevinscott.github.io/dirsql/reference/http-api
----
-
 # HTTP API
-
-> Online: <https://thekevinscott.github.io/dirsql/reference/http-api>
 
 The [`dirsql` server](./cli.md#server-mode) (default `localhost:7117`)
 exposes two endpoints: `POST /query` and `GET /events`.

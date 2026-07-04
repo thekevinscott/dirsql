@@ -1,10 +1,4 @@
----
-canonical: https://thekevinscott.github.io/dirsql/reference/cli
----
-
 # CLI
-
-> Online: <https://thekevinscott.github.io/dirsql/reference/cli>
 
 The `dirsql` binary has two modes:
 

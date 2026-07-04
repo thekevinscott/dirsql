@@ -1,10 +1,4 @@
----
-canonical: https://thekevinscott.github.io/dirsql/reference/config
----
-
 # Configuration file (`.dirsql.toml`)
-
-> Online: <https://thekevinscott.github.io/dirsql/reference/config>
 
 `.dirsql.toml` is a TOML file with one optional `[dirsql]` section, zero or
 more `[[dirsql.extension]]` entries, and zero or more `[[table]]` entries.

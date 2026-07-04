@@ -1,10 +1,4 @@
----
-canonical: https://thekevinscott.github.io/dirsql/cli/
----
-
 # Using `dirsql` from the CLI
-
-> Online: <https://thekevinscott.github.io/dirsql/cli/>
 
 `dirsql` ships a command-line interface that starts an HTTP server exposing
 the same indexing, querying, and watching functionality as the SDK — no host

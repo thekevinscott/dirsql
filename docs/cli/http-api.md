@@ -1,10 +1,4 @@
----
-canonical: https://thekevinscott.github.io/dirsql/cli/http-api
----
-
 # HTTP API
-
-> Online: <https://thekevinscott.github.io/dirsql/cli/http-api>
 
 Once the [server is running](./server.md), `dirsql` exposes two HTTP
 endpoints: `POST /query` for SQL queries and `GET /events` for a real-time

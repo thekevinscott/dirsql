@@ -1,10 +1,4 @@
----
-canonical: https://thekevinscott.github.io/dirsql/reference/columns
----
-
 # Virtual columns and glob captures
-
-> Online: <https://thekevinscott.github.io/dirsql/reference/columns>
 
 Every table — config-defined or programmatic — gets filesystem facts merged
 onto its rows automatically: seven reserved **virtual columns** derived from

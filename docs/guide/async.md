@@ -1,10 +1,4 @@
----
-canonical: https://thekevinscott.github.io/dirsql/guide/async
----
-
 # Async API
-
-> Online: <https://thekevinscott.github.io/dirsql/guide/async>
 
 `DirSQL` is async by default in Python. The initial directory scan runs in a background thread so it does not block the event loop.
 
