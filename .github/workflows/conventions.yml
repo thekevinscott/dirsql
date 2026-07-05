@@ -5,24 +5,29 @@ on: [pull_request]
 permissions:
   contents: read
 
-# Adopt the testing-conventions reusable workflow (@v0) for the STATIC gates
-# only — the documented split-setup pattern (docs/guide/ci.md "Scoping serves
-# split setups"): the suite-executing gates (coverage/mutation) and the
-# repo-root-scoped ones (packaging/e2e-verify) stay in our own build-capable
-# workflows, tracked for retirement in #393.
+# Adopt the testing-conventions reusable workflow (@v0). This runs the static
+# gates (colocated-test, unit-lint, integration-lint) PLUS the `mutation`
+# suite-executing gate for TypeScript and Rust — the upstream monorepo primitive
+# (#277 derives the package root from `path`; #279 makes the mutation job
+# install/build from that derived root) makes the reusable workflow build the
+# native artifact itself, so the bespoke ts-mutation.yml / rust-mutation.yml are
+# retired (#417). Still bespoke, pending a further upstream fix (#412/#413/#418):
+# `unit-coverage` (its suite job still installs at the repo root, not the derived
+# root), `packaging`, `e2e-verify`, and python `mutation` (cosmic-ray deps).
 #
 # One call per package (the intended monorepo pattern), scoped per tier because
 # the tool scans `path` recursively with no exclusions:
-#   - unit-tier static gates (colocated-test, unit-lint) at each SDK's SOURCE dir
+#   - unit-tier gates (colocated-test, unit-lint, + mutation for ts/rust) at each
+#     SDK's SOURCE dir
 #   - integration-lint at each SDK's integration-test dir (python/ts) or the
 #     crate root (rust, which scans tests/ itself)
 #
-# The `gates` allowlists below were set empirically: a first run turned every
-# static gate on (nothing excluded) and the arbiter reported the reds. Every
-# gate listed here is GREEN and enforced. (The one initial red — rust `unit-lint`,
-# 17 real isolation violations the old mis-scoped bespoke check missed — was
-# fixed in #395 and the gate re-enabled.) No gate is excluded to dodge
-# enforcement: a red is filed and fixed, not hidden.
+# The `gates` allowlists below were set empirically: a run turned each gate on
+# and the arbiter reported the reds. Every gate listed here is GREEN and
+# enforced. (The one initial red — rust `unit-lint`, 17 real isolation
+# violations the old mis-scoped bespoke check missed — was fixed in #395 and the
+# gate re-enabled.) No gate is excluded to dodge enforcement: a red is filed and
+# fixed, not hidden.
 jobs:
   python-unit:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
@@ -49,7 +54,13 @@ jobs:
       path: packages/ts/src
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint"]'
+      # `mutation` reruns the unit suite per mutant, which loads the native
+      # `dirsql.node`; #279 runs build_command from the derived root
+      # (packages/ts), so `pnpm build` compiles the napi core there and
+      # rust_toolchain provisions its cargo. Retires ts-mutation.yml (#417).
+      gates: '["colocated-test", "unit-lint", "mutation"]'
+      rust_toolchain: true
+      build_command: pnpm build
 
   typescript-integration:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
@@ -70,4 +81,8 @@ jobs:
       # colocated-test now runs for rust: upstream #274/#275 made the detector
       # fan the presence check over rust (co-change stays python/ts). This retires
       # the bespoke `colocated` job that rust-test.yml carried as a stopgap (#411).
-      gates: '["colocated-test", "unit-lint", "integration-lint"]'
+      # `mutation` (cargo-mutants) needs no build_command — the CLI self-provisions
+      # the engine, which builds and reruns the crate's own tests; #279 installs it
+      # from the derived root. No nightly (unlike coverage's --branch). Retires
+      # rust-mutation.yml (#417).
+      gates: '["colocated-test", "unit-lint", "integration-lint", "mutation"]'
