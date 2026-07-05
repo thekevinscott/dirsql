@@ -57,7 +57,7 @@ def installed_venv(tmp_path_factory):
     """
     maturin = shutil.which("maturin")
     assert maturin is not None, (
-        "`maturin` not on PATH -- run `uv sync --extra dev` in packages/python"
+        "`maturin` not on PATH -- run `uv sync` in packages/python"
     )
     assert os.path.exists(_BINARY), (
         f"prerequisite missing: dirsql binary not built at {_BINARY}; "

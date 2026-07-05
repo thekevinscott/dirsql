@@ -38,7 +38,7 @@ jobs:
         uses: extractions/setup-just@v2
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync
         working-directory: packages/python
 
       - name: Build Rust extension
@@ -73,7 +73,7 @@ jobs:
         uses: extractions/setup-just@v2
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync
         working-directory: packages/python
 
       - name: Build Rust extension
@@ -108,7 +108,7 @@ jobs:
         uses: extractions/setup-just@v2
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync
         working-directory: packages/python
 
       - name: Build Rust extension
@@ -139,7 +139,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync
         working-directory: packages/python
 
       - name: Build Rust extension
@@ -199,7 +199,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync
         working-directory: packages/python
 
       - name: Build dirsql CLI binary

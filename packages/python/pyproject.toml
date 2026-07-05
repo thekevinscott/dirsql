@@ -19,7 +19,13 @@ repository = "https://github.com/thekevinscott/dirsql"
 keywords = ["sql", "filesystem", "directory", "sqlite", "index"]
 readme = "README.md"
 
-[project.optional-dependencies]
+# Dev/test dependencies live in a PEP 735 dependency-group (not a
+# `[project.optional-dependencies]` extra) so a plain `uv sync` installs them
+# by default -- the reusable testing-conventions coverage/mutation jobs run
+# `uv sync` with no `--extra`, and our colocated suite needs pytest-describe /
+# pytest-asyncio to collect at all. Every in-repo flow is uv-based and now uses
+# plain `uv sync`; the old `pip install .[dev]` extra is intentionally dropped.
+[dependency-groups]
 dev = [
     "pytest>=8",
     "pytest-describe>=2",
