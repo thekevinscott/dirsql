@@ -987,7 +987,7 @@ impl DirSQLBuilder {
     /// written to `<root>/.dirsql/cache.db` (override via
     /// [`persist_path`](Self::persist_path)) so subsequent startups only
     /// re-parse files that have actually changed. See
-    /// `docs/guide/persistence.md` for the reconcile contract.
+    /// `docs/howto/persist.md` for the reconcile contract.
     pub fn persist(mut self, persist: bool) -> Self {
         self.persist = persist;
         self

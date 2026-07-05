@@ -221,6 +221,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/cli/server.md` / `docs/cli/index.md`) is removed with the feature
   (docs-as-spec). Completes the epic across all three SDKs. (#325)
 
+### Fixed
+
+- **npm package ships the current docs tree (#404).** The `prepack` docs
+  stager (`packages/ts/tools/stage-docs.ts`) still allow-listed the pre-Diataxis
+  `guide/` and `api/` directories, which #403 deleted — so the published npm
+  tarball shipped none of the actual documentation directories. It now stages
+  the live `howto/` and `reference/` trees plus the root `explanation.md`.
+  Also repoints stale `docs/guide/`, `docs/cli/`, and `docs/api/` citations that
+  lingered in `packages/*` source comments and tests to their Diataxis
+  successors, and fixes the dead `docs/cli/config.md#loading-extensions` /
+  `github.io/dirsql/cli/` links in the three SDK READMEs.
+
 ### Added
 
 - **Python SDK: resolve a constructor extension by package name (#298).** An

@@ -1,5 +1,5 @@
 //! `dirsql init` — generate a starter `.dirsql.toml` by shelling out to
-//! the `claude` CLI. See `docs/guide/init.md` for the user-facing
+//! the `claude` CLI. See `docs/reference/cli.md` for the user-facing
 //! contract.
 //!
 //! The agent's only required responsibility is to print a valid

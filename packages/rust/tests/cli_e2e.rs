@@ -4,7 +4,7 @@
 //! talk to it over real HTTP, and drive real filesystem mutations. Nothing
 //! is mocked. Tests are deliberately tolerant of startup / shutdown timing
 //! via bounded retries; they are NOT tolerant of missing or broken
-//! behavior described in `docs/guide/cli.md`.
+//! behavior described in `docs/reference/cli.md`.
 //!
 //! Gated behind `--features cli`: the `dirsql` bin target itself is
 //! `required-features = ["cli"]`, so without the feature there's no
@@ -157,7 +157,7 @@ fn version_flag_prints_and_exits_zero() {
 
 #[test]
 fn help_flag_prints_and_exits_zero() {
-    // Every flag documented in docs/guide/cli.md must appear in `--help`.
+    // Every flag documented in docs/reference/cli.md must appear in `--help`.
     std::process::Command::cargo_bin("dirsql")
         .expect("binary must exist")
         .arg("--help")
@@ -174,7 +174,7 @@ fn help_flag_prints_and_exits_zero() {
 
 #[test]
 fn server_announces_bind_on_stdout() {
-    // Per docs/guide/cli.md: on startup, the server prints something like
+    // Per docs/reference/cli.md: on startup, the server prints something like
     // `Running at localhost:7117` to stdout. Parse the first line.
     let root = blog_fixture();
     let port = free_port();

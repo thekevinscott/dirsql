@@ -25,14 +25,14 @@ def _write(path, content):
 
 
 # ---------------------------------------------------------------------------
-# docs/guide/tables.md -- "Supported value types" -> bytes -> BLOB
+# docs/reference/sdk.md -- "Supported value types" -> bytes -> BLOB
 # ---------------------------------------------------------------------------
 
 
 def describe_tables_guide_bytes_to_blob():
     @pytest.mark.asyncio
     async def it_maps_python_bytes_to_sqlite_blob(tmp_dir):
-        """Docs (guide/tables.md "Supported value types"): Python `bytes` -> SQLite BLOB.
+        """Docs (reference/sdk.md "Supported value types"): Python `bytes` -> SQLite BLOB.
 
         Round-trip: extract returns a dict whose value is bytes, query returns bytes.
         """
@@ -61,14 +61,14 @@ def describe_tables_guide_bytes_to_blob():
 
 
 # ---------------------------------------------------------------------------
-# docs/guide/tables.md -- "Strict Mode" (programmatic Table strict=True)
+# docs/reference/sdk.md -- "Strict Mode" (programmatic Table strict=True)
 # ---------------------------------------------------------------------------
 
 
 def describe_strict_mode_gap():
     @pytest.mark.asyncio
     async def it_raises_on_extra_keys_when_strict_true(tmp_dir):
-        """Docs (guide/tables.md "Strict Mode"): strict=True errors on extra keys."""
+        """Docs (reference/sdk.md "Strict Mode"): strict=True errors on extra keys."""
         with open(os.path.join(tmp_dir, "a.json"), "w") as f:
             f.write("{}")
 
@@ -88,7 +88,7 @@ def describe_strict_mode_gap():
 
     @pytest.mark.asyncio
     async def it_allows_exact_match_when_strict_true(tmp_dir):
-        """Docs (guide/tables.md "Strict Mode"): strict mode passes on exact key match."""
+        """Docs (reference/sdk.md "Strict Mode"): strict mode passes on exact key match."""
         with open(os.path.join(tmp_dir, "a.json"), "w") as f:
             f.write("{}")
 
@@ -111,15 +111,15 @@ def describe_strict_mode_gap():
 
 
 # ---------------------------------------------------------------------------
-# docs/guide/watching.md -- "How diffing works" positional row identity
-# and RowEvent.file_path relative-path assertion
+# docs/explanation.md -- "How diffing works" positional row identity
+# docs/reference/sdk.md -- RowEvent.file_path relative-path assertion
 # ---------------------------------------------------------------------------
 
 
 def describe_watching_guide_positional_identity_gap():
     @pytest.mark.asyncio
     async def it_emits_delete_for_shrinking_file_positionally(tmp_dir):
-        """Docs (guide/watching.md "How diffing works"): row identity by position.
+        """Docs (explanation.md "How diffing works"): row identity by position.
 
         "If a file previously produced 3 rows and now produces 2, the first two
         rows are compared for updates and the third is emitted as a delete."
@@ -202,9 +202,9 @@ def describe_watching_guide_positional_identity_gap():
 
     @pytest.mark.asyncio
     async def it_sets_file_path_as_relative_path_on_events(tmp_dir):
-        """Docs (guide/watching.md event payloads): `file_path` is relative to root.
+        """Docs (reference/sdk.md event payloads): `file_path` is relative to root.
 
-        All examples in watching.md show relative paths (e.g., "comments/abc/index.json")
+        All examples in reference/sdk.md show relative paths (e.g., "comments/abc/index.json")
         rather than absolute paths.
         """
         import asyncio

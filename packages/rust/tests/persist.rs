@@ -1,7 +1,7 @@
 //! Integration tests for the persistent on-disk SQLite cache (issue #95).
 //!
 //! These tests exercise the contract described in
-//! `docs/guide/persistence.md`: a warm start with an unchanged tree must
+//! `docs/howto/persist.md`: a warm start with an unchanged tree must
 //! produce the same rows as a cold rebuild, while skipping the extract step
 //! for files whose filesystem metadata matches the cache.
 
