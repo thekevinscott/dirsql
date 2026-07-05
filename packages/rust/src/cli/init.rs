@@ -166,4 +166,46 @@ mod tests {
             "got: {err:?}"
         );
     }
+
+    // The spawn / non-zero-exit / write failure arms of `run` require actually
+    // invoking `claude` and touching the filesystem, so they are exercised at
+    // the e2e tier. Their `Display` renderings, however, are pure and covered
+    // here (the values are constructed inline, no process or fs I/O).
+
+    #[test]
+    fn spawn_error_display_mentions_spawn() {
+        let err = InitError::Spawn(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        ));
+        let msg = format!("{err}");
+        assert!(msg.contains("failed to spawn"), "got: {msg}");
+        assert!(msg.contains("denied"), "got: {msg}");
+    }
+
+    #[test]
+    fn write_error_display_names_the_path_and_source() {
+        let err = InitError::Write {
+            path: PathBuf::from("/tmp/out.toml"),
+            source: std::io::Error::other("disk full"),
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("/tmp/out.toml"), "got: {msg}");
+        assert!(msg.contains("disk full"), "got: {msg}");
+    }
+
+    #[test]
+    fn invalid_utf8_error_display_mentions_utf8() {
+        // A non-UTF8 byte sequence yields the `FromUtf8Error` that `#[from]`
+        // converts into `InitError::InvalidUtf8`.
+        let utf8_err = String::from_utf8(vec![0xff, 0xfe]).unwrap_err();
+        let err: InitError = utf8_err.into();
+        let msg = format!("{err}");
+        assert!(msg.contains("non-UTF8"), "got: {msg}");
+    }
+
+    // NOTE: `InitError::ClaudeFailed`'s `Display` is not unit-tested -- building
+    // it needs an `ExitStatus`, and `std::process::ExitStatus::from_raw` is
+    // effectful std the unit-isolation lint (`no-out-of-module-call`) forbids.
+    // Its rendering is covered end-to-end at the e2e tier instead.
 }

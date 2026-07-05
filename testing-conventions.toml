@@ -27,9 +27,11 @@
 # (testing-conventions #269/#270/#271). Its floors sit below the bindings' 100%
 # because effectful code (filesystem / subprocess / HTTP / `notify`) lives in
 # the integration tier by design (#233), so the unit tier cannot reach it.
-# `functions` was ratcheted to 88 (near its measured ~91%) in #354; `branch`
-# keeps a documented sub-90 floor as an accepted exception -- see the
-# `[rust.coverage]` block below for the rationale.
+# In #354 pure unit tests were added to close the reachable unit-tier gaps and
+# the floors were then pulled up as high as they robustly go (lines 94 /
+# regions 93 / functions 91 / branch 75); `branch` keeps a documented sub-90
+# floor as an accepted exception -- see the `[rust.coverage]` block below for
+# the rationale and a fragility warning about the near-zero slack.
 
 # --- Python (scanned: packages/python/dirsql) ------------------------------
 
@@ -86,34 +88,43 @@ features = ["cli"]
 # of the number -- testing-conventions #269). `branch` runs under `--branch`,
 # which needs the nightly toolchain pinned in rust-test.yml's coverage job.
 #
-# Floors are the honest unit-only maxima less a small margin. They are BELOW the
-# bindings' 100% because the effectful paths in lib.rs / cli/*.rs / watcher.rs
-# are exercised at the integration/e2e tier by design (#233), not the unit tier.
+# The floors are BELOW the bindings' 100% because the effectful paths in
+# lib.rs / cli/*.rs / watcher.rs are exercised at the integration/e2e tier by
+# design (#233), not the unit tier.
 #
-# #354 decided the target floors against the measured unit-only coverage
-# (lines 93.7% / regions 92.9% / functions 90.9% / branch 75.0%):
-#   - lines/regions: held at 90 (at the >=90% ideal already); the headroom above
-#     the floor absorbs legitimate integration-tier edits that lower a PR's line
-#     coverage without a unit regression.
-#   - functions: ratcheted 80 -> 88, near its ~91% actual.
-#   - branch: ratcheted 70 -> 72 but kept BELOW the >=90% ideal as an accepted,
-#     documented exception -- for two structural reasons:
-#       (1) The effectful production branches live in the integration/e2e tier
-#           by design (#233): cli/router.rs's async HTTP handlers (0% branch),
-#           cli/init.rs's `claude`-spawn arms, and lib.rs's racy-window/watcher/
-#           persist error arms are unreachable from a unit test; covering them
-#           re-litigates #233.
-#       (2) `--branch` instruments the crate WITH its `#[cfg(test)]` modules, so
-#           every `matches!(…, if a && b)` / `assert!(x && y)` guard in a unit
-#           test adds short-circuit sub-condition branches whose False arm is
-#           unreachable by construction (the assertion is written to pass).
-#           differ.rs is the clearest case: 100% line/region/function coverage
-#           but 58% branch, every uncovered branch inside a test-module guard,
-#           not production code. Well-formed new unit tests thus tend to LOWER
-#           branch %, so the floor stays conservative on purpose -- a tight floor
-#           would fail legitimate test-adding PRs.
+# #354 first added pure unit tests to close the reachable unit-tier gaps
+# (cli/router.rs `parse_sql_body`, cli/mod.rs `with_query_timeout` /
+# `From<String>`, cli/init.rs error `Display` arms), lifting the measured
+# unit-only coverage to lines 94.1% / regions 93.2% / functions 91.6% /
+# branch 75.6%. The floors below are then set as HIGH as they robustly go --
+# the highest integer under each actual:
+#   - lines: 94 (actual 94.1%).
+#   - regions: 93 (actual 93.2%).
+#   - functions: 91 (actual 91.6%).
+#   - branch: 75 (actual 75.6%), kept BELOW the >=90% ideal as an accepted,
+#     documented exception (see reasons below).
+#
+# WARNING -- these floors are pinned near their actuals (<1pt of slack), by
+# maintainer request. The whole-tree gate will therefore go red on any PR that
+# lowers a dimension even slightly. This is MOST fragile for `branch`: because
+# `--branch` counts test-assertion guards (reason (2) below), a PR that merely
+# ADDS well-formed unit tests can lower branch % and trip the floor. When that
+# happens the fix is usually to nudge the affected floor DOWN to the new actual,
+# not to treat the dip as a regression to chase.
+#
+# Why `branch` in particular cannot reach the >=90% ideal at the unit tier:
+#   (1) The effectful production branches live in the integration/e2e tier by
+#       design (#233): cli/router.rs's async HTTP handlers, cli/init.rs's
+#       `claude`-spawn arms, and lib.rs's racy-window/watcher/persist error arms
+#       are unreachable from a unit test; covering them re-litigates #233.
+#   (2) `--branch` instruments the crate WITH its `#[cfg(test)]` modules, so
+#       every `matches!(…, if a && b)` / `assert!(x && y)` guard in a unit test
+#       adds short-circuit sub-condition branches whose False arm is unreachable
+#       by construction (the assertion is written to pass). differ.rs is the
+#       clearest case: 100% line/region/function coverage but 58% branch, every
+#       uncovered branch inside a test-module guard, not production code.
 [rust.coverage]
-lines = 90
-functions = 88
-regions = 90
-branch = 72
+lines = 94
+functions = 91
+regions = 93
+branch = 75
