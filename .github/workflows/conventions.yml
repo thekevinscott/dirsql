@@ -67,9 +67,7 @@ jobs:
       path: packages/rust
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      # unit-lint is back ON: the 17 isolation violations (#395) are fixed.
-      # colocated-test is absent because the reusable workflow's detector excludes
-      # rust from it by design (inline #[cfg(test)] units can't go stale, so there's
-      # no co-change dimension) — it silently no-ops here. Rust colocation is
-      # enforced bespoke in rust-test.yml's `colocated` job (tracked in #393).
-      gates: '["unit-lint", "integration-lint"]'
+      # colocated-test now runs for rust: upstream #274/#275 made the detector
+      # fan the presence check over rust (co-change stays python/ts). This retires
+      # the bespoke `colocated` job that rust-test.yml carried as a stopgap (#411).
+      gates: '["colocated-test", "unit-lint", "integration-lint"]'
