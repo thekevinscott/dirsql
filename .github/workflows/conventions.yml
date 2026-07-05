@@ -31,7 +31,12 @@ jobs:
       path: packages/python/dirsql
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint"]'
+      # PROBE (#412): does #277 (package-root from path) + `pip install .` (the
+      # maintainer's build-and-run-in-one-interpreter example) make python
+      # unit-coverage work in the reusable workflow? Bespoke coverage kept.
+      gates: '["colocated-test", "unit-lint", "unit-coverage"]'
+      rust_toolchain: true
+      build_command: cd packages/python && python -m pip install .
 
   python-integration:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
@@ -49,7 +54,12 @@ jobs:
       path: packages/ts/src
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint"]'
+      # PROBE (#412/#417): #277 derives the package root from `path`, so the
+      # suite job's `pnpm install` should now find packages/ts. Re-run of the
+      # #410 failure. Bespoke coverage/mutation kept.
+      gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation"]'
+      rust_toolchain: true
+      build_command: cd packages/ts && pnpm build
 
   typescript-integration:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
@@ -67,7 +77,8 @@ jobs:
       path: packages/rust
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      # colocated-test now runs for rust: upstream #274/#275 made the detector
-      # fan the presence check over rust (co-change stays python/ts). This retires
-      # the bespoke `colocated` job that rust-test.yml carried as a stopgap (#411).
-      gates: '["colocated-test", "unit-lint", "integration-lint"]'
+      # colocated-test runs for rust (upstream #274/#275). PROBE (#417): + mutation
+      # — #279 makes the mutation job install/build from the derived package root;
+      # rust needs no nightly for mutation (unlike coverage's --branch). Bespoke
+      # rust-mutation.yml kept.
+      gates: '["colocated-test", "unit-lint", "integration-lint", "mutation"]'
