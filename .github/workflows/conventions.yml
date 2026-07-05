@@ -36,7 +36,8 @@ jobs:
       # unit-coverage work in the reusable workflow? Bespoke coverage kept.
       gates: '["colocated-test", "unit-lint", "unit-coverage"]'
       rust_toolchain: true
-      build_command: cd packages/python && python -m pip install .
+      # Runs from the derived package root (packages/python) — no `cd`.
+      build_command: python -m pip install .
 
   python-integration:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
@@ -59,7 +60,10 @@ jobs:
       # #410 failure. Bespoke coverage/mutation kept.
       gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation"]'
       rust_toolchain: true
-      build_command: cd packages/ts && pnpm build
+      # #279 runs the suite job from the DERIVED package root (packages/ts), so
+      # no `cd` — that double-cd'd. (Coverage still installs at repo root; that
+      # job hasn't had the #279 treatment yet, so it fails regardless.)
+      build_command: pnpm build
 
   typescript-integration:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
