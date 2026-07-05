@@ -26,9 +26,10 @@
 # cli`: the CLI now scopes to `--lib` and passes `[rust].features` through
 # (testing-conventions #269/#270/#271). Its floors sit below the bindings' 100%
 # because effectful code (filesystem / subprocess / HTTP / `notify`) lives in
-# the integration tier by design (#233), so the unit tier cannot reach it. The
-# `functions`/`branch` floors are an honest interim below the >=90% ideal;
-# raising them is tracked in #354.
+# the integration tier by design (#233), so the unit tier cannot reach it.
+# `functions` was ratcheted to 88 (near its measured ~91%) in #354; `branch`
+# keeps a documented sub-90 floor as an accepted exception -- see the
+# `[rust.coverage]` block below for the rationale.
 
 # --- Python (scanned: packages/python/dirsql) ------------------------------
 
@@ -86,12 +87,33 @@ features = ["cli"]
 # which needs the nightly toolchain pinned in rust-test.yml's coverage job.
 #
 # Floors are the honest unit-only maxima less a small margin. They are BELOW the
-# bindings' 100% (and `functions`/`branch` below the >=90% ideal) because the
-# effectful paths in lib.rs / cli/*.rs / watcher.rs are exercised at the
-# integration/e2e tier by design (#233), not the unit tier. Raising them toward
-# >=90% across the board is tracked in #354.
+# bindings' 100% because the effectful paths in lib.rs / cli/*.rs / watcher.rs
+# are exercised at the integration/e2e tier by design (#233), not the unit tier.
+#
+# #354 decided the target floors against the measured unit-only coverage
+# (lines 93.7% / regions 92.9% / functions 90.9% / branch 75.0%):
+#   - lines/regions: held at 90 (at the >=90% ideal already); the headroom above
+#     the floor absorbs legitimate integration-tier edits that lower a PR's line
+#     coverage without a unit regression.
+#   - functions: ratcheted 80 -> 88, near its ~91% actual.
+#   - branch: ratcheted 70 -> 72 but kept BELOW the >=90% ideal as an accepted,
+#     documented exception -- for two structural reasons:
+#       (1) The effectful production branches live in the integration/e2e tier
+#           by design (#233): cli/router.rs's async HTTP handlers (0% branch),
+#           cli/init.rs's `claude`-spawn arms, and lib.rs's racy-window/watcher/
+#           persist error arms are unreachable from a unit test; covering them
+#           re-litigates #233.
+#       (2) `--branch` instruments the crate WITH its `#[cfg(test)]` modules, so
+#           every `matches!(…, if a && b)` / `assert!(x && y)` guard in a unit
+#           test adds short-circuit sub-condition branches whose False arm is
+#           unreachable by construction (the assertion is written to pass).
+#           differ.rs is the clearest case: 100% line/region/function coverage
+#           but 58% branch, every uncovered branch inside a test-module guard,
+#           not production code. Well-formed new unit tests thus tend to LOWER
+#           branch %, so the floor stays conservative on purpose -- a tight floor
+#           would fail legitimate test-adding PRs.
 [rust.coverage]
 lines = 90
-functions = 80
+functions = 88
 regions = 90
-branch = 70
+branch = 72
