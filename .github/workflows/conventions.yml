@@ -48,7 +48,9 @@ jobs:
       # provision_rust fires — NO build_command / rust_toolchain needed. Dev deps
       # live in a PEP 735 [dependency-groups].dev so plain `uv sync` installs the
       # pytest plugins the suite needs. Retires python-test.yml's coverage job (#412).
-      gates: '["colocated-test", "unit-lint", "unit-coverage"]'
+      # PROBE (#418): + e2e-verify. Testing whether the reusable e2e-verify is
+      # adoptable at current @v0 (post-#293/#294). Bespoke e2e-attestation.yml KEPT.
+      gates: '["colocated-test", "unit-lint", "unit-coverage", "e2e-verify"]'
 
   python-integration:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
@@ -73,7 +75,8 @@ jobs:
       # `mutation` + `unit-coverage` both run here. TS keeps rust_toolchain +
       # `pnpm build` — both suites load the napi `dirsql.node`, so it's built
       # explicitly from the derived root. Retires ts-test.yml's coverage job (#412).
-      gates: '["colocated-test", "unit-lint", "mutation", "unit-coverage"]'
+      # PROBE (#418): + e2e-verify.
+      gates: '["colocated-test", "unit-lint", "mutation", "unit-coverage", "e2e-verify"]'
       rust_toolchain: true
       build_command: pnpm build
 
