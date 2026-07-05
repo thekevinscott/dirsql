@@ -1,6 +1,6 @@
 //! `dirsql` CLI binary. Two modes:
-//! - No subcommand: HTTP server documented in `docs/guide/cli.md`.
-//! - `init`: starter `.dirsql.toml` generation; see `docs/guide/init.md`.
+//! - No subcommand: HTTP server documented in `docs/reference/cli.md`.
+//! - `init`: starter `.dirsql.toml` generation; see `docs/reference/cli.md`.
 //!
 //! Only compiled with `--features cli`.
 

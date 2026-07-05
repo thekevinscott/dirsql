@@ -99,7 +99,7 @@ describe("getting started", () => {
 });
 
 // ---------------------------------------------------------------------------
-// guide/tables.md
+// reference/sdk.md
 // ---------------------------------------------------------------------------
 
 describe("tables guide", () => {
@@ -329,7 +329,7 @@ describe("tables guide", () => {
     expect(results[0].name).toBe("Widget");
   });
 
-  // Docs (guide/tables.md "Supported value types"): string -> TEXT,
+  // Docs (reference/sdk.md "Supported value types"): string -> TEXT,
   // integer number -> INTEGER, fractional number -> REAL,
   // boolean -> INTEGER (0/1), null -> NULL. (`bytes -> BLOB` is documented
   // for Python only; the TS binding has no Buffer -> BLOB mapping — a
@@ -369,7 +369,7 @@ describe("tables guide", () => {
 });
 
 // ---------------------------------------------------------------------------
-// guide/querying.md
+// reference/sdk.md
 // ---------------------------------------------------------------------------
 
 describe("querying guide", () => {
@@ -454,7 +454,7 @@ describe("querying guide", () => {
 });
 
 // ---------------------------------------------------------------------------
-// guide/async.md
+// reference/sdk.md
 // ---------------------------------------------------------------------------
 
 describe("async guide", () => {
@@ -538,7 +538,7 @@ describe("async guide", () => {
 });
 
 // ---------------------------------------------------------------------------
-// api/index.md
+// reference/sdk.md
 // ---------------------------------------------------------------------------
 
 describe("api reference", () => {

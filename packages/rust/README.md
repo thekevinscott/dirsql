@@ -124,7 +124,7 @@ cargo install dirsql --features cli
 dirsql
 ```
 
-Running `dirsql` starts an HTTP server bound to `localhost:7117` that exposes the SDK over HTTP: `POST /query` for SQL and `GET /events` for a Server-Sent Events change stream. Override with `--host`, `--port`, `--config`. See the [CLI guide](https://thekevinscott.github.io/dirsql/cli/).
+Running `dirsql` starts an HTTP server bound to `localhost:7117` that exposes the SDK over HTTP: `POST /query` for SQL and `GET /events` for a Server-Sent Events change stream. Override with `--host`, `--port`, `--config`. See the [CLI reference](https://thekevinscott.github.io/dirsql/reference/cli).
 
 The `cli` feature is **opt-in** -- `cargo add dirsql` pulls no CLI dependencies. `cargo install dirsql` without `--features cli` silently installs nothing (`required-features` skips the bin target with no warning); always include the flag, or use `npx dirsql` / `uvx dirsql` for prebuilt binaries.
 

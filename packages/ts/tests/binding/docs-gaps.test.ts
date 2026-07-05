@@ -29,7 +29,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-// Docs (guide/tables.md / guide/config.md "Strict Mode"): the default
+// Docs (reference/sdk.md / reference/config.md "Strict Mode"): the default
 // (relaxed) mode drops extract keys that aren't declared in the DDL and
 // fills declared-but-missing columns with NULL.
 describe("DirSQL relaxed schema (default)", () => {
@@ -102,7 +102,7 @@ describe("DirSQL strict mode (missing keys)", () => {
   });
 });
 
-// Docs (guide/tables.md "Supported value types"): `Buffer` / `Uint8Array`
+// Docs (reference/sdk.md "Supported value types"): `Buffer` / `Uint8Array`
 // -> SQLite BLOB; BLOB columns come back from `query()` as `Buffer`.
 // Round-trips the same payload as the Python/Rust mirrors.
 describe("DirSQL Buffer -> BLOB", () => {
@@ -139,7 +139,7 @@ describe("DirSQL Buffer -> BLOB", () => {
   });
 });
 
-// Docs (guide/tables.md "extract"): the callback receives the filesystem
+// Docs (reference/sdk.md "extract"): the callback receives the filesystem
 // path of the matched file (absolute when the root is absolute); dirsql
 // does not read file contents itself.
 describe("DirSQL extract path argument", () => {

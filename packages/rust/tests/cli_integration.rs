@@ -543,7 +543,7 @@ async fn get_events_streams_mutation_events() {
 
 #[tokio::test]
 async fn get_events_surfaces_parse_errors_as_error_events_not_fatal() {
-    // Per docs/guide/cli.md: an error during ingestion is a per-event problem,
+    // Per docs/reference/cli.md: an error during ingestion is a per-event problem,
     // not a server-wide one. The stream must keep delivering subsequent events.
     //
     // dirsql no longer reads file bodies itself, so a malformed file only

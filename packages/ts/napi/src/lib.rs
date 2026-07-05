@@ -577,7 +577,7 @@ unsafe fn js_val_to_value(env: napi::sys::napi_env, val: napi::sys::napi_value) 
         _ => {
             // `Buffer` / `Uint8Array` (Buffer is a Uint8Array subclass)
             // marshals to a BLOB, mirroring Python's `bytes -> BLOB`
-            // (guide/tables.md "Supported value types"). Any other object
+            // (reference/sdk.md "Supported value types"). Any other object
             // shape falls through to string coercion.
             if let Some(bytes) = get_u8_array_bytes(env, val) {
                 return Ok(Value::Blob(bytes));

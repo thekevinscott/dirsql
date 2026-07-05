@@ -99,7 +99,7 @@ await db.ready()
 rows = await db.query("SELECT vec_version() AS v")
 ```
 
-`dirsql` enables extension loading only while loading the configured libraries, then disables it again, so the SQL `load_extension()` function is never exposed to your queries. Programmatic entries load first, followed by any `[[dirsql.extension]]` entries declared in a `config` file. See the [config reference](https://github.com/thekevinscott/dirsql/blob/main/docs/cli/config.md#loading-extensions).
+`dirsql` enables extension loading only while loading the configured libraries, then disables it again, so the SQL `load_extension()` function is never exposed to your queries. Programmatic entries load first, followed by any `[[dirsql.extension]]` entries declared in a `config` file. See the [config reference](https://github.com/thekevinscott/dirsql/blob/main/docs/reference/config.md#dirsqlextension).
 
 ## Watching for changes
 
@@ -116,7 +116,7 @@ Each event has `.action` (`"insert"`, `"update"`, `"delete"`, or `"error"`), `.t
 
 ## CLI
 
-`pip install dirsql` also installs a `dirsql` console script that runs an HTTP server exposing the SDK over HTTP: `POST /query` for SQL and `GET /events` for a Server-Sent Events change stream. Run `dirsql` (or `uvx dirsql`) to start it. See the [CLI guide](https://thekevinscott.github.io/dirsql/cli/).
+`pip install dirsql` also installs a `dirsql` console script that runs an HTTP server exposing the SDK over HTTP: `POST /query` for SQL and `GET /events` for a Server-Sent Events change stream. Run `dirsql` (or `uvx dirsql`) to start it. See the [CLI reference](https://thekevinscott.github.io/dirsql/reference/cli).
 
 ## License
 

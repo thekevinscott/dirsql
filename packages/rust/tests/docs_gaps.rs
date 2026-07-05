@@ -11,10 +11,10 @@ use std::fs;
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
-// docs/guide/tables.md -- "Strict Mode" (strict = true on programmatic tables)
+// docs/reference/sdk.md -- "Strict Mode" (strict = true on programmatic tables)
 // ---------------------------------------------------------------------------
 
-/// Docs (guide/tables.md "Strict Mode"): `strict = true` errors on extra keys
+/// Docs (reference/sdk.md "Strict Mode"): `strict = true` errors on extra keys
 /// produced by the user extract.
 #[test]
 fn strict_true_rejects_extra_keys_from_extract() {
@@ -36,7 +36,7 @@ fn strict_true_rejects_extra_keys_from_extract() {
     );
 }
 
-/// Docs (guide/tables.md "Strict Mode"): strict mode passes when the extract's
+/// Docs (reference/sdk.md "Strict Mode"): strict mode passes when the extract's
 /// row keys match the DDL exactly.
 #[test]
 fn strict_true_allows_exact_match() {
@@ -62,10 +62,10 @@ fn strict_true_allows_exact_match() {
 }
 
 // ---------------------------------------------------------------------------
-// docs/guide/tables.md -- "Supported value types" -> bytes -> BLOB
+// docs/reference/sdk.md -- "Supported value types" -> bytes -> BLOB
 // ---------------------------------------------------------------------------
 
-/// Docs (guide/tables.md "Supported value types"): Rust `Value::Blob` round-trips through SQLite BLOB.
+/// Docs (reference/sdk.md "Supported value types"): Rust `Value::Blob` round-trips through SQLite BLOB.
 #[test]
 fn extract_blob_values_round_trip_via_sdk() {
     let root = TempDir::new().unwrap();
@@ -94,10 +94,10 @@ fn extract_blob_values_round_trip_via_sdk() {
 }
 
 // ---------------------------------------------------------------------------
-// docs/guide/watching.md -- RowEvent.file_path relative-path assertion
+// docs/reference/sdk.md -- RowEvent.file_path relative-path assertion
 // ---------------------------------------------------------------------------
 
-/// Docs (guide/watching.md): Insert events carry `file_path`, the relative
+/// Docs (reference/sdk.md): Insert events carry `file_path`, the relative
 /// path of the source file within the watched root.
 #[test]
 fn watch_insert_event_carries_relative_file_path() {

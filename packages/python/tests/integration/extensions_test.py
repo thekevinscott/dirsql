@@ -93,7 +93,7 @@ def mock_config_file():
 
 def describe_extensions_kwarg():
     # Feature: DirSQL(extensions=[{path, entrypoint?}]) loads SQLite
-    # extensions at startup. See docs/guide/extensions.md and
+    # extensions at startup. See docs/howto/load-extension.md and
     # packages/python/README.md (#229 / #298).
     @pytest.mark.asyncio
     async def it_defaults_extensions_to_none(mock_core):

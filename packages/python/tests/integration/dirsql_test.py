@@ -124,7 +124,7 @@ def core_init_raises(request):
 
 def describe_binding_layer():
     def describe_async_offloading():
-        # Feature: async-by-default API. See docs/guide/async.md and
+        # Feature: async-by-default API. See docs/reference/sdk.md and
         # packages/python/README.md ("DirSQL is async by default").
         @pytest.mark.asyncio
         async def it_offloads_init_via_to_thread(mock_core, to_thread_spy):
@@ -145,7 +145,7 @@ def describe_binding_layer():
 
     def describe_ready():
         # Feature: ready() awaits initial scan and surfaces init errors.
-        # See docs/guide/async.md and packages/python/README.md.
+        # See docs/reference/sdk.md and packages/python/README.md.
         @pytest.mark.asyncio
         @pytest.mark.parametrize(
             "core_init_raises", [RuntimeError("init failed")], indirect=True
@@ -177,7 +177,7 @@ def describe_binding_layer():
 
     def describe_query():
         # Feature: query() passes SQL to the engine. See
-        # docs/guide/querying.md and packages/python/README.md.
+        # docs/reference/sdk.md and packages/python/README.md.
         @pytest.mark.asyncio
         async def it_passes_sql_through_untouched(mock_core):
             db = async_mod.DirSQL("/root", tables=["t"])
@@ -191,7 +191,7 @@ def describe_binding_layer():
 
     def describe_watch():
         # Feature: watch() is an async iterator of RowEvent. See
-        # docs/guide/watching.md and packages/python/README.md.
+        # docs/reference/sdk.md and packages/python/README.md.
         @pytest.mark.asyncio
         async def it_lazily_starts_watcher_on_first_iteration(mock_core):
             db = async_mod.DirSQL("/root", tables=["t"])
@@ -238,7 +238,7 @@ def describe_binding_layer():
 
     def describe_config_kwarg():
         # Feature: DirSQL(config=path) forwards to the Rust core. See
-        # docs/guide/config.md and packages/python/README.md.
+        # docs/reference/config.md and packages/python/README.md.
         @pytest.mark.asyncio
         async def it_forwards_config_path_to_core(mock_core):
             db = async_mod.DirSQL(config="/some/.dirsql.toml")
@@ -275,7 +275,7 @@ def describe_binding_layer():
             assert inst.config is None
 
     def describe_ignore_kwarg():
-        # Feature: ignore patterns. See docs/guide/tables.md and
+        # Feature: ignore patterns. See docs/howto/skip-files.md and
         # packages/python/README.md (ignore= kwarg on DirSQL).
         @pytest.mark.asyncio
         async def it_forwards_ignore_to_core(mock_core):
@@ -295,7 +295,7 @@ def describe_binding_layer():
             assert _FakeRustDirSQL.instances[0].ignore is None
 
     def describe_persist_kwargs():
-        # Feature: persist / persist_path. See docs/guide/persistence.md.
+        # Feature: persist / persist_path. See docs/howto/persist.md.
         @pytest.mark.asyncio
         async def it_forwards_persist_kwargs_to_core(mock_core):
             db = async_mod.DirSQL(
