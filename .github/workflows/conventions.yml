@@ -49,7 +49,11 @@ jobs:
       # provision_rust fires — NO build_command / rust_toolchain needed. Dev deps
       # live in a PEP 735 [dependency-groups].dev so plain `uv sync` installs the
       # pytest plugins the suite needs. Retires python-test.yml's coverage job (#412).
-      gates: '["colocated-test", "unit-lint", "unit-coverage"]'
+      # PROBE (combined, off fixed main @6315133): + mutation (#426, cosmic-ray now
+      # bundled in the tc wheel), + e2e-verify (#418, --scope wiring live), +
+      # packaging (#413). Bespoke python-mutation.yml / e2e-attestation.yml /
+      # packaging.yml all KEPT — probe only adds.
+      gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation", "e2e-verify", "packaging"]'
 
   python-integration:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
@@ -73,7 +77,8 @@ jobs:
       # build_command config key — so the napi build is AUTO-PROVISIONED because
       # `packages/ts/napi` declares a napi build. `rust_toolchain: true` (still a
       # valid input) supplies cargo for that build.
-      gates: '["colocated-test", "unit-lint", "mutation", "unit-coverage"]'
+      # PROBE (combined): + e2e-verify (#418), + packaging (#413).
+      gates: '["colocated-test", "unit-lint", "mutation", "unit-coverage", "e2e-verify", "packaging"]'
       rust_toolchain: true
 
   typescript-integration:
@@ -99,4 +104,5 @@ jobs:
       # the engine, which builds and reruns the crate's own tests; #279 installs it
       # from the derived root. No nightly (unlike coverage's --branch). Retires
       # rust-mutation.yml (#417).
-      gates: '["colocated-test", "unit-lint", "integration-lint", "mutation"]'
+      # PROBE (combined): + packaging (#413, crate hygiene).
+      gates: '["colocated-test", "unit-lint", "integration-lint", "mutation", "packaging"]'
