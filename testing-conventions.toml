@@ -67,6 +67,13 @@ branch = true
 
 # --- TypeScript (scanned: packages/ts/src) ---------------------------------
 
+# The TS suite-executing gates (mutation, unit-coverage) load the native napi
+# `dirsql.node`, so it must be built before the suite runs. Post-#289 the build
+# command lives HERE in config, not as a `build_command:` input on the
+# `conventions.yml` `uses:` call (that input was removed upstream).
+[typescript]
+build_command = "pnpm build"
+
 # Unit-only coverage floor, per vitest metric.
 [typescript.coverage]
 lines = 100

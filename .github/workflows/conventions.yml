@@ -11,7 +11,8 @@ permissions:
 # The upstream monorepo primitive makes the reusable workflow build the native
 # artifact from the derived package root itself (#277 derives the root from
 # `path`; #279 wired the mutation job; #284 wired the coverage job — python via
-# python_env=uv `uv sync`, ts via build_command `pnpm build`), so the bespoke
+# python_env=uv `uv sync`, ts via `[typescript].build_command` in config #289),
+# so the bespoke
 # ts-mutation.yml / rust-mutation.yml (#417) and the python/ts coverage jobs
 # (#412) are retired.
 #
@@ -66,16 +67,14 @@ jobs:
       path: packages/ts/src
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      # `mutation` reruns the unit suite per mutant, which loads the native
-      # `dirsql.node`; #279 runs build_command from the derived root
-      # (packages/ts), so `pnpm build` compiles the napi core there and
-      # rust_toolchain provisions its cargo. Retires ts-mutation.yml (#417).
-      # `mutation` + `unit-coverage` both run here. TS keeps rust_toolchain +
-      # `pnpm build` — both suites load the napi `dirsql.node`, so it's built
-      # explicitly from the derived root. Retires ts-test.yml's coverage job (#412).
+      # `mutation` + `unit-coverage` both run here; both suites load the native
+      # napi `dirsql.node`. Post-#289 the build command moved OFF the `uses:` call
+      # into `[typescript].build_command = "pnpm build"` in testing-conventions.toml
+      # (the `build_command` workflow input was removed upstream; passing it now
+      # startup-fails the whole workflow). `rust_toolchain` (still a valid input)
+      # stays to provision cargo for the napi build.
       gates: '["colocated-test", "unit-lint", "mutation", "unit-coverage"]'
       rust_toolchain: true
-      build_command: pnpm build
 
   typescript-integration:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
