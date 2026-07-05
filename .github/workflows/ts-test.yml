@@ -129,65 +129,10 @@ jobs:
         working-directory: packages/ts
         run: pnpm test:binding
 
-  coverage:
-    name: TS unit coverage floor
-    runs-on: ubuntu-latest
-    needs: [unit, integration, binding]
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          # Full history so the PR-only `--base` changed-lines check can diff
-          # against the base commit.
-          fetch-depth: 0
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
-
-      - name: Install Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Install Python (for testing-conventions)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install testing-conventions
-        run: pip install testing-conventions
-
-      - name: Install dependencies
-        working-directory: packages/ts
-        run: pnpm install
-
-      - name: Build native module
-        working-directory: packages/ts
-        run: pnpm build
-
-      - name: Unit coverage floor (testing-conventions)
-        # Replaces the bespoke `pnpm coverage` vitest-thresholds gate. The CLI
-        # drives the project's own vitest via `npx --no-install`, scoped to the
-        # `src` unit suite ONLY (no integration padding); floor in
-        # testing-conventions.toml `[typescript.coverage]`.
-        working-directory: packages/ts
-        run: testing-conventions unit coverage --language typescript --config ../../testing-conventions.toml src
-
-      - name: Unit coverage floor on changed lines (PR only)
-        if: github.event_name == 'pull_request'
-        env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-        working-directory: packages/ts
-        run: testing-conventions unit coverage --language typescript --base "$BASE" --config ../../testing-conventions.toml src
+  # Unit coverage now runs in the reusable testing-conventions workflow
+  # (conventions.yml, `typescript-unit` gates: unit-coverage) after upstream
+  # #284 taught the coverage suite job to install/build from the derived
+  # package root. The bespoke coverage job that lived here is retired (#412).
 
   smoke:
     # Functional publishability gate: build the real binary + napi addon,

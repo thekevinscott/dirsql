@@ -79,7 +79,7 @@ jobs:
       - name: Build Python wheel
         working-directory: packages/python
         run: |
-          uv sync --extra dev
+          uv sync
           uv run maturin build --out dist
 
       - name: Build + pack npm tarball
