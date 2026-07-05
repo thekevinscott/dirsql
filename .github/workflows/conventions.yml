@@ -49,7 +49,11 @@ jobs:
       # provision_rust fires — NO build_command / rust_toolchain needed. Dev deps
       # live in a PEP 735 [dependency-groups].dev so plain `uv sync` installs the
       # pytest plugins the suite needs. Retires python-test.yml's coverage job (#412).
-      gates: '["colocated-test", "unit-lint", "unit-coverage"]'
+      # `mutation` runs here too: the testing-conventions wheel now bundles the
+      # cosmic-ray adapter as a runtime dep, so the reusable mutation job resolves
+      # the engine from the same `uv sync` env — no separate install. Retires
+      # python-mutation.yml (#426).
+      gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation"]'
 
   python-integration:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
