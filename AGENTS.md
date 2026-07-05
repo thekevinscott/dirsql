@@ -275,6 +275,27 @@ Orchestrators must block merges of SDK-touching PRs that don't update `PARITY.md
 
 Run `cargo bench -p dirsql` after significant changes to the Rust codebase. Not in CI -- local only. Covers: SQLite operations, directory scanning, row diffing, glob matching. Use to catch performance regressions before merging.
 
+## Git and GitHub Workflows
+
+### Merge Conflict Resolution
+
+**Merge conflicts on in-flight PRs are the highest priority.** When asked to resolve a merge conflict:
+
+1. Immediately stop other work and focus on the conflict.
+2. Pull the latest main/base branch.
+3. Resolve the conflict carefully, preserving both intended changes where possible.
+4. Commit and push the resolution.
+5. Do not proceed with other tasks until the merge conflict is fully resolved and the branch is clean.
+
+### PR Monitoring
+
+When monitoring PRs to get them across the finish line (shepherding to green):
+
+1. **Watch for merge conflicts** in addition to CI status. If a PR becomes unmergeable due to conflicts, immediately flag and work to resolve.
+2. **Monitor for GPG signing failures** if the repo requires signed commits. Re-sign or re-commit as needed to pass signature checks.
+3. Check CI logs for any signing-related errors and address them before merge.
+4. Keep the user informed of blockers and resolution status.
+
 ### Coverage Floor
 
 Coverage enforcement must stay explicit in CI for each SDK package. All three SDKs are now enforced by [`testing-conventions`](https://github.com/thekevinscott/testing-conventions) `unit coverage`; the per-package floors live in `testing-conventions.toml`:
