@@ -36,8 +36,10 @@ jobs:
       # unit-coverage work in the reusable workflow? Bespoke coverage kept.
       gates: '["colocated-test", "unit-lint", "unit-coverage"]'
       rust_toolchain: true
-      # Runs from the derived package root (packages/python) — no `cd`.
-      build_command: python -m pip install .
+      # Runs from the derived package root (packages/python). `.[dev]` pulls the
+      # test deps (pytest-describe, pytest-asyncio, pytest-cov) — plain `pip
+      # install .` gave "no tests ran" because the suite deps were absent.
+      build_command: python -m pip install '.[dev]'
 
   python-integration:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
