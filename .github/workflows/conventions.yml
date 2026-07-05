@@ -19,10 +19,10 @@ permissions:
 #
 # The `gates` allowlists below were set empirically: a first run turned every
 # static gate on (nothing excluded) and the arbiter reported the reds. Every
-# gate listed here came back GREEN. The one red — rust `unit-lint` (17 real
-# isolation violations the old mis-scoped bespoke check missed) — is turned OFF
-# here and tracked in #395; re-add it once fixed. No gate is excluded to dodge
-# enforcement: a red is filed, not hidden.
+# gate listed here is GREEN and enforced. (The one initial red — rust `unit-lint`,
+# 17 real isolation violations the old mis-scoped bespoke check missed — was
+# fixed in #395 and the gate re-enabled.) No gate is excluded to dodge
+# enforcement: a red is filed and fixed, not hidden.
 jobs:
   python-unit:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
@@ -67,9 +67,9 @@ jobs:
       path: packages/rust
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      # unit-lint is OFF pending #395 (17 real isolation violations). colocated-test
-      # is absent because the reusable workflow's detector excludes rust from it by
-      # design (inline #[cfg(test)] units can't go stale, so there's no co-change
-      # dimension) — it silently no-ops here. Rust colocation is enforced bespoke in
-      # rust-test.yml's `colocated` job until upstream offers it (tracked in #393).
-      gates: '["integration-lint"]'
+      # unit-lint is back ON: the 17 isolation violations (#395) are fixed.
+      # colocated-test is absent because the reusable workflow's detector excludes
+      # rust from it by design (inline #[cfg(test)] units can't go stale, so there's
+      # no co-change dimension) — it silently no-ops here. Rust colocation is
+      # enforced bespoke in rust-test.yml's `colocated` job (tracked in #393).
+      gates: '["unit-lint", "integration-lint"]'

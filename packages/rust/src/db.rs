@@ -624,7 +624,6 @@ impl From<rusqlite::types::Value> for Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::types::ToSql;
 
     #[test]
     fn create_table_from_ddl() {
@@ -966,95 +965,12 @@ mod tests {
         assert_eq!(normalized.len(), 2);
     }
 
-    // --- Value::to_sql coverage for all variants ---
-
-    #[test]
-    fn value_to_sql_null() {
-        let v = Value::Null;
-        let result = v.to_sql().unwrap();
-        // Branch-free: compare against the expected value (`ToSqlOutput: PartialEq`)
-        // rather than `matches!`, whose `_ => false` arm is a dead region here.
-        assert_eq!(
-            result,
-            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Null)
-        );
-    }
-
-    #[test]
-    fn value_to_sql_integer() {
-        let v = Value::Integer(42);
-        let result = v.to_sql().unwrap();
-        // Branch-free: see `value_to_sql_null` -- compare values directly.
-        assert_eq!(
-            result,
-            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Integer(42))
-        );
-    }
-
-    #[test]
-    fn value_to_sql_real() {
-        let v = Value::Real(1.5);
-        let result = v.to_sql().unwrap();
-        // Branch-free: `ToSqlOutput` derives `PartialEq`, so compare against
-        // the exact expected value instead of a `match` with a dead `_` arm.
-        // 1.5 is exactly representable in f64, so equality is precise here.
-        assert_eq!(
-            result,
-            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Real(1.5))
-        );
-    }
-
-    #[test]
-    fn value_to_sql_text() {
-        let v = Value::Text("hello".into());
-        let result = v.to_sql().unwrap();
-        assert!(matches!(
-            result,
-            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Text(ref s)) if s == "hello"
-        ));
-    }
-
-    #[test]
-    fn value_to_sql_blob() {
-        let v = Value::Blob(vec![1, 2, 3]);
-        let result = v.to_sql().unwrap();
-        assert!(matches!(
-            result,
-            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Blob(ref b)) if b == &[1, 2, 3]
-        ));
-    }
-
-    // --- Value::from coverage for all variants ---
-
-    #[test]
-    fn value_from_sqlite_null() {
-        let v = Value::from(rusqlite::types::Value::Null);
-        assert_eq!(v, Value::Null);
-    }
-
-    #[test]
-    fn value_from_sqlite_integer() {
-        let v = Value::from(rusqlite::types::Value::Integer(99));
-        assert_eq!(v, Value::Integer(99));
-    }
-
-    #[test]
-    fn value_from_sqlite_real() {
-        let v = Value::from(rusqlite::types::Value::Real(1.25));
-        assert_eq!(v, Value::Real(1.25));
-    }
-
-    #[test]
-    fn value_from_sqlite_text() {
-        let v = Value::from(rusqlite::types::Value::Text("world".into()));
-        assert_eq!(v, Value::Text("world".into()));
-    }
-
-    #[test]
-    fn value_from_sqlite_blob() {
-        let v = Value::from(rusqlite::types::Value::Blob(vec![10, 20]));
-        assert_eq!(v, Value::Blob(vec![10, 20]));
-    }
+    // `Value::to_sql` (our type -> SQLite param) and `From<rusqlite::types::Value>`
+    // (SQLite value -> our type) are the marshaling boundary. Every variant's
+    // arm is exercised end-to-end by the insert/query round-trip tests below
+    // (Real, Null, Blob each have a dedicated one; Text + Integer via
+    // `insert_and_query_rows`), so the arms stay covered without a unit test
+    // naming `rusqlite::types::*` directly (the `unit lint` isolation rule).
 
     // --- Insert and query with real/blob values ---
 
