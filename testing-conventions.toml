@@ -67,12 +67,12 @@ branch = true
 
 # --- TypeScript (scanned: packages/ts/src) ---------------------------------
 
-# The TS suite-executing gates (mutation, unit-coverage) load the native napi
-# `dirsql.node`, so it must be built before the suite runs. Post-#289 the build
-# command lives HERE in config, not as a `build_command:` input on the
-# `conventions.yml` `uses:` call (that input was removed upstream).
-[typescript]
-build_command = "pnpm build"
+# NB: the `[typescript]` table only accepts `coverage` / `exempt` -- there is no
+# `[typescript].build_command` (that config key is python-only). The TS
+# suite-executing gates (mutation, unit-coverage) load the native napi
+# `dirsql.node`; post-#289 that build is provisioned automatically because
+# `packages/ts/napi` declares a napi build (auto-provisioning without a
+# build_command field), with `rust_toolchain: true` on the caller supplying cargo.
 
 # Unit-only coverage floor, per vitest metric.
 [typescript.coverage]

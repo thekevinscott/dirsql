@@ -11,8 +11,8 @@ permissions:
 # The upstream monorepo primitive makes the reusable workflow build the native
 # artifact from the derived package root itself (#277 derives the root from
 # `path`; #279 wired the mutation job; #284 wired the coverage job — python via
-# python_env=uv `uv sync`, ts via `[typescript].build_command` in config #289),
-# so the bespoke
+# python_env=uv `uv sync`, ts via napi auto-provisioning after #289 removed the
+# build_command input), so the bespoke
 # ts-mutation.yml / rust-mutation.yml (#417) and the python/ts coverage jobs
 # (#412) are retired.
 #
@@ -68,11 +68,11 @@ jobs:
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       # `mutation` + `unit-coverage` both run here; both suites load the native
-      # napi `dirsql.node`. Post-#289 the build command moved OFF the `uses:` call
-      # into `[typescript].build_command = "pnpm build"` in testing-conventions.toml
-      # (the `build_command` workflow input was removed upstream; passing it now
-      # startup-fails the whole workflow). `rust_toolchain` (still a valid input)
-      # stays to provision cargo for the napi build.
+      # napi `dirsql.node`. #289 removed the `build_command` workflow input (passing
+      # it now startup-fails the whole workflow) and there is no `[typescript]`
+      # build_command config key — so the napi build is AUTO-PROVISIONED because
+      # `packages/ts/napi` declares a napi build. `rust_toolchain: true` (still a
+      # valid input) supplies cargo for that build.
       gates: '["colocated-test", "unit-lint", "mutation", "unit-coverage"]'
       rust_toolchain: true
 
