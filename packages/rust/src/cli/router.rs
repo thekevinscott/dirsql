@@ -356,4 +356,38 @@ mod tests {
             "application/json"
         );
     }
+
+    // `parse_sql_body` is the no-`pre-query` request path: it is pure (serde
+    // only), so it is unit-tested here directly rather than through the async
+    // `handle_query` handler (which needs a live server and is covered at the
+    // integration tier).
+
+    #[test]
+    fn parse_sql_body_returns_trimmed_sql() {
+        // Surrounding whitespace is stripped; the inner SQL is returned as-is.
+        let sql = parse_sql_body(r#"{"sql": "  SELECT 1  "}"#).expect("valid body");
+        assert_eq!(sql, "SELECT 1");
+    }
+
+    #[test]
+    fn parse_sql_body_rejects_malformed_json() {
+        // A body that isn't JSON fails at the serde step -> 400.
+        let resp = parse_sql_body("not json").expect_err("malformed JSON must be rejected");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn parse_sql_body_rejects_whitespace_only_sql() {
+        // A present-but-blank `sql` trims to empty -> 400 (the `Some(_)` arm,
+        // and the `false` side of the `!s.is_empty()` guard).
+        let resp = parse_sql_body(r#"{"sql": "   "}"#).expect_err("empty sql must be rejected");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn parse_sql_body_rejects_missing_sql_field() {
+        // Valid JSON object with no `sql` key -> the `None` arm -> 400.
+        let resp = parse_sql_body("{}").expect_err("missing sql must be rejected");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
 }

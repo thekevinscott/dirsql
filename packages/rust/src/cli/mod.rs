@@ -330,4 +330,26 @@ mod tests {
         assert_eq!(pq.command, "reshape {args}");
         assert_eq!(pq.config_dir, PathBuf::from("/proj"));
     }
+
+    #[test]
+    fn with_query_timeout_overrides_the_default() {
+        // The builder replaces the 30s default with the supplied timeout and
+        // leaves the rest of the config untouched.
+        let cfg = ServerConfig::bind("127.0.0.1", 8080).with_query_timeout(Duration::from_secs(5));
+        assert_eq!(cfg.query_timeout, Duration::from_secs(5));
+        assert_eq!(cfg.host, "127.0.0.1");
+        assert_eq!(cfg.port, 8080);
+    }
+
+    #[test]
+    fn app_state_from_string_builds_the_unavailable_arm() {
+        // `String -> AppState` yields the degraded arm carrying the diagnostic
+        // verbatim (the `/query`/`/events` 503 body). `AppState` isn't `Debug`,
+        // so match rather than assert on a rendering.
+        let state: AppState = "config failed to load".to_string().into();
+        match state {
+            AppState::Unavailable(reason) => assert_eq!(reason, "config failed to load"),
+            AppState::Ready(_) => panic!("String must map to the Unavailable arm"),
+        }
+    }
 }
