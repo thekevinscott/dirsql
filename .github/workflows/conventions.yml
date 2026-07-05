@@ -48,7 +48,10 @@ jobs:
       # provision_rust fires — NO build_command / rust_toolchain needed. Dev deps
       # live in a PEP 735 [dependency-groups].dev so plain `uv sync` installs the
       # pytest plugins the suite needs. Retires python-test.yml's coverage job (#412).
-      gates: '["colocated-test", "unit-lint", "unit-coverage"]'
+      # PROBE (#413): + packaging. #286 (packaging discovery) shipped before the
+      # current @v0, so the reusable packaging gate should find + build the wheel
+      # from the derived root. Bespoke packaging.yml KEPT (probe only adds).
+      gates: '["colocated-test", "unit-lint", "unit-coverage", "packaging"]'
 
   python-integration:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
@@ -73,7 +76,8 @@ jobs:
       # `mutation` + `unit-coverage` both run here. TS keeps rust_toolchain +
       # `pnpm build` — both suites load the napi `dirsql.node`, so it's built
       # explicitly from the derived root. Retires ts-test.yml's coverage job (#412).
-      gates: '["colocated-test", "unit-lint", "mutation", "unit-coverage"]'
+      # PROBE (#413): + packaging.
+      gates: '["colocated-test", "unit-lint", "mutation", "unit-coverage", "packaging"]'
       rust_toolchain: true
       build_command: pnpm build
 
@@ -100,4 +104,5 @@ jobs:
       # the engine, which builds and reruns the crate's own tests; #279 installs it
       # from the derived root. No nightly (unlike coverage's --branch). Retires
       # rust-mutation.yml (#417).
-      gates: '["colocated-test", "unit-lint", "integration-lint", "mutation"]'
+      # PROBE (#413): + packaging (crate hygiene).
+      gates: '["colocated-test", "unit-lint", "integration-lint", "mutation", "packaging"]'
