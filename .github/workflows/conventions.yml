@@ -36,7 +36,14 @@ jobs:
       path: packages/python/dirsql
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint"]'
+      # PROBE (#412): `unit-coverage` now works in the reusable workflow after
+      # #284 (the coverage job installs from the derived package root, runs
+      # `uv sync` when python_env=uv, and auto-fires provision_rust). Our
+      # pyproject.toml has a [project] table + maturin backend, so python_env
+      # resolves to uv and provision_rust fires — NO build_command / rust_toolchain
+      # needed (those manual flags are exactly what #284 makes unnecessary).
+      # Bespoke python-test.yml coverage KEPT (probe only adds).
+      gates: '["colocated-test", "unit-lint", "unit-coverage"]'
 
   python-integration:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
@@ -58,7 +65,10 @@ jobs:
       # `dirsql.node`; #279 runs build_command from the derived root
       # (packages/ts), so `pnpm build` compiles the napi core there and
       # rust_toolchain provisions its cargo. Retires ts-mutation.yml (#417).
-      gates: '["colocated-test", "unit-lint", "mutation"]'
+      # PROBE (#412): + unit-coverage. TS keeps rust_toolchain + `pnpm build`
+      # (the coverage suite loads the napi `dirsql.node`; napi auto-build isn't
+      # confirmed, so build it explicitly as mutation does).
+      gates: '["colocated-test", "unit-lint", "mutation", "unit-coverage"]'
       rust_toolchain: true
       build_command: pnpm build
 
