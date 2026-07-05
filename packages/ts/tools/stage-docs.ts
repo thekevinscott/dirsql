@@ -20,11 +20,12 @@ import { fileURLToPath } from "node:url";
 export const KEEP_FILES = new Set([
   "index.md",
   "getting-started.md",
+  "explanation.md",
   "migrations.md",
 ]);
 
 // Subdirectories of docs whose contents (recursively) should ship.
-export const KEEP_DIRS = new Set(["guide", "api"]);
+export const KEEP_DIRS = new Set(["howto", "reference"]);
 
 export function stageDocs(workspaceDocs: string, packageDocs: string): void {
   if (existsSync(packageDocs) || lstatSafe(packageDocs)) {

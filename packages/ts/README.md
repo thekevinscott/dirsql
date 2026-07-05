@@ -89,7 +89,7 @@ Each event has `.action` (`'insert'` | `'update'` | `'delete'` | `'error'`), `.t
 
 ## CLI
 
-`npx dirsql` runs an HTTP server exposing the SDK over HTTP: `POST /query` for SQL and `GET /events` for a Server-Sent Events change stream. Requires **Node >= 20.11**. See the [CLI guide](https://thekevinscott.github.io/dirsql/cli/).
+`npx dirsql` runs an HTTP server exposing the SDK over HTTP: `POST /query` for SQL and `GET /events` for a Server-Sent Events change stream. Requires **Node >= 20.11**. See the [CLI reference](https://thekevinscott.github.io/dirsql/reference/cli).
 
 ## License
 

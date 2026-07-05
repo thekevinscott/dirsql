@@ -34,12 +34,13 @@ function seedWorkspaceDocs(): void {
   // Files that should be shipped.
   writeFileSync(join(workspaceDocs, "index.md"), "# Home");
   writeFileSync(join(workspaceDocs, "getting-started.md"), "# Getting Started");
+  writeFileSync(join(workspaceDocs, "explanation.md"), "# Explanation");
   writeFileSync(join(workspaceDocs, "migrations.md"), "# Migrations");
   // Directories that should be shipped recursively.
-  mkdirSync(join(workspaceDocs, "guide"));
-  writeFileSync(join(workspaceDocs, "guide", "tables.md"), "# Tables");
-  mkdirSync(join(workspaceDocs, "api"));
-  writeFileSync(join(workspaceDocs, "api", "index.md"), "# API");
+  mkdirSync(join(workspaceDocs, "howto"));
+  writeFileSync(join(workspaceDocs, "howto", "define-tables.md"), "# Tables");
+  mkdirSync(join(workspaceDocs, "reference"));
+  writeFileSync(join(workspaceDocs, "reference", "sdk.md"), "# SDK");
   // VitePress / agent / test tooling that must NOT be shipped.
   writeFileSync(join(workspaceDocs, "AGENTS.md"), "internal");
   writeFileSync(join(workspaceDocs, "package.json"), "{}");
@@ -66,13 +67,16 @@ describe("stageDocs", () => {
       expect(readFileSync(join(packageDocs, "migrations.md"), "utf8")).toBe(
         "# Migrations",
       );
+      expect(readFileSync(join(packageDocs, "explanation.md"), "utf8")).toBe(
+        "# Explanation",
+      );
 
       // Allow-listed directories copied recursively.
-      expect(readFileSync(join(packageDocs, "guide", "tables.md"), "utf8")).toBe(
-        "# Tables",
-      );
-      expect(readFileSync(join(packageDocs, "api", "index.md"), "utf8")).toBe(
-        "# API",
+      expect(
+        readFileSync(join(packageDocs, "howto", "define-tables.md"), "utf8"),
+      ).toBe("# Tables");
+      expect(readFileSync(join(packageDocs, "reference", "sdk.md"), "utf8")).toBe(
+        "# SDK",
       );
 
       // Build / agent / test tooling NOT copied.
@@ -146,12 +150,13 @@ describe("KEEP allow-lists", () => {
   it("ship only the markdown content, not the build tooling", () => {
     expect(KEEP_FILES.has("index.md")).toBe(true);
     expect(KEEP_FILES.has("getting-started.md")).toBe(true);
+    expect(KEEP_FILES.has("explanation.md")).toBe(true);
     expect(KEEP_FILES.has("migrations.md")).toBe(true);
     expect(KEEP_FILES.has("AGENTS.md")).toBe(false);
     expect(KEEP_FILES.has("package.json")).toBe(false);
 
-    expect(KEEP_DIRS.has("guide")).toBe(true);
-    expect(KEEP_DIRS.has("api")).toBe(true);
+    expect(KEEP_DIRS.has("howto")).toBe(true);
+    expect(KEEP_DIRS.has("reference")).toBe(true);
     expect(KEEP_DIRS.has(".vitepress")).toBe(false);
     expect(KEEP_DIRS.has("tests")).toBe(false);
   });

@@ -253,7 +253,7 @@ describe("DirSQL strict mode", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  // Docs (guide/tables.md / guide/config.md "Strict Mode"):
+  // Docs (reference/sdk.md / reference/config.md "Strict Mode"):
   // `strict: true` on a Table def rejects rows with keys not in the DDL.
   it("rejects rows with extra keys when strict is true", async () => {
     await writeFile(
@@ -316,8 +316,8 @@ describe("DirSQL watch events", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  // Docs (guide/watching.md event payloads): `filePath` is relative to the root.
-  // All examples in watching.md show relative paths (e.g. "comments/abc/index.json")
+  // Docs (reference/sdk.md event payloads): `filePath` is relative to the root.
+  // All examples in reference/sdk.md show relative paths (e.g. "comments/abc/index.json")
   // rather than absolute paths.
   it("sets filePath as a relative path on watch events", async () => {
     await mkdir(join(dir, "nested", "dir"), { recursive: true });

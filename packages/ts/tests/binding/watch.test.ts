@@ -217,7 +217,7 @@ describe("DirSQL watch() async iterator", () => {
     TEST_TIMEOUT,
   );
 
-  // Docs (guide/watching.md "How diffing works"): a file shrinking from 3
+  // Docs (explanation.md "How diffing works"): a file shrinking from 3
   // rows to 2 must end with the dropped row deleted. Mirrors the Python
   // docs-gaps test (it_emits_delete_for_shrinking_file_positionally); the
   // same doc/impl divergence note applies — the current core does a full
