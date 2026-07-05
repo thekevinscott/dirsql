@@ -6,14 +6,19 @@ permissions:
   contents: read
 
 # Adopt the testing-conventions reusable workflow (@v0). This runs the static
-# gates (colocated-test, unit-lint, integration-lint) PLUS the `mutation`
-# suite-executing gate for TypeScript and Rust — the upstream monorepo primitive
-# (#277 derives the package root from `path`; #279 makes the mutation job
-# install/build from that derived root) makes the reusable workflow build the
-# native artifact itself, so the bespoke ts-mutation.yml / rust-mutation.yml are
-# retired (#417). Still bespoke, pending a further upstream fix (#412/#413/#418):
-# `unit-coverage` (its suite job still installs at the repo root, not the derived
-# root), `packaging`, `e2e-verify`, and python `mutation` (cosmic-ray deps).
+# gates (colocated-test, unit-lint, integration-lint) PLUS the suite-executing
+# `mutation` (TypeScript, Rust) and `unit-coverage` (TypeScript, python) gates.
+# The upstream monorepo primitive makes the reusable workflow build the native
+# artifact from the derived package root itself (#277 derives the root from
+# `path`; #279 wired the mutation job; #284 wired the coverage job — python via
+# python_env=uv `uv sync`, ts via build_command `pnpm build`), so the bespoke
+# ts-mutation.yml / rust-mutation.yml (#417) and the python/ts coverage jobs
+# (#412) are retired.
+#
+# Still bespoke (each blocked on a distinct upstream fix): `packaging` (#413),
+# `e2e-verify` (#418, needs #294's freshness-walk scope), python `mutation`
+# (cosmic-ray env), and rust `unit-coverage` (needs the nightly toolchain for
+# `--branch`).
 #
 # One call per package (the intended monorepo pattern), scoped per tier because
 # the tool scans `path` recursively with no exclusions:
@@ -36,13 +41,13 @@ jobs:
       path: packages/python/dirsql
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      # PROBE (#412): `unit-coverage` now works in the reusable workflow after
-      # #284 (the coverage job installs from the derived package root, runs
-      # `uv sync` when python_env=uv, and auto-fires provision_rust). Our
+      # `unit-coverage` runs here after upstream #284: the coverage job installs
+      # from the derived package root and runs `uv sync` when python_env=uv. Our
       # pyproject.toml has a [project] table + maturin backend, so python_env
-      # resolves to uv and provision_rust fires — NO build_command / rust_toolchain
-      # needed (those manual flags are exactly what #284 makes unnecessary).
-      # Bespoke python-test.yml coverage KEPT (probe only adds).
+      # resolves to uv (`uv sync` builds maturin into the suite venv) and
+      # provision_rust fires — NO build_command / rust_toolchain needed. Dev deps
+      # live in a PEP 735 [dependency-groups].dev so plain `uv sync` installs the
+      # pytest plugins the suite needs. Retires python-test.yml's coverage job (#412).
       gates: '["colocated-test", "unit-lint", "unit-coverage"]'
 
   python-integration:
@@ -65,9 +70,9 @@ jobs:
       # `dirsql.node`; #279 runs build_command from the derived root
       # (packages/ts), so `pnpm build` compiles the napi core there and
       # rust_toolchain provisions its cargo. Retires ts-mutation.yml (#417).
-      # PROBE (#412): + unit-coverage. TS keeps rust_toolchain + `pnpm build`
-      # (the coverage suite loads the napi `dirsql.node`; napi auto-build isn't
-      # confirmed, so build it explicitly as mutation does).
+      # `mutation` + `unit-coverage` both run here. TS keeps rust_toolchain +
+      # `pnpm build` — both suites load the napi `dirsql.node`, so it's built
+      # explicitly from the derived root. Retires ts-test.yml's coverage job (#412).
       gates: '["colocated-test", "unit-lint", "mutation", "unit-coverage"]'
       rust_toolchain: true
       build_command: pnpm build
