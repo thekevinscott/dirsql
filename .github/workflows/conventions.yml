@@ -36,7 +36,11 @@ jobs:
       path: packages/python/dirsql
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint"]'
+      # PROBE (#418): `e2e-verify` scopes attestation discovery to the derived
+      # package root (packages/python, where e2e-attestation.json lives — #281,
+      # the 12:06 release). checkout is fetch-depth:0 so it walks full subtree
+      # history. Bespoke e2e-attestation.yml KEPT (only adds the reusable gate).
+      gates: '["colocated-test", "unit-lint", "e2e-verify"]'
 
   python-integration:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
@@ -58,7 +62,8 @@ jobs:
       # `dirsql.node`; #279 runs build_command from the derived root
       # (packages/ts), so `pnpm build` compiles the napi core there and
       # rust_toolchain provisions its cargo. Retires ts-mutation.yml (#417).
-      gates: '["colocated-test", "unit-lint", "mutation"]'
+      # PROBE (#418): + e2e-verify (derived package root packages/ts).
+      gates: '["colocated-test", "unit-lint", "mutation", "e2e-verify"]'
       rust_toolchain: true
       build_command: pnpm build
 
