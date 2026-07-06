@@ -435,7 +435,10 @@ mod python {
             });
             assert_eq!(p.action, "insert");
             assert_eq!(p.table.as_deref(), Some("t"));
-            assert_eq!(p.row.as_ref().and_then(|r| r.get("k")), Some(&Value::Integer(7)));
+            assert_eq!(
+                p.row.as_ref().and_then(|r| r.get("k")),
+                Some(&Value::Integer(7))
+            );
             assert!(p.old_row.is_none());
             assert!(p.error.is_none());
             assert_eq!(p.file_path, "/f");
@@ -452,8 +455,14 @@ mod python {
                 file_path: "/f".into(),
             });
             assert_eq!(p.action, "update");
-            assert_eq!(p.row.as_ref().and_then(|r| r.get("k")), Some(&Value::Integer(9)));
-            assert_eq!(p.old_row.as_ref().and_then(|r| r.get("k")), Some(&Value::Integer(7)));
+            assert_eq!(
+                p.row.as_ref().and_then(|r| r.get("k")),
+                Some(&Value::Integer(9))
+            );
+            assert_eq!(
+                p.old_row.as_ref().and_then(|r| r.get("k")),
+                Some(&Value::Integer(7))
+            );
         }
 
         #[test]

@@ -869,10 +869,19 @@ mod tests {
     #[test]
     fn value_to_js_maps_each_variant() {
         assert!(matches!(value_to_js(&Value::Null), JsRowValue::Null));
-        assert!(matches!(value_to_js(&Value::Integer(3)), JsRowValue::Integer(3)));
-        assert!(matches!(value_to_js(&Value::Real(1.5)), JsRowValue::Real(f) if (f - 1.5).abs() < f64::EPSILON));
-        assert!(matches!(value_to_js(&Value::Text("hi".into())), JsRowValue::Text(ref s) if s == "hi"));
-        assert!(matches!(value_to_js(&Value::Blob(vec![1, 2])), JsRowValue::Blob(ref b) if b == &[1, 2]));
+        assert!(matches!(
+            value_to_js(&Value::Integer(3)),
+            JsRowValue::Integer(3)
+        ));
+        assert!(
+            matches!(value_to_js(&Value::Real(1.5)), JsRowValue::Real(f) if (f - 1.5).abs() < f64::EPSILON)
+        );
+        assert!(
+            matches!(value_to_js(&Value::Text("hi".into())), JsRowValue::Text(ref s) if s == "hi")
+        );
+        assert!(
+            matches!(value_to_js(&Value::Blob(vec![1, 2])), JsRowValue::Blob(ref b) if b == &[1, 2])
+        );
     }
 
     #[test]
