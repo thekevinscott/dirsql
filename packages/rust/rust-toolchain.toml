@@ -1,0 +1,17 @@
+# Pins the toolchain used when cargo runs from this crate's directory.
+#
+# Branch coverage (`cargo llvm-cov --branch`, the `[rust.coverage].branch`
+# floor in testing-conventions.toml) is nightly-only. The reusable
+# testing-conventions `unit-coverage` job runs from this derived package root
+# and strips RUSTUP_TOOLCHAIN/CARGO/RUSTC so this file decides the toolchain --
+# rustup auto-installs it and `cargo-llvm-cov` is toolchain-agnostic. This is
+# the upstream-sanctioned way to supply nightly for branch coverage (no caller
+# workflow input): see testing-conventions' branch-coverage fixture.
+#
+# Pinned (not floating `nightly`) so branch-coverage numbers are reproducible;
+# matches the nightly the bespoke rust-test.yml coverage job installs. CI jobs
+# that must stay on stable run cargo from the repo root (not this dir) or pin
+# `@stable` explicitly, so this pin does not reach them.
+[toolchain]
+channel = "nightly-2026-05-28"
+components = ["llvm-tools-preview"]
