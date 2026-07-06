@@ -116,3 +116,31 @@ jobs:
       # from the derived root. No nightly (unlike coverage's --branch). Retires
       # rust-mutation.yml (#417).
       gates: '["colocated-test", "unit-lint", "integration-lint", "mutation"]'
+
+  # The two native BINDING crates (#405) hold real marshaling logic but sat
+  # outside every gate — the `rust` call above scans only `packages/rust` (the
+  # core). Bring each binding crate under colocated-test + unit-lint at its own
+  # crate root. Their pure conversion logic is unit-tested inline; the
+  # runtime-coupled parts (napi::sys getters / FnRef; pyo3 GIL conversions) stay
+  # covered by the binding tier (#233). No mutation/coverage here: those run the
+  # suite and would need the napi/pyo3 build; the static presence+isolation gates
+  # are what #405 is about. No exemption — the crux (does unit-lint tolerate a
+  # test constructing first-party `Value`/`RowEvent` via `super::*`?) resolved
+  # green in probing.
+  rust-napi-binding:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["rust"]'
+      path: packages/ts/napi
+      config: testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["colocated-test", "unit-lint"]'
+
+  rust-python-binding:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["rust"]'
+      path: packages/python
+      config: testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["colocated-test", "unit-lint"]'
