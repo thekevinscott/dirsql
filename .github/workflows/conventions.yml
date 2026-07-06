@@ -53,7 +53,12 @@ jobs:
       # cosmic-ray adapter as a runtime dep, so the reusable mutation job resolves
       # the engine from the same `uv sync` env — no separate install. Retires
       # python-mutation.yml (#426).
-      gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation"]'
+      # `e2e-verify` (#418): head.sha checkout (#293) + `--scope packages/python/dirsql`
+      # (#294) + `--base` diff-scoping (squash-fix) — freshness is measured over
+      # base..HEAD's scoped-source diff, so a PR that doesn't touch the SDK source
+      # has nothing to verify (no stale-on-main false red). e2e-attestation.yml
+      # keeps ONLY the #337 shared-core freshness gate.
+      gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation", "e2e-verify"]'
 
   python-integration:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
@@ -77,7 +82,8 @@ jobs:
       # build_command config key — so the napi build is AUTO-PROVISIONED because
       # `packages/ts/napi` declares a napi build. `rust_toolchain: true` (still a
       # valid input) supplies cargo for that build.
-      gates: '["colocated-test", "unit-lint", "mutation", "unit-coverage"]'
+      # `e2e-verify` (#418): `--scope packages/ts/src` + `--base` diff-scoping.
+      gates: '["colocated-test", "unit-lint", "mutation", "unit-coverage", "e2e-verify"]'
       rust_toolchain: true
 
   typescript-integration:
