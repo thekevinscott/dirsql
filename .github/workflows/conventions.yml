@@ -17,12 +17,16 @@ permissions:
 # python-mutation.yml (#426), the python/ts coverage jobs (#412), and the whole
 # e2e-attestation.yml (#418, via the `--base` squash-fix) are retired.
 #
-# Still bespoke (each blocked on a distinct upstream fix): `packaging` (#413,
-# needs packaging_artifact wiring), rust `unit-coverage` (needs the nightly
-# toolchain for `--branch`), and the #337 shared-core e2e-freshness case (a core
-# change stales both bindings but lives outside either binding's `--scope`) —
-# filed upstream (draft: .github/testing-conventions-337-shared-core-e2e-verify.md),
-# NOT kept as a bespoke gate.
+# `packaging` (#413) is now PROBED here too via the `packaging_artifact` pattern
+# (build the dists caller-side, scan them in the reusable gate); the bespoke
+# packaging.yml runs in parallel until this is proven green, then a follow-up
+# retires it.
+#
+# Still bespoke: rust `unit-coverage` (needs the nightly toolchain for
+# `--branch`), and the #337 shared-core e2e-freshness case (a core change stales
+# both bindings but lives outside either binding's `--scope`) — filed upstream
+# (draft: .github/testing-conventions-337-shared-core-e2e-verify.md), NOT kept as
+# a bespoke gate.
 #
 # One call per package (the intended monorepo pattern), scoped per tier because
 # the tool scans `path` recursively with no exclusions:
@@ -116,3 +120,83 @@ jobs:
       # from the derived root. No nightly (unlike coverage's --branch). Retires
       # rust-mutation.yml (#417).
       gates: '["colocated-test", "unit-lint", "integration-lint", "mutation"]'
+
+  # --- packaging gate (#413) -------------------------------------------------
+  # The reusable `packaging` gate does NOT build — it downloads a caller-uploaded
+  # artifact (`packaging_artifact`) and scans every .whl/.tar.gz/.tgz/.crate in it
+  # for shipped test files, auto-detecting language by extension (it ignores
+  # `languages`/`path`). So adoption = build the three distributions caller-side,
+  # upload them as ONE artifact, and point a dedicated reusable call at it. The
+  # SCAN thus runs inside conventions.yml while the build (which the reusable
+  # workflow structurally can't do) stays a thin caller job — the sanctioned
+  # `packaging_artifact` pattern. Keeping it a separate call (not a `needs:` on
+  # the unit jobs) means the dist build does not gate coverage/mutation/e2e.
+  #
+  # PROBE (never-retire-ahead-of-green, AGENTS.md): the bespoke packaging.yml
+  # still runs in parallel; once this `packaging` job is green a follow-up retires
+  # packaging.yml.
+  build-dists:
+    name: Build distributions (for packaging gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: '3.13'
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      # The three distributions the release pipeline ships, built the same way.
+      - name: Build Python wheel
+        working-directory: packages/python
+        run: |
+          uv sync
+          uv run maturin build --out dist
+      - name: Build + pack npm tarball
+        working-directory: packages/ts
+        run: |
+          pnpm install
+          pnpm build
+          mkdir -p dist-pack
+          pnpm pack --pack-destination dist-pack
+      - name: Package Rust crate
+        # --no-verify skips the compile/test build (we only need the file
+        # manifest); --allow-dirty tolerates generated files in the checkout.
+        run: cargo package -p dirsql --no-verify --allow-dirty
+      # Upload as ONE artifact; the reusable packaging job globs it recursively.
+      # upload-artifact major MUST match the reusable's download-artifact@v8.
+      - name: Upload built distributions
+        uses: actions/upload-artifact@v8
+        with:
+          name: distributions
+          path: |
+            packages/python/dist/*.whl
+            packages/ts/dist-pack/*.tgz
+            target/package/*.crate
+          if-no-files-found: error
+
+  packaging:
+    needs: build-dists
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      # `languages`/`path` are `detect`-job placeholders only — the packaging scan
+      # is language-agnostic (globs the artifact and auto-detects per file). This
+      # combo matches python-unit's, which `detect` already accepts. The single
+      # artifact holds all three dists, so this one call scans python + ts + rust.
+      languages: '["python"]'
+      path: packages/python/dirsql
+      config: testing-conventions.toml
+      packaging_artifact: distributions
+      gates: '["packaging"]'
