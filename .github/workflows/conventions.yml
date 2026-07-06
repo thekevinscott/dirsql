@@ -7,19 +7,22 @@ permissions:
 
 # Adopt the testing-conventions reusable workflow (@v0). This runs the static
 # gates (colocated-test, unit-lint, integration-lint) PLUS the suite-executing
-# `mutation` (TypeScript, Rust) and `unit-coverage` (TypeScript, python) gates.
+# `mutation` (all three SDKs), `unit-coverage` (TypeScript, python), and
+# `e2e-verify` (TypeScript, python) gates.
 # The upstream monorepo primitive makes the reusable workflow build the native
 # artifact from the derived package root itself (#277 derives the root from
 # `path`; #279 wired the mutation job; #284 wired the coverage job — python via
 # python_env=uv `uv sync`, ts via napi auto-provisioning after #289 removed the
-# build_command input), so the bespoke
-# ts-mutation.yml / rust-mutation.yml (#417) and the python/ts coverage jobs
-# (#412) are retired.
+# build_command input), so the bespoke ts-mutation.yml / rust-mutation.yml (#417),
+# python-mutation.yml (#426), the python/ts coverage jobs (#412), and the whole
+# e2e-attestation.yml (#418, via the `--base` squash-fix) are retired.
 #
-# Still bespoke (each blocked on a distinct upstream fix): `packaging` (#413),
-# `e2e-verify` (#418, needs #294's freshness-walk scope), python `mutation`
-# (cosmic-ray env), and rust `unit-coverage` (needs the nightly toolchain for
-# `--branch`).
+# Still bespoke (each blocked on a distinct upstream fix): `packaging` (#413,
+# needs packaging_artifact wiring), rust `unit-coverage` (needs the nightly
+# toolchain for `--branch`), and the #337 shared-core e2e-freshness case (a core
+# change stales both bindings but lives outside either binding's `--scope`) —
+# filed upstream (draft: .github/testing-conventions-337-shared-core-e2e-verify.md),
+# NOT kept as a bespoke gate.
 #
 # One call per package (the intended monorepo pattern), scoped per tier because
 # the tool scans `path` recursively with no exclusions:
@@ -56,8 +59,11 @@ jobs:
       # `e2e-verify` (#418): head.sha checkout (#293) + `--scope packages/python/dirsql`
       # (#294) + `--base` diff-scoping (squash-fix) — freshness is measured over
       # base..HEAD's scoped-source diff, so a PR that doesn't touch the SDK source
-      # has nothing to verify (no stale-on-main false red). e2e-attestation.yml
-      # keeps ONLY the #337 shared-core freshness gate.
+      # has nothing to verify (no stale-on-main false red). This retired the
+      # bespoke e2e-attestation.yml entirely. The #337 shared-core case (a core
+      # change stales both bindings but lives outside either `--scope`) has no
+      # reusable equivalent and is filed upstream; until it lands, re-attest each
+      # binding by hand after a non-`cli` `packages/rust/src` change (see AGENTS.md).
       gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation", "e2e-verify"]'
 
   python-integration:
