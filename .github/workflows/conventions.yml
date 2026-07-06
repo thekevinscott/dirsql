@@ -176,9 +176,11 @@ jobs:
         # manifest); --allow-dirty tolerates generated files in the checkout.
         run: cargo package -p dirsql --no-verify --allow-dirty
       # Upload as ONE artifact; the reusable packaging job globs it recursively.
-      # upload-artifact major MUST match the reusable's download-artifact@v8.
+      # upload-artifact tops out at v7 (download-artifact is one major ahead at
+      # v8); v7 upload ↔ v8 download is the matched pair for the unzipped-artifact
+      # feature, and v8 download reads a standard zipped v7 upload fine.
       - name: Upload built distributions
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v7
         with:
           name: distributions
           path: |
