@@ -857,3 +857,102 @@ fn row_event_to_js(event: &CoreRowEvent) -> RowEvent {
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn one_row() -> HashMap<String, Value> {
+        HashMap::from([("k".to_string(), Value::Integer(7))])
+    }
+
+    #[test]
+    fn value_to_js_maps_each_variant() {
+        assert!(matches!(value_to_js(&Value::Null), JsRowValue::Null));
+        assert!(matches!(
+            value_to_js(&Value::Integer(3)),
+            JsRowValue::Integer(3)
+        ));
+        assert!(
+            matches!(value_to_js(&Value::Real(1.5)), JsRowValue::Real(f) if (f - 1.5).abs() < f64::EPSILON)
+        );
+        assert!(
+            matches!(value_to_js(&Value::Text("hi".into())), JsRowValue::Text(ref s) if s == "hi")
+        );
+        assert!(
+            matches!(value_to_js(&Value::Blob(vec![1, 2])), JsRowValue::Blob(ref b) if b == &[1, 2])
+        );
+    }
+
+    #[test]
+    fn value_row_to_js_converts_every_entry() {
+        let js = value_row_to_js(&one_row());
+        assert!(matches!(js.get("k"), Some(JsRowValue::Integer(7))));
+    }
+
+    #[test]
+    fn row_event_to_js_insert() {
+        let ev = CoreRowEvent::Insert {
+            table: "t".into(),
+            row: one_row(),
+            file_path: "/f".into(),
+        };
+        let out = row_event_to_js(&ev);
+        assert_eq!(out.action, "insert");
+        assert_eq!(out.table.as_deref(), Some("t"));
+        assert!(out.row.is_some());
+        assert!(out.old_row.is_none());
+        assert!(out.error.is_none());
+    }
+
+    #[test]
+    fn row_event_to_js_update_carries_old_and_new() {
+        let ev = CoreRowEvent::Update {
+            table: "t".into(),
+            old_row: one_row(),
+            new_row: one_row(),
+            file_path: "/f".into(),
+        };
+        let out = row_event_to_js(&ev);
+        assert_eq!(out.action, "update");
+        assert!(out.row.is_some());
+        assert!(out.old_row.is_some());
+    }
+
+    #[test]
+    fn row_event_to_js_delete() {
+        let ev = CoreRowEvent::Delete {
+            table: "t".into(),
+            row: one_row(),
+            file_path: "/f".into(),
+        };
+        let out = row_event_to_js(&ev);
+        assert_eq!(out.action, "delete");
+        assert!(out.old_row.is_none());
+    }
+
+    #[test]
+    fn row_event_to_js_error_has_no_row_and_optional_table() {
+        let ev = CoreRowEvent::Error {
+            table: None,
+            file_path: PathBuf::from("/f"),
+            error: "boom".into(),
+        };
+        let out = row_event_to_js(&ev);
+        assert_eq!(out.action, "error");
+        assert!(out.table.is_none());
+        assert!(out.row.is_none());
+        assert_eq!(out.error.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn to_napi_err_carries_message() {
+        let err = to_napi_err("kaboom");
+        assert!(err.reason.contains("kaboom"));
+    }
+
+    #[test]
+    fn extract_error_displays_inner() {
+        assert_eq!(ExtractError("bad".to_string()).to_string(), "bad");
+    }
+}
