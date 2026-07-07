@@ -17,12 +17,16 @@ permissions:
 # python-mutation.yml (#426), the python/ts coverage jobs (#412), and the whole
 # e2e-attestation.yml (#418, via the `--base` squash-fix) are retired.
 #
-# Still bespoke (each blocked on a distinct upstream fix): `packaging` (#413,
-# needs packaging_artifact wiring), rust `unit-coverage` (needs the nightly
-# toolchain for `--branch`), and the #337 shared-core e2e-freshness case (a core
-# change stales both bindings but lives outside either binding's `--scope`) —
-# filed upstream (draft: .github/testing-conventions-337-shared-core-e2e-verify.md),
-# NOT kept as a bespoke gate.
+# The #337 shared-core e2e-freshness case (a core change stales both binding
+# attestations but lives outside either binding's `--scope`) is solved by
+# `testing-conventions.toml`'s `[e2e].extra_scope = ["packages/rust/src"]` +
+# `exclude` (upstream #333: `e2e verify --extra-scope`/`--exclude`, wired through
+# `detect`) — pure config, the e2e-verify gate below enforces it. No bespoke gate.
+#
+# Still bespoke: `packaging` (#413 — reusable can't self-provision the dist build;
+# upstream building it), and rust `unit-coverage` (bespoke by design in
+# rust-test.yml — a `packages/rust` `rust-toolchain.toml` for `--branch` nightly
+# breaks release cross-compile; #412 closed).
 #
 # One call per package (the intended monorepo pattern), scoped per tier because
 # the tool scans `path` recursively with no exclusions:
@@ -61,9 +65,10 @@ jobs:
       # base..HEAD's scoped-source diff, so a PR that doesn't touch the SDK source
       # has nothing to verify (no stale-on-main false red). This retired the
       # bespoke e2e-attestation.yml entirely. The #337 shared-core case (a core
-      # change stales both bindings but lives outside either `--scope`) has no
-      # reusable equivalent and is filed upstream; until it lands, re-attest each
-      # binding by hand after a non-`cli` `packages/rust/src` change (see AGENTS.md).
+      # change stales both binding attestations though it lives outside this
+      # `--scope`) is covered by `[e2e].extra_scope = ["packages/rust/src"]` in
+      # testing-conventions.toml (upstream #333 `--extra-scope`, wired via detect):
+      # a non-`cli` packages/rust/src change stales this attestation too.
       gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation", "e2e-verify"]'
 
   python-integration:
