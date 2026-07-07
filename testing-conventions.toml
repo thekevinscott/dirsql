@@ -37,11 +37,12 @@
 # (testing-conventions #269/#270/#271). Its floors sit below the bindings' 100%
 # because effectful code (filesystem / subprocess / HTTP / `notify`) lives in
 # the integration tier by design (#233), so the unit tier cannot reach it.
-# In #354 pure unit tests were added to close the reachable unit-tier gaps and
-# the floors were then pulled up as high as they robustly go (lines 94 /
-# regions 93 / functions 91 / branch 75); `branch` keeps a documented sub-90
-# floor as an accepted exception -- see the `[rust.coverage]` block below for
-# the rationale and a fragility warning about the near-zero slack.
+# In #354 pure unit tests were added to close the reachable unit-tier gaps,
+# and #446 removed cli/init.rs's `claude`-subprocess entirely; the floors were
+# then pulled up as high as they robustly go (lines 94 / regions 93 /
+# functions 91 / branch 76); `branch` keeps a documented sub-90 floor as an
+# accepted exception -- see the `[rust.coverage]` block below for the
+# rationale and a fragility warning about the near-zero slack.
 
 # --- Shared-core e2e freshness (#337, via upstream #333) --------------------
 #
@@ -123,14 +124,17 @@ features = ["cli"]
 #
 # #354 first added pure unit tests to close the reachable unit-tier gaps
 # (cli/router.rs `parse_sql_body`, cli/mod.rs `with_query_timeout` /
-# `From<String>`, cli/init.rs error `Display` arms), lifting the measured
-# unit-only coverage to lines 94.1% / regions 93.2% / functions 91.6% /
-# branch 75.6%. The floors below are then set as HIGH as they robustly go --
-# the highest integer under each actual:
-#   - lines: 94 (actual 94.1%).
-#   - regions: 93 (actual 93.2%).
-#   - functions: 91 (actual 91.6%).
-#   - branch: 75 (actual 75.6%), kept BELOW the >=90% ideal as an accepted,
+# `From<String>`, cli/init.rs error `Display` arms). #446 then removed
+# cli/init.rs's `claude`-subprocess entirely -- `init` writes a fixed
+# starter TOML with no LLM call, no filesystem walk, nothing left
+# unreachable from a unit test -- lifting the measured unit-only coverage to
+# lines 94.50% / regions 93.59% / functions 91.52% / branch 76.73%. The
+# floors below are then set as HIGH as they robustly go -- the highest
+# integer under each actual:
+#   - lines: 94 (actual 94.50%).
+#   - regions: 93 (actual 93.59%).
+#   - functions: 91 (actual 91.52%).
+#   - branch: 76 (actual 76.73%), kept BELOW the >=90% ideal as an accepted,
 #     documented exception (see reasons below).
 #
 # WARNING -- these floors are pinned near their actuals (<1pt of slack), by
@@ -143,9 +147,9 @@ features = ["cli"]
 #
 # Why `branch` in particular cannot reach the >=90% ideal at the unit tier:
 #   (1) The effectful production branches live in the integration/e2e tier by
-#       design (#233): cli/router.rs's async HTTP handlers, cli/init.rs's
-#       `claude`-spawn arms, and lib.rs's racy-window/watcher/persist error arms
-#       are unreachable from a unit test; covering them re-litigates #233.
+#       design (#233): cli/router.rs's async HTTP handlers and lib.rs's
+#       racy-window/watcher/persist error arms are unreachable from a unit
+#       test; covering them re-litigates #233.
 #   (2) `--branch` instruments the crate WITH its `#[cfg(test)]` modules, so
 #       every `matches!(…, if a && b)` / `assert!(x && y)` guard in a unit test
 #       adds short-circuit sub-condition branches whose False arm is unreachable
@@ -156,4 +160,4 @@ features = ["cli"]
 lines = 94
 functions = 91
 regions = 93
-branch = 75
+branch = 76

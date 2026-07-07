@@ -2,7 +2,8 @@
 //! - No subcommand: HTTP server documented in `docs/reference/cli.md`.
 //! - `query`: one-shot query over the same pipeline the server uses; see
 //!   `docs/reference/cli.md`.
-//! - `init`: starter `.dirsql.toml` generation; see `docs/reference/cli.md`.
+//! - `init`: write a fixed starter `.dirsql.toml`; see
+//!   `docs/reference/cli.md`.
 //!
 //! Only compiled with `--features cli`.
 
@@ -25,8 +26,8 @@ use dirsql::{DirSQL, Extension, Row, Table};
                   directory. Tables are defined by a `.dirsql.toml` config \
                   file; with no config, a default `files` table over every \
                   file in the directory is served. With the `init` \
-                  subcommand, generates a starter `.dirsql.toml` by running \
-                  `claude` over the target directory."
+                  subcommand, writes a starter `.dirsql.toml` with that same \
+                  default `files` table."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -64,8 +65,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Generate a starter `.dirsql.toml` by running `claude` over the
-    /// target directory.
+    /// Write a fixed starter `.dirsql.toml` (the same default `files`
+    /// table zero-config mode serves).
     Init(InitArgs),
 
     /// Run one SQL query against the indexed directory, print the result
@@ -84,7 +85,9 @@ struct QueryArgs {
 
 #[derive(Debug, Args)]
 struct InitArgs {
-    /// Directory to scan (default: current directory).
+    /// Directory the default `--output` path is resolved against
+    /// (default: current directory). `init` writes a fixed config
+    /// regardless of this directory's contents.
     #[arg(long)]
     root: Option<PathBuf>,
 
@@ -162,7 +165,6 @@ fn run_init(args: InitArgs) -> ExitCode {
     let output = args.output.unwrap_or_else(|| root.join(".dirsql.toml"));
 
     let opts = InitOptions {
-        root,
         output,
         force: args.force,
     };

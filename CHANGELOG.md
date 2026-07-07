@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`dirsql init` is now deterministic and offline (#446).** It no longer
+  shells out to the `claude` CLI. It now writes a fixed starter
+  `.dirsql.toml` -- byte-for-byte the same single `files` table zero-config
+  mode already serves -- without inspecting the target directory's contents
+  at all. `init` no longer requires Claude Code installed/signed-in or a
+  network connection, and its integration tests run in CI (the LLM-only
+  dependency that kept them local-only is gone).
 - **Documentation: trimmed LLM-drafted comments to the minimal useful set (#445).** Removed archaeology comments (issue/PR references), comments restating adjacent code, reviewer-directed justification, and banner dividers across all three SDKs. Retained public API docs, safety/locking/ordering invariants, platform quirks, security invariants, and forward-looking notes tied to open issues. No code behavior changes.
 
 ### Added

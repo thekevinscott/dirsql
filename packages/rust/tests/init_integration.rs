@@ -125,10 +125,7 @@ fn root_flag_targets_a_different_directory() {
     let cwd = TempDir::new().unwrap();
     let scan_root = TempDir::new().unwrap();
 
-    let output = run_init(
-        cwd.path(),
-        &["--root", scan_root.path().to_str().unwrap()],
-    );
+    let output = run_init(cwd.path(), &["--root", scan_root.path().to_str().unwrap()]);
     assert!(output.status.success(), "init failed: {output:?}");
 
     // Per docs: default --output is `<root>/.dirsql.toml`.

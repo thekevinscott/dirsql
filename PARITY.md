@@ -359,9 +359,14 @@ The CLI is a single Rust binary shipped through three channels, so its
 *behavior* (HTTP `/query` + `/events`, status codes, zero-config `files`
 table, `init`, `on-file` / `pre-query` / `post-query` hooks, signal
 handling) is covered once, in the Rust e2e/CLI suites (`cli_e2e.rs`,
-`cli_integration.rs`, `init_e2e.rs`, `init_integration.rs`,
-`on_file_e2e.rs`). The per-binding e2e suites cover what is genuinely
-per-launcher: resolving/staging the bundled binary, forwarding argv, and
+`cli_integration.rs`, `init_integration.rs`, `on_file_e2e.rs`). `init` is
+deterministic and offline (#446), so `init_integration.rs` runs against the
+real binary with nothing stubbed and is CI-runnable, unlike the other
+`_e2e.rs` suites; Python (`tests/e2e/init_test.py`) and TypeScript
+(`tests/e2e/init.test.ts`) each carry their own local-only e2e coverage of
+the same fixed-output contract through their real launcher/binary. The
+per-binding e2e suites otherwise cover what is genuinely per-launcher:
+resolving/staging the bundled binary, forwarding argv, and
 ecosystem-specific extension resolution.
 
 | Test Scenario              | Python (`tests/e2e/`, `tests/smoke/`) | Rust (`tests/`) | TypeScript (`tests/e2e/`, `tests/smoke/`) |

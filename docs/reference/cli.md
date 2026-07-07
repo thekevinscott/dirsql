@@ -6,7 +6,7 @@ The `dirsql` binary has three modes:
 |---|---|
 | `dirsql` (no subcommand) | Start a long-lived HTTP server exposing a SQL view of a directory. See [HTTP API](./http-api.md). |
 | `dirsql query "<sql>"` | Build the index, run one query, print the rows as JSON, exit. No server, no watch. |
-| `dirsql init` | Generate a starter `.dirsql.toml` by running `claude` over a directory. |
+| `dirsql init` | Write a fixed starter `.dirsql.toml` -- the same default `files` table zero-config mode serves. |
 
 ## Installation
 
@@ -140,34 +140,38 @@ stderr, with exit code `1`.
 
 ## `dirsql init`
 
-Generates a `.dirsql.toml` by running the `claude` CLI over the target
-directory. The generated config contains only filesystem-fact tables
-(`[[table]]` entries whose columns come from [glob captures and virtual
-columns](./columns.md)) — never content-derived columns.
+Writes a fixed starter `.dirsql.toml` -- byte-for-byte the same single
+`files` table [zero-config mode](#zero-config-mode) already serves. `init`
+does not inspect the target directory's contents in any way: no LLM, no
+network, no filesystem walk. It exists purely to hand you a valid, loadable
+config to start editing.
 
 ```bash
 dirsql init
+cat .dirsql.toml
+```
+
+```toml
+[[table]]
+ddl  = "CREATE TABLE files (_path TEXT, _basename TEXT, _dir TEXT, _ext TEXT, _size INTEGER, _mtime INTEGER, _ctime INTEGER)"
+glob = "**/*"
 ```
 
 ### Flags
 
 | Flag | Default | Description |
 |---|---|---|
-| `--root <path>` | current directory | Directory to scan. |
+| `--root <path>` | current directory | Directory the default `--output` path is resolved against. Does not affect the generated content. |
 | `--output <path>` | `<root>/.dirsql.toml` | Where to write the generated config. |
 | `--force` | off | Overwrite the output file if it already exists. |
 
-### Requirements and failure modes
+### Failure modes
 
-`init` requires `claude` on `PATH`, signed in; there is no separate API key.
 All failures exit `1` with a message on stderr:
 
 | Condition | Behavior |
 |---|---|
-| Output file exists and `--force` not passed | Fails before invoking `claude` (no LLM call is made). |
-| `claude` not found on `PATH` | Fails with a pointer to the Claude Code install docs. |
-| `claude` exits non-zero | Fails with `claude`'s stderr; no partial config is written. |
-| `claude` produces non-UTF-8 output | Fails; nothing is written. |
+| Output file exists and `--force` not passed | Fails before writing; nothing is written. |
+| Output path is not writable (e.g. missing parent directory, permissions) | Fails with the underlying I/O error. |
 
-On success, `claude`'s stdout is written verbatim to the output path and
-`init` exits `0`.
+On success, `init` exits `0`.
