@@ -19,6 +19,10 @@ Temporary scripts, including Node or shell helpers, must also be written to `/tm
 
 Exceptions: piping (`|`) is fine when it's genuinely one logical operation (e.g., `cmd | jq`). Heredocs (`cat <<EOF`) are fine. `cd path && cmd` is NOT fine -- use `cd` as a separate call (or pass absolute paths).
 
+## Comments
+
+Default to no comments. Only add one when the WHY is non-obvious -- a hidden constraint, an invariant, a workaround, something that would surprise a reader. Never write archaeology: no issue/PR references, no "added for the X flow" / "used by Y", no restating what adjacent code already says, no reviewer-directed justification. That belongs in the commit message and PR description, not the file -- it rots as the codebase evolves and the file is never re-read once merged. See #445 (trimmed exactly this style repo-wide) and CHANGELOG.md's entry for it.
+
 ## CI Workflows
 
 **CI logic lives in scripts, not workflow YAML.** `run:` / `github-script` steps stay trivial glue -- check out, set up a toolchain, invoke one command. Anything with iteration, `case` dispatch, conditionals, or text-munging moves to a script under `.github/scripts/`, invoked as a one-liner, and carries **colocated unit tests** (the same testing-conventions standard as the rest of the tree -- `foo.py` ↔ `foo_test.py`). Those tests run under a 100% coverage floor in `.github/workflows/gha-scripts.yml`. Inline workflow logic is untestable, un-runnable locally, and silently duplicated across runners; a script is none of those.
