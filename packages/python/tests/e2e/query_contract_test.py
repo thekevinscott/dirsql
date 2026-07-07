@@ -96,9 +96,7 @@ def describe_query_contract():
         (root / "a.txt").write_text("hello")
         cfg = root / ".dirsql.toml"
         cfg.write_text(
-            "[[table]]\n"
-            'ddl = "CREATE TABLE files (_path TEXT)"\n'
-            'glob = "*.txt"\n'
+            '[[table]]\nddl = "CREATE TABLE files (_path TEXT)"\nglob = "*.txt"\n'
         )
 
         port = _free_port()
