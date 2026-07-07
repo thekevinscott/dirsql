@@ -43,6 +43,26 @@
 # floor as an accepted exception -- see the `[rust.coverage]` block below for
 # the rationale and a fragility warning about the near-zero slack.
 
+# --- Shared-core e2e freshness (#337, via upstream #333) --------------------
+#
+# The Rust core (`packages/rust/src`) compiles into BOTH bindings but lives in
+# neither binding's e2e `--scope` (`packages/python/dirsql`, `packages/ts/src`),
+# so `e2e verify` was structurally blind to a core change -- the binding
+# attestations stayed "fresh" while the shipped binary's behavior changed. This
+# `[e2e]` block declares the core as an extra freshness root: `detect.py` reads
+# it and the reusable `e2e-verify` job passes `--extra-scope`/`--exclude`, so a
+# non-`cli` `packages/rust/src` change now stales BOTH bindings' attestations and
+# CI demands re-attestation. This is the promise the deleted `e2e_core_freshness.py`
+# enforced, now pure config -- no bespoke gate, no upstream wait (the capability
+# shipped as #333). Proven locally: over a `packages/rust/src`-only diff,
+# `e2e verify` is exit 0 without `--extra-scope` and exit 1 with it.
+#
+# `cli`-only core (`src/cli`, `src/bin`) is feature-gated out of the bindings, so
+# it must NOT stale them -- carved back out via `exclude` (mirrors #328).
+[e2e]
+extra_scope = ["packages/rust/src"]
+exclude = ["packages/rust/src/cli", "packages/rust/src/bin"]
+
 # --- Python (scanned: packages/python/dirsql) ------------------------------
 
 # The public barrel `__init__.py` is verified by its colocated test
