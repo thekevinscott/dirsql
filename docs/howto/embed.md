@@ -35,7 +35,7 @@ comments/t2/c1.json    # {"body": "following up", "author": "alice"}
 
 Unlike a config-file table, a programmatic table takes an `extract`
 callback — your code reads each matched file and returns its rows, with
-[glob captures and virtual columns](../reference/columns.md) merged on
+[glob captures and stat columns](../reference/columns.md) merged on
 automatically (here, `{thread}` from the path):
 
 ::: code-group

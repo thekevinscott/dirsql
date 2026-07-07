@@ -20,7 +20,7 @@ glob = "posts/**/*.md"
 - `glob` selects the files: every `.md` under `posts/`, at any depth,
   relative to the directory containing the config.
 - `ddl` is a plain SQLite `CREATE TABLE` naming the columns you want. Here
-  all three are [virtual columns](../reference/columns.md#virtual-columns) —
+  all three are [stat columns](../reference/columns.md#stat-columns) —
   filesystem facts `dirsql` computes for every file. Facts are opt-in by
   DDL: only the ones you declare become columns.
 

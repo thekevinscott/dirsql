@@ -1,15 +1,27 @@
-# Virtual columns and glob captures
+# Stat columns and glob captures
 
 Every table — config-defined or programmatic — gets filesystem facts merged
-onto its rows automatically: seven reserved **virtual columns** derived from
-the file's path and stat metadata, plus one column per **`{name}` capture**
-in the table's glob.
+onto its rows automatically: seven **stat columns** derived from the file's
+path and stat metadata, plus one column per **`{name}` capture** in the
+table's glob.
+
+These are ordinary, physically stored `TEXT`/`INTEGER` columns, computed
+once per file at scan time and written like any other column value — not
+SQLite's `GENERATED ... VIRTUAL` columns (computed on the fly, never stored)
+and not part of a `CREATE VIRTUAL TABLE` (dirsql tables are always real
+tables). "Stat" describes where the value comes from — the file's path and
+`stat` metadata, as opposed to its content — not how it's stored.
 
 Facts are **opt-in by DDL**: only facts whose name appears as a column in
 the table's `CREATE TABLE` are populated; the rest are silently dropped.
-Declaring them requires nothing else.
+Declaring them requires nothing else. The names below aren't a protected or
+enforced namespace — nothing stops you from declaring a column with one of
+these names for an unrelated purpose, in which case dirsql's computed value
+lands there like any other fact (unless your own row source — an `on-file`
+command or SDK `extract` callback — supplies its own value for that name;
+see [Precedence](#precedence)).
 
-## Virtual columns
+## Stat columns
 
 | Column | Type | Value |
 |---|---|---|
@@ -53,7 +65,7 @@ A file at `_comments/abc123/2024-05-05.jsonl` produces a row with
   characters, never a `/`. For matching purposes, `{name}` behaves like
   `*`.
 - A glob may contain multiple captures (`{year}/{month}/*.jpg`).
-- Like virtual columns, a capture populates a column only when the DDL
+- Like stat columns, a capture populates a column only when the DDL
   declares a column of the same name.
 
 ## Precedence
@@ -63,6 +75,6 @@ output or an SDK `extract` callback's return value — **win** over
 auto-injected facts of the same name. An extract that explicitly emits
 `_path` is honored.
 
-Injection order per row: virtual columns first, then glob captures, then
+Injection order per row: stat columns first, then glob captures, then
 the row source's own values, each layer overwriting the previous, all
 filtered to the DDL's declared columns.

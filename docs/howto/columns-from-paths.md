@@ -49,7 +49,7 @@ dirsql query "SELECT year, COUNT(*) AS photos FROM photos GROUP BY year"
 
 ## Going further
 
-- Captures combine freely with [virtual columns](../reference/columns.md#virtual-columns)
+- Captures combine freely with [stat columns](../reference/columns.md#stat-columns)
   (`_basename` above) — both are filesystem facts merged onto every row.
 - The [tutorial](../getting-started.md) walks the same idea with an
   `{author}` capture, starting from zero.

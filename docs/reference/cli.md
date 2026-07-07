@@ -68,7 +68,7 @@ default `./.dirsql.toml`) with a single table named `files`:
 
 - Glob: `**/*` — every file under the root, at any depth, no ignores.
 - One row per file, with all seven
-  [virtual columns](./columns.md): `_path`, `_basename`, `_dir`, `_ext`,
+  [stat columns](./columns.md): `_path`, `_basename`, `_dir`, `_ext`,
   `_size`, `_mtime`, `_ctime`.
 
 ```bash
