@@ -1,16 +1,12 @@
 name: Packaging
 
-# Enforces the testing-conventions `packaging` rule: test files must never ship
-# in a built distribution (.whl / .tgz / .crate). Each distribution is built the
-# way the release pipeline ships it, unpacked, and scanned with
-# `testing-conventions packaging --language <lang>`.
-#
-# This is a build-dependent testing-conventions gate. Per epic #231's known
-# constraint -- the testing-conventions reusable workflow has no build step and
-# no build hook -- we drive the CLI inside our own job (reusing our maturin /
-# napi / cargo builds) rather than calling the reusable workflow's
-# `packaging_artifact` input. Adopting this gate retires the bespoke
-# wheel/pack smoke tests (#238). Part of epic #231 (job 7/9).
+# Enforces the testing-conventions `packaging` rule for the rust crate only:
+# python and typescript adopted the reusable-workflow gate directly in
+# conventions.yml (#413) -- zero-config auto-build works for them. Rust can't
+# adopt it: packages/rust is a Cargo workspace member, and `cargo package`
+# always writes to the workspace root's target/package, never the member's
+# own, so the gate's auto-build can't find it. Filed upstream; this stays
+# rust-only until that's resolved.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -19,16 +15,12 @@ on:
   push:
     branches: [main]
     paths:
-      - 'packages/python/**'
-      - 'packages/ts/**'
       - 'packages/rust/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/packaging.yml'
   pull_request:
     paths:
-      - 'packages/python/**'
-      - 'packages/ts/**'
       - 'packages/rust/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -60,76 +52,22 @@ jobs:
         with:
           workspaces: ". -> target"
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          python-version: '3.13'
-
-      - name: Install Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      # ---- Build the three distributions the release pipeline ships ----
-      - name: Build Python wheel
-        working-directory: packages/python
-        run: |
-          uv sync
-          uv run maturin build --out dist
-
-      - name: Build + pack npm tarball
-        working-directory: packages/ts
-        run: |
-          pnpm install
-          pnpm build
-          mkdir -p dist-pack
-          pnpm pack --pack-destination dist-pack
-
       - name: Package Rust crate
         # `--no-verify` skips the compile-and-test verification build (we only
         # need the file manifest for the hygiene check); `--allow-dirty` keeps
         # it robust if the checkout has any generated files.
         run: cargo package -p dirsql --no-verify --allow-dirty
 
-      - name: Upload built distributions
-        uses: actions/upload-artifact@v4
-        with:
-          name: distributions
-          path: |
-            packages/python/dist/*.whl
-            packages/ts/dist-pack/*.tgz
-            target/package/*.crate
-          if-no-files-found: error
-
-      # ---- Enforce: no test files in any built artifact ----
-      - name: Check distributions ship no test files
+      - name: Check the crate ships no test files
         run: |
           set -u
           work="${RUNNER_TEMP}/packaging"
           rm -rf "$work"
-          mkdir -p "$work/wheel" "$work/tgz" "$work/crate"
+          mkdir -p "$work/crate"
 
-          # Wheel (zip) and npm tarball unpack with stock tools. The .crate is a
-          # gzip-tar that cargo writes with trailing bytes which make tar/gzip
-          # exit non-zero mid-extract, so use Python's (lenient, already present)
-          # tarfile module for it.
-          python -m zipfile -e packages/python/dist/*.whl "$work/wheel"
-          tar -xzf packages/ts/dist-pack/*.tgz -C "$work/tgz"
+          # The .crate is a gzip-tar that cargo writes with trailing bytes which
+          # make tar/gzip exit non-zero mid-extract, so use Python's (lenient,
+          # already present) tarfile module for it.
           python -m tarfile -e target/package/*.crate "$work/crate"
 
-          rc=0
-          echo "::group::python wheel"
-          testing-conventions packaging --language python "$work/wheel" || rc=1
-          echo "::endgroup::"
-          echo "::group::npm tarball"
-          testing-conventions packaging --language typescript "$work/tgz/package" || rc=1
-          echo "::endgroup::"
-          echo "::group::rust crate"
-          testing-conventions packaging --language rust "$work"/crate/dirsql-* || rc=1
-          echo "::endgroup::"
-          exit $rc
+          testing-conventions packaging --language rust "$work"/crate/dirsql-*
