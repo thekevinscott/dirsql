@@ -23,13 +23,10 @@ overrides the init symbol when it doesn't match the filename-derived
 default — `sqlite-vec` is exactly such a case
 ([reference](../reference/config.md#dirsql-extension)).
 
-Start the server (`npx dirsql` / `uvx dirsql`) and the extension's
-functions are callable:
+The extension's functions are callable:
 
 ```bash
-curl -s http://localhost:7117/query \
-  -H 'content-type: application/json' \
-  -d '{"sql":"SELECT vec_version() AS vec_version"}'
+dirsql query "SELECT vec_version() AS vec_version"
 ```
 
 ```json

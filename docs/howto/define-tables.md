@@ -24,26 +24,12 @@ glob = "posts/**/*.md"
   filesystem facts `dirsql` computes for every file. Facts are opt-in by
   DDL: only the ones you declare become columns.
 
-## 2. Start the server and query
-
-::: code-group
-
-```bash [npm]
-npx dirsql
-```
-
-```bash [PyPI]
-uvx dirsql
-```
-
-:::
+## 2. Query the table
 
 Each matched file is one row:
 
 ```bash
-curl -s http://localhost:7117/query \
-  -H 'content-type: application/json' \
-  -d '{"sql":"SELECT _path, _size FROM posts ORDER BY _path"}'
+dirsql query "SELECT _path, _size FROM posts ORDER BY _path"
 ```
 
 ```json

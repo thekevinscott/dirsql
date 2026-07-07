@@ -31,12 +31,8 @@ ignored file never reaches any table — even one whose glob would match it.
 
 ## 2. Confirm what made it in
 
-Start the server (`npx dirsql` / `uvx dirsql`) and check:
-
 ```bash
-curl -s http://localhost:7117/query \
-  -H 'content-type: application/json' \
-  -d '{"sql":"SELECT _path FROM notes ORDER BY _path"}'
+dirsql query "SELECT _path FROM notes ORDER BY _path"
 ```
 
 ```json
