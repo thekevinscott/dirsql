@@ -26,8 +26,12 @@ permissions:
 # `dirsql` binary and their e2e suites spawn it, so CLI changes stale the
 # attestations like any other core change.
 #
-# Still bespoke: `packaging` (#413 — reusable can't self-provision the dist build;
-# upstream building it), and rust `unit-coverage` (bespoke by design in
+# `packaging` (#413) is PROBED here for python/typescript only, zero-config
+# (just "packaging" in `gates`, no build job). Rust can't adopt it yet -- see
+# the `rust` job below -- so packaging.yml stays for rust; it retires for
+# python/typescript once this probe is confirmed green.
+#
+# Still bespoke (for now): rust `unit-coverage` (bespoke by design in
 # rust-test.yml — a `packages/rust` `rust-toolchain.toml` for `--branch` nightly
 # breaks release cross-compile; #412 closed).
 #
@@ -72,7 +76,7 @@ jobs:
       # `--scope`) is covered by `[e2e].extra_scope = ["packages/rust/src"]` in
       # testing-conventions.toml (upstream #333 `--extra-scope`, wired via detect):
       # any packages/rust/src change (cli included) stales this attestation too.
-      gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation", "e2e-verify"]'
+      gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation", "e2e-verify", "packaging"]'
 
   python-integration:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
@@ -97,7 +101,7 @@ jobs:
       # `packages/ts/napi` declares a napi build. `rust_toolchain: true` (still a
       # valid input) supplies cargo for that build.
       # `e2e-verify` (#418): `--scope packages/ts/src` + `--base` diff-scoping.
-      gates: '["colocated-test", "unit-lint", "mutation", "unit-coverage", "e2e-verify"]'
+      gates: '["colocated-test", "unit-lint", "mutation", "unit-coverage", "e2e-verify", "packaging"]'
       rust_toolchain: true
 
   typescript-integration:
@@ -123,6 +127,11 @@ jobs:
       # the engine, which builds and reruns the crate's own tests; #279 installs it
       # from the derived root. No nightly (unlike coverage's --branch). Retires
       # rust-mutation.yml (#417).
+      #
+      # No "packaging" here: packages/rust is a Cargo workspace member, so
+      # `cargo package` writes to the workspace root's target/package, never
+      # the member's own -- the gate's zero-config auto-build can't find it.
+      # Filed upstream; rust packaging stays on the bespoke packaging.yml (#413).
       gates: '["colocated-test", "unit-lint", "integration-lint", "mutation"]'
 
   # The two native BINDING crates (#405) hold real marshaling logic but sat
