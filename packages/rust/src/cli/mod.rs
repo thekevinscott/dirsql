@@ -15,7 +15,9 @@
 //! submodule:
 //!
 //! - [`server`] — bind/serve/shutdown plumbing.
-//! - [`router`] — axum routes + request handlers.
+//! - [`router`] — axum routes + request handlers (thin HTTP adapters).
+//! - [`execute`] — the transport-agnostic query pipeline shared by the
+//!   HTTP handler and the one-shot `dirsql query` subcommand.
 //! - [`serialize`] — row + event → JSON.
 
 use std::net::SocketAddr;
@@ -29,6 +31,7 @@ use tokio::task::JoinHandle;
 use crate::DirSQL;
 use crate::command::DEFAULT_COMMAND_TIMEOUT;
 
+pub mod execute;
 pub mod init;
 pub mod router;
 pub mod serialize;

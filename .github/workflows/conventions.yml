@@ -19,9 +19,12 @@ permissions:
 #
 # The #337 shared-core e2e-freshness case (a core change stales both binding
 # attestations but lives outside either binding's `--scope`) is solved by
-# `testing-conventions.toml`'s `[e2e].extra_scope = ["packages/rust/src"]` +
-# `exclude` (upstream #333: `e2e verify --extra-scope`/`--exclude`, wired through
-# `detect`) — pure config, the e2e-verify gate below enforces it. No bespoke gate.
+# `testing-conventions.toml`'s `[e2e].extra_scope = ["packages/rust/src"]`
+# (upstream #333: `e2e verify --extra-scope`, wired through `detect`) — pure
+# config, the e2e-verify gate below enforces it. No bespoke gate. No `exclude`
+# carve-out for `src/cli`/`src/bin`: the language packages ship the compiled
+# `dirsql` binary and their e2e suites spawn it, so CLI changes stale the
+# attestations like any other core change.
 #
 # Still bespoke: `packaging` (#413 — reusable can't self-provision the dist build;
 # upstream building it), and rust `unit-coverage` (bespoke by design in
@@ -68,7 +71,7 @@ jobs:
       # change stales both binding attestations though it lives outside this
       # `--scope`) is covered by `[e2e].extra_scope = ["packages/rust/src"]` in
       # testing-conventions.toml (upstream #333 `--extra-scope`, wired via detect):
-      # a non-`cli` packages/rust/src change stales this attestation too.
+      # any packages/rust/src change (cli included) stales this attestation too.
       gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation", "e2e-verify"]'
 
   python-integration:
