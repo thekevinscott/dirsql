@@ -1,23 +1,17 @@
 """Resolve an extension entry's ``path`` to a concrete loadable file.
 
-#225 supports only literal file paths. #298 adds resolving a bare **package
-name**: when ``path`` carries no path separator and no loadable-file suffix, it
-names a package installed in the runtime env, and dirsql discovers the loadable
-file *inside* that package.
-
-Resolution is an ordered probe (file-first, then package), so every literal
-path from #225 keeps its old behavior and only a bare name reaches the package
-machinery:
+Resolution is an ordered probe (file-first, then package), so only a bare
+package name reaches the package machinery:
 
 1. **Path-looking** (contains a separator, or ends in ``.so`` / ``.dylib`` /
    ``.dll`` / ``.pyd``) -- returned as a file path: made absolute against
    ``base`` when ``resolve_relative`` is set (config-file entries), else
-   verbatim (programmatic entries, mirroring the Rust builder).
+   verbatim (programmatic entries).
 2. **Bare name** -- a same-named local file under ``base`` *shadows* the
-   package (parity with #225's file-first probe); otherwise the package dir is
-   located via :func:`importlib.util.find_spec` and the current platform's
-   loadable is globbed from inside it. Zero matches and multiple matches are
-   both hard errors -- the caller must disambiguate with a literal path.
+   package; otherwise the package dir is located via
+   :func:`importlib.util.find_spec` and the current platform's loadable is
+   globbed from inside it. Zero matches and multiple matches are both hard
+   errors -- the caller must disambiguate with a literal path.
 """
 
 import glob as _glob
@@ -25,9 +19,8 @@ import importlib.util
 import os
 import sys
 
-# Suffixes that mark a value as "already a file path" (so package resolution is
-# never attempted) and, per platform, the globs used to find a loadable inside
-# a package directory.
+# Suffixes that mark a value as "already a file path", so package resolution
+# is never attempted.
 _LOADABLE_SUFFIXES = (".so", ".dylib", ".dll", ".pyd")
 
 
@@ -73,8 +66,6 @@ def _resolve_package(name):
             matches.update(_glob.glob(os.path.join(d, "**", pat), recursive=True))
     found = sorted(matches)
 
-    # Exactly one loadable resolves; unpacking (rather than a guarded
-    # subscript) makes the zero- and multiple-match failures each observable.
     try:
         (single,) = found
     except ValueError:

@@ -20,8 +20,6 @@ mod python {
     use std::path::PathBuf;
     use std::time::Duration;
 
-    // -- Public PyO3 classes ------------------------------------------------
-
     /// A table definition. Mirrors `dirsql::Table` but holds a Python
     /// callable for `extract`.
     #[pyclass(name = "Table", frozen)]
@@ -34,15 +32,11 @@ mod python {
         extract: Py<PyAny>,
         #[pyo3(get)]
         strict: bool,
-        /// Parsed table name (from `ddl`), or `None` if the DDL doesn't
-        /// match `CREATE TABLE <name> (...)`. Computed once at construction
-        /// via `dirsql::db::parse_table_name` so the `dirsql interpret`
-        /// dispatcher (#196) and other consumers share the core's single
-        /// source of truth instead of re-parsing DDL. We return `None`
-        /// rather than raising at construction so `DirSQL.ready()` keeps
-        /// surfacing malformed DDLs as the loud failure path (the Rust
-        /// core's `DirSqlError::Ddl`); callers that care about the name
-        /// before that point can check `t.name is None` themselves.
+        /// Parsed table name (from `ddl`) via `dirsql::db::parse_table_name`,
+        /// or `None` if the DDL doesn't match `CREATE TABLE <name> (...)`.
+        /// `None` rather than a construction error so `DirSQL.ready()` keeps
+        /// surfacing malformed DDLs as the loud failure path (the core's
+        /// `DirSqlError::Ddl`).
         #[pyo3(get)]
         name: Option<String>,
     }
@@ -64,11 +58,9 @@ mod python {
     }
 
     /// Marshals a Python `{"path": str, "entrypoint"?: str}` mapping from the
-    /// `extensions=` constructor argument into a [`dirsql::Extension`]. Mirrors
-    /// the `[[dirsql.extension]]` config-file fields and the Rust builder's
-    /// `Extension { path, entrypoint }`. Paths are taken verbatim (the
-    /// programmatic surface does not resolve relative paths), matching
-    /// `DirSQLBuilder::extensions`.
+    /// `extensions=` constructor argument into a [`dirsql::Extension`]. Paths
+    /// are taken verbatim; the programmatic surface does not resolve relative
+    /// paths.
     #[derive(FromPyObject)]
     struct PyExtensionSpec {
         #[pyo3(item)]
@@ -117,8 +109,8 @@ mod python {
         /// `suppress_config_extensions` skips the core's own loading of the
         /// config's `[[dirsql.extension]]` entries; the SDK sets it after
         /// resolving those entries itself (package names need `importlib`,
-        /// which the core lacks -- #313) and passing the resolved literal
-        /// paths via `extensions`, so the entries are not loaded twice.
+        /// which the core lacks) and passing the resolved literal paths via
+        /// `extensions`, so the entries are not loaded twice.
         #[new]
         #[pyo3(signature = (root=None, *, tables=None, ignore=None, config=None, persist=false, persist_path=None, extensions=None, suppress_config_extensions=false))]
         fn new(
@@ -205,8 +197,6 @@ mod python {
         }
     }
 
-    // -- Helpers ------------------------------------------------------------
-
     fn build_table(py: Python<'_>, t: &PyTable) -> Table {
         let extract_ref = t.extract.clone_ref(py);
         let mut table = Table::try_new(
@@ -260,10 +250,7 @@ mod python {
     /// Pure, GIL-free intermediate for a row event. [`row_event_to_plain`]
     /// builds it from a core [`RowEvent`] (unit-testable without a Python
     /// interpreter); [`row_event_to_py`] then marshals it into the
-    /// Python-facing [`PyRowEvent`] (the GIL step). Splitting the two keeps the
-    /// variant -> action / field-selection mapping testable at the unit tier,
-    /// mirroring the napi binding's pure `row_event_to_js`. The value-level
-    /// `Row -> PyDict` conversion stays GIL-bound (binding-tier covered).
+    /// Python-facing [`PyRowEvent`] (the GIL step).
     struct PlainRowEvent {
         table: Option<String>,
         action: &'static str,
@@ -405,8 +392,6 @@ mod python {
             Value::Blob(b) => b.into_pyobject(py).unwrap().unbind(),
         }
     }
-
-    // -- Module registration ------------------------------------------------
 
     #[pymodule]
     #[pyo3(name = "_dirsql")]

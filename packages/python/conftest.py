@@ -1,15 +1,9 @@
 """Stub the compiled `_dirsql` extension for unit tests that don't need it.
 
-`cli_test.py` exercises the pure-Python launcher; it must be runnable
-without `maturin develop` having built the PyO3 extension. We stub the
-missing module here (rather than in the test file) so the stub is in
-place before pytest imports `dirsql.__init__`, which transitively
-imports real types from `dirsql._dirsql`.
-
-The stub is installed ONLY when the real extension can't be imported.
-When `maturin develop` has been run (as in CI), the real extension wins
-and tests that depend on it — `_async_test.py`, the integration suites —
-see the real bindings.
+Must live here (not in a test file) so the stub is in place before pytest
+imports `dirsql.__init__`, which imports real types from `dirsql._dirsql`.
+Installed only when the real extension can't be imported; when `maturin
+develop` has been run, the real bindings win.
 """
 
 from __future__ import annotations

@@ -17,7 +17,6 @@ from dirsql import DirSQL
 
 @pytest.fixture
 def config_dir():
-    """Create a temp dir for the config and data files."""
     with tempfile.TemporaryDirectory() as d:
         yield d
 
@@ -32,7 +31,6 @@ def describe_DirSQL_from_config():
     def describe_basic():
         @pytest.mark.asyncio
         async def it_produces_one_row_per_matched_file(config_dir):
-            """One row per file with `_path` and `_basename` populated."""
             _write(os.path.join(config_dir, "items", "a.csv"), "anything")
             _write(os.path.join(config_dir, "items", "b.csv"), "anything")
             _write(
@@ -58,7 +56,6 @@ glob = "items/*.csv"
     def describe_path_captures():
         @pytest.mark.asyncio
         async def it_injects_path_captures_into_rows(config_dir):
-            """Glob `{name}` placeholders become column values."""
             _write(
                 os.path.join(config_dir, "comments", "thread-1", "a.txt"),
                 "hello",
@@ -88,8 +85,6 @@ glob = "comments/{thread_id}/*.txt"
     def describe_stat_virtuals():
         @pytest.mark.asyncio
         async def it_exposes_stat_virtuals(config_dir):
-            """`_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`
-            are auto-injected when declared in DDL."""
             body = "# title\nhello world\n"
             _write(os.path.join(config_dir, "docs", "readme.md"), body)
             _write(
@@ -119,7 +114,6 @@ glob = "docs/*.md"
     def describe_ignore():
         @pytest.mark.asyncio
         async def it_respects_ignore_patterns(config_dir):
-            """Ignore patterns from config are applied."""
             _write(os.path.join(config_dir, "data", "good.json"), "{}")
             _write(
                 os.path.join(config_dir, "data", "node_modules", "bad.json"),
@@ -146,7 +140,6 @@ glob = "data/**/*.json"
     def describe_multiple_tables():
         @pytest.mark.asyncio
         async def it_loads_multiple_tables(config_dir):
-            """Multiple [[table]] entries create multiple SQL tables."""
             _write(os.path.join(config_dir, "posts", "hello.txt"), "x")
             _write(os.path.join(config_dir, "authors", "alice.txt"), "x")
             _write(
@@ -174,14 +167,12 @@ glob = "authors/*.txt"
     def describe_error_handling():
         @pytest.mark.asyncio
         async def it_raises_on_missing_config_file(config_dir):
-            """from_config raises when the config file doesn't exist."""
             db = DirSQL(config=os.path.join(config_dir, "nonexistent.toml"))
             with pytest.raises(Exception):
                 await db.ready()
 
         @pytest.mark.asyncio
         async def it_raises_on_invalid_toml(config_dir):
-            """from_config raises on invalid TOML syntax."""
             _write(
                 os.path.join(config_dir, ".dirsql.toml"),
                 "this is not valid [[[",
@@ -192,7 +183,6 @@ glob = "authors/*.txt"
 
         @pytest.mark.asyncio
         async def it_raises_on_missing_ddl(config_dir):
-            """from_config raises when a table entry is missing ddl."""
             _write(
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
@@ -207,7 +197,6 @@ glob = "*.json"
     def describe_query_after_config():
         @pytest.mark.asyncio
         async def it_supports_sql_queries_after_config_init(config_dir):
-            """Queries work the same way whether created via config= or tables=."""
             _write(os.path.join(config_dir, "items", "apple.json"), "x")
             _write(
                 os.path.join(config_dir, ".dirsql.toml"),
@@ -224,7 +213,6 @@ glob = "items/{name}.json"
             assert len(results) == 1
             assert results[0]["name"] == "apple"
 
-            # Internal columns should be hidden
             results = await db.query("SELECT * FROM items LIMIT 1")
             assert "_dirsql_file_path" not in results[0]
             assert "_dirsql_row_index" not in results[0]

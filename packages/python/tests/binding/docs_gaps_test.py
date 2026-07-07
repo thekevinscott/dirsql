@@ -24,11 +24,6 @@ def _write(path, content):
         f.write(content)
 
 
-# ---------------------------------------------------------------------------
-# docs/reference/sdk.md -- "Supported value types" -> bytes -> BLOB
-# ---------------------------------------------------------------------------
-
-
 def describe_tables_guide_bytes_to_blob():
     @pytest.mark.asyncio
     async def it_maps_python_bytes_to_sqlite_blob(tmp_dir):
@@ -55,14 +50,8 @@ def describe_tables_guide_bytes_to_blob():
         results = await db.query("SELECT * FROM blobs")
         assert len(results) == 1
         assert results[0]["name"] == "bin"
-        # Python bytes round-trip through SQLite BLOB.
         assert results[0]["data"] == payload
         assert isinstance(results[0]["data"], (bytes, bytearray))
-
-
-# ---------------------------------------------------------------------------
-# docs/reference/sdk.md -- "Strict Mode" (programmatic Table strict=True)
-# ---------------------------------------------------------------------------
 
 
 def describe_strict_mode_gap():
@@ -110,12 +99,6 @@ def describe_strict_mode_gap():
         assert results[0]["color"] == "red"
 
 
-# ---------------------------------------------------------------------------
-# docs/explanation.md -- "How diffing works" positional row identity
-# docs/reference/sdk.md -- RowEvent.file_path relative-path assertion
-# ---------------------------------------------------------------------------
-
-
 def describe_watching_guide_positional_identity_gap():
     @pytest.mark.asyncio
     async def it_emits_delete_for_shrinking_file_positionally(tmp_dir):
@@ -147,7 +130,6 @@ def describe_watching_guide_positional_identity_gap():
         )
         await db.ready()
 
-        # Sanity: 3 rows present initially
         pre = await db.query("SELECT * FROM rows ORDER BY idx")
         assert len(pre) == 3
 
@@ -171,7 +153,6 @@ def describe_watching_guide_positional_identity_gap():
         task = asyncio.create_task(collect())
         await asyncio.sleep(0.3)
 
-        # Shrink from 3 -> 2 rows (drop the third)
         with open(path, "w") as f:
             for i in range(2):
                 f.write(json.dumps({"idx": i, "name": f"row-{i}"}) + "\n")
@@ -184,18 +165,15 @@ def describe_watching_guide_positional_identity_gap():
 
         delete_events = [e for e in events if e.action == "delete"]
         assert delete_events, "expected at least one delete event when file shrinks"
-        # Docs promise positional identity: the third (idx=2) row should be deleted.
-        # The current implementation does a full-replace on shrink instead
-        # (see packages/rust/src/differ.rs::diff_rows). That is a doc/impl
-        # divergence surfaced in TESTS_AUDIT.md, not fixed here.
-        # What we *can* assert without contradicting either side: among the
-        # delete events the dropped row (idx=2, name=row-2) must appear.
+        # Docs promise positional identity (delete the third row) but the
+        # implementation full-replaces on shrink (packages/rust/src/differ.rs)
+        # -- a doc/impl divergence. Assert only what holds either way: the
+        # dropped row (idx=2) appears among the deletes.
         deleted_names = {e.row.get("name") for e in delete_events if e.row}
         assert "row-2" in deleted_names, (
             f"expected a delete for row-2 (dropped positionally); got {deleted_names!r}"
         )
 
-        # DB should now reflect only 2 rows.
         post = await db.query("SELECT * FROM rows ORDER BY idx")
         assert len(post) == 2
         assert [r["idx"] for r in post] == [0, 1]
@@ -248,8 +226,6 @@ def describe_watching_guide_positional_identity_gap():
         assert len(events) >= 1
         ev = events[0]
         assert ev.file_path is not None
-        # Must be relative (never starts with the absolute root), and must match
-        # the relative path we wrote.
         assert not os.path.isabs(ev.file_path), (
             f"file_path should be relative, got absolute: {ev.file_path!r}"
         )

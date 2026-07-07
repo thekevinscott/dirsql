@@ -1,9 +1,9 @@
 """Unit tests for `with_resolved_extensions`.
 
-The shared SDK resolver (`dirsql.resolve_config_extensions`, mocked here) owns
-the TOML parsing and package-name gating and carries its own colocated tests;
-this file covers only the launcher-side argv plumbing: config-path extraction,
-the `init` / native-config guards, and `--extension` flag construction.
+The shared SDK resolver (mocked here) owns the TOML parsing and package-name
+gating; this file covers only the launcher-side argv plumbing: config-path
+extraction, the `init` / native-config guards, and `--extension` flag
+construction.
 """
 
 from unittest import mock
@@ -69,8 +69,6 @@ def describe_with_resolved_extensions():
         resolver.assert_called_once_with("")
 
     def it_reads_the_config_value_at_any_argv_position():
-        # `--config` mid-argv with arguments on both sides: the value is the
-        # element immediately after the flag, not one at a fixed offset.
         with _patch(None) as resolver:
             rce.with_resolved_extensions(["-v", "--config", "/x/y", "tail"])
         resolver.assert_called_once_with("/x/y")

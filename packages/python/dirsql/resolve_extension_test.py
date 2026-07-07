@@ -1,4 +1,4 @@
-"""Unit tests for `resolve_extension` (#298).
+"""Unit tests for `resolve_extension`.
 
 Every collaborator -- `importlib.util.find_spec`, the filesystem probes
 (`os.path.isfile`), the loadable glob (`glob.glob`), and `sys.platform` -- is
@@ -23,8 +23,6 @@ def describe_is_bare_name():
         assert re.is_bare_name("/abs/ext.so") is False
 
     def it_treats_a_separatorful_value_without_a_loadable_suffix_as_a_path():
-        # The separator probe alone must classify these; the suffix probe
-        # would not (no loadable suffix to match).
         assert re.is_bare_name("ext/foo") is False
         assert re.is_bare_name("/abs/dir") is False
 
@@ -135,9 +133,8 @@ def describe_bare_name_package_resolution():
         assert glob.call_count == 2
 
     def it_globs_so_on_any_other_platform():
-        # Platforms that are neither darwin nor win32 -- including ones that
-        # sort below "darwin" (aix) or above "win32" (zos) -- glob `*.so`,
-        # pinning the dispatch to equality rather than any ordering.
+        # aix sorts below "darwin" and zos above "win32", pinning the
+        # dispatch to equality rather than any ordering.
         for platform in ("aix", "zos", "linux"):
             with (
                 mock.patch.object(re.os.path, "isfile", return_value=False),

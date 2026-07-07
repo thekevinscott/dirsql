@@ -77,10 +77,8 @@ def describe_DirSQL_async():
                 assert db._db.root == "/tmp/root"
                 assert db._db.tables == ["table-a"]
                 assert db._db.ignore == ["**/*.tmp"]
-                # Programmatic extension paths are resolved (bare names ->
-                # installed package) before reaching the core (#298), against
-                # the cwd and without making relative paths absolute
-                # (programmatic semantics, unlike config-file entries).
+                # Programmatic entries resolve against the cwd and keep
+                # relative paths relative (unlike config-file entries).
                 resolver.assert_called_once_with(
                     "ext/a.so", base=os.getcwd(), resolve_relative=False
                 )
@@ -102,10 +100,6 @@ def describe_DirSQL_async():
     def describe_config_file_extensions():
         @pytest.mark.asyncio
         async def it_appends_resolved_config_extensions_and_suppresses_the_core():
-            # When the config resolver intervenes (a bare package name in the
-            # config, #313), its resolved specs are appended after the
-            # programmatic ones and the core's own config-extension loading is
-            # suppressed.
             with (
                 patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
                 patch.object(
@@ -152,9 +146,6 @@ def describe_DirSQL_async():
 
         @pytest.mark.asyncio
         async def it_leaves_the_core_loading_when_the_resolver_declines():
-            # `None` from the resolver (no bare package name in the config)
-            # keeps the pre-#313 behavior: the core loads the config's own
-            # extension entries.
             with (
                 patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
                 patch.object(
@@ -184,9 +175,6 @@ def describe_DirSQL_async():
 
         @pytest.mark.asyncio
         async def it_awaits_readiness_when_query_is_called_before_ready():
-            # query() must await initialization itself: calling it without a
-            # prior `await db.ready()` should still return rows, not raise
-            # AttributeError from `self._db` still being None.
             with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
                 db = async_mod.DirSQL("/tmp/root", tables=["table-a"])
 
@@ -197,8 +185,6 @@ def describe_DirSQL_async():
 
         @pytest.mark.asyncio
         async def it_propagates_initialization_errors_from_query():
-            # An init failure must surface through query() too (it awaits
-            # ready(), which re-raises), not as an AttributeError.
             class _BoomDirSQL:
                 def __init__(self, *args, **kwargs):
                     raise RuntimeError("boom")
@@ -240,8 +226,6 @@ def describe_DirSQL_async():
 
         @pytest.mark.asyncio
         async def it_polls_again_when_a_poll_returns_no_events():
-            # An empty poll loops back for another poll rather than yielding;
-            # the second poll's events are what surface.
             stream = async_mod._WatchStream(_FakeWatcherDb(events=[[], ["event-a"]]))
 
             first = await stream.__anext__()
@@ -252,9 +236,7 @@ def describe_DirSQL_async():
     def describe_construction():
         @pytest.mark.asyncio
         async def it_constructs_without_a_root_or_config():
-            # The guard that raised TypeError on (None, None) is gone; the
-            # wrapper forwards both to the core, which owns "no root"
-            # validation (DirSQLBuilder::resolve). Construction must not raise.
+            # The core owns "no root" validation; construction must not raise.
             with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
                 db = async_mod.DirSQL()
                 await db.ready()

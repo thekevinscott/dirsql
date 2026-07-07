@@ -59,7 +59,7 @@ class DirSQL:
     at startup. Any ``[[dirsql.extension]]`` entries in a ``config`` file are
     appended after the programmatic ones. A ``path`` (programmatic or
     config-file) may be a bare **package name**, resolved from the installed
-    package in the runtime env (#298 / #313).
+    package in the runtime env.
     """
 
     def __init__(
@@ -98,15 +98,13 @@ class DirSQL:
         """Resolve extensions and construct the Rust-backed instance.
 
         Runs on a worker thread (via ``asyncio.to_thread``): both the
-        package-name resolution (``importlib`` + filesystem globs) and the
-        core's initial scan are blocking work.
+        package-name resolution and the core's initial scan are blocking.
 
         When the ``config`` file names an extension by bare package name, the
         SDK resolves every one of the config's ``[[dirsql.extension]]`` entries
-        itself (#313) -- appended after the programmatic ones, matching the
-        core's ordering -- and suppresses the core's own config-extension
-        loading so the entries are not loaded a second time (and the core never
-        sees the unresolvable bare name).
+        itself -- appended after the programmatic ones -- and suppresses the
+        core's own config-extension loading so the entries are not loaded a
+        second time (the core cannot resolve a bare name).
         """
         extensions = self._resolved_extensions()
         suppress = False
@@ -129,9 +127,8 @@ class DirSQL:
     def _resolved_extensions(self):
         """Resolve each programmatic extension's ``path`` to a loadable file.
 
-        A bare package name is resolved to the loadable installed in the runtime
-        env (#298); path-looking values are passed through verbatim (mirroring
-        the Rust builder, which takes programmatic paths as-is). Config-file
+        A bare package name is resolved to the loadable installed in the
+        runtime env; path-looking values pass through verbatim. Config-file
         ``[[dirsql.extension]]`` entries are handled by ``_build_db``.
         """
         if not self._extensions:

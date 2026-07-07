@@ -1,11 +1,8 @@
-"""E2E test asserting `dirsql interpret` is gone (epic #321 / #323).
+"""E2E test asserting the `interpret` subcommand is rejected.
 
-The native-language (`.py`) config path and its `interpret` handshake
-were hard-removed from the Python SDK. The launcher no longer intercepts
-``interpret``; it forwards all argv to the bundled Rust binary, which
-rejects the unknown subcommand (clap, non-zero exit).
-
-No mocking of any kind: this spawns the real ``dirsql`` console script as
+The launcher does not intercept ``interpret``; it forwards all argv to the
+bundled Rust binary, which rejects the unknown subcommand (clap, non-zero
+exit). No mocking of any kind: spawns the real ``dirsql`` console script as
 a subprocess against the real built binary and asserts the failure is a
 clean clap error, not a Python traceback.
 """
@@ -17,11 +14,7 @@ import subprocess
 
 
 def _cli() -> str:
-    """Resolve the `dirsql` console script for this test env.
-
-    Failing loudly here surfaces an environment misconfiguration rather
-    than masking it as a test assertion failure further down.
-    """
+    """Resolve the `dirsql` console script for this test env."""
     dirsql = shutil.which("dirsql")
     assert dirsql is not None, (
         "`dirsql` console script not on PATH -- run `uv run maturin develop`"

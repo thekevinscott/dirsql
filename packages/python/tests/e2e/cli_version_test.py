@@ -1,14 +1,9 @@
-"""E2E test for `dirsql --version` through the Python launcher (#294 parity).
+"""E2E test for `dirsql --version` through the Python launcher.
 
-Mirrors the Rust CLI e2e `version_flag_prints_and_exits_zero`
-(packages/rust/tests/cli_e2e.rs) and the functional half of the TS smoke
-test's `dirsql --version` run: the Python console script must find the
-bundled Rust binary, forward argv to it, and surface its output and exit
-code unchanged.
-
-No mocking of any kind: this spawns the real ``dirsql`` console script as
-a subprocess against the real built binary (staged where the launcher's
-``binary_path()`` looks, exactly as the extension-package e2e does).
+The Python console script must find the bundled Rust binary, forward argv to
+it, and surface its output and exit code unchanged. No mocking of any kind:
+spawns the real ``dirsql`` console script as a subprocess against the real
+built binary (staged where the launcher's ``binary_path()`` looks).
 """
 
 from __future__ import annotations
@@ -33,11 +28,7 @@ _BINARY_STAGE_DIR = os.path.join(os.path.dirname(_dirsql_pkg.__file__), "_binary
 
 
 def _cli() -> str:
-    """Resolve the `dirsql` console script for this test env.
-
-    Failing loudly here surfaces an environment misconfiguration rather
-    than masking it as a test assertion failure further down.
-    """
+    """Resolve the `dirsql` console script for this test env."""
     dirsql = shutil.which("dirsql")
     assert dirsql is not None, (
         "`dirsql` console script not on PATH -- run `uv run maturin develop`"

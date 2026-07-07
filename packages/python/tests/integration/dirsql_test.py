@@ -1,4 +1,4 @@
-"""Hermetic integration tests for the Python SDK (#289).
+"""Hermetic integration tests for the Python SDK.
 
 These tests exercise the SDK public API with the Rust core
 (``dirsql._dirsql.DirSQL``) mocked and no filesystem access. They
@@ -131,8 +131,6 @@ def describe_binding_layer():
             db = async_mod.DirSQL("/root", tables=["t"])
             await db.ready()
 
-            # Construction (extension resolution + core init) is offloaded as
-            # the `_build_db` bound method.
             assert "_build_db" in to_thread_spy, to_thread_spy
 
         @pytest.mark.asyncio
@@ -161,7 +159,6 @@ def describe_binding_layer():
             await db.ready()
             await db.ready()
             await db.ready()
-            # Only one underlying instance should have been constructed.
             assert len(_FakeRustDirSQL.instances) == 1
 
         @pytest.mark.asyncio
@@ -200,7 +197,6 @@ def describe_binding_layer():
             stream = db.watch()
             assert _FakeRustDirSQL.instances[0].started is False
 
-            # Queue a single event so __anext__ returns.
             _FakeRustDirSQL.instances[0].poll_batches = [["evt-1"]]
 
             event = await stream.__anext__()
@@ -219,7 +215,6 @@ def describe_binding_layer():
             assert await stream.__anext__() == "a"
             assert await stream.__anext__() == "b"
             assert await stream.__anext__() == "c"
-            # Only one poll happened; the rest came from the buffer.
             assert len(fake.poll_calls) == 1
             assert fake.poll_calls[0] == 200
 
@@ -264,9 +259,7 @@ def describe_binding_layer():
         async def it_forwards_construction_without_root_or_config_to_the_core(
             mock_core,
         ):
-            # The wrapper no longer raises on (None, None); the core owns that
-            # validation (DirSQLBuilder::resolve). Construction forwards both
-            # as None.
+            # The core owns (None, None) validation; the wrapper forwards both.
             db = async_mod.DirSQL()
             await db.ready()
 

@@ -1,16 +1,14 @@
 """SDK-side resolution of a TOML config's ``[[dirsql.extension]]`` entries.
 
-The Rust core parses a ``.dirsql.toml`` itself and loads its extensions
-literally -- it has no ``importlib``, so it cannot resolve a bare **package
-name** (#227). The SDK can (#313). When a TOML config names an extension by
-package name, the SDK resolves every one of its extensions here, hands the
-core the resolved literal paths, and suppresses the core's own config-extension
-loading (the Rust ``suppress_config_extensions`` builder toggle) so the
-config's entries are not loaded a second time.
+The Rust core loads a config's extensions literally -- it has no
+``importlib``, so it cannot resolve a bare **package name**. When a TOML
+config names an extension by package name, the SDK resolves every one of its
+extensions here, hands the core the resolved literal paths, and suppresses
+the core's own config-extension loading (``suppress_config_extensions``) so
+the config's entries are not loaded a second time.
 
 Shared by the ``DirSQL`` constructor (``config=`` path) and the CLI launcher
-(``dirsql.cli.resolve_config_extensions``, which converts the resolved specs
-into ``--extension`` flags for the binary).
+(which converts the resolved specs into ``--extension`` flags).
 """
 
 from __future__ import annotations
@@ -45,9 +43,7 @@ def resolve_config_extension_specs(config_path):
     entries = cfg.get("extension")
     if not isinstance(entries, list):
         return None
-    # Only intervene when at least one path is a bare package name; a config
-    # with only literal paths (or no entries at all) keeps the core's existing
-    # behavior untouched.
+    # Only intervene when at least one path is a bare package name.
     if not any(
         isinstance(e, dict)
         and isinstance(e.get("path"), str)
