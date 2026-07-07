@@ -123,7 +123,9 @@ fn parse_sql_body(body: &str) -> Result<String, QueryFailure> {
 /// (`Internal`).
 fn classify_query_error(err: DirSqlError) -> QueryFailure {
     match err {
-        DirSqlError::Core(_) => QueryFailure::BadRequest(err.to_string()),
+        DirSqlError::Core(_) | DirSqlError::WriteForbidden => {
+            QueryFailure::BadRequest(err.to_string())
+        }
         _ => QueryFailure::Internal(err.to_string()),
     }
 }
@@ -233,6 +235,17 @@ mod tests {
         let failure = classify_query_error(err);
         assert!(
             matches!(failure, QueryFailure::Internal(_)),
+            "got: {failure:?}"
+        );
+    }
+
+    #[test]
+    fn classify_write_forbidden_is_bad_request() {
+        // A rejected write is the caller's fault, exactly like a `Core` SQL
+        // error -> `BadRequest`, not the `Internal` catch-all (issue #444).
+        let failure = classify_query_error(DirSqlError::WriteForbidden);
+        assert!(
+            matches!(failure, QueryFailure::BadRequest(_)),
             "got: {failure:?}"
         );
     }

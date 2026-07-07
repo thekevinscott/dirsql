@@ -159,10 +159,10 @@ def describe_query_contract():
         assert status == 400
         assert "no such table" in body["error"]
 
-    # NOTE: http-api.md also documents the read-only rule (a write statement
-    # is a 400), but the binary currently returns 500 for it -- a pre-existing
-    # docs-vs-behavior mismatch surfaced while writing this suite, tracked as
-    # #444. The case is asserted here as soon as that fix lands.
+    def it_rejects_a_write_statement_with_400(server):
+        status, body = _post_sql(server, "DELETE FROM files")
+        assert status == 400
+        assert "read-only" in body["error"]
 
     def it_denies_internal_table_reads_with_400(server):
         # The `_dirsql_*` bookkeeping namespace is not readable through the
