@@ -29,12 +29,8 @@ within one path segment) are in
 
 ## 2. Query the captured columns
 
-Start the server (`npx dirsql` / `uvx dirsql`) and query:
-
 ```bash
-curl -s http://localhost:7117/query \
-  -H 'content-type: application/json' \
-  -d '{"sql":"SELECT year, month, _basename FROM photos ORDER BY year, month"}'
+dirsql query "SELECT year, month, _basename FROM photos ORDER BY year, month"
 ```
 
 ```json
@@ -44,9 +40,7 @@ curl -s http://localhost:7117/query \
 Captures are real SQL columns, so aggregation works:
 
 ```bash
-curl -s http://localhost:7117/query \
-  -H 'content-type: application/json' \
-  -d '{"sql":"SELECT year, COUNT(*) AS photos FROM photos GROUP BY year"}'
+dirsql query "SELECT year, COUNT(*) AS photos FROM photos GROUP BY year"
 ```
 
 ```json

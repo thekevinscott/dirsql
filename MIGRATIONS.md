@@ -93,12 +93,9 @@ _None._
 #### Verification
 
 ```sh
-# Start dirsql over a directory (serves on localhost:7117 by default), then
-# post a read of an internal table to the query surface:
-curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:7117/query \
-  -H 'content-type: application/json' \
-  -d '{"sql": "SELECT * FROM _dirsql_internal_rows"}'
-# expected: 400 (was 200 with the internal rows before this change)
+dirsql query "SELECT * FROM _dirsql_internal_rows"; echo "exit: $?"
+# expected: nonzero exit with a rejected-read diagnostic on stderr
+# (was exit 0 with the internal rows before this change)
 ```
 
 ### Internal `_dirsql_*` tracking columns removed; one-time cache rebuild (#361)
@@ -354,11 +351,8 @@ release).
 cargo build -p dirsql --features cli
 # A `.py` config no longer serves tables; the binary reports a TOML parse error.
 printf 'app = 1\n' > /tmp/dirsql-a3.py
-cargo run -q -p dirsql --features cli -- --config /tmp/dirsql-a3.py --port 8099 &
-sleep 1
-curl -s localhost:8099/query -H 'content-type: application/json' -d '{"sql":"SELECT 1"}'
-# expected: a 503 with a "failed to load config" / TOML parse diagnostic
-kill %1
+cargo run -q -p dirsql --features cli -- --config /tmp/dirsql-a3.py query "SELECT 1"
+# expected: exit 1 with a "failed to load config" / TOML parse diagnostic on stderr
 ```
 
 ### CLI: Python `DirSQL(...)` no longer guards `(None, None)` (#260)
@@ -907,12 +901,8 @@ _None._
 ```bash
 cd "$(mktemp -d)"
 echo hi > note.txt
-dirsql --port 7117 &
-sleep 1
-curl -s localhost:7117/query -H 'content-type: application/json' \
-  -d '{"sql":"SELECT _basename FROM files"}'
+dirsql query "SELECT _basename FROM files"
 # expected: [{"_basename":"note.txt"}]
-kill %1
 ```
 
 ---

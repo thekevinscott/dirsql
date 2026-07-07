@@ -31,12 +31,8 @@ by every hook.
 
 ## 2. Query the extracted columns
 
-Start the server (`npx dirsql` / `uvx dirsql`) and query:
-
 ```bash
-curl -s http://localhost:7117/query \
-  -H 'content-type: application/json' \
-  -d '{"sql":"SELECT title, author, year, _path FROM books ORDER BY year"}'
+dirsql query "SELECT title, author, year, _path FROM books ORDER BY year"
 ```
 
 ```json
@@ -61,9 +57,7 @@ on-file = "jq -c -s '.' {path}"
 ```
 
 ```bash
-curl -s http://localhost:7117/query \
-  -H 'content-type: application/json' \
-  -d '{"sql":"SELECT event, user FROM events"}'
+dirsql query "SELECT event, user FROM events"
 ```
 
 ```json

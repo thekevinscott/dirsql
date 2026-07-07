@@ -99,20 +99,14 @@ installed `sqlite_vec` module to its bundled loadable. Naming rules per
 runtime — and the literal-path alternative that works everywhere — are in
 [Load a SQLite extension](./load-extension.md).
 
-## 3. Start the server and ask questions
+## 3. Ask questions
 
-Launch with `sqlite-vec` available to the launcher's environment:
-
-```bash
-uvx --with sqlite-vec dirsql
-```
-
-The initial scan runs `embed.py` once per note. Then ask:
+Run with `sqlite-vec` available to the launcher's environment. The initial
+scan runs `embed.py` once per note, then the query argument goes straight to
+`pre-query`, exactly as a `POST /query` body would:
 
 ```bash
-curl -s http://localhost:7117/query \
-  -H 'content-type: application/json' \
-  -d '{"q": "how do I cook pasta?"}'
+uvx --with sqlite-vec dirsql query '{"q": "how do I cook pasta?"}'
 ```
 
 ```json
@@ -120,9 +114,7 @@ curl -s http://localhost:7117/query \
 ```
 
 ```bash
-curl -s http://localhost:7117/query \
-  -H 'content-type: application/json' \
-  -d '{"q": "reviewing code on github"}'
+uvx --with sqlite-vec dirsql query '{"q": "reviewing code on github"}'
 ```
 
 ```json
@@ -133,9 +125,9 @@ Neither question shares a keyword with its top note — "cook" appears
 nowhere in `pasta.md`, "github" nowhere in `branches.md`. The distance
 ranking is doing the work.
 
-Because `pre-query` is set, the request body is *not* the usual
-`{"sql": …}` — the raw body goes to your script, which decides what SQL
-runs ([hook interactions](../reference/http-api.md#hook-interactions)).
+Because `pre-query` is set, the query argument is *not* the usual
+`{"sql": …}` — it goes to your script as-is, which decides what SQL runs
+([hook interactions](../reference/http-api.md#hook-interactions)).
 
 ## Recomputing vs. caching
 
