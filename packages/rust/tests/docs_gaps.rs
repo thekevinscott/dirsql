@@ -2,17 +2,12 @@
 //! on the Rust SDK side.
 //!
 //! Each test cites the canonical doc location (docs page + section) it covers.
-//! These mirror `packages/python/tests/binding/docs_gaps_test.py` for the
-//! Rust SDK (bead dirsql-9ng). See TESTS_AUDIT.md.
+//! These mirror `packages/python/tests/binding/docs_gaps_test.py`.
 
 use dirsql::{DirSQL, Table, Value};
 use std::collections::HashMap;
 use std::fs;
 use tempfile::TempDir;
-
-// ---------------------------------------------------------------------------
-// docs/reference/sdk.md -- "Strict Mode" (strict = true on programmatic tables)
-// ---------------------------------------------------------------------------
 
 /// Docs (reference/sdk.md "Strict Mode"): `strict = true` errors on extra keys
 /// produced by the user extract.
@@ -61,10 +56,6 @@ fn strict_true_allows_exact_match() {
     assert_eq!(rows[0]["color"], Value::Text("red".into()));
 }
 
-// ---------------------------------------------------------------------------
-// docs/reference/sdk.md -- "Supported value types" -> bytes -> BLOB
-// ---------------------------------------------------------------------------
-
 /// Docs (reference/sdk.md "Supported value types"): Rust `Value::Blob` round-trips through SQLite BLOB.
 #[test]
 fn extract_blob_values_round_trip_via_sdk() {
@@ -92,10 +83,6 @@ fn extract_blob_values_round_trip_via_sdk() {
     assert_eq!(rows[0]["name"], Value::Text("bin".into()));
     assert_eq!(rows[0]["data"], Value::Blob(payload));
 }
-
-// ---------------------------------------------------------------------------
-// docs/reference/sdk.md -- RowEvent.file_path relative-path assertion
-// ---------------------------------------------------------------------------
 
 /// Docs (reference/sdk.md): Insert events carry `file_path`, the relative
 /// path of the source file within the watched root.

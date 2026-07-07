@@ -46,7 +46,6 @@ fn bench_diff_single_line_change(c: &mut Criterion) {
     for count in [10, 100, 1000] {
         let old = make_rows(count);
         let mut new = old.clone();
-        // Change one row in the middle
         new[count / 2].insert("name".to_string(), Value::Text("CHANGED".to_string()));
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, _| {
             b.iter(|| {
@@ -62,7 +61,6 @@ fn bench_diff_append(c: &mut Criterion) {
     for count in [10, 100, 1000] {
         let old = make_rows(count);
         let mut new = old.clone();
-        // Append 10% more rows
         let extra = make_rows(count + count / 10);
         new.extend_from_slice(&extra[count..]);
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, _| {
@@ -78,7 +76,6 @@ fn bench_diff_full_replace(c: &mut Criterion) {
     let mut group = c.benchmark_group("differ/full_replace");
     for count in [10, 100, 1000] {
         let old = make_rows(count);
-        // Completely different rows trigger full replace
         let new: Vec<HashMap<String, Value>> = (0..count)
             .map(|i| {
                 HashMap::from([

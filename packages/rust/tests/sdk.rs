@@ -317,7 +317,6 @@ fn it_streams_watch_delete_events() {
 
     let db = DirSQL::new(root.path(), vec![items_table()]).unwrap();
 
-    // Verify initial data
     let rows = db.query("SELECT * FROM items").unwrap();
     assert_eq!(rows.len(), 1);
 
@@ -404,9 +403,8 @@ fn it_streams_watch_error_events() {
     }
 }
 
-// The split-phase wait/apply API is used by async bindings (TypeScript) that
-// cannot safely invoke the `extract` callback off the host thread. Verify the
-// two halves round-trip to the same result as the combined `poll_events`.
+// The split-phase wait/apply API exists for async bindings (TypeScript) that
+// cannot safely invoke the `extract` callback off the host thread.
 #[test]
 fn it_splits_wait_and_apply_for_async_bindings() {
     let root = TempDir::new().unwrap();
@@ -431,7 +429,7 @@ fn it_splits_wait_and_apply_for_async_bindings() {
             .any(|e| matches!(e, RawFileEvent::Created(_) | RawFileEvent::Modified(_)))
     );
 
-    // Apply runs extract and mutates the DB. Inserts land in the index.
+    // Apply runs extract and mutates the DB.
     let row_events = db.apply_file_events(raw);
     assert!(!row_events.is_empty());
 
@@ -442,12 +440,10 @@ fn it_splits_wait_and_apply_for_async_bindings() {
     )));
 }
 
-// The split-phase prepare/finish build API is used by async bindings
+// The split-phase prepare/finish build API exists for async bindings
 // (TypeScript) that cannot safely invoke the `extract` callback off the host
-// thread. `prepare_build` walks the directory and reads file contents on the
-// worker thread; `finish_build` runs `extract` + DB inserts on the thread
-// where the callback is safe. Verify both halves together produce the same
-// result as the combined `DirSQL::new` constructor.
+// thread: `prepare_build` walks the directory on the worker thread;
+// `finish_build` runs `extract` + DB inserts where the callback is safe.
 #[test]
 fn it_splits_scan_and_build_for_async_bindings() {
     use std::sync::Arc;
@@ -493,10 +489,6 @@ fn it_splits_scan_and_build_for_async_bindings() {
     assert_eq!(rows[0]["name"], Value::Text("alpha".into()));
     assert_eq!(rows[1]["name"], Value::Text("beta".into()));
 }
-
-// ---------------------------------------------------------------------------
-// Builder API
-// ---------------------------------------------------------------------------
 
 #[test]
 fn builder_root_and_table_match_new() {
@@ -583,9 +575,8 @@ glob = "*.json"
 
 #[test]
 fn builder_explicit_root_overrides_config_root() {
-    // Config root points at an empty dir, but explicit .root() wins.
-    // The `name` column is populated from a glob path capture so the test
-    // doesn't depend on content parsing.
+    // The `name` column comes from a glob path capture so the test doesn't
+    // depend on content parsing.
     let temp = TempDir::new().unwrap();
     let empty_dir = temp.path().join("empty");
     let data_dir = temp.path().join("data");
@@ -671,8 +662,6 @@ glob = "*.json"
     assert_eq!(notes[0]["body"], Value::Text("hello".into()));
 }
 
-// poll_events: happy path. Create a file after start, poll, and confirm the
-// resulting RowEvent batch lands in the in-memory index.
 #[test]
 fn poll_events_returns_row_events_for_new_file() {
     let root = TempDir::new().unwrap();
@@ -699,8 +688,8 @@ fn poll_events_returns_row_events_for_new_file() {
     )));
 }
 
-// poll_events when watch() is already active returns an error (the two APIs
-// drain the same underlying watcher and are mutually exclusive).
+// poll_events and watch() drain the same underlying watcher, so they are
+// mutually exclusive.
 #[test]
 fn poll_events_after_watch_errors() {
     let root = TempDir::new().unwrap();
@@ -710,7 +699,6 @@ fn poll_events_after_watch_errors() {
     assert!(result.is_err());
 }
 
-// watch() after poll_events() returns an error (mirror of the above).
 #[test]
 fn watch_after_poll_events_errors() {
     let root = TempDir::new().unwrap();
@@ -720,7 +708,6 @@ fn watch_after_poll_events_errors() {
     assert!(result.is_err());
 }
 
-// watch() twice returns WatchAlreadyStarted.
 #[test]
 fn watch_twice_errors_with_already_started() {
     let root = TempDir::new().unwrap();
@@ -733,7 +720,6 @@ fn watch_twice_errors_with_already_started() {
     ));
 }
 
-// wait_file_events() after watch() is active also errors.
 #[test]
 fn wait_file_events_after_watch_errors() {
     let root = TempDir::new().unwrap();
@@ -743,7 +729,6 @@ fn wait_file_events_after_watch_errors() {
     assert!(result.is_err());
 }
 
-// prepare() surfaces resolve() errors (e.g. no root configured) via its `?`.
 #[test]
 fn prepare_without_root_errors() {
     let err = match DirSQL::builder().table(items_table()).prepare() {
@@ -756,8 +741,6 @@ fn prepare_without_root_errors() {
     );
 }
 
-// A table whose DDL cannot be parsed for a name is rejected at matcher
-// compile time with a Ddl error (covers compile_matcher's parse `ok_or_else`).
 #[test]
 fn unparseable_ddl_errors() {
     let root = TempDir::new().unwrap();
@@ -766,21 +749,15 @@ fn unparseable_ddl_errors() {
     assert!(matches!(result, Err(dirsql::DirSqlError::Ddl(_))));
 }
 
-// A table with an invalid glob pattern is rejected with a Matcher error
-// (covers compile_matcher's TableMatcher::new `map_err`).
 #[test]
 fn invalid_glob_errors() {
     let root = TempDir::new().unwrap();
-    // An unclosed character class is an invalid glob.
     let table = Table::new("CREATE TABLE t (x TEXT)", "a[b", |_| vec![]);
     let result = DirSQL::new(root.path(), vec![table]);
     assert!(matches!(result, Err(dirsql::DirSqlError::Matcher { .. })));
 }
 
-// An undeclared glob capture is silently dropped during fact-merging: the
-// row's only declared column is `_path`, while the `{kind}` capture is not a
-// table column. Covers the `declared.contains` false arm of
-// merge_filesystem_facts.
+// An undeclared glob capture is silently dropped during fact-merging.
 #[test]
 fn undeclared_capture_is_dropped() {
     let root = TempDir::new().unwrap();
@@ -794,12 +771,10 @@ fn undeclared_capture_is_dropped() {
     let db = DirSQL::new(root.path(), vec![table]).unwrap();
     let rows = db.query("SELECT * FROM entries").unwrap();
     assert_eq!(rows.len(), 1);
-    // `kind` was captured but not declared, so it must not appear as a column.
     assert!(!rows[0].contains_key("kind"));
     assert!(rows[0].contains_key("_path"));
 }
 
-// Building two tables that parse to the same name is a DuplicateTable error.
 #[test]
 fn duplicate_table_name_errors() {
     let root = TempDir::new().unwrap();
@@ -809,7 +784,6 @@ fn duplicate_table_name_errors() {
     assert!(matches!(result, Err(dirsql::DirSqlError::DuplicateTable(name)) if name == "dup"));
 }
 
-// An extract that returns Err surfaces as DirSqlError::Extract at build time.
 #[test]
 fn extract_error_surfaces_as_extract_error() {
     let root = TempDir::new().unwrap();
@@ -832,10 +806,8 @@ fn extract_error_surfaces_as_extract_error() {
 
 #[test]
 fn binary_file_under_glob_does_not_break_build() {
-    // Regression for issue #184 (Part 2): dirsql must not eagerly read
-    // matched files as UTF-8 text. `extract` no longer receives content,
-    // so a non-UTF-8 file under a table's glob must not fail the build --
-    // its row is still produced from filesystem facts alone.
+    // dirsql must not eagerly read matched files as UTF-8 text: a non-UTF-8
+    // file under a table's glob still produces its filesystem-facts row.
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("logo.png"),

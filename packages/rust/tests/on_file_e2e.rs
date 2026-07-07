@@ -1,4 +1,4 @@
-//! End-to-end tests for the `on-file` per-table command event (#327).
+//! End-to-end tests for the `on-file` per-table command event.
 //!
 //! These spawn the real compiled `dirsql` binary over a temp directory whose
 //! `.dirsql.toml` declares an `on-file` command, talk to it over real HTTP,

@@ -1,13 +1,7 @@
-//! Regression test for #250: the file watcher must deliver `RowEvent`s when
-//! `DirSQL` is constructed with a **relative** `root` (e.g. `DirSQL::new(".",
-//! ...)`), not just an absolute one.
-//!
-//! Root cause: `start_watching()` handed the user-supplied (possibly relative)
-//! `root` straight to `notify`, which has surprising behavior when watching
-//! relative paths like `./`. The initial scan worked fine either way; only the
-//! live watcher was broken. The CLI binary already canonicalized its root for
-//! exactly this reason — the SDK did not. The fix watches a canonicalized
-//! `watch_root` while keeping the user-supplied `root` for scanning,
+//! The file watcher must deliver `RowEvent`s when `DirSQL` is constructed
+//! with a **relative** `root` (e.g. `DirSQL::new(".", ...)`): `notify`
+//! misbehaves on relative paths, so the watcher runs on a canonicalized
+//! `watch_root` while the user-supplied `root` keeps serving scanning,
 //! `config()`, and `_path` output.
 //!
 //! `std::env::set_current_dir` mutates **process-global** state, so every test
@@ -20,8 +14,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-/// Serializes the process-global cwd across the tests in this file. A `OnceLock`
-/// avoids pulling in a `lazy_static`/`once_cell` dependency just for the test.
+/// Serializes the process-global cwd across the tests in this file.
 fn cwd_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -69,15 +62,10 @@ fn items_table() -> Table {
     )
 }
 
-/// #250: a watcher built on a relative `root` (`"."`) must still emit an insert
-/// `RowEvent` when a matching file is created after `start_watching()`.
-///
-/// Without the fix the watcher hands `"."` to `notify`, which never delivers
-/// events, so this poll loop times out with zero events (RED). With the fix the
-/// watcher canonicalizes the root, the create is observed, and an `Insert`
-/// arrives (GREEN). The companion absolute-root assertion is intentionally
-/// *not* a separate `#[test]` so it can't race for the cwd lock; it shares this
-/// one to prove the two roots behave identically.
+/// A watcher built on a relative `root` (`"."`) must emit an insert
+/// `RowEvent` when a matching file is created after `start_watching()`. The
+/// absolute-root comparison lives inside this same `#[test]` (not a separate
+/// one) so it can't race for the cwd lock.
 #[test]
 fn watch_with_relative_root_emits_events() {
     let dir = tempfile::TempDir::new().unwrap();
@@ -89,7 +77,6 @@ fn watch_with_relative_root_emits_events() {
 
     let _cwd = CwdGuard::enter(&canonical_dir);
 
-    // Relative root: the exact shape from the bug report / docs examples.
     let db = DirSQL::new(".", vec![items_table()]).unwrap();
     db.start_watching().unwrap();
 
@@ -111,9 +98,8 @@ fn watch_with_relative_root_emits_events() {
         "relative-root watcher must emit an Insert event (#250); saw: {events:?}"
     );
 
-    // The relative `_path` must be the root-relative file name, identical to
-    // what an absolute root would have produced — proving the canonical
-    // watch-root did not leak the absolute prefix into the event path.
+    // `_path` must stay root-relative — the canonical watch-root must not
+    // leak its absolute prefix into the event path.
     if let Some(dirsql::RowEvent::Insert { row, .. }) = insert {
         assert_eq!(
             row.get("_path"),
@@ -122,7 +108,6 @@ fn watch_with_relative_root_emits_events() {
         );
     }
 
-    // And the row landed in the in-memory index.
     let rows = db.query("SELECT name FROM items").unwrap();
     assert!(
         rows.iter().any(|r| matches!(

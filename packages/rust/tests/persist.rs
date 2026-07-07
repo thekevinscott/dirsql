@@ -1,4 +1,4 @@
-//! Integration tests for the persistent on-disk SQLite cache (issue #95).
+//! Integration tests for the persistent on-disk SQLite cache.
 //!
 //! These tests exercise the contract described in
 //! `docs/howto/persist.md`: a warm start with an unchanged tree must
@@ -53,10 +53,6 @@ fn open_in_memory(root: &Path, counter: Arc<AtomicUsize>) -> DirSQL {
         .unwrap()
 }
 
-// ---------------------------------------------------------------------------
-// Cold-start: cache file is created at the documented default path.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn cold_start_writes_cache_at_default_path() {
     let root = TempDir::new().unwrap();
@@ -66,8 +62,6 @@ fn cold_start_writes_cache_at_default_path() {
     let _db = open(root.path(), counter);
 
     let cache = root.path().join(".dirsql").join("cache.db");
-    // Static failure message: a `{}` arg here is only evaluated on failure,
-    // leaving a dead coverage region on the happy path.
     assert!(
         cache.exists(),
         "expected cache at default .dirsql/cache.db path"
@@ -97,16 +91,12 @@ fn custom_persist_path_is_honored() {
     );
 }
 
-// A persist build whose persist_path cannot be created (its parent is an
-// existing regular file) surfaces an error from prepare_persist, propagated
-// through the build pipeline.
 #[test]
 fn persist_with_unopenable_path_errors() {
     let root = TempDir::new().unwrap();
     write_csv(root.path(), "a.csv", &["alpha"]);
 
-    // Make a regular file, then ask for a cache db "inside" it. ensure_parent_dir
-    // / Db::open cannot create a directory under a file, so the build fails.
+    // A cache path "inside" a regular file cannot have its parent created.
     let blocker = root.path().join("blocker");
     fs::write(&blocker, b"x").unwrap();
     let bad_cache = blocker.join("nested").join("cache.db");
@@ -118,19 +108,12 @@ fn persist_with_unopenable_path_errors() {
         .persist(true)
         .persist_path(&bad_cache)
         .build();
-    // The failure surfaces from `ensure_parent_dir`, whose `io::Error` is
-    // converted to `DirSqlError::Io` via the `#[from]` arm. (On this platform
-    // the OS reports `NotADirectory`; the variant is what we pin here.)
     let err = match result {
         Ok(_) => panic!("expected an error when the persist path's parent is a file"),
         Err(e) => e,
     };
     assert!(matches!(err, DirSqlError::Io(_)), "got: {err}");
 }
-
-// ---------------------------------------------------------------------------
-// Warm-start: extract is NOT called for unchanged files; rows are equivalent.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn warm_start_skips_extract_for_unchanged_files() {
@@ -177,10 +160,6 @@ fn warm_start_returns_same_rows_as_cold_rebuild() {
     assert_eq!(cold_rows, warm_rows);
 }
 
-// ---------------------------------------------------------------------------
-// Warm-start with changes: changes are picked up.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn warm_start_reparses_modified_file() {
     let root = TempDir::new().unwrap();
@@ -191,8 +170,8 @@ fn warm_start_reparses_modified_file() {
         let _db = open(root.path(), counter.clone());
     }
 
-    // Wait long enough for any 1-second filesystem timestamp resolution to
-    // distinguish the modified mtime from the cached snapshot.
+    // Wait past 1-second filesystem timestamp resolution so the modified
+    // mtime is distinguishable from the cached snapshot.
     std::thread::sleep(std::time::Duration::from_millis(1100));
     write_csv(root.path(), "a.csv", &["alpha-updated"]);
 
@@ -246,10 +225,6 @@ fn warm_start_ingests_new_file() {
     assert_eq!(rows[1]["col"], Value::Text("beta".into()));
 }
 
-// ---------------------------------------------------------------------------
-// Full-rebuild triggers: glob change, dirsql_version bump, etc.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn glob_config_change_forces_full_rebuild() {
     let root = TempDir::new().unwrap();
@@ -263,8 +238,7 @@ fn glob_config_change_forces_full_rebuild() {
     let cold = counter.swap(0, Ordering::SeqCst);
     assert_eq!(cold, 1);
 
-    // Change the glob: now match *.tsv too. This is a different glob set, so
-    // the cached glob_config_hash should mismatch and force a full rebuild.
+    // A different glob set mismatches the cached glob_config_hash.
     let csv_counter = Arc::new(AtomicUsize::new(0));
     let tsv_counter = Arc::new(AtomicUsize::new(0));
     let csv_table = counting_csv_table(csv_counter.clone());
@@ -317,7 +291,6 @@ fn corrupted_meta_triggers_full_rebuild() {
     }
     counter.store(0, Ordering::SeqCst);
 
-    // Manually corrupt the cached dirsql_version.
     let cache = root.path().join(".dirsql").join("cache.db");
     let conn = Connection::open(&cache).unwrap();
     conn.execute(
@@ -336,10 +309,6 @@ fn corrupted_meta_triggers_full_rebuild() {
     let rows = db.query("SELECT col FROM rows").unwrap();
     assert_eq!(rows.len(), 1);
 }
-
-// ---------------------------------------------------------------------------
-// .dirsql/ exclusion (must hold whether persist is on or off).
-// ---------------------------------------------------------------------------
 
 #[test]
 fn dirsql_directory_excluded_when_persist_enabled() {
@@ -380,10 +349,6 @@ fn dirsql_directory_excluded_when_persist_disabled() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["col"], Value::Text("alpha".into()));
 }
-
-// ---------------------------------------------------------------------------
-// Sidecar tables exist and are populated.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn cache_contains_sidecar_tables() {

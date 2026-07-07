@@ -1,15 +1,7 @@
-//! Integration tests for the filesystem watcher.
-//!
-//! These drive a **real** `notify` OS watcher over a real temp directory with
-//! real file mutations, threads, and wall-clock polling -- they verify the
-//! end-to-end "does the OS actually report this change" behavior through
-//! `Watcher`'s public API. That makes them integration tests, not unit tests:
-//! faking `notify` would only assert against the fake. They were moved here
-//! out of `watcher.rs`'s inline `#[cfg(test)]` module so that module stays
-//! purely unit (the `testing-conventions` `unit lint` isolation rule forbids
-//! effectful std -- `std::fs`, `std::thread`, `Instant::now` -- in unit tests).
-//! The pure `translate_event` mapping tests remain inline next to the private
-//! function they exercise.
+//! Integration tests for the filesystem watcher: a **real** `notify` OS
+//! watcher over a real temp directory (the unit-lint isolation rule keeps
+//! this effectful tier out of `watcher.rs`'s inline unit module, which holds
+//! the pure `translate_event` tests).
 
 use std::time::{Duration, Instant};
 use std::{fs, thread};
@@ -48,10 +40,6 @@ fn detects_file_creation() {
     let file_path = dir.path().join("new_file.txt");
     fs::write(&file_path, "hello").unwrap();
 
-    // Collect every event seen up to the deadline, then assert. Draining
-    // into a Vec (instead of breaking out of the loop on the first match)
-    // keeps the loop body free of a data-dependent `break` whose region
-    // races with real-OS event timing under coverage.
     let events = collect_events_until(&watcher, Duration::from_secs(5), |seen| {
         seen.iter().any(|e| matches!(e, FileEvent::Created(_)))
     });
@@ -72,7 +60,6 @@ fn detects_file_deletion() {
 
     fs::remove_file(&file_path).unwrap();
 
-    // See `detects_file_creation` for why we collect rather than break.
     let events = collect_events_until(&watcher, Duration::from_secs(5), |seen| {
         seen.iter().any(|e| matches!(e, FileEvent::Deleted(_)))
     });
@@ -93,9 +80,7 @@ fn detects_file_modification() {
 
     fs::write(&file_path, "modified content").unwrap();
 
-    // We should get either a Modified or Created event (some backends emit
-    // Create on overwrite). See `detects_file_creation` for the collect
-    // rationale.
+    // Some backends emit Create on overwrite, so accept Modified or Created.
     let matches_event = |e: &FileEvent| matches!(e, FileEvent::Modified(_) | FileEvent::Created(_));
     let events = collect_events_until(&watcher, Duration::from_secs(5), |seen| {
         seen.iter().any(matches_event)
@@ -112,7 +97,6 @@ fn recv_blocks_until_event_arrives() {
     let watcher = Watcher::new(dir.path()).unwrap();
     thread::sleep(Duration::from_millis(100));
     fs::write(dir.path().join("recv_test.txt"), "hi").unwrap();
-    // recv() blocks; the event should arrive quickly
     let event = watcher.recv();
     assert!(event.is_some());
 }
@@ -123,12 +107,10 @@ fn try_recv_all_drains_pending_events() {
     let watcher = Watcher::new(dir.path()).unwrap();
     thread::sleep(Duration::from_millis(100));
 
-    // Create several files
     for i in 0..3 {
         fs::write(dir.path().join(format!("file_{i}.txt")), "data").unwrap();
     }
 
-    // Wait a bit for events to arrive
     thread::sleep(Duration::from_millis(500));
 
     let events = watcher.try_recv_all();

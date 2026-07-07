@@ -1,4 +1,4 @@
-//! End-to-end tests for the `dirsql` CLI binary (issue #105).
+//! End-to-end tests for the `dirsql` CLI binary.
 //!
 //! These tests spawn the actual compiled `dirsql` binary as a subprocess,
 //! talk to it over real HTTP, and drive real filesystem mutations. Nothing
@@ -24,16 +24,10 @@ use reqwest::{StatusCode, blocking::Client};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-// ---------------------------------------------------------------------------
-// Fixtures & helpers
-// ---------------------------------------------------------------------------
-
 /// Write a two-post blog fixture into a fresh tempdir and return it.
 /// The `.dirsql.toml` lives at the root so `dirsql` can discover it.
-///
-/// `title` and `author` are captured from the file path (`posts/{author}/
-/// {title}.json`) rather than parsed from file content -- the new model
-/// derives row columns from filesystem facts only.
+/// `title` and `author` are captured from the file path
+/// (`posts/{author}/{title}.json`).
 fn blog_fixture() -> TempDir {
     let root = TempDir::new().unwrap();
     fs::create_dir_all(root.path().join("posts/alice")).unwrap();
@@ -54,9 +48,7 @@ glob = "posts/{author}/{title}.json"
 
 /// A blog fixture whose `.dirsql.toml` names the table with a **quoted**
 /// identifier (`"posts"`) -- the canonical DDL shape emitted by ORMs / schema
-/// tools. Until #204 resolves the name via `sqlite_master`, the hand-rolled
-/// scanner keeps the quotes, the table is rejected at build time, and the
-/// server is left degraded (503).
+/// tools.
 fn quoted_blog_fixture() -> TempDir {
     let root = TempDir::new().unwrap();
     fs::create_dir_all(root.path().join("posts/alice")).unwrap();
@@ -141,10 +133,6 @@ fn kill_and_wait(mut child: Child) {
     let _ = child.wait();
 }
 
-// ---------------------------------------------------------------------------
-// Binary smoke tests
-// ---------------------------------------------------------------------------
-
 #[test]
 fn version_flag_prints_and_exits_zero() {
     std::process::Command::cargo_bin("dirsql")
@@ -168,14 +156,8 @@ fn help_flag_prints_and_exits_zero() {
         .stdout(predicates::str::contains("--port"));
 }
 
-// ---------------------------------------------------------------------------
-// Server lifecycle
-// ---------------------------------------------------------------------------
-
 #[test]
 fn server_announces_bind_on_stdout() {
-    // Per docs/reference/cli.md: on startup, the server prints something like
-    // `Running at localhost:7117` to stdout. Parse the first line.
     let root = blog_fixture();
     let port = free_port();
     let mut child = spawn_dirsql(root.path(), port);
@@ -222,10 +204,6 @@ fn post_query_returns_rows_over_http() {
 
 #[test]
 fn post_query_rejects_read_of_internal_bookkeeping_table() {
-    // #378: dirsql's internal bookkeeping tables are unreachable through the CLI
-    // query surface. `_dirsql_internal_rows` is populated by the engine while
-    // indexing the fixture, but selecting from it is rejected at prepare time
-    // rather than leaking the internal rows.
     let root = blog_fixture();
     let port = free_port();
     let child = spawn_dirsql(root.path(), port);
@@ -355,16 +333,10 @@ fn concurrent_queries_all_succeed() {
     kill_and_wait(child);
 }
 
-// ---------------------------------------------------------------------------
-// Config discovery & error paths
-// ---------------------------------------------------------------------------
-
 #[test]
 fn unloadable_config_returns_503_on_query() {
-    // A `.dirsql.toml` that exists but cannot be parsed leaves the server in
-    // the degraded state: it still starts (so the error is visible over
-    // HTTP), but every query returns 503. (A *missing* config is no longer
-    // degraded -- see `no_config_serves_default_files_table`.)
+    // A parse-failing config degrades the server (still binds, queries 503);
+    // a *missing* config does not -- see `no_config_serves_default_files_table`.
     let dir = TempDir::new().unwrap();
     fs::write(
         dir.path().join(".dirsql.toml"),
@@ -387,10 +359,7 @@ fn unloadable_config_returns_503_on_query() {
 
 #[test]
 fn quoted_identifier_table_in_toml_is_served_over_http() {
-    // #204: a `.dirsql.toml` table whose DDL uses a quoted identifier must be
-    // served like any other -- SQLite resolves the name to the bare `posts`.
-    // Today the quoted name is rejected at build time, so the server degrades
-    // to 503; this asserts the post-fix behavior (200 + the indexed row).
+    // The quoted DDL identifier resolves to the bare table name `posts`.
     let root = quoted_blog_fixture();
     let port = free_port();
     let child = spawn_dirsql(root.path(), port);
@@ -410,9 +379,6 @@ fn quoted_identifier_table_in_toml_is_served_over_http() {
 
 #[test]
 fn no_config_serves_default_files_table() {
-    // Issue #184 Part 1: with no `.dirsql.toml`, dirsql serves a default
-    // `files` table with one row per file under the root, instead of going
-    // into the degraded (503) state.
     let dir = TempDir::new().unwrap();
     fs::write(dir.path().join("readme.md"), "hello").unwrap();
     let port = free_port();
@@ -444,12 +410,9 @@ fn no_config_serves_default_files_table() {
 #[cfg(unix)]
 #[test]
 fn pre_query_hook_rewrites_body_into_sql_over_http() {
-    // #328: with `[dirsql].pre-query` set, `POST /query` passes the raw request
-    // body to the hook and runs the SQL it prints. The hook here ignores the
-    // (non-JSON) body and emits a SELECT over the posts table; getting rows
-    // back proves the hook ran (the `{sql}` passthrough would have 400'd on
-    // this body). The hook script is referenced by a bare relative name to
-    // exercise cwd = the config file's directory.
+    // The passthrough path would 400 on this non-JSON body, so rows coming
+    // back proves the hook ran. The script is referenced by a bare relative
+    // name to exercise cwd = the config file's directory.
     let root = blog_fixture();
     fs::write(
         root.path().join("to_sql.sh"),
@@ -494,12 +457,9 @@ glob = "posts/{author}/{title}.json"
 #[cfg(unix)]
 #[test]
 fn post_query_hook_reshapes_response_over_http() {
-    // #329: with `[dirsql].post-query` set, a successful `POST /query` result
-    // set is handed to the hook, which reads the rows (on stdin) and prints the
-    // JSON body to return. The hook here wraps the rows in a `{results: …}`
-    // envelope; getting that envelope back proves the hook reshaped the
-    // response. The hook script is referenced by a bare relative name to
-    // exercise cwd = the config file's directory.
+    // The `{results: …}` envelope coming back proves the hook reshaped the
+    // response. The script is referenced by a bare relative name to exercise
+    // cwd = the config file's directory.
     let root = blog_fixture();
     fs::write(
         root.path().join("wrap.sh"),
@@ -541,10 +501,8 @@ glob = "posts/{author}/{title}.json"
 #[cfg(unix)]
 #[test]
 fn pre_query_hook_exceeding_configured_timeout_returns_500() {
-    // #351: the global `[dirsql].hook-timeout` bounds each pre-query run. A hook
-    // that sleeps past a 1-second timeout is killed and the request returns
-    // 500 with the timeout in the error body — under the default 30-second
-    // timeout the hook would have finished and the request succeeded.
+    // Under the default 30s timeout this hook would finish; the 500 proves
+    // the configured 1-second `hook-timeout` applied.
     let root = blog_fixture();
     fs::write(
         root.path().join("slow_to_sql.sh"),
@@ -591,9 +549,8 @@ glob = "posts/{author}/{title}.json"
 #[cfg(unix)]
 #[test]
 fn pre_query_hook_within_generous_configured_timeout_succeeds() {
-    // #351: a generous `hook-timeout` admits a hook slower than the old fixed
-    // bound would matter for — and proves the value is read as seconds (a 60
-    // read as milliseconds would kill this 2-second hook).
+    // Proves `hook-timeout` is read as seconds: a 60 read as milliseconds
+    // would kill this 2-second hook.
     let root = blog_fixture();
     fs::write(
         root.path().join("slowish_to_sql.sh"),
@@ -642,8 +599,6 @@ glob = "posts/{author}/{title}.json"
 #[cfg(unix)]
 #[test]
 fn post_query_hook_exceeding_configured_timeout_returns_500() {
-    // #351: the global `[dirsql].hook-timeout` bounds each post-query run, the
-    // same single key that bounds on-file and pre-query.
     let root = blog_fixture();
     fs::write(
         root.path().join("slow_wrap.sh"),
@@ -822,7 +777,6 @@ fn query_subcommand_serves_default_files_table_without_config() {
 
 #[test]
 fn explicit_config_flag_overrides_cwd_default() {
-    // Start in an unrelated cwd but point `--config` at the fixture.
     let fixture = blog_fixture();
     let elsewhere = TempDir::new().unwrap();
 

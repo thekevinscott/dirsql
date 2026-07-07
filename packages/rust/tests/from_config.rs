@@ -141,9 +141,7 @@ glob = "docs/*.md"
     assert_eq!(r["_dir"], Value::Text("docs".into()));
     assert_eq!(r["_ext"], Value::Text("md".into()));
     assert_eq!(r["_size"], Value::Integer(body.len() as i64));
-    // _mtime is set to a unix timestamp; confirm it's a positive integer.
-    // Single-line `matches!` with a guard pins the `Integer` variant and the
-    // positivity check in one branch-free expression (no dead non-Integer arm).
+    // _mtime is a unix timestamp; confirm it's a positive integer.
     assert!(
         matches!(&r["_mtime"], Value::Integer(n) if *n > 0),
         "expected a positive Integer _mtime, got {:?}",
@@ -153,8 +151,6 @@ glob = "docs/*.md"
 
 #[test]
 fn from_config_undeclared_stat_columns_are_silently_dropped() {
-    // The DDL declares only _path; _size/_mtime are not selected, but the
-    // injection layer doesn't fail when they're not in the table schema.
     let root = TempDir::new().unwrap();
 
     fs::write(
@@ -201,7 +197,7 @@ glob = "nothing_here/*.txt"
 }
 
 // A config with an *absolute* `root` is used verbatim (not joined to the
-// config's parent). Covers the absolute-root branch of resolve().
+// config's parent).
 #[test]
 fn from_config_absolute_root_is_used_verbatim() {
     let data = TempDir::new().unwrap();
@@ -230,9 +226,7 @@ glob = "*.csv"
     assert_eq!(rows.len(), 1);
 }
 
-// A config with `persist = true` and a *relative* `persist_path` enables the
-// on-disk cache, resolving the path relative to the config parent. Covers the
-// config-driven persist branches of resolve() + prepare_persist().
+// A relative `persist_path` resolves against the config's parent directory.
 #[test]
 fn from_config_persist_true_with_relative_persist_path() {
     let root = TempDir::new().unwrap();
@@ -256,15 +250,13 @@ glob = "*.csv"
     let db = DirSQL::from_config_path(&cfg_path).unwrap();
     let rows = db.query("SELECT _path FROM files").unwrap();
     assert_eq!(rows.len(), 1);
-    // The relative persist_path resolved under the config's parent dir.
     assert!(
         root.path().join("cache").join("db.sqlite").exists(),
         "expected the cache db at the resolved relative persist_path",
     );
 }
 
-// A config with `persist = true` and an *absolute* `persist_path` uses the
-// path verbatim. Covers the absolute-persist_path branch of resolve().
+// An absolute `persist_path` is used verbatim.
 #[test]
 fn from_config_persist_true_with_absolute_persist_path() {
     let root = TempDir::new().unwrap();
@@ -300,10 +292,6 @@ glob = "*.csv"
     );
 }
 
-// A config table with `strict = true` propagates strictness; an extra,
-// undeclared injected column would error, so a minimal-DDL strict table
-// over a file with no extra columns still builds. Covers the strict branch
-// of build_tables_from_config.
 #[test]
 fn from_config_strict_table_builds() {
     let root = TempDir::new().unwrap();

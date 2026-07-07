@@ -1,4 +1,4 @@
-//! Integration tests for the `on-file` per-table command event (#327).
+//! Integration tests for the `on-file` per-table command event.
 //!
 //! These build a `DirSQL` from a real `.dirsql.toml` whose table declares an
 //! `on-file` command, over real temp files, and assert the parsed rows appear
@@ -138,10 +138,8 @@ on-file = "sh extract.sh {path}"
     assert_eq!(rows[0]["name"], Value::Text("ok".into()));
 }
 
-/// #351: the global `[dirsql].hook-timeout` key bounds each `on-file` run. A
-/// command that sleeps past a 1-second timeout is killed and the file is
-/// skipped (the usual per-file error isolation) — under the default 30-second
-/// timeout the command would have finished and its row would have landed.
+/// Under the default 30-second timeout this command would finish; the skip
+/// proves the configured 1-second `hook-timeout` bounded the run.
 #[test]
 fn on_file_exceeding_configured_timeout_skips_the_file() {
     let root = TempDir::new().unwrap();
@@ -174,9 +172,8 @@ on-file = "sh slow.sh {path}"
     );
 }
 
-/// #351: a generous `[dirsql].hook-timeout` admits a command slower than the
-/// bound would otherwise suggest — `hook-timeout = 5` with a 2-second command
-/// lands rows (and proves the value is read as seconds).
+/// Proves `hook-timeout` is read as seconds: `hook-timeout = 5` with a
+/// 2-second command lands rows.
 #[test]
 fn on_file_within_generous_configured_timeout_lands_rows() {
     let root = TempDir::new().unwrap();

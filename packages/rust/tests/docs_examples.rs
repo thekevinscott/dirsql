@@ -8,10 +8,6 @@ use std::collections::HashMap;
 use std::fs;
 use tempfile::TempDir;
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 /// Set up the blog directory structure from getting-started.md.
 fn blog_dir(root: &std::path::Path) {
     let posts = root.join("posts");
@@ -80,10 +76,6 @@ fn blog_tables() -> Vec<Table> {
     ]
 }
 
-// ---------------------------------------------------------------------------
-// getting-started.md
-// ---------------------------------------------------------------------------
-
 #[test]
 fn it_matches_getting_started_query_all_posts() {
     let root = TempDir::new().unwrap();
@@ -141,10 +133,6 @@ fn it_matches_getting_started_join_example() {
         ]
     );
 }
-
-// ---------------------------------------------------------------------------
-// reference/sdk.md
-// ---------------------------------------------------------------------------
 
 #[test]
 fn it_matches_tables_guide_single_object_json() {
@@ -481,10 +469,6 @@ fn it_matches_tables_guide_constraints() {
     assert_eq!(rows[0]["name"], Value::Text("Widget".into()));
 }
 
-// ---------------------------------------------------------------------------
-// reference/sdk.md
-// ---------------------------------------------------------------------------
-
 #[test]
 fn it_matches_querying_guide_select_all() {
     let root = TempDir::new().unwrap();
@@ -572,10 +556,6 @@ fn it_matches_querying_guide_empty_results() {
     assert!(rows.is_empty());
 }
 
-// ---------------------------------------------------------------------------
-// reference/sdk.md - watch events (sync DirSQL)
-// ---------------------------------------------------------------------------
-
 #[test]
 fn it_matches_watching_guide_insert_event() {
     let root = TempDir::new().unwrap();
@@ -632,7 +612,6 @@ fn it_matches_watching_guide_delete_event() {
     )
     .unwrap();
 
-    // Verify initial data
     let rows = db.query("SELECT * FROM items").unwrap();
     assert_eq!(rows.len(), 1);
 
@@ -704,10 +683,6 @@ fn it_matches_watching_guide_update_event() {
         other => panic!("expected update-related event, got: {other:?}"),
     }
 }
-
-// ---------------------------------------------------------------------------
-// reference/sdk.md
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn it_matches_async_guide_basic_usage() {

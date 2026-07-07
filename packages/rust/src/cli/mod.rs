@@ -39,10 +39,6 @@ pub mod server;
 
 pub use server::{serve, serve_with_state};
 
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
 /// A server-wide `pre-query` command hook, carrying the command template plus
 /// the directory it runs in (the config file's parent). When set on a
 /// [`ServerConfig`], the server passes each `POST /query` request body to the
@@ -57,7 +53,7 @@ pub struct PreQuery {
     pub config_dir: PathBuf,
     /// Per-run timeout. Defaults to the shared 30-second
     /// [`DEFAULT_COMMAND_TIMEOUT`]; override it via [`Self::with_timeout`]
-    /// (the CLI wires the global `[dirsql].hook-timeout` here, #351).
+    /// (the CLI wires the global `[dirsql].hook-timeout` here).
     pub timeout: Duration,
 }
 
@@ -95,7 +91,7 @@ pub struct PostQuery {
     pub config_dir: PathBuf,
     /// Per-run timeout. Defaults to the shared 30-second
     /// [`DEFAULT_COMMAND_TIMEOUT`]; override it via [`Self::with_timeout`]
-    /// (the CLI wires the global `[dirsql].hook-timeout` here, #351).
+    /// (the CLI wires the global `[dirsql].hook-timeout` here).
     pub timeout: Duration,
 }
 
@@ -202,10 +198,8 @@ impl From<DirSQL> for AppState {
     }
 }
 
-/// Symmetric construction for the degraded arm. Lets call sites build the
-/// degraded state with the same `.into()` ergonomics as the ready arm
-/// instead of typing the variant name. The string is the diagnostic that
-/// `/query` and `/events` echo back as a 503 body.
+/// The string is the diagnostic that `/query` and `/events` echo back as a
+/// 503 body.
 impl From<String> for AppState {
     fn from(reason: String) -> Self {
         Self::Unavailable(reason)
@@ -266,14 +260,9 @@ pub enum ServerError {
 mod tests {
     use super::*;
 
-    // `From<DirSQL> for AppState` produces the `Ready` arm -- this is
-    // verified at the integration tier by `from_dirsql_yields_ready_state`
-    // in `tests/cli_integration.rs`, which builds a real `DirSQL` over a
-    // temp directory (so the initial scan runs) and asserts the public
-    // `AppState::Ready` variant. It lived here once but needed
-    // `std::fs::write` to populate the scanned directory, which the
-    // `testing-conventions` `unit lint` isolation rule forbids in a unit
-    // test (effectful std). The pure config-default test below stays inline.
+    // `From<DirSQL> for AppState` needs a real scanned directory, so its
+    // `Ready`-arm test lives in `tests/cli_integration.rs` (unit-lint
+    // isolation forbids the fs setup here).
 
     #[test]
     fn default_config_binds_localhost_7117_with_30s_timeout() {
@@ -287,8 +276,6 @@ mod tests {
 
     #[test]
     fn pre_query_constructor_carries_command_and_dir() {
-        // `PreQuery::new` is pure data plumbing: the command template and the
-        // working directory it will run in, with the shared default timeout.
         let pq = PreQuery::new("to_sql.py {args}", "/proj");
         assert_eq!(pq.command, "to_sql.py {args}");
         assert_eq!(pq.config_dir, PathBuf::from("/proj"));
@@ -311,8 +298,6 @@ mod tests {
 
     #[test]
     fn post_query_constructor_carries_command_and_dir() {
-        // `PostQuery::new` is pure data plumbing: the command template and the
-        // working directory it will run in, with the shared default timeout.
         let pq = PostQuery::new("jq '{results: .}'", "/proj");
         assert_eq!(pq.command, "jq '{results: .}'");
         assert_eq!(pq.config_dir, PathBuf::from("/proj"));
@@ -336,8 +321,6 @@ mod tests {
 
     #[test]
     fn with_query_timeout_overrides_the_default() {
-        // The builder replaces the 30s default with the supplied timeout and
-        // leaves the rest of the config untouched.
         let cfg = ServerConfig::bind("127.0.0.1", 8080).with_query_timeout(Duration::from_secs(5));
         assert_eq!(cfg.query_timeout, Duration::from_secs(5));
         assert_eq!(cfg.host, "127.0.0.1");
@@ -346,9 +329,7 @@ mod tests {
 
     #[test]
     fn app_state_from_string_builds_the_unavailable_arm() {
-        // `String -> AppState` yields the degraded arm carrying the diagnostic
-        // verbatim (the `/query`/`/events` 503 body). `AppState` isn't `Debug`,
-        // so match rather than assert on a rendering.
+        // `AppState` isn't `Debug`, so match instead of asserting on a rendering.
         let state: AppState = "config failed to load".to_string().into();
         match state {
             AppState::Unavailable(reason) => assert_eq!(reason, "config failed to load"),

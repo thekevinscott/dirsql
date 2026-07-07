@@ -54,34 +54,162 @@ pub(super) fn router(ctx: SharedCtx) -> Router {
 }
 
 async fn handle_query(State(ctx): State<SharedCtx>, body: String) -> Response {
-    match execute_query(
-        &ctx.state,
-        body,
-        ctx.query_timeout,
-        ctx.pre_query.as_ref(),
-        ctx.post_query.as_ref(),
-    )
+    let sql = match &ctx.pre_query {
+        Some(pq) => match run_pre_query(pq, body).await {
+            Ok(sql) => sql,
+            Err(resp) => return resp,
+        },
+        None => match parse_sql_body(&body) {
+            Ok(sql) => sql,
+            Err(resp) => return resp,
+        },
+    };
+
+    let db = match require_ready(&ctx.state) {
+        Ok(db) => db,
+        Err(resp) => return resp,
+    };
+
+    let timeout = ctx.query_timeout;
+    let join =
+        tokio::time::timeout(timeout, tokio::task::spawn_blocking(move || db.query(&sql))).await;
+
+    match join {
+        Ok(Ok(Ok(rows))) => {
+            let rows_json = rows_to_json(&rows);
+            match &ctx.post_query {
+                Some(pq) => match run_post_query(pq, rows_json).await {
+                    Ok(value) => Json(value).into_response(),
+                    Err(resp) => resp,
+                },
+                None => Json(rows_json).into_response(),
+            }
+        }
+        Ok(Ok(Err(err))) => {
+            let status = classify_query_error(&err);
+            error_response(status, err.to_string())
+        }
+        Ok(Err(join_err)) => {
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, join_err.to_string())
+        }
+        Err(_elapsed) => error_response(
+            StatusCode::REQUEST_TIMEOUT,
+            format!("query exceeded {:?} timeout", timeout),
+        ),
+    }
+}
+
+/// Parse a `POST /query` body as `{"sql": …}` and return the trimmed SQL.
+/// 400 on malformed JSON or a missing/empty `sql` field.
+///
+/// `Response` is large (clippy flags the error variant), but returning it
+/// directly matches the axum handler contract and avoids boxing on the hot
+/// path — same trade-off as [`require_ready`].
+#[allow(clippy::result_large_err)]
+fn parse_sql_body(body: &str) -> Result<String, Response> {
+    let parsed: QueryBody = serde_json::from_str(body)
+        .map_err(|err| error_response(StatusCode::BAD_REQUEST, err.to_string()))?;
+    match parsed.sql.as_deref().map(str::trim) {
+        Some(s) if !s.is_empty() => Ok(s.to_string()),
+        Some(_) => Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "`sql` must not be empty",
+        )),
+        None => Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "missing `sql` field",
+        )),
+    }
+}
+
+/// Run the server-wide `pre-query` hook over the raw request body and return
+/// the SQL it prints. The body is passed as the injection-safe `{args}`
+/// placeholder (a single argv token); the command's last non-empty stdout line
+/// is the SQL to run. Any failure (non-zero exit, timeout, spawn error) maps to
+/// `500` carrying the command's stderr tail.
+///
+/// `Response` is large (see [`parse_sql_body`]); returned by value for the same
+/// reason.
+#[allow(clippy::result_large_err)]
+async fn run_pre_query(pq: &PreQuery, raw_body: String) -> Result<String, Response> {
+    let command = pq.command.clone();
+    let config_dir = pq.config_dir.clone();
+    let timeout = pq.timeout;
+    // `run_command` is blocking, so run it off the async runtime. It enforces
+    // the hook timeout internally; no outer `tokio::time::timeout` is needed.
+    let outcome = tokio::task::spawn_blocking(move || {
+        run_command(
+            &command,
+            &[Placeholder::new("args", &raw_body)],
+            &config_dir,
+            timeout,
+            None,
+        )
+    })
     .await
-    {
-        Ok(value) => Json(value).into_response(),
-        Err(failure) => failure_response(&failure),
-    }
+    .map_err(|join_err| error_response(StatusCode::INTERNAL_SERVER_ERROR, join_err.to_string()))?;
+
+    outcome
+        .map(|out| out.payload)
+        .map_err(|err| error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
 }
 
-/// The HTTP status for each [`QueryFailure`] arm. This mapping — together
-/// with [`failure_response`]'s `{"error": …}` body — is the entirety of the
-/// HTTP adapter's own behavior; everything else is the shared pipeline.
-fn failure_status(failure: &QueryFailure) -> StatusCode {
-    match failure {
-        QueryFailure::BadRequest(_) => StatusCode::BAD_REQUEST,
-        QueryFailure::Timeout(_) => StatusCode::REQUEST_TIMEOUT,
-        QueryFailure::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        QueryFailure::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
-    }
-}
+/// Run the server-wide `post-query` hook over a successful result set and
+/// return the JSON body it prints. The rows are serialized to a JSON array and
+/// delivered two ways: always on the child's stdin (unbounded, injection-safe),
+/// and as the `{args}` placeholder when the payload is within
+/// [`POST_QUERY_ARGS_MAX`] (beyond that `{args}` is emptied and a warning names
+/// the size, directing the operator to stdin — never silent truncation). The
+/// command's last non-empty stdout line is parsed as JSON and returned as the
+/// `200` body; anything that isn't valid JSON, or any failure (non-zero exit,
+/// timeout, spawn error), maps to `500`.
+///
+/// `Response` is large (see [`parse_sql_body`]); returned by value for the same
+/// reason.
+#[allow(clippy::result_large_err)]
+async fn run_post_query(
+    pq: &PostQuery,
+    rows: Vec<serde_json::Value>,
+) -> Result<serde_json::Value, Response> {
+    let payload = serde_json::to_string(&rows)
+        .map_err(|err| error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+    let command = pq.command.clone();
+    let config_dir = pq.config_dir.clone();
+    let timeout = pq.timeout;
+    // `run_command` is blocking, so run it off the async runtime. It enforces
+    // the hook timeout internally; no outer `tokio::time::timeout` is needed.
+    let outcome = tokio::task::spawn_blocking(move || {
+        let args_value = if payload.len() <= POST_QUERY_ARGS_MAX {
+            payload.clone()
+        } else {
+            eprintln!(
+                "dirsql: post-query result payload is {} bytes, exceeding the \
+                 {POST_QUERY_ARGS_MAX}-byte argv threshold; `{{args}}` is emptied — \
+                 read the rows from stdin instead",
+                payload.len()
+            );
+            String::new()
+        };
+        run_command(
+            &command,
+            &[Placeholder::new("args", &args_value)],
+            &config_dir,
+            timeout,
+            Some(payload.as_bytes()),
+        )
+    })
+    .await
+    .map_err(|join_err| error_response(StatusCode::INTERNAL_SERVER_ERROR, join_err.to_string()))?;
 
-fn failure_response(failure: &QueryFailure) -> Response {
-    error_response(failure_status(failure), failure.message())
+    let out = outcome
+        .map_err(|err| error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+
+    serde_json::from_str(&out.payload).map_err(|err| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("post-query did not return valid JSON: {err}"),
+        )
+    })
 }
 
 async fn handle_events(State(ctx): State<SharedCtx>) -> Response {
@@ -141,14 +269,14 @@ pub(super) fn error_response(status: StatusCode, message: impl Into<String>) -> 
 mod tests {
     use super::*;
 
-    // The pipeline itself (intake validation, hooks, timeout, execution,
-    // error classification) is unit-tested in `cli/execute.rs` and covered
-    // end-to-end by `tests/cli_integration.rs`. What remains here is the
-    // HTTP adapter's own behavior: the failure -> status mapping and the
-    // JSON error body.
+    // The `DirSqlError::Core => 400` arm is covered in
+    // `tests/cli_integration.rs`: constructing a `Core` value needs
+    // `crate::db::DbError`, which the unit-lint isolation rule forbids here.
 
     #[test]
-    fn failure_status_maps_each_arm_to_its_http_status() {
+    fn classify_non_core_error_is_internal_server_error() {
+        // Lock/watch/config failures are server-side faults -> 500.
+        let err = DirSqlError::Lock("poisoned".into());
         assert_eq!(
             failure_status(&QueryFailure::BadRequest("x".into())),
             StatusCode::BAD_REQUEST
@@ -168,10 +296,13 @@ mod tests {
     }
 
     #[test]
-    fn failure_response_carries_the_status_and_message() {
-        // The degraded arm renders as the 503 JSON error the server always
-        // returned; the message travels through `QueryFailure::message`.
-        let resp = failure_response(&QueryFailure::Unavailable("config failed to load".into()));
+    fn require_ready_returns_503_response_when_unavailable() {
+        let state = AppState::Unavailable("config failed to load".into());
+        // `DirSQL` isn't `Debug`, so go through `.err()` (which drops the Ok
+        // value) rather than `expect_err`.
+        let resp = require_ready(&state)
+            .err()
+            .expect("Unavailable must not yield a db");
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             resp.headers().get(header::CONTENT_TYPE).unwrap(),
@@ -187,5 +318,29 @@ mod tests {
             resp.headers().get(header::CONTENT_TYPE).unwrap(),
             "application/json"
         );
+    }
+
+    #[test]
+    fn parse_sql_body_returns_trimmed_sql() {
+        let sql = parse_sql_body(r#"{"sql": "  SELECT 1  "}"#).expect("valid body");
+        assert_eq!(sql, "SELECT 1");
+    }
+
+    #[test]
+    fn parse_sql_body_rejects_malformed_json() {
+        let resp = parse_sql_body("not json").expect_err("malformed JSON must be rejected");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn parse_sql_body_rejects_whitespace_only_sql() {
+        let resp = parse_sql_body(r#"{"sql": "   "}"#).expect_err("empty sql must be rejected");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn parse_sql_body_rejects_missing_sql_field() {
+        let resp = parse_sql_body("{}").expect_err("missing sql must be rejected");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

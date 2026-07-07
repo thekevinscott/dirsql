@@ -30,8 +30,7 @@ fn cell_to_json(value: &CellValue) -> Value {
     }
 }
 
-/// Hex-encode a byte slice. Used for `BLOB` SQLite values in JSON
-/// output. Lightweight; pulls in no dep just to emit hex.
+/// Hex-encode a byte slice, for `BLOB` SQLite values in JSON output.
 fn hex_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -93,10 +92,6 @@ fn event_to_value(event: &RowEvent) -> Value {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Unit tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,7 +125,6 @@ mod tests {
             Some("posts/a.json"),
         );
         assert!(parsed.get("old_row").unwrap().is_null());
-        // event_to_json is the string form of the value it builds.
         assert_eq!(event_to_json(&event), parsed.to_string());
     }
 
@@ -202,8 +196,6 @@ mod tests {
 
     #[test]
     fn blob_cell_becomes_hex_string() {
-        // The Blob arm of `cell_to_json` hex-encodes the bytes into a JSON
-        // string (BLOB columns aren't representable as JSON literals).
         let json = cell_to_json(&CellValue::Blob(vec![0xde, 0xad, 0xbe, 0xef]));
         assert_eq!(json.as_str(), Some("deadbeef"));
     }
