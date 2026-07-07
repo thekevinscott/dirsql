@@ -4,7 +4,7 @@
 //! the `pre-query` hook, the query timeout, [`DirSQL::query`], row
 //! serialization, the `post-query` hook, and error classification —
 //! lives here exactly once. The HTTP handler and the one-shot
-//! `dirsql query` subcommand (#399) are thin transport adapters over
+//! `dirsql query` subcommand are thin transport adapters over
 //! [`execute_query`], so the two surfaces cannot drift behaviorally:
 //! per-surface code only maps [`QueryFailure`] to a status code or an
 //! exit code.

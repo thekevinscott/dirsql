@@ -9,8 +9,7 @@ internal-table denial (all `400` with a JSON `{"error": ...}` body), plus
 `405` for `GET /query`. No mocks: real launcher, real binary, real process,
 real filesystem.
 
-Added with #399 (whose stage 1, #438, rewired the binary's query pipeline):
-the Rust tiers already pin this contract in-crate, but the language packages
+The Rust tiers already pin this contract in-crate, but the language packages
 ship the binary, so each SDK's e2e suite must pin the HTTP surface it ships.
 """
 
@@ -166,8 +165,8 @@ def describe_query_contract():
     # #444. The case is asserted here as soon as that fix lands.
 
     def it_denies_internal_table_reads_with_400(server):
-        # #378: the `_dirsql_*` bookkeeping namespace is not readable through
-        # the query surface; a rejected read is an error, not empty output.
+        # The `_dirsql_*` bookkeeping namespace is not readable through the
+        # query surface; a rejected read is an error, not empty output.
         status, body = _post_sql(server, "SELECT * FROM _dirsql_internal_rows")
         assert status == 400
         assert "not authorized" in body["error"]
