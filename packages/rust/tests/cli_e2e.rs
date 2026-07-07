@@ -687,6 +687,139 @@ glob = "posts/{author}/{title}.json"
     kill_and_wait(child);
 }
 
+// ---------------------------------------------------------------------------
+// One-shot `dirsql query` subcommand (#399 / #439)
+// ---------------------------------------------------------------------------
+
+/// Run `dirsql query <sql>` in `dir` and return the completed output.
+fn run_query_subcommand(dir: &std::path::Path, sql: &str) -> std::process::Output {
+    std::process::Command::cargo_bin("dirsql")
+        .expect("binary must exist")
+        .arg("query")
+        .arg(sql)
+        .current_dir(dir)
+        .output()
+        .expect("spawning `dirsql query` failed")
+}
+
+#[test]
+fn query_subcommand_stdout_is_byte_identical_to_the_http_response() {
+    // #439 parity: the same SQL over the same fixture through both surfaces
+    // must yield identical bytes — the subcommand is a thin adapter over the
+    // same execute_query pipeline the server uses, so stdout IS the HTTP body.
+    let root = blog_fixture();
+    let sql = "SELECT title FROM posts ORDER BY title";
+
+    let port = free_port();
+    let child = spawn_dirsql(root.path(), port);
+    wait_until_ready(port, Duration::from_secs(10));
+    let http_body = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({ "sql": sql }))
+        .send()
+        .unwrap()
+        .text()
+        .unwrap();
+    kill_and_wait(child);
+
+    let out = run_query_subcommand(root.path(), sql);
+    assert!(
+        out.status.success(),
+        "`dirsql query` must exit 0 on success, got {out:?}"
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(
+        stdout.trim_end_matches('\n'),
+        http_body,
+        "CLI stdout must be byte-identical to the HTTP response body"
+    );
+}
+
+#[test]
+fn query_subcommand_rejects_internal_table_read_with_the_http_error_message() {
+    // #439 parity on the error path: a rejected read (#378 internal-table
+    // denial) is a non-zero exit carrying the SAME diagnostic the HTTP
+    // surface returns in its `{"error": …}` body — an error, never empty
+    // output.
+    let root = blog_fixture();
+    let sql = "SELECT * FROM _dirsql_internal_rows";
+
+    let port = free_port();
+    let child = spawn_dirsql(root.path(), port);
+    wait_until_ready(port, Duration::from_secs(10));
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({ "sql": sql }))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let http_error = resp.json::<Value>().unwrap()["error"]
+        .as_str()
+        .expect("HTTP error body carries an `error` string")
+        .to_string();
+    kill_and_wait(child);
+
+    let out = run_query_subcommand(root.path(), sql);
+    assert!(
+        !out.status.success(),
+        "a rejected read must be a non-zero exit, got {out:?}"
+    );
+    assert!(
+        out.stdout.is_empty(),
+        "a rejected read must not produce stdout rows, got {:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains(&http_error),
+        "stderr must carry the same diagnostic the HTTP surface returns \
+         ({http_error:?}), got {stderr:?}"
+    );
+}
+
+#[test]
+fn query_subcommand_rejects_blank_sql_with_nonzero_exit() {
+    // The subcommand synthesizes the same `{"sql": …}` intake the server
+    // parses, so blank SQL hits the shared empty-rejection with the same
+    // message the HTTP 400 body carries.
+    let root = blog_fixture();
+    let out = run_query_subcommand(root.path(), "   ");
+    assert!(
+        !out.status.success(),
+        "blank SQL must be a non-zero exit, got {out:?}"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("`sql` must not be empty"),
+        "stderr must carry the shared intake message, got {stderr:?}"
+    );
+}
+
+#[test]
+fn query_subcommand_serves_default_files_table_without_config() {
+    // Config discovery matches server mode: no `.dirsql.toml` means the
+    // default `files` table, queryable out of the box.
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("readme.md"), "hello").unwrap();
+
+    let out = run_query_subcommand(dir.path(), "SELECT _basename FROM files");
+    assert!(
+        out.status.success(),
+        "`dirsql query` must serve the default files table, got {out:?}"
+    );
+    let rows: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let names: Vec<&str> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["_basename"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"readme.md"),
+        "expected the default files table to contain readme.md, got {names:?}"
+    );
+}
+
 #[test]
 fn explicit_config_flag_overrides_cwd_default() {
     // Start in an unrelated cwd but point `--config` at the fixture.
