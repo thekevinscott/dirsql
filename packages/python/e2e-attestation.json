@@ -1,6 +1,6 @@
 {
   "command": "uv run python -m pytest tests/e2e/ -x -q",
-  "ran_at": 1783257990,
+  "ran_at": 1783387386,
   "exit_code": 0,
-  "commit": "cb8d663ecb72a808f4ab99589af16949e9449f3b"
+  "commit": "a9cf031533c564bf43c77d893745f9e85fed059f"
 }
