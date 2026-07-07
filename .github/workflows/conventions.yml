@@ -26,9 +26,10 @@ permissions:
 # `dirsql` binary and their e2e suites spawn it, so CLI changes stale the
 # attestations like any other core change.
 #
-# `packaging` (#413) is PROBED here: the reusable workflow auto-builds the
-# distribution from the manifest, so adopting it is just adding "packaging" to
-# gates below. packaging.yml stays until this is confirmed green, then retires.
+# `packaging` (#413) is PROBED here: python/typescript adopt it zero-config
+# (just "packaging" in `gates`); rust needs `build-rust-crate` + `packaging_artifact`
+# since `cargo package` writes to the workspace root, not the member crate's own
+# root. packaging.yml stays until this is confirmed green, then retires.
 #
 # Still bespoke (for now): rust `unit-coverage` (bespoke by design in
 # rust-test.yml — a `packages/rust` `rust-toolchain.toml` for `--branch` nightly
@@ -112,12 +113,36 @@ jobs:
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       gates: '["integration-lint"]'
 
+  # `packages/rust` is a Cargo workspace member, not a standalone crate: `cargo
+  # package` always writes to the *workspace root's* target/package, never the
+  # member's own -- so the reusable workflow's zero-config packaging auto-build
+  # can't find it at the derived package root. This is upstream's documented
+  # "workspace-only manifest" case for `packaging_artifact`: build the crate
+  # ourselves and hand it the artifact, rather than relying on auto-build.
+  build-rust-crate:
+    name: Package the rust crate for the packaging gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - run: cargo package -p dirsql --no-verify --allow-dirty
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rust-crate-dist
+          path: target/package/*.crate
+          if-no-files-found: error
+
   rust:
+    needs: build-rust-crate
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
       languages: '["rust"]'
       path: packages/rust
       config: testing-conventions.toml
+      packaging_artifact: rust-crate-dist
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       # colocated-test now runs for rust: upstream #274/#275 made the detector
       # fan the presence check over rust (co-change stays python/ts). This retires
