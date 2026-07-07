@@ -57,11 +57,13 @@
 # shipped as #333). Proven locally: over a `packages/rust/src`-only diff,
 # `e2e verify` is exit 0 without `--extra-scope` and exit 1 with it.
 #
-# `cli`-only core (`src/cli`, `src/bin`) is feature-gated out of the bindings, so
-# it must NOT stale them -- carved back out via `exclude` (mirrors #328).
+# `cli`-only core (`src/cli`, `src/bin`) is feature-gated out of the binding
+# *libraries*, but the language packages SHIP the compiled `dirsql` binary and
+# their e2e suites spawn it -- so a CLI change alters what those suites
+# exercise just as a core change does. No carve-out: every
+# `packages/rust/src` change stales both bindings' attestations.
 [e2e]
 extra_scope = ["packages/rust/src"]
-exclude = ["packages/rust/src/cli", "packages/rust/src/bin"]
 
 # --- Python (scanned: packages/python/dirsql) ------------------------------
 
