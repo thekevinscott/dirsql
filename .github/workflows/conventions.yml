@@ -26,10 +26,10 @@ permissions:
 # `dirsql` binary and their e2e suites spawn it, so CLI changes stale the
 # attestations like any other core change.
 #
-# `packaging` (#413) is PROBED here: python/typescript adopt it zero-config
-# (just "packaging" in `gates`); rust needs `build-rust-crate` + `packaging_artifact`
-# since `cargo package` writes to the workspace root, not the member crate's own
-# root. packaging.yml stays until this is confirmed green, then retires.
+# `packaging` (#413) is PROBED here for python/typescript only, zero-config
+# (just "packaging" in `gates`, no build job). Rust can't adopt it yet -- see
+# the `rust` job below -- so packaging.yml stays for rust; it retires for
+# python/typescript once this probe is confirmed green.
 #
 # Still bespoke (for now): rust `unit-coverage` (bespoke by design in
 # rust-test.yml — a `packages/rust` `rust-toolchain.toml` for `--branch` nightly
@@ -113,36 +113,12 @@ jobs:
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       gates: '["integration-lint"]'
 
-  # `packages/rust` is a Cargo workspace member, not a standalone crate: `cargo
-  # package` always writes to the *workspace root's* target/package, never the
-  # member's own -- so the reusable workflow's zero-config packaging auto-build
-  # can't find it at the derived package root. This is upstream's documented
-  # "workspace-only manifest" case for `packaging_artifact`: build the crate
-  # ourselves and hand it the artifact, rather than relying on auto-build.
-  build-rust-crate:
-    name: Package the rust crate for the packaging gate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
-      - run: cargo package -p dirsql --no-verify --allow-dirty
-      - uses: actions/upload-artifact@v4
-        with:
-          name: rust-crate-dist
-          path: target/package/*.crate
-          if-no-files-found: error
-
   rust:
-    needs: build-rust-crate
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
       languages: '["rust"]'
       path: packages/rust
       config: testing-conventions.toml
-      packaging_artifact: rust-crate-dist
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       # colocated-test now runs for rust: upstream #274/#275 made the detector
       # fan the presence check over rust (co-change stays python/ts). This retires
@@ -151,7 +127,12 @@ jobs:
       # the engine, which builds and reruns the crate's own tests; #279 installs it
       # from the derived root. No nightly (unlike coverage's --branch). Retires
       # rust-mutation.yml (#417).
-      gates: '["colocated-test", "unit-lint", "integration-lint", "mutation", "packaging"]'
+      #
+      # No "packaging" here: packages/rust is a Cargo workspace member, so
+      # `cargo package` writes to the workspace root's target/package, never
+      # the member's own -- the gate's zero-config auto-build can't find it.
+      # Filed upstream; rust packaging stays on the bespoke packaging.yml (#413).
+      gates: '["colocated-test", "unit-lint", "integration-lint", "mutation"]'
 
   # The two native BINDING crates (#405) hold real marshaling logic but sat
   # outside every gate — the `rust` call above scans only `packages/rust` (the
