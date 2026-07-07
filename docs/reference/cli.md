@@ -1,10 +1,11 @@
 # CLI
 
-The `dirsql` binary has two modes:
+The `dirsql` binary has three modes:
 
 | Invocation | Behavior |
 |---|---|
 | `dirsql` (no subcommand) | Start a long-lived HTTP server exposing a SQL view of a directory. See [HTTP API](./http-api.md). |
+| `dirsql query "<sql>"` | Build the index, run one query, print the rows as JSON, exit. No server, no watch. |
 | `dirsql init` | Generate a starter `.dirsql.toml` by running `claude` over a directory. |
 
 ## Installation
@@ -96,6 +97,46 @@ with a JSON body describing the failure:
 |---|---|
 | `0` | Clean shutdown after `SIGINT` / `SIGTERM`. |
 | `1` | Failed to bind `host:port`, or an error during shutdown. |
+
+## `dirsql query`
+
+Run one SQL query from the shell — for ad-hoc inspection, scripting, and
+docs verification snippets — without booting the server and `curl`ing it:
+
+```bash
+dirsql query "SELECT _basename, _size FROM files ORDER BY _size DESC LIMIT 5"
+# [{"_basename":"model.bin","_size":104857600}, …]
+
+dirsql query "SELECT COUNT(*) AS n FROM posts" | jq '.[0].n'
+```
+
+The subcommand builds the index, runs the SQL, prints the result rows as a
+JSON array on stdout (byte-identical to the [`POST /query`](./http-api.md)
+response body), and exits `0`.
+
+`dirsql query` is a thin adapter over the **same query pipeline the server
+uses**, so behavior is identical to `POST /query` by construction:
+
+- **Config discovery** honors `--config` (default `./.dirsql.toml`),
+  [zero-config mode](#zero-config-mode), and `--extension` overrides,
+  exactly as server mode does.
+- **Hooks** ([`pre-query`](./hooks.md#pre-query) /
+  [`post-query`](./hooks.md#post-query)) and the
+  [`[dirsql].hook-timeout`](./config.md#dirsql-keys) apply identically.
+- The **30-second query timeout**, the **read-only rule**, and the
+  `_dirsql_*` **internal-table denial** apply identically. A rejected read
+  is an error, not empty output.
+
+Errors print the same diagnostic the HTTP `{"error": …}` body carries —
+config failures, SQL errors, rejected reads, hook failures, timeouts — to
+stderr, with exit code `1`.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Query succeeded; rows printed on stdout. |
+| `1` | Any failure: config, SQL, rejected read, hook, or timeout. The diagnostic is on stderr. |
 
 ## `dirsql init`
 

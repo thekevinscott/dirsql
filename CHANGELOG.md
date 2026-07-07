@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **One-shot `dirsql query "<sql>"` subcommand (#399/#439).** Build the index,
+  run one query, print the result rows as a JSON array on stdout, and exit —
+  no server, no watch, pipes straight into `jq`. The subcommand is a thin
+  adapter over the exact pipeline `POST /query` uses (extracted in #438), so
+  config discovery (`--config`, zero-config `files` table, `--extension`
+  overrides), the `pre-query`/`post-query` hooks, the 30-second query timeout,
+  the read-only rule, and the `_dirsql_*` internal-table denial (#378) behave
+  identically on both surfaces by construction. Errors print the same
+  diagnostic the HTTP `{"error": …}` body carries, on stderr, with a non-zero
+  exit.
+
 - **Configurable command-hook timeout (#351).** A single global
   `[dirsql].hook-timeout` key (positive whole seconds) raises or tightens the
   30-second timeout for **all** command-backed hooks at once — `on-file`,
