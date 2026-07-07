@@ -125,16 +125,21 @@ features = ["cli"]
 # #354 first added pure unit tests to close the reachable unit-tier gaps
 # (cli/router.rs `parse_sql_body`, cli/mod.rs `with_query_timeout` /
 # `From<String>`, cli/init.rs error `Display` arms). #446 then removed
-# cli/init.rs's `claude`-subprocess entirely -- `init` writes a fixed
-# starter TOML with no LLM call, no filesystem walk, nothing left
-# unreachable from a unit test -- lifting the measured unit-only coverage to
-# lines 94.50% / regions 93.59% / functions 91.52% / branch 76.73%. The
-# floors below are then set as HIGH as they robustly go -- the highest
-# integer under each actual:
-#   - lines: 94 (actual 94.50%).
-#   - regions: 93 (actual 93.59%).
-#   - functions: 91 (actual 91.52%).
-#   - branch: 76 (actual 76.73%), kept BELOW the >=90% ideal as an accepted,
+# cli/init.rs's `claude`-subprocess entirely -- `init` now writes a fixed
+# starter TOML with no LLM call and no directory walk. Its `run()` still
+# calls `std::fs::write` on its success path (including the `--force`
+# overwrite), which unit-lint isolation forbids a test from asserting on
+# directly (no effectful std::fs in a unit test -- the same rule that
+# excludes `scanner::scan_directory`'s full walk from this tier); that path
+# is covered black-box instead, in `tests/init_integration.rs`. With the
+# error-`Display` and early-return paths still unit-tested, this lifted the
+# measured unit-only coverage to lines 94.43% / regions 93.51% / functions
+# 91.50% / branch 76.10%. The floors below are then set as HIGH as they
+# robustly go -- the highest integer under each actual:
+#   - lines: 94 (actual 94.43%).
+#   - regions: 93 (actual 93.51%).
+#   - functions: 91 (actual 91.50%).
+#   - branch: 76 (actual 76.10%), kept BELOW the >=90% ideal as an accepted,
 #     documented exception (see reasons below).
 #
 # WARNING -- these floors are pinned near their actuals (<1pt of slack), by

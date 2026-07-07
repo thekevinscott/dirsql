@@ -100,28 +100,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn run_writes_the_starter_toml() {
-        let dir = tempfile::tempdir().unwrap();
-        let output = dir.path().join(".dirsql.toml");
-        let opts = InitOptions {
-            output: output.clone(),
-            force: false,
-        };
-        run(opts).unwrap();
-        assert_eq!(std::fs::read_to_string(output).unwrap(), STARTER_TOML);
-    }
-
-    #[test]
-    fn run_with_force_overwrites_an_existing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let output = dir.path().join(".dirsql.toml");
-        std::fs::write(&output, "# old\n").unwrap();
-        let opts = InitOptions {
-            output: output.clone(),
-            force: true,
-        };
-        run(opts).unwrap();
-        assert_eq!(std::fs::read_to_string(output).unwrap(), STARTER_TOML);
-    }
+    // `run`'s write success path (including --force overwrite) calls
+    // `std::fs::write` directly, so asserting on written file content from a
+    // test requires effectful std::fs of its own -- unit-lint isolation
+    // forbids that (see `scanner.rs` for the same split). Covered black-box
+    // in `tests/init_integration.rs`.
 }
