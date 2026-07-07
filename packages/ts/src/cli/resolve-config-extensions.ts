@@ -1,14 +1,11 @@
 // Launcher-side resolution of a TOML config's `[[dirsql.extension]]` entries.
 //
-// The compiled `dirsql` binary reads a `.dirsql.toml` itself and loads its
-// extensions literally — it has no `require.resolve`, so it cannot resolve a
-// bare **package name** (#227). This launcher can. When a TOML config names an
-// extension by package name, the shared SDK resolver
-// (`../resolve-config-extensions.ts`, #313) resolves every one of its
-// extensions and this launcher passes the resolved literal paths to the binary
-// via repeatable `--extension` flags; the binary then loads those and ignores
-// the config's own extension entries (see the Rust `--extension` flag /
-// `suppress_config_extensions`).
+// The compiled `dirsql` binary loads config extensions literally — it has no
+// `require.resolve`, so it cannot resolve a bare **package name**. When a
+// TOML config names an extension by package name, the shared SDK resolver
+// resolves every entry and this launcher passes the resolved literal paths
+// to the binary via repeatable `--extension` flags; the binary then loads
+// those and ignores the config's own extension entries.
 //
 // Native-language configs (`.py`/`.js`/`.mjs`/`.cjs`) are untouched: the binary
 // dispatches those to `dirsql interpret`, whose handshake already carries

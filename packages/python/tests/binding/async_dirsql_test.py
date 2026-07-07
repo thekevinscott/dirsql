@@ -13,7 +13,6 @@ def describe_DirSQL_async():
     def describe_init():
         @pytest.mark.asyncio
         async def it_creates_instance_synchronously(jsonl_dir):
-            """DirSQL constructor is sync and returns immediately."""
             db = DirSQL(
                 jsonl_dir,
                 tables=[
@@ -36,7 +35,6 @@ def describe_DirSQL_async():
 
         @pytest.mark.asyncio
         async def it_indexes_files_after_ready(jsonl_dir):
-            """Data is available after awaiting ready()."""
             db = DirSQL(
                 jsonl_dir,
                 tables=[
@@ -61,7 +59,6 @@ def describe_DirSQL_async():
 
         @pytest.mark.asyncio
         async def it_raises_on_extract_error_during_ready(tmp_dir):
-            """Extract lambda errors during ready() raise exceptions."""
             os.makedirs(os.path.join(tmp_dir, "data"), exist_ok=True)
             with open(os.path.join(tmp_dir, "data", "bad.json"), "w") as f:
                 f.write("not valid json")
@@ -83,7 +80,6 @@ def describe_DirSQL_async():
 
         @pytest.mark.asyncio
         async def it_allows_multiple_ready_calls(jsonl_dir):
-            """Calling ready() multiple times is safe and idempotent."""
             db = DirSQL(
                 jsonl_dir,
                 tables=[
@@ -110,7 +106,6 @@ def describe_DirSQL_async():
     def describe_query():
         @pytest.mark.asyncio
         async def it_returns_results_as_list_of_dicts(jsonl_dir):
-            """Async query returns list of dicts with column names."""
             db = DirSQL(
                 jsonl_dir,
                 tables=[
@@ -138,9 +133,6 @@ def describe_DirSQL_async():
 
         @pytest.mark.asyncio
         async def it_awaits_ready_transparently_for_eager_queries(jsonl_dir):
-            """query() issued before ready() waits for the scan (parity with
-            the TS `query awaits ready` test, #146 / PARITY.md "Ready
-            semantics")."""
             db = DirSQL(
                 jsonl_dir,
                 tables=[
@@ -166,7 +158,6 @@ def describe_DirSQL_async():
 
         @pytest.mark.asyncio
         async def it_raises_on_invalid_sql(jsonl_dir):
-            """Invalid SQL raises an exception."""
             db = DirSQL(
                 jsonl_dir,
                 tables=[
@@ -192,7 +183,6 @@ def describe_DirSQL_async():
     def describe_watch():
         @pytest.mark.asyncio
         async def it_emits_insert_events_for_new_files(tmp_dir):
-            """watch() yields insert events when a new file is created."""
             db = DirSQL(
                 tmp_dir,
                 tables=[
@@ -230,7 +220,6 @@ def describe_DirSQL_async():
                 json.dump({"name": "apple"}, f)
             os.replace(tmp, final)
 
-            # Wait for events with timeout
             try:
                 await asyncio.wait_for(task, timeout=5.0)
             except asyncio.TimeoutError:
@@ -243,8 +232,6 @@ def describe_DirSQL_async():
 
         @pytest.mark.asyncio
         async def it_emits_delete_events_for_removed_files(tmp_dir):
-            """watch() yields delete events when a file is removed."""
-            # Create file before init
             with open(os.path.join(tmp_dir, "doomed.json"), "w") as f:
                 json.dump({"name": "doomed"}, f)
 
@@ -262,7 +249,6 @@ def describe_DirSQL_async():
             )
             await db.ready()
 
-            # Confirm initial data
             results = await db.query("SELECT * FROM items")
             assert len(results) == 1
 
@@ -277,7 +263,6 @@ def describe_DirSQL_async():
             task = asyncio.create_task(collect_events())
             await asyncio.sleep(0.3)
 
-            # Delete the file
             os.remove(os.path.join(tmp_dir, "doomed.json"))
 
             try:
@@ -290,13 +275,11 @@ def describe_DirSQL_async():
             assert events[0].table == "items"
             assert events[0].row["name"] == "doomed"
 
-            # DB should reflect deletion
             results = await db.query("SELECT * FROM items")
             assert len(results) == 0
 
         @pytest.mark.asyncio
         async def it_emits_update_events_for_modified_files(tmp_dir):
-            """watch() yields update events when a file is modified."""
             with open(os.path.join(tmp_dir, "item.json"), "w") as f:
                 json.dump({"name": "draft"}, f)
 
@@ -330,7 +313,6 @@ def describe_DirSQL_async():
             task = asyncio.create_task(collect_events())
             await asyncio.sleep(0.3)
 
-            # Modify the file
             with open(os.path.join(tmp_dir, "item.json"), "w") as f:
                 json.dump({"name": "final"}, f)
 
@@ -346,7 +328,6 @@ def describe_DirSQL_async():
 
         @pytest.mark.asyncio
         async def it_emits_error_events_for_bad_extract(tmp_dir):
-            """watch() yields error events when extract lambda fails."""
             db = DirSQL(
                 tmp_dir,
                 tables=[
@@ -374,7 +355,6 @@ def describe_DirSQL_async():
             task = asyncio.create_task(collect_events())
             await asyncio.sleep(0.3)
 
-            # Create a file with invalid JSON
             with open(os.path.join(tmp_dir, "bad.json"), "w") as f:
                 f.write("not json at all")
 
@@ -393,7 +373,6 @@ def describe_DirSQL_async():
 
         @pytest.mark.asyncio
         async def it_updates_db_on_file_changes(tmp_dir):
-            """The database is kept in sync with file system changes."""
             db = DirSQL(
                 tmp_dir,
                 tables=[
@@ -408,7 +387,6 @@ def describe_DirSQL_async():
             )
             await db.ready()
 
-            # Initially empty
             results = await db.query("SELECT * FROM items")
             assert len(results) == 0
 
@@ -428,7 +406,6 @@ def describe_DirSQL_async():
             task = asyncio.create_task(collect_events())
             await asyncio.sleep(0.3)
 
-            # Add a file
             with open(os.path.join(tmp_dir, "new.json"), "w") as f:
                 json.dump({"name": "added"}, f)
 
@@ -437,7 +414,6 @@ def describe_DirSQL_async():
             except asyncio.TimeoutError:
                 pytest.fail("Timed out waiting for watch events")
 
-            # DB should now have the row
             results = await db.query("SELECT * FROM items")
             assert len(results) == 1
             assert results[0]["name"] == "added"

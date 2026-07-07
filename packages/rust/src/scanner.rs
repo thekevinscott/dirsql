@@ -15,7 +15,6 @@ pub fn scan_directory(root: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, Stri
     let mut results = Vec::new();
 
     let walker = WalkDir::new(root).into_iter().filter_entry(|entry| {
-        // Skip the reserved `.dirsql/` directory at the top level.
         !is_reserved_dir(entry.depth(), entry.file_type().is_dir(), entry.file_name())
     });
 
@@ -43,9 +42,7 @@ pub fn scan_directory(root: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, Stri
 }
 
 /// True for the reserved top-level `.dirsql/` directory (`depth == 1`), which
-/// the scan unconditionally excludes. Factored out as a pure predicate over the
-/// facts `WalkDir` exposes so it can be unit-tested without walking a real tree
-/// -- the directory-walk behavior itself is covered by `tests/scanner.rs`.
+/// the scan unconditionally excludes.
 fn is_reserved_dir(depth: usize, is_dir: bool, file_name: &std::ffi::OsStr) -> bool {
     depth == 1 && is_dir && file_name == RESERVED_DIR
 }
@@ -55,11 +52,8 @@ mod tests {
     use super::*;
     use std::ffi::OsStr;
 
-    // The directory-walk behavior of `scan_directory` (real temp trees, real
-    // files) is exercised by `tests/scanner.rs` -- those are integration tests
-    // and stay out of this inline unit module, which the `unit lint` isolation
-    // rule keeps free of effectful std. What remains here is the pure
-    // reserved-dir predicate the walker filters on.
+    // Real directory-walk behavior is covered by `tests/scanner.rs`
+    // (unit-lint isolation); only the pure predicate is tested here.
 
     #[test]
     fn is_reserved_dir_matches_top_level_dirsql() {
@@ -68,16 +62,12 @@ mod tests {
 
     #[test]
     fn is_reserved_dir_rejects_nested_dirsql() {
-        // Only the *top-level* `.dirsql/` (depth 1) is reserved; a nested one
-        // (e.g. `sub/.dirsql/`) is an ordinary directory.
         assert!(!is_reserved_dir(2, true, OsStr::new(RESERVED_DIR)));
     }
 
     #[test]
     fn is_reserved_dir_rejects_files_and_other_names() {
-        // A file named `.dirsql` is not the reserved directory ...
         assert!(!is_reserved_dir(1, false, OsStr::new(RESERVED_DIR)));
-        // ... and an ordinary top-level directory is not reserved.
         assert!(!is_reserved_dir(1, true, OsStr::new("data")));
     }
 }

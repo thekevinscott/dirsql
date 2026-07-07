@@ -1,6 +1,5 @@
 // `readFileSync` stays sync: it runs inside `extract` callbacks, and the
 // public `TableDef.extract` signature is synchronous `(filePath) => rows[]`.
-// Only the test's own setup/teardown plumbing moves to `node:fs/promises`.
 import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -213,7 +212,6 @@ describe("DirSQL", () => {
       await expect(db.query(stmt)).rejects.toThrow(/read-only/i);
     }
 
-    // Index is unchanged.
     const rows = await db.query("SELECT name FROM items");
     expect(rows).toEqual([{ name: "apple" }]);
   });
@@ -229,17 +227,9 @@ describe("DirSQL", () => {
         },
       ],
     });
-    // Construction is async: DDL errors surface via the `ready` Promise
-    // rejection rather than a sync throw.
     await expect(db.ready).rejects.toThrow();
   });
 });
-
-// ---------------------------------------------------------------------------
-// Gap-filling tests for docs features previously untested on the TS SDK side.
-// Mirrors packages/python/tests/binding/docs_gaps_test.py (bead dirsql-9ng).
-// See TESTS_AUDIT.md.
-// ---------------------------------------------------------------------------
 
 describe("DirSQL strict mode", () => {
   let dir: string;
@@ -253,8 +243,7 @@ describe("DirSQL strict mode", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  // Docs (reference/sdk.md / reference/config.md "Strict Mode"):
-  // `strict: true` on a Table def rejects rows with keys not in the DDL.
+  // Docs: reference/sdk.md / reference/config.md "Strict Mode".
   it("rejects rows with extra keys when strict is true", async () => {
     await writeFile(
       join(dir, "items", "a.json"),
@@ -277,7 +266,6 @@ describe("DirSQL strict mode", () => {
     await expect(db.ready).rejects.toThrow();
   });
 
-  // Docs: strict mode passes on exact key match.
   it("allows rows with exact key match when strict is true", async () => {
     await writeFile(
       join(dir, "items", "a.json"),
@@ -317,8 +305,6 @@ describe("DirSQL watch events", () => {
   });
 
   // Docs (reference/sdk.md event payloads): `filePath` is relative to the root.
-  // All examples in reference/sdk.md show relative paths (e.g. "comments/abc/index.json")
-  // rather than absolute paths.
   it("sets filePath as a relative path on watch events", async () => {
     await mkdir(join(dir, "nested", "dir"), { recursive: true });
 
@@ -337,12 +323,9 @@ describe("DirSQL watch events", () => {
 
     await db.startWatcher();
 
-    // Give the watcher a moment to settle before writing, so the file event
-    // is definitely captured.
     const relPath = join("nested", "dir", "new.json");
     await writeFile(join(dir, relPath), JSON.stringify({ name: "relative" }));
 
-    // Poll until we see at least one event, up to ~5s total.
     const events: RowEvent[] = [];
     const deadline = Date.now() + 5000;
     while (events.length === 0 && Date.now() < deadline) {
@@ -353,15 +336,10 @@ describe("DirSQL watch events", () => {
     const ev = events[0];
     expect(ev.filePath).toBeTruthy();
     const fp = (ev.filePath ?? "").replace(/\\/g, "/");
-    // Must be relative (not absolute).
     expect(fp.startsWith("/")).toBe(false);
     expect(fp).toBe(relPath.replace(/\\/g, "/"));
   });
 
-  // #147: pollEvents runs on the libuv threadpool, so awaiting a long poll
-  // timeout does NOT starve the JS event loop. This is the watch-layer
-  // analog of the async query test; a ~500ms native poll must coexist with
-  // a concurrent ~50ms setTimeout.
   it("does not block the JS event loop during pollEvents", async () => {
     const db = new DirSQL({
       root: dir,
@@ -389,14 +367,11 @@ describe("DirSQL watch events", () => {
     await db.pollEvents(500);
     const pollElapsed = Date.now() - pollStart;
 
-    // The timer fires concurrently with the poll (it's not starved).
     expect(timerFired).toBe(true);
     // Sanity: the poll still actually parked the native thread for ~500ms.
     expect(pollElapsed).toBeGreaterThanOrEqual(400);
   });
 
-  // PARITY: the TS DirSQL exposes `ready: Promise<void>` and
-  // `watch(): AsyncIterable<RowEvent>` to match Python/Rust.
   it("exposes ready as an awaitable Promise", async () => {
     const db = new DirSQL({
       root: dir,
@@ -413,14 +388,9 @@ describe("DirSQL watch events", () => {
 
     expect(db.ready).toBeInstanceOf(Promise);
     await expect(db.ready).resolves.toBeUndefined();
-    // query works immediately after ready resolves.
     expect(await db.query("SELECT * FROM items")).toEqual([]);
   });
 
-  // #146: the constructor must NOT block the JS event loop. The directory
-  // scan + file reads happen on the libuv threadpool; the constructor
-  // returns immediately with a `ready` promise. A concurrent short setTimeout
-  // should fire before or during the scan, not after it.
   it("does not block the JS event loop during construction", async () => {
     // Seed with a handful of files so the scan has real work to do.
     await mkdir(join(dir, "items"), { recursive: true });
@@ -459,8 +429,6 @@ describe("DirSQL watch events", () => {
     expect(rows).toHaveLength(20);
   });
 
-  // #146: `query()` transparently awaits `ready`, so callers can issue it
-  // before the initial scan has finished and it just works.
   it("query awaits ready so callers can issue it eagerly", async () => {
     await writeFile(
       join(dir, "x.json"),
@@ -485,15 +453,6 @@ describe("DirSQL watch events", () => {
     expect(rows).toEqual([{ name: "eagerly-resolved" }]);
   });
 });
-
-// ---------------------------------------------------------------------------
-// Parity-restoring: `Table` class export (#216).
-// Python has `Table(ddl=..., glob=..., extract=...)` and Rust has
-// `Table::new(...)`; TS used to require plain object literals only. The new
-// `Table` class is a thin identity wrapper around `TableDef` -- constructing
-// `new Table({...})` produces something structurally identical to the literal,
-// and anything accepting `TableDef[]` must accept both forms interchangeably.
-// ---------------------------------------------------------------------------
 
 describe("Table class", () => {
   let dir: string;

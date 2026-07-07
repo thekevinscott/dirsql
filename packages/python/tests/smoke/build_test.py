@@ -1,27 +1,19 @@
 """Packaging smoke test for the published PyPI wheel -- the `smoke` tier
-(build -> pack -> install -> run). Mirrors the TS smoke test
-(packages/ts/tests/smoke/build.test.ts, #344). Distinct from the e2e tier
-(CLI features against the dev install) and from packaging.yml, which only
-checks that no test files ship in the artifact; this proves the wheel
-actually installs and runs.
+(build -> pack -> install -> run).
 
 Stages the real cargo-built `dirsql` binary under `dirsql/_binary/` the
 way the release pipeline's `bundle_cli` step would, builds the wheel with
 `maturin build`, installs it into a fresh venv with `pip install`, and
 runs the installed `dirsql --version` console script plus an
-`import dirsql` of the installed package. No mocks, no monkeypatching --
-exactly what `pip install dirsql` gives an end user.
-
-This is the in-CI publishability gate: red here means the PyPI release
-is broken and must not go out.
+`import dirsql` of the installed package. No mocks -- exactly what
+`pip install dirsql` gives an end user.
 
 Caveats:
 - Tests only the host triple/interpreter. Cross-target coverage lives in
   the release pipeline's install matrix (one runner per target).
 - The binary staging is reconstructed locally because it is normally
-  performed by the release tool (putitoutthere's `bundle_cli`). The
-  staged path is the one `dirsql.cli.binary_path()` consumes
-  (`<dirsql package>/_binary/dirsql`), so this still exercises the real
+  performed by the release tool. The staged path is the one
+  `dirsql.cli.binary_path()` consumes, so this still exercises the real
   launcher resolution path.
 """
 
@@ -52,8 +44,7 @@ def installed_venv(tmp_path_factory):
     """Build the wheel and install it into a fresh venv; yield its bin dir.
 
     Module-scoped: the maturin build + venv install is expensive, and both
-    tests exercise the same installed artifact. Prerequisites fail loudly
-    (environment misconfiguration, not a product failure).
+    tests exercise the same installed artifact.
     """
     maturin = shutil.which("maturin")
     assert maturin is not None, (
@@ -66,15 +57,13 @@ def installed_venv(tmp_path_factory):
 
     staging = tmp_path_factory.mktemp("dirsql-smoke")
 
-    # 1. Stage the cargo-built CLI binary where the wheel `include` expects
-    #    it, as the release pipeline's bundle_cli step would.
+    # 1. Stage the cargo-built CLI binary where the wheel `include` expects it.
     os.makedirs(_BINARY_STAGE_DIR, exist_ok=True)
     staged_binary = os.path.join(_BINARY_STAGE_DIR, "dirsql")
     shutil.copy(_BINARY, staged_binary)
     os.chmod(staged_binary, 0o755)
     try:
-        # 2. Build the real wheel. Goes through the package's actual
-        #    maturin config (module-name, includes, excludes).
+        # 2. Build the real wheel through the package's actual maturin config.
         wheel_dir = staging / "dist"
         build = subprocess.run(
             [maturin, "build", "--out", str(wheel_dir)],

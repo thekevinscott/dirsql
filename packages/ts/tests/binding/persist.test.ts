@@ -1,6 +1,5 @@
 // `readFileSync` stays sync: it runs inside `extract` callbacks, whose public
-// signature is synchronous. All other fs access (setup/teardown, cache
-// surgery, existence checks) moves to `node:fs/promises`.
+// signature is synchronous.
 import { readFileSync } from "node:fs";
 import {
   mkdir,
@@ -18,14 +17,12 @@ import initSqlJs from "sql.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { exists } from "../exists.js";
 
-// The two tests below reach into dirsql's on-disk cache (`.dirsql/cache.db`,
-// written by the Rust core) out-of-band to corrupt internal bookkeeping and
-// exercise the racy-window and dirsql_version-bump reconcile paths. We use
-// sql.js (WASM SQLite) instead of `node:sqlite` so the binding suite runs
-// on every supported Node -- `node:sqlite` only exists on 22.5+. sql.js is
-// in-memory, so we read the cache bytes, mutate, and write them back; the
-// cache uses SQLite's default rollback journal (no WAL sidecar), so the main
-// db file is complete at rest. See #245.
+// Some tests corrupt dirsql's on-disk cache (`.dirsql/cache.db`) out-of-band
+// to exercise the racy-window and dirsql_version-bump reconcile paths. sql.js
+// (WASM SQLite) is used instead of `node:sqlite`, which only exists on Node
+// 22.5+. sql.js is in-memory, so we read the cache bytes, mutate, and write
+// them back; the cache uses SQLite's default rollback journal (no WAL
+// sidecar), so the main db file is complete at rest.
 const resolveModule = createRequire(import.meta.url).resolve;
 const sqlJsReady = initSqlJs({
   locateFile: (file) => join(dirname(resolveModule("sql.js")), file),
@@ -271,7 +268,6 @@ describe("DirSQL persist", () => {
       persist: true,
     });
     await db2.ready;
-    // Racy-window path forces a hash check; corrupted hash -> re-parse.
     expect(box2.count).toBe(1);
     const rows = await db2.query("SELECT name FROM items");
     expect(rows[0].name).toBe("apple");
@@ -300,7 +296,6 @@ describe("DirSQL persist", () => {
       persist: true,
     });
     await db2.ready;
-    // Version mismatch forces a full rebuild; the file is re-parsed.
     expect(box2.count).toBe(1);
   });
 

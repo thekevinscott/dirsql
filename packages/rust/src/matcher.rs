@@ -43,17 +43,14 @@ pub fn parse_captures(pattern: &str) -> (String, Vec<String>, Option<Regex>) {
         return (pattern.to_string(), names, None);
     }
 
-    // Replace {name} with * for glob matching
     let glob_pattern = capture_re.replace_all(pattern, "*").to_string();
 
-    // Build a regex that captures the values from matched paths.
-    // Escape everything except our capture groups, and replace {name} with a named group.
+    // Build a regex over the original pattern to extract capture values.
     let mut regex_parts = Vec::new();
     let mut last_end = 0;
 
     for mat in capture_re.find_iter(pattern) {
         let before = &pattern[last_end..mat.start()];
-        // Convert glob syntax in the "before" segment to regex
         regex_parts.push(glob_segment_to_regex(before));
         let name = &pattern[mat.start() + 1..mat.end() - 1];
         regex_parts.push(format!("(?P<{}>[^/]+)", name));
@@ -203,7 +200,6 @@ mod tests {
             &[],
         )
         .unwrap();
-        // "data/foo.json" matches *.json first
         assert_eq!(
             matcher.match_file(Path::new("data/foo.json")),
             Some("json_table")
@@ -247,8 +243,6 @@ mod tests {
 
     #[test]
     fn invalid_ignore_pattern_returns_error() {
-        // An unparseable *ignore* glob propagates through the `?` in the
-        // ignore-pattern loop, mirroring the table-glob error path.
         let result = TableMatcher::new(&[], &["[invalid"]);
         assert!(result.is_err());
     }
@@ -263,7 +257,6 @@ mod tests {
 
     #[test]
     fn double_star_at_end_matches_any_depth() {
-        // `**` not followed by `/` — produces `.*` in the regex, matches any path suffix.
         let matcher = TableMatcher::new(&[("logs/**", "t")], &[]).unwrap();
         assert!(matcher.match_file(Path::new("logs/a.txt")).is_some());
         assert!(
@@ -272,8 +265,6 @@ mod tests {
                 .is_some()
         );
     }
-
-    // --- Path capture tests ---
 
     #[test]
     fn capture_single_segment() {
@@ -329,7 +320,6 @@ mod tests {
 
     #[test]
     fn match_file_still_works_with_captures_in_pattern() {
-        // The old match_file API should still work when patterns have captures
         let matcher =
             TableMatcher::new(&[("comments/{thread_id}/index.jsonl", "comments")], &[]).unwrap();
         assert_eq!(
@@ -349,8 +339,6 @@ mod tests {
 
     #[test]
     fn capture_with_trailing_double_star() {
-        // `**` not followed by `/` in a capture pattern exercises the
-        // `.*` branch of `glob_segment_to_regex` (the `after` segment).
         let matcher = TableMatcher::new(&[("logs/{date}/**", "logs")], &[]).unwrap();
         let result = matcher
             .match_file_with_captures(Path::new("logs/2024-01-15/deep/events.jsonl"))
@@ -361,8 +349,6 @@ mod tests {
 
     #[test]
     fn capture_with_question_mark() {
-        // `?` in a capture pattern exercises the `[^/]` branch of
-        // `glob_segment_to_regex`.
         let matcher = TableMatcher::new(&[("{name}?.txt", "files")], &[]).unwrap();
         let result = matcher
             .match_file_with_captures(Path::new("ab.txt"))

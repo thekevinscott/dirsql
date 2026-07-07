@@ -1,13 +1,7 @@
-// Hermetic integration tests for the `extensions` constructor option (#289).
-//
-// These exercise the SDK public API with first-party code run for real and
-// only the third-party boundaries mocked: `node:fs` probes and
-// `node:module`'s `createRequire` (which both `load-native-core.ts` — the
-// napi binary — and `resolve-extension.ts` — package resolution — sit
-// behind). Programmatic extension entries flow through the real
-// `src/resolve-extension.ts` and must reach `openAsync`'s seventh argument
-// resolved. Real extension *loading* (a missing `.so` failing ready, a
-// fixture cdylib registering a function) is covered by `tests/binding/`.
+// Hermetic: first-party code runs for real; the mocked boundaries are
+// `node:fs` probes and `node:module`'s `createRequire` (behind which both
+// the napi binary and package resolution sit). Real extension *loading* is
+// covered by `tests/binding/`.
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { DirSQL } from "dirsql";
@@ -73,8 +67,6 @@ describe("extensions option (hermetic, #230/#299)", () => {
       ],
     });
     await db.ready;
-    // Programmatic path-looking entries pass through verbatim (the core
-    // resolves them); no fs probe runs for either.
     expect(openAsync.mock.calls[0]?.[6]).toEqual([
       { path: "/ext/libvec.so", entrypoint: "sqlite3_vec_init" },
       { path: "./rel/spellfix.so", entrypoint: undefined },
@@ -135,8 +127,6 @@ describe("extensions option (hermetic, #230/#299)", () => {
     expect(call?.[6]).toEqual([
       { path: "/nm/dirsql-testext-pkg/libtestext.so", entrypoint: undefined },
     ]);
-    // The core's own config-extension loading is suppressed so the entries
-    // are not loaded twice.
     expect(call?.[7]).toBe(true);
   });
 
@@ -150,7 +140,6 @@ describe("extensions option (hermetic, #230/#299)", () => {
     await expect(db.ready).rejects.toThrow(
       "could not resolve extension package 'not-installed-pkg': not installed",
     );
-    // The resolution error surfaced before the core was ever opened.
     expect(openAsync).not.toHaveBeenCalled();
   });
 });

@@ -37,24 +37,15 @@ const INTERNAL_TABLE_PREFIX: &str = "_dirsql_";
 const INTERNAL_TABLE_DENIED_MSG: &str = "not authorized: dirsql's internal bookkeeping tables (the `_dirsql_*` namespace) \
      are not readable through query()";
 
-/// Whether `name` refers to a dirsql-internal bookkeeping table — anything in
-/// the reserved [`INTERNAL_TABLE_PREFIX`] namespace.
 fn is_internal_table(name: &str) -> bool {
     name.starts_with(INTERNAL_TABLE_PREFIX)
 }
 
 /// Validate that `s` is a safe unquoted SQL identifier: starts with an
 /// ASCII letter or underscore, followed by ASCII letters / digits /
-/// underscores. Used at every entry point that interpolates an identifier
-/// into formatted SQL (`INSERT INTO {table} ...`, `PRAGMA table_info({table})`,
-/// `INSERT INTO {table} ({col}, ...)`).
-///
-/// Why a strict character class instead of quoting? Quoting would let us
-/// accept arbitrary identifiers, but every downstream caller (and every
-/// language-binding consumer) would then need to follow the same quoting
-/// discipline. The strict-class is simpler to audit and matches typical
-/// dirsql usage (DDL-defined table names + extract-produced column names
-/// both fit the class).
+/// underscores. Must be called at every entry point that interpolates an
+/// identifier into formatted SQL (`INSERT INTO {table} ...`,
+/// `PRAGMA table_info({table})`, `INSERT INTO {table} ({col}, ...)`).
 pub fn validate_identifier(s: &str) -> Result<()> {
     let mut chars = s.chars();
     match chars.next() {
@@ -71,7 +62,7 @@ pub fn validate_identifier(s: &str) -> Result<()> {
 
 pub type Result<T> = std::result::Result<T, DbError>;
 
-/// Name of the internal row-bookkeeping table (issue #359, epic #358).
+/// Name of the internal row-bookkeeping table.
 ///
 /// The sole record of row ownership: it maps every inserted user row back to
 /// the file that produced it — `(table_name, file_path, row_index, rowid_ref)`
@@ -80,8 +71,7 @@ pub type Result<T> = std::result::Result<T, DbError>;
 pub const INTERNAL_ROWS_TABLE: &str = "_dirsql_internal_rows";
 
 /// Create the internal `_dirsql_internal_rows` bookkeeping table and its
-/// by-file index if they don't already exist. Idempotent, so it is safe to
-/// call on every `Db` construction and on every persistent-cache open.
+/// by-file index if they don't already exist. Idempotent.
 ///
 /// A **real** table (not virtual): it lives in the persisted cache and is
 /// written inside the same transaction as the row inserts/deletes it
@@ -106,13 +96,13 @@ pub struct Db {
 
 impl Db {
     /// Open the default, ephemeral `Db`: an **anonymous disk-backed temp
-    /// database** (`Connection::open("")`, issue #402), not `:memory:`.
+    /// database** (`Connection::open("")`), not `:memory:`.
     ///
     /// SQLite creates a private temp file and deletes it immediately after
     /// opening, so the OS reclaims it even on a crash or SIGKILL, and there
     /// is never a name to collide on. Pages spill to disk as the index
-    /// grows — only the page cache stays resident — so memory no longer
-    /// scales with the indexed corpus. The file lands in the directory
+    /// grows — only the page cache stays resident — so memory does not
+    /// scale with the indexed corpus. The file lands in the directory
     /// SQLite's VFS picks (`SQLITE_TMPDIR` → `TMPDIR` → `/var/tmp` →
     /// `/usr/tmp` → `/tmp`); export `SQLITE_TMPDIR` to steer it off a
     /// tmpfs mount.
@@ -158,15 +148,15 @@ impl Db {
         Ok(())
     }
 
-    /// Create a table from a user-provided DDL statement, executed **verbatim**
-    /// (epic #358): dirsql no longer injects tracking columns — row ownership
-    /// lives entirely in `_dirsql_internal_rows`, so a table's schema is exactly
+    /// Create a table from a user-provided DDL statement, executed
+    /// **verbatim**: dirsql injects no tracking columns — row ownership lives
+    /// entirely in `_dirsql_internal_rows`, so a table's schema is exactly
     /// the DDL the user wrote.
     ///
     /// Validates that the parsed table name is a safe unquoted SQL identifier
-    /// before handing the DDL to SQLite — closes the gap where a DDL like
-    /// `CREATE TABLE foo;DROP_TABLE_bar--(id TEXT)` would parse to a poisoned
-    /// internal table name and break downstream `format!()`-built SQL.
+    /// before handing the DDL to SQLite, so a DDL like
+    /// `CREATE TABLE foo;DROP_TABLE_bar--(id TEXT)` can't yield a poisoned
+    /// table name that breaks downstream `format!()`-built SQL.
     pub fn create_table(&self, ddl: &str) -> Result<()> {
         // A dirsql table is a per-file row table; an extension-backed virtual
         // table is not one, so reject `CREATE VIRTUAL TABLE` with a clear
@@ -183,8 +173,7 @@ impl Db {
         validate_identifier(&table)?;
         // A `WITHOUT ROWID` table has no rowid, so `last_insert_rowid()` cannot
         // identify the inserted row and the `_dirsql_internal_rows.rowid_ref`
-        // mapping (epic #358) would be meaningless. Warn; the table is still
-        // created.
+        // mapping would be meaningless. Warn; the table is still created.
         if is_without_rowid_ddl(ddl) {
             eprintln!(
                 "dirsql: table `{table}` is declared WITHOUT ROWID; internal row \
@@ -280,10 +269,10 @@ impl Db {
             validate_identifier(key)?;
         }
 
-        // The user row carries ONLY user columns — no injected tracking columns
-        // (epic #358). Ownership is recorded in `_dirsql_internal_rows`, keyed on
-        // the row's rowid. A column-less row (SQLite requires ≥1 declared column,
-        // so this is only reachable defensively) uses `DEFAULT VALUES`.
+        // The user row carries ONLY user columns; ownership is recorded in
+        // `_dirsql_internal_rows`, keyed on the row's rowid. A column-less row
+        // (SQLite requires ≥1 declared column, so this is only reachable
+        // defensively) uses `DEFAULT VALUES`.
         let columns: Vec<String> = row.keys().cloned().collect();
         let sql = if columns.is_empty() {
             format!("INSERT INTO {} DEFAULT VALUES", table)
@@ -328,13 +317,10 @@ impl Db {
     /// mapping (joined on `rowid`); user columns are qualified with the table
     /// alias so a user column named like a mapping column stays unambiguous.
     ///
-    /// This is the watcher's diffing source (#401): `handle_upsert` /
-    /// `handle_delete` snapshot a file's previous rows here instead of holding
-    /// a corpus-wide in-memory copy. A row read back compares equal to the
-    /// normalized row that was inserted as long as the extract's value types
-    /// match the declared column affinities (SQLite coerces on insert
-    /// otherwise, e.g. `Integer(5)` into a TEXT column comes back
-    /// `Text("5")`).
+    /// A row read back compares equal to the normalized row that was inserted
+    /// only when the extract's value types match the declared column
+    /// affinities (SQLite coerces on insert otherwise, e.g. `Integer(5)` into
+    /// a TEXT column comes back `Text("5")`).
     pub fn get_rows_by_file(
         &self,
         table: &str,
@@ -373,16 +359,11 @@ impl Db {
         Ok(out)
     }
 
-    /// Delete all rows that were produced by a given file path.
+    /// Delete all rows that were produced by a given file path. Row ownership
+    /// is resolved through the `_dirsql_internal_rows` mapping.
     ///
-    /// The user-row deletes and the matching `_dirsql_internal_rows` mapping
-    /// deletes commit in ONE transaction (epic #358), so the mapping never
-    /// outlives the rows it describes.
-    ///
-    /// Stage 2 (epic #358): row ownership is read from the mapping, not the
-    /// injected `_dirsql_file_path` column (now write-only). The user rows to
-    /// drop are those whose `rowid` the mapping attributes to `file_path` under
-    /// `table`; the mapping rows are then removed in the same transaction.
+    /// The user-row deletes and the matching mapping deletes commit in ONE
+    /// transaction, so the mapping never outlives the rows it describes.
     pub fn delete_rows_by_file(&self, table: &str, file_path: &str) -> Result<usize> {
         validate_identifier(table)?;
         let tx = self.conn.unchecked_transaction()?;
@@ -408,18 +389,17 @@ impl Db {
     /// ANALYZE / …) via `sqlite3_stmt_readonly`, surfaced here as
     /// [`DbError::WriteForbidden`].
     ///
-    /// Results are vanilla SQLite: dirsql injects no tracking columns (epic
-    /// #358), so a table's columns are exactly the user's DDL and `SELECT *`
-    /// returns exactly those columns — no filtering.
+    /// Results are vanilla SQLite: dirsql injects no tracking columns, so a
+    /// table's columns are exactly the user's DDL and `SELECT *` returns
+    /// exactly those columns — no filtering.
     ///
-    /// A SQLite authorizer (issue #378) makes dirsql's internal bookkeeping
-    /// tables unreachable through this surface: any read (or schema `PRAGMA`)
+    /// A SQLite authorizer makes dirsql's internal bookkeeping tables
+    /// unreachable through this surface: any read (or schema `PRAGMA`)
     /// targeting the reserved `_dirsql_*` namespace is denied at prepare time,
     /// surfaced as [`DbError::Unauthorized`]. The authorizer is installed only
     /// around this `prepare` and cleared immediately after, so the engine's own
     /// internal writes (`insert_row`, delete-by-file, persist), which never go
-    /// through `query()`, are unaffected and stay transactional with the user
-    /// rows they describe.
+    /// through `query()`, are unaffected.
     pub fn query(&self, sql: &str) -> Result<Vec<HashMap<String, Value>>> {
         use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 
@@ -517,10 +497,10 @@ impl rusqlite::types::ToSql for Value {
 /// names resolve to the table segment. Returns `None` when the input isn't a
 /// `CREATE TABLE` or carries no name token.
 ///
-/// This is deliberately a small, pure tokenizer rather than a full SQL parser
-/// (or a round-trip through SQLite): dirsql constrains table names to safe
-/// unquoted identifiers via [`validate_identifier`], so the handful of forms
-/// above are the only ones that can actually resolve to a usable table.
+/// Deliberately a small, pure tokenizer rather than a full SQL parser:
+/// dirsql constrains table names to safe unquoted identifiers via
+/// [`validate_identifier`], so the handful of forms above are the only ones
+/// that can actually resolve to a usable table.
 pub fn parse_table_name(ddl: &str) -> Option<String> {
     let upper = ddl.to_uppercase();
     let idx = upper.find("CREATE TABLE")?;
@@ -536,8 +516,8 @@ pub fn parse_table_name(ddl: &str) -> Option<String> {
         rest = rest[IF_NOT_EXISTS.len()..].trim_start();
     }
 
-    // Parse dot-separated identifier segments (`schema.table`) and keep the
-    // last one: the table name. Each segment may be quoted independently.
+    // `schema.table`: keep the last dot-separated segment. Each segment may
+    // be quoted independently.
     let mut chars = rest.chars().peekable();
     let mut table = parse_identifier(&mut chars)?;
     while chars.peek() == Some(&'.') {
@@ -571,7 +551,7 @@ fn parse_identifier(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Opt
         }
     };
 
-    chars.next(); // consume the opening delimiter
+    chars.next();
     let mut name = String::new();
     while let Some(c) = chars.next() {
         if c == close {
@@ -590,10 +570,8 @@ fn parse_identifier(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Opt
 }
 
 /// True if `ddl` is a `CREATE VIRTUAL TABLE` statement. dirsql tables are
-/// per-file row tables (create_table injects `_dirsql_` tracking columns and
-/// inserts one row per file), which is structurally incompatible with an
-/// extension-backed virtual table — those are rejected with a clear error
-/// rather than mangled by column injection.
+/// per-file row tables, structurally incompatible with an extension-backed
+/// virtual table, so those are rejected with a clear error.
 fn is_virtual_table_ddl(ddl: &str) -> bool {
     let normalized = ddl.split_whitespace().collect::<Vec<_>>().join(" ");
     normalized.to_uppercase().contains("CREATE VIRTUAL TABLE")
@@ -601,9 +579,8 @@ fn is_virtual_table_ddl(ddl: &str) -> bool {
 
 /// True if `ddl` declares a `WITHOUT ROWID` table. Such tables have no rowid,
 /// so `last_insert_rowid()` cannot identify an inserted row and the
-/// `_dirsql_internal_rows.rowid_ref` mapping (epic #358) is meaningless. Stage
-/// 1 warns; stage 3 rejects. Whitespace is normalized so `WITHOUT   ROWID`
-/// and newline-separated forms are still detected.
+/// `_dirsql_internal_rows.rowid_ref` mapping is meaningless. Whitespace is
+/// normalized so `WITHOUT   ROWID` and newline-separated forms are detected.
 fn is_without_rowid_ddl(ddl: &str) -> bool {
     let normalized = ddl.split_whitespace().collect::<Vec<_>>().join(" ");
     normalized.to_uppercase().contains("WITHOUT ROWID")
@@ -631,7 +608,6 @@ mod tests {
         db.create_table("CREATE TABLE comments (id TEXT PRIMARY KEY, body TEXT, resolved INTEGER)")
             .unwrap();
 
-        // Table should exist -- querying it should return empty results
         let rows = db.query("SELECT * FROM comments").unwrap();
         assert_eq!(rows.len(), 0);
     }
@@ -645,8 +621,6 @@ mod tests {
 
     #[test]
     fn create_table_runs_ddl_verbatim_no_injected_columns() {
-        // Epic #358: no tracking columns are injected — a table's schema is
-        // exactly the user's DDL, and `SELECT *` returns only the user's columns.
         let db = Db::new().unwrap();
         db.create_table("CREATE TABLE t (id TEXT)").unwrap();
         db.insert_row(
@@ -721,7 +695,6 @@ mod tests {
         db.create_table("CREATE TABLE comments (id TEXT, body TEXT)")
             .unwrap();
 
-        // Insert rows from two different files
         for (i, (id, file)) in [("1", "a.jsonl"), ("2", "a.jsonl"), ("3", "b.jsonl")]
             .iter()
             .enumerate()
@@ -733,11 +706,9 @@ mod tests {
             db.insert_row("comments", &row, file, i).unwrap();
         }
 
-        // Delete rows from file "a.jsonl"
         let deleted = db.delete_rows_by_file("comments", "a.jsonl").unwrap();
         assert_eq!(deleted, 2);
 
-        // Only file b's row remains
         let results = db.query("SELECT id FROM comments").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0]["id"], Value::Text("3".into()));
@@ -804,8 +775,6 @@ mod tests {
 
     #[test]
     fn parse_table_name_double_quoted() {
-        // The canonical ORM / schema-generator shape: the quotes are SQL
-        // delimiters and must be stripped to the bare `comments`.
         assert_eq!(
             parse_table_name(r#"CREATE TABLE "comments" (id TEXT)"#),
             Some("comments".to_string())
@@ -830,7 +799,6 @@ mod tests {
 
     #[test]
     fn parse_table_name_bracket_quoted() {
-        // SQLite's `[ident]` form ends at the first `]` -- no doubling escape.
         assert_eq!(
             parse_table_name("CREATE TABLE [comments] (id TEXT)"),
             Some("comments".to_string())
@@ -839,9 +807,7 @@ mod tests {
 
     #[test]
     fn parse_table_name_double_quote_escape() {
-        // `""` inside a double-quoted identifier is one literal `"`. The
-        // extracted name is later rejected by `validate_identifier`; here we
-        // only assert the tokenizer unescapes correctly.
+        // `""` inside a double-quoted identifier is one literal `"`.
         assert_eq!(
             parse_table_name(r#"CREATE TABLE "we""ird" (id TEXT)"#),
             Some("we\"ird".to_string())
@@ -858,8 +824,6 @@ mod tests {
 
     #[test]
     fn parse_table_name_schema_qualified() {
-        // `schema.table` resolves to the table segment (the name SQLite stores
-        // in `sqlite_master`).
         assert_eq!(
             parse_table_name("CREATE TABLE main.comments (id TEXT)"),
             Some("comments".to_string())
@@ -876,7 +840,6 @@ mod tests {
 
     #[test]
     fn parse_table_name_runs_to_end_of_input() {
-        // Bare identifier terminated by EOF rather than whitespace/paren.
         assert_eq!(
             parse_table_name("CREATE TABLE comments"),
             Some("comments".to_string())
@@ -885,7 +848,6 @@ mod tests {
 
     #[test]
     fn parse_table_name_missing_name_is_none() {
-        // A `(` where the name should be yields an empty token -> None.
         assert_eq!(parse_table_name("CREATE TABLE (id TEXT)"), None);
     }
 
@@ -965,15 +927,6 @@ mod tests {
         assert_eq!(normalized.len(), 2);
     }
 
-    // `Value::to_sql` (our type -> SQLite param) and `From<rusqlite::types::Value>`
-    // (SQLite value -> our type) are the marshaling boundary. Every variant's
-    // arm is exercised end-to-end by the insert/query round-trip tests below
-    // (Real, Null, Blob each have a dedicated one; Text + Integer via
-    // `insert_and_query_rows`), so the arms stay covered without a unit test
-    // naming `rusqlite::types::*` directly (the `unit lint` isolation rule).
-
-    // --- Insert and query with real/blob values ---
-
     #[test]
     fn insert_and_query_real_value() {
         let db = Db::new().unwrap();
@@ -1007,8 +960,6 @@ mod tests {
         assert_eq!(results[0]["data"], Value::Blob(vec![0xFF, 0x00]));
     }
 
-    // --- Vanilla SELECT *: no injected columns (epic #358) ---
-
     #[test]
     fn select_star_returns_only_user_columns() {
         let db = Db::new().unwrap();
@@ -1022,8 +973,6 @@ mod tests {
 
     #[test]
     fn dirsql_columns_no_longer_exist_on_user_tables() {
-        // The tracking columns are gone: selecting one is a plain "no such
-        // column" error.
         let db = Db::new().unwrap();
         db.create_table("CREATE TABLE t (id TEXT)").unwrap();
         let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
@@ -1033,8 +982,6 @@ mod tests {
         assert!(matches!(err, DbError::Sqlite(_)), "got: {err}");
         assert!(err.to_string().contains("no such column"), "got: {err}");
     }
-
-    // --- Internal-table authorizer (issue #378) ---
 
     #[test]
     fn is_internal_table_recognizes_the_reserved_namespace() {
@@ -1046,8 +993,6 @@ mod tests {
 
     #[test]
     fn is_internal_table_allows_user_tables_and_fs_columns() {
-        // User tables and the documented `_`-prefixed filesystem columns are
-        // NOT in the reserved `_dirsql_` namespace.
         assert!(!is_internal_table("items"));
         assert!(!is_internal_table("posts"));
         assert!(!is_internal_table("_path"));
@@ -1057,8 +1002,6 @@ mod tests {
 
     #[test]
     fn query_denies_reading_internal_rows_table() {
-        // `_dirsql_internal_rows` exists on every `Db`; reading it through
-        // query() is rejected at prepare time as Unauthorized.
         let db = Db::new().unwrap();
         let err = db.query("SELECT * FROM _dirsql_internal_rows").unwrap_err();
         assert!(matches!(err, DbError::Unauthorized(_)), "got: {err}");
@@ -1070,8 +1013,6 @@ mod tests {
 
     #[test]
     fn query_denies_pragma_targeting_internal_table() {
-        // A schema PRAGMA naming an internal table is denied too — the internal
-        // schema is unreachable, not just its rows.
         let db = Db::new().unwrap();
         let err = db
             .query("PRAGMA table_info(_dirsql_internal_rows)")
@@ -1081,8 +1022,6 @@ mod tests {
 
     #[test]
     fn query_allows_pragma_on_a_user_table() {
-        // The Pragma authorizer only denies the internal namespace; a PRAGMA on
-        // a user table is served.
         let db = Db::new().unwrap();
         db.create_table("CREATE TABLE t (id TEXT)").unwrap();
         let rows = db.query("PRAGMA table_info(t)").unwrap();
@@ -1092,18 +1031,13 @@ mod tests {
 
     #[test]
     fn query_authorizer_is_cleared_after_each_query() {
-        // The authorizer must not leak onto the shared connection. The strong
-        // proof: `delete_rows_by_file` itself READS `_dirsql_internal_rows` (it
-        // resolves ownership through the mapping) without routing through
-        // query(), so if a prior query() left the authorizer installed, that
-        // internal read would be denied and the delete would fail.
+        // `delete_rows_by_file` reads `_dirsql_internal_rows` without routing
+        // through query(), so a leaked authorizer would make it fail.
         let db = Db::new().unwrap();
         db.create_table("CREATE TABLE t (id TEXT)").unwrap();
         let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
         db.insert_row("t", &row, "file.json", 0).unwrap();
 
-        // A denied read and a normal read each install the authorizer for their
-        // own prepare; both must clear it afterward.
         let _ = db.query("SELECT * FROM _dirsql_internal_rows").unwrap_err();
         let rows = db.query("SELECT id FROM t").unwrap();
         assert_eq!(rows.len(), 1);
@@ -1123,16 +1057,12 @@ mod tests {
         assert!(INTERNAL_TABLE_DENIED_MSG.contains("_dirsql_"));
     }
 
-    // --- Error path: query with invalid SQL ---
-
     #[test]
     fn query_invalid_sql_returns_error() {
         let db = Db::new().unwrap();
         let result = db.query("SELECT FROM nonexistent");
         assert!(result.is_err());
     }
-
-    // --- Error path: insert into nonexistent table ---
 
     #[test]
     fn insert_into_nonexistent_table_returns_error() {
@@ -1142,8 +1072,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // --- Error path: delete from nonexistent table ---
-
     #[test]
     fn delete_from_nonexistent_table_returns_error() {
         let db = Db::new().unwrap();
@@ -1151,16 +1079,12 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // --- Error path: get_table_columns on nonexistent table returns empty ---
-
     #[test]
     fn get_table_columns_nonexistent_table_returns_empty() {
         let db = Db::new().unwrap();
         let cols = db.get_table_columns("nonexistent").unwrap();
         assert!(cols.is_empty());
     }
-
-    // --- DbError Display ---
 
     #[test]
     fn db_error_display_messages() {
@@ -1170,8 +1094,6 @@ mod tests {
         let err = DbError::DdlParse("bad ddl".to_string());
         assert!(err.to_string().contains("DDL parse error"));
     }
-
-    // --- delete_rows_by_file returns zero when no rows match ---
 
     #[test]
     fn delete_rows_by_file_returns_zero_for_no_matching_rows() {
@@ -1183,15 +1105,11 @@ mod tests {
         assert_eq!(deleted, 0);
     }
 
-    // --- Db::new backing store (#402) ---
-
     #[test]
     fn new_is_disk_backed_not_memory() {
         // An in-memory SQLite database is pinned to journal_mode=memory; a
         // file-backed one — including the anonymous temp database `Db::new`
-        // opens — defaults to journal_mode=delete. This pins #402: the
-        // default Db must never be `:memory:`, so index pages spill to disk
-        // instead of scaling resident memory with the corpus.
+        // opens — defaults to journal_mode=delete.
         let db = Db::new().unwrap();
         let mode: String = db
             .conn()
@@ -1200,14 +1118,11 @@ mod tests {
         assert_eq!(mode, "delete");
     }
 
-    // --- get_rows_by_file: the watcher's diffing source (#401) ---
-
     #[test]
     fn get_rows_by_file_returns_rows_in_row_index_order() {
         let db = Db::new().unwrap();
         db.create_table("CREATE TABLE t (id TEXT)").unwrap();
-        // Insert with row indices out of insertion order; the read must
-        // follow row_index, not rowid / insertion order.
+        // Row indices are deliberately out of insertion order.
         let second = HashMap::from([("id".into(), Value::Text("second".into()))]);
         let first = HashMap::from([("id".into(), Value::Text("first".into()))]);
         db.insert_row("t", &second, "a.json", 1).unwrap();
@@ -1235,17 +1150,12 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["id"], Value::Text("t-row".into()));
 
-        // A file with no rows in this table reads back empty.
         let none = db.get_rows_by_file("u", "b.json").unwrap();
         assert!(none.is_empty());
     }
 
     #[test]
     fn get_rows_by_file_round_trips_all_value_variants() {
-        // The watcher's positional diff compares a read-back row against a
-        // freshly normalized one, so every Value variant must survive
-        // insert -> select unchanged when the declared column affinity
-        // matches the value type.
         let db = Db::new().unwrap();
         db.create_table("CREATE TABLE t (i INTEGER, r REAL, s TEXT, b BLOB, n TEXT)")
             .unwrap();
@@ -1265,32 +1175,20 @@ mod tests {
 
     #[test]
     fn get_rows_by_file_missing_table_returns_error() {
-        // A nonexistent table has no columns, so the SELECT list falls back
-        // to `1` and SQLite reports the missing table.
         let db = Db::new().unwrap();
         let err = db.get_rows_by_file("ghost", "a.json").unwrap_err();
         assert!(err.to_string().contains("no such table"), "got: {err}");
     }
 
-    // --- Error path: Db::open on an unopenable path ---
-
     #[test]
     fn open_on_unopenable_path_returns_error() {
-        // A path inside a directory that does not exist cannot be created by
-        // SQLite, so `Connection::open` fails and the `?` propagates the
-        // rusqlite error through the `#[from]` conversion. (`Db` is not
-        // `Debug`; `.map(|_| ())` discards the Ok payload so `unwrap_err`
-        // works without a dead `Ok => panic!` arm that coverage would flag.)
+        // `Db` is not `Debug`; `.map(|_| ())` discards the Ok payload so
+        // `unwrap_err` works.
         let err = Db::open(Path::new("/nonexistent-dir-xyz/sub/cache.db"))
             .map(|_| ())
             .unwrap_err();
         assert!(matches!(err, DbError::Sqlite(_)), "got: {err}");
     }
-
-    // --- Error path: create_table with a DDL that has no parseable table name.
-    // `CREATE TABLE (...)` (no name between TABLE and the paren) is rejected
-    // by `parse_table_name` before SQLite ever sees it. Previously this fell
-    // through to a SQLite syntax error; now it fails fast with DdlParse.
 
     #[test]
     fn create_table_without_parseable_name_fails_at_parse() {
@@ -1301,10 +1199,6 @@ mod tests {
         assert!(matches!(err, DbError::DdlParse(_)), "got: {err}");
     }
 
-    // --- Error path: normalize_row with a table name that isn't a safe
-    // identifier. `validate_identifier` rejects whitespace before
-    // `get_table_columns` ever runs the PRAGMA. ---
-
     #[test]
     fn normalize_row_propagates_column_lookup_error() {
         let db = Db::new().unwrap();
@@ -1314,8 +1208,6 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, DbError::InvalidIdentifier(_)), "got: {err}");
     }
-
-    // --- validate_identifier: identifier hygiene at every interpolation site ---
 
     #[test]
     fn validate_identifier_accepts_simple_names() {
@@ -1368,14 +1260,8 @@ mod tests {
         assert!(matches!(err, DbError::InvalidIdentifier(_)), "got: {err:?}");
     }
 
-    // --- load_extension: error path (missing shared library) ---
-
     #[test]
     fn load_extension_missing_file_errors() {
-        // Loading is enabled for the call (the guard succeeds), the load of a
-        // nonexistent shared library fails, and the error propagates as
-        // DbError::Sqlite. Exercises the enable→load path; the success arm is
-        // covered by the integration suite against a real extension.
         let db = Db::new().unwrap();
         let err = db
             .load_extension(Path::new("/nonexistent/dirsql-no-such-ext.so"), None)
@@ -1383,23 +1269,15 @@ mod tests {
         assert!(matches!(err, DbError::Sqlite(_)), "got: {err}");
     }
 
-    // --- create_table: virtual tables are not supported as dirsql tables ---
-
     #[test]
     fn create_table_rejects_virtual_table_with_clear_error() {
-        // A dirsql table is a per-file row table: create_table injects
-        // _dirsql_ tracking columns and the engine inserts one row per file.
-        // That is structurally incompatible with an extension-backed virtual
-        // table, so a `CREATE VIRTUAL TABLE` DDL must fail with a clear,
-        // specific error rather than a confusing "no such module" / mangled
-        // DDL. (RED for #225 review finding #1.)
         let db = Db::new().unwrap();
         let err = db
             .create_table("CREATE VIRTUAL TABLE vss USING vec0(embedding float[4])")
             .unwrap_err();
-        // Must be a clear "not supported" message, NOT the generic
-        // `DdlParse` echo (which trivially contains "virtual table" because it
-        // echoes the DDL back).
+        // Must be a clear "not supported" message, NOT the generic `DdlParse`
+        // echo (which trivially contains "virtual table" because it echoes
+        // the DDL back).
         let msg = err.to_string().to_lowercase();
         assert!(
             msg.contains("virtual table") && msg.contains("not supported"),
@@ -1418,8 +1296,6 @@ mod tests {
             "CREATE TABLE IF NOT EXISTS x (a TEXT)"
         ));
     }
-
-    // --- _dirsql_internal_rows mapping (epic #358, stage 1) ---
 
     /// Read the raw mapping rows for a table, ordered for stable assertions.
     fn mapping_rows(db: &Db, table: &str) -> Vec<(String, i64, i64)> {
@@ -1445,10 +1321,8 @@ mod tests {
     #[test]
     fn ensure_internal_rows_table_is_idempotent() {
         let db = Db::new().unwrap();
-        // Db::new already created it; calling again must not error.
         ensure_internal_rows_table(&db.conn).unwrap();
         ensure_internal_rows_table(&db.conn).unwrap();
-        // The table and its by-file index both exist.
         let table_count: i64 = db
             .conn
             .query_row(
@@ -1485,7 +1359,6 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, "f.jsonl");
         assert_eq!(rows[0].1, 3);
-        // The captured rowid_ref points at the user row.
         let user_rowid: i64 = db
             .conn
             .query_row("SELECT rowid FROM t", [], |r| r.get(0))
@@ -1495,8 +1368,8 @@ mod tests {
 
     #[test]
     fn insert_row_captures_user_declared_rowid_alias() {
-        // A user-declared `INTEGER PRIMARY KEY` is a rowid alias: the inserted
-        // value becomes the rowid, and `last_insert_rowid()` must capture it.
+        // A user-declared `INTEGER PRIMARY KEY` is a rowid alias: the
+        // inserted value becomes the rowid.
         let db = Db::new().unwrap();
         db.create_table("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
             .unwrap();
@@ -1531,7 +1404,6 @@ mod tests {
         }
         db.delete_rows_by_file("t", "a.jsonl").unwrap();
 
-        // Only b.jsonl's mapping survives, in lockstep with the user rows.
         let rows = mapping_rows(&db, "t");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, "b.jsonl");
@@ -1539,8 +1411,6 @@ mod tests {
 
     #[test]
     fn delete_rows_by_file_resolves_ownership_through_mapping() {
-        // Delete-by-file resolves ownership entirely through the mapping. A file
-        // with no mapping rows deletes nothing; the owning file deletes its row.
         let db = Db::new().unwrap();
         db.create_table("CREATE TABLE t (id TEXT)").unwrap();
         db.insert_row(
@@ -1562,9 +1432,8 @@ mod tests {
 
     #[test]
     fn delete_rows_by_file_is_scoped_to_its_table() {
-        // The mapping subquery is keyed on (table_name, file_path): a delete on
-        // one table must not touch another table's rows for the same file path,
-        // even when they share a rowid.
+        // Rows in different tables can share a rowid; the delete must not
+        // cross tables for the same file path.
         let db = Db::new().unwrap();
         db.create_table("CREATE TABLE t1 (id TEXT)").unwrap();
         db.create_table("CREATE TABLE t2 (id TEXT)").unwrap();
@@ -1593,8 +1462,6 @@ mod tests {
 
     #[test]
     fn failed_row_insert_leaves_no_mapping_row() {
-        // Transactional coupling, forward direction: when the user-row insert
-        // fails, its mapping row must not be written either.
         let db = Db::new().unwrap();
         db.create_table("CREATE TABLE t (id TEXT UNIQUE)").unwrap();
         db.insert_row(
@@ -1604,7 +1471,6 @@ mod tests {
             0,
         )
         .unwrap();
-        // Second insert of the same UNIQUE value fails.
         let err = db
             .insert_row(
                 "t",
@@ -1626,8 +1492,6 @@ mod tests {
 
     #[test]
     fn failed_mapping_insert_rolls_back_row_insert() {
-        // Transactional coupling, reverse direction: if the mapping insert
-        // fails, the user-row insert must roll back too (nothing left behind).
         let db = Db::new().unwrap();
         db.create_table("CREATE TABLE t (id TEXT)").unwrap();
         // Remove the mapping table so the second statement in the transaction
@@ -1654,7 +1518,6 @@ mod tests {
 
     #[test]
     fn create_table_allows_without_rowid_and_warns() {
-        // Stage 1 only warns (via eprintln); the table is still created.
         let db = Db::new().unwrap();
         db.create_table("CREATE TABLE t (id TEXT PRIMARY KEY) WITHOUT ROWID")
             .unwrap();

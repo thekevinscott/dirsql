@@ -12,11 +12,6 @@ import pytest
 from dirsql import DirSQL, Table
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _blog_dir(root):
     """Set up the blog directory structure used in getting-started.md."""
     posts_dir = os.path.join(root, "posts")
@@ -55,11 +50,6 @@ def _blog_tables():
     ]
 
 
-# ---------------------------------------------------------------------------
-# getting-started.md
-# ---------------------------------------------------------------------------
-
-
 def describe_getting_started():
     @pytest.mark.asyncio
     async def it_matches_getting_started_query_all_posts(tmp_dir):
@@ -89,11 +79,6 @@ def describe_getting_started():
             "Hello World": "Alice",
             "Second Post": "Bob",
         }
-
-
-# ---------------------------------------------------------------------------
-# reference/sdk.md
-# ---------------------------------------------------------------------------
 
 
 def describe_tables_guide():
@@ -363,11 +348,6 @@ def describe_tables_guide():
         assert row["null_val"] is None
 
 
-# ---------------------------------------------------------------------------
-# reference/sdk.md
-# ---------------------------------------------------------------------------
-
-
 def describe_querying_guide():
     @pytest.mark.asyncio
     async def it_matches_querying_guide_select_all(tmp_dir):
@@ -464,11 +444,6 @@ def describe_querying_guide():
         assert results == []
 
 
-# ---------------------------------------------------------------------------
-# reference/sdk.md
-# ---------------------------------------------------------------------------
-
-
 def describe_async_guide():
     @pytest.mark.asyncio
     async def it_matches_async_guide_basic_usage(tmp_dir):
@@ -549,11 +524,6 @@ def describe_async_guide():
         results = await db.query("SELECT COUNT(*) as n FROM items")
         assert len(results) == 1
         assert results[0]["n"] == 2
-
-
-# ---------------------------------------------------------------------------
-# reference/sdk.md
-# ---------------------------------------------------------------------------
 
 
 def describe_watching_guide():
@@ -764,11 +734,6 @@ def describe_watching_guide():
         assert len(events) >= 1
         assert events[0].action == "error"
         assert events[0].error is not None
-
-
-# ---------------------------------------------------------------------------
-# reference/sdk.md
-# ---------------------------------------------------------------------------
 
 
 def describe_api_reference():

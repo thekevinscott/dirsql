@@ -1,4 +1,4 @@
-//! Integration coverage for loading SQLite extensions via config (#225).
+//! Integration coverage for loading SQLite extensions via config.
 //!
 //! These exercise the public construction surface (`DirSQL::from_config`) — a
 //! `.dirsql.toml` that declares `[[dirsql.extension]]` entries. dirsql loads
@@ -124,8 +124,7 @@ fn builder_extensions_method_surfaces_missing_file() {
 }
 
 /// A relative extension path in a config file resolves against the config's
-/// parent directory. The file is absent so construction fails — exercising the
-/// relative-path resolution branch end to end.
+/// parent directory. The file is absent, so construction fails.
 #[test]
 fn config_relative_extension_path_is_resolved() {
     let root = TempDir::new().unwrap();
@@ -188,14 +187,12 @@ glob = "*.txt"
     );
 }
 
-/// A failed extension load must surface a dirsql extension-specific error that
 /// `suppress_config_extensions(true)` makes the builder ignore a config file's
 /// own `[[dirsql.extension]]` entries and use only the programmatically-supplied
-/// ones. This is the seam the CLI launcher uses to hand the core already-resolved
-/// (e.g. package-name → path) extensions without the core loading the config's
-/// unresolved entries a second time (#227). The config here declares a bogus
-/// relative extension path that would fail to load if it were honored; the build
-/// succeeds and the real (overriding) extension's function is callable.
+/// ones — the seam the CLI launcher uses to hand the core already-resolved
+/// (e.g. package-name → path) extensions. The config's bogus relative path
+/// would fail to load if honored; the build succeeds and the overriding
+/// extension's function is callable.
 #[test]
 fn suppress_config_extensions_ignores_config_entries_and_uses_overrides() {
     let ext = build_fixture_extension();
@@ -253,8 +250,8 @@ path = "does/not/exist.so"
     );
 }
 
-/// names the offending library, not an opaque generic SQLite error. (RED for
-/// #225 review finding #9.)
+/// A failed extension load surfaces an error naming the offending library,
+/// not an opaque generic SQLite error.
 #[test]
 fn missing_extension_error_names_the_extension() {
     let root = TempDir::new().unwrap();

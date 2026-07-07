@@ -1,9 +1,8 @@
 """Unit tests for `resolve_config_extension_specs`.
 
-Real `.dirsql.toml` files are parsed (matching the `resolve_config_extensions`
-CLI-test pattern); the only mocked collaborator is `resolve_extension_path`
-(the effectful file-vs-package resolver, unit-tested in
-`resolve_extension_test`). The pure `is_bare_name` stays real.
+Real `.dirsql.toml` files are parsed; the only mocked collaborator is
+`resolve_extension_path` (the effectful file-vs-package resolver). The pure
+`is_bare_name` stays real.
 """
 
 import os
@@ -86,7 +85,6 @@ def describe_resolve_config_extension_specs():
             {"path": "R:sqlite_vec", "entrypoint": "sqlite3_vec_init"},
             {"path": "R:ext/local.so", "entrypoint": None},
         ]
-        # Config entries resolve against the config's parent dir.
         resolver.assert_any_call("sqlite_vec", base=cfg_dir, resolve_relative=True)
         resolver.assert_any_call("ext/local.so", base=cfg_dir, resolve_relative=True)
 

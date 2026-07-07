@@ -1,10 +1,9 @@
-"""Binding tier: resolve a SQLite extension by bare package name (#298).
+"""Binding tier: resolve a SQLite extension by bare package name.
 
 Lays a real compiled loadable inside a real package directory on `sys.path`,
 points `DirSQL` at it by **bare package name**, and asserts the SDK resolves
 the actual on-disk file, loads it, and the function it registers is callable.
-Real layout, no mocks -- the shape mirrors the TypeScript sibling (#299) and
-the Rust end-to-end test: resolve -> load -> callable.
+Real layout, no mocks.
 
 The loadable is the repo's `tests/fixtures/testext` cdylib (registers
 `dirsql_testext_answer() -> 42`), built on the fly with cargo.

@@ -1,4 +1,4 @@
-//! Persistent on-disk SQLite cache (issue #95).
+//! Persistent on-disk SQLite cache.
 //!
 //! Stores the SQLite database at a named on-disk path between runs so
 //! subsequent startups only re-parse files that have actually changed. Uses
@@ -19,25 +19,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::Table;
 
 /// Sidecar schema version. Bumped on any breaking change to the on-disk layout
-/// (`_dirsql_files` / `_dirsql_meta`, or the shape of the cached user tables).
-///
-/// - `2` (epic #358): added the `_dirsql_internal_rows` bookkeeping table.
-/// - `3` (epic #358): user tables no longer carry injected tracking columns. A
-///   cache written by an older build still has them, so the version mismatch
-///   forces a penalty-free full rebuild on first startup after upgrade,
-///   re-creating the user tables from the (now verbatim) DDL.
+/// (`_dirsql_files` / `_dirsql_meta`, or the shape of the cached user tables);
+/// a mismatch forces a penalty-free full rebuild on first startup.
 pub const SCHEMA_VERSION: &str = "3";
 
 /// Bumped whenever any built-in parser changes its row-shape contract. A
 /// mismatch forces a full rebuild.
 ///
-/// As of #169 dirsql no longer parses file content on the user's behalf, so
-/// the only "parser" surface is the filesystem-fact layer. The meta key is
-/// kept (empty JSON object) so the on-disk cache layout doesn't shift in
-/// shape; a future reintroduction of per-format parsers would slot back in
-/// here without bumping `SCHEMA_VERSION`. Existing caches written by older
-/// builds will fail `meta_is_compatible` against this empty value and
-/// cleanly rebuild on next startup.
+/// dirsql currently parses no file content itself, so this stays an empty
+/// JSON object; the meta key is kept so the on-disk cache layout doesn't
+/// shift in shape if per-format parsers return.
 pub const PARSER_VERSIONS_JSON: &str = "{}";
 
 pub const META_TABLE: &str = "_dirsql_meta";
@@ -379,9 +370,8 @@ pub fn drop_user_tables(conn: &Connection) -> rusqlite::Result<()> {
         conn.execute(&format!("DROP TABLE IF EXISTS \"{name}\""), [])?;
     }
     conn.execute("DELETE FROM _dirsql_files", [])?;
-    // Wipe the row mapping too (epic #358): a cold rebuild re-ingests every
-    // file, and `insert_row` repopulates the mapping, so any stale rows here
-    // must go or they would duplicate / orphan the fresh state.
+    // Wipe the row mapping too: a cold rebuild re-ingests every file and
+    // `insert_row` repopulates it; stale rows would duplicate/orphan state.
     conn.execute("DELETE FROM _dirsql_internal_rows", [])?;
     Ok(())
 }
@@ -420,7 +410,6 @@ mod tests {
         let h1 = compute_glob_config_hash(&[t1.clone()], &[]);
         let h2 = compute_glob_config_hash(&[t2], &[]);
         assert_ne!(h1, h2);
-        // Sanity: still equal when reset.
         t1.strict = false;
         assert_eq!(h1, compute_glob_config_hash(&[t1], &[]));
     }
@@ -505,9 +494,8 @@ mod tests {
     fn drop_user_tables_clears_user_data_and_files_index() {
         let conn = Connection::open_in_memory().unwrap();
         create_sidecar_tables(&conn).unwrap();
-        // The internal row mapping (epic #358) is created by `Db::open` in
-        // production; declare it inline here since this test uses a raw
-        // connection (calling the `db` helper would break unit isolation).
+        // `_dirsql_internal_rows` is created by `Db::open` in production;
+        // declared inline here since this test uses a raw connection.
         conn.execute(
             "CREATE TABLE _dirsql_internal_rows (
                 table_name TEXT NOT NULL, file_path TEXT NOT NULL,
@@ -518,7 +506,6 @@ mod tests {
         conn.execute("CREATE TABLE rows (x TEXT)", []).unwrap();
         conn.execute("INSERT INTO rows (x) VALUES ('a')", [])
             .unwrap();
-        // A stale mapping row that a cold rebuild must wipe.
         conn.execute(
             "INSERT INTO _dirsql_internal_rows (table_name, file_path, row_index, rowid_ref) \
              VALUES ('rows', 'a.csv', 0, 1)",
@@ -546,14 +533,13 @@ mod tests {
             .unwrap();
         assert_eq!(table_count, 0);
         assert!(read_cached_files(&conn).unwrap().is_empty());
-        // The internal row mapping is wiped too, ready for a fresh re-ingest.
         let mapping_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM _dirsql_internal_rows", [], |r| {
                 r.get(0)
             })
             .unwrap();
         assert_eq!(mapping_count, 0);
-        // Meta is preserved by drop_user_tables -- we replace it explicitly.
+        // Meta is preserved; callers replace it explicitly.
         let m = read_meta(&conn).unwrap();
         assert_eq!(m.get("x"), Some(&"y".to_string()));
     }
@@ -564,9 +550,8 @@ mod tests {
         let p = dir.path().join("a.txt");
         fs::write(&p, b"hello").unwrap();
         let h = hash_file(&p).unwrap();
-        // Golden BLAKE3 digest of b"hello" (pins the exact algorithm + output;
-        // hardcoded so the unit test does not call the blake3 crate itself).
-        // hex: ea8f163db38682925e4491c5e58d4bb3506ef8c14eb78a86e908c5624a67200f
+        // Golden BLAKE3 digest of b"hello", hardcoded so the unit test does
+        // not call the blake3 crate itself.
         let expected: [u8; 32] = [
             0xea, 0x8f, 0x16, 0x3d, 0xb3, 0x86, 0x82, 0x92, 0x5e, 0x44, 0x91, 0xc5, 0xe5, 0x8d,
             0x4b, 0xb3, 0x50, 0x6e, 0xf8, 0xc1, 0x4e, 0xb7, 0x8a, 0x86, 0xe9, 0x08, 0xc5, 0x62,
@@ -577,9 +562,6 @@ mod tests {
 
     #[test]
     fn hash_file_errors_on_missing_path() {
-        // `fs::read` fails for a path that does not exist, so the `?` in
-        // hash_file propagates the IO error. A missing path is reported as
-        // `NotFound` across platforms, so pin that kind.
         let dir = TempDir::new().unwrap();
         let missing = dir.path().join("does-not-exist.txt");
         let err = hash_file(&missing).unwrap_err();
@@ -588,8 +570,6 @@ mod tests {
 
     #[test]
     fn canonical_root_falls_back_to_literal_when_canonicalize_fails() {
-        // A nonexistent path cannot be canonicalized, so canonical_root
-        // returns the literal path string via the unwrap_or_else fallback.
         let dir = TempDir::new().unwrap();
         let missing = dir.path().join("no-such-subdir");
         let got = canonical_root(&missing);
@@ -598,13 +578,9 @@ mod tests {
 
     #[test]
     fn ensure_parent_dir_errors_when_parent_is_a_file() {
-        // When the would-be parent is an existing regular file,
-        // `create_dir_all` fails and the `?` propagates. The exact
-        // `ErrorKind` is platform-fragile here: `create_dir_all` stats the
-        // existing file and may report `AlreadyExists`, `NotADirectory`, or
-        // (on some targets) `NotFound`. Rather than hardcode a brittle kind,
-        // pin that it IS an error whose kind is not `NotFound` (the
-        // missing-path case we want to distinguish it from).
+        // `create_dir_all`'s ErrorKind is platform-fragile here (may be
+        // AlreadyExists or NotADirectory), so pin only that it errors with a
+        // kind distinct from the missing-path `NotFound`.
         let dir = TempDir::new().unwrap();
         let file = dir.path().join("not-a-dir");
         fs::write(&file, b"x").unwrap();
@@ -635,23 +611,15 @@ mod tests {
 
     #[test]
     fn ensure_parent_dir_is_noop_for_bare_filename() {
-        // A bare filename has an empty parent (`""`); the guard must skip
-        // `create_dir_all` and return Ok without touching the filesystem.
+        // A bare filename's parent is `Some("")`, not `None`; the empty-parent
+        // guard must skip `create_dir_all`.
         ensure_parent_dir(Path::new("bare.txt")).unwrap();
     }
 
     #[test]
     fn system_time_to_ns_returns_zero_for_none() {
-        // Unavailable timestamps (e.g. platforms without ctime) map to 0.
         assert_eq!(system_time_to_ns(None), 0);
     }
-
-    // --- rusqlite error propagation (`?` arms) ---
-    //
-    // Each sidecar accessor runs against a `_dirsql_*` table. Calling it on a
-    // connection that has *not* had `create_sidecar_tables` run yields a "no
-    // such table" SQLite error, exercising the `?` propagation in each
-    // function (rather than only the happy path covered by the round-trips).
 
     #[test]
     fn read_meta_propagates_missing_table_error() {
@@ -714,7 +682,6 @@ mod tests {
     fn write_meta_replaces_the_entire_meta_table() {
         let conn = Connection::open_in_memory().unwrap();
         create_sidecar_tables(&conn).unwrap();
-        // Seed a stale entry that write_meta must clear.
         upsert_meta(&conn, "stale", "old").unwrap();
 
         let mut entries = HashMap::new();
@@ -766,9 +733,6 @@ mod tests {
 
     #[test]
     fn from_metadata_captures_size_and_timestamps() {
-        // Read real metadata for a staged file so `from_metadata` (and, on
-        // unix, `inode_dev`) run against a live `fs::Metadata`. The five-byte
-        // body pins the size; mtime is non-zero for a just-written file.
         let dir = TempDir::new().unwrap();
         let p = dir.path().join("a.txt");
         fs::write(&p, b"hello").unwrap();
@@ -782,9 +746,6 @@ mod tests {
 
     #[test]
     fn read_cached_files_drops_malformed_content_hash() {
-        // A `content_hash` blob whose length is not 32 bytes cannot be a valid
-        // BLAKE3 digest, so `read_cached_files` maps it to `None` (the `else`
-        // arm of the length check) rather than truncating or panicking.
         let conn = Connection::open_in_memory().unwrap();
         create_sidecar_tables(&conn).unwrap();
         conn.execute(

@@ -1,11 +1,7 @@
-// Binding tier: resolve a SQLite extension by bare package name (#299).
-//
-// Lays a real compiled loadable inside a real installed-package directory under
-// `node_modules`, points `DirSQL` at it by **bare package name**, and asserts
-// the SDK resolves the actual on-disk file via `require.resolve`, loads it, and
-// the function it registers is callable. Real layout, no mocks -- the shape
-// mirrors the Python sibling (#298) and the Rust end-to-end test: resolve ->
-// load -> callable.
+// Lays a real compiled loadable inside a real installed-package directory
+// under `node_modules`, points `DirSQL` at it by **bare package name**, and
+// asserts the SDK resolves the actual on-disk file via `require.resolve`,
+// loads it, and the function it registers is callable. Real layout, no mocks.
 //
 // The loadable is the repo's `tests/fixtures/testext` cdylib (registers
 // `dirsql_testext_answer() -> 42`), built on the fly with cargo.
@@ -64,7 +60,7 @@ function buildFixtureExtension(targetDir: string): string {
 
 describe("DirSQL extension by package name (#299)", () => {
   // Must stay unique across test files: suites run in parallel workers and
-  // share this `node_modules`, so a reused name races on setup/cleanup (#349).
+  // share this `node_modules`, so a reused name races on setup/cleanup.
   const pkgName = "dirsql-testext-pkg";
   const pkgDir = join(tsNodeModules, pkgName);
   let tmp: string;

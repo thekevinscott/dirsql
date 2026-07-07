@@ -1,4 +1,4 @@
-//! Integration tests for `dirsql init` (issue #96).
+//! Integration tests for `dirsql init`.
 //!
 //! These tests spawn the compiled `dirsql` binary as a subprocess but
 //! replace `claude` with a stub shell script that prints a canned
@@ -75,10 +75,6 @@ fn run_init(cwd: &Path, stub_dir: &Path, extra_args: &[&str]) -> Output {
         .expect("spawning dirsql failed")
 }
 
-// ---------------------------------------------------------------------------
-// Happy path
-// ---------------------------------------------------------------------------
-
 #[test]
 fn writes_a_loadable_dirsql_config() {
     let stub_dir = TempDir::new().unwrap();
@@ -101,19 +97,14 @@ fn writes_a_loadable_dirsql_config() {
         .expect("config produced by `dirsql init` must load via from_config_path");
 }
 
-// ---------------------------------------------------------------------------
-// --force semantics
-// ---------------------------------------------------------------------------
-
 #[test]
 fn refuses_to_overwrite_existing_config() {
     let stub_dir = TempDir::new().unwrap();
     let sentinel = stub_dir.path().join("claude.called");
     write_stub_claude(stub_dir.path(), CANNED_TOML, &sentinel);
 
-    // First run: empty cwd, the happy-path baseline. Establishes that
-    // init can in fact write a config, so the second-run failure below
-    // can't be confused with "init is broken".
+    // Baseline first run proves init can write a config, so the second-run
+    // failure below can't be confused with a broken init.
     let cwd = TempDir::new().unwrap();
     let first = run_init(cwd.path(), stub_dir.path(), &[]);
     assert!(
@@ -168,10 +159,6 @@ fn force_flag_overwrites_existing_config() {
         .expect("forced-overwrite config must load");
 }
 
-// ---------------------------------------------------------------------------
-// --root and --output flags
-// ---------------------------------------------------------------------------
-
 #[test]
 fn root_flag_targets_a_different_directory() {
     let stub_dir = TempDir::new().unwrap();
@@ -221,10 +208,6 @@ fn output_flag_redirects_destination() {
         "default path must not be written when --output is set",
     );
 }
-
-// ---------------------------------------------------------------------------
-// Failure paths
-// ---------------------------------------------------------------------------
 
 #[test]
 fn raises_when_claude_is_missing() {
@@ -282,10 +265,6 @@ fn does_not_write_partial_config_when_claude_fails() {
         "no config must be written when `claude` fails",
     );
 }
-
-// ---------------------------------------------------------------------------
-// --help surface (every documented flag must appear)
-// ---------------------------------------------------------------------------
 
 #[test]
 fn init_help_lists_documented_flags() {

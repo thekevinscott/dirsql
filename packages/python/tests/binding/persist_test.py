@@ -40,7 +40,6 @@ def describe_persist():
     def describe_cold_start():
         @pytest.mark.asyncio
         async def it_writes_cache_to_dotdirsql(persist_dir):
-            """A cold start with persist=True creates `.dirsql/cache.db`."""
             _write(
                 os.path.join(persist_dir, "items", "a.json"),
                 json.dumps({"name": "apple", "price": 1.5}),
@@ -55,7 +54,6 @@ def describe_persist():
     def describe_warm_start():
         @pytest.mark.asyncio
         async def it_trusts_unchanged_files(persist_dir):
-            """A warm start with persist=True does not re-parse unchanged files."""
             _write(
                 os.path.join(persist_dir, "items", "a.json"),
                 json.dumps({"name": "apple", "price": 1.5}),
@@ -78,7 +76,6 @@ def describe_persist():
     def describe_changed_file():
         @pytest.mark.asyncio
         async def it_reparses_changed_files(persist_dir):
-            """A modified file is re-parsed on warm start."""
             path = os.path.join(persist_dir, "items", "a.json")
             _write(path, json.dumps({"name": "apple", "price": 1.5}))
 
@@ -105,7 +102,6 @@ def describe_persist():
     def describe_deleted_file():
         @pytest.mark.asyncio
         async def it_drops_rows_for_deleted_files(persist_dir):
-            """Files removed between runs have their rows dropped."""
             a = os.path.join(persist_dir, "items", "a.json")
             b = os.path.join(persist_dir, "items", "b.json")
             _write(a, json.dumps({"name": "apple", "price": 1.5}))
@@ -126,7 +122,6 @@ def describe_persist():
     def describe_new_file():
         @pytest.mark.asyncio
         async def it_ingests_new_files(persist_dir):
-            """A file added between runs is parsed on warm start."""
             _write(
                 os.path.join(persist_dir, "items", "a.json"),
                 json.dumps({"name": "apple", "price": 1.5}),
@@ -151,7 +146,6 @@ def describe_persist():
     def describe_glob_change():
         @pytest.mark.asyncio
         async def it_forces_full_rebuild_on_config_change(persist_dir):
-            """Changing a glob/DDL invalidates the cache and re-parses everything."""
             _write(
                 os.path.join(persist_dir, "items", "a.json"),
                 json.dumps({"name": "apple", "price": 1.5}),
@@ -191,8 +185,6 @@ def describe_persist():
     def describe_dirsql_excluded():
         @pytest.mark.asyncio
         async def it_excludes_dotdirsql_from_walk(persist_dir):
-            """The reserved `.dirsql/` dir at the root is never indexed."""
-            # Real data file:
             _write(
                 os.path.join(persist_dir, "items", "a.json"),
                 json.dumps({"name": "apple", "price": 1.5}),
@@ -250,7 +242,6 @@ def describe_persist():
             box2 = [0]
             db2 = DirSQL(persist_dir, tables=[_items_table(box2)], persist=True)
             await db2.ready()
-            # Racy-window path forces a hash check; corrupted hash -> re-parse.
             assert box2[0] == 1
             results = await db2.query("SELECT name FROM items")
             assert results[0]["name"] == "apple"
@@ -258,8 +249,6 @@ def describe_persist():
     def describe_dirsql_version_bump():
         @pytest.mark.asyncio
         async def it_rebuilds_cache_when_dirsql_version_changes(persist_dir):
-            """A mismatch on the cached `dirsql_version` meta key must trigger
-            a full rebuild — even for otherwise-unchanged files."""
             _write(
                 os.path.join(persist_dir, "items", "a.json"),
                 json.dumps({"name": "apple", "price": 1.5}),
@@ -289,7 +278,6 @@ def describe_persist():
     def describe_custom_persist_path():
         @pytest.mark.asyncio
         async def it_honors_custom_persist_path(persist_dir):
-            """`persist_path` overrides the default cache location."""
             _write(
                 os.path.join(persist_dir, "items", "a.json"),
                 json.dumps({"name": "apple", "price": 1.5}),

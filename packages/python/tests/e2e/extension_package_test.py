@@ -1,16 +1,13 @@
 """CLI e2e: load a SQLite extension by **package name** through the real
-`dirsql` launcher + binary (#227 / #298).
+`dirsql` launcher + binary.
 
 Drives the Python launcher (`dirsql.cli.main:main`) against a real
 `.dirsql.toml` whose `[[dirsql.extension]].path` is a bare package name
 installed on the launcher's `sys.path`, then queries the running HTTP server
-and asserts the extension's function is callable. No mocks: real launcher, real
-binary, real process, real filesystem, real installed package.
-
-The launcher resolves the package name (via `importlib`) and passes the
-resolved literal path to the binary as `--extension`; the compiled binary can't
-resolve package names itself. This is the only test that proves the TOML-config
-CLI path works end to end.
+and asserts the extension's function is callable. No mocks. The launcher
+resolves the package name (via `importlib`) and passes the resolved literal
+path to the binary as `--extension`; the compiled binary can't resolve
+package names itself.
 
 The loadable is the repo's `tests/fixtures/testext` cdylib (registers
 `dirsql_testext_answer() -> 42`), built on the fly with cargo.

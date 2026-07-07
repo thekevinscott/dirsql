@@ -96,9 +96,8 @@ fn start_watch_task(db: DirSQL, tx: broadcast::Sender<String>) {
 mod tests {
     use super::*;
 
-    // Binding with an `Unavailable` state needs no DB/filesystem, so this
-    // exercises the real bind / local-addr / graceful-shutdown plumbing
-    // without standing up a full index. Port 0 lets the OS pick a free port.
+    // An `Unavailable` state needs no DB/filesystem, so the real bind /
+    // graceful-shutdown plumbing runs without standing up an index.
     #[tokio::test]
     async fn serve_with_state_binds_an_ephemeral_port_then_shuts_down() {
         let config = ServerConfig::bind("127.0.0.1".to_string(), 0);
@@ -115,10 +114,6 @@ mod tests {
         handle.shutdown().await.expect("graceful shutdown");
     }
 
-    // A `Ready` state drives the `serve` convenience wrapper plus
-    // `start_watch_task` (which attaches `DirSQL::watch` and pumps its stream
-    // into the broadcast channel). Built over an empty temp dir so the scan
-    // touches nothing; the port-0 bind and graceful shutdown are real.
     #[tokio::test]
     async fn serve_with_a_ready_db_attaches_the_watcher_then_shuts_down() {
         let dir = tempfile::tempdir().unwrap();

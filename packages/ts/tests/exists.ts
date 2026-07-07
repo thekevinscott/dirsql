@@ -1,9 +1,6 @@
 // Shared test helper: the `node:fs/promises` analog of `existsSync`.
-//
-// `node:fs/promises` has no `existsSync`; the idiom is `access()` in a
-// try/catch. Kept in its own module (not a `.test.ts` file) so vitest
-// doesn't collect it. Imported by the integration suite (`persist`) and
-// the packaging smoke test (`smoke/build`).
+// Kept in its own module (not a `.test.ts` file) so vitest doesn't
+// collect it.
 
 import { access } from "node:fs/promises";
 

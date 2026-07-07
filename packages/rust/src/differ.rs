@@ -84,12 +84,10 @@ fn diff_rows(
     new_rows: &[HashMap<String, Value>],
     file_path: &str,
 ) -> Vec<RowEvent> {
-    // If file shrunk, do full replace
     if new_rows.len() < old_rows.len() {
         return full_replace(table, old_rows, new_rows, file_path);
     }
 
-    // Compare overlapping rows line by line
     let overlap = old_rows.len();
     let mut changed = 0;
     let mut events = Vec::new();
@@ -100,13 +98,11 @@ fn diff_rows(
         }
     }
 
-    // For multi-row files, if more than half of overlapping rows changed, full replace.
-    // Single-row files (overlap == 1) never trigger full replace -- they use Update.
+    // Single-row files (overlap == 1) update rather than full-replace.
     if overlap > 1 && changed * 2 > overlap {
         return full_replace(table, old_rows, new_rows, file_path);
     }
 
-    // Emit Update events for changed lines
     for i in 0..overlap {
         if old_rows[i] != new_rows[i] {
             events.push(RowEvent::Update {
@@ -118,7 +114,6 @@ fn diff_rows(
         }
     }
 
-    // Emit Insert events for appended lines
     for row in &new_rows[overlap..] {
         events.push(RowEvent::Insert {
             table: table.to_string(),
@@ -174,8 +169,6 @@ mod tests {
         Value::Integer(i)
     }
 
-    // --- All inserts (file created) ---
-
     #[test]
     fn all_inserts_when_old_is_none() {
         let rows = vec![
@@ -196,8 +189,6 @@ mod tests {
         ));
     }
 
-    // --- All deletes (file deleted) ---
-
     #[test]
     fn all_deletes_when_new_is_none() {
         let rows = vec![row(&[("id", text("1"))]), row(&[("id", text("2"))])];
@@ -215,16 +206,12 @@ mod tests {
         ));
     }
 
-    // --- No changes ---
-
     #[test]
     fn no_events_when_content_identical() {
         let rows = vec![row(&[("x", int(1))]), row(&[("x", int(2))])];
         let events = diff("t", Some(&rows), Some(&rows), "t.jsonl");
         assert!(events.is_empty());
     }
-
-    // --- Single line change ---
 
     #[test]
     fn update_event_for_changed_line() {
@@ -250,8 +237,6 @@ mod tests {
         ));
     }
 
-    // --- Append new lines ---
-
     #[test]
     fn insert_events_for_appended_lines() {
         let old = vec![row(&[("id", int(1))])];
@@ -274,8 +259,6 @@ mod tests {
         ));
     }
 
-    // --- Full replace on shrink ---
-
     #[test]
     fn full_replace_when_file_shrinks() {
         let old = vec![
@@ -285,7 +268,6 @@ mod tests {
         ];
         let new = vec![row(&[("id", int(1))])];
         let events = diff("t", Some(&old), Some(&new), "t.jsonl");
-        // Should be 3 deletes + 1 insert = 4 events
         assert_eq!(events.len(), 4);
         let deletes: Vec<_> = events
             .iter()
@@ -297,10 +279,8 @@ mod tests {
             .collect();
         assert_eq!(deletes.len(), 3);
         assert_eq!(inserts.len(), 1);
-        // Branch-free attribution check: every variant's Debug rendering
-        // includes its `file_path` field, so asserting on that string covers
-        // all variants without a `match` whose `Update`/`Error` arms this test
-        // never reaches (those arms would be dead coverage regions).
+        // Debug-string check covers file_path attribution on every variant
+        // without a `match` carrying dead `Update`/`Error` arms.
         assert!(
             events
                 .iter()
@@ -308,8 +288,6 @@ mod tests {
             "every event must be attributed to t.jsonl: {events:?}"
         );
     }
-
-    // --- Full replace on heavy modification ---
 
     #[test]
     fn full_replace_when_more_than_half_changed() {
@@ -319,7 +297,6 @@ mod tests {
             row(&[("v", text("c"))]),
             row(&[("v", text("d"))]),
         ];
-        // 3 out of 4 changed = 75% > 50%, triggers full replace
         let new = vec![
             row(&[("v", text("A"))]),
             row(&[("v", text("B"))]),
@@ -335,12 +312,9 @@ mod tests {
             .iter()
             .filter(|e| matches!(e, RowEvent::Insert { .. }))
             .collect();
-        // Full replace: 4 deletes + 4 inserts
         assert_eq!(deletes.len(), 4);
         assert_eq!(inserts.len(), 4);
     }
-
-    // --- Single-row file: update ---
 
     #[test]
     fn single_row_update() {
@@ -358,8 +332,6 @@ mod tests {
         ));
     }
 
-    // --- Single-row file: no change ---
-
     #[test]
     fn single_row_no_change() {
         let rows = vec![row(&[("title", text("Same"))])];
@@ -367,15 +339,11 @@ mod tests {
         assert!(events.is_empty());
     }
 
-    // --- Both None ---
-
     #[test]
     fn no_events_when_both_none() {
         let events = diff("t", None, None, "gone.json");
         assert!(events.is_empty());
     }
-
-    // --- Exactly half changed should NOT trigger full replace ---
 
     #[test]
     fn no_full_replace_when_exactly_half_changed() {
@@ -385,7 +353,6 @@ mod tests {
             row(&[("v", text("c"))]),
             row(&[("v", text("d"))]),
         ];
-        // 2 out of 4 changed = 50%, should NOT trigger full replace
         let new = vec![
             row(&[("v", text("A"))]),
             row(&[("v", text("B"))]),
@@ -393,19 +360,15 @@ mod tests {
             row(&[("v", text("d"))]),
         ];
         let events = diff("t", Some(&old), Some(&new), "t.jsonl");
-        // Should be 2 Update events, not a full replace
         assert_eq!(events.len(), 2);
         assert!(events.iter().all(|e| matches!(e, RowEvent::Update { .. })));
     }
-
-    // --- Full replace: deletes come before inserts ---
 
     #[test]
     fn full_replace_deletes_before_inserts() {
         let old = vec![row(&[("id", int(1))]), row(&[("id", int(2))])];
         let new = vec![row(&[("id", int(3))])];
         let events = diff("t", Some(&old), Some(&new), "t.jsonl");
-        // Find the index of the last delete and first insert
         let last_delete = events
             .iter()
             .rposition(|e| matches!(e, RowEvent::Delete { .. }));

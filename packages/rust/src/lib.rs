@@ -7,7 +7,7 @@
 //! bindings in this workspace can reach them, but they are not part of the
 //! stable public API.
 
-/// Reusable command runner backing the command-backed events (#322).
+/// Reusable command runner backing the command-backed events.
 pub mod command;
 #[doc(hidden)]
 pub mod config;
@@ -120,18 +120,10 @@ pub enum DirSqlError {
 }
 
 impl DirSqlError {
-    // Error-mapping helpers used with `?`/`map_err` (e.g.
-    // `.map_err(DirSqlError::lock)`), factored out of inline `|e| ...`
-    // closures so the conversion lives in one place. Their bodies run on
-    // lock poisoning / SQLite failures and are exercised by the
-    // poison/forced-error tests below.
     fn lock(e: impl std::fmt::Display) -> Self {
         DirSqlError::Lock(e.to_string())
     }
 
-    /// Wrap a typed error in `Watch`, preserving the underlying error as a
-    /// source so callers can `.source()` / downcast. Used by the
-    /// `notify`-backed code paths.
     fn watch<E: StdError + Send + Sync + 'static>(e: E) -> Self {
         DirSqlError::Watch {
             message: e.to_string(),
@@ -139,9 +131,6 @@ impl DirSqlError {
         }
     }
 
-    /// Build a `Watch` error with only a message (no underlying source).
-    /// Used by the mutually-exclusive-API guards and other internal
-    /// invariants that aren't backed by a third-party error type.
     fn watch_msg(msg: impl Into<String>) -> Self {
         DirSqlError::Watch {
             message: msg.into(),
@@ -223,49 +212,28 @@ impl Table {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Internal state
-// ---------------------------------------------------------------------------
-
 struct DirSqlInner {
     db: Mutex<Db>,
     root: PathBuf,
-    /// Canonicalized form of `root`, used **only** for the live filesystem
-    /// watcher. `notify` has surprising behavior when handed a relative path
-    /// like `.` / `./data` (it may deliver no events at all, or deliver them
-    /// under the cwd-joined path so the relative prefix no longer strips):
-    /// the CLI binary works around this by canonicalizing its root before
-    /// watching, and the SDK now does the same (#250). Derived once at
-    /// construction via [`canonical_root`] (literal fallback when
-    /// canonicalization fails, e.g. a not-yet-created root), so the user's
-    /// `root` — and therefore the initial scan and the
-    /// `_path` virtual column — stay byte-for-byte unchanged.
+    /// Canonicalized `root`, used **only** for the live filesystem watcher:
+    /// `notify` misbehaves on relative paths (it may deliver no events, or
+    /// deliver them under the cwd-joined path so the relative prefix no
+    /// longer strips). Literal fallback when canonicalization fails (e.g. a
+    /// not-yet-created root); the user's `root` — and therefore the initial
+    /// scan and the `_path` virtual column — stays byte-for-byte unchanged.
     watch_root: PathBuf,
-    /// Pre-compiled matcher over all table globs plus ignore patterns.
-    /// Built once at construction, reused by the initial scan and every
-    /// subsequent watch iteration.
     matcher: TableMatcher,
-    /// Table name -> extract closure, resolved once.
     extract_map: HashMap<String, Arc<ExtractFn>>,
-    /// Table name -> strict flag, resolved once.
     strict_map: HashMap<String, bool>,
-    /// Lazily-created filesystem watcher, shared by both the polling API
-    /// ([`DirSQL::poll_events`]) and the channel-based API ([`DirSQL::watch`]).
     watcher: Mutex<Option<Watcher>>,
-    /// `true` once [`DirSQL::poll_events`] has been called at least once.
-    /// Locks out [`DirSQL::watch`] to prevent two consumers from draining
-    /// the same underlying watcher.
+    /// Locks out [`DirSQL::watch`] once [`DirSQL::poll_events`] has run:
+    /// both would drain the same underlying watcher.
     poll_used: AtomicBool,
-    /// `true` once [`DirSQL::watch`] has spawned its background thread.
-    /// Locks out [`DirSQL::poll_events`].
+    /// Locks out [`DirSQL::poll_events`] once [`DirSQL::watch`] has spawned
+    /// its background thread.
     watch_thread_started: AtomicBool,
-    /// Poll interval used by the channel-based [`watch`](DirSQL::watch)
-    /// loop. Bounds event-to-stream latency from above (and idle CPU from
-    /// below). Defaults to 200ms — see [`DirSQLBuilder::poll_interval`].
     poll_interval: Duration,
-    /// Filesystem seam used by the watch-upsert path. Always [`RealFs`] in
-    /// production; unit tests inject a deterministic double via the
-    /// `with_ignore_and_fs` test-seam constructor.
+    /// Filesystem seam: [`RealFs`] in production; unit tests inject a double.
     fs: Arc<dyn FileSystem>,
 }
 
@@ -346,7 +314,7 @@ impl DirSQL {
         let mut guard = self.inner.watcher.lock().map_err(DirSqlError::lock)?;
         if guard.is_none() {
             // Watch the canonicalized root, never the (possibly relative)
-            // user-supplied one — `notify` misbehaves on relative paths (#250).
+            // user-supplied one — `notify` misbehaves on relative paths.
             let watcher = Watcher::new(&self.inner.watch_root).map_err(DirSqlError::watch)?;
             *guard = Some(watcher);
         }
@@ -437,10 +405,6 @@ impl DirSQL {
         Ok(rx)
     }
 
-    // ----- internals --------------------------------------------------------
-
-    /// One iteration of the watch loop: block up to `timeout` for events,
-    /// drain any extras, process them into row events + DB mutations.
     fn poll_once(&self, timeout: Duration) -> Result<Vec<RowEvent>> {
         let file_events = {
             let guard = self.inner.watcher.lock().map_err(DirSqlError::lock)?;
@@ -469,12 +433,9 @@ impl DirSQL {
         let abs_path = match &event {
             FileEvent::Created(p) | FileEvent::Modified(p) | FileEvent::Deleted(p) => p.clone(),
         };
-        // Events now arrive under the canonical `watch_root` (the watcher was
-        // started on it), so strip that first; fall back to the user-supplied
-        // `root` (covers the already-canonical/absolute-root case and any
-        // event whose path predates the watch-root change), then to the raw
-        // absolute path. This keeps the computed relative `_path` identical to
-        // the pre-#250 behavior for both absolute and relative roots.
+        // Events arrive under the canonical `watch_root`, so strip that
+        // first; fall back to the user-supplied `root` (the already-canonical
+        // /absolute-root case), then to the raw absolute path.
         let rel_path_buf = abs_path
             .strip_prefix(&self.inner.watch_root)
             .or_else(|_| abs_path.strip_prefix(&self.inner.root))
@@ -500,9 +461,9 @@ impl DirSQL {
     }
 
     fn handle_delete(&self, table: &str, rel_path: &str) -> Vec<RowEvent> {
-        // Snapshot the file's rows from the row store before deleting them —
-        // the Delete events carry the old-row payloads. Read and delete under
-        // one lock acquisition so a concurrent event for the same file can't
+        // Snapshot the file's rows before deleting them — the Delete events
+        // carry the old-row payloads. Read and delete under one lock
+        // acquisition so a concurrent event for the same file can't
         // interleave between them.
         let old_rows = {
             let db = match self.inner.db.lock() {
@@ -550,10 +511,9 @@ impl DirSQL {
 
         let strict = *self.inner.strict_map.get(table).unwrap_or(&false);
 
-        // Normalize the new rows, snapshot the file's previous rows from the
-        // row store, and apply the delete+insert — all under one lock
-        // acquisition, so a concurrent event for the same file can't
-        // interleave between the read and the write.
+        // Normalize, snapshot the file's previous rows, and apply the
+        // delete+insert under one lock acquisition, so a concurrent event for
+        // the same file can't interleave between the read and the write.
         let (old_rows, new_rows) = {
             let db = match self.inner.db.lock() {
                 Ok(g) => g,
@@ -599,11 +559,9 @@ impl DirSQL {
     }
 
     /// Test-seam build path: identical to [`build_from_resolved`] but stores
-    /// the supplied [`FileSystem`] double on the resulting instance so the
-    /// watch-upsert path's filesystem read can be faked deterministically.
-    /// The prepare phase still uses [`RealFs`] (it has no instance yet), but
-    /// the unit tests that exercise this seam build over an empty temp dir, so
-    /// the scan touches nothing.
+    /// the supplied [`FileSystem`] double on the resulting instance. The
+    /// prepare phase still uses [`RealFs`] (it has no instance yet), so
+    /// callers must build over an empty temp dir.
     #[cfg(test)]
     pub(crate) fn with_ignore_and_fs<I, S>(
         root: impl Into<PathBuf>,
@@ -651,8 +609,8 @@ impl DirSQL {
 
         let (matcher, table_names) = compile_matcher(&tables, &ignore)?;
 
-        // Resolve the persistent context first (when enabled), so that
-        // file scanning can consult the cached file index.
+        // Resolve the persistent context before scanning, so the scan can
+        // consult the cached file index.
         let persist_ctx = if persist {
             Some(prepare_persist(
                 &root,
@@ -664,12 +622,11 @@ impl DirSQL {
             None
         };
 
-        // Walk the directory once.
         let scanned = scan_directory(&root, &matcher);
 
-        // Build the list of files needing re-parse. When persist is
-        // enabled, files whose stat tuple matches the cache (and that pass
-        // the racy-window check) are trusted instead of re-parsed.
+        // When persist is enabled, files whose stat tuple matches the cache
+        // (and that pass the racy-window check) are trusted instead of
+        // re-parsed.
         let (scanned_files, _trusted, deleted) = match &persist_ctx {
             None => {
                 let mut files = Vec::with_capacity(scanned.len());
@@ -715,10 +672,9 @@ impl DirSQL {
         Self::finish_build_with_fs(prepared, Arc::new(RealFs))
     }
 
-    /// Test-seam variant of [`finish_build`] that takes the [`FileSystem`]
-    /// double to store on the instance. Production always passes
-    /// `Arc::new(RealFs)` (via [`finish_build`]); unit tests inject a fake so
-    /// the watch-upsert path's `stat` read is deterministic.
+    /// Variant of [`finish_build`] taking the [`FileSystem`] to store on the
+    /// instance. Production always passes `Arc::new(RealFs)`; unit tests
+    /// inject a fake.
     pub(crate) fn finish_build_with_fs(
         prepared: PreparedBuild,
         fs: Arc<dyn FileSystem>,
@@ -738,12 +694,9 @@ impl DirSQL {
             None => (Db::new()?, None),
         };
 
-        // Load configured SQLite extensions onto the connection before any
-        // CREATE TABLE so a table's DDL and later queries can use
-        // extension-provided functions. (An extension-backed *virtual table*
-        // cannot be a dirsql-managed `[[table]]` — those inject per-file
-        // tracking columns; see Db::create_table.) Loading is enabled only for
-        // the duration of each load and disabled again afterwards.
+        // Load extensions before any CREATE TABLE so a table's DDL and later
+        // queries can use extension-provided functions. Loading is enabled
+        // only for the duration of each load.
         for ext in &extensions {
             db.load_extension(&ext.path, ext.entrypoint.as_deref())
                 .map_err(|source| DirSqlError::Extension {
@@ -771,9 +724,8 @@ impl DirSQL {
         }
 
         // Drop cached rows for files that disappeared since the last cache
-        // write. Trusted files need no work at all: their rows already live
-        // in the on-disk SQLite, and the watcher's diffing path reads a
-        // file's previous rows back from the row store on demand (#401).
+        // write. Trusted files need no work: their rows already live in the
+        // on-disk SQLite.
         if let Some((deleted, _)) = persist_ready.as_ref() {
             for (rel_path, table_name) in deleted {
                 db.delete_rows_by_file(table_name, rel_path)
@@ -782,7 +734,6 @@ impl DirSQL {
             }
         }
 
-        // Process every file that needs (re)parsing.
         let snapshot_ns = now_ns();
         for ScannedFile {
             rel_path,
@@ -844,10 +795,8 @@ impl DirSQL {
             write_meta(db.conn(), meta).map_err(DirSqlError::sqlite)?;
         }
 
-        // Canonicalize the watch root once, here at the single shared
-        // construction point reached by both `build()` and `build_async()`,
-        // so the live watcher never sees a relative path (#250). `root` itself
-        // is left untouched.
+        // Canonicalize the watch root so the live watcher never sees a
+        // relative path; `root` itself is left untouched.
         let watch_root = PathBuf::from(fs.canonical_root(&root));
 
         Ok(Self {
@@ -867,10 +816,6 @@ impl DirSQL {
         })
     }
 }
-
-// ---------------------------------------------------------------------------
-// Builder
-// ---------------------------------------------------------------------------
 
 /// Builder for [`DirSQL`] and [`AsyncDirSQL`].
 ///
@@ -974,8 +919,8 @@ impl DirSQLBuilder {
     /// The core resolves config-file extension paths only literally (relative
     /// to the config's parent). A launcher that resolves extensions itself —
     /// e.g. by **package name**, which needs an interpreter the compiled core
-    /// lacks (Python `importlib`, Node `require.resolve`; see #227) — sets this
-    /// and supplies the already-resolved literal paths via
+    /// lacks (Python `importlib`, Node `require.resolve`) — sets this and
+    /// supplies the already-resolved literal paths via
     /// [`extensions`](Self::extensions) instead, so the config's own extension
     /// entries are not loaded a second time.
     pub fn suppress_config_extensions(mut self, suppress: bool) -> Self {
@@ -1010,10 +955,6 @@ impl DirSQLBuilder {
         self
     }
 
-    /// Resolve all inputs (reading the config file if one was supplied) into
-    /// a [`ResolvedBuild`] used by the construction pipeline. Emits a warning
-    /// on stderr if both an explicit root and a config-supplied root are
-    /// present.
     fn resolve(self) -> Result<ResolvedBuild> {
         let DirSQLBuilder {
             root: explicit_root,
@@ -1053,12 +994,9 @@ impl DirSQLBuilder {
             tables.extend(cfg_tables);
             ignore.extend(cfg.ignore);
 
-            // Resolve config-supplied extension paths against the config
-            // file's parent directory (absolute paths pass through). Appended
-            // after any programmatically-supplied extensions. Skipped entirely
-            // when the caller has pre-resolved the config's extensions itself
-            // (e.g. a launcher resolving package names) and supplied them via
-            // `.extensions(...)` — see `suppress_config_extensions`.
+            // Config-supplied extension paths resolve against the config
+            // file's parent directory (absolute paths pass through); see
+            // `suppress_config_extensions` for the skip.
             if !suppress_config_extensions {
                 for ext in cfg.extensions {
                     let path = if ext.path.is_absolute() {
@@ -1143,10 +1081,7 @@ impl DirSQLBuilder {
     }
 }
 
-/// Default poll interval for the channel-based watch loop. Used when the
-/// builder doesn't supply an explicit `poll_interval`. Bounds event-to-
-/// stream latency from above; lower values trade idle CPU for tighter
-/// reaction time.
+/// Default poll interval for the channel-based watch loop.
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 /// Fully-resolved builder inputs: the result of merging programmatic
@@ -1184,8 +1119,6 @@ pub struct PreparedBuild {
     matcher: TableMatcher,
     scanned_files: Vec<ScannedFile>,
     persist: Option<PreparedPersist>,
-    /// Poll interval for the channel-based watch loop. Sourced from
-    /// [`DirSQLBuilder::poll_interval`] or [`DEFAULT_POLL_INTERVAL`].
     poll_interval: Duration,
 }
 
@@ -1197,16 +1130,13 @@ pub struct PreparedPersist {
 }
 
 /// A file the reconcile decided to trust: its cached rows are kept as-is and
-/// the file is not re-parsed. Production consumes the decision implicitly
-/// (trusted files are excluded from the re-parse list); the list itself is
-/// returned so tests can assert on the trust decision directly.
+/// the file is not re-parsed.
 #[doc(hidden)]
 pub struct TrustedFile {
     pub rel_path: String,
     pub table_name: String,
 }
 
-/// Internal context produced by [`prepare_persist`].
 struct PersistContext {
     db: Db,
     cached: HashMap<String, CachedFile>,
@@ -1280,24 +1210,17 @@ fn prepare_persist(
     })
 }
 
-/// Internal filesystem seam. Every effectful filesystem read performed by the
+/// Internal filesystem seam: every effectful filesystem read in the
 /// persist/reconcile and watch-upsert paths goes through this trait so unit
-/// tests can inject a deterministic double (avoiding real `std::fs` calls and
-/// the racy timing windows they imply). Production always uses [`RealFs`],
-/// which replicates the previous inline `std::fs`/`hash_file` calls exactly --
-/// this is purely a test seam, not a behavioral change.
+/// tests can inject a deterministic double. Production always uses [`RealFs`].
 trait FileSystem: Send + Sync {
-    /// Stat a path. Mirrors `std::fs::metadata(path).map(|m| FileStat::from_metadata(&m))`.
     fn stat(&self, path: &Path) -> std::io::Result<FileStat>;
-    /// BLAKE3-hash a file's contents. Mirrors [`hash_file`].
+    /// BLAKE3-hash a file's contents.
     fn hash(&self, path: &Path) -> std::io::Result<[u8; 32]>;
-    /// Canonicalize the watch root (literal fallback). Mirrors
-    /// [`canonical_root`](persist::canonical_root).
+    /// Canonicalize the watch root, falling back to the literal path.
     fn canonical_root(&self, root: &Path) -> String;
 }
 
-/// Production [`FileSystem`]: delegates to the real `std::fs` / [`hash_file`]
-/// calls that the persist and watch paths used inline before the seam existed.
 struct RealFs;
 
 impl FileSystem for RealFs {
@@ -1387,11 +1310,6 @@ fn table_exists(db: &Db, name: &str) -> Result<bool> {
     Ok(count > 0)
 }
 
-/// Translate a [`DbError`] into a [`DirSqlError`], promoting the core's
-/// structural write-rejection ([`DbError::WriteForbidden`]) into
-/// [`DirSqlError::WriteForbidden`] so callers can distinguish a rejected
-/// write from any other query error. Every other `DbError` flows through the
-/// usual [`DirSqlError::Core`] conversion.
 fn map_db_error(e: DbError) -> DirSqlError {
     match e {
         DbError::WriteForbidden => DirSqlError::WriteForbidden,
@@ -1452,9 +1370,8 @@ fn relative_path(root: &Path, path: &Path) -> String {
 /// facts are still merged on top, user values winning). `config_dir` is the
 /// command's working directory (the config file's parent) and `root` is the
 /// resolved index root used to compute the `{path}` placeholder. Each run is
-/// bounded by the global `[dirsql].hook-timeout` key when present (#351),
-/// falling back to the shared 30-second default
-/// ([`command::DEFAULT_COMMAND_TIMEOUT`]).
+/// bounded by the global `[dirsql].hook-timeout` key when present, falling
+/// back to [`command::DEFAULT_COMMAND_TIMEOUT`].
 fn build_tables_from_config(
     cfg: &config::Config,
     config_dir: &Path,
@@ -1502,9 +1419,8 @@ fn build_tables_from_config(
 ///
 /// Placeholders: `{path}` (the file relative to `root`, append-if-absent so
 /// `cmd` and `cmd {path}` behave identically), `{abspath}` (the absolute path),
-/// and `{root}` (the index root). The relative path is computed with a single
-/// [`Path::strip_prefix`] (#251/#252), falling back to the absolute path when
-/// the file is not under `root`.
+/// and `{root}` (the index root). `{path}` falls back to the absolute path
+/// when the file is not under `root`.
 ///
 /// Per-file isolation: any failure — a spawn/exit/timeout error from
 /// [`command::run_command`], or output that is not a JSON array of objects —
@@ -1548,8 +1464,7 @@ fn run_on_file(
 
 /// Parse an `on-file` command's stdout payload — a JSON array of row objects —
 /// into [`Row`]s. Returns `Err(msg)` when the top-level JSON is not an array or
-/// any element is not an object. Pure (no IO), so it stays colocated-unit-
-/// testable; the effectful spawn lives in [`run_on_file`].
+/// any element is not an object.
 fn parse_command_rows(payload: &str) -> std::result::Result<Vec<Row>, String> {
     let parsed: serde_json::Value =
         serde_json::from_str(payload).map_err(|e| format!("invalid JSON: {e}"))?;
@@ -1573,7 +1488,7 @@ fn parse_command_rows(payload: &str) -> std::result::Result<Vec<Row>, String> {
 
 /// Map a JSON value to a SQLite [`Value`]: `null` → `Null`; `bool` → `Integer`
 /// (0/1); an integral number → `Integer`, otherwise `Real`; `string` → `Text`;
-/// an array/object → its JSON text as `Text`. Pure.
+/// an array/object → its JSON text as `Text`.
 fn json_to_value(value: &serde_json::Value) -> Value {
     match value {
         serde_json::Value::Null => Value::Null,
@@ -1602,11 +1517,9 @@ const STAT_CTIME: &str = "_ctime";
 /// (`_path`, `_basename`, `_dir`, `_ext`) and stat-derived (`_size`,
 /// `_mtime`, `_ctime`).
 fn compute_stat_virtuals(rel_path: &str, abs_path: &Path) -> Row {
-    // Read the file's stats once; a missing/unreadable file yields all-`None`,
-    // which `stat_virtuals` renders as absent `_size`/`_mtime`/`_ctime`
-    // columns. `_mtime`/`_ctime` are `None` when the platform can't supply
-    // them (or the value predates the epoch). The pure column-building logic
-    // lives in `stat_virtuals`.
+    // A missing/unreadable file yields all-`None` (absent columns);
+    // `_mtime`/`_ctime` are `None` when the platform can't supply them or the
+    // value predates the epoch.
     let (size, mtime_secs, ctime_secs) = match std::fs::metadata(abs_path) {
         Ok(metadata) => {
             let to_secs = |t: std::io::Result<std::time::SystemTime>| {
@@ -1627,9 +1540,7 @@ fn compute_stat_virtuals(rel_path: &str, abs_path: &Path) -> Row {
 
 /// Pure core of [`compute_stat_virtuals`]: build the filesystem-fact columns
 /// from the relative path plus already-read stat values (each `None` when the
-/// corresponding fact is unavailable). Split out so the column-mapping logic
-/// is unit-testable without touching the filesystem; the metadata read lives
-/// in the caller.
+/// corresponding fact is unavailable).
 fn stat_virtuals(
     rel_path: &str,
     size: Option<i64>,
@@ -1655,8 +1566,7 @@ fn stat_virtuals(
     }
     if let Some(ext) = pb.extension() {
         // Preserve the original case: on case-sensitive filesystems
-        // `Photo.JPG` and `photo.jpg` are distinct files. Consumers wanting
-        // case-insensitive matching can `LOWER(_ext)` in SQL.
+        // `Photo.JPG` and `photo.jpg` are distinct files.
         out.insert(
             STAT_EXT.into(),
             Value::Text(ext.to_string_lossy().into_owned()),
@@ -1713,10 +1623,6 @@ fn merge_filesystem_facts(
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// AsyncDirSQL
-// ---------------------------------------------------------------------------
-
 /// Async wrapper around [`DirSQL`] whose constructor returns immediately while
 /// the initial scan runs on a background thread.
 ///
@@ -1733,10 +1639,7 @@ struct AsyncDirSqlInner {
 
 #[cfg(test)]
 impl AsyncDirSqlInner {
-    /// Fresh inner with an empty `db` cell — the pre-`ready` state. Lets the unit
-    /// tests build this fixture without naming the `tokio::sync` primitives (the
-    /// `unit lint` isolation rule); real async runtime behavior is exercised in
-    /// the integration/binding tiers.
+    /// Fresh inner with an empty `db` cell — the pre-`ready` state.
     fn empty() -> Self {
         Self {
             db: tokio::sync::OnceCell::new(),
@@ -1854,15 +1757,8 @@ mod readonly_tests {
     #[test]
     fn map_db_error_promotes_write_forbidden() {
         let err = map_db_error(DbError::WriteForbidden);
-        // Single-line `matches!` pins the variant without a dead fallback arm.
         assert!(matches!(err, DirSqlError::WriteForbidden), "got: {err:?}");
     }
-
-    // `map_db_error` treats every non-`WriteForbidden` variant identically (the
-    // `other => Core` arm), so `map_db_error_leaves_schema_mismatch_as_core`
-    // below fully covers that arm without a unit test naming `rusqlite::Error`.
-    // The Sqlite-error mapping is additionally exercised end-to-end in the
-    // integration/binding tiers.
 
     #[test]
     fn map_db_error_leaves_schema_mismatch_as_core() {
@@ -1872,10 +1768,8 @@ mod readonly_tests {
 
     #[test]
     fn missing_extension_build_fails_with_extension_error() {
-        // The .extension() builder surface loads at startup; a missing file
-        // must surface as DirSqlError::Extension (naming the library), not the
-        // generic Core(Sqlite) error. (#225 review finding #9; also exercises
-        // the .extension() builder method in-process.)
+        // A missing extension file must surface as DirSqlError::Extension
+        // (naming the library), not the generic Core(Sqlite) error.
         let dir = tempfile::tempdir().unwrap();
         let err = match DirSQL::builder()
             .root(dir.path())
@@ -1894,16 +1788,12 @@ mod readonly_tests {
 
     #[test]
     fn error_helpers_build_expected_variants() {
-        // Exercise the `map_err` helper constructors directly; their runtime
-        // call sites only fire on lock poisoning / SQLite failures, which
-        // tests can't provoke. Asserting on Display avoids `matches!` (whose
-        // dead arm would itself be an uncovered region).
         assert_eq!(
             DirSqlError::lock("x").to_string(),
             "failed to lock shared state: x"
         );
-        // `watch`, `config`, `matcher` now wrap a typed StdError to preserve
-        // a `source()` chain. Use `std::io::Error` as a portable witness.
+        // `watch`, `config`, `matcher` wrap a typed StdError to preserve a
+        // `source()` chain.
         let io = || std::io::Error::new(std::io::ErrorKind::Other, "x");
         let watch_err = DirSqlError::watch(io());
         assert_eq!(watch_err.to_string(), "watcher error: x");
@@ -1917,7 +1807,6 @@ mod readonly_tests {
         assert_eq!(m_err.to_string(), "glob matcher error: x");
         assert!(StdError::source(&m_err).is_some());
 
-        // `watch_msg` is the source-less form for internal invariants.
         let watch_msg = DirSqlError::watch_msg("x");
         assert_eq!(watch_msg.to_string(), "watcher error: x");
         assert!(StdError::source(&watch_msg).is_none());
@@ -1935,12 +1824,8 @@ mod internal_tests {
     use std::collections::HashMap as StdHashMap;
     use tempfile::TempDir;
 
-    /// Deterministic [`FileSystem`] double for unit tests. Backed by a map of
-    /// canned [`FileStat`]s (and an optional canned hash); any path not present
-    /// stats/hashes as an `io::Error` of kind `NotFound`. Lets the tests of the
-    /// persist/reconcile and watch-upsert paths exercise the metadata-read and
-    /// racy-window branches without touching the real filesystem (and without
-    /// depending on real mtime timing).
+    /// Deterministic [`FileSystem`] double: canned [`FileStat`]s and hashes;
+    /// any path not present stats/hashes as `NotFound`.
     #[derive(Default)]
     struct FakeFs {
         stats: StdHashMap<PathBuf, FileStat>,
@@ -1959,9 +1844,7 @@ mod internal_tests {
             self.hashes.insert(path.into(), hash);
         }
 
-        /// Builder: register a canned canonicalization for `root`, so the
-        /// `watch_root` computation in `finish_build_with_fs` becomes
-        /// deterministic without touching the real filesystem or process CWD.
+        /// Register a canned canonicalization for `root`.
         fn with_canonical_root(
             mut self,
             root: impl Into<PathBuf>,
@@ -1993,9 +1876,7 @@ mod internal_tests {
         }
     }
 
-    /// A canned [`FileStat`] for unit tests that don't care about specific
-    /// values, only that a stat succeeds. `snapshot_ns`-comparable via
-    /// `mtime_ns`.
+    /// A canned [`FileStat`] for tests that only need a stat to succeed.
     fn fake_stat() -> FileStat {
         FileStat {
             size: 5,
@@ -2006,11 +1887,6 @@ mod internal_tests {
         }
     }
 
-    /// A relative path with a basename, parent dir, and extension exercises the
-    /// `Some` arms of `stat_virtuals`' path inspection, plus the `Some` arms of
-    /// the size/mtime/ctime inserts. The metadata read that supplies those
-    /// values lives in `compute_stat_virtuals` and is covered by the
-    /// integration suite (real-file scans).
     #[test]
     fn stat_virtuals_populates_all_fields() {
         let stat = stat_virtuals("nested/sub.txt", Some(5), Some(100), Some(50));
@@ -2023,12 +1899,6 @@ mod internal_tests {
         assert!(matches!(stat.get(STAT_CTIME), Some(Value::Integer(50))));
     }
 
-    /// A bare filename has no parent component and no extension, and a
-    /// nonexistent abs path makes `compute_stat_virtuals`' `std::fs::metadata`
-    /// read fail (its `Err` arm -> all-`None`). This drives the skip branches:
-    /// no `_ext`, no `_size`/`_mtime`/`_ctime`. (Calling the real
-    /// `compute_stat_virtuals` with a nonexistent path keeps the test free of a
-    /// direct `std::fs` call while still covering the read-failure arm.)
     #[test]
     fn compute_stat_virtuals_skips_absent_fields() {
         let stat = compute_stat_virtuals("bare", Path::new("/nonexistent-xyz/bare"));
@@ -2042,9 +1912,6 @@ mod internal_tests {
         assert!(!stat.contains_key(STAT_CTIME));
     }
 
-    /// An empty relative path has neither a `file_name()` nor a `parent()`,
-    /// so the basename and dir `if let Some(..)` blocks both take their
-    /// no-match (false) arm: only `_path` is populated.
     #[test]
     fn compute_stat_virtuals_handles_empty_path() {
         let stat = compute_stat_virtuals("", Path::new("/nonexistent-xyz/none"));
@@ -2057,9 +1924,8 @@ mod internal_tests {
         assert!(!stat.contains_key(STAT_EXT));
     }
 
-    /// `finish_build` defends against a `ScannedFile` whose table has no
-    /// registered extract function (a "ghost" entry). With an empty table
-    /// list the lookup misses and the defensive `ok_or_else` fires.
+    /// A `ScannedFile` whose table has no registered extract function must
+    /// error rather than be silently skipped.
     #[test]
     fn finish_build_errors_on_ghost_scanned_file() {
         let dir = TempDir::new().unwrap();
@@ -2077,24 +1943,13 @@ mod internal_tests {
             poll_interval: DEFAULT_POLL_INTERVAL,
             persist: None,
         };
-        // `.is_err()` keeps the assertion free of an unreachable Ok arm while
-        // still executing `finish_build`'s defensive `ok_or_else` path.
         assert!(DirSQL::finish_build(prepared).is_err());
     }
 
-    /// A filesystem event for an ignored path is dropped by
-    /// `process_file_event` before it reaches the matcher, returning no row
-    /// events. Exercises the `is_ignored` early-return branch directly,
-    /// without depending on real filesystem-watch timing. A second,
-    /// non-ignored file confirms the same table *does* extract a row when the
-    /// path is not ignored -- which also exercises the extract closure body
-    /// (so it isn't a dead coverage region).
     #[test]
     fn process_file_event_skips_ignored_paths() {
         let dir = TempDir::new().unwrap();
         let kept = dir.path().join("keep.txt");
-        // Inject a fake fs so the non-ignored path's stat read succeeds without
-        // staging a real file. The ignored path is dropped before any stat.
         let fake = FakeFs::with_stat(kept.clone(), fake_stat());
         let db = DirSQL::with_ignore_and_fs(
             dir.path(),
@@ -2113,33 +1968,19 @@ mod internal_tests {
         )
         .unwrap();
 
-        // Ignored path: dropped before the matcher, no events.
         let ignored = dir.path().join("skip").join("a.txt");
         let events = db.process_file_event(FileEvent::Created(ignored));
         assert!(events.is_empty(), "ignored path must produce no events");
 
-        // Non-ignored path: the extract closure runs and yields one insert.
         let events = db.process_file_event(FileEvent::Created(kept));
         assert_eq!(events.len(), 1, "non-ignored path must produce one event");
     }
 
-    // -----------------------------------------------------------------------
-    // #250: canonical `watch_root` and the strip-prefix fallbacks.
-    //
-    // The canonicalization runs through the `FileSystem` seam, so these tests
-    // inject a `FakeFs` with a canned `canonical_root` mapping instead of
-    // mutating the process CWD or staging real files (#233).
-    // -----------------------------------------------------------------------
-
     /// Building with a **relative** root canonicalizes `watch_root` to an
-    /// absolute path while leaving `root` (and therefore `config()` / `_path`)
-    /// exactly as the caller supplied it. This is the core of the #250 fix:
-    /// `start_watching` watches `watch_root`, so `notify` never sees `.`.
+    /// absolute path while leaving `root` exactly as the caller supplied it,
+    /// so `notify` never sees `.`.
     #[test]
     fn relative_root_canonicalizes_watch_root_only() {
-        // FakeFs canonicalizes the relative root `.` to a fixed absolute
-        // string, so the watch_root computation is deterministic with no CWD
-        // juggling.
         let fake = FakeFs::default().with_canonical_root(".", "/ws/canonical");
         let db = DirSQL::with_ignore_and_fs(
             ".",
@@ -2149,9 +1990,7 @@ mod internal_tests {
         )
         .unwrap();
 
-        // `root` is preserved verbatim.
         assert_eq!(db.inner.root, PathBuf::from("."));
-        // `watch_root` is absolute and points at the canonical dir.
         assert!(
             db.inner.watch_root.is_absolute(),
             "watch_root must be absolute, got {:?}",
@@ -2160,17 +1999,12 @@ mod internal_tests {
         assert_eq!(db.inner.watch_root, PathBuf::from("/ws/canonical"));
     }
 
-    /// With an absolute root the canonical `watch_root` equals the (already
-    /// canonical) root on this platform, and `process_file_event` strips that
-    /// prefix to yield a root-relative `_path` — the first `strip_prefix`
-    /// (watch_root) arm.
+    /// With an absolute root, `process_file_event` strips the `watch_root`
+    /// prefix to yield a root-relative `_path`.
     #[test]
     fn process_file_event_strips_watch_root_prefix() {
         let root = PathBuf::from("/ws");
         let abs = root.join("nested").join("a.txt");
-        // FakeFs canonicalizes the root to itself (already-canonical case) and
-        // stats the event path so the upsert's existence check passes — no real
-        // file is staged.
         let fake = FakeFs::with_stat(abs.clone(), fake_stat()).with_canonical_root(&root, "/ws");
         let db = DirSQL::with_ignore_and_fs(
             &root,
@@ -2204,9 +2038,7 @@ mod internal_tests {
     }
 
     /// When an event path lies under the user-supplied `root` but not under
-    /// the canonical `watch_root`, the `.or_else` fallback strips `root`
-    /// instead. We force that split by pointing `watch_root` at a sibling that
-    /// is not a prefix of the event path, leaving `root` as the real dir.
+    /// the canonical `watch_root`, the fallback strips `root` instead.
     #[test]
     fn process_file_event_falls_back_to_root_prefix() {
         let root = PathBuf::from("/ws");
@@ -2229,8 +2061,7 @@ mod internal_tests {
         )
         .unwrap();
 
-        // Repoint watch_root to a non-prefix sibling so the first strip misses
-        // and the `.or_else(root)` arm runs. `root` stays the real dir.
+        // Repoint watch_root to a non-prefix sibling so the first strip misses.
         Arc::get_mut(&mut db.inner).unwrap().watch_root = root.join("does-not-prefix");
 
         let events = db.process_file_event(FileEvent::Created(abs));
@@ -2247,11 +2078,8 @@ mod internal_tests {
         }
     }
 
-    /// When the event path is under neither `watch_root` nor `root`, the final
-    /// `unwrap_or(&abs_path)` arm keeps the absolute path. A path that matches
-    /// no table glob then yields no events, but the strip fallback is still
-    /// executed — we assert the no-event outcome to pin the arm without relying
-    /// on a row.
+    /// When the event path is under neither `watch_root` nor `root`, the
+    /// absolute path is kept as the relative path.
     #[test]
     fn process_file_event_keeps_absolute_path_when_no_prefix_matches() {
         let root = PathBuf::from("/ws");
@@ -2273,10 +2101,8 @@ mod internal_tests {
         )
         .unwrap();
 
-        // A path outside both roots: neither strip matches, so the absolute
-        // path is used as the relative path. It does not match `*.txt` at the
-        // root, so no events are produced. (The non-matching glob returns before
-        // any stat, so the FakeFs needs no entry for this path.)
+        // The outside path matches no table glob, so no events are produced;
+        // the strip fallback still runs.
         let outside = PathBuf::from("/some/elsewhere/c.md");
         let events = db.process_file_event(FileEvent::Created(outside));
         assert!(
@@ -2285,17 +2111,14 @@ mod internal_tests {
         );
     }
 
-    /// Drive `reconcile_scan` directly with a cached file whose
-    /// `snapshot_ns <= mtime_ns`, forcing the racy-window hash-confirm branch.
-    /// With a matching content hash the file is trusted.
+    /// A cached file whose `snapshot_ns <= mtime_ns` is inside the racy
+    /// window; a matching content hash confirms it and the file is trusted.
     #[test]
     fn reconcile_scan_hash_confirms_in_racy_window() {
         let dir = TempDir::new().unwrap();
         let abs = dir.path().join("a.txt");
         let stat = fake_stat();
         let live_hash = [7u8; 32];
-        // Fake fs: canned stat + matching hash, so the racy-window hash-confirm
-        // branch sees a live hash equal to the cached one and trusts the file.
         let mut fake = FakeFs::with_stat(abs.clone(), stat.clone());
         fake.set_hash(abs.clone(), live_hash);
 
@@ -2325,16 +2148,13 @@ mod internal_tests {
         assert!(deleted.is_empty());
     }
 
-    /// Same racy-window entry but with no stored content hash falls through
-    /// the `_ => false` arm, so the file is NOT trusted and is re-parsed.
+    /// Same racy-window entry but with no stored content hash: the file
+    /// cannot be confirmed, so it is re-parsed.
     #[test]
     fn reconcile_scan_racy_window_without_hash_reparses() {
         let dir = TempDir::new().unwrap();
         let abs = dir.path().join("b.txt");
         let stat = fake_stat();
-        // The live hash is available (file present) but the cache stored no
-        // content hash, so the `(Some(live), None)` pair falls through the
-        // `_ => false` arm: the file is NOT trusted and is re-parsed.
         let mut fake = FakeFs::with_stat(abs.clone(), stat.clone());
         fake.set_hash(abs.clone(), [9u8; 32]);
 
@@ -2361,8 +2181,6 @@ mod internal_tests {
         assert!(trusted.is_empty());
     }
 
-    /// `reconcile_scan` stats every scanned path; a path that has vanished
-    /// makes `std::fs::metadata` fail and the `?` propagates the error.
     #[test]
     fn reconcile_scan_errors_when_file_vanished() {
         let dir = TempDir::new().unwrap();
@@ -2373,19 +2191,10 @@ mod internal_tests {
         };
         let missing = dir.path().join("ghost.txt");
         let scanned = vec![(missing, "t".to_string())];
-        // An empty fake fs stats every path as NotFound; the `?` in
-        // `reconcile_scan` propagates that error.
         let fake = FakeFs::default();
         assert!(reconcile_scan(dir.path(), scanned, &ctx, &fake).is_err());
     }
 
-    /// Exercise the production [`RealFs`] [`FileSystem`] impl directly so its
-    /// `stat`/`hash` method bodies are covered without the integration suite
-    /// having to deterministically land in `reconcile_scan`'s racy window.
-    /// Both methods run against a path that does not exist (inside a temp dir,
-    /// so no direct `std::fs` call lives in the test): each delegates to its
-    /// real backing (`std::fs::metadata` / `hash_file`) and surfaces the
-    /// resulting `NotFound` error, executing the body either way.
     #[test]
     fn real_fs_delegates_stat_and_hash() {
         let dir = TempDir::new().unwrap();
@@ -2399,10 +2208,7 @@ mod internal_tests {
             fs.hash(&missing).is_err(),
             "hash of a missing path must error"
         );
-        // `canonical_root` of a nonexistent path can't canonicalize, so it
-        // takes the literal fallback (the path's lossy string) — exercising the
-        // RealFs delegation to `persist::canonical_root` without a direct
-        // `std::fs` call in the test.
+        // A nonexistent path can't canonicalize, so the literal fallback runs.
         assert_eq!(
             fs.canonical_root(&missing),
             missing.to_string_lossy(),
@@ -2410,21 +2216,7 @@ mod internal_tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // Lock-poison error arms
-    //
-    // The `.lock().map_err(DirSqlError::lock)?` (and `match self.inner.*.lock()`)
-    // arms only fire when a mutex is poisoned -- i.e. a thread panicked while
-    // holding the guard. We provoke that deterministically with a scoped
-    // thread that locks the mutex and panics, then assert the error/Display
-    // surface. These tests reach into the private `inner` mutexes, which is
-    // why they live in the in-crate `internal_tests` module rather than the
-    // public-API integration suite.
-    // -----------------------------------------------------------------------
-
-    /// Poison a mutex by panicking while holding its guard. `catch_unwind` on
-    /// the current thread does this without `std::thread` (the `unit lint`
-    /// isolation rule keeps effectful std out of unit tests): the guard's
+    /// Poison a mutex by panicking while holding its guard: the guard's
     /// `Drop` runs during unwinding and marks the mutex poisoned.
     fn poison<T: Send>(m: &Mutex<T>) {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2434,10 +2226,7 @@ mod internal_tests {
         assert!(m.is_poisoned(), "mutex should be poisoned");
     }
 
-    /// Build a tableless `DirSQL` over an empty temp dir. These tests only
-    /// need a live instance whose inner mutexes can be poisoned, so there is no
-    /// table or file to stage (which keeps `std::fs` out of this unit module).
-    /// Extract-closure coverage lives in the `process_file_event_*` tests.
+    /// Build a tableless `DirSQL` over an empty temp dir.
     fn simple_db() -> (TempDir, DirSQL) {
         let dir = TempDir::new().unwrap();
         let db =
@@ -2445,16 +2234,12 @@ mod internal_tests {
         (dir, db)
     }
 
-    /// Build a one-table `DirSQL` over a temp dir with a single matching file
-    /// already written. Returns the db plus the file's absolute and relative
-    /// paths so callers can drive `handle_*` directly.
+    /// Build a one-table `DirSQL` whose fake fs stats `a.txt` successfully
+    /// (any other path stats as NotFound). Returns the db plus the file's
+    /// absolute and relative paths so callers can drive `handle_*` directly.
     fn upsert_fixture() -> (TempDir, DirSQL, PathBuf, String) {
         let dir = TempDir::new().unwrap();
         let abs = dir.path().join("a.txt");
-        // Inject a fake fs that stats the fixture path successfully (so
-        // `handle_upsert`'s vanished-file guard passes) without staging a real
-        // file. Any other path stats as NotFound, which the vanished-file test
-        // relies on.
         let fake = FakeFs::with_stat(abs.clone(), fake_stat());
         let db = DirSQL::with_ignore_and_fs(
             dir.path(),
@@ -2480,7 +2265,6 @@ mod internal_tests {
         let (_dir, db) = simple_db();
         poison(&db.inner.db);
         let err = db.query("SELECT 1").unwrap_err();
-        // Exercises both `query`'s `?` arm and the `DirSqlError::lock` helper.
         assert!(err.to_string().starts_with("failed to lock"), "got: {err}");
     }
 
@@ -2504,10 +2288,7 @@ mod internal_tests {
         assert!(err.to_string().starts_with("failed to lock"), "got: {err}");
     }
 
-    /// A `RowEvent::Error` whose message reports a lock failure. Asserts on the
-    /// Debug rendering so there is no `match`/`else` fallback arm. The
-    /// `handle_*` arms forward the raw `PoisonError` (`e.to_string()`), whose
-    /// std Display contains "poisoned lock".
+    /// Assert one `RowEvent::Error` whose message reports a poisoned lock.
     fn assert_single_lock_error(events: &[RowEvent]) {
         assert_eq!(events.len(), 1, "expected exactly one event: {events:?}");
         let dbg = format!("{:?}", events[0]);
@@ -2526,9 +2307,7 @@ mod internal_tests {
     #[test]
     fn handle_delete_surfaces_db_failure() {
         let (_dir, db, _abs, _rel) = upsert_fixture();
-        // No SQL table named `ghost` exists, so the old-row snapshot issues a
-        // `SELECT ... FROM "ghost" ...` that fails with "no such table". That
-        // drives the get_rows_by_file Err arm of `handle_delete`.
+        // No SQL table named `ghost` exists, so the old-row snapshot fails.
         let events = db.handle_delete("ghost", "whatever.txt");
         assert_eq!(events.len(), 1, "expected one error event: {events:?}");
         let dbg = format!("{:?}", events[0]);
@@ -2538,10 +2317,8 @@ mod internal_tests {
 
     #[test]
     fn handle_delete_surfaces_delete_failure() {
-        // The old-row snapshot succeeds but the delete itself fails: a trigger
-        // aborts every DELETE on items, driving `handle_delete`'s
-        // delete_rows_by_file Err arm (the snapshot read runs first, so the
-        // ghost-table test above no longer reaches it).
+        // The old-row snapshot succeeds but the delete itself fails: a
+        // trigger aborts every DELETE on items.
         let (_dir, db, abs, rel) = upsert_fixture();
         let events = db.handle_upsert("items", &abs, &rel);
         assert_eq!(events.len(), 1, "fixture insert failed: {events:?}");
@@ -2574,8 +2351,7 @@ mod internal_tests {
     #[test]
     fn handle_upsert_surfaces_insert_failure() {
         // Normalize and the old-row snapshot succeed, but the write-back
-        // fails: a trigger aborts every INSERT on items, driving
-        // `handle_upsert`'s db_result Err arm.
+        // fails: a trigger aborts every INSERT on items.
         let (_dir, db, abs, rel) = upsert_fixture();
         {
             let guard = db.inner.db.lock().unwrap();
@@ -2595,14 +2371,10 @@ mod internal_tests {
         assert!(dbg.contains("insert forbidden"), "got: {dbg}");
     }
 
-    // ----- handle_upsert clean early-returns --------------------------------
-
     #[test]
     fn handle_upsert_returns_empty_when_file_vanished() {
         let (dir, db, _abs, _rel) = upsert_fixture();
         let missing = dir.path().join("gone.txt");
-        // The file never existed, so `std::fs::metadata` returns NotFound and
-        // `handle_upsert` returns no events.
         let events = db.handle_upsert("items", &missing, "gone.txt");
         assert!(events.is_empty(), "vanished file must produce no events");
     }
@@ -2610,27 +2382,16 @@ mod internal_tests {
     #[test]
     fn handle_upsert_returns_empty_for_unknown_table() {
         let (_dir, db, abs, rel) = upsert_fixture();
-        // The file exists, but no extract closure is registered for this table
-        // name, so the extract-map lookup misses and we return no events.
         let events = db.handle_upsert("not_a_table", &abs, &rel);
         assert!(events.is_empty(), "unknown table must produce no events");
     }
 
     #[test]
     fn handle_upsert_surfaces_normalize_error_in_strict_mode() {
-        // A strict table rejects rows with columns its DDL doesn't declare.
-        // The extract emits an undeclared `extra` column, so `normalize_row`
-        // returns a SchemaMismatch and `handle_upsert` reports it as a single
-        // RowEvent::Error (the strict-mode normalize-error arm).
-        //
-        // The dir is empty at build time so the initial scan matches nothing;
-        // the file is created afterwards and reaches the DB only through
-        // `handle_upsert`, isolating the arm under test.
+        // The extract emits an undeclared `extra` column, so the strict-mode
+        // normalize rejects it with a SchemaMismatch.
         let dir = TempDir::new().unwrap();
         let abs = dir.path().join("a.txt");
-        // Inject a fake fs so the strict table's `handle_upsert` stat read
-        // succeeds without staging a real file; the normalize-error arm is the
-        // arm under test.
         let fake = FakeFs::with_stat(abs.clone(), fake_stat());
         let db = DirSQL::with_ignore_and_fs(
             dir.path(),
@@ -2659,14 +2420,10 @@ mod internal_tests {
         );
     }
 
-    // ----- run_channel_loop error arm --------------------------------------
-
     #[test]
     fn run_channel_loop_emits_error_event_on_poll_failure() {
         let (_dir, db) = simple_db();
-        // Start the watcher, then poison it so the loop's first `poll_once`
-        // returns Err, driving the `Err(e)` arm: it pushes one RowEvent::Error
-        // and returns.
+        // Poison the started watcher so the loop's first `poll_once` errors.
         db.start_watching().unwrap();
         poison(&db.inner.watcher);
 
@@ -2677,16 +2434,9 @@ mod internal_tests {
         let dbg = format!("{event:?}");
         assert!(dbg.contains("Error"), "expected an Error event: {dbg}");
         assert!(dbg.contains("failed to lock"), "expected lock text: {dbg}");
-        // The loop returns after the error, so the channel is now drained and
-        // its sender dropped; a further `try_recv` reports the empty channel.
         assert!(rx.try_recv().is_err(), "loop should have ended");
     }
 
-    // ----- constructors & simple query -------------------------------------
-
-    /// `DirSQL::new` builds a tableless instance and a read-only query against
-    /// the empty in-memory DB succeeds (exercising `query`'s Ok arm, which the
-    /// poison tests only exercise on the error side).
     #[test]
     fn new_builds_a_tableless_instance_and_query_runs() {
         let dir = TempDir::new().unwrap();
@@ -2696,8 +2446,6 @@ mod internal_tests {
         assert_eq!(rows[0]["n"], Value::Integer(1));
     }
 
-    /// A directory with no `.dirsql.toml` makes `load_config` fail, and both
-    /// config shortcuts surface that as an error from the resolve step.
     #[test]
     fn from_config_variants_error_when_no_config_present() {
         let dir = TempDir::new().unwrap();
@@ -2706,11 +2454,9 @@ mod internal_tests {
         assert!(DirSQL::from_config_path(&missing).is_err());
     }
 
-    /// A builder with neither an explicit root nor a config takes the
-    /// `(None, None)` arm of `resolve` and errors with a Config diagnostic.
     #[test]
     fn builder_without_root_or_config_errors() {
-        // `build` returns `Result<DirSQL, _>`; DirSQL is not Debug, so match.
+        // DirSQL is not Debug, so match rather than `unwrap_err`.
         let err = match DirSQL::builder().build() {
             Ok(_) => panic!("expected a config error"),
             Err(e) => e,
@@ -2718,7 +2464,6 @@ mod internal_tests {
         assert!(matches!(err, DirSqlError::Config { .. }), "got: {err:?}");
     }
 
-    /// Two tables whose DDL names collide are rejected by `compile_matcher`.
     #[test]
     fn duplicate_table_names_are_rejected() {
         let dir = TempDir::new().unwrap();
@@ -2738,10 +2483,6 @@ mod internal_tests {
         );
     }
 
-    // ----- watch/poll lifecycle (real notify watcher over a temp dir) ------
-
-    /// `start_watching` lazily creates the watcher and is idempotent; a second
-    /// call sees the guard already `Some` and no-ops.
     #[test]
     fn start_watching_is_idempotent() {
         let (_dir, db) = simple_db();
@@ -2749,16 +2490,12 @@ mod internal_tests {
         db.start_watching().unwrap();
     }
 
-    /// A zero-timeout `poll_events` starts the watcher and returns immediately
-    /// with no events (the `recv_timeout` None arm of `poll_once`).
     #[test]
     fn poll_events_returns_empty_without_activity() {
         let (_dir, db) = simple_db();
         assert!(db.poll_events(Duration::from_millis(0)).unwrap().is_empty());
     }
 
-    /// The split-phase `wait_file_events` likewise returns an empty batch when
-    /// nothing has changed.
     #[test]
     fn wait_file_events_returns_empty_batch_without_activity() {
         let (_dir, db) = simple_db();
@@ -2769,8 +2506,6 @@ mod internal_tests {
         );
     }
 
-    /// `watch` and the poll APIs are mutually exclusive. After `watch` marks
-    /// the thread started, both `poll_events` and `wait_file_events` reject.
     #[test]
     fn watch_locks_out_the_poll_apis() {
         let (_dir, db) = simple_db();
@@ -2781,8 +2516,6 @@ mod internal_tests {
         assert!(e2.to_string().contains("watch() is active"), "got: {e2}");
     }
 
-    /// Conversely, once `poll_events` has run, `watch` is rejected because both
-    /// would drain the same underlying watcher.
     #[test]
     fn poll_events_locks_out_watch() {
         let (_dir, db) = simple_db();
@@ -2794,8 +2527,6 @@ mod internal_tests {
         );
     }
 
-    /// Calling `watch` twice reports [`DirSqlError::WatchAlreadyStarted`] on the
-    /// second call (the `swap` guard already `true`).
     #[test]
     fn watch_twice_reports_already_started() {
         let (_dir, db) = simple_db();
@@ -2807,10 +2538,6 @@ mod internal_tests {
         );
     }
 
-    /// `apply_file_events` runs the extract/DB pipeline for a batch: a create
-    /// for a matching file inserts a row; a subsequent delete removes it. Also
-    /// drives `process_file_event`'s `Deleted` arm and `handle_delete`'s
-    /// success path.
     #[test]
     fn apply_file_events_processes_create_then_delete() {
         let (_dir, db, abs, _rel) = upsert_fixture();
@@ -2823,11 +2550,6 @@ mod internal_tests {
         assert!(matches!(&deleted[0], RowEvent::Delete { .. }));
     }
 
-    // ----- handle_upsert success + extract error ---------------------------
-
-    /// The full success path of `handle_upsert`: stat OK, extract runs, columns
-    /// resolved, rows normalized and inserted. Returns one Insert; the stored
-    /// row is then read back from SQLite and diffs to a Delete on removal.
     #[test]
     fn handle_upsert_inserts_and_diffs_rows() {
         let (_dir, db, abs, rel) = upsert_fixture();
@@ -2840,8 +2562,6 @@ mod internal_tests {
         assert!(matches!(&del[0], RowEvent::Delete { .. }));
     }
 
-    /// An extract closure that returns `Err` makes `handle_upsert` surface a
-    /// single [`RowEvent::Error`] carrying the message.
     #[test]
     fn handle_upsert_surfaces_extract_error() {
         let dir = TempDir::new().unwrap();
@@ -2865,11 +2585,6 @@ mod internal_tests {
         assert!(dbg.contains("boom"), "got: {dbg}");
     }
 
-    // ----- builder surface + persist warm/cold ------------------------------
-
-    /// Exercise every remaining builder setter and build a two-table,
-    /// persist-enabled instance. `.tables()` replaces then `.table()` appends,
-    /// so both tables exist; the custom `poll_interval` is stored.
     #[test]
     fn builder_setters_configure_and_build() {
         let dir = TempDir::new().unwrap();
@@ -2895,9 +2610,8 @@ mod internal_tests {
         assert_eq!(db.inner.poll_interval, Duration::from_millis(50));
     }
 
-    /// A second persist build over the same root+cache finds a compatible meta
-    /// block written by the first build and takes `prepare_persist`'s warm
-    /// `read_cached_files` branch instead of a cold rebuild.
+    /// A second persist build over the same root+cache finds a compatible
+    /// meta block and reuses the cache instead of a cold rebuild.
     #[test]
     fn persist_second_build_reuses_compatible_cache() {
         let dir = TempDir::new().unwrap();
@@ -2928,8 +2642,6 @@ mod internal_tests {
         assert!(second.query("SELECT * FROM t").is_ok());
     }
 
-    /// `prepare_persist` on a fresh cache reports a cold rebuild: an empty
-    /// file index (so every file re-parses) and a populated expected-meta map.
     #[test]
     fn prepare_persist_cold_start_reports_rebuild() {
         let dir = TempDir::new().unwrap();
@@ -2938,8 +2650,6 @@ mod internal_tests {
         assert!(ctx.cached.is_empty());
         assert!(!ctx.expected_meta.is_empty());
     }
-
-    // ----- reconcile_scan trust/delete arms --------------------------------
 
     /// `snapshot_ns > mtime_ns`: the file is outside the racy window, so a
     /// matching stat is trusted without a hash confirmation.
@@ -2973,8 +2683,8 @@ mod internal_tests {
         assert!(deleted.is_empty());
     }
 
-    /// A stat match but a *different* cached `table_name` falls through the
-    /// outer `_ => false` arm, so the file is re-parsed rather than trusted.
+    /// A stat match but a *different* cached `table_name` is re-parsed
+    /// rather than trusted.
     #[test]
     fn reconcile_scan_reparses_when_cached_table_differs() {
         let dir = TempDir::new().unwrap();
@@ -3004,7 +2714,6 @@ mod internal_tests {
         assert!(trusted.is_empty());
     }
 
-    /// A cached file absent from the current scan is reported as deleted.
     #[test]
     fn reconcile_scan_reports_deleted_cached_files() {
         let dir = TempDir::new().unwrap();
@@ -3032,11 +2741,6 @@ mod internal_tests {
         assert_eq!(deleted, vec![("gone.txt".to_string(), "t".to_string())]);
     }
 
-    // ----- stat virtuals real-metadata + merge captures --------------------
-
-    /// A real existing path (the temp dir itself) makes the metadata read
-    /// succeed, populating `_size`/`_mtime` (the Ok arm of the read in
-    /// `compute_stat_virtuals`).
     #[test]
     fn compute_stat_virtuals_reads_real_metadata() {
         let dir = TempDir::new().unwrap();
@@ -3052,8 +2756,6 @@ mod internal_tests {
         );
     }
 
-    /// `merge_filesystem_facts` injects only *declared* stat virtuals and glob
-    /// captures, drops undeclared ones, and lets user-emitted values win.
     #[test]
     fn merge_filesystem_facts_filters_to_declared_columns() {
         let mut captures = HashMap::new();
@@ -3080,10 +2782,6 @@ mod internal_tests {
         assert_eq!(row["name"], Value::Text("x".into()));
     }
 
-    // ----- config-backed tables + on-file runner ---------------------------
-
-    /// `build_tables_from_config` produces a plain filesystem-fact table (one
-    /// empty row per file) and an `on-file` table (carrying its strict flag).
     #[test]
     fn build_tables_from_config_creates_plain_and_on_file_tables() {
         let cfg = config::load_config_str(concat!(
@@ -3100,22 +2798,17 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let tables = build_tables_from_config(&cfg, dir.path(), dir.path()).unwrap();
         assert_eq!(tables.len(), 2);
-        // The plain table's synthesized extract yields exactly one empty row.
         assert_eq!((tables[0].extract)("/whatever").unwrap().len(), 1);
         assert!(tables[1].strict, "on-file table preserves strict flag");
     }
 
-    /// `run_on_file` runs the command and parses its JSON payload into rows.
-    /// The abs path lies under `root`, so the `{path}` placeholder strips to a
-    /// relative path (the `strip_prefix` Ok arm).
     #[test]
     fn run_on_file_parses_command_json_output() {
         let dir = TempDir::new().unwrap();
         let abs = dir.path().join("f.txt");
-        // The `{path}` placeholder is append-if-absent, so the file path is
-        // appended as a trailing argv element. `printf` with a conversion-free
-        // format prints it once and ignores that extra arg, keeping the JSON
-        // payload clean.
+        // `{path}` is append-if-absent, so the file path lands as a trailing
+        // argv element; `printf` with a conversion-free format ignores it,
+        // keeping the JSON payload clean.
         let rows = run_on_file(
             "printf '[{\"n\":1}]'",
             &abs.to_string_lossy(),
@@ -3127,8 +2820,7 @@ mod internal_tests {
         assert_eq!(rows[0]["n"], Value::Integer(1));
     }
 
-    /// A command that cannot be spawned yields no rows (per-file isolation) and
-    /// takes the `strip_prefix` fallback since the abs path is outside `root`.
+    /// A command that cannot be spawned yields no rows (per-file isolation).
     #[test]
     fn run_on_file_returns_no_rows_on_spawn_failure() {
         let dir = TempDir::new().unwrap();
@@ -3142,7 +2834,6 @@ mod internal_tests {
         assert!(rows.is_empty());
     }
 
-    /// A command whose output is not a JSON array of objects yields no rows.
     #[test]
     fn run_on_file_returns_no_rows_on_non_json_output() {
         let dir = TempDir::new().unwrap();
@@ -3156,10 +2847,6 @@ mod internal_tests {
         assert!(rows.is_empty());
     }
 
-    // ----- AsyncDirSQL -----------------------------------------------------
-
-    /// End-to-end async happy path: build, await readiness, query, `sync`, and
-    /// the poll-forwarding methods.
     #[tokio::test]
     async fn async_dirsql_builds_queries_and_forwards() {
         let dir = TempDir::new().unwrap();
@@ -3176,7 +2863,6 @@ mod internal_tests {
         );
     }
 
-    /// `AsyncDirSQL::watch` forwards to the inner instance once ready.
     #[tokio::test]
     async fn async_dirsql_watch_forwards() {
         let dir = TempDir::new().unwrap();
@@ -3185,7 +2871,6 @@ mod internal_tests {
         let _stream = adb.watch().unwrap();
     }
 
-    /// `AsyncDirSQL::with_ignore` constructs successfully.
     #[test]
     fn async_dirsql_with_ignore_constructs() {
         let dir = TempDir::new().unwrap();
@@ -3194,8 +2879,8 @@ mod internal_tests {
         );
     }
 
-    /// The async config shortcuts fail fast (before spawning) when the config
-    /// file is missing, because `resolve` errors inside `build_async`.
+    /// The async config shortcuts fail fast (before spawning) when the
+    /// config file is missing.
     #[test]
     fn async_dirsql_from_config_errors_on_missing_file() {
         let dir = TempDir::new().unwrap();
@@ -3204,14 +2889,12 @@ mod internal_tests {
         assert!(AsyncDirSQL::from_config_path(&missing).is_err());
     }
 
-    /// `sync` before init completes reports "not ready". Built directly from an
-    /// empty `OnceCell` so the state is deterministic (no build race).
+    /// `sync` before init completes reports "not ready". Built directly from
+    /// an empty `OnceCell` so the state is deterministic (no build race).
     #[test]
     fn async_dirsql_sync_before_ready_is_not_ready() {
         let inner = Arc::new(AsyncDirSqlInner::empty());
         let adb = AsyncDirSQL { inner };
-        // `sync` returns `Result<DirSQL, _>`; DirSQL is not Debug, so match
-        // rather than `unwrap_err`.
         let err = match adb.sync() {
             Ok(_) => panic!("expected not-ready error"),
             Err(e) => e,
@@ -3219,8 +2902,6 @@ mod internal_tests {
         assert!(err.to_string().contains("not ready"), "got: {err}");
     }
 
-    /// When init completed with an error, both `ready` and `sync` surface an
-    /// "init failed" error carrying the underlying diagnostic.
     #[tokio::test]
     async fn async_dirsql_surfaces_init_failure() {
         let inner = Arc::new(AsyncDirSqlInner::empty());
@@ -3278,8 +2959,7 @@ mod command_rows_tests {
 
     #[test]
     fn a_number_that_does_not_fit_i64_becomes_real() {
-        // 10^19 exceeds i64::MAX (~9.2e18) but fits u64, so `as_i64` is None and
-        // it falls through to `Real`.
+        // 10^19 exceeds i64::MAX but fits u64.
         let rows = parse_command_rows(r#"[{"big":10000000000000000000}]"#).unwrap();
         assert!(matches!(rows[0]["big"], Value::Real(_)));
     }

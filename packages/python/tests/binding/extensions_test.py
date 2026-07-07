@@ -1,15 +1,10 @@
-"""Binding-tier tests (real core) for SQLite extension loading via the Python SDK (#229).
+"""Binding-tier tests (real core) for SQLite extension loading via the Python SDK.
 
-The Python `DirSQL(extensions=[...])` constructor argument (and the
-`[[dirsql.extension]]` config-file form) marshal into the shared Rust core,
-which loads each extension onto the connection at startup -- before any
-`CREATE TABLE` -- then disables loading again.
-
-These exercise the public SDK surface: a *missing* extension must fail
-construction, proving the path reaches the core's load-at-startup logic. A
-real-extension end-to-end load is covered by the Rust suite
-(`packages/rust/tests/extensions.rs`), which builds a fixture `.so`; the
-binding here is a thin marshal to that same core.
+`DirSQL(extensions=[...])` and the `[[dirsql.extension]]` config-file form
+marshal into the shared Rust core, which loads each extension onto the
+connection at startup -- before any `CREATE TABLE` -- then disables loading
+again. A real-extension end-to-end load is covered by the Rust suite
+(`packages/rust/tests/extensions.rs`).
 """
 
 import os
@@ -26,8 +21,6 @@ def _noop_extract(_path):
 def describe_constructor_extensions():
     @pytest.mark.asyncio
     async def it_raises_when_a_constructor_extension_is_missing(tmp_dir):
-        """A nonexistent `extensions=` path fails the background build, and the
-        error -- naming the library -- is re-raised by `await ready()`."""
         db = DirSQL(
             tmp_dir,
             tables=[
@@ -45,8 +38,6 @@ def describe_constructor_extensions():
 
     @pytest.mark.asyncio
     async def it_accepts_an_optional_entrypoint(tmp_dir):
-        """An `entrypoint` override is carried into the load call; a missing
-        library still fails, proving the entry reached the core verbatim."""
         db = DirSQL(
             tmp_dir,
             extensions=[
@@ -78,10 +69,6 @@ def describe_constructor_extensions():
 def describe_config_file_extensions():
     @pytest.mark.asyncio
     async def it_raises_when_a_config_file_extension_is_missing(tmp_dir):
-        """A `[[dirsql.extension]]` entry in a `.dirsql.toml` passed via
-        `config=` is loaded by the core -- a missing library fails the build,
-        confirming Python's `config=` path delegates extension loading to the
-        shared Rust config loader."""
         cfg_path = os.path.join(tmp_dir, ".dirsql.toml")
         with open(cfg_path, "w") as f:
             f.write('[[dirsql.extension]]\npath = "missing-extension.so"\n')

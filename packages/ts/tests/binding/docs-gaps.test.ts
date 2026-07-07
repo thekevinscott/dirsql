@@ -1,17 +1,3 @@
-// Gap-filling tests for documented features previously untested on the TS
-// SDK (#294 test parity).
-//
-// Mirrors packages/python/tests/binding/dirsql_test.py
-// (describe_relaxed_schema, describe_extract_receives_path) and
-// packages/rust/tests/sdk.rs (it_ignores_extra_keys_by_default,
-// it_fills_missing_keys_with_null, it_raises_on_missing_keys_in_strict_mode).
-// The strict extra-keys / exact-match cases already live in index.test.ts.
-//
-// The `Buffer -> BLOB` describe below mirrors
-// docs_gaps_test.py::it_maps_python_bytes_to_sqlite_blob and
-// packages/rust/tests/docs_gaps.rs::extract_blob_values_round_trip_via_sdk
-// (#343 parity restoration).
-
 import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -78,8 +64,6 @@ describe("DirSQL relaxed schema (default)", () => {
 });
 
 // Docs: strict mode errors on declared columns the extract row is missing.
-// Completes the strict-mode triple — the extra-keys and exact-match cases
-// live in index.test.ts.
 describe("DirSQL strict mode (missing keys)", () => {
   it("rejects rows with missing keys when strict is true", async () => {
     await writeFile(join(dir, "a.json"), JSON.stringify({ name: "apple" }));
@@ -104,7 +88,6 @@ describe("DirSQL strict mode (missing keys)", () => {
 
 // Docs (reference/sdk.md "Supported value types"): `Buffer` / `Uint8Array`
 // -> SQLite BLOB; BLOB columns come back from `query()` as `Buffer`.
-// Round-trips the same payload as the Python/Rust mirrors.
 describe("DirSQL Buffer -> BLOB", () => {
   const payload = Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe]);
 

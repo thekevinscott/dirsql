@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Documentation: trimmed LLM-drafted comments to the minimal useful set (#445).** Removed archaeology comments (issue/PR references), comments restating adjacent code, reviewer-directed justification, and banner dividers across all three SDKs. Retained public API docs, safety/locking/ordering invariants, platform quirks, security invariants, and forward-looking notes tied to open issues. No code behavior changes.
+
 ### Added
 
 - **One-shot `dirsql query "<sql>"` subcommand (#399/#439).** Build the index,

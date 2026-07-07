@@ -1,4 +1,4 @@
-"""Hermetic integration tests for the ``extensions=`` constructor kwarg (#289).
+"""Hermetic integration tests for the ``extensions=`` constructor kwarg.
 
 These exercise the SDK public API with the Rust core mocked and every
 filesystem / import-machinery probe faked: programmatic extension entries
@@ -94,7 +94,7 @@ def mock_config_file():
 def describe_extensions_kwarg():
     # Feature: DirSQL(extensions=[{path, entrypoint?}]) loads SQLite
     # extensions at startup. See docs/howto/load-extension.md and
-    # packages/python/README.md (#229 / #298).
+    # packages/python/README.md.
     @pytest.mark.asyncio
     async def it_defaults_extensions_to_none(mock_core):
         db = async_mod.DirSQL("/root", tables=["t"])
@@ -122,8 +122,6 @@ def describe_extensions_kwarg():
         )
         await db.ready()
 
-        # Programmatic path-looking entries pass through verbatim (the Rust
-        # builder resolves them); the optional entrypoint is normalized to None.
         assert _FakeRustDirSQL.instances[0].extensions == [
             {"path": "./rel/libvec.so", "entrypoint": None}
         ]
@@ -132,8 +130,6 @@ def describe_extensions_kwarg():
     async def it_resolves_a_bare_package_name_to_the_installed_loadable(
         mock_core, mock_cwd, mock_isfile, mock_find_spec, mock_glob
     ):
-        # A bare name (no separator, no loadable suffix) names an installed
-        # package; the SDK globs the platform loadable inside it (#298).
         mock_find_spec.return_value = SimpleNamespace(
             submodule_search_locations=["/site-packages/sqlite_vec"], origin=None
         )
@@ -152,8 +148,6 @@ def describe_extensions_kwarg():
     async def it_prefers_a_same_named_local_file_over_the_package(
         mock_core, mock_cwd, mock_isfile
     ):
-        # Parity with the file-first probe: a local file under the cwd shadows
-        # the installed package.
         mock_isfile.return_value = True
 
         db = async_mod.DirSQL(
@@ -169,9 +163,6 @@ def describe_extensions_kwarg():
     async def it_resolves_config_extension_package_names_and_suppresses_core_loading(
         mock_core, mock_cwd, mock_isfile, mock_find_spec, mock_glob, mock_config_file
     ):
-        # A config-file [[dirsql.extension]] entry naming a package is resolved
-        # by the SDK, and the core's own config-extension loading is suppressed
-        # so the entries are not loaded twice (#313).
         mock_isfile.side_effect = lambda p: p == "/cfg/.dirsql.toml"
         mock_find_spec.return_value = SimpleNamespace(
             submodule_search_locations=["/site-packages/sqlite_vec"], origin=None

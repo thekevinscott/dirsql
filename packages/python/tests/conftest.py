@@ -15,7 +15,6 @@ def tmp_dir():
 @pytest.fixture
 def jsonl_dir(tmp_dir):
     """Create a temp dir with JSONL files for testing."""
-    # Create a simple JSONL file
     os.makedirs(os.path.join(tmp_dir, "comments", "abc"), exist_ok=True)
     os.makedirs(os.path.join(tmp_dir, "comments", "def"), exist_ok=True)
 

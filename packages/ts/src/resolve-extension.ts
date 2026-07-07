@@ -1,23 +1,16 @@
 // Resolve an extension entry's `path` to a concrete loadable file.
 //
-// #225 / #230 support only literal file paths. #299 adds resolving a bare
-// **package name**: when `path` carries no path separator and no loadable-file
-// suffix, it names a package installed under `node_modules`, and dirsql
-// discovers the loadable file *inside* that package.
-//
-// Resolution is an ordered probe (file-first, then package), so every literal
-// path keeps its old behavior and only a bare name reaches the package
-// machinery:
+// Resolution is an ordered probe (file-first, then package):
 //
 //   1. Path-looking (contains a separator, or ends in `.so` / `.dylib` /
 //      `.dll` / `.node`) -> returned as a file path: made absolute against
 //      `base` when `resolveRelative` is set (config-file entries), else
-//      verbatim (programmatic entries, mirroring the Rust builder).
-//   2. Bare name -> a same-named local file under `base` *shadows* the package
-//      (parity with the file-first probe); otherwise the package dir is located
-//      via `require.resolve` and the current platform's loadable is globbed
-//      from inside it. Zero matches and multiple matches are both hard errors --
-//      the caller must disambiguate with a literal path.
+//      verbatim (programmatic entries).
+//   2. Bare package name -> a same-named local file under `base` shadows the
+//      package; otherwise the package dir is located via `require.resolve`
+//      and the current platform's loadable is globbed from inside it. Zero
+//      matches and multiple matches are both hard errors -- disambiguate
+//      with a literal path.
 
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -29,8 +22,7 @@ const LOADABLE_SUFFIXES = [".so", ".dylib", ".dll", ".node"];
 
 /**
  * `require.resolve`-shaped seam. Injectable so unit tests can fake module
- * resolution without a real `node_modules` layout (mirrors `load-native-core`'s
- * `Requirer`).
+ * resolution without a real `node_modules` layout.
  */
 export interface PackageResolver {
   /** Resolve a specifier to an on-disk path (`require.resolve`). */

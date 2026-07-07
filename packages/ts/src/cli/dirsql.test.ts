@@ -1,5 +1,5 @@
-// The npm `bin` entry shim invokes `runCli()` at module load. Mock it so
-// importing the shim is a no-op, then assert it was called (#239).
+// The npm `bin` entry shim invokes `runCli()` at module load, so it must be
+// mocked before the shim is imported.
 
 import { describe, expect, it, vi } from "vitest";
 import { runCli } from "./run-cli.js";

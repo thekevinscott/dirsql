@@ -1,11 +1,6 @@
-//! Integration tests for `scan_directory`.
-//!
-//! These build real temp directory trees with real files and assert what the
-//! scanner returns end-to-end through its public API. They were moved out of
-//! `scanner.rs`'s inline `#[cfg(test)]` module so that module stays pure (the
-//! `testing-conventions` `unit lint` isolation rule forbids effectful std --
-//! `std::fs`, temp dirs -- in unit tests). The pure reserved-dir predicate
-//! test remains inline next to the function it covers.
+//! Integration tests for `scan_directory`: real temp trees, real files,
+//! end-to-end through the public API (the unit-lint isolation rule keeps
+//! effectful std out of the inline unit module).
 
 use std::fs;
 
@@ -70,7 +65,6 @@ fn scan_returns_empty_for_no_matches() {
 #[test]
 fn scan_skips_directories() {
     let dir = TempDir::new().unwrap();
-    // Create a directory that matches the glob -- it should not appear in results
     fs::create_dir(dir.path().join("data.csv")).unwrap();
 
     let matcher = TableMatcher::new(&[("**/*.csv", "t")], &[]).unwrap();
@@ -84,8 +78,6 @@ fn scan_excludes_top_level_dirsql_directory() {
     let dir = TempDir::new().unwrap();
     fs::write(dir.path().join("real.csv"), "a,b\n1,2").unwrap();
 
-    // Files inside the reserved `.dirsql/` directory (e.g. the cache db)
-    // must never be picked up by the scanner.
     fs::create_dir(dir.path().join(".dirsql")).unwrap();
     fs::write(dir.path().join(".dirsql").join("cache.csv"), "a,b\n1,2").unwrap();
 

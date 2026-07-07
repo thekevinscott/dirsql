@@ -7,7 +7,6 @@ use tempfile::TempDir;
 fn create_temp_tree(file_count: usize) -> TempDir {
     let dir = TempDir::new().unwrap();
     for i in 0..file_count {
-        // Distribute files across subdirectories
         let subdir = dir.path().join(format!("dir_{}", i % 10));
         fs::create_dir_all(&subdir).unwrap();
         fs::write(
@@ -16,7 +15,6 @@ fn create_temp_tree(file_count: usize) -> TempDir {
         )
         .unwrap();
     }
-    // Add some non-matching files
     for i in 0..file_count / 5 {
         fs::write(dir.path().join(format!("readme_{i}.md")), "# not matched").unwrap();
     }

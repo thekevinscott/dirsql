@@ -84,10 +84,10 @@ fn translate_event(event: &Event) -> Vec<FileEvent> {
     results
 }
 
-// Test fixtures: build `notify::Event`s for each top-level `EventKind` without
-// the unit tests below naming the `notify::event::*` inner-kind types (the
-// `unit lint` isolation rule). `translate_event` matches only the outer
-// `EventKind` variant, so the inner kind here is an arbitrary valid value.
+// Test fixtures: build `notify::Event`s without the unit tests naming the
+// `notify::event::*` inner-kind types (the unit-lint isolation rule).
+// `translate_event` matches only the outer variant, so the inner kind is an
+// arbitrary valid value.
 #[cfg(test)]
 fn create_event(paths: Vec<PathBuf>) -> Event {
     Event {
@@ -130,13 +130,9 @@ fn access_event(paths: Vec<PathBuf>) -> Event {
 mod tests {
     use super::*;
 
-    // Effectful tests that drive a real `notify` OS watcher over real temp
-    // files (`std::fs`, `std::thread`, `Instant::now`) live in
-    // `tests/watcher.rs` -- they're integration tests, and keeping them out of
-    // this inline module is what the `unit lint` isolation rule requires. Only
-    // the pure `translate_event` mapping tests belong here; they build their
-    // `notify::Event` inputs via the `*_event` fixtures above so no unit test
-    // names a `notify::event::*` type directly.
+    // Effectful tests driving a real `notify` OS watcher live in
+    // `tests/watcher.rs` (unit-lint isolation); only the pure
+    // `translate_event` mapping tests belong here.
 
     #[test]
     fn translate_event_maps_create() {

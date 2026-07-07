@@ -1,8 +1,8 @@
 //! Integration tests for the internal `_dirsql_internal_rows` bookkeeping
-//! table (epic #358). The mapping is the sole record of row ownership — user
-//! tables carry no injected tracking columns — so these tests assert the
-//! mapping stays consistent with the live user rows across create / modify /
-//! delete and round-trips the persisted cache.
+//! table. The mapping is the sole record of row ownership — user tables carry
+//! no injected tracking columns — so these tests assert the mapping stays
+//! consistent with the live user rows across create / modify / delete and
+//! round-trips the persisted cache.
 
 use dirsql::db::{Db, INTERNAL_ROWS_TABLE};
 use dirsql::{DirSQL, Table, Value};
@@ -59,14 +59,12 @@ fn mapping_tracks_create_modify_delete() {
     db.insert_row("t", &row("b0"), "b.jsonl", 0).unwrap();
     assert_mapping_consistent(&db, "t", 3);
 
-    // Modify a.jsonl: delete its rows, insert a different count.
     db.delete_rows_by_file("t", "a.jsonl").unwrap();
     for (i, r) in ["a0'", "a1'", "a2'"].iter().enumerate() {
         db.insert_row("t", &row(r), "a.jsonl", i).unwrap();
     }
     assert_mapping_consistent(&db, "t", 4);
 
-    // Delete b.jsonl entirely.
     db.delete_rows_by_file("t", "b.jsonl").unwrap();
     assert_mapping_consistent(&db, "t", 3);
 }

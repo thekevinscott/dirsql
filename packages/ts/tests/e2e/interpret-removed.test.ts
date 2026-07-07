@@ -1,14 +1,7 @@
-// E2E regression for the removal of the `interpret` subcommand and the
-// native-language (.js/.mjs/.cjs) config path from the TypeScript SDK
-// (epic #321, sub-issue A2 / #324).
-//
-// The TS launcher used to intercept `argv[0] === "interpret"` and run an
-// in-process helper. That branch is gone: the launcher now forwards every
-// argv verbatim to the bundled Rust binary, which owns subcommand dispatch
-// and clap-rejects any unknown subcommand. This test spawns the REAL built
-// launcher (`dist/cli/dirsql.js`) — nothing mocked, real process, real
-// filesystem, real Rust binary — and asserts that `dirsql interpret <X>` is
-// no longer dispatched: it exits non-zero and stderr is a clean clap error,
+// The launcher must not dispatch `interpret` itself: every argv goes
+// verbatim to the bundled Rust binary, which owns subcommand dispatch and
+// clap-rejects unknown subcommands. Spawns the REAL built launcher and
+// asserts `dirsql interpret <X>` exits non-zero with a clean clap error,
 // not a JS stack trace.
 
 import { spawn } from "node:child_process";
@@ -65,7 +58,6 @@ describe("interpret subcommand removed (#324)", () => {
       "./dirsql.config.mjs",
     ]);
 
-    // Non-zero: the binary clap-rejects an unknown subcommand.
     expect(code).not.toBe(0);
     // "Clean": a clap usage error, not a Node/V8 stack trace from a crashed
     // in-process interpret helper.

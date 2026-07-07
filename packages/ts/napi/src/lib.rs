@@ -30,22 +30,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-// -- Public napi-rs functions -----------------------------------------------
-
 /// Parse the table name out of a `CREATE TABLE <name> (...)` DDL.
 /// Returns `null` if the DDL doesn't match (e.g. empty, missing
 /// `CREATE TABLE`, or the identifier slot is empty).
-///
-/// Surfaces the core Rust implementation in
-/// `dirsql::db::parse_table_name`. Used by the `dirsql interpret`
-/// dispatcher (#196) so the JS side and the Rust core agree on table
-/// name resolution without a duplicate regex.
 #[napi(js_name = "parseTableName")]
 pub fn parse_table_name(ddl: String) -> Option<String> {
     core_parse_table_name(&ddl)
 }
-
-// -- Public napi-rs classes --------------------------------------------------
 
 /// A row-level event emitted by the file watcher.
 ///
@@ -68,10 +59,9 @@ pub struct RowEvent {
 }
 
 /// A SQLite extension to load at startup, marshaled from the JS
-/// `{ path, entrypoint? }` object passed via the `extensions` constructor
-/// option into a [`dirsql::Extension`]. Paths are taken verbatim — the
-/// programmatic surface does not resolve relative paths, matching
-/// `DirSQLBuilder::extensions` and the Python binding's `PyExtensionSpec`.
+/// `{ path, entrypoint? }` object into a [`dirsql::Extension`]. Paths are
+/// taken verbatim — the programmatic surface does not resolve relative
+/// paths.
 #[napi(object)]
 pub struct ExtensionSpec {
     pub path: String,
@@ -99,15 +89,12 @@ impl DirSQL {
     /// any programmatic `tables` and its `[dirsql].ignore` is appended after
     /// any explicit `ignore`. When both `root` and config's `[dirsql].root`
     /// are supplied, the explicit `root` wins and a warning is emitted.
-    // The single construction entry point mirrors the SDK's wide options
-    // object (root / tables / ignore / config / persist / persistPath /
-    // extensions); each is a distinct optional knob, so collapsing them into
-    // a struct would only obscure the napi signature the TS wrapper calls.
+    ///
     /// `suppress_config_extensions` skips the core's own loading of the
     /// config's `[[dirsql.extension]]` entries; the TS wrapper sets it after
     /// resolving those entries itself (package names need `require.resolve`,
-    /// which the core lacks -- #313) and passing the resolved literal paths
-    /// via `extensions`, so the entries are not loaded twice.
+    /// which the core lacks) and passing the resolved literal paths via
+    /// `extensions`, so the entries are not loaded twice.
     #[allow(clippy::too_many_arguments)]
     #[napi(js_name = "openAsync", ts_return_type = "Promise<DirSQL>")]
     pub fn open_async(
@@ -182,8 +169,6 @@ impl DirSQL {
     }
 }
 
-// -- Async tasks -------------------------------------------------------------
-
 /// Splits construction across the libuv threadpool and the JS main thread.
 ///
 /// `compute()` resolves the builder (loading a `.dirsql.toml` if supplied)
@@ -201,12 +186,10 @@ pub struct OpenTask {
     ignore: Vec<String>,
     persist: bool,
     persist_path: Option<PathBuf>,
-    /// SQLite extensions to load onto the connection before any table DDL,
-    /// forwarded to the core builder's `extensions`. Empty when none were
-    /// passed; config-file `[[dirsql.extension]]` entries are appended by
-    /// the builder when `config` is supplied -- unless
-    /// `suppress_config_extensions` is set because the TS wrapper already
-    /// resolved and included them (#313).
+    /// SQLite extensions to load onto the connection before any table DDL.
+    /// Config-file `[[dirsql.extension]]` entries are appended by the builder
+    /// unless `suppress_config_extensions` is set (the TS wrapper already
+    /// resolved and included them).
     extensions: Vec<Extension>,
     suppress_config_extensions: bool,
 }
@@ -319,8 +302,6 @@ impl Task for PollEventsTask {
     }
 }
 
-// -- Table-definition parsing ------------------------------------------------
-
 /// Parse a JS array of `TableDef` objects into Rust [`Table`]s. Must run on
 /// the JS thread: creates a persistent napi reference to each `extract`
 /// callback so it can be invoked later without a live JS call frame.
@@ -351,8 +332,6 @@ fn parse_tables_from_js(env: Env, tables: Array) -> Result<Vec<Table>> {
 
     Ok(rust_tables)
 }
-
-// -- JS callback plumbing ----------------------------------------------------
 
 /// A persistent reference to a JS function, safe to store across calls.
 ///
@@ -470,8 +449,6 @@ fn to_napi_err<E: std::fmt::Display>(e: E) -> Error {
     Error::new(Status::GenericFailure, e.to_string())
 }
 
-// -- JS <-> Rust value conversion helpers ------------------------------------
-
 unsafe fn parse_js_array_of_objects(
     env: napi::sys::napi_env,
     array: napi::sys::napi_value,
@@ -576,9 +553,8 @@ unsafe fn js_val_to_value(env: napi::sys::napi_env, val: napi::sys::napi_value) 
         }
         _ => {
             // `Buffer` / `Uint8Array` (Buffer is a Uint8Array subclass)
-            // marshals to a BLOB, mirroring Python's `bytes -> BLOB`
-            // (reference/sdk.md "Supported value types"). Any other object
-            // shape falls through to string coercion.
+            // marshals to a BLOB; any other object shape falls through to
+            // string coercion.
             if let Some(bytes) = get_u8_array_bytes(env, val) {
                 return Ok(Value::Blob(bytes));
             }
@@ -762,12 +738,8 @@ unsafe fn get_function_property(
     Ok(val)
 }
 
-// -- Row/event conversion ----------------------------------------------------
-
 /// A row value crossing from Rust to JS. Mirrors [`dirsql::Value`] but
-/// converts straight to napi values, so a BLOB surfaces as a Node `Buffer`
-/// (the previous serde_json-shaped path had no binary variant and
-/// hex-encoded blobs — the #343 drift).
+/// converts straight to napi values, so a BLOB surfaces as a Node `Buffer`.
 pub enum JsRowValue {
     Null,
     Integer(i64),

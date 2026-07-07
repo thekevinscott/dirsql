@@ -1,6 +1,6 @@
 //! Reusable shell-command runner — the foundation for the command-backed
-//! events (`on-file`, `pre-query`, `post-query`; Epic B / #322). This module
-//! owns command execution; the events are thin wiring on top of it (#326).
+//! events (`on-file`, `pre-query`, `post-query`), which are thin wiring on
+//! top of it.
 //!
 //! ## Contract
 //!
@@ -195,7 +195,6 @@ pub fn run_command(
         })? {
         Some(status) => status,
         None => {
-            // Timed out: kill, reap, then collect whatever the pipes hold.
             let _ = child.kill();
             let _ = child.wait();
             if let Some(t) = stdin_thread {
@@ -342,7 +341,6 @@ mod tests {
 
     #[test]
     fn respects_shell_quoting_so_sh_c_keeps_its_script_as_one_arg() {
-        // Quote-aware split (no shell invoked): the quoted script is one token.
         assert_eq!(
             argv("sh -c 'echo one two'", &[]),
             ["sh", "-c", "echo one two"]
@@ -398,8 +396,6 @@ mod tests {
 
     #[test]
     fn substitution_is_single_pass_so_injected_braces_are_not_rescanned() {
-        // `{args}` carries a literal `{path}`; it must NOT be substituted again
-        // by the `{path}` placeholder — the injected value stays verbatim.
         assert_eq!(
             argv(
                 "run {args} {path}",
@@ -441,7 +437,6 @@ mod tests {
 
     #[test]
     fn substitute_only_placeholder_is_dropped_when_absent() {
-        // `abspath` is not `append`, so omitting `{abspath}` adds nothing.
         assert_eq!(
             argv("run", &[Placeholder::new("abspath", "/tmp/x")]),
             ["run"]
@@ -490,13 +485,9 @@ mod tests {
         assert!(Placeholder::append("a", "b").append_if_absent);
     }
 
-    // ----- run_command end-to-end (spawns trivial POSIX commands) ----------
-    //
-    // `run_command` can only be exercised by actually spawning a child, so
-    // these drive `sh`/`echo`/`cat` — universally present on the Linux CI
-    // runners. The test code itself statically references only `super::` items,
-    // `Duration`, and `std::path::Path`, so the `unit lint` isolation rule is
-    // satisfied; the effectful process/thread work lives in production code.
+    // The run_command tests spawn real `sh`/`echo`/`cat`. Their test code must
+    // statically reference only `super::` items (plus pure std) to satisfy the
+    // unit-lint isolation rule.
 
     fn cwd() -> std::path::PathBuf {
         std::path::PathBuf::from(".")
@@ -517,8 +508,6 @@ mod tests {
 
     #[test]
     fn run_command_writes_stdin_payload_to_the_child() {
-        // `cat` echoes its stdin, so the payload round-trips through the
-        // stdin-writer thread and the stdout drain.
         let out = run_command(
             "cat",
             &[],
@@ -575,9 +564,6 @@ mod tests {
 
     #[test]
     fn run_command_kills_and_reports_timeout_even_with_stdin() {
-        // A short timeout against a long sleep drives the timeout branch,
-        // including joining the stdin-writer thread. `sh` ignoring stdin closes
-        // the pipe early, which the writer treats as a clean EOF.
         let err = run_command(
             "sh -c 'sleep 30'",
             &[],

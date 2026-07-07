@@ -1,13 +1,8 @@
 // CLI e2e: load a SQLite extension referenced by **package name** through the
-// real `dirsql` binary (#299 / #227).
-//
-// Spawns the bundled Rust binary against a real `.dirsql.toml` (and a native
-// `.mjs` config) whose `[[dirsql.extension]].path` / `extensions[].path` is a
-// bare package name installed under `node_modules`, then queries the running
-// HTTP server and asserts the extension's function is callable. No mocks: real
-// binary, real process, real filesystem, real package layout. This is the only
-// test that proves the feature works through the CLI (integration tests exercise
-// the SDK constructor, which the CLI does not use for TOML configs).
+// real `dirsql` binary. Spawns the launcher against a real `.dirsql.toml`
+// whose `[[dirsql.extension]].path` is a bare package name installed under
+// `node_modules`, then queries the running HTTP server and asserts the
+// extension's function is callable. No mocks.
 //
 // The loadable is the repo's `tests/fixtures/testext` cdylib (registers
 // `dirsql_testext_answer() -> 42`), built on the fly with cargo.
@@ -114,8 +109,6 @@ beforeAll(async () => {
   );
   execFileSync("cp", [so, join(PKG_DIR, "testext.so")]);
 
-  // Shim so the binary's `dirsql interpret` spawn resolves to the Node
-  // launcher (matches native-config.test.ts).
   const pkg = JSON.parse(
     await readFile(join(PKG_ROOT, "package.json"), "utf8"),
   ) as { bin: { dirsql: string } };
@@ -131,8 +124,8 @@ beforeAll(async () => {
   );
   execFileSync("cp", [BINARY, join(CLI_PKG_DIR, binName)]);
 
-  // Shim so the binary's `dirsql interpret` spawn (native configs) resolves to
-  // the Node launcher (matches native-config.test.ts).
+  // Shim so the binary's `dirsql interpret` spawn (native configs) resolves
+  // to the Node launcher.
   SHIM_DIR = await mkdtemp(join(tmpdir(), "dirsql-shim-"));
   const shim = join(SHIM_DIR, "dirsql");
   await writeFile(

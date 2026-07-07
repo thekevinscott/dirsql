@@ -1,8 +1,4 @@
-// Lazy access to the napi-rs core module, plus the test-only seam used to
-// swap in a fake binding without loading the real native binary.
-//
-// Split out of the public barrel (`index.ts`) so it carries a colocated
-// unit test instead of an exemption (#239).
+// Lazy access to the napi-rs core module.
 
 import type { ExtensionSpec, RowEvent } from "./dirsql.js";
 import { loadNativeCore as defaultLoadNativeCore } from "./load-native-core.js";
@@ -25,7 +21,7 @@ export interface NativeDirSQLConstructor {
     persistPath: string | null,
     extensions: ExtensionSpec[] | null,
     // Skip the core's own loading of the config's [[dirsql.extension]]
-    // entries; set by the wrapper after resolving them itself (#313).
+    // entries; set by the wrapper after resolving them itself.
     suppressConfigExtensions: boolean | null,
   ): Promise<NativeDirSQL>;
 }
@@ -37,10 +33,8 @@ export interface CoreModule {
   parseTableName(ddl: string): string | null;
 }
 
-// Lazy-loaded reference to the core module. Populated on first access by
-// `defaultLoadNativeCore()`. Unit tests don't reach this state: they
-// `vi.mock("./core.js")` to fake `getCore` directly, so production carries
-// no test-only injection seam.
+// Unit tests `vi.mock("./core.js")` to fake `getCore` directly, so
+// production carries no test-only injection seam.
 let core: CoreModule | null = null;
 
 export function getCore(): CoreModule {

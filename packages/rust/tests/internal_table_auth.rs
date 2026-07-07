@@ -1,5 +1,5 @@
 //! Integration tests: dirsql's internal bookkeeping tables are unreachable
-//! through the public `query()` surface (issue #378, epic #358).
+//! through the public `query()` surface.
 //!
 //! `_dirsql_internal_rows`, `_dirsql_files`, and `_dirsql_meta` are engine
 //! bookkeeping. A caller reaching `query()` (SDK user, HTTP client) must not be
@@ -79,8 +79,6 @@ fn query_rejects_meta_table() {
 
 #[test]
 fn query_rejects_internal_table_named_in_explicit_projection() {
-    // Not only `SELECT *` — naming the internal columns explicitly is rejected
-    // too; the whole table is unreachable, not just its star-expansion.
     let root = TempDir::new().unwrap();
     let db = persisted_db(root.path());
     let result = db.query("SELECT file_path, rowid_ref FROM _dirsql_internal_rows");
@@ -93,8 +91,6 @@ fn query_rejects_internal_table_named_in_explicit_projection() {
 
 #[test]
 fn query_rejects_internal_table_in_join_with_user_table() {
-    // Reaching an internal table via a join is rejected too — the authorizer
-    // sees the internal table's read regardless of query shape.
     let root = TempDir::new().unwrap();
     let db = persisted_db(root.path());
     let result = db.query(
@@ -110,7 +106,6 @@ fn query_rejects_internal_table_in_join_with_user_table() {
 
 #[test]
 fn query_allows_normal_user_table() {
-    // The authorizer is scoped to internal tables; ordinary user queries work.
     let root = TempDir::new().unwrap();
     let db = persisted_db(root.path());
     let rows = db.query("SELECT name FROM items ORDER BY name").unwrap();
@@ -121,10 +116,8 @@ fn query_allows_normal_user_table() {
 
 #[test]
 fn internal_write_paths_unaffected_user_rows_present() {
-    // The engine writes `_dirsql_internal_rows` / `_dirsql_files` while indexing
-    // (the authorizer never fires on those internal writes), so the user rows it
-    // produced are all present — proving the query-path authorizer did not
-    // break the internal read/write paths.
+    // The authorizer never fires on the engine's own internal writes during
+    // indexing, so the indexed user rows are all present.
     let root = TempDir::new().unwrap();
     let db = persisted_db(root.path());
     let rows = db.query("SELECT COUNT(*) AS n FROM items").unwrap();

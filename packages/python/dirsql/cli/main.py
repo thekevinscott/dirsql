@@ -24,7 +24,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # Resolve any package-name extensions in a TOML config here (the binary
-    # can't) and pass them as `--extension` flags; a no-op otherwise (#227).
+    # can't) and pass them as `--extension` flags; a no-op otherwise.
     try:
         argv = with_resolved_extensions(argv)
     except Exception as exc:

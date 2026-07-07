@@ -1,9 +1,3 @@
-// The `DirSQL` facade — the SDK's primary entry point.
-//
-// Split out of the public barrel (`index.ts`) so it carries a colocated
-// unit test instead of an exemption (#239). The native binding is reached
-// through `getCore()` (see `core.ts`), which tests fake.
-
 import type { NativeDirSQL } from "./core.js";
 import { getCore } from "./core.js";
 import { resolveConfigExtensionSpecs } from "./resolve-config-extensions.js";
@@ -12,8 +6,7 @@ import type { TableDef } from "./table.js";
 
 /**
  * A SQLite extension to load at startup, as accepted by the {@link DirSQL}
- * constructor's `extensions` option. Mirrors the Rust `Extension { path,
- * entrypoint }` and the Python `{"path", "entrypoint"?}` dict.
+ * constructor's `extensions` option.
  */
 export interface ExtensionSpec {
   /**
@@ -70,7 +63,7 @@ export interface DirSQLOptions {
    * function is never left exposed). Programmatic entries load first, then
    * any `[[dirsql.extension]]` declared in `config`. A `path` (programmatic
    * or config-file) may be a bare **package name**, resolved from the
-   * installed package under `node_modules` (#299 / #313).
+   * installed package under `node_modules`.
    */
   extensions?: ExtensionSpec[];
 }
@@ -131,8 +124,7 @@ export class DirSQL {
 
   // Initialized by `ready`. Do NOT touch before awaiting `ready`.
   private _inner!: NativeDirSQL;
-  // Constructor options preserved verbatim for inspection without waiting on
-  // `ready`. Public-by-design.
+  // Constructor options preserved verbatim; public-by-design.
   readonly _options: DirSQLOptions;
 
   /** Construct from a `.dirsql.toml` config-file path. */
@@ -144,10 +136,9 @@ export class DirSQL {
       typeof arg === "string" ? { config: arg } : arg;
     this._options = options;
     const Ctor = getCore().DirSQL;
-    // Resolve programmatic extension paths (a bare package name -> the loadable
-    // installed under `node_modules`, #299) before handing them to the
-    // file-path-only core. Done inside the promise chain so a resolution error
-    // rejects `ready` rather than throwing from the constructor.
+    // Extension paths (possibly bare package names) are resolved inside the
+    // promise chain so a resolution error rejects `ready` rather than
+    // throwing from the constructor; the core accepts file paths only.
     this.ready = Promise.resolve()
       .then(() => {
         const extensions =
@@ -155,12 +146,10 @@ export class DirSQL {
             path: resolveExtensionPath(e.path, process.cwd(), false),
             entrypoint: e.entrypoint,
           })) ?? null;
-        // When the config file names an extension by bare package name, the
-        // SDK resolves every one of the config's [[dirsql.extension]] entries
-        // itself (#313) -- appended after the programmatic ones, matching the
-        // core's ordering -- and suppresses the core's own config-extension
-        // loading so the entries are not loaded a second time (and the core
-        // never sees the unresolvable bare name).
+        // The SDK resolves the config's [[dirsql.extension]] entries itself
+        // (bare package names need require.resolve, which the core lacks) and
+        // suppresses the core's own config-extension loading so they are not
+        // loaded twice.
         const configExtensions =
           options.config != null
             ? resolveConfigExtensionSpecs(options.config)
@@ -238,9 +227,8 @@ export class DirSQL {
     await this.ready;
     await this._inner.startWatcher();
     while (true) {
-      // Native `pollEvents` now runs on the libuv threadpool and returns a
-      // Promise, so awaiting it does not park the JS thread. A ~200ms
-      // timeout keeps the poll cadence low without starving the event loop.
+      // Native poll runs on the libuv threadpool; ~200ms bounds each await
+      // without starving the event loop.
       const events = await this._inner.pollEvents(200);
       for (const event of events) {
         yield event;

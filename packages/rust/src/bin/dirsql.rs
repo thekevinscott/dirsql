@@ -53,8 +53,8 @@ struct Cli {
     ///
     /// Intended for the language launcher (pip/npm), not end users: the
     /// launcher resolves config extensions — including bare **package names**,
-    /// which need an interpreter this compiled binary lacks (see #227) — and
-    /// passes the resolved literal paths here. When any are present, the TOML
+    /// which need an interpreter this compiled binary lacks — and passes the
+    /// resolved literal paths here. When any are present, the TOML
     /// config's own extension entries are not loaded (the launcher already
     /// merged and resolved them). Used by server mode and by the `query`
     /// subcommand.
@@ -198,7 +198,6 @@ async fn run_server(cli: Cli) -> ExitCode {
     // Echo back the user-facing hostname (not the resolved IP SocketAddr).
     println!("Running at {host}:{}", handle.local_addr().port());
 
-    // Await ctrl-c / SIGTERM; then drain.
     if let Err(err) = wait_for_shutdown().await {
         eprintln!("dirsql: signal handler error: {err}");
     }
@@ -233,9 +232,9 @@ fn load_state(cli: &Cli) -> AppState {
 
     // Launcher-resolved extensions (`--extension`) override the TOML config's
     // own `[[dirsql.extension]]` entries: the launcher has already merged and
-    // resolved them (including package names the compiled binary can't resolve;
-    // #227), so build from the config but suppress its extension loading and
-    // supply the resolved literal paths instead.
+    // resolved them (including package names the compiled binary can't
+    // resolve), so suppress the config's extension loading and supply the
+    // resolved literal paths instead.
     let build = if cli.extension.is_empty() {
         DirSQL::from_config_path(&resolved)
     } else {
@@ -428,10 +427,6 @@ mod tests {
 
     #[test]
     fn default_files_table_declares_filesystem_fact_columns_over_recursive_glob() {
-        // The zero-config fallback table is pure data: a fixed DDL naming only
-        // the auto-injected filesystem-fact columns and a `**/*` glob that
-        // matches every file at any depth. The extract closure is never
-        // invoked here, so this stays a pure unit test.
         let table = default_files_table();
         assert_eq!(table.glob, "**/*");
         assert!(table.ddl.starts_with("CREATE TABLE files ("));

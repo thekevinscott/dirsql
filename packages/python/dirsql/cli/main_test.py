@@ -70,8 +70,6 @@ def describe_main():
             )
 
         def it_resolves_config_extensions_before_handing_off():
-            # argv is routed through with_resolved_extensions; execv receives
-            # its (here, marker-augmented) result.
             with (
                 patch.object(main_module, "binary_path", return_value="/bin/dirsql"),
                 patch.object(main_module, "is_windows", return_value=False),
@@ -128,9 +126,8 @@ def describe_main():
             run.assert_called_once_with(["C:/dirsql.exe", "--help"])
 
     def describe_when_argv0_is_interpret():
-        """`interpret` is no longer intercepted in-process -- it is forwarded
-        to the bundled Rust binary like any other argv (the binary rejects it
-        as an unknown subcommand)."""
+        """`interpret` is forwarded to the bundled Rust binary like any other
+        argv (the binary rejects it as an unknown subcommand)."""
 
         def it_forwards_interpret_to_the_binary_instead_of_intercepting():
             with (

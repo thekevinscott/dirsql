@@ -12,7 +12,6 @@ def describe_DirSQL():
     def describe_init():
         @pytest.mark.asyncio
         async def it_creates_instance_with_tables(jsonl_dir):
-            """DirSQL can be initialized with a root path and table definitions."""
             db = DirSQL(
                 jsonl_dir,
                 tables=[
@@ -35,7 +34,6 @@ def describe_DirSQL():
 
         @pytest.mark.asyncio
         async def it_accepts_ignore_patterns(jsonl_dir):
-            """DirSQL accepts an ignore list to skip matching paths."""
             db = DirSQL(
                 jsonl_dir,
                 ignore=["**/def/**"],
@@ -56,7 +54,6 @@ def describe_DirSQL():
                 ],
             )
             await db.ready()
-            # Only the "abc" directory should be indexed, not "def"
             results = await db.query("SELECT DISTINCT id FROM comments")
             ids = {r["id"] for r in results}
             assert ids == {"abc"}
@@ -64,7 +61,6 @@ def describe_DirSQL():
     def describe_query():
         @pytest.mark.asyncio
         async def it_returns_all_rows(jsonl_dir):
-            """query returns all indexed rows when no WHERE clause."""
             db = DirSQL(
                 jsonl_dir,
                 tables=[
@@ -89,7 +85,6 @@ def describe_DirSQL():
 
         @pytest.mark.asyncio
         async def it_returns_dicts_with_column_names(jsonl_dir):
-            """Each result row is a dict keyed by column name."""
             db = DirSQL(
                 jsonl_dir,
                 tables=[
@@ -117,7 +112,6 @@ def describe_DirSQL():
 
         @pytest.mark.asyncio
         async def it_filters_with_where_clause(jsonl_dir):
-            """SQL WHERE clauses work correctly on indexed data."""
             db = DirSQL(
                 jsonl_dir,
                 tables=[
@@ -143,7 +137,6 @@ def describe_DirSQL():
 
         @pytest.mark.asyncio
         async def it_excludes_internal_tracking_columns(jsonl_dir):
-            """Internal _dirsql_* columns are not exposed in query results."""
             db = DirSQL(
                 jsonl_dir,
                 tables=[
@@ -171,7 +164,6 @@ def describe_DirSQL():
 
         @pytest.mark.asyncio
         async def it_handles_integer_values(tmp_dir):
-            """Integer values in extracted data are preserved correctly."""
             os.makedirs(os.path.join(tmp_dir, "data"), exist_ok=True)
             with open(os.path.join(tmp_dir, "data", "counts.json"), "w") as f:
                 json.dump({"name": "apples", "count": 42}, f)
@@ -197,7 +189,6 @@ def describe_DirSQL():
     def describe_multiple_tables():
         @pytest.mark.asyncio
         async def it_supports_multiple_table_definitions(tmp_dir):
-            """Multiple tables can be defined with different globs and extractors."""
             os.makedirs(os.path.join(tmp_dir, "posts"), exist_ok=True)
             os.makedirs(os.path.join(tmp_dir, "authors"), exist_ok=True)
 
@@ -236,7 +227,6 @@ def describe_DirSQL():
 
         @pytest.mark.asyncio
         async def it_supports_joins_across_tables(tmp_dir):
-            """SQL JOINs work across different tables."""
             os.makedirs(os.path.join(tmp_dir, "posts"), exist_ok=True)
             os.makedirs(os.path.join(tmp_dir, "authors"), exist_ok=True)
 
@@ -277,7 +267,6 @@ def describe_DirSQL():
     def describe_error_handling():
         @pytest.mark.asyncio
         async def it_raises_on_invalid_sql(jsonl_dir):
-            """Invalid SQL raises an exception."""
             db = DirSQL(
                 jsonl_dir,
                 tables=[
@@ -302,7 +291,6 @@ def describe_DirSQL():
 
         @pytest.mark.asyncio
         async def it_rejects_write_statements_via_query(tmp_dir):
-            """`query()` rejects non-SELECT statements so a caller can't mutate the index."""
             with open(os.path.join(tmp_dir, "item.json"), "w") as f:
                 json.dump({"name": "apple"}, f)
 
@@ -333,14 +321,12 @@ def describe_DirSQL():
                 with pytest.raises(Exception, match="(?i)read-only|writeforbidden"):
                     await db.query(stmt)
 
-            # Index remains intact.
             results = await db.query("SELECT name FROM items")
             assert len(results) == 1
             assert results[0]["name"] == "apple"
 
         @pytest.mark.asyncio
         async def it_raises_on_invalid_ddl(tmp_dir):
-            """Invalid DDL raises an exception during init."""
             db = DirSQL(
                 tmp_dir,
                 tables=[
@@ -356,7 +342,6 @@ def describe_DirSQL():
 
         @pytest.mark.asyncio
         async def it_handles_empty_directory(tmp_dir):
-            """An empty directory produces zero rows."""
             db = DirSQL(
                 tmp_dir,
                 tables=[
@@ -375,7 +360,6 @@ def describe_DirSQL():
 
         @pytest.mark.asyncio
         async def it_handles_extract_returning_empty_list(tmp_dir):
-            """Extract function returning [] produces no rows for that file."""
             with open(os.path.join(tmp_dir, "skip.json"), "w") as f:
                 json.dump({"ignore": True}, f)
 
@@ -396,7 +380,6 @@ def describe_DirSQL():
     def describe_extract_receives_path():
         @pytest.mark.asyncio
         async def it_passes_absolute_path(tmp_dir):
-            """Extract receives the absolute filesystem path of the matched file."""
             with open(os.path.join(tmp_dir, "test.json"), "w") as f:
                 json.dump({"val": 1}, f)
 
@@ -426,7 +409,6 @@ def describe_DirSQL():
     def describe_relaxed_schema():
         @pytest.mark.asyncio
         async def it_ignores_extra_keys_by_default(tmp_dir):
-            """Extra keys returned by extract are silently dropped."""
             with open(os.path.join(tmp_dir, "item.json"), "w") as f:
                 json.dump({"name": "apple", "color": "red", "weight": 150}, f)
 
@@ -451,7 +433,6 @@ def describe_DirSQL():
 
         @pytest.mark.asyncio
         async def it_fills_missing_keys_with_null(tmp_dir):
-            """Missing keys become NULL in the database."""
             with open(os.path.join(tmp_dir, "item.json"), "w") as f:
                 json.dump({"name": "apple"}, f)
 
@@ -476,7 +457,6 @@ def describe_DirSQL():
 
         @pytest.mark.asyncio
         async def it_raises_on_extra_keys_in_strict_mode(tmp_dir):
-            """Strict mode raises when extract returns keys not in the DDL."""
             with open(os.path.join(tmp_dir, "item.json"), "w") as f:
                 json.dump({"name": "apple", "color": "red"}, f)
 
@@ -498,7 +478,6 @@ def describe_DirSQL():
 
         @pytest.mark.asyncio
         async def it_raises_on_missing_keys_in_strict_mode(tmp_dir):
-            """Strict mode raises when extract is missing declared columns."""
             with open(os.path.join(tmp_dir, "item.json"), "w") as f:
                 json.dump({"name": "apple"}, f)
 
@@ -520,7 +499,6 @@ def describe_DirSQL():
 
         @pytest.mark.asyncio
         async def it_allows_exact_match_in_strict_mode(tmp_dir):
-            """Strict mode works when keys exactly match DDL columns."""
             with open(os.path.join(tmp_dir, "item.json"), "w") as f:
                 json.dump({"name": "apple", "color": "red"}, f)
 

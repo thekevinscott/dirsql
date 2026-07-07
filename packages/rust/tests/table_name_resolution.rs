@@ -1,30 +1,19 @@
-//! Integration tests for robust table-name resolution (issue #204).
+//! Integration tests for robust table-name resolution.
 //!
 //! dirsql keeps `ddl` as the schema input (bring-your-own DDL, hand-written
-//! or emitted by any ORM / schema tool). The only thing dirsql needs from the
-//! DDL is the table *name*. The hand-rolled `parse_table_name()` scanner gets
-//! that wrong for perfectly valid DDL shapes -- most notably a **quoted
-//! identifier**, the canonical form emitted by Drizzle / SQLAlchemy / Diesel /
-//! sea-query, where it returns the name *with the surrounding quotes* and the
-//! downstream identifier validator then rejects the table outright.
-//!
-//! #204 resolves the name via SQLite itself (execute the DDL, read the name
-//! back from `sqlite_master`). These tests assert the user-visible outcome:
-//! a quoted-identifier DDL registers and the table is queryable, with the
-//! name resolved to the bare `comments`.
-//!
-//! RED today: `DirSQL::new` errors because `parse_table_name` yields
-//! `"comments"` (quotes included), which `validate_identifier` rejects.
+//! or emitted by any ORM / schema tool) and needs only the table *name* from
+//! it. A **quoted identifier** -- the canonical form emitted by Drizzle /
+//! SQLAlchemy / Diesel / sea-query -- must register and be queryable under
+//! the bare name.
 
 use dirsql::{DirSQL, Row, Table, Value};
 use std::collections::HashMap;
 use std::fs;
 use tempfile::TempDir;
 
-/// The exact `comments` fixture from `sdk.rs::comments_table`, with the only
-/// difference being the **quoted** table identifier in the DDL. Isolating the
-/// quoting keeps the test honest: anything that breaks is the name resolution,
-/// not the surrounding plumbing.
+/// The `comments` fixture from `sdk.rs::comments_table`, differing only in
+/// the **quoted** table identifier -- anything that breaks is the name
+/// resolution, not the surrounding plumbing.
 fn quoted_comments_table() -> Table {
     Table::new(
         r#"CREATE TABLE "comments" (id TEXT, body TEXT, author TEXT)"#,
@@ -65,8 +54,6 @@ fn quoted_identifier_ddl_registers_and_is_queryable() {
     )
     .unwrap();
 
-    // SQLite resolves the quoted DDL to the bare table name `comments`, so the
-    // table must register and accept the bare name in a query.
     let db = DirSQL::new(root.path(), vec![quoted_comments_table()])
         .expect("quoted-identifier DDL should register; SQLite resolves the name to `comments`");
     let rows = db.query("SELECT * FROM comments").unwrap();

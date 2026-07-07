@@ -1,4 +1,4 @@
-//! Integration tests for the command runner (`dirsql::command::run_command`, #326).
+//! Integration tests for the command runner (`dirsql::command::run_command`).
 //!
 //! These exercise the **effectful** half of the primitive — real process
 //! spawning, timeouts, stdin, and exit handling — which the Rust `unit lint`
@@ -46,7 +46,6 @@ fn substitutes_a_placeholder_and_reads_the_named_file() {
 fn append_if_absent_appends_the_value_end_to_end() {
     let dir = TempDir::new().unwrap();
     std::fs::write(dir.path().join("data.txt"), "only-line\n").unwrap();
-    // The template has no `{path}`, so the value is appended as `cat data.txt`.
     let out = run_command(
         "cat",
         &[Placeholder::append("path", "data.txt")],
@@ -62,7 +61,6 @@ fn append_if_absent_appends_the_value_end_to_end() {
 fn runs_in_the_given_cwd_so_relative_paths_resolve() {
     let dir = TempDir::new().unwrap();
     std::fs::write(dir.path().join("marker.txt"), "here\n").unwrap();
-    // A bare relative path only resolves if cwd is the temp dir.
     let out =
         run_command("cat marker.txt", &[], dir.path(), TIMEOUT, None).expect("command succeeds");
     assert_eq!(out.payload, "here");
@@ -72,7 +70,6 @@ fn runs_in_the_given_cwd_so_relative_paths_resolve() {
 fn inherits_the_parent_environment() {
     let dir = TempDir::new().unwrap();
     let parent_path = std::env::var("PATH").expect("PATH set");
-    // If the child's env were cleared, `$PATH` would be empty.
     let out = run_command(
         r#"sh -c 'printf %s "$PATH"'"#,
         &[],
@@ -95,8 +92,8 @@ fn writes_the_stdin_payload_to_the_child() {
 #[test]
 fn untrusted_placeholder_values_are_never_shell_interpreted() {
     let dir = TempDir::new().unwrap();
-    // `{args}` carries shell metacharacters; as a single argv token they are
-    // inert. The script echoes its first positional arg verbatim.
+    // The script echoes its first positional arg (`$1`) verbatim; `{args}`
+    // arrives as a single argv token, so its metacharacters are inert.
     let out = run_command(
         r#"sh -c 'printf %s "$1"' _ {args}"#,
         &[Placeholder::new("args", "a; rm -rf / && echo pwned")],
@@ -199,7 +196,7 @@ fn an_invalid_template_is_rejected_before_spawning() {
 fn a_large_stdin_payload_flows_without_deadlocking() {
     let dir = TempDir::new().unwrap();
     // Larger than a typical 64KiB pipe buffer, to exercise the concurrent
-    // stdin-writer / stdout-reader threads. `cat` echoes stdin back.
+    // stdin-writer / stdout-reader threads.
     let mut payload = "x".repeat(512 * 1024).into_bytes();
     payload.extend_from_slice(b"\nBIGPAYLOAD\n");
     let out =

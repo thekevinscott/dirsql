@@ -1,23 +1,14 @@
-// Hermetic integration tests for the TypeScript SDK (#289).
-//
-// These exercise the SDK public API (the `dirsql` barrel) with the SDK's
-// first-party code run for real and only the third-party boundary mocked:
+// Hermetic: first-party code runs for real; the only mocked boundary is
 // `node:module`'s `createRequire`, through which `load-native-core.ts`
-// requires the napi binary, hands back a fake core module instead. They
-// verify the SDK's glue — constructor overloads, positional marshaling into
-// `openAsync`, ready/error propagation, method delegation, and the `watch()`
-// async iterator — without loading the real napi binary or touching disk.
-//
-// Real-core behaviour (SQL semantics, scanning, diffing, watching) is
-// covered by `tests/binding/` (the SDK against the real core) and by the
-// Rust core's own suites.
+// requires the napi binary — it hands back a fake core module instead.
+// Real-core behaviour is covered by `tests/binding/`.
 
 import { DirSQL, type RowEvent, Table, parseTableName } from "dirsql";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The fake native core module. `createRequire` below returns a requirer that
-// resolves every specifier to this object, so the real `loadNativeCore()` /
-// `getCore()` chain runs unmodified and lands here instead of `dirsql.node`.
+// The mocked `createRequire` resolves every specifier to this object, so the
+// real `loadNativeCore()` / `getCore()` chain runs unmodified and lands here
+// instead of `dirsql.node`.
 const { fakeCore } = vi.hoisted(() => ({
   fakeCore: {
     DirSQL: { openAsync: vi.fn() },
@@ -125,8 +116,6 @@ describe("DirSQL construction", () => {
     };
     const db = new DirSQL({ root: "/data", tables: [asClass, asLiteral] });
     await db.ready;
-    // The Table wrapper is structurally identical to the literal; both reach
-    // the core unchanged.
     const [, forwarded] = openAsync.mock.calls[0] as [unknown, unknown[]];
     expect(forwarded).toEqual([
       {

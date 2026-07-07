@@ -9,8 +9,7 @@
 // `{"error": ...}` body), plus `405` for `GET /query`. No mocks: real
 // launcher, real binary, real process, real filesystem.
 //
-// Added with #399 (whose stage 1, #438, rewired the binary's query pipeline):
-// the Rust tiers already pin this contract in-crate, but the language
+// The Rust tiers already pin this contract in-crate, but the language
 // packages ship the binary, so each SDK's e2e suite must pin the HTTP
 // surface it ships.
 //
@@ -262,7 +261,7 @@ describe("POST /query contract (docs/reference/http-api.md)", () => {
   // #444. The case is asserted here as soon as that fix lands.
 
   it("denies `_dirsql_*` internal-table reads with 400", async () => {
-    // #378: the internal bookkeeping namespace is not readable through the
+    // The internal bookkeeping namespace is not readable through the
     // query surface; a rejected read is an error, not empty output.
     const res = await postSql(
       serverPort,

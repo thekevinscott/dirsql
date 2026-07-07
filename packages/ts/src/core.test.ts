@@ -12,7 +12,6 @@ describe("getCore", () => {
     } as ReturnType<typeof loadNativeCore>;
     vi.mocked(loadNativeCore).mockReturnValue(fake);
 
-    // First call hits the loader; the second returns the cached reference.
     expect(getCore()).toBe(fake);
     expect(getCore()).toBe(fake);
     expect(loadNativeCore).toHaveBeenCalledTimes(1);

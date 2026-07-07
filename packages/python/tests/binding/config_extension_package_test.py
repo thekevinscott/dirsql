@@ -1,12 +1,10 @@
-"""Binding tier: resolve a config-file extension by bare package name (#313).
+"""Binding tier: resolve a config-file extension by bare package name.
 
 Lays a real compiled loadable inside a real package directory on `sys.path`,
 declares it in a `.dirsql.toml` as a `[[dirsql.extension]]` entry whose `path`
 is a bare **package name**, and asserts that constructing `DirSQL` from that
 config resolves the actual on-disk file, loads it, and the function it
-registers is callable. Real layout, no mocks -- the shape mirrors the
-programmatic sibling (`extension_package_test.py`, #298) and the TypeScript
-sibling (#299): resolve -> load -> callable.
+registers is callable. Real layout, no mocks.
 
 The loadable is the repo's `tests/fixtures/testext` cdylib (registers
 `dirsql_testext_answer() -> 42`), built on the fly with cargo.

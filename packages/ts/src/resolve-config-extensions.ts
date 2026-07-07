@@ -1,16 +1,12 @@
 // SDK-side resolution of a TOML config's `[[dirsql.extension]]` entries.
 //
-// The Rust core parses a `.dirsql.toml` itself and loads its extensions
-// literally — it has no `require.resolve`, so it cannot resolve a bare
-// **package name** (#227). The SDK can (#313). When a TOML config names an
-// extension by package name, the SDK resolves every one of its extensions
+// The Rust core loads config extensions literally — it has no
+// `require.resolve`, so it cannot resolve a bare **package name**. When a
+// config names an extension by package name, the SDK resolves every entry
 // here, hands the core the resolved literal paths, and suppresses the core's
-// own config-extension loading (the Rust `suppress_config_extensions` builder
-// toggle) so the config's entries are not loaded a second time.
+// own config-extension loading so the entries are not loaded twice.
 //
-// Shared by the `DirSQL` constructor (`config` option) and the CLI launcher
-// (`cli/resolve-config-extensions.ts`, which converts the resolved specs into
-// `--extension` flags for the binary).
+// Shared by the `DirSQL` constructor (`config` option) and the CLI launcher.
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve as resolvePath } from "node:path";
@@ -50,9 +46,6 @@ export function resolveConfigExtensionSpecs(
     return null;
   }
   const entries: Toml[] = dirsql.extension;
-  // Only intervene when at least one path is a bare package name; a config
-  // with only literal paths (or no entries at all) keeps the core's existing
-  // behavior untouched.
   const hasPackageName = entries.some(
     (e) => typeof e.path === "string" && isBareName(e.path),
   );

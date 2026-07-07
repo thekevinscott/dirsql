@@ -1,10 +1,3 @@
-// Unit tests for `resolveExtensionPath` (#299).
-//
-// The effectful collaborators are mocked: `node:fs` (existsSync / statSync /
-// readdirSync) via `vi.mock`, and `require.resolve` via an injected
-// `PackageResolver` fake (mirroring `load-native-core`'s injected requirer).
-// `process.platform` is pinned per-test so the loadable glob is deterministic.
-
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -179,11 +172,9 @@ describe("resolveExtensionPath", () => {
     });
 
     it("uses the default require-based resolver when none is injected", () => {
-      // No resolver argument -> the real `createRequire`-backed resolver runs.
-      // A package that isn't installed makes `require.resolve` throw and
-      // `require.resolve.paths` yield only real node_modules dirs (none holding
-      // it), so resolution falls through to the "not installed" error -- with
-      // fs mocked, no real disk is touched.
+      // The real `createRequire`-backed resolver runs; the uninstalled package
+      // falls through to the "not installed" error, and with fs mocked no real
+      // disk is touched.
       vi.mocked(existsSync).mockReturnValue(false);
       expect(() =>
         resolveExtensionPath("dirsql-nonexistent-pkg-xyz", "/c", true),
