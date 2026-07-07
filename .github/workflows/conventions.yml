@@ -26,15 +26,16 @@ permissions:
 # `dirsql` binary and their e2e suites spawn it, so CLI changes stale the
 # attestations like any other core change.
 #
-# `packaging` (#413) is now PROBED here too: upstream landed `packaging_artifact`
-# (the reusable workflow can inspect a pre-built artifact instead of building it
-# itself). The `build-distributions` job below builds the same three
-# distributions the bespoke packaging.yml builds and uploads them under the
-# `distributions` artifact name; python-unit/typescript-unit/rust then add
-# `"packaging"` to their gates and pass `packaging_artifact: distributions`. Per
-# AGENTS.md's "never retire a bespoke gate ahead of a green proof", packaging.yml
-# stays in place until this probe is confirmed green per job — it is retired in
-# a follow-up once that's proven.
+# `packaging` (#413) is now PROBED here too: the reusable workflow builds the
+# distribution itself (zero-config — `uv build` / `pnpm pack` / `cargo package`,
+# derived from the manifest at each call's package root), so adopting the gate
+# is just adding `"packaging"` to python-unit/typescript-unit/rust's `gates`. No
+# bespoke build job, no `packaging_artifact` (that input is only for the
+# artifact-provided/committed-dist escape hatch, not the default path — see
+# docs/explanation/packaging.md upstream). Per AGENTS.md's "never retire a
+# bespoke gate ahead of a green proof", packaging.yml stays in place until this
+# probe is confirmed green per job — it is retired in a follow-up once that's
+# proven.
 #
 # Still bespoke (for now): rust `unit-coverage` (bespoke by design in
 # rust-test.yml — a `packages/rust` `rust-toolchain.toml` for `--branch` nightly
@@ -54,79 +55,12 @@ permissions:
 # gate re-enabled.) No gate is excluded to dodge enforcement: a red is filed and
 # fixed, not hidden.
 jobs:
-  # Builds the same three distributions the bespoke packaging.yml builds, and
-  # uploads them under one artifact name so each reusable-workflow call below
-  # can pass `packaging_artifact: distributions` instead of building itself
-  # (the reusable workflow has no build hook of its own — #413).
-  build-distributions:
-    name: Build distributions for packaging gate probe
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          python-version: '3.13'
-
-      - name: Install Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
-
-      - name: Build Python wheel
-        working-directory: packages/python
-        run: |
-          uv sync
-          uv run maturin build --out dist
-
-      - name: Build + pack npm tarball
-        working-directory: packages/ts
-        run: |
-          pnpm install
-          pnpm build
-          mkdir -p dist-pack
-          pnpm pack --pack-destination dist-pack
-
-      - name: Package Rust crate
-        run: cargo package -p dirsql --no-verify --allow-dirty
-
-      - name: Upload built distributions
-        uses: actions/upload-artifact@v4
-        with:
-          name: distributions
-          path: |
-            packages/python/dist/*.whl
-            packages/ts/dist-pack/*.tgz
-            target/package/*.crate
-          if-no-files-found: error
-
   python-unit:
-    needs: build-distributions
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
       languages: '["python"]'
       path: packages/python/dirsql
       config: testing-conventions.toml
-      packaging_artifact: distributions
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       # `unit-coverage` runs here after upstream #284: the coverage job installs
       # from the derived package root and runs `uv sync` when python_env=uv. Our
@@ -160,13 +94,11 @@ jobs:
       gates: '["integration-lint"]'
 
   typescript-unit:
-    needs: build-distributions
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
       languages: '["typescript"]'
       path: packages/ts/src
       config: testing-conventions.toml
-      packaging_artifact: distributions
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       # `mutation` + `unit-coverage` both run here; both suites load the native
       # napi `dirsql.node`. #289 removed the `build_command` workflow input (passing
@@ -188,13 +120,11 @@ jobs:
       gates: '["integration-lint"]'
 
   rust:
-    needs: build-distributions
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
       languages: '["rust"]'
       path: packages/rust
       config: testing-conventions.toml
-      packaging_artifact: distributions
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       # colocated-test now runs for rust: upstream #274/#275 made the detector
       # fan the presence check over rust (co-change stays python/ts). This retires
