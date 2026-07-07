@@ -1,5 +1,3 @@
-// Unit tests for `die`.
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { die } from "./die.js";
 

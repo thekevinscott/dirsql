@@ -1,9 +1,3 @@
-// Unit tests for `resolveConfigExtensionSpecs`.
-//
-// Effectful collaborators are mocked: `node:fs` (existsSync/readFileSync) and
-// `smol-toml` (parse) via `vi.mock`, and `resolveExtensionPath` via an anchored
-// factory (the pure `isBareName` stays real). No real files or packages.
-
 import { existsSync, readFileSync } from "node:fs";
 import { parse as parseToml } from "smol-toml";
 import { describe, expect, it, vi } from "vitest";
@@ -80,7 +74,6 @@ describe("resolveConfigExtensionSpecs", () => {
       { path: "R:sqlite_vec", entrypoint: "sqlite3_vec_init" },
       { path: "R:ext/local.so", entrypoint: undefined },
     ]);
-    // Config entries resolve against the config's parent dir.
     expect(resolveExtensionPath).toHaveBeenCalledWith(
       "sqlite_vec",
       "/cfg",

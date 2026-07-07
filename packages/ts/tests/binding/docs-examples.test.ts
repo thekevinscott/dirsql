@@ -1,14 +1,7 @@
-// Binding-tier tests (real core, real fs) that mirror the code examples in
-// the docs (#294 test parity).
-//
-// The Python and Rust SDKs each carry a docs-examples suite
-// (packages/python/tests/binding/docs_examples_test.py,
-// packages/rust/tests/docs_examples.rs); this is the TypeScript mirror. Each
-// test is named for the doc page and section it verifies — if a doc example
-// changes and these tests break, the docs need updating (or vice versa).
-//
-// Watching-guide event examples live in watch.test.ts alongside the rest of
-// the `watch()` iterator coverage.
+// Mirrors the code examples in the docs. Each test is named for the doc page
+// and section it verifies — if a doc example changes and these tests break,
+// the docs need updating (or vice versa). Watching-guide event examples live
+// in watch.test.ts.
 
 import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -69,10 +62,6 @@ function blogTables(): TableDef[] {
   ];
 }
 
-// ---------------------------------------------------------------------------
-// getting-started.md
-// ---------------------------------------------------------------------------
-
 describe("getting started", () => {
   it("matches getting-started query all posts", async () => {
     await blogDir(dir);
@@ -97,10 +86,6 @@ describe("getting started", () => {
     });
   });
 });
-
-// ---------------------------------------------------------------------------
-// reference/sdk.md
-// ---------------------------------------------------------------------------
 
 describe("tables guide", () => {
   it("matches tables guide single-object JSON", async () => {
@@ -331,9 +316,7 @@ describe("tables guide", () => {
 
   // Docs (reference/sdk.md "Supported value types"): string -> TEXT,
   // integer number -> INTEGER, fractional number -> REAL,
-  // boolean -> INTEGER (0/1), null -> NULL. (`bytes -> BLOB` is documented
-  // for Python only; the TS binding has no Buffer -> BLOB mapping — a
-  // tracked parity gap, see PARITY.md.)
+  // boolean -> INTEGER (0/1), null -> NULL.
   it("matches tables guide value types", async () => {
     await writeFile(
       join(dir, "item.json"),
@@ -367,10 +350,6 @@ describe("tables guide", () => {
     expect(row.null_val).toBeNull();
   });
 });
-
-// ---------------------------------------------------------------------------
-// reference/sdk.md
-// ---------------------------------------------------------------------------
 
 describe("querying guide", () => {
   it("matches querying guide select all", async () => {
@@ -453,10 +432,6 @@ describe("querying guide", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// reference/sdk.md
-// ---------------------------------------------------------------------------
-
 describe("async guide", () => {
   it("matches async guide basic usage", async () => {
     await mkdir(join(dir, "data"), { recursive: true });
@@ -536,10 +511,6 @@ describe("async guide", () => {
     expect(results).toEqual([{ n: 2 }]);
   });
 });
-
-// ---------------------------------------------------------------------------
-// reference/sdk.md
-// ---------------------------------------------------------------------------
 
 describe("api reference", () => {
   it("matches api reference DirSQL constructor", async () => {

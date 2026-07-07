@@ -1,5 +1,3 @@
-// Unit tests for `resolveBinary` and `defaultResolver`.
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { die } from "./die.js";
 import { defaultResolver, resolveBinary } from "./resolve-binary.js";

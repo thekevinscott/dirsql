@@ -1,7 +1,4 @@
-// Binding-tier tests (real core, real fs) for config-driven construction:
-// `new DirSQL(configPath)`.
-// TS mirror of packages/python/tests/binding/from_config_test.py and
-// packages/rust/tests/from_config.rs.
+// Config-driven construction: `new DirSQL(configPath)`.
 //
 // Config-defined tables produce one row per matched file. Each row's columns
 // come from filesystem facts: glob path captures and stat virtuals (`_path`,

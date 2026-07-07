@@ -1,7 +1,6 @@
 // Resolve the absolute path of the prebuilt `dirsql` binary shipped by
 // whichever `@dirsql/cli-<triple>` optional-dependency package matched
-// the host at `npm install` time. Never returns if unresolved — die()
-// takes over.
+// the host at `npm install` time.
 
 import { createRequire } from "node:module";
 import { nodeTriples } from "../platforms.js";

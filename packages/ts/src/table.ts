@@ -1,8 +1,3 @@
-// `Table` definition + its thin class wrapper.
-//
-// Split out of the public barrel (`index.ts`) so it carries a colocated
-// unit test instead of an exemption (#239).
-
 /** Definition of a SQL-indexed table backed by files on disk. */
 export interface TableDef {
   /** SQL DDL statement, e.g. `CREATE TABLE users (name TEXT, age INTEGER)`. */
@@ -21,11 +16,10 @@ export interface TableDef {
 }
 
 /**
- * Thin class wrapper around {@link TableDef} for parity with the Python
- * `Table(ddl=..., glob=..., extract=...)` and Rust `Table::new(...)`
- * constructors. `new Table({...})` is structurally identical to a plain
- * object literal satisfying `TableDef` — anything accepting `TableDef[]`
- * (e.g. {@link DirSQL}'s `tables` option) takes either form.
+ * Thin class wrapper around {@link TableDef}, for parity with the Python and
+ * Rust `Table` constructors. `new Table({...})` is structurally identical to
+ * a plain object literal satisfying `TableDef` — anything accepting
+ * `TableDef[]` takes either form.
  *
  * `strict` is only copied when present so the instance's enumerable keys
  * match the input literal exactly; field declarations use `declare` to

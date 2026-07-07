@@ -1,13 +1,9 @@
-// Binding tier: resolve a config-file extension by bare package name (#313).
-//
-// Lays a real compiled loadable inside a real installed-package directory under
-// `node_modules`, declares it in a `.dirsql.toml` as a `[[dirsql.extension]]`
-// entry whose `path` is a bare **package name**, and asserts that constructing
-// `DirSQL` from that config resolves the actual on-disk file via
-// `require.resolve`, loads it, and the function it registers is callable. Real
-// layout, no mocks -- the shape mirrors the programmatic sibling
-// (`extension-package.test.ts`, #299) and the Python sibling (#298):
-// resolve -> load -> callable.
+// Lays a real compiled loadable inside a real installed-package directory
+// under `node_modules`, declares it in a `.dirsql.toml` as a
+// `[[dirsql.extension]]` entry whose `path` is a bare **package name**, and
+// asserts that constructing `DirSQL` from that config resolves the on-disk
+// file via `require.resolve`, loads it, and the function it registers is
+// callable. Real layout, no mocks.
 //
 // The loadable is the repo's `tests/fixtures/testext` cdylib (registers
 // `dirsql_testext_answer() -> 42`), built on the fly with cargo.
@@ -68,7 +64,7 @@ describe("DirSQL config-file extension by package name (#313)", () => {
   // Unique to this suite: `extension-package.test.ts` installs its own fake
   // package in the same shared `node_modules`, and vitest runs the two files
   // in parallel workers — a shared name lets one suite's cleanup delete the
-  // other's fixture mid-test (#349).
+  // other's fixture mid-test.
   const pkgName = "dirsql-testext-pkg-config";
   const pkgDir = join(tsNodeModules, pkgName);
   let tmp: string;

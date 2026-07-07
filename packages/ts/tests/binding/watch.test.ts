@@ -1,14 +1,3 @@
-// Binding-tier tests (real core, real fs) for the `watch()` async-iterator
-// API (#294 test parity).
-//
-// Mirrors packages/python/tests/binding/async_dirsql_test.py
-// (describe_watch) and packages/rust/tests/sdk.rs
-// (it_streams_watch_*_events): the TS SDK exposes the same event stream as
-// `for await (const event of db.watch())`, which was previously only covered
-// via the lower-level `startWatcher()` + `pollEvents()` primitives
-// (index.test.ts). Real napi binding, real Rust core, real temp filesystem —
-// nothing mocked.
-
 import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -24,8 +13,7 @@ function sleep(ms: number): Promise<void> {
 
 // Consume `db.watch()` until `until` is satisfied, keeping only events that
 // pass `filter`. The iterator never self-terminates; if the expected events
-// never arrive, the enclosing test times out (the vitest analog of the
-// Python suite's `asyncio.wait_for(...)` + `pytest.fail`).
+// never arrive, the enclosing test times out.
 async function collectFromWatch(
   db: DirSQL,
   opts: {
@@ -121,7 +109,6 @@ describe("DirSQL watch() async iterator", () => {
       expect(events[0].table).toBe("items");
       expect(events[0].row?.name).toBe("doomed");
 
-      // The database reflects the deletion.
       expect(await db.query("SELECT * FROM items")).toHaveLength(0);
     },
     TEST_TIMEOUT,
@@ -183,9 +170,8 @@ describe("DirSQL watch() async iterator", () => {
       const events = await collector;
       expect(events[0].action).toBe("error");
       expect(events[0].error).toBeTruthy();
-      // The failing file matched the `items` table's glob; the error event
-      // must carry that attribution so multi-table consumers can route the
-      // error to the right handler.
+      // The error event must carry table attribution so multi-table
+      // consumers can route it.
       expect(events[0].table).toBe("items");
     },
     TEST_TIMEOUT,
@@ -218,12 +204,9 @@ describe("DirSQL watch() async iterator", () => {
   );
 
   // Docs (explanation.md "How diffing works"): a file shrinking from 3
-  // rows to 2 must end with the dropped row deleted. Mirrors the Python
-  // docs-gaps test (it_emits_delete_for_shrinking_file_positionally); the
-  // same doc/impl divergence note applies — the current core does a full
-  // replace on shrink (packages/rust/src/differ.rs::diff_rows), so we assert
-  // only that a delete for the dropped row appears and the end state is
-  // correct, without contradicting either mechanism.
+  // rows to 2 must end with the dropped row deleted. The core may do a full
+  // replace on shrink, so assert only that a delete for the dropped row
+  // appears and the end state is correct.
   it(
     "emits a delete for the dropped row when a file shrinks",
     async () => {

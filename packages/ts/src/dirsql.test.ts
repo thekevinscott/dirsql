@@ -5,19 +5,12 @@ import { resolveConfigExtensionSpecs } from "./resolve-config-extensions.js";
 import { resolveExtensionPath } from "./resolve-extension.js";
 
 vi.mock("./core.js");
-// Extension path resolution (file-vs-package) is unit-tested in
-// `resolve-extension.test`; here it is mocked so construction asserts only that
-// the resolved specs reach `openAsync`.
 vi.mock("./resolve-extension.js", async () => ({
   ...(await vi.importActual<typeof import("./resolve-extension.js")>(
     "./resolve-extension.js",
   )),
   resolveExtensionPath: vi.fn((path: string) => `R:${path}`),
 }));
-// Config-file extension resolution (TOML parsing + package-name gating) is
-// unit-tested in `resolve-config-extensions.test`; here it is mocked so
-// construction asserts only the merge + suppress plumbing. Defaults to `null`
-// (do not intervene).
 vi.mock("./resolve-config-extensions.js", async () => ({
   ...(await vi.importActual<typeof import("./resolve-config-extensions.js")>(
     "./resolve-config-extensions.js",
@@ -72,7 +65,6 @@ describe("DirSQL", () => {
         null,
         false,
       );
-      // No config option -> the config-extension resolver is never consulted.
       expect(resolveConfigExtensionSpecs).not.toHaveBeenCalled();
     });
 
@@ -86,8 +78,6 @@ describe("DirSQL", () => {
         ],
       });
       await db.ready;
-      // Each path is routed through the (mocked) resolver before reaching the
-      // core; a bare name resolves against cwd without being made absolute.
       expect(resolveExtensionPath).toHaveBeenCalledWith(
         "sqlite-vec",
         process.cwd(),
@@ -127,9 +117,6 @@ describe("DirSQL", () => {
     });
 
     it("appends resolved config extensions and suppresses the core's own loading", async () => {
-      // When the config resolver intervenes (a bare package name in the
-      // config, #313), its resolved specs are appended after the programmatic
-      // ones and the core's config-extension loading is suppressed.
       const openAsync = installFakeCore(makeInner());
       vi.mocked(resolveConfigExtensionSpecs).mockReturnValue([
         { path: "/env/pkg/ext.so", entrypoint: "init" },
@@ -177,8 +164,6 @@ describe("DirSQL", () => {
     });
 
     it("leaves the core's loading untouched when the resolver declines", async () => {
-      // `null` from the resolver (no bare package name in the config) keeps
-      // the pre-#313 behavior: the core loads the config's own entries.
       const openAsync = installFakeCore(makeInner());
       vi.mocked(resolveConfigExtensionSpecs).mockReturnValue(null);
       const db = new DirSQL({
@@ -256,11 +241,6 @@ describe("DirSQL", () => {
       ]);
     });
 
-    // Regression for https://github.com/thekevinscott/dirsql/issues/119 (the
-    // wrapper must `await` between polls) and #147 (the native poll runs on
-    // the libuv threadpool). Even a tight loop over pollEvents returning []
-    // must yield to the event loop each iteration, so a same-process
-    // setTimeout still fires.
     it("yields to the event loop between polls so same-process timers fire", async () => {
       let calls = 0;
       const inner = makeInner({

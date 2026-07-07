@@ -1,11 +1,3 @@
-// Unit tests for `withResolvedExtensions`.
-//
-// The shared SDK resolver (`../resolve-config-extensions.ts`, mocked here) owns
-// the TOML parsing and package-name gating and carries its own colocated
-// tests; this file covers only the launcher-side argv plumbing: config-path
-// extraction, the `init` / native-config guards, and `--extension` flag
-// construction.
-
 import { describe, expect, it, vi } from "vitest";
 import { resolveConfigExtensionSpecs } from "../resolve-config-extensions.js";
 import { withResolvedExtensions } from "./resolve-config-extensions.js";
