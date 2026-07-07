@@ -26,16 +26,9 @@ permissions:
 # `dirsql` binary and their e2e suites spawn it, so CLI changes stale the
 # attestations like any other core change.
 #
-# `packaging` (#413) is now PROBED here too: the reusable workflow builds the
-# distribution itself (zero-config — `uv build` / `pnpm pack` / `cargo package`,
-# derived from the manifest at each call's package root), so adopting the gate
-# is just adding `"packaging"` to python-unit/typescript-unit/rust's `gates`. No
-# bespoke build job, no `packaging_artifact` (that input is only for the
-# artifact-provided/committed-dist escape hatch, not the default path — see
-# docs/explanation/packaging.md upstream). Per AGENTS.md's "never retire a
-# bespoke gate ahead of a green proof", packaging.yml stays in place until this
-# probe is confirmed green per job — it is retired in a follow-up once that's
-# proven.
+# `packaging` (#413) is PROBED here: the reusable workflow auto-builds the
+# distribution from the manifest, so adopting it is just adding "packaging" to
+# gates below. packaging.yml stays until this is confirmed green, then retires.
 #
 # Still bespoke (for now): rust `unit-coverage` (bespoke by design in
 # rust-test.yml — a `packages/rust` `rust-toolchain.toml` for `--branch` nightly
