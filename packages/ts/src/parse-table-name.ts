@@ -1,3 +1,8 @@
+// `parseTableName` — table-name resolution delegated to the Rust core.
+//
+// Split out of the public barrel (`index.ts`) so it carries a colocated
+// unit test instead of an exemption (#239).
+
 import { getCore } from "./core.js";
 
 /**

@@ -11,6 +11,9 @@
 //
 // Both sub-package sets use `optionalDependencies` on the main `dirsql`
 // package so npm/pnpm install only the one matching the host's OS/arch.
+//
+// `nodeTriples()` / `libTriples()` return `${process.platform}-${process.arch}`
+// → sub-package-name maps for the respective layer.
 
 export interface Platform {
   /** Rust target triple — the name cargo-dist uses for archives. */
