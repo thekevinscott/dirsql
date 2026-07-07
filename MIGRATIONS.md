@@ -11,6 +11,44 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### A rejected write statement via `query()` now returns HTTP 400, not 500 (#444)
+
+#### Summary
+
+`POST /query` (and the `dirsql query` subcommand) previously returned HTTP 500
+for a write statement (e.g. `DELETE FROM files`), even though
+`docs/reference/http-api.md` documents the read-only rule as a 400-class
+error. The internal classification treated the read-only rejection
+(`DirSqlError::WriteForbidden`) as a server-side fault instead of a caller
+error. It now maps to 400, consistent with other caller-fixable SQL errors
+(malformed SQL, unknown table) and the existing `_dirsql_*` internal-table
+denial (#378).
+
+#### Required changes
+
+_None._ No API, config key, CLI flag, or return type changed.
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- **A write statement submitted to `query()` (via `POST /query` or
+  `dirsql query`) now returns HTTP 400 (or, for the CLI, the same
+  non-zero-exit/stderr treatment as any other bad-request error) instead of
+  500.** Callers that specifically branched on 500 for this case should treat
+  it as a 400 instead. The error message is unchanged.
+
+#### Verification
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:<port>/query \
+  -H 'content-type: application/json' \
+  -d '{"sql": "DELETE FROM files"}'
+# 400
+```
+
 ### Default (non-persist) index moved from `:memory:` to an anonymous disk-backed temp database (#402)
 
 #### Summary

@@ -238,6 +238,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`POST /query` returns 400, not 500, for a rejected write statement (#444).**
+  `classify_query_error` classified only `DirSqlError::Core(_)` as the
+  caller's fault, so the read-only rejection (`DirSqlError::WriteForbidden`)
+  fell to the server-fault catch-all and surfaced as HTTP 500 — contradicting
+  `docs/reference/http-api.md`, which documents the read-only rule under 400.
+  `WriteForbidden` now maps to the same 400 class as a `Core` SQL error. Applies
+  identically to the HTTP server and the `dirsql query` subcommand, since both
+  share the `execute_query` pipeline.
+
 - **npm package ships the current docs tree (#404).** The `prepack` docs
   stager (`packages/ts/tools/stage-docs.ts`) still allow-listed the pre-Diataxis
   `guide/` and `api/` directories, which #403 deleted — so the published npm

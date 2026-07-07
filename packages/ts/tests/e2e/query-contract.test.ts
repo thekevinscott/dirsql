@@ -255,10 +255,13 @@ describe("POST /query contract (docs/reference/http-api.md)", () => {
     );
   });
 
-  // NOTE: http-api.md also documents the read-only rule (a write statement
-  // is a 400), but the binary currently returns 500 for it -- a pre-existing
-  // docs-vs-behavior mismatch surfaced while writing this suite, tracked as
-  // #444. The case is asserted here as soon as that fix lands.
+  it("rejects a write statement with 400", async () => {
+    const res = await postSql(serverPort, "DELETE FROM files");
+    expect(res.status).toBe(400);
+    expect((JSON.parse(res.text) as { error: string }).error).toContain(
+      "read-only",
+    );
+  });
 
   it("denies `_dirsql_*` internal-table reads with 400", async () => {
     // The internal bookkeeping namespace is not readable through the
