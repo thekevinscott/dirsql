@@ -69,6 +69,8 @@ describe("DirSQL config-file extension by package name (#313)", () => {
   const pkgDir = join(tsNodeModules, pkgName);
   let tmp: string;
 
+  // buildFixtureExtension shells out to a cargo build; the 10s default hook
+  // timeout flakes under CI runner load, so allow 30s.
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), "dirsql-cfg-ext-pkg-"));
     const so = buildFixtureExtension(join(tmp, "target"));
@@ -80,7 +82,7 @@ describe("DirSQL config-file extension by package name (#313)", () => {
       JSON.stringify({ name: pkgName, version: "0.0.0" }),
     );
     execFileSync("cp", [so, join(pkgDir, "testext.so")]);
-  });
+  }, 30_000);
 
   afterEach(() => {
     rmSync(pkgDir, { recursive: true, force: true });
