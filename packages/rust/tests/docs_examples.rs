@@ -686,9 +686,9 @@ fn it_matches_watching_guide_update_event() {
         // Could be Update or Delete+Insert depending on implementation; the
         // settled event carries name == "final".
         let settled = match &event {
-            dirsql::RowEvent::Update {
-                table, new_row, ..
-            } => *table == "items" && new_row["name"] == Value::Text("final".into()),
+            dirsql::RowEvent::Update { table, new_row, .. } => {
+                *table == "items" && new_row["name"] == Value::Text("final".into())
+            }
             dirsql::RowEvent::Insert { table, row, .. } => {
                 *table == "items" && row["name"] == Value::Text("final".into())
             }
