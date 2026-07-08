@@ -97,7 +97,7 @@ test-packaging:
 
 # CI test target (unit + integration + binding, no e2e)
 test-ci:
-    uv run python -m pytest packages/python/dirsql/ packages/python/tests/integration/ packages/python/tests/binding/ -x -q --tb=short 2>/dev/null || echo "No tests found yet"
+    uv run python .github/scripts/pytest_gate.py packages/python/dirsql/ packages/python/tests/integration/ packages/python/tests/binding/ -x -q --tb=short
 
 # Run Rust tests
 test-rust:

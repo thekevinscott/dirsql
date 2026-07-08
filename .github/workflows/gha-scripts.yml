@@ -12,9 +12,11 @@ on:
     branches: [main]
     paths:
       - '.github/scripts/**'
+      - '.github/workflows/gha-scripts.yml'
   pull_request:
     paths:
       - '.github/scripts/**'
+      - '.github/workflows/gha-scripts.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -38,16 +40,9 @@ jobs:
       - name: Install pytest
         run: pip install pytest pytest-cov pytest-describe
 
-      # Presence guard: the scripts dir may be empty (all extracted CI logic can
-      # be retired). pytest over an empty/absent dir errors ("no tests ran"), so
-      # skip cleanly when there are no `*_test.py`. A real script-adding PR brings
-      # its colocated test (AGENTS.md "CI Workflows"), which flips this back on.
+      # pytest_gate translates pytest exit 5 (no tests collected) to 0, so an
+      # empty scripts dir passes cleanly while pytest's own recursive collection
+      # finds nested `.../foo_test.py`. Any other nonzero (test or coverage
+      # failure) propagates.
       - name: Run .github/scripts unit tests (100% coverage)
-        run: |
-          shopt -s nullglob
-          tests=(.github/scripts/*_test.py)
-          if [ ${#tests[@]} -eq 0 ]; then
-            echo "No .github/scripts/*_test.py present — nothing to test."
-            exit 0
-          fi
-          python -m pytest .github/scripts/ --cov=.github/scripts --cov-report=term-missing --cov-fail-under=100
+        run: python .github/scripts/pytest_gate.py .github/scripts/ --cov=.github/scripts --cov-report=term-missing --cov-fail-under=100
