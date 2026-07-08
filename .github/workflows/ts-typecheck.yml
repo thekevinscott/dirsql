@@ -16,6 +16,10 @@ on:
       - 'packages/ts/tsconfig.json'
       - 'packages/ts/package.json'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 # `tsc` already runs as part of `pnpm build` in `ts-test.yml`, so this is
 # redundant in the strict sense. It exists for the same reason
 # `python-typecheck.yml` does: a dedicated, fast-failing type-check signal
