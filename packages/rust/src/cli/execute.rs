@@ -217,15 +217,10 @@ async fn run_post_query(pq: &PostQuery, rows: Vec<Value>) -> Result<Value, Query
 mod tests {
     use super::*;
 
-    // The `DirSqlError::Core => BadRequest` arm of `classify_query_error` is
-    // exercised end-to-end at the integration tier by
+    // The `Core => BadRequest` arm is covered end-to-end by
     // `post_query_malformed_sql_returns_400_not_500` in
-    // `tests/cli_integration.rs`, which posts malformed SQL to `/query` and
-    // asserts the 400. Constructing a `Core` value inline would require
-    // importing the first-party `crate::db::DbError`, which the
-    // `testing-conventions` `unit lint` isolation rule forbids (a unit test
-    // may reach only `super::` and pure `std`). The non-Core arm below is
-    // pure -- it builds a `super::DirSqlError::Lock` -- so it stays inline.
+    // `tests/cli_integration.rs` (unit-lint isolation bars constructing a
+    // `Core` value inline). The pure non-Core arm below stays here.
 
     #[test]
     fn classify_non_core_error_is_internal() {

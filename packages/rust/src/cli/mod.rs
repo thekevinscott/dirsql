@@ -343,8 +343,6 @@ mod tests {
         }
     }
 
-    // `DEFAULT_CONFIG_TOML` parsing against the real `config::load_config_str`
-    // is covered in `tests/config.rs` -- a unit test here would call an
-    // out-of-module collaborator directly, which the `unit lint` isolation
-    // rule forbids.
+    // `DEFAULT_CONFIG_TOML` parsing is covered in `tests/config.rs`
+    // (unit-lint isolation bars calling `config::load_config_str` here).
 }
