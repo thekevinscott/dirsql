@@ -118,6 +118,17 @@ fn remove_event(paths: Vec<PathBuf>) -> Event {
 }
 
 #[cfg(test)]
+fn rename_from_event(paths: Vec<PathBuf>) -> Event {
+    Event {
+        kind: EventKind::Modify(notify::event::ModifyKind::Name(
+            notify::event::RenameMode::From,
+        )),
+        paths,
+        attrs: Default::default(),
+    }
+}
+
+#[cfg(test)]
 fn access_event(paths: Vec<PathBuf>) -> Event {
     Event {
         kind: EventKind::Access(notify::event::AccessKind::Read),
@@ -164,6 +175,17 @@ mod tests {
         assert_eq!(
             results,
             vec![FileEvent::Modified(PathBuf::from("/tmp/changed.txt"))]
+        );
+    }
+
+    #[test]
+    fn translate_event_maps_rename_from_to_delete() {
+        // inotify emits `Modify(Name(From))` when a file is renamed OUT of the
+        // watched tree; it must be treated as a removal so its rows are deleted.
+        let results = translate_event(&rename_from_event(vec![PathBuf::from("/tmp/moved.txt")]));
+        assert_eq!(
+            results,
+            vec![FileEvent::Deleted(PathBuf::from("/tmp/moved.txt"))]
         );
     }
 

@@ -877,6 +877,36 @@ mod tests {
     }
 
     #[test]
+    fn parse_table_name_ignores_leading_line_comment() {
+        assert_eq!(
+            parse_table_name("-- create table old\nCREATE TABLE t (x TEXT)"),
+            Some("t".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_table_name_ignores_leading_block_comment() {
+        assert_eq!(
+            parse_table_name("/* CREATE TABLE old */ CREATE TABLE t (x TEXT)"),
+            Some("t".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_table_name_unicode_in_comment_does_not_panic() {
+        // A case-length-changing char (`ﬁ`) in a comment must neither hijack
+        // the name nor panic on a byte-index slice.
+        assert_eq!(
+            parse_table_name("-- ﬁ\nCREATE TABLE t (x TEXT)"),
+            Some("t".to_string())
+        );
+        assert_eq!(
+            parse_table_name("/* ﬁﬁﬁ */ CREATE TABLE t (x TEXT)"),
+            Some("t".to_string())
+        );
+    }
+
+    #[test]
     fn get_table_columns_returns_user_columns_only() {
         let db = Db::new().unwrap();
         db.create_table("CREATE TABLE t (name TEXT, count INTEGER)")
