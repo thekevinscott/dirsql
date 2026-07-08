@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **TypeScript SDK surfaces native-load and construction errors instead of masking them (#467, epic #461).** The native-addon loader no longer swallows every error from the platform `@dirsql/lib-*` sub-package: only a genuine `MODULE_NOT_FOUND` falls through to the dev-path binary, while any other loader failure (ABI/glibc mismatch, corrupt binary) now propagates verbatim rather than being replaced by a misleading "Cannot find module .../dirsql.node". The `DirSQL` constructor also attaches a no-op handler to its internal readiness promise, so constructing without awaiting `ready` (as the docs encourage) can no longer terminate the process with an unhandled rejection when construction fails — the real error surfaces at the first `query()` / `await db.ready` instead.
+- **Reserved-word column names are now writable (#463).** `insert_row` interpolated user column names unquoted, so a table legally declaring a reserved word as a column (e.g. `"order" INTEGER`) passed validation but failed every insert with `near "order": syntax error`, leaving the table permanently un-writable. Column identifiers (and the table name) are now quoted on insert, matching the read path (`get_rows_by_file`); `validate_identifier` remains the injection guard.
 
 ### Changed
 

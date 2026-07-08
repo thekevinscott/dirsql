@@ -280,14 +280,14 @@ impl Db {
         // `_dirsql_internal_rows`, keyed on the row's rowid. A column-less row
         // (SQLite requires ≥1 declared column, so this is only reachable
         // defensively) uses `DEFAULT VALUES`.
-        let columns: Vec<String> = row.keys().cloned().collect();
+        let columns: Vec<String> = row.keys().map(|c| format!("\"{c}\"")).collect();
         let sql = if columns.is_empty() {
-            format!("INSERT INTO {} DEFAULT VALUES", table)
+            format!("INSERT INTO \"{table}\" DEFAULT VALUES")
         } else {
             let placeholders: Vec<String> =
                 (1..=columns.len()).map(|i| format!("?{}", i)).collect();
             format!(
-                "INSERT INTO {} ({}) VALUES ({})",
+                "INSERT INTO \"{}\" ({}) VALUES ({})",
                 table,
                 columns.join(", "),
                 placeholders.join(", "),
@@ -1321,6 +1321,22 @@ mod tests {
         let row = HashMap::from([("id); DROP TABLE t; --".into(), Value::Text("x".into()))]);
         let err = db.insert_row("t", &row, "f.json", 0).unwrap_err();
         assert!(matches!(err, DbError::InvalidIdentifier(_)), "got: {err:?}");
+    }
+
+    #[test]
+    fn insert_row_round_trips_reserved_word_column() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (path TEXT, \"order\" INTEGER)")
+            .unwrap();
+        let row = HashMap::from([
+            ("path".into(), Value::Text("a".into())),
+            ("order".into(), Value::Integer(7)),
+        ]);
+        db.insert_row("t", &row, "f.json", 0).unwrap();
+
+        let rows = db.get_rows_by_file("t", "f.json").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["order"], Value::Integer(7));
     }
 
     #[test]
