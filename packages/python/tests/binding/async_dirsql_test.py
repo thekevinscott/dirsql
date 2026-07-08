@@ -417,3 +417,74 @@ def describe_DirSQL_async():
             results = await db.query("SELECT * FROM items")
             assert len(results) == 1
             assert results[0]["name"] == "added"
+
+        @pytest.mark.asyncio
+        async def it_watches_without_awaiting_ready_first(tmp_dir):
+            # watch() must await readiness on first iteration -- calling it
+            # before an explicit `await db.ready()` must still yield events,
+            # not fail on a still-None core handle.
+            db = DirSQL(
+                tmp_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE items (name TEXT)",
+                        glob="**/*.json",
+                        extract=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
+                    ),
+                ],
+            )
+
+            events = []
+
+            async def collect_events():
+                async for event in db.watch():
+                    if event.action != "insert":
+                        continue
+                    events.append(event)
+                    break
+
+            task = asyncio.create_task(collect_events())
+            await asyncio.sleep(0.3)
+
+            final = os.path.join(tmp_dir, "new_item.json")
+            tmp = final + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump({"name": "apple"}, f)
+            os.replace(tmp, final)
+
+            try:
+                await asyncio.wait_for(task, timeout=5.0)
+            except asyncio.TimeoutError:
+                pytest.fail("Timed out waiting for watch events")
+
+            assert len(events) == 1
+            assert events[0].row["name"] == "apple"
+
+        @pytest.mark.asyncio
+        async def it_surfaces_the_real_init_error_on_watch_without_ready(tmp_dir):
+            os.makedirs(os.path.join(tmp_dir, "data"), exist_ok=True)
+            with open(os.path.join(tmp_dir, "data", "bad.json"), "w") as f:
+                f.write("not valid json")
+
+            db = DirSQL(
+                tmp_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE items (name TEXT)",
+                        glob="data/*.json",
+                        extract=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
+                    ),
+                ],
+            )
+
+            with pytest.raises(Exception) as exc_info:
+                async for _ in db.watch():
+                    break
+
+            # The stream must surface the real construction error, not an
+            # AttributeError from a captured None handle.
+            assert not isinstance(exc_info.value, AttributeError)

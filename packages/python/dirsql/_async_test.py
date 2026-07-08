@@ -52,6 +52,16 @@ class _FakeWatcherDb:
         return []
 
 
+class _ReadyOwner:
+    """Fake DirSQL whose ``_db`` is already populated when ``ready`` returns."""
+
+    def __init__(self, db):
+        self._db = db
+
+    async def ready(self):
+        pass
+
+
 def describe_DirSQL_async():
     def describe_ready_and_query():
         @pytest.mark.asyncio
@@ -210,9 +220,8 @@ def describe_DirSQL_async():
     def describe_watch_stream():
         @pytest.mark.asyncio
         async def it_starts_the_watcher_and_buffers_events():
-            stream = async_mod._WatchStream(
-                _FakeWatcherDb(events=[["event-a", "event-b"]])
-            )
+            fake_db = _FakeWatcherDb(events=[["event-a", "event-b"]])
+            stream = async_mod._WatchStream(_ReadyOwner(fake_db))
 
             assert stream.__aiter__() is stream
 
@@ -221,17 +230,55 @@ def describe_DirSQL_async():
 
             assert first == "event-a"
             assert second == "event-b"
-            assert stream._db.started == 1
-            assert stream._db.poll_calls == [200]
+            assert stream._db is fake_db
+            assert fake_db.started == 1
+            assert fake_db.poll_calls == [200]
 
         @pytest.mark.asyncio
         async def it_polls_again_when_a_poll_returns_no_events():
-            stream = async_mod._WatchStream(_FakeWatcherDb(events=[[], ["event-a"]]))
+            fake_db = _FakeWatcherDb(events=[[], ["event-a"]])
+            stream = async_mod._WatchStream(_ReadyOwner(fake_db))
 
             first = await stream.__anext__()
 
             assert first == "event-a"
-            assert stream._db.poll_calls == [200, 200]
+            assert fake_db.poll_calls == [200, 200]
+
+        @pytest.mark.asyncio
+        async def it_awaits_readiness_and_reads_the_db_at_iteration_start():
+            # The owner's _db is None until ready() completes; the stream must
+            # re-read it at first iteration rather than capturing None at
+            # construction time.
+            fake_db = _FakeWatcherDb(events=[["event-a"]])
+
+            class _LateOwner:
+                def __init__(self):
+                    self._db = None
+
+                async def ready(self):
+                    self._db = fake_db
+
+            owner = _LateOwner()
+            stream = async_mod._WatchStream(owner)
+
+            first = await stream.__anext__()
+
+            assert first == "event-a"
+            assert stream._db is fake_db
+            assert fake_db.started == 1
+
+        @pytest.mark.asyncio
+        async def it_surfaces_the_init_error_instead_of_attributeerror():
+            class _BoomOwner:
+                _db = None
+
+                async def ready(self):
+                    raise RuntimeError("boom")
+
+            stream = async_mod._WatchStream(_BoomOwner())
+
+            with pytest.raises(RuntimeError, match="boom"):
+                await stream.__anext__()
 
     def describe_construction():
         @pytest.mark.asyncio
@@ -246,7 +293,7 @@ def describe_DirSQL_async():
 
     def describe_watch():
         @pytest.mark.asyncio
-        async def it_returns_a_watch_stream_over_the_background_db():
+        async def it_returns_a_watch_stream_bound_to_the_owner():
             with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
                 db = async_mod.DirSQL("/tmp/root")
                 await db.ready()
@@ -254,4 +301,4 @@ def describe_DirSQL_async():
                 stream = db.watch()
 
                 assert isinstance(stream, async_mod._WatchStream)
-                assert stream._db is db._db
+                assert stream._owner is db
