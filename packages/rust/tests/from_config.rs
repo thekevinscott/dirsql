@@ -4,7 +4,7 @@ use tempfile::TempDir;
 
 /// Config-defined tables produce one row per matched file. Every row's
 /// columns come from filesystem facts: glob path captures and stat virtuals
-/// (`_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`).
+/// (`path`, `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`).
 /// Content interpretation is intentionally out of scope.
 
 #[test]
@@ -15,7 +15,7 @@ fn from_config_produces_one_row_per_matched_file() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE files (_path TEXT, _basename TEXT)"
+ddl = "CREATE TABLE files (path TEXT, basename TEXT)"
 glob = "data/*.csv"
 "#,
     )
@@ -27,14 +27,14 @@ glob = "data/*.csv"
 
     let db = DirSQL::from_config(root.path()).unwrap();
     let rows = db
-        .query("SELECT _path, _basename FROM files ORDER BY _path")
+        .query("SELECT path, basename FROM files ORDER BY path")
         .unwrap();
 
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0]["_path"], Value::Text("data/a.csv".into()));
-    assert_eq!(rows[0]["_basename"], Value::Text("a.csv".into()));
-    assert_eq!(rows[1]["_path"], Value::Text("data/b.csv".into()));
-    assert_eq!(rows[1]["_basename"], Value::Text("b.csv".into()));
+    assert_eq!(rows[0]["path"], Value::Text("data/a.csv".into()));
+    assert_eq!(rows[0]["basename"], Value::Text("a.csv".into()));
+    assert_eq!(rows[1]["path"], Value::Text("data/b.csv".into()));
+    assert_eq!(rows[1]["basename"], Value::Text("b.csv".into()));
 }
 
 #[test]
@@ -48,7 +48,7 @@ fn from_config_honors_ignore_patterns() {
 ignore = ["ignored/**"]
 
 [[table]]
-ddl = "CREATE TABLE files (_path TEXT)"
+ddl = "CREATE TABLE files (path TEXT)"
 glob = "**/*.csv"
 "#,
     )
@@ -60,10 +60,10 @@ glob = "**/*.csv"
     fs::write(root.path().join("ignored").join("b.csv"), "x").unwrap();
 
     let db = DirSQL::from_config(root.path()).unwrap();
-    let rows = db.query("SELECT _path FROM files").unwrap();
+    let rows = db.query("SELECT path FROM files").unwrap();
 
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["_path"], Value::Text("data/a.csv".into()));
+    assert_eq!(rows[0]["path"], Value::Text("data/a.csv".into()));
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn from_config_with_path_captures_promotes_them_to_columns() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE comments (thread_id TEXT, _basename TEXT)"
+ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
 glob = "_comments/{thread_id}/*.txt"
 "#,
     )
@@ -101,14 +101,14 @@ glob = "_comments/{thread_id}/*.txt"
 
     let db = DirSQL::from_config(root.path()).unwrap();
     let rows = db
-        .query("SELECT thread_id, _basename FROM comments ORDER BY thread_id")
+        .query("SELECT thread_id, basename FROM comments ORDER BY thread_id")
         .unwrap();
 
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["thread_id"], Value::Text("abc123".into()));
-    assert_eq!(rows[0]["_basename"], Value::Text("first.txt".into()));
+    assert_eq!(rows[0]["basename"], Value::Text("first.txt".into()));
     assert_eq!(rows[1]["thread_id"], Value::Text("def456".into()));
-    assert_eq!(rows[1]["_basename"], Value::Text("second.txt".into()));
+    assert_eq!(rows[1]["basename"], Value::Text("second.txt".into()));
 }
 
 #[test]
@@ -119,7 +119,7 @@ fn from_config_exposes_stat_virtuals() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE files (_path TEXT, _basename TEXT, _dir TEXT, _ext TEXT, _size INTEGER, _mtime INTEGER)"
+ddl = "CREATE TABLE files (path TEXT, basename TEXT, dir TEXT, ext TEXT, size INTEGER, mtime INTEGER)"
 glob = "docs/*.md"
 "#,
     )
@@ -131,21 +131,21 @@ glob = "docs/*.md"
 
     let db = DirSQL::from_config(root.path()).unwrap();
     let rows = db
-        .query("SELECT _path, _basename, _dir, _ext, _size, _mtime FROM files")
+        .query("SELECT path, basename, dir, ext, size, mtime FROM files")
         .unwrap();
 
     assert_eq!(rows.len(), 1);
     let r = &rows[0];
-    assert_eq!(r["_path"], Value::Text("docs/readme.md".into()));
-    assert_eq!(r["_basename"], Value::Text("readme.md".into()));
-    assert_eq!(r["_dir"], Value::Text("docs".into()));
-    assert_eq!(r["_ext"], Value::Text("md".into()));
-    assert_eq!(r["_size"], Value::Integer(body.len() as i64));
-    // _mtime is a unix timestamp; confirm it's a positive integer.
+    assert_eq!(r["path"], Value::Text("docs/readme.md".into()));
+    assert_eq!(r["basename"], Value::Text("readme.md".into()));
+    assert_eq!(r["dir"], Value::Text("docs".into()));
+    assert_eq!(r["ext"], Value::Text("md".into()));
+    assert_eq!(r["size"], Value::Integer(body.len() as i64));
+    // mtime is a unix timestamp; confirm it's a positive integer.
     assert!(
-        matches!(&r["_mtime"], Value::Integer(n) if *n > 0),
-        "expected a positive Integer _mtime, got {:?}",
-        r["_mtime"]
+        matches!(&r["mtime"], Value::Integer(n) if *n > 0),
+        "expected a positive Integer mtime, got {:?}",
+        r["mtime"]
     );
 }
 
@@ -157,7 +157,7 @@ fn from_config_undeclared_stat_columns_are_silently_dropped() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE minimal (_path TEXT)"
+ddl = "CREATE TABLE minimal (path TEXT)"
 glob = "*.txt"
 "#,
     )
@@ -165,9 +165,9 @@ glob = "*.txt"
 
     fs::write(root.path().join("a.txt"), "x").unwrap();
     let db = DirSQL::from_config(root.path()).unwrap();
-    let rows = db.query("SELECT _path FROM minimal").unwrap();
+    let rows = db.query("SELECT path FROM minimal").unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["_path"], Value::Text("a.txt".into()));
+    assert_eq!(rows[0]["path"], Value::Text("a.txt".into()));
 }
 
 #[test]
@@ -185,14 +185,14 @@ fn from_config_with_no_matching_files_yields_empty_table() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE empty_t (_path TEXT)"
+ddl = "CREATE TABLE empty_t (path TEXT)"
 glob = "nothing_here/*.txt"
 "#,
     )
     .unwrap();
 
     let db = DirSQL::from_config(root.path()).unwrap();
-    let rows = db.query("SELECT _path FROM empty_t").unwrap();
+    let rows = db.query("SELECT path FROM empty_t").unwrap();
     assert!(rows.is_empty());
 }
 
@@ -213,7 +213,7 @@ fn from_config_absolute_root_is_used_verbatim() {
 root = "{}"
 
 [[table]]
-ddl = "CREATE TABLE files (_path TEXT)"
+ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.csv"
 "#,
             data.path().display()
@@ -222,7 +222,7 @@ glob = "*.csv"
     .unwrap();
 
     let db = DirSQL::from_config_path(&cfg_path).unwrap();
-    let rows = db.query("SELECT _path FROM files").unwrap();
+    let rows = db.query("SELECT path FROM files").unwrap();
     assert_eq!(rows.len(), 1);
 }
 
@@ -241,14 +241,14 @@ persist = true
 persist_path = "cache/db.sqlite"
 
 [[table]]
-ddl = "CREATE TABLE files (_path TEXT)"
+ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.csv"
 "#,
     )
     .unwrap();
 
     let db = DirSQL::from_config_path(&cfg_path).unwrap();
-    let rows = db.query("SELECT _path FROM files").unwrap();
+    let rows = db.query("SELECT path FROM files").unwrap();
     assert_eq!(rows.len(), 1);
     assert!(
         root.path().join("cache").join("db.sqlite").exists(),
@@ -275,7 +275,7 @@ persist = true
 persist_path = "{}"
 
 [[table]]
-ddl = "CREATE TABLE files (_path TEXT)"
+ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.csv"
 "#,
             abs_cache.display()
@@ -284,7 +284,7 @@ glob = "*.csv"
     .unwrap();
 
     let db = DirSQL::from_config_path(&cfg_path).unwrap();
-    let rows = db.query("SELECT _path FROM files").unwrap();
+    let rows = db.query("SELECT path FROM files").unwrap();
     assert_eq!(rows.len(), 1);
     assert!(
         abs_cache.exists(),
@@ -298,14 +298,14 @@ fn from_config_strict_table_builds() {
     fs::write(root.path().join("a.csv"), "anything").unwrap();
 
     let cfg_path = root.path().join(".dirsql.toml");
-    // Declare only `_path` (always available) so strict normalization, which
+    // Declare only `path` (always available) so strict normalization, which
     // requires an exact column match, succeeds: the synthesized empty row is
-    // filled with `_path` and no undeclared virtuals leak in.
+    // filled with `path` and no undeclared virtuals leak in.
     fs::write(
         &cfg_path,
         r#"
 [[table]]
-ddl = "CREATE TABLE files (_path TEXT)"
+ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.csv"
 strict = true
 "#,
@@ -313,9 +313,9 @@ strict = true
     .unwrap();
 
     let db = DirSQL::from_config_path(&cfg_path).unwrap();
-    let rows = db.query("SELECT _path FROM files").unwrap();
+    let rows = db.query("SELECT path FROM files").unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["_path"], Value::Text("a.csv".into()));
+    assert_eq!(rows[0]["path"], Value::Text("a.csv".into()));
 }
 
 #[tokio::test]
@@ -328,7 +328,7 @@ async fn async_from_config_works() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE files (_path TEXT, _basename TEXT)"
+ddl = "CREATE TABLE files (path TEXT, basename TEXT)"
 glob = "*.csv"
 "#,
     )
@@ -338,12 +338,9 @@ glob = "*.csv"
 
     let db = AsyncDirSQL::from_config(root.path()).unwrap();
     db.ready().await.unwrap();
-    let rows = db
-        .query("SELECT _path, _basename FROM files")
-        .await
-        .unwrap();
+    let rows = db.query("SELECT path, basename FROM files").await.unwrap();
 
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["_path"], Value::Text("data.csv".into()));
-    assert_eq!(rows[0]["_basename"], Value::Text("data.csv".into()));
+    assert_eq!(rows[0]["path"], Value::Text("data.csv".into()));
+    assert_eq!(rows[0]["basename"], Value::Text("data.csv".into()));
 }

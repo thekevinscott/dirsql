@@ -25,7 +25,7 @@ use tempfile::TempDir;
 /// A minimal filesystem-fact config the stub returns. Loadable by
 /// `DirSQL::from_config_path`.
 const CANNED_TOML: &str = r#"[[table]]
-ddl  = "CREATE TABLE files (_path TEXT)"
+ddl  = "CREATE TABLE files (path TEXT)"
 glob = "*"
 "#;
 

@@ -16,7 +16,7 @@ fn load_config_from_file() {
         &path,
         r#"
 [[table]]
-ddl = "CREATE TABLE t (_path TEXT)"
+ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.csv"
 "#,
     )

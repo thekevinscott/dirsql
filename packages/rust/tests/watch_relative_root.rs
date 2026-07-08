@@ -2,7 +2,7 @@
 //! with a **relative** `root` (e.g. `DirSQL::new(".", ...)`): `notify`
 //! misbehaves on relative paths, so the watcher runs on a canonicalized
 //! `watch_root` while the user-supplied `root` keeps serving scanning,
-//! `config()`, and `_path` output.
+//! `config()`, and `path` output.
 //!
 //! `std::env::set_current_dir` mutates **process-global** state, so every test
 //! in this file serializes through `CWD_LOCK` and restores the original cwd on
@@ -50,7 +50,7 @@ impl Drop for CwdGuard {
 
 fn items_table() -> Table {
     Table::new(
-        "CREATE TABLE items (name TEXT, _path TEXT)",
+        "CREATE TABLE items (name TEXT, path TEXT)",
         "**/*.txt",
         |path| {
             let content = std::fs::read_to_string(path).unwrap_or_default();
@@ -71,7 +71,7 @@ fn watch_with_relative_root_emits_events() {
     let dir = tempfile::TempDir::new().unwrap();
     // Canonicalize the temp dir up front: on macOS `TempDir` lives under
     // `/var/...` which is a symlink to `/private/var/...`, and the post-fix
-    // `_path` is computed by stripping the *canonical* watch root. Comparing
+    // `path` is computed by stripping the *canonical* watch root. Comparing
     // against a canonical base keeps the relative-path assertion portable.
     let canonical_dir = fs::canonicalize(dir.path()).unwrap();
 
@@ -98,13 +98,13 @@ fn watch_with_relative_root_emits_events() {
         "relative-root watcher must emit an Insert event (#250); saw: {events:?}"
     );
 
-    // `_path` must stay root-relative — the canonical watch-root must not
+    // `path` must stay root-relative — the canonical watch-root must not
     // leak its absolute prefix into the event path.
     if let Some(dirsql::RowEvent::Insert { row, .. }) = insert {
         assert_eq!(
-            row.get("_path"),
+            row.get("path"),
             Some(&Value::Text("apple.txt".to_string())),
-            "_path must stay root-relative for a relative root"
+            "path must stay root-relative for a relative root"
         );
     }
 

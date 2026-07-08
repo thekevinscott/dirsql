@@ -30,7 +30,7 @@ use tempfile::TempDir;
 /// Returns the tempdir so the caller can mutate files while the server runs.
 ///
 /// `title` and `author` are captured from the file path (`posts/{author}/
-/// {title}.json`); `_size` is included so content-only edits still change a
+/// {title}.json`); `size` is included so content-only edits still change a
 /// column value and surface as `Update` events in the SSE stream.
 fn blog_fixture() -> (TempDir, DirSQL) {
     let root = TempDir::new().unwrap();
@@ -42,7 +42,7 @@ fn blog_fixture() -> (TempDir, DirSQL) {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT, _basename TEXT, _size INTEGER)"
+ddl = "CREATE TABLE posts (title TEXT, author TEXT, basename TEXT, size INTEGER)"
 glob = "posts/{author}/{title}.json"
 "#,
     )
@@ -472,11 +472,11 @@ async fn get_events_streams_mutation_events() {
     // exists.
     await_ready(&mut stream).await;
 
-    // Modify the file's content; `_size` is part of the row, so the diff
+    // Modify the file's content; `size` is part of the row, so the diff
     // produces an Update event even though no captured path changed.
     fs::write(
         root.path().join("posts/alice/Hello-World.json"),
-        r#"{"some":"larger","payload":"to change _size"}"#,
+        r#"{"some":"larger","payload":"to change size"}"#,
     )
     .unwrap();
 
@@ -504,7 +504,7 @@ async fn get_events_surfaces_parse_errors_as_error_events_not_fatal() {
     fs::write(root.path().join("posts/second.json"), r#"{"ok":2}"#).unwrap();
 
     let table = dirsql::Table::try_new(
-        "CREATE TABLE posts (ok INTEGER, _basename TEXT)",
+        "CREATE TABLE posts (ok INTEGER, basename TEXT)",
         "posts/*.json",
         |path| {
             let content = std::fs::read_to_string(path)?;

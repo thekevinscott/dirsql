@@ -167,18 +167,18 @@ fn i8_ext_preserves_original_case() {
     std::fs::write(dir.path().join("Photo.JPG"), b"").unwrap();
     let db = DirSQL::new(
         dir.path(),
-        vec![Table::new("CREATE TABLE pics (_ext TEXT)", "**/*", |_| {
+        vec![Table::new("CREATE TABLE pics (ext TEXT)", "**/*", |_| {
             vec![Row::new()]
         })],
     )
     .unwrap();
-    let rows = db.query("SELECT _ext FROM pics").unwrap();
+    let rows = db.query("SELECT ext FROM pics").unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(
-        rows[0]["_ext"],
+        rows[0]["ext"],
         Value::Text("JPG".into()),
-        "_ext must preserve the original case, got: {:?}",
-        rows[0]["_ext"],
+        "ext must preserve the original case, got: {:?}",
+        rows[0]["ext"],
     );
 }
 

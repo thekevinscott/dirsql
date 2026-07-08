@@ -764,7 +764,7 @@ fn undeclared_capture_is_dropped() {
     fs::create_dir_all(root.path().join("logs")).unwrap();
     fs::write(root.path().join("logs").join("a.txt"), "x").unwrap();
     let table = Table::new(
-        "CREATE TABLE entries (_path TEXT)",
+        "CREATE TABLE entries (path TEXT)",
         "logs/{kind}.txt",
         |_| vec![Row::new()],
     );
@@ -772,7 +772,7 @@ fn undeclared_capture_is_dropped() {
     let rows = db.query("SELECT * FROM entries").unwrap();
     assert_eq!(rows.len(), 1);
     assert!(!rows[0].contains_key("kind"));
-    assert!(rows[0].contains_key("_path"));
+    assert!(rows[0].contains_key("path"));
 }
 
 #[test]
@@ -816,14 +816,14 @@ fn binary_file_under_glob_does_not_break_build() {
     .unwrap();
 
     let table = Table::new(
-        "CREATE TABLE assets (_path TEXT, _basename TEXT)",
+        "CREATE TABLE assets (path TEXT, basename TEXT)",
         "*.png",
         |_path| vec![Row::new()],
     );
 
     let db = DirSQL::new(root.path(), vec![table]).expect("build must not fail on a binary file");
 
-    let rows = db.query("SELECT _basename FROM assets").unwrap();
+    let rows = db.query("SELECT basename FROM assets").unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["_basename"], Value::Text("logo.png".into()));
+    assert_eq!(rows[0]["basename"], Value::Text("logo.png".into()));
 }

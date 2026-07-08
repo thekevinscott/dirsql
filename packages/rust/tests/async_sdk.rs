@@ -169,7 +169,7 @@ async fn from_config_path_loads_config() {
 root = "."
 
 [[table]]
-ddl = "CREATE TABLE files (_path TEXT)"
+ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.csv"
 "#,
     )
@@ -177,7 +177,7 @@ glob = "*.csv"
 
     let db = AsyncDirSQL::from_config_path(&cfg_path).unwrap();
     db.ready().await.unwrap();
-    let rows = db.query("SELECT _path FROM files").await.unwrap();
+    let rows = db.query("SELECT path FROM files").await.unwrap();
     assert_eq!(rows.len(), 1);
 }
 
