@@ -575,7 +575,13 @@ unsafe fn read_js_string(env: napi::sys::napi_env, val: napi::sys::napi_value) -
     napi::sys::napi_get_value_string_utf8(env, val, std::ptr::null_mut(), 0, &mut len);
     let mut buf = vec![0u8; len + 1];
     let mut actual = 0usize;
-    napi::sys::napi_get_value_string_utf8(env, val, buf.as_mut_ptr() as *mut _, len + 1, &mut actual);
+    napi::sys::napi_get_value_string_utf8(
+        env,
+        val,
+        buf.as_mut_ptr() as *mut _,
+        len + 1,
+        &mut actual,
+    );
     String::from_utf8_lossy(&buf[..actual]).to_string()
 }
 
@@ -917,8 +923,14 @@ mod tests {
 
     #[test]
     fn ensure_js_safe_integer_accepts_the_boundary() {
-        assert_eq!(ensure_js_safe_integer(JS_MAX_SAFE_INTEGER), Ok(JS_MAX_SAFE_INTEGER));
-        assert_eq!(ensure_js_safe_integer(-JS_MAX_SAFE_INTEGER), Ok(-JS_MAX_SAFE_INTEGER));
+        assert_eq!(
+            ensure_js_safe_integer(JS_MAX_SAFE_INTEGER),
+            Ok(JS_MAX_SAFE_INTEGER)
+        );
+        assert_eq!(
+            ensure_js_safe_integer(-JS_MAX_SAFE_INTEGER),
+            Ok(-JS_MAX_SAFE_INTEGER)
+        );
         assert_eq!(ensure_js_safe_integer(0), Ok(0));
     }
 

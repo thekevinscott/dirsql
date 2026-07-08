@@ -15,7 +15,7 @@ mod python {
     use ::dirsql::{DirSQL, Extension, Row, RowEvent, Table, Value, db::parse_table_name};
     use pyo3::exceptions::{PyOverflowError, PyRuntimeError};
     use pyo3::prelude::*;
-    use pyo3::types::{PyByteArray, PyBool, PyBytes, PyDict, PyInt, PyList};
+    use pyo3::types::{PyBool, PyByteArray, PyBytes, PyDict, PyInt, PyList};
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::time::Duration;

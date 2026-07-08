@@ -68,8 +68,6 @@ describe("DirSQL extract error message", () => {
     const db = mkdb(() => {
       throw new Error("bad JSON in posts/a.json: boom");
     });
-    await expect(db.ready).rejects.toThrow(
-      /bad JSON in posts\/a\.json: boom/,
-    );
+    await expect(db.ready).rejects.toThrow(/bad JSON in posts\/a\.json: boom/);
   });
 });
