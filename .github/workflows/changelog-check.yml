@@ -26,13 +26,13 @@ jobs:
         uses: astral-sh/setup-uv@v7
 
       - name: Sync the checks package
-        run: uv sync --project .github/scripts/checks
+        run: uv sync --project internals/checks
 
       # Logic (path classification, skip-trailer parsing, added-line counting)
-      # lives in .github/scripts/checks' changelog_gate check, colocated-tested
+      # lives in internals/checks' changelog_gate check, colocated-tested
       # at 100% coverage, per AGENTS.md "CI Workflows".
       - name: Require CHANGELOG update for SDK code changes
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: uv run --project .github/scripts/checks dirsql-checks changelog-gate
+        run: uv run --project internals/checks dirsql-checks changelog-gate

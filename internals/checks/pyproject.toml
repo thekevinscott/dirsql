@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-# Repo-only: CI helper checks invoked by .github/workflows (#494/#495, mirroring
+# Repo-only: CI helper checks invoked by .github/workflows (#494/#502, mirroring
 # testing-conventions#321). Never published to an index -- run via
-# `uv run --project .github/scripts/checks dirsql-checks <check>`.
+# `uv run --project internals/checks dirsql-checks <check>`.
 name = "dirsql-github-checks"
 version = "0"
 description = "Repo-only CI helper checks for dirsql, run via .github/workflows."

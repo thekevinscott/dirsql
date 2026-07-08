@@ -25,7 +25,7 @@ Default to no comments. Only add one when the WHY is non-obvious -- a hidden con
 
 ## CI Workflows
 
-**CI logic lives in scripts, not workflow YAML.** `run:` / `github-script` steps stay trivial glue -- check out, set up a toolchain, invoke one command. Anything with iteration, `case` dispatch, conditionals, or text-munging moves to a script under `.github/scripts/`, invoked as a one-liner, and carries **colocated unit tests** (the same testing-conventions standard as the rest of the tree -- `foo.py` ↔ `foo_test.py`). Those tests run under a 100% coverage floor in `.github/workflows/gha-scripts.yml`. Inline workflow logic is untestable, un-runnable locally, and silently duplicated across runners; a script is none of those.
+**CI logic lives in scripts, not workflow YAML.** `run:` / `github-script` steps stay trivial glue -- check out, set up a toolchain, invoke one command. Anything with iteration, `case` dispatch, conditionals, or text-munging moves to a check in the `internals/checks` uv package (a click group, one subcommand per check -- see `internals/checks/src/checks/`), invoked as a one-liner (`uv run --project internals/checks dirsql-checks <check>`), and carries **colocated unit tests** (the same testing-conventions standard as the rest of the tree -- `foo.py` ↔ `foo_test.py`). Those tests run under a 100% coverage floor in `.github/workflows/gha-scripts.yml`. Inline workflow logic is untestable, un-runnable locally, and silently duplicated across runners; a script is none of those.
 
 ### Reusable-workflow gates (testing-conventions): adoption & debugging
 
