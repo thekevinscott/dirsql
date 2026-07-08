@@ -13,9 +13,9 @@
 #[cfg(feature = "extension-module")]
 mod python {
     use ::dirsql::{DirSQL, Extension, Row, RowEvent, Table, Value, db::parse_table_name};
-    use pyo3::exceptions::PyRuntimeError;
+    use pyo3::exceptions::{PyOverflowError, PyRuntimeError};
     use pyo3::prelude::*;
-    use pyo3::types::{PyDict, PyList};
+    use pyo3::types::{PyBool, PyByteArray, PyBytes, PyDict, PyInt, PyList};
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::time::Duration;
@@ -361,26 +361,44 @@ mod python {
         }
 
         // bool must precede int (bool is a subclass of int in Python).
-        if bound.is_instance_of::<pyo3::types::PyBool>() {
+        if bound.is_instance_of::<PyBool>() {
             let b: bool = bound.extract()?;
             return Ok(Value::Integer(if b { 1 } else { 0 }));
         }
 
-        if let Ok(i) = bound.extract::<i64>() {
-            return Ok(Value::Integer(i));
+        // A Python int must round-trip losslessly or fail loudly. Falling
+        // through to f64/str would silently corrupt an out-of-i64 value
+        // (lossy Real, or a TEXT repr).
+        if bound.is_instance_of::<PyInt>() {
+            return match bound.extract::<i64>() {
+                Ok(i) => Ok(Value::Integer(i)),
+                Err(_) => Err(PyOverflowError::new_err(int_overflow_message(
+                    &bound.str()?.to_string(),
+                ))),
+            };
         }
+
         if let Ok(f) = bound.extract::<f64>() {
             return Ok(Value::Real(f));
         }
         if let Ok(s) = bound.extract::<String>() {
             return Ok(Value::Text(s));
         }
-        if let Ok(b) = bound.extract::<Vec<u8>>() {
+        // Only genuine binary types map to BLOB. A list/tuple of ints must
+        // NOT be probed as bytes (that turned `[1,2,3]` into a BLOB by
+        // magnitude); it falls through to the repr like any other sequence.
+        if bound.is_instance_of::<PyBytes>() || bound.is_instance_of::<PyByteArray>() {
+            let b: Vec<u8> = bound.extract()?;
             return Ok(Value::Blob(b));
         }
 
         // Fall back to the Python repr.
         Ok(Value::Text(bound.str()?.to_string()))
+    }
+
+    /// The range-error message for a Python int that does not fit `i64`.
+    fn int_overflow_message(repr: &str) -> String {
+        format!("integer {repr} exceeds the 64-bit signed range dirsql can store")
     }
 
     fn value_to_py(py: Python<'_>, value: &Value) -> Py<PyAny> {
@@ -480,6 +498,13 @@ mod python {
         #[test]
         fn extract_error_displays_inner() {
             assert_eq!(ExtractError("bad".to_string()).to_string(), "bad");
+        }
+
+        #[test]
+        fn int_overflow_message_names_the_value() {
+            let m = int_overflow_message("9223372036854775808");
+            assert!(m.contains("9223372036854775808"));
+            assert!(m.contains("exceeds"));
         }
     }
 }

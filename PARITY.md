@@ -262,7 +262,9 @@ marshaling, delegation, watch) and `tests/integration/extensions.test.ts`
 | Extract receives the matched file's path | Y | Y | Y |
 | Extract returns `[]` to skip a file | Y | Y | Y |
 | Value types (str/int/float/bool/None) | Y | Y | Y |
-| `bytes`/`Vec<u8>`/`Buffer` → BLOB round-trip | Y | Y | Y (#343: `Buffer`/`Uint8Array` in, `Buffer` out) |
+| Out-of-`i64` integer errors (no lossy REAL/TEXT/round) | Y (#465: `OverflowError`) | core (`i64`) | Y (#465: `bigint`>`i64` and query result >2^53 throw) |
+| `bigint`/large-int → INTEGER when in-`i64` range | Y | Y | Y (#465: `bigint`→INTEGER) |
+| `bytes`/`Vec<u8>`/`Buffer` → BLOB (list/array of ints does NOT) | Y (#465) | Y | Y (#343: `Buffer`/`Uint8Array` in, `Buffer` out) |
 | Invalid SQL raises         | Y      | Y    | Y          |
 | Invalid DDL raises         | Y      | Y    | Y          |
 | Query rejects writes       | Y      | Y    | Y          |

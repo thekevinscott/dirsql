@@ -210,6 +210,12 @@ Executes a SQL query and returns rows keyed by column name.
 | BLOB | `bytes` | `Buffer` | `Value::Blob` |
 | NULL | `None` | `null` | `Value::Null` |
 
+An `INTEGER` outside JavaScript's safe integer range (magnitude greater
+than `Number.MAX_SAFE_INTEGER`, 2^53 − 1) cannot be represented as a JS
+`number` without precision loss, so the TypeScript SDK **throws** rather
+than return a rounded value. Python's `int` is unbounded, so it always
+round-trips.
+
 ### `watch`
 
 ::: code-group
@@ -351,7 +357,14 @@ An `extract` callback (and the SQLite columns it feeds) accepts:
 | SQLite column | Python value | TypeScript value | Rust `Value` |
 |---|---|---|---|
 | TEXT | `str` | `string` | `Value::Text(String)` |
-| INTEGER | `int`, `bool` | `number`, `boolean` | `Value::Integer(i64)` |
+| INTEGER | `int`, `bool` | `number`, `boolean`, `bigint` | `Value::Integer(i64)` |
 | REAL | `float` | `number` | `Value::Real(f64)` |
 | BLOB | `bytes` | `Buffer` / `Uint8Array` | `Value::Blob(Vec<u8>)` |
 | NULL | `None` | `null` | `Value::Null` |
+
+Integers are stored as a signed 64-bit `Value::Integer`. A value that does
+not fit that range is a hard error, not a lossy conversion: Python raises
+`OverflowError`, and a TypeScript `bigint` outside the `i64` range throws.
+A TypeScript `bigint` **within** `i64` range maps to `INTEGER`. Only a real
+`bytes`/`bytearray` (Python) or `Buffer`/`Uint8Array` (TypeScript) maps to
+`BLOB` — a list/array of integers does not.
