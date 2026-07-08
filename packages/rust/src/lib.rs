@@ -484,9 +484,13 @@ impl DirSQL {
     }
 
     fn handle_upsert(&self, table: &str, abs_path: &Path, rel_path: &str) -> Vec<RowEvent> {
-        // The file may have vanished between the watcher event and now.
-        match self.inner.fs.stat(abs_path) {
-            Ok(_) => {}
+        // The path may have vanished between the watcher event and now, or be a
+        // directory (a `mkdir` under the root matches a `**/*` glob). Only
+        // regular files become rows — mirror the initial scan, which skips
+        // non-files.
+        match self.inner.fs.is_file(abs_path) {
+            Ok(true) => {}
+            Ok(false) => return Vec::new(),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
             Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
         }
@@ -1215,6 +1219,8 @@ fn prepare_persist(
 /// tests can inject a deterministic double. Production always uses [`RealFs`].
 trait FileSystem: Send + Sync {
     fn stat(&self, path: &Path) -> std::io::Result<FileStat>;
+    /// Whether `path` is a regular file. `Err(NotFound)` when it doesn't exist.
+    fn is_file(&self, path: &Path) -> std::io::Result<bool>;
     /// BLAKE3-hash a file's contents.
     fn hash(&self, path: &Path) -> std::io::Result<[u8; 32]>;
     /// Canonicalize the watch root, falling back to the literal path.
@@ -1226,6 +1232,10 @@ struct RealFs;
 impl FileSystem for RealFs {
     fn stat(&self, path: &Path) -> std::io::Result<FileStat> {
         std::fs::metadata(path).map(|m| FileStat::from_metadata(&m))
+    }
+
+    fn is_file(&self, path: &Path) -> std::io::Result<bool> {
+        std::fs::metadata(path).map(|m| m.is_file())
     }
 
     fn hash(&self, path: &Path) -> std::io::Result<[u8; 32]> {
@@ -1822,15 +1832,19 @@ mod readonly_tests {
 mod internal_tests {
     use super::*;
     use std::collections::HashMap as StdHashMap;
+    use std::collections::HashSet as StdHashSet;
     use tempfile::TempDir;
 
     /// Deterministic [`FileSystem`] double: canned [`FileStat`]s and hashes;
-    /// any path not present stats/hashes as `NotFound`.
+    /// any path not present stats/hashes as `NotFound`. A path registered via
+    /// [`with_dir`](FakeFs::with_dir) reports as a non-file; any other stat'd
+    /// path reports as a regular file.
     #[derive(Default)]
     struct FakeFs {
         stats: StdHashMap<PathBuf, FileStat>,
         hashes: StdHashMap<PathBuf, [u8; 32]>,
         canonical_roots: StdHashMap<PathBuf, String>,
+        dirs: StdHashSet<PathBuf>,
     }
 
     impl FakeFs {
@@ -1838,6 +1852,12 @@ mod internal_tests {
             let mut fs = FakeFs::default();
             fs.stats.insert(path.into(), stat);
             fs
+        }
+
+        /// Register `path` as an existing non-file (a directory).
+        fn with_dir(mut self, path: impl Into<PathBuf>) -> Self {
+            self.dirs.insert(path.into());
+            self
         }
 
         fn set_hash(&mut self, path: impl Into<PathBuf>, hash: [u8; 32]) {
@@ -1860,6 +1880,19 @@ mod internal_tests {
             self.stats.get(path).cloned().ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::NotFound, "fake: no such file")
             })
+        }
+
+        fn is_file(&self, path: &Path) -> std::io::Result<bool> {
+            if self.dirs.contains(path) {
+                return Ok(false);
+            }
+            if self.stats.contains_key(path) {
+                return Ok(true);
+            }
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "fake: no such file",
+            ))
         }
 
         fn hash(&self, path: &Path) -> std::io::Result<[u8; 32]> {
@@ -2208,6 +2241,15 @@ mod internal_tests {
             fs.hash(&missing).is_err(),
             "hash of a missing path must error"
         );
+
+        assert!(
+            !fs.is_file(dir.path()).unwrap(),
+            "a directory must report is_file=false"
+        );
+        assert!(
+            fs.is_file(&missing).is_err(),
+            "is_file of a missing path must error"
+        );
         // A nonexistent path can't canonicalize, so the literal fallback runs.
         assert_eq!(
             fs.canonical_root(&missing),
@@ -2369,6 +2411,34 @@ mod internal_tests {
         let dbg = format!("{:?}", events[0]);
         assert!(dbg.contains("Error"), "expected an Error event: {dbg}");
         assert!(dbg.contains("insert forbidden"), "got: {dbg}");
+    }
+
+    #[test]
+    fn handle_upsert_skips_directory() {
+        // A `mkdir` under the root matches a `**/*` glob, but a directory must
+        // not become a row — mirror the initial scan's non-file skip.
+        let dir = TempDir::new().unwrap();
+        let subdir = dir.path().join("subdir");
+        let fake = FakeFs::default().with_dir(subdir.clone());
+        let db = DirSQL::with_ignore_and_fs(
+            dir.path(),
+            vec![Table::new("CREATE TABLE files (name TEXT)", "**/*", |_| {
+                vec![Row::from_iter([(
+                    "name".to_string(),
+                    Value::Text("x".into()),
+                )])]
+            })],
+            Vec::<String>::new(),
+            Arc::new(fake),
+        )
+        .unwrap();
+
+        let events = db.handle_upsert("files", &subdir, "subdir");
+        assert!(events.is_empty(), "a directory must not produce row events");
+        assert!(
+            db.query("SELECT * FROM files").unwrap().is_empty(),
+            "a directory must not insert a row"
+        );
     }
 
     #[test]

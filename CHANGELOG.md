@@ -262,6 +262,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Watch/scan correctness in the Rust core (#466, epic #461).** Three defects
+  in the live-watch and DDL-parsing paths:
+  - A `mkdir` under the watched root no longer inserts a spurious directory
+    row. The initial scan already skips non-files, but the watch upsert path
+    only checked that the path existed (true for a directory), so a new
+    subdirectory matching a `**/*` glob became a row. The upsert now re-checks
+    that the path is a regular file, mirroring the scan.
+  - Renaming a matching file *out* of the tree now deletes its rows. On Linux
+    the rename-away event (`inotify IN_MOVED_FROM`) arrived as a generic
+    "modified" event; the upsert then found the file gone and returned without
+    deleting, so the moved-away file's rows persisted. Rename-out is now
+    treated as a removal.
+  - `parse_table_name` no longer matches a `CREATE TABLE` occurring inside a
+    leading `--`/`/* */` comment (which mis-registered the table under the
+    wrong name and broke inserts), and no longer risks a byte-index panic on
+    case-length-changing Unicode in a comment (it scans the original DDL by
+    byte offset instead of an uppercased copy). See `MIGRATIONS.md`.
+
 - **`POST /query` returns 400, not 500, for a rejected write statement (#444).**
   `classify_query_error` classified only `DirSqlError::Core(_)` as the
   caller's fault, so the read-only rejection (`DirSqlError::WriteForbidden`)

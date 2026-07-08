@@ -1,3 +1,4 @@
+use notify::event::{ModifyKind, RenameMode};
 use notify::{
     Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher,
 };
@@ -72,6 +73,12 @@ fn translate_event(event: &Event) -> Vec<FileEvent> {
     for path in &event.paths {
         let fe = match event.kind {
             EventKind::Create(_) => Some(FileEvent::Created(path.clone())),
+            // A rename OUT of the tree (inotify `IN_MOVED_FROM`) leaves no file
+            // behind, so it is a removal — otherwise the moved-away file's rows
+            // would persist.
+            EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
+                Some(FileEvent::Deleted(path.clone()))
+            }
             EventKind::Modify(_) => Some(FileEvent::Modified(path.clone())),
             EventKind::Remove(_) => Some(FileEvent::Deleted(path.clone())),
             _ => None,
