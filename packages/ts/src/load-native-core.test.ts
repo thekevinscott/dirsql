@@ -30,7 +30,11 @@ describe("loadNativeCore", () => {
       const fakeCore = { DirSQL: vi.fn() };
       const requirer = vi.fn((spec: string) => {
         if (spec === "@dirsql/lib-darwin-arm64") {
-          throw new Error("Cannot find module '@dirsql/lib-darwin-arm64'");
+          const err = new Error(
+            "Cannot find module '@dirsql/lib-darwin-arm64'",
+          ) as NodeJS.ErrnoException;
+          err.code = "MODULE_NOT_FOUND";
+          throw err;
         }
         if (spec.endsWith("dirsql.node")) {
           return fakeCore;
@@ -47,6 +51,31 @@ describe("loadNativeCore", () => {
       expect(core).toBe(fakeCore);
       expect(requirer).toHaveBeenCalledTimes(2);
       expect(requirer).toHaveBeenLastCalledWith("/pkg/dirsql.node");
+    });
+  });
+
+  describe("when the platform sub-package load fails for another reason", () => {
+    it("propagates the original error instead of masking it with the dev fallback", () => {
+      const glibcErr = new Error(
+        "/lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.38' not found",
+      );
+      const requirer = vi.fn((spec: string) => {
+        if (spec === "@dirsql/lib-linux-x64-gnu") {
+          throw glibcErr;
+        }
+        throw new Error(`unexpected require(${spec})`);
+      });
+
+      expect(() =>
+        loadNativeCore(
+          "linux-x64",
+          requirer as unknown as (s: string) => unknown,
+          () => "/pkg/ts",
+        ),
+      ).toThrow(glibcErr);
+      expect(requirer).toHaveBeenCalledExactlyOnceWith(
+        "@dirsql/lib-linux-x64-gnu",
+      );
     });
   });
 
