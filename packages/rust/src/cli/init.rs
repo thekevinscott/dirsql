@@ -87,9 +87,7 @@ mod tests {
         );
     }
 
-    // `run`'s write success path (including --force overwrite) calls
-    // `std::fs::write` directly, so asserting on written file content from a
-    // test requires effectful std::fs of its own -- unit-lint isolation
-    // forbids that (see `scanner.rs` for the same split). Covered black-box
-    // in `tests/init_integration.rs`.
+    // The write success + `--force` paths are covered black-box in
+    // `tests/init_integration.rs` (unit-lint isolation keeps effectful
+    // `std::fs` out of here).
 }
