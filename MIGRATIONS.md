@@ -108,6 +108,50 @@ dirsql query "ATTACH '/tmp/evil.db' AS ext"
 # and /tmp/evil.db is NOT created.
 ```
 
+### Watch now skips directory events and deletes rows on rename-out (#466, epic #461)
+
+#### Summary
+
+Two live-watch behaviors in the Rust core changed (no API change), affecting
+every SDK and the CLI since they share the core watcher. (1) Creating a
+directory under the watched root (`mkdir subdir`) previously inserted a
+spurious row when a table's glob matched it (e.g. the default `files` table's
+`**/*`); the watch upsert now re-checks that the path is a regular file and
+skips non-files, mirroring the initial scan. (2) Renaming a matching file
+*out* of the watched tree previously left its rows in the index (the
+rename-away event was treated as a modification, then the now-missing file was
+silently skipped); rename-out is now treated as a removal and its rows are
+deleted. A third fix corrects `parse_table_name` DDL parsing (a leading
+comment no longer hijacks the table name; Unicode in a comment no longer risks
+a panic) — a pure bug fix with no observable behavior change for well-formed
+DDL.
+
+#### Required changes
+
+_None._ No public API, config key, CLI flag, action input, function signature,
+or return type changed.
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- **`mkdir` under the watched root no longer emits an `Insert`/adds a row.** A
+  consumer that (incorrectly) relied on directories appearing as rows will no
+  longer see them. Regular files are unaffected.
+- **Renaming a matching file out of the watched tree now emits a `Delete` and
+  removes its rows.** Previously those rows persisted until a restart. This is
+  platform-dependent on the OS rename signal (verified on Linux `inotify`).
+
+#### Verification
+
+```bash
+# In a watched directory with a `**/*`-matching table:
+mkdir subdir            # no new row appears for `subdir`
+mv a.txt ../a.txt       # the rows for a.txt disappear from the index
+```
+
 ### The seven stat columns dropped their leading underscore (#454, epic #452)
 
 #### Summary

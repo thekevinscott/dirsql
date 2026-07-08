@@ -1,3 +1,4 @@
+use notify::event::{ModifyKind, RenameMode};
 use notify::{
     Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher,
 };
@@ -72,6 +73,12 @@ fn translate_event(event: &Event) -> Vec<FileEvent> {
     for path in &event.paths {
         let fe = match event.kind {
             EventKind::Create(_) => Some(FileEvent::Created(path.clone())),
+            // A rename OUT of the tree (inotify `IN_MOVED_FROM`) leaves no file
+            // behind, so it is a removal — otherwise the moved-away file's rows
+            // would persist.
+            EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
+                Some(FileEvent::Deleted(path.clone()))
+            }
             EventKind::Modify(_) => Some(FileEvent::Modified(path.clone())),
             EventKind::Remove(_) => Some(FileEvent::Deleted(path.clone())),
             _ => None,
@@ -112,6 +119,17 @@ fn modify_event(paths: Vec<PathBuf>) -> Event {
 fn remove_event(paths: Vec<PathBuf>) -> Event {
     Event {
         kind: EventKind::Remove(notify::event::RemoveKind::File),
+        paths,
+        attrs: Default::default(),
+    }
+}
+
+#[cfg(test)]
+fn rename_from_event(paths: Vec<PathBuf>) -> Event {
+    Event {
+        kind: EventKind::Modify(notify::event::ModifyKind::Name(
+            notify::event::RenameMode::From,
+        )),
         paths,
         attrs: Default::default(),
     }
@@ -164,6 +182,17 @@ mod tests {
         assert_eq!(
             results,
             vec![FileEvent::Modified(PathBuf::from("/tmp/changed.txt"))]
+        );
+    }
+
+    #[test]
+    fn translate_event_maps_rename_from_to_delete() {
+        // inotify emits `Modify(Name(From))` when a file is renamed OUT of the
+        // watched tree; it must be treated as a removal so its rows are deleted.
+        let results = translate_event(&rename_from_event(vec![PathBuf::from("/tmp/moved.txt")]));
+        assert_eq!(
+            results,
+            vec![FileEvent::Deleted(PathBuf::from("/tmp/moved.txt"))]
         );
     }
 

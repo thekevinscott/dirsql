@@ -526,19 +526,64 @@ impl rusqlite::types::ToSql for Value {
 /// dirsql constrains table names to safe unquoted identifiers via
 /// [`validate_identifier`], so the handful of forms above are the only ones
 /// that can actually resolve to a usable table.
-pub fn parse_table_name(ddl: &str) -> Option<String> {
-    let upper = ddl.to_uppercase();
-    let idx = upper.find("CREATE TABLE")?;
-    let mut rest = ddl[idx + "CREATE TABLE".len()..].trim_start();
+/// Strip leading whitespace and SQL comments (`-- ...` to end-of-line and
+/// `/* ... */` blocks, repeated) from `s`. An unterminated block comment
+/// consumes the rest of the input. Every returned slice starts on a char
+/// boundary, so callers can index it safely.
+fn skip_ws_comments(s: &str) -> &str {
+    let mut s = s;
+    loop {
+        let trimmed = s.trim_start();
+        if let Some(after) = trimmed.strip_prefix("--") {
+            match after.find('\n') {
+                Some(i) => s = &after[i + 1..],
+                None => return "",
+            }
+        } else if let Some(after) = trimmed.strip_prefix("/*") {
+            match after.find("*/") {
+                Some(i) => s = &after[i + 2..],
+                None => return "",
+            }
+        } else {
+            return trimmed;
+        }
+    }
+}
 
-    // Skip optional "IF NOT EXISTS". `.get()` avoids slicing on a non-char
-    // boundary when the name itself begins with a multi-byte character.
-    const IF_NOT_EXISTS: &str = "IF NOT EXISTS";
-    if rest
-        .get(..IF_NOT_EXISTS.len())
-        .is_some_and(|p| p.eq_ignore_ascii_case(IF_NOT_EXISTS))
-    {
-        rest = rest[IF_NOT_EXISTS.len()..].trim_start();
+/// If `s` begins with the ASCII keyword `kw` (case-insensitive) followed by a
+/// non-identifier boundary, return the remainder after it; otherwise `None`.
+/// The boundary check keeps a longer identifier (`TABLES`, `iffy`) from
+/// matching a keyword prefix.
+fn strip_keyword_ci<'a>(s: &'a str, kw: &str) -> Option<&'a str> {
+    let bytes = s.as_bytes();
+    if bytes.len() < kw.len() || !bytes[..kw.len()].eq_ignore_ascii_case(kw.as_bytes()) {
+        return None;
+    }
+    let rest = &s[kw.len()..];
+    match rest.chars().next() {
+        Some(c) if c.is_alphanumeric() || c == '_' => None,
+        _ => Some(rest),
+    }
+}
+
+pub fn parse_table_name(ddl: &str) -> Option<String> {
+    // Match `CREATE TABLE` only as the *statement head*: skip leading
+    // whitespace and line/block comments and scan the original `ddl` by byte
+    // offset (never a `to_uppercase()` copy, whose length can differ from the
+    // source and mis-slice on Unicode). A `-- CREATE TABLE ...` comment must
+    // not hijack the name.
+    let rest = skip_ws_comments(ddl);
+    let rest = strip_keyword_ci(rest, "CREATE")?;
+    let rest = strip_keyword_ci(skip_ws_comments(rest), "TABLE")?;
+    let mut rest = skip_ws_comments(rest);
+
+    // Skip optional "IF NOT EXISTS". The keyword boundary check in
+    // `strip_keyword_ci` keeps a table literally named e.g. `iffy` from being
+    // mistaken for `IF`.
+    if let Some(after_if) = strip_keyword_ci(rest, "IF") {
+        let after_not = strip_keyword_ci(skip_ws_comments(after_if), "NOT")?;
+        let after_exists = strip_keyword_ci(skip_ws_comments(after_not), "EXISTS")?;
+        rest = skip_ws_comments(after_exists);
     }
 
     // `schema.table`: keep the last dot-separated segment. Each segment may
@@ -874,6 +919,59 @@ mod tests {
     #[test]
     fn parse_table_name_missing_name_is_none() {
         assert_eq!(parse_table_name("CREATE TABLE (id TEXT)"), None);
+    }
+
+    #[test]
+    fn parse_table_name_ignores_leading_line_comment() {
+        assert_eq!(
+            parse_table_name("-- create table old\nCREATE TABLE t (x TEXT)"),
+            Some("t".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_table_name_ignores_leading_block_comment() {
+        assert_eq!(
+            parse_table_name("/* CREATE TABLE old */ CREATE TABLE t (x TEXT)"),
+            Some("t".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_table_name_unterminated_comment_is_none() {
+        // Unterminated `--` and `/* */` comments consume the rest of the input,
+        // leaving no statement head.
+        assert_eq!(parse_table_name("-- no newline, no statement"), None);
+        assert_eq!(parse_table_name("/* unterminated CREATE TABLE t"), None);
+    }
+
+    #[test]
+    fn parse_table_name_rejects_keyword_prefix() {
+        // `CREATE TABLES` must not match the `TABLE` keyword prefix.
+        assert_eq!(parse_table_name("CREATE TABLES foo (id TEXT)"), None);
+    }
+
+    #[test]
+    fn parse_table_name_if_prefixed_name_is_not_if_not_exists() {
+        // A table whose name merely starts with `if` is not `IF NOT EXISTS`.
+        assert_eq!(
+            parse_table_name("CREATE TABLE ifx (id TEXT)"),
+            Some("ifx".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_table_name_unicode_in_comment_does_not_panic() {
+        // A case-length-changing char (`ﬁ`) in a comment must neither hijack
+        // the name nor panic on a byte-index slice.
+        assert_eq!(
+            parse_table_name("-- ﬁ\nCREATE TABLE t (x TEXT)"),
+            Some("t".to_string())
+        );
+        assert_eq!(
+            parse_table_name("/* ﬁﬁﬁ */ CREATE TABLE t (x TEXT)"),
+            Some("t".to_string())
+        );
     }
 
     #[test]
