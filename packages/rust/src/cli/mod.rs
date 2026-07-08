@@ -343,20 +343,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn default_config_toml_parses_to_a_single_files_table_with_every_stat_column() {
-        let config = crate::config::load_config_str(DEFAULT_CONFIG_TOML)
-            .expect("DEFAULT_CONFIG_TOML must be valid dirsql config TOML");
-        assert_eq!(config.tables.len(), 1);
-        let table = &config.tables[0];
-        assert_eq!(table.glob, "**/*");
-        assert!(table.ddl.starts_with("CREATE TABLE files ("));
-        for col in ["path", "basename", "dir", "ext", "size", "mtime", "ctime"] {
-            assert!(
-                table.ddl.contains(col),
-                "DEFAULT_CONFIG_TOML's DDL must declare {col}, got: {}",
-                table.ddl
-            );
-        }
-    }
+    // `DEFAULT_CONFIG_TOML` parsing against the real `config::load_config_str`
+    // is covered in `tests/config.rs` -- a unit test here would call an
+    // out-of-module collaborator directly, which the `unit lint` isolation
+    // rule forbids.
 }

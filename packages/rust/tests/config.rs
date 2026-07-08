@@ -5,7 +5,8 @@
 //! (effectful std), so per the `unit lint` isolation rule it belongs in the
 //! integration tier rather than the inline unit module.
 
-use dirsql::config::load_config;
+use dirsql::cli::DEFAULT_CONFIG_TOML;
+use dirsql::config::{load_config, load_config_str};
 use tempfile::TempDir;
 
 #[test]
@@ -23,4 +24,24 @@ glob = "*.csv"
     .unwrap();
     let config = load_config(&path).unwrap();
     assert_eq!(config.tables.len(), 1);
+}
+
+// `DEFAULT_CONFIG_TOML` (packages/rust/src/cli/mod.rs) crosses the
+// cli <-> config module boundary, so this lives here rather than as a unit
+// test in either module -- per the `unit lint` isolation rule.
+#[test]
+fn default_config_toml_parses_to_a_single_files_table_with_every_stat_column() {
+    let config = load_config_str(DEFAULT_CONFIG_TOML)
+        .expect("DEFAULT_CONFIG_TOML must be valid dirsql config TOML");
+    assert_eq!(config.tables.len(), 1);
+    let table = &config.tables[0];
+    assert_eq!(table.glob, "**/*");
+    assert!(table.ddl.starts_with("CREATE TABLE files ("));
+    for col in ["path", "basename", "dir", "ext", "size", "mtime", "ctime"] {
+        assert!(
+            table.ddl.contains(col),
+            "DEFAULT_CONFIG_TOML's DDL must declare {col}, got: {}",
+            table.ddl
+        );
+    }
 }
