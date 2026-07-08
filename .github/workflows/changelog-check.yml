@@ -57,6 +57,11 @@ jobs:
               packages/ts/src/*) code_changed=true ;;
               # Top-level Cargo manifests affect SDK builds
               Cargo.toml|Cargo.lock) code_changed=true ;;
+              # Per-crate manifests: a dep/feature/version bump here changes the
+              # built SDK without touching src/, so it still needs a changelog.
+              packages/rust/Cargo.toml) code_changed=true ;;
+              packages/ts/napi/Cargo.toml) code_changed=true ;;
+              packages/python/Cargo.toml) code_changed=true ;;
             esac
           done
 

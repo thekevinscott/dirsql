@@ -9,10 +9,16 @@ on:
     paths:
       - 'packages/ts/**'
       - 'packages/rust/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/ts-test.yml'
   pull_request:
     paths:
       - 'packages/ts/**'
       - 'packages/rust/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/ts-test.yml'
 
 jobs:
   unit:

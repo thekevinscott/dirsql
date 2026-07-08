@@ -8,9 +8,13 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
+      - 'MIGRATIONS.md'
+      - '.github/workflows/docs-test.yml'
   pull_request:
     paths:
       - 'docs/**'
+      - 'MIGRATIONS.md'
+      - '.github/workflows/docs-test.yml'
 
 jobs:
   unit:
