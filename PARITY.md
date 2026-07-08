@@ -359,8 +359,9 @@ The CLI is a single Rust binary shipped through three channels, so its
 *behavior* (HTTP `/query` + `/events`, status codes, zero-config `files`
 table, `init`, `on-file` / `pre-query` / `post-query` hooks, signal
 handling) is covered once, in the Rust e2e/CLI suites (`cli_e2e.rs`,
-`cli_integration.rs`, `init_e2e.rs`, `init_integration.rs`,
-`on_file_e2e.rs`). The per-binding e2e suites cover what is genuinely
+`cli_integration.rs`, `init_integration.rs`, `on_file_e2e.rs`). `init` is
+deterministic (#455) so its coverage needs no live-LLM e2e tier — there is
+no separate `init_e2e.rs`. The per-binding e2e suites cover what is genuinely
 per-launcher: resolving/staging the bundled binary, forwarding argv, and
 ecosystem-specific extension resolution.
 

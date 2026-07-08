@@ -1,88 +1,36 @@
 //! Integration tests for `dirsql init`.
 //!
-//! These tests spawn the compiled `dirsql` binary as a subprocess but
-//! replace `claude` with a stub shell script that prints a canned
-//! `.dirsql.toml` to stdout. That keeps the CLI behavior under test —
-//! flag parsing, file writing, --force, missing-claude error path —
-//! while skipping the live LLM call. CI-runnable.
+//! `init` is deterministic: it writes the fixed
+//! [`dirsql::cli::DEFAULT_CONFIG_TOML`] asset verbatim and never inspects the
+//! target directory. These tests spawn the compiled `dirsql` binary as a
+//! subprocess and exercise flag parsing, file writing, and --force —
+//! no stubs, no live LLM, CI-runnable.
 //!
-//! See `init_e2e.rs` for the real-`claude` variant, which is local-only.
-//!
-//! Gated behind `--features cli` (the binary is feature-gated) and
-//! `unix` (the stub is a shell script).
+//! Gated behind `--features cli` (the binary is feature-gated).
 
-#![cfg(all(feature = "cli", unix))]
+#![cfg(feature = "cli")]
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
 use std::process::Output;
 
 use assert_cmd::prelude::*;
 use predicates::str::contains;
 use tempfile::TempDir;
 
-/// A minimal filesystem-fact config the stub returns. Loadable by
-/// `DirSQL::from_config_path`.
-const CANNED_TOML: &str = r#"[[table]]
-ddl  = "CREATE TABLE files (path TEXT)"
-glob = "*"
-"#;
-
-/// Write a `claude` stub into `dir` that prints `response` on stdout and
-/// exits zero. Touches `sentinel` so tests can assert the stub was
-/// invoked. The stub ignores its arguments.
-fn write_stub_claude(dir: &Path, response: &str, sentinel: &Path) {
-    let stub = dir.join("claude");
-    let script = format!(
-        "#!/bin/sh\ntouch '{}'\ncat <<'__DIRSQL_TOML__'\n{response}__DIRSQL_TOML__\n",
-        sentinel.display(),
-    );
-    fs::write(&stub, script).unwrap();
-    let mut perms = fs::metadata(&stub).unwrap().permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&stub, perms).unwrap();
-}
-
-/// Write a `claude` stub that exits non-zero with `stderr_msg` on stderr.
-/// Touches `sentinel` so tests can assert the stub was reached before
-/// the failure.
-fn write_failing_stub_claude(dir: &Path, exit_code: i32, stderr_msg: &str, sentinel: &Path) {
-    let stub = dir.join("claude");
-    let escaped = stderr_msg.replace('\'', "'\\''");
-    let script = format!(
-        "#!/bin/sh\ntouch '{}'\nprintf '%s\\n' '{escaped}' >&2\nexit {exit_code}\n",
-        sentinel.display(),
-    );
-    fs::write(&stub, script).unwrap();
-    let mut perms = fs::metadata(&stub).unwrap().permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&stub, perms).unwrap();
-}
-
-/// Run `dirsql init` with `stub_dir` prepended to `PATH` so the stub
-/// `claude` wins over any system `claude`.
-fn run_init(cwd: &Path, stub_dir: &Path, extra_args: &[&str]) -> Output {
-    let original_path = std::env::var("PATH").unwrap_or_default();
-    let new_path = format!("{}:{}", stub_dir.display(), original_path);
+fn run_init(cwd: &std::path::Path, extra_args: &[&str]) -> Output {
     std::process::Command::cargo_bin("dirsql")
         .expect("`dirsql` binary must be built with --features cli")
         .arg("init")
         .args(extra_args)
         .current_dir(cwd)
-        .env("PATH", new_path)
         .output()
         .expect("spawning dirsql failed")
 }
 
 #[test]
-fn writes_a_loadable_dirsql_config() {
-    let stub_dir = TempDir::new().unwrap();
-    let sentinel = stub_dir.path().join("claude.called");
-    write_stub_claude(stub_dir.path(), CANNED_TOML, &sentinel);
-
+fn writes_the_default_config_verbatim() {
     let cwd = TempDir::new().unwrap();
-    let output = run_init(cwd.path(), stub_dir.path(), &[]);
+    let output = run_init(cwd.path(), &[]);
     assert!(
         output.status.success(),
         "init failed: status={:?} stderr={}",
@@ -91,37 +39,46 @@ fn writes_a_loadable_dirsql_config() {
     );
 
     let config_path = cwd.path().join(".dirsql.toml");
-    assert!(config_path.exists(), "expected .dirsql.toml to be written");
+    let written = fs::read_to_string(&config_path).unwrap();
+    assert_eq!(
+        written,
+        dirsql::cli::DEFAULT_CONFIG_TOML,
+        "init must write DEFAULT_CONFIG_TOML verbatim",
+    );
 
     dirsql::DirSQL::from_config_path(&config_path)
         .expect("config produced by `dirsql init` must load via from_config_path");
 }
 
 #[test]
-fn refuses_to_overwrite_existing_config() {
-    let stub_dir = TempDir::new().unwrap();
-    let sentinel = stub_dir.path().join("claude.called");
-    write_stub_claude(stub_dir.path(), CANNED_TOML, &sentinel);
-
-    // Baseline first run proves init can write a config, so the second-run
-    // failure below can't be confused with a broken init.
+fn ignores_target_directory_contents() {
+    // A directory full of files must not change what `init` writes — it does
+    // not inspect the target at all.
     let cwd = TempDir::new().unwrap();
-    let first = run_init(cwd.path(), stub_dir.path(), &[]);
+    fs::write(cwd.path().join("a.txt"), "hello").unwrap();
+    fs::write(cwd.path().join("b.json"), "{}").unwrap();
+    fs::create_dir(cwd.path().join("sub")).unwrap();
+    fs::write(cwd.path().join("sub/c.rs"), "fn main() {}").unwrap();
+
+    let output = run_init(cwd.path(), &[]);
+    assert!(output.status.success(), "init failed: {output:?}");
+
+    let written = fs::read_to_string(cwd.path().join(".dirsql.toml")).unwrap();
+    assert_eq!(written, dirsql::cli::DEFAULT_CONFIG_TOML);
+}
+
+#[test]
+fn refuses_to_overwrite_existing_config() {
+    let cwd = TempDir::new().unwrap();
+    let first = run_init(cwd.path(), &[]);
     assert!(
         first.status.success(),
         "baseline init must succeed: stderr={}",
         String::from_utf8_lossy(&first.stderr),
     );
     let written = fs::read_to_string(cwd.path().join(".dirsql.toml")).unwrap();
-    assert!(
-        sentinel.exists(),
-        "claude must have been invoked on first run"
-    );
 
-    // Reset sentinel; second run must fail without touching the file.
-    fs::remove_file(&sentinel).unwrap();
-
-    let second = run_init(cwd.path(), stub_dir.path(), &[]);
+    let second = run_init(cwd.path(), &[]);
     assert!(
         !second.status.success(),
         "second init must fail when .dirsql.toml already exists",
@@ -131,22 +88,14 @@ fn refuses_to_overwrite_existing_config() {
         preserved, written,
         "existing config must not be modified by the failed run",
     );
-    assert!(
-        !sentinel.exists(),
-        "claude must not be invoked when output already exists and --force is absent",
-    );
 }
 
 #[test]
 fn force_flag_overwrites_existing_config() {
-    let stub_dir = TempDir::new().unwrap();
-    let sentinel = stub_dir.path().join("claude.called");
-    write_stub_claude(stub_dir.path(), CANNED_TOML, &sentinel);
-
     let cwd = TempDir::new().unwrap();
     fs::write(cwd.path().join(".dirsql.toml"), "# old\n").unwrap();
 
-    let output = run_init(cwd.path(), stub_dir.path(), &["--force"]);
+    let output = run_init(cwd.path(), &["--force"]);
     assert!(
         output.status.success(),
         "init --force failed: stderr={}",
@@ -154,25 +103,17 @@ fn force_flag_overwrites_existing_config() {
     );
 
     let written = fs::read_to_string(cwd.path().join(".dirsql.toml")).unwrap();
-    assert_ne!(written, "# old\n", "config must be replaced");
+    assert_eq!(written, dirsql::cli::DEFAULT_CONFIG_TOML);
     dirsql::DirSQL::from_config_path(cwd.path().join(".dirsql.toml"))
         .expect("forced-overwrite config must load");
 }
 
 #[test]
 fn root_flag_targets_a_different_directory() {
-    let stub_dir = TempDir::new().unwrap();
-    let sentinel = stub_dir.path().join("claude.called");
-    write_stub_claude(stub_dir.path(), CANNED_TOML, &sentinel);
-
     let cwd = TempDir::new().unwrap();
     let scan_root = TempDir::new().unwrap();
 
-    let output = run_init(
-        cwd.path(),
-        stub_dir.path(),
-        &["--root", scan_root.path().to_str().unwrap()],
-    );
+    let output = run_init(cwd.path(), &["--root", scan_root.path().to_str().unwrap()]);
     assert!(output.status.success(), "init failed: {output:?}");
 
     // Per docs: default --output is `<root>/.dirsql.toml`.
@@ -188,81 +129,16 @@ fn root_flag_targets_a_different_directory() {
 
 #[test]
 fn output_flag_redirects_destination() {
-    let stub_dir = TempDir::new().unwrap();
-    let sentinel = stub_dir.path().join("claude.called");
-    write_stub_claude(stub_dir.path(), CANNED_TOML, &sentinel);
-
     let cwd = TempDir::new().unwrap();
     let custom_out = cwd.path().join("custom.toml");
 
-    let output = run_init(
-        cwd.path(),
-        stub_dir.path(),
-        &["--output", custom_out.to_str().unwrap()],
-    );
+    let output = run_init(cwd.path(), &["--output", custom_out.to_str().unwrap()]);
     assert!(output.status.success(), "init failed: {output:?}");
 
     assert!(custom_out.exists(), "config should land at --output path");
     assert!(
         !cwd.path().join(".dirsql.toml").exists(),
         "default path must not be written when --output is set",
-    );
-}
-
-#[test]
-fn raises_when_claude_is_missing() {
-    // Empty stub_dir + restricted PATH so `claude` cannot be resolved at all.
-    let stub_dir = TempDir::new().unwrap();
-    let cwd = TempDir::new().unwrap();
-
-    let output = std::process::Command::cargo_bin("dirsql")
-        .unwrap()
-        .arg("init")
-        .current_dir(cwd.path())
-        .env("PATH", stub_dir.path().to_str().unwrap())
-        .output()
-        .unwrap();
-
-    assert!(
-        !output.status.success(),
-        "init should fail when `claude` is not on PATH",
-    );
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.to_lowercase().contains("claude"),
-        "error must mention `claude`: stderr={stderr}",
-    );
-
-    assert!(
-        !cwd.path().join(".dirsql.toml").exists(),
-        "no config must be written when `claude` is unavailable",
-    );
-}
-
-#[test]
-fn does_not_write_partial_config_when_claude_fails() {
-    let stub_dir = TempDir::new().unwrap();
-    let sentinel = stub_dir.path().join("claude.called");
-    write_failing_stub_claude(stub_dir.path(), 1, "boom", &sentinel);
-
-    let cwd = TempDir::new().unwrap();
-    let output = run_init(cwd.path(), stub_dir.path(), &[]);
-    assert!(
-        !output.status.success(),
-        "init should fail when `claude` exits non-zero",
-    );
-
-    // Sentinel proves init actually invoked claude (rather than failing
-    // before reaching the subprocess); only then is the
-    // "no partial file" guarantee meaningful.
-    assert!(
-        sentinel.exists(),
-        "init must have invoked claude before failing",
-    );
-    assert!(
-        !cwd.path().join(".dirsql.toml").exists(),
-        "no config must be written when `claude` fails",
     );
 }
 

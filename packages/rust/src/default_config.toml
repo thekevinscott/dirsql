@@ -1,0 +1,3 @@
+[[table]]
+ddl  = "CREATE TABLE files (path TEXT, basename TEXT, dir TEXT, ext TEXT, size INTEGER, mtime INTEGER, ctime INTEGER)"
+glob = "**/*"

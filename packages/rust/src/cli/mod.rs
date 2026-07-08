@@ -39,6 +39,12 @@ pub mod server;
 
 pub use server::{serve, serve_with_state};
 
+/// The one starter `.dirsql.toml` -- a single `files` table over every file
+/// under the root, built from the seven stat columns. This is both what
+/// `dirsql init` writes verbatim ([`init::run`]) and what zero-config mode
+/// parses to build its default table, so the two can never drift apart.
+pub const DEFAULT_CONFIG_TOML: &str = include_str!("../default_config.toml");
+
 /// A server-wide `pre-query` command hook, carrying the command template plus
 /// the directory it runs in (the config file's parent). When set on a
 /// [`ServerConfig`], the server passes each `POST /query` request body to the
@@ -334,6 +340,23 @@ mod tests {
         match state {
             AppState::Unavailable(reason) => assert_eq!(reason, "config failed to load"),
             AppState::Ready(_) => panic!("String must map to the Unavailable arm"),
+        }
+    }
+
+    #[test]
+    fn default_config_toml_parses_to_a_single_files_table_with_every_stat_column() {
+        let config = crate::config::load_config_str(DEFAULT_CONFIG_TOML)
+            .expect("DEFAULT_CONFIG_TOML must be valid dirsql config TOML");
+        assert_eq!(config.tables.len(), 1);
+        let table = &config.tables[0];
+        assert_eq!(table.glob, "**/*");
+        assert!(table.ddl.starts_with("CREATE TABLE files ("));
+        for col in ["path", "basename", "dir", "ext", "size", "mtime", "ctime"] {
+            assert!(
+                table.ddl.contains(col),
+                "DEFAULT_CONFIG_TOML's DDL must declare {col}, got: {}",
+                table.ddl
+            );
         }
     }
 }

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Breaking: the seven stat columns dropped their leading underscore (#454, epic #452).** `_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime` are now `path`, `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`. These were never an enforced/reserved namespace — the underscore prefix was purely conventional — so this is a pure rename with no other behavior change. Existing `.dirsql.toml` configs and SDK table definitions declaring the old names need updating; see `MIGRATIONS.md`.
+- **Breaking: `dirsql init` is now deterministic (#455, epic #452).** It no longer shells out to the `claude` CLI. It writes a fixed starter `.dirsql.toml` — the exact single `files` table zero-config mode already serves — parsed from one embedded default-config asset shared by both surfaces, so they can never drift apart. `init` no longer inspects the target directory at all; `--root` now only controls where the default `--output` path is resolved. No LLM, no network, no `claude` dependency. See `MIGRATIONS.md`.
 - **Documentation: trimmed LLM-drafted comments to the minimal useful set (#445).** Removed archaeology comments (issue/PR references), comments restating adjacent code, reviewer-directed justification, and banner dividers across all three SDKs. Retained public API docs, safety/locking/ordering invariants, platform quirks, security invariants, and forward-looking notes tied to open issues. No code behavior changes.
 
 ### Added
