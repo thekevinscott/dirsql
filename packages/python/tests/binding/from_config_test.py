@@ -44,9 +44,7 @@ glob = "items/*.csv"
 
             db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
-            results = await db.query(
-                "SELECT path, basename FROM items ORDER BY path"
-            )
+            results = await db.query("SELECT path, basename FROM items ORDER BY path")
             assert len(results) == 2
             assert results[0]["path"] == "items/a.csv"
             assert results[0]["basename"] == "a.csv"
