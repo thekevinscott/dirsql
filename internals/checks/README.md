@@ -23,8 +23,8 @@ Each check follows the same shape:
   raising `SystemExit` with its return code.
 
 Every module (except empty `__init__.py`s) carries a colocated `*_test.py`, gated by
-`conventions.yml`'s `internals-checks` job (`colocated-test` + `unit-lint`). `gha-scripts.yml`
-separately enforces a 100% unit-coverage floor by running the suite through `pytest-gate` itself.
+`conventions.yml`'s `internals-checks` job: `colocated-test`, `unit-lint`, `unit-coverage`, and
+`mutation`.
 
 ## Adding a check
 
