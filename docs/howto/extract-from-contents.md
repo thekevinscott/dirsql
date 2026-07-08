@@ -18,7 +18,7 @@ stdout works. With [`jq`](https://jqlang.org/):
 
 ```toml
 [[table]]
-ddl     = "CREATE TABLE books (title TEXT, author TEXT, year INTEGER, _path TEXT)"
+ddl     = "CREATE TABLE books (title TEXT, author TEXT, year INTEGER, path TEXT)"
 glob    = "books/*.json"
 on-file = "jq -c '[{title, author, year}]' {path}"
 ```
@@ -32,14 +32,14 @@ by every hook.
 ## 2. Query the extracted columns
 
 ```bash
-dirsql query "SELECT title, author, year, _path FROM books ORDER BY year"
+dirsql query "SELECT title, author, year, path FROM books ORDER BY year"
 ```
 
 ```json
-[{"_path":"books/bleak-house.json","author":"Charles Dickens","title":"Bleak House","year":1852},{"_path":"books/middlemarch.json","author":"George Eliot","title":"Middlemarch","year":1871}]
+[{"path":"books/bleak-house.json","author":"Charles Dickens","title":"Bleak House","year":1852},{"path":"books/middlemarch.json","author":"George Eliot","title":"Middlemarch","year":1871}]
 ```
 
-Filesystem facts are still merged onto every row — `_path` above comes from
+Filesystem facts are still merged onto every row — `path` above comes from
 `dirsql`, not from `jq`. When the command emits a key that collides with a
 fact, the command wins
 ([precedence](../reference/columns.md#precedence)).
@@ -51,7 +51,7 @@ row per line, slurp it:
 
 ```toml
 [[table]]
-ddl     = "CREATE TABLE events (event TEXT, user TEXT, _path TEXT)"
+ddl     = "CREATE TABLE events (event TEXT, user TEXT, path TEXT)"
 glob    = "logs/*.jsonl"
 on-file = "jq -c -s '.' {path}"
 ```

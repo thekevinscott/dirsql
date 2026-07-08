@@ -112,30 +112,30 @@ through `jq` to pretty-print. Now select some columns:
 ```bash
 curl -s http://localhost:7117/query \
   -H 'content-type: application/json' \
-  -d '{"sql":"SELECT _path, _size FROM files ORDER BY _path"}' \
+  -d '{"sql":"SELECT path, size FROM files ORDER BY path"}' \
   | jq
 ```
 
 ```json
 [
   {
-    "_path": "notes/alice/ideas.md",
-    "_size": 52
+    "path": "notes/alice/ideas.md",
+    "size": 52
   },
   {
-    "_path": "notes/alice/welcome.md",
-    "_size": 66
+    "path": "notes/alice/welcome.md",
+    "size": 66
   },
   {
-    "_path": "notes/bob/reading-list.md",
-    "_size": 41
+    "path": "notes/bob/reading-list.md",
+    "size": 41
   }
 ]
 ```
 
-`_path` and `_size` are two of the built-in file columns `dirsql` collects
+`path` and `size` are two of the built-in file columns `dirsql` collects
 for every file — see [stat columns](./reference/columns.md#stat-columns)
-for the full list. (The `_size` values are byte counts; they match the
+for the full list. (The `size` values are byte counts; they match the
 output above because you pasted the files exactly.)
 
 You have a working SQL database over your files. Next, teach it the
@@ -152,7 +152,7 @@ In your second terminal, still inside `my-notes`, create a `.dirsql.toml`:
 ```bash
 cat > .dirsql.toml <<'EOF'
 [[table]]
-ddl  = "CREATE TABLE notes (author TEXT, _basename TEXT, _size INTEGER)"
+ddl  = "CREATE TABLE notes (author TEXT, basename TEXT, size INTEGER)"
 glob = "notes/{author}/*.md"
 EOF
 ```
@@ -192,25 +192,25 @@ terminal:
 ```bash
 curl -s http://localhost:7117/query \
   -H 'content-type: application/json' \
-  -d '{"sql":"SELECT author, _basename, _size FROM notes ORDER BY author, _basename"}' \
+  -d '{"sql":"SELECT author, basename, size FROM notes ORDER BY author, basename"}' \
   | jq
 ```
 
 ```json
 [
   {
-    "_basename": "ideas.md",
-    "_size": 52,
+    "basename": "ideas.md",
+    "size": 52,
     "author": "alice"
   },
   {
-    "_basename": "welcome.md",
-    "_size": 66,
+    "basename": "welcome.md",
+    "size": 66,
     "author": "alice"
   },
   {
-    "_basename": "reading-list.md",
-    "_size": 41,
+    "basename": "reading-list.md",
+    "size": 41,
     "author": "bob"
   }
 ]

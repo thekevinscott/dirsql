@@ -18,7 +18,7 @@ Capture both directory levels in `.dirsql.toml`:
 
 ```toml
 [[table]]
-ddl  = "CREATE TABLE photos (year TEXT, month TEXT, _basename TEXT)"
+ddl  = "CREATE TABLE photos (year TEXT, month TEXT, basename TEXT)"
 glob = "photos/{year}/{month}/*.jpg"
 ```
 
@@ -30,11 +30,11 @@ within one path segment) are in
 ## 2. Query the captured columns
 
 ```bash
-dirsql query "SELECT year, month, _basename FROM photos ORDER BY year, month"
+dirsql query "SELECT year, month, basename FROM photos ORDER BY year, month"
 ```
 
 ```json
-[{"_basename":"beach.jpg","month":"05","year":"2024"},{"_basename":"hike.jpg","month":"11","year":"2024"},{"_basename":"snow.jpg","month":"01","year":"2025"}]
+[{"basename":"beach.jpg","month":"05","year":"2024"},{"basename":"hike.jpg","month":"11","year":"2024"},{"basename":"snow.jpg","month":"01","year":"2025"}]
 ```
 
 Captures are real SQL columns, so aggregation works:
@@ -50,7 +50,7 @@ dirsql query "SELECT year, COUNT(*) AS photos FROM photos GROUP BY year"
 ## Going further
 
 - Captures combine freely with [stat columns](../reference/columns.md#stat-columns)
-  (`_basename` above) — both are filesystem facts merged onto every row.
+  (`basename` above) — both are filesystem facts merged onto every row.
 - The [tutorial](../getting-started.md) walks the same idea with an
   `{author}` capture, starting from zero.
 - When the value you need lives inside the file rather than in its path,

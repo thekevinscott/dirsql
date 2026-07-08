@@ -1,8 +1,8 @@
 """Binding-tier tests (real core, real fs) for DirSQL(config=).
 
 Config-defined tables produce one row per matched file. Each row's columns
-come from filesystem facts: glob path captures and stat virtuals (`_path`,
-`_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`). Content
+come from filesystem facts: glob path captures and stat virtuals (`path`,
+`basename`, `dir`, `ext`, `size`, `mtime`, `ctime`). Content
 interpretation is intentionally out of scope; for that, register a
 programmatic Table with your own extract function.
 """
@@ -37,7 +37,7 @@ def describe_DirSQL_from_config():
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
-ddl = "CREATE TABLE items (_path TEXT, _basename TEXT)"
+ddl = "CREATE TABLE items (path TEXT, basename TEXT)"
 glob = "items/*.csv"
 """,
             )
@@ -45,13 +45,13 @@ glob = "items/*.csv"
             db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
             results = await db.query(
-                "SELECT _path, _basename FROM items ORDER BY _path"
+                "SELECT path, basename FROM items ORDER BY path"
             )
             assert len(results) == 2
-            assert results[0]["_path"] == "items/a.csv"
-            assert results[0]["_basename"] == "a.csv"
-            assert results[1]["_path"] == "items/b.csv"
-            assert results[1]["_basename"] == "b.csv"
+            assert results[0]["path"] == "items/a.csv"
+            assert results[0]["basename"] == "a.csv"
+            assert results[1]["path"] == "items/b.csv"
+            assert results[1]["basename"] == "b.csv"
 
     def describe_path_captures():
         @pytest.mark.asyncio
@@ -68,7 +68,7 @@ glob = "items/*.csv"
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
-ddl = "CREATE TABLE comments (thread_id TEXT, _basename TEXT)"
+ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
 glob = "comments/{thread_id}/*.txt"
 """,
             )
@@ -76,7 +76,7 @@ glob = "comments/{thread_id}/*.txt"
             db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
             results = await db.query(
-                "SELECT thread_id, _basename FROM comments ORDER BY thread_id"
+                "SELECT thread_id, basename FROM comments ORDER BY thread_id"
             )
             assert len(results) == 2
             assert results[0]["thread_id"] == "thread-1"
@@ -91,7 +91,7 @@ glob = "comments/{thread_id}/*.txt"
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
-ddl = "CREATE TABLE files (_path TEXT, _basename TEXT, _dir TEXT, _ext TEXT, _size INTEGER, _mtime INTEGER)"
+ddl = "CREATE TABLE files (path TEXT, basename TEXT, dir TEXT, ext TEXT, size INTEGER, mtime INTEGER)"
 glob = "docs/*.md"
 """,
             )
@@ -99,17 +99,17 @@ glob = "docs/*.md"
             db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
             results = await db.query(
-                "SELECT _path, _basename, _dir, _ext, _size, _mtime FROM files"
+                "SELECT path, basename, dir, ext, size, mtime FROM files"
             )
             assert len(results) == 1
             r = results[0]
-            assert r["_path"] == "docs/readme.md"
-            assert r["_basename"] == "readme.md"
-            assert r["_dir"] == "docs"
-            assert r["_ext"] == "md"
-            assert r["_size"] == len(body)
-            assert isinstance(r["_mtime"], int)
-            assert r["_mtime"] > 0
+            assert r["path"] == "docs/readme.md"
+            assert r["basename"] == "readme.md"
+            assert r["dir"] == "docs"
+            assert r["ext"] == "md"
+            assert r["size"] == len(body)
+            assert isinstance(r["mtime"], int)
+            assert r["mtime"] > 0
 
     def describe_ignore():
         @pytest.mark.asyncio
@@ -126,16 +126,16 @@ glob = "docs/*.md"
 ignore = ["**/node_modules/**"]
 
 [[table]]
-ddl = "CREATE TABLE items (_path TEXT)"
+ddl = "CREATE TABLE items (path TEXT)"
 glob = "data/**/*.json"
 """,
             )
 
             db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
-            results = await db.query("SELECT _path FROM items")
+            results = await db.query("SELECT path FROM items")
             assert len(results) == 1
-            assert results[0]["_path"] == "data/good.json"
+            assert results[0]["path"] == "data/good.json"
 
     def describe_multiple_tables():
         @pytest.mark.asyncio
@@ -146,23 +146,23 @@ glob = "data/**/*.json"
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
-ddl = "CREATE TABLE posts (_basename TEXT)"
+ddl = "CREATE TABLE posts (basename TEXT)"
 glob = "posts/*.txt"
 
 [[table]]
-ddl = "CREATE TABLE authors (_basename TEXT)"
+ddl = "CREATE TABLE authors (basename TEXT)"
 glob = "authors/*.txt"
 """,
             )
 
             db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             await db.ready()
-            posts = await db.query("SELECT _basename FROM posts")
-            authors = await db.query("SELECT _basename FROM authors")
+            posts = await db.query("SELECT basename FROM posts")
+            authors = await db.query("SELECT basename FROM authors")
             assert len(posts) == 1
             assert len(authors) == 1
-            assert posts[0]["_basename"] == "hello.txt"
-            assert authors[0]["_basename"] == "alice.txt"
+            assert posts[0]["basename"] == "hello.txt"
+            assert authors[0]["basename"] == "alice.txt"
 
     def describe_error_handling():
         @pytest.mark.asyncio
@@ -202,7 +202,7 @@ glob = "*.json"
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
-ddl = "CREATE TABLE items (name TEXT, _size INTEGER)"
+ddl = "CREATE TABLE items (name TEXT, size INTEGER)"
 glob = "items/{name}.json"
 """,
             )

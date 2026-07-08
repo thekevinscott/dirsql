@@ -141,7 +141,7 @@ def describe_cli_extension_by_package_name():
             'path = "dirsql_testext_pkg"\n'
             'entrypoint = "sqlite3_extension_init"\n\n'
             "[[table]]\n"
-            'ddl = "CREATE TABLE files (_path TEXT)"\n'
+            'ddl = "CREATE TABLE files (path TEXT)"\n'
             'glob = "*.txt"\n'
         )
 

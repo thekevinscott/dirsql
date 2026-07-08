@@ -167,7 +167,7 @@ beforeAll(async () => {
   const cfg = join(dataDir, ".dirsql.toml");
   await writeFile(
     cfg,
-    `[[table]]\nddl = "CREATE TABLE files (_path TEXT)"\nglob = "*.txt"\n`,
+    `[[table]]\nddl = "CREATE TABLE files (path TEXT)"\nglob = "*.txt"\n`,
   );
 
   serverPort = await freePort();
@@ -222,11 +222,11 @@ describe("POST /query contract (docs/reference/http-api.md)", () => {
   });
 
   it("serves a config-table row per matched file", async () => {
-    const res = await postSql(serverPort, "SELECT _path FROM files");
+    const res = await postSql(serverPort, "SELECT path FROM files");
     expect(res.status).toBe(200);
-    const rows = JSON.parse(res.text) as { _path: string }[];
+    const rows = JSON.parse(res.text) as { path: string }[];
     expect(rows).toHaveLength(1);
-    expect(rows[0]._path.endsWith("a.txt")).toBe(true);
+    expect(rows[0].path.endsWith("a.txt")).toBe(true);
   });
 
   it("rejects a missing `sql` field with 400", async () => {
