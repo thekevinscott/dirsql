@@ -280,14 +280,14 @@ impl Db {
         // `_dirsql_internal_rows`, keyed on the row's rowid. A column-less row
         // (SQLite requires ≥1 declared column, so this is only reachable
         // defensively) uses `DEFAULT VALUES`.
-        let columns: Vec<String> = row.keys().cloned().collect();
+        let columns: Vec<String> = row.keys().map(|c| format!("\"{c}\"")).collect();
         let sql = if columns.is_empty() {
-            format!("INSERT INTO {} DEFAULT VALUES", table)
+            format!("INSERT INTO \"{table}\" DEFAULT VALUES")
         } else {
             let placeholders: Vec<String> =
                 (1..=columns.len()).map(|i| format!("?{}", i)).collect();
             format!(
-                "INSERT INTO {} ({}) VALUES ({})",
+                "INSERT INTO \"{}\" ({}) VALUES ({})",
                 table,
                 columns.join(", "),
                 placeholders.join(", "),
