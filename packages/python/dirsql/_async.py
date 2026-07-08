@@ -23,14 +23,18 @@ class _WatchStream:
     async def __anext__(self):
         if not self._started:
             await self._owner.ready()
-            self._db = self._owner._db
-            await asyncio.to_thread(self._db._start_watcher)
+            db = self._owner._db
+            assert db is not None  # ready() returned, so _init_bg set _db
+            self._db = db
+            await asyncio.to_thread(db._start_watcher)
             self._started = True
 
+        db = self._db
+        assert db is not None
         while True:
             if self._buffer:
                 return self._buffer.pop(0)
-            events = await asyncio.to_thread(self._db._poll_events, 200)
+            events = await asyncio.to_thread(db._poll_events, 200)
             if events:
                 self._buffer.extend(events)
 
