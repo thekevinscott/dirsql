@@ -140,7 +140,7 @@ jobs:
     # sub-package the way the release pipeline would, `npm install` both
     # into a fresh dir, and run `node_modules/.bin/dirsql --version`. Red
     # here means the npm release is broken and must not go out. This is the
-    # install-and-run check `packaging.yml` does NOT do (that gate only
+    # install-and-run check the `packaging` gate does NOT do (that gate only
     # asserts no test files ship in the artifact). No mocks.
     name: Packaging smoke (install + run)
     runs-on: ubuntu-latest

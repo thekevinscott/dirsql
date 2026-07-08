@@ -79,8 +79,8 @@ unit-coverage:
     testing-conventions unit coverage --language rust --config testing-conventions.toml packages/rust/src
 
 # Packaging gate: assert no test files ship in the built .whl / .tgz / .crate.
-# Mirrors .github/workflows/packaging.yml; requires uv, pnpm, cargo, and
-# `pip install testing-conventions`.
+# Mirrors the testing-conventions `packaging` gate run in conventions.yml;
+# requires uv, pnpm, cargo, and `pip install testing-conventions`.
 test-packaging:
     #!/usr/bin/env bash
     set -euo pipefail
