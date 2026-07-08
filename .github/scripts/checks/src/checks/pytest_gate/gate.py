@@ -1,3 +1,10 @@
+"""Pure logic for the pytest-gate check (#494/#495).
+
+Translates pytest's "no tests collected" exit code to success, so a directory with no
+`*_test.py` files yet (or no longer any) passes cleanly instead of failing CI.
+"""
+from __future__ import annotations
+
 import subprocess
 import sys
 from pathlib import Path
@@ -18,14 +25,10 @@ def interpret(returncode):
     return returncode
 
 
-def main(argv, runner=subprocess.run, finder=find_test_files):
+def run(argv, runner=subprocess.run, finder=find_test_files):
     paths = [arg for arg in argv if not arg.startswith("-")]
     if not finder(paths):
         print(f"No *_test.py under {paths or ['.']} — nothing to test.")
         return 0
     result = runner([sys.executable, "-m", "pytest", *argv])
     return interpret(result.returncode)
-
-
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main(sys.argv[1:]))

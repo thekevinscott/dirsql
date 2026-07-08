@@ -1,7 +1,7 @@
 import sys
 from unittest import mock
 
-from pytest_gate import NO_TESTS_COLLECTED, find_test_files, interpret, main
+from checks.pytest_gate.gate import NO_TESTS_COLLECTED, find_test_files, interpret, run
 
 
 def describe_find_test_files():
@@ -25,11 +25,11 @@ def describe_interpret():
         assert interpret(1) == 1
 
 
-def describe_main():
+def describe_run():
     def runs_pytest_and_returns_interpreted_code_when_tests_exist():
         runner = mock.Mock(return_value=mock.Mock(returncode=NO_TESTS_COLLECTED))
         finder = mock.Mock(return_value=["found_test.py"])
-        rc = main(["pkg/", "-x"], runner=runner, finder=finder)
+        rc = run(["pkg/", "-x"], runner=runner, finder=finder)
         finder.assert_called_once_with(["pkg/"])
         runner.assert_called_once_with([sys.executable, "-m", "pytest", "pkg/", "-x"])
         assert rc == 0
@@ -37,10 +37,10 @@ def describe_main():
     def failing_suite_makes_the_gate_red():
         runner = mock.Mock(return_value=mock.Mock(returncode=1))
         finder = mock.Mock(return_value=["found_test.py"])
-        assert main(["pkg/"], runner=runner, finder=finder) == 1
+        assert run(["pkg/"], runner=runner, finder=finder) == 1
 
     def genuine_no_tests_is_green_without_running_pytest():
         runner = mock.Mock()
         finder = mock.Mock(return_value=[])
-        assert main(["-q"], runner=runner, finder=finder) == 0
+        assert run(["-q"], runner=runner, finder=finder) == 0
         runner.assert_not_called()
