@@ -326,6 +326,71 @@ def describe_DirSQL():
             assert results[0]["name"] == "apple"
 
         @pytest.mark.asyncio
+        async def it_rejects_attach_and_creates_no_file(tmp_dir):
+            with open(os.path.join(tmp_dir, "item.json"), "w") as f:
+                json.dump({"name": "apple"}, f)
+
+            db = DirSQL(
+                tmp_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE items (name TEXT)",
+                        glob="*.json",
+                        extract=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
+                    ),
+                ],
+            )
+            await db.ready()
+
+            target = os.path.join(tmp_dir, "attached.db")
+            with pytest.raises(Exception, match="(?i)not authorized"):
+                await db.query(f"ATTACH '{target}' AS ext")
+            assert not os.path.exists(target)
+
+            with pytest.raises(Exception, match="(?i)not authorized"):
+                await db.query("DETACH ext")
+
+            results = await db.query("SELECT name FROM items")
+            assert len(results) == 1
+            assert results[0]["name"] == "apple"
+
+        @pytest.mark.asyncio
+        async def it_cannot_read_external_db_via_attach(tmp_dir):
+            import sqlite3
+
+            secret = os.path.join(tmp_dir, "secret.db")
+            conn = sqlite3.connect(secret)
+            conn.execute("CREATE TABLE secrets (v TEXT)")
+            conn.execute("INSERT INTO secrets (v) VALUES ('token')")
+            conn.commit()
+            conn.close()
+
+            os.makedirs(os.path.join(tmp_dir, "data"), exist_ok=True)
+            with open(os.path.join(tmp_dir, "data", "item.json"), "w") as f:
+                json.dump({"name": "apple"}, f)
+
+            db = DirSQL(
+                tmp_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE items (name TEXT)",
+                        glob="data/*.json",
+                        extract=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
+                    ),
+                ],
+            )
+            await db.ready()
+
+            with pytest.raises(Exception):
+                await db.query(f"ATTACH '{secret}' AS ext")
+            with pytest.raises(Exception):
+                await db.query("SELECT v FROM ext.secrets")
+
+        @pytest.mark.asyncio
         async def it_raises_on_invalid_ddl(tmp_dir):
             db = DirSQL(
                 tmp_dir,

@@ -37,6 +37,13 @@ const INTERNAL_TABLE_PREFIX: &str = "_dirsql_";
 const INTERNAL_TABLE_DENIED_MSG: &str = "not authorized: dirsql's internal bookkeeping tables (the `_dirsql_*` namespace) \
      are not readable through query()";
 
+/// The message carried by [`DbError::Unauthorized`] when `query()` rejects an
+/// `ATTACH`/`DETACH`. SQLite classifies both as read-only, so the `readonly()`
+/// gate lets them through; they are effectful (ATTACH creates/opens an
+/// arbitrary database file) and denied at prepare time instead.
+const ATTACH_DENIED_MSG: &str = "not authorized: query() does not permit ATTACH or DETACH; \
+     attaching external databases is disabled on this surface";
+
 fn is_internal_table(name: &str) -> bool {
     name.starts_with(INTERNAL_TABLE_PREFIX)
 }
@@ -402,16 +409,33 @@ impl Db {
     /// through `query()`, are unaffected.
     pub fn query(&self, sql: &str) -> Result<Vec<HashMap<String, Value>>> {
         use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        use std::sync::{Arc, Mutex};
 
+        // The authorizer runs at prepare time and may deny for two distinct
+        // reasons; it records which one here so the caught error can carry the
+        // matching message (the closure must be `'static`, so it owns a clone).
+        let denial: Arc<Mutex<Option<&'static str>>> = Arc::new(Mutex::new(None));
+        let denial_cb = Arc::clone(&denial);
         self.conn
-            .authorizer(Some(|ctx: AuthContext<'_>| match ctx.action {
+            .authorizer(Some(move |ctx: AuthContext<'_>| match ctx.action {
                 AuthAction::Read { table_name, .. } if is_internal_table(table_name) => {
+                    *denial_cb.lock().unwrap() = Some(INTERNAL_TABLE_DENIED_MSG);
                     Authorization::Deny
                 }
                 AuthAction::Pragma {
                     pragma_value: Some(value),
                     ..
-                } if is_internal_table(value) => Authorization::Deny,
+                } if is_internal_table(value) => {
+                    *denial_cb.lock().unwrap() = Some(INTERNAL_TABLE_DENIED_MSG);
+                    Authorization::Deny
+                }
+                // ATTACH/DETACH are the only effectful actions SQLite classifies
+                // as read-only, so the `readonly()` gate below can't catch them;
+                // deny here before the file is ever created or opened.
+                AuthAction::Attach { .. } | AuthAction::Detach { .. } => {
+                    *denial_cb.lock().unwrap() = Some(ATTACH_DENIED_MSG);
+                    Authorization::Deny
+                }
                 _ => Authorization::Allow,
             }));
         let prepared = self.conn.prepare(sql);
@@ -426,7 +450,8 @@ impl Db {
                 if e.sqlite_error_code()
                     == Some(rusqlite::ErrorCode::AuthorizationForStatementDenied) =>
             {
-                return Err(DbError::Unauthorized(INTERNAL_TABLE_DENIED_MSG.to_string()));
+                let msg = denial.lock().unwrap().unwrap_or(INTERNAL_TABLE_DENIED_MSG);
+                return Err(DbError::Unauthorized(msg.to_string()));
             }
             Err(e) => return Err(DbError::Sqlite(e)),
         };
@@ -1055,6 +1080,44 @@ mod tests {
     fn internal_table_denied_message_mentions_the_namespace() {
         assert!(INTERNAL_TABLE_DENIED_MSG.contains("not authorized"));
         assert!(INTERNAL_TABLE_DENIED_MSG.contains("_dirsql_"));
+    }
+
+    #[test]
+    fn query_denies_attach() {
+        let db = Db::new().unwrap();
+        let err = db
+            .query("ATTACH 'file:should-not-open?mode=ro' AS ext")
+            .unwrap_err();
+        assert!(matches!(err, DbError::Unauthorized(_)), "got: {err}");
+        let msg = err.to_string();
+        assert!(msg.contains("not authorized"), "got: {msg}");
+        assert!(msg.contains("ATTACH"), "got: {msg}");
+    }
+
+    #[test]
+    fn query_denies_detach() {
+        let db = Db::new().unwrap();
+        let err = db.query("DETACH ext").unwrap_err();
+        assert!(matches!(err, DbError::Unauthorized(_)), "got: {err}");
+        assert!(err.to_string().contains("not authorized"), "got: {err}");
+    }
+
+    #[test]
+    fn attach_denied_message_mentions_attach_and_detach() {
+        assert!(ATTACH_DENIED_MSG.contains("not authorized"));
+        assert!(ATTACH_DENIED_MSG.contains("ATTACH"));
+        assert!(ATTACH_DENIED_MSG.contains("DETACH"));
+    }
+
+    #[test]
+    fn query_still_allows_select_after_attach_denial() {
+        // The authorizer is cleared after each query, so a denied ATTACH must
+        // not poison the next normal read.
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        let _ = db.query("ATTACH 'x.db' AS ext").unwrap_err();
+        let rows = db.query("SELECT * FROM t").unwrap();
+        assert_eq!(rows.len(), 0);
     }
 
     #[test]

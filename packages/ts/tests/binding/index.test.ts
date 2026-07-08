@@ -1,6 +1,6 @@
 // `readFileSync` stays sync: it runs inside `extract` callbacks, and the
 // public `TableDef.extract` signature is synchronous `(filePath) => rows[]`.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -211,6 +211,37 @@ describe("DirSQL", () => {
     ]) {
       await expect(db.query(stmt)).rejects.toThrow(/read-only/i);
     }
+
+    const rows = await db.query("SELECT name FROM items");
+    expect(rows).toEqual([{ name: "apple" }]);
+  });
+
+  it("rejects ATTACH/DETACH via query and creates no file", async () => {
+    const itemDir = join(dir, "items");
+    await mkdir(itemDir, { recursive: true });
+    await writeFile(join(itemDir, "a.json"), JSON.stringify({ name: "apple" }));
+
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE items (name TEXT)",
+          glob: "items/*.json",
+          extract: (filePath: string) => [
+            JSON.parse(readFileSync(filePath, "utf8")),
+          ],
+        },
+      ],
+    });
+
+    const target = join(dir, "attached.db");
+    await expect(db.query(`ATTACH '${target}' AS ext`)).rejects.toThrow(
+      /not authorized/i,
+    );
+    expect(existsSync(target)).toBe(false);
+    await expect(db.query("DETACH ext")).rejects.toThrow(/not authorized/i);
+    // The external db a follow-up SELECT would read never gets attached.
+    await expect(db.query("SELECT * FROM ext.anything")).rejects.toThrow();
 
     const rows = await db.query("SELECT name FROM items");
     expect(rows).toEqual([{ name: "apple" }]);
