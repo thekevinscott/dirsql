@@ -184,6 +184,30 @@ describe("DirSQL", () => {
     });
   });
 
+  describe("construction failure", () => {
+    it("surfaces the error at the query site with no unhandled rejection", async () => {
+      const bootErr = new Error("boom: no such root");
+      const openAsync = vi.fn().mockRejectedValue(bootErr);
+      vi.mocked(getCore).mockReturnValue({
+        DirSQL: { openAsync },
+      } as unknown as ReturnType<typeof getCore>);
+
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown) => unhandled.push(reason);
+      process.on("unhandledRejection", onUnhandled);
+
+      const db = new DirSQL({ root: "./missing-root" });
+      // Let the construction rejection settle before any handler is attached,
+      // mirroring a caller that constructs at module load and queries later.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      await expect(db.query("SELECT 1")).rejects.toBe(bootErr);
+
+      process.off("unhandledRejection", onUnhandled);
+      expect(unhandled).toEqual([]);
+    });
+  });
+
   describe("delegation", () => {
     let inner: FakeInner;
 

@@ -113,6 +113,11 @@ export interface RowEvent {
  * not block the JS event loop even for large directories.
  */
 export class DirSQL {
+  // The tracked construction promise. A no-op `.catch` is attached in the
+  // constructor so a failure is never an unhandled rejection when the caller
+  // constructs without awaiting `ready`; awaiters still observe the rejection.
+  private readonly _ready: Promise<void>;
+
   /**
    * Resolves once the initial directory scan + row extraction have
    * completed, or rejects if construction failed. Every other method on
@@ -120,7 +125,9 @@ export class DirSQL {
    * only necessary when a caller needs to observe construction errors
    * synchronously (without issuing a query first).
    */
-  readonly ready: Promise<void>;
+  get ready(): Promise<void> {
+    return this._ready;
+  }
 
   // Initialized by `ready`. Do NOT touch before awaiting `ready`.
   private _inner!: NativeDirSQL;
@@ -139,7 +146,7 @@ export class DirSQL {
     // Extension paths (possibly bare package names) are resolved inside the
     // promise chain so a resolution error rejects `ready` rather than
     // throwing from the constructor; the core accepts file paths only.
-    this.ready = Promise.resolve()
+    this._ready = Promise.resolve()
       .then(() => {
         const extensions =
           options.extensions?.map((e) => ({
@@ -172,6 +179,7 @@ export class DirSQL {
       .then((inner) => {
         this._inner = inner;
       });
+    this._ready.catch(() => {});
   }
 
   /**
