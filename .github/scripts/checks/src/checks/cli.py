@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import click
 
+from checks.changelog_gate.cli import cli as changelog_gate
 from checks.pytest_gate.cli import cli as pytest_gate
 
 
@@ -15,4 +16,5 @@ def main() -> None:
     """Repo-only CI helper checks for dirsql."""
 
 
+main.add_command(changelog_gate, name="changelog-gate")
 main.add_command(pytest_gate, name="pytest-gate")
