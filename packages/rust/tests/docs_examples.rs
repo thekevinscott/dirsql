@@ -657,30 +657,51 @@ fn it_matches_watching_guide_update_event() {
     std::thread::sleep(std::time::Duration::from_millis(250));
     fs::write(root.path().join("item.txt"), "final").unwrap();
 
-    let event = futures_executor::block_on(futures_util::StreamExt::next(&mut stream))
-        .expect("expected watch event");
+    // `fs::write` truncates to 0 bytes and then writes, so the watcher can
+    // observe an empty intermediate before "final" lands and emit a transient
+    // event carrying name == "". The guide is about eventual state, so drain
+    // events (as `while let Some(event) = stream.next()` would) until the
+    // settled "final" value arrives, bounded by a timeout.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        while let Some(event) =
+            futures_executor::block_on(futures_util::StreamExt::next(&mut stream))
+        {
+            if tx.send(event).is_err() {
+                break;
+            }
+        }
+    });
 
-    // Could be Update or Delete+Insert depending on implementation
-    match event {
-        dirsql::RowEvent::Update {
-            table,
-            new_row,
-            old_row,
-            ..
-        } => {
-            assert_eq!(table, "items");
-            assert_eq!(new_row["name"], Value::Text("final".into()));
-            assert_eq!(old_row["name"], Value::Text("draft".into()));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut last = None;
+    loop {
+        let remaining = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .unwrap_or_default();
+        let event = rx.recv_timeout(remaining).unwrap_or_else(|_| {
+            panic!("timed out waiting for settled 'final' update event; last seen: {last:?}")
+        });
+
+        // Could be Update or Delete+Insert depending on implementation; the
+        // settled event carries name == "final".
+        let settled = match &event {
+            dirsql::RowEvent::Update {
+                table, new_row, ..
+            } => *table == "items" && new_row["name"] == Value::Text("final".into()),
+            dirsql::RowEvent::Insert { table, row, .. } => {
+                *table == "items" && row["name"] == Value::Text("final".into())
+            }
+            dirsql::RowEvent::Delete { table, .. } => {
+                assert_eq!(*table, "items");
+                false
+            }
+            other => panic!("expected update-related event, got: {other:?}"),
+        };
+        if settled {
+            return;
         }
-        dirsql::RowEvent::Delete { table, .. } => {
-            assert_eq!(table, "items");
-            // Expect the insert to follow
-        }
-        dirsql::RowEvent::Insert { table, row, .. } => {
-            assert_eq!(table, "items");
-            assert_eq!(row["name"], Value::Text("final".into()));
-        }
-        other => panic!("expected update-related event, got: {other:?}"),
+        last = Some(event);
     }
 }
 
