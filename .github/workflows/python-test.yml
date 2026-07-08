@@ -132,8 +132,8 @@ jobs:
     # would, build the wheel with `maturin build`, `pip install` it into a
     # fresh venv, and run the installed `dirsql --version` console script
     # plus `import dirsql`. Red here means the PyPI release is broken and
-    # must not go out. This is the install-and-run check `packaging.yml`
-    # does NOT do (that gate only asserts no test files ship in the
+    # must not go out. This is the install-and-run check the `packaging`
+    # gate does NOT do (that gate only asserts no test files ship in the
     # artifact). No mocks.
     name: Packaging smoke (install + run)
     runs-on: ubuntu-latest
