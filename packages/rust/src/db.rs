@@ -995,7 +995,7 @@ mod tests {
     fn is_internal_table_allows_user_tables_and_fs_columns() {
         assert!(!is_internal_table("items"));
         assert!(!is_internal_table("posts"));
-        assert!(!is_internal_table("_path"));
+        assert!(!is_internal_table("path"));
         assert!(!is_internal_table("_dirsq"));
         assert!(!is_internal_table("dirsql_internal_rows"));
     }

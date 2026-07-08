@@ -220,7 +220,7 @@ struct DirSqlInner {
     /// deliver them under the cwd-joined path so the relative prefix no
     /// longer strips). Literal fallback when canonicalization fails (e.g. a
     /// not-yet-created root); the user's `root` — and therefore the initial
-    /// scan and the `_path` virtual column — stays byte-for-byte unchanged.
+    /// scan and the `path` column — stays byte-for-byte unchanged.
     watch_root: PathBuf,
     matcher: TableMatcher,
     extract_map: HashMap<String, Arc<ExtractFn>>,
@@ -1359,7 +1359,7 @@ fn relative_path(root: &Path, path: &Path) -> String {
 ///
 /// A plain config-defined table produces one row per matched file built
 /// entirely from filesystem facts: glob path captures and stat virtuals
-/// (`_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`) are
+/// (`path`, `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`) are
 /// injected by the core pipeline ([`merge_filesystem_facts`]). Its synthesized
 /// extract emits a single empty row per file; the fact-injection layer fills it
 /// in.
@@ -1505,20 +1505,20 @@ fn json_to_value(value: &serde_json::Value) -> Value {
 /// Reserved column names for filesystem-derived virtual columns. These are
 /// always available on every row when declared in the table DDL; if not
 /// declared, they are silently dropped during normalization.
-const STAT_PATH: &str = "_path";
-const STAT_BASENAME: &str = "_basename";
-const STAT_DIR: &str = "_dir";
-const STAT_EXT: &str = "_ext";
-const STAT_SIZE: &str = "_size";
-const STAT_MTIME: &str = "_mtime";
-const STAT_CTIME: &str = "_ctime";
+const STAT_PATH: &str = "path";
+const STAT_BASENAME: &str = "basename";
+const STAT_DIR: &str = "dir";
+const STAT_EXT: &str = "ext";
+const STAT_SIZE: &str = "size";
+const STAT_MTIME: &str = "mtime";
+const STAT_CTIME: &str = "ctime";
 
 /// Compute the filesystem-fact columns for a given file: path-derived
-/// (`_path`, `_basename`, `_dir`, `_ext`) and stat-derived (`_size`,
-/// `_mtime`, `_ctime`).
+/// (`path`, `basename`, `dir`, `ext`) and stat-derived (`size`,
+/// `mtime`, `ctime`).
 fn compute_stat_virtuals(rel_path: &str, abs_path: &Path) -> Row {
     // A missing/unreadable file yields all-`None` (absent columns);
-    // `_mtime`/`_ctime` are `None` when the platform can't supply them or the
+    // `mtime`/`ctime` are `None` when the platform can't supply them or the
     // value predates the epoch.
     let (size, mtime_secs, ctime_secs) = match std::fs::metadata(abs_path) {
         Ok(metadata) => {
@@ -1591,7 +1591,7 @@ fn stat_virtuals(
 /// to those declared in `declared_columns`, so a strict-mode table with a
 /// minimal DDL is not broken by virtuals it didn't ask for. User-provided
 /// values in `raw_rows` win over auto-injected values: an extract that
-/// explicitly emits e.g. `_path` is honored.
+/// explicitly emits e.g. `path` is honored.
 fn merge_filesystem_facts(
     raw_rows: Vec<Row>,
     captures: &HashMap<String, String>,
@@ -1904,7 +1904,7 @@ mod internal_tests {
         let stat = compute_stat_virtuals("bare", Path::new("/nonexistent-xyz/bare"));
         assert_eq!(stat[STAT_PATH], Value::Text("bare".into()));
         assert_eq!(stat[STAT_BASENAME], Value::Text("bare".into()));
-        // `Path::new("bare").parent()` is `Some("")`, so `_dir` is an empty
+        // `Path::new("bare").parent()` is `Some("")`, so `dir` is an empty
         // string rather than absent; there is no extension and no metadata.
         assert!(!stat.contains_key(STAT_EXT));
         assert!(!stat.contains_key(STAT_SIZE));
@@ -2000,7 +2000,7 @@ mod internal_tests {
     }
 
     /// With an absolute root, `process_file_event` strips the `watch_root`
-    /// prefix to yield a root-relative `_path`.
+    /// prefix to yield a root-relative `path`.
     #[test]
     fn process_file_event_strips_watch_root_prefix() {
         let root = PathBuf::from("/ws");
@@ -2009,7 +2009,7 @@ mod internal_tests {
         let db = DirSQL::with_ignore_and_fs(
             &root,
             vec![Table::new(
-                "CREATE TABLE items (name TEXT, _path TEXT)",
+                "CREATE TABLE items (name TEXT, path TEXT)",
                 "**/*.txt",
                 |_| {
                     vec![Row::from_iter([(
@@ -2028,7 +2028,7 @@ mod internal_tests {
         match &events[0] {
             RowEvent::Insert { row, .. } => {
                 assert_eq!(
-                    row.get("_path"),
+                    row.get("path"),
                     Some(&Value::Text("nested/a.txt".to_string())),
                     "watch_root prefix must be stripped to a root-relative path"
                 );
@@ -2047,7 +2047,7 @@ mod internal_tests {
         let mut db = DirSQL::with_ignore_and_fs(
             &root,
             vec![Table::new(
-                "CREATE TABLE items (name TEXT, _path TEXT)",
+                "CREATE TABLE items (name TEXT, path TEXT)",
                 "**/*.txt",
                 |_| {
                     vec![Row::from_iter([(
@@ -2069,7 +2069,7 @@ mod internal_tests {
         match &events[0] {
             RowEvent::Insert { row, .. } => {
                 assert_eq!(
-                    row.get("_path"),
+                    row.get("path"),
                     Some(&Value::Text("b.txt".to_string())),
                     "root fallback must strip the user-supplied root prefix"
                 );
@@ -2762,23 +2762,23 @@ mod internal_tests {
         captures.insert("month".to_string(), "2024-01".to_string());
         captures.insert("undeclared".to_string(), "drop".to_string());
         let mut stat = Row::new();
-        stat.insert("_path".to_string(), Value::Text("2024-01/a.txt".into()));
-        stat.insert("_size".to_string(), Value::Integer(9));
+        stat.insert("path".to_string(), Value::Text("2024-01/a.txt".into()));
+        stat.insert("size".to_string(), Value::Integer(9));
         let raw = vec![Row::from_iter([(
             "name".to_string(),
             Value::Text("x".into()),
         )])];
-        let declared = vec!["name".to_string(), "month".to_string(), "_path".to_string()];
+        let declared = vec!["name".to_string(), "month".to_string(), "path".to_string()];
         let merged = merge_filesystem_facts(raw, &captures, &stat, &declared);
         assert_eq!(merged.len(), 1);
         let row = &merged[0];
         assert_eq!(row["month"], Value::Text("2024-01".into()));
-        assert_eq!(row["_path"], Value::Text("2024-01/a.txt".into()));
+        assert_eq!(row["path"], Value::Text("2024-01/a.txt".into()));
         assert!(
             !row.contains_key("undeclared"),
             "undeclared capture dropped"
         );
-        assert!(!row.contains_key("_size"), "undeclared stat dropped");
+        assert!(!row.contains_key("size"), "undeclared stat dropped");
         assert_eq!(row["name"], Value::Text("x".into()));
     }
 
