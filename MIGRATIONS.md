@@ -11,6 +11,69 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### The seven stat columns dropped their leading underscore (#454, epic #452)
+
+#### Summary
+
+The seven filesystem-fact columns dirsql auto-populates on every table row
+were named `_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`.
+The leading underscore suggested these were a protected/reserved namespace,
+but nothing in the engine ever enforced that — a column declared with one of
+these names was populated the same way regardless, with no validation
+preventing a user from reusing the name for something else. The only
+genuinely enforced reserved namespace in dirsql is `_dirsql_*` (denied at
+prepare time by a SQLite authorizer), which is unaffected by this change.
+The underscore prefix is dropped: the seven columns are now `path`,
+`basename`, `dir`, `ext`, `size`, `mtime`, `ctime`. This is a pure rename —
+the columns' values, types, population rules (opt-in by DDL), and
+precedence versus a row source's own output are all unchanged.
+
+This is a hard cutover with no backward-compatibility shim: a `.dirsql.toml`
+or SDK table declaring the old names now simply gets a table with no
+`path`/`basename`/etc. columns populated (the old names are no longer
+recognized facts), not an error. Any config or code referencing the old
+names must be updated.
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| `.dirsql.toml` `[[table]]` `ddl` | `ddl = "CREATE TABLE files (_path TEXT, _size INTEGER)"` | `ddl = "CREATE TABLE files (path TEXT, size INTEGER)"` |
+| SQL queries | `SELECT _path, _size FROM files` | `SELECT path, size FROM files` |
+| Python `Table(ddl=...)` | `ddl="CREATE TABLE files (_path TEXT)"` | `ddl="CREATE TABLE files (path TEXT)"` |
+| TypeScript `{ ddl, glob }` / `new Table({...})` | `ddl: "CREATE TABLE files (_path TEXT)"` | `ddl: "CREATE TABLE files (path TEXT)"` |
+| Rust `Table::new(ddl, glob, extract)` | `"CREATE TABLE files (_path TEXT)"` | `"CREATE TABLE files (path TEXT)"` |
+| Result-row field access (any SDK) | `row["_path"]` / `row._path` | `row["path"]` / `row.path` |
+
+The same rename applies to every occurrence of the other five columns
+(`_basename`/`_dir`/`_ext`/`_mtime`/`_ctime`) in each surface above.
+
+#### Deprecations removed
+
+_None._ There was no deprecation period for this change — the old names are
+removed outright, not soft-deprecated first.
+
+#### Behavior changes without code changes
+
+_None beyond the rename itself._ A config or query that is not updated does
+not error; it simply stops receiving the affected column's data (the
+column, if declared under the old name, is never populated — same as
+declaring any other column name dirsql doesn't recognize as a fact).
+
+#### Verification
+
+```bash
+mkdir -p /tmp/dirsql-rename-demo && cd /tmp/dirsql-rename-demo
+echo hi > notes.txt
+cat > .dirsql.toml <<'EOF'
+[[table]]
+ddl  = "CREATE TABLE files (path TEXT, basename TEXT, size INTEGER)"
+glob = "*.txt"
+EOF
+dirsql query "SELECT path, basename, size FROM files"
+# expected: [{"basename":"notes.txt","path":"notes.txt","size":3}]
+```
+
 ### A rejected write statement via `query()` now returns HTTP 400, not 500 (#444)
 
 #### Summary
