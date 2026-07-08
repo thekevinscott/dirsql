@@ -11,8 +11,9 @@ from dirsql.resolve_extension import resolve_extension_path
 class _WatchStream:
     """Async iterator that polls for file events."""
 
-    def __init__(self, db):
-        self._db = db
+    def __init__(self, owner):
+        self._owner = owner
+        self._db = None
         self._started = False
         self._buffer = []
 
@@ -21,13 +22,19 @@ class _WatchStream:
 
     async def __anext__(self):
         if not self._started:
-            await asyncio.to_thread(self._db._start_watcher)
+            await self._owner.ready()
+            db = self._owner._db
+            assert db is not None  # ready() returned, so _init_bg set _db
+            self._db = db
+            await asyncio.to_thread(db._start_watcher)
             self._started = True
 
+        db = self._db
+        assert db is not None
         while True:
             if self._buffer:
                 return self._buffer.pop(0)
-            events = await asyncio.to_thread(self._db._poll_events, 200)
+            events = await asyncio.to_thread(db._poll_events, 200)
             if events:
                 self._buffer.extend(events)
 
@@ -166,5 +173,12 @@ class DirSQL:
         return await asyncio.to_thread(db.query, sql)
 
     def watch(self):
-        """Start watching for file changes. Returns an async iterable of RowEvent."""
-        return _WatchStream(self._db)
+        """Start watching for file changes. Returns an async iterable of RowEvent.
+
+        Like :meth:`query`, the returned stream awaits :meth:`ready` on its
+        first iteration before starting the watcher, so calling ``watch``
+        before an explicit ``await db.ready()`` waits for the background scan
+        (and surfaces any initialization error) instead of failing on a
+        still-``None`` ``_db``.
+        """
+        return _WatchStream(self)

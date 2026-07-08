@@ -127,6 +127,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entirely in the shared Rust core, so every install behaves identically with no
   per-SDK surface.
 
+### Fixed
+
+- **Python `DirSQL.watch()` now awaits readiness before starting the watcher
+  (#464, epic #461).** `watch()` previously captured the core handle at call
+  time; when called before the background scan finished (i.e. before an explicit
+  `await db.ready()`), it captured a still-`None` handle permanently and the
+  first iteration raised `AttributeError: 'NoneType' object has no attribute
+  '_start_watcher'`, breaking the stream for good — and a failed init surfaced as
+  that same `AttributeError` rather than the real error. The returned stream now
+  awaits `ready()` and re-reads the core handle on its first iteration, mirroring
+  `DirSQL.query()` and the TypeScript SDK's `watch()`. Restores cross-SDK parity.
+
 ### Changed
 
 - **The default (non-persist) index is now an anonymous disk-backed temp
