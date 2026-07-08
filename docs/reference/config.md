@@ -108,7 +108,7 @@ callback.
 
 ```toml
 [[table]]
-ddl  = "CREATE TABLE comments (thread_id TEXT, _basename TEXT, _mtime INTEGER)"
+ddl  = "CREATE TABLE comments (thread_id TEXT, basename TEXT, mtime INTEGER)"
 glob = "_comments/{thread_id}/*.jsonl"
 
 [[table]]
@@ -157,10 +157,10 @@ path       = "sqlite_vec"            # Python module name; on Node use the
 entrypoint = "sqlite3_vec_init"
 
 [[table]]
-ddl  = "CREATE TABLE comments (thread_id TEXT, _basename TEXT, _mtime INTEGER)"
+ddl  = "CREATE TABLE comments (thread_id TEXT, basename TEXT, mtime INTEGER)"
 glob = "_comments/{thread_id}/*.jsonl"
 
 [[table]]
-ddl  = "CREATE TABLE documents (_path TEXT, _basename TEXT, _size INTEGER)"
+ddl  = "CREATE TABLE documents (path TEXT, basename TEXT, size INTEGER)"
 glob = "**/index.md"
 ```

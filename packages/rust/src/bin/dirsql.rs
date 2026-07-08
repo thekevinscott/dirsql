@@ -350,8 +350,8 @@ fn load_default_state(config_path: &Path) -> AppState {
 fn default_files_table() -> Table {
     Table::new(
         "CREATE TABLE files (\
-         _path TEXT, _basename TEXT, _dir TEXT, _ext TEXT, \
-         _size INTEGER, _mtime INTEGER, _ctime INTEGER)",
+         path TEXT, basename TEXT, dir TEXT, ext TEXT, \
+         size INTEGER, mtime INTEGER, ctime INTEGER)",
         "**/*",
         |_path| vec![Row::new()],
     )
@@ -430,15 +430,7 @@ mod tests {
         let table = default_files_table();
         assert_eq!(table.glob, "**/*");
         assert!(table.ddl.starts_with("CREATE TABLE files ("));
-        for col in [
-            "_path",
-            "_basename",
-            "_dir",
-            "_ext",
-            "_size",
-            "_mtime",
-            "_ctime",
-        ] {
+        for col in ["path", "basename", "dir", "ext", "size", "mtime", "ctime"] {
             assert!(
                 table.ddl.contains(col),
                 "default files DDL must declare {col}, got: {}",

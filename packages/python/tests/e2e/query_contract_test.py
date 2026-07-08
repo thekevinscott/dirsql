@@ -95,7 +95,7 @@ def describe_query_contract():
         (root / "a.txt").write_text("hello")
         cfg = root / ".dirsql.toml"
         cfg.write_text(
-            '[[table]]\nddl = "CREATE TABLE files (_path TEXT)"\nglob = "*.txt"\n'
+            '[[table]]\nddl = "CREATE TABLE files (path TEXT)"\nglob = "*.txt"\n'
         )
 
         port = _free_port()
@@ -134,10 +134,10 @@ def describe_query_contract():
         assert rows == [{"one": 1, "s": "x"}]
 
     def it_serves_a_config_table_row_per_matched_file(server):
-        status, rows = _post_sql(server, "SELECT _path FROM files")
+        status, rows = _post_sql(server, "SELECT path FROM files")
         assert status == 200
         assert len(rows) == 1
-        assert rows[0]["_path"].endswith("a.txt")
+        assert rows[0]["path"].endswith("a.txt")
 
     def it_rejects_a_missing_sql_field_with_400(server):
         status, body = _post_raw(server, b"{}")

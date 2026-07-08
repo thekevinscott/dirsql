@@ -1,8 +1,8 @@
 // Config-driven construction: `new DirSQL(configPath)`.
 //
 // Config-defined tables produce one row per matched file. Each row's columns
-// come from filesystem facts: glob path captures and stat virtuals (`_path`,
-// `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`). Content
+// come from filesystem facts: glob path captures and stat virtuals (`path`,
+// `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`). Content
 // interpretation is intentionally out of scope; for that, register a
 // programmatic Table with your own extract function.
 
@@ -39,7 +39,7 @@ describe("new DirSQL(configPath)", () => {
       configPath,
       `
 [[table]]
-ddl = "CREATE TABLE items (_path TEXT, _basename TEXT)"
+ddl = "CREATE TABLE items (path TEXT, basename TEXT)"
 glob = "items/*.csv"
 `,
     );
@@ -47,13 +47,13 @@ glob = "items/*.csv"
     const db = new DirSQL(configPath);
     await db.ready;
     const rows = await db.query(
-      "SELECT _path, _basename FROM items ORDER BY _path",
+      "SELECT path, basename FROM items ORDER BY path",
     );
     expect(rows).toHaveLength(2);
-    expect(rows[0]._path).toBe("items/a.csv");
-    expect(rows[0]._basename).toBe("a.csv");
-    expect(rows[1]._path).toBe("items/b.csv");
-    expect(rows[1]._basename).toBe("b.csv");
+    expect(rows[0].path).toBe("items/a.csv");
+    expect(rows[0].basename).toBe("a.csv");
+    expect(rows[1].path).toBe("items/b.csv");
+    expect(rows[1].basename).toBe("b.csv");
   });
 
   it("injects glob path captures into rows", async () => {
@@ -63,7 +63,7 @@ glob = "items/*.csv"
       configPath,
       `
 [[table]]
-ddl = "CREATE TABLE comments (thread_id TEXT, _basename TEXT)"
+ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
 glob = "comments/{thread_id}/*.txt"
 `,
     );
@@ -71,7 +71,7 @@ glob = "comments/{thread_id}/*.txt"
     const db = new DirSQL(configPath);
     await db.ready;
     const rows = await db.query(
-      "SELECT thread_id, _basename FROM comments ORDER BY thread_id",
+      "SELECT thread_id, basename FROM comments ORDER BY thread_id",
     );
     expect(rows).toHaveLength(2);
     expect(rows[0].thread_id).toBe("thread-1");
@@ -85,7 +85,7 @@ glob = "comments/{thread_id}/*.txt"
       configPath,
       `
 [[table]]
-ddl = "CREATE TABLE files (_path TEXT, _basename TEXT, _dir TEXT, _ext TEXT, _size INTEGER, _mtime INTEGER)"
+ddl = "CREATE TABLE files (path TEXT, basename TEXT, dir TEXT, ext TEXT, size INTEGER, mtime INTEGER)"
 glob = "docs/*.md"
 `,
     );
@@ -93,17 +93,17 @@ glob = "docs/*.md"
     const db = new DirSQL(configPath);
     await db.ready;
     const rows = await db.query(
-      "SELECT _path, _basename, _dir, _ext, _size, _mtime FROM files",
+      "SELECT path, basename, dir, ext, size, mtime FROM files",
     );
     expect(rows).toHaveLength(1);
     const r = rows[0];
-    expect(r._path).toBe("docs/readme.md");
-    expect(r._basename).toBe("readme.md");
-    expect(r._dir).toBe("docs");
-    expect(r._ext).toBe("md");
-    expect(r._size).toBe(body.length);
-    expect(typeof r._mtime).toBe("number");
-    expect(r._mtime as number).toBeGreaterThan(0);
+    expect(r.path).toBe("docs/readme.md");
+    expect(r.basename).toBe("readme.md");
+    expect(r.dir).toBe("docs");
+    expect(r.ext).toBe("md");
+    expect(r.size).toBe(body.length);
+    expect(typeof r.mtime).toBe("number");
+    expect(r.mtime as number).toBeGreaterThan(0);
   });
 
   it("respects ignore patterns from config", async () => {
@@ -116,16 +116,16 @@ glob = "docs/*.md"
 ignore = ["**/node_modules/**"]
 
 [[table]]
-ddl = "CREATE TABLE items (_path TEXT)"
+ddl = "CREATE TABLE items (path TEXT)"
 glob = "data/**/*.json"
 `,
     );
 
     const db = new DirSQL(configPath);
     await db.ready;
-    const rows = await db.query("SELECT _path FROM items");
+    const rows = await db.query("SELECT path FROM items");
     expect(rows).toHaveLength(1);
-    expect(rows[0]._path).toBe("data/good.json");
+    expect(rows[0].path).toBe("data/good.json");
   });
 
   it("loads multiple tables", async () => {
@@ -135,23 +135,23 @@ glob = "data/**/*.json"
       configPath,
       `
 [[table]]
-ddl = "CREATE TABLE posts (_basename TEXT)"
+ddl = "CREATE TABLE posts (basename TEXT)"
 glob = "posts/*.txt"
 
 [[table]]
-ddl = "CREATE TABLE authors (_basename TEXT)"
+ddl = "CREATE TABLE authors (basename TEXT)"
 glob = "authors/*.txt"
 `,
     );
 
     const db = new DirSQL(configPath);
     await db.ready;
-    const posts = await db.query("SELECT _basename FROM posts");
-    const authors = await db.query("SELECT _basename FROM authors");
+    const posts = await db.query("SELECT basename FROM posts");
+    const authors = await db.query("SELECT basename FROM authors");
     expect(posts).toHaveLength(1);
     expect(authors).toHaveLength(1);
-    expect(posts[0]._basename).toBe("hello.txt");
-    expect(authors[0]._basename).toBe("alice.txt");
+    expect(posts[0].basename).toBe("hello.txt");
+    expect(authors[0].basename).toBe("alice.txt");
   });
 
   it("rejects missing config files", async () => {

@@ -66,7 +66,7 @@ model = StaticModel.from_pretrained("minishlab/potion-base-8M")
 vector = model.encode([body["q"]])[0]
 needle = json.dumps([round(float(x), 6) for x in vector])
 print(
-    "SELECT _path, ROUND(vec_distance_cosine(embedding, '%s'), 3) AS distance "
+    "SELECT path, ROUND(vec_distance_cosine(embedding, '%s'), 3) AS distance "
     "FROM notes ORDER BY distance LIMIT 3" % needle
 )
 ```
@@ -89,7 +89,7 @@ path       = "sqlite_vec"          # Python module name; see note below
 entrypoint = "sqlite3_vec_init"
 
 [[table]]
-ddl     = "CREATE TABLE notes (_path TEXT, text TEXT, embedding TEXT)"
+ddl     = "CREATE TABLE notes (path TEXT, text TEXT, embedding TEXT)"
 glob    = "notes/*.md"
 on-file = "uv run --with model2vec python embed.py {path}"
 ```
@@ -110,7 +110,7 @@ uvx --with sqlite-vec dirsql query '{"q": "how do I cook pasta?"}'
 ```
 
 ```json
-[{"_path":"notes/pasta.md","distance":0.315},{"_path":"notes/tomatoes.md","distance":0.881},{"_path":"notes/branches.md","distance":0.92}]
+[{"path":"notes/pasta.md","distance":0.315},{"path":"notes/tomatoes.md","distance":0.881},{"path":"notes/branches.md","distance":0.92}]
 ```
 
 ```bash
@@ -118,7 +118,7 @@ uvx --with sqlite-vec dirsql query '{"q": "reviewing code on github"}'
 ```
 
 ```json
-[{"_path":"notes/branches.md","distance":0.51},{"_path":"notes/pasta.md","distance":1.033},{"_path":"notes/tomatoes.md","distance":1.074}]
+[{"path":"notes/branches.md","distance":0.51},{"path":"notes/pasta.md","distance":1.033},{"path":"notes/tomatoes.md","distance":1.074}]
 ```
 
 Neither question shares a keyword with its top note — "cook" appears

@@ -315,7 +315,7 @@ marshaling, delegation, watch) and `tests/integration/extensions.test.ts`
 |----------------------------|--------|------|------------|
 | Construct from config file | Y      | Y    | Y          |
 | Explicit root overrides config root | Y      | Y    | Y          |
-| One row per matched file + stat virtuals (`_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`) | Y | Y | Y |
+| One row per matched file + stat columns (`path`, `basename`, `dir`, `ext`, `size`, `mtime`) | Y | Y | Y |
 | Glob path captures promoted to columns | Y | Y | Y |
 | Config `[dirsql].ignore` respected | Y | Y | Y |
 | Multiple `[[table]]` entries | Y | Y | Y |

@@ -24,7 +24,7 @@ fn on_file_rows_appear_in_query_results() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE papers (paper_id TEXT, title TEXT, _basename TEXT)"
+ddl = "CREATE TABLE papers (paper_id TEXT, title TEXT, basename TEXT)"
 glob = "**/meta.json"
 on-file = "cat {path}"
 "#,
@@ -40,14 +40,14 @@ on-file = "cat {path}"
 
     let db = DirSQL::from_config(root.path()).unwrap();
     let rows = db
-        .query("SELECT paper_id, title, _basename FROM papers ORDER BY paper_id")
+        .query("SELECT paper_id, title, basename FROM papers ORDER BY paper_id")
         .unwrap();
 
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["paper_id"], Value::Text("a".into()));
     assert_eq!(rows[0]["title"], Value::Text("First".into()));
     // Filesystem facts are still merged onto on-file rows.
-    assert_eq!(rows[0]["_basename"], Value::Text("meta.json".into()));
+    assert_eq!(rows[0]["basename"], Value::Text("meta.json".into()));
     assert_eq!(rows[1]["paper_id"], Value::Text("b".into()));
     assert_eq!(rows[1]["title"], Value::Text("Second".into()));
 }

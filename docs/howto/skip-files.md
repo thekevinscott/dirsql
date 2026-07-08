@@ -22,7 +22,7 @@ Exclude the noise in `.dirsql.toml`:
 ignore = ["notes/drafts/**", "**/*.tmp"]
 
 [[table]]
-ddl  = "CREATE TABLE notes (_path TEXT)"
+ddl  = "CREATE TABLE notes (path TEXT)"
 glob = "notes/**/*"
 ```
 
@@ -32,11 +32,11 @@ ignored file never reaches any table — even one whose glob would match it.
 ## 2. Confirm what made it in
 
 ```bash
-dirsql query "SELECT _path FROM notes ORDER BY _path"
+dirsql query "SELECT path FROM notes ORDER BY path"
 ```
 
 ```json
-[{"_path":"notes/final.md"}]
+[{"path":"notes/final.md"}]
 ```
 
 ## Notes

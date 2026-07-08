@@ -13,7 +13,7 @@ directory you want to index, create a `.dirsql.toml` with one
 
 ```toml
 [[table]]
-ddl  = "CREATE TABLE posts (_path TEXT, _size INTEGER, _mtime INTEGER)"
+ddl  = "CREATE TABLE posts (path TEXT, size INTEGER, mtime INTEGER)"
 glob = "posts/**/*.md"
 ```
 
@@ -29,11 +29,11 @@ glob = "posts/**/*.md"
 Each matched file is one row:
 
 ```bash
-dirsql query "SELECT _path, _size FROM posts ORDER BY _path"
+dirsql query "SELECT path, size FROM posts ORDER BY path"
 ```
 
 ```json
-[{"_path":"posts/2024/hello.md","_size":21},{"_path":"posts/2025/again.md","_size":55}]
+[{"path":"posts/2024/hello.md","size":21},{"path":"posts/2025/again.md","size":55}]
 ```
 
 Files that don't match the glob (a `README.txt` next to `posts/`, say) are

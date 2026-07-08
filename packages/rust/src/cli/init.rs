@@ -104,7 +104,7 @@ Each `[[table]]` block has:
 
 Each row is one matched file. Columns come from these sources ONLY:
 - Glob path captures: `{name}` segments in the glob become columns named `name`.
-- Stat virtuals (reserved column names): `_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`.
+- Stat virtuals (reserved column names): `path`, `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`.
 
 Do NOT include columns sourced from file content (JSON keys, CSV headers, frontmatter, etc.). Content parsing is not configured in `.dirsql.toml`.
 
@@ -112,12 +112,12 @@ Output ONLY the TOML, with no surrounding prose, no markdown fences, no explanat
 
 Example for a flat directory of mixed files:
 [[table]]
-ddl  = "CREATE TABLE files (_path TEXT, _ext TEXT, _size INTEGER)"
+ddl  = "CREATE TABLE files (path TEXT, ext TEXT, size INTEGER)"
 glob = "*"
 
 Example with path captures:
 [[table]]
-ddl  = "CREATE TABLE photos (month TEXT, _basename TEXT, _mtime INTEGER)"
+ddl  = "CREATE TABLE photos (month TEXT, basename TEXT, mtime INTEGER)"
 glob = "{month}/*.jpg"
 "#;
 
@@ -129,7 +129,7 @@ mod tests {
     fn prompt_mentions_filesystem_fact_constraints() {
         let p = build_prompt();
         assert!(p.contains("[[table]]"));
-        assert!(p.contains("_path"));
+        assert!(p.contains("path"));
         assert!(p.contains("Output ONLY the TOML"));
     }
 

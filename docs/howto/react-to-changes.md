@@ -33,7 +33,7 @@ The stream delivers the resulting row change:
 
 ```
 event: row
-data: {"action":"insert","file_path":"inbox/two.txt","old_row":null,"row":{"_basename":"two.txt","_ctime":1783170226,"_dir":"inbox","_ext":"txt","_mtime":1783170226,"_path":"inbox/two.txt","_size":7},"table":"files"}
+data: {"action":"insert","file_path":"inbox/two.txt","old_row":null,"row":{"basename":"two.txt","ctime":1783170226,"dir":"inbox","ext":"txt","mtime":1783170226,"path":"inbox/two.txt","size":7},"table":"files"}
 ```
 
 Edits arrive as `update` events carrying both the old and new row;

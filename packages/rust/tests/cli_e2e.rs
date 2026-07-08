@@ -38,7 +38,7 @@ fn blog_fixture() -> TempDir {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT, _basename TEXT, _size INTEGER)"
+ddl = "CREATE TABLE posts (title TEXT, author TEXT, basename TEXT, size INTEGER)"
 glob = "posts/{author}/{title}.json"
 "#,
     )
@@ -58,7 +58,7 @@ fn quoted_blog_fixture() -> TempDir {
         // Single-quoted TOML string so the embedded double quotes are literal.
         r#"
 [[table]]
-ddl = 'CREATE TABLE "posts" (title TEXT, author TEXT, _basename TEXT)'
+ddl = 'CREATE TABLE "posts" (title TEXT, author TEXT, basename TEXT)'
 glob = "posts/{author}/{title}.json"
 "#,
     )
@@ -387,7 +387,7 @@ fn no_config_serves_default_files_table() {
 
     let resp = Client::new()
         .post(format!("http://localhost:{port}/query"))
-        .json(&json!({"sql": "SELECT _basename FROM files"}))
+        .json(&json!({"sql": "SELECT basename FROM files"}))
         .send()
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -397,7 +397,7 @@ fn no_config_serves_default_files_table() {
         .as_array()
         .unwrap()
         .iter()
-        .filter_map(|r| r["_basename"].as_str())
+        .filter_map(|r| r["basename"].as_str())
         .collect();
     assert!(
         names.contains(&"readme.md"),
@@ -426,7 +426,7 @@ fn pre_query_hook_rewrites_body_into_sql_over_http() {
 pre-query = "sh to_sql.sh {args}"
 
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT, _basename TEXT, _size INTEGER)"
+ddl = "CREATE TABLE posts (title TEXT, author TEXT, basename TEXT, size INTEGER)"
 glob = "posts/{author}/{title}.json"
 "#,
     )
@@ -473,7 +473,7 @@ fn post_query_hook_reshapes_response_over_http() {
 post-query = "sh wrap.sh {args}"
 
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT, _basename TEXT, _size INTEGER)"
+ddl = "CREATE TABLE posts (title TEXT, author TEXT, basename TEXT, size INTEGER)"
 glob = "posts/{author}/{title}.json"
 "#,
     )
@@ -517,7 +517,7 @@ pre-query = "sh slow_to_sql.sh {args}"
 hook-timeout = 1
 
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT, _basename TEXT, _size INTEGER)"
+ddl = "CREATE TABLE posts (title TEXT, author TEXT, basename TEXT, size INTEGER)"
 glob = "posts/{author}/{title}.json"
 "#,
     )
@@ -565,7 +565,7 @@ pre-query = "sh slowish_to_sql.sh {args}"
 hook-timeout = 60
 
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT, _basename TEXT, _size INTEGER)"
+ddl = "CREATE TABLE posts (title TEXT, author TEXT, basename TEXT, size INTEGER)"
 glob = "posts/{author}/{title}.json"
 "#,
     )
@@ -613,7 +613,7 @@ post-query = "sh slow_wrap.sh {args}"
 hook-timeout = 1
 
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT, _basename TEXT, _size INTEGER)"
+ddl = "CREATE TABLE posts (title TEXT, author TEXT, basename TEXT, size INTEGER)"
 glob = "posts/{author}/{title}.json"
 "#,
     )
@@ -757,7 +757,7 @@ fn query_subcommand_serves_default_files_table_without_config() {
     let dir = TempDir::new().unwrap();
     fs::write(dir.path().join("readme.md"), "hello").unwrap();
 
-    let out = run_query_subcommand(dir.path(), "SELECT _basename FROM files");
+    let out = run_query_subcommand(dir.path(), "SELECT basename FROM files");
     assert!(
         out.status.success(),
         "`dirsql query` must serve the default files table, got {out:?}"
@@ -767,7 +767,7 @@ fn query_subcommand_serves_default_files_table_without_config() {
         .as_array()
         .unwrap()
         .iter()
-        .filter_map(|r| r["_basename"].as_str())
+        .filter_map(|r| r["basename"].as_str())
         .collect();
     assert!(
         names.contains(&"readme.md"),

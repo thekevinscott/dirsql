@@ -68,12 +68,12 @@ default `./.dirsql.toml`) with a single table named `files`:
 
 - Glob: `**/*` — every file under the root, at any depth, no ignores.
 - One row per file, with all seven
-  [stat columns](./columns.md): `_path`, `_basename`, `_dir`, `_ext`,
-  `_size`, `_mtime`, `_ctime`.
+  [stat columns](./columns.md): `path`, `basename`, `dir`, `ext`,
+  `size`, `mtime`, `ctime`.
 
 ```bash
 curl -s localhost:7117/query -H 'content-type: application/json' \
-  -d '{"sql":"SELECT _basename, _size FROM files ORDER BY _size DESC LIMIT 5"}'
+  -d '{"sql":"SELECT basename, size FROM files ORDER BY size DESC LIMIT 5"}'
 ```
 
 A config file, when present, fully overrules this default. A *missing*
@@ -104,8 +104,8 @@ Run one SQL query from the shell — for ad-hoc inspection, scripting, and
 docs verification snippets — without booting the server and `curl`ing it:
 
 ```bash
-dirsql query "SELECT _basename, _size FROM files ORDER BY _size DESC LIMIT 5"
-# [{"_basename":"model.bin","_size":104857600}, …]
+dirsql query "SELECT basename, size FROM files ORDER BY size DESC LIMIT 5"
+# [{"basename":"model.bin","size":104857600}, …]
 
 dirsql query "SELECT COUNT(*) AS n FROM posts" | jq '.[0].n'
 ```

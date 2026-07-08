@@ -252,7 +252,7 @@ pub struct ExtensionSpec {
 /// A config-defined table maps a glob pattern to a SQL DDL. Each matched
 /// file produces one row whose columns are derived from filesystem facts:
 /// glob path captures (named `{placeholder}` segments) and stat virtuals
-/// (`_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`).
+/// (`path`, `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`).
 /// Content interpretation (frontmatter, JSON dot-paths, CSV parsing, etc.)
 /// is intentionally out of scope; for that, register a programmatic
 /// [`crate::Table`] with your own extract closure.
@@ -410,11 +410,11 @@ mod tests {
 ignore = ["node_modules/**", ".git/**"]
 
 [[table]]
-ddl = "CREATE TABLE comments (thread_id TEXT, _path TEXT)"
+ddl = "CREATE TABLE comments (thread_id TEXT, path TEXT)"
 glob = "_comments/{thread_id}/index.jsonl"
 
 [[table]]
-ddl = "CREATE TABLE items (_path TEXT, _size INTEGER)"
+ddl = "CREATE TABLE items (path TEXT, size INTEGER)"
 glob = "catalog/*.json"
 strict = true
 "#;
@@ -423,7 +423,7 @@ strict = true
         assert_eq!(config.tables.len(), 2);
 
         let t0 = &config.tables[0];
-        assert_eq!(t0.ddl, "CREATE TABLE comments (thread_id TEXT, _path TEXT)");
+        assert_eq!(t0.ddl, "CREATE TABLE comments (thread_id TEXT, path TEXT)");
         assert_eq!(t0.glob, "_comments/{thread_id}/index.jsonl");
         assert!(t0.strict.is_none());
 
@@ -501,7 +501,7 @@ glob = "*.json"
 root = "docs"
 
 [[table]]
-ddl = "CREATE TABLE t (_path TEXT)"
+ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -512,7 +512,7 @@ glob = "*.json"
     fn root_absent_by_default() {
         let toml = r#"
 [[table]]
-ddl = "CREATE TABLE t (_path TEXT)"
+ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -526,7 +526,7 @@ glob = "*.json"
 root = "/tmp/data"
 
 [[table]]
-ddl = "CREATE TABLE t (_path TEXT)"
+ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -537,7 +537,7 @@ glob = "*.json"
     fn persist_defaults_to_false() {
         let toml = r#"
 [[table]]
-ddl = "CREATE TABLE t (_path TEXT)"
+ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -553,7 +553,7 @@ persist = true
 persist_path = "/var/cache/dirsql.db"
 
 [[table]]
-ddl = "CREATE TABLE t (_path TEXT)"
+ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -568,15 +568,15 @@ glob = "*.json"
     fn multiple_tables_preserve_order() {
         let toml = r#"
 [[table]]
-ddl = "CREATE TABLE a (_path TEXT)"
+ddl = "CREATE TABLE a (path TEXT)"
 glob = "a/*.json"
 
 [[table]]
-ddl = "CREATE TABLE b (_path TEXT)"
+ddl = "CREATE TABLE b (path TEXT)"
 glob = "b/*.csv"
 
 [[table]]
-ddl = "CREATE TABLE c (_path TEXT)"
+ddl = "CREATE TABLE c (path TEXT)"
 glob = "c/*.yaml"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -592,7 +592,7 @@ glob = "c/*.yaml"
         // keys (e.g. `format`) load with the key dropped.
         let toml = r#"
 [[table]]
-ddl = "CREATE TABLE t (_path TEXT)"
+ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
 format = "json"
 "#;
@@ -608,7 +608,7 @@ path = "./ext/vec0.dylib"
 entrypoint = "sqlite3_vec_init"
 
 [[table]]
-ddl = "CREATE TABLE t (_path TEXT)"
+ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -648,7 +648,7 @@ entrypoint = "sqlite3_x_init"
     fn extensions_default_empty_when_absent() {
         let toml = r#"
 [[table]]
-ddl = "CREATE TABLE t (_path TEXT)"
+ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -690,7 +690,7 @@ on-file = "uv run python extract_papers.py {path}"
     fn on_file_absent_is_none() {
         let toml = r#"
 [[table]]
-ddl = "CREATE TABLE t (_path TEXT)"
+ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -701,7 +701,7 @@ glob = "*.json"
     fn on_file_empty_errors() {
         let toml = r#"
 [[table]]
-ddl = "CREATE TABLE t (_path TEXT)"
+ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
 on-file = "   "
 "#;
@@ -719,7 +719,7 @@ on-file = "   "
 pre-query = "uv run python to_sql.py {args}"
 
 [[table]]
-ddl = "CREATE TABLE t (_path TEXT)"
+ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -733,7 +733,7 @@ glob = "*.json"
     fn pre_query_absent_is_none() {
         let toml = r#"
 [[table]]
-ddl = "CREATE TABLE t (_path TEXT)"
+ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -760,7 +760,7 @@ pre-query = "   "
 post-query = "jq '{results: .}'"
 
 [[table]]
-ddl = "CREATE TABLE t (_path TEXT)"
+ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -771,7 +771,7 @@ glob = "*.json"
     fn post_query_absent_is_none() {
         let toml = r#"
 [[table]]
-ddl = "CREATE TABLE t (_path TEXT)"
+ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
 "#;
         let config = load_config_str(toml).unwrap();
@@ -821,7 +821,7 @@ path = "vec0.so"
 entrypoint = "sqlite3_vec_init"
 
 [[table]]
-ddl = "CREATE TABLE t (_path TEXT)"
+ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
 "#);
         let merged = combine_configs(&[(src("/proj/.dirsql.toml"), config.clone())]).unwrap();
@@ -841,16 +841,16 @@ glob = "*.json"
     fn combine_concatenates_tables_in_input_order() {
         let a = cfg(r#"
 [[table]]
-ddl = "CREATE TABLE a (_path TEXT)"
+ddl = "CREATE TABLE a (path TEXT)"
 glob = "a/*.json"
 
 [[table]]
-ddl = "CREATE TABLE b (_path TEXT)"
+ddl = "CREATE TABLE b (path TEXT)"
 glob = "b/*.json"
 "#);
         let b = cfg(r#"
 [[table]]
-ddl = "CREATE TABLE c (_path TEXT)"
+ddl = "CREATE TABLE c (path TEXT)"
 glob = "c/*.json"
 "#);
         let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
@@ -858,9 +858,9 @@ glob = "c/*.json"
         assert_eq!(
             ddls,
             vec![
-                "CREATE TABLE a (_path TEXT)",
-                "CREATE TABLE b (_path TEXT)",
-                "CREATE TABLE c (_path TEXT)",
+                "CREATE TABLE a (path TEXT)",
+                "CREATE TABLE b (path TEXT)",
+                "CREATE TABLE c (path TEXT)",
             ]
         );
         assert_eq!(merged.tables[2].glob, "c/*.json");
