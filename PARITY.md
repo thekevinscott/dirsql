@@ -110,13 +110,16 @@ a "not authorized" error — no per-binding surface.
 | Watch                      | `async for event in db.watch()`       | `db.watch()? -> WatchStream` (Stream trait) |
 
 **Ready semantics — Python and TypeScript transparently await `ready`.** The
-Python `DirSQL.query()` and the TypeScript `db.query()` await readiness
-internally, so a query issued immediately after construction (before an
-explicit `await db.ready()`) waits for the scan instead of failing. (Python
-previously raised `AttributeError` in that window; now fixed to wait like
-TypeScript.) Rust's `AsyncDirSQL` is intentionally more explicit: its methods
-require a prior `ready().await` and return a `"not ready"` error otherwise — a
-language-idiomatic difference, not unintended drift.
+Python `DirSQL.query()` / `DirSQL.watch()` and the TypeScript `db.query()` /
+`db.watch()` await readiness internally, so a query or watch issued immediately
+after construction (before an explicit `await db.ready()`) waits for the scan
+instead of failing. (Python `query()` previously raised `AttributeError` in that
+window, and Python `watch()` captured a `None` core handle permanently; both are
+now fixed to wait like TypeScript — the TS `watch()` already did `await this.ready`
+on first iteration, so this restores parity.) Rust's `AsyncDirSQL` is intentionally
+more explicit: its methods require a prior `ready().await` and return a
+`"not ready"` error otherwise — a language-idiomatic difference, not unintended
+drift.
 
 **TypeScript note:** JS is async by default, so there is no separate `AsyncDirSQL` class.
 The single `DirSQL` class has `ready: Promise<void>` (an awaitable property) and
