@@ -26,14 +26,20 @@ jobs:
       - name: Install just
         uses: extractions/setup-just@v2
 
+      # Lint/format only touch the `.py` source and never execute the
+      # compiled extension, so skip installing/building the local maturin
+      # project (`uv sync` would otherwise pay a full Rust build just to run
+      # ruff). `uv run --no-sync` keeps the `ruff` invocations from
+      # re-triggering the project install that a plain `uv run` performs
+      # implicitly.
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --no-install-project
         working-directory: packages/python
 
       - name: Lint
-        run: uv run ruff check .
+        run: uv run --no-sync ruff check .
         working-directory: packages/python
 
       - name: Format check
-        run: uv run ruff format --check .
+        run: uv run --no-sync ruff format --check .
         working-directory: packages/python
