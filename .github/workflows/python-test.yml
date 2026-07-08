@@ -41,6 +41,20 @@ jobs:
       - name: Install just
         uses: extractions/setup-just@v2
 
+      # `uv sync` builds the maturin extension (once implicitly, then again
+      # explicitly via `maturin develop` below); the workspace `target/` dir
+      # is shared across matrix python versions (there is no per-version
+      # target-dir override), so a single Cargo.lock-keyed cache serves both
+      # legs of this matrix and every other python-test job.
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+
       - name: Install dependencies
         run: uv sync
         working-directory: packages/python
@@ -76,6 +90,15 @@ jobs:
       - name: Install just
         uses: extractions/setup-just@v2
 
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+
       - name: Install dependencies
         run: uv sync
         working-directory: packages/python
@@ -110,6 +133,15 @@ jobs:
 
       - name: Install just
         uses: extractions/setup-just@v2
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
       - name: Install dependencies
         run: uv sync
