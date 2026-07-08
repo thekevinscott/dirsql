@@ -3,7 +3,7 @@ name: GHA Scripts
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
-# CI logic extracted out of workflow YAML lives in .github/scripts/ with
+# CI logic extracted out of workflow YAML lives in internals/checks with
 # colocated unit tests (AGENTS.md "CI Workflows"). This gate runs those tests
 # under a 100% coverage floor so the extracted logic stays tested. The job is
 # itself trivial glue -- install pytest, run it -- per the rule it enforces.
@@ -11,11 +11,11 @@ on:
   push:
     branches: [main]
     paths:
-      - '.github/scripts/**'
+      - 'internals/checks/**'
       - '.github/workflows/gha-scripts.yml'
   pull_request:
     paths:
-      - '.github/scripts/**'
+      - 'internals/checks/**'
       - '.github/workflows/gha-scripts.yml'
 
 concurrency:
@@ -36,11 +36,11 @@ jobs:
         uses: astral-sh/setup-uv@v7
 
       - name: Sync the checks package
-        run: uv sync --project .github/scripts/checks
+        run: uv sync --project internals/checks
 
       # pytest_gate translates pytest exit 5 (no tests collected) to 0, so an
       # empty scripts dir passes cleanly while pytest's own recursive collection
       # finds nested `.../foo_test.py`. Any other nonzero (test or coverage
       # failure) propagates. The gate here runs itself over the checks package.
-      - name: Run .github/scripts/checks unit tests (100% coverage)
-        run: uv run --project .github/scripts/checks dirsql-checks pytest-gate .github/scripts/checks/src --cov=checks --cov-report=term-missing --cov-fail-under=100
+      - name: Run internals/checks unit tests (100% coverage)
+        run: uv run --project internals/checks dirsql-checks pytest-gate internals/checks/src --cov=checks --cov-report=term-missing --cov-fail-under=100

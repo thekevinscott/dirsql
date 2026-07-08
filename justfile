@@ -96,8 +96,12 @@ test-packaging:
     testing-conventions packaging --language rust "$work"/crate/dirsql-*
 
 # CI test target (unit + integration + binding, no e2e)
+# Imports the pytest-gate check's pure `run` directly via PYTHONPATH rather than
+# the installed `dirsql-checks` entry point -- this must run under the ambient
+# `packages/python` venv (which has dirsql + its test deps), not internals/checks'
+# own venv (which has neither).
 test-ci:
-    uv run python .github/scripts/pytest_gate.py packages/python/dirsql/ packages/python/tests/integration/ packages/python/tests/binding/ -x -q --tb=short
+    PYTHONPATH=internals/checks/src uv run python -c "import sys; from checks.pytest_gate.gate import run; sys.exit(run(sys.argv[1:]))" packages/python/dirsql/ packages/python/tests/integration/ packages/python/tests/binding/ -x -q --tb=short
 
 # Run Rust tests
 test-rust:
