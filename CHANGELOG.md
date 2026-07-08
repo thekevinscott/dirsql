@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`query()` now rejects `ATTACH`/`DETACH` (#462, epic #461).** SQLite classifies `ATTACH` as read-only, so it slipped past the read-only gate on `query()` — a caller reaching the surface (SDK `query`, CLI `POST /query`, `dirsql query`) could run `ATTACH '/path/x.db' AS ext` to create an arbitrary file on disk and then read an external database via `SELECT ... FROM ext.*`. The query-path authorizer now denies both `ATTACH` and `DETACH` at prepare time, surfaced as the same not-authorized error the `_dirsql_*` denial uses, so neither ever executes and no file is created. All other effectful statements were already blocked as writes; `ATTACH`/`DETACH` were the only read-only-classified actions that leaked. See `MIGRATIONS.md`.
+
 ### Fixed
 
 - **TypeScript SDK surfaces native-load and construction errors instead of masking them (#467, epic #461).** The native-addon loader no longer swallows every error from the platform `@dirsql/lib-*` sub-package: only a genuine `MODULE_NOT_FOUND` falls through to the dev-path binary, while any other loader failure (ABI/glibc mismatch, corrupt binary) now propagates verbatim rather than being replaced by a misleading "Cannot find module .../dirsql.node". The `DirSQL` constructor also attaches a no-op handler to its internal readiness promise, so constructing without awaiting `ready` (as the docs encourage) can no longer terminate the process with an unhandled rejection when construction fails — the real error surfaces at the first `query()` / `await db.ready` instead.

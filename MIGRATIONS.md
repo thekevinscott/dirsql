@@ -67,6 +67,47 @@ except RuntimeError as e:
     print("raised:", "exceeds" in str(e))   # -> raised: True
 ```
 
+### `query()` now rejects `ATTACH`/`DETACH` (#462, epic #461)
+
+#### Summary
+
+`query()` — the read-only SQL surface exposed by every SDK (`DirSQL.query`) and
+by the CLI (`POST /query`, `dirsql query "<sql>"`) — previously allowed
+`ATTACH` and `DETACH`. SQLite reports `ATTACH` as read-only via
+`sqlite3_stmt_readonly`, so it passed the read-only gate; but `ATTACH` creates a
+file on disk and opens an arbitrary external database, which a follow-up
+`SELECT ... FROM ext.*` could then read. The query-path authorizer now denies
+both statements at prepare time. This is a behavior change with no API change:
+the same method signatures accept the same inputs, but an `ATTACH`/`DETACH`
+that used to succeed now raises a not-authorized error.
+
+#### Required changes
+
+_None._ The method signatures are unchanged. Callers that relied on
+`ATTACH`/`DETACH` through `query()` (never a documented capability) must stop;
+there is no replacement on this surface.
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- `DirSQL.query` / `POST /query` / `dirsql query`: an `ATTACH` or `DETACH`
+  statement previously prepared and executed (creating/opening the target
+  database); it now fails at prepare time with a not-authorized error
+  (`DirSqlError::Unauthorized` in Rust; a raised exception carrying
+  `not authorized` in Python/TypeScript) and no file is created. All other
+  effectful statements already failed the read-only gate and are unaffected.
+
+#### Verification
+
+```bash
+dirsql query "ATTACH '/tmp/evil.db' AS ext"
+# expected: a non-zero exit with an error mentioning "not authorized",
+# and /tmp/evil.db is NOT created.
+```
+
 ### The seven stat columns dropped their leading underscore (#454, epic #452)
 
 #### Summary
