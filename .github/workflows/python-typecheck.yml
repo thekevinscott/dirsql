@@ -16,6 +16,10 @@ on:
       - 'packages/python/**/*.pyi'
       - 'packages/python/pyproject.toml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ty:
     runs-on: ubuntu-latest
