@@ -139,15 +139,13 @@ stderr, with exit code `1`.
 
 ## `dirsql init`
 
-Writes a starter `.dirsql.toml`: the exact single `files` table
-[zero-config mode](./config.md) serves, over every file in the directory
-using the [stat columns](./columns.md) — never content-derived columns.
-`init` does not inspect the target directory; the written content is fixed,
-so the two surfaces can never drift apart. No LLM, no network.
+Writes a starter `.dirsql.toml`:
 
 ```bash
 dirsql init
 ```
+
+You can further tweak this config as needed.
 
 ### Flags
 
