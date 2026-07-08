@@ -19,13 +19,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  unit:
-    name: Unit tests (Node ${{ matrix.node }})
+  build:
+    # Builds the napi addon once and shares it with unit/binding/smoke below
+    # (#483) instead of each job/matrix-cell rebuilding it independently.
+    # The addon is N-API (napi6, see packages/ts/napi/Cargo.toml), which is
+    # ABI-stable across Node majors, so one build serves the whole Node
+    # 20/22/24 matrix.
+    name: Build native module
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        node: ["20", "22", "24"]
     steps:
       - uses: actions/checkout@v6
 
@@ -36,6 +37,46 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        working-directory: packages/ts
+        run: pnpm install
+
+      - name: Build native module + stage platform
+        working-directory: packages/ts
+        run: pnpm build
+
+      - name: Upload native build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ts-native-build
+          path: |
+            packages/ts/dirsql.node
+            packages/ts/index.d.ts
+            packages/ts/dist
+            packages/ts/build
+          retention-days: 1
+
+  unit:
+    name: Unit tests (Node ${{ matrix.node }})
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20", "22", "24"]
+    steps:
+      - uses: actions/checkout@v6
 
       - name: Install Node
         uses: actions/setup-node@v4
@@ -51,13 +92,19 @@ jobs:
         working-directory: packages/ts
         run: pnpm install
 
-      - name: Build native module
-        working-directory: packages/ts
-        run: pnpm build
+      - name: Download native build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ts-native-build
+          path: packages/ts
 
+      # Invoke vitest directly (not the `pnpm test:unit` wireit script):
+      # wireit's `test:unit` task depends on the `napi:build` task, and
+      # calling through wireit would re-run/re-verify that build instead of
+      # trusting the artifact placed above.
       - name: Run unit tests
         working-directory: packages/ts
-        run: pnpm test:unit
+        run: pnpm exec vitest run --dir src
 
   integration:
     # Hermetic tier (#289): SDK public API with the native core mocked
@@ -94,7 +141,14 @@ jobs:
     # Binding tier (#289): the SDK public API against the real napi core and
     # a real filesystem — proves the SDK↔core marshaling that the hermetic
     # integration tier mocks out.
+    #
+    # Keeps its own Rust toolchain + rust-cache (unlike unit/smoke below):
+    # tests/binding/*.test.ts shell out to `cargo` directly at test-run time
+    # to compile ad hoc fixture extension crates (packages/rust/tests/fixtures)
+    # — that's independent of the shared napi addon build and still needs a
+    # toolchain on this runner.
     name: Binding tests (Node ${{ matrix.node }})
+    needs: build
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -125,13 +179,16 @@ jobs:
         working-directory: packages/ts
         run: pnpm install
 
-      - name: Build native module
-        working-directory: packages/ts
-        run: pnpm build
+      - name: Download native build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ts-native-build
+          path: packages/ts
 
+      # See the `unit` job comment above for why this bypasses wireit.
       - name: Run binding tests
         working-directory: packages/ts
-        run: pnpm test:binding
+        run: pnpm exec vitest run --dir tests/binding --passWithNoTests
 
   # Unit coverage now runs in the reusable testing-conventions workflow
   # (conventions.yml, `typescript-unit` gates: unit-coverage) after upstream
@@ -147,17 +204,10 @@ jobs:
     # install-and-run check the `packaging` gate does NOT do (that gate only
     # asserts no test files ship in the artifact). No mocks.
     name: Packaging smoke (install + run)
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
 
       - name: Install Node
         uses: actions/setup-node@v4
@@ -173,10 +223,13 @@ jobs:
         working-directory: packages/ts
         run: pnpm install
 
-      - name: Build native module + stage platform
-        working-directory: packages/ts
-        run: pnpm build
+      - name: Download native build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ts-native-build
+          path: packages/ts
 
+      # See the `unit` job comment above for why this bypasses wireit.
       - name: Run packaging smoke (build -> pack -> install -> run)
         working-directory: packages/ts
-        run: pnpm test:smoke
+        run: pnpm exec vitest run --dir tests/smoke
