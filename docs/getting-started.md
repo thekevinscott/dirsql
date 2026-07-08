@@ -134,7 +134,7 @@ curl -s http://localhost:7117/query \
 ```
 
 `_path` and `_size` are two of the built-in file columns `dirsql` collects
-for every file — see [virtual columns](./reference/columns.md#virtual-columns)
+for every file — see [stat columns](./reference/columns.md#stat-columns)
 for the full list. (The `_size` values are byte counts; they match the
 output above because you pasted the files exactly.)
 
