@@ -125,6 +125,8 @@ The same workflow also runs `unit lint` -- the **isolation** rule: a unit test m
 
 The scan covers the two native **binding crates** too (#405): `conventions.yml`'s `rust-napi-binding` (`packages/ts/napi`) and `rust-python-binding` (`packages/python`) calls run `colocated-test` + `unit-lint` at each crate root, alongside the core `rust` call. Their **pure** conversion logic is unit-tested inline -- napi's `value_to_js` / `row_event_to_js`, and the pyo3 binding's `row_event_to_plain` (a GIL-free intermediate extracted so the variant->action / field-selection mapping is unit-testable, mirroring napi; `PyRowEvent` is built from it unchanged). The **runtime-coupled** parts (napi `napi::sys` getters / `FnRef`; pyo3 GIL conversions `py_to_value` / `value_to_py` / `value_row_to_py_dict`) stay covered by the binding tier (`tests/binding`), the same #233 split the core uses for effectful code. No exemption: a rust unit test constructing first-party `Value` / `RowEvent` via `super::*` passes `unit-lint`. No `mutation`/`coverage` gate on the binding crates -- those execute the suite and would need the napi/pyo3 build; #405 is the static presence+isolation gates.
 
+`conventions.yml`'s `internals-checks` call (#494/#503) gates the repo-tooling `internals/checks` package the same way: `colocated-test` + `unit-lint` at `internals/checks/src`. No `unit-coverage`/`mutation` there either -- `gha-scripts.yml` already self-enforces a 100% coverage floor over the package via plain `pytest --cov`, and it has no native build to justify the mutation engine's overhead.
+
 Run it locally before pushing:
 
 ```bash
