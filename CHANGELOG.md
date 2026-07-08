@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **TypeScript SDK surfaces native-load and construction errors instead of masking them (#467, epic #461).** The native-addon loader no longer swallows every error from the platform `@dirsql/lib-*` sub-package: only a genuine `MODULE_NOT_FOUND` falls through to the dev-path binary, while any other loader failure (ABI/glibc mismatch, corrupt binary) now propagates verbatim rather than being replaced by a misleading "Cannot find module .../dirsql.node". The `DirSQL` constructor also attaches a no-op handler to its internal readiness promise, so constructing without awaiting `ready` (as the docs encourage) can no longer terminate the process with an unhandled rejection when construction fails — the real error surfaces at the first `query()` / `await db.ready` instead.
+
 ### Changed
 
 - **Breaking: the seven stat columns dropped their leading underscore (#454, epic #452).** `_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime` are now `path`, `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`. These were never an enforced/reserved namespace — the underscore prefix was purely conventional — so this is a pure rename with no other behavior change. Existing `.dirsql.toml` configs and SDK table definitions declaring the old names need updating; see `MIGRATIONS.md`.

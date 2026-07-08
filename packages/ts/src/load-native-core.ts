@@ -34,9 +34,14 @@ export function loadNativeCore(
   if (pkg) {
     try {
       return requirer(pkg) as CoreModule;
-    } catch {
-      // Sub-package not installed (dev checkout, or `npm install
-      // --no-optional`). Fall through to the dev path.
+    } catch (err) {
+      // Only a genuine "not installed" (dev checkout, or `npm install
+      // --no-optional`) falls through to the dev path. Any other loader
+      // failure -- an ABI/glibc mismatch, a corrupt binary -- must surface,
+      // not be masked by the dev path's own module-not-found error.
+      if ((err as NodeJS.ErrnoException).code !== "MODULE_NOT_FOUND") {
+        throw err;
+      }
     }
   }
 
