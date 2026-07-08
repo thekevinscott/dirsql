@@ -5,8 +5,8 @@ The `dirsql` binary has three modes:
 | Invocation | Behavior |
 |---|---|
 | `dirsql` (no subcommand) | Start a long-lived HTTP server exposing a SQL view of a directory. See [HTTP API](./http-api.md). |
-| `dirsql query "<sql>"` | Build the index, run one query, print the rows as JSON, exit. No server, no watch. |
-| `dirsql init` | Write a starter `.dirsql.toml` — the same default `files` table zero-config mode serves. |
+| `dirsql query "<sql>"` | Query the file system as JSON |
+| `dirsql init` | Generate a `.dirsql.toml` |
 
 ## Installation
 
@@ -100,8 +100,7 @@ with a JSON body describing the failure:
 
 ## `dirsql query`
 
-Run one SQL query from the shell — for ad-hoc inspection, scripting, and
-docs verification snippets — without booting the server and `curl`ing it:
+Run a SQL query from the shell:
 
 ```bash
 dirsql query "SELECT basename, size FROM files ORDER BY size DESC LIMIT 5"
