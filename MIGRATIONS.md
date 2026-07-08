@@ -11,6 +11,62 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### Binding-boundary value fidelity: out-of-range integers error, list-of-ints is no longer bytes, extract errors carry the real message (#465, epic #461)
+
+#### Summary
+
+The Python and TypeScript bindings marshaled some `extract` values and query
+results incorrectly. A Python `int` larger than `i64` silently degraded to a
+lossy `REAL` (via `__float__`) or a `TEXT` repr; a query result larger than
+JavaScript's safe integer range silently rounded to the nearest `number`; a
+JS `bigint` was stored as `TEXT`; a Python `list`/`tuple` of ints in the
+0–255 range was probed as bytes and stored as a `BLOB` (so `[1,2,3]` became
+a BLOB but `[1,2,300]` became `TEXT` — "bytes by magnitude"); and a JS
+`extract` that threw surfaced only the fixed string
+`"Extract function call failed"`, discarding the real message. All are fixed
+with a single symmetric numeric contract: integers that do not fit a signed
+64-bit `Value::Integer` raise/throw an explicit range error, and only genuine
+binary types map to `BLOB`. This changes runtime behavior at the SDK
+boundary; the public API signatures are unchanged.
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| Python `extract` returning an `int` > `i64` | silently stored as lossy `REAL`/`TEXT` | raises `OverflowError` (surfaced as `RuntimeError` from `ready()`) — pass a `str` or a fitting `int` |
+| TypeScript query result > `Number.MAX_SAFE_INTEGER` | returned a rounded `number` | `query()` rejects — store such values as `TEXT` if you must read them as JS numbers |
+| TypeScript `extract` returning a `bigint` in `i64` range | stored as `TEXT` (`"42"`) | stored as `INTEGER` (`42`) |
+| TypeScript `extract` returning a `bigint` outside `i64` | stored as `TEXT` | throws — pass a `string` instead |
+| Python `extract` returning `[1, 2, 3]` | stored as `BLOB` `b"\x01\x02\x03"` | stored as `TEXT` `"[1, 2, 3]"` — pass `bytes(...)` for a BLOB |
+| napi `extract` that throws | `"Extract function call failed"` | the thrown `Error`'s real `message` |
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+All of the above are behavior changes with no API-signature change: the same
+`extract` callbacks and `query()` calls now raise/throw (or return a
+differently-typed value) for the inputs listed. Code that already passed
+in-range integers, real `bytes`/`Buffer` values, and non-throwing extracts is
+unaffected.
+
+#### Verification
+
+```python
+# Python: an out-of-i64 int now raises rather than corrupting.
+import asyncio, tempfile, os
+from dirsql import DirSQL, Table
+d = tempfile.mkdtemp(); open(os.path.join(d, "m.json"), "w").write("{}")
+db = DirSQL(d, tables=[Table(ddl="CREATE TABLE t (v)", glob="*.json",
+                             extract=lambda p: [{"v": 2**63}])])
+try:
+    asyncio.run(db.ready())
+except RuntimeError as e:
+    print("raised:", "exceeds" in str(e))   # -> raised: True
+```
+
 ### The seven stat columns dropped their leading underscore (#454, epic #452)
 
 #### Summary

@@ -245,7 +245,7 @@ impl Task for QueryTask {
 
     fn compute(&mut self) -> Result<Self::Output> {
         let rows = self.inner.query(&self.sql).map_err(to_napi_err)?;
-        Ok(rows.iter().map(value_row_to_js).collect())
+        rows.iter().map(value_row_to_js).collect()
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -298,7 +298,7 @@ impl Task for PollEventsTask {
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
         let row_events = self.inner.apply_file_events(output);
-        Ok(row_events.iter().map(row_event_to_js).collect())
+        row_events.iter().map(row_event_to_js).collect()
     }
 }
 
@@ -405,10 +405,14 @@ impl FnRef {
             if is_exception {
                 let mut exception = std::ptr::null_mut();
                 napi::sys::napi_get_and_clear_last_exception(env, &mut exception);
+                return Err(Error::new(
+                    Status::GenericFailure,
+                    extract_exception_message(env, exception),
+                ));
             }
             return Err(Error::new(
                 Status::GenericFailure,
-                "Extract function call failed",
+                "Extract function call failed".to_string(),
             ));
         }
 
@@ -535,21 +539,23 @@ unsafe fn js_val_to_value(env: napi::sys::napi_env, val: napi::sys::napi_value) 
                 Ok(Value::Real(n))
             }
         }
-        4 => {
-            let mut len = 0usize;
-            napi::sys::napi_get_value_string_utf8(env, val, std::ptr::null_mut(), 0, &mut len);
-            let mut buf = vec![0u8; len + 1];
-            let mut actual = 0usize;
-            napi::sys::napi_get_value_string_utf8(
-                env,
-                val,
-                buf.as_mut_ptr() as *mut _,
-                len + 1,
-                &mut actual,
-            );
-            Ok(Value::Text(
-                String::from_utf8_lossy(&buf[..actual]).to_string(),
-            ))
+        4 => Ok(Value::Text(read_js_string(env, val))),
+        // BigInt: an INTEGER within i64, or an explicit range error. Never a
+        // silent TEXT fallback (the lossy behavior this replaces).
+        9 => {
+            let mut result: i64 = 0;
+            let mut lossless = false;
+            napi::sys::napi_get_value_bigint_int64(env, val, &mut result, &mut lossless);
+            if !lossless {
+                return Err(Error::new(
+                    Status::GenericFailure,
+                    format!(
+                        "BigInt {} exceeds the i64 range dirsql can store",
+                        coerce_js_to_string(env, val)
+                    ),
+                ));
+            }
+            Ok(Value::Integer(result))
         }
         _ => {
             // `Buffer` / `Uint8Array` (Buffer is a Uint8Array subclass)
@@ -558,27 +564,59 @@ unsafe fn js_val_to_value(env: napi::sys::napi_env, val: napi::sys::napi_value) 
             if let Some(bytes) = get_u8_array_bytes(env, val) {
                 return Ok(Value::Blob(bytes));
             }
-            let mut str_val = std::ptr::null_mut();
-            let status = napi::sys::napi_coerce_to_string(env, val, &mut str_val);
-            if status != napi::sys::Status::napi_ok {
-                return Ok(Value::Text("[object]".to_string()));
-            }
-            let mut len = 0usize;
-            napi::sys::napi_get_value_string_utf8(env, str_val, std::ptr::null_mut(), 0, &mut len);
-            let mut buf = vec![0u8; len + 1];
-            let mut actual = 0usize;
-            napi::sys::napi_get_value_string_utf8(
-                env,
-                str_val,
-                buf.as_mut_ptr() as *mut _,
-                len + 1,
-                &mut actual,
-            );
-            Ok(Value::Text(
-                String::from_utf8_lossy(&buf[..actual]).to_string(),
-            ))
+            Ok(Value::Text(coerce_js_to_string(env, val)))
         }
     }
+}
+
+/// Read a JS string value into a Rust `String`.
+unsafe fn read_js_string(env: napi::sys::napi_env, val: napi::sys::napi_value) -> String {
+    let mut len = 0usize;
+    napi::sys::napi_get_value_string_utf8(env, val, std::ptr::null_mut(), 0, &mut len);
+    let mut buf = vec![0u8; len + 1];
+    let mut actual = 0usize;
+    napi::sys::napi_get_value_string_utf8(env, val, buf.as_mut_ptr() as *mut _, len + 1, &mut actual);
+    String::from_utf8_lossy(&buf[..actual]).to_string()
+}
+
+/// Coerce any JS value to a string (via `String(value)` semantics),
+/// returning `"[object]"` if coercion itself fails.
+unsafe fn coerce_js_to_string(env: napi::sys::napi_env, val: napi::sys::napi_value) -> String {
+    let mut str_val = std::ptr::null_mut();
+    let status = napi::sys::napi_coerce_to_string(env, val, &mut str_val);
+    if status != napi::sys::Status::napi_ok {
+        return "[object]".to_string();
+    }
+    read_js_string(env, str_val)
+}
+
+/// The message of a thrown JS value: an `Error`'s `message` when present,
+/// otherwise the value coerced to a string (`throw "oops"`). Mirrors the
+/// pyo3 side, which surfaces the real Python exception text.
+unsafe fn extract_exception_message(
+    env: napi::sys::napi_env,
+    exception: napi::sys::napi_value,
+) -> String {
+    let mut key = std::ptr::null_mut();
+    napi::sys::napi_create_string_utf8(
+        env,
+        "message".as_ptr() as *const _,
+        "message".len() as isize,
+        &mut key,
+    );
+
+    let mut has = false;
+    napi::sys::napi_has_property(env, exception, key, &mut has);
+    if has {
+        let mut val = std::ptr::null_mut();
+        napi::sys::napi_get_property(env, exception, key, &mut val);
+        let mut vtype = 0i32;
+        napi::sys::napi_typeof(env, val, &mut vtype);
+        if vtype == 4 {
+            return read_js_string(env, val);
+        }
+    }
+    coerce_js_to_string(env, exception)
 }
 
 /// The bytes of a `Buffer` / `Uint8Array` / `Uint8ClampedArray`, or `None`
@@ -760,24 +798,42 @@ impl ToNapiValue for JsRowValue {
     }
 }
 
-fn value_to_js(v: &Value) -> JsRowValue {
-    match v {
-        Value::Null => JsRowValue::Null,
-        Value::Integer(i) => JsRowValue::Integer(*i),
-        Value::Real(f) => JsRowValue::Real(*f),
-        Value::Text(s) => JsRowValue::Text(s.clone()),
-        Value::Blob(b) => JsRowValue::Blob(b.clone()),
+/// `Number.MAX_SAFE_INTEGER` (2^53 - 1): the largest integer a JS `Number`
+/// holds without precision loss.
+const JS_MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+
+/// An `i64` a JS `Number` can represent exactly, or an error message naming
+/// the value. Out-of-range integers must error rather than silently round
+/// when they cross to JS.
+fn ensure_js_safe_integer(i: i64) -> std::result::Result<i64, String> {
+    if i > JS_MAX_SAFE_INTEGER || i < -JS_MAX_SAFE_INTEGER {
+        Err(format!("integer {i} exceeds JS safe integer range"))
+    } else {
+        Ok(i)
     }
 }
 
-fn value_row_to_js(row: &HashMap<String, Value>) -> HashMap<String, JsRowValue> {
+fn value_to_js(v: &Value) -> Result<JsRowValue> {
+    Ok(match v {
+        Value::Null => JsRowValue::Null,
+        Value::Integer(i) => {
+            ensure_js_safe_integer(*i).map_err(to_napi_err)?;
+            JsRowValue::Integer(*i)
+        }
+        Value::Real(f) => JsRowValue::Real(*f),
+        Value::Text(s) => JsRowValue::Text(s.clone()),
+        Value::Blob(b) => JsRowValue::Blob(b.clone()),
+    })
+}
+
+fn value_row_to_js(row: &HashMap<String, Value>) -> Result<HashMap<String, JsRowValue>> {
     row.iter()
-        .map(|(k, v)| (k.clone(), value_to_js(v)))
+        .map(|(k, v)| Ok((k.clone(), value_to_js(v)?)))
         .collect()
 }
 
-fn row_event_to_js(event: &CoreRowEvent) -> RowEvent {
-    match event {
+fn row_event_to_js(event: &CoreRowEvent) -> Result<RowEvent> {
+    Ok(match event {
         CoreRowEvent::Insert {
             table,
             row,
@@ -785,7 +841,7 @@ fn row_event_to_js(event: &CoreRowEvent) -> RowEvent {
         } => RowEvent {
             table: Some(table.clone()),
             action: "insert".to_string(),
-            row: Some(value_row_to_js(row)),
+            row: Some(value_row_to_js(row)?),
             old_row: None,
             error: None,
             file_path: Some(file_path.clone()),
@@ -798,8 +854,8 @@ fn row_event_to_js(event: &CoreRowEvent) -> RowEvent {
         } => RowEvent {
             table: Some(table.clone()),
             action: "update".to_string(),
-            row: Some(value_row_to_js(new_row)),
-            old_row: Some(value_row_to_js(old_row)),
+            row: Some(value_row_to_js(new_row)?),
+            old_row: Some(value_row_to_js(old_row)?),
             error: None,
             file_path: Some(file_path.clone()),
         },
@@ -810,7 +866,7 @@ fn row_event_to_js(event: &CoreRowEvent) -> RowEvent {
         } => RowEvent {
             table: Some(table.clone()),
             action: "delete".to_string(),
-            row: Some(value_row_to_js(row)),
+            row: Some(value_row_to_js(row)?),
             old_row: None,
             error: None,
             file_path: Some(file_path.clone()),
@@ -827,7 +883,7 @@ fn row_event_to_js(event: &CoreRowEvent) -> RowEvent {
             error: Some(error.clone()),
             file_path: Some(file_path.to_string_lossy().to_string()),
         },
-    }
+    })
 }
 
 #[cfg(test)]
@@ -840,26 +896,57 @@ mod tests {
 
     #[test]
     fn value_to_js_maps_each_variant() {
-        assert!(matches!(value_to_js(&Value::Null), JsRowValue::Null));
         assert!(matches!(
-            value_to_js(&Value::Integer(3)),
+            value_to_js(&Value::Null).unwrap(),
+            JsRowValue::Null
+        ));
+        assert!(matches!(
+            value_to_js(&Value::Integer(3)).unwrap(),
             JsRowValue::Integer(3)
         ));
         assert!(
-            matches!(value_to_js(&Value::Real(1.5)), JsRowValue::Real(f) if (f - 1.5).abs() < f64::EPSILON)
+            matches!(value_to_js(&Value::Real(1.5)).unwrap(), JsRowValue::Real(f) if (f - 1.5).abs() < f64::EPSILON)
         );
         assert!(
-            matches!(value_to_js(&Value::Text("hi".into())), JsRowValue::Text(ref s) if s == "hi")
+            matches!(value_to_js(&Value::Text("hi".into())).unwrap(), JsRowValue::Text(ref s) if s == "hi")
         );
         assert!(
-            matches!(value_to_js(&Value::Blob(vec![1, 2])), JsRowValue::Blob(ref b) if b == &[1, 2])
+            matches!(value_to_js(&Value::Blob(vec![1, 2])).unwrap(), JsRowValue::Blob(ref b) if b == &[1, 2])
         );
     }
 
     #[test]
+    fn ensure_js_safe_integer_accepts_the_boundary() {
+        assert_eq!(ensure_js_safe_integer(JS_MAX_SAFE_INTEGER), Ok(JS_MAX_SAFE_INTEGER));
+        assert_eq!(ensure_js_safe_integer(-JS_MAX_SAFE_INTEGER), Ok(-JS_MAX_SAFE_INTEGER));
+        assert_eq!(ensure_js_safe_integer(0), Ok(0));
+    }
+
+    #[test]
+    fn ensure_js_safe_integer_rejects_out_of_range() {
+        let err = ensure_js_safe_integer(JS_MAX_SAFE_INTEGER + 1).unwrap_err();
+        assert!(err.contains(&(JS_MAX_SAFE_INTEGER + 1).to_string()));
+        assert!(err.contains("safe integer"));
+        assert!(ensure_js_safe_integer(-JS_MAX_SAFE_INTEGER - 1).is_err());
+        assert!(ensure_js_safe_integer(i64::MAX).is_err());
+    }
+
+    #[test]
+    fn value_to_js_errors_on_unsafe_integer() {
+        assert!(value_to_js(&Value::Integer(JS_MAX_SAFE_INTEGER + 1)).is_err());
+        assert!(value_to_js(&Value::Integer(JS_MAX_SAFE_INTEGER)).is_ok());
+    }
+
+    #[test]
     fn value_row_to_js_converts_every_entry() {
-        let js = value_row_to_js(&one_row());
+        let js = value_row_to_js(&one_row()).unwrap();
         assert!(matches!(js.get("k"), Some(JsRowValue::Integer(7))));
+    }
+
+    #[test]
+    fn value_row_to_js_propagates_unsafe_integer() {
+        let row = HashMap::from([("k".to_string(), Value::Integer(JS_MAX_SAFE_INTEGER + 1))]);
+        assert!(value_row_to_js(&row).is_err());
     }
 
     #[test]
@@ -869,12 +956,23 @@ mod tests {
             row: one_row(),
             file_path: "/f".into(),
         };
-        let out = row_event_to_js(&ev);
+        let out = row_event_to_js(&ev).unwrap();
         assert_eq!(out.action, "insert");
         assert_eq!(out.table.as_deref(), Some("t"));
         assert!(out.row.is_some());
         assert!(out.old_row.is_none());
         assert!(out.error.is_none());
+    }
+
+    #[test]
+    fn row_event_to_js_propagates_unsafe_integer() {
+        let row = HashMap::from([("k".to_string(), Value::Integer(JS_MAX_SAFE_INTEGER + 1))]);
+        let ev = CoreRowEvent::Insert {
+            table: "t".into(),
+            row,
+            file_path: "/f".into(),
+        };
+        assert!(row_event_to_js(&ev).is_err());
     }
 
     #[test]
@@ -885,7 +983,7 @@ mod tests {
             new_row: one_row(),
             file_path: "/f".into(),
         };
-        let out = row_event_to_js(&ev);
+        let out = row_event_to_js(&ev).unwrap();
         assert_eq!(out.action, "update");
         assert!(out.row.is_some());
         assert!(out.old_row.is_some());
@@ -898,7 +996,7 @@ mod tests {
             row: one_row(),
             file_path: "/f".into(),
         };
-        let out = row_event_to_js(&ev);
+        let out = row_event_to_js(&ev).unwrap();
         assert_eq!(out.action, "delete");
         assert!(out.old_row.is_none());
     }
@@ -910,7 +1008,7 @@ mod tests {
             file_path: PathBuf::from("/f"),
             error: "boom".into(),
         };
-        let out = row_event_to_js(&ev);
+        let out = row_event_to_js(&ev).unwrap();
         assert_eq!(out.action, "error");
         assert!(out.table.is_none());
         assert!(out.row.is_none());
