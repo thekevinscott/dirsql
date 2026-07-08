@@ -26,10 +26,12 @@ permissions:
 # `dirsql` binary and their e2e suites spawn it, so CLI changes stale the
 # attestations like any other core change.
 #
-# `packaging` (#413) is PROBED here for python/typescript only, zero-config
-# (just "packaging" in `gates`, no build job). Rust can't adopt it yet -- see
-# the `rust` job below -- so packaging.yml stays for rust; it retires for
-# python/typescript once this probe is confirmed green.
+# `packaging` (#413) runs whole-hog for all three SDKs, zero-config (just
+# "packaging" in `gates`, no build job). Rust adopted it via upstream #360/#362,
+# which fixed workspace-member support (packages/rust is a Cargo workspace
+# member, so `cargo package` wrote to the workspace root's target/package until
+# the fix redirected it via `--target-dir target`). The bespoke packaging.yml is
+# deleted -- this gate is the sole packaging enforcement.
 #
 # Still bespoke (for now): rust `unit-coverage` (bespoke by design in
 # rust-test.yml — a `packages/rust` `rust-toolchain.toml` for `--branch` nightly
@@ -128,11 +130,12 @@ jobs:
       # from the derived root. No nightly (unlike coverage's --branch). Retires
       # rust-mutation.yml (#417).
       #
-      # No "packaging" here: packages/rust is a Cargo workspace member, so
-      # `cargo package` writes to the workspace root's target/package, never
-      # the member's own -- the gate's zero-config auto-build can't find it.
-      # Filed upstream; rust packaging stays on the bespoke packaging.yml (#413).
-      gates: '["colocated-test", "unit-lint", "integration-lint", "mutation"]'
+      # `packaging` works for this workspace member via upstream #360/#362:
+      # membership is detected from an ancestor Cargo.toml `[workspace]` table and
+      # the build is redirected via `--target-dir target` so the .crate lands
+      # under the member's own target/package where the gate scans. Zero-config,
+      # no extra input (#413).
+      gates: '["colocated-test", "unit-lint", "integration-lint", "mutation", "packaging"]'
 
   # The two native BINDING crates (#405) hold real marshaling logic but sat
   # outside every gate — the `rust` call above scans only `packages/rust` (the

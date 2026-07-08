@@ -2,7 +2,7 @@
 //! - No subcommand: HTTP server documented in `docs/reference/cli.md`.
 //! - `query`: one-shot query over the same pipeline the server uses; see
 //!   `docs/reference/cli.md`.
-//! - `init`: starter `.dirsql.toml` generation; see `docs/reference/cli.md`.
+//! - `init`: writes a fixed starter `.dirsql.toml`; see `docs/reference/cli.md`.
 //!
 //! Only compiled with `--features cli`.
 
@@ -25,8 +25,9 @@ use dirsql::{DirSQL, Extension, Row, Table};
                   directory. Tables are defined by a `.dirsql.toml` config \
                   file; with no config, a default `files` table over every \
                   file in the directory is served. With the `init` \
-                  subcommand, generates a starter `.dirsql.toml` by running \
-                  `claude` over the target directory."
+                  subcommand, writes that same default `files` table as a \
+                  starter `.dirsql.toml` — no target-directory inspection, \
+                  no network, deterministic."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -64,8 +65,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Generate a starter `.dirsql.toml` by running `claude` over the
-    /// target directory.
+    /// Write the fixed starter `.dirsql.toml` — the same default `files`
+    /// table zero-config mode serves. No target-directory inspection.
     Init(InitArgs),
 
     /// Run one SQL query against the indexed directory, print the result
@@ -84,7 +85,9 @@ struct QueryArgs {
 
 #[derive(Debug, Args)]
 struct InitArgs {
-    /// Directory to scan (default: current directory).
+    /// Directory the default `--output` path is resolved against (default:
+    /// current directory). The written config's content does not depend on
+    /// this directory's contents.
     #[arg(long)]
     root: Option<PathBuf>,
 
@@ -162,7 +165,6 @@ fn run_init(args: InitArgs) -> ExitCode {
     let output = args.output.unwrap_or_else(|| root.join(".dirsql.toml"));
 
     let opts = InitOptions {
-        root,
         output,
         force: args.force,
     };
@@ -344,15 +346,16 @@ fn load_default_state(config_path: &Path) -> AppState {
     }
 }
 
-/// The default `files` table used in zero-config mode: glob `**/*` matches
-/// every file under the root at any depth (no ignores), and each row is built
-/// purely from the auto-injected filesystem-fact columns.
+/// The default `files` table used in zero-config mode, parsed from the same
+/// [`dirsql::cli::DEFAULT_CONFIG_TOML`] asset `dirsql init` writes verbatim,
+/// so the two can never drift apart.
 fn default_files_table() -> Table {
+    let config = dirsql::config::load_config_str(dirsql::cli::DEFAULT_CONFIG_TOML)
+        .expect("DEFAULT_CONFIG_TOML must be valid dirsql config TOML");
+    let table_config = &config.tables[0];
     Table::new(
-        "CREATE TABLE files (\
-         path TEXT, basename TEXT, dir TEXT, ext TEXT, \
-         size INTEGER, mtime INTEGER, ctime INTEGER)",
-        "**/*",
+        table_config.ddl.clone(),
+        table_config.glob.clone(),
         |_path| vec![Row::new()],
     )
 }

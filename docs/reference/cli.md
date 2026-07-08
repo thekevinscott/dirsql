@@ -5,8 +5,8 @@ The `dirsql` binary has three modes:
 | Invocation | Behavior |
 |---|---|
 | `dirsql` (no subcommand) | Start a long-lived HTTP server exposing a SQL view of a directory. See [HTTP API](./http-api.md). |
-| `dirsql query "<sql>"` | Build the index, run one query, print the rows as JSON, exit. No server, no watch. |
-| `dirsql init` | Generate a starter `.dirsql.toml` by running `claude` over a directory. |
+| `dirsql query "<sql>"` | Query the file system as JSON |
+| `dirsql init` | Generate a `.dirsql.toml` |
 
 ## Installation
 
@@ -100,8 +100,7 @@ with a JSON body describing the failure:
 
 ## `dirsql query`
 
-Run one SQL query from the shell — for ad-hoc inspection, scripting, and
-docs verification snippets — without booting the server and `curl`ing it:
+Run a SQL query from the shell:
 
 ```bash
 dirsql query "SELECT basename, size FROM files ORDER BY size DESC LIMIT 5"
@@ -140,34 +139,29 @@ stderr, with exit code `1`.
 
 ## `dirsql init`
 
-Generates a `.dirsql.toml` by running the `claude` CLI over the target
-directory. The generated config contains only filesystem-fact tables
-(`[[table]]` entries whose columns come from [glob captures and virtual
-columns](./columns.md)) — never content-derived columns.
+Writes a starter `.dirsql.toml`:
 
 ```bash
 dirsql init
 ```
 
+You can further tweak this config as needed.
+
 ### Flags
 
 | Flag | Default | Description |
 |---|---|---|
-| `--root <path>` | current directory | Directory to scan. |
-| `--output <path>` | `<root>/.dirsql.toml` | Where to write the generated config. |
+| `--root <path>` | current directory | Directory the default `--output` path is resolved against. |
+| `--output <path>` | `<root>/.dirsql.toml` | Where to write the config. |
 | `--force` | off | Overwrite the output file if it already exists. |
 
 ### Requirements and failure modes
 
-`init` requires `claude` on `PATH`, signed in; there is no separate API key.
 All failures exit `1` with a message on stderr:
 
 | Condition | Behavior |
 |---|---|
-| Output file exists and `--force` not passed | Fails before invoking `claude` (no LLM call is made). |
-| `claude` not found on `PATH` | Fails with a pointer to the Claude Code install docs. |
-| `claude` exits non-zero | Fails with `claude`'s stderr; no partial config is written. |
-| `claude` produces non-UTF-8 output | Fails; nothing is written. |
+| Output file exists and `--force` not passed | Fails; nothing is written. |
+| Output path unwritable (e.g. missing parent directory) | Fails with the underlying I/O error. |
 
-On success, `claude`'s stdout is written verbatim to the output path and
-`init` exits `0`.
+On success, `init` exits `0`.
