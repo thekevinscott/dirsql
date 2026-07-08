@@ -471,6 +471,30 @@ def describe_DirSQL():
             assert os.path.basename(captured["path"]) == "test.json"
             assert '"val"' in captured["content"]
 
+    def describe_reserved_word_columns():
+        @pytest.mark.asyncio
+        async def it_round_trips_a_reserved_word_column(tmp_dir):
+            with open(os.path.join(tmp_dir, "item.json"), "w") as f:
+                json.dump({"name": "apple", "order": 7}, f)
+
+            db = DirSQL(
+                tmp_dir,
+                tables=[
+                    Table(
+                        ddl='CREATE TABLE items (name TEXT, "order" INTEGER)',
+                        glob="*.json",
+                        extract=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
+                    ),
+                ],
+            )
+            await db.ready()
+            results = await db.query('SELECT name, "order" FROM items')
+            assert len(results) == 1
+            assert results[0]["name"] == "apple"
+            assert results[0]["order"] == 7
+
     def describe_relaxed_schema():
         @pytest.mark.asyncio
         async def it_ignores_extra_keys_by_default(tmp_dir):

@@ -82,6 +82,29 @@ describe("DirSQL", () => {
     expect(products[0].price).toBeCloseTo(19.99);
   });
 
+  it("round-trips a reserved-word column", async () => {
+    await writeFile(
+      join(dir, "data", "orders.json"),
+      JSON.stringify([{ name: "Widget", order: 7 }]),
+    );
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: 'CREATE TABLE orders (name TEXT, "order" INTEGER)',
+          glob: "data/orders.json",
+          extract: (filePath: string) =>
+            JSON.parse(readFileSync(filePath, "utf8")),
+        },
+      ],
+    });
+
+    const rows = await db.query('SELECT name, "order" FROM orders');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].name).toBe("Widget");
+    expect(rows[0].order).toBe(7);
+  });
+
   it("supports glob patterns", async () => {
     const db = new DirSQL({
       root: dir,

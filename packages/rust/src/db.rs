@@ -1324,6 +1324,22 @@ mod tests {
     }
 
     #[test]
+    fn insert_row_round_trips_reserved_word_column() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (path TEXT, \"order\" INTEGER)")
+            .unwrap();
+        let row = HashMap::from([
+            ("path".into(), Value::Text("a".into())),
+            ("order".into(), Value::Integer(7)),
+        ]);
+        db.insert_row("t", &row, "f.json", 0).unwrap();
+
+        let rows = db.get_rows_by_file("t", "f.json").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["order"], Value::Integer(7));
+    }
+
+    #[test]
     fn load_extension_missing_file_errors() {
         let db = Db::new().unwrap();
         let err = db
