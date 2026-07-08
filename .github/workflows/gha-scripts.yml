@@ -32,17 +32,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
 
-      - name: Install pytest
-        run: pip install pytest pytest-cov pytest-describe
+      - name: Sync the checks package
+        run: uv sync --project .github/scripts/checks
 
       # pytest_gate translates pytest exit 5 (no tests collected) to 0, so an
       # empty scripts dir passes cleanly while pytest's own recursive collection
       # finds nested `.../foo_test.py`. Any other nonzero (test or coverage
-      # failure) propagates.
-      - name: Run .github/scripts unit tests (100% coverage)
-        run: python .github/scripts/pytest_gate.py .github/scripts/ --cov=.github/scripts --cov-report=term-missing --cov-fail-under=100
+      # failure) propagates. The gate here runs itself over the checks package.
+      - name: Run .github/scripts/checks unit tests (100% coverage)
+        run: uv run --project .github/scripts/checks dirsql-checks pytest-gate .github/scripts/checks/src --cov=checks --cov-report=term-missing --cov-fail-under=100

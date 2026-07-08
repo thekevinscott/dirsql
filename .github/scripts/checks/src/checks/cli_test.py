@@ -1,0 +1,9 @@
+"""Colocated unit test for the group: each check is registered as a subcommand (isolation).
+
+Reads the composed group's command table -- no file I/O, no dispatch.
+"""
+from checks.cli import main
+
+
+def test_pytest_gate_is_registered():
+    assert "pytest-gate" in main.commands

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+# Repo-only: CI helper checks invoked by .github/workflows (#494/#495, mirroring
+# testing-conventions#321). Never published to an index -- run via
+# `uv run --project .github/scripts/checks dirsql-checks <check>`.
+name = "dirsql-github-checks"
+version = "0"
+description = "Repo-only CI helper checks for dirsql, run via .github/workflows."
+requires-python = ">=3.11"
+dependencies = ["click>=8.1"]
+
+[project.scripts]
+# A single entry point for the whole suite -- the click group in `checks/cli.py`
+# that composes each check as a subcommand. New checks register in the group.
+dirsql-checks = "checks.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-cov>=5", "pytest-describe>=2"]
+
+[tool.hatch.build]
+exclude = ["**/*_test.py"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/checks"]
+
+[tool.pytest.ini_options]
+# `src` layout: put it on the path so checks and their colocated tests import
+# the package normally (`from checks import ...`), no per-file sys.path hack.
+pythonpath = ["src"]
