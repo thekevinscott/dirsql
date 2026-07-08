@@ -13,15 +13,14 @@
 # `[<lang>.coverage]` table sets the unit-only coverage floor the `unit
 # coverage` job enforces.
 #
-# There is exactly ONE exemption below, and it is tool-blocked, not a barrel
-# waiver: every re-export/empty barrel is now handled without a colocated-test
-# waiver -- the TS `index.ts` barrel has `index.test.ts`, the python `__init__.py`
-# barrel has `__init___test.py`, empty package inits (`cli/__init__.py`) are
-# auto-skipped by the tool, and the dead `cli/interpret` shells were deleted. The
-# lone remaining entry waives the python isolation rule on the python barrel's
-# *test* (see the block below the coverage tables); it exists only because
-# testing-conventions flags a python barrel test importing its own re-exports
-# while allowing the identical TS pattern -- a parity gap filed upstream.
+# There are ZERO exemptions below. Every re-export/empty barrel is verified
+# without a waiver -- the TS `index.ts` barrel has `index.test.ts`, the python
+# `__init__.py` barrel has `__init___test.py`, empty package inits
+# (`cli/__init__.py`) are auto-skipped by the tool, and the dead `cli/interpret`
+# shells were deleted. The former python isolation waiver on the python barrel's
+# *test* was removed once testing-conventions#382 / PR #384 brought the python
+# `unmocked-collaborator` rule to parity with TS (a bare package-relative import
+# `from . import <names>` in a barrel test now resolves to the SUT and passes).
 #
 # `path` is relative to the scanned source dir (packages/python/dirsql for the
 # `[[python.exempt]]` entries, packages/ts/src for the `[[typescript.exempt]]`
@@ -66,21 +65,6 @@
 extra_scope = ["packages/rust/src"]
 
 # --- Python (scanned: packages/python/dirsql) ------------------------------
-
-# The public barrel `__init__.py` is verified by its colocated test
-# `__init___test.py` (asserts it re-exports exactly DirSQL/Table/RowEvent/
-# __version__) -- so it needs no `colocated-test` waiver. But verifying a
-# re-export barrel requires importing the surface it re-exports, which the
-# python isolation rule flags as unmocked collaborators; mocking them would make
-# the test assert nothing. The TS barrel test (`index.test.ts`) imports its
-# barrel and passes the equivalent TS rule, so this is a python/ts parity gap in
-# testing-conventions (filed upstream). We waive the isolation rule on the test
-# -- not the colocated-test rule on the barrel -- so the re-exports stay
-# genuinely verified. This is the ONLY remaining exemption.
-[[python.exempt]]
-path = "__init___test.py"
-rules = ["unmocked-collaborator"]
-reason = "Barrel test must import the public surface it verifies (`from . import DirSQL, Table, RowEvent, __version__, __all__`); the python isolation rule flags these as unmocked collaborators while the equivalent TS barrel test (index.test.ts) passes -- a testing-conventions python/ts parity gap (filed upstream). Waiving isolation on the test keeps the barrel's re-exports genuinely verified rather than leaving the barrel untested."
 
 # Unit-only coverage floor (branch coverage on, matching the prior --cov-branch).
 [python.coverage]
