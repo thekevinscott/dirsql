@@ -812,10 +812,10 @@ const JS_MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 /// the value. Out-of-range integers must error rather than silently round
 /// when they cross to JS.
 fn ensure_js_safe_integer(i: i64) -> std::result::Result<i64, String> {
-    if i > JS_MAX_SAFE_INTEGER || i < -JS_MAX_SAFE_INTEGER {
-        Err(format!("integer {i} exceeds JS safe integer range"))
-    } else {
+    if (-JS_MAX_SAFE_INTEGER..=JS_MAX_SAFE_INTEGER).contains(&i) {
         Ok(i)
+    } else {
+        Err(format!("integer {i} exceeds JS safe integer range"))
     }
 }
 
