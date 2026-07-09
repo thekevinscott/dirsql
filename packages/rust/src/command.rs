@@ -9,7 +9,7 @@
 //!   single argument — but no shell is ever invoked: there is no globbing,
 //!   piping, or variable expansion. To get a real shell, ask for one
 //!   explicitly (`sh -c '…'`).
-//! - **Placeholders.** `{path}`, `{args}`, `{abspath}`, `{root}` (and any
+//! - **Placeholders.** `{path}`, `{args}`, `{root}` (and any
 //!   others a caller supplies) are substituted into whole argv tokens, every
 //!   occurrence. Substitution is single-pass and left-to-right per token, so a
 //!   value that itself contains `{…}` is never re-scanned — a substituted value
@@ -437,10 +437,7 @@ mod tests {
 
     #[test]
     fn substitute_only_placeholder_is_dropped_when_absent() {
-        assert_eq!(
-            argv("run", &[Placeholder::new("abspath", "/tmp/x")]),
-            ["run"]
-        );
+        assert_eq!(argv("run", &[Placeholder::new("extra", "/tmp/x")]), ["run"]);
     }
 
     #[test]

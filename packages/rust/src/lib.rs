@@ -1428,9 +1428,8 @@ fn build_tables_from_config(
 /// into rows.
 ///
 /// Placeholders: `{path}` (the file relative to `root`, append-if-absent so
-/// `cmd` and `cmd {path}` behave identically), `{abspath}` (the absolute path),
-/// and `{root}` (the index root). `{path}` falls back to the absolute path
-/// when the file is not under `root`.
+/// `cmd` and `cmd {path}` behave identically) and `{root}` (the index root).
+/// `{path}` falls back to the absolute path when the file is not under `root`.
 ///
 /// Per-file isolation: any failure — a spawn/exit/timeout error from
 /// [`command::run_command`], or output that is not a JSON array of objects —
@@ -1451,7 +1450,6 @@ fn run_on_file(
         .unwrap_or_else(|_| abs_path.to_string());
     let placeholders = [
         Placeholder::append("path", rel),
-        Placeholder::new("abspath", abs_path),
         Placeholder::new("root", root.to_string_lossy().into_owned()),
     ];
 
@@ -2888,6 +2886,25 @@ mod internal_tests {
         );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["n"], Value::Integer(1));
+    }
+
+    /// `{abspath}` is not in the substitution table: it is left literal like any
+    /// unknown `{…}`, so `printf` receives the string `{abspath}` verbatim. The
+    /// template references `{path}` so that arg is the real path (and no path is
+    /// appended), isolating the `{abspath}` behavior in the `q` column.
+    #[test]
+    fn run_on_file_does_not_substitute_abspath() {
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("f.txt");
+        let rows = run_on_file(
+            r#"printf '[{"p":"%s","q":"%s"}]' {path} {abspath}"#,
+            &abs.to_string_lossy(),
+            dir.path(),
+            dir.path(),
+            command::DEFAULT_COMMAND_TIMEOUT,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["q"], Value::Text("{abspath}".into()));
     }
 
     /// A command that cannot be spawned yields no rows (per-file isolation).

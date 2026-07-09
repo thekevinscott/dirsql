@@ -55,6 +55,54 @@ dirsql query "SELECT 1"; echo "exit=$?"
 # expected: a non-zero exit; stderr names the unknown key `persistpath`
 ```
 
+### `on-file` `{abspath}` token removed (#539, epic #528)
+
+#### Summary
+
+The per-file `on-file` command hook no longer recognizes the `{abspath}` token
+(the matched file's absolute path). The token set is now `{path}` (relative to
+the index root) and `{root}`. This affects **every SDK** (the behavior lives in
+the shared Rust core, so `pip`/`npm`/`cargo` change together) and any
+`.dirsql.toml` whose `on-file` command interpolated `{abspath}`. Unknown `{…}`
+sequences are left literal by design (so shell/`jq` braces survive), so a stale
+`{abspath}` does not raise — it is passed to the command as the **literal string
+`{abspath}`**, which will typically fail per-file at runtime (e.g. no such
+file). Update templates to use `{path}`.
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| `.dirsql.toml` `on-file` using `{abspath}` | `on-file = "extract.py {abspath}"` | `on-file = "extract.py {path}"` |
+
+#### Deprecations removed
+
+- The `on-file` `{abspath}` placeholder — removed; use `{path}`.
+
+#### Behavior changes without code changes
+
+- **`on-file` templates referencing `{abspath}`**: previously substituted with
+  the matched file's absolute path; now left literal (unknown token), so the
+  command receives the string `{abspath}`. It no longer resolves to a path, so
+  a command like `cat {abspath}` fails per-file (skipped with a stderr warning)
+  and the file contributes no rows.
+
+#### Verification
+
+```bash
+cat > .dirsql.toml <<'TOML'
+[[table]]
+ddl = "CREATE TABLE items (name TEXT)"
+glob = "*.json"
+on-file = "cat {path}"
+TOML
+printf '[{"name":"widget"}]' > a.json
+dirsql query "SELECT name FROM items"
+# expected: [{"name":"widget"}]
+# (an `on-file = "cat {abspath}"` template now passes the literal "{abspath}"
+#  to cat, which fails, so the row is absent and dirsql warns on stderr)
+```
+
 ### Python wheels are now stable-ABI (abi3): wheel filename tag changes (#487, epic #480)
 
 #### Summary

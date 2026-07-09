@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`query()` now rejects `ATTACH`/`DETACH` (#462, epic #461).** SQLite classifies `ATTACH` as read-only, so it slipped past the read-only gate on `query()` — a caller reaching the surface (SDK `query`, CLI `POST /query`, `dirsql query`) could run `ATTACH '/path/x.db' AS ext` to create an arbitrary file on disk and then read an external database via `SELECT ... FROM ext.*`. The query-path authorizer now denies both `ATTACH` and `DETACH` at prepare time, surfaced as the same not-authorized error the `_dirsql_*` denial uses, so neither ever executes and no file is created. All other effectful statements were already blocked as writes; `ATTACH`/`DETACH` were the only read-only-classified actions that leaked. See `MIGRATIONS.md`.
 
+### Removed
+
+- **Breaking: the `on-file` `{abspath}` token is removed (#539, epic #528).** The per-file `on-file` command hook no longer recognizes `{abspath}` (the matched file's absolute path); the token set is now just `{path}` (relative to the index root) and `{root}`. Because unknown `{…}` sequences are left literal by design (so shell/`jq` braces survive), a stale `{abspath}` in a template is now passed to the command as the literal string `{abspath}` rather than the absolute path — update such templates to use `{path}`. Handled entirely by the shared Rust core, so it is identical across the `pip` / `npm` / `cargo` installs. See `MIGRATIONS.md`.
+
 ### Fixed
 
 - **TypeScript SDK surfaces native-load and construction errors instead of masking them (#467, epic #461).** The native-addon loader no longer swallows every error from the platform `@dirsql/lib-*` sub-package: only a genuine `MODULE_NOT_FOUND` falls through to the dev-path binary, while any other loader failure (ABI/glibc mismatch, corrupt binary) now propagates verbatim rather than being replaced by a misleading "Cannot find module .../dirsql.node". The `DirSQL` constructor also attaches a no-op handler to its internal readiness promise, so constructing without awaiting `ready` (as the docs encourage) can no longer terminate the process with an unhandled rejection when construction fails — the real error surfaces at the first `query()` / `await db.ready` instead.
@@ -346,8 +350,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *contents*: `dirsql` runs the command once per file (the command reads the
   file and prints a JSON array of row objects on stdout), and each object
   becomes a row. Placeholders: `{path}` (the match relative to the index root,
-  appended automatically when the template omits it), `{abspath}` (absolute
-  path), and `{root}` (the index root). The command runs in the config file's
+  appended automatically when the template omits it) and `{root}` (the index
+  root). The command runs in the config file's
   directory with the inherited environment and a fixed 30-second timeout, no
   shell (argv-split with shell-like quoting; `sh -c '…'` is the explicit
   opt-in). JSON values map to SQLite as `null`→NULL, `bool`→`0/1`,
@@ -364,7 +368,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   foundation for command-backed events (Epic B, #322 / B1 #326).** Splits a
   command template into argv with shell-like quoting but runs **no shell**
   (`sh -c '…'` is the explicit opt-in), substitutes named placeholders
-  (`{path}`, `{args}`, `{abspath}`, `{root}`, …) into whole argv tokens so
+  (`{path}`, `{args}`, `{root}`, …) into whole argv tokens so
   untrusted values stay a single injection-safe argument, and supports an
   append-if-absent placeholder. Runs the child in a given working directory
   with the inherited environment (so `uvx`/`npx` shims resolve), an optional

@@ -102,7 +102,6 @@ row-mapping rules.
 | Placeholder | Value |
 |---|---|
 | `{path}` | The matched file's path **relative to the index root**. Appended automatically as a final argument when the command omits it, so `extract.py` and `extract.py {path}` behave identically. |
-| `{abspath}` | The matched file's absolute path. |
 | `{root}` | The index root directory. |
 
 ### `pre-query`
