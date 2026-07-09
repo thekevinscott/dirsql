@@ -15,7 +15,7 @@ import { dirname, join } from "node:path";
 import { DirSQL } from "dirsql";
 import initSqlJs from "sql.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { exists } from "../exists.js";
+import { exists } from "../../exists.js";
 
 // Some tests corrupt dirsql's on-disk cache (`.dirsql/cache.db`) out-of-band
 // to exercise the racy-window and dirsql_version-bump reconcile paths. sql.js

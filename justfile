@@ -21,11 +21,11 @@ test-unit:
 
 # Run integration tests (hermetic: mocked core + fs)
 test-integration:
-    uv run python -m pytest packages/python/tests/integration/ -x -q
+    uv run python -m pytest packages/python/tests/integration/hermetic/ -x -q
 
 # Run binding tests (real core, real fs)
 test-binding:
-    uv run python -m pytest packages/python/tests/binding/ -x -q
+    uv run python -m pytest packages/python/tests/integration/binding/ -x -q
 
 # Run e2e tests (local only, not CI)
 test-e2e:
@@ -114,7 +114,7 @@ test-packaging:
 # `packages/python` venv (which has dirsql + its test deps), not internals/checks'
 # own venv (which has neither).
 test-ci:
-    PYTHONPATH=internals/checks/src uv run python -c "import sys; from checks.pytest_gate.gate import run; sys.exit(run(sys.argv[1:]))" packages/python/dirsql/ packages/python/tests/integration/ packages/python/tests/binding/ -x -q --tb=short
+    PYTHONPATH=internals/checks/src uv run python -c "import sys; from checks.pytest_gate.gate import run; sys.exit(run(sys.argv[1:]))" packages/python/dirsql/ packages/python/tests/integration/ -x -q --tb=short
 
 # Run Rust tests
 test-rust:

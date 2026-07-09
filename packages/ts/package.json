@@ -101,17 +101,21 @@
       "output": []
     },
     "test:integration": {
-      "command": "vitest run --dir tests/integration --passWithNoTests",
-      "files": ["src/**/*.ts", "tests/integration/**/*.ts", "vitest.config.ts"],
+      "command": "vitest run --dir tests/integration/hermetic --passWithNoTests",
+      "files": [
+        "src/**/*.ts",
+        "tests/integration/hermetic/**/*.ts",
+        "vitest.config.ts"
+      ],
       "output": []
     },
     "test:binding": {
-      "command": "vitest run --dir tests/binding --passWithNoTests",
+      "command": "vitest run --dir tests/integration/binding --passWithNoTests",
       "dependencies": ["napi:build", "tsc"],
       "files": [
         "src/**/*.ts",
         "tools/**/*.ts",
-        "tests/binding/**/*.ts",
+        "tests/integration/binding/**/*.ts",
         "tests/exists.ts",
         "vitest.config.ts"
       ],
@@ -151,7 +155,6 @@
         "src/**/*.ts",
         "tools/**/*.ts",
         "tests/integration/**/*.ts",
-        "tests/binding/**/*.ts",
         "tests/exists.ts",
         "vitest.config.ts"
       ],

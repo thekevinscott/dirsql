@@ -13,16 +13,17 @@
 # `[<lang>.coverage]` table sets the unit-only coverage floor the `unit
 # coverage` job enforces.
 #
-# The zero-exemptions state is TEMPORARILY SUSPENDED pending #519/#520. The only
-# exemptions below waive `unknown-tier` for the `tests/binding/` and
-# `tests/smoke/` suites: testing-conventions#417 (live on `@v0`) derives
-# `integration lint`'s subjects from the package root and recognizes only
-# `tests/integration/` and `tests/e2e/` as suite tiers, so dirsql's two extra
-# tiers trip `unknown-tier`. Each entry points at its relocation issue -- binding
-# folds into `tests/integration/binding/` (#519), smoke moves to an internals
-# package (#520) -- and the stale-path hard error forces its own deletion when
-# that move lands. Every re-export/empty barrel is still verified without a
-# waiver -- the TS `index.ts` barrel has `index.test.ts`, the python
+# The zero-exemptions state is TEMPORARILY SUSPENDED pending #520. The only
+# exemption below waives `unknown-tier` for the `tests/smoke/` suite:
+# testing-conventions#417 (live on `@v0`) derives `integration lint`'s subjects
+# from the package root and recognizes only `tests/integration/` and
+# `tests/e2e/` as suite tiers, so the smoke tier trips `unknown-tier`. The entry
+# points at its relocation issue -- smoke moves to an internals package (#520) --
+# and the stale-path hard error forces its own deletion when that move lands.
+# (The binding waivers are already gone: #519 relocated that suite into the
+# recognized tier `tests/integration/binding/`.) Every re-export/empty barrel is
+# still verified without a waiver -- the TS `index.ts` barrel has
+# `index.test.ts`, the python
 # `__init__.py` barrel has `__init___test.py`, empty package inits
 # (`cli/__init__.py`) are auto-skipped by the tool, and the dead `cli/interpret`
 # shells were deleted. The former python isolation waiver on the python barrel's
@@ -84,64 +85,9 @@ extra_scope = ["packages/rust/src"]
 fail_under = 100
 branch = true
 
-# `unknown-tier` waivers (paths relative to packages/python). Removed when the
-# suites relocate into recognized tiers: binding -> tests/integration/binding/
-# (#519), smoke -> internals/smoke (#520).
-[[python.exempt]]
-path = "tests/binding/async_dirsql_test.py"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[python.exempt]]
-path = "tests/binding/config_extension_package_test.py"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[python.exempt]]
-path = "tests/binding/dirsql_test.py"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[python.exempt]]
-path = "tests/binding/docs_examples_test.py"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[python.exempt]]
-path = "tests/binding/docs_gaps_test.py"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[python.exempt]]
-path = "tests/binding/extension_package_test.py"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[python.exempt]]
-path = "tests/binding/extensions_test.py"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[python.exempt]]
-path = "tests/binding/from_config_test.py"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[python.exempt]]
-path = "tests/binding/persist_test.py"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[python.exempt]]
-path = "tests/binding/table_name_resolution_test.py"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[python.exempt]]
-path = "tests/binding/value_fidelity_test.py"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
+# `unknown-tier` waiver (path relative to packages/python). Removed when the
+# smoke flow moves to internals/smoke (#520). The binding waivers are gone: the
+# suite now lives in the recognized tier tests/integration/binding/ (#519).
 [[python.exempt]]
 path = "tests/smoke/build_test.py"
 rules = ["unknown-tier"]
@@ -163,64 +109,9 @@ functions = 100
 statements = 100
 branches = 100
 
-# `unknown-tier` waivers (paths relative to packages/ts). Removed when the
-# suites relocate into recognized tiers: binding -> tests/integration/binding/
-# (#519), smoke -> internals/smoke (#520).
-[[typescript.exempt]]
-path = "tests/binding/config-extension-package.test.ts"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[typescript.exempt]]
-path = "tests/binding/docs-examples.test.ts"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[typescript.exempt]]
-path = "tests/binding/docs-gaps.test.ts"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[typescript.exempt]]
-path = "tests/binding/extension-package.test.ts"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[typescript.exempt]]
-path = "tests/binding/extensions.test.ts"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[typescript.exempt]]
-path = "tests/binding/from-config.test.ts"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[typescript.exempt]]
-path = "tests/binding/index.test.ts"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[typescript.exempt]]
-path = "tests/binding/persist.test.ts"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[typescript.exempt]]
-path = "tests/binding/table-name-resolution.test.ts"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[typescript.exempt]]
-path = "tests/binding/value-fidelity.test.ts"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
-[[typescript.exempt]]
-path = "tests/binding/watch.test.ts"
-rules = ["unknown-tier"]
-reason = "real-core binding tier predates the derived three-tier layout; relocation to tests/integration/binding/ tracked in #519"
-
+# `unknown-tier` waiver (path relative to packages/ts). Removed when the smoke
+# flow moves to internals/smoke (#520). The binding waivers are gone: the suite
+# now lives in the recognized tier tests/integration/binding/ (#519).
 [[typescript.exempt]]
 path = "tests/smoke/build.test.ts"
 rules = ["unknown-tier"]

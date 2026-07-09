@@ -21,7 +21,7 @@ import pytest
 from dirsql import DirSQL
 
 _REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..")
 )
 _FIXTURE_MANIFEST = os.path.join(
     _REPO_ROOT, "packages", "rust", "tests", "fixtures", "testext", "Cargo.toml"
