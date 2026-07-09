@@ -932,20 +932,15 @@ impl DirSQLBuilder {
         self
     }
 
-    /// Enable persistent on-disk storage. When `true`, the SQLite database is
-    /// written to `<root>/.dirsql/cache.db` (override via
-    /// [`persist_path`](Self::persist_path)) so subsequent startups only
-    /// re-parse files that have actually changed. See
-    /// `docs/howto/persist.md` for the reconcile contract.
-    pub fn persist(mut self, persist: bool) -> Self {
-        self.persist = persist;
-        self
-    }
-
-    /// Override the location of the persistent cache file. Ignored when
-    /// [`persist`](Self::persist) is `false`.
-    pub fn persist_path(mut self, path: impl AsRef<Path>) -> Self {
-        self.persist_path = Some(path.as_ref().to_path_buf());
+    /// Enable persistent on-disk storage. `None` writes the SQLite database to
+    /// the default `<root>/.dirsql/cache.db`; `Some(path)` writes it to `path`.
+    /// Either way, subsequent startups only re-parse files that have actually
+    /// changed. See `docs/howto/persist.md` for the reconcile contract.
+    pub fn persist(mut self, path: Option<impl AsRef<Path>>) -> Self {
+        self.persist = true;
+        if let Some(path) = path {
+            self.persist_path = Some(path.as_ref().to_path_buf());
+        }
         self
     }
 
@@ -2651,14 +2646,45 @@ mod internal_tests {
             .ignore(["skip/**"])
             .extensions(Vec::<Extension>::new())
             .suppress_config_extensions(true)
-            .persist(true)
-            .persist_path(&cache)
+            .persist(Some(&cache))
             .poll_interval(Duration::from_millis(50))
             .build()
             .unwrap();
         assert!(db.query("SELECT * FROM a").is_ok());
         assert!(db.query("SELECT * FROM b").is_ok());
         assert_eq!(db.inner.poll_interval, Duration::from_millis(50));
+    }
+
+    #[test]
+    fn persist_none_enables_default_path() {
+        let resolved = DirSQL::builder()
+            .root("/tmp/x")
+            .persist(None::<&Path>)
+            .resolve()
+            .unwrap();
+        assert!(resolved.persist);
+        assert!(resolved.persist_path.is_none());
+    }
+
+    #[test]
+    fn persist_some_enables_explicit_path() {
+        let resolved = DirSQL::builder()
+            .root("/tmp/x")
+            .persist(Some("/tmp/x/custom.db"))
+            .resolve()
+            .unwrap();
+        assert!(resolved.persist);
+        assert_eq!(
+            resolved.persist_path,
+            Some(PathBuf::from("/tmp/x/custom.db"))
+        );
+    }
+
+    #[test]
+    fn persist_unset_leaves_persistence_off() {
+        let resolved = DirSQL::builder().root("/tmp/x").resolve().unwrap();
+        assert!(!resolved.persist);
+        assert!(resolved.persist_path.is_none());
     }
 
     /// A second persist build over the same root+cache finds a compatible
@@ -2674,8 +2700,7 @@ mod internal_tests {
                 "*.txt",
                 |_| vec![],
             )])
-            .persist(true)
-            .persist_path(&cache)
+            .persist(Some(&cache))
             .build()
             .unwrap();
         drop(first);
@@ -2686,8 +2711,7 @@ mod internal_tests {
                 "*.txt",
                 |_| vec![],
             )])
-            .persist(true)
-            .persist_path(&cache)
+            .persist(Some(&cache))
             .build()
             .unwrap();
         assert!(second.query("SELECT * FROM t").is_ok());

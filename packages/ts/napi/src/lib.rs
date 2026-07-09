@@ -217,10 +217,7 @@ impl Task for OpenTask {
             builder = builder.config(cfg);
         }
         if self.persist {
-            builder = builder.persist(true);
-        }
-        if let Some(p) = self.persist_path.take() {
-            builder = builder.persist_path(p);
+            builder = builder.persist(self.persist_path.take());
         }
         builder.prepare().map_err(to_napi_err)
     }

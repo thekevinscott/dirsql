@@ -76,10 +76,7 @@ impl Cli {
     /// → persist at `<path>`.
     fn apply_persist(&self, mut builder: dirsql::DirSQLBuilder) -> dirsql::DirSQLBuilder {
         if let Some(path) = &self.persist {
-            builder = builder.persist(true);
-            if let Some(path) = path {
-                builder = builder.persist_path(path);
-            }
+            builder = builder.persist(path.as_ref());
         }
         builder
     }
