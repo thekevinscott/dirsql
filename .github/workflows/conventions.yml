@@ -170,16 +170,16 @@ jobs:
       gates: '["colocated-test", "unit-lint"]'
 
   # internals/checks (#494/#503): the repo-tooling checks package was gated by hand
-  # convention only -- nothing enforced its colocated tests or isolation. `path` is
-  # the inner importable dir (internals/checks/src), not the package root, matching
-  # every other call above. No `unit-coverage`/`mutation` here: gha-scripts.yml
-  # already self-enforces a 100% coverage floor via plain `pytest --cov`, and this
-  # package has no native build to justify the mutation engine's extra CI time.
+  # convention only -- nothing enforced its colocated tests, isolation, or coverage.
+  # `path` is the inner importable dir (internals/checks/src), not the package root,
+  # matching every other call above. No `integration-lint` (no tests/integration/
+  # tier -- gate.py's injected-collaborator functions are already fully exercised by
+  # the unit suite) and no `e2e-verify` yet (no tests/e2e/ or attestation exists for
+  # this package -- follow-up work, see #494).
   internals-checks:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
       languages: '["python"]'
       path: internals/checks/src
-      config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint"]'
+      gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation"]'
