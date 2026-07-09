@@ -630,6 +630,19 @@ glbo = "typo"
     }
 
     #[test]
+    fn root_key_in_dirsql_section_is_rejected() {
+        // `root` is no longer a config key (#540): the runner owns the index
+        // root. An old config carrying it fails loudly, naming the key.
+        let toml = r#"
+[dirsql]
+root = "docs"
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(matches!(err, ConfigError::Toml(_)), "got: {err:?}");
+        assert!(err.to_string().contains("root"), "got: {err}");
+    }
+
+    #[test]
     fn unknown_key_in_extension_is_rejected() {
         // A misspelled `[[dirsql.extension]]` key (`entrypont`) errors.
         let toml = r#"
