@@ -151,7 +151,7 @@ fn help_flag_prints_and_exits_zero() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicates::str::contains("--config"))
+        .stdout(predicates::str::contains("-c, --config"))
         .stdout(predicates::str::contains("--host"))
         .stdout(predicates::str::contains("--port"));
 }
@@ -843,6 +843,36 @@ fn explicit_config_flag_overrides_cwd_default() {
         .arg("--host")
         .arg("localhost")
         .arg("--config")
+        .arg(fixture.path().join(".dirsql.toml"))
+        .current_dir(elsewhere.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+    let child = cmd.spawn().expect("spawn");
+    wait_until_ready(port, Duration::from_secs(10));
+
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT COUNT(*) AS n FROM posts"}))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    kill_and_wait(child);
+}
+
+#[test]
+fn short_config_flag_overrides_cwd_default() {
+    let fixture = blog_fixture();
+    let elsewhere = TempDir::new().unwrap();
+
+    let port = free_port();
+    let mut cmd: StdCommand =
+        std::process::Command::cargo_bin("dirsql").expect("binary must exist");
+    cmd.arg("--port")
+        .arg(port.to_string())
+        .arg("--host")
+        .arg("localhost")
+        .arg("-c")
         .arg(fixture.path().join(".dirsql.toml"))
         .current_dir(elsewhere.path())
         .stdout(Stdio::piped())
