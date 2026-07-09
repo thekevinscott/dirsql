@@ -1427,9 +1427,10 @@ fn build_tables_from_config(
 /// Run a table's `on-file` command for one matched file and parse its output
 /// into rows.
 ///
-/// Placeholders: `{path}` (the file relative to `root`, append-if-absent so
-/// `cmd` and `cmd {path}` behave identically) and `{root}` (the index root).
-/// `{path}` falls back to the absolute path when the file is not under `root`.
+/// Placeholders: `{path}` (the file relative to `root`) and `{root}` (the
+/// index root). `{path}` falls back to the absolute path when the file is not
+/// under `root`. A template that omits a placeholder simply never receives its
+/// value — nothing is appended.
 ///
 /// Per-file isolation: any failure — a spawn/exit/timeout error from
 /// [`command::run_command`], or output that is not a JSON array of objects —
@@ -1449,7 +1450,7 @@ fn run_on_file(
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| abs_path.to_string());
     let placeholders = [
-        Placeholder::append("path", rel),
+        Placeholder::new("path", rel),
         Placeholder::new("root", root.to_string_lossy().into_owned()),
     ];
 
@@ -2874,9 +2875,8 @@ mod internal_tests {
     fn run_on_file_parses_command_json_output() {
         let dir = TempDir::new().unwrap();
         let abs = dir.path().join("f.txt");
-        // `{path}` is append-if-absent, so the file path lands as a trailing
-        // argv element; `printf` with a conversion-free format ignores it,
-        // keeping the JSON payload clean.
+        // The template omits every placeholder, so nothing is appended; the
+        // `printf` payload is the whole output.
         let rows = run_on_file(
             "printf '[{\"n\":1}]'",
             &abs.to_string_lossy(),

@@ -103,6 +103,56 @@ dirsql query "SELECT name FROM items"
 #  to cat, which fails, so the row is absent and dirsql warns on stderr)
 ```
 
+### `on-file` no longer appends `{path}` when the template omits it (#538, epic #528)
+
+#### Summary
+
+The `on-file` per-table command hook dropped its append-if-absent ergonomic:
+token interpolation is now the only way the matched file's path reaches the
+command. Previously `on-file = "cat"` implicitly appended the file's
+root-relative path as a trailing argument (behaving like `cat {path}`); now a
+template that never references `{path}` receives no path at all. This affects
+**every SDK** (the behavior lives in the shared Rust core, so pip/npm/cargo all
+change together) and any `.dirsql.toml` whose `on-file` command relied on the
+implicit append. It was removed because a single explicit interpolation channel
+is simpler to reason about and maintain than a substitute-or-append hybrid.
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| `.dirsql.toml` `on-file` relying on implicit path | `on-file = "extract.py"` | `on-file = "extract.py {path}"` |
+| Rust `dirsql::command::Placeholder` | `Placeholder::append(name, value)` | `Placeholder::new(name, value)` (substitute-only; no append variant) |
+
+#### Deprecations removed
+
+- `dirsql::command::Placeholder::append` and the `Placeholder::append_if_absent`
+  field — removed; construct placeholders with `Placeholder::new`.
+
+#### Behavior changes without code changes
+
+- **`on-file` templates without `{path}`**: previously the matched file's
+  relative path was appended as a trailing argv element, so `on-file = "cat"`
+  read the file; now nothing is appended, so `cat` runs against its null stdin,
+  produces no output, and the file is skipped per-file with a stderr warning
+  (`on-file command failed: command 'cat' produced no output on stdout`) and
+  contributes no rows. Add `{path}` to the template to restore the path.
+
+#### Verification
+
+```bash
+cat > .dirsql.toml <<'TOML'
+[[table]]
+ddl = "CREATE TABLE items (name TEXT)"
+glob = "*.json"
+on-file = "cat {path}"
+TOML
+printf '[{"name":"widget"}]' > a.json
+dirsql query "SELECT name FROM items"
+# expected: [{"name":"widget"}]
+# (with the {path}-less `on-file = "cat"`, the row is absent and dirsql warns on stderr)
+```
+
 ### Python wheels are now stable-ABI (abi3): wheel filename tag changes (#487, epic #480)
 
 #### Summary

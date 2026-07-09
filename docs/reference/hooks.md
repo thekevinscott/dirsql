@@ -101,7 +101,7 @@ row-mapping rules.
 
 | Placeholder | Value |
 |---|---|
-| `{path}` | The matched file's path **relative to the index root**. Appended automatically as a final argument when the command omits it, so `extract.py` and `extract.py {path}` behave identically. |
+| `{path}` | The matched file's path **relative to the index root**. `on-file = "extract.py {path}"` |
 | `{root}` | The index root directory. |
 
 ### `pre-query`

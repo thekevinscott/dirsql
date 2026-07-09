@@ -83,10 +83,11 @@ on-file = "sh echo_args.sh {path} {abspath}"
     assert_eq!(rows[0]["q"], Value::Text("{abspath}".into()));
 }
 
-/// The `{path}` placeholder is appended when the template omits it, so
-/// `on-file = "cat"` behaves identically to `on-file = "cat {path}"`.
+/// Interpolation is the only channel for the path: a template that omits
+/// `{path}` no longer has it appended, so `on-file = "cat"` runs `cat` with no
+/// file (its stdin is null), producing no payload and therefore no rows.
 #[test]
-fn on_file_appends_path_when_absent() {
+fn on_file_omitting_path_no_longer_appends_it() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join(".dirsql.toml"),
@@ -102,8 +103,10 @@ on-file = "cat"
 
     let db = DirSQL::from_config(root.path()).unwrap();
     let rows = db.query("SELECT name FROM items").unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["name"], Value::Text("widget".into()));
+    assert!(
+        rows.is_empty(),
+        "a `{{path}}`-less template must not receive the path, got {rows:?}"
+    );
 }
 
 /// A file whose command exits non-zero is skipped; the other file's rows are
