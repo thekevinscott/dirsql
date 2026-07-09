@@ -11,6 +11,48 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### Python wheels are now stable-ABI (abi3): wheel filename tag changes (#487, epic #480)
+
+#### Summary
+
+The `dirsql` PyPI package now ships **abi3 (stable-ABI) wheels**: the pyo3
+binding enables the `abi3-py311` feature, so maturin builds one
+`cp311-abi3` wheel per platform (loadable on every CPython ≥ 3.11) instead of a
+separate `cp311`/`cp312`/`cp313`/`cp314` wheel per interpreter. This affects the
+**Python SDK's published artifacts only** — no import surface, call site, or
+supported-version floor changes (`requires-python` stays `>=3.11`). The change
+cuts the release build matrix' per-Python-version wheel axis 4×. The only
+consumer-visible difference is the wheel **filename tag**.
+
+#### Required changes
+
+_None._ `pip install dirsql`, `uv add dirsql`, and `uvx dirsql` resolve and
+install the abi3 wheel unchanged on CPython 3.11 through 3.14.
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- **Wheel filename tag**: previously the interpreter-specific
+  `dirsql-<ver>-cp312-cp312-<platform>.whl` (one per Python minor version); now
+  the stable-ABI `dirsql-<ver>-cp311-abi3-<platform>.whl` (one per platform,
+  installed on 3.11+). Consumers that **pin or hash exact wheel filenames** (a
+  lockfile with per-file hashes, an internal mirror keyed by filename, or CI
+  that greps the tag) must refresh those references. Everyone installing by
+  package name and version is unaffected.
+
+#### Verification
+
+```bash
+pip download dirsql --no-deps --python-version 3.13 --only-binary=:all: -d /tmp/dirsql-whl
+ls /tmp/dirsql-whl
+# expected: a single dirsql-<ver>-cp311-abi3-<platform>.whl (no cp313-cp313 wheel)
+python3.13 -c "import dirsql; print('ok')"
+# expected: ok
+```
+
 ### Binding-boundary value fidelity: out-of-range integers error, list-of-ints is no longer bytes, extract errors carry the real message (#465, epic #461)
 
 #### Summary
