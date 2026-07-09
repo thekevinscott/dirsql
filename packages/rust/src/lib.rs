@@ -2907,6 +2907,26 @@ mod internal_tests {
         assert_eq!(rows[0]["q"], Value::Text("{abspath}".into()));
     }
 
+    /// `{path}` interpolates the matched file's **absolute** path (not a
+    /// root-relative one). The command echoes its `{path}` argument back as a
+    /// row value, and we assert it is byte-for-byte the absolute path even when
+    /// the file sits directly under `root` (the case the old `strip_prefix`
+    /// would have shortened to a bare relative path).
+    #[test]
+    fn run_on_file_passes_absolute_path_for_path_placeholder() {
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("f.txt");
+        let rows = run_on_file(
+            r#"sh -c "printf '[{\"p\":\"%s\"}]' \"$1\"" sh {path}"#,
+            &abs.to_string_lossy(),
+            dir.path(),
+            dir.path(),
+            command::DEFAULT_COMMAND_TIMEOUT,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["p"], Value::Text(abs.to_string_lossy().into_owned()));
+    }
+
     /// A command that cannot be spawned yields no rows (per-file isolation).
     #[test]
     fn run_on_file_returns_no_rows_on_spawn_failure() {
