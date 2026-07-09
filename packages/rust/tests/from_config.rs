@@ -226,9 +226,11 @@ glob = "*.csv"
     assert_eq!(rows.len(), 1);
 }
 
-// A relative `persist_path` resolves against the config's parent directory.
+// Persistence is no longer config-driven — `persist`/`persist_path` are gone
+// from the TOML schema (moved to the `--persist [PATH]` CLI flag). A config
+// that still carries them fails to load with an "unknown field" error.
 #[test]
-fn from_config_persist_true_with_relative_persist_path() {
+fn from_config_rejects_removed_persist_keys() {
     let root = TempDir::new().unwrap();
     fs::write(root.path().join("a.csv"), "anything").unwrap();
 
@@ -238,7 +240,6 @@ fn from_config_persist_true_with_relative_persist_path() {
         r#"
 [dirsql]
 persist = true
-persist_path = "cache/db.sqlite"
 
 [[table]]
 ddl = "CREATE TABLE files (path TEXT)"
@@ -247,48 +248,13 @@ glob = "*.csv"
     )
     .unwrap();
 
-    let db = DirSQL::from_config_path(&cfg_path).unwrap();
-    let rows = db.query("SELECT path FROM files").unwrap();
-    assert_eq!(rows.len(), 1);
+    let err = match DirSQL::from_config_path(&cfg_path) {
+        Ok(_) => panic!("expected a load error for the removed `persist` key"),
+        Err(err) => err,
+    };
     assert!(
-        root.path().join("cache").join("db.sqlite").exists(),
-        "expected the cache db at the resolved relative persist_path",
-    );
-}
-
-// An absolute `persist_path` is used verbatim.
-#[test]
-fn from_config_persist_true_with_absolute_persist_path() {
-    let root = TempDir::new().unwrap();
-    fs::write(root.path().join("a.csv"), "anything").unwrap();
-
-    let cache_dir = TempDir::new().unwrap();
-    let abs_cache = cache_dir.path().join("nested").join("abs-cache.db");
-
-    let cfg_path = root.path().join(".dirsql.toml");
-    fs::write(
-        &cfg_path,
-        format!(
-            r#"
-[dirsql]
-persist = true
-persist_path = "{}"
-
-[[table]]
-ddl = "CREATE TABLE files (path TEXT)"
-glob = "*.csv"
-"#,
-            abs_cache.display()
-        ),
-    )
-    .unwrap();
-
-    let db = DirSQL::from_config_path(&cfg_path).unwrap();
-    let rows = db.query("SELECT path FROM files").unwrap();
-    assert_eq!(rows.len(), 1);
-    assert!(
-        abs_cache.exists(),
-        "expected the cache db at the absolute persist_path",
+        err.to_string().contains("persist"),
+        "expected an unknown-field error naming `persist`, got {err}"
     );
 }
 

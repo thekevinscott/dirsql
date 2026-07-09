@@ -31,8 +31,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking: `dirsql init` is now deterministic (#455, epic #452).** It no longer shells out to the `claude` CLI. It writes a fixed starter `.dirsql.toml` — the exact single `files` table zero-config mode already serves — parsed from one embedded default-config asset shared by both surfaces, so they can never drift apart. `init` no longer inspects the target directory at all; `--root` now only controls where the default `--output` path is resolved. No LLM, no network, no `claude` dependency. See `MIGRATIONS.md`.
 - **Documentation: trimmed LLM-drafted comments to the minimal useful set (#445).** Removed archaeology comments (issue/PR references), comments restating adjacent code, reviewer-directed justification, and banner dividers across all three SDKs. Retained public API docs, safety/locking/ordering invariants, platform quirks, security invariants, and forward-looking notes tied to open issues. No code behavior changes.
 
+### Removed
+
+- **Breaking: `persist` / `persist_path` removed from `.dirsql.toml` (#549, epic #528).** Persistence is no longer a config key — it moved to the [`--persist [PATH]`](docs/reference/cli.md) CLI flag. Whether and where to cache is a machine-local operational fact that belongs to the runner, not to shareable config content. With #536's strict parsing landed, a config still carrying `persist` or `persist_path` now fails to load with an "unknown field" error (the server degrades with a 503 naming the key; `dirsql query` exits non-zero). The SDK builder's `persist` / `persist_path` constructor parameters are unaffected. See `MIGRATIONS.md`.
+
 ### Added
 
+- **`--persist [PATH]` CLI flag (#549, epic #528).** Turns on the persistent
+  on-disk SQLite cache from the command line — global across server mode and
+  `dirsql query`. Bare `--persist` caches at the default
+  `<root>/.dirsql/cache.db`; `--persist <path>` caches at `<path>`. Whether and
+  where to cache is a machine-local operational choice, so it lives on the
+  runner (the flag), not in the shareable `.dirsql.toml`. Cache/reconcile
+  behavior is unchanged — only how persistence is switched on. See
+  `MIGRATIONS.md`.
 - **`-c` short alias for `--config` (#535, epic #528).** The global `--config` flag on the `dirsql` binary (server mode and the `query` subcommand) now also accepts `-c`. Purely additive; `-c ./.dirsql.toml` is identical to `--config ./.dirsql.toml`.
 - **One-shot `dirsql query "<sql>"` subcommand (#399/#439).** Build the index,
   run one query, print the result rows as a JSON array on stdout, and exit —
