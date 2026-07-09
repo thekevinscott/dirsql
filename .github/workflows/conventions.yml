@@ -59,6 +59,7 @@ jobs:
     with:
       languages: '["python"]'
       path: internals/checks/src
+      config: internals/checks/testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       gates: '["colocated-test", "unit-lint", "integration-lint", "unit-coverage", "mutation", "e2e-verify"]'
 
