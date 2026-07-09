@@ -15,8 +15,14 @@ import { join, resolve } from "node:path";
 import { DirSQL } from "dirsql";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-const repoRoot = resolve(import.meta.dirname, "..", "..", "..", "..");
-const tsNodeModules = resolve(import.meta.dirname, "..", "..", "node_modules");
+const repoRoot = resolve(import.meta.dirname, "..", "..", "..", "..", "..");
+const tsNodeModules = resolve(
+  import.meta.dirname,
+  "..",
+  "..",
+  "..",
+  "node_modules",
+);
 const fixtureManifest = join(
   repoRoot,
   "packages/rust/tests/fixtures/testext/Cargo.toml",

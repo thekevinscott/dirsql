@@ -112,7 +112,7 @@ jobs:
         working-directory: packages/python
 
       - name: Run integration tests
-        run: uv run python -m pytest tests/integration/ -x -q --tb=short
+        run: uv run python -m pytest tests/integration/hermetic/ -x -q --tb=short
         working-directory: packages/python
 
   binding:
@@ -156,7 +156,7 @@ jobs:
         working-directory: packages/python
 
       - name: Run binding tests
-        run: uv run python -m pytest tests/binding/ -x -q --tb=short
+        run: uv run python -m pytest tests/integration/binding/ -x -q --tb=short
         working-directory: packages/python
 
   # Unit coverage now runs in the reusable testing-conventions workflow

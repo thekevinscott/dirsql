@@ -194,7 +194,7 @@ jobs:
       # See the `unit` job comment above for why this bypasses wireit.
       - name: Run binding tests
         working-directory: packages/ts
-        run: pnpm exec vitest run --dir tests/binding --passWithNoTests
+        run: pnpm exec vitest run --dir tests/integration/binding --passWithNoTests
 
   # Unit coverage now runs in the reusable testing-conventions workflow
   # (conventions.yml, `typescript-unit` gates: unit-coverage) after upstream
