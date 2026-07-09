@@ -11,6 +11,50 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### Unknown `.dirsql.toml` keys are now a hard error (#536, epic #528)
+
+#### Summary
+
+`.dirsql.toml` parsing previously **ignored unknown keys** at every schema
+level — a misspelled or removed key (`glbo` for `[dirsql]`, `persistpath` for
+`persist_path`, a stale `format` on a `[[table]]`) silently no-opped, so a
+config that looked applied did nothing. Every raw config struct now sets
+`deny_unknown_fields`, so an unknown key at the top level, in `[dirsql]`, in a
+`[[table]]`, or in a `[[dirsql.extension]]` is a parse error naming the key.
+This affects **all consumers** that load a config (all three SDKs and the CLI),
+since they share the one Rust parser. It was made to stop typos from silently
+no-opping and to make future key removals fail loudly.
+
+#### Required changes
+
+Fix or remove any key the parser does not recognize. The error names it.
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| `[dirsql]` typo | `persistpath = "cache.db"` (silently ignored) | `persist_path = "cache.db"` |
+| `[[table]]` stale key | `format = "json"` (silently ignored) | remove the key |
+| Any unknown key | loaded, key dropped | parse error naming the key (`unknown field 'persistpath', expected one of …`) |
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- **Config load with an unknown key**: previously succeeded with the key
+  dropped; now fails. On the CLI server this degrades the server — `POST
+  /query` returns `503` whose `{"error": …}` body names the unknown key — and
+  `dirsql query` exits non-zero with the same diagnostic on stderr. The SDKs
+  raise/reject. A config that already parsed clean is unaffected.
+
+#### Verification
+
+```bash
+printf '[dirsql]\npersistpath = "cache.db"\n' > .dirsql.toml
+dirsql query "SELECT 1"; echo "exit=$?"
+# expected: a non-zero exit; stderr names the unknown key `persistpath`
+```
+
 ### Python wheels are now stable-ABI (abi3): wheel filename tag changes (#487, epic #480)
 
 #### Summary

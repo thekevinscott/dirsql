@@ -3,7 +3,9 @@
 `.dirsql.toml` is a TOML file with one optional `[dirsql]` section, zero or
 more `[[dirsql.extension]]` entries, and zero or more `[[table]]` entries.
 An empty file is valid. A missing `[dirsql]` section behaves as an
-all-defaults one. Unknown keys are ignored.
+all-defaults one. Unknown keys are a parse error at every level (top level,
+`[dirsql]`, `[[table]]`, `[[dirsql.extension]]`) — a typo or a removed key
+fails loudly, naming the offending key, rather than silently no-opping.
 
 The [CLI](./cli.md) loads `./.dirsql.toml` by default (`--config <path>`
 overrides). The [SDKs](./sdk.md) load a config via the `config` constructor
@@ -136,6 +138,8 @@ Loading fails (the CLI enters [degraded mode](./cli.md#degraded-mode); the
 SDKs raise/reject) when:
 
 - The TOML is malformed.
+- Any table contains an unknown key (top level, `[dirsql]`, `[[table]]`, or
+  `[[dirsql.extension]]`). The error names the offending key.
 - A `[[table]]` entry omits `ddl` or `glob`.
 - A `[[dirsql.extension]]` entry omits `path`, or `path` is empty.
 - `on-file`, `pre-query`, or `post-query` is present but empty/whitespace.

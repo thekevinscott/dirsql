@@ -6,7 +6,7 @@
 //! integration tier rather than the inline unit module.
 
 use dirsql::cli::DEFAULT_CONFIG_TOML;
-use dirsql::config::{load_config, load_config_str};
+use dirsql::config::{ConfigError, load_config, load_config_str};
 use tempfile::TempDir;
 
 #[test]
@@ -24,6 +24,42 @@ glob = "*.csv"
     .unwrap();
     let config = load_config(&path).unwrap();
     assert_eq!(config.tables.len(), 1);
+}
+
+// Unknown keys are a hard error at every schema level (top level, `[dirsql]`,
+// `[[table]]`, `[[dirsql.extension]]`), so a typo or a removed key fails loudly
+// instead of silently no-opping.
+#[test]
+fn unknown_key_at_each_schema_level_errors() {
+    let cases = [
+        ("top-level", "glbo = \"typo\"\n", "glbo"),
+        (
+            "[dirsql]",
+            "[dirsql]\npersistpath = \"cache.db\"\n",
+            "persistpath",
+        ),
+        (
+            "[[table]]",
+            "[[table]]\nddl = \"CREATE TABLE t (path TEXT)\"\nglob = \"*.json\"\nformat = \"json\"\n",
+            "format",
+        ),
+        (
+            "[[dirsql.extension]]",
+            "[[dirsql.extension]]\npath = \"vec0.so\"\nentrypont = \"x\"\n",
+            "entrypont",
+        ),
+    ];
+    for (level, toml, key) in cases {
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::Toml(_)),
+            "{level}: expected a TOML parse error, got: {err:?}"
+        );
+        assert!(
+            err.to_string().contains(key),
+            "{level}: error must name the unknown key `{key}`, got: {err}"
+        );
+    }
 }
 
 // `DEFAULT_CONFIG_TOML` (packages/rust/src/cli/mod.rs) crosses the

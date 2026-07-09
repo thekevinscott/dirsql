@@ -269,12 +269,14 @@ pub struct TableConfig {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawConfig {
     dirsql: Option<RawDirsql>,
     table: Option<Vec<RawTable>>,
 }
 
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct RawDirsql {
     root: Option<PathBuf>,
     ignore: Option<Vec<String>>,
@@ -290,12 +292,14 @@ struct RawDirsql {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawExtension {
     path: Option<String>,
     entrypoint: Option<String>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawTable {
     ddl: Option<String>,
     glob: Option<String>,
@@ -587,17 +591,55 @@ glob = "c/*.yaml"
     }
 
     #[test]
-    fn unknown_top_level_keys_in_table_are_rejected() {
-        // serde ignores unknown table keys, so configs still carrying removed
-        // keys (e.g. `format`) load with the key dropped.
+    fn unknown_key_in_table_is_rejected() {
+        // An unknown `[[table]]` key (a removed key like `format`, or a typo)
+        // is a hard parse error naming the key, never silently dropped.
         let toml = r#"
 [[table]]
 ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
 format = "json"
 "#;
-        let config = load_config_str(toml).unwrap();
-        assert_eq!(config.tables.len(), 1);
+        let err = load_config_str(toml).unwrap_err();
+        assert!(matches!(err, ConfigError::Toml(_)), "got: {err:?}");
+        assert!(err.to_string().contains("format"), "got: {err}");
+    }
+
+    #[test]
+    fn unknown_key_in_dirsql_section_is_rejected() {
+        // A misspelled `[dirsql]` key (`persistpath` for `persist_path`) errors
+        // rather than silently no-opping.
+        let toml = r#"
+[dirsql]
+persistpath = "cache.db"
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(matches!(err, ConfigError::Toml(_)), "got: {err:?}");
+        assert!(err.to_string().contains("persistpath"), "got: {err}");
+    }
+
+    #[test]
+    fn unknown_top_level_key_is_rejected() {
+        // A stray key outside any known section (`glbo` for `[dirsql]`) errors.
+        let toml = r#"
+glbo = "typo"
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(matches!(err, ConfigError::Toml(_)), "got: {err:?}");
+        assert!(err.to_string().contains("glbo"), "got: {err}");
+    }
+
+    #[test]
+    fn unknown_key_in_extension_is_rejected() {
+        // A misspelled `[[dirsql.extension]]` key (`entrypont`) errors.
+        let toml = r#"
+[[dirsql.extension]]
+path = "vec0.so"
+entrypont = "sqlite3_vec_init"
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(matches!(err, ConfigError::Toml(_)), "got: {err:?}");
+        assert!(err.to_string().contains("entrypont"), "got: {err}");
     }
 
     #[test]
