@@ -169,17 +169,45 @@ jobs:
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       gates: '["colocated-test", "unit-lint"]'
 
-  # internals/checks (#494/#503): the repo-tooling checks package was gated by hand
-  # convention only -- nothing enforced its colocated tests, isolation, or coverage.
-  # `path` is the inner importable dir (internals/checks/src), not the package root,
-  # matching every other call above. No `integration-lint` (no tests/integration/
-  # tier -- gate.py's injected-collaborator functions are already fully exercised by
-  # the unit suite) and no `e2e-verify` yet (no tests/e2e/ or attestation exists for
-  # this package -- follow-up work, see #494).
+  # internals/checks (#494/#503, integration+e2e tiers #509): the repo-tooling
+  # checks package. `path` is the inner importable dir (internals/checks/src),
+  # not the package root, matching every other call above. `e2e-verify`
+  # measures freshness of internals/checks/e2e-attestation.json against this
+  # scoped diff, mirroring the python-unit / typescript-unit wiring above.
+  #
+  # `integration-lint` is NOT in this call's gates -- confirmed by a live CI run
+  # (PR #513, run 29013827853) that on the current `@v0` release, `integration
+  # lint` scans exactly the given `path` (SCAN_PATH: internals/checks/src in
+  # that run's step env), not a derived `<package root>/tests/integration/`.
+  # Pointed at `src`, it wrongly applied integration-suite isolation rules
+  # (no-inline-patch) to the colocated *unit* test files living there. The
+  # derived-suite-tiers resolution described in thekevinscott/
+  # testing-conventions#417 / docs/monorepo.md ("Everything derives from the
+  # package" / "The test tiers") -- which would let one call cover every tier --
+  # has not reached `@v0` yet. `integration-lint` for this package runs in the
+  # internals-checks-integration call below instead, scoped directly at
+  # internals/checks/tests/integration, matching the pattern python-integration
+  # / typescript-integration already use. Once #417 lands and is confirmed live
+  # on `@v0` (re-probe by re-adding integration-lint here and checking the
+  # step's SCAN_PATH resolves to tests/integration, not src), fold that job back
+  # into this one and delete it.
   internals-checks:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
       languages: '["python"]'
       path: internals/checks/src
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation"]'
+      gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation", "e2e-verify"]'
+
+  # internals/checks integration tier (#509): tests/integration/ exercises each
+  # check's gate.run() against real collaborators (real git, real pytest
+  # subprocess) rather than the packaged CLI (that's the e2e tier above). A
+  # separate call, not folded into internals-checks above -- see that job's
+  # comment for why.
+  internals-checks-integration:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["python"]'
+      path: internals/checks/tests/integration
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["integration-lint"]'
