@@ -162,6 +162,7 @@ def describe_cli_extension_by_package_name():
                 "--port",
                 str(port),
             ],
+            cwd=str(root),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

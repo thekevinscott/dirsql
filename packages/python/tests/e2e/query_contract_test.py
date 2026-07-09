@@ -111,6 +111,7 @@ def describe_query_contract():
                 "--port",
                 str(port),
             ],
+            cwd=str(root),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

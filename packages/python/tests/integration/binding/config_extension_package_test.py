@@ -40,8 +40,9 @@ def describe_config_extension_by_package_name():
         (pkg / "__init__.py").write_text("")
         shutil.copy(so, pkg / os.path.basename(so))
 
-        # The config names the extension by bare package name; its root
-        # defaults to the config file's parent directory.
+        # The config names the extension by bare package name. The index
+        # root is set explicitly below; the config file's location does not
+        # set it.
         root = tmp_path / "root"
         root.mkdir()
         config = root / ".dirsql.toml"
@@ -54,7 +55,7 @@ def describe_config_extension_by_package_name():
         sys.path.insert(0, str(env))
         importlib.invalidate_caches()
         try:
-            db = DirSQL(config=str(config))
+            db = DirSQL(root=str(root), config=str(config))
             await db.ready()
             assert await db.query("SELECT dirsql_testext_answer() AS a") == [{"a": 42}]
         finally:
