@@ -23,8 +23,15 @@ import os
 import shutil
 import subprocess
 import sys
+from typing import NamedTuple
 
 import pytest
+
+
+class _Installed(NamedTuple):
+    bin: str
+    wheel: str  # basename of the built wheel
+
 
 _PY_PKG = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _REPO_ROOT = os.path.abspath(os.path.join(_PY_PKG, "..", ".."))
@@ -98,16 +105,27 @@ def installed_venv(tmp_path_factory):
         )
         assert install.returncode == 0, f"pip install failed:\n{install.stderr}"
 
-        yield venv_bin
+        yield _Installed(bin=venv_bin, wheel=wheels[0])
     finally:
         shutil.rmtree(_BINARY_STAGE_DIR, ignore_errors=True)
 
 
 def describe_pip_installed_dirsql():
+    def it_ships_a_single_stable_abi_wheel(installed_venv):
+        # abi3 (#487): maturin builds ONE `cp3x-abi3` wheel per platform
+        # (loadable on every CPython >= the abi3 floor) instead of one
+        # interpreter-specific `cpXY-cpXY` wheel per version. Dropping the
+        # `abi3-py311` pyo3 feature reverts to a version-locked tag and
+        # re-inflates the release matrix 4x, so guard the tag here.
+        wheel = installed_venv.wheel
+        assert "-abi3-" in wheel, f"expected an abi3 wheel tag, saw {wheel!r}"
+        interp = wheel.split("-")[2]  # dirsql-<ver>-<interp>-<abi>-<plat>.whl
+        assert interp.startswith("cp3"), f"unexpected interpreter tag in {wheel!r}"
+
     def it_registers_a_dirsql_console_script_that_runs_the_bundled_binary(
         installed_venv,
     ):
-        cli = os.path.join(installed_venv, "dirsql")
+        cli = os.path.join(installed_venv.bin, "dirsql")
         assert os.path.exists(cli), f"console script missing at {cli}"
         proc = subprocess.run(
             [cli, "--version"],
@@ -122,7 +140,7 @@ def describe_pip_installed_dirsql():
         assert "dirsql" in proc.stdout
 
     def it_imports_the_installed_sdk_package(installed_venv, tmp_path):
-        python = os.path.join(installed_venv, "python")
+        python = os.path.join(installed_venv.bin, "python")
         # cwd is a scratch dir so `import dirsql` resolves the installed
         # wheel, never the source tree.
         proc = subprocess.run(
