@@ -967,8 +967,8 @@ impl DirSQLBuilder {
             mut extensions,
             config_path,
             suppress_config_extensions,
-            mut persist,
-            mut persist_path,
+            persist,
+            persist_path,
             poll_interval,
         } = self;
 
@@ -1014,20 +1014,6 @@ impl DirSQLBuilder {
                         entrypoint: ext.entrypoint,
                     });
                 }
-            }
-
-            if cfg.persist {
-                persist = true;
-            }
-            if persist_path.is_none()
-                && let Some(p) = cfg.persist_path.clone()
-            {
-                let resolved = if p.is_absolute() {
-                    p
-                } else {
-                    cfg_parent.join(p)
-                };
-                persist_path = Some(resolved);
             }
         }
 
