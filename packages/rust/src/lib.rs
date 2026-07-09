@@ -996,8 +996,9 @@ impl DirSQLBuilder {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
 
-            // `on-file` commands run in the config file's directory and compute
-            // `{path}` relative to the index root.
+            // `on-file` commands run in the config file's directory; `{path}`
+            // is the matched file's absolute path and `{root}` the resolved
+            // index root.
             let cfg_tables = build_tables_from_config(&cfg, &cfg_parent, &root)?;
             tables.extend(cfg_tables);
             ignore.extend(cfg.ignore);
@@ -1362,7 +1363,7 @@ fn relative_path(root: &Path, path: &Path) -> String {
 /// array of row objects on stdout, which becomes the file's rows (filesystem
 /// facts are still merged on top, user values winning). `config_dir` is the
 /// command's working directory (the config file's parent) and `root` is the
-/// resolved index root used to compute the `{path}` placeholder. Each run is
+/// resolved index root exposed as the `{root}` placeholder. Each run is
 /// bounded by the global `[dirsql].hook-timeout` key when present, falling
 /// back to [`command::DEFAULT_COMMAND_TIMEOUT`].
 fn build_tables_from_config(
@@ -1410,10 +1411,10 @@ fn build_tables_from_config(
 /// Run a table's `on-file` command for one matched file and parse its output
 /// into rows.
 ///
-/// Placeholders: `{path}` (the file relative to `root`, append-if-absent so
-/// `cmd` and `cmd {path}` behave identically), `{abspath}` (the absolute path),
-/// and `{root}` (the index root). `{path}` falls back to the absolute path
-/// when the file is not under `root`.
+/// Placeholders: `{path}` (the file's absolute path) and `{root}` (the index
+/// root). An absolute `{path}` is self-sufficient from any cwd, so a hook whose
+/// config lives outside the index still resolves it. A template that omits a
+/// placeholder simply never receives its value — nothing is appended.
 ///
 /// Per-file isolation: any failure — a spawn/exit/timeout error from
 /// [`command::run_command`], or output that is not a JSON array of objects —
@@ -1427,14 +1428,8 @@ fn run_on_file(
     root: &Path,
     timeout: Duration,
 ) -> Vec<Row> {
-    let abs = Path::new(abs_path);
-    let rel = abs
-        .strip_prefix(root)
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| abs_path.to_string());
     let placeholders = [
-        Placeholder::append("path", rel),
-        Placeholder::new("abspath", abs_path),
+        Placeholder::new("path", abs_path),
         Placeholder::new("root", root.to_string_lossy().into_owned()),
     ];
 
@@ -2875,9 +2870,8 @@ mod internal_tests {
     fn run_on_file_parses_command_json_output() {
         let dir = TempDir::new().unwrap();
         let abs = dir.path().join("f.txt");
-        // `{path}` is append-if-absent, so the file path lands as a trailing
-        // argv element; `printf` with a conversion-free format ignores it,
-        // keeping the JSON payload clean.
+        // The template omits every placeholder, so nothing is appended; the
+        // `printf` payload is the whole output.
         let rows = run_on_file(
             "printf '[{\"n\":1}]'",
             &abs.to_string_lossy(),
@@ -2887,6 +2881,48 @@ mod internal_tests {
         );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["n"], Value::Integer(1));
+    }
+
+    /// `{abspath}` is not in the substitution table: it is left literal like any
+    /// unknown `{…}`, so `printf` receives the string `{abspath}` verbatim. The
+    /// template references `{path}` so that arg is the real path (and no path is
+    /// appended), isolating the `{abspath}` behavior in the `q` column.
+    #[test]
+    fn run_on_file_does_not_substitute_abspath() {
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("f.txt");
+        let rows = run_on_file(
+            r#"printf '[{"p":"%s","q":"%s"}]' {path} {abspath}"#,
+            &abs.to_string_lossy(),
+            dir.path(),
+            dir.path(),
+            command::DEFAULT_COMMAND_TIMEOUT,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["q"], Value::Text("{abspath}".into()));
+    }
+
+    /// `{path}` interpolates the matched file's **absolute** path (not a
+    /// root-relative one). The command echoes its `{path}` argument back as a
+    /// row value, and we assert it is byte-for-byte the absolute path even when
+    /// the file sits directly under `root` (the case the old `strip_prefix`
+    /// would have shortened to a bare relative path).
+    #[test]
+    fn run_on_file_passes_absolute_path_for_path_placeholder() {
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("f.txt");
+        let rows = run_on_file(
+            r#"sh -c "printf '[{\"p\":\"%s\"}]' \"$1\"" sh {path}"#,
+            &abs.to_string_lossy(),
+            dir.path(),
+            dir.path(),
+            command::DEFAULT_COMMAND_TIMEOUT,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0]["p"],
+            Value::Text(abs.to_string_lossy().into_owned())
+        );
     }
 
     /// A command that cannot be spawned yields no rows (per-file isolation).

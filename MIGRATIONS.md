@@ -115,6 +115,158 @@ dirsql query "SELECT 1"; echo "exit=$?"
 # expected: a non-zero exit; stderr names the unknown key `persistpath`
 ```
 
+### `on-file` `{abspath}` token removed (#539, epic #528)
+
+#### Summary
+
+The per-file `on-file` command hook no longer recognizes the `{abspath}` token
+(the matched file's absolute path). The token set is now `{path}` (relative to
+the index root) and `{root}`. This affects **every SDK** (the behavior lives in
+the shared Rust core, so `pip`/`npm`/`cargo` change together) and any
+`.dirsql.toml` whose `on-file` command interpolated `{abspath}`. Unknown `{…}`
+sequences are left literal by design (so shell/`jq` braces survive), so a stale
+`{abspath}` does not raise — it is passed to the command as the **literal string
+`{abspath}`**, which will typically fail per-file at runtime (e.g. no such
+file). Update templates to use `{path}`.
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| `.dirsql.toml` `on-file` using `{abspath}` | `on-file = "extract.py {abspath}"` | `on-file = "extract.py {path}"` |
+
+#### Deprecations removed
+
+- The `on-file` `{abspath}` placeholder — removed; use `{path}`.
+
+#### Behavior changes without code changes
+
+- **`on-file` templates referencing `{abspath}`**: previously substituted with
+  the matched file's absolute path; now left literal (unknown token), so the
+  command receives the string `{abspath}`. It no longer resolves to a path, so
+  a command like `cat {abspath}` fails per-file (skipped with a stderr warning)
+  and the file contributes no rows.
+
+#### Verification
+
+```bash
+cat > .dirsql.toml <<'TOML'
+[[table]]
+ddl = "CREATE TABLE items (name TEXT)"
+glob = "*.json"
+on-file = "cat {path}"
+TOML
+printf '[{"name":"widget"}]' > a.json
+dirsql query "SELECT name FROM items"
+# expected: [{"name":"widget"}]
+# (an `on-file = "cat {abspath}"` template now passes the literal "{abspath}"
+#  to cat, which fails, so the row is absent and dirsql warns on stderr)
+```
+
+### `on-file` no longer appends `{path}` when the template omits it (#538, epic #528)
+
+#### Summary
+
+The `on-file` per-table command hook dropped its append-if-absent ergonomic:
+token interpolation is now the only way the matched file's path reaches the
+command. Previously `on-file = "cat"` implicitly appended the file's
+root-relative path as a trailing argument (behaving like `cat {path}`); now a
+template that never references `{path}` receives no path at all. This affects
+**every SDK** (the behavior lives in the shared Rust core, so pip/npm/cargo all
+change together) and any `.dirsql.toml` whose `on-file` command relied on the
+implicit append. It was removed because a single explicit interpolation channel
+is simpler to reason about and maintain than a substitute-or-append hybrid.
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| `.dirsql.toml` `on-file` relying on implicit path | `on-file = "extract.py"` | `on-file = "extract.py {path}"` |
+| Rust `dirsql::command::Placeholder` | `Placeholder::append(name, value)` | `Placeholder::new(name, value)` (substitute-only; no append variant) |
+
+#### Deprecations removed
+
+- `dirsql::command::Placeholder::append` and the `Placeholder::append_if_absent`
+  field — removed; construct placeholders with `Placeholder::new`.
+
+#### Behavior changes without code changes
+
+- **`on-file` templates without `{path}`**: previously the matched file's
+  relative path was appended as a trailing argv element, so `on-file = "cat"`
+  read the file; now nothing is appended, so `cat` runs against its null stdin,
+  produces no output, and the file is skipped per-file with a stderr warning
+  (`on-file command failed: command 'cat' produced no output on stdout`) and
+  contributes no rows. Add `{path}` to the template to restore the path.
+
+#### Verification
+
+```bash
+cat > .dirsql.toml <<'TOML'
+[[table]]
+ddl = "CREATE TABLE items (name TEXT)"
+glob = "*.json"
+on-file = "cat {path}"
+TOML
+printf '[{"name":"widget"}]' > a.json
+dirsql query "SELECT name FROM items"
+# expected: [{"name":"widget"}]
+# (with the {path}-less `on-file = "cat"`, the row is absent and dirsql warns on stderr)
+```
+
+### `on-file` `{path}` token now interpolates the absolute path (#542, part of #528)
+
+#### Summary
+
+The `on-file` command hook's `{path}` placeholder previously interpolated the
+matched file's path **relative to the index root**; it now interpolates the
+file's **absolute** path. This is a shared-core change (`packages/rust/src`)
+compiled into all three installs (`cargo` / `pip` / `npm`), so every SDK and the
+CLI behave identically. The motivation is #528's repeatable `--config`: a hook
+runs with its working directory set to the declaring config file's directory, so
+once a config can live outside the index a root-relative `{path}` no longer
+resolves. An absolute path is self-sufficient from any cwd. Only the hook
+**token** changed — the `path` **column** (stat virtuals) stays root-relative.
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| `on-file` command reading the file (`cat {path}`, `jq … {path}`) | received e.g. `books/a.json` | receives e.g. `/proj/books/a.json` — no change needed; the file still opens |
+| `on-file` command that **concatenates** `{path}` onto a base (`sh -c 'cat {root}/{path}'`) | `{root}/books/a.json` resolved | now `{root}//proj/books/a.json` — drop the `{root}/` prefix and use `{path}` alone |
+| `on-file` command **storing** `{path}` as a column value | stored the root-relative path | stores the absolute path — derive the relative form with `relpath({path}, {root})` if you need it |
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- **`on-file` `{path}` placeholder**: previously the file's path relative to the
+  index root; now the file's absolute path. Commands that only read the file
+  (`{path}` passed to `cat`/`jq`/an interpreter) are unaffected. Commands that
+  prefix `{path}` with the root or persist it as data must adjust (see the table
+  above). `{root}` is unchanged; the `path` column is unchanged (still
+  root-relative).
+
+#### Verification
+
+```bash
+mkdir -p /tmp/dirsql-542/data
+cat > /tmp/dirsql-542/echo-path.sh <<'EOF'
+#!/bin/sh
+printf '[{"seen":"%s"}]' "$1"
+EOF
+cat > /tmp/dirsql-542/.dirsql.toml <<'EOF'
+[[table]]
+ddl = "CREATE TABLE f (seen TEXT)"
+glob = "data/*.json"
+on-file = "sh echo-path.sh {path}"
+EOF
+echo '[]' > /tmp/dirsql-542/data/a.json
+cd /tmp/dirsql-542 && npx -y dirsql query "SELECT seen FROM f"
+# expected: [{"seen":"/tmp/dirsql-542/data/a.json"}]  (absolute, not "data/a.json")
+```
+
 ### Python wheels are now stable-ABI (abi3): wheel filename tag changes (#487, epic #480)
 
 #### Summary

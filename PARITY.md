@@ -163,9 +163,11 @@ All three share one global timeout override, `[dirsql].hook-timeout`
 (`config::Config::hook_timeout`, positive seconds, default 30s; #351).
 
 - **`on-file` (B2 #327).** A `[[table]]` key naming a per-file command whose
-  JSON-array stdout becomes the table's rows (placeholders `{path}` / `{abspath}`
-  / `{root}`; per-file error isolation; 30s default timeout, overridable via the
-  global `[dirsql].hook-timeout` key in positive seconds, #351). Parsed and executed in the
+  JSON-array stdout becomes the table's rows (interpolation-only placeholders
+  `{path}` (the file's **absolute** path, #542) / `{root}` — a template that
+  omits one receives no value, no append-if-absent, #538/#539; per-file error
+  isolation; 30s default timeout, overridable via the global
+  `[dirsql].hook-timeout` key in positive seconds, #351). Parsed and executed in the
   shared Rust core (`config::TableConfig::on_file` + the `build_tables_from_config`
   extract path), with **no** Python/TypeScript public-API surface — identical
   across all three installs, no drift.

@@ -9,15 +9,12 @@
 //!   single argument — but no shell is ever invoked: there is no globbing,
 //!   piping, or variable expansion. To get a real shell, ask for one
 //!   explicitly (`sh -c '…'`).
-//! - **Placeholders.** `{path}`, `{args}`, `{abspath}`, `{root}` (and any
+//! - **Placeholders.** `{path}`, `{args}`, `{root}` (and any
 //!   others a caller supplies) are substituted into whole argv tokens, every
 //!   occurrence. Substitution is single-pass and left-to-right per token, so a
 //!   value that itself contains `{…}` is never re-scanned — a substituted value
 //!   is always exactly one argv element, keeping values with spaces (and
 //!   untrusted input) injection-safe. An unknown `{…}` is left literal.
-//! - **append-if-absent.** A [`Placeholder`] marked [`Placeholder::append`] is
-//!   appended as a final argv element when its `{name}` does not appear in the
-//!   template (the `on-file` ergonomic: `cmd {path}` and `cmd` behave the same).
 //! - **cwd / env / timeout.** The child runs in `cwd` (the config file's
 //!   directory), inherits dirsql's environment (so `uvx --with …` / `npx …`
 //!   dependency resolution works), and is killed if it exceeds `timeout`.
@@ -44,34 +41,21 @@ pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 /// A named placeholder substituted into a command's argv.
 ///
 /// `name` is the bare identifier (no braces): a `name` of `path` matches the
-/// template token `{path}`.
+/// template token `{path}`. Substitution only — a placeholder whose `{name}`
+/// never appears in the template is a no-op.
 #[derive(Debug, Clone)]
 pub struct Placeholder {
     pub name: String,
     pub value: String,
-    /// When `true` and the template contains no `{name}`, `value` is appended
-    /// as a final argv element instead of being dropped.
-    pub append_if_absent: bool,
 }
 
 impl Placeholder {
-    /// A substitute-only placeholder: replaces `{name}` where it appears, and
-    /// is a no-op when the template omits it.
+    /// Replaces `{name}` where it appears, and is a no-op when the template
+    /// omits it.
     pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             value: value.into(),
-            append_if_absent: false,
-        }
-    }
-
-    /// A placeholder that is *appended* to argv when the template omits its
-    /// `{name}` (the `on-file` `{path}` ergonomic).
-    pub fn append(name: impl Into<String>, value: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            value: value.into(),
-            append_if_absent: true,
         }
     }
 }
@@ -246,17 +230,10 @@ fn build_argv(command: &str, placeholders: &[Placeholder]) -> Result<Vec<String>
         return Err(CommandError::InvalidCommand(command.to_string()));
     }
 
-    let mut used = vec![false; placeholders.len()];
-    let mut argv: Vec<String> = tokens
+    let argv: Vec<String> = tokens
         .iter()
-        .map(|token| substitute(token, placeholders, &mut used))
+        .map(|token| substitute(token, placeholders))
         .collect();
-
-    for (i, ph) in placeholders.iter().enumerate() {
-        if ph.append_if_absent && !used[i] {
-            argv.push(ph.value.clone());
-        }
-    }
 
     Ok(argv)
 }
@@ -264,14 +241,12 @@ fn build_argv(command: &str, placeholders: &[Placeholder]) -> Result<Vec<String>
 /// Replace every `{name}` in `token` with its placeholder value in a single
 /// left-to-right pass. Injected values are never re-scanned, so an untrusted
 /// value containing `{…}` is inert. Unknown `{…}` sequences are left literal.
-/// Marks `used[i]` for each placeholder that was substituted at least once.
-fn substitute(token: &str, placeholders: &[Placeholder], used: &mut [bool]) -> String {
+fn substitute(token: &str, placeholders: &[Placeholder]) -> String {
     let mut out = String::with_capacity(token.len());
     let mut i = 0;
     while i < token.len() {
         if let Some((idx, consumed)) = match_placeholder(token, i, placeholders) {
             out.push_str(&placeholders[idx].value);
-            used[idx] = true;
             i += consumed;
             continue;
         }
@@ -417,30 +392,8 @@ mod tests {
     }
 
     #[test]
-    fn append_if_absent_appends_when_the_template_omits_the_token() {
-        assert_eq!(
-            argv("extract.py", &[Placeholder::append("path", "docs/a.md")]),
-            ["extract.py", "docs/a.md"]
-        );
-    }
-
-    #[test]
-    fn append_if_absent_does_not_append_when_the_token_is_present() {
-        assert_eq!(
-            argv(
-                "extract.py --file {path}",
-                &[Placeholder::append("path", "docs/a.md")]
-            ),
-            ["extract.py", "--file", "docs/a.md"]
-        );
-    }
-
-    #[test]
-    fn substitute_only_placeholder_is_dropped_when_absent() {
-        assert_eq!(
-            argv("run", &[Placeholder::new("abspath", "/tmp/x")]),
-            ["run"]
-        );
+    fn a_placeholder_the_template_omits_is_dropped() {
+        assert_eq!(argv("run", &[Placeholder::new("path", "/tmp/x")]), ["run"]);
     }
 
     #[test]
@@ -477,12 +430,6 @@ mod tests {
         assert_eq!(tail.chars().count(), 2001); // 2000 chars + the leading '…'
         assert!(tail.starts_with('…'));
         assert!(tail.ends_with('x'));
-    }
-
-    #[test]
-    fn placeholder_constructors_set_append_flag() {
-        assert!(!Placeholder::new("a", "b").append_if_absent);
-        assert!(Placeholder::append("a", "b").append_if_absent);
     }
 
     // The run_command tests spawn real `sh`/`echo`/`cat`. Their test code must

@@ -29,13 +29,22 @@ fn free_port() -> u16 {
 }
 
 fn spawn_dirsql(dir: &std::path::Path, port: u16) -> Child {
+    spawn_dirsql_with(dir, None, port)
+}
+
+/// Spawn `dirsql` from working directory `cwd`, optionally pointing `--config`
+/// at a config file elsewhere (so the config dir can differ from the cwd).
+fn spawn_dirsql_with(cwd: &std::path::Path, config: Option<&std::path::Path>, port: u16) -> Child {
     let mut cmd: StdCommand = std::process::Command::cargo_bin("dirsql")
         .expect("`dirsql` binary must be built with --features cli");
     cmd.arg("--port")
         .arg(port.to_string())
         .arg("--host")
-        .arg("localhost")
-        .current_dir(dir)
+        .arg("localhost");
+    if let Some(config) = config {
+        cmd.arg("--config").arg(config);
+    }
+    cmd.current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
     cmd.spawn().expect("spawning dirsql failed")
@@ -60,6 +69,18 @@ fn wait_until_ready(port: u16, timeout: Duration) {
 fn kill_and_wait(mut child: Child) {
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// Kills the spawned server on drop, so a panicking test never leaks a process
+/// that keeps the inherited stderr pipe open (which would stall the CI step
+/// waiting for EOF).
+struct ServerGuard(Child);
+
+impl Drop for ServerGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
 
 #[test]
@@ -100,6 +121,170 @@ on-file = "cat {path}"
             json!({"paper_id": "b", "title": "Second"}),
         ]
     );
+
+    kill_and_wait(child);
+}
+
+/// `{path}` is the matched file's **absolute** path. The `on-file` script
+/// exits non-zero unless its argument is absolute (`case $1 in /*)`) and then
+/// `cat`s it; rows arriving over HTTP prove the script received an absolute
+/// path.
+#[test]
+fn on_file_receives_absolute_path_over_http() {
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("abscheck.sh"),
+        "#!/bin/sh\ncase \"$1\" in /*) cat \"$1\" ;; *) exit 1 ;; esac\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[table]]
+ddl = "CREATE TABLE papers (paper_id TEXT)"
+glob = "**/meta.json"
+on-file = "sh abscheck.sh {path}"
+"#,
+    )
+    .unwrap();
+    fs::create_dir_all(root.path().join("p1")).unwrap();
+    fs::write(
+        root.path().join("p1").join("meta.json"),
+        r#"[{"paper_id":"a"}]"#,
+    )
+    .unwrap();
+
+    let port = free_port();
+    let _server = ServerGuard(spawn_dirsql(root.path(), port));
+    wait_until_ready(port, Duration::from_secs(10));
+
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT paper_id FROM papers"}))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Vec<Value> = resp.json().unwrap();
+    assert_eq!(body, vec![json!({"paper_id": "a"})]);
+}
+
+/// The absolute `{path}` resolves even when the hook's working directory (the
+/// config dir) is not the index root. Since #540 the index root is the
+/// invocation cwd, so `dirsql` is launched from the data dir while its config
+/// lives elsewhere, reached via an absolute `--config`. The hook (cwd = config
+/// dir) `cat`s the file only because `{path}` is absolute — a root-relative
+/// path would not resolve from the config dir.
+#[test]
+fn on_file_absolute_path_resolves_when_config_dir_differs_from_root() {
+    let project = TempDir::new().unwrap();
+    let configdir = TempDir::new().unwrap();
+    fs::write(
+        configdir.path().join("abscheck.sh"),
+        "#!/bin/sh\ncase \"$1\" in /*) cat \"$1\" ;; *) exit 1 ;; esac\n",
+    )
+    .unwrap();
+    fs::write(
+        configdir.path().join(".dirsql.toml"),
+        r#"
+[[table]]
+ddl = "CREATE TABLE papers (paper_id TEXT)"
+glob = "**/meta.json"
+on-file = "sh abscheck.sh {path}"
+"#,
+    )
+    .unwrap();
+    fs::create_dir_all(project.path().join("data")).unwrap();
+    fs::write(
+        project.path().join("data").join("meta.json"),
+        r#"[{"paper_id":"a"}]"#,
+    )
+    .unwrap();
+
+    let port = free_port();
+    let _server = ServerGuard(spawn_dirsql_with(
+        project.path(),
+        Some(&configdir.path().join(".dirsql.toml")),
+        port,
+    ));
+    wait_until_ready(port, Duration::from_secs(10));
+
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT paper_id FROM papers"}))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Vec<Value> = resp.json().unwrap();
+    assert_eq!(body, vec![json!({"paper_id": "a"})]);
+}
+
+#[test]
+fn on_file_abspath_token_is_no_longer_substituted() {
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("echo_args.sh"),
+        "#!/bin/sh\nprintf '[{\"q\":\"%s\"}]' \"$2\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[table]]
+ddl = "CREATE TABLE items (q TEXT)"
+glob = "*.json"
+on-file = "sh echo_args.sh {path} {abspath}"
+"#,
+    )
+    .unwrap();
+    fs::write(root.path().join("a.json"), "ignored\n").unwrap();
+
+    let port = free_port();
+    let child = spawn_dirsql(root.path(), port);
+    wait_until_ready(port, Duration::from_secs(10));
+
+    // The helper echoes its second arg (the `{abspath}` slot) into `q`. Since
+    // `{abspath}` is no longer substituted, it arrives as the literal string.
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT q FROM items"}))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Vec<Value> = resp.json().unwrap();
+    assert_eq!(body, vec![json!({"q": "{abspath}"})]);
+
+    kill_and_wait(child);
+}
+
+#[test]
+fn on_file_omitting_path_yields_no_rows() {
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[table]]
+ddl = "CREATE TABLE items (name TEXT)"
+glob = "*.json"
+on-file = "cat"
+"#,
+    )
+    .unwrap();
+    fs::write(root.path().join("a.json"), r#"[{"name":"widget"}]"#).unwrap();
+
+    let port = free_port();
+    let child = spawn_dirsql(root.path(), port);
+    wait_until_ready(port, Duration::from_secs(10));
+
+    // The server stays healthy; the `{path}`-less command simply contributes no
+    // rows (its output is empty), so the query succeeds with an empty result.
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT name FROM items"}))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Vec<Value> = resp.json().unwrap();
+    assert!(body.is_empty(), "got: {body:?}");
 
     kill_and_wait(child);
 }
