@@ -172,14 +172,24 @@ jobs:
   # internals/checks (#494/#503): the repo-tooling checks package was gated by hand
   # convention only -- nothing enforced its colocated tests, isolation, or coverage.
   # `path` is the inner importable dir (internals/checks/src), not the package root,
-  # matching every other call above. No `integration-lint` (no tests/integration/
-  # tier -- gate.py's injected-collaborator functions are already fully exercised by
-  # the unit suite) and no `e2e-verify` yet (no tests/e2e/ or attestation exists for
-  # this package -- follow-up work, see #494).
+  # matching every other call above. `e2e-verify` (#509) measures freshness of
+  # internals/checks/e2e-attestation.json against this scoped diff, mirroring the
+  # python-unit / typescript-unit wiring above.
   internals-checks:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
       languages: '["python"]'
       path: internals/checks/src
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation"]'
+      gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation", "e2e-verify"]'
+
+  # internals/checks integration tier (#509): tests/integration/ exercises each
+  # check's gate.run() against real collaborators (real git, real pytest
+  # subprocess) rather than the packaged CLI (that's the e2e tier above).
+  internals-checks-integration:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["python"]'
+      path: internals/checks/tests/integration
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["integration-lint"]'

@@ -37,6 +37,18 @@ test-e2e:
 test-smoke:
     uv run python -m pytest packages/python/tests/smoke/ -x -q
 
+# Run internals/checks integration tests (real git, real pytest subprocess)
+test-integration-internals-checks:
+    cd internals/checks && uv run python -m pytest tests/integration -x -q
+
+# Run internals/checks e2e tests (real `dirsql-checks` CLI subprocess, local only)
+test-e2e-internals-checks:
+    cd internals/checks && uv run python -m pytest tests/e2e -x -q
+
+# Refresh internals/checks/e2e-attestation.json
+e2e-attest-internals-checks:
+    cd internals/checks && uvx testing-conventions e2e attest 'uv run python -m pytest tests/e2e -x -q'
+
 # Refresh packages/python/e2e-attestation.json: runs the python e2e suite and
 # commits the attestation. The CI gate runs inside the reusable workflow
 # (conventions.yml, python-unit `e2e-verify`) on PRs that touch the python SDK
@@ -55,6 +67,7 @@ e2e-attest-ts:
 e2e-verify:
     cd packages/python && testing-conventions e2e verify
     cd packages/ts && testing-conventions e2e verify
+    cd internals/checks && testing-conventions e2e verify
 
 # Enforce colocated unit tests via the testing-conventions CLI
 # (install: pip install testing-conventions). Exemptions live in
