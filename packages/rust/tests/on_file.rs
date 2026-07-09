@@ -109,6 +109,78 @@ on-file = "cat"
     );
 }
 
+/// `{path}` interpolates the matched file's **absolute** path, so an `on-file`
+/// script receives a self-sufficient argument that resolves from any cwd. The
+/// helper exits non-zero unless its argument is absolute; only then does it
+/// `cat` the file. Rows landing proves the script saw an absolute `{path}`.
+#[test]
+fn on_file_receives_absolute_path() {
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("abscheck.sh"),
+        "#!/bin/sh\ncase \"$1\" in /*) cat \"$1\" ;; *) exit 1 ;; esac\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[table]]
+ddl = "CREATE TABLE items (name TEXT)"
+glob = "*.json"
+on-file = "sh abscheck.sh {path}"
+"#,
+    )
+    .unwrap();
+    fs::write(root.path().join("a.json"), r#"[{"name":"widget"}]"#).unwrap();
+
+    let db = DirSQL::from_config(root.path()).unwrap();
+    let rows = db.query("SELECT name FROM items").unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "an absolute `{{path}}` must pass the /*-guard and let the script cat the file"
+    );
+    assert_eq!(rows[0]["name"], Value::Text("widget".into()));
+}
+
+/// When the index root differs from the config file's directory (a `root`
+/// override), the hook still runs with cwd = the config dir, so a root-relative
+/// `{path}` would not resolve. The absolute `{path}` does: the script `cat`s the
+/// file from a cwd that is not the index root and rows land.
+#[test]
+fn on_file_absolute_path_resolves_when_root_differs_from_config_dir() {
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("abscheck.sh"),
+        "#!/bin/sh\ncase \"$1\" in /*) cat \"$1\" ;; *) exit 1 ;; esac\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[dirsql]
+root = "data"
+
+[[table]]
+ddl = "CREATE TABLE items (name TEXT)"
+glob = "**/meta.json"
+on-file = "sh abscheck.sh {path}"
+"#,
+    )
+    .unwrap();
+    fs::create_dir_all(root.path().join("data")).unwrap();
+    fs::write(
+        root.path().join("data").join("meta.json"),
+        r#"[{"name":"widget"}]"#,
+    )
+    .unwrap();
+
+    let db = DirSQL::from_config_path(root.path().join(".dirsql.toml")).unwrap();
+    let rows = db.query("SELECT name FROM items").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["name"], Value::Text("widget".into()));
+}
+
 /// A file whose command exits non-zero is skipped; the other file's rows are
 /// still present and the scan does not error. The command is a helper script
 /// (kept out of the TOML to sidestep nested-quote parsing): a file containing

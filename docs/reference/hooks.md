@@ -101,8 +101,8 @@ row-mapping rules.
 
 | Placeholder | Value |
 |---|---|
-| `{path}` | The matched file's path **relative to the index root**. `on-file = "extract.py {path}"` |
-| `{root}` | The index root directory. |
+| `{path}` | The matched file's **absolute** path. `on-file = "extract.py {path}"` — self-sufficient from any working directory, so the command resolves it even when the config lives outside the index. |
+| `{root}` | The index root directory. Derive a root-relative path with `relpath({path}, {root})`. |
 
 ### `pre-query`
 

@@ -23,7 +23,7 @@ glob    = "books/*.json"
 on-file = "jq -c '[{title, author, year}]' {path}"
 ```
 
-`{path}` is the matched file, relative to the index root — one of the
+`{path}` is the matched file's absolute path — one of the
 placeholders defined by the
 [command hook contract](../reference/hooks.md#on-file), which also covers
 the argv splitting, working directory, stdout protocol, and timeout shared
