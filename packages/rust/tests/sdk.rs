@@ -526,7 +526,7 @@ fn builder_ignore_filters_files() {
 }
 
 #[test]
-fn builder_config_loads_tables_and_root() {
+fn builder_config_loads_tables_with_explicit_root() {
     let root = TempDir::new().unwrap();
     fs::write(root.path().join("a.json"), r#"{"name":"one"}"#).unwrap();
     fs::write(root.path().join("b.json"), r#"{"name":"two"}"#).unwrap();
@@ -542,55 +542,34 @@ glob = "*.json"
     )
     .unwrap();
 
-    let db = DirSQL::builder().config(&cfg_path).build().unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(&cfg_path)
+        .build()
+        .unwrap();
     let rows = db.query("SELECT name FROM items ORDER BY name").unwrap();
     assert_eq!(rows.len(), 2);
 }
 
 #[test]
-fn builder_config_root_resolves_relative_to_config_parent() {
-    let root = TempDir::new().unwrap();
-    let data_dir = root.path().join("data");
-    fs::create_dir_all(&data_dir).unwrap();
-    fs::write(data_dir.join("a.json"), r#"{"name":"one"}"#).unwrap();
-
-    let cfg_path = root.path().join(".dirsql.toml");
-    fs::write(
-        &cfg_path,
-        r#"
-[dirsql]
-root = "data"
-
-[[table]]
-ddl = "CREATE TABLE items (name TEXT)"
-glob = "*.json"
-"#,
-    )
-    .unwrap();
-
-    let db = DirSQL::builder().config(&cfg_path).build().unwrap();
-    let rows = db.query("SELECT name FROM items").unwrap();
-    assert_eq!(rows.len(), 1);
-}
-
-#[test]
-fn builder_explicit_root_overrides_config_root() {
-    // The `name` column comes from a glob path capture so the test doesn't
-    // depend on content parsing.
+fn builder_explicit_root_wins_over_config_directory() {
+    // With `root` gone from config (#540), the index root is the explicit
+    // `.root(...)`, never the config file's own directory. The config's parent
+    // holds a decoy; only the explicit root's file is indexed. The `name`
+    // column comes from a glob path capture so the test doesn't depend on
+    // content parsing.
     let temp = TempDir::new().unwrap();
-    let empty_dir = temp.path().join("empty");
+    let cfg_dir = temp.path().join("cfgdir");
     let data_dir = temp.path().join("data");
-    fs::create_dir_all(&empty_dir).unwrap();
+    fs::create_dir_all(&cfg_dir).unwrap();
     fs::create_dir_all(&data_dir).unwrap();
+    fs::write(cfg_dir.join("decoy.json"), "anything").unwrap();
     fs::write(data_dir.join("present.json"), "anything").unwrap();
 
-    let cfg_path = temp.path().join(".dirsql.toml");
+    let cfg_path = cfg_dir.join(".dirsql.toml");
     fs::write(
         &cfg_path,
         r#"
-[dirsql]
-root = "empty"
-
 [[table]]
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "{name}.json"
@@ -606,20 +585,6 @@ glob = "{name}.json"
     let rows = db.query("SELECT name FROM items").unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["name"], Value::Text("present".into()));
-}
-
-#[test]
-fn builder_without_root_or_config_errors() {
-    let result = DirSQL::builder().table(items_table()).build();
-    let err = match result {
-        Ok(_) => panic!("expected error when no root is provided"),
-        Err(e) => e,
-    };
-    let msg = err.to_string();
-    assert!(
-        msg.contains("root"),
-        "expected root-missing error, got: {msg}"
-    );
 }
 
 #[test]
@@ -727,18 +692,6 @@ fn wait_file_events_after_watch_errors() {
     let _stream = db.watch().unwrap();
     let result = db.wait_file_events(Duration::from_millis(50));
     assert!(result.is_err());
-}
-
-#[test]
-fn prepare_without_root_errors() {
-    let err = match DirSQL::builder().table(items_table()).prepare() {
-        Ok(_) => panic!("expected a Config error when no root is provided"),
-        Err(e) => e,
-    };
-    assert!(
-        matches!(err, dirsql::DirSqlError::Config { .. }),
-        "got: {err}"
-    );
 }
 
 #[test]

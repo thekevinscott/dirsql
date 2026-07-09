@@ -219,9 +219,10 @@ fn load_state(cli: &Cli) -> AppState {
         return load_default_state(config_path);
     }
 
-    // Canonicalize so the root (derived from the config's parent) is
-    // absolute — `notify` has surprising behavior when watching relative
-    // paths like `./`.
+    // Canonicalize so config-relative paths (extension libraries, hook
+    // working directories) resolve against an absolute parent — `notify` and
+    // the hook subprocesses misbehave with relative paths like `./`. The
+    // index root itself is the invocation cwd (#540), not derived from here.
     let resolved = match config_path.canonicalize() {
         Ok(p) => p,
         Err(err) => {

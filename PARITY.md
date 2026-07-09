@@ -21,10 +21,10 @@ SDKs (no drift).
 All three SDKs share a single unified construction entry point — no separate
 `from_config` / `fromConfig` factory. Callers supply any combination of
 `root`, `tables`, `ignore`, and `config`; `config` names a `.dirsql.toml`
-file whose `[[table]]` entries are appended and whose optional
-`[dirsql].root` is resolved relative to the config file. When both an
-explicit `root` and a config-supplied root are present, the explicit value
-wins (a warning is emitted on stderr).
+file whose `[[table]]` entries are appended. The index root is decided
+uniformly across all three SDKs (#540): the explicit `root` when given, else
+the process cwd — the config file's location never sets the root. (The
+`[dirsql].root` config key was removed in #540.)
 
 | API                        | Python                                         | Rust                                                 | TypeScript                                              |
 |----------------------------|------------------------------------------------|------------------------------------------------------|---------------------------------------------------------|
@@ -141,7 +141,9 @@ for await (const event of db.watch()) { ... }
 parsed by the shared Rust config loader. That loader rejects unknown keys at
 every level (top level, `[dirsql]`, `[[table]]`, `[[dirsql.extension]]`; #536),
 so a typo fails identically on every install — parity by construction, no
-drift. Native-language config files (`.py` /
+drift. The loader has no `root` key (#540): the index root is the runner's
+(CLI invocation cwd / SDK explicit root), decided the same way on every
+install, so a config's location never sets where you index. Native-language config files (`.py` /
 `.js` / `.mjs` / `.cjs`), the `dirsql interpret` NDJSON helper that backed them,
 and the cross-language config-serialization snapshot (#194) that fed the
 handshake were all removed in epic #321 (#323 Python, #324 TypeScript, #325

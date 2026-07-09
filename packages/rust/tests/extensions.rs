@@ -213,6 +213,7 @@ glob = "*.txt"
     fs::write(root.path().join("a.txt"), "x").unwrap();
 
     let db = DirSQL::builder()
+        .root(root.path())
         .config(root.path().join(".dirsql.toml"))
         .suppress_config_extensions(true)
         .extensions(vec![Extension {
@@ -242,6 +243,7 @@ path = "does/not/exist.so"
     .unwrap();
 
     let result = DirSQL::builder()
+        .root(root.path())
         .config(root.path().join(".dirsql.toml"))
         .build();
     assert!(

@@ -249,10 +249,11 @@ impl DirSQL {
     /// to split the scan across threads for async bindings).
     ///
     /// The builder is the single construction entrypoint. To load from a
-    /// `.dirsql.toml`, pass the config path via `.config(path)`; to override
-    /// the root, use `.root(path)`; to add tables programmatically, use
-    /// `.table(t)` / `.tables(ts)`. When both a `.config()` and explicit
-    /// `.root()` are set, the explicit root wins and a warning is emitted.
+    /// `.dirsql.toml`, pass the config path via `.config(path)`; to set the
+    /// index root, use `.root(path)`; to add tables programmatically, use
+    /// `.table(t)` / `.tables(ts)`. The index root is the explicit `.root(...)`
+    /// when given, else the process cwd — the config file's location never
+    /// contributes.
     pub fn builder() -> DirSQLBuilder {
         DirSQLBuilder::default()
     }
@@ -279,14 +280,21 @@ impl DirSQL {
             .build()
     }
 
-    /// Shortcut for `DirSQL::builder().config(root/.dirsql.toml).build()`.
+    /// Shortcut for `DirSQL::builder().root(root).config(root/.dirsql.toml).build()`.
+    ///
+    /// `root` is both where `.dirsql.toml` is read from and the index root.
     pub fn from_config(root: impl Into<PathBuf>) -> Result<Self> {
+        let root = root.into();
         DirSQL::builder()
-            .config(root.into().join(".dirsql.toml"))
+            .config(root.join(".dirsql.toml"))
+            .root(root)
             .build()
     }
 
     /// Shortcut for `DirSQL::builder().config(config_path).build()`.
+    ///
+    /// With no explicit `.root()`, the index roots at the process cwd, not the
+    /// config file's parent directory.
     pub fn from_config_path(config_path: impl AsRef<Path>) -> Result<Self> {
         DirSQL::builder()
             .config(config_path.as_ref().to_path_buf())
@@ -839,10 +847,9 @@ impl DirSQL {
 /// ```
 ///
 /// # Config files
-/// Pass a `.dirsql.toml` path via [`config`](Self::config). If the config
-/// file declares a `root` field, it is resolved relative to the config's
-/// parent directory. If both the config and an explicit [`root`](Self::root)
-/// are provided, the explicit root wins and a warning is emitted.
+/// Pass a `.dirsql.toml` path via [`config`](Self::config). The config file's
+/// location does not set the index root: the root is the explicit
+/// [`root`](Self::root) when given, else the process cwd.
 #[derive(Default)]
 pub struct DirSQLBuilder {
     root: Option<PathBuf>,
@@ -857,9 +864,9 @@ pub struct DirSQLBuilder {
 }
 
 impl DirSQLBuilder {
-    /// Set the root directory to scan. Overrides any `root` declared by a
-    /// config file passed via [`config`](Self::config), emitting a warning
-    /// on stderr to flag the collision.
+    /// Set the root directory to scan. When unset, the index roots at the
+    /// process cwd; a config file passed via [`config`](Self::config) never
+    /// contributes to root derivation.
     pub fn root(mut self, root: impl Into<PathBuf>) -> Self {
         self.root = Some(root.into());
         self
@@ -909,10 +916,11 @@ impl DirSQLBuilder {
     }
 
     /// Load a `.dirsql.toml` config file at build time. The file's `[[table]]`
-    /// entries are appended after any programmatic tables; its `[dirsql].ignore`
-    /// patterns are appended; its optional `[dirsql].root` is resolved relative
-    /// to the config's parent directory. If the builder's own [`root`](Self::root)
-    /// was also set, the explicit value wins (with a warning).
+    /// entries are appended after any programmatic tables and its
+    /// `[dirsql].ignore` patterns are appended. The config file does not set the
+    /// index root: with no explicit [`root`](Self::root), the index roots at the
+    /// process cwd. Relative `persist_path` / `[[dirsql.extension]]` paths still
+    /// resolve against the config's parent directory.
     pub fn config(mut self, config_path: impl Into<PathBuf>) -> Self {
         self.config_path = Some(config_path.into());
         self
@@ -972,7 +980,13 @@ impl DirSQLBuilder {
             poll_interval,
         } = self;
 
-        let mut config_root: Option<PathBuf> = None;
+        // The index root is an operational fact owned by the runner: the
+        // explicit `.root(...)` when given, else the process cwd. The config
+        // file's own location plays no part in root derivation (#540).
+        let root = match explicit_root {
+            Some(explicit) => explicit,
+            None => std::env::current_dir().map_err(DirSqlError::config)?,
+        };
 
         if let Some(ref cfg_path) = config_path {
             let cfg = config::load_config(cfg_path).map_err(DirSqlError::config)?;
@@ -981,20 +995,10 @@ impl DirSQLBuilder {
                 .parent()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
-            let resolved_root = if let Some(cfg_root) = cfg.root.clone() {
-                if cfg_root.is_absolute() {
-                    cfg_root
-                } else {
-                    cfg_parent.join(cfg_root)
-                }
-            } else {
-                cfg_parent.clone()
-            };
-            config_root = Some(resolved_root.clone());
 
             // `on-file` commands run in the config file's directory and compute
-            // `{path}` relative to the resolved index root.
-            let cfg_tables = build_tables_from_config(&cfg, &cfg_parent, &resolved_root)?;
+            // `{path}` relative to the index root.
+            let cfg_tables = build_tables_from_config(&cfg, &cfg_parent, &root)?;
             tables.extend(cfg_tables);
             ignore.extend(cfg.ignore);
 
@@ -1029,27 +1033,6 @@ impl DirSQLBuilder {
                 persist_path = Some(resolved);
             }
         }
-
-        let root = match (explicit_root, config_root) {
-            (Some(explicit), Some(cfg)) => {
-                if explicit != cfg {
-                    eprintln!(
-                        "dirsql: explicit .root({}) overrides config root ({})",
-                        explicit.display(),
-                        cfg.display(),
-                    );
-                }
-                explicit
-            }
-            (Some(explicit), None) => explicit,
-            (None, Some(cfg)) => cfg,
-            (None, None) => {
-                return Err(DirSqlError::Config {
-                    message: "no root directory: call .root(...) or .config(path)".into(),
-                    source: None,
-                });
-            }
-        };
 
         Ok(ResolvedBuild {
             root,
@@ -1682,14 +1665,21 @@ impl AsyncDirSQL {
             .build_async()
     }
 
-    /// Shortcut for `DirSQL::builder().config(root/.dirsql.toml).build_async()`.
+    /// Shortcut for `DirSQL::builder().root(root).config(root/.dirsql.toml).build_async()`.
+    ///
+    /// `root` is both where `.dirsql.toml` is read from and the index root.
     pub fn from_config(root: impl Into<PathBuf>) -> Result<Self> {
+        let root = root.into();
         DirSQL::builder()
-            .config(root.into().join(".dirsql.toml"))
+            .config(root.join(".dirsql.toml"))
+            .root(root)
             .build_async()
     }
 
     /// Shortcut for `DirSQL::builder().config(config_path).build_async()`.
+    ///
+    /// With no explicit `.root()`, the index roots at the process cwd, not the
+    /// config file's parent directory.
     pub fn from_config_path(config_path: impl AsRef<Path>) -> Result<Self> {
         DirSQL::builder()
             .config(config_path.as_ref().to_path_buf())
@@ -2525,13 +2515,22 @@ mod internal_tests {
     }
 
     #[test]
-    fn builder_without_root_or_config_errors() {
-        // DirSQL is not Debug, so match rather than `unwrap_err`.
-        let err = match DirSQL::builder().build() {
-            Ok(_) => panic!("expected a config error"),
-            Err(e) => e,
-        };
-        assert!(matches!(err, DirSqlError::Config { .. }), "got: {err:?}");
+    fn resolve_without_root_defaults_to_process_cwd() {
+        // No `.root()`, no `.config()`: the index root falls back to the
+        // process cwd, which is always an absolute path. The exact-cwd
+        // assertion lives in the `config_root_derivation` integration test,
+        // which may mutate the process cwd (forbidden in a unit test).
+        let resolved = DirSQL::builder().resolve().unwrap();
+        assert!(resolved.root.is_absolute());
+    }
+
+    #[test]
+    fn resolve_explicit_root_is_used_verbatim() {
+        let resolved = DirSQL::builder()
+            .root("/some/explicit/root")
+            .resolve()
+            .unwrap();
+        assert_eq!(resolved.root, PathBuf::from("/some/explicit/root"));
     }
 
     #[test]

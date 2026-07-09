@@ -11,16 +11,16 @@ The [CLI](./cli.md) loads `./.dirsql.toml` by default (`--config <path>`
 overrides). The [SDKs](./sdk.md) load a config via the `config` constructor
 parameter.
 
-**Path resolution.** Relative paths in the config (`root`, `persist_path`,
+**Path resolution.** Relative paths in the config (`persist_path`,
 `[[dirsql.extension]]` `path`) resolve against the config file's parent
-directory. The scan root defaults to that same directory when `root` is not
-set.
+directory. The **index root is not a config concern** — it is decided by the
+runner (the CLI's invocation directory, or an SDK's explicit root), never by
+the config file's location. See [`--config`](./cli.md#flags).
 
 ## `[dirsql]` keys
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `root` | string | config file's parent directory | Directory to index. Relative values resolve against the config file's parent. An explicit `root` passed to an SDK constructor overrides this (a warning is emitted on stderr). |
 | `ignore` | array of strings | `[]` | Glob patterns matched against root-relative paths. Matched files are skipped entirely — excluded from the initial scan and from watch events. |
 | `persist` | boolean | `false` | Keep the SQLite index on disk between runs. When `false`, the index is ephemeral: rebuilt from your files on every startup and discarded on exit. |
 | `persist_path` | string | `<root>/.dirsql/cache.db` | Location of the on-disk cache. Relative values resolve against the config file's parent. Ignored unless `persist = true`. |
@@ -36,7 +36,6 @@ directory.
 
 ```toml
 [dirsql]
-root = "../data"
 ignore = ["node_modules/**", ".git/**"]
 persist = true
 persist_path = ".dirsql/cache.db"   # the default; shown for illustration

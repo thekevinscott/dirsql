@@ -92,22 +92,22 @@ DirSQL::builder()
 
 :::
 
-Creates a SQLite index over a directory. At least one of `root` or `config`
-must be supplied; with neither, construction fails with a "no root
-directory" error.
+Creates a SQLite index over a directory. The index root is the explicit
+`root` when given, else the **process cwd** — the `config` file's location
+never sets the root.
 
 **Parameters:**
 
-- `root` — Directory to index. Optional if `config` is supplied.
+- `root` — Directory to index. When omitted, the index roots at the process
+  cwd (even when `config` is supplied).
 - `tables` — Programmatic [`Table`](#table) definitions.
 - `ignore` — Glob patterns matched against root-relative paths; matched
   files are skipped entirely (scan and watch).
 - `config` — Path to a [`.dirsql.toml`](./config.md). Its `[[table]]`
   entries are appended after any programmatic `tables`; its `ignore`
-  patterns and `[[dirsql.extension]]` entries are appended likewise; its
-  `[dirsql].root` supplies the root when no explicit `root` is passed.
-  When both an explicit `root` and a config root are present, the explicit
-  value wins and a warning is emitted on stderr.
+  patterns and `[[dirsql.extension]]` entries are appended likewise. The
+  config file does **not** set the index root: with no explicit `root`, the
+  index roots at the process cwd.
 - `persist` — Keep the SQLite index on disk between runs (default off:
   ephemeral, rebuilt every startup). The cache lives at
   `<root>/.dirsql/cache.db` by default; on restart, only files whose stat

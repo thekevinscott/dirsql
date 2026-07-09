@@ -146,28 +146,15 @@ async fn it_supports_ignore_patterns() {
 }
 
 #[tokio::test]
-async fn build_async_without_root_errors() {
-    let err = match dirsql::DirSQL::builder().table(items_table()).build_async() {
-        Ok(_) => panic!("expected a Config error when no root is provided"),
-        Err(e) => e,
-    };
-    assert!(
-        matches!(err, dirsql::DirSqlError::Config { .. }),
-        "got: {err}"
-    );
-}
-
-#[tokio::test]
-async fn from_config_path_loads_config() {
+async fn from_config_path_loads_config_with_explicit_root() {
+    // `from_config_path` roots at the process cwd; the explicit `.root(...)`
+    // on the builder points the index at the data directory (#540).
     let root = TempDir::new().unwrap();
     fs::write(root.path().join("data.csv"), "anything").unwrap();
     let cfg_path = root.path().join("custom.toml");
     fs::write(
         &cfg_path,
         r#"
-[dirsql]
-root = "."
-
 [[table]]
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.csv"
@@ -175,7 +162,11 @@ glob = "*.csv"
     )
     .unwrap();
 
-    let db = AsyncDirSQL::from_config_path(&cfg_path).unwrap();
+    let db = dirsql::DirSQL::builder()
+        .root(root.path())
+        .config(&cfg_path)
+        .build_async()
+        .unwrap();
     db.ready().await.unwrap();
     let rows = db.query("SELECT path FROM files").await.unwrap();
     assert_eq!(rows.len(), 1);

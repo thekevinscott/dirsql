@@ -45,7 +45,7 @@ requests, closes open `/events` streams, and exits.
 
 | Flag | Default | Description |
 |---|---|---|
-| `-c, --config <path>` | `./.dirsql.toml` | Path to the [config file](./config.md). The index is rooted at the directory containing this file (unless the config sets `[dirsql].root`). When the file does not exist, the server runs in [zero-config mode](#zero-config-mode). |
+| `-c, --config <path>` | `./.dirsql.toml` | Path to the [config file](./config.md). The index is always rooted at the **invocation directory** (the current working directory), regardless of where this file lives — so `--config /elsewhere/.dirsql.toml` still indexes the directory you ran `dirsql` from. When the file does not exist, the server runs in [zero-config mode](#zero-config-mode). |
 | `--host <addr>` | `localhost` | Bind address. |
 | `--port <n>` | `7117` | TCP port to bind. |
 | `--extension <path>` | none | Load a SQLite extension by literal path, overriding the config's `[[dirsql.extension]]` entries. Repeatable. Format: `<path>` or `<path>::<entrypoint>`. Internal plumbing for the pip/npm launchers, which resolve package-name extensions and pass the resolved paths here — not intended for direct use. When any `--extension` is present, the config file's own extension entries are not loaded. |

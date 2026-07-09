@@ -196,45 +196,14 @@ glob = "nothing_here/*.txt"
     assert!(rows.is_empty());
 }
 
-// A config with an *absolute* `root` is used verbatim (not joined to the
-// config's parent).
-#[test]
-fn from_config_absolute_root_is_used_verbatim() {
-    let data = TempDir::new().unwrap();
-    fs::write(data.path().join("a.csv"), "anything").unwrap();
-
-    let cfg_dir = TempDir::new().unwrap();
-    let cfg_path = cfg_dir.path().join(".dirsql.toml");
-    fs::write(
-        &cfg_path,
-        format!(
-            r#"
-[dirsql]
-root = "{}"
-
-[[table]]
-ddl = "CREATE TABLE files (path TEXT)"
-glob = "*.csv"
-"#,
-            data.path().display()
-        ),
-    )
-    .unwrap();
-
-    let db = DirSQL::from_config_path(&cfg_path).unwrap();
-    let rows = db.query("SELECT path FROM files").unwrap();
-    assert_eq!(rows.len(), 1);
-}
-
 // A relative `persist_path` resolves against the config's parent directory.
 #[test]
 fn from_config_persist_true_with_relative_persist_path() {
     let root = TempDir::new().unwrap();
     fs::write(root.path().join("a.csv"), "anything").unwrap();
 
-    let cfg_path = root.path().join(".dirsql.toml");
     fs::write(
-        &cfg_path,
+        root.path().join(".dirsql.toml"),
         r#"
 [dirsql]
 persist = true
@@ -247,7 +216,7 @@ glob = "*.csv"
     )
     .unwrap();
 
-    let db = DirSQL::from_config_path(&cfg_path).unwrap();
+    let db = DirSQL::from_config(root.path()).unwrap();
     let rows = db.query("SELECT path FROM files").unwrap();
     assert_eq!(rows.len(), 1);
     assert!(
@@ -265,9 +234,8 @@ fn from_config_persist_true_with_absolute_persist_path() {
     let cache_dir = TempDir::new().unwrap();
     let abs_cache = cache_dir.path().join("nested").join("abs-cache.db");
 
-    let cfg_path = root.path().join(".dirsql.toml");
     fs::write(
-        &cfg_path,
+        root.path().join(".dirsql.toml"),
         format!(
             r#"
 [dirsql]
@@ -283,7 +251,7 @@ glob = "*.csv"
     )
     .unwrap();
 
-    let db = DirSQL::from_config_path(&cfg_path).unwrap();
+    let db = DirSQL::from_config(root.path()).unwrap();
     let rows = db.query("SELECT path FROM files").unwrap();
     assert_eq!(rows.len(), 1);
     assert!(
@@ -297,12 +265,11 @@ fn from_config_strict_table_builds() {
     let root = TempDir::new().unwrap();
     fs::write(root.path().join("a.csv"), "anything").unwrap();
 
-    let cfg_path = root.path().join(".dirsql.toml");
     // Declare only `path` (always available) so strict normalization, which
     // requires an exact column match, succeeds: the synthesized empty row is
     // filled with `path` and no undeclared virtuals leak in.
     fs::write(
-        &cfg_path,
+        root.path().join(".dirsql.toml"),
         r#"
 [[table]]
 ddl = "CREATE TABLE files (path TEXT)"
@@ -312,7 +279,7 @@ strict = true
     )
     .unwrap();
 
-    let db = DirSQL::from_config_path(&cfg_path).unwrap();
+    let db = DirSQL::from_config(root.path()).unwrap();
     let rows = db.query("SELECT path FROM files").unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["path"], Value::Text("a.csv".into()));
