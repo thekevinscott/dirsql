@@ -9,52 +9,6 @@ concurrency:
 permissions:
   contents: read
 
-# Adopt the testing-conventions reusable workflow (@v0). This runs the static
-# gates (colocated-test, unit-lint, integration-lint) PLUS the suite-executing
-# `mutation` (all three SDKs), `unit-coverage` (TypeScript, python), and
-# `e2e-verify` (TypeScript, python) gates.
-# The upstream monorepo primitive makes the reusable workflow build the native
-# artifact from the derived package root itself (#277 derives the root from
-# `path`; #279 wired the mutation job; #284 wired the coverage job — python via
-# python_env=uv `uv sync`, ts via napi auto-provisioning after #289 removed the
-# build_command input), so the bespoke ts-mutation.yml / rust-mutation.yml (#417),
-# python-mutation.yml (#426), the python/ts coverage jobs (#412), and the whole
-# e2e-attestation.yml (#418, via the `--base` squash-fix) are retired.
-#
-# The #337 shared-core e2e-freshness case (a core change stales both binding
-# attestations but lives outside either binding's `--scope`) is solved by
-# `testing-conventions.toml`'s `[e2e].extra_scope = ["packages/rust/src"]`
-# (upstream #333: `e2e verify --extra-scope`, wired through `detect`) — pure
-# config, the e2e-verify gate below enforces it. No bespoke gate. No `exclude`
-# carve-out for `src/cli`/`src/bin`: the language packages ship the compiled
-# `dirsql` binary and their e2e suites spawn it, so CLI changes stale the
-# attestations like any other core change.
-#
-# `packaging` (#413) runs whole-hog for all three SDKs, zero-config (just
-# "packaging" in `gates`, no build job). Rust adopted it via upstream #360/#362,
-# which fixed workspace-member support (packages/rust is a Cargo workspace
-# member, so `cargo package` wrote to the workspace root's target/package until
-# the fix redirected it via `--target-dir target`). The bespoke packaging.yml is
-# deleted -- this gate is the sole packaging enforcement.
-#
-# Still bespoke (for now): rust `unit-coverage` (bespoke by design in
-# rust-test.yml — a `packages/rust` `rust-toolchain.toml` for `--branch` nightly
-# breaks release cross-compile; #412 closed).
-#
-# One call per package (the intended monorepo pattern): each call points `path`
-# at the package's SOURCE dir, and every tier's gates run from there.
-# `integration-lint` derives its own subjects (tests/integration/, tests/e2e/)
-# from the package root (testing-conventions#417), so it needs no separate
-# integration-dir call -- the python-integration / typescript-integration calls
-# were folded into python-unit / typescript-unit (#521), as internals-checks was
-# (#516). Rust scans its crate root, which already covers tests/.
-#
-# The `gates` allowlists below were set empirically: a run turned each gate on
-# and the arbiter reported the reds. Every gate listed here is GREEN and
-# enforced. (The one initial red — rust `unit-lint`, 17 real isolation
-# violations the old mis-scoped bespoke check missed — was fixed in #395 and the
-# gate re-enabled.) No gate is excluded to dodge enforcement: a red is filed and
-# fixed, not hidden.
 jobs:
   python-unit:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
@@ -63,31 +17,6 @@ jobs:
       path: packages/python/dirsql
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      # `unit-coverage` runs here after upstream #284: the coverage job installs
-      # from the derived package root and runs `uv sync` when python_env=uv. Our
-      # pyproject.toml has a [project] table + maturin backend, so python_env
-      # resolves to uv (`uv sync` builds maturin into the suite venv) and
-      # provision_rust fires — NO build_command / rust_toolchain needed. Dev deps
-      # live in a PEP 735 [dependency-groups].dev so plain `uv sync` installs the
-      # pytest plugins the suite needs. Retires python-test.yml's coverage job (#412).
-      # `mutation` runs here too: the testing-conventions wheel now bundles the
-      # cosmic-ray adapter as a runtime dep, so the reusable mutation job resolves
-      # the engine from the same `uv sync` env — no separate install. Retires
-      # python-mutation.yml (#426).
-      # `e2e-verify` (#418): head.sha checkout (#293) + `--scope packages/python/dirsql`
-      # (#294) + `--base` diff-scoping (squash-fix) — freshness is measured over
-      # base..HEAD's scoped-source diff, so a PR that doesn't touch the SDK source
-      # has nothing to verify (no stale-on-main false red). This retired the
-      # bespoke e2e-attestation.yml entirely. The #337 shared-core case (a core
-      # change stales both binding attestations though it lives outside this
-      # `--scope`) is covered by `[e2e].extra_scope = ["packages/rust/src"]` in
-      # testing-conventions.toml (upstream #333 `--extra-scope`, wired via detect):
-      # any packages/rust/src change (cli included) stales this attestation too.
-      # `integration-lint` runs here too (#521): with tier derivation live on
-      # `@v0` (testing-conventions#417), one `src`-scoped call derives the package
-      # root and scans tests/integration/ + tests/e2e/, so the former
-      # `python-integration` call is folded in.
-      gates: '["colocated-test", "unit-lint", "integration-lint", "unit-coverage", "mutation", "e2e-verify", "packaging"]'
 
   typescript-unit:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
@@ -96,17 +25,6 @@ jobs:
       path: packages/ts/src
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      # `mutation` + `unit-coverage` both run here; both suites load the native
-      # napi `dirsql.node`. #289 removed the `build_command` workflow input (passing
-      # it now startup-fails the whole workflow) and there is no `[typescript]`
-      # build_command config key — so the napi build is AUTO-PROVISIONED because
-      # `packages/ts/napi` declares a napi build. `rust_toolchain: true` (still a
-      # valid input) supplies cargo for that build.
-      # `e2e-verify` (#418): `--scope packages/ts/src` + `--base` diff-scoping.
-      # `integration-lint` runs here too (#521, folding the former
-      # `typescript-integration` call): the `src`-scoped call derives the package
-      # root and scans tests/integration/ + tests/e2e/ (testing-conventions#417).
-      gates: '["colocated-test", "unit-lint", "integration-lint", "mutation", "unit-coverage", "e2e-verify", "packaging"]'
       rust_toolchain: true
 
   rust:
@@ -116,31 +34,8 @@ jobs:
       path: packages/rust
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      # colocated-test now runs for rust: upstream #274/#275 made the detector
-      # fan the presence check over rust (co-change stays python/ts). This retires
-      # the bespoke `colocated` job that rust-test.yml carried as a stopgap (#411).
-      # `mutation` (cargo-mutants) needs no build_command — the CLI self-provisions
-      # the engine, which builds and reruns the crate's own tests; #279 installs it
-      # from the derived root. No nightly (unlike coverage's --branch). Retires
-      # rust-mutation.yml (#417).
-      #
-      # `packaging` works for this workspace member via upstream #360/#362:
-      # membership is detected from an ancestor Cargo.toml `[workspace]` table and
-      # the build is redirected via `--target-dir target` so the .crate lands
-      # under the member's own target/package where the gate scans. Zero-config,
-      # no extra input (#413).
       gates: '["colocated-test", "unit-lint", "integration-lint", "mutation", "packaging"]'
 
-  # The two native BINDING crates (#405) hold real marshaling logic but sat
-  # outside every gate — the `rust` call above scans only `packages/rust` (the
-  # core). Bring each binding crate under colocated-test + unit-lint at its own
-  # crate root. Their pure conversion logic is unit-tested inline; the
-  # runtime-coupled parts (napi::sys getters / FnRef; pyo3 GIL conversions) stay
-  # covered by the binding tier (#233). No mutation/coverage here: those run the
-  # suite and would need the napi/pyo3 build; the static presence+isolation gates
-  # are what #405 is about. No exemption — the crux (does unit-lint tolerate a
-  # test constructing first-party `Value`/`RowEvent` via `super::*`?) resolved
-  # green in probing.
   rust-napi-binding:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
@@ -159,28 +54,6 @@ jobs:
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       gates: '["colocated-test", "unit-lint"]'
 
-  # internals/checks (#494/#503, integration+e2e tiers #509): the repo-tooling
-  # checks package. `path` is the inner importable dir (internals/checks/src),
-  # not the package root, matching every other call above. `e2e-verify`
-  # measures freshness of internals/checks/e2e-attestation.json against this
-  # scoped diff, mirroring the python-unit / typescript-unit wiring above.
-  #
-  # `integration-lint` is NOT in this call's gates -- confirmed by a live CI run
-  # (PR #513, run 29013827853) that on the current `@v0` release, `integration
-  # lint` scans exactly the given `path` (SCAN_PATH: internals/checks/src in
-  # that run's step env), not a derived `<package root>/tests/integration/`.
-  # Pointed at `src`, it wrongly applied integration-suite isolation rules
-  # (no-inline-patch) to the colocated *unit* test files living there. The
-  # derived-suite-tiers resolution described in thekevinscott/
-  # testing-conventions#417 / docs/monorepo.md ("Everything derives from the
-  # package" / "The test tiers") -- which would let one call cover every tier --
-  # has not reached `@v0` yet. `integration-lint` for this package runs in the
-  # internals-checks-integration call below instead, scoped directly at
-  # internals/checks/tests/integration, matching the pattern python-integration
-  # / typescript-integration already use. Once #417 lands and is confirmed live
-  # on `@v0` (re-probe by re-adding integration-lint here and checking the
-  # step's SCAN_PATH resolves to tests/integration, not src), fold that job back
-  # into this one and delete it.
   internals-checks:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
@@ -189,11 +62,6 @@ jobs:
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation", "e2e-verify"]'
 
-  # internals/checks integration tier (#509): tests/integration/ exercises each
-  # check's gate.run() against real collaborators (real git, real pytest
-  # subprocess) rather than the packaged CLI (that's the e2e tier above). A
-  # separate call, not folded into internals-checks above -- see that job's
-  # comment for why.
   internals-checks-integration:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
@@ -202,15 +70,6 @@ jobs:
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       gates: '["integration-lint"]'
 
-  # internals/distcheck (#520): the packaging distcheck flows extracted from
-  # the former per-package packaging suites. Pure-python repo tooling, gated like internals-checks
-  # -- `path` is the inner importable dir (internals/distcheck/src). One call covers
-  # every tier: with tier derivation live on `@v0` (testing-conventions#417),
-  # `integration-lint` derives its subjects from the package root
-  # (internals/distcheck/tests/integration/), so no separate integration call is
-  # needed. No `e2e-verify` gate -- the package has no e2e tier (nothing to
-  # attest; the real flows run in the packaging-distcheck jobs of python-test.yml /
-  # ts-test.yml).
   internals-distcheck:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
