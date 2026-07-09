@@ -1428,9 +1428,8 @@ fn build_tables_from_config(
 /// into rows.
 ///
 /// Placeholders: `{path}` (the file relative to `root`, append-if-absent so
-/// `cmd` and `cmd {path}` behave identically), `{abspath}` (the absolute path),
-/// and `{root}` (the index root). `{path}` falls back to the absolute path
-/// when the file is not under `root`.
+/// `cmd` and `cmd {path}` behave identically) and `{root}` (the index root).
+/// `{path}` falls back to the absolute path when the file is not under `root`.
 ///
 /// Per-file isolation: any failure — a spawn/exit/timeout error from
 /// [`command::run_command`], or output that is not a JSON array of objects —
@@ -1451,7 +1450,6 @@ fn run_on_file(
         .unwrap_or_else(|_| abs_path.to_string());
     let placeholders = [
         Placeholder::append("path", rel),
-        Placeholder::new("abspath", abs_path),
         Placeholder::new("root", root.to_string_lossy().into_owned()),
     ];
 
