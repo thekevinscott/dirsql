@@ -153,6 +153,60 @@ dirsql query "SELECT name FROM items"
 # (with the {path}-less `on-file = "cat"`, the row is absent and dirsql warns on stderr)
 ```
 
+### `on-file` `{path}` token now interpolates the absolute path (#542, part of #528)
+
+#### Summary
+
+The `on-file` command hook's `{path}` placeholder previously interpolated the
+matched file's path **relative to the index root**; it now interpolates the
+file's **absolute** path. This is a shared-core change (`packages/rust/src`)
+compiled into all three installs (`cargo` / `pip` / `npm`), so every SDK and the
+CLI behave identically. The motivation is #528's repeatable `--config`: a hook
+runs with its working directory set to the declaring config file's directory, so
+once a config can live outside the index a root-relative `{path}` no longer
+resolves. An absolute path is self-sufficient from any cwd. Only the hook
+**token** changed — the `path` **column** (stat virtuals) stays root-relative.
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| `on-file` command reading the file (`cat {path}`, `jq … {path}`) | received e.g. `books/a.json` | receives e.g. `/proj/books/a.json` — no change needed; the file still opens |
+| `on-file` command that **concatenates** `{path}` onto a base (`sh -c 'cat {root}/{path}'`) | `{root}/books/a.json` resolved | now `{root}//proj/books/a.json` — drop the `{root}/` prefix and use `{path}` alone |
+| `on-file` command **storing** `{path}` as a column value | stored the root-relative path | stores the absolute path — derive the relative form with `relpath({path}, {root})` if you need it |
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- **`on-file` `{path}` placeholder**: previously the file's path relative to the
+  index root; now the file's absolute path. Commands that only read the file
+  (`{path}` passed to `cat`/`jq`/an interpreter) are unaffected. Commands that
+  prefix `{path}` with the root or persist it as data must adjust (see the table
+  above). `{root}` is unchanged; the `path` column is unchanged (still
+  root-relative).
+
+#### Verification
+
+```bash
+mkdir -p /tmp/dirsql-542/data
+cat > /tmp/dirsql-542/echo-path.sh <<'EOF'
+#!/bin/sh
+printf '[{"seen":"%s"}]' "$1"
+EOF
+cat > /tmp/dirsql-542/.dirsql.toml <<'EOF'
+[[table]]
+ddl = "CREATE TABLE f (seen TEXT)"
+glob = "data/*.json"
+on-file = "sh echo-path.sh {path}"
+EOF
+echo '[]' > /tmp/dirsql-542/data/a.json
+cd /tmp/dirsql-542 && npx -y dirsql query "SELECT seen FROM f"
+# expected: [{"seen":"/tmp/dirsql-542/data/a.json"}]  (absolute, not "data/a.json")
+```
+
 ### Python wheels are now stable-ABI (abi3): wheel filename tag changes (#487, epic #480)
 
 #### Summary
