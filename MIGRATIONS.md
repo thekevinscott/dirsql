@@ -71,6 +71,62 @@ dirsql query "SELECT 1"; echo "exit=$?"
 # expected: non-zero exit; stderr names the unknown key `root`
 ```
 
+### `persist` / `persist_path` removed from `.dirsql.toml`; use `--persist [PATH]` (#549, epic #528)
+
+#### Summary
+
+Persistence is no longer configured in `.dirsql.toml`. The `[dirsql].persist`
+and `[dirsql].persist_path` keys are **removed** and replaced by a global
+`--persist [PATH]` CLI flag. Whether and where to cache is a machine-local
+operational fact — it belongs to the command you run, not to shareable config
+content. This affects **CLI users** who enabled persistence via the config
+file. Because unknown keys are now a hard error (#536), a config still carrying
+either key fails to load rather than silently ignoring it: the server degrades
+(`503` naming the key) and `dirsql query` exits non-zero. The SDK builder's
+`persist` / `persist_path` constructor parameters are **unchanged** — only the
+config-file keys and their builder-side wiring are gone.
+
+#### Required changes
+
+Delete the keys from `.dirsql.toml` and pass the flag instead.
+
+| Surface | Before (`.dirsql.toml`) | After (CLI) |
+| ------- | ----------------------- | ----------- |
+| Default cache location | `[dirsql]`<br>`persist = true` | `dirsql --persist` |
+| Custom cache location | `[dirsql]`<br>`persist = true`<br>`persist_path = "/var/cache/x.db"` | `dirsql --persist /var/cache/x.db` |
+| One-shot query | `persist = true` in config | `dirsql query "SELECT …" --persist` (flag trailing so its optional value does not swallow the SQL) |
+
+The default cache location is unchanged: bare `--persist` writes
+`<root>/.dirsql/cache.db`, exactly where `persist = true` used to.
+
+#### Deprecations removed
+
+- `[dirsql].persist` and `[dirsql].persist_path` config keys. They are not
+  soft-deprecated — they are removed and now parse-error as unknown fields.
+
+#### Behavior changes without code changes
+
+- **A config carrying `persist` / `persist_path`** previously enabled the
+  on-disk cache; it now fails to load (unknown-field error). Move the intent to
+  the `--persist` flag.
+- **Cache/reconcile behavior is otherwise identical.** The on-disk format, the
+  default path, and the stat-based trust/rebuild logic are unchanged — only the
+  switch that turns persistence on moved from config to the CLI.
+
+#### Verification
+
+```bash
+# The removed key is now a hard error:
+printf '[dirsql]\npersist = true\n' > .dirsql.toml
+dirsql query "SELECT 1"; echo "exit=$?"
+# expected: non-zero exit; stderr names the unknown key `persist`
+
+# The flag replaces it (run against a directory with no such config):
+rm -f .dirsql.toml
+dirsql query "SELECT COUNT(*) AS n FROM files" --persist
+ls .dirsql/cache.db   # the cache was written at the default location
+```
+
 ### Unknown `.dirsql.toml` keys are now a hard error (#536, epic #528)
 
 #### Summary
@@ -91,9 +147,9 @@ Fix or remove any key the parser does not recognize. The error names it.
 
 | Surface | Before | After |
 | ------- | ------ | ----- |
-| `[dirsql]` typo | `persistpath = "cache.db"` (silently ignored) | `persist_path = "cache.db"` |
+| `[dirsql]` typo | `ignorre = ["*.tmp"]` (silently ignored) | `ignore = ["*.tmp"]` |
 | `[[table]]` stale key | `format = "json"` (silently ignored) | remove the key |
-| Any unknown key | loaded, key dropped | parse error naming the key (`unknown field 'persistpath', expected one of …`) |
+| Any unknown key | loaded, key dropped | parse error naming the key (`unknown field 'ignorre', expected one of …`) |
 
 #### Deprecations removed
 

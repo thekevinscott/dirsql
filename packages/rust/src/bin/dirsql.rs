@@ -61,6 +61,28 @@ struct Cli {
     /// subcommand.
     #[arg(long = "extension", global = true)]
     extension: Vec<String>,
+
+    /// Keep the SQLite index on disk between runs so a restart only re-parses
+    /// files that actually changed. Bare `--persist` caches at the default
+    /// location (`<root>/.dirsql/cache.db`); `--persist <path>` caches there.
+    /// Off by default (ephemeral index). Used by server mode and `query`.
+    #[arg(long, num_args = 0..=1, global = true)]
+    persist: Option<Option<PathBuf>>,
+}
+
+impl Cli {
+    /// Apply the `--persist [PATH]` flag to a builder. Absent → no change;
+    /// bare `--persist` → persist at the default location; `--persist <path>`
+    /// → persist at `<path>`.
+    fn apply_persist(&self, mut builder: dirsql::DirSQLBuilder) -> dirsql::DirSQLBuilder {
+        if let Some(path) = &self.persist {
+            builder = builder.persist(true);
+            if let Some(path) = path {
+                builder = builder.persist_path(path);
+            }
+        }
+        builder
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -216,7 +238,7 @@ fn load_state(cli: &Cli) -> AppState {
     if !config_path.exists() {
         // No config: serve a default `files` table so dirsql is queryable
         // out of the box. A config file, when present, fully overrules this.
-        return load_default_state(config_path);
+        return load_default_state(cli, config_path);
     }
 
     // Canonicalize so config-relative paths (extension libraries, hook
@@ -238,16 +260,14 @@ fn load_state(cli: &Cli) -> AppState {
     // resolved them (including package names the compiled binary can't
     // resolve), so suppress the config's extension loading and supply the
     // resolved literal paths instead.
-    let build = if cli.extension.is_empty() {
-        DirSQL::from_config_path(&resolved)
-    } else {
-        DirSQL::builder()
-            .config(&resolved)
+    let mut builder = DirSQL::builder().config(&resolved);
+    if !cli.extension.is_empty() {
+        builder = builder
             .extensions(parse_extension_specs(&cli.extension))
-            .suppress_config_extensions(true)
-            .build()
-    };
-    match build {
+            .suppress_config_extensions(true);
+    }
+    builder = cli.apply_persist(builder);
+    match builder.build() {
         Ok(db) => AppState::Ready(db),
         Err(err) => AppState::Unavailable(format!("failed to load config: {err}")),
     }
@@ -325,7 +345,7 @@ fn load_post_query(cli: &Cli) -> Option<PostQuery> {
 /// table — one row per file, columns drawn entirely from filesystem facts —
 /// so `SELECT * FROM files` works immediately. A config file, when present,
 /// fully overrules this default.
-fn load_default_state(config_path: &Path) -> AppState {
+fn load_default_state(cli: &Cli, config_path: &Path) -> AppState {
     let dir = config_path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -341,7 +361,8 @@ fn load_default_state(config_path: &Path) -> AppState {
         }
     };
 
-    match DirSQL::new(root, vec![default_files_table()]) {
+    let builder = cli.apply_persist(DirSQL::builder().root(root).table(default_files_table()));
+    match builder.build() {
         Ok(db) => AppState::Ready(db),
         Err(err) => AppState::Unavailable(format!("failed to build default index: {err}")),
     }
@@ -405,6 +426,34 @@ mod tests {
         // Blank SQL is NOT rejected here: it flows to the pipeline's shared
         // empty-rejection so both surfaces emit the identical message.
         assert_eq!(query_body("   "), r#"{"sql":"   "}"#);
+    }
+
+    #[test]
+    fn persist_flag_absent_is_none() {
+        let cli = Cli::parse_from(["dirsql"]);
+        assert_eq!(cli.persist, None);
+    }
+
+    #[test]
+    fn persist_flag_bare_enables_default_location() {
+        // Bare `--persist` (no value) → `Some(None)`: persist at the default
+        // `<root>/.dirsql/cache.db`, no override path.
+        let cli = Cli::parse_from(["dirsql", "--persist"]);
+        assert_eq!(cli.persist, Some(None));
+    }
+
+    #[test]
+    fn persist_flag_with_path_carries_the_value() {
+        let cli = Cli::parse_from(["dirsql", "--persist", "/var/cache/x.db"]);
+        assert_eq!(cli.persist, Some(Some(PathBuf::from("/var/cache/x.db"))));
+    }
+
+    #[test]
+    fn persist_flag_is_global_on_the_query_subcommand() {
+        // `--persist` is global, so it attaches to `query` too; the flag sits
+        // after the positional SQL to avoid the num_args(0..=1) greedy grab.
+        let cli = Cli::parse_from(["dirsql", "query", "SELECT 1", "--persist"]);
+        assert_eq!(cli.persist, Some(None));
     }
 
     #[test]

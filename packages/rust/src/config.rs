@@ -68,12 +68,10 @@ impl std::fmt::Display for Source {
 /// Order-significant; at least one entry is required and a single entry is
 /// returned unchanged. List-shaped config (`[[table]]`, `[[dirsql.extension]]`,
 /// `ignore`) concatenates in input order. A table-name collision anywhere in
-/// the combined set errors, naming both sources. Single-valued keys (`persist`,
-/// `persist_path`, `pre-query`, `post-query`, `hook-timeout`) defined by more than
+/// the combined set errors, naming both sources. Single-valued keys
+/// (`pre-query`, `post-query`, `hook-timeout`) defined by more than
 /// one config error, naming both sources — no silent shadowing, no precedence;
-/// defined in exactly one config they merge through unchanged. (`persist`
-/// counts as defined only when `true`: the parsed [`Config`] cannot
-/// distinguish an explicit `persist = false` from the default.)
+/// defined in exactly one config they merge through unchanged.
 ///
 /// Tables whose DDL yields no parseable table name are concatenated without a
 /// collision check; `Db::create_table` rejects them downstream.
@@ -89,8 +87,6 @@ pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
     let mut table_sources: std::collections::HashMap<String, &Source> =
         std::collections::HashMap::new();
 
-    let mut persist: Option<&Source> = None;
-    let mut persist_path: Option<(&Source, PathBuf)> = None;
     let mut pre_query: Option<(&Source, String)> = None;
     let mut post_query: Option<(&Source, String)> = None;
     let mut hook_timeout: Option<(&Source, Duration)> = None;
@@ -112,12 +108,6 @@ pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
         extensions.extend(config.extensions.iter().cloned());
 
         merge_single(
-            "persist_path",
-            &mut persist_path,
-            config.persist_path.as_ref(),
-            source,
-        )?;
-        merge_single(
             "pre-query",
             &mut pre_query,
             config.pre_query.as_ref(),
@@ -135,23 +125,11 @@ pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
             config.hook_timeout.as_ref(),
             source,
         )?;
-        if config.persist {
-            if let Some(prior) = persist {
-                return Err(ConfigError::ConflictingKey {
-                    key: "persist",
-                    first: prior.clone(),
-                    second: source.clone(),
-                });
-            }
-            persist = Some(source);
-        }
     }
 
     Ok(Config {
         ignore,
         tables,
-        persist: persist.is_some(),
-        persist_path: persist_path.map(|(_, value)| value),
         extensions,
         pre_query: pre_query.map(|(_, value)| value),
         post_query: post_query.map(|(_, value)| value),
@@ -185,13 +163,6 @@ fn merge_single<'a, T: Clone>(
 pub struct Config {
     pub ignore: Vec<String>,
     pub tables: Vec<TableConfig>,
-    /// Enable persistent on-disk SQLite cache. When false (the default), the
-    /// database is rebuilt from scratch on every startup in an anonymous
-    /// disk-backed temp database.
-    pub persist: bool,
-    /// Optional override for the on-disk cache location. Resolved relative
-    /// to the config file's parent directory when relative.
-    pub persist_path: Option<PathBuf>,
     /// SQLite extensions to load at startup, declared via
     /// `[[dirsql.extension]]`. Paths are taken verbatim from the file here;
     /// relative paths are resolved against the config file's parent directory
@@ -268,8 +239,6 @@ struct RawConfig {
 #[serde(deny_unknown_fields)]
 struct RawDirsql {
     ignore: Option<Vec<String>>,
-    persist: Option<bool>,
-    persist_path: Option<PathBuf>,
     extension: Option<Vec<RawExtension>>,
     #[serde(rename = "pre-query")]
     pre_query: Option<String>,
@@ -308,8 +277,6 @@ pub fn load_config_str(content: &str) -> Result<Config> {
 
     let d = raw.dirsql.unwrap_or_default();
     let ignore = d.ignore.unwrap_or_default();
-    let persist = d.persist.unwrap_or(false);
-    let persist_path = d.persist_path;
     let raw_extensions = d.extension.unwrap_or_default();
     let raw_pre_query = d.pre_query;
     let raw_post_query = d.post_query;
@@ -370,8 +337,6 @@ pub fn load_config_str(content: &str) -> Result<Config> {
     Ok(Config {
         ignore,
         tables,
-        persist,
-        persist_path,
         extensions,
         pre_query,
         post_query,
@@ -485,34 +450,26 @@ glob = "*.json"
     }
 
     #[test]
-    fn persist_defaults_to_false() {
-        let toml = r#"
-[[table]]
-ddl = "CREATE TABLE t (path TEXT)"
-glob = "*.json"
-"#;
-        let config = load_config_str(toml).unwrap();
-        assert!(!config.persist);
-        assert!(config.persist_path.is_none());
-    }
-
-    #[test]
-    fn persist_true_is_parsed() {
+    fn persist_key_is_rejected_as_unknown() {
+        // Persistence moved to the `--persist` CLI flag; the TOML key is gone.
         let toml = r#"
 [dirsql]
 persist = true
-persist_path = "/var/cache/dirsql.db"
-
-[[table]]
-ddl = "CREATE TABLE t (path TEXT)"
-glob = "*.json"
 "#;
-        let config = load_config_str(toml).unwrap();
-        assert!(config.persist);
-        assert_eq!(
-            config.persist_path.as_deref(),
-            Some(Path::new("/var/cache/dirsql.db"))
-        );
+        let err = load_config_str(toml).unwrap_err();
+        assert!(matches!(err, ConfigError::Toml(_)), "got: {err:?}");
+        assert!(err.to_string().contains("persist"), "got: {err}");
+    }
+
+    #[test]
+    fn persist_path_key_is_rejected_as_unknown() {
+        let toml = r#"
+[dirsql]
+persist_path = "/var/cache/dirsql.db"
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(matches!(err, ConfigError::Toml(_)), "got: {err:?}");
+        assert!(err.to_string().contains("persist_path"), "got: {err}");
     }
 
     #[test]
@@ -554,8 +511,7 @@ format = "json"
 
     #[test]
     fn unknown_key_in_dirsql_section_is_rejected() {
-        // A misspelled `[dirsql]` key (`persistpath` for `persist_path`) errors
-        // rather than silently no-opping.
+        // A misspelled `[dirsql]` key errors rather than silently no-opping.
         let toml = r#"
 [dirsql]
 persistpath = "cache.db"
@@ -812,8 +768,6 @@ post-query = "   "
         let config = cfg(r#"
 [dirsql]
 ignore = ["*.tmp"]
-persist = true
-persist_path = "cache.db"
 pre-query = "to_sql {args}"
 post-query = "jq '{results: .}'"
 
@@ -827,8 +781,6 @@ glob = "*.json"
 "#);
         let merged = combine_configs(&[(src("/proj/.dirsql.toml"), config.clone())]).unwrap();
         assert_eq!(merged.ignore, config.ignore);
-        assert_eq!(merged.persist, config.persist);
-        assert_eq!(merged.persist_path, config.persist_path);
         assert_eq!(merged.extensions, config.extensions);
         assert_eq!(merged.pre_query, config.pre_query);
         assert_eq!(merged.post_query, config.post_query);
@@ -1011,54 +963,6 @@ glob = "c/*.json"
         let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
         assert_eq!(merged.pre_query.as_deref(), Some("to_sql {args}"));
         assert_eq!(merged.post_query.as_deref(), Some("jq -c ."));
-    }
-
-    #[test]
-    fn combine_persist_true_in_two_configs_errors_naming_both_sources() {
-        let a = cfg("[dirsql]\npersist = true\n");
-        let b = cfg("[dirsql]\npersist = true\n");
-        let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
-        match &err {
-            ConfigError::ConflictingKey { key, first, second } => {
-                assert_eq!(*key, "persist");
-                assert_eq!(first, &src("/a"));
-                assert_eq!(second, &src("/b"));
-            }
-            other => panic!("got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn combine_persist_true_in_one_config_merges_through() {
-        let a = cfg("[dirsql]\npersist = true\npersist_path = \"cache.db\"\n");
-        let b = cfg("[dirsql]\nignore = [\"c/**\"]\n");
-        let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
-        assert!(merged.persist);
-        assert_eq!(merged.persist_path.as_deref(), Some(Path::new("cache.db")));
-    }
-
-    #[test]
-    fn combine_persist_false_everywhere_stays_false() {
-        let a = cfg("[dirsql]\nignore = [\"a/**\"]\n");
-        let b = cfg("[dirsql]\nignore = [\"b/**\"]\n");
-        let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
-        assert!(!merged.persist);
-        assert!(merged.persist_path.is_none());
-    }
-
-    #[test]
-    fn combine_persist_path_in_two_configs_errors_naming_both_sources() {
-        let a = cfg("[dirsql]\npersist_path = \"a.db\"\n");
-        let b = cfg("[dirsql]\npersist_path = \"b.db\"\n");
-        let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
-        match &err {
-            ConfigError::ConflictingKey { key, first, second } => {
-                assert_eq!(*key, "persist_path");
-                assert_eq!(first, &src("/a"));
-                assert_eq!(second, &src("/b"));
-            }
-            other => panic!("got: {other:?}"),
-        }
     }
 
     #[test]

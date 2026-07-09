@@ -1,23 +1,34 @@
 # Keep the index across restarts
 
 By default the database is ephemeral: rebuilt from your files on every
-startup and discarded on exit. [`persist`](../reference/config.md#dirsql-keys) keeps the
-SQLite index on disk instead, so a restart only re-parses files that
-actually changed — the difference between seconds and milliseconds on large
-trees, and between re-running and skipping expensive
+startup and discarded on exit. The [`--persist [PATH]`](../reference/cli.md#server-mode)
+flag keeps the SQLite index on disk instead, so a restart only re-parses
+files that actually changed — the difference between seconds and
+milliseconds on large trees, and between re-running and skipping expensive
 [`on-file`](./extract-from-contents.md) commands.
+
+Whether and where to cache is a machine-local operational choice — it
+belongs to the command you run, not to the shared `.dirsql.toml`. That is
+why it is a CLI flag, not a config key.
 
 ## 1. Turn it on
 
-```toml
-[dirsql]
-persist = true
+```bash
+dirsql --persist
 ```
 
 That's the whole change. On the next run the cache is written to
 `.dirsql/cache.db` under the root; runs after that start from it. To put
-the cache elsewhere (a CI cache dir, a tmpfs), set
-[`persist_path`](../reference/config.md#dirsql-keys).
+the cache elsewhere (a CI cache dir, a tmpfs), pass a path:
+
+```bash
+dirsql --persist /var/cache/dirsql.db
+```
+
+The same flag works on [`dirsql query`](../reference/cli.md#dirsql-query);
+put a bare `--persist` after the SQL there so it does not consume the query
+argument. Embedding `dirsql`? The SDK constructors expose the same switch —
+see [_Embedding `dirsql`?_](#embedding-dirsql) below.
 
 ## 2. Keep the cache out of git
 

@@ -90,6 +90,24 @@ fn spawn_dirsql(dir: &std::path::Path, port: u16) -> Child {
     cmd.spawn().expect("spawning dirsql failed")
 }
 
+/// Spawn `dirsql` bound to `--port <port>` in `dir` with `extra` args
+/// appended (e.g. `--persist`). Mirrors [`spawn_dirsql`] otherwise.
+fn spawn_dirsql_with_args(dir: &std::path::Path, port: u16, extra: &[&str]) -> Child {
+    let mut cmd: StdCommand = std::process::Command::cargo_bin("dirsql")
+        .expect("`dirsql` binary must be built by `cargo test` with --features cli");
+    cmd.arg("--port")
+        .arg(port.to_string())
+        .arg("--host")
+        .arg("localhost");
+    for a in extra {
+        cmd.arg(a);
+    }
+    cmd.current_dir(dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+    cmd.spawn().expect("spawning dirsql failed")
+}
+
 /// Block until the server answers `GET /query` (or times out).
 fn wait_until_ready(port: u16, timeout: Duration) {
     let client = Client::builder()
@@ -153,7 +171,8 @@ fn help_flag_prints_and_exits_zero() {
         .success()
         .stdout(predicates::str::contains("-c, --config"))
         .stdout(predicates::str::contains("--host"))
-        .stdout(predicates::str::contains("--port"));
+        .stdout(predicates::str::contains("--port"))
+        .stdout(predicates::str::contains("--persist"));
 }
 
 #[test]
@@ -974,4 +993,116 @@ fn short_config_flag_overrides_cwd_default() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     kill_and_wait(child);
+}
+
+// ---------------------------------------------------------------------------
+// Persistence: the `--persist [PATH]` flag (#549)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn persist_config_key_degrades_server_with_503_naming_the_key() {
+    // Persistence moved to the `--persist` flag: `persist` is no longer a TOML
+    // key, so a config carrying it is a hard load error (#536). The server
+    // degrades and `POST /query` returns 503 whose diagnostic names `persist`.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(".dirsql.toml"),
+        "[dirsql]\npersist = true\n",
+    )
+    .unwrap();
+    let port = free_port();
+    let child = spawn_dirsql(dir.path(), port);
+    wait_until_ready(port, Duration::from_secs(10));
+
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT 1"}))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let error = resp.json::<Value>().unwrap()["error"]
+        .as_str()
+        .expect("503 body carries an `error` string")
+        .to_string();
+    assert!(
+        error.contains("persist"),
+        "503 diagnostic must name the unknown `persist` key, got {error:?}"
+    );
+
+    kill_and_wait(child);
+}
+
+#[test]
+fn persist_flag_writes_default_cache_and_restart_serves() {
+    // Bare `--persist` writes the cache at the default `<root>/.dirsql/cache.db`
+    // during the startup scan; a restart with `--persist` reopens that cache
+    // (trusting unchanged files) and serves the same rows.
+    let root = blog_fixture();
+    let cache = root.path().join(".dirsql").join("cache.db");
+
+    let port = free_port();
+    let child = spawn_dirsql_with_args(root.path(), port, &["--persist"]);
+    wait_until_ready(port, Duration::from_secs(10));
+    let first = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .send()
+        .unwrap()
+        .text()
+        .unwrap();
+    kill_and_wait(child);
+
+    assert!(
+        cache.exists(),
+        "bare --persist must write the default cache at {}",
+        cache.display()
+    );
+
+    // Restart against the unchanged tree: the cache is reused and the same
+    // rows are served.
+    let port = free_port();
+    let child = spawn_dirsql_with_args(root.path(), port, &["--persist"]);
+    wait_until_ready(port, Duration::from_secs(10));
+    let second = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .send()
+        .unwrap()
+        .text()
+        .unwrap();
+    kill_and_wait(child);
+
+    assert_eq!(
+        first, second,
+        "a persisted restart must serve the same rows"
+    );
+}
+
+#[test]
+fn persist_flag_with_path_writes_the_cache_there() {
+    // `--persist <path>` writes the cache at the given path, not the default.
+    let root = blog_fixture();
+    let cache_dir = TempDir::new().unwrap();
+    let cache = cache_dir.path().join("nested").join("x.db");
+
+    let port = free_port();
+    let child = spawn_dirsql_with_args(root.path(), port, &["--persist", cache.to_str().unwrap()]);
+    wait_until_ready(port, Duration::from_secs(10));
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT COUNT(*) AS n FROM posts"}))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    kill_and_wait(child);
+
+    assert!(
+        cache.exists(),
+        "--persist <path> must write the cache at {}",
+        cache.display()
+    );
+    assert!(
+        !root.path().join(".dirsql").join("cache.db").exists(),
+        "the default cache must not be written when a path is given"
+    );
 }
