@@ -175,39 +175,22 @@ jobs:
   # measures freshness of internals/checks/e2e-attestation.json against this
   # scoped diff, mirroring the python-unit / typescript-unit wiring above.
   #
-  # `integration-lint` is NOT in this call's gates -- confirmed by a live CI run
-  # (PR #513, run 29013827853) that on the current `@v0` release, `integration
-  # lint` scans exactly the given `path` (SCAN_PATH: internals/checks/src in
-  # that run's step env), not a derived `<package root>/tests/integration/`.
-  # Pointed at `src`, it wrongly applied integration-suite isolation rules
-  # (no-inline-patch) to the colocated *unit* test files living there. The
-  # derived-suite-tiers resolution described in thekevinscott/
-  # testing-conventions#417 / docs/monorepo.md ("Everything derives from the
-  # package" / "The test tiers") -- which would let one call cover every tier --
-  # has not reached `@v0` yet. `integration-lint` for this package runs in the
-  # internals-checks-integration call below instead, scoped directly at
-  # internals/checks/tests/integration, matching the pattern python-integration
-  # / typescript-integration already use. Once #417 lands and is confirmed live
-  # on `@v0` (re-probe by re-adding integration-lint here and checking the
-  # step's SCAN_PATH resolves to tests/integration, not src), fold that job back
-  # into this one and delete it.
+  # `integration-lint` runs in THIS call (folded in by #515). A single call now
+  # covers every tier: testing-conventions#417 landed on `@v0`, so `integration
+  # lint` derives `<package root>/tests/integration/` from the given `path`
+  # (internals/checks/src) instead of scanning `path` directly. Confirmed live
+  # against CLI 0.0.77: `uvx testing-conventions integration lint --language
+  # python internals/checks/src` is exit 0 (the colocated *unit* tests under
+  # `src` that inline-patch are no longer flagged), and a probe file dropped in
+  # tests/integration/ IS flagged -- proving the derived scan target is
+  # tests/integration. This retired the separate internals-checks-integration
+  # job that scanned tests/integration directly (the pattern predating #417).
+  # The SDK python-integration / typescript-integration jobs above keep their
+  # split for now -- folding those is a separate change (#515 non-goal).
   internals-checks:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
       languages: '["python"]'
       path: internals/checks/src
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation", "e2e-verify"]'
-
-  # internals/checks integration tier (#509): tests/integration/ exercises each
-  # check's gate.run() against real collaborators (real git, real pytest
-  # subprocess) rather than the packaged CLI (that's the e2e tier above). A
-  # separate call, not folded into internals-checks above -- see that job's
-  # comment for why.
-  internals-checks-integration:
-    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
-    with:
-      languages: '["python"]'
-      path: internals/checks/tests/integration
-      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["integration-lint"]'
+      gates: '["colocated-test", "unit-lint", "integration-lint", "unit-coverage", "mutation", "e2e-verify"]'
