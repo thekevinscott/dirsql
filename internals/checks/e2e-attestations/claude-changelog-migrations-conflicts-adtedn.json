@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1783640637,
+  "exit_code": 0,
+  "commit": "6773de46b8f49dbee30d2500a50686426f264454",
+  "branch": "claude/changelog-migrations-conflicts-adtedn"
+}
