@@ -41,12 +41,13 @@ permissions:
 # rust-test.yml — a `packages/rust` `rust-toolchain.toml` for `--branch` nightly
 # breaks release cross-compile; #412 closed).
 #
-# One call per package (the intended monorepo pattern), scoped per tier because
-# the tool scans `path` recursively with no exclusions:
-#   - unit-tier gates (colocated-test, unit-lint, + mutation for ts/rust) at each
-#     SDK's SOURCE dir
-#   - integration-lint at each SDK's integration-test dir (python/ts) or the
-#     crate root (rust, which scans tests/ itself)
+# One call per package (the intended monorepo pattern): each call points `path`
+# at the package's SOURCE dir, and every tier's gates run from there.
+# `integration-lint` derives its own subjects (tests/integration/, tests/e2e/)
+# from the package root (testing-conventions#417), so it needs no separate
+# integration-dir call -- the python-integration / typescript-integration calls
+# were folded into python-unit / typescript-unit (#521), as internals-checks was
+# (#516). Rust scans its crate root, which already covers tests/.
 #
 # The `gates` allowlists below were set empirically: a run turned each gate on
 # and the arbiter reported the reds. Every gate listed here is GREEN and
@@ -82,16 +83,11 @@ jobs:
       # `--scope`) is covered by `[e2e].extra_scope = ["packages/rust/src"]` in
       # testing-conventions.toml (upstream #333 `--extra-scope`, wired via detect):
       # any packages/rust/src change (cli included) stales this attestation too.
-      gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation", "e2e-verify", "packaging"]'
-
-  python-integration:
-    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
-    with:
-      languages: '["python"]'
-      path: packages/python/tests/integration
-      config: testing-conventions.toml
-      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["integration-lint"]'
+      # `integration-lint` runs here too (#521): with tier derivation live on
+      # `@v0` (testing-conventions#417), one `src`-scoped call derives the package
+      # root and scans tests/integration/ + tests/e2e/, so the former
+      # `python-integration` call is folded in.
+      gates: '["colocated-test", "unit-lint", "integration-lint", "unit-coverage", "mutation", "e2e-verify", "packaging"]'
 
   typescript-unit:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
@@ -107,17 +103,11 @@ jobs:
       # `packages/ts/napi` declares a napi build. `rust_toolchain: true` (still a
       # valid input) supplies cargo for that build.
       # `e2e-verify` (#418): `--scope packages/ts/src` + `--base` diff-scoping.
-      gates: '["colocated-test", "unit-lint", "mutation", "unit-coverage", "e2e-verify", "packaging"]'
+      # `integration-lint` runs here too (#521, folding the former
+      # `typescript-integration` call): the `src`-scoped call derives the package
+      # root and scans tests/integration/ + tests/e2e/ (testing-conventions#417).
+      gates: '["colocated-test", "unit-lint", "integration-lint", "mutation", "unit-coverage", "e2e-verify", "packaging"]'
       rust_toolchain: true
-
-  typescript-integration:
-    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
-    with:
-      languages: '["typescript"]'
-      path: packages/ts/tests/integration
-      config: testing-conventions.toml
-      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["integration-lint"]'
 
   rust:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
