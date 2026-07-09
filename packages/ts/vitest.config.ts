@@ -25,12 +25,12 @@ export default defineConfig({
       "**/dist/**",
       "**/.{git,cache}/**",
       "docs/**",
-      // e2e (`tests/e2e/`) and smoke (`tests/smoke/`) run via their own
-      // `pnpm test:e2e` / `pnpm test:smoke` scripts (which depend on
-      // `pnpm build`). Excluding them keeps the default `pnpm test` and
-      // `test:integration` fast and free of the cargo-build prerequisite.
+      // e2e (`tests/e2e/`) runs via its own `pnpm test:e2e` script (which
+      // depends on `pnpm build`). Excluding it keeps the default `pnpm test`
+      // and `test:integration` fast and free of the cargo-build prerequisite.
+      // (Packaging distcheck moved out of this package entirely -- #520, now the
+      // `internals/distcheck` package.)
       "tests/e2e/**",
-      "tests/smoke/**",
     ],
     // Coverage shape for local `pnpm coverage` runs. The enforced unit-only
     // floor lives in testing-conventions.toml `[typescript.coverage]` and is

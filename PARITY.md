@@ -359,7 +359,7 @@ incl. #313).
 | Config `[[dirsql.extension]]` `path` as bare package name via SDK `config=` (#313) | Y + integration | N/A | Y + integration |
 | `load_extension()` locked after startup; `suppress_config_extensions` seam | core | Y (`extensions.rs`) | core |
 
-### E2E (CLI / launcher) and smoke tiers
+### E2E (CLI / launcher) and distcheck tiers
 
 The CLI is a single Rust binary shipped through three channels, so its
 *behavior* (HTTP `/query` + `/events`, status codes, zero-config `files`
@@ -371,14 +371,19 @@ no separate `init_e2e.rs`. The per-binding e2e suites cover what is genuinely
 per-launcher: resolving/staging the bundled binary, forwarding argv, and
 ecosystem-specific extension resolution.
 
-| Test Scenario              | Python (`tests/e2e/`, `tests/smoke/`) | Rust (`tests/`) | TypeScript (`tests/e2e/`, `tests/smoke/`) |
+Packaging distcheck (build → pack → install → run the published artifact) is no
+longer a per-binding test tier: it moved to the `internals/distcheck`
+package (#520), whose `dirsql-distcheck python` / `dirsql-distcheck node` flows cover
+both bindings against a real wheel / npm install.
+
+| Test Scenario              | Python (`tests/e2e/`) | Rust (`tests/`) | TypeScript (`tests/e2e/`) |
 |----------------------------|--------|------|------------|
-| `--version` exits 0 and prints the version | Y (`cli_version_test.py`) | Y (`cli_e2e.rs`) | Y (smoke `build.test.ts`, against the packed npm install) |
+| `--version` exits 0 and prints the version | Y (`cli_version_test.py`) | Y (`cli_e2e.rs`) | Y (`internals/distcheck` `dirsql-distcheck node`, against the packed npm install) |
 | Launcher starts server; `POST /query` over HTTP | Y (`extension_package_test.py`) | Y | Y (`extension-package.test.ts`) |
 | `[[dirsql.extension]]` package name resolved by the launcher (#227) | Y | N/A | Y |
 | `interpret` subcommand removed; argv forwarded to clap (#321) | Y | core (clap dispatch) | Y |
 | HTTP semantics, SSE `/events`, hooks, `init`, zero-config `files` table | core | Y | core |
-| Smoke: pack → install → run the published artifact | Y (smoke `build_test.py`, against the packed wheel install) | N/A | Y |
+| Distcheck: pack → install → run the published artifact | Y (`internals/distcheck` `dirsql-distcheck python`, against the packed wheel install) | N/A | Y (`internals/distcheck` `dirsql-distcheck node`) |
 
 ### Known gaps / follow-ups
 
