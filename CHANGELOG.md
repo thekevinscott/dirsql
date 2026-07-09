@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`-c` short alias for `--config` (#535, epic #528).** The global `--config` flag on the `dirsql` binary (server mode and the `query` subcommand) now also accepts `-c`. Purely additive; `-c ./.dirsql.toml` is identical to `--config ./.dirsql.toml`.
 - **One-shot `dirsql query "<sql>"` subcommand (#399/#439).** Build the index,
   run one query, print the result rows as a JSON array on stdout, and exit —
   no server, no watch, pipes straight into `jq`. The subcommand is a thin
