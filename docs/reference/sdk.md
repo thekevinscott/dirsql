@@ -81,8 +81,8 @@ DirSQL::builder()
     .tables(tables)                 // optional; append one with .table(t)
     .ignore(patterns)               // optional
     .config(config_toml_path)       // optional
-    .persist(true)                  // optional; default false
-    .persist_path(path)             // optional
+    .persist(cache_path)            // optional; Some(path), or None for the
+                                    //   default <root>/.dirsql/cache.db
     .extensions(extensions)         // optional; append one with .extension(e)
     .poll_interval(duration)        // optional; watch-loop cadence, default 200ms
     .build()                        // -> Result<DirSQL>  (synchronous scan)
@@ -114,7 +114,10 @@ directory" error.
   changed are re-parsed. (The CLI exposes the same switch as the
   [`--persist [PATH]`](./cli.md#server-mode) flag; it is not a config key.)
 - `persist_path` / `persistPath` — Override the cache location. Ignored when
-  persistence is off. Constructor values are used as given.
+  persistence is off. Constructor values are used as given. In Rust these two
+  parameters collapse into a single builder method: `.persist(None)` enables
+  persistence at the default location, `.persist(Some(path))` enables it at
+  `path`.
 - `extensions` — SQLite extensions to load at startup, before any table
   DDL (enable → load → disable, so SQL `load_extension()` is never
   exposed). Each entry pairs a shared-library `path` with an optional

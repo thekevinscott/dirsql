@@ -263,6 +263,46 @@ cd /tmp/dirsql-542 && npx -y dirsql query "SELECT seen FROM f"
 # expected: [{"seen":"/tmp/dirsql-542/data/a.json"}]  (absolute, not "data/a.json")
 ```
 
+### Rust builder: `.persist(bool)` + `.persist_path()` collapse into one optional-path `.persist()` (#551)
+
+#### Summary
+
+The Rust `DirSQLBuilder` persist surface changed. The two methods
+`.persist(persist: bool)` and `.persist_path(path)` are replaced by a single
+`.persist(path: Option<impl AsRef<Path>>)`: `None` enables persistence at the
+default `<root>/.dirsql/cache.db`, and `Some(path)` enables it at `path`.
+Persistence is off unless `.persist(..)` is called. This affects **the Rust SDK
+only** — the Python and TypeScript constructor parameters (`persist`,
+`persist_path`/`persistPath`) are unchanged. Cache/reconcile behavior is
+identical; this is purely a builder call-site change.
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| Rust builder, default cache path | `.persist(true)` | `.persist(None::<&Path>)` |
+| Rust builder, custom cache path | `.persist(true).persist_path(&cache)` | `.persist(Some(&cache))` |
+| Rust builder, persistence off | `.persist(false)` (or omit) | omit `.persist(..)` |
+
+#### Deprecations removed
+
+- `DirSQLBuilder::persist_path(path)` — removed; pass the path to
+  `.persist(Some(path))` instead.
+
+#### Behavior changes without code changes
+
+_None._ The default path and the custom-path override behave exactly as
+before.
+
+#### Verification
+
+```bash
+cargo build -p dirsql
+# expected: builds clean; a call site still using `.persist_path(..)` or
+# `.persist(true)` fails to compile (E0599 no method `persist_path` /
+# mismatched types for `persist`), confirming the collapse.
+```
+
 ### Python wheels are now stable-ABI (abi3): wheel filename tag changes (#487, epic #480)
 
 #### Summary

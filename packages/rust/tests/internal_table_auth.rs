@@ -32,7 +32,7 @@ fn persisted_db(root: &Path) -> DirSQL {
     DirSQL::builder()
         .root(root)
         .table(user_table())
-        .persist(true)
+        .persist(None::<&Path>)
         .build()
         .unwrap()
 }

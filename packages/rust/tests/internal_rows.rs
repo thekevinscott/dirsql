@@ -79,7 +79,7 @@ fn persisted_cache_round_trips_the_mapping() {
     let db = DirSQL::builder()
         .root(root.path())
         .table(csv_table())
-        .persist(true)
+        .persist(None::<&std::path::Path>)
         .build()
         .unwrap();
     assert_eq!(db.query("SELECT col FROM rows").unwrap().len(), 3);
@@ -100,7 +100,7 @@ fn mapping_table_is_a_durable_sidecar() {
     let db = DirSQL::builder()
         .root(root.path())
         .table(csv_table())
-        .persist(true)
+        .persist(None::<&std::path::Path>)
         .build()
         .unwrap();
     drop(db);
@@ -145,7 +145,7 @@ fn schema_bump_rebuilds_and_repopulates_mapping() {
     let db = DirSQL::builder()
         .root(root.path())
         .table(csv_table())
-        .persist(true)
+        .persist(None::<&std::path::Path>)
         .build()
         .unwrap();
     drop(db);
@@ -165,7 +165,7 @@ fn schema_bump_rebuilds_and_repopulates_mapping() {
     let db = DirSQL::builder()
         .root(root.path())
         .table(csv_table())
-        .persist(true)
+        .persist(None::<&std::path::Path>)
         .build()
         .unwrap();
     drop(db);
