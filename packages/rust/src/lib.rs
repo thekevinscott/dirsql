@@ -2890,6 +2890,25 @@ mod internal_tests {
         assert_eq!(rows[0]["n"], Value::Integer(1));
     }
 
+    /// `{abspath}` is not in the substitution table: it is left literal like any
+    /// unknown `{…}`, so `printf` receives the string `{abspath}` verbatim. The
+    /// template references `{path}` so that arg is the real path (and no path is
+    /// appended), isolating the `{abspath}` behavior in the `q` column.
+    #[test]
+    fn run_on_file_does_not_substitute_abspath() {
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("f.txt");
+        let rows = run_on_file(
+            r#"printf '[{"p":"%s","q":"%s"}]' {path} {abspath}"#,
+            &abs.to_string_lossy(),
+            dir.path(),
+            dir.path(),
+            command::DEFAULT_COMMAND_TIMEOUT,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["q"], Value::Text("{abspath}".into()));
+    }
+
     /// A command that cannot be spawned yields no rows (per-file isolation).
     #[test]
     fn run_on_file_returns_no_rows_on_spawn_failure() {

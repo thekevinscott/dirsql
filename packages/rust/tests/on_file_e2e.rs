@@ -105,6 +105,44 @@ on-file = "cat {path}"
 }
 
 #[test]
+fn on_file_abspath_token_is_no_longer_substituted() {
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("echo_args.sh"),
+        "#!/bin/sh\nprintf '[{\"q\":\"%s\"}]' \"$2\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[table]]
+ddl = "CREATE TABLE items (q TEXT)"
+glob = "*.json"
+on-file = "sh echo_args.sh {path} {abspath}"
+"#,
+    )
+    .unwrap();
+    fs::write(root.path().join("a.json"), "ignored\n").unwrap();
+
+    let port = free_port();
+    let child = spawn_dirsql(root.path(), port);
+    wait_until_ready(port, Duration::from_secs(10));
+
+    // The helper echoes its second arg (the `{abspath}` slot) into `q`. Since
+    // `{abspath}` is no longer substituted, it arrives as the literal string.
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT q FROM items"}))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Vec<Value> = resp.json().unwrap();
+    assert_eq!(body, vec![json!({"q": "{abspath}"})]);
+
+    kill_and_wait(child);
+}
+
+#[test]
 fn a_file_whose_command_errors_is_skipped_while_the_rest_succeed() {
     let root = TempDir::new().unwrap();
     fs::write(

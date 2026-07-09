@@ -52,6 +52,37 @@ on-file = "cat {path}"
     assert_eq!(rows[1]["title"], Value::Text("Second".into()));
 }
 
+/// `{abspath}` is no longer a recognized `on-file` token: a template
+/// referencing it receives the literal string `{abspath}` (unknown tokens are
+/// left literal). The helper echoes its second argument into column `q`, so a
+/// substituted `{abspath}` would surface the absolute path; instead `q` is the
+/// literal `{abspath}`.
+#[test]
+fn on_file_abspath_token_is_no_longer_substituted() {
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("echo_args.sh"),
+        "#!/bin/sh\nprintf '[{\"q\":\"%s\"}]' \"$2\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[table]]
+ddl = "CREATE TABLE items (q TEXT)"
+glob = "*.json"
+on-file = "sh echo_args.sh {path} {abspath}"
+"#,
+    )
+    .unwrap();
+    fs::write(root.path().join("a.json"), "ignored\n").unwrap();
+
+    let db = DirSQL::from_config(root.path()).unwrap();
+    let rows = db.query("SELECT q FROM items").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["q"], Value::Text("{abspath}".into()));
+}
+
 /// The `{path}` placeholder is appended when the template omits it, so
 /// `on-file = "cat"` behaves identically to `on-file = "cat {path}"`.
 #[test]
