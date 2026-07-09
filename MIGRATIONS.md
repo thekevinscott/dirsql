@@ -33,7 +33,7 @@ Fix or remove any key the parser does not recognize. The error names it.
 | ------- | ------ | ----- |
 | `[dirsql]` typo | `persistpath = "cache.db"` (silently ignored) | `persist_path = "cache.db"` |
 | `[[table]]` stale key | `format = "json"` (silently ignored) | remove the key |
-| Any unknown key | loaded, key dropped | parse error: `unknown field \`<key>\`, expected one of …` |
+| Any unknown key | loaded, key dropped | parse error naming the key (`unknown field 'persistpath', expected one of …`) |
 
 #### Deprecations removed
 
