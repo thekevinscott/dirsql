@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   build:
-    # Builds the napi addon once and shares it with unit/binding/smoke below
+    # Builds the napi addon once and shares it with unit/binding/distcheck below
     # (#483) instead of each job/matrix-cell rebuilding it independently.
     # The addon is N-API (napi6, see packages/ts/napi/Cargo.toml), which is
     # ABI-stable across Node majors, so one build serves the whole Node
@@ -148,7 +148,7 @@ jobs:
     # a real filesystem — proves the SDK↔core marshaling that the hermetic
     # integration tier mocks out.
     #
-    # Keeps its own Rust toolchain + rust-cache (unlike unit/smoke below):
+    # Keeps its own Rust toolchain + rust-cache (unlike unit/distcheck below):
     # tests/binding/*.test.ts shell out to `cargo` directly at test-run time
     # to compile ad hoc fixture extension crates (packages/rust/tests/fixtures)
     # — that's independent of the shared napi addon build and still needs a
@@ -201,15 +201,17 @@ jobs:
   # #284 taught the coverage suite job to install/build from the derived
   # package root. The bespoke coverage job that lived here is retired (#412).
 
-  smoke:
+  distcheck:
     # Functional publishability gate: build the real binary + napi addon,
     # pack the main `dirsql` package and the host's `@dirsql/cli-<slug>`
     # sub-package the way the release pipeline would, `npm install` both
     # into a fresh dir, and run `node_modules/.bin/dirsql --version`. Red
     # here means the npm release is broken and must not go out. This is the
     # install-and-run check the `packaging` gate does NOT do (that gate only
-    # asserts no test files ship in the artifact). No mocks.
-    name: Packaging smoke (install + run)
+    # asserts no test files ship in the artifact). No mocks. The flow lives
+    # in the internals/distcheck package (#520); this job invokes its
+    # `dirsql-distcheck node` entry point (which drives npm/pnpm from Python).
+    name: Packaging distcheck (install + run)
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -225,6 +227,9 @@ jobs:
         with:
           version: 9
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
       - name: Install dependencies
         working-directory: packages/ts
         run: pnpm install
@@ -235,7 +240,5 @@ jobs:
           name: ts-native-build
           path: packages/ts
 
-      # See the `unit` job comment above for why this bypasses wireit.
-      - name: Run packaging smoke (build -> pack -> install -> run)
-        working-directory: packages/ts
-        run: pnpm exec vitest run --dir tests/smoke
+      - name: Run packaging distcheck (build -> pack -> install -> run)
+        run: uv run --project internals/distcheck dirsql-distcheck node

@@ -13,33 +13,27 @@
 # `[<lang>.coverage]` table sets the unit-only coverage floor the `unit
 # coverage` job enforces.
 #
-# The zero-exemptions state is TEMPORARILY SUSPENDED pending #520. The only
-# exemption below waives `unknown-tier` for the `tests/smoke/` suite:
-# testing-conventions#417 (live on `@v0`) derives `integration lint`'s subjects
-# from the package root and recognizes only `tests/integration/` and
-# `tests/e2e/` as suite tiers, so the smoke tier trips `unknown-tier`. The entry
-# points at its relocation issue -- smoke moves to an internals package (#520) --
-# and the stale-path hard error forces its own deletion when that move lands.
-# (The binding waivers are already gone: #519 relocated that suite into the
-# recognized tier `tests/integration/binding/`.) Every re-export/empty barrel is
-# still verified without a waiver -- the TS `index.ts` barrel has
-# `index.test.ts`, the python
-# `__init__.py` barrel has `__init___test.py`, empty package inits
-# (`cli/__init__.py`) are auto-skipped by the tool, and the dead `cli/interpret`
-# shells were deleted. The former python isolation waiver on the python barrel's
-# *test* was removed once testing-conventions#382 / PR #384 brought the python
-# `unmocked-collaborator` rule to parity with TS (a bare package-relative import
-# `from . import <names>` in a barrel test now resolves to the SUT and passes).
+# There are ZERO exemptions below. The three-tier conformance work (#517) is
+# complete: the binding suites moved into the recognized tier
+# `tests/integration/binding/` (#519) and the packaging distcheck flows moved to the
+# `internals/distcheck` package (#520), so nothing trips `unknown-tier` anymore.
+# Every re-export/empty barrel is verified without a waiver -- the TS `index.ts`
+# barrel has `index.test.ts`, the python `__init__.py` barrel has
+# `__init___test.py`, empty package inits (`cli/__init__.py`) are auto-skipped
+# by the tool, and the dead `cli/interpret` shells were deleted. The former
+# python isolation waiver on the python barrel's *test* was removed once
+# testing-conventions#382 / PR #384 brought the python `unmocked-collaborator`
+# rule to parity with TS (a bare package-relative import `from . import <names>`
+# in a barrel test now resolves to the SUT and passes).
 #
-# `path` is relative to the subject root the rule resolves against: the scanned
-# source dir (packages/python/dirsql / packages/ts/src) for source-file rules
-# (colocated-test, coverage), but the DERIVED PACKAGE ROOT (packages/python /
-# packages/ts) for the suite-tier rule `unknown-tier` (testing-conventions#417) --
-# so the binding/smoke waivers below are written `tests/binding/...`,
-# `tests/smoke/...`. The CLI rejects an exempt entry whose `path` matches no
-# file, so this list self-cleans: delete an entry the moment its file gains a
-# real colocated test, is removed, or (for the tier waivers) is relocated into a
-# recognized tier. Keep the coverage/colocation entries in lockstep with the
+# When an entry is added, its `path` is relative to the subject root the waived
+# rule resolves against: the scanned source dir (packages/python/dirsql /
+# packages/ts/src) for source-file rules (colocated-test, coverage), or the
+# derived package root (packages/python / packages/ts) for the suite-tier rule
+# `unknown-tier` (testing-conventions#417). The CLI rejects an exempt entry whose
+# `path` matches no file, so the list self-cleans: an entry must be deleted the
+# moment its file gains a real colocated test, is removed, or is relocated into a
+# recognized tier. Keep coverage/colocation entries in lockstep with the
 # coverage-omit rationale in packages/python/pyproject.toml and
 # packages/ts/vitest.config.ts.
 #
@@ -85,14 +79,6 @@ extra_scope = ["packages/rust/src"]
 fail_under = 100
 branch = true
 
-# `unknown-tier` waiver (path relative to packages/python). Removed when the
-# smoke flow moves to internals/smoke (#520). The binding waivers are gone: the
-# suite now lives in the recognized tier tests/integration/binding/ (#519).
-[[python.exempt]]
-path = "tests/smoke/build_test.py"
-rules = ["unknown-tier"]
-reason = "packaging smoke flow predates the derived three-tier layout; extraction to an internals package tracked in #520"
-
 # --- TypeScript (scanned: packages/ts/src) ---------------------------------
 
 # NB: the `[typescript]` table only accepts `coverage` / `exempt` -- there is no
@@ -108,14 +94,6 @@ lines = 100
 functions = 100
 statements = 100
 branches = 100
-
-# `unknown-tier` waiver (path relative to packages/ts). Removed when the smoke
-# flow moves to internals/smoke (#520). The binding waivers are gone: the suite
-# now lives in the recognized tier tests/integration/binding/ (#519).
-[[typescript.exempt]]
-path = "tests/smoke/build.test.ts"
-rules = ["unknown-tier"]
-reason = "packaging smoke flow predates the derived three-tier layout; extraction to an internals package tracked in #520"
 
 # --- Rust (scanned: packages/rust/src) -------------------------------------
 

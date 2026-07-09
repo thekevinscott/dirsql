@@ -31,11 +31,18 @@ test-binding:
 test-e2e:
     uv run python -m pytest packages/python/tests/e2e/ -x -q
 
-# Run Python packaging smoke tests (build the wheel, install into a fresh
-# venv, run the installed CLI). Runs in CI (python-test.yml `smoke` job).
-# Needs `cargo build -p dirsql --features cli` first.
-test-smoke:
-    uv run python -m pytest packages/python/tests/smoke/ -x -q
+# Run the Python packaging distcheck flow (build the wheel, install into a fresh
+# venv, run the installed CLI) from the internals/distcheck package (#520). Runs in
+# CI (python-test.yml `distcheck` job). Needs `cargo build -p dirsql --features cli`
+# and `maturin` on PATH (uv sync in packages/python) first.
+test-distcheck-python:
+    uv run --project internals/distcheck dirsql-distcheck python
+
+# Run the node packaging distcheck flow (pack -> npm install -> run) from the
+# internals/distcheck package. Runs in CI (ts-test.yml `distcheck` job). Needs
+# `pnpm build` in packages/ts first.
+test-distcheck-node:
+    uv run --project internals/distcheck dirsql-distcheck node
 
 # Run internals/checks integration tests (real git, real pytest subprocess)
 test-integration-internals-checks:

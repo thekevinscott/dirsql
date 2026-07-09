@@ -36,7 +36,6 @@
     "test:integration": "wireit",
     "test:binding": "wireit",
     "test:e2e": "wireit",
-    "test:smoke": "wireit",
     "coverage": "wireit",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
@@ -128,20 +127,6 @@
         "src/**/*.ts",
         "tools/**/*.ts",
         "tests/e2e/**/*.ts",
-        "vitest.config.ts",
-        "../rust/src/**/*.rs",
-        "../rust/Cargo.toml"
-      ],
-      "output": []
-    },
-    "test:smoke": {
-      "command": "vitest run --dir tests/smoke",
-      "dependencies": ["build"],
-      "files": [
-        "src/**/*.ts",
-        "tools/**/*.ts",
-        "tests/smoke/**/*.ts",
-        "tests/exists.ts",
         "vitest.config.ts",
         "../rust/src/**/*.rs",
         "../rust/Cargo.toml"

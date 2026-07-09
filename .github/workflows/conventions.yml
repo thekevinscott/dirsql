@@ -211,3 +211,20 @@ jobs:
       path: internals/checks/tests/integration
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       gates: '["integration-lint"]'
+
+  # internals/distcheck (#520): the packaging distcheck flows extracted from
+  # the former per-package packaging suites. Pure-python repo tooling, gated like internals-checks
+  # -- `path` is the inner importable dir (internals/distcheck/src). One call covers
+  # every tier: with tier derivation live on `@v0` (testing-conventions#417),
+  # `integration-lint` derives its subjects from the package root
+  # (internals/distcheck/tests/integration/), so no separate integration call is
+  # needed. No `e2e-verify` gate -- the package has no e2e tier (nothing to
+  # attest; the real flows run in the packaging-distcheck jobs of python-test.yml /
+  # ts-test.yml).
+  internals-distcheck:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["python"]'
+      path: internals/distcheck/src
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["colocated-test", "unit-lint", "integration-lint", "unit-coverage", "mutation"]'
