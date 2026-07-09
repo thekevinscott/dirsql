@@ -169,27 +169,29 @@ jobs:
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       gates: '["colocated-test", "unit-lint"]'
 
-  # internals/checks (#494/#503): the repo-tooling checks package was gated by hand
-  # convention only -- nothing enforced its colocated tests, isolation, or coverage.
-  # `path` is the inner importable dir (internals/checks/src), not the package root,
-  # matching every other call above. `e2e-verify` (#509) measures freshness of
-  # internals/checks/e2e-attestation.json against this scoped diff, mirroring the
-  # python-unit / typescript-unit wiring above.
+  # internals/checks (#494/#503, integration+e2e tiers #509): the repo-tooling
+  # checks package. `path` is the inner importable dir (internals/checks/src),
+  # not the package root, matching every other call above. `e2e-verify`
+  # measures freshness of internals/checks/e2e-attestation.json against this
+  # scoped diff, mirroring the python-unit / typescript-unit wiring above.
+  #
+  # `integration-lint` runs in THIS SAME call rather than a separate job/path:
+  # testing-conventions' derived-suite-tiers behavior (thekevinscott/
+  # testing-conventions#417 -- docs/monorepo.md "Everything derives from the
+  # package" / "The test tiers") resolves the integration suite to
+  # `<package root>/tests/integration/` (here, internals/checks/tests/
+  # integration) from the derived package root, independent of `path` -- so one
+  # call runs every tier, exactly like the simple per-package example in that
+  # doc. `@v0` is a moving tag (fixes/new checks land with no version bump on
+  # our side), so this is written for the post-#417 behavior; if CI runs before
+  # #417 lands upstream, temporarily split `integration-lint` back into its own
+  # call scoped at `path: internals/checks/tests/integration` (the pattern
+  # python-integration / typescript-integration below still use, pending the
+  # same upstream landing).
   internals-checks:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
       languages: '["python"]'
       path: internals/checks/src
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation", "e2e-verify"]'
-
-  # internals/checks integration tier (#509): tests/integration/ exercises each
-  # check's gate.run() against real collaborators (real git, real pytest
-  # subprocess) rather than the packaged CLI (that's the e2e tier above).
-  internals-checks-integration:
-    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
-    with:
-      languages: '["python"]'
-      path: internals/checks/tests/integration
-      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["integration-lint"]'
+      gates: '["colocated-test", "unit-lint", "integration-lint", "unit-coverage", "mutation", "e2e-verify"]'

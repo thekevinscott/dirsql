@@ -23,14 +23,16 @@ Each check follows the same shape:
   raising `SystemExit` with its return code.
 
 Every module (except empty `__init__.py`s) carries a colocated `*_test.py`, gated by
-`conventions.yml`'s `internals-checks` job: `colocated-test`, `unit-lint`, `unit-coverage`,
-`mutation`, and `e2e-verify`.
+`conventions.yml`'s `internals-checks` job: `colocated-test`, `unit-lint`, `integration-lint`,
+`unit-coverage`, `mutation`, and `e2e-verify` -- all in that one call, scoped at
+`internals/checks/src` (`integration-lint` resolves the integration suite from the derived
+package root, independent of `path`).
 
 ## Test tiers
 
 - `tests/integration/` -- exercises each check's `gate.run()` against real collaborators (real
-  `git`, real pytest subprocess) rather than the packaged CLI. Gated by `conventions.yml`'s
-  `internals-checks-integration` job (`integration-lint`).
+  `git`, real pytest subprocess) rather than the packaged CLI. Gated by `integration-lint` in the
+  `internals-checks` job above.
 - `tests/e2e/` -- spawns the real `dirsql-checks` CLI as a subprocess with nothing mocked. Not run
   in CI; gated only via `e2e-attestation.json` freshness (see AGENTS.md, "E2E Attestation").
 
