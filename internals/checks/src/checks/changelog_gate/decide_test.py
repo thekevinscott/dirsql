@@ -12,6 +12,9 @@ def describe_is_changelog_fragment():
     def a_categorized_md_file_under_changelog_d_counts():
         assert is_changelog_fragment("changelog.d/claude-my-branch.changed.md") is True
 
+    def a_fragment_sorting_before_the_readme_counts():
+        assert is_changelog_fragment("changelog.d/0-hotfix-branch.fixed.md") is True
+
     def the_fragment_dir_readme_does_not_count():
         assert is_changelog_fragment("changelog.d/README.md") is False
 
