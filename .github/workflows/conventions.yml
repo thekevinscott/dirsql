@@ -60,15 +60,7 @@ jobs:
       languages: '["python"]'
       path: internals/checks/src
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation", "e2e-verify"]'
-
-  internals-checks-integration:
-    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
-    with:
-      languages: '["python"]'
-      path: internals/checks/tests/integration
-      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["integration-lint"]'
+      gates: '["colocated-test", "unit-lint", "integration-lint", "unit-coverage", "mutation", "e2e-verify"]'
 
   internals-distcheck:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0

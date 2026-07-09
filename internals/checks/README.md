@@ -29,10 +29,9 @@ Every module (except empty `__init__.py`s) carries a colocated `*_test.py`, gate
 ## Test tiers
 
 - `tests/integration/` -- exercises each check's `gate.run()` against real collaborators (real
-  `git`, real pytest subprocess) rather than the packaged CLI. Gated by `conventions.yml`'s
-  `internals-checks-integration` job (`integration-lint`), a separate call from `internals-checks`
-  because the current `testing-conventions` release scans exactly the `path` it's given rather
-  than deriving `tests/integration/` from the package root -- see AGENTS.md for the tracking note.
+  `git`, real pytest subprocess) rather than the packaged CLI. Gated by the `integration-lint` gate
+  in `conventions.yml`'s `internals-checks` job, which derives `tests/integration/` from the package
+  root (#417).
 - `tests/e2e/` -- spawns the real `dirsql-checks` CLI as a subprocess with nothing mocked. Not run
   in CI; gated only via `e2e-attestation.json` freshness (see AGENTS.md, "E2E Attestation").
 
