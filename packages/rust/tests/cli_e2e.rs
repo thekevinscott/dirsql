@@ -358,6 +358,61 @@ fn unloadable_config_returns_503_on_query() {
 }
 
 #[test]
+fn unknown_config_key_degrades_server_with_503_naming_the_key() {
+    // A misspelled key is a hard config error (#536): the server degrades and
+    // `POST /query` returns 503 whose diagnostic names the offending key.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(".dirsql.toml"),
+        "[dirsql]\npersistpath = \"cache.db\"\n",
+    )
+    .unwrap();
+    let port = free_port();
+    let child = spawn_dirsql(dir.path(), port);
+    wait_until_ready(port, Duration::from_secs(10));
+
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT 1"}))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let error = resp.json::<Value>().unwrap()["error"]
+        .as_str()
+        .expect("503 body carries an `error` string")
+        .to_string();
+    assert!(
+        error.contains("persistpath"),
+        "503 diagnostic must name the unknown key, got {error:?}"
+    );
+
+    kill_and_wait(child);
+}
+
+#[test]
+fn query_subcommand_rejects_unknown_config_key_with_nonzero_exit() {
+    // Same strict-config diagnostic on the one-shot surface (#536): `dirsql
+    // query` exits non-zero and names the unknown key on stderr.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(".dirsql.toml"),
+        "[dirsql]\npersistpath = \"cache.db\"\n",
+    )
+    .unwrap();
+
+    let out = run_query_subcommand(dir.path(), "SELECT 1");
+    assert!(
+        !out.status.success(),
+        "an unknown config key must be a non-zero exit, got {out:?}"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("persistpath"),
+        "stderr must name the unknown key, got {stderr:?}"
+    );
+}
+
+#[test]
 fn quoted_identifier_table_in_toml_is_served_over_http() {
     // The quoted DDL identifier resolves to the bare table name `posts`.
     let root = quoted_blog_fixture();
