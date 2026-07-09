@@ -43,18 +43,23 @@ fn substitutes_a_placeholder_and_reads_the_named_file() {
 }
 
 #[test]
-fn append_if_absent_appends_the_value_end_to_end() {
+fn a_placeholder_the_template_omits_is_not_appended() {
     let dir = TempDir::new().unwrap();
     std::fs::write(dir.path().join("data.txt"), "only-line\n").unwrap();
-    let out = run_command(
+    // `cat` with no argument reads its (null) stdin: an omitted `{path}` is not
+    // appended, so there is no file to read and the run produces no payload.
+    let err = run_command(
         "cat",
-        &[Placeholder::append("path", "data.txt")],
+        &[Placeholder::new("path", "data.txt")],
         dir.path(),
         TIMEOUT,
         None,
     )
-    .expect("command succeeds");
-    assert_eq!(out.payload, "only-line");
+    .expect_err("no path is appended, so `cat` reads empty stdin");
+    assert!(
+        matches!(err, CommandError::EmptyOutput { .. }),
+        "got: {err:?}"
+    );
 }
 
 #[test]
