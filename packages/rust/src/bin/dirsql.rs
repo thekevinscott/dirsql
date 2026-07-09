@@ -37,7 +37,7 @@ struct Cli {
     /// rooted at the directory containing this file. When the file does
     /// not exist, a default `files` table is served. Used by server mode
     /// and by the `query` subcommand.
-    #[arg(long, default_value = "./.dirsql.toml", global = true)]
+    #[arg(short = 'c', long, default_value = "./.dirsql.toml", global = true)]
     config: PathBuf,
 
     /// Bind address. Used when no subcommand is given.
