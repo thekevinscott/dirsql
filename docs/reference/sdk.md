@@ -111,11 +111,10 @@ directory" error.
 - `persist` — Keep the SQLite index on disk between runs (default off:
   ephemeral, rebuilt every startup). The cache lives at
   `<root>/.dirsql/cache.db` by default; on restart, only files whose stat
-  changed are re-parsed. `persist = true` in the config also enables it.
-- `persist_path` / `persistPath` — Override the cache location. An
-  explicit value wins over the config's `persist_path`. Ignored when
-  persistence is off. (Config-file values resolve relative to the config's
-  parent directory; constructor values are used as given.)
+  changed are re-parsed. (The CLI exposes the same switch as the
+  [`--persist [PATH]`](./cli.md#server-mode) flag; it is not a config key.)
+- `persist_path` / `persistPath` — Override the cache location. Ignored when
+  persistence is off. Constructor values are used as given.
 - `extensions` — SQLite extensions to load at startup, before any table
   DDL (enable → load → disable, so SQL `load_extension()` is never
   exposed). Each entry pairs a shared-library `path` with an optional

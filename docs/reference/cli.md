@@ -48,6 +48,7 @@ requests, closes open `/events` streams, and exits.
 | `-c, --config <path>` | `./.dirsql.toml` | Path to the [config file](./config.md). The index is rooted at the directory containing this file (unless the config sets `[dirsql].root`). When the file does not exist, the server runs in [zero-config mode](#zero-config-mode). |
 | `--host <addr>` | `localhost` | Bind address. |
 | `--port <n>` | `7117` | TCP port to bind. |
+| `--persist [<path>]` | off | Keep the SQLite index on disk between runs so a restart only re-parses files that actually changed. Bare `--persist` caches at `<root>/.dirsql/cache.db`; `--persist <path>` caches at `<path>`. Off by default (the index is ephemeral). Global — also honored by [`dirsql query`](#dirsql-query). See [Keep the index across restarts](../howto/persist.md). |
 | `--extension <path>` | none | Load a SQLite extension by literal path, overriding the config's `[[dirsql.extension]]` entries. Repeatable. Format: `<path>` or `<path>::<entrypoint>`. Internal plumbing for the pip/npm launchers, which resolve package-name extensions and pass the resolved paths here — not intended for direct use. When any `--extension` is present, the config file's own extension entries are not loaded. |
 | `--version` | | Print the version and exit. |
 | `--help` | | Print usage and exit. |
@@ -119,6 +120,10 @@ uses**, so behavior is identical to `POST /query` by construction:
 - **Config discovery** honors `--config` (default `./.dirsql.toml`),
   [zero-config mode](#zero-config-mode), and `--extension` overrides,
   exactly as server mode does.
+- **`--persist [<path>]`** is honored, so a repeated `dirsql query` reuses the
+  on-disk cache. Because its value is optional, place a bare `--persist` after
+  the SQL (`dirsql query "SELECT …" --persist`) or use the `=` form
+  (`--persist=/path`) so it does not swallow the SQL argument.
 - **Hooks** ([`pre-query`](./hooks.md#pre-query) /
   [`post-query`](./hooks.md#post-query)) and the
   [`[dirsql].hook-timeout`](./config.md#dirsql-keys) apply identically.
