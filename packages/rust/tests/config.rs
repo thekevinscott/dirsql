@@ -33,7 +33,11 @@ glob = "*.csv"
 fn unknown_key_at_each_schema_level_errors() {
     let cases = [
         ("top-level", "glbo = \"typo\"\n", "glbo"),
-        ("[dirsql]", "[dirsql]\npersistpath = \"cache.db\"\n", "persistpath"),
+        (
+            "[dirsql]",
+            "[dirsql]\npersistpath = \"cache.db\"\n",
+            "persistpath",
+        ),
         (
             "[[table]]",
             "[[table]]\nddl = \"CREATE TABLE t (path TEXT)\"\nglob = \"*.json\"\nformat = \"json\"\n",

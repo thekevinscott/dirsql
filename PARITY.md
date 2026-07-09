@@ -138,7 +138,10 @@ for await (const event of db.watch()) { ... }
 ## CLI: config files
 
 `--config` accepts a single format across all three SDKs: `.dirsql.toml`,
-parsed by the shared Rust config loader. Native-language config files (`.py` /
+parsed by the shared Rust config loader. That loader rejects unknown keys at
+every level (top level, `[dirsql]`, `[[table]]`, `[[dirsql.extension]]`; #536),
+so a typo fails identically on every install — parity by construction, no
+drift. Native-language config files (`.py` /
 `.js` / `.mjs` / `.cjs`), the `dirsql interpret` NDJSON helper that backed them,
 and the cross-language config-serialization snapshot (#194) that fed the
 handshake were all removed in epic #321 (#323 Python, #324 TypeScript, #325

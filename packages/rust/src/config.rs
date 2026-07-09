@@ -269,12 +269,14 @@ pub struct TableConfig {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawConfig {
     dirsql: Option<RawDirsql>,
     table: Option<Vec<RawTable>>,
 }
 
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct RawDirsql {
     root: Option<PathBuf>,
     ignore: Option<Vec<String>>,
@@ -290,12 +292,14 @@ struct RawDirsql {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawExtension {
     path: Option<String>,
     entrypoint: Option<String>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawTable {
     ddl: Option<String>,
     glob: Option<String>,
