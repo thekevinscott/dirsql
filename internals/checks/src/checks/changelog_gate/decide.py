@@ -32,6 +32,18 @@ _INCLUDE_PATTERNS = (
 )
 
 
+_FRAGMENT_PATTERN = "changelog.d/*.md"
+_FRAGMENT_README = "changelog.d/README.md"
+
+
+def is_changelog_fragment(path: str) -> bool:
+    return fnmatch.fnmatch(path, _FRAGMENT_PATTERN) and path != _FRAGMENT_README
+
+
+def changelog_fragments(paths) -> list[str]:
+    return [path for path in paths if is_changelog_fragment(path)]
+
+
 def is_sdk_code_change(path: str) -> bool:
     if any(fnmatch.fnmatch(path, pattern) for pattern in _EXCLUDE_PATTERNS):
         return False

@@ -8,15 +8,24 @@ from __future__ import annotations
 import sys
 
 from checks.changelog_gate import git_ops
-from checks.changelog_gate.decide import any_sdk_code_changed, count_added_lines, extract_skip_trailers
+from checks.changelog_gate.decide import (
+    any_sdk_code_changed,
+    changelog_fragments,
+    count_added_lines,
+    extract_skip_trailers,
+)
 
 MISSING_CHANGELOG_MESSAGE = """\
-::error file=CHANGELOG.md::SDK code changed but CHANGELOG.md was not updated.
+::error file=CHANGELOG.md::SDK code changed but no changelog entry was added.
 
-Every PR that modifies public-facing SDK code must add an entry under
-'## [Unreleased]' in CHANGELOG.md. If the change is also breaking,
-behavior-altering, or removes a deprecated symbol, add a matching
-migration entry to MIGRATIONS.md (see its template).
+Every PR that modifies public-facing SDK code must add a changelog
+fragment: a new file changelog.d/<branch-slug>.<category>.md whose
+category is one of added/changed/deprecated/removed/fixed/security,
+containing the entry body. (Editing CHANGELOG.md under '## [Unreleased]'
+directly is still accepted, but conflicts with other in-flight PRs.)
+If the change is also breaking, behavior-altering, or removes a
+deprecated symbol, add a matching migration entry as
+migrations.d/<branch-slug>.md (see MIGRATIONS.md's template).
 
 Escape hatch: if this PR genuinely has no observable change (pure
 refactor, internal rename, etc.), add a trailer to any commit:
@@ -50,6 +59,11 @@ def run(
         print("Reason(s):")
         for reason in trailers:
             print(f"  - {reason}")
+        return 0
+
+    fragments = changelog_fragments(files)
+    if fragments:
+        print(f"Changelog fragment present: {', '.join(fragments)}. OK.")
         return 0
 
     if "CHANGELOG.md" not in files:

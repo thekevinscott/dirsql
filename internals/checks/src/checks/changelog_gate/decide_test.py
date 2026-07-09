@@ -1,9 +1,42 @@
 from checks.changelog_gate.decide import (
     any_sdk_code_changed,
+    changelog_fragments,
     count_added_lines,
     extract_skip_trailers,
+    is_changelog_fragment,
     is_sdk_code_change,
 )
+
+
+def describe_is_changelog_fragment():
+    def a_categorized_md_file_under_changelog_d_counts():
+        assert is_changelog_fragment("changelog.d/claude-my-branch.changed.md") is True
+
+    def the_fragment_dir_readme_does_not_count():
+        assert is_changelog_fragment("changelog.d/README.md") is False
+
+    def a_non_md_file_under_changelog_d_does_not_count():
+        assert is_changelog_fragment("changelog.d/notes.txt") is False
+
+    def a_migrations_fragment_does_not_count():
+        assert is_changelog_fragment("migrations.d/claude-my-branch.md") is False
+
+    def the_changelog_itself_does_not_count():
+        assert is_changelog_fragment("CHANGELOG.md") is False
+
+
+def describe_changelog_fragments():
+    def returns_only_fragment_paths():
+        assert changelog_fragments(
+            [
+                "packages/rust/src/lib.rs",
+                "changelog.d/claude-my-branch.changed.md",
+                "changelog.d/README.md",
+            ]
+        ) == ["changelog.d/claude-my-branch.changed.md"]
+
+    def returns_empty_for_no_fragments():
+        assert changelog_fragments(["README.md", "CHANGELOG.md"]) == []
 
 
 def describe_is_sdk_code_change():
