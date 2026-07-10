@@ -1,7 +1,0 @@
-{
-  "command": "pnpm test:e2e",
-  "ran_at": 1783641256,
-  "exit_code": 0,
-  "commit": "e8cda44abdfccb421ad06ec83c77bd644fb2bb83",
-  "branch": "worktree-agent-a1a637f59ef70f352"
-}
