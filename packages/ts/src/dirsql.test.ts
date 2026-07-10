@@ -116,6 +116,25 @@ describe("DirSQL", () => {
       expect(db._options).toEqual({ config: "/cfg.toml" });
     });
 
+    it("forwards a null root when only a config is given (#540: the config never sets the root)", async () => {
+      // The SDK never derives an index root from the config file's location;
+      // it forwards `root: null` and the core defaults to the process cwd.
+      const openAsync = installFakeCore(makeInner());
+      vi.mocked(resolveConfigExtensionSpecs).mockReturnValue(null);
+      const db = new DirSQL({ config: "/elsewhere/.dirsql.toml" });
+      await db.ready;
+      expect(openAsync).toHaveBeenCalledWith(
+        null,
+        null,
+        null,
+        "/elsewhere/.dirsql.toml",
+        null,
+        null,
+        null,
+        false,
+      );
+    });
+
     it("appends resolved config extensions and suppresses the core's own loading", async () => {
       const openAsync = installFakeCore(makeInner());
       vi.mocked(resolveConfigExtensionSpecs).mockReturnValue([
