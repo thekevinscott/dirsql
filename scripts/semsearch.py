@@ -4,6 +4,10 @@
 # ///
 """Semantic search over local files with DuckDB.
 
+Files are split into paragraphs, each paragraph is embedded separately, and a
+file is ranked by its best-matching paragraph (whole-document embeddings
+average long files into mush).
+
 Usage:
     uv run semsearch.py "how do I cook pasta?"
     uv run semsearch.py "reviewing code" -g 'notes/**' -g 'docs/**/*.md' -n 3
@@ -33,17 +37,33 @@ con.create_function(
     ["VARCHAR"],
     "FLOAT[256]",
 )
+needle = [float(x) for x in model.encode([args.query])[0]]
 
 rows = con.execute(
     """
+    WITH chunks AS (
+        SELECT filename,
+               unnest(string_split_regex(content, '\n[ \t]*\n')) AS chunk
+        FROM read_text(?)
+    ),
+    scored AS (
+        SELECT filename, chunk,
+               array_cosine_distance(embed(chunk), ?::FLOAT[256]) AS distance
+        FROM chunks
+        WHERE length(trim(chunk)) > 0
+    )
     SELECT filename,
-           round(array_cosine_distance(embed(content), embed(?)), 3) AS distance
-    FROM read_text(?)
+           round(min(distance), 3) AS distance,
+           arg_min(chunk, distance) AS best_chunk
+    FROM scored
+    GROUP BY filename
     ORDER BY distance
     LIMIT ?
     """,
-    [args.query, args.glob or ["**/*.md"], args.limit],
+    [args.glob or ["**/*.md"], needle, args.limit],
 ).fetchall()
 
-for filename, distance in rows:
+for filename, distance, chunk in rows:
+    snippet = " ".join(chunk.split())[:100]
     print(f"{distance:.3f}  {filename}")
+    print(f"       {snippet}")
