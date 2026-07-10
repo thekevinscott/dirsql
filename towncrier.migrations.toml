@@ -1,0 +1,27 @@
+# towncrier config for assembling migrations.d/ fragments into MIGRATIONS.md.
+# Run via the "Release Notes" workflow (workflow_dispatch), or locally:
+#
+#   uvx towncrier@25.8.0 build --config towncrier.migrations.toml --version "$(date -u +%F)"
+#
+# Draft preview (renders without writing): add --draft.
+#
+# Fragments are migrations.d/<branch-slug>.md -- one complete templated
+# migration entry per file (see MIGRATIONS.md's template). There is no
+# category suffix: the single type below is literally "md", so towncrier
+# parses "<branch-slug>.md" as name + type with no extra naming ceremony.
+
+[tool.towncrier]
+directory = "migrations.d"
+filename = "MIGRATIONS.md"
+template = "towncrier.migrations.template.md"
+start_string = "<!-- towncrier release notes start -->\n"
+title_format = "## [{version}]"
+underlines = ["", "", ""]
+wrap = false
+all_bullets = false
+ignore = ["README.md"]
+
+[[tool.towncrier.type]]
+directory = "md"
+name = "Migrations"
+showcontent = true

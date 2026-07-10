@@ -15,6 +15,12 @@ file here:
   changes without code changes / Verification), with `_None._` under any
   subsection that does not apply.
 
-At release time the fragments are assembled into `MIGRATIONS.md` and deleted.
+The dispatch-triggered "Release Notes" workflow
+(`.github/workflows/release-notes.yml`) assembles the fragments into a dated
+`MIGRATIONS.md` section (towncrier, config in `towncrier.migrations.toml`)
+and deletes them, via an assemble PR. Preview pending entries with:
+
+    uvx towncrier@25.8.0 build --config towncrier.migrations.toml --draft --version next
+
 See AGENTS.md, section "Changelog and Migrations". This README is not a
 fragment.

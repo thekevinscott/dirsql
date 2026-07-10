@@ -9,7 +9,18 @@ from it via a VitePress include; do not edit the rendered page.
 
 See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHANGELOG.md) for the full release log. (The relative path is not used because this file is also included into the docs site via a VitePress include, where relative paths would break.)
 
-## [Unreleased]
+Pending migration entries live as fragments in `migrations.d/` (one complete
+templated entry per PR); sections below are assembled from them at
+release-notes time (`towncrier.migrations.toml`). Preview pending entries with
+`uvx towncrier@25.8.0 build --config towncrier.migrations.toml --draft --version next`.
+
+<!-- towncrier release notes start -->
+
+## [2026-07-09]
+
+Everything in this section accumulated under "[Unreleased]" while per-package
+releases shipped continuously (0.2.x–0.3.x); it was frozen as history, dated
+the day the fragment workflow landed.
 
 ### `persist` / `persist_path` removed from `.dirsql.toml`; use `--persist [PATH]` (#549, epic #528)
 
@@ -1586,9 +1597,10 @@ npx -y putitoutthere@0.2 plan
 
 <!--
 When a PR introduces a breaking change, a deprecation removal, or a
-behavior-only change, copy the template block below into the `## [Unreleased]`
-section and fill it in. When a release is cut, rename `## [Unreleased]` to
-`## [vX.Y.Z] - YYYY-MM-DD` and start a fresh Unreleased section above it.
+behavior-only change, copy the template block below into a new fragment file
+`migrations.d/<branch-slug>.md` and fill it in. The "Release Notes" workflow
+assembles fragments into a dated section above (towncrier.migrations.toml)
+and deletes them.
 
 Migration entries are required for:
   - Breaking API changes (signatures, names, return types, config keys)

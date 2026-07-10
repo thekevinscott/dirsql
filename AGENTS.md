@@ -286,7 +286,7 @@ Entries are categorized per [Keep a Changelog](https://keepachangelog.com/en/1.1
 
 Purely additive changes and behavior-preserving bug fixes do NOT require a migration entry.
 
-Migration entries live under `## [Unreleased]` in `MIGRATIONS.md` and must follow the template at the bottom of that file. Every entry has five required subsections:
+A migration entry is one fragment file `migrations.d/<branch-slug>.md` holding a complete entry per the template at the bottom of `MIGRATIONS.md` (assembled into a dated section by the same Release Notes workflow, via `towncrier.migrations.toml`). Every entry has five required subsections:
 
 1. **Summary** -- one paragraph: what broke, which SDKs/call sites, and why.
 2. **Required changes** -- table of before/after snippets for every affected surface (config, CLI, action inputs, function signatures, return types).

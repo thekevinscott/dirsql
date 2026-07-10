@@ -39,6 +39,11 @@ jobs:
           TITLE: ${{ inputs.title }}
         run: uvx towncrier@25.8.0 build --config towncrier.changelog.toml --yes --version "${TITLE:-$(date -u +%F)}"
 
+      - name: Assemble MIGRATIONS.md from migrations.d/ fragments
+        env:
+          TITLE: ${{ inputs.title }}
+        run: uvx towncrier@25.8.0 build --config towncrier.migrations.toml --yes --version "${TITLE:-$(date -u +%F)}"
+
       - name: Open the assemble PR
         uses: peter-evans/create-pull-request@v7
         with:
