@@ -1,7 +1,0 @@
-{
-  "command": "uv run python -m pytest tests/e2e/ -x -q",
-  "ran_at": 1783641235,
-  "exit_code": 0,
-  "commit": "e8cda44abdfccb421ad06ec83c77bd644fb2bb83",
-  "branch": "worktree-agent-a1a637f59ef70f352"
-}
