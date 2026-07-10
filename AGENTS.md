@@ -266,7 +266,7 @@ The scope is intentionally broad -- any change under SDK source (Rust core, Pyth
 changelog.d/<branch-slug>.<category>.md
 ```
 
-`<branch-slug>` is the PR's branch name, lowercased and sanitized (the slug format testing-conventions uses for branch-keyed e2e receipts); `<category>` is one of `added` / `changed` / `deprecated` / `removed` / `fixed` / `security` (Keep a Changelog); the content is the entry body exactly as it would appear in `CHANGELOG.md` -- typically one bold-led bullet. Migration entries (see below) likewise go in `migrations.d/<branch-slug>.md`, one complete templated entry per file. At release time the fragments are assembled into the real files and deleted. During the transition (epic #561) the gate accepts either a fragment or a direct `CHANGELOG.md` edit; direct edits stop being accepted once release-time assembly lands, so always write the fragment.
+`<branch-slug>` is the PR's branch name, lowercased and sanitized (the slug format testing-conventions uses for branch-keyed e2e receipts); `<category>` is one of `added` / `changed` / `deprecated` / `removed` / `fixed` / `security` (Keep a Changelog); the content is the entry body exactly as it would appear in `CHANGELOG.md` -- typically one bold-led bullet. Migration entries (see below) likewise go in `migrations.d/<branch-slug>.md`, one complete templated entry per file. `CHANGELOG.md` has no `## [Unreleased]` section anymore: the fragment dir *is* the unreleased state (preview with `uvx towncrier@25.8.0 build --config towncrier.changelog.toml --draft --version next`), and the dispatch-triggered **Release Notes** workflow (`.github/workflows/release-notes.yml`) assembles fragments into a dated section via towncrier and opens the assemble PR -- the only writer to the shared file. During the transition (epic #561) the gate still accepts a direct `CHANGELOG.md` edit, but there is no Unreleased section to edit, so always write the fragment; the gate tightens to fragments-only in #565.
 
 **Escape hatch.** If a PR genuinely has no observable change -- a pure refactor, an internal rename, a type-signature tidy with the same runtime -- bypass the gate by adding a trailer to any commit in the PR:
 
@@ -276,7 +276,7 @@ skip-changelog: <reason>
 
 The reason is logged to CI and stays in git history, so the decision is auditable. Use this sparingly; when in doubt, write the changelog entry.
 
-Every entry goes under `## [Unreleased]`, categorized per [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`.
+Entries are categorized per [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) (`Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`) -- for a changelog fragment the category rides in the filename suffix.
 
 **`MIGRATIONS.md` is additionally required when a PR:**
 

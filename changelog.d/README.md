@@ -12,6 +12,12 @@ with every other in-flight PR), each PR adds one new file here:
 - Content: the entry body exactly as it would appear under `## [Unreleased]`
   in `CHANGELOG.md` — typically one bold-led bullet.
 
-At release time the fragments are assembled into `CHANGELOG.md` and deleted.
+The dispatch-triggered "Release Notes" workflow
+(`.github/workflows/release-notes.yml`) assembles the fragments into a dated
+`CHANGELOG.md` section (towncrier, config in `towncrier.changelog.toml`) and
+deletes them, via an assemble PR. Preview pending entries with:
+
+    uvx towncrier@25.8.0 build --config towncrier.changelog.toml --draft --version next
+
 See AGENTS.md, section "Changelog and Migrations". This README is not a
 fragment and never satisfies the changelog gate.

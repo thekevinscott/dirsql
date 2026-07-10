@@ -1,0 +1,53 @@
+name: Release Notes
+
+# Assembles changelog.d/ fragments into CHANGELOG.md (towncrier) and opens
+# an assemble PR — the only writer to the shared file, so per-PR fragment
+# authors never conflict. Dispatch it whenever a section should be cut.
+#
+# Known GITHUB_TOKEN limitation: the created PR does not trigger
+# pull_request workflows automatically; close and reopen it (or push an
+# empty commit) to run the gates before merging.
+#
+# Dispatching with an empty changelog.d/ produces a "No significant
+# changes" section — just close the PR instead of merging.
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: >
+          Section title, used as "## [<title>]". Defaults to today's
+          UTC date (YYYY-MM-DD).
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Assemble CHANGELOG.md from changelog.d/ fragments
+        env:
+          TITLE: ${{ inputs.title }}
+        run: uvx towncrier@25.8.0 build --config towncrier.changelog.toml --yes --version "${TITLE:-$(date -u +%F)}"
+
+      - name: Open the assemble PR
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: release-notes/assemble
+          title: 'Assemble release notes from changelog.d/ fragments'
+          commit-message: 'Assemble release notes from changelog.d/ fragments'
+          body: >
+            Assembled by the Release Notes workflow (towncrier): inserts the
+            new dated section into CHANGELOG.md and deletes the consumed
+            fragments. Close and reopen this PR to trigger CI (GITHUB_TOKEN
+            PRs do not start pull_request workflows automatically).
+          delete-branch: true

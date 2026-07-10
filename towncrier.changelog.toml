@@ -1,0 +1,48 @@
+# towncrier config for assembling changelog.d/ fragments into CHANGELOG.md.
+# Run via the "Release Notes" workflow (workflow_dispatch), or locally:
+#
+#   uvx towncrier@25.8.0 build --config towncrier.changelog.toml --version "$(date -u +%F)"
+#
+# Draft preview (renders without writing): add --draft.
+# Fragments are changelog.d/<branch-slug>.<category>.md; see changelog.d/README.md.
+
+[tool.towncrier]
+directory = "changelog.d"
+filename = "CHANGELOG.md"
+template = "towncrier.changelog.template.md"
+start_string = "<!-- towncrier release notes start -->\n"
+title_format = "## [{version}]"
+underlines = ["", "", ""]
+wrap = false
+all_bullets = false
+ignore = ["README.md"]
+
+[[tool.towncrier.type]]
+directory = "added"
+name = "Added"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "changed"
+name = "Changed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "deprecated"
+name = "Deprecated"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "removed"
+name = "Removed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "fixed"
+name = "Fixed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "security"
+name = "Security"
+showcontent = true

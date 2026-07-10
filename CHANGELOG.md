@@ -5,7 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+Unreleased changes live as fragments in [`changelog.d/`](./changelog.d/), one
+file per PR; sections below are assembled from them at release-notes time
+(`towncrier.changelog.toml`). Preview pending entries with
+`uvx towncrier@25.8.0 build --config towncrier.changelog.toml --draft --version next`.
+
+<!-- towncrier release notes start -->
+
+## [2026-07-09]
+
+Everything in this section accumulated under "[Unreleased]" while per-package
+releases shipped continuously (0.2.x–0.3.x); it was frozen as history, dated
+the day the fragment workflow landed. Repeated category headings mark the
+waves in which entries were added (newest first).
 
 ### Security
 
