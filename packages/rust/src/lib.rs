@@ -940,20 +940,15 @@ impl DirSQLBuilder {
         self
     }
 
-    /// Enable persistent on-disk storage. When `true`, the SQLite database is
-    /// written to `<root>/.dirsql/cache.db` (override via
-    /// [`persist_path`](Self::persist_path)) so subsequent startups only
-    /// re-parse files that have actually changed. See
-    /// `docs/howto/persist.md` for the reconcile contract.
-    pub fn persist(mut self, persist: bool) -> Self {
-        self.persist = persist;
-        self
-    }
-
-    /// Override the location of the persistent cache file. Ignored when
-    /// [`persist`](Self::persist) is `false`.
-    pub fn persist_path(mut self, path: impl AsRef<Path>) -> Self {
-        self.persist_path = Some(path.as_ref().to_path_buf());
+    /// Enable persistent on-disk storage. `None` writes the SQLite database to
+    /// the default `<root>/.dirsql/cache.db`; `Some(path)` writes it to `path`.
+    /// Either way, subsequent startups only re-parse files that have actually
+    /// changed. See `docs/howto/persist.md` for the reconcile contract.
+    pub fn persist(mut self, path: Option<impl AsRef<Path>>) -> Self {
+        self.persist = true;
+        if let Some(path) = path {
+            self.persist_path = Some(path.as_ref().to_path_buf());
+        }
         self
     }
 
@@ -988,6 +983,13 @@ impl DirSQLBuilder {
             None => std::env::current_dir().map_err(DirSqlError::config)?,
         };
 
+        // The config layer is an ordered list of entries, each carrying its
+        // loaded `config`, its `config_dir` (where `on-file` hooks run and the
+        // base for extension path resolution), and its `hook_timeout`. Every
+        // caller supplies at most one config, so the list holds 0 or 1 entries
+        // and the in-order merge below is byte-for-byte identical to a single
+        // pass.
+        let mut config_entries: Vec<ResolvedConfigEntry> = Vec::new();
         if let Some(ref cfg_path) = config_path {
             let cfg = config::load_config(cfg_path).map_err(DirSqlError::config)?;
 
@@ -995,11 +997,26 @@ impl DirSQLBuilder {
                 .parent()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
+            let hook_timeout = cfg.hook_timeout.unwrap_or(command::DEFAULT_COMMAND_TIMEOUT);
+            config_entries.push(ResolvedConfigEntry {
+                config: cfg,
+                config_dir: cfg_parent,
+                hook_timeout,
+            });
+        }
+
+        for entry in config_entries {
+            let ResolvedConfigEntry {
+                config: cfg,
+                config_dir: cfg_parent,
+                hook_timeout,
+            } = entry;
 
             // `on-file` commands run in the config file's directory; `{path}`
             // is the matched file's absolute path and `{root}` the resolved
             // index root.
-            let cfg_tables = build_tables_from_config(&cfg, &cfg_parent, &root)?;
+            let cfg_tables =
+                build_tables_from_config(&cfg, &cfg_parent, &root, hook_timeout)?;
             tables.extend(cfg_tables);
             ignore.extend(cfg.ignore);
 
@@ -1057,6 +1074,17 @@ impl DirSQLBuilder {
 
 /// Default poll interval for the channel-based watch loop.
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+/// One resolved config file in the ordered list [`DirSQLBuilder::resolve`]
+/// merges over. Carries the loaded `config`, its `config_dir` (the config
+/// file's parent -- where `on-file` hooks run and the base for extension path
+/// resolution), and the `hook_timeout` bounding each `on-file` run. The index
+/// root is owned by the runner (#540), not derived per config entry.
+struct ResolvedConfigEntry {
+    config: config::Config,
+    config_dir: PathBuf,
+    hook_timeout: Duration,
+}
 
 /// Fully-resolved builder inputs: the result of merging programmatic
 /// settings with values loaded from a `.dirsql.toml` config file.
@@ -1349,16 +1377,17 @@ fn relative_path(root: &Path, path: &Path) -> String {
 /// array of row objects on stdout, which becomes the file's rows (filesystem
 /// facts are still merged on top, user values winning). `config_dir` is the
 /// command's working directory (the config file's parent) and `root` is the
-/// resolved index root exposed as the `{root}` placeholder. Each run is
-/// bounded by the global `[dirsql].hook-timeout` key when present, falling
-/// back to [`command::DEFAULT_COMMAND_TIMEOUT`].
+/// resolved index root exposed as the `{root}` placeholder. `timeout` bounds
+/// each `on-file` run; the caller resolves it from the global
+/// `[dirsql].hook-timeout` key, falling back to
+/// [`command::DEFAULT_COMMAND_TIMEOUT`].
 fn build_tables_from_config(
     cfg: &config::Config,
     config_dir: &Path,
     root: &Path,
+    timeout: Duration,
 ) -> Result<Vec<Table>> {
     let mut tables = Vec::with_capacity(cfg.tables.len());
-    let timeout = cfg.hook_timeout.unwrap_or(command::DEFAULT_COMMAND_TIMEOUT);
 
     for table_cfg in &cfg.tables {
         let mut table = match &table_cfg.on_file {
@@ -2650,14 +2679,45 @@ mod internal_tests {
             .ignore(["skip/**"])
             .extensions(Vec::<Extension>::new())
             .suppress_config_extensions(true)
-            .persist(true)
-            .persist_path(&cache)
+            .persist(Some(&cache))
             .poll_interval(Duration::from_millis(50))
             .build()
             .unwrap();
         assert!(db.query("SELECT * FROM a").is_ok());
         assert!(db.query("SELECT * FROM b").is_ok());
         assert_eq!(db.inner.poll_interval, Duration::from_millis(50));
+    }
+
+    #[test]
+    fn persist_none_enables_default_path() {
+        let resolved = DirSQL::builder()
+            .root("/tmp/x")
+            .persist(None::<&Path>)
+            .resolve()
+            .unwrap();
+        assert!(resolved.persist);
+        assert!(resolved.persist_path.is_none());
+    }
+
+    #[test]
+    fn persist_some_enables_explicit_path() {
+        let resolved = DirSQL::builder()
+            .root("/tmp/x")
+            .persist(Some("/tmp/x/custom.db"))
+            .resolve()
+            .unwrap();
+        assert!(resolved.persist);
+        assert_eq!(
+            resolved.persist_path,
+            Some(PathBuf::from("/tmp/x/custom.db"))
+        );
+    }
+
+    #[test]
+    fn persist_unset_leaves_persistence_off() {
+        let resolved = DirSQL::builder().root("/tmp/x").resolve().unwrap();
+        assert!(!resolved.persist);
+        assert!(resolved.persist_path.is_none());
     }
 
     /// A second persist build over the same root+cache finds a compatible
@@ -2673,8 +2733,7 @@ mod internal_tests {
                 "*.txt",
                 |_| vec![],
             )])
-            .persist(true)
-            .persist_path(&cache)
+            .persist(Some(&cache))
             .build()
             .unwrap();
         drop(first);
@@ -2685,8 +2744,7 @@ mod internal_tests {
                 "*.txt",
                 |_| vec![],
             )])
-            .persist(true)
-            .persist_path(&cache)
+            .persist(Some(&cache))
             .build()
             .unwrap();
         assert!(second.query("SELECT * FROM t").is_ok());
@@ -2846,10 +2904,44 @@ mod internal_tests {
         ))
         .unwrap();
         let dir = TempDir::new().unwrap();
-        let tables = build_tables_from_config(&cfg, dir.path(), dir.path()).unwrap();
+        let tables = build_tables_from_config(
+            &cfg,
+            dir.path(),
+            dir.path(),
+            command::DEFAULT_COMMAND_TIMEOUT,
+        )
+        .unwrap();
         assert_eq!(tables.len(), 2);
         assert_eq!((tables[0].extract)("/whatever").unwrap().len(), 1);
         assert!(tables[1].strict, "on-file table preserves strict flag");
+    }
+
+    #[test]
+    fn build_tables_from_config_uses_the_caller_supplied_timeout() {
+        // The timeout is now threaded in as an explicit argument rather than
+        // re-derived from `cfg.hook_timeout` inside the function; a table built
+        // from a config declaring its own `hook-timeout` must honor the value
+        // the caller passes, independent of the config key.
+        let cfg = config::load_config_str(concat!(
+            "[dirsql]\n",
+            "hook-timeout = 999\n\n",
+            "[[table]]\n",
+            "ddl = \"CREATE TABLE b (y TEXT)\"\n",
+            "glob = \"*.b\"\n",
+            "on-file = \"printf '[{\\\"y\\\":1}]'\"\n",
+        ))
+        .unwrap();
+        let dir = TempDir::new().unwrap();
+        let abs = dir.path().join("f.b");
+        let tables =
+            build_tables_from_config(&cfg, dir.path(), dir.path(), Duration::from_secs(5)).unwrap();
+        assert_eq!(tables.len(), 1);
+        // The passed timeout is generous, so the on-file command runs and its
+        // row is produced -- proving the argument path is live.
+        assert_eq!(
+            (tables[0].extract)(&abs.to_string_lossy()).unwrap().len(),
+            1
+        );
     }
 
     #[test]

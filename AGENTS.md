@@ -256,9 +256,17 @@ When adding a feature, the PR must include docs AND tests. When docs change, tes
 
 ### Changelog and Migrations
 
-**Every PR that touches public-facing SDK code must update `CHANGELOG.md`.** This is enforced in CI by `.github/workflows/changelog-check.yml`; an unmet gate blocks merge.
+**Every PR that touches public-facing SDK code must add a changelog entry.** This is enforced in CI by `.github/workflows/changelog-check.yml`; an unmet gate blocks merge.
 
 The scope is intentionally broad -- any change under SDK source (Rust core, Python/TS packages, binding crates, or top-level `Cargo.toml` / `Cargo.lock`) requires a changelog entry, excluding test-only files. We err toward requiring entries because the project does not yet strictly follow semver, so the changelog must carry the signal that semver would otherwise provide.
+
+**Write the entry as a fragment, not a `CHANGELOG.md` edit.** Editing `CHANGELOG.md` directly merge-conflicts with every other in-flight PR, so entries are added as one new file per PR:
+
+```
+changelog.d/<branch-slug>.<category>.md
+```
+
+`<branch-slug>` is the PR's branch name, lowercased and sanitized (the slug format testing-conventions uses for branch-keyed e2e receipts); `<category>` is one of `added` / `changed` / `deprecated` / `removed` / `fixed` / `security` (Keep a Changelog); the content is the entry body exactly as it would appear in `CHANGELOG.md` -- typically one bold-led bullet. Migration entries (see below) likewise go in `migrations.d/<branch-slug>.md`, one complete templated entry per file. At release time the fragments are assembled into the real files and deleted. During the transition (epic #561) the gate accepts either a fragment or a direct `CHANGELOG.md` edit; direct edits stop being accepted once release-time assembly lands, so always write the fragment.
 
 **Escape hatch.** If a PR genuinely has no observable change -- a pure refactor, an internal rename, a type-signature tidy with the same runtime -- bypass the gate by adding a trailer to any commit in the PR:
 
@@ -295,8 +303,8 @@ If a subsection does not apply, keep the heading and write `_None._`. Do not omi
 ```markdown
 ## Changelog / Migrations
 
-- [ ] `CHANGELOG.md` updated under `## [Unreleased]` (or: `skip-changelog` trailer on a commit with reason)
-- [ ] `MIGRATIONS.md` updated (or: not required -- additive/bugfix only)
+- [ ] Changelog fragment added under `changelog.d/` (or: `skip-changelog` trailer on a commit with reason)
+- [ ] Migration fragment added under `migrations.d/` (or: not required -- additive/bugfix only)
 ```
 
 Orchestrators must block merges of SDK-touching PRs that miss either file when required.

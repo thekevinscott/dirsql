@@ -72,6 +72,44 @@ def describe_run():
         assert rc == 1
         assert NO_ADDED_CONTENT_MESSAGE in capsys.readouterr().err
 
+    def passes_when_a_changelog_fragment_is_added(capsys):
+        changed_files = mock.Mock(
+            return_value=[
+                "packages/rust/src/lib.rs",
+                "changelog.d/claude-my-branch-abc123.changed.md",
+            ]
+        )
+        skip_trailers = mock.Mock(return_value="")
+        changelog_diff = mock.Mock()
+        rc = run(
+            "base",
+            "head",
+            changed_files=changed_files,
+            skip_trailers=skip_trailers,
+            changelog_diff=changelog_diff,
+        )
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "fragment" in out
+        assert "changelog.d/claude-my-branch-abc123.changed.md" in out
+        changelog_diff.assert_not_called()
+
+    def the_fragment_dir_readme_alone_does_not_satisfy_the_gate(capsys):
+        changed_files = mock.Mock(
+            return_value=["packages/rust/src/lib.rs", "changelog.d/README.md"]
+        )
+        skip_trailers = mock.Mock(return_value="")
+        changelog_diff = mock.Mock()
+        rc = run(
+            "base",
+            "head",
+            changed_files=changed_files,
+            skip_trailers=skip_trailers,
+            changelog_diff=changelog_diff,
+        )
+        assert rc == 1
+        assert MISSING_CHANGELOG_MESSAGE in capsys.readouterr().err
+
     def passes_when_changelog_has_added_content(capsys):
         changed_files = mock.Mock(
             return_value=["packages/rust/src/lib.rs", "CHANGELOG.md"]

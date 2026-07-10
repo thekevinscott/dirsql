@@ -154,10 +154,7 @@ mod python {
                         builder = builder.config(c);
                     }
                     if persist {
-                        builder = builder.persist(true);
-                    }
-                    if let Some(p) = persist_path {
-                        builder = builder.persist_path(p);
+                        builder = builder.persist(persist_path);
                     }
                     if !rust_extensions.is_empty() {
                         builder = builder.extensions(rust_extensions);

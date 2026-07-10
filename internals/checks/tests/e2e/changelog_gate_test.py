@@ -71,6 +71,35 @@ def describe_dirsql_checks_changelog_gate():
         assert proc.returncode == 1
         assert "SDK code changed" in proc.stderr
 
+    def it_exits_zero_when_a_changelog_fragment_is_added(repo):
+        tmp_path, base_sha = repo
+        rust_dir = tmp_path / "packages" / "rust" / "src"
+        rust_dir.mkdir(parents=True)
+        (rust_dir / "lib.rs").write_text("// code\n")
+        fragment_dir = tmp_path / "changelog.d"
+        fragment_dir.mkdir()
+        (fragment_dir / "claude-my-branch-abc123.changed.md").write_text(
+            "**Changed a thing.**\n"
+        )
+        head_sha = _commit(tmp_path, "add sdk code with fragment")
+
+        proc = subprocess.run(
+            [
+                _cli(),
+                "changelog-gate",
+                "--base-sha",
+                base_sha,
+                "--head-sha",
+                head_sha,
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+
     def it_exits_zero_when_the_changelog_gains_an_entry(repo):
         tmp_path, base_sha = repo
         rust_dir = tmp_path / "packages" / "rust" / "src"

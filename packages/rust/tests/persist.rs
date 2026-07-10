@@ -40,7 +40,7 @@ fn open(root: &Path, counter: Arc<AtomicUsize>) -> DirSQL {
     DirSQL::builder()
         .root(root)
         .table(counting_csv_table(counter))
-        .persist(true)
+        .persist(None::<&Path>)
         .build()
         .unwrap()
 }
@@ -79,8 +79,7 @@ fn custom_persist_path_is_honored() {
     let _db = DirSQL::builder()
         .root(root.path())
         .table(counting_csv_table(counter))
-        .persist(true)
-        .persist_path(&custom)
+        .persist(Some(&custom))
         .build()
         .unwrap();
 
@@ -105,8 +104,7 @@ fn persist_with_unopenable_path_errors() {
     let result = DirSQL::builder()
         .root(root.path())
         .table(counting_csv_table(counter))
-        .persist(true)
-        .persist_path(&bad_cache)
+        .persist(Some(&bad_cache))
         .build();
     let err = match result {
         Ok(_) => panic!("expected an error when the persist path's parent is a file"),
@@ -258,7 +256,7 @@ fn glob_config_change_forces_full_rebuild() {
     let db = DirSQL::builder()
         .root(root.path())
         .tables(vec![csv_table, tsv_table])
-        .persist(true)
+        .persist(None::<&Path>)
         .build()
         .unwrap();
 

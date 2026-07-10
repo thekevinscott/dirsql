@@ -34,9 +34,9 @@ struct Cli {
     command: Option<Command>,
 
     /// Path to the config file (default: `./.dirsql.toml`). The index is
-    /// rooted at the directory containing this file. When the file does
-    /// not exist, a default `files` table is served. Used by server mode
-    /// and by the `query` subcommand.
+    /// rooted at the invocation directory (cwd), not this file's location
+    /// (#540). When the file does not exist, a default `files` table is
+    /// served. Used by server mode and by the `query` subcommand.
     #[arg(short = 'c', long, default_value = "./.dirsql.toml", global = true)]
     config: PathBuf,
 
@@ -76,10 +76,7 @@ impl Cli {
     /// → persist at `<path>`.
     fn apply_persist(&self, mut builder: dirsql::DirSQLBuilder) -> dirsql::DirSQLBuilder {
         if let Some(path) = &self.persist {
-            builder = builder.persist(true);
-            if let Some(path) = path {
-                builder = builder.persist_path(path);
-            }
+            builder = builder.persist(path.as_ref());
         }
         builder
     }
