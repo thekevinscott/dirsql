@@ -5,18 +5,24 @@
 """Semantic search over local files with DuckDB.
 
 Usage:
-    uv run semsearch.py "how do I cook pasta?" [glob] [limit]
-
-Defaults: glob '**/*.md', limit 5.
+    uv run semsearch.py "how do I cook pasta?"
+    uv run semsearch.py "reviewing code" -g 'notes/**' -g 'docs/**/*.md' -n 3
 """
-import sys
+import argparse
 
 import duckdb
 from model2vec import StaticModel
 
-query = sys.argv[1]
-pattern = sys.argv[2] if len(sys.argv) > 2 else "**/*.md"
-limit = int(sys.argv[3]) if len(sys.argv) > 3 else 5
+parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+parser.add_argument("query", help="natural-language search query")
+parser.add_argument(
+    "-g",
+    "--glob",
+    action="append",
+    help="glob of files to search; repeatable (default: **/*.md)",
+)
+parser.add_argument("-n", "--limit", type=int, default=5, help="rows to return (default: 5)")
+args = parser.parse_args()
 
 model = StaticModel.from_pretrained("minishlab/potion-base-8M")
 
@@ -36,7 +42,7 @@ rows = con.execute(
     ORDER BY distance
     LIMIT ?
     """,
-    [query, pattern, limit],
+    [args.query, args.glob or ["**/*.md"], args.limit],
 ).fetchall()
 
 for filename, distance in rows:
