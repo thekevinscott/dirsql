@@ -4,13 +4,15 @@
 # ///
 """Semantic search over local files with DuckDB.
 
-Files are split into paragraphs, each paragraph is embedded separately, and a
-file is ranked by its best-matching paragraph (whole-document embeddings
-average long files into mush).
+Files are split into chunks (paragraphs by default), each chunk is embedded
+separately, and a file is ranked by its best-matching chunk (whole-document
+embeddings average long files into mush).
 
 Usage:
     uv run semsearch.py "how do I cook pasta?"
     uv run semsearch.py "reviewing code" -g 'notes/**' -g 'docs/**/*.md' -n 3
+    uv run semsearch.py "mock" --split '(?m)^#{1,6} '   # markdown sections
+    uv run semsearch.py "mock" --split none             # whole files
 """
 import argparse
 
@@ -26,6 +28,13 @@ parser.add_argument(
     help="glob of files to search; repeatable (default: **/*.md)",
 )
 parser.add_argument("-n", "--limit", type=int, default=5, help="rows to return (default: 5)")
+parser.add_argument(
+    "-s",
+    "--split",
+    default=r"\n[ \t]*\n",
+    help="regex to split files into chunks (RE2 syntax; default: blank lines), "
+    "or 'none' to embed each file whole",
+)
 args = parser.parse_args()
 
 model = StaticModel.from_pretrained("minishlab/potion-base-8M")
@@ -39,11 +48,17 @@ con.create_function(
 )
 needle = [float(x) for x in model.encode([args.query])[0]]
 
+if args.split == "none":
+    chunk_expr = "content AS chunk"
+    params = [args.glob or ["**/*.md"], needle, args.limit]
+else:
+    chunk_expr = "unnest(string_split_regex(content, ?)) AS chunk"
+    params = [args.split, args.glob or ["**/*.md"], needle, args.limit]
+
 rows = con.execute(
-    """
+    f"""
     WITH chunks AS (
-        SELECT filename,
-               unnest(string_split_regex(content, '\n[ \t]*\n')) AS chunk
+        SELECT filename, {chunk_expr}
         FROM read_text(?)
     ),
     scored AS (
@@ -60,7 +75,7 @@ rows = con.execute(
     ORDER BY distance
     LIMIT ?
     """,
-    [args.glob or ["**/*.md"], needle, args.limit],
+    params,
 ).fetchall()
 
 for filename, distance, chunk in rows:
