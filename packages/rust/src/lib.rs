@@ -1015,8 +1015,7 @@ impl DirSQLBuilder {
             // `on-file` commands run in the config file's directory; `{path}`
             // is the matched file's absolute path and `{root}` the resolved
             // index root.
-            let cfg_tables =
-                build_tables_from_config(&cfg, &cfg_parent, &root, hook_timeout)?;
+            let cfg_tables = build_tables_from_config(&cfg, &cfg_parent, &root, hook_timeout)?;
             tables.extend(cfg_tables);
             ignore.extend(cfg.ignore);
 
