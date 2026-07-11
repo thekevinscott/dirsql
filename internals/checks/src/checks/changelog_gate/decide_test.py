@@ -27,6 +27,26 @@ def describe_is_changelog_fragment():
     def the_changelog_itself_does_not_count():
         assert is_changelog_fragment("CHANGELOG.md") is False
 
+    def every_keep_a_changelog_category_counts():
+        for category in (
+            "added",
+            "changed",
+            "deprecated",
+            "removed",
+            "fixed",
+            "security",
+        ):
+            assert (
+                is_changelog_fragment(f"changelog.d/claude-my-branch.{category}.md")
+                is True
+            )
+
+    def a_fragment_without_a_category_suffix_does_not_count():
+        assert is_changelog_fragment("changelog.d/claude-my-branch.md") is False
+
+    def a_fragment_with_an_unknown_category_suffix_does_not_count():
+        assert is_changelog_fragment("changelog.d/claude-my-branch.bogus.md") is False
+
 
 def describe_changelog_fragments():
     def returns_only_fragment_paths():

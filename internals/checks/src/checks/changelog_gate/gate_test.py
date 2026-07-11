@@ -2,7 +2,6 @@ from unittest import mock
 
 from checks.changelog_gate.gate import (
     MISSING_CHANGELOG_MESSAGE,
-    NO_ADDED_CONTENT_MESSAGE,
     run,
 )
 
@@ -56,12 +55,12 @@ def describe_run():
         assert MISSING_CHANGELOG_MESSAGE in capsys.readouterr().err
         changelog_diff.assert_not_called()
 
-    def fails_when_changelog_touched_with_no_added_content(capsys):
+    def a_direct_changelog_edit_no_longer_satisfies_the_gate(capsys):
         changed_files = mock.Mock(
             return_value=["packages/rust/src/lib.rs", "CHANGELOG.md"]
         )
         skip_trailers = mock.Mock(return_value="")
-        changelog_diff = mock.Mock(return_value="+++ b/CHANGELOG.md\n")
+        changelog_diff = mock.Mock(return_value="+++ b/CHANGELOG.md\n+- new entry\n")
         rc = run(
             "base",
             "head",
@@ -70,7 +69,26 @@ def describe_run():
             changelog_diff=changelog_diff,
         )
         assert rc == 1
-        assert NO_ADDED_CONTENT_MESSAGE in capsys.readouterr().err
+        assert MISSING_CHANGELOG_MESSAGE in capsys.readouterr().err
+
+    def a_fragment_without_a_category_suffix_does_not_satisfy_the_gate(capsys):
+        changed_files = mock.Mock(
+            return_value=[
+                "packages/rust/src/lib.rs",
+                "changelog.d/claude-my-branch.md",
+            ]
+        )
+        skip_trailers = mock.Mock(return_value="")
+        changelog_diff = mock.Mock()
+        rc = run(
+            "base",
+            "head",
+            changed_files=changed_files,
+            skip_trailers=skip_trailers,
+            changelog_diff=changelog_diff,
+        )
+        assert rc == 1
+        assert MISSING_CHANGELOG_MESSAGE in capsys.readouterr().err
 
     def passes_when_a_changelog_fragment_is_added(capsys):
         changed_files = mock.Mock(
@@ -110,18 +128,3 @@ def describe_run():
         assert rc == 1
         assert MISSING_CHANGELOG_MESSAGE in capsys.readouterr().err
 
-    def passes_when_changelog_has_added_content(capsys):
-        changed_files = mock.Mock(
-            return_value=["packages/rust/src/lib.rs", "CHANGELOG.md"]
-        )
-        skip_trailers = mock.Mock(return_value="")
-        changelog_diff = mock.Mock(return_value="+++ b/CHANGELOG.md\n+- new entry\n")
-        rc = run(
-            "base",
-            "head",
-            changed_files=changed_files,
-            skip_trailers=skip_trailers,
-            changelog_diff=changelog_diff,
-        )
-        assert rc == 0
-        assert "updated with 1 added line(s). OK." in capsys.readouterr().out

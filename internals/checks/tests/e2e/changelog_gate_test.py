@@ -100,7 +100,7 @@ def describe_dirsql_checks_changelog_gate():
 
         assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
 
-    def it_exits_zero_when_the_changelog_gains_an_entry(repo):
+    def it_exits_nonzero_when_only_the_changelog_file_is_edited(repo):
         tmp_path, base_sha = repo
         rust_dir = tmp_path / "packages" / "rust" / "src"
         rust_dir.mkdir(parents=True)
@@ -123,4 +123,5 @@ def describe_dirsql_checks_changelog_gate():
             timeout=30,
         )
 
-        assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        assert proc.returncode == 1, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        assert "fragment" in proc.stderr

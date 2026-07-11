@@ -54,7 +54,7 @@ def describe_run_against_a_real_repo():
         assert run(base_sha, head_sha) == 1
         assert "SDK code changed" in capsys.readouterr().err
 
-    def it_passes_when_the_changelog_gains_an_entry(repo, capsys):
+    def it_fails_when_only_the_changelog_file_is_edited(repo, capsys):
         tmp_path, base_sha = repo
         rust_dir = tmp_path / "packages" / "rust" / "src"
         rust_dir.mkdir(parents=True)
@@ -62,8 +62,78 @@ def describe_run_against_a_real_repo():
         (tmp_path / "CHANGELOG.md").write_text("## [Unreleased]\n- Added a thing\n")
         head_sha = _commit("add sdk code with changelog")
 
+        assert run(base_sha, head_sha) == 1
+        assert "fragment" in capsys.readouterr().err
+
+    def it_fails_when_the_changelog_fragment_has_no_category_suffix(repo, capsys):
+        tmp_path, base_sha = repo
+        rust_dir = tmp_path / "packages" / "rust" / "src"
+        rust_dir.mkdir(parents=True)
+        (rust_dir / "lib.rs").write_text("// code\n")
+        fragment_dir = tmp_path / "changelog.d"
+        fragment_dir.mkdir()
+        (fragment_dir / "claude-my-branch-abc123.md").write_text(
+            "**Changed a thing.**\n"
+        )
+        head_sha = _commit("add sdk code with suffixless fragment")
+
+        assert run(base_sha, head_sha) == 1
+        assert "fragment" in capsys.readouterr().err
+
+    def it_fails_when_the_changelog_fragment_is_empty(repo, capsys):
+        tmp_path, base_sha = repo
+        rust_dir = tmp_path / "packages" / "rust" / "src"
+        rust_dir.mkdir(parents=True)
+        (rust_dir / "lib.rs").write_text("// code\n")
+        fragment_dir = tmp_path / "changelog.d"
+        fragment_dir.mkdir()
+        (fragment_dir / "claude-my-branch-abc123.changed.md").write_text("   \n")
+        head_sha = _commit("add sdk code with empty fragment")
+
+        assert run(base_sha, head_sha) == 1
+        assert "claude-my-branch-abc123.changed.md" in capsys.readouterr().err
+
+    def it_fails_when_a_migrations_fragment_misses_template_subsections(repo, capsys):
+        tmp_path, base_sha = repo
+        rust_dir = tmp_path / "packages" / "rust" / "src"
+        rust_dir.mkdir(parents=True)
+        (rust_dir / "lib.rs").write_text("// code\n")
+        (tmp_path / "changelog.d").mkdir()
+        (tmp_path / "changelog.d" / "claude-my-branch-abc123.changed.md").write_text(
+            "**Changed a thing.**\n"
+        )
+        (tmp_path / "migrations.d").mkdir()
+        (tmp_path / "migrations.d" / "claude-my-branch-abc123.md").write_text(
+            "### A breaking change\n\n#### Summary\n\nBroke a thing.\n"
+        )
+        head_sha = _commit("add sdk code with malformed migrations fragment")
+
+        assert run(base_sha, head_sha) == 1
+        assert "claude-my-branch-abc123.md" in capsys.readouterr().err
+
+    def it_passes_when_a_complete_migrations_fragment_accompanies_the_changelog(
+        repo, capsys
+    ):
+        tmp_path, base_sha = repo
+        rust_dir = tmp_path / "packages" / "rust" / "src"
+        rust_dir.mkdir(parents=True)
+        (rust_dir / "lib.rs").write_text("// code\n")
+        (tmp_path / "changelog.d").mkdir()
+        (tmp_path / "changelog.d" / "claude-my-branch-abc123.changed.md").write_text(
+            "**Changed a thing.**\n"
+        )
+        (tmp_path / "migrations.d").mkdir()
+        (tmp_path / "migrations.d" / "claude-my-branch-abc123.md").write_text(
+            "### A breaking change\n\n"
+            "#### Summary\n\nBroke a thing.\n\n"
+            "#### Required changes\n\n_None._\n\n"
+            "#### Deprecations removed\n\n_None._\n\n"
+            "#### Behavior changes without code changes\n\n_None._\n\n"
+            "#### Verification\n\n_None._\n"
+        )
+        head_sha = _commit("add sdk code with complete migrations fragment")
+
         assert run(base_sha, head_sha) == 0
-        assert "updated with" in capsys.readouterr().out
 
     def it_passes_when_a_changelog_fragment_is_added(repo, capsys):
         tmp_path, base_sha = repo
