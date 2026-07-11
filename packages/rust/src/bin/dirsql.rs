@@ -34,9 +34,9 @@ struct Cli {
     command: Option<Command>,
 
     /// Path to the config file (default: `./.dirsql.toml`). The index is
-    /// rooted at the directory containing this file. When the file does
-    /// not exist, a default `files` table is served. Used by server mode
-    /// and by the `query` subcommand.
+    /// rooted at the invocation directory (cwd), not this file's location
+    /// (#540). When the file does not exist, a default `files` table is
+    /// served. Used by server mode and by the `query` subcommand.
     #[arg(short = 'c', long, default_value = "./.dirsql.toml", global = true)]
     config: PathBuf,
 
@@ -238,9 +238,10 @@ fn load_state(cli: &Cli) -> AppState {
         return load_default_state(cli, config_path);
     }
 
-    // Canonicalize so the root (derived from the config's parent) is
-    // absolute — `notify` has surprising behavior when watching relative
-    // paths like `./`.
+    // Canonicalize so config-relative paths (extension libraries, hook
+    // working directories) resolve against an absolute parent — `notify` and
+    // the hook subprocesses misbehave with relative paths like `./`. The
+    // index root itself is the invocation cwd (#540), not derived from here.
     let resolved = match config_path.canonicalize() {
         Ok(p) => p,
         Err(err) => {

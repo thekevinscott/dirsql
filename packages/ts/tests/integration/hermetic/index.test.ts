@@ -129,10 +129,10 @@ describe("DirSQL construction", () => {
   });
 
   it("rejects ready when the core scan fails, and query surfaces the same error", async () => {
-    openAsync.mockRejectedValue(new Error("no root directory"));
+    openAsync.mockRejectedValue(new Error("core scan failed"));
     const db = new DirSQL({});
-    await expect(db.ready).rejects.toThrow("no root directory");
-    await expect(db.query("SELECT 1")).rejects.toThrow("no root directory");
+    await expect(db.ready).rejects.toThrow("core scan failed");
+    await expect(db.query("SELECT 1")).rejects.toThrow("core scan failed");
   });
 });
 

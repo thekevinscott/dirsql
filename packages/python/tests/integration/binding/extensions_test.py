@@ -72,7 +72,7 @@ def describe_config_file_extensions():
         cfg_path = os.path.join(tmp_dir, ".dirsql.toml")
         with open(cfg_path, "w") as f:
             f.write('[[dirsql.extension]]\npath = "missing-extension.so"\n')
-        db = DirSQL(config=cfg_path)
+        db = DirSQL(root=tmp_dir, config=cfg_path)
         with pytest.raises(Exception) as excinfo:
             await db.ready()
         assert "failed to load extension" in str(excinfo.value)

@@ -96,8 +96,8 @@ describe("DirSQL config-file extension by package name (#313)", () => {
   });
 
   it("resolves, loads, and calls a config extension referenced by package name", async () => {
-    // The config names the extension by bare package name; its root defaults
-    // to the config file's parent directory.
+    // The config names the extension by bare package name; the index root is
+    // set explicitly to the directory holding the config and its data.
     const root = join(tmp, "root");
     mkdirSync(root);
     const config = join(root, ".dirsql.toml");
@@ -106,7 +106,7 @@ describe("DirSQL config-file extension by package name (#313)", () => {
       `[[dirsql.extension]]\npath = "${pkgName}"\nentrypoint = "sqlite3_extension_init"\n`,
     );
 
-    const db = new DirSQL(config);
+    const db = new DirSQL({ root, config });
     await db.ready;
     expect(await db.query("SELECT dirsql_testext_answer() AS a")).toEqual([
       { a: 42 },
