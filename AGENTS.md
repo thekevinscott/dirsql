@@ -339,6 +339,15 @@ Run `cargo bench -p dirsql` after significant changes to the Rust codebase. Not 
 
 ### PR Monitoring
 
+Merge gating is via **pr-monitor** (`thekevinscott/pr-monitor@v1`, `.github/workflows/pr-monitor.yml`): the **`CI Gate`** check is an *aggregator*, not a test — it polls every *other* workflow run on the PR and is the single check the merge waits on. Any red among the others turns `CI Gate` red; there is no named-required-checks allowlist in branch protection, so *any* CI/workflow change (renaming/adding/removing a job or check in any `.github/workflows/*.yml`) needs no branch-protection coordination and can't orphan a required check — don't flag that concern.
+
+**When `CI Gate` is red, read its log's last line before acting** — it disambiguates two very different causes:
+
+- `Non-passing runs: ["<Workflow> (failure | startup_failure)"]` → a **real** red in `<Workflow>`; `CI Gate` is only reporting it. A `startup_failure` produces *no separate check-run*, so `CI Gate` can look like the **only** red while masking the actual failure (e.g. a `conventions.yml` input the `@v0` tag no longer defines). Fix/re-run **that** workflow — re-triggering `CI Gate` alone won't help.
+- a **timeout** (it waits up to 20 min for slow jobs like Release Precheck) or "still in progress" → a flake. **Re-trigger `CI Gate`** (re-run the PR Monitor run, or push any commit) once the underlying jobs have finished; it then reads them green. This is the common "`CI Gate` is the lone red → re-run → all green" case.
+
+A green `CI Gate` therefore means the whole PR is green.
+
 When monitoring PRs to get them across the finish line (shepherding to green):
 
 1. **Watch for merge conflicts** in addition to CI status. If a PR becomes unmergeable due to conflicts, immediately flag and work to resolve.
