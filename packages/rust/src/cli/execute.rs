@@ -68,14 +68,22 @@ pub async fn execute_query(
     state: &AppState,
     raw_body: String,
     timeout: Duration,
-    pre_query: Option<&PreQuery>,
-    post_query: Option<&PostQuery>,
+    pre_query: &[PreQuery],
+    post_query: &[PostQuery],
 ) -> Result<Value, QueryFailure> {
-    // Resolve the SQL to run. With a `pre-query` hook the raw body is
-    // rewritten by the command; without one it is parsed as `{"sql": …}`.
-    let sql = match pre_query {
-        Some(pq) => run_pre_query(pq, raw_body).await?,
-        None => parse_sql_body(&raw_body)?,
+    // Resolve the SQL to run. A `pre-query` chain pipes the raw body FIFO
+    // through each stage (body → stage₁ → … → SQL), each stage receiving the
+    // previous stage's output as its `{args}`; with no stage the body is parsed
+    // as `{"sql": …}`. A failing stage fails the request (its `?` short-circuits
+    // the chain).
+    let sql = if pre_query.is_empty() {
+        parse_sql_body(&raw_body)?
+    } else {
+        let mut payload = raw_body;
+        for pq in pre_query {
+            payload = run_pre_query(pq, payload).await?;
+        }
+        payload
     };
 
     let db = require_ready(state)?;
@@ -86,9 +94,17 @@ pub async fn execute_query(
     match join {
         Ok(Ok(Ok(rows))) => {
             let rows_json = rows_to_json(&rows);
-            match post_query {
-                Some(pq) => run_post_query(pq, rows_json).await,
-                None => Ok(Value::Array(rows_json)),
+            // A `post-query` chain pipes the rows FIFO through each stage
+            // (rows → stage₁ → … → response), each stage receiving the previous
+            // stage's output; with no stage the rows return as-is.
+            if post_query.is_empty() {
+                Ok(Value::Array(rows_json))
+            } else {
+                let mut payload = Value::Array(rows_json);
+                for pq in post_query {
+                    payload = run_post_query(pq, payload).await?;
+                }
+                Ok(payload)
             }
         }
         Ok(Ok(Err(err))) => Err(classify_query_error(err)),
@@ -162,18 +178,19 @@ async fn run_pre_query(pq: &PreQuery, raw_body: String) -> Result<String, QueryF
         .map_err(|err| QueryFailure::Internal(err.to_string()))
 }
 
-/// Run the `post-query` hook over a successful result set and return the JSON
-/// body it prints. The rows are serialized to a JSON array and delivered two
-/// ways: always on the child's stdin (unbounded, injection-safe), and as the
-/// `{args}` placeholder when the payload is within [`POST_QUERY_ARGS_MAX`]
-/// (beyond that `{args}` is emptied and a warning names the size, directing
-/// the operator to stdin — never silent truncation). The command's last
-/// non-empty stdout line is parsed as JSON and returned as the result;
-/// anything that isn't valid JSON, or any failure (non-zero exit, timeout,
-/// spawn error), maps to `Internal`.
-async fn run_post_query(pq: &PostQuery, rows: Vec<Value>) -> Result<Value, QueryFailure> {
+/// Run one `post-query` stage over its `input` JSON and return the JSON body it
+/// prints. `input` is the serialized result rows for the first stage, or the
+/// previous stage's output thereafter. It is serialized and delivered two ways:
+/// always on the child's stdin (unbounded, injection-safe), and as the `{args}`
+/// placeholder when the payload is within [`POST_QUERY_ARGS_MAX`] (beyond that
+/// `{args}` is emptied and a warning names the size, directing the operator to
+/// stdin — never silent truncation). The command's last non-empty stdout line
+/// is parsed as JSON and returned as the result; anything that isn't valid
+/// JSON, or any failure (non-zero exit, timeout, spawn error), maps to
+/// `Internal`.
+async fn run_post_query(pq: &PostQuery, input: Value) -> Result<Value, QueryFailure> {
     let payload =
-        serde_json::to_string(&rows).map_err(|err| QueryFailure::Internal(err.to_string()))?;
+        serde_json::to_string(&input).map_err(|err| QueryFailure::Internal(err.to_string()))?;
     let command = pq.command.clone();
     let config_dir = pq.config_dir.clone();
     let timeout = pq.timeout;
