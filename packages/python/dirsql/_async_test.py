@@ -119,7 +119,7 @@ def describe_DirSQL_async():
                 ),
                 patch.object(
                     async_mod,
-                    "resolve_config_extension_specs",
+                    "resolve_configs_extension_specs",
                     return_value=[{"path": "/env/pkg/ext.so", "entrypoint": "init"}],
                 ) as config_resolver,
             ):
@@ -129,7 +129,7 @@ def describe_DirSQL_async():
                 )
                 await db.ready()
 
-                config_resolver.assert_called_once_with("/cfg/.dirsql.toml")
+                config_resolver.assert_called_once_with(["/cfg/.dirsql.toml"])
                 assert db._db.extensions == [
                     {"path": "R:ext/a.so", "entrypoint": None},
                     {"path": "/env/pkg/ext.so", "entrypoint": "init"},
@@ -142,7 +142,7 @@ def describe_DirSQL_async():
                 patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
                 patch.object(
                     async_mod,
-                    "resolve_config_extension_specs",
+                    "resolve_configs_extension_specs",
                     return_value=[{"path": "/env/pkg/ext.so", "entrypoint": None}],
                 ),
             ):
@@ -159,13 +159,13 @@ def describe_DirSQL_async():
             with (
                 patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
                 patch.object(
-                    async_mod, "resolve_config_extension_specs", return_value=None
+                    async_mod, "resolve_configs_extension_specs", return_value=None
                 ) as config_resolver,
             ):
                 db = async_mod.DirSQL(config="/cfg/.dirsql.toml")
                 await db.ready()
 
-                config_resolver.assert_called_once_with("/cfg/.dirsql.toml")
+                config_resolver.assert_called_once_with(["/cfg/.dirsql.toml"])
                 assert db._db.extensions is None
                 assert db._db.suppress_config_extensions is False
 
@@ -174,7 +174,7 @@ def describe_DirSQL_async():
             with (
                 patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
                 patch.object(
-                    async_mod, "resolve_config_extension_specs"
+                    async_mod, "resolve_configs_extension_specs"
                 ) as config_resolver,
             ):
                 db = async_mod.DirSQL("/tmp/root")
@@ -182,6 +182,20 @@ def describe_DirSQL_async():
 
                 config_resolver.assert_not_called()
                 assert db._db.suppress_config_extensions is False
+
+        @pytest.mark.asyncio
+        async def it_forwards_a_list_of_configs_and_resolves_across_them():
+            with (
+                patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
+                patch.object(
+                    async_mod, "resolve_configs_extension_specs", return_value=None
+                ) as config_resolver,
+            ):
+                db = async_mod.DirSQL(config=["/a.toml", "/b.toml"])
+                await db.ready()
+
+                config_resolver.assert_called_once_with(["/a.toml", "/b.toml"])
+                assert db._db.config == ["/a.toml", "/b.toml"]
 
         @pytest.mark.asyncio
         async def it_awaits_readiness_when_query_is_called_before_ready():

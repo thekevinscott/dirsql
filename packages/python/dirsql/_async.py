@@ -4,7 +4,7 @@ import asyncio
 import os
 
 from dirsql._dirsql import DirSQL as _RustDirSQL
-from dirsql.resolve_config_extensions import resolve_config_extension_specs
+from dirsql.resolve_config_extensions import resolve_configs_extension_specs
 from dirsql.resolve_extension import resolve_extension_path
 
 
@@ -85,6 +85,15 @@ class DirSQL:
         self._tables = tables
         self._ignore = ignore
         self._config = config
+        # A single path or a list of paths; the list merges in order (each
+        # config's [[table]] / ignore / [[dirsql.extension]] accumulate).
+        self._config_paths = (
+            []
+            if config is None
+            else [config]
+            if isinstance(config, str)
+            else list(config)
+        )
         self._persist = persist
         self._persist_path = persist_path
         self._extensions = extensions
@@ -116,8 +125,8 @@ class DirSQL:
         """
         extensions = self._resolved_extensions()
         suppress = False
-        if self._config is not None:
-            config_extensions = resolve_config_extension_specs(self._config)
+        if self._config_paths:
+            config_extensions = resolve_configs_extension_specs(self._config_paths)
             if config_extensions is not None:
                 extensions = [*(extensions or []), *config_extensions]
                 suppress = True
@@ -125,7 +134,7 @@ class DirSQL:
             self._root,
             tables=self._tables,
             ignore=self._ignore,
-            config=self._config,
+            config=self._config_paths or None,
             persist=self._persist,
             persist_path=self._persist_path,
             extensions=extensions,
