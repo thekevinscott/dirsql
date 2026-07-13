@@ -25,6 +25,8 @@ Default to no comments. Only add one when the WHY is non-obvious -- a hidden con
 
 ## CI Workflows
 
+**Every CI check emits actionable fix instructions on failure.** A failing check must tell the contributor exactly what to change -- the file, command, or trailer to add or edit -- not merely which rule was violated. When a check can detect a *near-miss* (a fix was attempted but malformed), it names the specific defect and how to correct it rather than falling through to a generic "not satisfied" message (e.g. the `changelog-gate` reports a `skip-changelog:` line that git did not parse as a trailer, instead of the generic "no changelog entry"; dirsql#582).
+
 **CI logic lives in scripts, not workflow YAML.** `run:` / `github-script` steps stay trivial glue -- check out, set up a toolchain, invoke one command. Anything with iteration, `case` dispatch, conditionals, or text-munging moves to a check in the `internals/checks` uv package (a click group, one subcommand per check -- see `internals/checks/src/checks/`), invoked as a one-liner (`uv run --project internals/checks dirsql-checks <check>`), and carries **colocated unit tests** (the same testing-conventions standard as the rest of the tree -- `foo.py` ↔ `foo_test.py`). Those tests run under `conventions.yml`'s `internals-checks` job (`unit-coverage` enforces a 100% floor; see "Enforcing Colocation" below for the full gate list). Inline workflow logic is untestable, un-runnable locally, and silently duplicated across runners; a script is none of those.
 
 ### Reusable-workflow gates (testing-conventions): adoption & debugging
@@ -276,6 +278,8 @@ skip-changelog: <reason>
 
 The reason is logged to CI and stays in git history, so the decision is auditable. Use this sparingly; when in doubt, write the changelog entry.
 
+**`skip-changelog:` must be a real git trailer** -- in the **last** paragraph of the commit message, with **no blank line** separating it from the other trailers (`Co-Authored-By:`, `Claude-Session:`). A blank line splits it into its own paragraph, git stops treating it as a trailer, and the gate silently sees no bypass (it now reports this specific malformation rather than the generic "no entry" -- dirsql#582). Correct: `skip-changelog: <reason>` immediately above/below the other trailers in one contiguous block.
+
 Every entry goes under `## [Unreleased]`, categorized per [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`.
 
 **`MIGRATIONS.md` is additionally required when a PR:**
@@ -326,6 +330,11 @@ Orchestrators must block merges of SDK-touching PRs that don't update `PARITY.md
 Run `cargo bench -p dirsql` after significant changes to the Rust codebase. Not in CI -- local only. Covers: SQLite operations, directory scanning, row diffing, glob matching. Use to catch performance regressions before merging.
 
 ## Git and GitHub Workflows
+
+### PR Sizing and Issues
+
+- **Every PR is M or smaller.** A change larger than M is broken into a sequence of smaller PRs, each independently reviewable and mergeable. Size by review surface, not raw line count -- a mechanical rename spanning many files can be M, while a subtle core change of far fewer lines may not be.
+- **Every PR is accompanied by a GitHub issue it auto-closes.** Put a closing keyword (`Fixes #<n>` / `Closes #<n>`) in the PR body so the issue closes on merge; file the issue first if one does not exist yet.
 
 ### Merge Conflict Resolution
 

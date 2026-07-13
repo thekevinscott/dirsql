@@ -1,6 +1,7 @@
 from checks.changelog_gate.decide import (
     any_sdk_code_changed,
     changelog_fragments,
+    contains_skip_changelog_line,
     count_added_lines,
     extract_skip_trailers,
     is_changelog_fragment,
@@ -112,6 +113,29 @@ def describe_extract_skip_trailers():
 
     def returns_empty_list_for_whitespace_only_output():
         assert extract_skip_trailers("\n\n") == []
+
+
+def describe_contains_skip_changelog_line():
+    def detects_a_skip_changelog_line():
+        assert (
+            contains_skip_changelog_line("feat: x\n\nskip-changelog: internal\n")
+            is True
+        )
+
+    def detects_it_case_insensitively_and_indented():
+        assert contains_skip_changelog_line("   Skip-Changelog: why\n") is True
+
+    def false_when_no_skip_changelog_present():
+        assert (
+            contains_skip_changelog_line("feat: x\n\nCo-Authored-By: a <a@b.c>\n")
+            is False
+        )
+
+    def false_for_empty_input():
+        assert contains_skip_changelog_line("") is False
+
+    def a_mention_mid_line_does_not_count():
+        assert contains_skip_changelog_line("see the skip-changelog: docs\n") is False
 
 
 def describe_count_added_lines():

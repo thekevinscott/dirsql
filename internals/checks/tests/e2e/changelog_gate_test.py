@@ -71,6 +71,35 @@ def describe_dirsql_checks_changelog_gate():
         assert proc.returncode == 1
         assert "SDK code changed" in proc.stderr
 
+    def it_names_a_malformed_skip_changelog_trailer(repo):
+        tmp_path, base_sha = repo
+        rust_dir = tmp_path / "packages" / "rust" / "src"
+        rust_dir.mkdir(parents=True)
+        (rust_dir / "lib.rs").write_text("// code\n")
+        # blank line splits `skip-changelog:` out of the final trailer block
+        head_sha = _commit(
+            tmp_path,
+            "feat: a change\n\nskip-changelog: internal\n\nCo-Authored-By: x <x@y.z>",
+        )
+
+        proc = subprocess.run(
+            [
+                _cli(),
+                "changelog-gate",
+                "--base-sha",
+                base_sha,
+                "--head-sha",
+                head_sha,
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert proc.returncode == 1, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        assert "did not parse it as a trailer" in proc.stderr
+
     def it_exits_zero_when_a_changelog_fragment_is_added(repo):
         tmp_path, base_sha = repo
         rust_dir = tmp_path / "packages" / "rust" / "src"
