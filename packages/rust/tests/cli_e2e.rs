@@ -1055,6 +1055,50 @@ glob = "**/*"
 }
 
 #[test]
+fn explicit_config_without_include_default_suppresses_the_baked_in_files() {
+    // #604 row 3: an explicit `-c` WITHOUT `--include-default` keeps the
+    // replacement semantics of #602 — the baked-in default is suppressed, so
+    // only the config's own tables exist. This is what makes --include-default
+    // meaningful (it opts the default back IN) and pins the flag's condition.
+    let root = blog_fixture(); // `.dirsql.toml` defines `posts`, never `files`
+
+    let posts = run_query_subcommand_with_config(root.path(), "SELECT COUNT(*) AS n FROM posts");
+    assert!(
+        posts.status.success(),
+        "the explicit config's `posts` table must load, got {posts:?}"
+    );
+
+    let files = run_query_subcommand_with_config(root.path(), "SELECT COUNT(*) AS n FROM files");
+    assert!(
+        !files.status.success(),
+        "an explicit `-c` without --include-default must suppress the baked-in \
+         `files` table, got {files:?}"
+    );
+    let stderr = String::from_utf8(files.stderr).unwrap();
+    assert!(
+        stderr.contains("files"),
+        "the error should name the absent `files` table, got {stderr:?}"
+    );
+}
+
+#[test]
+fn include_default_is_hidden_from_help() {
+    // #604: `--include-default` is internal launcher plumbing, not a public
+    // flag — it must not appear in `--help`.
+    let out = std::process::Command::cargo_bin("dirsql")
+        .expect("binary must exist")
+        .arg("--help")
+        .output()
+        .expect("spawning `dirsql --help` failed");
+    assert!(out.status.success(), "`--help` must exit 0, got {out:?}");
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        !stdout.contains("--include-default"),
+        "the internal --include-default flag must be hidden from --help, got:\n{stdout}"
+    );
+}
+
+#[test]
 fn init_output_loads_when_passed_explicitly_with_config_flag() {
     // #602: `dirsql init` remains a scaffold, but its output no longer
     // auto-loads — you pass it explicitly with `-c`. Write the starter, then
