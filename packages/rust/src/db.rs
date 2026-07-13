@@ -1509,6 +1509,24 @@ mod tests {
     }
 
     #[test]
+    fn open_sets_wal_journal_mode_and_normal_synchronous() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = Db::open(&dir.path().join("cache.db")).unwrap();
+
+        let mode: String = db
+            .conn()
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal", "Db::open must set journal_mode=WAL");
+
+        let synchronous: i64 = db
+            .conn()
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(synchronous, 1, "Db::open must set synchronous=NORMAL (1)");
+    }
+
+    #[test]
     fn is_virtual_table_ddl_detects_variants() {
         assert!(is_virtual_table_ddl("CREATE VIRTUAL TABLE x USING vec0(a)"));
         assert!(is_virtual_table_ddl(
