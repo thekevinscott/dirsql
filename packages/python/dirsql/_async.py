@@ -88,7 +88,11 @@ class DirSQL:
         # A single path or a list of paths; the list merges in order (each
         # config's [[table]] / ignore / [[dirsql.extension]] accumulate).
         self._config_paths = (
-            [] if config is None else [config] if isinstance(config, str) else list(config)
+            []
+            if config is None
+            else [config]
+            if isinstance(config, str)
+            else list(config)
         )
         self._persist = persist
         self._persist_path = persist_path
