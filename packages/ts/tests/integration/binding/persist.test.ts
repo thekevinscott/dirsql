@@ -36,12 +36,12 @@ async function corruptCache(cachePath: string, sql: string): Promise<void> {
   // sql.js reads the raw binary file and doesn't understand WAL mode.
   // Delete the sidecar files so sql.js reads a clean database file.
   try {
-    await unlink(cachePath + "-wal");
+    await unlink(`${cachePath}-wal`);
   } catch {
     // File might not exist if WAL hasn't created sidecar yet
   }
   try {
-    await unlink(cachePath + "-shm");
+    await unlink(`${cachePath}-shm`);
   } catch {
     // File might not exist if WAL hasn't created sidecar yet
   }
