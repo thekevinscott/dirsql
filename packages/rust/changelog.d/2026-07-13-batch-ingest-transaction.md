@@ -1,0 +1,1 @@
+**Fixed** Persist-cache rebuilds and watch-event updates now commit in a single SQLite transaction instead of once per row, eliminating the ~100x write amplification and fsync-bound rebuild times on slow storage (#595). A build that fails midway now rolls back cleanly instead of leaving partially ingested rows in the cache.
