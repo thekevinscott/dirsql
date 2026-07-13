@@ -33,12 +33,15 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 
-    /// Path to the config file (default: `./.dirsql.toml`). The index is
-    /// rooted at the invocation directory (cwd), not this file's location
-    /// (#540). When the file does not exist, a default `files` table is
-    /// served. Used by server mode and by the `query` subcommand.
-    #[arg(short = 'c', long, default_value = "./.dirsql.toml", global = true)]
-    config: PathBuf,
+    /// Path to a config file. **Repeatable** (`-c a -c b`): the configs load
+    /// and merge in argv order -- their `[[table]]`, `ignore`, and
+    /// `[[dirsql.extension]]` entries accumulate, and their `pre-query` /
+    /// `post-query` hooks chain FIFO. With none given, `./.dirsql.toml` is used;
+    /// when that file does not exist, a default `files` table is served. The
+    /// index is rooted at the invocation directory (cwd), not a config's
+    /// location (#540). Used by server mode and by the `query` subcommand.
+    #[arg(short = 'c', long, global = true)]
+    config: Vec<PathBuf>,
 
     /// Bind address. Used when no subcommand is given.
     #[arg(long, default_value = "localhost")]
@@ -79,6 +82,16 @@ impl Cli {
             builder = builder.persist(path.as_ref());
         }
         builder
+    }
+
+    /// The effective config paths: those passed via `-c`/`--config`, or the
+    /// single default `./.dirsql.toml` when none were given.
+    fn config_paths(&self) -> Vec<PathBuf> {
+        if self.config.is_empty() {
+            vec![PathBuf::from("./.dirsql.toml")]
+        } else {
+            self.config.clone()
+        }
     }
 }
 
@@ -138,8 +151,8 @@ async fn main() -> ExitCode {
 /// stderr with a non-zero exit.
 async fn run_query(cli: &Cli, args: QueryArgs) -> ExitCode {
     let state = load_state(cli);
-    let pre_query = load_pre_query(cli);
-    let post_query = load_post_query(cli);
+    let pre_query = load_pre_queries(cli);
+    let post_query = load_post_queries(cli);
     // Same default the server binds with; the pipeline enforces it.
     let timeout = ServerConfig::default().query_timeout;
 
@@ -147,8 +160,8 @@ async fn run_query(cli: &Cli, args: QueryArgs) -> ExitCode {
         &state,
         query_body(&args.sql),
         timeout,
-        pre_query.as_ref(),
-        post_query.as_ref(),
+        &pre_query,
+        &post_query,
     )
     .await
     {
@@ -200,10 +213,10 @@ fn run_init(args: InitArgs) -> ExitCode {
 async fn run_server(cli: Cli) -> ExitCode {
     let state = load_state(&cli);
     let mut server_config = ServerConfig::bind(cli.host.clone(), cli.port);
-    if let Some(pre_query) = load_pre_query(&cli) {
+    for pre_query in load_pre_queries(&cli) {
         server_config = server_config.with_pre_query(pre_query);
     }
-    if let Some(post_query) = load_post_query(&cli) {
+    for post_query in load_post_queries(&cli) {
         server_config = server_config.with_post_query(post_query);
     }
 
@@ -231,33 +244,38 @@ async fn run_server(cli: Cli) -> ExitCode {
 }
 
 fn load_state(cli: &Cli) -> AppState {
-    let config_path = &cli.config;
-    if !config_path.exists() {
-        // No config: serve a default `files` table so dirsql is queryable
-        // out of the box. A config file, when present, fully overrules this.
-        return load_default_state(cli, config_path);
+    let configs = cli.config_paths();
+
+    // Zero-config default: no `-c` was given and the implicit `./.dirsql.toml`
+    // is absent -> serve a default `files` table so dirsql is queryable out of
+    // the box. An explicitly-passed config that is missing degrades below.
+    if cli.config.is_empty() && !configs[0].exists() {
+        return load_default_state(cli, &configs[0]);
     }
 
-    // Canonicalize so config-relative paths (extension libraries, hook
-    // working directories) resolve against an absolute parent — `notify` and
-    // the hook subprocesses misbehave with relative paths like `./`. The
-    // index root itself is the invocation cwd (#540), not derived from here.
-    let resolved = match config_path.canonicalize() {
-        Ok(p) => p,
-        Err(err) => {
-            return AppState::Unavailable(format!(
-                "failed to resolve {}: {err}",
-                config_path.display()
-            ));
-        }
-    };
+    let mut builder = DirSQL::builder();
+    for config_path in &configs {
+        // Canonicalize so config-relative paths (extension libraries, hook
+        // working directories) resolve against an absolute parent — `notify`
+        // and the hook subprocesses misbehave with relative paths like `./`.
+        // The index root itself is the invocation cwd (#540), not derived here.
+        let resolved = match config_path.canonicalize() {
+            Ok(p) => p,
+            Err(err) => {
+                return AppState::Unavailable(format!(
+                    "failed to resolve {}: {err}",
+                    config_path.display()
+                ));
+            }
+        };
+        builder = builder.config(resolved);
+    }
 
-    // Launcher-resolved extensions (`--extension`) override the TOML config's
-    // own `[[dirsql.extension]]` entries: the launcher has already merged and
+    // Launcher-resolved extensions (`--extension`) override the configs' own
+    // `[[dirsql.extension]]` entries: the launcher has already merged and
     // resolved them (including package names the compiled binary can't
-    // resolve), so suppress the config's extension loading and supply the
-    // resolved literal paths instead.
-    let mut builder = DirSQL::builder().config(&resolved);
+    // resolve), so suppress config extension loading and supply the resolved
+    // literal paths instead.
     if !cli.extension.is_empty() {
         builder = builder
             .extensions(parse_extension_specs(&cli.extension))
@@ -290,51 +308,70 @@ fn parse_extension_specs(specs: &[String]) -> Vec<Extension> {
         .collect()
 }
 
-/// Extract the server-wide `pre-query` hook from the config, if any.
+/// Collect the `pre-query` hooks declared across the configs, in argv order,
+/// so the server chains them FIFO (#546/#547).
 ///
-/// Returns `None` when the config is absent, unresolvable, unparsable, or
-/// declares no `pre-query` — the server then parses `POST /query` bodies as
-/// `{"sql": …}` (the degraded / zero-config paths never get a hook). The
-/// command's working directory is the config file's parent, mirroring the
-/// `on-file` contract. Config resolution mirrors [`load_state`]: a config that
-/// fails here also fails there (leaving the server degraded), so the hook is
-/// simply skipped.
-fn load_pre_query(cli: &Cli) -> Option<PreQuery> {
-    let config_path = &cli.config;
-    if !config_path.exists() {
-        return None;
+/// Each config contributes at most one `pre-query`; a config that is absent,
+/// unresolvable, unparsable, or declares none is skipped (its load failure
+/// degrades the index in [`load_state`], so the hook is simply omitted here).
+/// Each hook's working directory is its own config file's parent, mirroring
+/// the `on-file` contract, and it carries that config's `hook-timeout`.
+fn load_pre_queries(cli: &Cli) -> Vec<PreQuery> {
+    let mut hooks = Vec::new();
+    for config_path in &cli.config_paths() {
+        if !config_path.exists() {
+            continue;
+        }
+        let Ok(resolved) = config_path.canonicalize() else {
+            continue;
+        };
+        let Ok(config) = dirsql::config::load_config(&resolved) else {
+            continue;
+        };
+        let Some(command) = config.pre_query else {
+            continue;
+        };
+        let Some(parent) = resolved.parent() else {
+            continue;
+        };
+        let mut pre_query = PreQuery::new(command, parent.to_path_buf());
+        if let Some(timeout) = config.hook_timeout {
+            pre_query = pre_query.with_timeout(timeout);
+        }
+        hooks.push(pre_query);
     }
-    let resolved = config_path.canonicalize().ok()?;
-    let config = dirsql::config::load_config(&resolved).ok()?;
-    let command = config.pre_query?;
-    let config_dir = resolved.parent()?.to_path_buf();
-    let mut pre_query = PreQuery::new(command, config_dir);
-    if let Some(timeout) = config.hook_timeout {
-        pre_query = pre_query.with_timeout(timeout);
-    }
-    Some(pre_query)
+    hooks
 }
 
-/// Extract the server-wide `post-query` hook from the config, if any.
-///
-/// Returns `None` when the config is absent, unresolvable, unparsable, or
-/// declares no `post-query` — the server then returns `POST /query` result rows
-/// as-is (the degraded / zero-config paths never get a hook). The command's
-/// working directory is the config file's parent, mirroring [`load_pre_query`].
-fn load_post_query(cli: &Cli) -> Option<PostQuery> {
-    let config_path = &cli.config;
-    if !config_path.exists() {
-        return None;
+/// Collect the `post-query` hooks declared across the configs, in argv order,
+/// so the server chains them FIFO. Mirrors [`load_pre_queries`]: one hook per
+/// config, skipped when absent/unloadable, each running from its own config's
+/// parent under its own `hook-timeout`.
+fn load_post_queries(cli: &Cli) -> Vec<PostQuery> {
+    let mut hooks = Vec::new();
+    for config_path in &cli.config_paths() {
+        if !config_path.exists() {
+            continue;
+        }
+        let Ok(resolved) = config_path.canonicalize() else {
+            continue;
+        };
+        let Ok(config) = dirsql::config::load_config(&resolved) else {
+            continue;
+        };
+        let Some(command) = config.post_query else {
+            continue;
+        };
+        let Some(parent) = resolved.parent() else {
+            continue;
+        };
+        let mut post_query = PostQuery::new(command, parent.to_path_buf());
+        if let Some(timeout) = config.hook_timeout {
+            post_query = post_query.with_timeout(timeout);
+        }
+        hooks.push(post_query);
     }
-    let resolved = config_path.canonicalize().ok()?;
-    let config = dirsql::config::load_config(&resolved).ok()?;
-    let command = config.post_query?;
-    let config_dir = resolved.parent()?.to_path_buf();
-    let mut post_query = PostQuery::new(command, config_dir);
-    if let Some(timeout) = config.hook_timeout {
-        post_query = post_query.with_timeout(timeout);
-    }
-    Some(post_query)
+    hooks
 }
 
 /// Zero-config fallback. When no `.dirsql.toml` is found, dirsql indexes the

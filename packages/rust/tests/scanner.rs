@@ -73,6 +73,60 @@ fn scan_skips_directories() {
     assert!(results.is_empty());
 }
 
+// A file matching two tables' globs must produce one (path, table) pair
+// per matching table (fan-out), in declaration order — not a single
+// first-match pair.
+#[test]
+fn scan_fans_out_file_matching_two_tables() {
+    let dir = TempDir::new().unwrap();
+    let sub = dir.path().join("data").join("2401.00001");
+    fs::create_dir_all(&sub).unwrap();
+    fs::write(sub.join("metadata.json"), "{}").unwrap();
+
+    let matcher = TableMatcher::new(
+        &[
+            ("data/*/metadata.json", "ta"),
+            ("data/*/metadata.json", "tb"),
+        ],
+        &[],
+    )
+    .unwrap();
+    let results = scan_directory(dir.path(), &matcher);
+
+    assert_eq!(results.len(), 2, "one pair per matching table: {results:?}");
+    let tables: Vec<&str> = results.iter().map(|(_, t)| t.as_str()).collect();
+    assert_eq!(tables, vec!["ta", "tb"], "pairs in declaration order");
+    assert!(
+        results
+            .iter()
+            .all(|(p, _)| p.ends_with("data/2401.00001/metadata.json")),
+        "both pairs point at the same file: {results:?}"
+    );
+}
+
+// Distinct-but-overlapping globs (`data/*/…` and `data/**/…`) both matching
+// one file must also fan out to both tables.
+#[test]
+fn scan_fans_out_overlapping_distinct_globs() {
+    let dir = TempDir::new().unwrap();
+    let sub = dir.path().join("data").join("2401.00001");
+    fs::create_dir_all(&sub).unwrap();
+    fs::write(sub.join("metadata.json"), "{}").unwrap();
+
+    let matcher = TableMatcher::new(
+        &[
+            ("data/*/metadata.json", "ta"),
+            ("data/**/metadata.json", "tb"),
+        ],
+        &[],
+    )
+    .unwrap();
+    let results = scan_directory(dir.path(), &matcher);
+
+    let tables: Vec<&str> = results.iter().map(|(_, t)| t.as_str()).collect();
+    assert_eq!(tables, vec!["ta", "tb"], "both tables matched: {results:?}");
+}
+
 #[test]
 fn scan_excludes_top_level_dirsql_directory() {
     let dir = TempDir::new().unwrap();

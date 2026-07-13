@@ -38,7 +38,7 @@ function jsonTable(glob: string) {
   return {
     ddl: "CREATE TABLE items (name TEXT)",
     glob,
-    extract: (filePath: string) => [JSON.parse(readFileSync(filePath, "utf8"))],
+    onFile: (filePath: string) => [JSON.parse(readFileSync(filePath, "utf8"))],
   };
 }
 
@@ -154,7 +154,7 @@ describe("DirSQL watch() async iterator", () => {
   );
 
   it(
-    "emits error events with table attribution when extract fails",
+    "emits error events with table attribution when onFile fails",
     async () => {
       const db = new DirSQL({ root: dir, tables: [jsonTable("**/*.json")] });
       await db.ready;
@@ -221,7 +221,7 @@ describe("DirSQL watch() async iterator", () => {
           {
             ddl: "CREATE TABLE rows (idx INTEGER, name TEXT)",
             glob: "*.jsonl",
-            extract: (filePath: string) =>
+            onFile: (filePath: string) =>
               readFileSync(filePath, "utf8")
                 .split("\n")
                 .filter((l) => l.length > 0)

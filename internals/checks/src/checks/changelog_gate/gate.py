@@ -11,6 +11,7 @@ from checks.changelog_gate import git_ops
 from checks.changelog_gate.decide import (
     any_sdk_code_changed,
     changelog_fragments,
+    contains_skip_changelog_line,
     count_added_lines,
     extract_skip_trailers,
 )
@@ -38,6 +39,21 @@ NO_ADDED_CONTENT_MESSAGE = (
     "::error file=CHANGELOG.md::CHANGELOG.md was touched but has no added content."
 )
 
+MALFORMED_SKIP_CHANGELOG_MESSAGE = """\
+::error file=CHANGELOG.md::A `skip-changelog:` line is present but git did not parse it as a trailer.
+
+A `skip-changelog:` bypass must be a real git trailer: in the LAST
+paragraph of a commit message, with no blank line separating it from the
+other trailers (Co-Authored-By:, etc.). As written it sits in its own
+paragraph, so git ignores it and this gate sees no bypass.
+
+Fix it either way:
+  - reword the commit so `skip-changelog: <reason>` is in the final
+    trailer block (no blank line before it), or
+  - add a changelog fragment: changelog.d/<branch-slug>.<category>.md.
+
+See AGENTS.md, section "Changelog and Migrations"."""
+
 
 def run(
     base_sha: str,
@@ -46,6 +62,7 @@ def run(
     changed_files=git_ops.changed_files,
     skip_trailers=git_ops.skip_trailers,
     changelog_diff=git_ops.changelog_diff,
+    commit_messages=git_ops.commit_messages,
 ) -> int:
     files = changed_files(base_sha, head_sha)
 
@@ -67,7 +84,13 @@ def run(
         return 0
 
     if "CHANGELOG.md" not in files:
-        print(MISSING_CHANGELOG_MESSAGE, file=sys.stderr)
+        # Distinguish "no bypass attempted" from "a skip-changelog was written
+        # but git didn't parse it as a trailer" -- the latter needs a targeted
+        # fix, not the generic "add an entry" message.
+        if contains_skip_changelog_line(commit_messages(base_sha, head_sha)):
+            print(MALFORMED_SKIP_CHANGELOG_MESSAGE, file=sys.stderr)
+        else:
+            print(MISSING_CHANGELOG_MESSAGE, file=sys.stderr)
         return 1
 
     added = count_added_lines(changelog_diff(base_sha, head_sha))

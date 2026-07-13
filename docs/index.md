@@ -20,7 +20,7 @@ But querying across many files is slow.
 
 ## Solution
 
-`dirsql` bridges this gap. The filesystem remains the source of truth, but you get SQL queries and real-time change events for free. Define tables with glob patterns and extract functions, and `dirsql` handles the rest.
+`dirsql` bridges this gap. The filesystem remains the source of truth, but you get SQL queries and real-time change events for free. Define tables with glob patterns and on-file callbacks, and `dirsql` handles the rest.
 
 ::: code-group
 
@@ -34,7 +34,7 @@ db = DirSQL(
         Table(
             ddl="CREATE TABLE files (name TEXT, size INTEGER, type TEXT)",
             glob="data/*.json",
-            extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+            on_file=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
     ],
 )
@@ -70,7 +70,7 @@ const db = new DirSQL({
     new Table({
       ddl: 'CREATE TABLE files (name TEXT, size INTEGER, type TEXT)',
       glob: 'data/*.json',
-      extract: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
+      onFile: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
     }),
   ],
 });

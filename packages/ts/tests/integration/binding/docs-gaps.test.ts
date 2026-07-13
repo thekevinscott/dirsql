@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 // Docs (reference/sdk.md / reference/config.md "Strict Mode"): the default
-// (relaxed) mode drops extract keys that aren't declared in the DDL and
+// (relaxed) mode drops onFile keys that aren't declared in the DDL and
 // fills declared-but-missing columns with NULL.
 describe("DirSQL relaxed schema (default)", () => {
   it("ignores extra keys by default", async () => {
@@ -31,7 +31,7 @@ describe("DirSQL relaxed schema (default)", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "*.json",
-          extract: (filePath: string) => [
+          onFile: (filePath: string) => [
             JSON.parse(readFileSync(filePath, "utf8")),
           ],
         },
@@ -51,7 +51,7 @@ describe("DirSQL relaxed schema (default)", () => {
         {
           ddl: "CREATE TABLE items (name TEXT, color TEXT)",
           glob: "*.json",
-          extract: (filePath: string) => [
+          onFile: (filePath: string) => [
             JSON.parse(readFileSync(filePath, "utf8")),
           ],
         },
@@ -63,7 +63,7 @@ describe("DirSQL relaxed schema (default)", () => {
   });
 });
 
-// Docs: strict mode errors on declared columns the extract row is missing.
+// Docs: strict mode errors on declared columns the onFile row is missing.
 describe("DirSQL strict mode (missing keys)", () => {
   it("rejects rows with missing keys when strict is true", async () => {
     await writeFile(join(dir, "a.json"), JSON.stringify({ name: "apple" }));
@@ -74,7 +74,7 @@ describe("DirSQL strict mode (missing keys)", () => {
         {
           ddl: "CREATE TABLE items (name TEXT, color TEXT)",
           glob: "*.json",
-          extract: (filePath: string) => [
+          onFile: (filePath: string) => [
             JSON.parse(readFileSync(filePath, "utf8")),
           ],
           strict: true,
@@ -99,7 +99,7 @@ describe("DirSQL Buffer -> BLOB", () => {
         {
           ddl: "CREATE TABLE blobs (name TEXT, data BLOB)",
           glob: "*.json",
-          extract: () => [{ name: "bin", data }],
+          onFile: () => [{ name: "bin", data }],
         },
       ],
     });
@@ -122,10 +122,10 @@ describe("DirSQL Buffer -> BLOB", () => {
   });
 });
 
-// Docs (reference/sdk.md "extract"): the callback receives the filesystem
+// Docs (reference/sdk.md "onFile"): the callback receives the filesystem
 // path of the matched file (absolute when the root is absolute); dirsql
 // does not read file contents itself.
-describe("DirSQL extract path argument", () => {
+describe("DirSQL onFile path argument", () => {
   it("passes the absolute path of the matched file", async () => {
     await writeFile(join(dir, "item.json"), JSON.stringify({ name: "x" }));
 
@@ -136,7 +136,7 @@ describe("DirSQL extract path argument", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "*.json",
-          extract: (filePath: string) => {
+          onFile: (filePath: string) => {
             seenPaths.push(filePath);
             return [JSON.parse(readFileSync(filePath, "utf8"))];
           },

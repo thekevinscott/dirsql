@@ -52,12 +52,12 @@ function blogTables(): TableDef[] {
     {
       ddl: "CREATE TABLE posts (title TEXT, author TEXT)",
       glob: "posts/*.json",
-      extract: readJson,
+      onFile: readJson,
     },
     {
       ddl: "CREATE TABLE authors (id TEXT, name TEXT)",
       glob: "authors/*.json",
-      extract: readJson,
+      onFile: readJson,
     },
   ];
 }
@@ -101,7 +101,7 @@ describe("tables guide", () => {
         {
           ddl: "CREATE TABLE items (name TEXT, value INTEGER)",
           glob: "data/*.json",
-          extract: readJson,
+          onFile: readJson,
         },
       ],
     });
@@ -128,7 +128,7 @@ describe("tables guide", () => {
         {
           ddl: "CREATE TABLE comments (body TEXT, author TEXT)",
           glob: "comments/**/index.jsonl",
-          extract: (filePath: string) =>
+          onFile: (filePath: string) =>
             readFileSync(filePath, "utf8")
               .split("\n")
               .filter((line) => line.length > 0)
@@ -155,7 +155,7 @@ describe("tables guide", () => {
         {
           ddl: "CREATE TABLE comments (id TEXT, body TEXT)",
           glob: "comments/**/index.jsonl",
-          extract: (filePath: string) =>
+          onFile: (filePath: string) =>
             readFileSync(filePath, "utf8")
               .split("\n")
               .filter((line) => line.length > 0)
@@ -190,7 +190,7 @@ describe("tables guide", () => {
         {
           ddl: "CREATE TABLE posts (title TEXT)",
           glob: "*.json",
-          extract: (filePath: string) => {
+          onFile: (filePath: string) => {
             const data = JSON.parse(readFileSync(filePath, "utf8"));
             // Conditionally skip files by returning [].
             return data.draft ? [] : [{ title: data.title }];
@@ -222,12 +222,12 @@ describe("tables guide", () => {
         {
           ddl: "CREATE TABLE posts (title TEXT, author_id TEXT)",
           glob: "posts/*.json",
-          extract: readJson,
+          onFile: readJson,
         },
         {
           ddl: "CREATE TABLE authors (id TEXT, name TEXT)",
           glob: "authors/*.json",
-          extract: readJson,
+          onFile: readJson,
         },
       ],
     });
@@ -255,7 +255,7 @@ describe("tables guide", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "**/*.json",
-          extract: readJson,
+          onFile: readJson,
         },
       ],
     });
@@ -278,7 +278,7 @@ describe("tables guide", () => {
         {
           ddl: "CREATE TABLE metrics (name TEXT, value REAL, count INTEGER)",
           glob: "data/*.json",
-          extract: readJson,
+          onFile: readJson,
         },
       ],
     });
@@ -303,7 +303,7 @@ describe("tables guide", () => {
         {
           ddl: "CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL)",
           glob: "data/*.json",
-          extract: readJson,
+          onFile: readJson,
         },
       ],
     });
@@ -335,7 +335,7 @@ describe("tables guide", () => {
         {
           ddl: "CREATE TABLE items (text_val TEXT, int_val INTEGER, float_val REAL, bool_val INTEGER, null_val TEXT)",
           glob: "*.json",
-          extract: readJson,
+          onFile: readJson,
         },
       ],
     });
@@ -450,7 +450,7 @@ describe("async guide", () => {
         {
           ddl: "CREATE TABLE items (name TEXT, value INTEGER)",
           glob: "data/*.json",
-          extract: readJson,
+          onFile: readJson,
         },
       ],
     });
@@ -475,7 +475,7 @@ describe("async guide", () => {
         {
           ddl: "CREATE TABLE items (name TEXT, value INTEGER)",
           glob: "data/*.json",
-          extract: readJson,
+          onFile: readJson,
         },
       ],
     });
@@ -502,7 +502,7 @@ describe("async guide", () => {
         {
           ddl: "CREATE TABLE items (name TEXT, value INTEGER)",
           glob: "data/*.json",
-          extract: readJson,
+          onFile: readJson,
         },
       ],
     });
@@ -535,7 +535,7 @@ describe("api reference", () => {
     const table = new Table({
       ddl: "CREATE TABLE items (name TEXT)",
       glob: "**/*.json",
-      extract: readJson,
+      onFile: readJson,
     });
     expect(table.ddl).toBe("CREATE TABLE items (name TEXT)");
     expect(table.glob).toBe("**/*.json");
@@ -554,7 +554,7 @@ describe("api reference", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "data/*.json",
-          extract: readJson,
+          onFile: readJson,
         },
       ],
     });

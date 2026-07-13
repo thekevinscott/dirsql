@@ -38,9 +38,9 @@ describe("quoted-identifier DDL (#204)", () => {
           {
             ddl: 'CREATE TABLE "users" (name TEXT)',
             glob: "data/users.json",
-            // `extract` is synchronous (returns rows, not a Promise), so the
+            // `onFile` is synchronous (returns rows, not a Promise), so the
             // file body is read with the sync API.
-            extract: (filePath: string) =>
+            onFile: (filePath: string) =>
               JSON.parse(readFileSync(filePath, "utf8")),
           },
         ],

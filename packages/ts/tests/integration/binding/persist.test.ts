@@ -1,4 +1,4 @@
-// `readFileSync` stays sync: it runs inside `extract` callbacks, whose public
+// `readFileSync` stays sync: it runs inside `onFile` callbacks, whose public
 // signature is synchronous.
 import { readFileSync } from "node:fs";
 import {
@@ -60,7 +60,7 @@ describe("DirSQL persist", () => {
     return {
       ddl: "CREATE TABLE items (name TEXT, price REAL)",
       glob: "items/*.json",
-      extract: (filePath: string) => {
+      onFile: (filePath: string) => {
         box.count += 1;
         return [JSON.parse(readFileSync(filePath, "utf8"))];
       },
@@ -201,7 +201,7 @@ describe("DirSQL persist", () => {
         {
           ddl: "CREATE TABLE items (name TEXT, price REAL, sku TEXT)",
           glob: "items/*.json",
-          extract: (filePath: string) => {
+          onFile: (filePath: string) => {
             box2.count += 1;
             return [
               { ...JSON.parse(readFileSync(filePath, "utf8")), sku: "X" },
@@ -230,7 +230,7 @@ describe("DirSQL persist", () => {
         {
           ddl: "CREATE TABLE items (name TEXT, price REAL)",
           glob: "**/*.json",
-          extract: (filePath: string) => [
+          onFile: (filePath: string) => [
             JSON.parse(readFileSync(filePath, "utf8")),
           ],
         },

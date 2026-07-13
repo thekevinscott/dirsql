@@ -1,6 +1,7 @@
 from unittest import mock
 
 from checks.changelog_gate.gate import (
+    MALFORMED_SKIP_CHANGELOG_MESSAGE,
     MISSING_CHANGELOG_MESSAGE,
     NO_ADDED_CONTENT_MESSAGE,
     run,
@@ -45,15 +46,39 @@ def describe_run():
         changed_files = mock.Mock(return_value=["packages/rust/src/lib.rs"])
         skip_trailers = mock.Mock(return_value="")
         changelog_diff = mock.Mock()
+        commit_messages = mock.Mock(return_value="feat: a change\n")
         rc = run(
             "base",
             "head",
             changed_files=changed_files,
             skip_trailers=skip_trailers,
             changelog_diff=changelog_diff,
+            commit_messages=commit_messages,
         )
         assert rc == 1
         assert MISSING_CHANGELOG_MESSAGE in capsys.readouterr().err
+        changelog_diff.assert_not_called()
+
+    def names_a_malformed_skip_changelog_when_git_did_not_parse_it(capsys):
+        # A `skip-changelog:` split out of the trailer block by a blank line:
+        # git parses no trailer, so the gate must name the malformed attempt
+        # instead of the generic "no entry" message.
+        changed_files = mock.Mock(return_value=["packages/rust/src/lib.rs"])
+        skip_trailers = mock.Mock(return_value="")
+        changelog_diff = mock.Mock()
+        commit_messages = mock.Mock(
+            return_value="feat: a change\n\nskip-changelog: internal\n\nCo-Authored-By: x <x@y.z>\n"
+        )
+        rc = run(
+            "base",
+            "head",
+            changed_files=changed_files,
+            skip_trailers=skip_trailers,
+            changelog_diff=changelog_diff,
+            commit_messages=commit_messages,
+        )
+        assert rc == 1
+        assert MALFORMED_SKIP_CHANGELOG_MESSAGE in capsys.readouterr().err
         changelog_diff.assert_not_called()
 
     def fails_when_changelog_touched_with_no_added_content(capsys):
@@ -100,12 +125,14 @@ def describe_run():
         )
         skip_trailers = mock.Mock(return_value="")
         changelog_diff = mock.Mock()
+        commit_messages = mock.Mock(return_value="feat: a change\n")
         rc = run(
             "base",
             "head",
             changed_files=changed_files,
             skip_trailers=skip_trailers,
             changelog_diff=changelog_diff,
+            commit_messages=commit_messages,
         )
         assert rc == 1
         assert MISSING_CHANGELOG_MESSAGE in capsys.readouterr().err

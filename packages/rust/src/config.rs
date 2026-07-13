@@ -215,7 +215,7 @@ pub struct ExtensionSpec {
 /// (`path`, `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`).
 /// Content interpretation (frontmatter, JSON dot-paths, CSV parsing, etc.)
 /// is intentionally out of scope; for that, register a programmatic
-/// [`crate::Table`] with your own extract closure.
+/// [`crate::Table`] with your own on-file callback.
 #[derive(Debug, Clone)]
 pub struct TableConfig {
     pub ddl: String,

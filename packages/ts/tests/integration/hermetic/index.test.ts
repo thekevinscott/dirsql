@@ -76,7 +76,7 @@ describe("DirSQL construction", () => {
       {
         ddl: "CREATE TABLE t (n INTEGER)",
         glob: "**/*.json",
-        extract: () => [],
+        onFile: () => [],
       },
     ];
     const db = new DirSQL({
@@ -102,17 +102,17 @@ describe("DirSQL construction", () => {
 
   it("accepts Table instances and plain objects interchangeably", async () => {
     openAsync.mockResolvedValue(makeInner());
-    const extract = () => [];
+    const onFile = () => [];
     const asClass = new Table({
       ddl: "CREATE TABLE a (n INTEGER)",
       glob: "a/**",
-      extract,
+      onFile,
       strict: true,
     });
     const asLiteral = {
       ddl: "CREATE TABLE b (n INTEGER)",
       glob: "b/**",
-      extract,
+      onFile,
     };
     const db = new DirSQL({ root: "/data", tables: [asClass, asLiteral] });
     await db.ready;
@@ -121,7 +121,7 @@ describe("DirSQL construction", () => {
       {
         ddl: "CREATE TABLE a (n INTEGER)",
         glob: "a/**",
-        extract,
+        onFile,
         strict: true,
       },
       asLiteral,

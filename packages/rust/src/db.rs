@@ -325,7 +325,7 @@ impl Db {
     /// alias so a user column named like a mapping column stays unambiguous.
     ///
     /// A row read back compares equal to the normalized row that was inserted
-    /// only when the extract's value types match the declared column
+    /// only when the on-file callback's value types match the declared column
     /// affinities (SQLite coerces on insert otherwise, e.g. `Integer(5)` into
     /// a TEXT column comes back `Text("5")`).
     pub fn get_rows_by_file(

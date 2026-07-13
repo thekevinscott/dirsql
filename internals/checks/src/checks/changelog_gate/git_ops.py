@@ -35,6 +35,20 @@ def skip_trailers(base_sha: str, head_sha: str, runner=subprocess.run) -> str:
     return result.stdout
 
 
+def commit_messages(base_sha: str, head_sha: str, runner=subprocess.run) -> str:
+    # Raw commit bodies (`%B`) for every commit in the range, so the gate can
+    # detect a `skip-changelog:` line that git did NOT parse as a trailer (e.g.
+    # split out of the final trailer block by a blank line) and report it,
+    # instead of falling through to the generic "no changelog entry" message.
+    result = runner(
+        ["git", "log", "--format=%B", f"{base_sha}..{head_sha}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
 def changelog_diff(base_sha: str, head_sha: str, runner=subprocess.run) -> str:
     result = runner(
         ["git", "diff", f"{base_sha}...{head_sha}", "--", "CHANGELOG.md"],
