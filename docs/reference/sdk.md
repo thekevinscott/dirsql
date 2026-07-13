@@ -88,7 +88,7 @@ DirSQL::builder()
     .poll_interval(duration)        // optional; watch-loop cadence, default 200ms
     .build()                        // -> Result<DirSQL>  (synchronous scan)
 // Shortcuts: DirSQL::new(root, tables), DirSQL::with_ignore(root, tables, ignore),
-//            DirSQL::from_config(root), DirSQL::from_config_path(path)
+//            DirSQL::from_config_path(path)  // reads an explicit config file
 ```
 
 :::
@@ -96,6 +96,15 @@ DirSQL::builder()
 Creates a SQLite index over a directory. The index root is the explicit
 `root` when given, else the **process cwd** — the `config` file's location
 never sets the root.
+
+Constructing with **neither a `config` nor programmatic `tables`** serves the
+**baked-in default** `files` table (one row per file, over the root) — the
+same shipped default the CLI serves with no [`-c`](./cli.md#default-mode), not
+an empty index. There is no implicit `<root>/.dirsql.toml` discovery: to read a
+config on disk, pass its path via `config` (Rust: `.config(path)` /
+`DirSQL::from_config_path(path)`). The root-joining `DirSQL::from_config(root)`
+shortcut was removed in #603 — use
+`DirSQL::from_config_path(root.join(".dirsql.toml"))`.
 
 **Parameters:**
 
@@ -294,7 +303,7 @@ let sync: DirSQL = db.sync()?;            // unwrap the inner sync handle
 ```
 
 Shortcuts mirror `DirSQL`: `AsyncDirSQL::new`, `with_ignore`,
-`from_config`, `from_config_path`. Unlike the Python/TypeScript SDKs,
+`from_config_path`. Unlike the Python/TypeScript SDKs,
 methods called before `ready().await` completes return a "not ready" error
 rather than waiting — an intentional, language-idiomatic difference.
 

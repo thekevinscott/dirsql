@@ -14,7 +14,7 @@ use dirsql::cli::{
     AppState, PostQuery, PreQuery, ServerConfig, execute::execute_query, init::InitOptions,
     serve_with_state,
 };
-use dirsql::{DirSQL, Extension, Row, Table};
+use dirsql::{DirSQL, Extension};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -390,25 +390,14 @@ fn load_default_state(cli: &Cli) -> AppState {
         }
     };
 
-    let builder = cli.apply_persist(DirSQL::builder().root(root).table(default_files_table()));
+    // A builder with no config and no programmatic tables injects the baked-in
+    // default `files` table (#603), so the CLI's no-`-c` default is the exact
+    // same asset the SDK serves -- one implementation, no drift.
+    let builder = cli.apply_persist(DirSQL::builder().root(root));
     match builder.build() {
         Ok(db) => AppState::Ready(db),
         Err(err) => AppState::Unavailable(format!("failed to build default index: {err}")),
     }
-}
-
-/// The baked-in default `files` table served when no `-c` is given, parsed from the same
-/// [`dirsql::cli::DEFAULT_CONFIG_TOML`] asset `dirsql init` writes verbatim,
-/// so the two can never drift apart.
-fn default_files_table() -> Table {
-    let config = dirsql::config::load_config_str(dirsql::cli::DEFAULT_CONFIG_TOML)
-        .expect("DEFAULT_CONFIG_TOML must be valid dirsql config TOML");
-    let table_config = &config.tables[0];
-    Table::new(
-        table_config.ddl.clone(),
-        table_config.glob.clone(),
-        |_path| vec![Row::new()],
-    )
 }
 
 #[cfg(unix)]
@@ -524,19 +513,5 @@ mod tests {
         let exts = parse_extension_specs(&specs);
         assert_eq!(exts[0].path, PathBuf::from("/a.so"));
         assert_eq!(exts[0].entrypoint.as_deref(), Some("init::extra"));
-    }
-
-    #[test]
-    fn default_files_table_declares_filesystem_fact_columns_over_recursive_glob() {
-        let table = default_files_table();
-        assert_eq!(table.glob, "**/*");
-        assert!(table.ddl.starts_with("CREATE TABLE files ("));
-        for col in ["path", "basename", "dir", "ext", "size", "mtime", "ctime"] {
-            assert!(
-                table.ddl.contains(col),
-                "default files DDL must declare {col}, got: {}",
-                table.ddl
-            );
-        }
     }
 }

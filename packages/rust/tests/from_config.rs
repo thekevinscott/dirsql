@@ -25,7 +25,11 @@ glob = "data/*.csv"
     fs::write(root.path().join("data").join("a.csv"), "anything").unwrap();
     fs::write(root.path().join("data").join("b.csv"), "anything").unwrap();
 
-    let db = DirSQL::from_config(root.path()).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
     let rows = db
         .query("SELECT path, basename FROM files ORDER BY path")
         .unwrap();
@@ -59,7 +63,11 @@ glob = "**/*.csv"
     fs::write(root.path().join("data").join("a.csv"), "x").unwrap();
     fs::write(root.path().join("ignored").join("b.csv"), "x").unwrap();
 
-    let db = DirSQL::from_config(root.path()).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
     let rows = db.query("SELECT path FROM files").unwrap();
 
     assert_eq!(rows.len(), 1);
@@ -99,7 +107,11 @@ glob = "_comments/{thread_id}/*.txt"
     )
     .unwrap();
 
-    let db = DirSQL::from_config(root.path()).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
     let rows = db
         .query("SELECT thread_id, basename FROM comments ORDER BY thread_id")
         .unwrap();
@@ -129,7 +141,11 @@ glob = "docs/*.md"
     let body = "# title\nhello world\n";
     fs::write(root.path().join("docs").join("readme.md"), body).unwrap();
 
-    let db = DirSQL::from_config(root.path()).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
     let rows = db
         .query("SELECT path, basename, dir, ext, size, mtime FROM files")
         .unwrap();
@@ -164,7 +180,11 @@ glob = "*.txt"
     .unwrap();
 
     fs::write(root.path().join("a.txt"), "x").unwrap();
-    let db = DirSQL::from_config(root.path()).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
     let rows = db.query("SELECT path FROM minimal").unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["path"], Value::Text("a.txt".into()));
@@ -173,7 +193,10 @@ glob = "*.txt"
 #[test]
 fn from_config_missing_config_file_returns_error() {
     let root = TempDir::new().unwrap();
-    let result = DirSQL::from_config(root.path());
+    let result = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build();
     assert!(result.is_err());
 }
 
@@ -191,7 +214,11 @@ glob = "nothing_here/*.txt"
     )
     .unwrap();
 
-    let db = DirSQL::from_config(root.path()).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
     let rows = db.query("SELECT path FROM empty_t").unwrap();
     assert!(rows.is_empty());
 }
@@ -247,7 +274,11 @@ strict = true
     )
     .unwrap();
 
-    let db = DirSQL::from_config(root.path()).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
     let rows = db.query("SELECT path FROM files").unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["path"], Value::Text("a.csv".into()));
@@ -255,8 +286,6 @@ strict = true
 
 #[tokio::test]
 async fn async_from_config_works() {
-    use dirsql::AsyncDirSQL;
-
     let root = TempDir::new().unwrap();
 
     fs::write(
@@ -271,7 +300,11 @@ glob = "*.csv"
 
     fs::write(root.path().join("data.csv"), "anything").unwrap();
 
-    let db = AsyncDirSQL::from_config(root.path()).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build_async()
+        .unwrap();
     db.ready().await.unwrap();
     let rows = db.query("SELECT path, basename FROM files").await.unwrap();
 

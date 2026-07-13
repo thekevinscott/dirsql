@@ -56,8 +56,12 @@ class DirSQL:
     The index root is the explicit ``root`` when given, else the process
     current working directory. A ``config`` file's location never sets the
     root -- it only supplies tables, ignore patterns, and extensions. There
-    is no ``[dirsql].root`` config key. Constructing with neither ``root``
-    nor ``config`` roots at the cwd (no error is raised).
+    is no ``[dirsql].root`` config key. Constructing with neither ``config``
+    nor programmatic ``tables`` serves the **baked-in default** ``files``
+    table (one row per file, over the root) -- the same shipped default the
+    CLI serves with no ``-c`` (#603), not an empty index. To read a config on
+    disk, pass its path explicitly via ``config=`` (there is no implicit
+    ``<root>/.dirsql.toml`` discovery).
 
     Pass ``persist=True`` to keep an on-disk SQLite cache (default location:
     ``<root>/.dirsql/cache.db``). Override the location with ``persist_path``.

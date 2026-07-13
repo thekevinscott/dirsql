@@ -29,6 +29,12 @@ export interface ExtensionSpec {
  *
  * The index root is the explicit `root` when given, otherwise the process
  * working directory. The `config` file's location never sets the root.
+ *
+ * Constructing with neither `config` nor programmatic `tables` serves the
+ * baked-in default `files` table (one row per file, over the root) — the same
+ * shipped default the CLI serves with no `-c` (#603), not an empty index. To
+ * read a config on disk, pass its path via `config` (there is no implicit
+ * `<root>/.dirsql.toml` discovery).
  */
 export interface DirSQLOptions {
   /** Root directory to scan. */

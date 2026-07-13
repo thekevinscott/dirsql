@@ -1,7 +1,7 @@
 //! Integration coverage for loading SQLite extensions via config.
 //!
-//! These exercise the public construction surface (`DirSQL::from_config`) — a
-//! `.dirsql.toml` that declares `[[dirsql.extension]]` entries. dirsql loads
+//! These exercise the public construction surface (the builder's `.config()`)
+//! — a `.dirsql.toml` that declares `[[dirsql.extension]]` entries. dirsql loads
 //! each configured extension onto the connection at startup, before any
 //! `CREATE TABLE`, then disables loading again so the SQL `load_extension()`
 //! function is never left open.
@@ -83,7 +83,10 @@ glob = "*.txt"
     .unwrap();
     fs::write(root.path().join("a.txt"), "x").unwrap();
 
-    let result = DirSQL::from_config(root.path());
+    let result = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build();
     assert!(
         result.is_err(),
         "expected construction to fail when a configured extension file is missing, got Ok",
@@ -137,7 +140,10 @@ path = "ext/local-extension.so"
     )
     .unwrap();
 
-    let result = DirSQL::from_config(root.path());
+    let result = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build();
     assert!(result.is_err());
 }
 
@@ -168,7 +174,10 @@ glob = "*.txt"
     .unwrap();
     fs::write(root.path().join("a.txt"), "x").unwrap();
 
-    let db = DirSQL::from_config(root.path())
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
         .expect("construction with a real extension should succeed");
 
     // The fixture registered dirsql_testext_answer() -> 42.
@@ -267,7 +276,11 @@ path = "/nonexistent/dirsql-no-such-extension.so"
     .unwrap();
 
     // `DirSQL` is not `Debug`, so match rather than `unwrap_err()`.
-    let err = match DirSQL::from_config(root.path()) {
+    let err = match DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+    {
         Ok(_) => panic!("expected construction to fail for a missing extension"),
         Err(e) => e,
     };
