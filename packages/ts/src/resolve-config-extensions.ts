@@ -28,9 +28,14 @@ type Toml = Record<string, any>;
  * (and error reporting) untouched. Throws if a package name cannot be
  * resolved.
  */
-export function resolveConfigExtensionSpecs(
+/** Load a config's `[[dirsql.extension]]` entries with its base directory.
+ *
+ * `null` when the config is missing, unreadable/malformed, or declares no
+ * extension array — the caller leaves such configs to the core.
+ */
+function loadExtensionEntries(
   configPath: string,
-): ExtensionSpec[] | null {
+): { entries: Toml[]; base: string } | null {
   if (!existsSync(configPath)) {
     return null;
   }
@@ -45,17 +50,53 @@ export function resolveConfigExtensionSpecs(
   if (!Array.isArray(dirsql.extension)) {
     return null;
   }
-  const entries: Toml[] = dirsql.extension;
-  const hasPackageName = entries.some(
-    (e) => typeof e.path === "string" && isBareName(e.path),
-  );
-  if (!hasPackageName) {
-    return null;
-  }
+  return { entries: dirsql.extension, base: dirname(resolvePath(configPath)) };
+}
 
-  const base = dirname(resolvePath(configPath));
+function hasBareName(entries: Toml[]): boolean {
+  return entries.some((e) => typeof e.path === "string" && isBareName(e.path));
+}
+
+function resolveEntries(entries: Toml[], base: string): ExtensionSpec[] {
   return entries.map((e) => ({
     path: resolveExtensionPath(e.path as string, base, true),
     entrypoint: typeof e.entrypoint === "string" ? e.entrypoint : undefined,
   }));
+}
+
+export function resolveConfigExtensionSpecs(
+  configPath: string,
+): ExtensionSpec[] | null {
+  const loaded = loadExtensionEntries(configPath);
+  if (loaded === null || !hasBareName(loaded.entries)) {
+    return null;
+  }
+  return resolveEntries(loaded.entries, loaded.base);
+}
+
+/**
+ * Resolve the `[[dirsql.extension]]` entries of several configs, in order.
+ *
+ * The SDK intervenes for the whole set only when **some** config names an
+ * extension by bare package name (the core can resolve neither package names
+ * nor — once globally suppressed — the literal entries of the other configs).
+ * When it intervenes it resolves **every** config's entries, each against that
+ * config's own parent directory, concatenated in `configPaths` order. Returns
+ * `null` when no config uses a package name, leaving every config's loading to
+ * the core.
+ */
+export function resolveConfigsExtensionSpecs(
+  configPaths: string[],
+): ExtensionSpec[] | null {
+  const loaded = configPaths.map(loadExtensionEntries);
+  if (!loaded.some((item) => item !== null && hasBareName(item.entries))) {
+    return null;
+  }
+  const specs: ExtensionSpec[] = [];
+  for (const item of loaded) {
+    if (item !== null) {
+      specs.push(...resolveEntries(item.entries, item.base));
+    }
+  }
+  return specs;
 }
