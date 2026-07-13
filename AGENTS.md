@@ -274,6 +274,8 @@ packages/<pkg>/changelog.d/YYYY-MM-DD-<slug>.md
 
 Fragments are **permanent and append-only** -- nothing is ever assembled back into a root `CHANGELOG.md` and deleted. The root `CHANGELOG.md` / `MIGRATIONS.md` are **frozen** pointer stubs holding only the pre-fragment history (#563/#564); do not edit them. Version history is the `git log --tags` record (the repo tags a release on every merge).
 
+> **Direction of travel is one-way: entries become fragments, never the reverse.** The root `CHANGELOG.md` / `MIGRATIONS.md` are a *closed archive* -- a new entry (even one that documents an already-released change, or a stray fragment left in an old location) is **never** appended, merged, or "folded" into them. The correct home for *any* changelog/migration content that is not already frozen is a fragment under `packages/<pkg>/changelog.d/` (or `migrations.d/`). If you find loose entries in a wrong location -- e.g. the retired **root** `changelog.d/` / `migrations.d/` (the dual-mode dirs that predate the per-package layout, #565) -- **relocate them to the owning package's fragment dir** (renamed to `YYYY-MM-DD-<slug>.md`, body leading with its category), one copy per package the change affected; do **not** move them into the frozen files. Writing into the frozen archive is the mistake the freeze exists to prevent -- if you're adding lines to root `CHANGELOG.md`/`MIGRATIONS.md`, stop: you want a fragment.
+
 **Escape hatch.** If a PR genuinely has no observable change -- a pure refactor, an internal rename, a type-signature tidy with the same runtime -- bypass the gate by adding a trailer to any commit in the PR:
 
 ```
