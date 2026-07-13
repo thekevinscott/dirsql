@@ -54,6 +54,34 @@ def describe_run_against_a_real_repo():
         assert run(base_sha, head_sha) == 1
         assert "SDK code changed" in capsys.readouterr().err
 
+    def it_names_a_malformed_skip_changelog_trailer(repo, capsys):
+        # A `skip-changelog:` separated from the trailer block by a blank line:
+        # git parses no trailer, so the gate must name the malformed attempt
+        # rather than print the generic "no entry" message.
+        tmp_path, base_sha = repo
+        rust_dir = tmp_path / "packages" / "rust" / "src"
+        rust_dir.mkdir(parents=True)
+        (rust_dir / "lib.rs").write_text("// code\n")
+        _git("add", "-A")
+        subprocess.run(
+            [
+                "git",
+                "commit",
+                "-m",
+                "feat: a change\n\nskip-changelog: internal\n\n"
+                "Co-Authored-By: x <x@y.z>",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        head_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+        assert run(base_sha, head_sha) == 1
+        assert "did not parse it as a trailer" in capsys.readouterr().err
+
     def it_passes_when_the_changelog_gains_an_entry(repo, capsys):
         tmp_path, base_sha = repo
         rust_dir = tmp_path / "packages" / "rust" / "src"
