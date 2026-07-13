@@ -2,7 +2,6 @@ from unittest import mock
 
 from checks.changelog_gate.git_ops import (
     changed_files,
-    changelog_diff,
     commit_messages,
     skip_trailers,
 )
@@ -46,18 +45,6 @@ def describe_commit_messages():
         )
         runner.assert_called_once_with(
             ["git", "log", "--format=%B", "base..head"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-
-
-def describe_changelog_diff():
-    def returns_raw_stdout_scoped_to_changelog():
-        runner = mock.Mock(return_value=mock.Mock(stdout="+entry\n"))
-        assert changelog_diff("base", "head", runner=runner) == "+entry\n"
-        runner.assert_called_once_with(
-            ["git", "diff", "base...head", "--", "CHANGELOG.md"],
             capture_output=True,
             text=True,
             check=True,
