@@ -24,7 +24,7 @@ def _table(name, glob, col, val):
     return Table(
         ddl=f"CREATE TABLE {name} ({col} TEXT)",
         glob=glob,
-        extract=lambda _path, col=col, val=val: [{col: val}],
+        on_file=lambda _path, col=col, val=val: [{col: val}],
     )
 
 
@@ -75,12 +75,12 @@ def describe_fanout():
                 Table(
                     ddl="CREATE TABLE a (id TEXT, col_a TEXT)",
                     glob="data/{id}/metadata.json",
-                    extract=lambda _path: [{"col_a": "A"}],
+                    on_file=lambda _path: [{"col_a": "A"}],
                 ),
                 Table(
                     ddl="CREATE TABLE b (id TEXT, col_b TEXT)",
                     glob="**/metadata.json",
-                    extract=lambda _path: [{"col_b": "B"}],
+                    on_file=lambda _path: [{"col_b": "B"}],
                 ),
             ],
         )

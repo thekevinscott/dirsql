@@ -15,14 +15,14 @@ export interface TableDef {
    * callback needs the file body it reads the path itself (e.g.
    * `fs.readFileSync(filePath, "utf8")`). Returns an array of row objects.
    */
-  extract: (filePath: string) => Record<string, unknown>[];
+  onFile: (filePath: string) => Record<string, unknown>[];
   /** If true, reject rows with columns not declared in `ddl`. */
   strict?: boolean;
 }
 
 /**
  * Thin class wrapper around {@link TableDef} for parity with the Python
- * `Table(ddl=..., glob=..., extract=...)` and Rust `Table::new(...)`
+ * `Table(ddl=..., glob=..., on_file=...)` and Rust `Table::new(...)`
  * constructors. `new Table({...})` is structurally identical to a plain
  * object literal satisfying `TableDef` — anything accepting `TableDef[]`
  * (e.g. {@link DirSQL}'s `tables` option) takes either form.
@@ -35,13 +35,13 @@ export interface TableDef {
 export class Table implements TableDef {
   declare readonly ddl: string;
   declare readonly glob: string;
-  declare readonly extract: (filePath: string) => Record<string, unknown>[];
+  declare readonly onFile: (filePath: string) => Record<string, unknown>[];
   declare readonly strict?: boolean;
 
   constructor(def: TableDef) {
     this.ddl = def.ddl;
     this.glob = def.glob;
-    this.extract = def.extract;
+    this.onFile = def.onFile;
     if (def.strict !== undefined) {
       this.strict = def.strict;
     }

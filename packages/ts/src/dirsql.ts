@@ -33,7 +33,7 @@ export interface ExtensionSpec {
 export interface DirSQLOptions {
   /** Root directory to scan. */
   root?: string;
-  /** Programmatic table definitions. Each table's `extract` runs in-process. */
+  /** Programmatic table definitions. Each table's `onFile` runs in-process. */
   tables?: TableDef[];
   /** Glob patterns (relative to `root`) to ignore. */
   ignore?: string[];

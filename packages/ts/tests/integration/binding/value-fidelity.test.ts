@@ -1,6 +1,6 @@
 // Binding-tier tests for value fidelity at the JS<->core boundary (#465):
 // the numeric contract (out-of-range ints/BigInts error, never lossy) and
-// BigInt->INTEGER, plus real extract-error message propagation.
+// BigInt->INTEGER, plus real onFile-error message propagation.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,10 +17,10 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-function mkdb(extract: () => Array<Record<string, unknown>>): DirSQL {
+function mkdb(onFile: () => Array<Record<string, unknown>>): DirSQL {
   return new DirSQL({
     root: dir,
-    tables: [{ ddl: "CREATE TABLE t (v)", glob: "*.json", extract }],
+    tables: [{ ddl: "CREATE TABLE t (v)", glob: "*.json", onFile }],
   });
 }
 
@@ -42,7 +42,7 @@ describe("DirSQL integer range (query results)", () => {
   });
 });
 
-describe("DirSQL BigInt extract", () => {
+describe("DirSQL BigInt onFile", () => {
   beforeEach(async () => {
     await writeFile(join(dir, "marker.json"), "{}");
   });
@@ -59,12 +59,12 @@ describe("DirSQL BigInt extract", () => {
   });
 });
 
-describe("DirSQL extract error message", () => {
+describe("DirSQL onFile error message", () => {
   beforeEach(async () => {
     await writeFile(join(dir, "marker.json"), "{}");
   });
 
-  it("propagates the thrown extract error message", async () => {
+  it("propagates the thrown onFile error message", async () => {
     const db = mkdb(() => {
       throw new Error("bad JSON in posts/a.json: boom");
     });

@@ -98,13 +98,13 @@ per-file command.
 |---|---|---|
 | `ddl` | yes | A SQLite `CREATE TABLE` statement. The table name is parsed from it. Only columns declared here are populated; auto-injected facts not in the DDL are dropped. |
 | `glob` | yes | Glob pattern matched against root-relative paths. May contain `{name}` [capture segments](./columns.md#glob-captures). Every table whose glob matches a file receives that file's rows — a file can populate multiple tables. |
-| `strict` | no (default `false`) | When `true`, rows whose keys do not exactly match the declared columns are rejected with an error: extra keys error, and every declared column must be supplied (by the command/extract output, a glob capture, or a stat column). When `false`, extra keys are dropped and missing columns become `NULL`. |
+| `strict` | no (default `false`) | When `true`, rows whose keys do not exactly match the declared columns are rejected with an error: extra keys error, and every declared column must be supplied (by the command/on-file output, a glob capture, or a stat column). When `false`, extra keys are dropped and missing columns become `NULL`. |
 | `on-file` | no | A command run once per matched file; its stdout (a JSON array of row objects) becomes the file's rows. Must be non-empty. See [Command hooks](./hooks.md#on-file). |
 
 Without `on-file`, a table produces exactly one row per matched file, built
 entirely from filesystem facts. Content interpretation (frontmatter, JSON
 fields, CSV parsing) is out of scope for plain config tables — use
-`on-file`, or a programmatic [SDK table](./sdk.md#table) with an `extract`
+`on-file`, or a programmatic [SDK table](./sdk.md#table) with an `on_file`
 callback.
 
 ```toml

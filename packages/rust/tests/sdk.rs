@@ -738,22 +738,22 @@ fn duplicate_table_name_errors() {
 }
 
 #[test]
-fn extract_error_surfaces_as_extract_error() {
+fn on_file_error_surfaces_as_on_file_error() {
     let root = TempDir::new().unwrap();
     fs::write(root.path().join("boom.txt"), "data").unwrap();
     let table = Table::try_new("CREATE TABLE items (name TEXT)", "*.txt", |_| {
         Err("kaboom".into())
     });
     let err = match DirSQL::new(root.path(), vec![table]) {
-        Ok(_) => panic!("expected an Extract error from the failing extract closure"),
+        Ok(_) => panic!("expected an on-file error from the failing on-file closure"),
         Err(e) => e,
     };
     match err {
-        dirsql::DirSqlError::Extract { message, path } => {
+        dirsql::DirSqlError::OnFile { message, path } => {
             assert!(message.contains("kaboom"));
             assert!(path.contains("boom.txt"));
         }
-        other => panic!("expected Extract error, got: {other:?}"),
+        other => panic!("expected OnFile error, got: {other:?}"),
     }
 }
 

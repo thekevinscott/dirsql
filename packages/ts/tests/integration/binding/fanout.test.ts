@@ -29,12 +29,12 @@ describe("DirSQL fan-out", () => {
         {
           ddl: "CREATE TABLE ta (col_a TEXT)",
           glob: "data/*/metadata.json",
-          extract: () => [{ col_a: "A" }],
+          onFile: () => [{ col_a: "A" }],
         },
         {
           ddl: "CREATE TABLE tb (col_b TEXT)",
           glob: "data/*/metadata.json",
-          extract: () => [{ col_b: "B" }],
+          onFile: () => [{ col_b: "B" }],
         },
       ],
     });
@@ -52,12 +52,12 @@ describe("DirSQL fan-out", () => {
         {
           ddl: "CREATE TABLE ta (col_a TEXT)",
           glob: "data/*/metadata.json",
-          extract: () => [{ col_a: "A" }],
+          onFile: () => [{ col_a: "A" }],
         },
         {
           ddl: "CREATE TABLE tb (col_b TEXT)",
           glob: "data/**/metadata.json",
-          extract: () => [{ col_b: "B" }],
+          onFile: () => [{ col_b: "B" }],
         },
       ],
     });
@@ -74,12 +74,12 @@ describe("DirSQL fan-out", () => {
         {
           ddl: "CREATE TABLE a (id TEXT, col_a TEXT)",
           glob: "data/{id}/metadata.json",
-          extract: () => [{ col_a: "A" }],
+          onFile: () => [{ col_a: "A" }],
         },
         {
           ddl: "CREATE TABLE b (id TEXT, col_b TEXT)",
           glob: "**/metadata.json",
-          extract: () => [{ col_b: "B" }],
+          onFile: () => [{ col_b: "B" }],
         },
       ],
     });

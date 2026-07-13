@@ -27,7 +27,7 @@ def describe_constructor_extensions():
                 Table(
                     ddl="CREATE TABLE items (name TEXT)",
                     glob="*.json",
-                    extract=_noop_extract,
+                    on_file=_noop_extract,
                 )
             ],
             extensions=[{"path": "/nonexistent/dirsql-no-such-ext.so"}],
@@ -58,7 +58,7 @@ def describe_constructor_extensions():
                 Table(
                     ddl="CREATE TABLE items (name TEXT)",
                     glob="*.json",
-                    extract=lambda _path: [{"name": "x"}],
+                    on_file=lambda _path: [{"name": "x"}],
                 )
             ],
         )

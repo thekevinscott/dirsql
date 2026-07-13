@@ -18,7 +18,7 @@ Declaring them requires nothing else. The names below aren't a protected or
 enforced namespace — nothing stops you from declaring a column with one of
 these names for an unrelated purpose, in which case dirsql's computed value
 lands there like any other fact (unless your own row source — an `on-file`
-command or SDK `extract` callback — supplies its own value for that name;
+command or SDK `on_file` callback — supplies its own value for that name;
 see [Precedence](#precedence)).
 
 ## Stat columns
@@ -71,8 +71,8 @@ A file at `_comments/abc123/2024-05-05.jsonl` produces a row with
 ## Precedence
 
 Values produced by a table's own row source — an `on-file` command's JSON
-output or an SDK `extract` callback's return value — **win** over
-auto-injected facts of the same name. An extract that explicitly emits
+output or an SDK `on_file` callback's return value — **win** over
+auto-injected facts of the same name. An `on_file` callback that explicitly emits
 `path` is honored.
 
 Injection order per row: stat columns first, then glob captures, then
