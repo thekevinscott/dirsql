@@ -171,16 +171,17 @@ def describe_with_discovered_plugins():
                 return_value=["/a/dirsql.toml", "/b/dirsql.toml"],
             ),
         ):
-            # Prepended (top-level clap context) so they merge with a user's own
-            # top-level `-c`; a global `-c` after the subcommand would be dropped.
+            # Appended after the user's args; config flags are subcommand-local
+            # (#609) so they accumulate with the user's own `-c` in the same
+            # clap context.
             assert with_discovered_plugins(["query", "x"]) == [
+                "query",
+                "x",
                 "--include-default",
                 "-c",
                 "/a/dirsql.toml",
                 "-c",
                 "/b/dirsql.toml",
-                "query",
-                "x",
             ]
 
     def it_injects_only_c_flags_when_the_user_passed_a_config():
@@ -194,9 +195,9 @@ def describe_with_discovered_plugins():
         ):
             assert with_discovered_plugins(["-c", "user.toml", "query", "x"]) == [
                 "-c",
-                "/a/dirsql.toml",
-                "-c",
                 "user.toml",
                 "query",
                 "x",
+                "-c",
+                "/a/dirsql.toml",
             ]

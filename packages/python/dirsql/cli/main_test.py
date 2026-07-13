@@ -34,6 +34,7 @@ def describe_main():
             with (
                 patch.object(main_module, "binary_path", return_value="C:/dirsql.exe"),
                 patch.object(main_module, "is_windows", return_value=True),
+                patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(main_module, "with_resolved_extensions", lambda a: a),
                 patch(
                     "dirsql.cli.main.subprocess.run", return_value=_Completed(7)
@@ -46,6 +47,7 @@ def describe_main():
             with (
                 patch.object(main_module, "binary_path", return_value="C:/dirsql.exe"),
                 patch.object(main_module, "is_windows", return_value=True),
+                patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(main_module, "with_resolved_extensions", lambda a: a),
                 patch("dirsql.cli.main.subprocess.run", return_value=_Completed(0)),
                 patch.object(os, "execv") as execv,
@@ -60,6 +62,7 @@ def describe_main():
                     main_module, "binary_path", return_value="/usr/local/bin/dirsql"
                 ),
                 patch.object(main_module, "is_windows", return_value=False),
+                patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(main_module, "with_resolved_extensions", lambda a: a),
                 patch.object(os, "execv") as execv,
             ):
@@ -73,6 +76,7 @@ def describe_main():
             with (
                 patch.object(main_module, "binary_path", return_value="/bin/dirsql"),
                 patch.object(main_module, "is_windows", return_value=False),
+                patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(
                     main_module,
                     "with_resolved_extensions",
@@ -86,10 +90,34 @@ def describe_main():
                 ["/bin/dirsql", "--config", "cfg.toml", "--extension", "/abs/x.so"],
             )
 
+        def it_discovers_plugins_before_resolving_extensions():
+            # Discovery injects `-c <fragment>` into argv; extension resolution
+            # must then see the already-injected argv (so a fragment's own
+            # extensions could be resolved). Order matters.
+            seen: list[list[str]] = []
+            with (
+                patch.object(main_module, "binary_path", return_value="/bin/dirsql"),
+                patch.object(main_module, "is_windows", return_value=False),
+                patch.object(
+                    main_module,
+                    "with_discovered_plugins",
+                    lambda a: [*a, "-c", "/frag.toml"],
+                ),
+                patch.object(
+                    main_module,
+                    "with_resolved_extensions",
+                    lambda a: seen.append(list(a)) or a,
+                ),
+                patch.object(os, "execv"),
+            ):
+                main([])
+            assert seen == [["-c", "/frag.toml"]]
+
         def it_returns_1_when_extension_resolution_fails():
             fake_stderr = io.StringIO()
             with (
                 patch.object(main_module, "binary_path", return_value="/bin/dirsql"),
+                patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(
                     main_module,
                     "with_resolved_extensions",
@@ -106,6 +134,7 @@ def describe_main():
             with (
                 patch.object(main_module, "binary_path", return_value="/bin/dirsql"),
                 patch.object(main_module, "is_windows", return_value=False),
+                patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(main_module, "with_resolved_extensions", lambda a: a),
                 patch.object(os, "execv"),
             ):
@@ -117,6 +146,7 @@ def describe_main():
                 patch.object(sys, "argv", ["dirsql", "--help"]),
                 patch.object(main_module, "binary_path", return_value="C:/dirsql.exe"),
                 patch.object(main_module, "is_windows", return_value=True),
+                patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(main_module, "with_resolved_extensions", lambda a: a),
                 patch(
                     "dirsql.cli.main.subprocess.run", return_value=_Completed(0)
@@ -133,6 +163,7 @@ def describe_main():
             with (
                 patch.object(main_module, "binary_path", return_value="/bin/dirsql"),
                 patch.object(main_module, "is_windows", return_value=True),
+                patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(main_module, "with_resolved_extensions", lambda a: a),
                 patch(
                     "dirsql.cli.main.subprocess.run", return_value=_Completed(2)

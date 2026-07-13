@@ -142,9 +142,10 @@ def describe_plugin_discovery():
             'glob = "*.md"\n'
         )
         # A user `-c` is the base; the plugin is appended -> both tables load.
-        posts = _run(site_dir, ["-c", "user.toml", "query", "SELECT basename FROM posts"], data)
+        # Config flags are subcommand-local (#609), so `-c` follows the SQL.
+        posts = _run(site_dir, ["query", "SELECT basename FROM posts", "-c", "user.toml"], data)
         assert posts.returncode == 0, f"stdout={posts.stdout!r} stderr={posts.stderr!r}"
-        notes = _run(site_dir, ["-c", "user.toml", "query", "SELECT basename FROM notes"], data)
+        notes = _run(site_dir, ["query", "SELECT basename FROM notes", "-c", "user.toml"], data)
         assert notes.returncode == 0, f"stdout={notes.stdout!r} stderr={notes.stderr!r}"
 
     def it_errors_when_a_plugin_table_collides_with_a_user_config(staged):
@@ -155,6 +156,6 @@ def describe_plugin_discovery():
             'ddl = "CREATE TABLE notes (path TEXT)"\n'
             'glob = "*.md"\n'
         )
-        out = _run(site_dir, ["-c", "dup.toml", "query", "SELECT 1"], data)
+        out = _run(site_dir, ["query", "SELECT 1", "-c", "dup.toml"], data)
         assert out.returncode != 0, f"a duplicate `notes` table must conflict: {out.stdout!r}"
         assert "notes" in out.stderr
