@@ -1,174 +1,139 @@
 from checks.changelog_gate.decide import (
+    added_fragments,
     changed_packages,
-    contains_skip_changelog_line,
-    extract_skip_trailers,
-    fragment_package,
-    fragment_paths,
-    is_valid_fragment_name,
-    package_for_path,
+    code_touched,
+    has_skip_trailer,
+    malformed_fragments,
 )
 
 
-def describe_package_for_path():
-    def rust_core_source_is_rust():
-        assert package_for_path("packages/rust/src/lib.rs") == "rust"
+def describe_has_skip_trailer():
+    def detects_a_skip_changelog_line():
+        assert has_skip_trailer("feat: thing\n\nskip-changelog: internal refactor")
 
-    def rust_crate_manifest_is_rust():
-        assert package_for_path("packages/rust/Cargo.toml") == "rust"
+    def is_case_insensitive():
+        assert has_skip_trailer("Skip-Changelog: yes")
 
-    def top_level_cargo_toml_is_rust():
-        assert package_for_path("Cargo.toml") == "rust"
+    def false_when_absent():
+        assert not has_skip_trailer("feat: add a public method\n\nbody text")
 
-    def top_level_cargo_lock_is_rust():
-        assert package_for_path("Cargo.lock") == "rust"
+    def must_start_a_line():
+        assert not has_skip_trailer("see skip-changelog: in the docs")
 
-    def python_binding_source_is_python():
-        assert package_for_path("packages/python/src/lib.rs") == "python"
-
-    def python_package_source_is_python():
-        assert package_for_path("packages/python/dirsql/table.py") == "python"
-
-    def python_crate_manifest_is_python():
-        assert package_for_path("packages/python/Cargo.toml") == "python"
-
-    def python_test_file_is_not_sdk_source():
-        assert package_for_path("packages/python/dirsql/table_test.py") is None
-
-    def ts_package_source_is_ts():
-        assert package_for_path("packages/ts/src/table.ts") == "ts"
-
-    def ts_napi_source_is_ts():
-        assert package_for_path("packages/ts/napi/src/lib.rs") == "ts"
-
-    def ts_napi_manifest_is_ts():
-        assert package_for_path("packages/ts/napi/Cargo.toml") == "ts"
-
-    def ts_test_file_is_not_sdk_source():
-        assert package_for_path("packages/ts/src/table.test.ts") is None
-
-    def ts_spec_file_is_not_sdk_source():
-        assert package_for_path("packages/ts/src/table.spec.ts") is None
-
-    def docs_are_not_sdk_source():
-        assert package_for_path("docs/guide.md") is None
-
-    def workflow_files_are_not_sdk_source():
-        assert package_for_path(".github/workflows/ci.yml") is None
+    def false_for_empty_input():
+        assert not has_skip_trailer("")
 
 
 def describe_changed_packages():
-    def collects_the_distinct_packages():
+    def collects_unique_and_sorted():
         assert changed_packages(
             [
-                "packages/rust/src/lib.rs",
-                "packages/python/dirsql/table.py",
-                "packages/python/src/lib.rs",
+                "packages/python/foo.py",
+                "packages/ts/src/bar.ts",
+                "packages/python/baz.py",
                 "README.md",
+                "packages",  # too short to name a package
             ]
-        ) == {"rust", "python"}
+        ) == ["python", "ts"]
 
-    def is_empty_when_nothing_is_sdk_source():
-        assert changed_packages(["README.md", "docs/guide.md"]) == set()
+    def a_two_segment_path_still_names_its_package():
+        assert changed_packages(["packages/rust"]) == ["rust"]
 
-    def is_empty_for_no_paths():
-        assert changed_packages([]) == set()
-
-
-def describe_fragment_package():
-    def a_dated_fragment_maps_to_its_package():
+    def none_outside_packages():
         assert (
-            fragment_package("packages/python/changelog.d/2026-07-13-repeatable.md")
-            == "python"
+            changed_packages(["README.md", "docs/x.md", ".github/workflows/ci.yml"])
+            == []
         )
 
-    def a_badly_named_md_fragment_still_maps_to_its_package():
-        # Name validity is a separate check; location alone identifies the pkg.
-        assert fragment_package("packages/ts/changelog.d/notes.md") == "ts"
-
-    def the_dir_readme_is_not_a_fragment():
-        assert fragment_package("packages/rust/changelog.d/README.md") is None
-
-    def a_non_md_file_is_not_a_fragment():
-        assert fragment_package("packages/rust/changelog.d/notes.txt") is None
-
-    def a_file_outside_a_package_changelog_dir_is_not_a_fragment():
-        assert fragment_package("changelog.d/2026-07-13-x.md") is None
-
-    def an_unknown_package_is_not_a_fragment():
-        assert fragment_package("packages/docs/changelog.d/2026-07-13-x.md") is None
-
-    def a_nested_path_is_not_a_fragment():
-        assert fragment_package("packages/rust/changelog.d/sub/2026-07-13-x.md") is None
+    def empty_for_no_paths():
+        assert changed_packages([]) == []
 
 
-def describe_is_valid_fragment_name():
-    def a_dated_kebab_slug_is_valid():
-        assert (
-            is_valid_fragment_name("packages/rust/changelog.d/2026-07-13-fix-race.md")
-            is True
+def describe_code_touched():
+    def true_for_source():
+        assert code_touched(["packages/python/dirsql/core.py"], "python")
+
+    def true_for_rust_source():
+        assert code_touched(["packages/rust/src/lib.rs"], "rust")
+
+    def true_for_ts_napi_source():
+        assert code_touched(["packages/ts/napi/src/lib.rs"], "ts")
+
+    def false_for_pointer_stubs():
+        assert not code_touched(["packages/python/CHANGELOG.md"], "python")
+        assert not code_touched(["packages/python/MIGRATIONS.md"], "python")
+
+    def false_for_fragment_files():
+        assert not code_touched(
+            ["packages/rust/changelog.d/2026-07-13-fix.md"], "rust"
+        )
+        assert not code_touched(
+            ["packages/rust/migrations.d/2026-07-13-break.md"], "rust"
         )
 
-    def a_single_word_slug_is_valid():
-        assert is_valid_fragment_name("packages/rust/changelog.d/2026-07-13-x.md") is True
+    def false_for_underscore_python_tests():
+        assert not code_touched(["packages/python/dirsql/core_test.py"], "python")
 
-    def a_missing_date_is_invalid():
-        assert is_valid_fragment_name("packages/rust/changelog.d/fix-race.md") is False
+    def false_for_dot_test_ts_sources():
+        assert not code_touched(["packages/ts/src/bar.test.ts"], "ts")
+        assert not code_touched(["packages/ts/src/bar.spec.tsx"], "ts")
 
-    def an_uppercase_slug_is_invalid():
-        assert (
-            is_valid_fragment_name("packages/rust/changelog.d/2026-07-13-Fix.md") is False
+    def false_for_test_directories():
+        assert not code_touched(["packages/python/tests/conftest.py"], "python")
+        assert not code_touched(["packages/rust/tests/cli.rs"], "rust")
+
+    def ignores_other_packages():
+        assert not code_touched(["packages/ts/src/bar.ts"], "python")
+
+    def false_when_only_exempt_files_change():
+        assert not code_touched(
+            ["packages/python/CHANGELOG.md", "packages/python/dirsql/x_test.py"],
+            "python",
         )
 
-    def a_trailing_hyphen_is_invalid():
-        assert (
-            is_valid_fragment_name("packages/rust/changelog.d/2026-07-13-fix-.md") is False
-        )
 
+def describe_added_fragments():
+    def a_changelog_fragment_counts():
+        added = ["packages/ts/changelog.d/2026-07-13-repeatable-config.md"]
+        assert added_fragments(added, "ts") == added
 
-def describe_fragment_paths():
-    def returns_only_fragment_paths():
-        assert fragment_paths(
-            [
-                "packages/rust/src/lib.rs",
-                "packages/rust/changelog.d/2026-07-13-x.md",
-                "packages/rust/changelog.d/README.md",
-            ]
-        ) == ["packages/rust/changelog.d/2026-07-13-x.md"]
+    def a_migrations_fragment_counts():
+        added = ["packages/python/migrations.d/2026-07-13-rename-config-key.md"]
+        assert added_fragments(added, "python") == added
 
-    def returns_empty_for_no_fragments():
-        assert fragment_paths(["README.md", "CHANGELOG.md"]) == []
+    def a_fragment_in_another_package_does_not_count():
+        added = ["packages/ts/changelog.d/2026-07-13-fix.md"]
+        assert added_fragments(added, "python") == []
 
+    def requires_a_slug_after_the_date():
+        assert added_fragments(["packages/rust/changelog.d/2026-07-13.md"], "rust") == []
 
-def describe_extract_skip_trailers():
-    def filters_blank_lines():
-        assert extract_skip_trailers("reason one\n\nreason two\n") == [
-            "reason one",
-            "reason two",
+    def ignores_paths_outside_fragment_dirs():
+        added = [
+            "packages/rust/2026-07-13-fix.md",
+            "packages/rust/changelog.d/nested/2026-07-13-fix.md",
         ]
-
-    def returns_empty_list_when_no_trailers():
-        assert extract_skip_trailers("") == []
-
-    def returns_empty_list_for_whitespace_only_output():
-        assert extract_skip_trailers("\n\n") == []
+        assert added_fragments(added, "rust") == []
 
 
-def describe_contains_skip_changelog_line():
-    def detects_a_skip_changelog_line():
-        assert (
-            contains_skip_changelog_line("feat: x\n\nskip-changelog: internal\n") is True
-        )
+def describe_malformed_fragments():
+    def flags_bad_names():
+        changed = [
+            "packages/rust/changelog.d/Fix.md",  # no date, uppercase
+            "packages/rust/migrations.d/2026-07-13-fix.txt",  # wrong extension
+        ]
+        assert malformed_fragments(changed) == changed
 
-    def detects_it_case_insensitively_and_indented():
-        assert contains_skip_changelog_line("   Skip-Changelog: why\n") is True
+    def allows_wellformed_and_readme():
+        changed = [
+            "packages/rust/changelog.d/2026-07-13-fix-cascade.md",
+            "packages/rust/changelog.d/README.md",
+            "packages/ts/migrations.d/README.md",
+        ]
+        assert malformed_fragments(changed) == []
 
-    def false_when_no_skip_changelog_present():
-        assert (
-            contains_skip_changelog_line("feat: x\n\nCo-Authored-By: a <a@b.c>\n") is False
-        )
+    def ignores_files_outside_fragment_dirs():
+        assert malformed_fragments(["packages/rust/src/lib.rs", "README.md"]) == []
 
-    def false_for_empty_input():
-        assert contains_skip_changelog_line("") is False
-
-    def a_mention_mid_line_does_not_count():
-        assert contains_skip_changelog_line("see the skip-changelog: docs\n") is False
+    def ignores_nested_files_inside_a_fragment_dir():
+        assert malformed_fragments(["packages/rust/changelog.d/sub/bad-name.md"]) == []

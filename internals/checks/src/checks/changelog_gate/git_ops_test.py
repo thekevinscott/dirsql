@@ -1,9 +1,9 @@
 from unittest import mock
 
 from checks.changelog_gate.git_ops import (
+    added_files,
     changed_files,
     commit_messages,
-    skip_trailers,
 )
 
 
@@ -18,18 +18,17 @@ def describe_changed_files():
             check=True,
         )
 
+    def drops_blank_lines():
+        runner = mock.Mock(return_value=mock.Mock(stdout="a.py\n\n"))
+        assert changed_files("base", "head", runner=runner) == ["a.py"]
 
-def describe_skip_trailers():
-    def returns_raw_stdout():
-        runner = mock.Mock(return_value=mock.Mock(stdout="reason\n"))
-        assert skip_trailers("base", "head", runner=runner) == "reason\n"
+
+def describe_added_files():
+    def parses_added_only_diff():
+        runner = mock.Mock(return_value=mock.Mock(stdout="new.md\n"))
+        assert added_files("base", "head", runner=runner) == ["new.md"]
         runner.assert_called_once_with(
-            [
-                "git",
-                "log",
-                "--format=%(trailers:key=skip-changelog,valueonly)",
-                "base..head",
-            ],
+            ["git", "diff", "--name-only", "--diff-filter=A", "base...head"],
             capture_output=True,
             text=True,
             check=True,
