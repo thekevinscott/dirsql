@@ -48,7 +48,7 @@ requests, closes open `/events` streams, and exits.
 | `-c, --config <path>` | baked-in default | Path to a [config file](./config.md). **Repeatable** (`-c a -c b`): the configs load and merge in argv order — see [Composing multiple configs](./config.md#composing-multiple-configs). The index is always rooted at the **invocation directory** (the current working directory), regardless of where a config lives — so `--config /elsewhere/.dirsql.toml` still indexes the directory you ran `dirsql` from. With none given, the [baked-in default](#default-mode) `files` table is served — a `./.dirsql.toml` on disk is **not** auto-loaded; pass it explicitly. A `-c` naming a file that does not exist is an [error](#degraded-mode), not a silent fallback to the default. |
 | `--host <addr>` | `localhost` | Bind address. |
 | `--port <n>` | `7117` | TCP port to bind. |
-| `--persist [<path>]` | off | Keep the SQLite index on disk between runs so a restart only re-parses files that actually changed. Bare `--persist` caches at `<root>/.dirsql/cache.db`; `--persist <path>` caches at `<path>`. Off by default (the index is ephemeral). Global — also honored by [`dirsql query`](#dirsql-query). See [Keep the index across restarts](../howto/persist.md). |
+| `--persist [<path>]` | off | Keep the SQLite index on disk between runs so a restart only re-parses files that actually changed. Bare `--persist` caches at `<root>/.dirsql/cache.db`; `--persist <path>` caches at `<path>`. Off by default (the index is ephemeral). Also available on [`dirsql query`](#dirsql-query), passed after the subcommand. See [Keep the index across restarts](../howto/persist.md). |
 | `--extension <path>` | none | Load a SQLite extension by literal path, overriding the config's `[[dirsql.extension]]` entries. Repeatable. Format: `<path>` or `<path>::<entrypoint>`. Internal plumbing for the pip/npm launchers, which resolve package-name extensions and pass the resolved paths here — not intended for direct use. When any `--extension` is present, the config file's own extension entries are not loaded. |
 | `--version` | | Print the version and exit. |
 | `--help` | | Print usage and exit. |
@@ -115,9 +115,17 @@ Run a SQL query from the shell:
 dirsql query "SELECT basename, size FROM files ORDER BY size DESC LIMIT 5"
 # [{"basename":"model.bin","size":104857600}, …]
 
-# A config table (`posts`) needs its config passed explicitly.
-dirsql -c ./.dirsql.toml query "SELECT COUNT(*) AS n FROM posts" | jq '.[0].n'
+# A config table (`posts`) needs its config passed explicitly, AFTER the subcommand.
+dirsql query "SELECT COUNT(*) AS n FROM posts" -c ./.dirsql.toml | jq '.[0].n'
 ```
+
+::: warning Config flags are subcommand-local
+Pass `-c`/`--config`, `--persist`, and `--extension` **after** `query`
+(`dirsql query "<sql>" -c <cfg>`). A config flag placed *before* the subcommand
+is a hard error — `error: the subcommand 'query' cannot be used with
+'--config <CONFIG>'` — never silently dropped. (In server mode, with no
+subcommand, the same flags are passed directly: `dirsql -c <cfg>`.)
+:::
 
 The subcommand builds the index, runs the SQL, prints the result rows as a
 JSON array on stdout (byte-identical to the [`POST /query`](./http-api.md)
@@ -126,9 +134,9 @@ response body), and exits `0`.
 `dirsql query` is a thin adapter over the **same query pipeline the server
 uses**, so behavior is identical to `POST /query` by construction:
 
-- **Config discovery** honors `--config` (with none given, the
-  [baked-in default](#default-mode)), and `--extension` overrides, exactly as
-  server mode does.
+- **Config discovery** honors `--config` passed after the subcommand (with none
+  given, the [baked-in default](#default-mode)), and `--extension` overrides,
+  exactly as server mode does.
 - **`--persist [<path>]`** is honored, so a repeated `dirsql query` reuses the
   on-disk cache. Because its value is optional, place a bare `--persist` after
   the SQL (`dirsql query "SELECT …" --persist`) or use the `=` form

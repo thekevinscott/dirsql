@@ -31,7 +31,7 @@ auto-load a `.dirsql.toml` from the current directory. Each matched file is
 one row:
 
 ```bash
-dirsql -c ./.dirsql.toml query "SELECT path, size FROM posts ORDER BY path"
+dirsql query "SELECT path, size FROM posts ORDER BY path" -c ./.dirsql.toml
 ```
 
 ```json

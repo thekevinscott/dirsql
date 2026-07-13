@@ -33,7 +33,7 @@ Pass the config with [`-c`](../reference/cli.md#flags) (`dirsql` does not
 auto-load a `.dirsql.toml` from the current directory):
 
 ```bash
-dirsql -c ./.dirsql.toml query "SELECT year, month, basename FROM photos ORDER BY year, month"
+dirsql query "SELECT year, month, basename FROM photos ORDER BY year, month" -c ./.dirsql.toml
 ```
 
 ```json
@@ -43,7 +43,7 @@ dirsql -c ./.dirsql.toml query "SELECT year, month, basename FROM photos ORDER B
 Captures are real SQL columns, so aggregation works:
 
 ```bash
-dirsql -c ./.dirsql.toml query "SELECT year, COUNT(*) AS photos FROM photos GROUP BY year"
+dirsql query "SELECT year, COUNT(*) AS photos FROM photos GROUP BY year" -c ./.dirsql.toml
 ```
 
 ```json
