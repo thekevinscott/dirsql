@@ -24,7 +24,7 @@ def _missing_message(packages: list[str]) -> str:
     lines = "\n".join(
         f"    packages/{pkg}/changelog.d/YYYY-MM-DD-<slug>.md" for pkg in packages
     )
-    plural = "s" if len(packages) > 1 else ""
+    plural = "s" if packages[1:] else ""
     return f"""\
 ::error file=CHANGELOG.md::SDK code changed but no changelog fragment was added for {len(packages)} package{plural}: {", ".join(packages)}.
 

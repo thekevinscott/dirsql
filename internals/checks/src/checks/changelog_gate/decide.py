@@ -7,8 +7,6 @@ root ``changelog.d/`` directory and the direct ``CHANGELOG.md`` edit are no
 longer accepted -- ``CHANGELOG.md`` is a frozen pointer stub (#563).
 """
 
-from __future__ import annotations
-
 import fnmatch
 import re
 
@@ -46,8 +44,12 @@ _PACKAGE_SOURCES = {
 # `packages/<pkg>/changelog.d/<file>` -- captures the package slug and filename.
 _FRAGMENT_PATH_RE = re.compile(r"^packages/([^/]+)/changelog\.d/([^/]+)$")
 
-# Template-lib fragment name: an ISO date, a kebab-case slug, and `.md`.
-_FRAGMENT_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*\.md$")
+# A well-formed fragment path: a package changelog dir, then the template-lib
+# name (an ISO date, a kebab-case slug, and `.md`). Matched whole so there is
+# no basename-splitting to mutate.
+_FRAGMENT_NAME_RE = re.compile(
+    r"^packages/[^/]+/changelog\.d/\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*\.md$"
+)
 
 
 def package_for_path(path: str) -> str | None:
@@ -83,8 +85,8 @@ def fragment_package(path: str) -> str | None:
 
 
 def is_valid_fragment_name(path: str) -> bool:
-    """Whether a fragment's filename matches ``YYYY-MM-DD-<slug>.md``."""
-    return _FRAGMENT_NAME_RE.match(path.rsplit("/", 1)[-1]) is not None
+    """Whether a fragment path's filename matches ``YYYY-MM-DD-<slug>.md``."""
+    return _FRAGMENT_NAME_RE.match(path) is not None
 
 
 def fragment_paths(paths) -> list[str]:

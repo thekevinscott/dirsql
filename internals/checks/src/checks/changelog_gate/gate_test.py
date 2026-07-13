@@ -64,7 +64,23 @@ def describe_run():
         assert rc == 1
         err = capsys.readouterr().err
         assert "packages/rust/changelog.d/YYYY-MM-DD-<slug>.md" in err
-        assert "1 package" in err
+        # Singular, not "1 packages" -- pins the plural to exactly-one.
+        assert "1 package:" in err
+        assert "1 packages" not in err
+
+    def an_extra_fragment_for_an_unchanged_package_is_harmless(capsys):
+        # rust source changed + covered; a stray ts fragment (ts unchanged)
+        # must not turn the gate red -- the requirement is set difference
+        # (changed - covered), not symmetric difference.
+        rc = _run(
+            [
+                "packages/rust/src/lib.rs",
+                "packages/rust/changelog.d/2026-07-13-core.md",
+                "packages/ts/changelog.d/2026-07-13-extra.md",
+            ]
+        )
+        assert rc == 0
+        assert "fragment(s) present for: rust" in capsys.readouterr().out
 
     def names_only_the_uncovered_package_when_another_is_covered(capsys):
         rc = _run(
