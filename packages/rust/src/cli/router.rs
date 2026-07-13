@@ -28,14 +28,14 @@ pub(super) struct AppContext {
     pub events: broadcast::Sender<String>,
     pub cancel: watch::Receiver<bool>,
     pub query_timeout: Duration,
-    /// Optional server-wide `pre-query` hook. When `Some`, `POST /query`
-    /// rewrites the request body through the command; when `None`, the body
-    /// is parsed as `{"sql": …}`.
-    pub pre_query: Option<PreQuery>,
-    /// Optional server-wide `post-query` hook. When `Some`, a successful
-    /// `POST /query` result set is reshaped by the command before responding;
-    /// when `None`, the rows are returned as-is.
-    pub post_query: Option<PostQuery>,
+    /// Ordered `pre-query` command chain. Empty means `POST /query` parses the
+    /// body as `{"sql": …}`; otherwise the raw body is piped through each stage
+    /// in order (body → stage₁ → … → SQL).
+    pub pre_query: Vec<PreQuery>,
+    /// Ordered `post-query` command chain. Empty means the rows are returned
+    /// as-is; otherwise a successful result set is piped through each stage in
+    /// order (rows → stage₁ → … → response).
+    pub post_query: Vec<PostQuery>,
 }
 
 pub(super) type SharedCtx = Arc<AppContext>;
@@ -58,8 +58,8 @@ async fn handle_query(State(ctx): State<SharedCtx>, body: String) -> Response {
         &ctx.state,
         body,
         ctx.query_timeout,
-        ctx.pre_query.as_ref(),
-        ctx.post_query.as_ref(),
+        &ctx.pre_query,
+        &ctx.post_query,
     )
     .await
     {

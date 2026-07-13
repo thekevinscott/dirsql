@@ -138,8 +138,8 @@ async fn main() -> ExitCode {
 /// stderr with a non-zero exit.
 async fn run_query(cli: &Cli, args: QueryArgs) -> ExitCode {
     let state = load_state(cli);
-    let pre_query = load_pre_query(cli);
-    let post_query = load_post_query(cli);
+    let pre_query: Vec<PreQuery> = load_pre_query(cli).into_iter().collect();
+    let post_query: Vec<PostQuery> = load_post_query(cli).into_iter().collect();
     // Same default the server binds with; the pipeline enforces it.
     let timeout = ServerConfig::default().query_timeout;
 
@@ -147,8 +147,8 @@ async fn run_query(cli: &Cli, args: QueryArgs) -> ExitCode {
         &state,
         query_body(&args.sql),
         timeout,
-        pre_query.as_ref(),
-        post_query.as_ref(),
+        &pre_query,
+        &post_query,
     )
     .await
     {
