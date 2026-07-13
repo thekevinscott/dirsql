@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  python-unit:
+  python-sdk:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
       languages: '["python"]'
@@ -18,7 +18,7 @@ jobs:
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
 
-  typescript-unit:
+  typescript-sdk:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
       languages: '["typescript"]'

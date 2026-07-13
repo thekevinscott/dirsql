@@ -160,7 +160,7 @@ jobs:
         working-directory: packages/python
 
   # Unit coverage now runs in the reusable testing-conventions workflow
-  # (conventions.yml, `python-unit` gates: unit-coverage) after upstream #284
+  # (conventions.yml, `python-sdk` gates: unit-coverage) after upstream #284
   # taught the coverage suite job to install/build from the derived package
   # root (python_env=uv -> `uv sync` builds maturin; provision_rust). The
   # bespoke coverage job that lived here is retired (#412).
