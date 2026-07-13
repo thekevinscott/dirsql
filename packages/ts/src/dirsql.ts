@@ -1,6 +1,6 @@
 import type { NativeDirSQL } from "./core.js";
 import { getCore } from "./core.js";
-import { resolveConfigExtensionSpecs } from "./resolve-config-extensions.js";
+import { resolveConfigsExtensionSpecs } from "./resolve-config-extensions.js";
 import { resolveExtensionPath } from "./resolve-extension.js";
 import type { TableDef } from "./table.js";
 
@@ -38,13 +38,14 @@ export interface DirSQLOptions {
   /** Glob patterns (relative to `root`) to ignore. */
   ignore?: string[];
   /**
-   * Path to a `.dirsql.toml` config file. Its `[[table]]` entries are
-   * appended to any programmatic `tables`; its `[dirsql].ignore` patterns
-   * are appended to any explicit `ignore`. The config file's location does
-   * not affect the index root — that is the explicit `root` when given,
-   * otherwise the process working directory.
+   * Path to a `.dirsql.toml` config file, or an array of paths that merge in
+   * order. Each config's `[[table]]` entries are appended to any programmatic
+   * `tables`; its `[dirsql].ignore` patterns are appended to any explicit
+   * `ignore`; a duplicate table name across configs errors. The config file's
+   * location does not affect the index root — that is the explicit `root` when
+   * given, otherwise the process working directory.
    */
-  config?: string;
+  config?: string | string[];
   /**
    * Enable persistent on-disk SQLite cache. When `true`, the database is
    * written to `<root>/.dirsql/cache.db` (override via `persistPath`) so
@@ -141,6 +142,14 @@ export class DirSQL {
     const options: DirSQLOptions =
       typeof arg === "string" ? { config: arg } : arg;
     this._options = options;
+    // A single path or an array; the array merges in order (each config's
+    // [[table]] / ignore / [[dirsql.extension]] accumulate).
+    const configPaths =
+      options.config == null
+        ? []
+        : typeof options.config === "string"
+          ? [options.config]
+          : options.config;
     const Ctor = getCore().DirSQL;
     // Extension paths (possibly bare package names) are resolved inside the
     // promise chain so a resolution error rejects `ready` rather than
@@ -157,8 +166,8 @@ export class DirSQL {
         // suppresses the core's own config-extension loading so they are not
         // loaded twice.
         const configExtensions =
-          options.config != null
-            ? resolveConfigExtensionSpecs(options.config)
+          configPaths.length > 0
+            ? resolveConfigsExtensionSpecs(configPaths)
             : null;
         const merged =
           configExtensions !== null
@@ -168,7 +177,7 @@ export class DirSQL {
           options.root ?? null,
           options.tables ?? null,
           options.ignore ?? null,
-          options.config ?? null,
+          configPaths.length > 0 ? configPaths : null,
           options.persist ?? null,
           options.persistPath ?? null,
           merged,

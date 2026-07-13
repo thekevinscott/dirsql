@@ -102,7 +102,7 @@ impl DirSQL {
         root: Option<String>,
         tables: Option<Array>,
         ignore: Option<Vec<String>>,
-        config: Option<String>,
+        config: Option<Vec<String>>,
         persist: Option<bool>,
         persist_path: Option<String>,
         extensions: Option<Vec<ExtensionSpec>>,
@@ -122,7 +122,11 @@ impl DirSQL {
             .collect();
         Ok(AsyncTask::new(OpenTask {
             root: root.map(PathBuf::from),
-            config_path: config.map(PathBuf::from),
+            config_paths: config
+                .unwrap_or_default()
+                .into_iter()
+                .map(PathBuf::from)
+                .collect(),
             tables: Some(rust_tables),
             ignore: ignore.unwrap_or_default(),
             persist: persist.unwrap_or(false),
@@ -179,7 +183,7 @@ impl DirSQL {
 /// napi handles remain valid when invoking each JS `onFile` callback.
 pub struct OpenTask {
     root: Option<PathBuf>,
-    config_path: Option<PathBuf>,
+    config_paths: Vec<PathBuf>,
     // `Option` so we can move `tables` out in `compute` without requiring
     // `Table: Default` for `std::mem::take`.
     tables: Option<Vec<Table>>,
@@ -213,7 +217,7 @@ impl Task for OpenTask {
         if let Some(root) = self.root.take() {
             builder = builder.root(root);
         }
-        if let Some(cfg) = self.config_path.take() {
+        for cfg in std::mem::take(&mut self.config_paths) {
             builder = builder.config(cfg);
         }
         if self.persist {

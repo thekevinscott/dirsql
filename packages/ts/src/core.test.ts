@@ -47,4 +47,31 @@ describe("NativeDirSQLConstructor contract", () => {
       true,
     );
   });
+
+  it("accepts an array of config paths as openAsync's fourth argument (#589)", () => {
+    const openAsync = vi.fn().mockResolvedValue({});
+    const ctor = { openAsync } as unknown as NativeDirSQLConstructor;
+    // Pins the repeatable-config contract: `config` is `string[] | null`, so
+    // passing a single string here would fail to compile.
+    ctor.openAsync(
+      "/r",
+      null,
+      null,
+      ["/a.toml", "/b.toml"],
+      null,
+      null,
+      null,
+      null,
+    );
+    expect(openAsync).toHaveBeenCalledWith(
+      "/r",
+      null,
+      null,
+      ["/a.toml", "/b.toml"],
+      null,
+      null,
+      null,
+      null,
+    );
+  });
 });
