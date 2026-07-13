@@ -258,17 +258,21 @@ When adding a feature, the PR must include docs AND tests. When docs change, tes
 
 ### Changelog and Migrations
 
-**Every PR that touches public-facing SDK code must add a changelog entry.** This is enforced in CI by `.github/workflows/changelog-check.yml`; an unmet gate blocks merge.
+**Every PR that touches public-facing SDK code must add a changelog fragment.** This is enforced in CI by the `changelog-gate` check (`internals/checks`); an unmet gate blocks merge.
 
-The scope is intentionally broad -- any change under SDK source (Rust core, Python/TS packages, binding crates, or top-level `Cargo.toml` / `Cargo.lock`) requires a changelog entry, excluding test-only files. We err toward requiring entries because the project does not yet strictly follow semver, so the changelog must carry the signal that semver would otherwise provide.
+The scope is intentionally broad -- any change under SDK source (Rust core, Python/TS packages, binding crates, or top-level `Cargo.toml` / `Cargo.lock`) requires a fragment, excluding test-only files. We err toward requiring entries because the project does not yet strictly follow semver, so the changelog must carry the signal that semver would otherwise provide.
 
-**Write the entry as a fragment, not a `CHANGELOG.md` edit.** Editing `CHANGELOG.md` directly merge-conflicts with every other in-flight PR, so entries are added as one new file per PR:
+**Fragments are per-package (#565).** Each SDK package (`python`, `ts`, `rust`) owns its own changelog under `packages/<pkg>/changelog.d/`, and a PR adds one fragment per **changed package** -- the fragment lives under the same package whose source changed:
 
 ```
-changelog.d/<branch-slug>.<category>.md
+packages/<pkg>/changelog.d/YYYY-MM-DD-<slug>.md
 ```
 
-`<branch-slug>` is the PR's branch name, lowercased and sanitized (the slug format testing-conventions uses for branch-keyed e2e receipts); `<category>` is one of `added` / `changed` / `deprecated` / `removed` / `fixed` / `security` (Keep a Changelog); the content is the entry body exactly as it would appear in `CHANGELOG.md` -- typically one bold-led bullet. Migration entries (see below) likewise go in `migrations.d/<branch-slug>.md`, one complete templated entry per file. At release time the fragments are assembled into the real files and deleted. During the transition (epic #561) the gate accepts either a fragment or a direct `CHANGELOG.md` edit; direct edits stop being accepted once release-time assembly lands, so always write the fragment.
+- `<pkg>` is the package whose public source the PR changed. The Rust core (`packages/rust/src`, the workspace `Cargo.toml` / `Cargo.lock`) is `rust`; the Python package/binding (`packages/python/**`) is `python`; the TS package + napi crate (`packages/ts/**`) is `ts`. A PR that touches more than one package needs a fragment in each.
+- `YYYY-MM-DD` is the UTC merge date; `<slug>` is a short kebab-case description (`2026-07-13-fix-watcher-race.md`).
+- The body leads with a Keep a Changelog **category** in bold -- `**Added**` / `**Changed**` / `**Deprecated**` / `**Removed**` / `**Fixed**` / `**Security**` -- then the entry text, exactly as it would read in a changelog. The category lives in the body, **not** the filename.
+
+Fragments are **permanent and append-only** -- nothing is ever assembled back into a root `CHANGELOG.md` and deleted. The root `CHANGELOG.md` / `MIGRATIONS.md` are **frozen** pointer stubs holding only the pre-fragment history (#563/#564); do not edit them. Version history is the `git log --tags` record (the repo tags a release on every merge).
 
 **Escape hatch.** If a PR genuinely has no observable change -- a pure refactor, an internal rename, a type-signature tidy with the same runtime -- bypass the gate by adding a trailer to any commit in the PR:
 
@@ -276,13 +280,11 @@ changelog.d/<branch-slug>.<category>.md
 skip-changelog: <reason>
 ```
 
-The reason is logged to CI and stays in git history, so the decision is auditable. Use this sparingly; when in doubt, write the changelog entry.
+The reason is logged to CI and stays in git history, so the decision is auditable. Use this sparingly; when in doubt, write the changelog fragment.
 
 **`skip-changelog:` must be a real git trailer** -- in the **last** paragraph of the commit message, with **no blank line** separating it from the other trailers (`Co-Authored-By:`, `Claude-Session:`). A blank line splits it into its own paragraph, git stops treating it as a trailer, and the gate silently sees no bypass (it now reports this specific malformation rather than the generic "no entry" -- dirsql#582). Correct: `skip-changelog: <reason>` immediately above/below the other trailers in one contiguous block.
 
-Every entry goes under `## [Unreleased]`, categorized per [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`.
-
-**`MIGRATIONS.md` is additionally required when a PR:**
+**A migration fragment is additionally required when a PR:**
 
 - Breaks a public API (signature, name, return type, config key, CLI flag, action input).
 - Removes a previously deprecated symbol.
@@ -290,7 +292,7 @@ Every entry goes under `## [Unreleased]`, categorized per [Keep a Changelog](htt
 
 Purely additive changes and behavior-preserving bug fixes do NOT require a migration entry.
 
-Migration entries live under `## [Unreleased]` in `MIGRATIONS.md` and must follow the template at the bottom of that file. Every entry has five required subsections:
+Migration fragments are per-package too, one file per changed package under `packages/<pkg>/migrations.d/YYYY-MM-DD-<slug>.md` (same naming as changelog fragments). Each is a complete entry -- a `### <title>` heading plus the five required subsections:
 
 1. **Summary** -- one paragraph: what broke, which SDKs/call sites, and why.
 2. **Required changes** -- table of before/after snippets for every affected surface (config, CLI, action inputs, function signatures, return types).
@@ -298,17 +300,17 @@ Migration entries live under `## [Unreleased]` in `MIGRATIONS.md` and must follo
 4. **Behavior changes without code changes** -- same API, different runtime behavior.
 5. **Verification** -- a concrete dry-run command plus expected output that a consumer can run to confirm the upgrade.
 
-If a subsection does not apply, keep the heading and write `_None._`. Do not omit subsections.
+If a subsection does not apply, keep the heading and write `_None._`. Do not omit subsections. The template lives at the bottom of the frozen root `MIGRATIONS.md`.
 
-`MIGRATIONS.md` is the source of truth and is surfaced on the docs site at `/migrations` via a VitePress include (`docs/migrations.md`). Do not edit the rendered page; edit the root file and the docs site picks up the change on the next build.
+The frozen root `MIGRATIONS.md` is surfaced on the docs site at `/migrations` via a VitePress include (`docs/migrations.md`). Do not edit the rendered page.
 
 **PR body requirement:** PRs that touch SDK code must contain the following block (checkboxes filled in):
 
 ```markdown
 ## Changelog / Migrations
 
-- [ ] Changelog fragment added under `changelog.d/` (or: `skip-changelog` trailer on a commit with reason)
-- [ ] Migration fragment added under `migrations.d/` (or: not required -- additive/bugfix only)
+- [ ] Changelog fragment added under `packages/<pkg>/changelog.d/` for each changed package (or: `skip-changelog` trailer on a commit with reason)
+- [ ] Migration fragment added under `packages/<pkg>/migrations.d/` (or: not required -- additive/bugfix only)
 ```
 
 Orchestrators must block merges of SDK-touching PRs that miss either file when required.

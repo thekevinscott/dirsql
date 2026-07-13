@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Frozen history (pre-fragment)
 
+<!-- The block below consolidates the last transitional root-level changelog
+     fragments (written under the dual-mode gate, before the per-package
+     fragment gate landed in #565). They are folded in here so no record is
+     lost; new entries live under packages/<pkg>/changelog.d/. -->
+
+### Added
+
+- **The Rust builder and core now accept multiple config files, merged in order.** `DirSQLBuilder::config(path)` is repeatable — each call appends onto an ordered list. `[[table]]`, `ignore`, and `[[dirsql.extension]]` entries accumulate across configs in call order; each config's `on-file` hooks run from that config file's own directory under its own `[dirsql].hook-timeout`; a duplicate table name across configs errors (`DuplicateTable`). A single config is byte-identical to before. (#553, #545)
+- **`dirsql -c`/`--config` is now repeatable.** Pass several config files (`dirsql -c a.toml -c b.toml`, also on `dirsql query`); they load and merge in argv order — `[[table]]`, `ignore`, and `[[dirsql.extension]]` entries accumulate, and `pre-query` / `post-query` hooks chain FIFO. Each config's hooks run from its own directory under its own `[dirsql].hook-timeout`; a duplicate table name across configs errors. A single `-c` (or none, defaulting to `./.dirsql.toml`) is unchanged. (#547)
+- **`pre-query` and `post-query` hooks can now be chained.** `ServerConfig::with_pre_query` / `with_post_query` are repeatable; registered stages run FIFO — the request body pipes through each `pre-query` stage to the final SQL, and result rows pipe through each `post-query` stage to the response, each stage receiving the previous stage's output as `{args}` (post stages also on stdin). A failing stage fails the request, surfacing its stderr. A single hook is byte-identical to before. (#546)
+- **Python SDK: `DirSQL(config=...)` accepts a list of config files.** Pass `config=["./.dirsql.toml", "~/team/embeddings.toml", "./local.toml"]` and the configs merge in order — `[[table]]` / `ignore` / `[[dirsql.extension]]` accumulate, a duplicate table name across configs errors — mirroring the Rust builder's repeatable `.config()` (#545) and the CLI's repeatable `-c/--config` (#547). A single `config="..."` string is unchanged. Config-file extensions named by package are resolved across every config. (#588)
+- **TypeScript SDK: `config` accepts an array of config files.** Pass `new DirSQL({ config: ["./.dirsql.toml", "~/team/embeddings.toml", "./local.toml"] })` and the configs merge in order — `[[table]]` / `ignore` / `[[dirsql.extension]]` accumulate, a duplicate table name across configs errors — mirroring the Rust builder's repeatable `.config()` (#545) and the CLI's repeatable `-c/--config` (#547). A single `config` string and `new DirSQL(configPath)` are unchanged. Config-file extensions named by package are resolved across every config. (#589)
+
+### Changed
+
+- **Fan-out file→table matching:** a file matching multiple tables' globs now populates **every** matching table — each `Table` is an independent view over the files matching its glob — replacing the previous "first matching table wins" routing. Captures are resolved per-glob, deletions fan out to every matching table, and declaration order no longer affects routing. The persistent cache is now keyed by `(rel_path, table_name)` (sidecar schema version `3` → `4`), so an existing cache is discarded and rebuilt once on the first run after upgrading. (#580)
+- **Renamed the per-file row seam from `extract` to `on_file` / `onFile`** across all three SDKs, unifying on the config spelling (`on-file` in TOML). Python `Table(on_file=…)`, TypeScript `TableDef.onFile`, Rust `Table::new(ddl, glob, on_file)` and the `OnFileFn` alias (was `ExtractFn`). The Rust error variant is now `DirSqlError::OnFile` and its message reads `on-file error for {path}` (was `extract error for {path}`). Hard break — no deprecation alias. (#570)
+- **CI: standardized the Node version across workflows to Node 24**, while keeping Node 20.11 in the test matrices to ensure the minimum supported version (Node ≥ 20.11) continues to work. (#586)
+
 ### Security
 
 - **`query()` now rejects `ATTACH`/`DETACH` (#462, epic #461).** SQLite classifies `ATTACH` as read-only, so it slipped past the read-only gate on `query()` — a caller reaching the surface (SDK `query`, CLI `POST /query`, `dirsql query`) could run `ATTACH '/path/x.db' AS ext` to create an arbitrary file on disk and then read an external database via `SELECT ... FROM ext.*`. The query-path authorizer now denies both `ATTACH` and `DETACH` at prepare time, surfaced as the same not-authorized error the `_dirsql_*` denial uses, so neither ever executes and no file is created. All other effectful statements were already blocked as writes; `ATTACH`/`DETACH` were the only read-only-classified actions that leaked. See `MIGRATIONS.md`.

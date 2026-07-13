@@ -17,6 +17,137 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## Frozen history (pre-fragment)
 
+<!-- The two entries below consolidate the last transitional root-level
+     migration fragments (written under the dual-mode gate, before the
+     per-package fragment gate landed in #565). Folded in here so no record
+     is lost; new entries live under packages/<pkg>/migrations.d/. -->
+
+### A file matching multiple tables' globs now populates every matching table (#580)
+
+#### Summary
+
+`dirsql` previously routed a file that matched several tables' globs to only
+the **first-declared** matching table; every other matching table received
+zero rows for that file. A file matching N tables' globs now populates **all
+N** tables — each `Table` is an independent view over the files matching its
+glob. This affects every SDK (Python, TypeScript, Rust) and the CLI, since the
+behavior lives in the shared core; no public API signature changed. The most
+common way to be bitten is a catch-all table (e.g. glob `**/*`) that used to
+ingest only the files no earlier table claimed and now ingests **all** matching
+files.
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| Catch-all table overlapping a narrower one (any SDK / `.dirsql.toml`) | The catch-all silently received only files unclaimed by earlier tables | The catch-all receives **all** files its glob matches, including those also claimed by other tables. Tighten the catch-all's glob, or filter unwanted files in its `on-file`, to restore the previous row set. |
+| Two tables intentionally sharing files | Only the first-declared table was populated | Both tables are populated; no change needed if that is what you wanted. |
+
+#### Deprecations removed
+
+_None._
+
+#### Behavior changes without code changes
+
+- **File→table routing**: a file matching N tables' globs previously produced
+  rows in only the first-declared matching table; now it produces rows in every
+  matching table. Declaration order no longer affects which tables a file
+  populates (it may still affect event ordering within a single file event,
+  which is unspecified).
+- **Glob captures**: each matching table's rows now receive the captures from
+  **that table's own glob**. Previously captures were resolved by a separate
+  first-match lookup, so an overlapping table could receive another table's
+  captures (or none).
+- **Watch deletes**: deleting a file now removes its rows from **every**
+  matching table and emits a `Delete` event for each, rather than only the
+  first-declared table.
+- **Persistent cache**: the sidecar `_dirsql_files` bookkeeping is now keyed by
+  `(rel_path, table_name)` instead of `rel_path` alone, and the sidecar schema
+  version is bumped (`3` → `4`). A cache written by an older build is discarded
+  and rebuilt once, automatically, on the first run after upgrading — no action
+  required, and penalty-free per the persistence design.
+
+#### Verification
+
+With a `.dirsql.toml` declaring two tables whose globs both match the same
+file:
+
+```toml
+[[table]]
+ddl = "CREATE TABLE ta (path TEXT)"
+glob = "data/*/metadata.json"
+
+[[table]]
+ddl = "CREATE TABLE tb (path TEXT)"
+glob = "data/**/metadata.json"
+```
+
+and a single file `data/2401.00001/metadata.json`, both tables are populated:
+
+```sh
+dirsql query "SELECT path FROM ta"
+# expected: [{"path":"data/2401.00001/metadata.json"}]
+dirsql query "SELECT path FROM tb"
+# expected: [{"path":"data/2401.00001/metadata.json"}]
+```
+
+Before this change, `tb` (declared second) would have returned `[]`.
+
+### Rename SDK `extract` to `on_file` / `onFile` (#570)
+
+#### Summary
+
+The per-file → rows seam had two names for one concept: the config surface
+called it `on-file` (a command), while the SDK surface called it `extract` (a
+callback). This renames the SDK callback to match the config spelling on
+every surface — Python `on_file`, TypeScript `onFile`, Rust `on_file` (with
+the public `ExtractFn` alias becoming `OnFileFn`). It is a hard break with no
+deprecation alias: the old `extract` spelling is gone in all three SDKs. The
+Rust error variant and its message change too. Anyone constructing a
+programmatic `Table` in Python, TypeScript, or Rust must update their call
+sites; config-file (`.dirsql.toml`) users are unaffected — `on-file` was
+already the config name.
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| Python `Table` | `Table(ddl=…, glob=…, extract=fn)` | `Table(ddl=…, glob=…, on_file=fn)` |
+| TypeScript `TableDef` | `{ ddl, glob, extract: fn }` | `{ ddl, glob, onFile: fn }` |
+| Rust `Table::new` / `try_new` / `strict` | `Table::new(ddl, glob, extract)` | `Table::new(ddl, glob, on_file)` |
+| Rust type alias | `pub type ExtractFn` | `pub type OnFileFn` |
+| Rust error variant | `DirSqlError::Extract { path, message }` | `DirSqlError::OnFile { path, message }` |
+
+#### Deprecations removed
+
+_None._ (There was no prior deprecation cycle; `extract` is removed directly.)
+
+#### Behavior changes without code changes
+
+- Rust `DirSqlError` per-file failure message: previously
+  `extract error for {path}: {message}`; now `on-file error for {path}:
+  {message}`. Code matching on the message text (rather than the variant)
+  must update the substring. The variant itself also renamed
+  (`Extract` → `OnFile`).
+
+#### Verification
+
+```python
+from dirsql import Table
+# Old spelling is now a hard error:
+try:
+    Table(ddl="CREATE TABLE t (n)", glob="*.json", extract=lambda p: [])
+    print("FAIL: extract still accepted")
+except TypeError:
+    print("ok: extract rejected")
+# New spelling works:
+Table(ddl="CREATE TABLE t (n)", glob="*.json", on_file=lambda p: [])
+print("ok: on_file accepted")
+# expected:
+# ok: extract rejected
+# ok: on_file accepted
+```
+
 ### The `[dirsql].root` config key is removed; the runner decides the index root (#540, epic #528)
 
 #### Summary
