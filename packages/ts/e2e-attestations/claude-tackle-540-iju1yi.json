@@ -1,7 +1,0 @@
-{
-  "command": "pnpm test:e2e",
-  "ran_at": 1783786417,
-  "exit_code": 0,
-  "commit": "97b685bf63bd8823d567b0f071c0d06a362b9d73",
-  "branch": "claude/tackle-540-iju1yi"
-}
