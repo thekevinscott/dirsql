@@ -6,6 +6,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  unlink,
   utimes,
   writeFile,
 } from "node:fs/promises";
@@ -21,8 +22,8 @@ import { exists } from "../../exists.js";
 // to exercise the racy-window and dirsql_version-bump reconcile paths. sql.js
 // (WASM SQLite) is used instead of `node:sqlite`, which only exists on Node
 // 22.5+. sql.js is in-memory, so we read the cache bytes, mutate, and write
-// them back; the cache uses SQLite's default rollback journal (no WAL
-// sidecar), so the main db file is complete at rest.
+// them back. The cache uses WAL mode, so after closing the Rust connection,
+// we must checkpoint the WAL to ensure the main db file is complete.
 const resolveModule = createRequire(import.meta.url).resolve;
 const sqlJsReady = initSqlJs({
   locateFile: (file) => join(dirname(resolveModule("sql.js")), file),
@@ -31,6 +32,20 @@ const sqlJsReady = initSqlJs({
 /** Open `.dirsql/cache.db` with sql.js, run `sql`, write the bytes back. */
 async function corruptCache(cachePath: string, sql: string): Promise<void> {
   const SQL = await sqlJsReady;
+  // With WAL mode, the cache has sidecar files (cache.db-wal, cache.db-shm).
+  // sql.js reads the raw binary file and doesn't understand WAL mode.
+  // Delete the sidecar files so sql.js reads a clean database file.
+  try {
+    await unlink(`${cachePath}-wal`);
+  } catch {
+    // File might not exist if WAL hasn't created sidecar yet
+  }
+  try {
+    await unlink(`${cachePath}-shm`);
+  } catch {
+    // File might not exist if WAL hasn't created sidecar yet
+  }
+
   const db = new SQL.Database(await readFile(cachePath));
   try {
     db.run(sql);
@@ -254,6 +269,11 @@ describe("DirSQL persist", () => {
     });
     await db1.ready;
     expect(box1.count).toBe(1);
+    // Explicitly close the connection to trigger WAL checkpoint.
+    // napi close() consumes self, so this is the only call on this instance.
+    db1.close();
+    // Wait for WAL checkpoint to complete before reading with sql.js.
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
     const cache = join(dir, ".dirsql", "cache.db");
     await corruptCache(
@@ -282,6 +302,11 @@ describe("DirSQL persist", () => {
     });
     await db1.ready;
     expect(box1.count).toBe(1);
+    // Explicitly close the connection to trigger WAL checkpoint.
+    // napi close() consumes self, so this is the only call on this instance.
+    db1.close();
+    // Wait for WAL checkpoint to complete before reading with sql.js.
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
     const cache = join(dir, ".dirsql", "cache.db");
     await corruptCache(

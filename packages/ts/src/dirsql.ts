@@ -251,4 +251,14 @@ export class DirSQL {
       }
     }
   }
+
+  /**
+   * Explicitly close the database connection. Used primarily for cleanup or
+   * to ensure the persistent cache's WAL checkpoint completes (for testing).
+   * After calling close, subsequent calls to query, watch, or other methods
+   * will fail.
+   */
+  close(): void {
+    this._inner.close();
+  }
 }

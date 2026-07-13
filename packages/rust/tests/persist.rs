@@ -561,3 +561,23 @@ fn failed_build_rolls_back_all_ingested_rows() {
         .unwrap();
     assert_eq!(file_count, 0, "no files should persist after failed build");
 }
+
+#[test]
+fn persist_cache_uses_wal_journal_mode() {
+    use rusqlite::Connection;
+
+    let root = TempDir::new().unwrap();
+    write_csv(root.path(), "a.csv", &["alpha"]);
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    {
+        let _db = open(root.path(), counter);
+    }
+
+    let cache = root.path().join(".dirsql").join("cache.db");
+    let conn = Connection::open(&cache).unwrap();
+    let mode: String = conn
+        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(mode, "wal", "cache must use WAL journal mode");
+}

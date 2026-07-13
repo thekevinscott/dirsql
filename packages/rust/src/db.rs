@@ -123,6 +123,10 @@ impl Db {
     /// persistent cache path; the anonymous temp database is the default.
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
+        // Best-effort: WAL is unavailable on some filesystems (SQLite keeps the
+        // prior journal mode and returns it); the cache still works there.
+        let _mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         ensure_internal_rows_table(&conn)?;
         Ok(Self { conn })
     }
@@ -1506,6 +1510,24 @@ mod tests {
             msg.contains("virtual table") && msg.contains("not supported"),
             "expected a clear 'virtual table not supported' error, not a generic DDL-parse echo, got: {err}"
         );
+    }
+
+    #[test]
+    fn open_sets_wal_journal_mode_and_normal_synchronous() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = Db::open(&dir.path().join("cache.db")).unwrap();
+
+        let mode: String = db
+            .conn()
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal", "Db::open must set journal_mode=WAL");
+
+        let synchronous: i64 = db
+            .conn()
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(synchronous, 1, "Db::open must set synchronous=NORMAL (1)");
     }
 
     #[test]

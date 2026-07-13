@@ -22,6 +22,7 @@ type FakeInner = {
   query: ReturnType<typeof vi.fn>;
   startWatcher: ReturnType<typeof vi.fn>;
   pollEvents: ReturnType<typeof vi.fn>;
+  close: ReturnType<typeof vi.fn>;
 };
 
 function installFakeCore(inner: FakeInner) {
@@ -37,6 +38,7 @@ function makeInner(overrides: Partial<FakeInner> = {}): FakeInner {
     query: vi.fn().mockResolvedValue([]),
     startWatcher: vi.fn().mockResolvedValue(undefined),
     pollEvents: vi.fn().mockResolvedValue([]),
+    close: vi.fn(),
     ...overrides,
   };
 }
@@ -292,6 +294,13 @@ describe("DirSQL", () => {
       const db = new DirSQL({ root: "/d" });
       await db.pollEvents(50);
       expect(inner.pollEvents).toHaveBeenCalledWith(50);
+    });
+
+    it("close forwards to the inner instance", async () => {
+      const db = new DirSQL({ root: "/d" });
+      await db.ready;
+      db.close();
+      expect(inner.close).toHaveBeenCalledOnce();
     });
   });
 

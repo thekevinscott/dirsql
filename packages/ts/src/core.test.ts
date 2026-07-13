@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { type NativeDirSQLConstructor, getCore } from "./core.js";
+import {
+  type NativeDirSQL,
+  type NativeDirSQLConstructor,
+  getCore,
+} from "./core.js";
 import { loadNativeCore } from "./load-native-core.js";
 
 vi.mock("./load-native-core.js");
@@ -73,5 +77,20 @@ describe("NativeDirSQLConstructor contract", () => {
       null,
       null,
     );
+  });
+});
+
+describe("NativeDirSQL interface", () => {
+  it("includes close() method for cleanup (#598)", () => {
+    const instance = {
+      query: vi.fn().mockResolvedValue([]),
+      startWatcher: vi.fn().mockResolvedValue(undefined),
+      pollEvents: vi.fn().mockResolvedValue([]),
+      close: vi.fn(),
+    } as unknown as NativeDirSQL;
+    // Verifies the interface has the close() method; calling it exercises
+    // that the method exists and is callable.
+    instance.close();
+    expect(instance.close).toHaveBeenCalledOnce();
   });
 });
