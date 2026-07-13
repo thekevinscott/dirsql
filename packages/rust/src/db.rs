@@ -123,6 +123,10 @@ impl Db {
     /// persistent cache path; the anonymous temp database is the default.
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
+        // Best-effort: WAL is unavailable on some filesystems (SQLite keeps the
+        // prior journal mode and returns it); the cache still works there.
+        let _mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         ensure_internal_rows_table(&conn)?;
         Ok(Self { conn })
     }
