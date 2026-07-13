@@ -53,10 +53,11 @@ class DirSQL:
         async for event in db.watch():
             ...
 
-    Supply a ``root``, a ``config`` path, or both. When both are set, the
-    explicit ``root`` wins over any ``[dirsql].root`` in the config file (a
-    warning is emitted on stderr). If neither is given, the initial scan
-    fails with a "no root directory" error raised by the core.
+    The index root is the explicit ``root`` when given, else the process
+    current working directory. A ``config`` file's location never sets the
+    root -- it only supplies tables, ignore patterns, and extensions. There
+    is no ``[dirsql].root`` config key. Constructing with neither ``root``
+    nor ``config`` roots at the cwd (no error is raised).
 
     Pass ``persist=True`` to keep an on-disk SQLite cache (default location:
     ``<root>/.dirsql/cache.db``). Override the location with ``persist_path``.

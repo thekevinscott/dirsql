@@ -259,7 +259,8 @@ def describe_binding_layer():
         async def it_forwards_construction_without_root_or_config_to_the_core(
             mock_core,
         ):
-            # The core owns (None, None) validation; the wrapper forwards both.
+            # With neither root nor config the core roots at the cwd; the
+            # wrapper forwards both as None.
             db = async_mod.DirSQL()
             await db.ready()
 

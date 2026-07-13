@@ -225,6 +225,9 @@ async function runServerAndQuery(configPath: string): Promise<unknown[]> {
     ],
     {
       stdio: "pipe",
+      // The CLI roots the index at its invocation cwd, so run from the data
+      // directory the config's tables are defined against.
+      cwd: dirname(configPath),
       env: { ...process.env, PATH: `${SHIM_DIR}:${process.env.PATH ?? ""}` },
     },
   );

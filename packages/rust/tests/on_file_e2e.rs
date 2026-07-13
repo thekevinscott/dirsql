@@ -168,26 +168,24 @@ on-file = "sh abscheck.sh {path}"
     assert_eq!(body, vec![json!({"paper_id": "a"})]);
 }
 
-/// The absolute `{path}` resolves even when `dirsql` is launched from a working
-/// directory that is neither the config dir nor the index root. The config is
-/// reached via an absolute `--config`, the index root is a `root = "data"`
-/// override, and the hook (cwd = config dir) `cat`s the file only because
-/// `{path}` is absolute — a root-relative path would not resolve from here.
+/// The absolute `{path}` resolves even when the hook's working directory (the
+/// config dir) is not the index root. Since #540 the index root is the
+/// invocation cwd, so `dirsql` is launched from the data dir while its config
+/// lives elsewhere, reached via an absolute `--config`. The hook (cwd = config
+/// dir) `cat`s the file only because `{path}` is absolute — a root-relative
+/// path would not resolve from the config dir.
 #[test]
-fn on_file_absolute_path_resolves_when_launched_from_elsewhere() {
+fn on_file_absolute_path_resolves_when_config_dir_differs_from_root() {
     let project = TempDir::new().unwrap();
-    let elsewhere = TempDir::new().unwrap();
+    let configdir = TempDir::new().unwrap();
     fs::write(
-        project.path().join("abscheck.sh"),
+        configdir.path().join("abscheck.sh"),
         "#!/bin/sh\ncase \"$1\" in /*) cat \"$1\" ;; *) exit 1 ;; esac\n",
     )
     .unwrap();
     fs::write(
-        project.path().join(".dirsql.toml"),
+        configdir.path().join(".dirsql.toml"),
         r#"
-[dirsql]
-root = "data"
-
 [[table]]
 ddl = "CREATE TABLE papers (paper_id TEXT)"
 glob = "**/meta.json"
@@ -204,8 +202,8 @@ on-file = "sh abscheck.sh {path}"
 
     let port = free_port();
     let _server = ServerGuard(spawn_dirsql_with(
-        elsewhere.path(),
-        Some(&project.path().join(".dirsql.toml")),
+        project.path(),
+        Some(&configdir.path().join(".dirsql.toml")),
         port,
     ));
     wait_until_ready(port, Duration::from_secs(10));

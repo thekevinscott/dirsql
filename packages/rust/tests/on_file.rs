@@ -143,10 +143,11 @@ on-file = "sh abscheck.sh {path}"
     assert_eq!(rows[0]["name"], Value::Text("widget".into()));
 }
 
-/// When the index root differs from the config file's directory (a `root`
-/// override), the hook still runs with cwd = the config dir, so a root-relative
-/// `{path}` would not resolve. The absolute `{path}` does: the script `cat`s the
-/// file from a cwd that is not the index root and rows land.
+/// When the index root differs from the config file's directory (here via an
+/// explicit `.root(...)`, since #540 removed the config `root` key), the hook
+/// still runs with cwd = the config dir, so a root-relative `{path}` would not
+/// resolve. The absolute `{path}` does: the script `cat`s the file from a cwd
+/// that is not the index root and rows land.
 #[test]
 fn on_file_absolute_path_resolves_when_root_differs_from_config_dir() {
     let root = TempDir::new().unwrap();
@@ -158,9 +159,6 @@ fn on_file_absolute_path_resolves_when_root_differs_from_config_dir() {
     fs::write(
         root.path().join(".dirsql.toml"),
         r#"
-[dirsql]
-root = "data"
-
 [[table]]
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "**/meta.json"
@@ -175,7 +173,13 @@ on-file = "sh abscheck.sh {path}"
     )
     .unwrap();
 
-    let db = DirSQL::from_config_path(root.path().join(".dirsql.toml")).unwrap();
+    // Index root is `data/`; the config (and `abscheck.sh`) live in the parent,
+    // so the hook's cwd (the config dir) is not the index root.
+    let db = DirSQL::builder()
+        .root(root.path().join("data"))
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
     let rows = db.query("SELECT name FROM items").unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["name"], Value::Text("widget".into()));

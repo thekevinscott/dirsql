@@ -42,7 +42,9 @@ glob = "items/*.csv"
 """,
             )
 
-            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(
+                root=config_dir, config=os.path.join(config_dir, ".dirsql.toml")
+            )
             await db.ready()
             results = await db.query("SELECT path, basename FROM items ORDER BY path")
             assert len(results) == 2
@@ -71,7 +73,9 @@ glob = "comments/{thread_id}/*.txt"
 """,
             )
 
-            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(
+                root=config_dir, config=os.path.join(config_dir, ".dirsql.toml")
+            )
             await db.ready()
             results = await db.query(
                 "SELECT thread_id, basename FROM comments ORDER BY thread_id"
@@ -94,7 +98,9 @@ glob = "docs/*.md"
 """,
             )
 
-            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(
+                root=config_dir, config=os.path.join(config_dir, ".dirsql.toml")
+            )
             await db.ready()
             results = await db.query(
                 "SELECT path, basename, dir, ext, size, mtime FROM files"
@@ -129,7 +135,9 @@ glob = "data/**/*.json"
 """,
             )
 
-            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(
+                root=config_dir, config=os.path.join(config_dir, ".dirsql.toml")
+            )
             await db.ready()
             results = await db.query("SELECT path FROM items")
             assert len(results) == 1
@@ -153,7 +161,9 @@ glob = "authors/*.txt"
 """,
             )
 
-            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(
+                root=config_dir, config=os.path.join(config_dir, ".dirsql.toml")
+            )
             await db.ready()
             posts = await db.query("SELECT basename FROM posts")
             authors = await db.query("SELECT basename FROM authors")
@@ -205,7 +215,9 @@ glob = "items/{name}.json"
 """,
             )
 
-            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
+            db = DirSQL(
+                root=config_dir, config=os.path.join(config_dir, ".dirsql.toml")
+            )
             await db.ready()
             results = await db.query("SELECT name FROM items WHERE name = 'apple'")
             assert len(results) == 1

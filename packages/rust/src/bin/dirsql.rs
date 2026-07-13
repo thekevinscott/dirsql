@@ -34,9 +34,9 @@ struct Cli {
     command: Option<Command>,
 
     /// Path to the config file (default: `./.dirsql.toml`). The index is
-    /// rooted at the directory containing this file. When the file does
-    /// not exist, a default `files` table is served. Used by server mode
-    /// and by the `query` subcommand.
+    /// rooted at the invocation directory (cwd), not this file's location
+    /// (#540). When the file does not exist, a default `files` table is
+    /// served. Used by server mode and by the `query` subcommand.
     #[arg(short = 'c', long, default_value = "./.dirsql.toml", global = true)]
     config: PathBuf,
 
@@ -138,8 +138,8 @@ async fn main() -> ExitCode {
 /// stderr with a non-zero exit.
 async fn run_query(cli: &Cli, args: QueryArgs) -> ExitCode {
     let state = load_state(cli);
-    let pre_query = load_pre_query(cli);
-    let post_query = load_post_query(cli);
+    let pre_query: Vec<PreQuery> = load_pre_query(cli).into_iter().collect();
+    let post_query: Vec<PostQuery> = load_post_query(cli).into_iter().collect();
     // Same default the server binds with; the pipeline enforces it.
     let timeout = ServerConfig::default().query_timeout;
 
@@ -147,8 +147,8 @@ async fn run_query(cli: &Cli, args: QueryArgs) -> ExitCode {
         &state,
         query_body(&args.sql),
         timeout,
-        pre_query.as_ref(),
-        post_query.as_ref(),
+        &pre_query,
+        &post_query,
     )
     .await
     {
@@ -238,9 +238,10 @@ fn load_state(cli: &Cli) -> AppState {
         return load_default_state(cli, config_path);
     }
 
-    // Canonicalize so the root (derived from the config's parent) is
-    // absolute — `notify` has surprising behavior when watching relative
-    // paths like `./`.
+    // Canonicalize so config-relative paths (extension libraries, hook
+    // working directories) resolve against an absolute parent — `notify` and
+    // the hook subprocesses misbehave with relative paths like `./`. The
+    // index root itself is the invocation cwd (#540), not derived from here.
     let resolved = match config_path.canonicalize() {
         Ok(p) => p,
         Err(err) => {

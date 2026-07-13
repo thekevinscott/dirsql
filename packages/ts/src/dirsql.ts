@@ -27,9 +27,8 @@ export interface ExtensionSpec {
 /**
  * Options accepted by the {@link DirSQL} constructor.
  *
- * At least one of `root` or `config` must be supplied. When both are set,
- * the explicit `root` wins over any `[dirsql].root` declared in the config
- * file (a warning is emitted by the native layer).
+ * The index root is the explicit `root` when given, otherwise the process
+ * working directory. The `config` file's location never sets the root.
  */
 export interface DirSQLOptions {
   /** Root directory to scan. */
@@ -41,9 +40,9 @@ export interface DirSQLOptions {
   /**
    * Path to a `.dirsql.toml` config file. Its `[[table]]` entries are
    * appended to any programmatic `tables`; its `[dirsql].ignore` patterns
-   * are appended to any explicit `ignore`. If the config declares a
-   * `[dirsql].root` and no explicit `root` is given, it is resolved
-   * relative to the config file's parent directory.
+   * are appended to any explicit `ignore`. The config file's location does
+   * not affect the index root — that is the explicit `root` when given,
+   * otherwise the process working directory.
    */
   config?: string;
   /**

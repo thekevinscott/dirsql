@@ -11,6 +11,66 @@ See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHA
 
 ## [Unreleased]
 
+### The `[dirsql].root` config key is removed; the runner decides the index root (#540, epic #528)
+
+#### Summary
+
+`.dirsql.toml` no longer accepts a `root` key, and the index root is no longer
+derived from the config file's location. A config file describes **content**
+(tables, hooks); **where** you index is an operational fact owned by the
+runner. One uniform rule now applies to every consumer (all three SDKs and the
+CLI, which share the one Rust core): the index root is the **explicit root**
+when given, else the **process cwd**. The config file's parent directory plays
+no part. Combined with the strict parser (#536), a config that still carries
+`root` fails loudly with `unknown field 'root'`.
+
+#### Required changes
+
+| Surface | Before | After |
+| ------- | ------ | ----- |
+| `.dirsql.toml` | `[dirsql]\nroot = "docs"` indexed `<config-dir>/docs` | remove the key; run `dirsql` from the directory you want indexed (or pass an explicit root via an SDK) |
+| CLI, config elsewhere | `dirsql --config /elsewhere/.dirsql.toml` rooted at `/elsewhere` | roots at the invocation cwd; `cd` into the directory to index |
+| Rust `DirSQL::from_config_path("/elsewhere/.dirsql.toml")` | rooted at `/elsewhere` | roots at the process cwd; add `.root("/elsewhere")` on the builder to keep the old target |
+| Rust builder `.config(path)` without `.root()` | rooted at the config's parent | roots at the process cwd; add `.root(dir)` for an explicit target |
+| Python `DirSQL(config="/elsewhere/.dirsql.toml")` | rooted at `/elsewhere` | roots at the process cwd; pass `root="/elsewhere"` to keep the old target |
+| TypeScript `new DirSQL({ config: "/elsewhere/.dirsql.toml" })` | rooted at `/elsewhere` | roots at the process cwd; pass `{ root: "/elsewhere", config: … }` to keep the old target |
+
+`DirSQL::from_config(dir)` (Rust) is unchanged: it still both reads
+`dir/.dirsql.toml` and roots at `dir`. The default flow — `dirsql` with
+`./.dirsql.toml`, or an SDK pointed at the cwd — is also unchanged (the config's
+parent was already the cwd).
+
+#### Deprecations removed
+
+- The `[dirsql].root` config key. It is not a warning — an old config carrying
+  it is a hard parse error (`unknown field 'root'`).
+
+#### Behavior changes without code changes
+
+- **A config carrying `root`** now fails to load: the CLI server degrades
+  (`POST /query` → `503` whose `{"error": …}` names `root`; `dirsql query`
+  exits non-zero), and the SDKs raise/reject.
+- **`--config` / `from_config_path` / `config=` pointing at a config outside
+  the cwd** now indexes the cwd, not the config's directory. Same code, new
+  root.
+- **The Rust builder with neither `.root()` nor `.config()`** no longer errors
+  with "no root directory" — it roots at the process cwd. The
+  explicit-root-vs-config-root collision warning on stderr is also gone.
+
+#### Verification
+
+```bash
+mkdir -p /tmp/dirsql-540/data && cd /tmp/dirsql-540/data
+printf '{}' > a.json
+printf '[[table]]\nddl = "CREATE TABLE files (path TEXT)"\nglob = "*.json"\n' > /tmp/dirsql-540/.dirsql.toml
+dirsql --config /tmp/dirsql-540/.dirsql.toml query "SELECT path FROM files"
+# expected: [{"path":"a.json"}] — indexed from the cwd, not /tmp/dirsql-540
+
+printf '[dirsql]\nroot = "docs"\n' > .dirsql.toml
+dirsql query "SELECT 1"; echo "exit=$?"
+# expected: non-zero exit; stderr names the unknown key `root`
+```
+
 ### `persist` / `persist_path` removed from `.dirsql.toml`; use `--persist [PATH]` (#549, epic #528)
 
 #### Summary

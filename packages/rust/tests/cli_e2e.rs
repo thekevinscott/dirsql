@@ -850,6 +850,92 @@ fn query_subcommand_serves_default_files_table_without_config() {
 }
 
 #[test]
+fn root_config_key_degrades_server_with_503_naming_the_key() {
+    // `root` is no longer a config key (#540): the runner owns the index root.
+    // An old config carrying it is a hard config error, so the server degrades
+    // and `POST /query` returns 503 whose diagnostic names `root`.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(".dirsql.toml"),
+        "[dirsql]\nroot = \"docs\"\n",
+    )
+    .unwrap();
+    let port = free_port();
+    let child = spawn_dirsql(dir.path(), port);
+    wait_until_ready(port, Duration::from_secs(10));
+
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT 1"}))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let error = resp.json::<Value>().unwrap()["error"]
+        .as_str()
+        .expect("503 body carries an `error` string")
+        .to_string();
+    assert!(
+        error.contains("root"),
+        "503 diagnostic must name the unknown key, got {error:?}"
+    );
+
+    kill_and_wait(child);
+}
+
+#[test]
+fn config_elsewhere_indexes_invocation_cwd_not_config_parent() {
+    // With `root` gone (#540), `--config /elsewhere/.dirsql.toml` roots at the
+    // invocation cwd, not the config's parent. The data lives in the cwd; the
+    // config's own directory holds nothing to index.
+    let cwd = TempDir::new().unwrap();
+    fs::create_dir_all(cwd.path().join("posts/alice")).unwrap();
+    fs::create_dir_all(cwd.path().join("posts/bob")).unwrap();
+    fs::write(cwd.path().join("posts/alice/Hello-World.json"), "{}").unwrap();
+    fs::write(cwd.path().join("posts/bob/Second-Post.json"), "{}").unwrap();
+
+    let elsewhere = TempDir::new().unwrap();
+    fs::write(
+        elsewhere.path().join(".dirsql.toml"),
+        r#"
+[[table]]
+ddl = "CREATE TABLE posts (title TEXT, author TEXT)"
+glob = "posts/{author}/{title}.json"
+"#,
+    )
+    .unwrap();
+
+    let port = free_port();
+    let mut cmd: StdCommand =
+        std::process::Command::cargo_bin("dirsql").expect("binary must exist");
+    cmd.arg("--port")
+        .arg(port.to_string())
+        .arg("--host")
+        .arg("localhost")
+        .arg("--config")
+        .arg(elsewhere.path().join(".dirsql.toml"))
+        .current_dir(cwd.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+    let child = cmd.spawn().expect("spawn");
+    wait_until_ready(port, Duration::from_secs(10));
+
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT COUNT(*) AS n FROM posts"}))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Vec<Value> = resp.json().unwrap();
+    assert_eq!(
+        body,
+        vec![json!({"n": 2})],
+        "posts must be indexed from the invocation cwd, not the config's parent"
+    );
+
+    kill_and_wait(child);
+}
+
+#[test]
 fn explicit_config_flag_overrides_cwd_default() {
     let fixture = blog_fixture();
     let elsewhere = TempDir::new().unwrap();

@@ -11,16 +11,16 @@ The [CLI](./cli.md) loads `./.dirsql.toml` by default (`--config <path>`
 overrides). The [SDKs](./sdk.md) load a config via the `config` constructor
 parameter.
 
-**Path resolution.** Relative paths in the config (`root`,
-`[[dirsql.extension]]` `path`) resolve against the config file's parent
-directory. The scan root defaults to that same directory when `root` is not
-set.
+**Path resolution.** Relative paths in the config (`[[dirsql.extension]]`
+`path`) resolve against the config file's parent
+directory. The **index root is not a config concern** — it is decided by the
+runner (the CLI's invocation directory, or an SDK's explicit root), never by
+the config file's location. See [`--config`](./cli.md#flags).
 
 ## `[dirsql]` keys
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `root` | string | config file's parent directory | Directory to index. Relative values resolve against the config file's parent. An explicit `root` passed to an SDK constructor overrides this (a warning is emitted on stderr). |
 | `ignore` | array of strings | `[]` | Glob patterns matched against root-relative paths. Matched files are skipped entirely — excluded from the initial scan and from watch events. |
 | `pre-query` | string | none | Server-wide command hook: the raw `POST /query` request body is passed to this command as `{args}`, and the plain-text SQL it prints is executed instead of parsing the body as `{"sql": …}`. CLI server only; the SDKs ignore it. Must be non-empty. See [Command hooks](./hooks.md#pre-query). |
 | `post-query` | string | none | Server-wide command hook: each successful `POST /query` result set is handed to this command (as a JSON array on stdin, and as `{args}` up to 96 KiB), and the JSON body it prints is returned instead of the bare row array. CLI server only; the SDKs ignore it. Must be non-empty. See [Command hooks](./hooks.md#post-query). |
@@ -34,7 +34,6 @@ directory.
 
 ```toml
 [dirsql]
-root = "../data"
 ignore = ["node_modules/**", ".git/**"]
 hook-timeout = 300
 ```

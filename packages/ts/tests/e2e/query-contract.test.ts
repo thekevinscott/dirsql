@@ -184,6 +184,9 @@ beforeAll(async () => {
     ],
     {
       stdio: "pipe",
+      // The CLI roots the index at its invocation cwd, so run from the data
+      // directory the config's tables are defined against.
+      cwd: dataDir,
       env: {
         ...process.env,
         NODE_PATH: [NODE_PATH_DIR, process.env.NODE_PATH]

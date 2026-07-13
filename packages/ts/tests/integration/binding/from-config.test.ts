@@ -44,7 +44,7 @@ glob = "items/*.csv"
 `,
     );
 
-    const db = new DirSQL(configPath);
+    const db = new DirSQL({ root: dir, config: configPath });
     await db.ready;
     const rows = await db.query(
       "SELECT path, basename FROM items ORDER BY path",
@@ -68,7 +68,7 @@ glob = "comments/{thread_id}/*.txt"
 `,
     );
 
-    const db = new DirSQL(configPath);
+    const db = new DirSQL({ root: dir, config: configPath });
     await db.ready;
     const rows = await db.query(
       "SELECT thread_id, basename FROM comments ORDER BY thread_id",
@@ -90,7 +90,7 @@ glob = "docs/*.md"
 `,
     );
 
-    const db = new DirSQL(configPath);
+    const db = new DirSQL({ root: dir, config: configPath });
     await db.ready;
     const rows = await db.query(
       "SELECT path, basename, dir, ext, size, mtime FROM files",
@@ -121,7 +121,7 @@ glob = "data/**/*.json"
 `,
     );
 
-    const db = new DirSQL(configPath);
+    const db = new DirSQL({ root: dir, config: configPath });
     await db.ready;
     const rows = await db.query("SELECT path FROM items");
     expect(rows).toHaveLength(1);
@@ -144,7 +144,7 @@ glob = "authors/*.txt"
 `,
     );
 
-    const db = new DirSQL(configPath);
+    const db = new DirSQL({ root: dir, config: configPath });
     await db.ready;
     const posts = await db.query("SELECT basename FROM posts");
     const authors = await db.query("SELECT basename FROM authors");

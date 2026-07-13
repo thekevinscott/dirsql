@@ -283,7 +283,8 @@ def describe_DirSQL_async():
     def describe_construction():
         @pytest.mark.asyncio
         async def it_constructs_without_a_root_or_config():
-            # The core owns "no root" validation; construction must not raise.
+            # With neither root nor config the core roots at the cwd;
+            # construction must not raise.
             with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
                 db = async_mod.DirSQL()
                 await db.ready()

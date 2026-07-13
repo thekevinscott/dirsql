@@ -68,16 +68,13 @@ impl std::fmt::Display for Source {
 /// Order-significant; at least one entry is required and a single entry is
 /// returned unchanged. List-shaped config (`[[table]]`, `[[dirsql.extension]]`,
 /// `ignore`) concatenates in input order. A table-name collision anywhere in
-/// the combined set errors, naming both sources. Single-valued keys (`root`,
-/// `pre-query`, `post-query`, `hook-timeout`) defined by more than
+/// the combined set errors, naming both sources. Single-valued keys
+/// (`pre-query`, `post-query`, `hook-timeout`) defined by more than
 /// one config error, naming both sources — no silent shadowing, no precedence;
 /// defined in exactly one config they merge through unchanged.
 ///
 /// Tables whose DDL yields no parseable table name are concatenated without a
 /// collision check; `Db::create_table` rejects them downstream.
-///
-/// Plugin whitelist enforcement ("a fragment may not set `root`") is the
-/// discovery layer's job, per fragment, before calling this.
 pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
     let (first, rest) = configs.split_first().ok_or(ConfigError::NoConfigs)?;
     if rest.is_empty() {
@@ -90,7 +87,6 @@ pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
     let mut table_sources: std::collections::HashMap<String, &Source> =
         std::collections::HashMap::new();
 
-    let mut root: Option<(&Source, PathBuf)> = None;
     let mut pre_query: Option<(&Source, String)> = None;
     let mut post_query: Option<(&Source, String)> = None;
     let mut hook_timeout: Option<(&Source, Duration)> = None;
@@ -111,7 +107,6 @@ pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
         ignore.extend(config.ignore.iter().cloned());
         extensions.extend(config.extensions.iter().cloned());
 
-        merge_single("root", &mut root, config.root.as_ref(), source)?;
         merge_single(
             "pre-query",
             &mut pre_query,
@@ -133,7 +128,6 @@ pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
     }
 
     Ok(Config {
-        root: root.map(|(_, value)| value),
         ignore,
         tables,
         extensions,
@@ -167,11 +161,6 @@ fn merge_single<'a, T: Clone>(
 /// Parsed configuration from a `.dirsql.toml` file.
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Optional root directory override. When absent, callers derive the
-    /// root from the config file's own location. When present, it is taken
-    /// relative to the config file's parent (so a config at
-    /// `/proj/.dirsql.toml` with `root = "docs"` scans `/proj/docs`).
-    pub root: Option<PathBuf>,
     pub ignore: Vec<String>,
     pub tables: Vec<TableConfig>,
     /// SQLite extensions to load at startup, declared via
@@ -249,7 +238,6 @@ struct RawConfig {
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct RawDirsql {
-    root: Option<PathBuf>,
     ignore: Option<Vec<String>>,
     extension: Option<Vec<RawExtension>>,
     #[serde(rename = "pre-query")]
@@ -288,7 +276,6 @@ pub fn load_config_str(content: &str) -> Result<Config> {
     let raw: RawConfig = toml::from_str(content)?;
 
     let d = raw.dirsql.unwrap_or_default();
-    let root = d.root;
     let ignore = d.ignore.unwrap_or_default();
     let raw_extensions = d.extension.unwrap_or_default();
     let raw_pre_query = d.pre_query;
@@ -348,7 +335,6 @@ pub fn load_config_str(content: &str) -> Result<Config> {
     }
 
     Ok(Config {
-        root,
         ignore,
         tables,
         extensions,
@@ -464,45 +450,6 @@ glob = "*.json"
     }
 
     #[test]
-    fn optional_root_parses_when_present() {
-        let toml = r#"
-[dirsql]
-root = "docs"
-
-[[table]]
-ddl = "CREATE TABLE t (path TEXT)"
-glob = "*.json"
-"#;
-        let config = load_config_str(toml).unwrap();
-        assert_eq!(config.root.as_deref(), Some(Path::new("docs")));
-    }
-
-    #[test]
-    fn root_absent_by_default() {
-        let toml = r#"
-[[table]]
-ddl = "CREATE TABLE t (path TEXT)"
-glob = "*.json"
-"#;
-        let config = load_config_str(toml).unwrap();
-        assert!(config.root.is_none());
-    }
-
-    #[test]
-    fn root_can_be_absolute() {
-        let toml = r#"
-[dirsql]
-root = "/tmp/data"
-
-[[table]]
-ddl = "CREATE TABLE t (path TEXT)"
-glob = "*.json"
-"#;
-        let config = load_config_str(toml).unwrap();
-        assert_eq!(config.root.as_deref(), Some(Path::new("/tmp/data")));
-    }
-
-    #[test]
     fn persist_key_is_rejected_as_unknown() {
         // Persistence moved to the `--persist` CLI flag; the TOML key is gone.
         let toml = r#"
@@ -583,6 +530,19 @@ glbo = "typo"
         let err = load_config_str(toml).unwrap_err();
         assert!(matches!(err, ConfigError::Toml(_)), "got: {err:?}");
         assert!(err.to_string().contains("glbo"), "got: {err}");
+    }
+
+    #[test]
+    fn root_key_in_dirsql_section_is_rejected() {
+        // `root` is no longer a config key (#540): the runner owns the index
+        // root. An old config carrying it fails loudly, naming the key.
+        let toml = r#"
+[dirsql]
+root = "docs"
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(matches!(err, ConfigError::Toml(_)), "got: {err:?}");
+        assert!(err.to_string().contains("root"), "got: {err}");
     }
 
     #[test]
@@ -807,7 +767,6 @@ post-query = "   "
     fn combine_singleton_returns_config_unchanged() {
         let config = cfg(r#"
 [dirsql]
-root = "docs"
 ignore = ["*.tmp"]
 pre-query = "to_sql {args}"
 post-query = "jq '{results: .}'"
@@ -821,7 +780,6 @@ ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
 "#);
         let merged = combine_configs(&[(src("/proj/.dirsql.toml"), config.clone())]).unwrap();
-        assert_eq!(merged.root, config.root);
         assert_eq!(merged.ignore, config.ignore);
         assert_eq!(merged.extensions, config.extensions);
         assert_eq!(merged.pre_query, config.pre_query);
@@ -1005,33 +963,6 @@ glob = "c/*.json"
         let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
         assert_eq!(merged.pre_query.as_deref(), Some("to_sql {args}"));
         assert_eq!(merged.post_query.as_deref(), Some("jq -c ."));
-    }
-
-    #[test]
-    fn combine_root_in_two_configs_errors_naming_both_sources() {
-        let a = cfg("[dirsql]\nroot = \"docs\"\n");
-        let b = cfg("[dirsql]\nroot = \"data\"\n");
-        let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
-        match &err {
-            ConfigError::ConflictingKey { key, first, second } => {
-                assert_eq!(*key, "root");
-                assert_eq!(first, &src("/a"));
-                assert_eq!(second, &src("/b"));
-            }
-            other => panic!("got: {other:?}"),
-        }
-        let msg = err.to_string();
-        assert!(msg.contains("'root'"), "got: {msg}");
-        assert!(msg.contains("/a"), "got: {msg}");
-        assert!(msg.contains("/b"), "got: {msg}");
-    }
-
-    #[test]
-    fn combine_root_in_one_config_merges_through() {
-        let a = cfg("[dirsql]\nignore = [\"a/**\"]\n");
-        let b = cfg("[dirsql]\nroot = \"docs\"\n");
-        let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
-        assert_eq!(merged.root.as_deref(), Some(Path::new("docs")));
     }
 
     #[test]

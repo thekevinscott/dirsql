@@ -127,12 +127,17 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub query_timeout: Duration,
-    /// Optional server-wide `pre-query` command. When `None` (the default),
-    /// `POST /query` parses its body as `{"sql": …}`.
-    pub pre_query: Option<PreQuery>,
-    /// Optional server-wide `post-query` command. When `None` (the default),
-    /// `POST /query` returns the result rows as-is.
-    pub post_query: Option<PostQuery>,
+    /// Ordered `pre-query` command chain. Empty (the default) means
+    /// `POST /query` parses its body as `{"sql": …}`; otherwise the raw body is
+    /// piped through each stage in registration order (body → stage₁ → … → SQL),
+    /// each stage receiving the previous stage's output as its `{args}`.
+    pub pre_query: Vec<PreQuery>,
+    /// Ordered `post-query` command chain. Empty (the default) means
+    /// `POST /query` returns the result rows as-is; otherwise the rows are piped
+    /// through each stage in registration order (rows → stage₁ → … → response),
+    /// each stage receiving the previous stage's output as its `{args}` (and on
+    /// stdin).
+    pub post_query: Vec<PostQuery>,
 }
 
 impl ServerConfig {
@@ -143,8 +148,8 @@ impl ServerConfig {
             host: "localhost".into(),
             port: 0,
             query_timeout: Duration::from_secs(30),
-            pre_query: None,
-            post_query: None,
+            pre_query: Vec::new(),
+            post_query: Vec::new(),
         }
     }
 
@@ -154,8 +159,8 @@ impl ServerConfig {
             host: host.into(),
             port,
             query_timeout: Duration::from_secs(30),
-            pre_query: None,
-            post_query: None,
+            pre_query: Vec::new(),
+            post_query: Vec::new(),
         }
     }
 
@@ -166,19 +171,23 @@ impl ServerConfig {
         self
     }
 
-    /// Attach a server-wide [`PreQuery`] hook. With it set, `POST /query`
-    /// passes the raw request body to the command and runs the SQL it prints
-    /// instead of parsing the body as `{"sql": …}`.
+    /// Append a [`PreQuery`] stage to the chain. Stages run in registration
+    /// order (body → stage₁ → … → SQL); the first stage receives the raw
+    /// request body and each subsequent stage receives the previous stage's
+    /// output, the last stage's output being the SQL to run. With no stage the
+    /// body is parsed as `{"sql": …}`.
     pub fn with_pre_query(mut self, pre_query: PreQuery) -> Self {
-        self.pre_query = Some(pre_query);
+        self.pre_query.push(pre_query);
         self
     }
 
-    /// Attach a server-wide [`PostQuery`] hook. With it set, `POST /query`
-    /// hands each successful result set to the command and returns the JSON
-    /// body it prints instead of returning the rows as-is.
+    /// Append a [`PostQuery`] stage to the chain. Stages run in registration
+    /// order (rows → stage₁ → … → response); the first stage receives the
+    /// serialized result rows and each subsequent stage receives the previous
+    /// stage's output, the last stage's output being the response body. With no
+    /// stage the rows are returned as-is.
     pub fn with_post_query(mut self, post_query: PostQuery) -> Self {
-        self.post_query = Some(post_query);
+        self.post_query.push(post_query);
         self
     }
 }
@@ -276,8 +285,8 @@ mod tests {
         assert_eq!(cfg.host, "localhost");
         assert_eq!(cfg.port, 7117);
         assert_eq!(cfg.query_timeout, Duration::from_secs(30));
-        assert!(cfg.pre_query.is_none());
-        assert!(cfg.post_query.is_none());
+        assert!(cfg.pre_query.is_empty());
+        assert!(cfg.post_query.is_empty());
     }
 
     #[test]
@@ -295,11 +304,15 @@ mod tests {
     }
 
     #[test]
-    fn with_pre_query_sets_the_hook() {
-        let cfg = ServerConfig::ephemeral().with_pre_query(PreQuery::new("cmd {args}", "/proj"));
-        let pq = cfg.pre_query.expect("hook must be set");
-        assert_eq!(pq.command, "cmd {args}");
-        assert_eq!(pq.config_dir, PathBuf::from("/proj"));
+    fn with_pre_query_appends_stages_in_order() {
+        let cfg = ServerConfig::ephemeral()
+            .with_pre_query(PreQuery::new("first {args}", "/a"))
+            .with_pre_query(PreQuery::new("second {args}", "/b"));
+        assert_eq!(cfg.pre_query.len(), 2);
+        assert_eq!(cfg.pre_query[0].command, "first {args}");
+        assert_eq!(cfg.pre_query[0].config_dir, PathBuf::from("/a"));
+        assert_eq!(cfg.pre_query[1].command, "second {args}");
+        assert_eq!(cfg.pre_query[1].config_dir, PathBuf::from("/b"));
     }
 
     #[test]
@@ -317,12 +330,15 @@ mod tests {
     }
 
     #[test]
-    fn with_post_query_sets_the_hook() {
-        let cfg =
-            ServerConfig::ephemeral().with_post_query(PostQuery::new("reshape {args}", "/proj"));
-        let pq = cfg.post_query.expect("hook must be set");
-        assert_eq!(pq.command, "reshape {args}");
-        assert_eq!(pq.config_dir, PathBuf::from("/proj"));
+    fn with_post_query_appends_stages_in_order() {
+        let cfg = ServerConfig::ephemeral()
+            .with_post_query(PostQuery::new("first {args}", "/a"))
+            .with_post_query(PostQuery::new("second {args}", "/b"));
+        assert_eq!(cfg.post_query.len(), 2);
+        assert_eq!(cfg.post_query[0].command, "first {args}");
+        assert_eq!(cfg.post_query[0].config_dir, PathBuf::from("/a"));
+        assert_eq!(cfg.post_query[1].command, "second {args}");
+        assert_eq!(cfg.post_query[1].config_dir, PathBuf::from("/b"));
     }
 
     #[test]
