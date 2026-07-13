@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { type NativeDirSQL, type NativeDirSQLConstructor, getCore } from "./core.js";
+import {
+  type NativeDirSQL,
+  type NativeDirSQLConstructor,
+  getCore,
+} from "./core.js";
 import { loadNativeCore } from "./load-native-core.js";
 
 vi.mock("./load-native-core.js");
