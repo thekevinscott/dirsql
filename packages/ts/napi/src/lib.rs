@@ -170,10 +170,7 @@ impl DirSQL {
     #[napi(js_name = "pollEvents", ts_return_type = "Promise<RowEvent[]>")]
     pub fn poll_events(&self, timeout_ms: u32) -> AsyncTask<PollEventsTask> {
         let inner = self.inner.borrow().as_ref().cloned();
-        AsyncTask::new(PollEventsTask {
-            inner,
-            timeout_ms,
-        })
+        AsyncTask::new(PollEventsTask { inner, timeout_ms })
     }
 
     /// Explicitly close the database connection. Called for cleanup or to
