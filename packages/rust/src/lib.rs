@@ -856,7 +856,7 @@ pub struct DirSQLBuilder {
     tables: Vec<Table>,
     ignore: Vec<String>,
     extensions: Vec<Extension>,
-    config_path: Option<PathBuf>,
+    config_paths: Vec<PathBuf>,
     suppress_config_extensions: bool,
     persist: bool,
     persist_path: Option<PathBuf>,
@@ -921,8 +921,13 @@ impl DirSQLBuilder {
     /// index root: with no explicit [`root`](Self::root), the index roots at the
     /// process cwd. Relative `persist_path` / `[[dirsql.extension]]` paths still
     /// resolve against the config's parent directory.
+    ///
+    /// Call repeatedly to load several configs: their `[[table]]`, `ignore`, and
+    /// `[[dirsql.extension]]` entries accumulate in call order, and each config's
+    /// `on-file` hooks run from that config file's own directory under its own
+    /// `[dirsql].hook-timeout`. A single call is identical to before.
     pub fn config(mut self, config_path: impl Into<PathBuf>) -> Self {
-        self.config_path = Some(config_path.into());
+        self.config_paths.push(config_path.into());
         self
     }
 
@@ -968,7 +973,7 @@ impl DirSQLBuilder {
             mut tables,
             mut ignore,
             mut extensions,
-            config_path,
+            config_paths,
             suppress_config_extensions,
             persist,
             persist_path,
@@ -985,12 +990,11 @@ impl DirSQLBuilder {
 
         // The config layer is an ordered list of entries, each carrying its
         // loaded `config`, its `config_dir` (where `on-file` hooks run and the
-        // base for extension path resolution), and its `hook_timeout`. Every
-        // caller supplies at most one config, so the list holds 0 or 1 entries
-        // and the in-order merge below is byte-for-byte identical to a single
-        // pass.
+        // base for extension path resolution), and its `hook_timeout`. Configs
+        // accumulate in `.config()` call order; a single entry makes the in-order
+        // merge below byte-for-byte identical to a single pass.
         let mut config_entries: Vec<ResolvedConfigEntry> = Vec::new();
-        if let Some(ref cfg_path) = config_path {
+        for cfg_path in &config_paths {
             let cfg = config::load_config(cfg_path).map_err(DirSqlError::config)?;
 
             let cfg_parent = cfg_path

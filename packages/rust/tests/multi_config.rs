@@ -29,8 +29,11 @@ fn write_config(dir: &Path, contents: &str) -> std::path::PathBuf {
 
 #[test]
 fn tables_accumulate_across_config_entries() {
+    // Distinct globs per table: dirsql routes each file to a single table
+    // (one-file-one-table), so each config's table matches its own file.
     let data = TempDir::new().unwrap();
     fs::write(data.path().join("a.json"), "{}").unwrap();
+    fs::write(data.path().join("b.json"), "{}").unwrap();
 
     let cfg_a = TempDir::new().unwrap();
     let cfg_a_path = write_config(
@@ -38,7 +41,7 @@ fn tables_accumulate_across_config_entries() {
         r#"
 [[table]]
 ddl = "CREATE TABLE alpha (basename TEXT)"
-glob = "*.json"
+glob = "a.json"
 "#,
     );
     let cfg_b = TempDir::new().unwrap();
@@ -47,7 +50,7 @@ glob = "*.json"
         r#"
 [[table]]
 ddl = "CREATE TABLE beta (basename TEXT)"
-glob = "*.json"
+glob = "b.json"
 "#,
     );
 
@@ -68,15 +71,17 @@ glob = "*.json"
         .query("SELECT basename FROM beta")
         .expect("the SECOND config's table must be queryable");
     assert_eq!(beta.len(), 1);
+    assert_eq!(beta[0]["basename"], Value::Text("b.json".into()));
 }
 
 #[test]
 fn each_on_file_runs_from_its_declaring_config_dir() {
+    // Distinct globs (one-file-one-table); each config's relative `on-file`
+    // script proves the hook's cwd was that config's own directory.
     let data = TempDir::new().unwrap();
     fs::write(data.path().join("a.json"), "{}").unwrap();
+    fs::write(data.path().join("b.json"), "{}").unwrap();
 
-    // Each config declares an `on-file` that runs a *relative* script, so the
-    // row value proves the hook's cwd was that config's own directory.
     let cfg_a = TempDir::new().unwrap();
     fs::write(
         cfg_a.path().join("emit.sh"),
@@ -88,7 +93,7 @@ fn each_on_file_runs_from_its_declaring_config_dir() {
         r#"
 [[table]]
 ddl = "CREATE TABLE alpha (v TEXT)"
-glob = "*.json"
+glob = "a.json"
 on-file = "sh ./emit.sh {path}"
 "#,
     );
@@ -104,7 +109,7 @@ on-file = "sh ./emit.sh {path}"
         r#"
 [[table]]
 ddl = "CREATE TABLE beta (v TEXT)"
-glob = "*.json"
+glob = "b.json"
 on-file = "sh ./emit.sh {path}"
 "#,
     );
@@ -129,11 +134,13 @@ on-file = "sh ./emit.sh {path}"
 
 #[test]
 fn hook_timeout_scopes_to_its_declaring_config() {
+    // Distinct globs (one-file-one-table). Config A bounds ITS hooks at 1s and
+    // declares a 3s hook: its rows are skipped. Config B declares no timeout:
+    // its fast hook is unaffected.
     let data = TempDir::new().unwrap();
     fs::write(data.path().join("a.json"), "{}").unwrap();
+    fs::write(data.path().join("b.json"), "{}").unwrap();
 
-    // Config A bounds ITS hooks at 1s and declares a 3s hook: its rows are
-    // skipped. Config B declares no timeout: its fast hook is unaffected.
     let cfg_a = TempDir::new().unwrap();
     fs::write(
         cfg_a.path().join("slow.sh"),
@@ -148,7 +155,7 @@ hook-timeout = 1
 
 [[table]]
 ddl = "CREATE TABLE slow (v TEXT)"
-glob = "*.json"
+glob = "a.json"
 on-file = "sh ./slow.sh {path}"
 "#,
     );
@@ -164,7 +171,7 @@ on-file = "sh ./slow.sh {path}"
         r#"
 [[table]]
 ddl = "CREATE TABLE fast (v TEXT)"
-glob = "*.json"
+glob = "b.json"
 on-file = "sh ./fast.sh {path}"
 "#,
     );
