@@ -1093,7 +1093,7 @@ impl DirSQLBuilder {
         // `SELECT * FROM files` works out of the box -- parity with the CLI's
         // no-`-c` default (#603). A config that was given but defines no tables
         // is left as-is (the config is the base, not the default).
-        if config_paths.is_empty() && tables.is_empty() {
+        if should_inject_default_table(&config_paths, &tables) {
             let default_cfg = config::load_config_str(DEFAULT_CONFIG_TOML)
                 .expect("DEFAULT_CONFIG_TOML must be valid dirsql config TOML");
             let default_tables = build_tables_from_config(
@@ -1452,6 +1452,14 @@ fn relative_path(root: &Path, path: &Path) -> String {
 /// each `on-file` run; the caller resolves it from the global
 /// `[dirsql].hook-timeout` key, falling back to
 /// [`command::DEFAULT_COMMAND_TIMEOUT`].
+/// Whether the builder should inject the baked-in default `files` table (#603):
+/// only when neither an explicit config nor a programmatic table was supplied.
+/// A config given but defining no tables is still the base — the default is not
+/// layered on top. Pure so the whole truth table is unit-testable without I/O.
+fn should_inject_default_table(config_paths: &[PathBuf], tables: &[Table]) -> bool {
+    config_paths.is_empty() && tables.is_empty()
+}
+
 fn build_tables_from_config(
     cfg: &config::Config,
     config_dir: &Path,
@@ -2573,6 +2581,26 @@ mod internal_tests {
     }
 
     #[test]
+    fn should_inject_default_table_only_when_config_and_tables_are_both_empty() {
+        // Pure truth table (no I/O): the baked-in default is injected only when
+        // neither a config path nor a programmatic table was supplied (#603).
+        let table = Table::new("CREATE TABLE x (a TEXT)", "*", |_| vec![Row::new()]);
+        assert!(should_inject_default_table(&[], &[]));
+        assert!(!should_inject_default_table(
+            &[PathBuf::from("c.toml")],
+            &[]
+        ));
+        assert!(!should_inject_default_table(
+            &[],
+            std::slice::from_ref(&table)
+        ));
+        assert!(!should_inject_default_table(
+            &[PathBuf::from("c.toml")],
+            std::slice::from_ref(&table)
+        ));
+    }
+
+    #[test]
     fn resolve_with_no_config_or_tables_injects_the_default_files_table() {
         // With no config and no programmatic tables, the builder injects the
         // baked-in default `files` table (#603), so the index is queryable out
@@ -2587,6 +2615,18 @@ mod internal_tests {
             "expected the baked-in files table, got {}",
             resolved.tables[0].ddl
         );
+
+        // A programmatic table (still no config) is used verbatim -- the
+        // default is NOT layered on top.
+        let with_table = DirSQL::builder()
+            .root("/tmp/x")
+            .table(Table::new("CREATE TABLE t (a TEXT)", "*.t", |_| {
+                vec![Row::new()]
+            }))
+            .resolve()
+            .unwrap();
+        assert_eq!(with_table.tables.len(), 1, "no default when a table exists");
+        assert!(with_table.tables[0].ddl.starts_with("CREATE TABLE t"));
     }
 
     #[test]
