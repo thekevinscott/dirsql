@@ -131,6 +131,38 @@ by the command wins over a same-named fact. Output that is not a JSON array
 of objects is a per-file failure: the file is skipped with a stderr warning
 and the scan continues (see [failure semantics](./hooks.md#failure-semantics)).
 
+## Composing multiple configs
+
+Pass [`-c`/`--config`](./cli.md#flags) more than once to compose several config
+files — a shared team config plus local overrides, or a plugin's config
+alongside your own:
+
+```bash
+dirsql -c ./.dirsql.toml -c ~/team/embeddings.toml -c ./local.toml
+```
+
+The configs load and merge in **argv order**:
+
+- **`[[table]]`, `ignore`, and `[[dirsql.extension]]` entries accumulate** across
+  all configs, in order.
+- **Each config's `on-file`, `pre-query`, and `post-query` hooks run from that
+  config file's own directory**, under that config's own
+  [`hook-timeout`](#dirsql-keys) — so a relative command like
+  `on-file = "sh ./extract.sh"` resolves against the config that declared it,
+  wherever it lives.
+- **`pre-query` / `post-query` hooks chain FIFO**: the request body flows through
+  each `pre-query` stage in order to the final SQL, and the result rows flow
+  through each `post-query` stage to the response. See the
+  [hook contract](./hooks.md).
+- Each config is **validated on its own** (the [parse errors](#parse-errors)
+  below apply per file). There is no cross-file merge validation, with one
+  structural exception: **two configs defining a table of the same name is an
+  error**, naming the table.
+
+The index [root](./cli.md#flags) is the invocation directory regardless of where
+any config lives. With no `-c`, `./.dirsql.toml` is used; a single `-c` behaves
+exactly as before.
+
 ## Parse errors
 
 Loading fails (the CLI enters [degraded mode](./cli.md#degraded-mode); the

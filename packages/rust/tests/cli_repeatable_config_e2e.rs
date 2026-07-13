@@ -19,8 +19,10 @@ use reqwest::blocking::Client;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-/// Write `.dirsql.toml` declaring one single-column table into `dir`.
-fn write_table_config(dir: &Path, table: &str) -> std::path::PathBuf {
+/// Write `.dirsql.toml` declaring one single-column table into `dir`. `glob`
+/// is distinct per table because dirsql routes each file to a single table
+/// (one-file-one-table), so each config's table matches its own file.
+fn write_table_config(dir: &Path, table: &str, glob: &str) -> std::path::PathBuf {
     let path = dir.join(".dirsql.toml");
     fs::write(
         &path,
@@ -28,7 +30,7 @@ fn write_table_config(dir: &Path, table: &str) -> std::path::PathBuf {
             r#"
 [[table]]
 ddl = "CREATE TABLE {table} (basename TEXT)"
-glob = "*.json"
+glob = "{glob}"
 "#
         ),
     )
@@ -72,10 +74,11 @@ fn wait_until_ready_or_exit(child: &mut Child, port: u16, timeout: Duration) {
 fn server_serves_tables_from_two_config_flags() {
     let data = TempDir::new().unwrap();
     fs::write(data.path().join("a.json"), "{}").unwrap();
+    fs::write(data.path().join("b.json"), "{}").unwrap();
     let cfg_a = TempDir::new().unwrap();
-    let cfg_a_path = write_table_config(cfg_a.path(), "alpha");
+    let cfg_a_path = write_table_config(cfg_a.path(), "alpha", "a.json");
     let cfg_b = TempDir::new().unwrap();
-    let cfg_b_path = write_table_config(cfg_b.path(), "beta");
+    let cfg_b_path = write_table_config(cfg_b.path(), "beta", "b.json");
 
     let port = free_port();
     let mut cmd: StdCommand = std::process::Command::cargo_bin("dirsql")
@@ -119,20 +122,23 @@ fn server_serves_tables_from_two_config_flags() {
 fn query_subcommand_accepts_repeated_config_flags() {
     let data = TempDir::new().unwrap();
     fs::write(data.path().join("a.json"), "{}").unwrap();
+    fs::write(data.path().join("b.json"), "{}").unwrap();
     let cfg_a = TempDir::new().unwrap();
-    let cfg_a_path = write_table_config(cfg_a.path(), "alpha");
+    let cfg_a_path = write_table_config(cfg_a.path(), "alpha", "a.json");
     let cfg_b = TempDir::new().unwrap();
-    let cfg_b_path = write_table_config(cfg_b.path(), "beta");
+    let cfg_b_path = write_table_config(cfg_b.path(), "beta", "b.json");
 
     let mut cmd: StdCommand = std::process::Command::cargo_bin("dirsql")
         .expect("`dirsql` binary must be built by `cargo test` with --features cli");
+    // Query the SECOND config's table -- proves the repeated `--config` was
+    // honored, not just the first.
     let out = cmd
         .arg("--config")
         .arg(&cfg_a_path)
         .arg("--config")
         .arg(&cfg_b_path)
         .arg("query")
-        .arg("SELECT COUNT(*) AS n FROM alpha")
+        .arg("SELECT COUNT(*) AS n FROM beta")
         .current_dir(data.path())
         .output()
         .expect("spawning `dirsql query` failed");

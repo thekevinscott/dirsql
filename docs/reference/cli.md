@@ -45,7 +45,7 @@ requests, closes open `/events` streams, and exits.
 
 | Flag | Default | Description |
 |---|---|---|
-| `-c, --config <path>` | `./.dirsql.toml` | Path to the [config file](./config.md). The index is always rooted at the **invocation directory** (the current working directory), regardless of where this file lives — so `--config /elsewhere/.dirsql.toml` still indexes the directory you ran `dirsql` from. When the file does not exist, the server runs in [zero-config mode](#zero-config-mode). |
+| `-c, --config <path>` | `./.dirsql.toml` | Path to a [config file](./config.md). **Repeatable** (`-c a -c b`): the configs load and merge in argv order — see [Composing multiple configs](./config.md#composing-multiple-configs). The index is always rooted at the **invocation directory** (the current working directory), regardless of where a config lives — so `--config /elsewhere/.dirsql.toml` still indexes the directory you ran `dirsql` from. With none given, `./.dirsql.toml` is used; when it does not exist, the server runs in [zero-config mode](#zero-config-mode). |
 | `--host <addr>` | `localhost` | Bind address. |
 | `--port <n>` | `7117` | TCP port to bind. |
 | `--persist [<path>]` | off | Keep the SQLite index on disk between runs so a restart only re-parses files that actually changed. Bare `--persist` caches at `<root>/.dirsql/cache.db`; `--persist <path>` caches at `<path>`. Off by default (the index is ephemeral). Global — also honored by [`dirsql query`](#dirsql-query). See [Keep the index across restarts](../howto/persist.md). |
