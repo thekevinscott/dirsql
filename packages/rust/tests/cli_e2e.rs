@@ -825,6 +825,48 @@ fn query_subcommand_rejects_blank_sql_with_nonzero_exit() {
 }
 
 #[test]
+fn query_subcommand_fans_out_file_to_overlapping_tables() {
+    // Two plain tables with overlapping globs both match the one file; each
+    // `dirsql query` returns the file's row (#580 fan-out).
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("data/2401.00001")).unwrap();
+    fs::write(root.path().join("data/2401.00001/metadata.json"), "{}").unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[table]]
+ddl = "CREATE TABLE ta (path TEXT)"
+glob = "data/*/metadata.json"
+
+[[table]]
+ddl = "CREATE TABLE tb (path TEXT)"
+glob = "data/**/metadata.json"
+"#,
+    )
+    .unwrap();
+
+    for table in ["ta", "tb"] {
+        let out = run_query_subcommand(root.path(), &format!("SELECT path FROM {table}"));
+        assert!(
+            out.status.success(),
+            "`dirsql query` on {table} must succeed, got {out:?}"
+        );
+        let rows: Value = serde_json::from_slice(&out.stdout).unwrap();
+        let paths: Vec<&str> = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r["path"].as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            vec!["data/2401.00001/metadata.json"],
+            "table {table} must contain the fanned-out file, got {paths:?}"
+        );
+    }
+}
+
+#[test]
 fn query_subcommand_serves_default_files_table_without_config() {
     // Config discovery matches server mode: no `.dirsql.toml` means the
     // default `files` table, queryable out of the box.

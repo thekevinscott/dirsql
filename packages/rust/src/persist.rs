@@ -21,7 +21,11 @@ use crate::Table;
 /// Sidecar schema version. Bumped on any breaking change to the on-disk layout
 /// (`_dirsql_files` / `_dirsql_meta`, or the shape of the cached user tables);
 /// a mismatch forces a penalty-free full rebuild on first startup.
-pub const SCHEMA_VERSION: &str = "3";
+///
+/// `4`: `_dirsql_files` is keyed by the composite `(rel_path, table_name)`
+/// instead of `rel_path` alone, so a file matching multiple tables' globs is
+/// bookkept per table (fan-out, #580). Caches at `3` are discarded and rebuilt.
+pub const SCHEMA_VERSION: &str = "4";
 
 /// Bumped whenever any built-in parser changes its row-shape contract. A
 /// mismatch forces a full rebuild.
@@ -177,7 +181,7 @@ pub fn create_sidecar_tables(conn: &Connection) -> rusqlite::Result<()> {
             value TEXT NOT NULL
          );
          CREATE TABLE IF NOT EXISTS _dirsql_files (
-            rel_path     TEXT PRIMARY KEY,
+            rel_path     TEXT NOT NULL,
             table_name   TEXT NOT NULL,
             size         INTEGER NOT NULL,
             mtime_ns     INTEGER NOT NULL,
@@ -185,7 +189,8 @@ pub fn create_sidecar_tables(conn: &Connection) -> rusqlite::Result<()> {
             inode        INTEGER NOT NULL,
             dev          INTEGER NOT NULL,
             content_hash BLOB,
-            snapshot_ns  INTEGER NOT NULL
+            snapshot_ns  INTEGER NOT NULL,
+            PRIMARY KEY (rel_path, table_name)
          );",
     )?;
     Ok(())
@@ -266,8 +271,11 @@ pub fn meta_is_compatible(
     true
 }
 
-/// Read every `_dirsql_files` row, keyed by relative path.
-pub fn read_cached_files(conn: &Connection) -> rusqlite::Result<HashMap<String, CachedFile>> {
+/// Read every `_dirsql_files` row, keyed by the `(rel_path, table_name)` pair
+/// (a file may be bookkept under several tables under fan-out).
+pub fn read_cached_files(
+    conn: &Connection,
+) -> rusqlite::Result<HashMap<(String, String), CachedFile>> {
     let mut stmt = conn.prepare(
         "SELECT rel_path, table_name, size, mtime_ns, ctime_ns, inode, dev,
                 content_hash, snapshot_ns
@@ -301,7 +309,7 @@ pub fn read_cached_files(conn: &Connection) -> rusqlite::Result<HashMap<String, 
     let mut out = HashMap::new();
     for row in rows {
         let cf = row?;
-        out.insert(cf.rel_path.clone(), cf);
+        out.insert((cf.rel_path.clone(), cf.table_name.clone()), cf);
     }
     Ok(out)
 }
@@ -322,8 +330,7 @@ pub fn upsert_file(
             (rel_path, table_name, size, mtime_ns, ctime_ns, inode, dev,
              content_hash, snapshot_ns)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-         ON CONFLICT(rel_path) DO UPDATE SET
-            table_name   = excluded.table_name,
+         ON CONFLICT(rel_path, table_name) DO UPDATE SET
             size         = excluded.size,
             mtime_ns     = excluded.mtime_ns,
             ctime_ns     = excluded.ctime_ns,
@@ -346,11 +353,13 @@ pub fn upsert_file(
     Ok(())
 }
 
-/// Delete a file's row from `_dirsql_files`.
-pub fn delete_file(conn: &Connection, rel_path: &str) -> rusqlite::Result<()> {
+/// Delete a single `(rel_path, table_name)` bookkeeping row from
+/// `_dirsql_files`. Under fan-out a file may have several such rows, so
+/// deletes are keyed by the pair, not by `rel_path` alone.
+pub fn delete_file(conn: &Connection, rel_path: &str, table_name: &str) -> rusqlite::Result<()> {
     conn.execute(
-        "DELETE FROM _dirsql_files WHERE rel_path = ?1",
-        params![rel_path],
+        "DELETE FROM _dirsql_files WHERE rel_path = ?1 AND table_name = ?2",
+        params![rel_path, table_name],
     )?;
     Ok(())
 }
@@ -467,11 +476,68 @@ mod tests {
         upsert_file(&conn, "a.csv", "rows", &stat, Some(&hash), 1234).unwrap();
         let files = read_cached_files(&conn).unwrap();
         assert_eq!(files.len(), 1);
-        let cf = files.get("a.csv").unwrap();
+        let cf = files
+            .get(&("a.csv".to_string(), "rows".to_string()))
+            .unwrap();
         assert_eq!(cf.table_name, "rows");
         assert_eq!(cf.stat, stat);
         assert_eq!(cf.content_hash, Some(hash));
         assert_eq!(cf.snapshot_ns, 1234);
+    }
+
+    #[test]
+    fn one_file_under_two_tables_stores_two_rows() {
+        // Fan-out: the same rel_path bookkept under two tables is two distinct
+        // rows keyed by (rel_path, table_name), not one that overwrites.
+        let conn = Connection::open_in_memory().unwrap();
+        create_sidecar_tables(&conn).unwrap();
+        let stat = FileStat {
+            size: 1,
+            mtime_ns: 1,
+            ctime_ns: 1,
+            inode: 1,
+            dev: 1,
+        };
+        upsert_file(&conn, "shared.json", "ta", &stat, None, 1).unwrap();
+        upsert_file(&conn, "shared.json", "tb", &stat, None, 1).unwrap();
+
+        let files = read_cached_files(&conn).unwrap();
+        assert_eq!(files.len(), 2, "one row per (rel_path, table): {files:?}");
+        assert_eq!(
+            files
+                .get(&("shared.json".to_string(), "ta".to_string()))
+                .unwrap()
+                .table_name,
+            "ta"
+        );
+        assert_eq!(
+            files
+                .get(&("shared.json".to_string(), "tb".to_string()))
+                .unwrap()
+                .table_name,
+            "tb"
+        );
+    }
+
+    #[test]
+    fn delete_file_removes_only_the_targeted_table_row() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_sidecar_tables(&conn).unwrap();
+        let stat = FileStat {
+            size: 1,
+            mtime_ns: 1,
+            ctime_ns: 1,
+            inode: 1,
+            dev: 1,
+        };
+        upsert_file(&conn, "shared.json", "ta", &stat, None, 1).unwrap();
+        upsert_file(&conn, "shared.json", "tb", &stat, None, 1).unwrap();
+
+        delete_file(&conn, "shared.json", "ta").unwrap();
+
+        let files = read_cached_files(&conn).unwrap();
+        assert_eq!(files.len(), 1, "only the (shared.json, ta) row is removed");
+        assert!(files.contains_key(&("shared.json".to_string(), "tb".to_string())));
     }
 
     #[test]
@@ -486,7 +552,7 @@ mod tests {
             dev: 1,
         };
         upsert_file(&conn, "a.csv", "t", &stat, None, 1).unwrap();
-        delete_file(&conn, "a.csv").unwrap();
+        delete_file(&conn, "a.csv", "t").unwrap();
         assert!(read_cached_files(&conn).unwrap().is_empty());
     }
 
@@ -671,7 +737,7 @@ mod tests {
     #[test]
     fn delete_file_propagates_missing_table_error() {
         let conn = Connection::open_in_memory().unwrap();
-        let err = delete_file(&conn, "a.csv").unwrap_err();
+        let err = delete_file(&conn, "a.csv", "t").unwrap_err();
         assert!(
             err.to_string().contains("no such table"),
             "expected a missing-table error, got: {err}"
@@ -757,7 +823,9 @@ mod tests {
         )
         .unwrap();
         let files = read_cached_files(&conn).unwrap();
-        let cf = files.get("bad.csv").unwrap();
+        let cf = files
+            .get(&("bad.csv".to_string(), "t".to_string()))
+            .unwrap();
         assert_eq!(cf.content_hash, None);
     }
 }

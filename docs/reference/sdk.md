@@ -318,7 +318,9 @@ Maps files to table rows.
 - `ddl` — A SQLite `CREATE TABLE` statement; the table name is parsed from
   it. Table names must be unique across all tables.
 - `glob` — Glob pattern matched against root-relative paths. May contain
-  `{name}` [captures](./columns.md#glob-captures).
+  `{name}` [captures](./columns.md#glob-captures). Every table whose glob
+  matches a file receives that file's rows — a file can populate multiple
+  tables.
 - `on_file` (`on_file` / `onFile`) — Callback receiving the matched file's full path (the root
   joined with the file's relative path — absolute when `root` is absolute)
   and returning the rows that file contributes. `dirsql` never reads file

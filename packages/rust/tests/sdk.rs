@@ -757,6 +757,94 @@ fn on_file_error_surfaces_as_on_file_error() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Fan-out: a file matching N tables' globs populates all N tables (#580).
+// ---------------------------------------------------------------------------
+
+/// Root containing exactly one file `data/2401.00001/metadata.json`.
+fn fanout_root() -> TempDir {
+    let root = TempDir::new().unwrap();
+    let sub = root.path().join("data").join("2401.00001");
+    fs::create_dir_all(&sub).unwrap();
+    fs::write(sub.join("metadata.json"), "{}").unwrap();
+    root
+}
+
+fn table_returning(name: &str, glob: &str, col: &'static str, val: &'static str) -> Table {
+    Table::new(
+        &format!("CREATE TABLE {name} ({col} TEXT)"),
+        glob,
+        move |_path| vec![HashMap::from([(col.into(), Value::Text(val.into()))])],
+    )
+}
+
+#[test]
+fn fanout_identical_globs_populate_both_tables() {
+    let root = fanout_root();
+    let ta = table_returning("ta", "data/*/metadata.json", "col_a", "A");
+    let tb = table_returning("tb", "data/*/metadata.json", "col_b", "B");
+
+    let db = DirSQL::new(root.path(), vec![ta, tb]).unwrap();
+
+    let a_rows = db.query("SELECT col_a FROM ta").unwrap();
+    assert_eq!(a_rows.len(), 1, "ta populated");
+    assert_eq!(a_rows[0]["col_a"], Value::Text("A".into()));
+
+    let b_rows = db.query("SELECT col_b FROM tb").unwrap();
+    assert_eq!(b_rows.len(), 1, "tb (second-declared) populated");
+    assert_eq!(b_rows[0]["col_b"], Value::Text("B".into()));
+}
+
+#[test]
+fn fanout_overlapping_distinct_globs_populate_both_tables() {
+    let root = fanout_root();
+    let ta = table_returning("ta", "data/*/metadata.json", "col_a", "A");
+    let tb = table_returning("tb", "data/**/metadata.json", "col_b", "B");
+
+    let db = DirSQL::new(root.path(), vec![ta, tb]).unwrap();
+
+    let a_rows = db.query("SELECT col_a FROM ta").unwrap();
+    assert_eq!(a_rows.len(), 1, "ta populated");
+    let b_rows = db.query("SELECT col_b FROM tb").unwrap();
+    assert_eq!(b_rows.len(), 1, "tb (second-declared) populated");
+    assert_eq!(b_rows[0]["col_b"], Value::Text("B".into()));
+}
+
+// Captures are per-glob: table `a`'s rows carry `id` from its own glob, table
+// `b`'s rows (a captureless glob) do not (spec item 4).
+#[test]
+fn fanout_captures_are_per_glob() {
+    let root = fanout_root();
+    let a = Table::new(
+        "CREATE TABLE a (id TEXT, col_a TEXT)",
+        "data/{id}/metadata.json",
+        |_path| vec![HashMap::from([("col_a".into(), Value::Text("A".into()))])],
+    );
+    let b = Table::new(
+        "CREATE TABLE b (id TEXT, col_b TEXT)",
+        "**/metadata.json",
+        |_path| vec![HashMap::from([("col_b".into(), Value::Text("B".into()))])],
+    );
+
+    let db = DirSQL::new(root.path(), vec![a, b]).unwrap();
+
+    let a_rows = db.query("SELECT id, col_a FROM a").unwrap();
+    assert_eq!(a_rows.len(), 1);
+    assert_eq!(
+        a_rows[0]["id"],
+        Value::Text("2401.00001".into()),
+        "table a gets its own glob's capture"
+    );
+
+    let b_rows = db.query("SELECT id, col_b FROM b").unwrap();
+    assert_eq!(b_rows.len(), 1);
+    assert_eq!(
+        b_rows[0]["id"],
+        Value::Null,
+        "table b's captureless glob yields no id capture"
+    );
+}
+
 #[test]
 fn binary_file_under_glob_does_not_break_build() {
     // dirsql must not eagerly read matched files as UTF-8 text: a non-UTF-8

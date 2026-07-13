@@ -86,7 +86,7 @@ Walks a directory tree and matches files against table globs. Returns a list of 
 
 ### `matcher` -- Glob-to-table mapping
 
-Maps glob patterns to table names and handles ignore patterns. A file is matched against globs in registration order; the first match wins. Glob patterns may contain `{name}` capture placeholders; the matcher returns captured segments alongside the table name.
+Maps glob patterns to table names and handles ignore patterns. A file is matched against every glob in registration order; every matching pattern fires, so a file can belong to multiple tables. Glob patterns may contain `{name}` capture placeholders; the matcher returns captured segments alongside each table name.
 
 ### `watcher` -- Filesystem monitoring
 

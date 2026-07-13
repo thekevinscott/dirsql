@@ -20,7 +20,7 @@ fn make_test_paths(count: usize) -> Vec<String> {
 }
 
 fn bench_match_file(c: &mut Criterion) {
-    let mut group = c.benchmark_group("matcher/match_file");
+    let mut group = c.benchmark_group("matcher/match_all");
     for pattern_count in [1, 10, 50] {
         let matcher = make_matcher(pattern_count);
         let paths = make_test_paths(100);
@@ -30,7 +30,7 @@ fn bench_match_file(c: &mut Criterion) {
             |b, _| {
                 b.iter(|| {
                     for p in &paths {
-                        matcher.match_file(Path::new(p));
+                        matcher.match_all(Path::new(p));
                     }
                 });
             },
