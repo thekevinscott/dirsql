@@ -144,10 +144,7 @@ impl DirSQL {
     #[napi(ts_return_type = "Promise<Record<string, unknown>[]>")]
     pub fn query(&self, sql: String) -> AsyncTask<QueryTask> {
         let inner = self.inner.borrow().as_ref().cloned();
-        AsyncTask::new(QueryTask {
-            inner,
-            sql,
-        })
+        AsyncTask::new(QueryTask { inner, sql })
     }
 
     /// Start the file watcher. Must be called before pollEvents.
@@ -157,9 +154,7 @@ impl DirSQL {
     #[napi(js_name = "startWatcher", ts_return_type = "Promise<void>")]
     pub fn start_watcher(&self) -> AsyncTask<StartWatcherTask> {
         let inner = self.inner.borrow().as_ref().cloned();
-        AsyncTask::new(StartWatcherTask {
-            inner,
-        })
+        AsyncTask::new(StartWatcherTask { inner })
     }
 
     /// Poll for file events with a timeout (in milliseconds).
