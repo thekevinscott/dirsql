@@ -939,6 +939,121 @@ fn missing_explicit_config_exits_nonzero_naming_the_file() {
     );
 }
 
+/// Run `dirsql --include-default [-c <cfg>]... query <sql>` in `dir`.
+fn run_query_include_default(
+    dir: &std::path::Path,
+    configs: &[&str],
+    sql: &str,
+) -> std::process::Output {
+    let mut cmd = std::process::Command::cargo_bin("dirsql").expect("binary must exist");
+    cmd.arg("--include-default");
+    for cfg in configs {
+        cmd.arg("-c").arg(cfg);
+    }
+    cmd.arg("query")
+        .arg(sql)
+        .current_dir(dir)
+        .output()
+        .expect("spawning `dirsql query` failed")
+}
+
+#[test]
+fn include_default_composes_baked_in_files_with_an_explicit_config() {
+    // #604: the hidden `--include-default` flag seeds the baked-in default
+    // `files` table BEFORE the explicit `-c` configs, so a config no longer
+    // suppresses the default. This is the additive composition the plugin
+    // launcher (#529) injects for row 2 (no user `-c` + plugin): the result is
+    // the baked-in default PLUS the config's own tables.
+    let root = blog_fixture(); // `.dirsql.toml` defines `posts`
+
+    let files = run_query_include_default(
+        root.path(),
+        &[".dirsql.toml"],
+        "SELECT COUNT(*) AS n FROM files",
+    );
+    assert!(
+        files.status.success(),
+        "the baked-in `files` table must be present under --include-default, got {files:?}"
+    );
+
+    let posts = run_query_include_default(
+        root.path(),
+        &[".dirsql.toml"],
+        "SELECT title FROM posts ORDER BY title",
+    );
+    assert!(
+        posts.status.success(),
+        "the explicit config's `posts` table must ALSO be present, got {posts:?}"
+    );
+    let rows: Value = serde_json::from_slice(&posts.stdout).unwrap();
+    let titles: Vec<&str> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["title"].as_str())
+        .collect();
+    assert_eq!(
+        titles,
+        vec!["Hello-World", "Second-Post"],
+        "the config's posts must load alongside the default files table, got {titles:?}"
+    );
+}
+
+#[test]
+fn include_default_with_no_config_serves_the_bare_default() {
+    // #604: `--include-default` with no `-c` is idempotent — it is exactly the
+    // bare baked-in default (row 1). Seeding the default and then merging an
+    // empty config set changes nothing.
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("readme.md"), "hello").unwrap();
+
+    let out = run_query_include_default(dir.path(), &[], "SELECT basename FROM files");
+    assert!(
+        out.status.success(),
+        "`--include-default` alone must serve the default files table, got {out:?}"
+    );
+    let rows: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let names: Vec<&str> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["basename"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"readme.md"),
+        "expected the default files table to contain readme.md, got {names:?}"
+    );
+}
+
+#[test]
+fn include_default_conflicting_files_table_exits_nonzero_naming_files() {
+    // #604: seeding the baked-in `files` table and then loading a `-c` config
+    // that ALSO defines `files` is a duplicate-table conflict, caught by the
+    // existing dedup (no new conflict machinery). The diagnostic names the
+    // duplicated table.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("dup.toml"),
+        r#"
+[[table]]
+ddl = "CREATE TABLE files (x TEXT)"
+glob = "**/*"
+"#,
+    )
+    .unwrap();
+
+    let out = run_query_include_default(dir.path(), &["dup.toml"], "SELECT 1");
+    assert!(
+        !out.status.success(),
+        "a config redefining `files` under --include-default must conflict, got {out:?}"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("files") && stderr.to_lowercase().contains("duplicate"),
+        "the conflict must name the duplicate `files` table, got {stderr:?}"
+    );
+}
+
 #[test]
 fn init_output_loads_when_passed_explicitly_with_config_flag() {
     // #602: `dirsql init` remains a scaffold, but its output no longer
