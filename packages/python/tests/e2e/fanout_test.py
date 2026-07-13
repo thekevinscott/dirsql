@@ -81,11 +81,11 @@ def describe_fanout():
         (sub / "metadata.json").write_text("{}")
         cfg = root / ".dirsql.toml"
         cfg.write_text(
-            '[[table]]\n'
+            "[[table]]\n"
             'ddl = "CREATE TABLE ta (path TEXT)"\n'
             'glob = "data/*/metadata.json"\n'
-            '\n'
-            '[[table]]\n'
+            "\n"
+            "[[table]]\n"
             'ddl = "CREATE TABLE tb (path TEXT)"\n'
             'glob = "data/**/metadata.json"\n'
         )

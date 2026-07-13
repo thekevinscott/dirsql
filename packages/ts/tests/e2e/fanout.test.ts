@@ -152,16 +152,7 @@ beforeAll(async () => {
   const cfg = join(dataDir, ".dirsql.toml");
   await writeFile(
     cfg,
-    [
-      `[[table]]`,
-      `ddl = "CREATE TABLE ta (path TEXT)"`,
-      `glob = "data/*/metadata.json"`,
-      ``,
-      `[[table]]`,
-      `ddl = "CREATE TABLE tb (path TEXT)"`,
-      `glob = "data/**/metadata.json"`,
-      ``,
-    ].join("\n"),
+    `[[table]]\nddl = "CREATE TABLE ta (path TEXT)"\nglob = "data/*/metadata.json"\n\n[[table]]\nddl = "CREATE TABLE tb (path TEXT)"\nglob = "data/**/metadata.json"\n`,
   );
 
   serverPort = await freePort();
