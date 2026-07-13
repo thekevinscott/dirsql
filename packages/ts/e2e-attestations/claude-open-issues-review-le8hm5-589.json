@@ -1,7 +1,7 @@
 {
   "command": "pnpm test:e2e",
-  "ran_at": 1783956958,
+  "ran_at": 1783957254,
   "exit_code": 0,
-  "commit": "9587f7ed691e17a32cfe6f4400b3dbc3280fdab0",
+  "commit": "4980d07c816333edc8c4d2e644b64156a16f3635",
   "branch": "claude/open-issues-review-le8hm5-589"
 }
