@@ -58,6 +58,19 @@ def describe_DirSQL():
             ids = {r["id"] for r in results}
             assert ids == {"abc"}
 
+    def describe_default_config():
+        @pytest.mark.asyncio
+        async def it_serves_the_baked_in_files_table_with_no_config(tmp_path):
+            # #603: a DirSQL with no `config` and no `tables` serves the
+            # baked-in default `files` table (parity with the CLI's no-`-c`
+            # default), not an empty index.
+            (tmp_path / "readme.md").write_text("hello")
+            db = DirSQL(str(tmp_path))
+            await db.ready()
+            rows = await db.query("SELECT basename FROM files")
+            names = {r["basename"] for r in rows}
+            assert "readme.md" in names
+
     def describe_query():
         @pytest.mark.asyncio
         async def it_returns_all_rows(jsonl_dir):
