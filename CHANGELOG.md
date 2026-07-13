@@ -1,11 +1,16 @@
 # Changelog
 
-All notable changes to this project are documented in this file.
+> **This file is frozen.** The entries below are the pre-fragment history.
+> New changelog entries are **per-package fragments** under
+> `packages/<pkg>/changelog.d/` — one timestamped file per change, so PRs
+> never conflict on a shared file. See each package's `CHANGELOG.md`
+> (`packages/python`, `packages/ts`, `packages/rust`) and AGENTS.md,
+> "Changelog and Migrations". Version history is the `git log --tags` record.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## Frozen history (pre-fragment)
 
 ### Security
 
