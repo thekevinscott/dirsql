@@ -25,6 +25,7 @@ use dirsql::{
 use napi::Task;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -71,7 +72,7 @@ pub struct ExtensionSpec {
 /// The main DirSQL class. Creates an ephemeral SQLite index over a directory.
 #[napi(js_name = "DirSQL")]
 pub struct DirSQL {
-    inner: CoreDirSQL,
+    inner: RefCell<Option<CoreDirSQL>>,
 }
 
 #[napi]
@@ -142,8 +143,9 @@ impl DirSQL {
     /// Returns a `Promise` in JS.
     #[napi(ts_return_type = "Promise<Record<string, unknown>[]>")]
     pub fn query(&self, sql: String) -> AsyncTask<QueryTask> {
+        let inner = self.inner.borrow().as_ref().cloned();
         AsyncTask::new(QueryTask {
-            inner: self.inner.clone(),
+            inner,
             sql,
         })
     }
@@ -154,8 +156,9 @@ impl DirSQL {
     /// while the watcher is being initialized. Returns a `Promise` in JS.
     #[napi(js_name = "startWatcher", ts_return_type = "Promise<void>")]
     pub fn start_watcher(&self) -> AsyncTask<StartWatcherTask> {
+        let inner = self.inner.borrow().as_ref().cloned();
         AsyncTask::new(StartWatcherTask {
-            inner: self.inner.clone(),
+            inner,
         })
     }
 
@@ -166,10 +169,19 @@ impl DirSQL {
     /// for the duration of the poll timeout. Returns a `Promise` in JS.
     #[napi(js_name = "pollEvents", ts_return_type = "Promise<RowEvent[]>")]
     pub fn poll_events(&self, timeout_ms: u32) -> AsyncTask<PollEventsTask> {
+        let inner = self.inner.borrow().as_ref().cloned();
         AsyncTask::new(PollEventsTask {
-            inner: self.inner.clone(),
+            inner,
             timeout_ms,
         })
+    }
+
+    /// Explicitly close the database connection. Called for cleanup or to
+    /// ensure the WAL checkpoint completes before reading the database with
+    /// external tools (e.g. sql.js in tests). Returns `undefined`.
+    #[napi]
+    pub fn close(&self) {
+        self.inner.borrow_mut().take();
     }
 }
 
@@ -228,7 +240,9 @@ impl Task for OpenTask {
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
         let inner = CoreDirSQL::finish_build(output).map_err(to_napi_err)?;
-        Ok(DirSQL { inner })
+        Ok(DirSQL {
+            inner: RefCell::new(Some(inner)),
+        })
     }
 }
 
@@ -236,7 +250,7 @@ impl Task for OpenTask {
 /// responsive. `CoreDirSQL` is cheap to clone (internally `Arc`-wrapped), so
 /// each task owns its own handle for the lifetime of the query.
 pub struct QueryTask {
-    inner: CoreDirSQL,
+    inner: Option<CoreDirSQL>,
     sql: String,
 }
 
@@ -245,7 +259,11 @@ impl Task for QueryTask {
     type JsValue = Vec<HashMap<String, JsRowValue>>;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let rows = self.inner.query(&self.sql).map_err(to_napi_err)?;
+        let inner = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
+        let rows = inner.query(&self.sql).map_err(to_napi_err)?;
         rows.iter().map(value_row_to_js).collect()
     }
 
@@ -257,7 +275,7 @@ impl Task for QueryTask {
 /// Runs `DirSQL::start_watching` on the libuv threadpool. Idempotent on the
 /// core side, so repeated calls from JS are still safe.
 pub struct StartWatcherTask {
-    inner: CoreDirSQL,
+    inner: Option<CoreDirSQL>,
 }
 
 impl Task for StartWatcherTask {
@@ -265,7 +283,11 @@ impl Task for StartWatcherTask {
     type JsValue = ();
 
     fn compute(&mut self) -> Result<Self::Output> {
-        self.inner.start_watching().map_err(to_napi_err)
+        let inner = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
+        inner.start_watching().map_err(to_napi_err)
     }
 
     fn resolve(&mut self, _env: Env, _output: Self::Output) -> Result<Self::JsValue> {
@@ -283,7 +305,7 @@ impl Task for StartWatcherTask {
 /// `compute()` would call into JS from a worker thread and crash V8
 /// with "Cannot create a handle without a HandleScope".
 pub struct PollEventsTask {
-    inner: CoreDirSQL,
+    inner: Option<CoreDirSQL>,
     timeout_ms: u32,
 }
 
@@ -292,13 +314,21 @@ impl Task for PollEventsTask {
     type JsValue = Vec<RowEvent>;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        self.inner
+        let inner = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
+        inner
             .wait_file_events(Duration::from_millis(self.timeout_ms as u64))
             .map_err(to_napi_err)
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
-        let row_events = self.inner.apply_file_events(output);
+        let inner = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
+        let row_events = inner.apply_file_events(output);
         row_events.iter().map(row_event_to_js).collect()
     }
 }

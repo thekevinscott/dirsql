@@ -9,6 +9,7 @@ export interface NativeDirSQL {
   query(sql: string): Promise<Record<string, unknown>[]>;
   startWatcher(): Promise<void>;
   pollEvents(timeoutMs: number): Promise<RowEvent[]>;
+  close(): void;
 }
 
 export interface NativeDirSQLConstructor {

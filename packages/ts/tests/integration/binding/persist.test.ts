@@ -6,6 +6,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  unlink,
   utimes,
   writeFile,
 } from "node:fs/promises";
@@ -31,17 +32,22 @@ const sqlJsReady = initSqlJs({
 /** Open `.dirsql/cache.db` with sql.js, run `sql`, write the bytes back. */
 async function corruptCache(cachePath: string, sql: string): Promise<void> {
   const SQL = await sqlJsReady;
-  // With WAL mode, need to checkpoint before reading the file with sql.js.
-  // Open and close a connection to force checkpoint, or read WAL+shm if present.
-  // For simplicity, open the db and run a checkpoint pragma.
-  let db = new SQL.Database(await readFile(cachePath));
+  // With WAL mode, the cache has sidecar files (cache.db-wal, cache.db-shm).
+  // sql.js reads the raw binary file and doesn't understand WAL mode.
+  // Delete the sidecar files so sql.js reads a clean database file.
   try {
-    // Attempt checkpoint via pragma. sql.js might not support it, so wrap in try.
-    try {
-      db.run("PRAGMA wal_checkpoint(RESTART)");
-    } catch {
-      // sql.js doesn't support wal_checkpoint; that's OK, proceed with mutation
-    }
+    await unlink(cachePath + "-wal");
+  } catch {
+    // File might not exist if WAL hasn't created sidecar yet
+  }
+  try {
+    await unlink(cachePath + "-shm");
+  } catch {
+    // File might not exist if WAL hasn't created sidecar yet
+  }
+
+  const db = new SQL.Database(await readFile(cachePath));
+  try {
     db.run(sql);
     await writeFile(cachePath, db.export());
   } finally {
@@ -256,19 +262,18 @@ describe("DirSQL persist", () => {
     // be hash-confirmed instead of trusted. Corrupt the cached hash so the
     // hash check fails; the file must then be re-parsed.
     const box1 = { count: 0 };
-    // Scope db1 to ensure it's dropped before corrupting the cache.
-    // WAL mode requires the connection to close before the WAL checkpoints.
-    {
-      const db1 = new DirSQL({
-        root: dir,
-        tables: [makeTable(box1)],
-        persist: true,
-      });
-      await db1.ready;
-      expect(box1.count).toBe(1);
-    }
-    // Force garbage collection to ensure db1 is dropped and WAL checkpoints
-    if (global.gc) global.gc();
+    const db1 = new DirSQL({
+      root: dir,
+      tables: [makeTable(box1)],
+      persist: true,
+    });
+    await db1.ready;
+    expect(box1.count).toBe(1);
+    // Explicitly close the connection to trigger WAL checkpoint.
+    // napi close() consumes self, so this is the only call on this instance.
+    db1.close();
+    // Wait for WAL checkpoint to complete before reading with sql.js.
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
     const cache = join(dir, ".dirsql", "cache.db");
     await corruptCache(
@@ -290,19 +295,18 @@ describe("DirSQL persist", () => {
 
   it("rebuilds the cache when the dirsql_version meta changes", async () => {
     const box1 = { count: 0 };
-    // Scope db1 to ensure it's dropped before corrupting the cache.
-    // WAL mode requires the connection to close before the WAL checkpoints.
-    {
-      const db1 = new DirSQL({
-        root: dir,
-        tables: [makeTable(box1)],
-        persist: true,
-      });
-      await db1.ready;
-      expect(box1.count).toBe(1);
-    }
-    // Force garbage collection to ensure db1 is dropped and WAL checkpoints
-    if (global.gc) global.gc();
+    const db1 = new DirSQL({
+      root: dir,
+      tables: [makeTable(box1)],
+      persist: true,
+    });
+    await db1.ready;
+    expect(box1.count).toBe(1);
+    // Explicitly close the connection to trigger WAL checkpoint.
+    // napi close() consumes self, so this is the only call on this instance.
+    db1.close();
+    // Wait for WAL checkpoint to complete before reading with sql.js.
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
     const cache = join(dir, ".dirsql", "cache.db");
     await corruptCache(
