@@ -28,10 +28,11 @@ jobs:
       - name: Sync the checks package
         run: uv sync --project internals/checks
 
-      # Logic (path classification, skip-trailer parsing, added-line counting)
-      # lives in internals/checks' changelog_gate check, colocated-tested
-      # at 100% coverage, per AGENTS.md "CI Workflows".
-      - name: Require CHANGELOG update for SDK code changes
+      # Logic (per-package path classification, per-package fragment
+      # detection, skip-trailer parsing) lives in internals/checks'
+      # changelog_gate check, colocated-tested at 100% coverage, per
+      # AGENTS.md "CI Workflows".
+      - name: Require a per-package changelog fragment for SDK code changes
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}

@@ -1,43 +1,67 @@
 """Orchestration for the changelog-gate check (#494/#496).
 
-Ported from `.github/workflows/changelog-check.yml`'s inline bash -- same messages, same
-`::error::` annotations, same exit codes, just testable and driven through injected collaborators.
+Per-package, fragments-only since #565: each SDK package whose source a PR
+changes must carry a ``packages/<pkg>/changelog.d/YYYY-MM-DD-<slug>.md``
+fragment. The ``skip-changelog:`` trailer is the only bypass.
 """
+
 from __future__ import annotations
 
 import sys
 
 from checks.changelog_gate import git_ops
 from checks.changelog_gate.decide import (
-    any_sdk_code_changed,
-    changelog_fragments,
+    changed_packages,
     contains_skip_changelog_line,
-    count_added_lines,
     extract_skip_trailers,
+    fragment_package,
+    fragment_paths,
+    is_valid_fragment_name,
 )
 
-MISSING_CHANGELOG_MESSAGE = """\
-::error file=CHANGELOG.md::SDK code changed but no changelog entry was added.
 
-Every PR that modifies public-facing SDK code must add a changelog
-fragment: a new file changelog.d/<branch-slug>.<category>.md whose
-category is one of added/changed/deprecated/removed/fixed/security,
-containing the entry body. (Editing CHANGELOG.md under '## [Unreleased]'
-directly is still accepted, but conflicts with other in-flight PRs.)
-If the change is also breaking, behavior-altering, or removes a
-deprecated symbol, add a matching migration entry as
-migrations.d/<branch-slug>.md (see MIGRATIONS.md's template).
+def _missing_message(packages: list[str]) -> str:
+    lines = "\n".join(
+        f"    packages/{pkg}/changelog.d/YYYY-MM-DD-<slug>.md" for pkg in packages
+    )
+    plural = "s" if packages[1:] else ""
+    return f"""\
+::error file=CHANGELOG.md::SDK code changed but no changelog fragment was added for {len(packages)} package{plural}: {", ".join(packages)}.
 
-Escape hatch: if this PR genuinely has no observable change (pure
-refactor, internal rename, etc.), add a trailer to any commit:
+Every PR that modifies a package's public-facing SDK source must add a
+changelog fragment under that package's own directory:
+
+{lines}
+
+The date is the UTC merge date; the body leads with a Keep a Changelog
+category (**Added** / **Changed** / **Deprecated** / **Removed** / **Fixed** /
+**Security**). Fragments are permanent -- nothing is assembled back into
+CHANGELOG.md.
+
+If the change is also breaking, add a matching migration fragment under
+packages/<pkg>/migrations.d/ (see that package's MIGRATIONS.md).
+
+Escape hatch: if this PR genuinely has no observable change (pure refactor,
+internal rename, etc.), add a trailer to any commit:
 
     skip-changelog: <reason>
 
 See AGENTS.md, section "Changelog and Migrations", for the full rule."""
 
-NO_ADDED_CONTENT_MESSAGE = (
-    "::error file=CHANGELOG.md::CHANGELOG.md was touched but has no added content."
-)
+
+def _malformed_name_message(paths: list[str]) -> str:
+    lines = "\n".join(f"    {path}" for path in paths)
+    return f"""\
+::error file=CHANGELOG.md::A changelog fragment's filename is malformed.
+
+These fragment file(s) are not named `YYYY-MM-DD-<slug>.md` (an ISO merge
+date, a kebab-case slug, then `.md`):
+
+{lines}
+
+Rename each to e.g. `2026-07-13-fix-watcher-race.md`. See AGENTS.md,
+section "Changelog and Migrations"."""
+
 
 MALFORMED_SKIP_CHANGELOG_MESSAGE = """\
 ::error file=CHANGELOG.md::A `skip-changelog:` line is present but git did not parse it as a trailer.
@@ -50,7 +74,8 @@ paragraph, so git ignores it and this gate sees no bypass.
 Fix it either way:
   - reword the commit so `skip-changelog: <reason>` is in the final
     trailer block (no blank line before it), or
-  - add a changelog fragment: changelog.d/<branch-slug>.<category>.md.
+  - add a changelog fragment under the changed package's
+    packages/<pkg>/changelog.d/ (named YYYY-MM-DD-<slug>.md).
 
 See AGENTS.md, section "Changelog and Migrations"."""
 
@@ -61,42 +86,39 @@ def run(
     *,
     changed_files=git_ops.changed_files,
     skip_trailers=git_ops.skip_trailers,
-    changelog_diff=git_ops.changelog_diff,
     commit_messages=git_ops.commit_messages,
 ) -> int:
     files = changed_files(base_sha, head_sha)
 
-    if not any_sdk_code_changed(files):
+    changed = changed_packages(files)
+    if not changed:
         print("No SDK code changes detected. Skipping changelog check.")
         return 0
 
     trailers = extract_skip_trailers(skip_trailers(base_sha, head_sha))
     if trailers:
-        print("skip-changelog trailer present. Bypassing CHANGELOG check.")
+        print("skip-changelog trailer present. Bypassing changelog check.")
         print("Reason(s):")
         for reason in trailers:
             print(f"  - {reason}")
         return 0
 
-    fragments = changelog_fragments(files)
-    if fragments:
-        print(f"Changelog fragment present: {', '.join(fragments)}. OK.")
+    fragments = fragment_paths(files)
+    malformed = [path for path in fragments if not is_valid_fragment_name(path)]
+    if malformed:
+        print(_malformed_name_message(malformed), file=sys.stderr)
+        return 1
+
+    covered = {fragment_package(path) for path in fragments}
+    missing = sorted(changed - covered)
+    if not missing:
+        print(f"Changelog fragment(s) present for: {', '.join(sorted(changed))}. OK.")
         return 0
 
-    if "CHANGELOG.md" not in files:
-        # Distinguish "no bypass attempted" from "a skip-changelog was written
-        # but git didn't parse it as a trailer" -- the latter needs a targeted
-        # fix, not the generic "add an entry" message.
-        if contains_skip_changelog_line(commit_messages(base_sha, head_sha)):
-            print(MALFORMED_SKIP_CHANGELOG_MESSAGE, file=sys.stderr)
-        else:
-            print(MISSING_CHANGELOG_MESSAGE, file=sys.stderr)
-        return 1
-
-    added = count_added_lines(changelog_diff(base_sha, head_sha))
-    if added < 1:
-        print(NO_ADDED_CONTENT_MESSAGE, file=sys.stderr)
-        return 1
-
-    print(f"CHANGELOG.md updated with {added} added line(s). OK.")
-    return 0
+    # A changed package has no fragment. Distinguish "no bypass attempted" from
+    # "a skip-changelog was written but git didn't parse it as a trailer".
+    if contains_skip_changelog_line(commit_messages(base_sha, head_sha)):
+        print(MALFORMED_SKIP_CHANGELOG_MESSAGE, file=sys.stderr)
+    else:
+        print(_missing_message(missing), file=sys.stderr)
+    return 1

@@ -82,31 +82,32 @@ def describe_run_against_a_real_repo():
         assert run(base_sha, head_sha) == 1
         assert "did not parse it as a trailer" in capsys.readouterr().err
 
-    def it_passes_when_the_changelog_gains_an_entry(repo, capsys):
+    def it_fails_when_the_fragment_lands_in_the_wrong_package(repo, capsys):
+        # A python fragment does not satisfy a rust source change.
         tmp_path, base_sha = repo
         rust_dir = tmp_path / "packages" / "rust" / "src"
         rust_dir.mkdir(parents=True)
         (rust_dir / "lib.rs").write_text("// code\n")
-        (tmp_path / "CHANGELOG.md").write_text("## [Unreleased]\n- Added a thing\n")
-        head_sha = _commit("add sdk code with changelog")
+        fragment_dir = tmp_path / "packages" / "python" / "changelog.d"
+        fragment_dir.mkdir(parents=True)
+        (fragment_dir / "2026-07-13-unrelated.md").write_text("**Changed.**\n")
+        head_sha = _commit("rust change, python fragment")
 
-        assert run(base_sha, head_sha) == 0
-        assert "updated with" in capsys.readouterr().out
+        assert run(base_sha, head_sha) == 1
+        assert "packages/rust/changelog.d/YYYY-MM-DD-<slug>.md" in capsys.readouterr().err
 
-    def it_passes_when_a_changelog_fragment_is_added(repo, capsys):
+    def it_passes_when_a_per_package_fragment_is_added(repo, capsys):
         tmp_path, base_sha = repo
         rust_dir = tmp_path / "packages" / "rust" / "src"
         rust_dir.mkdir(parents=True)
         (rust_dir / "lib.rs").write_text("// code\n")
-        fragment_dir = tmp_path / "changelog.d"
-        fragment_dir.mkdir()
-        (fragment_dir / "claude-my-branch-abc123.changed.md").write_text(
-            "**Changed a thing.**\n"
-        )
+        fragment_dir = tmp_path / "packages" / "rust" / "changelog.d"
+        fragment_dir.mkdir(parents=True)
+        (fragment_dir / "2026-07-13-fix-race.md").write_text("**Changed a thing.**\n")
         head_sha = _commit("add sdk code with fragment")
 
         assert run(base_sha, head_sha) == 0
-        assert "fragment" in capsys.readouterr().out
+        assert "fragment(s) present for: rust" in capsys.readouterr().out
 
     def it_passes_via_the_skip_changelog_trailer(repo, capsys):
         tmp_path, base_sha = repo
@@ -130,7 +131,7 @@ def describe_run_against_a_real_repo():
         ).stdout.strip()
 
         assert run(base_sha, head_sha) == 0
-        assert "Bypassing CHANGELOG check" in capsys.readouterr().out
+        assert "Bypassing changelog check" in capsys.readouterr().out
 
     def it_passes_when_no_sdk_code_changed(repo, capsys):
         tmp_path, base_sha = repo

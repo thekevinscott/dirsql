@@ -47,13 +47,3 @@ def commit_messages(base_sha: str, head_sha: str, runner=subprocess.run) -> str:
         check=True,
     )
     return result.stdout
-
-
-def changelog_diff(base_sha: str, head_sha: str, runner=subprocess.run) -> str:
-    result = runner(
-        ["git", "diff", f"{base_sha}...{head_sha}", "--", "CHANGELOG.md"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return result.stdout

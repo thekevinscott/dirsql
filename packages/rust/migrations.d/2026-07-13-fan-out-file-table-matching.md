@@ -16,7 +16,7 @@ files.
 
 | Surface | Before | After |
 | ------- | ------ | ----- |
-| Catch-all table overlapping a narrower one (any SDK / `.dirsql.toml`) | The catch-all silently received only files unclaimed by earlier tables | The catch-all receives **all** files its glob matches, including those also claimed by other tables. Tighten the catch-all's glob, or filter unwanted files in its `extract`, to restore the previous row set. |
+| Catch-all table overlapping a narrower one (any SDK / `.dirsql.toml`) | The catch-all silently received only files unclaimed by earlier tables | The catch-all receives **all** files its glob matches, including those also claimed by other tables. Tighten the catch-all's glob, or filter unwanted files in its `on-file`, to restore the previous row set. |
 | Two tables intentionally sharing files | Only the first-declared table was populated | Both tables are populated; no change needed if that is what you wanted. |
 
 #### Deprecations removed

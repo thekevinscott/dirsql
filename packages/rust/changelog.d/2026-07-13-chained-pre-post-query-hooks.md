@@ -1,1 +1,3 @@
+**Added**
+
 - **`pre-query` and `post-query` hooks can now be chained.** `ServerConfig::with_pre_query` / `with_post_query` are repeatable; registered stages run FIFO — the request body pipes through each `pre-query` stage to the final SQL, and result rows pipe through each `post-query` stage to the response, each stage receiving the previous stage's output as `{args}` (post stages also on stdin). A failing stage fails the request, surfacing its stderr. A single hook is byte-identical to before. (#546)
