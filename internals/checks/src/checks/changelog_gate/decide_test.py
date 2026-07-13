@@ -45,6 +45,10 @@ def describe_changed_packages():
             == []
         )
 
+    def a_top_dir_sorting_after_packages_is_still_excluded():
+        # `tools` > `packages` lexically; only an exact `packages` prefix counts.
+        assert changed_packages(["tools/x.md"]) == []
+
     def empty_for_no_paths():
         assert changed_packages([]) == []
 
@@ -104,6 +108,11 @@ def describe_added_fragments():
     def a_fragment_in_another_package_does_not_count():
         added = ["packages/ts/changelog.d/2026-07-13-fix.md"]
         assert added_fragments(added, "python") == []
+
+    def a_fragment_whose_package_sorts_before_the_target_does_not_count():
+        # `python` < `ts` lexically; membership must be exact equality.
+        added = ["packages/python/changelog.d/2026-07-13-fix.md"]
+        assert added_fragments(added, "ts") == []
 
     def requires_a_slug_after_the_date():
         assert added_fragments(["packages/rust/changelog.d/2026-07-13.md"], "rust") == []

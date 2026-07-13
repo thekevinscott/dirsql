@@ -84,3 +84,20 @@ def describe_run():
         out = capsys.readouterr().out
         assert "packages/rust has code changes" in out
         assert "packages/ts has code changes" in out
+
+    def a_later_package_is_still_checked_after_an_exempt_only_package(capsys):
+        # rust (first, sorted) has only an exempt change -> the loop must
+        # `continue` to ts, not stop.
+        rc = _run(["packages/rust/CHANGELOG.md", "packages/ts/src/x.ts"])
+        assert rc == 1
+        assert "packages/ts has code changes" in capsys.readouterr().out
+
+    def a_later_package_is_still_checked_after_a_covered_package(capsys):
+        # rust (first) is covered by its fragment -> the loop must `continue`
+        # to ts, not stop.
+        rc = _run(
+            ["packages/rust/src/lib.rs", "packages/ts/src/x.ts"],
+            ["packages/rust/changelog.d/2026-07-13-fix.md"],
+        )
+        assert rc == 1
+        assert "packages/ts has code changes" in capsys.readouterr().out

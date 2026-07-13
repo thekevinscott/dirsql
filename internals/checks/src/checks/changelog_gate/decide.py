@@ -15,7 +15,7 @@ import re
 # A `skip-changelog:` line anywhere in a commit body bypasses the gate. Scanned
 # over raw bodies (not git's trailer parser), so it need not be a formal
 # trailer -- this sidesteps the blank-line-splits-the-trailer footgun.
-_SKIP_TRAILER = re.compile(r"^skip-changelog:", re.IGNORECASE | re.MULTILINE)
+_SKIP_TRAILER = re.compile(r"(?im)^skip-changelog:")
 
 # A fragment sits directly inside a package's changelog.d/ or migrations.d/.
 # Captures (<pkg>, <filename>); the trailing segment forbids nested paths.
