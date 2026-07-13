@@ -58,7 +58,7 @@ e2e-attest-internals-checks:
 
 # Refresh packages/python/e2e-attestation.json: runs the python e2e suite and
 # commits the attestation. The CI gate runs inside the reusable workflow
-# (conventions.yml, python-unit `e2e-verify`) on PRs that touch the python SDK
+# (conventions.yml, python-sdk `e2e-verify`) on PRs that touch the python SDK
 # source. Install testing-conventions first (CI always uses the latest release):
 #   pip install testing-conventions
 e2e-attest-python:
@@ -70,7 +70,7 @@ e2e-attest-ts:
     cd packages/ts && testing-conventions e2e attest 'pnpm test:e2e'
 
 # Verify each package's e2e attestation is fresh. Mirrors the CI gate, which now
-# runs inside conventions.yml (python-unit / typescript-unit `e2e-verify`).
+# runs inside conventions.yml (python-sdk / typescript-sdk `e2e-verify`).
 e2e-verify:
     cd packages/python && testing-conventions e2e verify
     cd packages/ts && testing-conventions e2e verify

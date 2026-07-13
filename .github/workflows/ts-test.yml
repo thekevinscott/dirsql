@@ -197,7 +197,7 @@ jobs:
         run: pnpm exec vitest run --dir tests/integration/binding --passWithNoTests
 
   # Unit coverage now runs in the reusable testing-conventions workflow
-  # (conventions.yml, `typescript-unit` gates: unit-coverage) after upstream
+  # (conventions.yml, `typescript-sdk` gates: unit-coverage) after upstream
   # #284 taught the coverage suite job to install/build from the derived
   # package root. The bespoke coverage job that lived here is retired (#412).
 
