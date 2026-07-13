@@ -1,0 +1,3 @@
+**Changed**
+
+- **Bare `dirsql` no longer auto-loads `./.dirsql.toml`.** "Default config" now means the baked-in shipped config — the single `files` table over every file, compiled into the binary — never a `.dirsql.toml` that happens to sit in the invocation directory. With no `-c`/`--config`, both server mode and `dirsql query` serve that baked-in default; to use an on-disk config you pass it explicitly (`dirsql -c ./.dirsql.toml`), even when it is named `.dirsql.toml`. A `-c` pointing at a missing file is now an error (non-zero exit / 503 degraded) rather than a silent fallback to the default. `dirsql init` still writes the starter config, but its output no longer auto-loads — pass it with `-c`. (#602)

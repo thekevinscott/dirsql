@@ -25,7 +25,8 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 /// Write a two-post blog fixture into a fresh tempdir and return it.
-/// The `.dirsql.toml` lives at the root so `dirsql` can discover it.
+/// The `.dirsql.toml` lives at the root; bare `dirsql` no longer auto-loads it
+/// (#602), so callers pass it with `-c .dirsql.toml`.
 /// `title` and `author` are captured from the file path
 /// (`posts/{author}/{title}.json`).
 fn blog_fixture() -> TempDir {
@@ -199,7 +200,7 @@ fn server_announces_bind_on_stdout() {
 fn post_query_returns_rows_over_http() {
     let root = blog_fixture();
     let port = free_port();
-    let child = spawn_dirsql(root.path(), port);
+    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
     wait_until_ready(port, Duration::from_secs(10));
 
     let resp = Client::new()
@@ -252,7 +253,7 @@ fn post_query_rejects_read_of_internal_bookkeeping_table() {
 fn get_events_emits_insert_event_when_file_created() {
     let root = blog_fixture();
     let port = free_port();
-    let child = spawn_dirsql(root.path(), port);
+    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
     wait_until_ready(port, Duration::from_secs(10));
 
     // Open SSE stream in a background thread. Signal when the server's
@@ -329,7 +330,7 @@ fn sigint_triggers_graceful_exit_zero() {
 fn concurrent_queries_all_succeed() {
     let root = blog_fixture();
     let port = free_port();
-    let child = spawn_dirsql(root.path(), port);
+    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
     wait_until_ready(port, Duration::from_secs(10));
 
     let url = format!("http://localhost:{port}/query");
@@ -354,8 +355,10 @@ fn concurrent_queries_all_succeed() {
 
 #[test]
 fn unloadable_config_returns_503_on_query() {
-    // A parse-failing config degrades the server (still binds, queries 503);
-    // a *missing* config does not -- see `no_config_serves_default_files_table`.
+    // A parse-failing `-c` config degrades the server (still binds, queries
+    // 503). A *missing* `-c` errors instead (see
+    // `missing_explicit_config_exits_nonzero_naming_the_file`); no `-c` at all
+    // serves the baked-in default (`no_config_serves_default_files_table`).
     let dir = TempDir::new().unwrap();
     fs::write(
         dir.path().join(".dirsql.toml"),
@@ -363,7 +366,7 @@ fn unloadable_config_returns_503_on_query() {
     )
     .unwrap();
     let port = free_port();
-    let child = spawn_dirsql(dir.path(), port);
+    let child = spawn_dirsql_with_args(dir.path(), port, &["-c", ".dirsql.toml"]);
     wait_until_ready(port, Duration::from_secs(10));
 
     let resp = Client::new()
@@ -387,7 +390,7 @@ fn unknown_config_key_degrades_server_with_503_naming_the_key() {
     )
     .unwrap();
     let port = free_port();
-    let child = spawn_dirsql(dir.path(), port);
+    let child = spawn_dirsql_with_args(dir.path(), port, &["-c", ".dirsql.toml"]);
     wait_until_ready(port, Duration::from_secs(10));
 
     let resp = Client::new()
@@ -419,7 +422,7 @@ fn query_subcommand_rejects_unknown_config_key_with_nonzero_exit() {
     )
     .unwrap();
 
-    let out = run_query_subcommand(dir.path(), "SELECT 1");
+    let out = run_query_subcommand_with_config(dir.path(), "SELECT 1");
     assert!(
         !out.status.success(),
         "an unknown config key must be a non-zero exit, got {out:?}"
@@ -436,7 +439,7 @@ fn quoted_identifier_table_in_toml_is_served_over_http() {
     // The quoted DDL identifier resolves to the bare table name `posts`.
     let root = quoted_blog_fixture();
     let port = free_port();
-    let child = spawn_dirsql(root.path(), port);
+    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
     wait_until_ready(port, Duration::from_secs(10));
 
     let resp = Client::new()
@@ -507,7 +510,7 @@ glob = "posts/{author}/{title}.json"
     .unwrap();
 
     let port = free_port();
-    let child = spawn_dirsql(root.path(), port);
+    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
     wait_until_ready(port, Duration::from_secs(10));
 
     let resp = Client::new()
@@ -554,7 +557,7 @@ glob = "posts/{author}/{title}.json"
     .unwrap();
 
     let port = free_port();
-    let child = spawn_dirsql(root.path(), port);
+    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
     wait_until_ready(port, Duration::from_secs(10));
 
     let resp = Client::new()
@@ -598,7 +601,7 @@ glob = "posts/{author}/{title}.json"
     .unwrap();
 
     let port = free_port();
-    let child = spawn_dirsql(root.path(), port);
+    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
     wait_until_ready(port, Duration::from_secs(10));
 
     let resp = Client::builder()
@@ -646,7 +649,7 @@ glob = "posts/{author}/{title}.json"
     .unwrap();
 
     let port = free_port();
-    let child = spawn_dirsql(root.path(), port);
+    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
     wait_until_ready(port, Duration::from_secs(10));
 
     let resp = Client::builder()
@@ -694,7 +697,7 @@ glob = "posts/{author}/{title}.json"
     .unwrap();
 
     let port = free_port();
-    let child = spawn_dirsql(root.path(), port);
+    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
     wait_until_ready(port, Duration::from_secs(10));
 
     let resp = Client::builder()
@@ -731,6 +734,21 @@ fn run_query_subcommand(dir: &std::path::Path, sql: &str) -> std::process::Outpu
         .expect("spawning `dirsql query` failed")
 }
 
+/// Run `dirsql -c ./.dirsql.toml query <sql>` in `dir`. Bare `dirsql` no longer
+/// auto-loads a cwd config (#602), so tests that expect the fixture's
+/// `.dirsql.toml` to take effect pass it explicitly.
+fn run_query_subcommand_with_config(dir: &std::path::Path, sql: &str) -> std::process::Output {
+    std::process::Command::cargo_bin("dirsql")
+        .expect("binary must exist")
+        .arg("-c")
+        .arg(".dirsql.toml")
+        .arg("query")
+        .arg(sql)
+        .current_dir(dir)
+        .output()
+        .expect("spawning `dirsql query` failed")
+}
+
 #[test]
 fn query_subcommand_stdout_is_byte_identical_to_the_http_response() {
     // #439 parity: the same SQL over the same fixture through both surfaces
@@ -740,7 +758,7 @@ fn query_subcommand_stdout_is_byte_identical_to_the_http_response() {
     let sql = "SELECT title FROM posts ORDER BY title";
 
     let port = free_port();
-    let child = spawn_dirsql(root.path(), port);
+    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
     wait_until_ready(port, Duration::from_secs(10));
     let http_body = Client::new()
         .post(format!("http://localhost:{port}/query"))
@@ -751,7 +769,7 @@ fn query_subcommand_stdout_is_byte_identical_to_the_http_response() {
         .unwrap();
     kill_and_wait(child);
 
-    let out = run_query_subcommand(root.path(), sql);
+    let out = run_query_subcommand_with_config(root.path(), sql);
     assert!(
         out.status.success(),
         "`dirsql query` must exit 0 on success, got {out:?}"
@@ -846,7 +864,8 @@ glob = "data/**/metadata.json"
     .unwrap();
 
     for table in ["ta", "tb"] {
-        let out = run_query_subcommand(root.path(), &format!("SELECT path FROM {table}"));
+        let out =
+            run_query_subcommand_with_config(root.path(), &format!("SELECT path FROM {table}"));
         assert!(
             out.status.success(),
             "`dirsql query` on {table} must succeed, got {out:?}"
@@ -864,6 +883,105 @@ glob = "data/**/metadata.json"
             "table {table} must contain the fanned-out file, got {paths:?}"
         );
     }
+}
+
+#[test]
+fn bare_dirsql_ignores_cwd_config_and_serves_baked_in_default() {
+    // #602: bare `dirsql` (no `-c`) no longer auto-loads a `./.dirsql.toml`
+    // sitting in the invocation directory. The default is the baked-in
+    // shipped config (the `files` table), NOT a config that happens to be on
+    // disk. So the on-disk `posts` table is unreachable, while `files` is.
+    let root = blog_fixture(); // writes a `.dirsql.toml` defining `posts`
+
+    // The baked-in default `files` table is served...
+    let files = run_query_subcommand(root.path(), "SELECT COUNT(*) AS n FROM files");
+    assert!(
+        files.status.success(),
+        "bare `dirsql query` must serve the baked-in `files` table, got {files:?}"
+    );
+
+    // ...and the cwd config's `posts` table is NOT loaded.
+    let posts = run_query_subcommand(root.path(), "SELECT COUNT(*) AS n FROM posts");
+    assert!(
+        !posts.status.success(),
+        "bare `dirsql` must NOT auto-load ./.dirsql.toml, so `posts` must be \
+         unknown, got {posts:?}"
+    );
+    let stderr = String::from_utf8(posts.stderr).unwrap();
+    assert!(
+        stderr.contains("posts"),
+        "the error should name the missing `posts` table, got {stderr:?}"
+    );
+}
+
+#[test]
+fn missing_explicit_config_exits_nonzero_naming_the_file() {
+    // #602: an explicit `-c` to a file that does not exist is an error — no
+    // silent fallback to the baked-in default. The diagnostic names the file.
+    let dir = TempDir::new().unwrap();
+    let out = std::process::Command::cargo_bin("dirsql")
+        .expect("binary must exist")
+        .arg("-c")
+        .arg("./missing.toml")
+        .arg("query")
+        .arg("SELECT 1")
+        .current_dir(dir.path())
+        .output()
+        .expect("spawning `dirsql query` failed");
+    assert!(
+        !out.status.success(),
+        "a missing -c config must be a non-zero exit, got {out:?}"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("missing.toml"),
+        "stderr must name the missing config file, got {stderr:?}"
+    );
+}
+
+#[test]
+fn init_output_loads_when_passed_explicitly_with_config_flag() {
+    // #602: `dirsql init` remains a scaffold, but its output no longer
+    // auto-loads — you pass it explicitly with `-c`. Write the starter, then
+    // load it via `-c` and confirm it serves the `files` table it declares.
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("readme.md"), "hello").unwrap();
+
+    let init = std::process::Command::cargo_bin("dirsql")
+        .expect("binary must exist")
+        .arg("init")
+        .current_dir(dir.path())
+        .output()
+        .expect("spawning `dirsql init` failed");
+    assert!(
+        init.status.success(),
+        "`dirsql init` must succeed, got {init:?}"
+    );
+
+    let out = std::process::Command::cargo_bin("dirsql")
+        .expect("binary must exist")
+        .arg("-c")
+        .arg(".dirsql.toml")
+        .arg("query")
+        .arg("SELECT basename FROM files")
+        .current_dir(dir.path())
+        .output()
+        .expect("spawning `dirsql query` failed");
+    assert!(
+        out.status.success(),
+        "the init-written config must load via `-c`, got {out:?}"
+    );
+    let rows: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let names: Vec<&str> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["basename"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"readme.md"),
+        "the init config's files table must contain readme.md, got {names:?}"
+    );
 }
 
 #[test]
@@ -903,7 +1021,7 @@ fn root_config_key_degrades_server_with_503_naming_the_key() {
     )
     .unwrap();
     let port = free_port();
-    let child = spawn_dirsql(dir.path(), port);
+    let child = spawn_dirsql_with_args(dir.path(), port, &["-c", ".dirsql.toml"]);
     wait_until_ready(port, Duration::from_secs(10));
 
     let resp = Client::new()
@@ -978,7 +1096,9 @@ glob = "posts/{author}/{title}.json"
 }
 
 #[test]
-fn explicit_config_flag_overrides_cwd_default() {
+fn explicit_config_flag_loads_the_named_config() {
+    // An explicit `--config` loads that file regardless of the cwd (there is
+    // no cwd `.dirsql.toml` auto-detection to override, #602).
     let fixture = blog_fixture();
     let elsewhere = TempDir::new().unwrap();
 
@@ -1008,7 +1128,8 @@ fn explicit_config_flag_overrides_cwd_default() {
 }
 
 #[test]
-fn short_config_flag_overrides_cwd_default() {
+fn short_config_flag_loads_the_named_config() {
+    // Same as the long form: `-c` loads the named config regardless of cwd.
     let fixture = blog_fixture();
     let elsewhere = TempDir::new().unwrap();
 
@@ -1053,7 +1174,7 @@ fn persist_config_key_degrades_server_with_503_naming_the_key() {
     )
     .unwrap();
     let port = free_port();
-    let child = spawn_dirsql(dir.path(), port);
+    let child = spawn_dirsql_with_args(dir.path(), port, &["-c", ".dirsql.toml"]);
     wait_until_ready(port, Duration::from_secs(10));
 
     let resp = Client::new()
@@ -1083,7 +1204,7 @@ fn persist_flag_writes_default_cache_and_restart_serves() {
     let cache = root.path().join(".dirsql").join("cache.db");
 
     let port = free_port();
-    let child = spawn_dirsql_with_args(root.path(), port, &["--persist"]);
+    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml", "--persist"]);
     wait_until_ready(port, Duration::from_secs(10));
     let first = Client::new()
         .post(format!("http://localhost:{port}/query"))
@@ -1103,7 +1224,7 @@ fn persist_flag_writes_default_cache_and_restart_serves() {
     // Restart against the unchanged tree: the cache is reused and the same
     // rows are served.
     let port = free_port();
-    let child = spawn_dirsql_with_args(root.path(), port, &["--persist"]);
+    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml", "--persist"]);
     wait_until_ready(port, Duration::from_secs(10));
     let second = Client::new()
         .post(format!("http://localhost:{port}/query"))
@@ -1128,7 +1249,11 @@ fn persist_flag_with_path_writes_the_cache_there() {
     let cache = cache_dir.path().join("nested").join("x.db");
 
     let port = free_port();
-    let child = spawn_dirsql_with_args(root.path(), port, &["--persist", cache.to_str().unwrap()]);
+    let child = spawn_dirsql_with_args(
+        root.path(),
+        port,
+        &["-c", ".dirsql.toml", "--persist", cache.to_str().unwrap()],
+    );
     wait_until_ready(port, Duration::from_secs(10));
     let resp = Client::new()
         .post(format!("http://localhost:{port}/query"))

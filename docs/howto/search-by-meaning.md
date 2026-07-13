@@ -103,10 +103,12 @@ runtime — and the literal-path alternative that works everywhere — are in
 
 Run with `sqlite-vec` available to the launcher's environment. The initial
 scan runs `embed.py` once per note, then the query argument goes straight to
-`pre-query`, exactly as a `POST /query` body would:
+`pre-query`, exactly as a `POST /query` body would. Pass the config with
+[`-c`](../reference/cli.md#flags) — `dirsql` does not auto-load a
+`.dirsql.toml` from the current directory:
 
 ```bash
-uvx --with sqlite-vec dirsql query '{"q": "how do I cook pasta?"}'
+uvx --with sqlite-vec dirsql -c ./.dirsql.toml query '{"q": "how do I cook pasta?"}'
 ```
 
 ```json
@@ -114,7 +116,7 @@ uvx --with sqlite-vec dirsql query '{"q": "how do I cook pasta?"}'
 ```
 
 ```bash
-uvx --with sqlite-vec dirsql query '{"q": "reviewing code on github"}'
+uvx --with sqlite-vec dirsql -c ./.dirsql.toml query '{"q": "reviewing code on github"}'
 ```
 
 ```json

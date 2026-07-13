@@ -92,7 +92,7 @@ open a **second terminal** for the next step.
 ## 3. Query your files
 
 You gave `dirsql` no configuration, so it serves a single default table
-named `files` ([zero-config mode](./reference/cli.md#zero-config-mode)).
+named `files` ([default mode](./reference/cli.md#default-mode)).
 Ask it how many rows it has:
 
 ```bash
@@ -167,16 +167,18 @@ Two keys define the table:
 ## 5. Restart and query the new shape
 
 Config is read at startup, so go back to the **first terminal**, stop the
-server with `Ctrl-C`, and start it again:
+server with `Ctrl-C`, and start it again — this time pointing `dirsql` at
+your config with `-c` (`dirsql` does not auto-load a `.dirsql.toml` from the
+current directory; you always pass it explicitly):
 
 ::: code-group
 
 ```bash [npm]
-npx dirsql
+npx dirsql -c .dirsql.toml
 ```
 
 ```bash [PyPI]
-uvx dirsql
+uvx dirsql -c .dirsql.toml
 ```
 
 :::
@@ -185,7 +187,7 @@ uvx dirsql
 Running at localhost:7117
 ```
 
-This time `dirsql` found your `.dirsql.toml` and served the `notes` table
+This time `dirsql` loaded your `.dirsql.toml` and served the `notes` table
 you defined instead of the default `files` table. Query it from the second
 terminal:
 

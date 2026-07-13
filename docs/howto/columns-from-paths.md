@@ -29,8 +29,11 @@ within one path segment) are in
 
 ## 2. Query the captured columns
 
+Pass the config with [`-c`](../reference/cli.md#flags) (`dirsql` does not
+auto-load a `.dirsql.toml` from the current directory):
+
 ```bash
-dirsql query "SELECT year, month, basename FROM photos ORDER BY year, month"
+dirsql -c ./.dirsql.toml query "SELECT year, month, basename FROM photos ORDER BY year, month"
 ```
 
 ```json
@@ -40,7 +43,7 @@ dirsql query "SELECT year, month, basename FROM photos ORDER BY year, month"
 Captures are real SQL columns, so aggregation works:
 
 ```bash
-dirsql query "SELECT year, COUNT(*) AS photos FROM photos GROUP BY year"
+dirsql -c ./.dirsql.toml query "SELECT year, COUNT(*) AS photos FROM photos GROUP BY year"
 ```
 
 ```json

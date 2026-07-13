@@ -2,7 +2,7 @@
 
 Map a glob of files to a named SQL table so you query exactly the files you
 care about, with exactly the columns you care about — instead of the
-catch-all `files` table that [zero-config mode](../reference/cli.md#zero-config-mode)
+catch-all `files` table that [default mode](../reference/cli.md#default-mode)
 serves.
 
 ## 1. Create a config next to your files
@@ -26,10 +26,12 @@ glob = "posts/**/*.md"
 
 ## 2. Query the table
 
-Each matched file is one row:
+Pass the config with [`-c`](../reference/cli.md#flags) — `dirsql` does not
+auto-load a `.dirsql.toml` from the current directory. Each matched file is
+one row:
 
 ```bash
-dirsql query "SELECT path, size FROM posts ORDER BY path"
+dirsql -c ./.dirsql.toml query "SELECT path, size FROM posts ORDER BY path"
 ```
 
 ```json
@@ -37,8 +39,8 @@ dirsql query "SELECT path, size FROM posts ORDER BY path"
 ```
 
 Files that don't match the glob (a `README.txt` next to `posts/`, say) are
-simply not in the table. Once a config file exists, it fully replaces the
-zero-config default — only the tables you define are served.
+simply not in the table. Passing a config with `-c` fully replaces the
+default `files` table — only the tables you define are served.
 
 ## Multiple tables
 
