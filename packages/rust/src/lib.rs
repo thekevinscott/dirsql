@@ -454,18 +454,33 @@ impl DirSQL {
             return Vec::new();
         }
 
-        let table_name = match self.inner.matcher.match_file(&rel_path_buf) {
-            Some(name) => name.to_string(),
-            None => return Vec::new(),
-        };
+        // Fan-out: dispatch the event to every table whose glob matches, and
+        // concatenate the resulting row events. Cross-table event order is
+        // unspecified. An `extract` failure produces an error event for that
+        // table only; the other matching tables still process the event.
+        let matches = self.inner.matcher.match_all(&rel_path_buf);
+        if matches.is_empty() {
+            return Vec::new();
+        }
         let rel_path = rel_path_buf.to_string_lossy().to_string();
 
-        match event {
-            FileEvent::Deleted(_) => self.handle_delete(&table_name, &rel_path),
-            FileEvent::Created(_) | FileEvent::Modified(_) => {
-                self.handle_upsert(&table_name, &abs_path, &rel_path)
+        let mut events = Vec::new();
+        for m in matches {
+            match &event {
+                FileEvent::Deleted(_) => {
+                    events.extend(self.handle_delete(&m.table_name, &rel_path));
+                }
+                FileEvent::Created(_) | FileEvent::Modified(_) => {
+                    events.extend(self.handle_upsert(
+                        &m.table_name,
+                        &abs_path,
+                        &rel_path,
+                        &m.captures,
+                    ));
+                }
             }
         }
+        events
     }
 
     fn handle_delete(&self, table: &str, rel_path: &str) -> Vec<RowEvent> {
@@ -491,7 +506,13 @@ impl DirSQL {
         differ::diff(table, Some(&old_rows), None, rel_path)
     }
 
-    fn handle_upsert(&self, table: &str, abs_path: &Path, rel_path: &str) -> Vec<RowEvent> {
+    fn handle_upsert(
+        &self,
+        table: &str,
+        abs_path: &Path,
+        rel_path: &str,
+        captures: &HashMap<String, String>,
+    ) -> Vec<RowEvent> {
         // The path may have vanished between the watcher event and now, or be a
         // directory (a `mkdir` under the root matches a `**/*` glob). Only
         // regular files become rows — mirror the initial scan, which skips
@@ -513,12 +534,6 @@ impl DirSQL {
             Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
         };
 
-        let captures = self
-            .inner
-            .matcher
-            .match_file_with_captures(Path::new(rel_path))
-            .map(|m| m.captures)
-            .unwrap_or_default();
         let stat = compute_stat_virtuals(rel_path, abs_path);
 
         let strict = *self.inner.strict_map.get(table).unwrap_or(&false);
@@ -535,7 +550,7 @@ impl DirSQL {
                 Ok(cols) => cols,
                 Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
             };
-            let raw_rows = merge_filesystem_facts(raw_rows, &captures, &stat, &declared_columns);
+            let raw_rows = merge_filesystem_facts(raw_rows, captures, &stat, &declared_columns);
             let mut new_rows = Vec::with_capacity(raw_rows.len());
             for raw in &raw_rows {
                 match db.normalize_row(table, raw, strict) {
@@ -742,7 +757,7 @@ impl DirSQL {
             for (rel_path, table_name) in deleted {
                 db.delete_rows_by_file(table_name, rel_path)
                     .map_err(map_db_error)?;
-                cache_delete_file(db.conn(), rel_path).map_err(DirSqlError::sqlite)?;
+                cache_delete_file(db.conn(), rel_path, table_name).map_err(DirSqlError::sqlite)?;
             }
         }
 
@@ -764,10 +779,9 @@ impl DirSQL {
                     message: e.to_string(),
                 })?;
 
-            let captures = matcher
-                .match_file_with_captures(Path::new(&rel_path))
-                .map(|m| m.captures)
-                .unwrap_or_default();
+            // Captures are per-glob: use the captures belonging to THIS
+            // entry's table, not a first-match lookup.
+            let captures = matcher.captures_for(Path::new(&rel_path), &table_name);
             let stat_virtuals = compute_stat_virtuals(&rel_path, &abs_path);
             let declared_columns = db.get_table_columns(&table_name).map_err(map_db_error)?;
             let raw_rows =
@@ -1144,7 +1158,9 @@ pub struct TrustedFile {
 
 struct PersistContext {
     db: Db,
-    cached: HashMap<String, CachedFile>,
+    /// Cached file bookkeeping keyed by `(rel_path, table_name)` — a file may
+    /// be cached under several tables under fan-out.
+    cached: HashMap<(String, String), CachedFile>,
     expected_meta: HashMap<String, String>,
 }
 
@@ -1259,18 +1275,20 @@ fn reconcile_scan(
 ) -> Result<(Vec<ScannedFile>, Vec<TrustedFile>, Vec<(String, String)>)> {
     let mut to_parse = Vec::new();
     let mut trusted = Vec::new();
-    let mut seen_paths: std::collections::HashSet<String> =
+    // Keyed by (rel_path, table_name): under fan-out one file may be scanned
+    // for several tables, and each pair is trusted/deleted independently.
+    let mut seen: std::collections::HashSet<(String, String)> =
         std::collections::HashSet::with_capacity(scanned.len());
 
     for (path, table_name) in scanned {
         let rel_path = relative_path(root, &path);
-        seen_paths.insert(rel_path.clone());
+        seen.insert((rel_path.clone(), table_name.clone()));
 
         let stat = fs.stat(&path)?;
 
-        let cached = ctx.cached.get(&rel_path);
+        let cached = ctx.cached.get(&(rel_path.clone(), table_name.clone()));
         let trust = match cached {
-            Some(c) if c.table_name == table_name && c.stat == stat => {
+            Some(c) if c.stat == stat => {
                 // Stat matches. Outside the racy window? Trust the cache.
                 if c.snapshot_ns > stat.mtime_ns {
                     true
@@ -1300,9 +1318,9 @@ fn reconcile_scan(
     }
 
     let mut deleted = Vec::new();
-    for (rel_path, cf) in &ctx.cached {
-        if !seen_paths.contains(rel_path) {
-            deleted.push((rel_path.clone(), cf.table_name.clone()));
+    for (rel_path, table_name) in ctx.cached.keys() {
+        if !seen.contains(&(rel_path.clone(), table_name.clone())) {
+            deleted.push((rel_path.clone(), table_name.clone()));
         }
     }
 
@@ -2160,7 +2178,7 @@ mod internal_tests {
 
         let mut cached = HashMap::new();
         cached.insert(
-            "a.txt".to_string(),
+            ("a.txt".to_string(), "t".to_string()),
             CachedFile {
                 rel_path: "a.txt".into(),
                 table_name: "t".into(),
@@ -2196,7 +2214,7 @@ mod internal_tests {
 
         let mut cached = HashMap::new();
         cached.insert(
-            "b.txt".to_string(),
+            ("b.txt".to_string(), "t".to_string()),
             CachedFile {
                 rel_path: "b.txt".into(),
                 table_name: "t".into(),
@@ -2365,7 +2383,7 @@ mod internal_tests {
         // The old-row snapshot succeeds but the delete itself fails: a
         // trigger aborts every DELETE on items.
         let (_dir, db, abs, rel) = upsert_fixture();
-        let events = db.handle_upsert("items", &abs, &rel);
+        let events = db.handle_upsert("items", &abs, &rel, &HashMap::new());
         assert_eq!(events.len(), 1, "fixture insert failed: {events:?}");
         {
             let guard = db.inner.db.lock().unwrap();
@@ -2389,7 +2407,7 @@ mod internal_tests {
     fn handle_upsert_surfaces_db_poison() {
         let (_dir, db, abs, rel) = upsert_fixture();
         poison(&db.inner.db);
-        let events = db.handle_upsert("items", &abs, &rel);
+        let events = db.handle_upsert("items", &abs, &rel, &HashMap::new());
         assert_single_lock_error(&events);
     }
 
@@ -2409,7 +2427,7 @@ mod internal_tests {
                 )
                 .unwrap();
         }
-        let events = db.handle_upsert("items", &abs, &rel);
+        let events = db.handle_upsert("items", &abs, &rel, &HashMap::new());
         assert_eq!(events.len(), 1, "expected one error event: {events:?}");
         let dbg = format!("{:?}", events[0]);
         assert!(dbg.contains("Error"), "expected an Error event: {dbg}");
@@ -2436,7 +2454,7 @@ mod internal_tests {
         )
         .unwrap();
 
-        let events = db.handle_upsert("files", &subdir, "subdir");
+        let events = db.handle_upsert("files", &subdir, "subdir", &HashMap::new());
         assert!(events.is_empty(), "a directory must not produce row events");
         assert!(
             db.query("SELECT * FROM files").unwrap().is_empty(),
@@ -2448,14 +2466,14 @@ mod internal_tests {
     fn handle_upsert_returns_empty_when_file_vanished() {
         let (dir, db, _abs, _rel) = upsert_fixture();
         let missing = dir.path().join("gone.txt");
-        let events = db.handle_upsert("items", &missing, "gone.txt");
+        let events = db.handle_upsert("items", &missing, "gone.txt", &HashMap::new());
         assert!(events.is_empty(), "vanished file must produce no events");
     }
 
     #[test]
     fn handle_upsert_returns_empty_for_unknown_table() {
         let (_dir, db, abs, rel) = upsert_fixture();
-        let events = db.handle_upsert("not_a_table", &abs, &rel);
+        let events = db.handle_upsert("not_a_table", &abs, &rel, &HashMap::new());
         assert!(events.is_empty(), "unknown table must produce no events");
     }
 
@@ -2483,7 +2501,7 @@ mod internal_tests {
         )
         .unwrap();
 
-        let events = db.handle_upsert("items", &abs, "a.txt");
+        let events = db.handle_upsert("items", &abs, "a.txt", &HashMap::new());
         assert_eq!(events.len(), 1, "expected one error event: {events:?}");
         let dbg = format!("{:?}", events[0]);
         assert!(dbg.contains("Error"), "expected an Error event: {dbg}");
@@ -2635,7 +2653,7 @@ mod internal_tests {
     #[test]
     fn handle_upsert_inserts_and_diffs_rows() {
         let (_dir, db, abs, rel) = upsert_fixture();
-        let events = db.handle_upsert("items", &abs, &rel);
+        let events = db.handle_upsert("items", &abs, &rel, &HashMap::new());
         assert_eq!(events.len(), 1, "got: {events:?}");
         assert!(matches!(&events[0], RowEvent::Insert { .. }));
 
@@ -2660,7 +2678,7 @@ mod internal_tests {
             Arc::new(fake),
         )
         .unwrap();
-        let events = db.handle_upsert("items", &abs, "a.txt");
+        let events = db.handle_upsert("items", &abs, "a.txt", &HashMap::new());
         assert_eq!(events.len(), 1, "got: {events:?}");
         let dbg = format!("{:?}", events[0]);
         assert!(dbg.contains("Error"), "got: {dbg}");
@@ -2772,7 +2790,7 @@ mod internal_tests {
         let fake = FakeFs::with_stat(abs.clone(), stat.clone());
         let mut cached = HashMap::new();
         cached.insert(
-            "a.txt".to_string(),
+            ("a.txt".to_string(), "t".to_string()),
             CachedFile {
                 rel_path: "a.txt".into(),
                 table_name: "t".into(),
@@ -2804,7 +2822,7 @@ mod internal_tests {
         let fake = FakeFs::with_stat(abs.clone(), stat.clone());
         let mut cached = HashMap::new();
         cached.insert(
-            "a.txt".to_string(),
+            ("a.txt".to_string(), "other".to_string()),
             CachedFile {
                 rel_path: "a.txt".into(),
                 table_name: "other".into(),
@@ -2830,7 +2848,7 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let mut cached = HashMap::new();
         cached.insert(
-            "gone.txt".to_string(),
+            ("gone.txt".to_string(), "t".to_string()),
             CachedFile {
                 rel_path: "gone.txt".into(),
                 table_name: "t".into(),

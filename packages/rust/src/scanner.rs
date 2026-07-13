@@ -33,8 +33,10 @@ pub fn scan_directory(root: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, Stri
             continue;
         }
 
-        if let Some(table_name) = matcher.match_file(rel_path) {
-            results.push((path.to_path_buf(), table_name.to_string()));
+        // Fan-out: a file matching N tables' globs yields N (path, table)
+        // pairs, one per matching table, in declaration order.
+        for m in matcher.match_all(rel_path) {
+            results.push((path.to_path_buf(), m.table_name));
         }
     }
 

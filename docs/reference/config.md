@@ -97,7 +97,7 @@ per-file command.
 | Key | Required | Description |
 |---|---|---|
 | `ddl` | yes | A SQLite `CREATE TABLE` statement. The table name is parsed from it. Only columns declared here are populated; auto-injected facts not in the DDL are dropped. |
-| `glob` | yes | Glob pattern matched against root-relative paths. May contain `{name}` [capture segments](./columns.md#glob-captures). First matching table wins when a file matches several globs. |
+| `glob` | yes | Glob pattern matched against root-relative paths. May contain `{name}` [capture segments](./columns.md#glob-captures). Every table whose glob matches a file receives that file's rows — a file can populate multiple tables. |
 | `strict` | no (default `false`) | When `true`, rows whose keys do not exactly match the declared columns are rejected with an error: extra keys error, and every declared column must be supplied (by the command/extract output, a glob capture, or a stat column). When `false`, extra keys are dropped and missing columns become `NULL`. |
 | `on-file` | no | A command run once per matched file; its stdout (a JSON array of row objects) becomes the file's rows. Must be non-empty. See [Command hooks](./hooks.md#on-file). |
 
