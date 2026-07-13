@@ -348,6 +348,125 @@ fn dirsql_directory_excluded_when_persist_disabled() {
     assert_eq!(rows[0]["col"], Value::Text("alpha".into()));
 }
 
+// ---------------------------------------------------------------------------
+// Fan-out under persistence: a file matching two tables is bookkept per
+// (rel_path, table_name); the composite key round-trips across runs (#580).
+// ---------------------------------------------------------------------------
+
+/// A counting table over `**/*.csv` with a distinct name/column.
+fn counting_named_table(name: &'static str, col: &'static str, counter: Arc<AtomicUsize>) -> Table {
+    Table::new(
+        &format!("CREATE TABLE {name} ({col} TEXT)"),
+        "**/*.csv",
+        move |path| {
+            let content = std::fs::read_to_string(path).unwrap();
+            counter.fetch_add(1, Ordering::SeqCst);
+            content
+                .lines()
+                .skip(1)
+                .map(|line| HashMap::from([(col.into(), Value::Text(line.trim().to_string()))]))
+                .collect::<Vec<Row>>()
+        },
+    )
+}
+
+fn open_two(root: &Path, ca: Arc<AtomicUsize>, cb: Arc<AtomicUsize>) -> DirSQL {
+    DirSQL::builder()
+        .root(root)
+        .tables(vec![
+            counting_named_table("ta", "col_a", ca),
+            counting_named_table("tb", "col_b", cb),
+        ])
+        .persist(None::<&Path>)
+        .build()
+        .unwrap()
+}
+
+#[test]
+fn persist_fans_out_and_composite_key_round_trips() {
+    let root = TempDir::new().unwrap();
+    write_csv(root.path(), "a.csv", &["alpha"]);
+
+    let ca = Arc::new(AtomicUsize::new(0));
+    let cb = Arc::new(AtomicUsize::new(0));
+    {
+        let db = open_two(root.path(), ca.clone(), cb.clone());
+        assert_eq!(db.query("SELECT col_a FROM ta").unwrap().len(), 1);
+        assert_eq!(
+            db.query("SELECT col_b FROM tb").unwrap().len(),
+            1,
+            "second-declared table populated on cold start"
+        );
+    }
+    assert_eq!(ca.swap(0, Ordering::SeqCst), 1, "ta extracted once");
+    assert_eq!(cb.swap(0, Ordering::SeqCst), 1, "tb extracted once");
+
+    // Warm start over the same root/cache: both (rel_path, table) entries are
+    // trusted, so neither table re-extracts, yet both still serve the row.
+    let db = open_two(root.path(), ca.clone(), cb.clone());
+    assert_eq!(ca.load(Ordering::SeqCst), 0, "ta trusted on warm start");
+    assert_eq!(cb.load(Ordering::SeqCst), 0, "tb trusted on warm start");
+    assert_eq!(db.query("SELECT col_a FROM ta").unwrap().len(), 1);
+    assert_eq!(db.query("SELECT col_b FROM tb").unwrap().len(), 1);
+}
+
+#[test]
+fn persist_cache_records_a_row_per_matching_table() {
+    use rusqlite::Connection;
+
+    let root = TempDir::new().unwrap();
+    write_csv(root.path(), "a.csv", &["alpha"]);
+
+    let ca = Arc::new(AtomicUsize::new(0));
+    let cb = Arc::new(AtomicUsize::new(0));
+    {
+        let _db = open_two(root.path(), ca, cb);
+    }
+
+    let cache = root.path().join(".dirsql").join("cache.db");
+    let conn = Connection::open(&cache).unwrap();
+    let files: i64 = conn
+        .query_row("SELECT COUNT(*) FROM _dirsql_files", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        files, 2,
+        "one file matching two tables must record two (rel_path, table) rows"
+    );
+}
+
+#[test]
+fn old_schema_version_cache_is_rebuilt() {
+    use rusqlite::Connection;
+
+    let root = TempDir::new().unwrap();
+    write_csv(root.path(), "a.csv", &["alpha"]);
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    {
+        let _db = open(root.path(), counter.clone());
+    }
+    counter.store(0, Ordering::SeqCst);
+
+    // Force the cache to the pre-fan-out schema version. The bumped version
+    // must make this cache incompatible, triggering a full rebuild.
+    let cache = root.path().join(".dirsql").join("cache.db");
+    let conn = Connection::open(&cache).unwrap();
+    conn.execute(
+        "UPDATE _dirsql_meta SET value = '3' WHERE key = 'schema_version'",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    let db = open(root.path(), counter.clone());
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        1,
+        "an old-schema-version cache must be discarded and rebuilt",
+    );
+    assert_eq!(db.query("SELECT col FROM rows").unwrap().len(), 1);
+}
+
 #[test]
 fn cache_contains_sidecar_tables() {
     use rusqlite::Connection;

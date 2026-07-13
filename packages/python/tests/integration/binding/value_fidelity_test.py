@@ -11,10 +11,10 @@ import pytest
 from dirsql import DirSQL, Table
 
 
-def _db(tmp_dir, extract, ddl="CREATE TABLE t (v)"):
+def _db(tmp_dir, on_file, ddl="CREATE TABLE t (v)"):
     with open(os.path.join(tmp_dir, "marker.json"), "w") as f:
         f.write("{}")
-    return DirSQL(tmp_dir, tables=[Table(ddl=ddl, glob="*.json", extract=extract)])
+    return DirSQL(tmp_dir, tables=[Table(ddl=ddl, glob="*.json", on_file=on_file)])
 
 
 def describe_integer_range():

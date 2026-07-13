@@ -15,7 +15,7 @@ facts:
 **Content interpretation is intentionally out of scope.** dirsql does not
 parse markdown frontmatter, JSON, CSV, YAML, TOML, or any other file format
 on the user's behalf. If a project needs columns derived from file content,
-the consumer registers a programmatic `Table` whose `extract` callback does
+the consumer registers a programmatic `Table` whose `on_file` callback does
 the parsing in the host language (Python / TypeScript / Rust).
 
 This scope is a deliberate inversion of the original design and was settled
@@ -86,7 +86,7 @@ Walks a directory tree and matches files against table globs. Returns a list of 
 
 ### `matcher` -- Glob-to-table mapping
 
-Maps glob patterns to table names and handles ignore patterns. A file is matched against globs in registration order; the first match wins. Glob patterns may contain `{name}` capture placeholders; the matcher returns captured segments alongside the table name.
+Maps glob patterns to table names and handles ignore patterns. A file is matched against every glob in registration order; every matching pattern fires, so a file can belong to multiple tables. Glob patterns may contain `{name}` capture placeholders; the matcher returns captured segments alongside each table name.
 
 ### `watcher` -- Filesystem monitoring
 
@@ -98,9 +98,9 @@ Compares old and new row sets for a file to produce `RowEvent` variants: `Insert
 
 ### Filesystem-fact injection (in `lib.rs`)
 
-The `extract` callback receives only the matched file's absolute path; dirsql
+The `on_file` callback receives only the matched file's absolute path; dirsql
 does not read file contents on its behalf. A callback that needs the file body
-reads it itself. After `extract` returns, and before SQLite insertion, the core
+reads it itself. After `on_file` returns, and before SQLite insertion, the core
 merges two sources of filesystem-derived columns into every row:
 
 - **Glob path captures**, by capture name (`{thread_id}` → `thread_id`).
@@ -109,14 +109,14 @@ merges two sources of filesystem-derived columns into every row:
 
 Auto-injected keys are filtered to the columns declared in the table's DDL
 (via `db.get_table_columns`), so a table with a minimal DDL is not broken by
-virtuals it didn't ask for. User-extract values win over auto-injected
+virtuals it didn't ask for. User on-file values win over auto-injected
 values when the keys collide.
 
 Config-defined tables (`[[table]]` entries in `.dirsql.toml`) use a
-synthesized `extract` that returns one empty row per matched file; the
+synthesized `on_file` that returns one empty row per matched file; the
 filesystem-fact layer fills it in. Programmatic tables (`Table::new` /
 `Table::strict`) get the same auto-injection applied to whatever rows their
-extract returns.
+on_file callback returns.
 
 ## Python SDK (`packages/python/`)
 
@@ -124,11 +124,11 @@ extract returns.
 
 The `lib.rs` file in `packages/python/src/` defines the PyO3 bindings that expose the Rust core to Python:
 
-- `Table` (PyO3 class) -- stores DDL, glob, and the Python extract callable
+- `Table` (PyO3 class) -- stores DDL, glob, and the Python on_file callable
 - `DirSQL` (PyO3 class) -- owns the database, table configs, file-row tracking, and watcher
 - `RowEvent` (PyO3 class) -- represents a row-level change event
 
-The Python `extract` callable is called from Rust via PyO3's GIL-acquiring mechanism. Python dicts are converted to `HashMap<String, Value>` for storage, and converted back for query results.
+The Python `on_file` callable is called from Rust via PyO3's GIL-acquiring mechanism. Python dicts are converted to `HashMap<String, Value>` for storage, and converted back for query results.
 
 ### DirSQL (Python-facing async wrapper)
 
@@ -141,9 +141,9 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 1. Python creates `DirSQL` with root path and table definitions
 2. Rust executes DDL to create SQLite tables
 3. `scanner` walks the directory and matches files to tables
-4. For each matched file, Python `extract` is called via PyO3
+4. For each matched file, Python `on_file` is called via PyO3
 5. The core merges glob captures and stat virtuals (filtered to the DDL's
-   declared columns) into each extracted row
+   declared columns) into each returned row
 6. Rows are inserted into SQLite with tracking metadata
 7. File-to-rows mapping is stored for later diffing
 
@@ -151,7 +151,7 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 
 1. `notify` detects a filesystem event (create/modify/delete)
 2. The matcher checks if the file belongs to a table
-3. For create/modify: `extract` is called with the file's absolute path
+3. For create/modify: `on_file` is called with the file's absolute path
    (reading the file itself if it needs the body), captures and stat virtuals
    are merged, `differ` compares old and new rows
 4. For delete: old rows are retrieved, all emitted as delete events

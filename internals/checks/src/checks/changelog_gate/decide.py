@@ -58,6 +58,19 @@ def extract_skip_trailers(trailer_output: str) -> list[str]:
     return [line for line in trailer_output.splitlines() if line.strip()]
 
 
+def contains_skip_changelog_line(commit_messages: str) -> bool:
+    """True if any commit-message line is a `skip-changelog:` directive.
+
+    Detects an *attempted* skip-changelog independent of git's trailer parser,
+    so the gate can tell a malformed (e.g. blank-line-split) trailer apart from
+    no skip at all and emit a targeted fix message.
+    """
+    return any(
+        line.strip().lower().startswith("skip-changelog:")
+        for line in commit_messages.splitlines()
+    )
+
+
 def count_added_lines(diff_text: str) -> int:
     added = 0
     for line in diff_text.splitlines():

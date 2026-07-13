@@ -21,9 +21,35 @@ struct PatternEntry {
     capture_regex: Option<Regex>,
 }
 
+impl PatternEntry {
+    /// Extract this pattern's `{name}` captures from `path`. Returns an empty
+    /// map when the pattern declares no captures or the path does not match
+    /// the capture regex.
+    fn extract_captures(&self, path: &Path) -> HashMap<String, String> {
+        let Some(regex) = &self.capture_regex else {
+            return HashMap::new();
+        };
+        let path_str = path.to_string_lossy();
+        regex
+            .captures(&path_str)
+            .map(|caps| {
+                self.capture_names
+                    .iter()
+                    .filter_map(|name| {
+                        caps.name(name)
+                            .map(|m| (name.clone(), m.as_str().to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
 /// Maps file paths to table names based on glob patterns.
-/// First matching pattern wins. An ignore list filters paths entirely.
-/// Supports `{name}` placeholders in glob patterns that capture path segments.
+/// Every matching pattern fires: a file matching N patterns yields N
+/// `MatchResult`s (one per table), so a file can belong to multiple tables.
+/// An ignore list filters paths entirely. Supports `{name}` placeholders in
+/// glob patterns that capture path segments.
 pub struct TableMatcher {
     entries: Vec<PatternEntry>,
     ignore_set: GlobSet,
@@ -128,47 +154,31 @@ impl TableMatcher {
         })
     }
 
-    /// Returns the table name for a file path, or None if no pattern matches.
-    /// For backward compatibility -- does not return captures.
-    pub fn match_file(&self, path: &Path) -> Option<&str> {
-        for entry in &self.entries {
-            if entry.glob_set.is_match(path) {
-                return Some(entry.table_name.as_str());
-            }
-        }
-        None
+    /// Returns one [`MatchResult`] per matching pattern, in declaration order.
+    /// A file matching N patterns yields N results (fan-out); each result
+    /// carries the captures from its own pattern's glob. Empty when nothing
+    /// matches.
+    pub fn match_all(&self, path: &Path) -> Vec<MatchResult> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.glob_set.is_match(path))
+            .map(|entry| MatchResult {
+                table_name: entry.table_name.clone(),
+                captures: entry.extract_captures(path),
+            })
+            .collect()
     }
 
-    /// Returns a MatchResult with table name and any captured path segments,
-    /// or None if no pattern matches.
-    pub fn match_file_with_captures(&self, path: &Path) -> Option<MatchResult> {
-        for entry in &self.entries {
-            if entry.glob_set.is_match(path) {
-                let captures = if let Some(ref regex) = entry.capture_regex {
-                    let path_str = path.to_string_lossy();
-                    regex
-                        .captures(&path_str)
-                        .map(|caps| {
-                            entry
-                                .capture_names
-                                .iter()
-                                .filter_map(|name| {
-                                    caps.name(name)
-                                        .map(|m| (name.clone(), m.as_str().to_string()))
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default()
-                } else {
-                    HashMap::new()
-                };
-                return Some(MatchResult {
-                    table_name: entry.table_name.clone(),
-                    captures,
-                });
-            }
-        }
-        None
+    /// Returns the captures that `table_name`'s own glob extracts from `path`.
+    /// Used when re-parsing a file already known to belong to a table (e.g.
+    /// the build/scan path), so captures stay per-glob rather than
+    /// first-match. Empty when the table is unknown or declares no captures.
+    pub fn captures_for(&self, path: &Path, table_name: &str) -> HashMap<String, String> {
+        self.entries
+            .iter()
+            .find(|entry| entry.table_name == table_name)
+            .map(|entry| entry.extract_captures(path))
+            .unwrap_or_default()
     }
 
     /// Returns true if the path matches any ignore pattern.
@@ -181,38 +191,75 @@ impl TableMatcher {
 mod tests {
     use super::*;
 
-    #[test]
-    fn match_file_returns_table_for_matching_glob() {
-        let matcher = TableMatcher::new(&[("*.csv", "data")], &[]).unwrap();
-        assert_eq!(matcher.match_file(Path::new("report.csv")), Some("data"));
+    /// Table names of every matching pattern, in declaration order.
+    fn names(matcher: &TableMatcher, path: &str) -> Vec<String> {
+        matcher
+            .match_all(Path::new(path))
+            .into_iter()
+            .map(|m| m.table_name)
+            .collect()
+    }
+
+    /// The single match for a one-table matcher (panics if zero matches).
+    fn only(matcher: &TableMatcher, path: &str) -> MatchResult {
+        let mut all = matcher.match_all(Path::new(path));
+        assert_eq!(all.len(), 1, "expected exactly one match for {path}");
+        all.remove(0)
     }
 
     #[test]
-    fn match_file_returns_none_for_no_match() {
+    fn match_all_returns_table_for_matching_glob() {
         let matcher = TableMatcher::new(&[("*.csv", "data")], &[]).unwrap();
-        assert_eq!(matcher.match_file(Path::new("readme.md")), None);
+        assert_eq!(names(&matcher, "report.csv"), vec!["data"]);
     }
 
     #[test]
-    fn first_matching_pattern_wins() {
+    fn match_all_returns_empty_for_no_match() {
+        let matcher = TableMatcher::new(&[("*.csv", "data")], &[]).unwrap();
+        assert!(matcher.match_all(Path::new("readme.md")).is_empty());
+    }
+
+    #[test]
+    fn all_matching_patterns_fire() {
+        // Two patterns both matching one path fan out to both tables, in
+        // declaration order.
         let matcher = TableMatcher::new(
-            &[("*.json", "json_table"), ("data/*.json", "data_table")],
+            &[
+                ("data/*/metadata.json", "ta"),
+                ("data/*/metadata.json", "tb"),
+            ],
             &[],
         )
         .unwrap();
         assert_eq!(
-            matcher.match_file(Path::new("data/foo.json")),
-            Some("json_table")
+            names(&matcher, "data/2401.00001/metadata.json"),
+            vec!["ta", "tb"],
         );
     }
 
     #[test]
-    fn match_file_with_nested_path() {
-        let matcher = TableMatcher::new(&[("**/*.jsonl", "events")], &[]).unwrap();
-        assert_eq!(
-            matcher.match_file(Path::new("logs/2024/events.jsonl")),
-            Some("events")
+    fn match_all_captures_are_per_pattern() {
+        let matcher = TableMatcher::new(
+            &[("data/{id}/metadata.json", "a"), ("**/metadata.json", "b")],
+            &[],
+        )
+        .unwrap();
+        let all = matcher.match_all(Path::new("data/x/metadata.json"));
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].table_name, "a");
+        assert_eq!(all[0].captures.get("id").map(String::as_str), Some("x"));
+        assert_eq!(all[1].table_name, "b");
+        assert!(
+            all[1].captures.is_empty(),
+            "the captureless glob yields no captures: {:?}",
+            all[1].captures
         );
+    }
+
+    #[test]
+    fn match_all_with_nested_path() {
+        let matcher = TableMatcher::new(&[("**/*.jsonl", "events")], &[]).unwrap();
+        assert_eq!(names(&matcher, "logs/2024/events.jsonl"), vec!["events"]);
     }
 
     #[test]
@@ -231,7 +278,7 @@ mod tests {
     #[test]
     fn empty_matcher_matches_nothing() {
         let matcher = TableMatcher::new(&[], &[]).unwrap();
-        assert_eq!(matcher.match_file(Path::new("anything.txt")), None);
+        assert!(matcher.match_all(Path::new("anything.txt")).is_empty());
         assert!(!matcher.is_ignored(Path::new("anything.txt")));
     }
 
@@ -250,29 +297,23 @@ mod tests {
     #[test]
     fn question_mark_matches_single_non_separator_char() {
         let matcher = TableMatcher::new(&[("file?.txt", "t")], &[]).unwrap();
-        assert!(matcher.match_file(Path::new("file1.txt")).is_some());
-        assert!(matcher.match_file(Path::new("fileA.txt")).is_some());
-        assert!(matcher.match_file(Path::new("file.txt")).is_none());
+        assert_eq!(names(&matcher, "file1.txt"), vec!["t"]);
+        assert_eq!(names(&matcher, "fileA.txt"), vec!["t"]);
+        assert!(matcher.match_all(Path::new("file.txt")).is_empty());
     }
 
     #[test]
     fn double_star_at_end_matches_any_depth() {
         let matcher = TableMatcher::new(&[("logs/**", "t")], &[]).unwrap();
-        assert!(matcher.match_file(Path::new("logs/a.txt")).is_some());
-        assert!(
-            matcher
-                .match_file(Path::new("logs/deep/nested/b.txt"))
-                .is_some()
-        );
+        assert_eq!(names(&matcher, "logs/a.txt"), vec!["t"]);
+        assert_eq!(names(&matcher, "logs/deep/nested/b.txt"), vec!["t"]);
     }
 
     #[test]
     fn capture_single_segment() {
         let matcher =
             TableMatcher::new(&[("comments/{thread_id}/index.jsonl", "comments")], &[]).unwrap();
-        let result = matcher
-            .match_file_with_captures(Path::new("comments/abc123/index.jsonl"))
-            .unwrap();
+        let result = only(&matcher, "comments/abc123/index.jsonl");
         assert_eq!(result.table_name, "comments");
         assert_eq!(result.captures.get("thread_id").unwrap(), "abc123");
     }
@@ -280,9 +321,7 @@ mod tests {
     #[test]
     fn capture_multiple_segments() {
         let matcher = TableMatcher::new(&[("{org}/{repo}/data.json", "repos")], &[]).unwrap();
-        let result = matcher
-            .match_file_with_captures(Path::new("acme/widgets/data.json"))
-            .unwrap();
+        let result = only(&matcher, "acme/widgets/data.json");
         assert_eq!(result.table_name, "repos");
         assert_eq!(result.captures.get("org").unwrap(), "acme");
         assert_eq!(result.captures.get("repo").unwrap(), "widgets");
@@ -291,9 +330,7 @@ mod tests {
     #[test]
     fn no_captures_returns_empty_map() {
         let matcher = TableMatcher::new(&[("*.csv", "data")], &[]).unwrap();
-        let result = matcher
-            .match_file_with_captures(Path::new("report.csv"))
-            .unwrap();
+        let result = only(&matcher, "report.csv");
         assert_eq!(result.table_name, "data");
         assert!(result.captures.is_empty());
     }
@@ -301,48 +338,38 @@ mod tests {
     #[test]
     fn capture_with_glob_star() {
         let matcher = TableMatcher::new(&[("logs/{date}/*.jsonl", "logs")], &[]).unwrap();
-        let result = matcher
-            .match_file_with_captures(Path::new("logs/2024-01-15/events.jsonl"))
-            .unwrap();
+        let result = only(&matcher, "logs/2024-01-15/events.jsonl");
         assert_eq!(result.captures.get("date").unwrap(), "2024-01-15");
     }
 
     #[test]
-    fn capture_no_match_returns_none() {
+    fn capture_no_match_returns_empty() {
         let matcher =
             TableMatcher::new(&[("comments/{thread_id}/index.jsonl", "comments")], &[]).unwrap();
-        assert!(
-            matcher
-                .match_file_with_captures(Path::new("other/file.txt"))
-                .is_none()
-        );
+        assert!(matcher.match_all(Path::new("other/file.txt")).is_empty());
     }
 
     #[test]
-    fn match_file_still_works_with_captures_in_pattern() {
+    fn match_all_still_matches_pattern_with_captures() {
         let matcher =
             TableMatcher::new(&[("comments/{thread_id}/index.jsonl", "comments")], &[]).unwrap();
         assert_eq!(
-            matcher.match_file(Path::new("comments/abc/index.jsonl")),
-            Some("comments")
+            names(&matcher, "comments/abc/index.jsonl"),
+            vec!["comments"]
         );
     }
 
     #[test]
     fn capture_with_double_star() {
         let matcher = TableMatcher::new(&[("**/{category}/items.json", "items")], &[]).unwrap();
-        let result = matcher
-            .match_file_with_captures(Path::new("shop/electronics/items.json"))
-            .unwrap();
+        let result = only(&matcher, "shop/electronics/items.json");
         assert_eq!(result.captures.get("category").unwrap(), "electronics");
     }
 
     #[test]
     fn capture_with_trailing_double_star() {
         let matcher = TableMatcher::new(&[("logs/{date}/**", "logs")], &[]).unwrap();
-        let result = matcher
-            .match_file_with_captures(Path::new("logs/2024-01-15/deep/events.jsonl"))
-            .unwrap();
+        let result = only(&matcher, "logs/2024-01-15/deep/events.jsonl");
         assert_eq!(result.table_name, "logs");
         assert_eq!(result.captures.get("date").unwrap(), "2024-01-15");
     }
@@ -350,10 +377,33 @@ mod tests {
     #[test]
     fn capture_with_question_mark() {
         let matcher = TableMatcher::new(&[("{name}?.txt", "files")], &[]).unwrap();
-        let result = matcher
-            .match_file_with_captures(Path::new("ab.txt"))
-            .unwrap();
+        let result = only(&matcher, "ab.txt");
         assert_eq!(result.table_name, "files");
         assert!(result.captures.contains_key("name"));
+    }
+
+    #[test]
+    fn captures_for_returns_the_named_tables_captures() {
+        let matcher = TableMatcher::new(
+            &[("data/{id}/metadata.json", "a"), ("**/metadata.json", "b")],
+            &[],
+        )
+        .unwrap();
+        let path = Path::new("data/x/metadata.json");
+        let a_caps = matcher.captures_for(path, "a");
+        assert_eq!(a_caps.get("id").map(String::as_str), Some("x"));
+        // `b`'s glob has no captures, so its per-table lookup is empty even
+        // though the same path matches it.
+        assert!(matcher.captures_for(path, "b").is_empty());
+    }
+
+    #[test]
+    fn captures_for_unknown_table_is_empty() {
+        let matcher = TableMatcher::new(&[("data/{id}/metadata.json", "a")], &[]).unwrap();
+        assert!(
+            matcher
+                .captures_for(Path::new("data/x/metadata.json"), "nope")
+                .is_empty()
+        );
     }
 }

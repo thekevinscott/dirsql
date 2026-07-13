@@ -6,12 +6,12 @@ API surface comparison across the three language SDKs.
 
 | Concept     | Python                  | Rust                     | TypeScript               |
 |-------------|-------------------------|--------------------------|--------------------------|
-| Table def   | `Table(ddl, glob, extract, strict)` | `Table::new(ddl, glob, extract)` / `Table::strict(...)` / `Table::try_new(...)` | `new Table({...})` or `{ ddl, glob, extract, strict? }` (plain object) |
-| Extract callback | `(path) -> list[dict]` | `Fn(&str) -> Vec<Row>` | `(path) => Record<string, unknown>[]` |
+| Table def   | `Table(ddl, glob, on_file, strict)` | `Table::new(ddl, glob, on_file)` / `Table::strict(...)` / `Table::try_new(...)` | `new Table({...})` or `{ ddl, glob, onFile, strict? }` (plain object) |
+| on-file callback | `(path) -> list[dict]` | `Fn(&str) -> Vec<Row>` | `(path) => Record<string, unknown>[]` |
 | Row event   | `RowEvent` (class, frozen attrs; `file_path` on all variants) | `RowEvent` (enum: Insert/Update/Delete/Error; `file_path` on all variants) | `RowEvent` (plain object with action string; `filePath` on all variants) |
 | Row type    | `dict[str, Any]`        | `HashMap<String, Value>` | `Record<string, unknown>` |
 
-The `extract` callback receives a single argument: the absolute filesystem
+The `on_file` callback receives a single argument: the absolute filesystem
 path of the matched file. `dirsql` does not read file contents — a callback
 that needs the file body reads it itself. This is consistent across all three
 SDKs (no drift).
@@ -148,7 +148,7 @@ install, so a config's location never sets where you index. Native-language conf
 and the cross-language config-serialization snapshot (#194) that fed the
 handshake were all removed in epic #321 (#323 Python, #324 TypeScript, #325
 Rust + docs) — there is no parity surface here anymore. To run user-defined
-`extract` callbacks, embed a binding SDK (`DirSQL(...)` + `Table(extract=fn)`)
+`on_file` callbacks, embed a binding SDK (`DirSQL(...)` + `Table(on_file=fn)`)
 in your own host program and query it in-process; this is at parity across
 Python, Rust, and TypeScript (see *Core Types* and *DirSQL* above).
 
@@ -169,7 +169,7 @@ All three share one global timeout override, `[dirsql].hook-timeout`
   isolation; 30s default timeout, overridable via the global
   `[dirsql].hook-timeout` key in positive seconds, #351). Parsed and executed in the
   shared Rust core (`config::TableConfig::on_file` + the `build_tables_from_config`
-  extract path), with **no** Python/TypeScript public-API surface — identical
+  on-file path), with **no** Python/TypeScript public-API surface — identical
   across all three installs, no drift.
 
 - **`pre-query` (B3 #328).** A **server-wide** `[dirsql]` key naming a command
@@ -207,7 +207,7 @@ All three share one global timeout override, `[dirsql].hook-timeout`
 
 ### Rust
 - Uses `snake_case` for all identifiers.
-- `Table` has separate constructors: `new` (infallible extract), `try_new` (fallible extract), `strict` (shorthand).
+- `Table` has separate constructors: `new` (infallible on-file), `try_new` (fallible on-file), `strict` (shorthand).
 - `RowEvent` is a Rust enum with variants (`Insert { table, row, file_path }`, `Update { table, old_row, new_row, file_path }`, `Delete { table, row, file_path }`, `Error { table, file_path, error }`) rather than a flat struct. `file_path` is a relative `String` on Insert/Update/Delete and a `PathBuf` on Error. `table` is `String` on Insert/Update/Delete and `Option<String>` on Error — `None` for errors that aren't tied to a specific table (e.g. a watch-channel failure). Python exposes the same field as `Optional[str]`; TypeScript as `string | null`.
 - Construction uses a builder (`DirSQL::builder()...build()`); the `new`/`with_ignore`/`from_config`/`from_config_path` shortcuts remain as thin wrappers delegating to the builder.
 - `AsyncDirSQL` uses tokio and `OnceCell` internally.
@@ -217,7 +217,7 @@ All three share one global timeout override, `[dirsql].hook-timeout`
 ### TypeScript
 - Uses `camelCase` for method names.
 - `RowEvent` field names use `camelCase` (`oldRow`, `filePath`), not `snake_case`.
-- Table definitions may be written as `new Table({...})` or as a plain object literal (`{ ddl, glob, extract, strict? }`); `Table` is a thin identity wrapper that exists for parity with the Python/Rust `Table` constructors. Both forms are interchangeable at every call site that takes `TableDef[]`.
+- Table definitions may be written as `new Table({...})` or as a plain object literal (`{ ddl, glob, onFile, strict? }`); `Table` is a thin identity wrapper that exists for parity with the Python/Rust `Table` constructors. Both forms are interchangeable at every call site that takes `TableDef[]`.
 - The constructor is overloaded: `new DirSQL(configPath: string)` or `new DirSQL(options: { root?, tables?, ignore?, config? })`. There is no separate `fromConfig` factory.
 - No separate `AsyncDirSQL` — JS is async by default, so `DirSQL` has `ready: Promise<void>`, `query(): Promise<Record[]>`, and `watch(): AsyncIterable<RowEvent>` built in.
 - `query()`, `startWatcher()`, and `pollEvents()` all return `Promise`s and run on the libuv threadpool so the JS event loop stays responsive (even for long poll timeouts).
@@ -270,8 +270,8 @@ incl. #313).
 | Multiple tables            | Y      | Y    | Y          |
 | JOIN across tables         | Y      | Y    | Y          |
 | Ignore patterns            | Y      | Y    | Y          |
-| Extract receives the matched file's path | Y | Y | Y |
-| Extract returns `[]` to skip a file | Y | Y | Y |
+| on-file receives the matched file's path | Y | Y | Y |
+| on-file returns `[]` to skip a file | Y | Y | Y |
 | Value types (str/int/float/bool/None) | Y | Y | Y |
 | Out-of-`i64` integer errors (no lossy REAL/TEXT/round) | Y (#465: `OverflowError`) | core (`i64`) | Y (#465: `bigint`>`i64` and query result >2^53 throw) |
 | `bigint`/large-int → INTEGER when in-`i64` range | Y | Y | Y (#465: `bigint`→INTEGER) |
@@ -283,7 +283,7 @@ incl. #313).
 | Internal `_dirsql_*` columns hidden from `SELECT *` | Y | Y | Y |
 | `_dirsql_*` filter robustness (comment/string-literal bypass) | core | Y (`code_review_findings.rs`) | core |
 | Empty directory / empty result set | Y | Y | Y |
-| Error taxonomy (duplicate table, invalid glob, unparseable DDL, extract error) | core | Y (`sdk.rs`) | core |
+| Error taxonomy (duplicate table, invalid glob, unparseable DDL, on-file error) | core | Y (`sdk.rs`) | core |
 | Relaxed schema (extra keys)| Y      | Y    | Y          |
 | Relaxed schema (missing)   | Y      | Y    | Y          |
 | Strict mode (extra keys)   | Y      | Y    | Y          |

@@ -2,28 +2,28 @@ import { describe, expect, it } from "vitest";
 import { Table } from "./table.js";
 
 describe("Table", () => {
-  const extract = () => [{ a: 1 }];
+  const onFile = () => [{ a: 1 }];
 
-  it("copies ddl, glob, and extract onto the instance", () => {
+  it("copies ddl, glob, and onFile onto the instance", () => {
     const t = new Table({
       ddl: "CREATE TABLE t (a INTEGER)",
       glob: "*.json",
-      extract,
+      onFile,
     });
     expect(t.ddl).toBe("CREATE TABLE t (a INTEGER)");
     expect(t.glob).toBe("*.json");
-    expect(t.extract).toBe(extract);
+    expect(t.onFile).toBe(onFile);
   });
 
   it("copies strict when present", () => {
-    const t = new Table({ ddl: "d", glob: "g", extract, strict: true });
+    const t = new Table({ ddl: "d", glob: "g", onFile, strict: true });
     expect(t.strict).toBe(true);
-    expect(Object.keys(t).sort()).toEqual(["ddl", "extract", "glob", "strict"]);
+    expect(Object.keys(t).sort()).toEqual(["ddl", "glob", "onFile", "strict"]);
   });
 
   it("omits strict from enumerable keys when absent", () => {
-    const t = new Table({ ddl: "d", glob: "g", extract });
+    const t = new Table({ ddl: "d", glob: "g", onFile });
     expect(t.strict).toBeUndefined();
-    expect(Object.keys(t).sort()).toEqual(["ddl", "extract", "glob"]);
+    expect(Object.keys(t).sort()).toEqual(["ddl", "glob", "onFile"]);
   });
 });

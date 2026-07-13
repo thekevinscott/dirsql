@@ -29,7 +29,7 @@ def describe_tables_guide_bytes_to_blob():
     async def it_maps_python_bytes_to_sqlite_blob(tmp_dir):
         """Docs (reference/sdk.md "Supported value types"): Python `bytes` -> SQLite BLOB.
 
-        Round-trip: extract returns a dict whose value is bytes, query returns bytes.
+        Round-trip: on_file returns a dict whose value is bytes, query returns bytes.
         """
         with open(os.path.join(tmp_dir, "marker.json"), "w") as f:
             f.write("{}")
@@ -42,7 +42,7 @@ def describe_tables_guide_bytes_to_blob():
                 Table(
                     ddl="CREATE TABLE blobs (name TEXT, data BLOB)",
                     glob="*.json",
-                    extract=lambda path: [{"name": "bin", "data": payload}],
+                    on_file=lambda path: [{"name": "bin", "data": payload}],
                 ),
             ],
         )
@@ -67,7 +67,7 @@ def describe_strict_mode_gap():
                 Table(
                     ddl="CREATE TABLE items (name TEXT)",
                     glob="*.json",
-                    extract=lambda path: [{"name": "apple", "color": "red"}],
+                    on_file=lambda path: [{"name": "apple", "color": "red"}],
                     strict=True,
                 ),
             ],
@@ -87,7 +87,7 @@ def describe_strict_mode_gap():
                 Table(
                     ddl="CREATE TABLE items (name TEXT, color TEXT)",
                     glob="*.json",
-                    extract=lambda path: [{"name": "apple", "color": "red"}],
+                    on_file=lambda path: [{"name": "apple", "color": "red"}],
                     strict=True,
                 ),
             ],
@@ -120,7 +120,7 @@ def describe_watching_guide_positional_identity_gap():
                 Table(
                     ddl="CREATE TABLE rows (idx INTEGER, name TEXT)",
                     glob="*.jsonl",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         json.loads(line)
                         for line in open(path, encoding="utf-8").read().splitlines()
                         if line
@@ -195,7 +195,7 @@ def describe_watching_guide_positional_identity_gap():
                 Table(
                     ddl="CREATE TABLE items (name TEXT)",
                     glob="**/*.json",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
                 ),

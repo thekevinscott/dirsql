@@ -296,19 +296,19 @@ rather than waiting — an intentional, language-idiomatic difference.
 ::: code-group
 
 ```python [Python]
-Table(*, ddl: str, glob: str, extract: Callable[[str], list[dict]], strict: bool = False)
+Table(*, ddl: str, glob: str, on_file: Callable[[str], list[dict]], strict: bool = False)
 ```
 
 ```typescript [TypeScript]
-new Table({ ddl, glob, extract, strict? })
+new Table({ ddl, glob, onFile, strict? })
 // or a plain object — TableDef and Table are interchangeable:
-{ ddl: string, glob: string, extract: (path: string) => Record<string, unknown>[], strict?: boolean }
+{ ddl: string, glob: string, onFile: (path: string) => Record<string, unknown>[], strict?: boolean }
 ```
 
 ```rust [Rust]
-Table::new(ddl, glob, extract)      // extract: Fn(&str) -> Vec<Row>, infallible
-Table::try_new(ddl, glob, extract)  // extract: Fn(&str) -> Result<Vec<Row>, _>
-Table::strict(ddl, glob, extract)   // Table::new with strict = true
+Table::new(ddl, glob, on_file)      // on_file: Fn(&str) -> Vec<Row>, infallible
+Table::try_new(ddl, glob, on_file)  // on_file: Fn(&str) -> Result<Vec<Row>, _>
+Table::strict(ddl, glob, on_file)   // Table::new with strict = true
 ```
 
 :::
@@ -318,8 +318,10 @@ Maps files to table rows.
 - `ddl` — A SQLite `CREATE TABLE` statement; the table name is parsed from
   it. Table names must be unique across all tables.
 - `glob` — Glob pattern matched against root-relative paths. May contain
-  `{name}` [captures](./columns.md#glob-captures).
-- `extract` — Callback receiving the matched file's full path (the root
+  `{name}` [captures](./columns.md#glob-captures). Every table whose glob
+  matches a file receives that file's rows — a file can populate multiple
+  tables.
+- `on_file` (`on_file` / `onFile`) — Callback receiving the matched file's full path (the root
   joined with the file's relative path — absolute when `root` is absolute)
   and returning the rows that file contributes. `dirsql` never reads file
   contents itself; a callback that needs the body reads the path. Return
@@ -354,7 +356,7 @@ relative to the root. Errors never terminate the stream.
 
 ## Value types
 
-An `extract` callback (and the SQLite columns it feeds) accepts:
+An `on_file` callback (and the SQLite columns it feeds) accepts:
 
 | SQLite column | Python value | TypeScript value | Rust `Value` |
 |---|---|---|---|

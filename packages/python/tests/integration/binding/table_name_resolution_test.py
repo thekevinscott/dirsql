@@ -19,7 +19,7 @@ def describe_quoted_identifier_ddl():
         table = Table(
             ddl='CREATE TABLE "comments" (id TEXT, body TEXT, author TEXT)',
             glob="comments/**/index.jsonl",
-            extract=lambda path: [],
+            on_file=lambda path: [],
         )
         assert table.name == "comments"
 
@@ -31,7 +31,7 @@ def describe_quoted_identifier_ddl():
                 Table(
                     ddl='CREATE TABLE "comments" (id TEXT, body TEXT, author TEXT)',
                     glob="comments/**/index.jsonl",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         {
                             "id": os.path.basename(os.path.dirname(path)),
                             "body": row["body"],

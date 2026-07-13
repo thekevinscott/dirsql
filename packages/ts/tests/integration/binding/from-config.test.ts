@@ -4,7 +4,7 @@
 // come from filesystem facts: glob path captures and stat virtuals (`path`,
 // `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`). Content
 // interpretation is intentionally out of scope; for that, register a
-// programmatic Table with your own extract function.
+// programmatic Table with your own onFile function.
 
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";

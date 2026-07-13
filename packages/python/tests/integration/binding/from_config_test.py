@@ -4,7 +4,7 @@ Config-defined tables produce one row per matched file. Each row's columns
 come from filesystem facts: glob path captures and stat virtuals (`path`,
 `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`). Content
 interpretation is intentionally out of scope; for that, register a
-programmatic Table with your own extract function.
+programmatic Table with your own on_file function.
 """
 
 import os

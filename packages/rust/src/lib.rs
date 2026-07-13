@@ -60,7 +60,7 @@ pub type Row = HashMap<String, Value>;
 pub type WatchStream = UnboundedReceiver<RowEvent>;
 
 type BoxError = Box<dyn StdError + Send + Sync + 'static>;
-type ExtractFn = dyn Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static;
+type OnFileFn = dyn Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static;
 
 #[derive(Debug, Error)]
 pub enum DirSqlError {
@@ -103,8 +103,8 @@ pub enum DirSqlError {
     #[error("duplicate table name: {0}")]
     DuplicateTable(String),
 
-    #[error("extract error for {path}: {message}")]
-    Extract { path: String, message: String },
+    #[error("on-file error for {path}: {message}")]
+    OnFile { path: String, message: String },
 
     #[error("config error: {message}")]
     Config {
@@ -159,17 +159,17 @@ impl DirSqlError {
 
 pub type Result<T> = std::result::Result<T, DirSqlError>;
 
-/// A single table definition: DDL + glob + extract callback.
+/// A single table definition: DDL + glob + on_file callback.
 ///
-/// The `extract` callback receives the **absolute filesystem path** of each
+/// The `on_file` callback receives the **absolute filesystem path** of each
 /// matched file and returns the rows that file contributes. dirsql does not
 /// read file contents itself; a callback that needs the file body reads it
 /// inside the closure (`std::fs::read_to_string(path)` etc.). Callbacks that
 /// derive columns purely from the path or from filesystem facts never touch
 /// the file at all.
 ///
-/// Use [`Table::new`] for infallible extractors or [`Table::try_new`] when the
-/// extractor can itself fail (bad file content, IO errors inside the callback,
+/// Use [`Table::new`] for infallible callbacks or [`Table::try_new`] when the
+/// callback can itself fail (bad file content, IO errors inside the callback,
 /// etc.). [`Table::strict`] rejects rows that don't match the DDL columns
 /// exactly.
 #[derive(Clone)]
@@ -177,36 +177,36 @@ pub struct Table {
     pub ddl: String,
     pub glob: String,
     pub strict: bool,
-    extract: Arc<ExtractFn>,
+    on_file: Arc<OnFileFn>,
 }
 
 impl Table {
-    pub fn new<F>(ddl: impl Into<String>, glob: impl Into<String>, extract: F) -> Self
+    pub fn new<F>(ddl: impl Into<String>, glob: impl Into<String>, on_file: F) -> Self
     where
         F: Fn(&str) -> Vec<Row> + Send + Sync + 'static,
     {
         Self::try_new(ddl, glob, move |path| {
-            Ok::<Vec<Row>, BoxError>(extract(path))
+            Ok::<Vec<Row>, BoxError>(on_file(path))
         })
     }
 
-    pub fn strict<F>(ddl: impl Into<String>, glob: impl Into<String>, extract: F) -> Self
+    pub fn strict<F>(ddl: impl Into<String>, glob: impl Into<String>, on_file: F) -> Self
     where
         F: Fn(&str) -> Vec<Row> + Send + Sync + 'static,
     {
-        let mut table = Self::new(ddl, glob, extract);
+        let mut table = Self::new(ddl, glob, on_file);
         table.strict = true;
         table
     }
 
-    pub fn try_new<F>(ddl: impl Into<String>, glob: impl Into<String>, extract: F) -> Self
+    pub fn try_new<F>(ddl: impl Into<String>, glob: impl Into<String>, on_file: F) -> Self
     where
         F: Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static,
     {
         Self {
             ddl: ddl.into(),
             glob: glob.into(),
-            extract: Arc::new(extract),
+            on_file: Arc::new(on_file),
             strict: false,
         }
     }
@@ -223,7 +223,7 @@ struct DirSqlInner {
     /// scan and the `path` column — stays byte-for-byte unchanged.
     watch_root: PathBuf,
     matcher: TableMatcher,
-    extract_map: HashMap<String, Arc<ExtractFn>>,
+    on_file_map: HashMap<String, Arc<OnFileFn>>,
     strict_map: HashMap<String, bool>,
     watcher: Mutex<Option<Watcher>>,
     /// Locks out [`DirSQL::watch`] once [`DirSQL::poll_events`] has run:
@@ -350,7 +350,7 @@ impl DirSQL {
     }
 
     /// Split-phase wait helper used by async bindings that cannot safely
-    /// invoke the `extract` callback off the host thread (e.g. the napi-rs
+    /// invoke the `on_file` callback off the host thread (e.g. the napi-rs
     /// TypeScript binding, where JS callbacks must run on the main JS
     /// thread). Blocks up to `timeout` for raw file events and returns them
     /// unprocessed. Pair with [`apply_file_events`](Self::apply_file_events)
@@ -376,9 +376,9 @@ impl DirSQL {
         Ok(events)
     }
 
-    /// Apply a batch of raw file events through the extract/DB update
+    /// Apply a batch of raw file events through the on_file/DB update
     /// pipeline. Counterpart to [`wait_file_events`](Self::wait_file_events).
-    /// Runs the `extract` callback inline, so the caller must invoke this on
+    /// Runs the `on_file` callback inline, so the caller must invoke this on
     /// a thread where that callback is safe to call (the JS main thread for
     /// the TypeScript binding).
     #[doc(hidden)]
@@ -454,18 +454,33 @@ impl DirSQL {
             return Vec::new();
         }
 
-        let table_name = match self.inner.matcher.match_file(&rel_path_buf) {
-            Some(name) => name.to_string(),
-            None => return Vec::new(),
-        };
+        // Fan-out: dispatch the event to every table whose glob matches, and
+        // concatenate the resulting row events. Cross-table event order is
+        // unspecified. An `on_file` failure produces an error event for that
+        // table only; the other matching tables still process the event.
+        let matches = self.inner.matcher.match_all(&rel_path_buf);
+        if matches.is_empty() {
+            return Vec::new();
+        }
         let rel_path = rel_path_buf.to_string_lossy().to_string();
 
-        match event {
-            FileEvent::Deleted(_) => self.handle_delete(&table_name, &rel_path),
-            FileEvent::Created(_) | FileEvent::Modified(_) => {
-                self.handle_upsert(&table_name, &abs_path, &rel_path)
+        let mut events = Vec::new();
+        for m in matches {
+            match &event {
+                FileEvent::Deleted(_) => {
+                    events.extend(self.handle_delete(&m.table_name, &rel_path));
+                }
+                FileEvent::Created(_) | FileEvent::Modified(_) => {
+                    events.extend(self.handle_upsert(
+                        &m.table_name,
+                        &abs_path,
+                        &rel_path,
+                        &m.captures,
+                    ));
+                }
             }
         }
+        events
     }
 
     fn handle_delete(&self, table: &str, rel_path: &str) -> Vec<RowEvent> {
@@ -491,7 +506,13 @@ impl DirSQL {
         differ::diff(table, Some(&old_rows), None, rel_path)
     }
 
-    fn handle_upsert(&self, table: &str, abs_path: &Path, rel_path: &str) -> Vec<RowEvent> {
+    fn handle_upsert(
+        &self,
+        table: &str,
+        abs_path: &Path,
+        rel_path: &str,
+        captures: &HashMap<String, String>,
+    ) -> Vec<RowEvent> {
         // The path may have vanished between the watcher event and now, or be a
         // directory (a `mkdir` under the root matches a `**/*` glob). Only
         // regular files become rows — mirror the initial scan, which skips
@@ -503,22 +524,16 @@ impl DirSQL {
             Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
         }
 
-        let extract = match self.inner.extract_map.get(table) {
+        let on_file = match self.inner.on_file_map.get(table) {
             Some(e) => e,
             None => return Vec::new(),
         };
 
-        let raw_rows = match extract(&abs_path.to_string_lossy()) {
+        let raw_rows = match on_file(&abs_path.to_string_lossy()) {
             Ok(r) => r,
             Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
         };
 
-        let captures = self
-            .inner
-            .matcher
-            .match_file_with_captures(Path::new(rel_path))
-            .map(|m| m.captures)
-            .unwrap_or_default();
         let stat = compute_stat_virtuals(rel_path, abs_path);
 
         let strict = *self.inner.strict_map.get(table).unwrap_or(&false);
@@ -535,7 +550,7 @@ impl DirSQL {
                 Ok(cols) => cols,
                 Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
             };
-            let raw_rows = merge_filesystem_facts(raw_rows, &captures, &stat, &declared_columns);
+            let raw_rows = merge_filesystem_facts(raw_rows, captures, &stat, &declared_columns);
             let mut new_rows = Vec::with_capacity(raw_rows.len());
             for raw in &raw_rows {
                 match db.normalize_row(table, raw, strict) {
@@ -602,10 +617,10 @@ impl DirSQL {
     /// off the host's main thread: validates DDL, compiles the matcher, walks
     /// the directory, opens the persistent cache (when enabled) and decides
     /// which files need re-parsing. Does **not** read file contents and does
-    /// **not** invoke `extract`.
+    /// **not** invoke `on_file`.
     ///
     /// Pair with [`finish_build`](Self::finish_build) to complete construction
-    /// on a thread where the `extract` callback can safely execute (e.g. the
+    /// on a thread where the `on_file` callback can safely execute (e.g. the
     /// JS main thread for the napi-rs TypeScript binding).
     #[doc(hidden)]
     pub fn prepare_resolved(resolved: ResolvedBuild) -> Result<PreparedBuild> {
@@ -674,10 +689,10 @@ impl DirSQL {
     /// Split-phase construction — part 2. Consumes the intermediate state from
     /// [`prepare_resolved`](Self::prepare_resolved): creates the SQLite
     /// database (or wires up the persistent on-disk one), runs each table's
-    /// DDL, invokes each file's `extract` callback, and inserts the
+    /// DDL, invokes each file's `on_file` callback, and inserts the
     /// resulting rows.
     ///
-    /// Must be invoked on a thread where the `extract` closures can safely
+    /// Must be invoked on a thread where the `on_file` closures can safely
     /// run. For the napi-rs binding that is the JS main thread.
     #[doc(hidden)]
     pub fn finish_build(prepared: PreparedBuild) -> Result<Self> {
@@ -717,7 +732,7 @@ impl DirSQL {
                 })?;
         }
 
-        let mut extract_map: HashMap<String, Arc<ExtractFn>> = HashMap::new();
+        let mut on_file_map: HashMap<String, Arc<OnFileFn>> = HashMap::new();
         let mut strict_map: HashMap<String, bool> = HashMap::new();
         let mut ddl_map: HashMap<String, String> = HashMap::new();
 
@@ -730,7 +745,7 @@ impl DirSQL {
             if !table_exists(&db, &table_name)? {
                 db.create_table(&table.ddl)?;
             }
-            extract_map.insert(table_name.clone(), table.extract);
+            on_file_map.insert(table_name.clone(), table.on_file);
             strict_map.insert(table_name.clone(), table.strict);
             ddl_map.insert(table_name, table.ddl);
         }
@@ -742,7 +757,7 @@ impl DirSQL {
             for (rel_path, table_name) in deleted {
                 db.delete_rows_by_file(table_name, rel_path)
                     .map_err(map_db_error)?;
-                cache_delete_file(db.conn(), rel_path).map_err(DirSqlError::sqlite)?;
+                cache_delete_file(db.conn(), rel_path, table_name).map_err(DirSqlError::sqlite)?;
             }
         }
 
@@ -753,21 +768,20 @@ impl DirSQL {
             stat,
         } in scanned_files
         {
-            let extract = extract_map.get(&table_name).ok_or_else(|| {
-                DirSqlError::Ddl(format!("missing extract function for table {table_name}"))
+            let on_file = on_file_map.get(&table_name).ok_or_else(|| {
+                DirSqlError::Ddl(format!("missing on-file function for table {table_name}"))
             })?;
             let strict = *strict_map.get(&table_name).unwrap_or(&false);
             let abs_path = root.join(&rel_path);
             let raw_rows =
-                extract(&abs_path.to_string_lossy()).map_err(|e| DirSqlError::Extract {
+                on_file(&abs_path.to_string_lossy()).map_err(|e| DirSqlError::OnFile {
                     path: rel_path.clone(),
                     message: e.to_string(),
                 })?;
 
-            let captures = matcher
-                .match_file_with_captures(Path::new(&rel_path))
-                .map(|m| m.captures)
-                .unwrap_or_default();
+            // Captures are per-glob: use the captures belonging to THIS
+            // entry's table, not a first-match lookup.
+            let captures = matcher.captures_for(Path::new(&rel_path), &table_name);
             let stat_virtuals = compute_stat_virtuals(&rel_path, &abs_path);
             let declared_columns = db.get_table_columns(&table_name).map_err(map_db_error)?;
             let raw_rows =
@@ -817,7 +831,7 @@ impl DirSQL {
                 root,
                 watch_root,
                 matcher,
-                extract_map,
+                on_file_map,
                 strict_map,
                 watcher: Mutex::new(None),
                 poll_used: AtomicBool::new(false),
@@ -856,7 +870,7 @@ pub struct DirSQLBuilder {
     tables: Vec<Table>,
     ignore: Vec<String>,
     extensions: Vec<Extension>,
-    config_path: Option<PathBuf>,
+    config_paths: Vec<PathBuf>,
     suppress_config_extensions: bool,
     persist: bool,
     persist_path: Option<PathBuf>,
@@ -921,8 +935,13 @@ impl DirSQLBuilder {
     /// index root: with no explicit [`root`](Self::root), the index roots at the
     /// process cwd. Relative `persist_path` / `[[dirsql.extension]]` paths still
     /// resolve against the config's parent directory.
+    ///
+    /// Call repeatedly to load several configs: their `[[table]]`, `ignore`, and
+    /// `[[dirsql.extension]]` entries accumulate in call order, and each config's
+    /// `on-file` hooks run from that config file's own directory under its own
+    /// `[dirsql].hook-timeout`. A single call is identical to before.
     pub fn config(mut self, config_path: impl Into<PathBuf>) -> Self {
-        self.config_path = Some(config_path.into());
+        self.config_paths.push(config_path.into());
         self
     }
 
@@ -968,7 +987,7 @@ impl DirSQLBuilder {
             mut tables,
             mut ignore,
             mut extensions,
-            config_path,
+            config_paths,
             suppress_config_extensions,
             persist,
             persist_path,
@@ -985,12 +1004,11 @@ impl DirSQLBuilder {
 
         // The config layer is an ordered list of entries, each carrying its
         // loaded `config`, its `config_dir` (where `on-file` hooks run and the
-        // base for extension path resolution), and its `hook_timeout`. Every
-        // caller supplies at most one config, so the list holds 0 or 1 entries
-        // and the in-order merge below is byte-for-byte identical to a single
-        // pass.
+        // base for extension path resolution), and its `hook_timeout`. Configs
+        // accumulate in `.config()` call order; a single entry makes the in-order
+        // merge below byte-for-byte identical to a single pass.
         let mut config_entries: Vec<ResolvedConfigEntry> = Vec::new();
-        if let Some(ref cfg_path) = config_path {
+        for cfg_path in &config_paths {
             let cfg = config::load_config(cfg_path).map_err(DirSqlError::config)?;
 
             let cfg_parent = cfg_path
@@ -1140,7 +1158,9 @@ pub struct TrustedFile {
 
 struct PersistContext {
     db: Db,
-    cached: HashMap<String, CachedFile>,
+    /// Cached file bookkeeping keyed by `(rel_path, table_name)` — a file may
+    /// be cached under several tables under fan-out.
+    cached: HashMap<(String, String), CachedFile>,
     expected_meta: HashMap<String, String>,
 }
 
@@ -1155,7 +1175,7 @@ fn compile_matcher(
         let table_name =
             parse_table_name(&table.ddl).ok_or_else(|| DirSqlError::Ddl(table.ddl.clone()))?;
         // Validate up front so a poisoned name from a stored cache or a
-        // would-be-injection DDL can't propagate into `extract_map`,
+        // would-be-injection DDL can't propagate into `on_file_map`,
         // `strict_map`, or any format!()-built SQL down the line.
         crate::db::validate_identifier(&table_name).map_err(map_db_error)?;
         if seen.insert(table_name.clone(), ()).is_some() {
@@ -1255,18 +1275,20 @@ fn reconcile_scan(
 ) -> Result<(Vec<ScannedFile>, Vec<TrustedFile>, Vec<(String, String)>)> {
     let mut to_parse = Vec::new();
     let mut trusted = Vec::new();
-    let mut seen_paths: std::collections::HashSet<String> =
+    // Keyed by (rel_path, table_name): under fan-out one file may be scanned
+    // for several tables, and each pair is trusted/deleted independently.
+    let mut seen: std::collections::HashSet<(String, String)> =
         std::collections::HashSet::with_capacity(scanned.len());
 
     for (path, table_name) in scanned {
         let rel_path = relative_path(root, &path);
-        seen_paths.insert(rel_path.clone());
+        seen.insert((rel_path.clone(), table_name.clone()));
 
         let stat = fs.stat(&path)?;
 
-        let cached = ctx.cached.get(&rel_path);
+        let cached = ctx.cached.get(&(rel_path.clone(), table_name.clone()));
         let trust = match cached {
-            Some(c) if c.table_name == table_name && c.stat == stat => {
+            Some(c) if c.stat == stat => {
                 // Stat matches. Outside the racy window? Trust the cache.
                 if c.snapshot_ns > stat.mtime_ns {
                     true
@@ -1296,9 +1318,9 @@ fn reconcile_scan(
     }
 
     let mut deleted = Vec::new();
-    for (rel_path, cf) in &ctx.cached {
-        if !seen_paths.contains(rel_path) {
-            deleted.push((rel_path.clone(), cf.table_name.clone()));
+    for (rel_path, table_name) in ctx.cached.keys() {
+        if !seen.contains(&(rel_path.clone(), table_name.clone())) {
+            deleted.push((rel_path.clone(), table_name.clone()));
         }
     }
 
@@ -1368,7 +1390,7 @@ fn relative_path(root: &Path, path: &Path) -> String {
 /// entirely from filesystem facts: glob path captures and stat virtuals
 /// (`path`, `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`) are
 /// injected by the core pipeline ([`merge_filesystem_facts`]). Its synthesized
-/// extract emits a single empty row per file; the fact-injection layer fills it
+/// on_file emits a single empty row per file; the fact-injection layer fills it
 /// in.
 ///
 /// A table with an `on-file` command instead runs that command once per matched
@@ -1396,7 +1418,7 @@ fn build_tables_from_config(
                 let root = root.to_path_buf();
                 // `Table::new` (infallible): `run_on_file` isolates its own
                 // errors to an empty row set so one bad file never aborts the
-                // scan (the scan aborts on an extract `Err`).
+                // scan (the scan aborts on an on_file `Err`).
                 Table::new(
                     table_cfg.ddl.clone(),
                     table_cfg.glob.clone(),
@@ -1589,10 +1611,10 @@ fn stat_virtuals(
 }
 
 /// Merge filesystem-fact columns (stat virtuals + glob captures) into each
-/// raw row produced by an extract closure. Auto-injected keys are filtered
+/// raw row produced by an on_file closure. Auto-injected keys are filtered
 /// to those declared in `declared_columns`, so a strict-mode table with a
 /// minimal DDL is not broken by virtuals it didn't ask for. User-provided
-/// values in `raw_rows` win over auto-injected values: an extract that
+/// values in `raw_rows` win over auto-injected values: an on_file that
 /// explicitly emits e.g. `path` is honored.
 fn merge_filesystem_facts(
     raw_rows: Vec<Row>,
@@ -1956,7 +1978,7 @@ mod internal_tests {
         assert!(!stat.contains_key(STAT_EXT));
     }
 
-    /// A `ScannedFile` whose table has no registered extract function must
+    /// A `ScannedFile` whose table has no registered on_file function must
     /// error rather than be silently skipped.
     #[test]
     fn finish_build_errors_on_ghost_scanned_file() {
@@ -2156,7 +2178,7 @@ mod internal_tests {
 
         let mut cached = HashMap::new();
         cached.insert(
-            "a.txt".to_string(),
+            ("a.txt".to_string(), "t".to_string()),
             CachedFile {
                 rel_path: "a.txt".into(),
                 table_name: "t".into(),
@@ -2192,7 +2214,7 @@ mod internal_tests {
 
         let mut cached = HashMap::new();
         cached.insert(
-            "b.txt".to_string(),
+            ("b.txt".to_string(), "t".to_string()),
             CachedFile {
                 rel_path: "b.txt".into(),
                 table_name: "t".into(),
@@ -2361,7 +2383,7 @@ mod internal_tests {
         // The old-row snapshot succeeds but the delete itself fails: a
         // trigger aborts every DELETE on items.
         let (_dir, db, abs, rel) = upsert_fixture();
-        let events = db.handle_upsert("items", &abs, &rel);
+        let events = db.handle_upsert("items", &abs, &rel, &HashMap::new());
         assert_eq!(events.len(), 1, "fixture insert failed: {events:?}");
         {
             let guard = db.inner.db.lock().unwrap();
@@ -2385,7 +2407,7 @@ mod internal_tests {
     fn handle_upsert_surfaces_db_poison() {
         let (_dir, db, abs, rel) = upsert_fixture();
         poison(&db.inner.db);
-        let events = db.handle_upsert("items", &abs, &rel);
+        let events = db.handle_upsert("items", &abs, &rel, &HashMap::new());
         assert_single_lock_error(&events);
     }
 
@@ -2405,7 +2427,7 @@ mod internal_tests {
                 )
                 .unwrap();
         }
-        let events = db.handle_upsert("items", &abs, &rel);
+        let events = db.handle_upsert("items", &abs, &rel, &HashMap::new());
         assert_eq!(events.len(), 1, "expected one error event: {events:?}");
         let dbg = format!("{:?}", events[0]);
         assert!(dbg.contains("Error"), "expected an Error event: {dbg}");
@@ -2432,7 +2454,7 @@ mod internal_tests {
         )
         .unwrap();
 
-        let events = db.handle_upsert("files", &subdir, "subdir");
+        let events = db.handle_upsert("files", &subdir, "subdir", &HashMap::new());
         assert!(events.is_empty(), "a directory must not produce row events");
         assert!(
             db.query("SELECT * FROM files").unwrap().is_empty(),
@@ -2444,20 +2466,20 @@ mod internal_tests {
     fn handle_upsert_returns_empty_when_file_vanished() {
         let (dir, db, _abs, _rel) = upsert_fixture();
         let missing = dir.path().join("gone.txt");
-        let events = db.handle_upsert("items", &missing, "gone.txt");
+        let events = db.handle_upsert("items", &missing, "gone.txt", &HashMap::new());
         assert!(events.is_empty(), "vanished file must produce no events");
     }
 
     #[test]
     fn handle_upsert_returns_empty_for_unknown_table() {
         let (_dir, db, abs, rel) = upsert_fixture();
-        let events = db.handle_upsert("not_a_table", &abs, &rel);
+        let events = db.handle_upsert("not_a_table", &abs, &rel, &HashMap::new());
         assert!(events.is_empty(), "unknown table must produce no events");
     }
 
     #[test]
     fn handle_upsert_surfaces_normalize_error_in_strict_mode() {
-        // The extract emits an undeclared `extra` column, so the strict-mode
+        // The on_file emits an undeclared `extra` column, so the strict-mode
         // normalize rejects it with a SchemaMismatch.
         let dir = TempDir::new().unwrap();
         let abs = dir.path().join("a.txt");
@@ -2479,7 +2501,7 @@ mod internal_tests {
         )
         .unwrap();
 
-        let events = db.handle_upsert("items", &abs, "a.txt");
+        let events = db.handle_upsert("items", &abs, "a.txt", &HashMap::new());
         assert_eq!(events.len(), 1, "expected one error event: {events:?}");
         let dbg = format!("{:?}", events[0]);
         assert!(dbg.contains("Error"), "expected an Error event: {dbg}");
@@ -2631,7 +2653,7 @@ mod internal_tests {
     #[test]
     fn handle_upsert_inserts_and_diffs_rows() {
         let (_dir, db, abs, rel) = upsert_fixture();
-        let events = db.handle_upsert("items", &abs, &rel);
+        let events = db.handle_upsert("items", &abs, &rel, &HashMap::new());
         assert_eq!(events.len(), 1, "got: {events:?}");
         assert!(matches!(&events[0], RowEvent::Insert { .. }));
 
@@ -2641,7 +2663,7 @@ mod internal_tests {
     }
 
     #[test]
-    fn handle_upsert_surfaces_extract_error() {
+    fn handle_upsert_surfaces_on_file_error() {
         let dir = TempDir::new().unwrap();
         let abs = dir.path().join("a.txt");
         let fake = FakeFs::with_stat(abs.clone(), fake_stat());
@@ -2656,7 +2678,7 @@ mod internal_tests {
             Arc::new(fake),
         )
         .unwrap();
-        let events = db.handle_upsert("items", &abs, "a.txt");
+        let events = db.handle_upsert("items", &abs, "a.txt", &HashMap::new());
         assert_eq!(events.len(), 1, "got: {events:?}");
         let dbg = format!("{:?}", events[0]);
         assert!(dbg.contains("Error"), "got: {dbg}");
@@ -2768,7 +2790,7 @@ mod internal_tests {
         let fake = FakeFs::with_stat(abs.clone(), stat.clone());
         let mut cached = HashMap::new();
         cached.insert(
-            "a.txt".to_string(),
+            ("a.txt".to_string(), "t".to_string()),
             CachedFile {
                 rel_path: "a.txt".into(),
                 table_name: "t".into(),
@@ -2800,7 +2822,7 @@ mod internal_tests {
         let fake = FakeFs::with_stat(abs.clone(), stat.clone());
         let mut cached = HashMap::new();
         cached.insert(
-            "a.txt".to_string(),
+            ("a.txt".to_string(), "other".to_string()),
             CachedFile {
                 rel_path: "a.txt".into(),
                 table_name: "other".into(),
@@ -2826,7 +2848,7 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let mut cached = HashMap::new();
         cached.insert(
-            "gone.txt".to_string(),
+            ("gone.txt".to_string(), "t".to_string()),
             CachedFile {
                 rel_path: "gone.txt".into(),
                 table_name: "t".into(),
@@ -2911,7 +2933,7 @@ mod internal_tests {
         )
         .unwrap();
         assert_eq!(tables.len(), 2);
-        assert_eq!((tables[0].extract)("/whatever").unwrap().len(), 1);
+        assert_eq!((tables[0].on_file)("/whatever").unwrap().len(), 1);
         assert!(tables[1].strict, "on-file table preserves strict flag");
     }
 
@@ -2938,7 +2960,7 @@ mod internal_tests {
         // The passed timeout is generous, so the on-file command runs and its
         // row is produced -- proving the argument path is live.
         assert_eq!(
-            (tables[0].extract)(&abs.to_string_lossy()).unwrap().len(),
+            (tables[0].on_file)(&abs.to_string_lossy()).unwrap().len(),
             1
         );
     }

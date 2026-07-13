@@ -33,7 +33,7 @@ comments/t1/c2.json    # {"body": "nice post", "author": "bob"}
 comments/t2/c1.json    # {"body": "following up", "author": "alice"}
 ```
 
-Unlike a config-file table, a programmatic table takes an `extract`
+Unlike a config-file table, a programmatic table takes an `on_file`
 callback — your code reads each matched file and returns its rows, with
 [glob captures and stat columns](../reference/columns.md) merged on
 automatically (here, `{thread}` from the path):
@@ -47,7 +47,7 @@ import json
 from dirsql import DirSQL, Table
 
 
-def extract(path: str) -> list[dict]:
+def on_file(path: str) -> list[dict]:
     with open(path, encoding="utf-8") as f:
         return [json.load(f)]
 
@@ -59,7 +59,7 @@ async def main() -> None:
             Table(
                 ddl="CREATE TABLE comments (thread TEXT, author TEXT, body TEXT)",
                 glob="comments/{thread}/*.json",
-                extract=extract,
+                on_file=on_file,
             )
         ],
     )
@@ -81,7 +81,7 @@ const db = new DirSQL({
     {
       ddl: "CREATE TABLE comments (thread TEXT, author TEXT, body TEXT)",
       glob: "comments/{thread}/*.json",
-      extract: (path) => [JSON.parse(readFileSync(path, "utf8"))],
+      onFile: (path) => [JSON.parse(readFileSync(path, "utf8"))],
     },
   ],
 });
@@ -99,7 +99,7 @@ use std::collections::HashMap;
 
 use dirsql::{DirSQL, Table, Value};
 
-fn extract(path: &str) -> Vec<HashMap<String, Value>> {
+fn on_file(path: &str) -> Vec<HashMap<String, Value>> {
     let raw = std::fs::read_to_string(path).unwrap_or_default();
     let Ok(serde_json::Value::Object(obj)) = serde_json::from_str(&raw) else {
         return vec![];
@@ -119,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .table(Table::new(
             "CREATE TABLE comments (thread TEXT, author TEXT, body TEXT)",
             "comments/{thread}/*.json",
-            extract,
+            on_file,
         ))
         .build()?;
 

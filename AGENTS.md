@@ -25,6 +25,8 @@ Default to no comments. Only add one when the WHY is non-obvious -- a hidden con
 
 ## CI Workflows
 
+**Every CI check emits actionable fix instructions on failure.** A failing check must tell the contributor exactly what to change -- the file, command, or trailer to add or edit -- not merely which rule was violated. When a check can detect a *near-miss* (a fix was attempted but malformed), it names the specific defect and how to correct it rather than falling through to a generic "not satisfied" message (e.g. the `changelog-gate` reports a `skip-changelog:` line that git did not parse as a trailer, instead of the generic "no changelog entry"; dirsql#582).
+
 **CI logic lives in scripts, not workflow YAML.** `run:` / `github-script` steps stay trivial glue -- check out, set up a toolchain, invoke one command. Anything with iteration, `case` dispatch, conditionals, or text-munging moves to a check in the `internals/checks` uv package (a click group, one subcommand per check -- see `internals/checks/src/checks/`), invoked as a one-liner (`uv run --project internals/checks dirsql-checks <check>`), and carries **colocated unit tests** (the same testing-conventions standard as the rest of the tree -- `foo.py` ↔ `foo_test.py`). Those tests run under `conventions.yml`'s `internals-checks` job (`unit-coverage` enforces a 100% floor; see "Enforcing Colocation" below for the full gate list). Inline workflow logic is untestable, un-runnable locally, and silently duplicated across runners; a script is none of those.
 
 ### Reusable-workflow gates (testing-conventions): adoption & debugging
@@ -146,7 +148,7 @@ The exemption count is again **zero**. The three-tier conformance work (#517) re
 
 The rung above coverage is the **`unit mutation`** gate (#235 / epic #231): testing-conventions mutates the source and fails on any **surviving** mutant -- one no unit test caught. Engines: **cosmic-ray** (Python), **Stryker** (TypeScript), **cargo-mutants** (Rust). It is **PR-only and diff-scoped** (`--base <base.sha>...HEAD`): only the lines a PR added/modified are mutated, so each PR's surface stays bounded. A PR that changes no SDK source has nothing to mutate and passes trivially.
 
-The gate reruns the real unit suite per mutant, so it needs the native bindings built. **TypeScript and Rust mutation now run inside the reusable workflow** (`.github/workflows/conventions.yml`): the upstream monorepo primitive -- #277 derives the package root from `path`, #279 makes the mutation job install/build from that derived root -- lets the reusable job build the native artifact itself (ts via `build_command: pnpm build` + `rust_toolchain: true`; rust via cargo-mutants, which builds the crate itself). This retired the bespoke `ts-mutation.yml` / `rust-mutation.yml` (#417). The CLI **self-provisions Stryker and cargo-mutants**, so there are no mutation engine deps or config in this repo.
+The gate reruns the real unit suite per mutant, so it needs the native bindings built. **TypeScript and Rust mutation now run inside the reusable workflow** (`.github/workflows/conventions.yml`): the upstream monorepo primitive -- #277 derives the package root from `source` (the caller input formerly named `path`, renamed upstream; dirsql#577), #279 makes the mutation job install/build from that derived root -- lets the reusable job build the native artifact itself (ts via `build_command: pnpm build` + `rust_toolchain: true`; rust via cargo-mutants, which builds the crate itself). This retired the bespoke `ts-mutation.yml` / `rust-mutation.yml` (#417). The CLI **self-provisions Stryker and cargo-mutants**, so there are no mutation engine deps or config in this repo.
 
 **Python mutation now runs in the reusable workflow too** (`conventions.yml`, `python-sdk` gates: `mutation`): the testing-conventions wheel bundles the cosmic-ray adapter as a runtime dependency, so the reusable mutation job resolves the engine from the same `python_env=uv` (`uv sync`) environment it provisions for coverage — no separate install and no bespoke workflow. This retired `python-mutation.yml` (#426). All three SDKs' `mutation` gates now run inside `conventions.yml`.
 
@@ -276,6 +278,8 @@ skip-changelog: <reason>
 
 The reason is logged to CI and stays in git history, so the decision is auditable. Use this sparingly; when in doubt, write the changelog entry.
 
+**`skip-changelog:` must be a real git trailer** -- in the **last** paragraph of the commit message, with **no blank line** separating it from the other trailers (`Co-Authored-By:`, `Claude-Session:`). A blank line splits it into its own paragraph, git stops treating it as a trailer, and the gate silently sees no bypass (it now reports this specific malformation rather than the generic "no entry" -- dirsql#582). Correct: `skip-changelog: <reason>` immediately above/below the other trailers in one contiguous block.
+
 Every entry goes under `## [Unreleased]`, categorized per [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`.
 
 **`MIGRATIONS.md` is additionally required when a PR:**
@@ -327,6 +331,11 @@ Run `cargo bench -p dirsql` after significant changes to the Rust codebase. Not 
 
 ## Git and GitHub Workflows
 
+### PR Sizing and Issues
+
+- **Every PR is M or smaller.** A change larger than M is broken into a sequence of smaller PRs, each independently reviewable and mergeable. Size by review surface, not raw line count -- a mechanical rename spanning many files can be M, while a subtle core change of far fewer lines may not be.
+- **Every PR is accompanied by a GitHub issue it auto-closes.** Put a closing keyword (`Fixes #<n>` / `Closes #<n>`) in the PR body so the issue closes on merge; file the issue first if one does not exist yet.
+
 ### Merge Conflict Resolution
 
 **Merge conflicts on in-flight PRs are the highest priority.** When asked to resolve a merge conflict:
@@ -339,7 +348,14 @@ Run `cargo bench -p dirsql` after significant changes to the Rust codebase. Not 
 
 ### PR Monitoring
 
-Merge gating is via **pr-monitor**: any red CI check blocks the merge, and there is no named-required-checks allowlist in branch protection. So *any* CI/workflow change — renaming, adding, or removing a job or check in any `.github/workflows/*.yml` — needs no branch-protection coordination and can't orphan a required check. Don't flag that concern.
+Merge gating is via **pr-monitor** (`thekevinscott/pr-monitor@v1`, `.github/workflows/pr-monitor.yml`): the **`CI Gate`** check is an *aggregator*, not a test — it polls every *other* workflow run on the PR and is the single check the merge waits on. Any red among the others turns `CI Gate` red; there is no named-required-checks allowlist in branch protection, so *any* CI/workflow change (renaming/adding/removing a job or check in any `.github/workflows/*.yml`) needs no branch-protection coordination and can't orphan a required check — don't flag that concern.
+
+**When `CI Gate` is red, read its log's last line before acting** — it disambiguates two very different causes:
+
+- `Non-passing runs: ["<Workflow> (failure | startup_failure)"]` → a **real** red in `<Workflow>`; `CI Gate` is only reporting it. A `startup_failure` produces *no separate check-run*, so `CI Gate` can look like the **only** red while masking the actual failure (e.g. a `conventions.yml` input the `@v0` tag no longer defines). Fix/re-run **that** workflow — re-triggering `CI Gate` alone won't help.
+- a **timeout** (it waits up to 20 min for slow jobs like Release Precheck) or "still in progress" → a flake. **Re-trigger `CI Gate`** (re-run the PR Monitor run, or push any commit) once the underlying jobs have finished; it then reads them green. This is the common "`CI Gate` is the lone red → re-run → all green" case.
+
+A green `CI Gate` therefore means the whole PR is green.
 
 When monitoring PRs to get them across the finish line (shepherding to green):
 

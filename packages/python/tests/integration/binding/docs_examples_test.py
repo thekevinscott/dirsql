@@ -40,12 +40,12 @@ def _blog_tables():
         Table(
             ddl="CREATE TABLE posts (title TEXT, author TEXT)",
             glob="posts/*.json",
-            extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+            on_file=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
         Table(
             ddl="CREATE TABLE authors (id TEXT, name TEXT)",
             glob="authors/*.json",
-            extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+            on_file=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
     ]
 
@@ -84,7 +84,7 @@ def describe_getting_started():
 def describe_tables_guide():
     @pytest.mark.asyncio
     async def it_matches_tables_guide_single_object_json(tmp_dir):
-        """Docs: extract reads the file at `path` for single-object JSON."""
+        """Docs: on_file reads the file at `path` for single-object JSON."""
         os.makedirs(os.path.join(tmp_dir, "data"), exist_ok=True)
         with open(os.path.join(tmp_dir, "data", "item.json"), "w") as f:
             json.dump({"name": "widget", "value": 42}, f)
@@ -95,7 +95,7 @@ def describe_tables_guide():
                 Table(
                     ddl="CREATE TABLE items (name TEXT, value INTEGER)",
                     glob="data/*.json",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
                 ),
@@ -121,7 +121,7 @@ def describe_tables_guide():
                 Table(
                     ddl="CREATE TABLE comments (body TEXT, author TEXT)",
                     glob="comments/**/index.jsonl",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         json.loads(line)
                         for line in open(path, encoding="utf-8").read().splitlines()
                     ],
@@ -136,7 +136,7 @@ def describe_tables_guide():
 
     @pytest.mark.asyncio
     async def it_matches_tables_guide_derive_from_path(tmp_dir):
-        """Docs: extract values from the file path (os.path.dirname)."""
+        """Docs: on_file values from the file path (os.path.dirname)."""
         os.makedirs(os.path.join(tmp_dir, "comments", "abc"), exist_ok=True)
         with open(os.path.join(tmp_dir, "comments", "abc", "index.jsonl"), "w") as f:
             f.write(json.dumps({"body": "hello"}) + "\n")
@@ -147,7 +147,7 @@ def describe_tables_guide():
                 Table(
                     ddl="CREATE TABLE comments (id TEXT, body TEXT)",
                     glob="comments/**/index.jsonl",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         {
                             "id": os.path.basename(os.path.dirname(path)),
                             "body": json.loads(line)["body"],
@@ -171,7 +171,7 @@ def describe_tables_guide():
         with open(os.path.join(tmp_dir, "published.json"), "w") as f:
             json.dump({"title": "Published Post", "draft": False}, f)
 
-        def extract(path):
+        def on_file(path):
             data = json.loads(open(path, encoding="utf-8").read())
             if data.get("draft"):
                 return []
@@ -183,7 +183,7 @@ def describe_tables_guide():
                 Table(
                     ddl="CREATE TABLE posts (title TEXT)",
                     glob="*.json",
-                    extract=extract,
+                    on_file=on_file,
                 ),
             ],
         )
@@ -210,14 +210,14 @@ def describe_tables_guide():
                 Table(
                     ddl="CREATE TABLE posts (title TEXT, author_id TEXT)",
                     glob="posts/*.json",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
                 ),
                 Table(
                     ddl="CREATE TABLE authors (id TEXT, name TEXT)",
                     glob="authors/*.json",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
                 ),
@@ -248,7 +248,7 @@ def describe_tables_guide():
                 Table(
                     ddl="CREATE TABLE items (name TEXT)",
                     glob="**/*.json",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
                 ),
@@ -272,7 +272,7 @@ def describe_tables_guide():
                 Table(
                     ddl="CREATE TABLE metrics (name TEXT, value REAL, count INTEGER)",
                     glob="data/*.json",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
                 ),
@@ -298,7 +298,7 @@ def describe_tables_guide():
                 Table(
                     ddl="CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL)",
                     glob="data/*.json",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
                 ),
@@ -331,7 +331,7 @@ def describe_tables_guide():
                 Table(
                     ddl="CREATE TABLE items (text_val TEXT, int_val INTEGER, float_val REAL, bool_val INTEGER, null_val TEXT)",
                     glob="*.json",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
                 ),
@@ -460,7 +460,7 @@ def describe_async_guide():
                 Table(
                     ddl="CREATE TABLE items (name TEXT, value INTEGER)",
                     glob="data/*.json",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
                 ),
@@ -486,7 +486,7 @@ def describe_async_guide():
                 Table(
                     ddl="CREATE TABLE items (name TEXT, value INTEGER)",
                     glob="data/*.json",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
                 ),
@@ -513,7 +513,7 @@ def describe_async_guide():
                 Table(
                     ddl="CREATE TABLE items (name TEXT, value INTEGER)",
                     glob="data/*.json",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
                 ),
@@ -541,7 +541,7 @@ def describe_watching_guide():
                 Table(
                     ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                     glob="comments/**/*.json",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
                 ),
@@ -596,7 +596,7 @@ def describe_watching_guide():
                 Table(
                     ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                     glob="comments/**/*.json",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
                 ),
@@ -651,7 +651,7 @@ def describe_watching_guide():
                 Table(
                     ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                     glob="comments/**/*.json",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
                 ),
@@ -690,7 +690,7 @@ def describe_watching_guide():
 
     @pytest.mark.asyncio
     async def it_matches_watching_guide_error_event(tmp_dir):
-        """Docs: watch() yields error events when extract fails."""
+        """Docs: watch() yields error events when on_file fails."""
         import asyncio
 
         # Pre-create directory so the watcher can monitor it
@@ -702,7 +702,7 @@ def describe_watching_guide():
                 Table(
                     ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                     glob="comments/**/*.json",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
                 ),
@@ -761,7 +761,7 @@ def describe_api_reference():
         table = Table(
             ddl="CREATE TABLE items (name TEXT)",
             glob="**/*.json",
-            extract=lambda path: [json.loads(open(path, encoding="utf-8").read())],
+            on_file=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         )
         assert table.ddl == "CREATE TABLE items (name TEXT)"
         assert table.glob == "**/*.json"
@@ -779,7 +779,7 @@ def describe_api_reference():
                 Table(
                     ddl="CREATE TABLE items (name TEXT)",
                     glob="data/*.json",
-                    extract=lambda path: [
+                    on_file=lambda path: [
                         json.loads(open(path, encoding="utf-8").read())
                     ],
                 ),

@@ -17,16 +17,16 @@ def _write(path, content):
 
 
 def _items_table(call_count_box):
-    """Build an items table whose extract callback bumps `call_count_box[0]` per call."""
+    """Build an items table whose on_file callback bumps `call_count_box[0]` per call."""
 
-    def extract(path):
+    def on_file(path):
         call_count_box[0] += 1
         return [json.loads(open(path, encoding="utf-8").read())]
 
     return Table(
         ddl="CREATE TABLE items (name TEXT, price REAL)",
         glob="items/*.json",
-        extract=extract,
+        on_file=on_file,
     )
 
 
@@ -67,7 +67,7 @@ def describe_persist():
             box2 = [0]
             db2 = DirSQL(persist_dir, tables=[_items_table(box2)], persist=True)
             await db2.ready()
-            # Warm start: extract not invoked for the unchanged file.
+            # Warm start: on_file not invoked for the unchanged file.
             assert box2[0] == 0
             results = await db2.query("SELECT * FROM items")
             assert len(results) == 1
@@ -164,7 +164,7 @@ def describe_persist():
                     Table(
                         ddl="CREATE TABLE items (name TEXT, price REAL, sku TEXT)",
                         glob="items/*.json",
-                        extract=lambda path: (
+                        on_file=lambda path: (
                             box2.__setitem__(0, box2[0] + 1)
                             or [
                                 {
@@ -202,7 +202,7 @@ def describe_persist():
                     Table(
                         ddl="CREATE TABLE items (name TEXT, price REAL)",
                         glob="**/*.json",
-                        extract=lambda path: [
+                        on_file=lambda path: [
                             json.loads(open(path, encoding="utf-8").read())
                         ],
                     )
