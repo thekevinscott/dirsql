@@ -29,7 +29,10 @@ fn free_port() -> u16 {
 }
 
 fn spawn_dirsql(dir: &std::path::Path, port: u16) -> Child {
-    spawn_dirsql_with(dir, None, port)
+    // Bare `dirsql` no longer auto-loads a cwd `.dirsql.toml` (#602); these
+    // fixtures place their config at the index root, so pass it explicitly.
+    let config = dir.join(".dirsql.toml");
+    spawn_dirsql_with(dir, Some(&config), port)
 }
 
 /// Spawn `dirsql` from working directory `cwd`, optionally pointing `--config`
