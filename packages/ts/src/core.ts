@@ -16,7 +16,7 @@ export interface NativeDirSQLConstructor {
     root: string | null,
     tables: TableDef[] | null,
     ignore: string[] | null,
-    config: string | null,
+    config: string[] | null,
     persist: boolean | null,
     persistPath: string | null,
     extensions: ExtensionSpec[] | null,

@@ -34,16 +34,15 @@ the process cwd — the config file's location never sets the root. (The
 | Poll events                | `db._poll_events(ms)`                          | `db.poll_events(duration)`                           | `await db.pollEvents(ms)` (runs on libuv threadpool)    |
 | Watch (channel/stream)     | `async for event in db.watch()` (via `_async.py`) | `db.watch() -> WatchStream` (channel)                | `for await (const ev of db.watch())`                    |
 | Load SQLite extension(s)   | `DirSQL(extensions=[{path, entrypoint?}])`; `[[dirsql.extension]]` config entries | `.extension(Extension)` / `.extensions(I)` builder; `[[dirsql.extension]]` config entries (`path` + optional `entrypoint`) | `new DirSQL({ extensions: [{ path, entrypoint? }] })`; `[[dirsql.extension]]` config entries |
-| Multiple config files (merge in order) | `config=` accepts `str` or `list[str]` (#588) | `.config(path)` **repeatable** — each call appends; configs merge in call order (#545/#553) | ⚠️ single `config` only |
+| Multiple config files (merge in order) | `config=` accepts `str` or `list[str]` (#588) | `.config(path)` **repeatable** — each call appends; configs merge in call order (#545/#553) | `config` accepts `string` or `string[]` (#589) |
 
-**Multiple config files — DRIFT (TypeScript lagging), tracked.** Several
+**Multiple config files — at parity across all three SDKs.** Several
 `.dirsql.toml` files merge in call order (`[[table]]` / `ignore` /
 `[[dirsql.extension]]` accumulate; a duplicate table name across configs
 errors), matching the CLI's repeatable `-c/--config` (#547). **Rust**'s
-builder `.config()` is repeatable (#545/#553) and **Python**'s `config=`
-accepts a `str` or a `list[str]` (#588). The **TypeScript** SDK constructor
-still accepts a **single** `config` path — tracked at
-[#589](https://github.com/thekevinscott/dirsql/issues/589).
+builder `.config()` is repeatable (#545/#553), **Python**'s `config=` accepts
+a `str` or a `list[str]` (#588), and **TypeScript**'s `config` accepts a
+`string` or a `string[]` (#589). No drift.
 
 **Extension loading — at parity across all three SDKs, see #225 / #229 / #230.**
 The Rust core loads SQLite extensions declared as `[[dirsql.extension]]` config

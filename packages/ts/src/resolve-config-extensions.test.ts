@@ -1,7 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { parse as parseToml } from "smol-toml";
 import { describe, expect, it, vi } from "vitest";
-import { resolveConfigExtensionSpecs } from "./resolve-config-extensions.js";
+import {
+  resolveConfigExtensionSpecs,
+  resolveConfigsExtensionSpecs,
+} from "./resolve-config-extensions.js";
 import { resolveExtensionPath } from "./resolve-extension.js";
 
 vi.mock("node:fs", async () => ({
@@ -103,6 +106,53 @@ describe("resolveConfigExtensionSpecs", () => {
     });
     expect(resolveConfigExtensionSpecs("/cfg/.dirsql.toml")).toEqual([
       { path: "R:42", entrypoint: undefined },
+      { path: "R:sqlite_vec", entrypoint: undefined },
+    ]);
+  });
+});
+
+describe("resolveConfigsExtensionSpecs", () => {
+  it("returns null for an empty list", () => {
+    vi.clearAllMocks();
+    expect(resolveConfigsExtensionSpecs([])).toBeNull();
+    expect(existsSync).not.toHaveBeenCalled();
+  });
+
+  it("returns null when no config uses a bare package name", () => {
+    vi.clearAllMocks();
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(parseToml)
+      .mockReturnValueOnce({
+        dirsql: { extension: [{ path: "ext/a.so" }] },
+      } as ReturnType<typeof parseToml>)
+      .mockReturnValueOnce({
+        table: [{ ddl: "CREATE TABLE t (x TEXT)", glob: "*" }],
+      } as ReturnType<typeof parseToml>);
+    expect(resolveConfigsExtensionSpecs(["/a.toml", "/b.toml"])).toBeNull();
+    expect(resolveExtensionPath).not.toHaveBeenCalled();
+  });
+
+  it("resolves every config in order when one uses a bare package name", () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(parseToml)
+      .mockReturnValueOnce({
+        dirsql: { extension: [{ path: "ext/a.so" }] },
+      } as ReturnType<typeof parseToml>)
+      .mockReturnValueOnce({
+        dirsql: { extension: [{ path: "sqlite_vec" }] },
+      } as ReturnType<typeof parseToml>);
+    expect(resolveConfigsExtensionSpecs(["/a.toml", "/b.toml"])).toEqual([
+      { path: "R:ext/a.so", entrypoint: undefined },
+      { path: "R:sqlite_vec", entrypoint: undefined },
+    ]);
+  });
+
+  it("skips a missing config but resolves the rest", () => {
+    vi.mocked(existsSync).mockReturnValueOnce(false).mockReturnValueOnce(true);
+    vi.mocked(parseToml).mockReturnValueOnce({
+      dirsql: { extension: [{ path: "sqlite_vec" }] },
+    } as ReturnType<typeof parseToml>);
+    expect(resolveConfigsExtensionSpecs(["/missing.toml", "/b.toml"])).toEqual([
       { path: "R:sqlite_vec", entrypoint: undefined },
     ]);
   });
