@@ -3,10 +3,12 @@
 //! this effectful tier out of `watcher.rs`'s inline unit module, which holds
 //! the pure `translate_event` tests).
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use std::{fs, thread};
 
 use dirsql::watcher::{FileEvent, Watcher};
+use dirsql::{DirSQL, RowEvent, Table, Value};
 use tempfile::TempDir;
 
 /// Drain events from `watcher` into a Vec, returning early once `done`
@@ -99,6 +101,93 @@ fn recv_blocks_until_event_arrives() {
     fs::write(dir.path().join("recv_test.txt"), "hi").unwrap();
     let event = watcher.recv();
     assert!(event.is_some());
+}
+
+// ---------------------------------------------------------------------------
+// Fan-out on the watch path: a create/delete for a file matching two tables'
+// globs fires row events for BOTH tables and mutates BOTH (#580).
+// ---------------------------------------------------------------------------
+
+fn drain_row_events(
+    db: &DirSQL,
+    budget: Duration,
+    done: impl Fn(&[RowEvent]) -> bool,
+) -> Vec<RowEvent> {
+    let deadline = Instant::now() + budget;
+    let mut seen = Vec::new();
+    while Instant::now() < deadline && !done(&seen) {
+        seen.extend(db.poll_events(Duration::from_millis(200)).unwrap());
+    }
+    seen
+}
+
+fn tables_with_action<'a>(
+    events: &'a [RowEvent],
+    is_action: impl Fn(&RowEvent) -> Option<&str>,
+) -> std::collections::HashSet<&'a str> {
+    events.iter().filter_map(|e| is_action(e)).collect()
+}
+
+#[test]
+fn watch_create_and_delete_fan_out_to_both_tables() {
+    let dir = TempDir::new().unwrap();
+    // Pre-create the target directory so notify's watch is installed before
+    // the file is written (a new dir + immediate write races inotify).
+    fs::create_dir_all(dir.path().join("data").join("2401.00001")).unwrap();
+
+    let ta = Table::new("CREATE TABLE ta (col_a TEXT)", "data/*/metadata.json", |_| {
+        vec![HashMap::from([("col_a".into(), Value::Text("A".into()))])]
+    });
+    let tb = Table::new(
+        "CREATE TABLE tb (col_b TEXT)",
+        "data/**/metadata.json",
+        |_| vec![HashMap::from([("col_b".into(), Value::Text("B".into()))])],
+    );
+
+    let db = DirSQL::new(dir.path(), vec![ta, tb]).unwrap();
+    db.start_watching().unwrap();
+    thread::sleep(Duration::from_millis(250));
+
+    let file = dir.path().join("data").join("2401.00001").join("metadata.json");
+    fs::write(&file, "{}").unwrap();
+
+    let created = drain_row_events(&db, Duration::from_secs(5), |seen| {
+        let t = tables_with_action(seen, |e| match e {
+            RowEvent::Insert { table, .. } => Some(table.as_str()),
+            _ => None,
+        });
+        t.contains("ta") && t.contains("tb")
+    });
+    let inserted = tables_with_action(&created, |e| match e {
+        RowEvent::Insert { table, .. } => Some(table.as_str()),
+        _ => None,
+    });
+    assert!(
+        inserted.contains("ta") && inserted.contains("tb"),
+        "expected Insert events for both tables, saw: {created:?}"
+    );
+    assert_eq!(db.query("SELECT col_a FROM ta").unwrap().len(), 1);
+    assert_eq!(db.query("SELECT col_b FROM tb").unwrap().len(), 1);
+
+    fs::remove_file(&file).unwrap();
+
+    let deleted = drain_row_events(&db, Duration::from_secs(5), |seen| {
+        let t = tables_with_action(seen, |e| match e {
+            RowEvent::Delete { table, .. } => Some(table.as_str()),
+            _ => None,
+        });
+        t.contains("ta") && t.contains("tb")
+    });
+    let removed = tables_with_action(&deleted, |e| match e {
+        RowEvent::Delete { table, .. } => Some(table.as_str()),
+        _ => None,
+    });
+    assert!(
+        removed.contains("ta") && removed.contains("tb"),
+        "expected Delete events for both tables, saw: {deleted:?}"
+    );
+    assert_eq!(db.query("SELECT col_a FROM ta").unwrap().len(), 0);
+    assert_eq!(db.query("SELECT col_b FROM tb").unwrap().len(), 0);
 }
 
 #[test]
