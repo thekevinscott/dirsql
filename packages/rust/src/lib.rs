@@ -2573,18 +2573,19 @@ mod internal_tests {
     }
 
     #[test]
-    fn new_with_no_tables_serves_the_baked_in_files_table() {
+    fn resolve_with_no_config_or_tables_injects_the_default_files_table() {
         // With no config and no programmatic tables, the builder injects the
-        // baked-in default `files` table (#603), so it is queryable out of the
-        // box rather than tableless.
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("readme.md"), "hi").unwrap();
-        let db = DirSQL::new(dir.path(), Vec::<Table>::new()).unwrap();
-        let rows = db.query("SELECT basename FROM files").unwrap();
+        // baked-in default `files` table (#603), so the index is queryable out
+        // of the box rather than tableless. `resolve()` is pure (no fs), so the
+        // injection is asserted here at the unit tier; the real query behavior
+        // over a scanned directory is covered by the `sdk.rs` integration test.
+        let resolved = DirSQL::builder().root("/tmp/x").resolve().unwrap();
+        assert_eq!(resolved.tables.len(), 1, "expected one injected table");
+        assert_eq!(resolved.tables[0].glob, "**/*");
         assert!(
-            rows.iter()
-                .any(|r| r["basename"] == Value::Text("readme.md".into())),
-            "no-table builder must serve the baked-in files table, got {rows:?}"
+            resolved.tables[0].ddl.starts_with("CREATE TABLE files"),
+            "expected the baked-in files table, got {}",
+            resolved.tables[0].ddl
         );
     }
 
