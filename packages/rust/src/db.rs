@@ -329,10 +329,24 @@ impl Db {
 
         if self.conn.is_autocommit() {
             let tx = self.conn.unchecked_transaction()?;
-            Self::insert_row_stmts(&tx, &sql, param_refs.as_slice(), table, file_path, row_index)?;
+            Self::insert_row_stmts(
+                &tx,
+                &sql,
+                param_refs.as_slice(),
+                table,
+                file_path,
+                row_index,
+            )?;
             tx.commit()?;
         } else {
-            Self::insert_row_stmts(&self.conn, &sql, param_refs.as_slice(), table, file_path, row_index)?;
+            Self::insert_row_stmts(
+                &self.conn,
+                &sql,
+                param_refs.as_slice(),
+                table,
+                file_path,
+                row_index,
+            )?;
         }
         Ok(())
     }
@@ -387,11 +401,7 @@ impl Db {
     /// Helper to execute delete_rows_by_file statements on any connection.
     /// Called from delete_rows_by_file() either inside a caller-supplied
     /// transaction or inside a transaction opened by delete_rows_by_file().
-    fn delete_rows_by_file_stmts(
-        conn: &Connection,
-        table: &str,
-        file_path: &str,
-    ) -> Result<usize> {
+    fn delete_rows_by_file_stmts(conn: &Connection, table: &str, file_path: &str) -> Result<usize> {
         let sql = format!(
             "DELETE FROM {} WHERE rowid IN \
              (SELECT rowid_ref FROM _dirsql_internal_rows \

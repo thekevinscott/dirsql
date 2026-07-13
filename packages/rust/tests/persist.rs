@@ -6,13 +6,13 @@
 //! for files whose filesystem metadata matches the cache.
 
 use dirsql::{DirSQL, DirSqlError, Row, Table, Value};
+use rusqlite;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
-use rusqlite;
 
 /// Returns a CSV table whose extract function increments `counter` every time
 /// it runs. Used to verify that warm starts skip extract for unchanged files.
@@ -521,21 +521,25 @@ fn failed_build_rolls_back_all_ingested_rows() {
         let counter_cb = Arc::clone(&counter);
         let result = DirSQL::builder()
             .root(root.path())
-            .table(Table::try_new("CREATE TABLE rows (col TEXT)", "**/*.csv", move |path| {
-                let content = std::fs::read_to_string(path).unwrap();
-                let count = counter_cb.fetch_add(1, Ordering::SeqCst);
-                if count == 2 {
-                    // Fail on the 3rd file (count starts at 0)
-                    return Err("boom".into());
-                }
-                Ok(content
-                    .lines()
-                    .skip(1)
-                    .map(|line| {
-                        HashMap::from([("col".into(), Value::Text(line.trim().to_string()))])
-                    })
-                    .collect::<Vec<Row>>())
-            }))
+            .table(Table::try_new(
+                "CREATE TABLE rows (col TEXT)",
+                "**/*.csv",
+                move |path| {
+                    let content = std::fs::read_to_string(path).unwrap();
+                    let count = counter_cb.fetch_add(1, Ordering::SeqCst);
+                    if count == 2 {
+                        // Fail on the 3rd file (count starts at 0)
+                        return Err("boom".into());
+                    }
+                    Ok(content
+                        .lines()
+                        .skip(1)
+                        .map(|line| {
+                            HashMap::from([("col".into(), Value::Text(line.trim().to_string()))])
+                        })
+                        .collect::<Vec<Row>>())
+                },
+            ))
             .persist(None::<&Path>)
             .build();
         result

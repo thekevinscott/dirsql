@@ -774,7 +774,10 @@ impl DirSQL {
         // Begin one transaction for the entire ingest: deleted-file cleanup,
         // row deletes/inserts, and meta write. All drop together on any
         // error, leaving the cache exactly as it was before the build started.
-        let _tx = db.conn().unchecked_transaction().map_err(DirSqlError::sqlite)?;
+        let _tx = db
+            .conn()
+            .unchecked_transaction()
+            .map_err(DirSqlError::sqlite)?;
 
         // Drop cached rows for files that disappeared since the last cache
         // write. Trusted files need no work: their rows already live in the
@@ -821,7 +824,8 @@ impl DirSQL {
             }
             for (row_index, raw_row) in raw_rows.iter().enumerate() {
                 let row = db.normalize_row(&table_name, raw_row, strict)?;
-                db.insert_row(&table_name, &row, &rel_path, row_index).map_err(map_db_error)?;
+                db.insert_row(&table_name, &row, &rel_path, row_index)
+                    .map_err(map_db_error)?;
             }
 
             // Update the persistent file index after a successful parse.
