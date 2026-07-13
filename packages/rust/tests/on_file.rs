@@ -38,7 +38,11 @@ on-file = "cat {path}"
     )
     .unwrap();
 
-    let db = DirSQL::from_config(root.path()).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
     let rows = db
         .query("SELECT paper_id, title, basename FROM papers ORDER BY paper_id")
         .unwrap();
@@ -77,7 +81,11 @@ on-file = "sh echo_args.sh {path} {abspath}"
     .unwrap();
     fs::write(root.path().join("a.json"), "ignored\n").unwrap();
 
-    let db = DirSQL::from_config(root.path()).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
     let rows = db.query("SELECT q FROM items").unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["q"], Value::Text("{abspath}".into()));
@@ -101,7 +109,11 @@ on-file = "cat"
     .unwrap();
     fs::write(root.path().join("a.json"), r#"[{"name":"widget"}]"#).unwrap();
 
-    let db = DirSQL::from_config(root.path()).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
     let rows = db.query("SELECT name FROM items").unwrap();
     assert!(
         rows.is_empty(),
@@ -133,7 +145,11 @@ on-file = "sh abscheck.sh {path}"
     .unwrap();
     fs::write(root.path().join("a.json"), r#"[{"name":"widget"}]"#).unwrap();
 
-    let db = DirSQL::from_config(root.path()).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
     let rows = db.query("SELECT name FROM items").unwrap();
     assert_eq!(
         rows.len(),
@@ -211,7 +227,11 @@ on-file = "sh extract.sh {path}"
     fs::write(root.path().join("bad.txt"), "BOOM\n").unwrap();
 
     // The scan must succeed despite one file's command failing.
-    let db = DirSQL::from_config(root.path()).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
     let rows = db.query("SELECT name FROM items").unwrap();
 
     // Only the good file contributed a row; the bad file was skipped.
@@ -242,7 +262,11 @@ on-file = "sh extract.sh {path}"
     fs::write(root.path().join("good.txt"), "GOOD\n").unwrap();
     fs::write(root.path().join("junk.txt"), "whatever\n").unwrap();
 
-    let db = DirSQL::from_config(root.path()).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
     let rows = db.query("SELECT name FROM items").unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["name"], Value::Text("ok".into()));
@@ -274,7 +298,11 @@ on-file = "sh slow.sh {path}"
     fs::write(root.path().join("a.txt"), "x\n").unwrap();
 
     // The scan must succeed; the timed-out file contributes no rows.
-    let db = DirSQL::from_config(root.path()).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
     let rows = db.query("SELECT name FROM items").unwrap();
     assert!(
         rows.is_empty(),
@@ -307,7 +335,11 @@ on-file = "sh slowish.sh {path}"
     .unwrap();
     fs::write(root.path().join("a.txt"), "x\n").unwrap();
 
-    let db = DirSQL::from_config(root.path()).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
     let rows = db.query("SELECT name FROM items").unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["name"], Value::Text("ok".into()));

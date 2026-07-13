@@ -39,11 +39,11 @@ pub mod server;
 
 pub use server::{serve, serve_with_state};
 
-/// The one starter `.dirsql.toml` -- a single `files` table over every file
-/// under the root, built from the seven stat columns. This is both what
-/// `dirsql init` writes verbatim ([`init::run`]) and what zero-config mode
-/// parses to build its default table, so the two can never drift apart.
-pub const DEFAULT_CONFIG_TOML: &str = include_str!("../default_config.toml");
+/// Re-export of the crate-level baked-in default config
+/// ([`crate::DEFAULT_CONFIG_TOML`]). This is both what `dirsql init` writes
+/// verbatim ([`init::run`]) and what the CLI's no-`-c` default serves, so the
+/// two can never drift apart.
+pub use crate::DEFAULT_CONFIG_TOML;
 
 /// A server-wide `pre-query` command hook, carrying the command template plus
 /// the directory it runs in (the config file's parent). When set on a

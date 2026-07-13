@@ -26,6 +26,19 @@ uniformly across all three SDKs (#540): the explicit `root` when given, else
 the process cwd — the config file's location never sets the root. (The
 `[dirsql].root` config key was removed in #540.)
 
+**No-config default — at parity across all three SDKs (#603), no drift.**
+Constructing with neither a `config` nor programmatic `tables` serves the
+**baked-in default** `files` table (`DEFAULT_CONFIG_TOML`, one row per file
+over the root) — the same shipped default the CLI serves with no `-c`, not an
+empty index. The logic lives in the shared core builder (`DirSQLBuilder::resolve`
+injects the default when config paths and tables are both empty), so all three
+SDKs gain it at once. There is **no implicit `<root>/.dirsql.toml` discovery**
+on any SDK: the root-joining Rust `DirSQL::from_config(root)` /
+`AsyncDirSQL::from_config(root)` shortcut was removed in #603 (use the explicit
+`from_config_path(root.join(".dirsql.toml"))` / `.config(path)`); Python and
+TypeScript never had a root-joiner — only the explicit `config=` — so nothing
+was removed there. This **restores parity** with the CLI's no-`-c` default (#602).
+
 | API                        | Python                                         | Rust                                                 | TypeScript                                              |
 |----------------------------|------------------------------------------------|------------------------------------------------------|---------------------------------------------------------|
 | Constructor                | `DirSQL(root=None, *, tables=None, ignore=None, config=None, persist=False, persist_path=None, extensions=None)` | `DirSQL::builder().root(..).tables(..).ignore(..).config(..).persist(Option<path>).extensions(..).build()` (also `DirSQL::new`/`with_ignore` shortcuts) | `new DirSQL(configPath)` or `new DirSQL({ root?, tables?, ignore?, config?, persist?, persistPath?, extensions? })` + `await db.ready` |
@@ -218,7 +231,7 @@ All three share one global timeout override, `[dirsql].hook-timeout`
 - Uses `snake_case` for all identifiers.
 - `Table` has separate constructors: `new` (infallible on-file), `try_new` (fallible on-file), `strict` (shorthand).
 - `RowEvent` is a Rust enum with variants (`Insert { table, row, file_path }`, `Update { table, old_row, new_row, file_path }`, `Delete { table, row, file_path }`, `Error { table, file_path, error }`) rather than a flat struct. `file_path` is a relative `String` on Insert/Update/Delete and a `PathBuf` on Error. `table` is `String` on Insert/Update/Delete and `Option<String>` on Error — `None` for errors that aren't tied to a specific table (e.g. a watch-channel failure). Python exposes the same field as `Optional[str]`; TypeScript as `string | null`.
-- Construction uses a builder (`DirSQL::builder()...build()`); the `new`/`with_ignore`/`from_config`/`from_config_path` shortcuts remain as thin wrappers delegating to the builder.
+- Construction uses a builder (`DirSQL::builder()...build()`); the `new`/`with_ignore`/`from_config_path` shortcuts remain as thin wrappers delegating to the builder. (The root-joining `from_config(root)` shortcut was removed in #603 — pass the config path explicitly.)
 - `AsyncDirSQL` uses tokio and `OnceCell` internally.
 - Watch returns `futures_channel::mpsc::UnboundedReceiver<RowEvent>` implementing `Stream`.
 - All fallible operations return `Result<T, DirSqlError>`. Statements classified as writes by SQLite's `sqlite3_stmt_readonly` surface as the unit variant `DirSqlError::WriteForbidden`; in the Python/TS bindings the same condition is a `RuntimeError` / `Error` with a "read-only" message.

@@ -48,7 +48,11 @@ glob = "posts/{author}/{title}.json"
     )
     .unwrap();
 
-    let db = DirSQL::from_config(root.path()).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
     (root, db)
 }
 

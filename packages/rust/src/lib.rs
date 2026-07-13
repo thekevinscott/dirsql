@@ -59,6 +59,13 @@ pub use crate::watcher::FileEvent as RawFileEvent;
 pub type Row = HashMap<String, Value>;
 pub type WatchStream = UnboundedReceiver<RowEvent>;
 
+/// The baked-in default config -- a single `files` table over every file, built
+/// from the seven stat columns. A builder with no `.config()` and no
+/// programmatic tables serves this (parity with the CLI's no-`-c` default,
+/// #603); `dirsql init` writes it verbatim; the CLI serves it directly. One
+/// asset, so the SDK default, the CLI default, and `init` can never drift.
+pub const DEFAULT_CONFIG_TOML: &str = include_str!("default_config.toml");
+
 type BoxError = Box<dyn StdError + Send + Sync + 'static>;
 type OnFileFn = dyn Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static;
 
@@ -280,21 +287,12 @@ impl DirSQL {
             .build()
     }
 
-    /// Shortcut for `DirSQL::builder().root(root).config(root/.dirsql.toml).build()`.
-    ///
-    /// `root` is both where `.dirsql.toml` is read from and the index root.
-    pub fn from_config(root: impl Into<PathBuf>) -> Result<Self> {
-        let root = root.into();
-        DirSQL::builder()
-            .config(root.join(".dirsql.toml"))
-            .root(root)
-            .build()
-    }
-
     /// Shortcut for `DirSQL::builder().config(config_path).build()`.
     ///
     /// With no explicit `.root()`, the index roots at the process cwd, not the
-    /// config file's parent directory.
+    /// config file's parent directory. To read `<root>/.dirsql.toml`, pass it
+    /// explicitly: `DirSQL::from_config_path(root.join(".dirsql.toml"))` (the
+    /// implicit root-joining `from_config(root)` shortcut was removed in #603).
     pub fn from_config_path(config_path: impl AsRef<Path>) -> Result<Self> {
         DirSQL::builder()
             .config(config_path.as_ref().to_path_buf())
@@ -1090,6 +1088,23 @@ impl DirSQLBuilder {
             }
         }
 
+        // No explicit config and no programmatic tables: serve the baked-in
+        // default (`DEFAULT_CONFIG_TOML`, the shipped `files` table), so
+        // `SELECT * FROM files` works out of the box -- parity with the CLI's
+        // no-`-c` default (#603). A config that was given but defines no tables
+        // is left as-is (the config is the base, not the default).
+        if should_inject_default_table(&config_paths, &tables) {
+            let default_cfg = config::load_config_str(DEFAULT_CONFIG_TOML)
+                .expect("DEFAULT_CONFIG_TOML must be valid dirsql config TOML");
+            let default_tables = build_tables_from_config(
+                &default_cfg,
+                &root,
+                &root,
+                command::DEFAULT_COMMAND_TIMEOUT,
+            )?;
+            tables.extend(default_tables);
+        }
+
         Ok(ResolvedBuild {
             root,
             tables,
@@ -1437,6 +1452,14 @@ fn relative_path(root: &Path, path: &Path) -> String {
 /// each `on-file` run; the caller resolves it from the global
 /// `[dirsql].hook-timeout` key, falling back to
 /// [`command::DEFAULT_COMMAND_TIMEOUT`].
+/// Whether the builder should inject the baked-in default `files` table (#603):
+/// only when neither an explicit config nor a programmatic table was supplied.
+/// A config given but defining no tables is still the base — the default is not
+/// layered on top. Pure so the whole truth table is unit-testable without I/O.
+fn should_inject_default_table(config_paths: &[PathBuf], tables: &[Table]) -> bool {
+    config_paths.is_empty() && tables.is_empty()
+}
+
 fn build_tables_from_config(
     cfg: &config::Config,
     config_dir: &Path,
@@ -1731,21 +1754,13 @@ impl AsyncDirSQL {
             .build_async()
     }
 
-    /// Shortcut for `DirSQL::builder().root(root).config(root/.dirsql.toml).build_async()`.
-    ///
-    /// `root` is both where `.dirsql.toml` is read from and the index root.
-    pub fn from_config(root: impl Into<PathBuf>) -> Result<Self> {
-        let root = root.into();
-        DirSQL::builder()
-            .config(root.join(".dirsql.toml"))
-            .root(root)
-            .build_async()
-    }
-
     /// Shortcut for `DirSQL::builder().config(config_path).build_async()`.
     ///
     /// With no explicit `.root()`, the index roots at the process cwd, not the
-    /// config file's parent directory.
+    /// config file's parent directory. To read `<root>/.dirsql.toml`, pass it
+    /// explicitly: `AsyncDirSQL::from_config_path(root.join(".dirsql.toml"))`
+    /// (the implicit root-joining `from_config(root)` shortcut was removed in
+    /// #603).
     pub fn from_config_path(config_path: impl AsRef<Path>) -> Result<Self> {
         DirSQL::builder()
             .config(config_path.as_ref().to_path_buf())
@@ -2324,7 +2339,9 @@ mod internal_tests {
         assert!(m.is_poisoned(), "mutex should be poisoned");
     }
 
-    /// Build a tableless `DirSQL` over an empty temp dir.
+    /// Build a `DirSQL` over an *empty* temp dir with no explicit tables, so
+    /// the injected baked-in `files` table (#603) has zero rows -- effectively
+    /// tableless for these lock-poison / error-path tests.
     fn simple_db() -> (TempDir, DirSQL) {
         let dir = TempDir::new().unwrap();
         let db =
@@ -2564,18 +2581,59 @@ mod internal_tests {
     }
 
     #[test]
-    fn new_builds_a_tableless_instance_and_query_runs() {
-        let dir = TempDir::new().unwrap();
-        let db = DirSQL::new(dir.path(), Vec::<Table>::new()).unwrap();
-        let rows = db.query("SELECT 1 AS n").unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["n"], Value::Integer(1));
+    fn should_inject_default_table_only_when_config_and_tables_are_both_empty() {
+        // Pure truth table (no I/O): the baked-in default is injected only when
+        // neither a config path nor a programmatic table was supplied (#603).
+        let table = Table::new("CREATE TABLE x (a TEXT)", "*", |_| vec![Row::new()]);
+        assert!(should_inject_default_table(&[], &[]));
+        assert!(!should_inject_default_table(
+            &[PathBuf::from("c.toml")],
+            &[]
+        ));
+        assert!(!should_inject_default_table(
+            &[],
+            std::slice::from_ref(&table)
+        ));
+        assert!(!should_inject_default_table(
+            &[PathBuf::from("c.toml")],
+            std::slice::from_ref(&table)
+        ));
     }
 
     #[test]
-    fn from_config_variants_error_when_no_config_present() {
+    fn resolve_with_no_config_or_tables_injects_the_default_files_table() {
+        // With no config and no programmatic tables, the builder injects the
+        // baked-in default `files` table (#603), so the index is queryable out
+        // of the box rather than tableless. `resolve()` is pure (no fs), so the
+        // injection is asserted here at the unit tier; the real query behavior
+        // over a scanned directory is covered by the `sdk.rs` integration test.
+        let resolved = DirSQL::builder().root("/tmp/x").resolve().unwrap();
+        assert_eq!(resolved.tables.len(), 1, "expected one injected table");
+        assert_eq!(resolved.tables[0].glob, "**/*");
+        assert!(
+            resolved.tables[0].ddl.starts_with("CREATE TABLE files"),
+            "expected the baked-in files table, got {}",
+            resolved.tables[0].ddl
+        );
+
+        // A programmatic table (still no config) is used verbatim -- the
+        // default is NOT layered on top.
+        let with_table = DirSQL::builder()
+            .root("/tmp/x")
+            .table(Table::new("CREATE TABLE t (a TEXT)", "*.t", |_| {
+                vec![Row::new()]
+            }))
+            .resolve()
+            .unwrap();
+        assert_eq!(with_table.tables.len(), 1, "no default when a table exists");
+        assert!(with_table.tables[0].ddl.starts_with("CREATE TABLE t"));
+    }
+
+    #[test]
+    fn from_config_path_errors_when_config_missing() {
+        // `from_config_path` (the explicit constructor that stays) errors when
+        // the named file does not exist -- no silent fallback to the default.
         let dir = TempDir::new().unwrap();
-        assert!(DirSQL::from_config(dir.path()).is_err());
         let missing = dir.path().join("nope.toml");
         assert!(DirSQL::from_config_path(&missing).is_err());
     }
@@ -3118,12 +3176,11 @@ mod internal_tests {
         );
     }
 
-    /// The async config shortcuts fail fast (before spawning) when the
-    /// config file is missing.
+    /// The async `from_config_path` shortcut fails fast (before spawning) when
+    /// the config file is missing.
     #[test]
-    fn async_dirsql_from_config_errors_on_missing_file() {
+    fn async_dirsql_from_config_path_errors_on_missing_file() {
         let dir = TempDir::new().unwrap();
-        assert!(AsyncDirSQL::from_config(dir.path()).is_err());
         let missing = dir.path().join("no.toml");
         assert!(AsyncDirSQL::from_config_path(&missing).is_err());
     }

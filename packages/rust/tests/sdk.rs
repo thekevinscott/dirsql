@@ -868,3 +868,22 @@ fn binary_file_under_glob_does_not_break_build() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["basename"], Value::Text("logo.png".into()));
 }
+
+#[test]
+fn builder_with_no_config_serves_the_baked_in_files_table() {
+    // #603: a builder with no `.config()` and no programmatic tables serves the
+    // baked-in default `files` table (parity with the CLI's no-`-c` default),
+    // not an empty index. `SELECT ... FROM files` must work out of the box.
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("readme.md"), "hello").unwrap();
+
+    let db = DirSQL::builder().root(root.path()).build().unwrap();
+    let rows = db
+        .query("SELECT basename FROM files ORDER BY basename")
+        .unwrap();
+    let names: Vec<Value> = rows.iter().map(|r| r["basename"].clone()).collect();
+    assert!(
+        names.contains(&Value::Text("readme.md".into())),
+        "no-config builder must serve the baked-in files table, got {names:?}"
+    );
+}
