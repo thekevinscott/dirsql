@@ -35,6 +35,21 @@ def _commit(repo, message: str) -> str:
     return result.stdout.strip()
 
 
+def _write(path, text="// code\n"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+def _gate(repo, base_sha, head_sha):
+    return subprocess.run(
+        [_cli(), "changelog-gate", "--base-sha", base_sha, "--head-sha", head_sha],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
 @pytest.fixture
 def repo(tmp_path):
     _git(tmp_path, "init", "-q")
@@ -46,111 +61,45 @@ def repo(tmp_path):
 
 
 def describe_dirsql_checks_changelog_gate():
-    def it_exits_nonzero_when_sdk_code_changes_without_a_changelog_entry(repo):
+    def it_exits_nonzero_when_package_source_changes_without_a_fragment(repo):
         tmp_path, base_sha = repo
-        rust_dir = tmp_path / "packages" / "rust" / "src"
-        rust_dir.mkdir(parents=True)
-        (rust_dir / "lib.rs").write_text("// code\n")
-        head_sha = _commit(tmp_path, "add sdk code")
+        _write(tmp_path / "packages" / "rust" / "src" / "lib.rs")
+        head_sha = _commit(tmp_path, "add rust code")
 
-        proc = subprocess.run(
-            [
-                _cli(),
-                "changelog-gate",
-                "--base-sha",
-                base_sha,
-                "--head-sha",
-                head_sha,
-            ],
-            cwd=tmp_path,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-
-        assert proc.returncode == 1
-        assert "SDK code changed" in proc.stderr
-
-    def it_names_a_malformed_skip_changelog_trailer(repo):
-        tmp_path, base_sha = repo
-        rust_dir = tmp_path / "packages" / "rust" / "src"
-        rust_dir.mkdir(parents=True)
-        (rust_dir / "lib.rs").write_text("// code\n")
-        # blank line splits `skip-changelog:` out of the final trailer block
-        head_sha = _commit(
-            tmp_path,
-            "feat: a change\n\nskip-changelog: internal\n\nCo-Authored-By: x <x@y.z>",
-        )
-
-        proc = subprocess.run(
-            [
-                _cli(),
-                "changelog-gate",
-                "--base-sha",
-                base_sha,
-                "--head-sha",
-                head_sha,
-            ],
-            cwd=tmp_path,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-
+        proc = _gate(tmp_path, base_sha, head_sha)
         assert proc.returncode == 1, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
-        assert "did not parse it as a trailer" in proc.stderr
+        assert "packages/rust has code changes" in proc.stdout
 
-    def it_exits_zero_when_a_per_package_fragment_is_added(repo):
+    def it_exits_zero_when_a_colocated_fragment_is_added(repo):
         tmp_path, base_sha = repo
-        rust_dir = tmp_path / "packages" / "rust" / "src"
-        rust_dir.mkdir(parents=True)
-        (rust_dir / "lib.rs").write_text("// code\n")
-        fragment_dir = tmp_path / "packages" / "rust" / "changelog.d"
-        fragment_dir.mkdir(parents=True)
-        (fragment_dir / "2026-07-13-fix-race.md").write_text("**Changed a thing.**\n")
-        head_sha = _commit(tmp_path, "add sdk code with fragment")
-
-        proc = subprocess.run(
-            [
-                _cli(),
-                "changelog-gate",
-                "--base-sha",
-                base_sha,
-                "--head-sha",
-                head_sha,
-            ],
-            cwd=tmp_path,
-            capture_output=True,
-            text=True,
-            timeout=30,
+        _write(tmp_path / "packages" / "rust" / "src" / "lib.rs")
+        _write(
+            tmp_path / "packages" / "rust" / "changelog.d" / "2026-07-13-fix.md",
+            "**Changed a thing.**\n",
         )
+        head_sha = _commit(tmp_path, "add rust code with fragment")
 
+        proc = _gate(tmp_path, base_sha, head_sha)
         assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
 
-    def it_exits_nonzero_when_the_fragment_is_in_the_wrong_package(repo):
+    def it_exits_nonzero_when_the_fragment_is_in_another_package(repo):
         tmp_path, base_sha = repo
-        rust_dir = tmp_path / "packages" / "rust" / "src"
-        rust_dir.mkdir(parents=True)
-        (rust_dir / "lib.rs").write_text("// code\n")
-        fragment_dir = tmp_path / "packages" / "python" / "changelog.d"
-        fragment_dir.mkdir(parents=True)
-        (fragment_dir / "2026-07-13-unrelated.md").write_text("**Changed.**\n")
-        head_sha = _commit(tmp_path, "rust change, python fragment")
-
-        proc = subprocess.run(
-            [
-                _cli(),
-                "changelog-gate",
-                "--base-sha",
-                base_sha,
-                "--head-sha",
-                head_sha,
-            ],
-            cwd=tmp_path,
-            capture_output=True,
-            text=True,
-            timeout=30,
+        _write(tmp_path / "packages" / "rust" / "src" / "lib.rs")
+        _write(
+            tmp_path / "packages" / "ts" / "changelog.d" / "2026-07-13-unrelated.md",
+            "**Changed.**\n",
         )
+        head_sha = _commit(tmp_path, "rust change, ts fragment")
 
+        proc = _gate(tmp_path, base_sha, head_sha)
         assert proc.returncode == 1, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
-        assert "packages/rust/changelog.d" in proc.stderr
+        assert "packages/rust has code changes" in proc.stdout
+
+    def it_exits_zero_via_the_skip_changelog_line(repo):
+        tmp_path, base_sha = repo
+        _write(tmp_path / "packages" / "rust" / "src" / "lib.rs")
+        head_sha = _commit(tmp_path, "internal refactor\n\nskip-changelog: no change")
+
+        proc = _gate(tmp_path, base_sha, head_sha)
+        assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        assert "bypassing changelog enforcement" in proc.stdout
