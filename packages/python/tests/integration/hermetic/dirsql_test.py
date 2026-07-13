@@ -240,11 +240,11 @@ def describe_binding_layer():
             await db.ready()
 
             inst = _FakeRustDirSQL.instances[-1]
-            assert inst.config == "/some/.dirsql.toml"
+            assert inst.config == ["/some/.dirsql.toml"]
             assert inst.root is None
 
             result = await db.query("SELECT 1")
-            assert result == [{"from_config": "/some/.dirsql.toml"}]
+            assert result == [{"from_config": ["/some/.dirsql.toml"]}]
 
         @pytest.mark.asyncio
         @pytest.mark.parametrize(

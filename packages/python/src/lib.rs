@@ -118,7 +118,7 @@ mod python {
             root: Option<String>,
             tables: Option<Vec<PyRef<'_, PyTable>>>,
             ignore: Option<Vec<String>>,
-            config: Option<String>,
+            config: Option<Vec<String>>,
             persist: bool,
             persist_path: Option<PathBuf>,
             extensions: Option<Vec<PyExtensionSpec>>,
@@ -150,7 +150,7 @@ mod python {
                     if let Some(ig) = ignore {
                         builder = builder.ignore(ig);
                     }
-                    if let Some(c) = config {
+                    for c in config.into_iter().flatten() {
                         builder = builder.config(c);
                     }
                     if persist {

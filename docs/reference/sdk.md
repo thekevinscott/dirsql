@@ -54,7 +54,7 @@ DirSQL(
     *,
     tables: list[Table] | None = None,
     ignore: list[str] | None = None,
-    config: str | None = None,
+    config: str | list[str] | None = None,
     persist: bool = False,
     persist_path: str | None = None,
     extensions: list[dict] | None = None,  # [{ "path": str, "entrypoint"?: str }]
@@ -108,12 +108,13 @@ never sets the root.
   entries are appended after any programmatic `tables`; its `ignore`
   patterns and `[[dirsql.extension]]` entries are appended likewise. The
   config file does **not** set the index root: with no explicit `root`, the
-  index roots at the process cwd. In **Rust**, the builder's `.config()` is
-  **repeatable** — call it once per file and the configs merge in call order
-  (`[[table]]` / `ignore` / `[[dirsql.extension]]` accumulate; a duplicate
-  table name across configs errors), mirroring the CLI's repeatable
-  [`-c/--config`](./cli.md#flags). Python and TypeScript currently accept a
-  single `config` path.
+  index roots at the process cwd. **Multiple configs merge in order** —
+  **Python** `config` accepts a `str` or a `list[str]`, and the **Rust**
+  builder's `.config()` is repeatable (call it once per file) — the configs
+  merge in call order (`[[table]]` / `ignore` / `[[dirsql.extension]]`
+  accumulate; a duplicate table name across configs errors), mirroring the
+  CLI's repeatable [`-c/--config`](./cli.md#flags). TypeScript currently
+  accepts a single `config` path.
 - `persist` — Keep the SQLite index on disk between runs (default off:
   ephemeral, rebuilt every startup). The cache lives at
   `<root>/.dirsql/cache.db` by default; on restart, only files whose stat
