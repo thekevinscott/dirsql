@@ -7,9 +7,10 @@ all-defaults one. Unknown keys are a parse error at every level (top level,
 `[dirsql]`, `[[table]]`, `[[dirsql.extension]]`) — a typo or a removed key
 fails loudly, naming the offending key, rather than silently no-opping.
 
-The [CLI](./cli.md) loads `./.dirsql.toml` by default (`--config <path>`
-overrides). The [SDKs](./sdk.md) load a config via the `config` constructor
-parameter.
+The [CLI](./cli.md) loads a config only when you pass it with `-c/--config`;
+with none given it serves the [baked-in default](./cli.md#default-mode) (a
+`./.dirsql.toml` on disk is **not** auto-loaded). The [SDKs](./sdk.md) load a
+config via the `config` constructor parameter.
 
 **Path resolution.** Relative paths in the config (`[[dirsql.extension]]`
 `path`) resolve against the config file's parent
@@ -160,8 +161,9 @@ The configs load and merge in **argv order**:
   error**, naming the table.
 
 The index [root](./cli.md#flags) is the invocation directory regardless of where
-any config lives. With no `-c`, `./.dirsql.toml` is used; a single `-c` behaves
-exactly as before.
+any config lives. With no `-c`, the [baked-in default](./cli.md#default-mode) is
+served (no `./.dirsql.toml` auto-discovery); a single `-c` behaves exactly as
+before.
 
 ## Parse errors
 

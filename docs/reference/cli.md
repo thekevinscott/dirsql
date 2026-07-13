@@ -45,7 +45,7 @@ requests, closes open `/events` streams, and exits.
 
 | Flag | Default | Description |
 |---|---|---|
-| `-c, --config <path>` | `./.dirsql.toml` | Path to a [config file](./config.md). **Repeatable** (`-c a -c b`): the configs load and merge in argv order — see [Composing multiple configs](./config.md#composing-multiple-configs). The index is always rooted at the **invocation directory** (the current working directory), regardless of where a config lives — so `--config /elsewhere/.dirsql.toml` still indexes the directory you ran `dirsql` from. With none given, `./.dirsql.toml` is used; when it does not exist, the server runs in [zero-config mode](#zero-config-mode). |
+| `-c, --config <path>` | baked-in default | Path to a [config file](./config.md). **Repeatable** (`-c a -c b`): the configs load and merge in argv order — see [Composing multiple configs](./config.md#composing-multiple-configs). The index is always rooted at the **invocation directory** (the current working directory), regardless of where a config lives — so `--config /elsewhere/.dirsql.toml` still indexes the directory you ran `dirsql` from. With none given, the [baked-in default](#default-mode) `files` table is served — a `./.dirsql.toml` on disk is **not** auto-loaded; pass it explicitly. A `-c` naming a file that does not exist is an [error](#degraded-mode), not a silent fallback to the default. |
 | `--host <addr>` | `localhost` | Bind address. |
 | `--port <n>` | `7117` | TCP port to bind. |
 | `--persist [<path>]` | off | Keep the SQLite index on disk between runs so a restart only re-parses files that actually changed. Bare `--persist` caches at `<root>/.dirsql/cache.db`; `--persist <path>` caches at `<path>`. Off by default (the index is ephemeral). Global — also honored by [`dirsql query`](#dirsql-query). See [Keep the index across restarts](../howto/persist.md). |
@@ -61,11 +61,14 @@ requests, closes open `/events` streams, and exits.
   **30-second** timeout each, overridable with the config key
   [`[dirsql].hook-timeout`](./config.md#dirsql-keys).
 
-### Zero-config mode
+### Default mode
 
-When the config file named by `--config` does not exist, the server indexes
-the directory that would have contained it (the current directory for the
-default `./.dirsql.toml`) with a single table named `files`:
+With no `-c/--config`, the server serves the **baked-in default** — the
+shipped config compiled into the binary, indexing the invocation directory
+with a single table named `files`. This is a fixed default, *not* a
+`.dirsql.toml` read from disk: a `./.dirsql.toml` sitting in the current
+directory is **not** auto-loaded (pass it with `-c ./.dirsql.toml` to use
+it). The default `files` table:
 
 - Glob: `**/*` — every file under the root, at any depth, no ignores.
 - One row per file, with all seven
@@ -77,20 +80,24 @@ curl -s localhost:7117/query -H 'content-type: application/json' \
   -d '{"sql":"SELECT basename, size FROM files ORDER BY size DESC LIMIT 5"}'
 ```
 
-A config file, when present, fully overrules this default. A *missing*
-config is not an error; only a config that exists but fails to load is (see
-below).
+Passing a config with `-c` fully overrules this default. A `-c` naming a file
+that does not exist is an error (not a fallback to the default); a config that
+exists but fails to load degrades the server (see below).
 
 ### Degraded mode
 
-When the config file exists but cannot be resolved or loaded (unreadable
-path, invalid TOML, schema errors), the server still starts and binds, but
-every request to `/query` and `/events` returns `503 Service Unavailable`
-with a JSON body describing the failure:
+When a config passed with `-c` cannot be resolved or loaded — the file does
+not exist, is unreadable, or has invalid TOML / schema errors — the server
+still starts and binds, but every request to `/query` and `/events` returns
+`503 Service Unavailable` with a JSON body describing the failure (the
+diagnostic names the offending path or key):
 
 ```json
 {"error": "failed to load config: ..."}
 ```
+
+The one-shot [`dirsql query`](#dirsql-query) surfaces the same failure as a
+non-zero exit with the diagnostic on stderr.
 
 ### Exit codes
 
@@ -104,10 +111,12 @@ with a JSON body describing the failure:
 Run a SQL query from the shell:
 
 ```bash
+# No -c: the baked-in default `files` table.
 dirsql query "SELECT basename, size FROM files ORDER BY size DESC LIMIT 5"
 # [{"basename":"model.bin","size":104857600}, …]
 
-dirsql query "SELECT COUNT(*) AS n FROM posts" | jq '.[0].n'
+# A config table (`posts`) needs its config passed explicitly.
+dirsql -c ./.dirsql.toml query "SELECT COUNT(*) AS n FROM posts" | jq '.[0].n'
 ```
 
 The subcommand builds the index, runs the SQL, prints the result rows as a
@@ -117,9 +126,9 @@ response body), and exits `0`.
 `dirsql query` is a thin adapter over the **same query pipeline the server
 uses**, so behavior is identical to `POST /query` by construction:
 
-- **Config discovery** honors `--config` (default `./.dirsql.toml`),
-  [zero-config mode](#zero-config-mode), and `--extension` overrides,
-  exactly as server mode does.
+- **Config discovery** honors `--config` (with none given, the
+  [baked-in default](#default-mode)), and `--extension` overrides, exactly as
+  server mode does.
 - **`--persist [<path>]`** is honored, so a repeated `dirsql query` reuses the
   on-disk cache. Because its value is optional, place a bare `--persist` after
   the SQL (`dirsql query "SELECT …" --persist`) or use the `=` form
@@ -144,13 +153,19 @@ stderr, with exit code `1`.
 
 ## `dirsql init`
 
-Writes a starter `.dirsql.toml`:
+Writes a starter `.dirsql.toml` — the same table the [baked-in
+default](#default-mode) serves — as a scaffold to edit:
 
 ```bash
 dirsql init
 ```
 
-You can further tweak this config as needed.
+The output does **not** auto-load. Once you've tweaked it, pass it explicitly
+to run against it:
+
+```bash
+dirsql -c ./.dirsql.toml
+```
 
 ### Flags
 

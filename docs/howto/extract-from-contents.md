@@ -31,8 +31,11 @@ by every hook.
 
 ## 2. Query the extracted columns
 
+Pass the config with [`-c`](../reference/cli.md#flags) (`dirsql` does not
+auto-load a `.dirsql.toml` from the current directory):
+
 ```bash
-dirsql query "SELECT title, author, year, path FROM books ORDER BY year"
+dirsql -c ./.dirsql.toml query "SELECT title, author, year, path FROM books ORDER BY year"
 ```
 
 ```json
@@ -57,7 +60,7 @@ on-file = "jq -c -s '.' {path}"
 ```
 
 ```bash
-dirsql query "SELECT event, user FROM events"
+dirsql -c ./.dirsql.toml query "SELECT event, user FROM events"
 ```
 
 ```json

@@ -31,8 +31,11 @@ ignored file never reaches any table — even one whose glob would match it.
 
 ## 2. Confirm what made it in
 
+Pass the config with [`-c`](../reference/cli.md#flags) (`dirsql` does not
+auto-load a `.dirsql.toml` from the current directory):
+
 ```bash
-dirsql query "SELECT path FROM notes ORDER BY path"
+dirsql -c ./.dirsql.toml query "SELECT path FROM notes ORDER BY path"
 ```
 
 ```json
@@ -42,7 +45,7 @@ dirsql query "SELECT path FROM notes ORDER BY path"
 ## Notes
 
 - `ignore` lives in a config file, so it needs one:
-  [zero-config mode](../reference/cli.md#zero-config-mode) indexes
+  [default mode](../reference/cli.md#default-mode) indexes
   everything with no ignores.
 - The top-level `.dirsql/` directory is always excluded, ignore list or
   not — it is reserved for `dirsql`'s own metadata
