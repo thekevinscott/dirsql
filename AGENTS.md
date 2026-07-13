@@ -146,7 +146,7 @@ The exemption count is again **zero**. The three-tier conformance work (#517) re
 
 The rung above coverage is the **`unit mutation`** gate (#235 / epic #231): testing-conventions mutates the source and fails on any **surviving** mutant -- one no unit test caught. Engines: **cosmic-ray** (Python), **Stryker** (TypeScript), **cargo-mutants** (Rust). It is **PR-only and diff-scoped** (`--base <base.sha>...HEAD`): only the lines a PR added/modified are mutated, so each PR's surface stays bounded. A PR that changes no SDK source has nothing to mutate and passes trivially.
 
-The gate reruns the real unit suite per mutant, so it needs the native bindings built. **TypeScript and Rust mutation now run inside the reusable workflow** (`.github/workflows/conventions.yml`): the upstream monorepo primitive -- #277 derives the package root from `path`, #279 makes the mutation job install/build from that derived root -- lets the reusable job build the native artifact itself (ts via `build_command: pnpm build` + `rust_toolchain: true`; rust via cargo-mutants, which builds the crate itself). This retired the bespoke `ts-mutation.yml` / `rust-mutation.yml` (#417). The CLI **self-provisions Stryker and cargo-mutants**, so there are no mutation engine deps or config in this repo.
+The gate reruns the real unit suite per mutant, so it needs the native bindings built. **TypeScript and Rust mutation now run inside the reusable workflow** (`.github/workflows/conventions.yml`): the upstream monorepo primitive -- #277 derives the package root from `source` (the caller input formerly named `path`, renamed upstream; dirsql#577), #279 makes the mutation job install/build from that derived root -- lets the reusable job build the native artifact itself (ts via `build_command: pnpm build` + `rust_toolchain: true`; rust via cargo-mutants, which builds the crate itself). This retired the bespoke `ts-mutation.yml` / `rust-mutation.yml` (#417). The CLI **self-provisions Stryker and cargo-mutants**, so there are no mutation engine deps or config in this repo.
 
 **Python mutation now runs in the reusable workflow too** (`conventions.yml`, `python-unit` gates: `mutation`): the testing-conventions wheel bundles the cosmic-ray adapter as a runtime dependency, so the reusable mutation job resolves the engine from the same `python_env=uv` (`uv sync`) environment it provisions for coverage — no separate install and no bespoke workflow. This retired `python-mutation.yml` (#426). All three SDKs' `mutation` gates now run inside `conventions.yml`.
 
@@ -338,6 +338,15 @@ Run `cargo bench -p dirsql` after significant changes to the Rust codebase. Not 
 5. Do not proceed with other tasks until the merge conflict is fully resolved and the branch is clean.
 
 ### PR Monitoring
+
+Merge gating is via **pr-monitor** (`thekevinscott/pr-monitor@v1`, `.github/workflows/pr-monitor.yml`): the **`CI Gate`** check is an *aggregator*, not a test — it polls every *other* workflow run on the PR and is the single check the merge waits on. Any red among the others turns `CI Gate` red; there is no named-required-checks allowlist in branch protection, so *any* CI/workflow change (renaming/adding/removing a job or check in any `.github/workflows/*.yml`) needs no branch-protection coordination and can't orphan a required check — don't flag that concern.
+
+**When `CI Gate` is red, read its log's last line before acting** — it disambiguates two very different causes:
+
+- `Non-passing runs: ["<Workflow> (failure | startup_failure)"]` → a **real** red in `<Workflow>`; `CI Gate` is only reporting it. A `startup_failure` produces *no separate check-run*, so `CI Gate` can look like the **only** red while masking the actual failure (e.g. a `conventions.yml` input the `@v0` tag no longer defines). Fix/re-run **that** workflow — re-triggering `CI Gate` alone won't help.
+- a **timeout** (it waits up to 20 min for slow jobs like Release Precheck) or "still in progress" → a flake. **Re-trigger `CI Gate`** (re-run the PR Monitor run, or push any commit) once the underlying jobs have finished; it then reads them green. This is the common "`CI Gate` is the lone red → re-run → all green" case.
+
+A green `CI Gate` therefore means the whole PR is green.
 
 When monitoring PRs to get them across the finish line (shepherding to green):
 
