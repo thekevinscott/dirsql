@@ -867,6 +867,102 @@ glob = "data/**/metadata.json"
 }
 
 #[test]
+fn bare_dirsql_ignores_cwd_config_and_serves_baked_in_default() {
+    // #602: bare `dirsql` (no `-c`) no longer auto-loads a `./.dirsql.toml`
+    // sitting in the invocation directory. The default is the baked-in
+    // shipped config (the `files` table), NOT a config that happens to be on
+    // disk. So the on-disk `posts` table is unreachable, while `files` is.
+    let root = blog_fixture(); // writes a `.dirsql.toml` defining `posts`
+
+    // The baked-in default `files` table is served...
+    let files = run_query_subcommand(root.path(), "SELECT COUNT(*) AS n FROM files");
+    assert!(
+        files.status.success(),
+        "bare `dirsql query` must serve the baked-in `files` table, got {files:?}"
+    );
+
+    // ...and the cwd config's `posts` table is NOT loaded.
+    let posts = run_query_subcommand(root.path(), "SELECT COUNT(*) AS n FROM posts");
+    assert!(
+        !posts.status.success(),
+        "bare `dirsql` must NOT auto-load ./.dirsql.toml, so `posts` must be \
+         unknown, got {posts:?}"
+    );
+    let stderr = String::from_utf8(posts.stderr).unwrap();
+    assert!(
+        stderr.contains("posts"),
+        "the error should name the missing `posts` table, got {stderr:?}"
+    );
+}
+
+#[test]
+fn missing_explicit_config_exits_nonzero_naming_the_file() {
+    // #602: an explicit `-c` to a file that does not exist is an error — no
+    // silent fallback to the baked-in default. The diagnostic names the file.
+    let dir = TempDir::new().unwrap();
+    let out = std::process::Command::cargo_bin("dirsql")
+        .expect("binary must exist")
+        .arg("-c")
+        .arg("./missing.toml")
+        .arg("query")
+        .arg("SELECT 1")
+        .current_dir(dir.path())
+        .output()
+        .expect("spawning `dirsql query` failed");
+    assert!(
+        !out.status.success(),
+        "a missing -c config must be a non-zero exit, got {out:?}"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("missing.toml"),
+        "stderr must name the missing config file, got {stderr:?}"
+    );
+}
+
+#[test]
+fn init_output_loads_when_passed_explicitly_with_config_flag() {
+    // #602: `dirsql init` remains a scaffold, but its output no longer
+    // auto-loads — you pass it explicitly with `-c`. Write the starter, then
+    // load it via `-c` and confirm it serves the `files` table it declares.
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("readme.md"), "hello").unwrap();
+
+    let init = std::process::Command::cargo_bin("dirsql")
+        .expect("binary must exist")
+        .arg("init")
+        .current_dir(dir.path())
+        .output()
+        .expect("spawning `dirsql init` failed");
+    assert!(init.status.success(), "`dirsql init` must succeed, got {init:?}");
+
+    let out = std::process::Command::cargo_bin("dirsql")
+        .expect("binary must exist")
+        .arg("-c")
+        .arg(".dirsql.toml")
+        .arg("query")
+        .arg("SELECT basename FROM files")
+        .current_dir(dir.path())
+        .output()
+        .expect("spawning `dirsql query` failed");
+    assert!(
+        out.status.success(),
+        "the init-written config must load via `-c`, got {out:?}"
+    );
+    let rows: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let names: Vec<&str> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["basename"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"readme.md"),
+        "the init config's files table must contain readme.md, got {names:?}"
+    );
+}
+
+#[test]
 fn query_subcommand_serves_default_files_table_without_config() {
     // Config discovery matches server mode: no `.dirsql.toml` means the
     // default `files` table, queryable out of the box.
