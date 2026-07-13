@@ -370,11 +370,7 @@ fn counting_named_table(name: &'static str, col: &'static str, counter: Arc<Atom
     )
 }
 
-fn open_two(
-    root: &Path,
-    ca: Arc<AtomicUsize>,
-    cb: Arc<AtomicUsize>,
-) -> DirSQL {
+fn open_two(root: &Path, ca: Arc<AtomicUsize>, cb: Arc<AtomicUsize>) -> DirSQL {
     DirSQL::builder()
         .root(root)
         .tables(vec![

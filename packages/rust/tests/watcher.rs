@@ -135,9 +135,11 @@ fn watch_create_and_delete_fan_out_to_both_tables() {
     // the file is written (a new dir + immediate write races inotify).
     fs::create_dir_all(dir.path().join("data").join("2401.00001")).unwrap();
 
-    let ta = Table::new("CREATE TABLE ta (col_a TEXT)", "data/*/metadata.json", |_| {
-        vec![HashMap::from([("col_a".into(), Value::Text("A".into()))])]
-    });
+    let ta = Table::new(
+        "CREATE TABLE ta (col_a TEXT)",
+        "data/*/metadata.json",
+        |_| vec![HashMap::from([("col_a".into(), Value::Text("A".into()))])],
+    );
     let tb = Table::new(
         "CREATE TABLE tb (col_b TEXT)",
         "data/**/metadata.json",
@@ -148,7 +150,11 @@ fn watch_create_and_delete_fan_out_to_both_tables() {
     db.start_watching().unwrap();
     thread::sleep(Duration::from_millis(250));
 
-    let file = dir.path().join("data").join("2401.00001").join("metadata.json");
+    let file = dir
+        .path()
+        .join("data")
+        .join("2401.00001")
+        .join("metadata.json");
     fs::write(&file, "{}").unwrap();
 
     let created = drain_row_events(&db, Duration::from_secs(5), |seen| {
