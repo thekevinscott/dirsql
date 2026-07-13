@@ -14,7 +14,7 @@ use dirsql::cli::{
     AppState, PostQuery, PreQuery, ServerConfig, execute::execute_query, init::InitOptions,
     serve_with_state,
 };
-use dirsql::{DirSQL, Extension};
+use dirsql::{DirSQL, Extension, Row, Table};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -46,6 +46,16 @@ struct Cli {
     /// server mode and by the `query` subcommand.
     #[arg(short = 'c', long, global = true)]
     config: Vec<PathBuf>,
+
+    /// Internal (launcher-only): seed the resolved config set with the baked-in
+    /// default `files` table *before* the `-c` configs, so an explicit `-c` no
+    /// longer suppresses the default. `--include-default -c <plugin>` yields the
+    /// baked-in default **plus** the plugin's tables — the additive composition
+    /// the plugin launcher (#529) injects for the no-user-`-c` case (#604).
+    /// Idempotent with no `-c` (just the bare default). Hidden from `--help`: it
+    /// is internal plumbing for the launcher, not a documented public flag.
+    #[arg(long = "include-default", global = true, hide = true)]
+    include_default: bool,
 
     /// Bind address. Used when no subcommand is given.
     #[arg(long, default_value = "localhost")]
@@ -254,6 +264,15 @@ fn load_state(cli: &Cli) -> AppState {
     }
 
     let mut builder = DirSQL::builder();
+    // `--include-default` seeds the baked-in default `files` table before the
+    // `-c` configs, so an explicit config composes with the default instead of
+    // replacing it (#604). Programmatic tables sort before config tables in
+    // `resolve`, giving `[default] ++ [-c]`; a default-vs-config `files`
+    // collision hits the existing dedup in `compile_matcher`. Reached only when
+    // `-c` is present -- with none, the idempotent default path above handles it.
+    if cli.include_default {
+        builder = builder.table(default_files_table());
+    }
     for config_path in &cli.config {
         // Canonicalize so config-relative paths (extension libraries, hook
         // working directories) resolve against an absolute parent — `notify`
@@ -400,6 +419,23 @@ fn load_default_state(cli: &Cli) -> AppState {
     }
 }
 
+/// The baked-in default `files` table, parsed from the shared
+/// [`dirsql::DEFAULT_CONFIG_TOML`] asset. Used by the `--include-default` compose
+/// path (#604), which seeds it as a programmatic table *before* the `-c`
+/// configs so an explicit config no longer suppresses the default. The no-`-c`
+/// default path relies on the builder's own injection instead (#603); both draw
+/// from the one asset, so they cannot drift.
+fn default_files_table() -> Table {
+    let config = dirsql::config::load_config_str(dirsql::DEFAULT_CONFIG_TOML)
+        .expect("DEFAULT_CONFIG_TOML must be valid dirsql config TOML");
+    let table_config = &config.tables[0];
+    Table::new(
+        table_config.ddl.clone(),
+        table_config.glob.clone(),
+        |_path| vec![Row::new()],
+    )
+}
+
 #[cfg(unix)]
 async fn wait_for_shutdown() -> std::io::Result<()> {
     use tokio::signal::unix::{SignalKind, signal};
@@ -463,6 +499,28 @@ mod tests {
             cli.config_paths(),
             vec![PathBuf::from("a.toml"), PathBuf::from("b.toml")]
         );
+    }
+
+    #[test]
+    fn include_default_defaults_false_without_the_flag() {
+        // Absent -> false: `-c` keeps its replacement semantics unless the
+        // launcher explicitly opts the baked-in default back in (#604).
+        let cli = Cli::parse_from(["dirsql"]);
+        assert!(!cli.include_default);
+    }
+
+    #[test]
+    fn include_default_flag_sets_true() {
+        let cli = Cli::parse_from(["dirsql", "--include-default"]);
+        assert!(cli.include_default);
+    }
+
+    #[test]
+    fn include_default_is_global_on_the_query_subcommand() {
+        // Global, so it attaches to `query` too — the launcher injects it before
+        // the subcommand alongside `-c <plugin>`.
+        let cli = Cli::parse_from(["dirsql", "query", "SELECT 1", "--include-default"]);
+        assert!(cli.include_default);
     }
 
     #[test]
