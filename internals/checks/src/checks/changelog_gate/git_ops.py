@@ -17,29 +17,25 @@ def changed_files(base_sha: str, head_sha: str, runner=subprocess.run) -> list[s
         text=True,
         check=True,
     )
-    return result.stdout.splitlines()
+    return [line for line in result.stdout.splitlines() if line]
 
 
-def skip_trailers(base_sha: str, head_sha: str, runner=subprocess.run) -> str:
+def added_files(base_sha: str, head_sha: str, runner=subprocess.run) -> list[str]:
+    # Added-only (`--diff-filter=A`) over the same merge-base range: a fragment satisfies the
+    # gate only when the PR *adds* it, so an edit to an existing fragment never counts.
     result = runner(
-        [
-            "git",
-            "log",
-            "--format=%(trailers:key=skip-changelog,valueonly)",
-            f"{base_sha}..{head_sha}",
-        ],
+        ["git", "diff", "--name-only", "--diff-filter=A", f"{base_sha}...{head_sha}"],
         capture_output=True,
         text=True,
         check=True,
     )
-    return result.stdout
+    return [line for line in result.stdout.splitlines() if line]
 
 
 def commit_messages(base_sha: str, head_sha: str, runner=subprocess.run) -> str:
-    # Raw commit bodies (`%B`) for every commit in the range, so the gate can
-    # detect a `skip-changelog:` line that git did NOT parse as a trailer (e.g.
-    # split out of the final trailer block by a blank line) and report it,
-    # instead of falling through to the generic "no changelog entry" message.
+    # Raw commit bodies (`%B`) for every commit in the range, scanned for a
+    # `skip-changelog:` line -- git's own trailer parser is bypassed so the
+    # bypass works from any line, not only a formal final-paragraph trailer.
     result = runner(
         ["git", "log", "--format=%B", f"{base_sha}..{head_sha}"],
         capture_output=True,

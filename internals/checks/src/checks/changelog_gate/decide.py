@@ -1,111 +1,95 @@
 """Pure decision logic for the changelog-gate check (#494/#496).
 
-Since #565 the gate is **per-package, fragments-only**: a PR that changes a
-package's public-facing SDK source must add a fragment under that package's
-own ``packages/<pkg>/changelog.d/`` (named ``YYYY-MM-DD-<slug>.md``). The old
-root ``changelog.d/`` directory and the direct ``CHANGELOG.md`` edit are no
-longer accepted -- ``CHANGELOG.md`` is a frozen pointer stub (#563).
+Mirrors template-lib's reference gate (#566) in structure, adapted to dirsql's
+**per-package colocation**: fragments live inside the package they document --
+``packages/<pkg>/changelog.d/`` and ``packages/<pkg>/migrations.d/`` -- so they
+ship with that package. A PR that changes non-test source under
+``packages/<pkg>/`` must add a fragment under that package's own fragment
+folders, named ``YYYY-MM-DD-<slug>.md`` (the directory identifies the package,
+so no package token in the filename). The ``skip-changelog:`` commit-body line
+is the bypass.
 """
 
-import fnmatch
 import re
 
-# The three SDK packages that own a changelog. Directory slug under packages/.
-PACKAGES = ("python", "ts", "rust")
+# A `skip-changelog:` line anywhere in a commit body bypasses the gate. Scanned
+# over raw bodies (not git's trailer parser), so it need not be a formal
+# trailer -- this sidesteps the blank-line-splits-the-trailer footgun.
+_SKIP_TRAILER = re.compile(r"^skip-changelog:", re.IGNORECASE | re.MULTILINE)
 
-# Test files never require a changelog entry; checked before the includes.
-_TEST_EXCLUDES = (
-    "packages/python/dirsql/*_test.py",
-    "packages/ts/src/*.test.ts",
-    "packages/ts/src/*.spec.ts",
-)
+# A fragment sits directly inside a package's changelog.d/ or migrations.d/.
+# Captures (<pkg>, <filename>); the trailing segment forbids nested paths.
+_FRAGMENT_RE = re.compile(r"packages/([^/]+)/(?:changelog|migrations)\.d/([^/]+)")
 
-# Public-facing SDK source, grouped by the package that owns it. The top-level
-# Cargo manifest/lock belong to the Rust core.
-_PACKAGE_SOURCES = {
-    "rust": (
-        "packages/rust/src/*",
-        "packages/rust/Cargo.toml",
-        "Cargo.toml",
-        "Cargo.lock",
-    ),
-    "python": (
-        "packages/python/src/*",
-        "packages/python/dirsql/*",
-        "packages/python/Cargo.toml",
-    ),
-    "ts": (
-        "packages/ts/src/*",
-        "packages/ts/napi/src/*",
-        "packages/ts/napi/Cargo.toml",
-    ),
-}
-
-# `packages/<pkg>/changelog.d/<file>` -- captures the package slug and filename.
-_FRAGMENT_PATH_RE = re.compile(r"^packages/([^/]+)/changelog\.d/([^/]+)$")
-
-# A well-formed fragment path: a package changelog dir, then the template-lib
-# name (an ISO date, a kebab-case slug, and `.md`). Matched whole so there is
-# no basename-splitting to mutate.
-_FRAGMENT_NAME_RE = re.compile(
-    r"^packages/[^/]+/changelog\.d/\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*\.md$"
-)
+# Template-lib fragment name: an ISO date, a kebab-case slug, and `.md`.
+_FRAGMENT_NAME = re.compile(r"\d{4}-\d{2}-\d{2}-[a-z0-9-]+\.md")
 
 
-def package_for_path(path: str) -> str | None:
-    """The SDK package a changed path belongs to, or ``None`` if it is not
-    public-facing SDK source (docs, tests, CI, tooling)."""
-    if any(fnmatch.fnmatch(path, pattern) for pattern in _TEST_EXCLUDES):
-        return None
-    for package, patterns in _PACKAGE_SOURCES.items():
-        if any(fnmatch.fnmatch(path, pattern) for pattern in patterns):
-            return package
-    return None
+def has_skip_trailer(commit_messages: str) -> bool:
+    """True if any commit-body line starts with ``skip-changelog:``."""
+    return bool(_SKIP_TRAILER.search(commit_messages))
 
 
-def changed_packages(paths) -> set[str]:
-    """The set of SDK packages whose source changed among ``paths``."""
-    return {
-        package
-        for package in (package_for_path(path) for path in paths)
-        if package is not None
+def changed_packages(changed) -> list[str]:
+    """Unique, sorted package names touched under ``packages/<name>/...``."""
+    pkgs = {
+        parts[1]
+        for path in changed
+        if len(parts := path.split("/")) >= 2 and parts[0] == "packages"
     }
+    return sorted(pkgs)
 
 
-def fragment_package(path: str) -> str | None:
-    """The package a changelog fragment path belongs to, or ``None`` when the
-    path is not a fragment (wrong location, the dir README, or not ``.md``)."""
-    match = _FRAGMENT_PATH_RE.match(path)
-    if match is None:
-        return None
-    package, name = match.group(1), match.group(2)
-    if package not in _PACKAGE_SOURCES or name == "README.md" or not name.endswith(".md"):
-        return None
-    return package
+def _is_exempt(path: str, pkg: str) -> bool:
+    """True if ``path`` is a fragment, stub, or test file -- not source.
 
-
-def is_valid_fragment_name(path: str) -> bool:
-    """Whether a fragment path's filename matches ``YYYY-MM-DD-<slug>.md``."""
-    return _FRAGMENT_NAME_RE.match(path) is not None
-
-
-def fragment_paths(paths) -> list[str]:
-    """The changelog-fragment paths (any package) among ``paths``."""
-    return [path for path in paths if fragment_package(path) is not None]
-
-
-def extract_skip_trailers(trailer_output: str) -> list[str]:
-    return [line for line in trailer_output.splitlines() if line.strip()]
-
-
-def contains_skip_changelog_line(commit_messages: str) -> bool:
-    """True if any commit-message line is a ``skip-changelog:`` directive.
-
-    Detects an *attempted* skip-changelog independent of git's trailer parser,
-    so the gate can tell a malformed (e.g. blank-line-split) trailer apart from
-    no skip at all and emit a targeted fix message.
+    The package ``CHANGELOG.md`` / ``MIGRATIONS.md`` are pointer stubs; the
+    ``changelog.d/`` / ``migrations.d/`` folders are the entries themselves;
+    dirsql colocates Python unit tests as ``*_test.py`` and TS as ``*.test.*``
+    / ``*.spec.*``; and anything under a ``tests/`` directory is a test tier.
     """
-    return any(
-        line.strip().lower().startswith("skip-changelog:")
-        for line in commit_messages.splitlines()
+    p = re.escape(pkg)
+    return bool(
+        re.fullmatch(rf"packages/{p}/(CHANGELOG|MIGRATIONS)\.md", path)
+        or re.match(rf"packages/{p}/(changelog|migrations)\.d/", path)
+        or re.fullmatch(rf"packages/{p}/.*_test\.py", path)
+        or re.fullmatch(rf"packages/{p}/.*\.(test|spec)\.(ts|tsx|js|mjs|cjs)", path)
+        or re.match(rf"packages/{p}/tests?/", path)
     )
+
+
+def code_touched(changed, pkg: str) -> bool:
+    """True if the package has non-stub, non-test source changes."""
+    prefix = f"packages/{pkg}/"
+    return any(
+        path.startswith(prefix) and not _is_exempt(path, pkg) for path in changed
+    )
+
+
+def _fragment(path: str):
+    """``(<pkg>, <filename>)`` if ``path`` sits directly in a package's
+    changelog.d/ or migrations.d/, else ``None``."""
+    match = _FRAGMENT_RE.fullmatch(path)
+    return (match.group(1), match.group(2)) if match is not None else None
+
+
+def malformed_fragments(changed) -> list[str]:
+    """Touched fragment files whose names break the naming convention."""
+    return [
+        path
+        for path in changed
+        if (frag := _fragment(path)) is not None
+        and frag[1] != "README.md"
+        and not _FRAGMENT_NAME.fullmatch(frag[1])
+    ]
+
+
+def added_fragments(added, pkg: str) -> list[str]:
+    """Well-formed fragments the PR adds under ``pkg``'s own fragment dirs."""
+    return [
+        path
+        for path in added
+        if (frag := _fragment(path)) is not None
+        and frag[0] == pkg
+        and _FRAGMENT_NAME.fullmatch(frag[1])
+    ]

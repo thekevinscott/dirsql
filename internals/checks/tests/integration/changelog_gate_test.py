@@ -28,6 +28,11 @@ def _commit(message: str) -> str:
     return result.stdout.strip()
 
 
+def _write(path, text="// code\n"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
 @pytest.fixture
 def repo(tmp_path):
     original_cwd = os.getcwd()
@@ -44,84 +49,62 @@ def repo(tmp_path):
 
 
 def describe_run_against_a_real_repo():
-    def it_fails_when_sdk_code_changes_without_a_changelog_entry(repo, capsys):
+    def it_fails_when_package_source_changes_without_a_fragment(repo, capsys):
         tmp_path, base_sha = repo
-        rust_dir = tmp_path / "packages" / "rust" / "src"
-        rust_dir.mkdir(parents=True)
-        (rust_dir / "lib.rs").write_text("// code\n")
-        head_sha = _commit("add sdk code")
+        _write(tmp_path / "packages" / "rust" / "src" / "lib.rs")
+        head_sha = _commit("add rust code")
 
         assert run(base_sha, head_sha) == 1
-        assert "SDK code changed" in capsys.readouterr().err
+        assert "packages/rust has code changes" in capsys.readouterr().out
 
-    def it_names_a_malformed_skip_changelog_trailer(repo, capsys):
-        # A `skip-changelog:` separated from the trailer block by a blank line:
-        # git parses no trailer, so the gate must name the malformed attempt
-        # rather than print the generic "no entry" message.
+    def it_passes_when_a_colocated_fragment_is_added(repo, capsys):
         tmp_path, base_sha = repo
-        rust_dir = tmp_path / "packages" / "rust" / "src"
-        rust_dir.mkdir(parents=True)
-        (rust_dir / "lib.rs").write_text("// code\n")
-        _git("add", "-A")
-        subprocess.run(
-            [
-                "git",
-                "commit",
-                "-m",
-                "feat: a change\n\nskip-changelog: internal\n\n"
-                "Co-Authored-By: x <x@y.z>",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
+        _write(tmp_path / "packages" / "rust" / "src" / "lib.rs")
+        _write(
+            tmp_path / "packages" / "rust" / "changelog.d" / "2026-07-13-fix.md",
+            "**Changed a thing.**\n",
         )
-        head_sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True
-        ).stdout.strip()
-
-        assert run(base_sha, head_sha) == 1
-        assert "did not parse it as a trailer" in capsys.readouterr().err
-
-    def it_fails_when_the_fragment_lands_in_the_wrong_package(repo, capsys):
-        # A python fragment does not satisfy a rust source change.
-        tmp_path, base_sha = repo
-        rust_dir = tmp_path / "packages" / "rust" / "src"
-        rust_dir.mkdir(parents=True)
-        (rust_dir / "lib.rs").write_text("// code\n")
-        fragment_dir = tmp_path / "packages" / "python" / "changelog.d"
-        fragment_dir.mkdir(parents=True)
-        (fragment_dir / "2026-07-13-unrelated.md").write_text("**Changed.**\n")
-        head_sha = _commit("rust change, python fragment")
-
-        assert run(base_sha, head_sha) == 1
-        assert "packages/rust/changelog.d/YYYY-MM-DD-<slug>.md" in capsys.readouterr().err
-
-    def it_passes_when_a_per_package_fragment_is_added(repo, capsys):
-        tmp_path, base_sha = repo
-        rust_dir = tmp_path / "packages" / "rust" / "src"
-        rust_dir.mkdir(parents=True)
-        (rust_dir / "lib.rs").write_text("// code\n")
-        fragment_dir = tmp_path / "packages" / "rust" / "changelog.d"
-        fragment_dir.mkdir(parents=True)
-        (fragment_dir / "2026-07-13-fix-race.md").write_text("**Changed a thing.**\n")
-        head_sha = _commit("add sdk code with fragment")
+        head_sha = _commit("add rust code with fragment")
 
         assert run(base_sha, head_sha) == 0
-        assert "fragment(s) present for: rust" in capsys.readouterr().out
 
-    def it_passes_via_the_skip_changelog_trailer(repo, capsys):
+    def it_fails_when_the_fragment_is_in_another_package(repo, capsys):
         tmp_path, base_sha = repo
-        rust_dir = tmp_path / "packages" / "rust" / "src"
-        rust_dir.mkdir(parents=True)
-        (rust_dir / "lib.rs").write_text("// code\n")
+        _write(tmp_path / "packages" / "rust" / "src" / "lib.rs")
+        _write(
+            tmp_path / "packages" / "ts" / "changelog.d" / "2026-07-13-unrelated.md",
+            "**Changed.**\n",
+        )
+        head_sha = _commit("rust change, ts fragment")
+
+        assert run(base_sha, head_sha) == 1
+        assert "packages/rust has code changes" in capsys.readouterr().out
+
+    def it_accepts_a_migrations_fragment(repo, capsys):
+        tmp_path, base_sha = repo
+        _write(tmp_path / "packages" / "rust" / "src" / "lib.rs")
+        _write(
+            tmp_path / "packages" / "rust" / "migrations.d" / "2026-07-13-break.md",
+            "### break\n",
+        )
+        head_sha = _commit("rust change with migration")
+
+        assert run(base_sha, head_sha) == 0
+
+    def it_flags_a_malformed_fragment_filename(repo, capsys):
+        tmp_path, base_sha = repo
+        _write(tmp_path / "packages" / "rust" / "changelog.d" / "notes.md", "x\n")
+        head_sha = _commit("bad fragment name")
+
+        assert run(base_sha, head_sha) == 1
+        assert "fragment filenames must match" in capsys.readouterr().out
+
+    def it_passes_via_the_skip_changelog_line(repo, capsys):
+        tmp_path, base_sha = repo
+        _write(tmp_path / "packages" / "rust" / "src" / "lib.rs")
         _git("add", "-A")
         subprocess.run(
-            [
-                "git",
-                "commit",
-                "-m",
-                "internal refactor\n\nskip-changelog: no observable change",
-            ],
+            ["git", "commit", "-m", "internal refactor\n\nskip-changelog: no change"],
             check=True,
             capture_output=True,
             text=True,
@@ -131,12 +114,12 @@ def describe_run_against_a_real_repo():
         ).stdout.strip()
 
         assert run(base_sha, head_sha) == 0
-        assert "Bypassing changelog check" in capsys.readouterr().out
+        assert "bypassing changelog enforcement" in capsys.readouterr().out
 
-    def it_passes_when_no_sdk_code_changed(repo, capsys):
+    def it_passes_when_no_package_source_changed(repo, capsys):
         tmp_path, base_sha = repo
         (tmp_path / "README.md").write_text("hello again\n")
         head_sha = _commit("docs tweak")
 
         assert run(base_sha, head_sha) == 0
-        assert "No SDK code changes detected" in capsys.readouterr().out
+        assert "No package source changed" in capsys.readouterr().out
