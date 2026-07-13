@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/ -x -q",
+  "ran_at": 1783984022,
+  "exit_code": 0,
+  "commit": "6a838799661eb6fab331d00d69b068df5e7ae69e",
+  "branch": "claude/open-issues-review-le8hm5-609"
+}
