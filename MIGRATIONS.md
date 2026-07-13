@@ -1,15 +1,21 @@
 # Migrations
 
 Upgrade guides for `dirsql` consumers. Every release that breaks, removes, or
-changes the runtime behavior of a public surface gets its own entry here.
+changes the runtime behavior of a public surface gets a migration entry.
 
-This file is the source of truth. The docs site
-([Migrations](https://thekevinscott.github.io/dirsql/migrations)) is generated
-from it via a VitePress include; do not edit the rendered page.
+**This file is frozen.** The entries below are the pre-fragment history. New
+migration entries are **per-package fragments** under
+`packages/<pkg>/migrations.d/` — one file per breaking change, each a complete
+five-subsection entry — so PRs never conflict on a shared file. See each
+package's `MIGRATIONS.md` (`packages/python`, `packages/ts`, `packages/rust`)
+and AGENTS.md, "Changelog and Migrations". This frozen archive is still the
+source of truth for the pre-fragment history; the docs site
+([Migrations](https://thekevinscott.github.io/dirsql/migrations)) surfaces it
+via a VitePress include — do not edit the rendered page.
 
 See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHANGELOG.md) for the full release log. (The relative path is not used because this file is also included into the docs site via a VitePress include, where relative paths would break.)
 
-## [Unreleased]
+## Frozen history (pre-fragment)
 
 ### The `[dirsql].root` config key is removed; the runner decides the index root (#540, epic #528)
 
