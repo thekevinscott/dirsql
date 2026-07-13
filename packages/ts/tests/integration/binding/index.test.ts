@@ -1,5 +1,5 @@
-// `readFileSync` stays sync: it runs inside `extract` callbacks, and the
-// public `TableDef.extract` signature is synchronous `(filePath) => rows[]`.
+// `readFileSync` stays sync: it runs inside `onFile` callbacks, and the
+// public `TableDef.onFile` signature is synchronous `(filePath) => rows[]`.
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -40,7 +40,7 @@ describe("DirSQL", () => {
         {
           ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
           glob: "data/users.json",
-          extract: (filePath: string) =>
+          onFile: (filePath: string) =>
             JSON.parse(readFileSync(filePath, "utf8")),
         },
       ],
@@ -61,13 +61,13 @@ describe("DirSQL", () => {
         {
           ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
           glob: "data/users.json",
-          extract: (filePath: string) =>
+          onFile: (filePath: string) =>
             JSON.parse(readFileSync(filePath, "utf8")),
         },
         {
           ddl: "CREATE TABLE products (name TEXT, price REAL)",
           glob: "data/products.json",
-          extract: (filePath: string) =>
+          onFile: (filePath: string) =>
             JSON.parse(readFileSync(filePath, "utf8")),
         },
       ],
@@ -93,7 +93,7 @@ describe("DirSQL", () => {
         {
           ddl: 'CREATE TABLE orders (name TEXT, "order" INTEGER)',
           glob: "data/orders.json",
-          extract: (filePath: string) =>
+          onFile: (filePath: string) =>
             JSON.parse(readFileSync(filePath, "utf8")),
         },
       ],
@@ -112,7 +112,7 @@ describe("DirSQL", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "data/*.json",
-          extract: (filePath: string) =>
+          onFile: (filePath: string) =>
             JSON.parse(readFileSync(filePath, "utf8")).map(
               (item: { name: string }) => ({
                 name: item.name,
@@ -133,7 +133,7 @@ describe("DirSQL", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "data/*.json",
-          extract: (filePath: string) =>
+          onFile: (filePath: string) =>
             JSON.parse(readFileSync(filePath, "utf8")).map(
               (item: { name: string }) => ({
                 name: item.name,
@@ -155,7 +155,7 @@ describe("DirSQL", () => {
         {
           ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
           glob: "data/users.json",
-          extract: (filePath: string) =>
+          onFile: (filePath: string) =>
             JSON.parse(readFileSync(filePath, "utf8")),
         },
       ],
@@ -175,7 +175,7 @@ describe("DirSQL", () => {
           {
             ddl: "CREATE TABLE items (name TEXT)",
             glob: "**/*.json",
-            extract: (filePath: string) =>
+            onFile: (filePath: string) =>
               JSON.parse(readFileSync(filePath, "utf8")),
           },
         ],
@@ -195,7 +195,7 @@ describe("DirSQL", () => {
         {
           ddl: "CREATE TABLE users (name TEXT)",
           glob: "data/users.json",
-          extract: (filePath: string) =>
+          onFile: (filePath: string) =>
             JSON.parse(readFileSync(filePath, "utf8")),
         },
       ],
@@ -215,7 +215,7 @@ describe("DirSQL", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "items/*.json",
-          extract: (filePath: string) => [
+          onFile: (filePath: string) => [
             JSON.parse(readFileSync(filePath, "utf8")),
           ],
         },
@@ -250,7 +250,7 @@ describe("DirSQL", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "items/*.json",
-          extract: (filePath: string) => [
+          onFile: (filePath: string) => [
             JSON.parse(readFileSync(filePath, "utf8")),
           ],
         },
@@ -277,7 +277,7 @@ describe("DirSQL", () => {
         {
           ddl: "NOT VALID SQL",
           glob: "**/*.json",
-          extract: () => [],
+          onFile: () => [],
         },
       ],
     });
@@ -310,7 +310,7 @@ describe("DirSQL strict mode", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "items/*.json",
-          extract: (filePath: string) => [
+          onFile: (filePath: string) => [
             JSON.parse(readFileSync(filePath, "utf8")),
           ],
           strict: true,
@@ -332,7 +332,7 @@ describe("DirSQL strict mode", () => {
         {
           ddl: "CREATE TABLE items (name TEXT, color TEXT)",
           glob: "items/*.json",
-          extract: (filePath: string) => [
+          onFile: (filePath: string) => [
             JSON.parse(readFileSync(filePath, "utf8")),
           ],
           strict: true,
@@ -368,7 +368,7 @@ describe("DirSQL watch events", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "**/*.json",
-          extract: (filePath: string) => [
+          onFile: (filePath: string) => [
             JSON.parse(readFileSync(filePath, "utf8")),
           ],
         },
@@ -401,7 +401,7 @@ describe("DirSQL watch events", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "**/*.json",
-          extract: (filePath: string) => [
+          onFile: (filePath: string) => [
             JSON.parse(readFileSync(filePath, "utf8")),
           ],
         },
@@ -433,7 +433,7 @@ describe("DirSQL watch events", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "**/*.json",
-          extract: (filePath: string) => [
+          onFile: (filePath: string) => [
             JSON.parse(readFileSync(filePath, "utf8")),
           ],
         },
@@ -466,7 +466,7 @@ describe("DirSQL watch events", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "items/*.json",
-          extract: (filePath: string) => [
+          onFile: (filePath: string) => [
             JSON.parse(readFileSync(filePath, "utf8")),
           ],
         },
@@ -495,7 +495,7 @@ describe("DirSQL watch events", () => {
         {
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "*.json",
-          extract: (filePath: string) => [
+          onFile: (filePath: string) => [
             JSON.parse(readFileSync(filePath, "utf8")),
           ],
         },
@@ -531,19 +531,19 @@ describe("Table class", () => {
     const t = new Table({
       ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
       glob: "data/users.json",
-      extract: (filePath: string) => JSON.parse(readFileSync(filePath, "utf8")),
+      onFile: (filePath: string) => JSON.parse(readFileSync(filePath, "utf8")),
     });
     expect(t).toBeInstanceOf(Table);
     expect(t.ddl).toBe("CREATE TABLE users (name TEXT, age INTEGER)");
     expect(t.glob).toBe("data/users.json");
-    expect(typeof t.extract).toBe("function");
+    expect(typeof t.onFile).toBe("function");
   });
 
   it("instances are assignable to TableDef and accepted by DirSQL", async () => {
     const tableInstance: TableDef = new Table({
       ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
       glob: "data/users.json",
-      extract: (filePath: string) => JSON.parse(readFileSync(filePath, "utf8")),
+      onFile: (filePath: string) => JSON.parse(readFileSync(filePath, "utf8")),
     });
 
     const db = new DirSQL({
@@ -558,18 +558,18 @@ describe("Table class", () => {
   });
 
   it("plain object and Table instance produce identical query behavior", async () => {
-    const extract = (filePath: string) =>
+    const onFile = (filePath: string) =>
       JSON.parse(readFileSync(filePath, "utf8"));
     const ddl = "CREATE TABLE users (name TEXT, age INTEGER)";
     const glob = "data/users.json";
 
     const dbFromLiteral = new DirSQL({
       root: dir,
-      tables: [{ ddl, glob, extract }],
+      tables: [{ ddl, glob, onFile }],
     });
     const dbFromClass = new DirSQL({
       root: dir,
-      tables: [new Table({ ddl, glob, extract })],
+      tables: [new Table({ ddl, glob, onFile })],
     });
 
     const literalRows = await dbFromLiteral.query(
@@ -585,7 +585,7 @@ describe("Table class", () => {
     const def = {
       ddl: "CREATE TABLE users (name TEXT)",
       glob: "data/users.json",
-      extract: (filePath: string) => JSON.parse(readFileSync(filePath, "utf8")),
+      onFile: (filePath: string) => JSON.parse(readFileSync(filePath, "utf8")),
     };
     const t = new Table(def);
     expect(Object.keys(t).sort()).toEqual(Object.keys(def).sort());
@@ -599,7 +599,7 @@ describe("Table class", () => {
     const t = new Table({
       ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
       glob: "data/users.json",
-      extract: (filePath: string) => JSON.parse(readFileSync(filePath, "utf8")),
+      onFile: (filePath: string) => JSON.parse(readFileSync(filePath, "utf8")),
       strict: true,
     });
     expect(t.strict).toBe(true);

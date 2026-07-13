@@ -39,7 +39,7 @@ class Table:
         *,
         ddl: str,
         glob: str,
-        extract: Callable[[str], list[Row]],
+        on_file: Callable[[str], list[Row]],
         strict: bool = False,
     ) -> None: ...
 

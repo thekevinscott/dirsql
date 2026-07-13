@@ -6,7 +6,7 @@
 //! napi-rs binding for `dirsql`. Intentionally thin: all orchestration lives
 //! in `dirsql::DirSQL`. This layer only:
 //!
-//! - wraps a JS `extract` callable in a Rust closure (via a persistent napi
+//! - wraps a JS `onFile` callable in a Rust closure (via a persistent napi
 //!   reference) so it can be handed to [`dirsql::Table`]
 //! - converts row values and events between Rust and the napi shapes exposed
 //!   to JS (BLOB columns cross as Node `Buffer`s via [`JsRowValue`])
@@ -80,9 +80,9 @@ impl DirSQL {
     /// least one of `root` or `config` must be provided.
     ///
     /// Table parsing runs synchronously on the JS thread (napi references to
-    /// each JS `extract` callback can only be created there). The directory
+    /// each JS `onFile` callback can only be created there). The directory
     /// scan + file I/O then runs on the libuv threadpool via [`OpenTask`];
-    /// the `extract` callbacks and DB inserts run back on the JS thread in
+    /// the `onFile` callbacks and DB inserts run back on the JS thread in
     /// the task's `resolve` phase.
     ///
     /// When `config` is supplied, its `[[table]]` entries are appended after
@@ -174,9 +174,9 @@ impl DirSQL {
 /// `compute()` resolves the builder (loading a `.dirsql.toml` if supplied)
 /// and performs the directory scan + file reads via the builder's
 /// `prepare()` — I/O that is safe to run on a worker thread. `resolve()`
-/// then runs the `extract` callbacks and DB inserts via
+/// then runs the `onFile` callbacks and DB inserts via
 /// [`CoreDirSQL::finish_build`], which must happen on the JS main thread so
-/// napi handles remain valid when invoking each JS `extract` callback.
+/// napi handles remain valid when invoking each JS `onFile` callback.
 pub struct OpenTask {
     root: Option<PathBuf>,
     config_path: Option<PathBuf>,
@@ -273,7 +273,7 @@ impl Task for StartWatcherTask {
 ///
 /// The blocking wait for raw file events runs in `compute()` on the
 /// threadpool (parking a worker thread, not the JS thread). Processing
-/// those events into [`RowEvent`]s — which invokes the JS `extract`
+/// those events into [`RowEvent`]s — which invokes the JS `onFile`
 /// callback for created / modified files — runs in `resolve()` on the
 /// JS main thread, where napi handles are valid. Without this split,
 /// `compute()` would call into JS from a worker thread and crash V8
@@ -300,7 +300,7 @@ impl Task for PollEventsTask {
 }
 
 /// Parse a JS array of `TableDef` objects into Rust [`Table`]s. Must run on
-/// the JS thread: creates a persistent napi reference to each `extract`
+/// the JS thread: creates a persistent napi reference to each `onFile`
 /// callback so it can be invoked later without a live JS call frame.
 fn parse_tables_from_js(env: Env, tables: Array) -> Result<Vec<Table>> {
     let raw_env = env.raw();
@@ -318,11 +318,11 @@ fn parse_tables_from_js(env: Env, tables: Array) -> Result<Vec<Table>> {
 
         let ddl = unsafe { get_string_property(raw_env, raw_obj, "ddl")? };
         let glob = unsafe { get_string_property(raw_env, raw_obj, "glob")? };
-        let extract_val = unsafe { get_function_property(raw_env, raw_obj, "extract")? };
+        let on_file_val = unsafe { get_function_property(raw_env, raw_obj, "onFile")? };
         let strict = unsafe { get_bool_property(raw_env, raw_obj, "strict", false) };
 
-        let fn_ref = unsafe { Arc::new(FnRef::new(raw_env, extract_val)?) };
-        let mut table = Table::try_new(ddl, glob, make_extract_closure(fn_ref));
+        let fn_ref = unsafe { Arc::new(FnRef::new(raw_env, on_file_val)?) };
+        let mut table = Table::try_new(ddl, glob, make_on_file_closure(fn_ref));
         table.strict = strict;
         rust_tables.push(table);
     }
@@ -334,7 +334,7 @@ fn parse_tables_from_js(env: Env, tables: Array) -> Result<Vec<Table>> {
 ///
 /// SAFETY: All access happens on the JS main thread via `#[napi]` methods.
 /// `DirSQL::new` and `DirSQL::pollEvents` both run on that thread, and the
-/// extract closure is only invoked synchronously within those methods.
+/// onFile closure is only invoked synchronously within those methods.
 struct FnRef {
     raw_env: napi::sys::napi_env,
     raw_ref: napi::sys::napi_ref,
@@ -371,7 +371,7 @@ impl FnRef {
         Ok(result)
     }
 
-    unsafe fn call_extract(&self, abs_path: &str) -> Result<Vec<HashMap<String, Value>>> {
+    unsafe fn call_on_file(&self, abs_path: &str) -> Result<Vec<HashMap<String, Value>>> {
         let env = self.raw_env;
         let func = self.get_value()?;
 
@@ -409,7 +409,7 @@ impl FnRef {
             }
             return Err(Error::new(
                 Status::GenericFailure,
-                "Extract function call failed".to_string(),
+                "on-file function call failed".to_string(),
             ));
         }
 
@@ -427,24 +427,24 @@ impl Drop for FnRef {
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-fn make_extract_closure(
+fn make_on_file_closure(
     fn_ref: Arc<FnRef>,
 ) -> impl Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static {
     move |path: &str| unsafe {
         fn_ref
-            .call_extract(path)
-            .map_err(|e| -> BoxError { Box::new(ExtractError(e.to_string())) })
+            .call_on_file(path)
+            .map_err(|e| -> BoxError { Box::new(OnFileError(e.to_string())) })
     }
 }
 
 #[derive(Debug)]
-struct ExtractError(String);
-impl std::fmt::Display for ExtractError {
+struct OnFileError(String);
+impl std::fmt::Display for OnFileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
 }
-impl std::error::Error for ExtractError {}
+impl std::error::Error for OnFileError {}
 
 fn to_napi_err<E: std::fmt::Display>(e: E) -> Error {
     Error::new(Status::GenericFailure, e.to_string())
@@ -459,7 +459,7 @@ unsafe fn parse_js_array_of_objects(
     if !is_array {
         return Err(Error::new(
             Status::GenericFailure,
-            "Extract must return an array",
+            "on-file must return an array",
         ));
     }
 
@@ -1031,7 +1031,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_error_displays_inner() {
-        assert_eq!(ExtractError("bad".to_string()).to_string(), "bad");
+    fn on_file_error_displays_inner() {
+        assert_eq!(OnFileError("bad".to_string()).to_string(), "bad");
     }
 }

@@ -79,6 +79,6 @@ SQLite value mapping is under
   file. If it is expensive, [keep the index across restarts](./persist.md).
 - The flagship use of `on-file` — computing embeddings — is
   [Search documents by meaning](./search-by-meaning.md).
-- Embedding `dirsql` in a program instead? The SDK's `extract` callback
+- Embedding `dirsql` in a program instead? The SDK's `on_file` callback
   fills the same role in-process — see
   [Embed `dirsql` in your application](./embed.md).

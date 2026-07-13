@@ -1,7 +1,7 @@
 //! PyO3 binding for `dirsql`. Intentionally thin: all orchestration lives in
 //! `dirsql::DirSQL`. This layer only:
 //!
-//! - wraps a Python `extract` callable in a Rust closure (acquiring the GIL as
+//! - wraps a Python `on_file` callable in a Rust closure (acquiring the GIL as
 //!   needed) so it can be handed to [`dirsql::Table`]
 //! - converts row dicts, values, and events between Python and Rust
 //! - forwards `new` / `query` / `_start_watcher` / `_poll_events` to the
@@ -21,7 +21,7 @@ mod python {
     use std::time::Duration;
 
     /// A table definition. Mirrors `dirsql::Table` but holds a Python
-    /// callable for `extract`.
+    /// callable for `on_file`.
     #[pyclass(name = "Table", frozen)]
     struct PyTable {
         #[pyo3(get)]
@@ -29,7 +29,7 @@ mod python {
         #[pyo3(get)]
         glob: String,
         #[pyo3(get)]
-        extract: Py<PyAny>,
+        on_file: Py<PyAny>,
         #[pyo3(get)]
         strict: bool,
         /// Parsed table name (from `ddl`) via `dirsql::db::parse_table_name`,
@@ -44,13 +44,13 @@ mod python {
     #[pymethods]
     impl PyTable {
         #[new]
-        #[pyo3(signature = (*, ddl, glob, extract, strict=false))]
-        fn new(ddl: String, glob: String, extract: Py<PyAny>, strict: bool) -> Self {
+        #[pyo3(signature = (*, ddl, glob, on_file, strict=false))]
+        fn new(ddl: String, glob: String, on_file: Py<PyAny>, strict: bool) -> Self {
             let name = parse_table_name(&ddl);
             PyTable {
                 ddl,
                 glob,
-                extract,
+                on_file,
                 strict,
                 name,
             }
@@ -195,11 +195,11 @@ mod python {
     }
 
     fn build_table(py: Python<'_>, t: &PyTable) -> Table {
-        let extract_ref = t.extract.clone_ref(py);
+        let on_file_ref = t.on_file.clone_ref(py);
         let mut table = Table::try_new(
             t.ddl.clone(),
             t.glob.clone(),
-            make_extract_closure(extract_ref),
+            make_on_file_closure(on_file_ref),
         );
         table.strict = t.strict;
         table
@@ -207,23 +207,23 @@ mod python {
 
     type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-    fn make_extract_closure(
-        extract: Py<PyAny>,
+    fn make_on_file_closure(
+        on_file: Py<PyAny>,
     ) -> impl Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static {
         move |path: &str| {
             Python::attach(|py| -> std::result::Result<Vec<Row>, BoxError> {
-                let result = extract
+                let result = on_file
                     .call1(py, (path,))
-                    .map_err(|e| -> BoxError { Box::new(ExtractError(e.to_string())) })?;
+                    .map_err(|e| -> BoxError { Box::new(OnFileError(e.to_string())) })?;
                 let raw: Vec<HashMap<String, Py<PyAny>>> = result
                     .extract(py)
-                    .map_err(|e: PyErr| -> BoxError { Box::new(ExtractError(e.to_string())) })?;
+                    .map_err(|e: PyErr| -> BoxError { Box::new(OnFileError(e.to_string())) })?;
 
                 let mut rows = Vec::with_capacity(raw.len());
                 for r in &raw {
                     rows.push(
                         convert_py_row(py, r)
-                            .map_err(|e| -> BoxError { Box::new(ExtractError(e.to_string())) })?,
+                            .map_err(|e| -> BoxError { Box::new(OnFileError(e.to_string())) })?,
                     );
                 }
                 Ok(rows)
@@ -232,13 +232,13 @@ mod python {
     }
 
     #[derive(Debug)]
-    struct ExtractError(String);
-    impl std::fmt::Display for ExtractError {
+    struct OnFileError(String);
+    impl std::fmt::Display for OnFileError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str(&self.0)
         }
     }
-    impl std::error::Error for ExtractError {}
+    impl std::error::Error for OnFileError {}
 
     fn to_py_err<E: std::fmt::Display>(e: E) -> PyErr {
         PyRuntimeError::new_err(e.to_string())
@@ -493,8 +493,8 @@ mod python {
         }
 
         #[test]
-        fn extract_error_displays_inner() {
-            assert_eq!(ExtractError("bad".to_string()).to_string(), "bad");
+        fn on_file_error_displays_inner() {
+            assert_eq!(OnFileError("bad".to_string()).to_string(), "bad");
         }
 
         #[test]
