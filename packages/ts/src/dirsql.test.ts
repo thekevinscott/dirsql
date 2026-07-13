@@ -186,9 +186,9 @@ describe("DirSQL", () => {
         extensions: [{ path: "ext/a.so" }],
       });
       await db.ready;
-      expect(resolveConfigsExtensionSpecs).toHaveBeenCalledWith(
-        ["/cfg/.dirsql.toml"],
-      );
+      expect(resolveConfigsExtensionSpecs).toHaveBeenCalledWith([
+        "/cfg/.dirsql.toml",
+      ]);
       expect(openAsync).toHaveBeenCalledWith(
         null,
         null,
