@@ -35,7 +35,7 @@ Pass the config with [`-c`](../reference/cli.md#flags) (`dirsql` does not
 auto-load a `.dirsql.toml` from the current directory):
 
 ```bash
-dirsql -c ./.dirsql.toml query "SELECT title, author, year, path FROM books ORDER BY year"
+dirsql query "SELECT title, author, year, path FROM books ORDER BY year" -c ./.dirsql.toml
 ```
 
 ```json
@@ -60,7 +60,7 @@ on-file = "jq -c -s '.' {path}"
 ```
 
 ```bash
-dirsql -c ./.dirsql.toml query "SELECT event, user FROM events"
+dirsql query "SELECT event, user FROM events" -c ./.dirsql.toml
 ```
 
 ```json

@@ -740,10 +740,10 @@ fn run_query_subcommand(dir: &std::path::Path, sql: &str) -> std::process::Outpu
 fn run_query_subcommand_with_config(dir: &std::path::Path, sql: &str) -> std::process::Output {
     std::process::Command::cargo_bin("dirsql")
         .expect("binary must exist")
-        .arg("-c")
-        .arg(".dirsql.toml")
         .arg("query")
         .arg(sql)
+        .arg("-c")
+        .arg(".dirsql.toml")
         .current_dir(dir)
         .output()
         .expect("spawning `dirsql query` failed")
@@ -921,10 +921,10 @@ fn missing_explicit_config_exits_nonzero_naming_the_file() {
     let dir = TempDir::new().unwrap();
     let out = std::process::Command::cargo_bin("dirsql")
         .expect("binary must exist")
-        .arg("-c")
-        .arg("./missing.toml")
         .arg("query")
         .arg("SELECT 1")
+        .arg("-c")
+        .arg("./missing.toml")
         .current_dir(dir.path())
         .output()
         .expect("spawning `dirsql query` failed");
@@ -939,6 +939,33 @@ fn missing_explicit_config_exits_nonzero_naming_the_file() {
     );
 }
 
+#[test]
+fn config_flag_before_the_subcommand_is_a_hard_error() {
+    // #609: config flags are subcommand-local. A `-c` placed BEFORE the
+    // subcommand is rejected loudly (never silently dropped or straddled across
+    // the subcommand boundary). Pass config AFTER the subcommand instead:
+    // `dirsql query <sql> -c <cfg>`.
+    let root = blog_fixture(); // valid `.dirsql.toml`, so the only failure is placement
+    let out = std::process::Command::cargo_bin("dirsql")
+        .expect("binary must exist")
+        .arg("-c")
+        .arg(".dirsql.toml")
+        .arg("query")
+        .arg("SELECT 1")
+        .current_dir(root.path())
+        .output()
+        .expect("spawning `dirsql query` failed");
+    assert!(
+        !out.status.success(),
+        "a config flag before the subcommand must be a hard error, got {out:?}"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap().to_lowercase();
+    assert!(
+        stderr.contains("subcommand") || stderr.contains("cannot be used"),
+        "the error should explain the flag conflicts with the subcommand, got {stderr:?}"
+    );
+}
+
 /// Run `dirsql --include-default [-c <cfg>]... query <sql>` in `dir`.
 fn run_query_include_default(
     dir: &std::path::Path,
@@ -946,13 +973,12 @@ fn run_query_include_default(
     sql: &str,
 ) -> std::process::Output {
     let mut cmd = std::process::Command::cargo_bin("dirsql").expect("binary must exist");
-    cmd.arg("--include-default");
+    // Config flags are subcommand-local (#609): pass them AFTER `query <sql>`.
+    cmd.arg("query").arg(sql).arg("--include-default");
     for cfg in configs {
         cmd.arg("-c").arg(cfg);
     }
-    cmd.arg("query")
-        .arg(sql)
-        .current_dir(dir)
+    cmd.current_dir(dir)
         .output()
         .expect("spawning `dirsql query` failed")
 }
@@ -1119,10 +1145,10 @@ fn init_output_loads_when_passed_explicitly_with_config_flag() {
 
     let out = std::process::Command::cargo_bin("dirsql")
         .expect("binary must exist")
-        .arg("-c")
-        .arg(".dirsql.toml")
         .arg("query")
         .arg("SELECT basename FROM files")
+        .arg("-c")
+        .arg(".dirsql.toml")
         .current_dir(dir.path())
         .output()
         .expect("spawning `dirsql query` failed");

@@ -108,7 +108,7 @@ scan runs `embed.py` once per note, then the query argument goes straight to
 `.dirsql.toml` from the current directory:
 
 ```bash
-uvx --with sqlite-vec dirsql -c ./.dirsql.toml query '{"q": "how do I cook pasta?"}'
+uvx --with sqlite-vec dirsql query '{"q": "how do I cook pasta?"}' -c ./.dirsql.toml
 ```
 
 ```json
@@ -116,7 +116,7 @@ uvx --with sqlite-vec dirsql -c ./.dirsql.toml query '{"q": "how do I cook pasta
 ```
 
 ```bash
-uvx --with sqlite-vec dirsql -c ./.dirsql.toml query '{"q": "reviewing code on github"}'
+uvx --with sqlite-vec dirsql query '{"q": "reviewing code on github"}' -c ./.dirsql.toml
 ```
 
 ```json

@@ -35,7 +35,7 @@ Pass the config with [`-c`](../reference/cli.md#flags) (`dirsql` does not
 auto-load a `.dirsql.toml` from the current directory):
 
 ```bash
-dirsql -c ./.dirsql.toml query "SELECT path FROM notes ORDER BY path"
+dirsql query "SELECT path FROM notes ORDER BY path" -c ./.dirsql.toml
 ```
 
 ```json

@@ -27,7 +27,7 @@ The extension's functions are callable (pass the config with
 [`-c`](../reference/cli.md#flags) so its `[[dirsql.extension]]` entry loads):
 
 ```bash
-dirsql -c ./.dirsql.toml query "SELECT vec_version() AS vec_version"
+dirsql query "SELECT vec_version() AS vec_version" -c ./.dirsql.toml
 ```
 
 ```json

@@ -131,14 +131,15 @@ fn query_subcommand_accepts_repeated_config_flags() {
     let mut cmd: StdCommand = std::process::Command::cargo_bin("dirsql")
         .expect("`dirsql` binary must be built by `cargo test` with --features cli");
     // Query the SECOND config's table -- proves the repeated `--config` was
-    // honored, not just the first.
+    // honored, not just the first. Config flags are subcommand-local (#609),
+    // so they follow the SQL.
     let out = cmd
+        .arg("query")
+        .arg("SELECT COUNT(*) AS n FROM beta")
         .arg("--config")
         .arg(&cfg_a_path)
         .arg("--config")
         .arg(&cfg_b_path)
-        .arg("query")
-        .arg("SELECT COUNT(*) AS n FROM beta")
         .current_dir(data.path())
         .output()
         .expect("spawning `dirsql query` failed");
