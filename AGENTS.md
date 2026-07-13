@@ -331,6 +331,11 @@ Run `cargo bench -p dirsql` after significant changes to the Rust codebase. Not 
 
 ## Git and GitHub Workflows
 
+### PR Sizing and Issues
+
+- **Every PR is M or smaller.** A change larger than M is broken into a sequence of smaller PRs, each independently reviewable and mergeable. Size by review surface, not raw line count -- a mechanical rename spanning many files can be M, while a subtle core change of far fewer lines may not be.
+- **Every PR is accompanied by a GitHub issue it auto-closes.** Put a closing keyword (`Fixes #<n>` / `Closes #<n>`) in the PR body so the issue closes on merge; file the issue first if one does not exist yet.
+
 ### Merge Conflict Resolution
 
 **Merge conflicts on in-flight PRs are the highest priority.** When asked to resolve a merge conflict:
