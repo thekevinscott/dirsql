@@ -12,6 +12,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
+use rusqlite;
 
 /// Returns a CSV table whose extract function increments `counter` every time
 /// it runs. Used to verify that warm starts skip extract for unchanged files.
@@ -506,4 +507,53 @@ fn cache_contains_sidecar_tables() {
             "_dirsql_meta missing key {required}; found: {meta_keys:?}",
         );
     }
+}
+
+#[test]
+fn failed_build_rolls_back_all_ingested_rows() {
+    let root = TempDir::new().unwrap();
+    write_csv(root.path(), "a.csv", &["alpha"]);
+    write_csv(root.path(), "b.csv", &["beta"]);
+    write_csv(root.path(), "c.csv", &["gamma"]);
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    let build_result = {
+        let counter_cb = Arc::clone(&counter);
+        let result = DirSQL::builder()
+            .root(root.path())
+            .table(Table::try_new("CREATE TABLE rows (col TEXT)", "**/*.csv", move |path| {
+                let content = std::fs::read_to_string(path).unwrap();
+                let count = counter_cb.fetch_add(1, Ordering::SeqCst);
+                if count == 2 {
+                    // Fail on the 3rd file (count starts at 0)
+                    return Err("boom".into());
+                }
+                Ok(content
+                    .lines()
+                    .skip(1)
+                    .map(|line| {
+                        HashMap::from([("col".into(), Value::Text(line.trim().to_string()))])
+                    })
+                    .collect::<Vec<Row>>())
+            }))
+            .persist(None::<&Path>)
+            .build();
+        result
+    };
+
+    assert!(build_result.is_err(), "build should have failed");
+
+    // Open the cache with a raw connection to verify rollback
+    let cache_path = root.path().join(".dirsql").join("cache.db");
+    let cache_conn = rusqlite::Connection::open(&cache_path).unwrap();
+
+    let row_count: i64 = cache_conn
+        .query_row("SELECT COUNT(*) FROM rows", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(row_count, 0, "no rows should persist after failed build");
+
+    let file_count: i64 = cache_conn
+        .query_row("SELECT COUNT(*) FROM _dirsql_files", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(file_count, 0, "no files should persist after failed build");
 }

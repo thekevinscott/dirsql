@@ -259,11 +259,37 @@ impl Db {
     /// Insert a row into a table.
     /// `row` contains user-defined columns only. `file_path` and `row_index` are tracked internally.
     ///
+    /// Helper to execute insert_row statements on any connection.
+    /// Called from insert_row() either inside a caller-supplied transaction or
+    /// inside a transaction opened by insert_row().
+    fn insert_row_stmts(
+        conn: &Connection,
+        sql: &str,
+        params: &[&dyn rusqlite::types::ToSql],
+        table: &str,
+        file_path: &str,
+        row_index: usize,
+    ) -> Result<()> {
+        conn.execute(sql, params)?;
+        let rowid = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO _dirsql_internal_rows (table_name, file_path, row_index, rowid_ref) \
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![table, file_path, row_index as i64, rowid],
+        )?;
+        Ok(())
+    }
+
     /// Both the table name and every user-provided column name are validated
     /// as safe SQL identifiers before being interpolated. A column key with
     /// SQL syntax (e.g. `id); DROP TABLE t; --`) produces a clean
     /// [`DbError::InvalidIdentifier`] rather than a cryptic SQLite parse
     /// failure.
+    ///
+    /// The user-row insert and its `_dirsql_internal_rows` mapping row commit
+    /// in ONE transaction (either via a transaction opened here in autocommit
+    /// mode, or via the caller's already-open transaction), so a crash between
+    /// them can never leave a row without its mapping (or vice versa).
     pub fn insert_row(
         &self,
         table: &str,
@@ -301,21 +327,13 @@ impl Db {
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params.iter().map(|p| p.as_ref()).collect();
 
-        // The user-row insert and its `_dirsql_internal_rows` mapping row commit
-        // in ONE transaction, so a crash between them can never leave a row
-        // without its mapping (or vice versa). `last_insert_rowid()` is read
-        // *after* the user insert and *before* the mapping insert, so it
-        // captures the user row's rowid (including a user-declared `INTEGER
-        // PRIMARY KEY` rowid alias).
-        let tx = self.conn.unchecked_transaction()?;
-        tx.execute(&sql, param_refs.as_slice())?;
-        let rowid = tx.last_insert_rowid();
-        tx.execute(
-            "INSERT INTO _dirsql_internal_rows (table_name, file_path, row_index, rowid_ref) \
-             VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![table, file_path, row_index as i64, rowid],
-        )?;
-        tx.commit()?;
+        if self.conn.is_autocommit() {
+            let tx = self.conn.unchecked_transaction()?;
+            Self::insert_row_stmts(&tx, &sql, param_refs.as_slice(), table, file_path, row_index)?;
+            tx.commit()?;
+        } else {
+            Self::insert_row_stmts(&self.conn, &sql, param_refs.as_slice(), table, file_path, row_index)?;
+        }
         Ok(())
     }
 
@@ -366,27 +384,45 @@ impl Db {
         Ok(out)
     }
 
-    /// Delete all rows that were produced by a given file path. Row ownership
-    /// is resolved through the `_dirsql_internal_rows` mapping.
-    ///
-    /// The user-row deletes and the matching mapping deletes commit in ONE
-    /// transaction, so the mapping never outlives the rows it describes.
-    pub fn delete_rows_by_file(&self, table: &str, file_path: &str) -> Result<usize> {
-        validate_identifier(table)?;
-        let tx = self.conn.unchecked_transaction()?;
+    /// Helper to execute delete_rows_by_file statements on any connection.
+    /// Called from delete_rows_by_file() either inside a caller-supplied
+    /// transaction or inside a transaction opened by delete_rows_by_file().
+    fn delete_rows_by_file_stmts(
+        conn: &Connection,
+        table: &str,
+        file_path: &str,
+    ) -> Result<usize> {
         let sql = format!(
             "DELETE FROM {} WHERE rowid IN \
              (SELECT rowid_ref FROM _dirsql_internal_rows \
               WHERE table_name = ?1 AND file_path = ?2)",
             table
         );
-        let count = tx.execute(&sql, rusqlite::params![table, file_path])?;
-        tx.execute(
+        let count = conn.execute(&sql, rusqlite::params![table, file_path])?;
+        conn.execute(
             "DELETE FROM _dirsql_internal_rows WHERE table_name = ?1 AND file_path = ?2",
             rusqlite::params![table, file_path],
         )?;
-        tx.commit()?;
         Ok(count)
+    }
+
+    /// Delete all rows that were produced by a given file path. Row ownership
+    /// is resolved through the `_dirsql_internal_rows` mapping.
+    ///
+    /// The user-row deletes and the matching mapping deletes commit in ONE
+    /// transaction (either via a transaction opened here in autocommit mode,
+    /// or via the caller's already-open transaction), so the mapping never
+    /// outlives the rows it describes.
+    pub fn delete_rows_by_file(&self, table: &str, file_path: &str) -> Result<usize> {
+        validate_identifier(table)?;
+        if self.conn.is_autocommit() {
+            let tx = self.conn.unchecked_transaction()?;
+            let count = Self::delete_rows_by_file_stmts(&tx, table, file_path)?;
+            tx.commit()?;
+            Ok(count)
+        } else {
+            Self::delete_rows_by_file_stmts(&self.conn, table, file_path)
+        }
     }
 
     /// Query the database, returning rows as a list of column-name -> value maps.
@@ -1711,5 +1747,66 @@ mod tests {
             "create table t (id text primary key)\n  without   rowid"
         ));
         assert!(!is_without_rowid_ddl("CREATE TABLE t (id TEXT)"));
+    }
+
+    #[test]
+    fn insert_row_joins_callers_open_transaction() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        let tx = db.conn.unchecked_transaction().unwrap();
+        db.insert_row(
+            "t",
+            &HashMap::from([("id".into(), Value::Text("a".into()))]),
+            "a.json",
+            0,
+        )
+        .unwrap();
+        drop(tx); // rollback
+
+        let count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "row must have rolled back");
+    }
+
+    #[test]
+    fn insert_row_inside_committed_transaction_persists() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        let tx = db.conn.unchecked_transaction().unwrap();
+        db.insert_row(
+            "t",
+            &HashMap::from([("id".into(), Value::Text("a".into()))]),
+            "a.json",
+            0,
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        let rows = db.get_rows_by_file("t", "a.json").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get("id").unwrap(), &Value::Text("a".into()));
+    }
+
+    #[test]
+    fn delete_rows_by_file_joins_callers_open_transaction() {
+        let db = Db::new().unwrap();
+        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.insert_row(
+            "t",
+            &HashMap::from([("id".into(), Value::Text("x".into()))]),
+            "a.json",
+            0,
+        )
+        .unwrap();
+
+        let tx = db.conn.unchecked_transaction().unwrap();
+        let count = db.delete_rows_by_file("t", "a.json").unwrap();
+        assert_eq!(count, 1);
+        drop(tx); // rollback
+
+        let rows = db.get_rows_by_file("t", "a.json").unwrap();
+        assert_eq!(rows.len(), 1, "delete must have rolled back");
     }
 }

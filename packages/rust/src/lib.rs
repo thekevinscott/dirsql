@@ -497,7 +497,16 @@ impl DirSQL {
                 Ok(rows) => rows,
                 Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
             };
+            // Wrap the delete in a transaction so it either succeeds completely
+            // or rolls back; no partial deletes.
+            let _tx = match db.conn().unchecked_transaction() {
+                Ok(tx) => tx,
+                Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
+            };
             if let Err(e) = db.delete_rows_by_file(table, rel_path) {
+                return vec![error_event(Some(table), rel_path, e.to_string())];
+            }
+            if let Err(e) = _tx.commit() {
                 return vec![error_event(Some(table), rel_path, e.to_string())];
             }
             old_rows
@@ -564,6 +573,14 @@ impl DirSQL {
                 Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
             };
 
+            // Wrap the delete+insert in a transaction so they commit together;
+            // a failed multi-row update rolls back completely instead of leaving
+            // partial rows.
+            let _tx = match db.conn().unchecked_transaction() {
+                Ok(tx) => tx,
+                Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
+            };
+
             let db_result = db.delete_rows_by_file(table, rel_path).and_then(|_| {
                 for (i, row) in new_rows.iter().enumerate() {
                     db.insert_row(table, row, rel_path, i)?;
@@ -571,6 +588,10 @@ impl DirSQL {
                 Ok(())
             });
             if let Err(e) = db_result {
+                return vec![error_event(Some(table), rel_path, e.to_string())];
+            }
+
+            if let Err(e) = _tx.commit() {
                 return vec![error_event(Some(table), rel_path, e.to_string())];
             }
 
@@ -750,6 +771,11 @@ impl DirSQL {
             ddl_map.insert(table_name, table.ddl);
         }
 
+        // Begin one transaction for the entire ingest: deleted-file cleanup,
+        // row deletes/inserts, and meta write. All drop together on any
+        // error, leaving the cache exactly as it was before the build started.
+        let _tx = db.conn().unchecked_transaction().map_err(DirSqlError::sqlite)?;
+
         // Drop cached rows for files that disappeared since the last cache
         // write. Trusted files need no work: their rows already live in the
         // on-disk SQLite.
@@ -795,7 +821,7 @@ impl DirSQL {
             }
             for (row_index, raw_row) in raw_rows.iter().enumerate() {
                 let row = db.normalize_row(&table_name, raw_row, strict)?;
-                db.insert_row(&table_name, &row, &rel_path, row_index)?;
+                db.insert_row(&table_name, &row, &rel_path, row_index).map_err(map_db_error)?;
             }
 
             // Update the persistent file index after a successful parse.
@@ -815,11 +841,16 @@ impl DirSQL {
             }
         }
 
-        // Write the meta block last so a crash mid-build leaves an
-        // incompatible cache that is detected on the next startup.
+        // Write the meta block last; ingest and meta commit atomically in the
+        // single transaction opened above. A crash mid-build leaves the cache
+        // exactly as it was before the build started (detected via meta on
+        // next startup).
         if let Some((_, meta)) = persist_ready.as_ref() {
             write_meta(db.conn(), meta).map_err(DirSqlError::sqlite)?;
         }
+
+        // Commit the ingest transaction.
+        _tx.commit().map_err(DirSqlError::sqlite)?;
 
         // Canonicalize the watch root so the live watcher never sees a
         // relative path; `root` itself is left untouched.
