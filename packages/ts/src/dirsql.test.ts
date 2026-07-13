@@ -68,6 +68,26 @@ describe("DirSQL", () => {
       expect(resolveConfigExtensionSpecs).not.toHaveBeenCalled();
     });
 
+    it("forwards programmatic tables (including onFile) untouched as the second arg", async () => {
+      const openAsync = installFakeCore(makeInner());
+      const onFile = () => [];
+      const tables = [
+        { ddl: "CREATE TABLE t (n INTEGER)", glob: "**/*.json", onFile },
+      ];
+      const db = new DirSQL({ root: "/data", tables });
+      await db.ready;
+      expect(openAsync).toHaveBeenCalledWith(
+        "/data",
+        tables,
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+      );
+    });
+
     it("resolves extension paths before forwarding them as openAsync's seventh arg", async () => {
       const openAsync = installFakeCore(makeInner());
       const db = new DirSQL({
