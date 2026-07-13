@@ -41,7 +41,9 @@ large. Add it to `.gitignore`:
 
 The top-level `.dirsql/` directory is reserved for `dirsql`'s metadata and
 is never scanned as data, so the cache can't index itself
-([config reference](../reference/config.md#dirsql-keys)).
+([config reference](../reference/config.md#dirsql-keys)). While running,
+`dirsql` also creates transient `cache.db-wal` and `cache.db-shm` sidecar
+files next to the cache; the `.dirsql/` ignore already covers all three.
 
 ## What survives, what rebuilds
 
@@ -56,6 +58,13 @@ exactly what a non-persistent startup does.
 Persistence is a startup-time optimization, not a change in meaning: the
 database remains a derived view of your files, and queries return the same
 rows either way ([how `dirsql` thinks](../explanation.md)).
+
+### Durability
+
+The cache favors throughput over durability: it opens in WAL journal mode
+with `synchronous=NORMAL`. On power loss the most recent cache updates may
+be lost, but the file cannot corrupt — the next startup reconciles and
+re-parses anything missing.
 
 ## Embedding `dirsql`?
 
