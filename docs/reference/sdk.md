@@ -80,7 +80,8 @@ DirSQL::builder()
     .root(root)                     // optional
     .tables(tables)                 // optional; append one with .table(t)
     .ignore(patterns)               // optional
-    .config(config_toml_path)       // optional
+    .config(config_toml_path)       // optional; repeatable — call again to
+                                    //   merge another config in call order
     .persist(cache_path)            // optional; Some(path), or None for the
                                     //   default <root>/.dirsql/cache.db
     .extensions(extensions)         // optional; append one with .extension(e)
@@ -107,7 +108,12 @@ never sets the root.
   entries are appended after any programmatic `tables`; its `ignore`
   patterns and `[[dirsql.extension]]` entries are appended likewise. The
   config file does **not** set the index root: with no explicit `root`, the
-  index roots at the process cwd.
+  index roots at the process cwd. In **Rust**, the builder's `.config()` is
+  **repeatable** — call it once per file and the configs merge in call order
+  (`[[table]]` / `ignore` / `[[dirsql.extension]]` accumulate; a duplicate
+  table name across configs errors), mirroring the CLI's repeatable
+  [`-c/--config`](./cli.md#flags). Python and TypeScript currently accept a
+  single `config` path.
 - `persist` — Keep the SQLite index on disk between runs (default off:
   ephemeral, rebuilt every startup). The cache lives at
   `<root>/.dirsql/cache.db` by default; on restart, only files whose stat

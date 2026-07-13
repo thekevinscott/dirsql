@@ -34,6 +34,16 @@ the process cwd — the config file's location never sets the root. (The
 | Poll events                | `db._poll_events(ms)`                          | `db.poll_events(duration)`                           | `await db.pollEvents(ms)` (runs on libuv threadpool)    |
 | Watch (channel/stream)     | `async for event in db.watch()` (via `_async.py`) | `db.watch() -> WatchStream` (channel)                | `for await (const ev of db.watch())`                    |
 | Load SQLite extension(s)   | `DirSQL(extensions=[{path, entrypoint?}])`; `[[dirsql.extension]]` config entries | `.extension(Extension)` / `.extensions(I)` builder; `[[dirsql.extension]]` config entries (`path` + optional `entrypoint`) | `new DirSQL({ extensions: [{ path, entrypoint? }] })`; `[[dirsql.extension]]` config entries |
+| Multiple config files (merge in order) | ⚠️ single `config=` only | `.config(path)` **repeatable** — each call appends; configs merge in call order (#545/#553) | ⚠️ single `config` only |
+
+**Multiple config files — DRIFT (Rust ahead), tracked.** The Rust builder's
+`.config()` is repeatable: several `.dirsql.toml` files merge in call order
+(`[[table]]` / `ignore` / `[[dirsql.extension]]` accumulate; a duplicate table
+name across configs errors), matching the CLI's repeatable `-c/--config`
+(#547). The Python and TypeScript SDK constructors still accept a **single**
+`config` path. Bringing them to parity is tracked per-SDK: Python
+[#588](https://github.com/thekevinscott/dirsql/issues/588), TypeScript
+[#589](https://github.com/thekevinscott/dirsql/issues/589).
 
 **Extension loading — at parity across all three SDKs, see #225 / #229 / #230.**
 The Rust core loads SQLite extensions declared as `[[dirsql.extension]]` config
