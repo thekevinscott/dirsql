@@ -1,7 +1,0 @@
-{
-  "command": "pnpm test:e2e",
-  "ran_at": 1783944416,
-  "exit_code": 0,
-  "commit": "11fe0d30232c40833ab56ca8c89a4dfde369ec7c",
-  "branch": "claude/github-issue-580-d0jd9u"
-}
