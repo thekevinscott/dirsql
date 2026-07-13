@@ -42,9 +42,10 @@ zero-config default — only the tables you define are served.
 
 ## Multiple tables
 
-Add one `[[table]]` entry per table. When a file matches several globs, the
-first matching table wins — see [`[[table]]`](../reference/config.md#table)
-for that and the remaining keys (`strict`, `on-file`).
+Add one `[[table]]` entry per table. When a file matches several globs, it
+populates every matching table — each table is an independent view. See
+[`[[table]]`](../reference/config.md#table) for that and the remaining keys
+(`strict`, `on-file`).
 
 ## Going further
 
