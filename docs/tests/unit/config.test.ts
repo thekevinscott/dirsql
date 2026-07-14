@@ -56,9 +56,9 @@ describe('vitepress config', () => {
     expect(links).toEqual(['/getting-started'])
   })
 
-  // The How-to tree (#376): nine goal-named guides, in the epic's order
-  // (#353 blessed target tree).
-  it('lists the nine goal-named how-to guides in the How-to Guides group', () => {
+  // The How-to tree (#376): the goal-named guides, in the epic's order
+  // (#353 blessed target tree), plus "Write a plugin" (#530).
+  it('lists the goal-named how-to guides in the How-to Guides group', () => {
     const sidebar = config.themeConfig!.sidebar as Record<string, SidebarItem[]>
     const howTo = sidebar['/'].find((group) => group.text === 'How-to Guides')
     const links = (howTo!.items ?? []).map((item) => item.link)
@@ -71,6 +71,7 @@ describe('vitepress config', () => {
       '/howto/load-extension',
       '/howto/persist',
       '/howto/react-to-changes',
+      '/howto/write-a-plugin',
       '/howto/embed'
     ])
   })

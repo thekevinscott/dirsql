@@ -46,8 +46,9 @@ test('the sidebar shows exactly the four Diataxis groups', async ({ page }) => {
   expect(groupTitles).toEqual(SECTIONS)
 })
 
-// The How-to tree (#376): nine goal-named guides, in the epic's order.
-test('the How-to Guides sidebar group lists the nine goal-named guides', async ({ page }) => {
+// The How-to tree (#376): the goal-named guides, in the epic's order,
+// plus "Write a plugin" (#530).
+test('the How-to Guides sidebar group lists the goal-named guides', async ({ page }) => {
   await page.goto('./howto/define-tables.html')
   await page.waitForSelector('.VPSidebar .group')
   const howtoLinks = await page.evaluate(() => {
@@ -68,6 +69,7 @@ test('the How-to Guides sidebar group lists the nine goal-named guides', async (
     '/dirsql/howto/load-extension.html',
     '/dirsql/howto/persist.html',
     '/dirsql/howto/react-to-changes.html',
+    '/dirsql/howto/write-a-plugin.html',
     '/dirsql/howto/embed.html'
   ])
 })
