@@ -1,0 +1,7 @@
+{
+  "command": "uv run --with sqlite-vec --with-editable . --with-editable ../../packages/python python -m pytest tests/e2e -x -q",
+  "ran_at": 1784018238,
+  "exit_code": 0,
+  "commit": "bfc074ddbc08cc5fa2cef1474f077c5b418b4d86",
+  "branch": "claude/open-issues-review-le8hm5-531"
+}
