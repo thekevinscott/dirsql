@@ -45,6 +45,7 @@ export default defineConfig({
             { text: 'Load a SQLite extension', link: '/howto/load-extension' },
             { text: 'Keep the index across restarts', link: '/howto/persist' },
             { text: 'React to file changes', link: '/howto/react-to-changes' },
+            { text: 'Write a plugin', link: '/howto/write-a-plugin' },
             { text: 'Embed dirsql in your application', link: '/howto/embed' }
           ]
         },
