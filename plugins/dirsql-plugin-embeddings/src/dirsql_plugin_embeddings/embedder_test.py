@@ -107,6 +107,20 @@ def describe_embed():
         with pytest.raises(EmbeddingError, match="status 500"):
             embed("x", env=_ENV, post=_post([1.0], status=500, raw=b"boom"))
 
+    def it_raises_on_a_status_below_200():
+        # Only `!= 200` (not `> 200`) rejects a sub-200 status.
+        with pytest.raises(EmbeddingError, match="status 199"):
+            embed("x", env=_ENV, post=_post([1.0], status=199, raw=b"early"))
+
+    def it_returns_the_first_data_entry_when_several_are_present():
+        def post(url, *, data, headers):
+            body = json.dumps(
+                {"data": [{"embedding": [1.0]}, {"embedding": [2.0]}]}
+            ).encode()
+            return 200, body
+
+        assert embed("x", env=_ENV, post=post) == [1.0]
+
     def it_raises_on_non_json_output():
         with pytest.raises(EmbeddingError, match="malformed embeddings response"):
             embed("x", env=_ENV, post=_post(None, raw=b"not json"))

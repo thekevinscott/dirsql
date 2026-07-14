@@ -3,9 +3,11 @@
 Reads the file at ``argv[1]``, embeds its text, and prints a one-line JSON row
 array (``path``, ``text``, ``embedding``) -- the embedding stored as JSON text,
 which ``sqlite-vec`` accepts directly.
-"""
 
-from __future__ import annotations
+Annotations are evaluated at runtime (no ``from __future__ import annotations``)
+so a mutated ``X | None`` union in a signature fails at import rather than
+surviving as an inert string.
+"""
 
 import json
 import sys

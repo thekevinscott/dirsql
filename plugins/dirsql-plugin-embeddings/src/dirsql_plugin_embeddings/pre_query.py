@@ -5,9 +5,11 @@ subcommand's ``{"sql": <arg>}`` wrapper, embeds the question, and prints the
 nearest-neighbor SQL over the ``documents`` table (ordered by
 ``vec_distance_cosine``). The hook owns SQL safety: the only interpolated value
 is a numeric vector this script produced.
-"""
 
-from __future__ import annotations
+Annotations are evaluated at runtime (no ``from __future__ import annotations``)
+so a mutated ``X | None`` union in a signature fails at import rather than
+surviving as an inert string.
+"""
 
 import json
 import sys

@@ -3,9 +3,11 @@
 Configuration comes from three environment variables (base URL, model, API
 key). The HTTP call is behind an injected ``post`` seam so the unit tests drive
 it without a real network; ``_urllib_post`` is the production seam.
-"""
 
-from __future__ import annotations
+Annotations are evaluated at runtime (no ``from __future__ import annotations``)
+so a mutated ``X | None`` union in a signature fails at import instead of being
+an inert string -- otherwise every annotation-union mutant would survive.
+"""
 
 import json
 import os
@@ -22,7 +24,7 @@ class EmbeddingError(RuntimeError):
     """A configuration, transport, or response error while embedding."""
 
 
-def _urllib_post(url: str, *, data: bytes, headers: Mapping[str, str]):
+def _urllib_post(url: str, data: bytes, headers: Mapping[str, str]):
     request = urllib.request.Request(
         url, data=data, headers=dict(headers), method="POST"
     )
@@ -41,7 +43,7 @@ def _require(env: Mapping[str, str], name: str) -> str:
 
 
 def embed(
-    text: str, *, env: Mapping[str, str] | None = None, post=_urllib_post
+    text: str, env: Mapping[str, str] | None = None, post=_urllib_post
 ) -> list[float]:
     if env is None:
         env = os.environ
