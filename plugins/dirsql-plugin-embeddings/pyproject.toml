@@ -26,6 +26,14 @@ version_scheme = "no-guess-dev"
 # for .git right next to pyproject.toml and fails outright rather than
 # walking up.
 root = "../.."
+# tag-pattern above only *extracts* a version from whatever tag `git
+# describe` returns -- it does not restrict which tags are candidates.
+# In this monorepo `git describe` finds the globally-nearest tag (e.g.
+# `dirsql-py-v0.3.110`), the regex correctly rejects it, and
+# setuptools-scm treats that as a hard error rather than falling back.
+# `--match` constrains `git describe` itself to this package's own
+# tag prefix.
+git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "dirsql-plugin-embeddings-v*"]
 
 [project.scripts]
 # The two command hooks the fragment invokes; installing the package puts them
