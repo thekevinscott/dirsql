@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 from .binary_path import binary_path
-from .discover_plugins import with_discovered_plugins
+from .discover_plugins.with_discovered_plugins import with_discovered_plugins
 from .is_windows import is_windows
 from .resolve_config_extensions import with_resolved_extensions
 
