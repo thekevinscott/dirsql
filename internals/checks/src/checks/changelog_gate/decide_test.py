@@ -86,6 +86,21 @@ def describe_code_touched():
         assert not code_touched(["packages/python/tests/conftest.py"], "python")
         assert not code_touched(["packages/rust/tests/cli.rs"], "rust")
 
+    def false_for_e2e_attestation_receipts():
+        assert not code_touched(
+            ["packages/python/e2e-attestations/claude-branch-611.json"], "python"
+        )
+        assert not code_touched(
+            ["packages/ts/e2e-attestations/claude-branch-611.json"], "ts"
+        )
+
+    def true_for_a_dir_that_merely_prefixes_e2e_attestations():
+        # A trailing `/` is required: `e2e-attestationsX/` is a real source dir,
+        # not the receipts folder, so it still counts as a code change.
+        assert code_touched(
+            ["packages/python/e2e-attestationsX/foo.py"], "python"
+        )
+
     def ignores_other_packages():
         assert not code_touched(["packages/ts/src/bar.ts"], "python")
 
