@@ -119,7 +119,9 @@ def describe_plugin_discovery():
     def it_skips_discovery_under_the_no_plugin_flag(staged):
         site_dir, data = staged
         out = _run(site_dir, ["--no-plugin", "query", "SELECT * FROM notes"], data)
-        assert out.returncode != 0, f"--no-plugin must not load the plugin: {out.stdout!r}"
+        assert out.returncode != 0, (
+            f"--no-plugin must not load the plugin: {out.stdout!r}"
+        )
         assert "notes" in out.stderr
 
     def it_skips_discovery_under_the_env_var(staged):
@@ -130,32 +132,38 @@ def describe_plugin_discovery():
             data,
             env_extra={"DIRSQL_NO_PLUGIN": "1"},
         )
-        assert out.returncode != 0, f"DIRSQL_NO_PLUGIN=1 must not load the plugin: {out.stdout!r}"
+        assert out.returncode != 0, (
+            f"DIRSQL_NO_PLUGIN=1 must not load the plugin: {out.stdout!r}"
+        )
         assert "notes" in out.stderr
 
     def it_composes_a_user_config_with_the_plugin(staged):
         site_dir, data = staged
         cfg = data / "user.toml"
         cfg.write_text(
-            '[[table]]\n'
+            "[[table]]\n"
             'ddl = "CREATE TABLE posts (path TEXT, basename TEXT)"\n'
             'glob = "*.md"\n'
         )
         # A user `-c` is the base; the plugin is appended -> both tables load.
         # Config flags are subcommand-local (#609), so `-c` follows the SQL.
-        posts = _run(site_dir, ["query", "SELECT basename FROM posts", "-c", "user.toml"], data)
+        posts = _run(
+            site_dir, ["query", "SELECT basename FROM posts", "-c", "user.toml"], data
+        )
         assert posts.returncode == 0, f"stdout={posts.stdout!r} stderr={posts.stderr!r}"
-        notes = _run(site_dir, ["query", "SELECT basename FROM notes", "-c", "user.toml"], data)
+        notes = _run(
+            site_dir, ["query", "SELECT basename FROM notes", "-c", "user.toml"], data
+        )
         assert notes.returncode == 0, f"stdout={notes.stdout!r} stderr={notes.stderr!r}"
 
     def it_errors_when_a_plugin_table_collides_with_a_user_config(staged):
         site_dir, data = staged
         cfg = data / "dup.toml"
         cfg.write_text(
-            '[[table]]\n'
-            'ddl = "CREATE TABLE notes (path TEXT)"\n'
-            'glob = "*.md"\n'
+            '[[table]]\nddl = "CREATE TABLE notes (path TEXT)"\nglob = "*.md"\n'
         )
         out = _run(site_dir, ["query", "SELECT 1", "-c", "dup.toml"], data)
-        assert out.returncode != 0, f"a duplicate `notes` table must conflict: {out.stdout!r}"
+        assert out.returncode != 0, (
+            f"a duplicate `notes` table must conflict: {out.stdout!r}"
+        )
         assert "notes" in out.stderr

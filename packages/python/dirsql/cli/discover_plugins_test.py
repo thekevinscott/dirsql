@@ -63,6 +63,11 @@ def describe_user_passed_config():
         # with `-c` (it starts with `--`) -- so no clause matches.
         assert _user_passed_config(["--configx"]) is False
 
+    def it_is_false_for_a_flag_that_sorts_before_config():
+        # `--all` sorts lexically before `--config` but is not a config flag;
+        # pins the `==` comparison against a `<=` mutant.
+        assert _user_passed_config(["--all"]) is False
+
 
 def describe_discovery_disabled():
     def it_is_true_with_the_no_plugin_flag():
@@ -132,10 +137,11 @@ def describe_with_discovered_plugins():
                 discover_plugins, "_discovered_fragments", side_effect=AssertionError
             ),
         ):
-            assert with_discovered_plugins(["--no-plugin", "query", "x"]) == [
-                "query",
-                "x",
-            ]
+            # `--host` sorts before `--no-plugin` and must survive the strip;
+            # pins the `!=` filter against a `>` mutant that would drop it.
+            assert with_discovered_plugins(
+                ["--no-plugin", "--host", "h", "query", "x"]
+            ) == ["--host", "h", "query", "x"]
 
     def it_skips_discovery_when_the_env_var_is_set():
         with (
@@ -147,13 +153,18 @@ def describe_with_discovered_plugins():
             assert with_discovered_plugins(["query", "x"]) == ["query", "x"]
 
     def it_leaves_init_untouched():
+        # A non-interned "init" plus a trailing arg pins the init guard against
+        # both a `argv[0] is "init"` mutant (identity vs equality) and an
+        # `argv[1]` index mutant -- either falls through to discovery and trips
+        # the mocked guard.
+        init = "".join(["i", "n", "i", "t"])
         with (
             patch.object(discover_plugins.os, "environ", {}),
             patch.object(
                 discover_plugins, "_discovered_fragments", side_effect=AssertionError
             ),
         ):
-            assert with_discovered_plugins(["init"]) == ["init"]
+            assert with_discovered_plugins([init, "--force"]) == [init, "--force"]
 
     def it_is_a_no_op_when_no_plugins_are_installed():
         with (
