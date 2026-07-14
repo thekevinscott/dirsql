@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+# In-repo, python-only dirsql plugin: the worked implementation behind
+# docs/howto/search-by-meaning.md, backed by an OpenAI-compatible
+# /v1/embeddings endpoint. Repo-only (not published to an index); it exists to
+# prove the plugin rails (#531, part of #363) and power the semantic-search demo.
+name = "dirsql-plugin-embeddings"
+version = "0"
+description = "First-party dirsql plugin: semantic search via an OpenAI-compatible embeddings endpoint."
+requires-python = ">=3.11"
+
+[project.scripts]
+# The two command hooks the fragment invokes; installing the package puts them
+# on PATH so `dirsql` resolves them when it spawns the hooks.
+dirsql-embeddings-on-file = "dirsql_plugin_embeddings.on_file:main"
+dirsql-embeddings-pre-query = "dirsql_plugin_embeddings.pre_query:main"
+
+[project.entry-points.dirsql]
+# How the #529 launcher discovers the plugin: group `dirsql`, value = the
+# top-level module whose root ships `dirsql.toml`.
+embeddings = "dirsql_plugin_embeddings"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-cov>=5", "pytest-describe>=2"]
+
+[tool.hatch.build]
+exclude = ["**/*_test.py"]
+
+[tool.hatch.build.targets.wheel]
+# The whole package ships, including the non-.py `dirsql.toml` fragment
+# (importlib.resources loads it, and it must be present in the built artifact).
+packages = ["src/dirsql_plugin_embeddings"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/dirsql_plugin_embeddings/dirsql.toml" = "dirsql_plugin_embeddings/dirsql.toml"
+
+[tool.pytest.ini_options]
+# `src` layout: put it on the path so modules and their colocated tests import
+# the package normally (`from dirsql_plugin_embeddings import ...`).
+pythonpath = ["src"]
