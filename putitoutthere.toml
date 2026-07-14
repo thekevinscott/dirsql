@@ -1,13 +1,17 @@
 # putitoutthere release configuration.
 #
-# Three published artifacts, all named `dirsql` on their respective
-# registries (crates.io, PyPI, npm). They share a workspace version and
-# release together, but each gets its own tag (default `{name}-v{version}`)
-# because putitoutthere tags are per-package.
+# Four published artifacts. The core three are all named `dirsql` on
+# their respective registries (crates.io, PyPI, npm); they share a
+# workspace version and release together, but each gets its own tag
+# (default `{name}-v{version}`) because putitoutthere tags are per-package.
 #
 # Cascade: a change under `packages/rust/**` cascades into the Python and
 # npm packages via `depends_on`, so a single Rust edit republishes all
 # three in topological order.
+#
+# The fourth, `dirsql-plugin-embeddings`, is an independently-versioned
+# pure-Python plugin published as its own PyPI project. It is deliberately
+# outside the cascade -- it releases only when its own path changes.
 
 [putitoutthere]
 version = 1
@@ -131,3 +135,20 @@ targets = [
 bin        = "dirsql"
 crate_path = "packages/rust"
 features   = ["cli"]
+
+# PyPI: the in-repo embeddings plugin (plugins/dirsql-plugin-embeddings/).
+# Pure-Python (hatchling) — no `build = "maturin"`, no native `targets`,
+# no `[package.bundle_cli]`. Deliberately NOT in the rust `depends_on`
+# cascade: a core change must not republish this plugin, and it is
+# independently versioned on its own v0.1.x line rather than the
+# workspace 0.2.x line the other three packages share.
+[[package]]
+name  = "dirsql-plugin-embeddings"
+pypi  = "dirsql-plugin-embeddings"
+kind  = "pypi"
+build = "hatch"
+path  = "plugins/dirsql-plugin-embeddings"
+globs = [
+  "plugins/dirsql-plugin-embeddings/**",
+]
+first_version = "0.1.0"
