@@ -45,6 +45,7 @@ def _is_exempt(path: str, pkg: str) -> bool:
 
     The package ``CHANGELOG.md`` / ``MIGRATIONS.md`` are pointer stubs; the
     ``changelog.d/`` / ``migrations.d/`` folders are the entries themselves;
+    the ``e2e-attestations/`` folder holds CI freshness receipts, not source;
     dirsql colocates Python unit tests as ``*_test.py`` and TS as ``*.test.*``
     / ``*.spec.*``; and anything under a ``tests/`` directory is a test tier.
     """
@@ -52,6 +53,7 @@ def _is_exempt(path: str, pkg: str) -> bool:
     return bool(
         re.fullmatch(rf"packages/{p}/(CHANGELOG|MIGRATIONS)\.md", path)
         or re.match(rf"packages/{p}/(changelog|migrations)\.d/", path)
+        or re.match(rf"packages/{p}/e2e-attestations/", path)
         or re.fullmatch(rf"packages/{p}/.*_test\.py", path)
         or re.fullmatch(rf"packages/{p}/.*\.(test|spec)\.(ts|tsx|js|mjs|cjs)", path)
         or re.match(rf"packages/{p}/tests?/", path)
