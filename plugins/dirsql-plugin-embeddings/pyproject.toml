@@ -1,16 +1,39 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
-# In-repo, python-only dirsql plugin: the worked implementation behind
-# docs/howto/search-by-meaning.md, backed by an OpenAI-compatible
-# /v1/embeddings endpoint. Repo-only (not published to an index); it exists to
-# prove the plugin rails (#531, part of #363) and power the semantic-search demo.
+# First-party dirsql plugin, published independently to PyPI: the worked
+# implementation behind docs/howto/search-by-meaning.md, backed by an
+# OpenAI-compatible /v1/embeddings endpoint. Exists to prove the plugin
+# rails (#531, part of #363) and power the semantic-search demo.
 name = "dirsql-plugin-embeddings"
-version = "0"
+dynamic = ["version"]
 description = "First-party dirsql plugin: semantic search via an OpenAI-compatible embeddings endpoint."
 requires-python = ">=3.11"
+
+[tool.hatch.version]
+source = "vcs"
+# putitoutthere tags this package independently as
+# `dirsql-plugin-embeddings-v<version>`, distinct from the workspace
+# `dirsql-{rust,py,npm}` tags sharing the same git history.
+tag-pattern = "^dirsql-plugin-embeddings-v(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+)$"
+
+[tool.hatch.version.raw-options]
+version_scheme = "no-guess-dev"
+# This pyproject.toml lives two directories below the repo root (the
+# actual .git location); without an explicit root, setuptools-scm looks
+# for .git right next to pyproject.toml and fails outright rather than
+# walking up.
+root = "../.."
+# tag-pattern above only *extracts* a version from whatever tag `git
+# describe` returns -- it does not restrict which tags are candidates.
+# In this monorepo `git describe` finds the globally-nearest tag (e.g.
+# `dirsql-py-v0.3.110`), the regex correctly rejects it, and
+# setuptools-scm treats that as a hard error rather than falling back.
+# `--match` constrains `git describe` itself to this package's own
+# tag prefix.
+git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "dirsql-plugin-embeddings-v*"]
 
 [project.scripts]
 # The two command hooks the fragment invokes; installing the package puts them

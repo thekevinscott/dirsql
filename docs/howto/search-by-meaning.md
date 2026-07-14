@@ -7,6 +7,13 @@ into semantic search: a SQLite vector extension for the distance math, an
 index time, and a [`pre-query`](../reference/hooks.md#pre-query) command to
 embed each question at query time.
 
+::: tip Just want it working?
+[`dirsql-plugin-embeddings`](https://pypi.org/project/dirsql-plugin-embeddings/)
+packages exactly what this guide builds, ready to install:
+`uvx --with dirsql-plugin-embeddings dirsql`. Keep reading to see how it's
+built — the same three pieces, from scratch.
+:::
+
 ## How the pieces fit
 
 1. **[`[[dirsql.extension]]`](../reference/config.md#dirsql-extension)**
