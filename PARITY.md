@@ -157,6 +157,21 @@ const rows = await db.query("SELECT ...");
 for await (const event of db.watch()) { ... }
 ```
 
+## CLI: plugin discovery
+
+**Intentional drift — pip/uvx launcher only (#529/#363).** Installed plugins
+(packages shipping a `dirsql.toml` fragment behind a `dirsql` entry point) are
+auto-discovered and injected by the **Python (`pip`/`uvx`) launcher** only. The
+**npm (`npx`) launcher deliberately does not discover yet** — npm lacks the
+entry-point-style install metadata, so it is the fiddlier half and is deferred
+by design (per #363), not an accidental gap. The Rust standalone binary does no
+discovery, and no SDK auto-discovers (the SDKs take a plugin's config
+explicitly). Kill switch: `--no-plugin` / `DIRSQL_NO_PLUGIN=1` (launcher-only).
+
+| Surface | Python (`pip`/`uvx`) | Rust binary | TypeScript (`npx`) |
+| --- | --- | --- | --- |
+| Auto-discover installed plugins | Y (#529) | N/A (no discovery) | **N (deferred, #363)** |
+
 ## CLI: config files
 
 `--config` accepts a single format across all three SDKs: `.dirsql.toml`,

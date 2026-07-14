@@ -193,3 +193,29 @@ All failures exit `1` with a message on stderr:
 | Output path unwritable (e.g. missing parent directory) | Fails with the underlying I/O error. |
 
 On success, `init` exits `0`.
+
+## Plugins
+
+A **plugin** is an ordinary Python package that ships a `dirsql.toml` config
+fragment and declares itself via a `dirsql` entry point. When such a package is
+installed in the same environment as `dirsql` (`pip install …`, or
+`uvx --with …`), the `uvx`/`pip` launcher **discovers it automatically** and
+loads its fragment — its tables are queryable with zero config edits.
+Installed = active: there is no enable step and no naming convention. The
+fragment is composed *after* your own `-c` configs (so your config takes
+precedence in ordering), and the baked-in `files` table is preserved.
+
+Discovery is **launcher-only** — the standalone `cargo`-installed binary does no
+discovery, and the SDKs never auto-discover (pass a plugin's config explicitly
+instead). It is **pip/uvx only** for now; the `npx` launcher does not yet
+discover.
+
+Turn discovery off with either:
+
+| | Effect |
+|---|---|
+| `--no-plugin` | Skip plugin discovery for this invocation. Consumed by the launcher; never forwarded to the binary. |
+| `DIRSQL_NO_PLUGIN=1` | Same, via the environment. |
+
+A plugin that declares itself but is missing its module or its `dirsql.toml`
+fragment is a launcher error naming the package — never a silent skip.
