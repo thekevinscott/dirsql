@@ -10,6 +10,7 @@ build-backend = "hatchling.build"
 name = "dirsql-plugin-embeddings"
 dynamic = ["version"]
 description = "First-party dirsql plugin: semantic search via an OpenAI-compatible embeddings endpoint."
+readme = "README.md"
 requires-python = ">=3.11"
 
 [tool.hatch.version]

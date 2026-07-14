@@ -3,13 +3,16 @@
 A first-party [`dirsql`](https://github.com/thekevinscott/dirsql) plugin that
 adds **semantic search** over a directory of Markdown files. It is the worked
 implementation behind the [Search documents by
-meaning](../../docs/howto/search-by-meaning.md) how-to, swapping that guide's
-local `model2vec` model for any OpenAI-compatible `/v1/embeddings` endpoint.
+meaning](https://thekevinscott.github.io/dirsql/howto/search-by-meaning) how-to,
+swapping that guide's local `model2vec` model for any OpenAI-compatible
+`/v1/embeddings` endpoint.
 
-This is an **in-repo, repo-only** package (not published to an index). It exists
-to prove the dirsql plugin conventions (#531, part of #363) and power the
-semantic-search demo. Deliberately minimal (v0.1): one embedding provider shape,
-one table, no chunking, no config surface beyond three environment variables.
+```sh
+uvx --with dirsql-plugin-embeddings dirsql
+```
+
+Deliberately minimal (v0.1): one embedding provider shape, one table, no
+chunking, no config surface beyond three environment variables.
 
 ## How it works
 
