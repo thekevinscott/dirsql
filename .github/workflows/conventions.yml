@@ -70,3 +70,12 @@ jobs:
       source: internals/distcheck/src
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       gates: '["colocated-test", "unit-lint", "integration-lint", "unit-coverage", "mutation"]'
+
+  plugins-embeddings:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["python"]'
+      source: plugins/dirsql-plugin-embeddings/src
+      config: plugins/dirsql-plugin-embeddings/testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["colocated-test", "unit-lint", "integration-lint", "unit-coverage", "mutation", "e2e-verify"]'

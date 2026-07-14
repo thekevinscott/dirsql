@@ -1,0 +1,18 @@
+# Fragment shipped by the dirsql-plugin-embeddings plugin.
+# Discovered via the package's [project.entry-points.dirsql] declaration and
+# injected by the launcher as an ordinary -c flag ("installed = active", #529).
+#
+# The table name here MUST match pre_query.TABLE_NAME (the SQL the pre-query
+# hook prints queries this table).
+[dirsql]
+pre-query = "dirsql-embeddings-pre-query {args}"
+hook-timeout = 300
+
+[[dirsql.extension]]
+path = "sqlite_vec"
+entrypoint = "sqlite3_vec_init"
+
+[[table]]
+ddl = "CREATE TABLE documents (path TEXT, text TEXT, embedding TEXT)"
+glob = "**/*.md"
+on-file = "dirsql-embeddings-on-file {path}"
