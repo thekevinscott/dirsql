@@ -12,9 +12,7 @@ import os
 import subprocess
 import sys
 
-_SRC = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "src")
-)
+_SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 
 def _run(module, arg, base_url):

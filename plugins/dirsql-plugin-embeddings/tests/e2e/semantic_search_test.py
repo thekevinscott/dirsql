@@ -59,7 +59,9 @@ _FIXTURES = {
 def _run(query, data_dir, base_url):
     env = {
         **os.environ,
-        "PATH": os.path.dirname(sys.executable) + os.pathsep + os.environ.get("PATH", ""),
+        "PATH": os.path.dirname(sys.executable)
+        + os.pathsep
+        + os.environ.get("PATH", ""),
         "DIRSQL_EMBEDDINGS_BASE_URL": base_url,
         "DIRSQL_EMBEDDINGS_MODEL": "stub-model",
         "DIRSQL_EMBEDDINGS_API_KEY": "stub-key",

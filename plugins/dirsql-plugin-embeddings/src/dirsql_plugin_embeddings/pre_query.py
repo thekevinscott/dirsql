@@ -1,11 +1,15 @@
 """``pre-query`` console script: turn a ``{"q": ...}`` body into search SQL.
 
-RED stub: signatures only; behavior is unimplemented so the colocated unit
-tests fail their assertions until the GREEN commit fills them in.
+Accepts both a verbatim server body (``{"q": ...}``) and the CLI ``query``
+subcommand's ``{"sql": <arg>}`` wrapper, embeds the question, and prints the
+nearest-neighbor SQL over the ``documents`` table (ordered by
+``vec_distance_cosine``). The hook owns SQL safety: the only interpolated value
+is a numeric vector this script produced.
 """
 
 from __future__ import annotations
 
+import json
 import sys
 
 from .embedder import embed
@@ -15,12 +19,22 @@ RESULT_LIMIT = 3
 
 
 def question(raw_body: str) -> str:
-    return ""
+    body = json.loads(raw_body)
+    if "q" in body:
+        return body["q"]
+    return json.loads(body["sql"])["q"]
 
 
 def build_sql(vector: list[float]) -> str:
-    return ""
+    needle = json.dumps(vector)
+    return (
+        f"SELECT path, ROUND(vec_distance_cosine(embedding, '{needle}'), 3) "
+        f"AS distance FROM {TABLE_NAME} ORDER BY distance LIMIT {RESULT_LIMIT}"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
-    return 1
+    if argv is None:
+        argv = sys.argv
+    print(build_sql(embed(question(argv[1]))))
+    return 0

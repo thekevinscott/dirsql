@@ -31,7 +31,11 @@ def _post(vector, *, status=200, raw=None):
 
     def post(url, *, data, headers):
         post.calls.append({"url": url, "data": data, "headers": headers})
-        body = raw if raw is not None else json.dumps({"data": [{"embedding": vector}]}).encode()
+        body = (
+            raw
+            if raw is not None
+            else json.dumps({"data": [{"embedding": vector}]}).encode()
+        )
         return status, body
 
     post.calls = []
@@ -43,7 +47,9 @@ def describe_require():
         assert _require({"K": "v"}, "K") == "v"
 
     def it_raises_naming_the_missing_variable():
-        with pytest.raises(EmbeddingError, match="missing required environment variable MISSING"):
+        with pytest.raises(
+            EmbeddingError, match="missing required environment variable MISSING"
+        ):
             _require({}, "MISSING")
 
     def it_treats_empty_string_as_missing():
@@ -57,7 +63,10 @@ def describe_embed():
         embed("hello world", env=_ENV, post=post)
         (call,) = post.calls
         assert call["url"] == "http://host/v1/embeddings"
-        assert json.loads(call["data"]) == {"model": "my-model", "input": ["hello world"]}
+        assert json.loads(call["data"]) == {
+            "model": "my-model",
+            "input": ["hello world"],
+        }
         assert call["headers"] == {
             "Content-Type": "application/json",
             "Authorization": "Bearer secret",
@@ -84,11 +93,15 @@ def describe_embed():
 
     def it_raises_when_model_is_missing():
         with pytest.raises(EmbeddingError, match=ENV_MODEL):
-            embed("x", env={ENV_BASE_URL: "http://h", ENV_API_KEY: "k"}, post=_post([1.0]))
+            embed(
+                "x", env={ENV_BASE_URL: "http://h", ENV_API_KEY: "k"}, post=_post([1.0])
+            )
 
     def it_raises_when_api_key_is_missing():
         with pytest.raises(EmbeddingError, match=ENV_API_KEY):
-            embed("x", env={ENV_BASE_URL: "http://h", ENV_MODEL: "m"}, post=_post([1.0]))
+            embed(
+                "x", env={ENV_BASE_URL: "http://h", ENV_MODEL: "m"}, post=_post([1.0])
+            )
 
     def it_raises_on_a_non_200_status():
         with pytest.raises(EmbeddingError, match="status 500"):

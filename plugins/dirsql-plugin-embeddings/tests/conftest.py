@@ -13,7 +13,17 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 # One dimension per keyword; the embedding of a text is the per-keyword count.
-KEYWORDS = ["pasta", "cook", "garlic", "git", "code", "review", "tomato", "plant", "seed"]
+KEYWORDS = [
+    "pasta",
+    "cook",
+    "garlic",
+    "git",
+    "code",
+    "review",
+    "tomato",
+    "plant",
+    "seed",
+]
 
 
 def keyword_vector(text):
