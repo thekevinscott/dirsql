@@ -13,6 +13,16 @@ All architectural decisions and constraints (including cross-language parity rul
 Write scratch/temporary files to `/tmp` instead of asking permission. Use unique filenames to avoid collisions with other sessions.
 Temporary scripts, including Node or shell helpers, must also be written to `/tmp` and executed from there.
 
+## Session Handoff Doc
+
+Maintain one ongoing handoff doc per session and deliver it to the user as a downloadable markdown file at every **stopping point**: after each major unit of work lands (a push, a green CI run, a finished investigation, a merged PR) or when blocked on user input. A stopping point marks a checkpoint, not the end -- send the doc, then keep working.
+
+- Keep it in the session scratchpad / `/tmp` (e.g. `<scratchpad>/handoff.md`). It is conversation-scoped: NEVER commit it, stage it, or place it anywhere in the repo tree.
+- Update the same doc in place and re-send it at each checkpoint (in hosted sessions, attach it via the file-delivery tool; locally, print its path), so the freshest copy sits near the bottom of the conversation.
+- Write it standalone, so a brand-new session with zero context can resume from it alone: task + status (done / in progress / next), branches/PRs/issues with numbers and CI state, key decisions and discovered constraints (one-line reasons), exact next commands to run, anything waiting on the user.
+
+Purpose: the prompt cache survives at most an hour of inactivity, so resuming a long conversation after hours away reprocesses the entire history at full cost. A current handoff doc near the end of the transcript lets the user scroll up, grab it, and start a cheap fresh session from the doc instead of resuming the stale one.
+
 ## Shell Commands
 
 **Do not chain commands** with `;`, `&&`, or `||`. Chained commands break the per-command permission model -- each command must be evaluated separately, and chaining forces a single bulk approval (or prompt) for the whole pipeline. Run each command as its own call.
