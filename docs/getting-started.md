@@ -16,39 +16,32 @@ tab that behaves identically, if you prefer Python tooling
 
 ## 1. Create three files
 
-Make a working directory with two subfolders — one per note author:
+Paste this whole block into your terminal. It makes a working directory
+with a subfolder per note author and writes three tiny markdown notes:
 
 ```bash
 mkdir -p my-notes/notes/alice my-notes/notes/bob
 cd my-notes
-```
-
-Create the three notes by pasting each block exactly as shown:
-
-```bash
 cat > notes/alice/welcome.md <<'EOF'
 # Welcome
 
 Start here. This folder is about to become a database.
 EOF
-```
-
-```bash
 cat > notes/alice/ideas.md <<'EOF'
 # Ideas
 
 - query files with SQL
 - watch for changes
 EOF
-```
-
-```bash
 cat > notes/bob/reading-list.md <<'EOF'
 # Reading list
 
 - The SQLite file format
 EOF
 ```
+
+(Any directory of files works with `dirsql` — the rest of this tutorial
+assumes exactly these three so your output matches ours.)
 
 Check that all three files are in place:
 
