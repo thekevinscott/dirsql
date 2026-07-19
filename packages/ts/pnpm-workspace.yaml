@@ -1,0 +1,19 @@
+# `packages` is required even though this is a single project: pnpm 9 treats
+# the mere presence of this file as a workspace declaration and aborts with
+# "packages field missing or empty" without it. The release path runs pnpm 9
+# (hardcoded in putitoutthere's build matrix), so that must keep working.
+packages:
+  - '.'
+
+# The build allowlist is spelled three ways because three pnpm majors read it
+# from three places, and all three are in use: pnpm 11 here (`allowBuilds`),
+# pnpm 10 here (`onlyBuiltDependencies`), and pnpm 9 from the `pnpm` field in
+# package.json. Drop any one and that major silently stops building esbuild,
+# whose binary tsx needs to run `tools/stage-platform.ts`.
+allowBuilds:
+  '@biomejs/biome': true
+  esbuild: true
+
+onlyBuiltDependencies:
+  - '@biomejs/biome'
+  - esbuild

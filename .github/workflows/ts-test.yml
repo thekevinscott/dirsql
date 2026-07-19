@@ -52,7 +52,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 11
 
       - name: Install dependencies
         working-directory: packages/ts
@@ -80,7 +80,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ["20.11", "24"]
+        node: ["24"]
     steps:
       - uses: actions/checkout@v6
 
@@ -92,7 +92,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 11
 
       - name: Install dependencies
         working-directory: packages/ts
@@ -121,7 +121,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ["20.11", "24"]
+        node: ["24"]
     steps:
       - uses: actions/checkout@v6
 
@@ -133,7 +133,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 11
 
       - name: Install dependencies
         working-directory: packages/ts
@@ -159,7 +159,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ["20.11", "24"]
+        node: ["24"]
     steps:
       - uses: actions/checkout@v6
 
@@ -179,7 +179,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 11
 
       - name: Install dependencies
         working-directory: packages/ts
@@ -225,7 +225,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 11
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
