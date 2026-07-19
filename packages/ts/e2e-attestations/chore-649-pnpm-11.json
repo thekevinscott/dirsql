@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1784454120,
+  "exit_code": 0,
+  "commit": "eebb054642a161672a72d5ec32b59ab19e6a0a22",
+  "branch": "chore/649-pnpm-11"
+}
