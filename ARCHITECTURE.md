@@ -42,7 +42,7 @@ Aim for **complete API parity across all three SDKs**: same concepts, same capab
 - **TypeScript**: `await db.ready` (awaitable property). camelCase. AsyncIterables for event streams.
 - **Rust**: Builder pattern or `db.ready().await`. snake_case. Stream trait for event streams.
 
-When adding a feature to one SDK, create beads for the other two.
+When adding a feature to one SDK, file GitHub issues for the other two.
 
 ## Overview
 

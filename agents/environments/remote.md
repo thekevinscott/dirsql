@@ -2,7 +2,7 @@
 
 This file provides the workflow rules that apply when the session is running in a **hosted Claude Code sandbox** (cloud / web). It is loaded via the `agents/build/environment.md` symlink, which is (re)created on every session start by `.claude/hooks/select-environment.sh` based on the `CLAUDE_CODE_REMOTE` env var.
 
-Universal rules (architecture, scratch files, shell command style, testing philosophy) live in `AGENTS.md`. This file covers only the **remote-specific overrides** -- what changes when there is no `~/work/dotfiles`, no GPG keyring, no `bd`, no `just`, and no local LLM credentials.
+Universal rules (architecture, scratch files, shell command style, testing philosophy) live in `AGENTS.md`. This file covers only the **remote-specific overrides** -- what changes when there is no `~/work/dotfiles`, no GPG keyring, no `gh`, no `just`, and no local LLM credentials.
 
 If an item listed here turns out to be available in the sandbox, prefer the corresponding local instruction in `agents/environments/local.md`.
 
@@ -24,11 +24,9 @@ git checkout -b claude/general-session-<id>-<slug> claude/general-session-<id>
 
 One PR per change still applies. The "never commit directly to `main`" rule still applies.
 
-## Task tracking (no Beads)
+## Task tracking
 
-`bd` is **not** installed. Skip every `bd create` / `bd update --claim` / `bd close` step. Do **NOT** fabricate bead IDs in commits or PR bodies.
-
-Track work via GitHub issues directly, using the `mcp__github__*` tools. Reference issues by `owner/repo#<num>` in commit messages and PR bodies; use `Fixes #<num>` where appropriate.
+Track work via GitHub issues, using the `mcp__github__*` tools (the sandbox restricts `gh`, so the local environment's `gh issue ...` commands do not apply here). Reference issues by `owner/repo#<num>` in commit messages and PR bodies; use `Fixes #<num>` where appropriate.
 
 ## Permissions and tool access
 
@@ -65,7 +63,6 @@ CI on GitHub remains the authoritative gate; the orchestrator continues to monit
 
 The subagent and orchestrator responsibilities from the local environment still apply, with these changes:
 
-- Skip all `bd` commands.
 - Skip `scripts/agent-preflight.sh`.
 - Skip worktree creation -- use child branches off the session branch instead.
 - Use `mcp__github__*` for every GitHub operation (status checks, PR creation, comments, merges) rather than `gh`.
@@ -78,4 +75,4 @@ There is no worktree to remove. Cleanup reduces to:
 1. Pull `main` into the sandbox checkout: `git pull origin main`.
 2. Delete the merged feature branch locally: `git branch -d <branch-name>`.
 
-Do **NOT** try to `git worktree remove`. There is no bead to close.
+Do **NOT** try to `git worktree remove`. The issue closes itself via the PR's `Fixes #<num>`.
