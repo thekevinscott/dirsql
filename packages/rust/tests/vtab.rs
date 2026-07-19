@@ -69,11 +69,9 @@ fn stat_columns_carry_real_values() {
     let conn = open_over(&dir, "**/*");
 
     let (path, basename, parent, ext, size): (String, String, String, String, i64) = conn
-        .query_row(
-            "SELECT path, basename, dir, ext, size FROM t",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-        )
+        .query_row("SELECT path, basename, dir, ext, size FROM t", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
         .unwrap();
 
     assert_eq!(path, "notes/todo.md", "path is relative to the scan root");
@@ -143,6 +141,22 @@ fn unreadable_file_yields_null_content_without_erroring_the_row() {
 
     assert_eq!(name, "secret.md", "the row still appears");
     assert_eq!(body, None, "unreadable content is NULL, not an error");
+}
+
+#[test]
+fn star_does_not_read_file_bodies() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("locked.md");
+    fs::write(&path, "unreadable").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    let conn = open_over(&dir, "**/*");
+
+    // If SELECT * read content eagerly this would surface the permission
+    // error; laziness is what keeps the stat columns queryable regardless.
+    let name: String = conn
+        .query_row("SELECT basename FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(name, "locked.md");
 }
 
 #[test]

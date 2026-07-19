@@ -1600,7 +1600,7 @@ const STAT_CTIME: &str = "ctime";
 /// Compute the filesystem-fact columns for a given file: path-derived
 /// (`path`, `basename`, `dir`, `ext`) and stat-derived (`size`,
 /// `mtime`, `ctime`).
-fn compute_stat_virtuals(rel_path: &str, abs_path: &Path) -> Row {
+pub(crate) fn compute_stat_virtuals(rel_path: &str, abs_path: &Path) -> Row {
     // A missing/unreadable file yields all-`None` (absent columns);
     // `mtime`/`ctime` are `None` when the platform can't supply them or the
     // value predates the epoch.
