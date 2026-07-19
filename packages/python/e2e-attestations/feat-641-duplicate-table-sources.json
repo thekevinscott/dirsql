@@ -1,7 +1,7 @@
 {
   "command": "uv run python -m pytest tests/e2e/ -x -q",
-  "ran_at": 1784424670,
+  "ran_at": 1784424785,
   "exit_code": 0,
-  "commit": "411c2807cc5330361973874bda58ba7ef0a2264e",
+  "commit": "9dc4255cecf8f8f6e4378cabcf1a53b2d49333fd",
   "branch": "feat/641-duplicate-table-sources"
 }
