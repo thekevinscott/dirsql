@@ -46,9 +46,7 @@ describe("path-tables (#627)", () => {
   });
 
   it("scopes the scan to the glob", async () => {
-    const rows = await open().query(
-      "SELECT basename, size FROM './docs/*.md'",
-    );
+    const rows = await open().query("SELECT basename, size FROM './docs/*.md'");
 
     expect(rows.map((r) => r.basename).sort()).toEqual(["a.md", "b.md"]);
     expect(rows.find((r) => r.basename === "b.md")?.size).toBe(10);

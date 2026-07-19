@@ -22,19 +22,23 @@ def docs_dir(tmp_path):
     return str(tmp_path)
 
 
-def _rows_table():
-    return Table(
-        ddl="CREATE TABLE rows_csv (path TEXT)",
-        glob="docs/*.csv",
-        on_file=lambda path: [{"path": "docs/c.csv"}],
+def _open(root):
+    return DirSQL(
+        root,
+        tables=[
+            Table(
+                ddl="CREATE TABLE rows_csv (path TEXT)",
+                glob="docs/*.csv",
+                on_file=lambda path: [{"path": "docs/c.csv"}],
+            )
+        ],
     )
 
 
 def describe_path_tables():
-    def it_scans_the_index_root_for_a_bare_dot_slash(docs_dir):
-        db = DirSQL(docs_dir, tables=[_rows_table()])
-
-        rows = db.query("SELECT path FROM './'")
+    @pytest.mark.asyncio
+    async def it_scans_the_index_root_for_a_bare_dot_slash(docs_dir):
+        rows = await _open(docs_dir).query("SELECT path FROM './'")
 
         assert sorted(r["path"] for r in rows) == [
             "docs/a.md",
@@ -42,58 +46,59 @@ def describe_path_tables():
             "docs/c.csv",
         ]
 
-    def it_scopes_the_scan_to_the_glob(docs_dir):
-        db = DirSQL(docs_dir, tables=[_rows_table()])
-
-        rows = db.query("SELECT basename, size FROM './docs/*.md'")
+    @pytest.mark.asyncio
+    async def it_scopes_the_scan_to_the_glob(docs_dir):
+        rows = await _open(docs_dir).query("SELECT basename, size FROM './docs/*.md'")
 
         assert sorted(r["basename"] for r in rows) == ["a.md", "b.md"]
         assert {r["basename"]: r["size"] for r in rows}["b.md"] == 10
 
-    def it_returns_no_rows_when_nothing_matches(docs_dir):
-        db = DirSQL(docs_dir, tables=[_rows_table()])
+    @pytest.mark.asyncio
+    async def it_returns_no_rows_when_nothing_matches(docs_dir):
+        assert await _open(docs_dir).query("SELECT path FROM './docs/*.rst'") == []
 
-        assert db.query("SELECT path FROM './docs/*.rst'") == []
-
-    def it_joins_a_path_table_against_a_named_table(docs_dir):
-        db = DirSQL(docs_dir, tables=[_rows_table()])
-
-        rows = db.query(
+    @pytest.mark.asyncio
+    async def it_joins_a_path_table_against_a_named_table(docs_dir):
+        rows = await _open(docs_dir).query(
             "SELECT p.basename FROM './docs/*.csv' AS p "
             "JOIN rows_csv AS r ON r.path = p.path"
         )
 
         assert [r["basename"] for r in rows] == ["c.csv"]
 
-    def it_still_resolves_a_real_table_by_name(docs_dir):
-        db = DirSQL(docs_dir, tables=[_rows_table()])
+    @pytest.mark.asyncio
+    async def it_still_resolves_a_real_table_by_name(docs_dir):
+        rows = await _open(docs_dir).query("SELECT path FROM rows_csv")
 
-        assert db.query("SELECT path FROM rows_csv") == [{"path": "docs/c.csv"}]
+        assert rows == [{"path": "docs/c.csv"}]
 
-    def it_hints_at_the_dot_slash_form_for_a_bare_glob(docs_dir):
-        db = DirSQL(docs_dir, tables=[_rows_table()])
+    @pytest.mark.asyncio
+    async def it_hints_at_the_dot_slash_form_for_a_bare_glob(docs_dir):
+        db = _open(docs_dir)
 
         with pytest.raises(Exception) as excinfo:
-            db.query("SELECT * FROM '**/*.md'")
+            await db.query("SELECT * FROM '**/*.md'")
 
         assert "did you mean './**/*.md'?" in str(excinfo.value)
 
-    def it_leaves_a_plain_typo_unchanged(docs_dir):
-        db = DirSQL(docs_dir, tables=[_rows_table()])
+    @pytest.mark.asyncio
+    async def it_leaves_a_plain_typo_unchanged(docs_dir):
+        db = _open(docs_dir)
 
         with pytest.raises(Exception) as excinfo:
-            db.query("SELECT * FROM usrs")
+            await db.query("SELECT * FROM usrs")
 
         message = str(excinfo.value)
         assert "no such table: usrs" in message
         assert "did you mean" not in message
 
-    def it_reads_the_filesystem_live(docs_dir):
-        db = DirSQL(docs_dir, tables=[_rows_table()])
-        db.query("SELECT path FROM './docs/*.md'")
+    @pytest.mark.asyncio
+    async def it_reads_the_filesystem_live(docs_dir):
+        db = _open(docs_dir)
+        await db.query("SELECT path FROM './docs/*.md'")
 
         with open(os.path.join(docs_dir, "docs", "d.md"), "w", encoding="utf-8") as fh:
             fh.write("delta")
 
-        rows = db.query("SELECT path FROM './docs/*.md'")
+        rows = await db.query("SELECT path FROM './docs/*.md'")
         assert "docs/d.md" in [r["path"] for r in rows]
