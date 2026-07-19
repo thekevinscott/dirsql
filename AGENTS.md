@@ -8,6 +8,10 @@ All architectural decisions and constraints (including cross-language parity rul
 
 @agents/build/environment.md
 
+## Reference Docs
+
+Deep operational references live in `agents/reference/` and are NOT auto-loaded (this file must stay under Claude Code's 40k-char instruction limit). Each summarized section below names its reference file -- **read it before working in that area**: CI gate debugging (`testing-conventions-ci.md`), colocation/mutation/coverage gates (`testing-gates.md`), e2e attestation (`e2e-attestation.md`), changelog/migration fragments (`changelog-migrations.md`).
+
 ## Scratch Files
 
 Write scratch/temporary files to `/tmp` instead of asking permission. Use unique filenames to avoid collisions with other sessions.
@@ -37,37 +41,11 @@ Default to no comments. Only add one when the WHY is non-obvious -- a hidden con
 
 **Every CI check emits actionable fix instructions on failure.** A failing check must tell the contributor exactly what to change -- the file, command, or trailer to add or edit -- not merely which rule was violated. When a check can detect a *near-miss* (a fix was attempted but malformed), it names the specific defect and how to correct it rather than falling through to a generic "not satisfied" message (e.g. the `changelog-gate` names a fragment file whose name breaks the `YYYY-MM-DD-<slug>.md` convention -- pointing at the exact file -- and its "no fragment" error prints the exact path to add; dirsql#566).
 
-**CI logic lives in scripts, not workflow YAML.** `run:` / `github-script` steps stay trivial glue -- check out, set up a toolchain, invoke one command. Anything with iteration, `case` dispatch, conditionals, or text-munging moves to a check in the `internals/checks` uv package (a click group, one subcommand per check -- see `internals/checks/src/checks/`), invoked as a one-liner (`uv run --project internals/checks dirsql-checks <check>`), and carries **colocated unit tests** (the same testing-conventions standard as the rest of the tree -- `foo.py` ↔ `foo_test.py`). Those tests run under `conventions.yml`'s `internals-checks` job (`unit-coverage` enforces a 100% floor; see "Enforcing Colocation" below for the full gate list). Inline workflow logic is untestable, un-runnable locally, and silently duplicated across runners; a script is none of those.
+**CI logic lives in scripts, not workflow YAML.** `run:` / `github-script` steps stay trivial glue -- check out, set up a toolchain, invoke one command. Anything with iteration, `case` dispatch, conditionals, or text-munging moves to a check in the `internals/checks` uv package (a click group, one subcommand per check -- see `internals/checks/src/checks/`), invoked as a one-liner (`uv run --project internals/checks dirsql-checks <check>`), and carries **colocated unit tests** (the same testing-conventions standard as the rest of the tree -- `foo.py` ↔ `foo_test.py`). Those tests run under `conventions.yml`'s `internals-checks` job (`unit-coverage` enforces a 100% floor; full gate list in `agents/reference/testing-gates.md`). Inline workflow logic is untestable, un-runnable locally, and silently duplicated across runners; a script is none of those.
 
-### Reusable-workflow gates (testing-conventions): adoption & debugging
+### Reusable-workflow gates (testing-conventions)
 
-`conventions.yml` calls the `testing-conventions` reusable workflow at the **moving tag `@v0`** (see #240 and its sub-issues). Hard-won operational rules:
-
-- **`@v0` rolls; a removed/renamed input startup-fails the WHOLE workflow.** When upstream moves an input (e.g. #289 removed `build_command`, migrating it to config), any caller still passing it fails with `startup_failure` and **0 jobs** -- and it takes down `conventions.yml` on `main` and every open PR, not just the PR that added it. So an input change is a live breakage; fix it fast.
-- **On `startup_failure`, read the run annotation FIRST -- do not hypothesize.** There are no job logs (no jobs ran), so `get_job_logs` is empty; instead WebFetch the run's `html_url`, which surfaces `Invalid workflow file: conventions.yml#L<n> -- Invalid input, <name> is not defined in the referenced workflow`. That names the file, line, and cause exactly. Guessing "tag-roll / transient / the gate itself" wastes rerun cycles; the annotation is authoritative.
-- **`testing-conventions.toml` is validated strictly -- an unknown key fails EVERY gate.** A bad `[<lang>].<key>` (e.g. `[typescript].build_command`, which does not exist -- `[typescript]`/`[rust]` accept only `coverage`/`exempt`; `build_command` is `[python]`-only) makes the CLI reject the whole config, so every gate (even colocated-test) goes red. Native builds **auto-provision from the manifest** (maturin / napi / `Cargo.toml`): a napi/TS package needs **no** `build_command` at all -- keep `rust_toolchain: true` to supply cargo, nothing else.
-- **Read reusable-workflow behavior at a PINNED commit, and trust `MIGRATIONS.md` over probing.** `git ls-remote https://github.com/thekevinscott/testing-conventions v0` for the sha, then WebFetch the raw workflow at that sha (`@v0` can roll mid-run and spuriously `startup_failure` a probe). Before probing a gate, cross-check upstream `packages/<lang>/MIGRATIONS.md` (authoritative): "landed" often means the CLI *capability* shipped while the reusable *job* isn't wired to it yet (e.g. `e2e verify --scope` shipped one release before the job passed it).
-- **e2e attestation goes stale after a squash merge.** The merged attestation names the pre-squash commit, which is dangling on `main`; the reusable `e2e-verify` job runs unconditionally, so it reds. `e2e verify --scope <path>` narrows the freshness walk to the source dir so test/docs-only commits don't stale it. A stale-attestation red is **our** re-attest to fix (as the last commit touching that package -- mind the ordering trap: `attest` records `HEAD`, so attest right after the package's own last change), never a tool bug.
-- **Never retire a bespoke gate ahead of a green proof.** Adopt a gate by *probing* (add the gate to the caller, keep the bespoke workflow), confirming green per-job, then retiring the bespoke workflow in a follow-up. A red is diagnosed and fixed or filed, never hidden.
-
-#### Adoption state (post-#240, 2026-07-08)
-
-Every adoptable gate runs inside `conventions.yml`, per package; `testing-conventions.toml` carries **zero** exemptions. The map:
-
-| Gate | python | typescript | rust (core) |
-| --- | --- | --- | --- |
-| colocated-test (+ co-change) | ✅ | ✅ | ✅ (presence-only) |
-| unit-lint | ✅ | ✅ | ✅ |
-| integration-lint | ✅ | ✅ | ✅ |
-| unit-coverage | ✅ | ✅ | ❌ bespoke in `rust-test.yml` -- permanent, see below |
-| mutation | ✅ | ✅ | ✅ |
-| e2e-verify | ✅ | ✅ | N/A by design, see below |
-| packaging | ✅ | ✅ | ✅ (workspace-member support, upstream #360/#362) |
-
-The binding crates (`packages/ts/napi`, `packages/python`) additionally run colocated-test + unit-lint at their own crate roots (#405).
-
-- **Rust unit-coverage is bespoke PERMANENTLY, not pending upstream.** The `branch` floor needs nightly (`cargo llvm-cov --branch`); the reusable coverage job provisions stable, and upstream declined a toolchain input. The sanctioned alternative -- a crate-root `packages/rust/rust-toolchain.toml` -- was probed in #437 and **breaks the release build**: the release precheck cross-compiles from `packages/rust` on stable with added musl/darwin targets, and the pin switched that build to nightly (`E0463: can't find crate for core` on every target). One crate, one directory, two callers needing different channels -- a crate-root pin cannot serve both, so `rust-test.yml`'s coverage job scopes nightly to its own step. Revisit only if upstream gains a toolchain selector that does not leak to other builds of the same crate.
-- **Rust has no e2e-verify because it has nothing to attest.** Attestations are receipts for suites CI cannot run (they spawn the shipped binary through the real launchers); rust's outermost tier (`packages/rust/tests/`) runs directly in CI on every PR, so a receipt would be strictly weaker evidence than the run itself. Core changes are still e2e-freshness-enforced through BOTH bindings via `[e2e].extra_scope` (see *E2E Attestation*).
+`conventions.yml` calls the `testing-conventions` reusable workflow at the **moving tag `@v0`**. The essentials: a removed/renamed input startup-fails the whole workflow on `main` and every PR (0 jobs, no job logs -- WebFetch the run's `html_url` and read the annotation first, never hypothesize); an unknown `testing-conventions.toml` key fails EVERY gate; read upstream behavior at a pinned sha and trust its `MIGRATIONS.md` over probing; a stale e2e attestation after a squash merge is ours to re-attest, never a tool bug; never retire a bespoke gate before a green proof. Full operational lore, the per-language gate adoption map, and the two permanent exceptions (Rust unit-coverage stays bespoke; Rust has no e2e-verify): `agents/reference/testing-conventions-ci.md`.
 
 ## Imports
 
@@ -133,15 +111,7 @@ A feature is not done until integration tests pass and cover the new functionali
 
 ### Enforcing Colocation (testing-conventions)
 
-The Python/TypeScript/Rust colocation rule above is enforced as a **blocking CI gate** by [`testing-conventions`](https://github.com/thekevinscott/testing-conventions), a config-driven CLI that scans each SDK's source tree and fails on any source file lacking a colocated unit test (for Rust, an inline `#[cfg(test)]` module). The wiring lives in `.github/workflows/testing-conventions.yml` (it pins the CLI version and runs the per-language `unit colocated-test` presence scans, plus a PR-only `--base` co-change check for Python/TypeScript that fails when a modified source's colocated test did not change alongside it) and `testing-conventions.toml` (the exempt list).
-
-The same workflow also runs `unit lint` -- the **isolation** rule: a unit test must mock every collaborator (it must not import an un-mocked one), so the test exercises only the unit under test. It is wired for **all three SDKs** (#233 / epic #231): Python and TypeScript first, then Rust once its effectful-std unit tests were either moved to the integration tier (real filesystem/subprocess/`notify` behavior belongs there) or routed through a trait-injected `FileSystem` double in the core. For Rust the rule is `no-out-of-module-call`/`no-out-of-module-import`: a unit test may reach only `super::` (the unit) and pure `std` -- no effectful `std::fs`/`std::thread`/`std::env`/`std::time` and no out-of-module first-party import. The fix for a violation is to mock the collaborator (Python: patch it by its dotted path, e.g. `patch("pkg.mod.subprocess.run", ...)`, rather than importing it; TypeScript: `vi.mock("<specifier>")`; Rust: inject a trait double or relocate the effectful test to `tests/`), or, when a dependency is naturally a callable the unit receives, to inject it (DI) -- never to weaken the test.
-
-The scan covers the two native **binding crates** too (#405): `conventions.yml`'s `rust-napi-binding` (`packages/ts/napi`) and `rust-python-binding` (`packages/python`) calls run `colocated-test` + `unit-lint` at each crate root, alongside the core `rust` call. Their **pure** conversion logic is unit-tested inline -- napi's `value_to_js` / `row_event_to_js`, and the pyo3 binding's `row_event_to_plain` (a GIL-free intermediate extracted so the variant->action / field-selection mapping is unit-testable, mirroring napi; `PyRowEvent` is built from it unchanged). The **runtime-coupled** parts (napi `napi::sys` getters / `FnRef`; pyo3 GIL conversions `py_to_value` / `value_to_py` / `value_row_to_py_dict`) stay covered by the binding tier (`tests/integration/binding`), the same #233 split the core uses for effectful code. No exemption: a rust unit test constructing first-party `Value` / `RowEvent` via `super::*` passes `unit-lint`. No `mutation`/`coverage` gate on the binding crates -- those execute the suite and would need the napi/pyo3 build; #405 is the static presence+isolation gates.
-
-`conventions.yml`'s `internals-checks` call (#494/#503) gates the repo-tooling `internals/checks` package the same way: `colocated-test`, `unit-lint`, `integration-lint`, `unit-coverage`, `mutation`, and `e2e-verify` at `internals/checks/src` -- one call per package, `integration-lint` deriving its subjects (`tests/integration/`) from the package root (#515/#417). `tests/integration/` exercises each check's `gate.run()` against real collaborators (real git, real pytest subprocess); `tests/e2e/` spawns the packaged `dirsql-checks` CLI with nothing mocked, gated by `internals/checks/e2e-attestation.json` per the E2E Attestation convention below.
-
-`internals/distcheck` (#520) is the same species of repo-only uv package: the packaging distcheck flows (build → pack → install → run the published artifact), extracted from the former per-package packaging suites. It is a click group (`dirsql-distcheck`) with one subcommand per flow (`dirsql-distcheck python`, `dirsql-distcheck node` -- the node flow drives `npm`/`pnpm` via subprocess from Python; one tested home matters more than harness-language purity), each backed by a `gate.run()` whose effects funnel through an injected `runner` (subprocess) + `FileSystem` seam so the orchestration is unit-testable without a real build. The real flows run in CI via the `distcheck` jobs in `python-test.yml` / `ts-test.yml` (which build the prerequisites first, then invoke `dirsql-distcheck <flow>`); `conventions.yml`'s `internals-distcheck` call gates the package with `colocated-test`, `unit-lint`, `integration-lint`, `unit-coverage`, and `mutation` at `internals/distcheck/src` (a single call -- with #417 live on `@v0`, `integration-lint` derives its subjects from the package root, so no separate integration call is needed). No `e2e-verify`/attestation: the package has no e2e tier, since its `tests/integration/` (each flow's `gate.run()` against real subprocesses) is the outermost tier and the CI distcheck jobs run the real flows directly.
+The colocation rule is a blocking CI gate ([`testing-conventions`](https://github.com/thekevinscott/testing-conventions), wired in `conventions.yml` + `testing-conventions.toml`): every source file needs a colocated unit test (Rust: inline `#[cfg(test)]`), a PR-only co-change check flags modified sources whose test didn't change, and `unit lint` enforces **isolation** -- a unit test must mock every collaborator (Python `patch(...)`, TS `vi.mock`, Rust trait double or relocate the effectful test), never weaken the test. The gates also cover the two binding crates and the repo-tooling `internals/checks` / `internals/distcheck` uv packages. **The exemption count is zero and stays there**: barrels get a colocated surface test, logic gets extracted, dead shells get deleted -- an exemption is never the escape hatch. Full wiring, per-package gate map, and history: `agents/reference/testing-gates.md`.
 
 Run it locally before pushing:
 
@@ -150,30 +120,9 @@ pip install testing-conventions   # CI always uses the latest release
 just test-conventions
 ```
 
-**Exemptions.** The goal is **zero** exemptions, and barrels are no longer an excuse for one. A re-export barrel gets a **colocated test that asserts its public surface** (TS `src/index.ts` ↔ `index.test.ts`, python `dirsql/__init__.py` ↔ `__init___test.py`), exactly as any module would -- it is *tested*, not exempted, so a broken re-export is caught. An `__init__.py` carrying no executable logic is made **truly empty** (0 bytes), which the tool auto-skips with no config entry. A package shell left dead by a feature removal is **deleted**, not parked behind an exemption. When a "barrel" actually holds logic, the fix remains to **extract that logic into colocated-tested modules** (#239). The npm `bin` shim `src/cli/dirsql.ts` is likewise *not* exempt: its error-handling lives in the unit-tested `cli/run-cli.ts`, leaving a trivial `runCli()` shim covered by a mocked distcheck-test.
-
-The exemption count is again **zero**. The three-tier conformance work (#517) restored it: the binding suites moved into the recognized tier `tests/integration/binding/` (#519) and the packaging distcheck flows moved to the `internals/distcheck` package (#520), so nothing trips `unknown-tier` anymore and the temporary `unknown-tier` waivers #518 added are all removed. Before that the last standing entry -- the python barrel-test isolation waiver (`[[python.exempt]] path = "__init___test.py" rules = ["unmocked-collaborator"]`) -- was removed once testing-conventions#382 / PR #384 brought the python `unmocked-collaborator` rule to parity with TS (a bare package-relative import `from . import <names>` in a barrel test now resolves to the SUT and passes). Exemption entries carry a `path` (relative to the scanned source dir for source-file rules, but the derived package root for the suite-tier `unknown-tier` rule), the `rules` waived, and a required `reason`; the CLI **rejects a stale entry whose `path` matches no file**, so it self-cleans. Adding a *new* untested source file fails the gate -- an exemption is never the escape hatch.
-
 ### Mutation (testing-conventions)
 
-The rung above coverage is the **`unit mutation`** gate (#235 / epic #231): testing-conventions mutates the source and fails on any **surviving** mutant -- one no unit test caught. Engines: **cosmic-ray** (Python), **Stryker** (TypeScript), **cargo-mutants** (Rust). It is **PR-only and diff-scoped** (`--base <base.sha>...HEAD`): only the lines a PR added/modified are mutated, so each PR's surface stays bounded. A PR that changes no SDK source has nothing to mutate and passes trivially.
-
-The gate reruns the real unit suite per mutant, so it needs the native bindings built. **TypeScript and Rust mutation now run inside the reusable workflow** (`.github/workflows/conventions.yml`): the upstream monorepo primitive -- #277 derives the package root from `source` (the caller input formerly named `path`, renamed upstream; dirsql#577), #279 makes the mutation job install/build from that derived root -- lets the reusable job build the native artifact itself (ts via `build_command: pnpm build` + `rust_toolchain: true`; rust via cargo-mutants, which builds the crate itself). This retired the bespoke `ts-mutation.yml` / `rust-mutation.yml` (#417). The CLI **self-provisions Stryker and cargo-mutants**, so there are no mutation engine deps or config in this repo.
-
-**Python mutation now runs in the reusable workflow too** (`conventions.yml`, `python-sdk` gates: `mutation`): the testing-conventions wheel bundles the cosmic-ray adapter as a runtime dependency, so the reusable mutation job resolves the engine from the same `python_env=uv` (`uv sync`) environment it provisions for coverage — no separate install and no bespoke workflow. This retired `python-mutation.yml` (#426). All three SDKs' `mutation` gates now run inside `conventions.yml`.
-
-Run a language locally (after building its native artifact), against your PR's base:
-
-```bash
-# from packages/python (maturin venv active, cosmic-ray installed)
-npx -y testing-conventions unit mutation --language python --base origin/main dirsql
-# from packages/ts (after pnpm build)
-npx -y testing-conventions unit mutation --language typescript --base origin/main src
-# from repo root (cargo-mutants installed)
-npx -y testing-conventions unit mutation --language rust --base origin/main packages/rust/src
-```
-
-**Survivors.** The fix is almost always a **new assertion** that kills the mutant. Only a genuinely *equivalent* or intentionally-defensive mutant is lifted, via a `[[<language>.exempt]]` entry in `testing-conventions.toml` whose `rules` includes `"mutation"` (with a real `path` and a `reason`) -- never weaken a test to make a survivor pass. There are none today.
+The `unit mutation` gate mutates PR-changed source lines and fails on any mutant no unit test kills (engines: cosmic-ray / Stryker / cargo-mutants, all self-provisioned; PR-only, diff-scoped via `--base`). All three SDKs run it inside `conventions.yml`. Fix a survivor with a **new assertion**, never by weakening a test; only a genuinely equivalent mutant gets a reason-required `mutation` exemption (none today). Local run commands and per-language details: `agents/reference/testing-gates.md`.
 
 ### Test Boundaries -- What to Mock, What Not To
 
@@ -241,24 +190,7 @@ For docs/lint/typo-only PRs, include the section with a single line: `N/A - docs
 
 ### E2E Attestation
 
-CI does not run the e2e suites -- they need real binaries, and some need live LLM calls -- but it enforces, **per package**, that they *were* run against that package's current code. Each SDK package carries its own attestation at its root -- `packages/python/e2e-attestation.json` and `packages/ts/e2e-attestation.json` -- recording (via [`testing-conventions`](https://github.com/thekevinscott/testing-conventions)) the e2e command, its exit code, and the commit it ran against. The freshness check runs **inside the reusable workflow** (`conventions.yml`, the `python-sdk` / `typescript-sdk` `e2e-verify` gate): `e2e verify "$PACKAGE_ROOT" --scope "$SCAN_PATH" --base "$BASE"` measures freshness over the **`base..HEAD` scoped-source diff**, so a PR that does not touch the SDK source has nothing to verify. It is a **freshness gate, not a test runner** -- no suite, no build, and no LLM run in CI, so it does not violate the E2E Test Policy above. The bespoke `e2e-attestation.yml` this replaced is deleted (whole-hog adoption -- the reusable `e2e-verify` gate owns per-package freshness).
-
-The `--scope` + `--base` diff-scoping makes the gate per-SDK by construction: a change under `packages/python/dirsql` stales only the python attestation, a change under `packages/ts/src` only the ts one, and a PR that does not touch a package's scoped source never verifies it.
-
-**Regenerate the attestation for each package you changed**, as the last commit touching that package before you push. From the repo root:
-
-```bash
-just e2e-attest-python   # cd packages/python && testing-conventions e2e attest 'just test-e2e'
-just e2e-attest-ts       # cd packages/ts && testing-conventions e2e attest 'pnpm test:e2e'
-```
-
-`attest` runs the command, writes `<package>/e2e-attestation.json` naming the current commit, and commits it for you. **The attestation must be the last commit touching that package** -- any later non-attestation commit under the package re-stales it and the gate goes red.
-
-**Multi-package PRs:** because `attest` records `HEAD`, attest each package right after finishing *its* changes (complete + attest python, then complete + attest ts). Attesting both only at the very end leaves whichever you attest second naming the other's attestation commit -- outside its subtree -- which verify rejects.
-
-**Shared-core changes stale both bindings -- CI-enforced via `[e2e].extra_scope`.** The shared Rust core (`packages/rust/src`) is compiled into both bindings but lives in neither binding's subtree, and `e2e verify --scope` requires the scope to be a **descendant of the caller's `path`** -- so a binding caller cannot point its freshness `--scope` at the core. That case is solved by the `e2e verify --extra-scope` / `--exclude` flags (upstream #333): `testing-conventions.toml`'s `[e2e]` block declares `extra_scope = ["packages/rust/src"]`, `detect.py` reads it, and the reusable `e2e-verify` job passes it through -- so **any `packages/rust/src` change now stales BOTH bindings' attestations in CI** and the gate demands re-attestation. Pure config; the former bespoke `e2e_core_freshness.py` gate is not needed (proven: over a `packages/rust/src`-only diff, `e2e verify` is exit 0 without `--extra-scope`, exit 1 with it). **After any shared-core change, re-attest each binding** (`just e2e-attest-python`, `just e2e-attest-ts`) -- CI now enforces this, it is no longer a by-hand-only promise. **`cli`-only** core source (`packages/rust/src/cli/**`, `packages/rust/src/bin/**`) is feature-gated out of the binding *libraries*, but the language packages ship the compiled `dirsql` binary and their e2e suites spawn it -- a CLI change alters what those suites exercise, so it stales the attestations like any other core change (no `exclude` carve-out).
-
-CI installs the latest `testing-conventions` release (unpinned); install it locally before attesting: `pip install testing-conventions`.
+CI never runs the e2e suites; instead `conventions.yml`'s `e2e-verify` gate checks, per package, a committed attestation (`packages/python/e2e-attestation.json`, `packages/ts/e2e-attestation.json`) recording that the suite ran against the package's current code. **Regenerate the attestation for each package you changed, as the last commit touching that package before you push**: `just e2e-attest-python` / `just e2e-attest-ts` (needs `pip install testing-conventions`). Multi-package PRs: attest each package right after finishing *its* changes -- attesting both at the very end leaves the second one stale. **Any `packages/rust/src` change (including `cli/`) stales BOTH bindings' attestations** (CI-enforced via `[e2e].extra_scope`), so re-attest both after core changes. Full mechanics and debugging: `agents/reference/e2e-attestation.md`.
 
 ### Docs as Spec
 
@@ -268,51 +200,11 @@ When adding a feature, the PR must include docs AND tests. When docs change, tes
 
 ### Changelog and Migrations
 
-**Every PR that touches public-facing SDK code must add a changelog fragment.** This is enforced in CI by the `changelog-gate` check (`internals/checks`), whose implementation mirrors [template-lib](https://github.com/thekevinbot/template-lib)'s reference gate (#566); an unmet gate blocks merge.
+**Every PR touching non-test source under `packages/<pkg>/` must add a changelog fragment** at `packages/<pkg>/changelog.d/YYYY-MM-DD-<slug>.md` (UTC merge date; body leads with a bold Keep-a-Changelog category, e.g. `**Fixed**`), one per changed package. Enforced by the `changelog-gate` check in CI. Escape hatch for truly no-observable-change PRs: a `skip-changelog: <reason>` line in any commit message. Fragments are permanent and append-only; the root `CHANGELOG.md` / `MIGRATIONS.md` are **frozen** pointer stubs -- never write into them; stray entries get relocated into the owning package's fragment dir, never folded into the frozen files.
 
-The scope: any change to non-test source under `packages/<pkg>/` requires a fragment naming that package. Exempt are test files (`*_test.py`, `*.test.ts` / `*.spec.ts`, anything under `packages/<pkg>/tests/`), the package `CHANGELOG.md` / `MIGRATIONS.md` pointer stubs, and the fragment folders themselves. We err toward requiring entries because the project does not yet strictly follow semver, so the changelog must carry the signal that semver would otherwise provide.
+**A migration fragment** (`packages/<pkg>/migrations.d/YYYY-MM-DD-<slug>.md`) is additionally required when a PR breaks a public API, removes a deprecated symbol, or changes runtime behavior without an API change. It needs all five subsections (Summary / Required changes / Deprecations removed / Behavior changes without code changes / Verification); write `_None._` under any that don't apply. Template at the bottom of the frozen root `MIGRATIONS.md`. Purely additive changes and behavior-preserving fixes need no migration entry.
 
-**Fragments are per-package and colocated (#565), so they ship with the package.** Each SDK package (`python`, `ts`, `rust`) owns its own changelog under `packages/<pkg>/changelog.d/`, and a PR adds one fragment per **changed package** -- the fragment lives under the same package whose source changed:
-
-```
-packages/<pkg>/changelog.d/YYYY-MM-DD-<slug>.md
-```
-
-- `<pkg>` is the package whose public source the PR changed. The Rust core is `rust` (`packages/rust/`), the Python package/binding is `python` (`packages/python/`), the TS package + napi crate is `ts` (`packages/ts/`). The directory identifies the package, so the filename carries no package token. A PR that touches more than one package needs a fragment in each.
-- `YYYY-MM-DD` is the UTC merge date; `<slug>` is a short kebab-case description (`2026-07-13-fix-watcher-race.md`).
-- The body leads with a Keep a Changelog **category** in bold -- `**Added**` / `**Changed**` / `**Deprecated**` / `**Removed**` / `**Fixed**` / `**Security**` -- then the entry text, exactly as it would read in a changelog. The category lives in the body, **not** the filename.
-
-Fragments are **permanent and append-only** -- nothing is ever assembled back into a root `CHANGELOG.md` and deleted. The root `CHANGELOG.md` / `MIGRATIONS.md` are **frozen** pointer stubs holding only the pre-fragment history (#563/#564); do not edit them. Version history is the `git log --tags` record (the repo tags a release on every merge).
-
-> **Direction of travel is one-way: entries become fragments, never the reverse.** The root `CHANGELOG.md` / `MIGRATIONS.md` are a *closed archive* -- a new entry (even one that documents an already-released change, or a stray fragment left in an old location) is **never** appended, merged, or "folded" into them. The correct home for *any* changelog/migration content that is not already frozen is a fragment under `packages/<pkg>/changelog.d/` (or `migrations.d/`). If you find loose entries in a wrong location -- e.g. the retired **root** `changelog.d/` / `migrations.d/` (the dual-mode dirs that predate the per-package layout, #565) -- **relocate them to the owning package's fragment dir** (renamed to `YYYY-MM-DD-<slug>.md`, body leading with its category), one copy per package the change affected; do **not** move them into the frozen files. Writing into the frozen archive is the mistake the freeze exists to prevent -- if you're adding lines to root `CHANGELOG.md`/`MIGRATIONS.md`, stop: you want a fragment.
-
-**Escape hatch.** If a PR genuinely has no observable change -- a pure refactor, an internal rename, a type-signature tidy with the same runtime -- bypass the gate by adding a `skip-changelog:` line to any commit message on the PR:
-
-```
-skip-changelog: <reason>
-```
-
-The gate scans raw commit bodies (#566, mirroring template-lib), so the line works from **any** line of any commit -- it need not be a formal git trailer, which removes the blank-line-splits-the-trailer footgun entirely. The reason stays in git history, so the decision is auditable. Use this sparingly; when in doubt, write the changelog fragment.
-
-**A migration fragment is additionally required when a PR:**
-
-- Breaks a public API (signature, name, return type, config key, CLI flag, action input).
-- Removes a previously deprecated symbol.
-- Changes runtime behavior without changing the API (exit codes, event payloads, on-disk layouts, default values, tag formats).
-
-Purely additive changes and behavior-preserving bug fixes do NOT require a migration entry.
-
-Migration fragments are per-package too, one file per changed package under `packages/<pkg>/migrations.d/YYYY-MM-DD-<slug>.md` (same naming as changelog fragments). Each is a complete entry -- a `### <title>` heading plus the five required subsections:
-
-1. **Summary** -- one paragraph: what broke, which SDKs/call sites, and why.
-2. **Required changes** -- table of before/after snippets for every affected surface (config, CLI, action inputs, function signatures, return types).
-3. **Deprecations removed** -- previously warned symbols that are now hard errors.
-4. **Behavior changes without code changes** -- same API, different runtime behavior.
-5. **Verification** -- a concrete dry-run command plus expected output that a consumer can run to confirm the upgrade.
-
-If a subsection does not apply, keep the heading and write `_None._`. Do not omit subsections. The template lives at the bottom of the frozen root `MIGRATIONS.md`.
-
-The frozen root `MIGRATIONS.md` is surfaced on the docs site at `/migrations` via a VitePress include (`docs/migrations.md`). Do not edit the rendered page.
+Full mechanics (scope/exemptions, fragment format details, relocation rules): `agents/reference/changelog-migrations.md`.
 
 **PR body requirement:** PRs that touch SDK code must contain the following block (checkboxes filled in):
 
@@ -379,13 +271,4 @@ When monitoring PRs to get them across the finish line (shepherding to green):
 
 ### Coverage Floor
 
-Coverage enforcement must stay explicit in CI for each SDK package. All three SDKs are now enforced by [`testing-conventions`](https://github.com/thekevinscott/testing-conventions) `unit coverage`; the per-package floors live in `testing-conventions.toml`:
-
-- **Python / TypeScript** run full tree + a PR-only `--base` changed-lines check, now **inside the reusable workflow** (`conventions.yml`, the `python-sdk` / `typescript-sdk` `unit-coverage` gate) after upstream #284 taught the coverage suite job to install/build from the derived package root (python via `python_env=uv` → `uv sync` builds maturin; ts via `build_command: pnpm build`). This retired the bespoke coverage jobs in `python-test.yml` / `ts-test.yml` (#412). Floors: `[python.coverage]` = `fail_under` / `branch`; `[typescript.coverage]` = `lines` / `branches` / `functions` / `statements` -- both held at the stricter **100%** (every line unit-reachable).
-- **Rust core** (#295) is still measured bespoke -- unit-only via `cargo llvm-cov --lib --features cli --branch`, wired into `rust-test.yml`'s coverage job (nightly toolchain for `--branch`, scoped to that job's step alone -- a **permanent** bespoke exception, not pending upstream: the crate-root `rust-toolchain.toml` the reusable job would need breaks release cross-compile, see *Adoption state* above / #437). The CLI now scopes to `--lib` and passes `[rust].features` through (testing-conventions #269/#270/#271). Floors in `[rust.coverage]`: `lines` **94**, `regions` **93**, `functions` **91**, `branch` **75**. #354 first added pure unit tests for the reachable unit-tier gaps (`cli/router.rs`'s `parse_sql_body`, `cli/mod.rs`'s `with_query_timeout`/`From<String>`, `cli/init.rs`'s error `Display` arms), lifting measured unit-only coverage to lines 94.1% / regions 93.2% / functions 91.6% / branch 75.6%; the floors are then set as high as they robustly go -- the highest integer under each actual. `lines`/`regions`/`functions` are above the ≥90% ideal. **`branch` keeps a documented sub-90 floor as an accepted exception** to the ≥90% rule, for two structural reasons. **These floors are pinned near their actuals (<1pt slack) by maintainer request**, so the whole-tree gate goes red on any PR that lowers a dimension -- most fragile for `branch`, where merely adding well-formed unit tests can lower the number (reason (2)); the fix when that happens is to nudge the affected floor down to the new actual, not to chase the dip as a regression. (1) The effectful production branches (filesystem / subprocess / HTTP / `notify`) live in the integration/e2e tier by design (#233): `cli/router.rs`'s async HTTP handlers (0% branch), `cli/init.rs`'s effectful `std::fs::write` success/`--force` arms, and `lib.rs`'s racy-window / watcher / persist error arms are unreachable from a unit test, and covering them re-litigates #233. (2) `--branch` instruments the crate *with its `#[cfg(test)]` modules*, so every `matches!(…, if a && b)` / `assert!(x && y)` guard in a unit test contributes short-circuit sub-condition branches whose False arm is unreachable by construction (the assertion is written to pass) -- `differ.rs` is the clearest case: 100% line/region/function coverage but 58% branch, with every uncovered branch inside a test-module guard, not production code. Because well-formed new unit tests therefore tend to *lower* branch %, the branch floor stays conservative on purpose -- a tight floor would fail legitimate test-adding PRs. The Rust job is **whole-tree only** (no `--base` changed-lines check) for the same reason -- a per-PR changed-lines floor would fail legitimate integration-tier edits.
-
-When work affects more than one SDK package, split the coverage and test work across subagents so each package can be validated independently.
-
-**Coverage floors apply to unit tests only.** Integration, binding, and e2e tests verify behavior through the public surface (binding/e2e as a black box: they spawn subprocesses and hit real filesystems), but they do not contribute to the coverage metric. The line of separation is intentional: the unit-coverage number measures what the library code itself reaches under direct exercise, decoupled from whether the integration scaffolding happens to drag execution through the same lines. `unit coverage` enforces this by construction -- it runs the colocated unit suite only (the Python/TS source dir, not the sibling `tests/` / `test/`), so integration tests never pad the number. A change that refactors implementation without changing behavior should leave integration tests untouched and unit coverage steady; a change that adds untested library code should fail the floor even if integration tests still pass.
-
-This means every covered source file needs in-process unit tests sufficient to hit the floor. **testing-conventions has no whole-file coverage exclusion** -- a file is either unit-tested or its specific uncovered lines are waived with a reason-required line-scoped `[[<lang>.exempt]] rules = ["coverage"]` entry; whole-file waivers are for the presence/lint rules only. So a facade that "needs the native binary" is not an excuse to exclude it -- inject and mock the binding layer and unit-test it (the TS `DirSQL` facade and `dirsql` bin shim are unit-tested this way; today neither binding needs any coverage waiver). Only *test* files are dropped from the metric: for Python via the omit list in `packages/python/pyproject.toml` (`[tool.coverage.run]`, which `coverage run` reads), for TypeScript via the tool's own `**/*.test.*` exclude. Functional exercise of the published launcher happens in the release pipeline's install matrix; the in-CI `packaging` gate additionally asserts such artifacts ship no test files.
+All three SDKs enforce unit-coverage floors via testing-conventions `unit coverage`; floors live in `testing-conventions.toml`. Python/TS run inside `conventions.yml` at 100% (plus a PR-only changed-lines check); the Rust core is bespoke in `rust-test.yml` (nightly `cargo llvm-cov --lib --features cli --branch`; floors: lines 94 / regions 93 / functions 91 / branch 75, pinned near actuals -- if adding tests lowers `branch`, nudge the floor down rather than chasing it). **Floors apply to unit tests only** -- integration/binding/e2e never pad the number; every covered source file needs in-process unit tests (inject and mock the binding layer rather than excluding a file; only line-scoped, reason-required coverage exemptions exist, and there are none today). Full rationale, Rust branch-floor caveats, and exemption rules: `agents/reference/testing-gates.md`.
