@@ -2806,6 +2806,33 @@ mod internal_tests {
     }
 
     #[test]
+    fn build_wires_the_index_root_as_the_path_table_root() {
+        let dir = TempDir::new().unwrap();
+        let db = DirSQL::builder().root(dir.path()).build().unwrap();
+
+        assert!(
+            db.query("SELECT path FROM './'").is_ok(),
+            "the path-table fallback must be armed on an ephemeral db"
+        );
+    }
+
+    #[test]
+    fn a_persisted_build_also_wires_the_path_table_root() {
+        let dir = TempDir::new().unwrap();
+        let cache = dir.path().join("cache.db");
+        let db = DirSQL::builder()
+            .root(dir.path())
+            .persist(Some(&cache))
+            .build()
+            .unwrap();
+
+        assert!(
+            db.query("SELECT path FROM './'").is_ok(),
+            "the persist branch must arm the fallback too"
+        );
+    }
+
+    #[test]
     fn persist_none_enables_default_path() {
         let resolved = DirSQL::builder()
             .root("/tmp/x")
