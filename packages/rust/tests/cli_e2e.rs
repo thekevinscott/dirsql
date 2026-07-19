@@ -1081,6 +1081,51 @@ glob = "**/*"
 }
 
 #[test]
+fn duplicate_table_in_one_config_exits_nonzero_naming_both_sources() {
+    // #641: two `[[table]]` entries with the same name in a single config are a
+    // registration conflict. The diagnostic names the table AND both sources so
+    // the user can find them; naming the config twice is correct here.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("dup.toml"),
+        r#"
+[[table]]
+ddl = "CREATE TABLE notes (a TEXT)"
+glob = "**/*.a"
+
+[[table]]
+ddl = "CREATE TABLE notes (b TEXT)"
+glob = "**/*.b"
+"#,
+    )
+    .unwrap();
+
+    let out = std::process::Command::cargo_bin("dirsql")
+        .expect("binary must exist")
+        .arg("query")
+        .arg("SELECT 1")
+        .arg("-c")
+        .arg("dup.toml")
+        .current_dir(dir.path())
+        .output()
+        .expect("spawning `dirsql query` failed");
+
+    assert!(
+        !out.status.success(),
+        "a config defining `notes` twice must fail, got {out:?}"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("notes"),
+        "the conflict must name the duplicated table, got {stderr:?}"
+    );
+    assert!(
+        stderr.matches("dup.toml").count() == 2,
+        "the conflict must name both sources, got {stderr:?}"
+    );
+}
+
+#[test]
 fn explicit_config_without_include_default_suppresses_the_baked_in_files() {
     // #604 row 3: an explicit `-c` WITHOUT `--include-default` keeps the
     // replacement semantics of #602 — the baked-in default is suppressed, so

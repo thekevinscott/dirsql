@@ -734,7 +734,103 @@ fn duplicate_table_name_errors() {
     let t1 = Table::new("CREATE TABLE dup (a TEXT)", "*.a", |_| vec![]);
     let t2 = Table::new("CREATE TABLE dup (b TEXT)", "*.b", |_| vec![]);
     let result = DirSQL::new(root.path(), vec![t1, t2]);
-    assert!(matches!(result, Err(dirsql::DirSqlError::DuplicateTable(name)) if name == "dup"));
+    assert!(result.is_err(), "duplicate table names must be rejected");
+}
+
+/// Collapse a `Result<DirSQL, _>` to its error, panicking on success. `DirSQL`
+/// is not `Debug`, so `unwrap_err()` is unavailable.
+fn expect_build_error<E>(result: std::result::Result<DirSQL, E>) -> E {
+    match result {
+        Ok(_) => panic!("expected a duplicate-table error, got a built index"),
+        Err(err) => err,
+    }
+}
+
+#[test]
+fn duplicate_programmatic_tables_name_both_sources() {
+    let root = TempDir::new().unwrap();
+    let t1 = Table::new("CREATE TABLE dup (a TEXT)", "*.a", |_| vec![]);
+    let t2 = Table::new("CREATE TABLE dup (b TEXT)", "*.b", |_| vec![]);
+    let err = expect_build_error(DirSQL::new(root.path(), vec![t1, t2]));
+
+    let message = err.to_string();
+    assert!(
+        message.contains("dup"),
+        "the error must name the duplicated table, got: {message}"
+    );
+    assert!(
+        message.matches("programmatic table").count() == 2,
+        "both sources must be identified as programmatic tables, got: {message}"
+    );
+}
+
+#[test]
+fn duplicate_across_config_and_programmatic_names_both_sources() {
+    let root = TempDir::new().unwrap();
+    let cfg_path = root.path().join("dirsql.toml");
+    fs::write(
+        &cfg_path,
+        r#"
+[[table]]
+ddl = "CREATE TABLE dup (a TEXT)"
+glob = "**/*.a"
+"#,
+    )
+    .unwrap();
+
+    let err = expect_build_error(
+        DirSQL::builder()
+            .root(root.path())
+            .table(Table::new("CREATE TABLE dup (b TEXT)", "*.b", |_| vec![]))
+            .config(&cfg_path)
+            .build(),
+    );
+
+    let message = err.to_string();
+    assert!(
+        message.contains("dup"),
+        "the error must name the duplicated table, got: {message}"
+    );
+    assert!(
+        message.contains("programmatic table"),
+        "the programmatic side must be identified, got: {message}"
+    );
+    assert!(
+        message.contains(&cfg_path.display().to_string()),
+        "the config side must be identified by path, got: {message}"
+    );
+}
+
+#[test]
+fn duplicate_within_a_single_config_names_that_config_twice() {
+    let root = TempDir::new().unwrap();
+    let cfg_path = root.path().join("dirsql.toml");
+    fs::write(
+        &cfg_path,
+        r#"
+[[table]]
+ddl = "CREATE TABLE dup (a TEXT)"
+glob = "**/*.a"
+
+[[table]]
+ddl = "CREATE TABLE dup (b TEXT)"
+glob = "**/*.b"
+"#,
+    )
+    .unwrap();
+
+    let err = expect_build_error(DirSQL::builder().root(root.path()).config(&cfg_path).build());
+
+    let message = err.to_string();
+    let cfg_display = cfg_path.display().to_string();
+    assert!(
+        message.contains("dup"),
+        "the error must name the duplicated table, got: {message}"
+    );
+    assert!(
+        message.matches(&cfg_display).count() == 2,
+        "both sources must name the config file, got: {message}"
+    );
 }
 
 #[test]
