@@ -79,7 +79,7 @@ The canonical facts -- flags, schemas, contracts, and API shapes:
 - [CLI](docs/reference/cli.md) -- flags, `dirsql init`, defaults, exit codes
 - [Configuration file](docs/reference/config.md) -- the complete `.dirsql.toml` schema
 - [Command hooks](docs/reference/hooks.md) -- placeholders, stdout protocol, exit codes, timeouts
-- [Virtual columns & glob captures](docs/reference/columns.md) -- `_path`, `_basename`, `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`, and `{name}` captures
+- [Stat columns & glob captures](docs/reference/columns.md) -- `path`, `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`, and `{name}` captures
 - [HTTP API](docs/reference/http-api.md) -- `POST /query`, `GET /events`, errors
 - [SDK](docs/reference/sdk.md) -- `DirSQL`, `Table`, and `RowEvent` across Python, Rust, and TypeScript
 - [Migrations](docs/migrations.md) -- upgrade notes for breaking changes; the canonical source is [`MIGRATIONS.md`](MIGRATIONS.md) at the repo root

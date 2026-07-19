@@ -341,7 +341,7 @@ Maps files to table rows.
   joined with the file's relative path — absolute when `root` is absolute)
   and returning the rows that file contributes. `dirsql` never reads file
   contents itself; a callback that needs the body reads the path. Return
-  an empty list to skip a file. [Virtual columns and glob
+  an empty list to skip a file. [Stat columns and glob
   captures](./columns.md) are merged onto each returned row; values the
   callback emits win over same-named facts.
 - `strict` — Default off: extra row keys are dropped and missing declared

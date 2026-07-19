@@ -6,11 +6,11 @@
 database is the index. Columns of any dirsql table come from filesystem-level
 facts:
 
-- The path itself, and parts derived from it (`_path`, `_basename`, `_dir`,
-  `_ext`).
+- The path itself, and parts derived from it (`path`, `basename`, `dir`,
+  `ext`).
 - Named captures in the glob pattern (`posts/{thread_id}/*.md` →
   `thread_id`).
-- Stat metadata (`_size`, `_mtime`, `_ctime`).
+- Stat metadata (`size`, `mtime`, `ctime`).
 
 **Content interpretation is intentionally out of scope.** dirsql does not
 parse markdown frontmatter, JSON, CSV, YAML, TOML, or any other file format
@@ -104,12 +104,14 @@ reads it itself. After `on_file` returns, and before SQLite insertion, the core
 merges two sources of filesystem-derived columns into every row:
 
 - **Glob path captures**, by capture name (`{thread_id}` → `thread_id`).
-- **Stat virtuals**, under reserved `_`-prefixed names: `_path`, `_basename`,
-  `_dir`, `_ext`, `_size`, `_mtime`, `_ctime`.
+- **Stat columns**, under bare names: `path`, `basename`, `dir`, `ext`,
+  `size`, `mtime`, `ctime`. These are ordinary stored columns, not SQLite
+  `GENERATED ... VIRTUAL` columns -- "stat" describes where the value comes
+  from, not how it is stored. See `docs/reference/columns.md`.
 
 Auto-injected keys are filtered to the columns declared in the table's DDL
 (via `db.get_table_columns`), so a table with a minimal DDL is not broken by
-virtuals it didn't ask for. User on-file values win over auto-injected
+stat columns it didn't ask for. User on-file values win over auto-injected
 values when the keys collide.
 
 Config-defined tables (`[[table]]` entries in `.dirsql.toml`) use a
@@ -142,7 +144,7 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 2. Rust executes DDL to create SQLite tables
 3. `scanner` walks the directory and matches files to tables
 4. For each matched file, Python `on_file` is called via PyO3
-5. The core merges glob captures and stat virtuals (filtered to the DDL's
+5. The core merges glob captures and stat columns (filtered to the DDL's
    declared columns) into each returned row
 6. Rows are inserted into SQLite with tracking metadata
 7. File-to-rows mapping is stored for later diffing
@@ -152,7 +154,7 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 1. `notify` detects a filesystem event (create/modify/delete)
 2. The matcher checks if the file belongs to a table
 3. For create/modify: `on_file` is called with the file's absolute path
-   (reading the file itself if it needs the body), captures and stat virtuals
+   (reading the file itself if it needs the body), captures and stat columns
    are merged, `differ` compares old and new rows
 4. For delete: old rows are retrieved, all emitted as delete events
 5. SQLite is updated (old rows deleted, new rows inserted)
