@@ -8,10 +8,9 @@ Universal rules (architecture, scratch files, shell command style, testing philo
 
 - Work in git worktrees under `.worktrees/` folder.
 - **NEVER commit directly to main** -- always create a PR.
-- One PR per bead. Beads should be concise and small -- as small as possible while still being useful.
-- Use `bd` (Beads) for task tracking: `bd list`, `bd show <id>`, `bd ready`.
-- **NEVER inspect or modify `.beads/` directly.** Treat `.beads/` as an internal Beads implementation detail that is off limits. All issue tracking operations must go through the Beads CLI (`bd ...`) only.
-- **Bead first**: When starting new work, the first step is always to create a bead (`bd create`). No implementation work begins without a bead.
+- One PR per issue. Issues should be concise and small -- as small as possible while still being useful.
+- Use GitHub Issues (`gh issue ...`) for task tracking: `gh issue list`, `gh issue view <n>`.
+- **Issue first**: When starting new work, the first step is always to file a GitHub issue (`gh issue create`). No implementation work begins without an issue.
 - These workflow rules apply to **all** changes, including documentation-only changes and updates to `AGENTS.md` or other instruction files. No exceptions.
 
 ## Agent Identity and Auth
@@ -54,19 +53,19 @@ git worktree remove .worktrees/my-feature
 
 **Do NOT skip step 1. Do NOT substitute `git -C` for `cd`.**
 
-## Beads Workflow
+## Issue Workflow
 
 **Lifecycle:**
-1. **Claim it FIRST**: `bd update <id> --claim` before any work
+1. **Claim it FIRST**: `gh issue edit <n> --add-assignee @me` before any work
 2. **Create worktree and branch**
-3. **Link the PR**: `bd update <id> --external-ref "gh-<pr-number>"` after creating the PR
-4. **Close**: `bd close <id>` immediately after the PR is merged
+3. **Link the PR**: put `Fixes #<n>` in the PR body so the issue closes on merge
+4. **Close**: the issue auto-closes when the PR merges; close it by hand (`gh issue close <n>`) if it does not
 
 ## Subagent Workflow
 
-New work on beads should be done via subagents in isolated worktrees. Each subagent:
-1. Claims the bead (`bd update <id> --claim`) before starting any work
-2. Creates a worktree and branch for its bead
+New work on issues should be done via subagents in isolated worktrees. Each subagent:
+1. Claims the issue (`gh issue edit <n> --add-assignee @me`) before starting any work
+2. Creates a worktree and branch for its issue
 3. Does the implementation work (red/green TDD)
 4. Pushes the branch and opens a PR
 5. Monitors the PR and proactively resolves:
@@ -74,7 +73,7 @@ New work on beads should be done via subagents in isolated worktrees. Each subag
    - GPG signing complaints
    - Merge conflicts
 6. Continues monitoring until the PR is in a mergeable state
-7. When a bead spans multiple SDKs or package lanes, split it into separate subagents and isolated worktrees rather than serially implementing everything in one checkout.
+7. When an issue spans multiple SDKs or package lanes, split it into separate subagents and isolated worktrees rather than serially implementing everything in one checkout.
 8. **Run e2e tests locally before `git push` on substantial changes** (see "E2E Before Push" below). Report the result in the PR body using the `## E2E Verification` template.
 
 ## Orchestrator Responsibilities
@@ -82,7 +81,7 @@ New work on beads should be done via subagents in isolated worktrees. Each subag
 The orchestrator (main Claude session) must proactively:
 1. **Monitor all open PRs** -- don't wait for the user to report failures. Check CI status after agent completion and on an ongoing basis.
 2. **Fix CI failures** on open PRs immediately, either directly or by dispatching a fix agent.
-3. **Handle post-merge cleanup** as soon as a PR merges (pull main, remove worktree, delete branch, close bead).
+3. **Handle post-merge cleanup** as soon as a PR merges (pull main, remove worktree, delete branch, confirm the issue closed).
 4. **Keep the user informed** of PR status without being asked.
 5. **Use foreground monitoring** when waiting on CI and there's no other work to do. Background monitoring causes the conversation to go silent -- use it only when there's genuinely parallel work to perform.
 6. **Scripts to `/tmp`**: For polling/monitoring scripts (watching CI, waiting for merges), write the script to `/tmp` then run it via `bash /tmp/script.sh`. Do not use inline bash loops in tool calls.
@@ -108,4 +107,4 @@ After a PR merges, the agent (or orchestrator) must:
 2. **Move CWD to root repo first** (CRITICAL -- never remove a worktree from inside it): `cd /home/duncan/work/code/projects/dirsql`
 3. Remove the worktree: `git worktree remove .worktrees/<name>`
 4. Delete the local branch: `git branch -d <branch-name>`
-5. **Verify the bead is addressed** by the merged PR, then close it: `bd close <id>`
+5. **Verify the issue is addressed** by the merged PR and confirm it closed (`Fixes #<n>` does this automatically); close it by hand if needed: `gh issue close <n>`

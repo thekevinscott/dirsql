@@ -225,7 +225,7 @@ On every PR that touches any SDK's public API (`packages/python/dirsql/`, `packa
 
 1. Update `PARITY.md` to reflect the new/changed/removed API surface.
 2. Call out in the PR body whether the change is **introducing parity drift** (one SDK gets something the others don't yet) or **restoring parity** (bringing a lagging SDK in line). Drift is allowed but must be intentional and tracked.
-3. If drift is introduced, open a follow-up bead for each lagging SDK so the gap is visible.
+3. If drift is introduced, open a follow-up GitHub issue for each lagging SDK so the gap is visible.
 
 Orchestrators must block merges of SDK-touching PRs that don't update `PARITY.md`.
 
