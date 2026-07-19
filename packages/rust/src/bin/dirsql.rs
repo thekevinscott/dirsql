@@ -293,7 +293,7 @@ fn load_state(cfg: &ConfigArgs) -> AppState {
     // collision hits the existing dedup in `compile_matcher`. Reached only when
     // `-c` is present -- with none, the idempotent default path above handles it.
     if cfg.include_default {
-        builder = builder.table(default_files_table());
+        builder = builder.default_table(default_files_table());
     }
     for config_path in &cfg.config {
         // Canonicalize so config-relative paths (extension libraries, hook

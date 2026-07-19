@@ -250,6 +250,7 @@ All three share one global timeout override, `[dirsql].hook-timeout`
 - `AsyncDirSQL` uses tokio and `OnceCell` internally.
 - Watch returns `futures_channel::mpsc::UnboundedReceiver<RowEvent>` implementing `Stream`.
 - All fallible operations return `Result<T, DirSqlError>`. Statements classified as writes by SQLite's `sqlite3_stmt_readonly` surface as the unit variant `DirSqlError::WriteForbidden`; in the Python/TS bindings the same condition is a `RuntimeError` / `Error` with a "read-only" message.
+- A duplicate table name is `DirSqlError::DuplicateTable { name, first, second }`, where `first`/`second` are `TableSource` (`Programmatic` / `Config(PathBuf)` / `Default`) identifying both definition sites. `TableSource` is Rust-only structured data: the bindings surface the same information, but only as rendered message text on the existing `RuntimeError` / `Error`. This is **intentional, non-drifting** — the message is at parity across all three SDKs; only Rust exposes the machine-readable variant, matching how every other `DirSqlError` variant is already Rust-only.
 
 ### TypeScript
 - Uses `camelCase` for method names.

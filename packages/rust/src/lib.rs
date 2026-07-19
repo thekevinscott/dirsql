@@ -107,8 +107,12 @@ pub enum DirSqlError {
         source: DbError,
     },
 
-    #[error("duplicate table name: {0}")]
-    DuplicateTable(String),
+    #[error("{}", format_duplicate_table(name, first, second))]
+    DuplicateTable {
+        name: String,
+        first: TableSource,
+        second: TableSource,
+    },
 
     #[error("on-file error for {path}: {message}")]
     OnFile { path: String, message: String },
@@ -124,6 +128,40 @@ pub enum DirSqlError {
         "query() only accepts read-only statements; SQLite classified this statement as a write"
     )]
     WriteForbidden,
+}
+
+/// Both halves of a collision often share an origin (two `[[table]]` entries in
+/// one config, two programmatic tables). Naming it once avoids a message that
+/// reads like a bug -- "defined by both config X and config X".
+fn format_duplicate_table(name: &str, first: &TableSource, second: &TableSource) -> String {
+    if first == second {
+        format!("Table '{name}' is defined twice by {first}")
+    } else {
+        format!("Table '{name}' is defined by both {first} and {second}")
+    }
+}
+
+/// Where a registered table came from. Carried only so a name collision can
+/// name both definitions -- a user whose SDK table shadows a config table has
+/// no other way to find the two sites.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TableSource {
+    /// Supplied in code via `.table()` / `.tables()`.
+    Programmatic,
+    /// Loaded from a config file at this path.
+    Config(PathBuf),
+    /// The baked-in default config (`--include-default` / the no-config default).
+    Default,
+}
+
+impl std::fmt::Display for TableSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TableSource::Programmatic => f.write_str("a programmatic table"),
+            TableSource::Config(path) => write!(f, "config {}", path.display()),
+            TableSource::Default => f.write_str("the built-in default config"),
+        }
+    }
 }
 
 impl DirSqlError {
@@ -621,6 +659,7 @@ impl DirSQL {
     {
         let resolved = ResolvedBuild {
             root: root.into(),
+            table_sources: vec![TableSource::Programmatic; tables.len()],
             tables,
             ignore: ignore.into_iter().map(Into::into).collect(),
             extensions: Vec::new(),
@@ -646,6 +685,7 @@ impl DirSQL {
         let ResolvedBuild {
             root,
             tables,
+            table_sources,
             ignore,
             extensions,
             persist,
@@ -653,7 +693,7 @@ impl DirSQL {
             poll_interval,
         } = resolved;
 
-        let (matcher, table_names) = compile_matcher(&tables, &ignore)?;
+        let (matcher, table_names) = compile_matcher(&tables, &table_sources, &ignore)?;
 
         // Resolve the persistent context before scanning, so the scan can
         // consult the cached file index.
@@ -901,6 +941,9 @@ impl DirSQL {
 pub struct DirSQLBuilder {
     root: Option<PathBuf>,
     tables: Vec<Table>,
+    /// Positions in `tables` seeded from the baked-in default config; every
+    /// other entry is user-supplied. Only affects collision provenance.
+    default_table_indices: Vec<usize>,
     ignore: Vec<String>,
     extensions: Vec<Extension>,
     config_paths: Vec<PathBuf>,
@@ -928,6 +971,17 @@ impl DirSQLBuilder {
     /// Append a single table to the table list.
     pub fn table(mut self, table: Table) -> Self {
         self.tables.push(table);
+        self
+    }
+
+    /// Append a table that came from the baked-in default config rather than
+    /// from user code. Identical to [`table`](Self::table) except for the
+    /// provenance a duplicate-name collision reports, so `--include-default`
+    /// blames "the built-in default config" instead of "a programmatic table".
+    #[doc(hidden)]
+    pub fn default_table(mut self, table: Table) -> Self {
+        self.tables.push(table);
+        self.default_table_indices.push(self.tables.len() - 1);
         self
     }
 
@@ -1018,6 +1072,7 @@ impl DirSQLBuilder {
         let DirSQLBuilder {
             root: explicit_root,
             mut tables,
+            default_table_indices,
             mut ignore,
             mut extensions,
             config_paths,
@@ -1040,6 +1095,16 @@ impl DirSQLBuilder {
         // base for extension path resolution), and its `hook_timeout`. Configs
         // accumulate in `.config()` call order; a single entry makes the in-order
         // merge below byte-for-byte identical to a single pass.
+        // Programmatic tables are whatever `.table()` / `.tables()` accumulated
+        // before any config is merged in, minus the positions `--include-default`
+        // seeded from the baked-in config.
+        let mut table_sources: Vec<TableSource> = vec![TableSource::Programmatic; tables.len()];
+        for index in default_table_indices {
+            if let Some(slot) = table_sources.get_mut(index) {
+                *slot = TableSource::Default;
+            }
+        }
+
         let mut config_entries: Vec<ResolvedConfigEntry> = Vec::new();
         for cfg_path in &config_paths {
             let cfg = config::load_config(cfg_path).map_err(DirSqlError::config)?;
@@ -1052,6 +1117,7 @@ impl DirSQLBuilder {
             config_entries.push(ResolvedConfigEntry {
                 config: cfg,
                 config_dir: cfg_parent,
+                config_path: cfg_path.clone(),
                 hook_timeout,
             });
         }
@@ -1060,6 +1126,7 @@ impl DirSQLBuilder {
             let ResolvedConfigEntry {
                 config: cfg,
                 config_dir: cfg_parent,
+                config_path,
                 hook_timeout,
             } = entry;
 
@@ -1067,6 +1134,10 @@ impl DirSQLBuilder {
             // is the matched file's absolute path and `{root}` the resolved
             // index root.
             let cfg_tables = build_tables_from_config(&cfg, &cfg_parent, &root, hook_timeout)?;
+            table_sources.extend(std::iter::repeat_n(
+                TableSource::Config(config_path),
+                cfg_tables.len(),
+            ));
             tables.extend(cfg_tables);
             ignore.extend(cfg.ignore);
 
@@ -1102,12 +1173,17 @@ impl DirSQLBuilder {
                 &root,
                 command::DEFAULT_COMMAND_TIMEOUT,
             )?;
+            table_sources.extend(std::iter::repeat_n(
+                TableSource::Default,
+                default_tables.len(),
+            ));
             tables.extend(default_tables);
         }
 
         Ok(ResolvedBuild {
             root,
             tables,
+            table_sources,
             ignore,
             extensions,
             persist,
@@ -1150,6 +1226,7 @@ const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(200);
 struct ResolvedConfigEntry {
     config: config::Config,
     config_dir: PathBuf,
+    config_path: PathBuf,
     hook_timeout: Duration,
 }
 
@@ -1159,6 +1236,9 @@ struct ResolvedConfigEntry {
 pub struct ResolvedBuild {
     pub root: PathBuf,
     pub tables: Vec<Table>,
+    /// Origin of each entry in `tables`, positionally aligned. Used only to
+    /// name both sides of a duplicate-name collision.
+    pub table_sources: Vec<TableSource>,
     pub ignore: Vec<String>,
     pub extensions: Vec<Extension>,
     pub persist: bool,
@@ -1216,20 +1296,29 @@ struct PersistContext {
 
 fn compile_matcher(
     tables: &[Table],
+    sources: &[TableSource],
     ignore_patterns: &[String],
 ) -> Result<(TableMatcher, Vec<String>)> {
-    let mut seen: HashMap<String, ()> = HashMap::with_capacity(tables.len());
+    let mut seen: HashMap<String, TableSource> = HashMap::with_capacity(tables.len());
     let mut mappings: Vec<(String, String)> = Vec::with_capacity(tables.len());
     let mut names = Vec::with_capacity(tables.len());
-    for table in tables {
+    for (index, table) in tables.iter().enumerate() {
         let table_name =
             parse_table_name(&table.ddl).ok_or_else(|| DirSqlError::Ddl(table.ddl.clone()))?;
         // Validate up front so a poisoned name from a stored cache or a
         // would-be-injection DDL can't propagate into `on_file_map`,
         // `strict_map`, or any format!()-built SQL down the line.
         crate::db::validate_identifier(&table_name).map_err(map_db_error)?;
-        if seen.insert(table_name.clone(), ()).is_some() {
-            return Err(DirSqlError::DuplicateTable(table_name));
+        let source = sources
+            .get(index)
+            .cloned()
+            .unwrap_or(TableSource::Programmatic);
+        if let Some(first) = seen.insert(table_name.clone(), source.clone()) {
+            return Err(DirSqlError::DuplicateTable {
+                name: table_name,
+                first,
+                second: source,
+            });
         }
         mappings.push((table.glob.clone(), table_name.clone()));
         names.push(table_name);
@@ -2671,8 +2760,81 @@ mod internal_tests {
             Err(e) => e,
         };
         assert!(
-            matches!(err, DirSqlError::DuplicateTable(ref n) if n == "t"),
+            matches!(
+                err,
+                DirSqlError::DuplicateTable {
+                    ref name,
+                    first: TableSource::Programmatic,
+                    second: TableSource::Programmatic,
+                } if name == "t"
+            ),
             "got: {err:?}"
+        );
+        assert_eq!(
+            err.to_string(),
+            "Table 't' is defined twice by a programmatic table"
+        );
+    }
+
+    #[test]
+    fn table_source_display_names_each_origin() {
+        assert_eq!(
+            TableSource::Programmatic.to_string(),
+            "a programmatic table"
+        );
+        assert_eq!(
+            TableSource::Config(PathBuf::from("/proj/dirsql.toml")).to_string(),
+            "config /proj/dirsql.toml"
+        );
+        assert_eq!(
+            TableSource::Default.to_string(),
+            "the built-in default config"
+        );
+    }
+
+    #[test]
+    fn compile_matcher_falls_back_to_programmatic_when_sources_are_short() {
+        // The sources vec is positionally aligned with `tables`; a caller that
+        // supplies a short one must still get a well-formed collision error
+        // rather than a panic.
+        let tables = vec![
+            Table::new("CREATE TABLE t (a TEXT)", "*.a", |_| vec![]),
+            Table::new("CREATE TABLE t (b TEXT)", "*.b", |_| vec![]),
+        ];
+        let err = match compile_matcher(&tables, &[], &[]) {
+            Ok(_) => panic!("expected a duplicate-table error"),
+            Err(e) => e,
+        };
+        assert!(
+            matches!(
+                err,
+                DirSqlError::DuplicateTable {
+                    first: TableSource::Programmatic,
+                    second: TableSource::Programmatic,
+                    ..
+                }
+            ),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn compile_matcher_names_the_config_source_of_a_collision() {
+        let tables = vec![
+            Table::new("CREATE TABLE t (a TEXT)", "*.a", |_| vec![]),
+            Table::new("CREATE TABLE t (b TEXT)", "*.b", |_| vec![]),
+        ];
+        let sources = vec![
+            TableSource::Programmatic,
+            TableSource::Config(PathBuf::from("/proj/dirsql.toml")),
+        ];
+        let err = match compile_matcher(&tables, &sources, &[]) {
+            Ok(_) => panic!("expected a duplicate-table error"),
+            Err(e) => e,
+        };
+        assert_eq!(
+            err.to_string(),
+            "Table 't' is defined by both a programmatic table and config /proj/dirsql.toml"
         );
     }
 

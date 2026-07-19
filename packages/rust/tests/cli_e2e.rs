@@ -1075,8 +1075,15 @@ glob = "**/*"
     );
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(
-        stderr.contains("files") && stderr.to_lowercase().contains("duplicate"),
+        stderr.contains("files"),
         "the conflict must name the duplicate `files` table, got {stderr:?}"
+    );
+    // #641: the seeded side is the baked-in default, not user code -- blaming
+    // "a programmatic table" would send the user hunting for a table they
+    // never wrote.
+    assert!(
+        stderr.contains("the built-in default config") && stderr.contains("dup.toml"),
+        "the conflict must name both sources, got {stderr:?}"
     );
 }
 
@@ -1120,8 +1127,8 @@ glob = "**/*.b"
         "the conflict must name the duplicated table, got {stderr:?}"
     );
     assert!(
-        stderr.matches("dup.toml").count() == 2,
-        "the conflict must name both sources, got {stderr:?}"
+        stderr.contains("defined twice by config") && stderr.contains("dup.toml"),
+        "the conflict must name the config it came from, got {stderr:?}"
     );
 }
 

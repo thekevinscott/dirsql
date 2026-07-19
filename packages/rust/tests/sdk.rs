@@ -759,8 +759,8 @@ fn duplicate_programmatic_tables_name_both_sources() {
         "the error must name the duplicated table, got: {message}"
     );
     assert!(
-        message.matches("programmatic table").count() == 2,
-        "both sources must be identified as programmatic tables, got: {message}"
+        message.contains("defined twice by a programmatic table"),
+        "a same-origin collision must name that origin once, got: {message}"
     );
 }
 
@@ -819,7 +819,12 @@ glob = "**/*.b"
     )
     .unwrap();
 
-    let err = expect_build_error(DirSQL::builder().root(root.path()).config(&cfg_path).build());
+    let err = expect_build_error(
+        DirSQL::builder()
+            .root(root.path())
+            .config(&cfg_path)
+            .build(),
+    );
 
     let message = err.to_string();
     let cfg_display = cfg_path.display().to_string();
@@ -828,8 +833,8 @@ glob = "**/*.b"
         "the error must name the duplicated table, got: {message}"
     );
     assert!(
-        message.matches(&cfg_display).count() == 2,
-        "both sources must name the config file, got: {message}"
+        message.contains(&format!("defined twice by config {cfg_display}")),
+        "a same-config collision must name that config once, got: {message}"
     );
 }
 

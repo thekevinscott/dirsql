@@ -38,7 +38,7 @@ describe("duplicate table names (#641)", () => {
 
     await expect(db.ready).rejects.toThrow(/dup/);
     await expect(db.ready).rejects.toThrow(
-      /programmatic table[\s\S]*programmatic table/,
+      /defined twice by a programmatic table/,
     );
   });
 
