@@ -146,7 +146,9 @@ uses**, so behavior is identical to `POST /query` by construction:
   [`[dirsql].hook-timeout`](./config.md#dirsql-keys) apply identically.
 - The **30-second query timeout**, the **read-only rule**, and the
   `_dirsql_*` **internal-table denial** apply identically. A rejected read
-  is an error, not empty output.
+  is an error, not empty output. The read-only rule here governs SQL
+  statements; dirsql separately never modifies the files it indexes — see
+  [Read-only by design](../explanation#read-only-by-design).
 
 Errors print the same diagnostic the HTTP `{"error": …}` body carries —
 config failures, SQL errors, rejected reads, hook failures, timeouts — to

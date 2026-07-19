@@ -4,6 +4,8 @@
 
 Ephemeral SQL index over a local directory. `dirsql` watches a filesystem, ingests structured files into an ephemeral SQLite database, and exposes a SQL query interface. On shutdown the database is discarded -- the filesystem remains the source of truth.
 
+**`dirsql` never modifies your files.** It opens them for reading and nothing else -- no writes, no moves, no deletes, no rewrites in place. Point it at anything, including a directory you have not backed up, and the worst it can do is read. This is a permanent design guarantee, not a feature that has yet to be built; see [Read-only by design](ARCHITECTURE.md#read-only-by-design) for its exact scope.
+
 The full documentation lives in [`docs/`](docs/) and is published at <https://thekevinscott.github.io/dirsql/>. This README mirrors the layout of `docs/` (every section below maps to a page) so agents and humans reading the source can navigate without leaving the repo. Each section is the bare minimum -- click through for the full guide.
 
 ## Why

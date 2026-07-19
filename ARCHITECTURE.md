@@ -24,6 +24,48 @@ prior `[table.columns]` source-dispatch and the `format` / `each` config
 keys were ripped out; the per-format parser zoo (`Format::Json`, `Csv`,
 `Yaml`, `Toml`, `Frontmatter`, …) is gone.
 
+## Read-only by design
+
+**dirsql never modifies the directory it indexes.** It opens files for reading
+and does nothing else -- no writes, no truncation, no in-place rewrites, no
+moves, no deletes, no permission or timestamp changes. A user can point dirsql
+at any directory, including one with no backup, and the worst outcome is that
+files are read.
+
+This is a permanent property of the design, not an unimplemented feature.
+Write-back -- letting a SQL `UPDATE` flow back into the files it came from --
+is rejected as a **feature class**, not deferred. The filesystem is the source
+of truth and the database is a derived view of it; a derived view that can
+mutate its own source is no longer derived, and every consistency question it
+raises (partial writes, conflicting concurrent edits, reconciling a failed
+write against a watcher event) is a question dirsql exists to avoid. Anything
+that mutates files belongs in the user's own code, where its failure modes are
+the user's to reason about.
+
+The guarantee is enforced at the query layer too: `query()` accepts only
+statements SQLite's `sqlite3_stmt_readonly` classifies as reads, so a `DELETE`
+against the in-memory index is refused rather than silently discarded.
+
+### Exact scope
+
+Three boundaries keep the guarantee honest -- it claims neither more nor less
+than it delivers:
+
+1. **Hooks run user commands, and those may write.** An `on-file` hook is an
+   arbitrary command the user configured; dirsql executes it and reads its
+   stdout. If that command writes files, files get written. The guarantee is
+   that **dirsql itself** never writes -- not that a dirsql invocation is
+   incapable of causing a write.
+2. **Persist mode writes one cache database, and it is opt-in.** With
+   `--persist` (off by default), dirsql maintains a SQLite cache so a restart
+   need not re-parse unchanged files. By default this lands at
+   **`<root>/.dirsql/cache.db` -- inside the indexed directory** -- creating
+   the `.dirsql/` directory if absent; `--persist-path` puts it anywhere you
+   name. This is the one path dirsql writes to, it is never a file dirsql
+   indexed, and without `--persist` nothing is written at all.
+3. **The index itself is ephemeral and off to the side.** Without persist, the
+   database is an anonymous disk-backed temp database discarded on shutdown.
+
 ## Core Principle: One Implementation, Thin Bindings
 
 **The Rust crate (`packages/rust/`) is the single source of truth for all business logic.** Every language SDK is a thin binding layer that wraps it -- it does NOT reimplement it.

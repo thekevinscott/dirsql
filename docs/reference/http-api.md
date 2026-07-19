@@ -5,7 +5,11 @@ exposes two endpoints: `POST /query` and `GET /events`.
 
 ## `POST /query`
 
-Run a read-only SQL query. Request body is JSON:
+Run a read-only SQL query — statements SQLite classifies as writes are
+rejected. That rule governs SQL against the index; dirsql separately never
+modifies the files it indexes, which is
+[permanent by design](../explanation#read-only-by-design). Request body is
+JSON:
 
 ```json
 {"sql": "SELECT title, author FROM posts WHERE draft = 0"}
