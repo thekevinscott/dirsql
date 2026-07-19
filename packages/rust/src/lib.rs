@@ -22,6 +22,8 @@ pub mod persist;
 #[doc(hidden)]
 pub mod scanner;
 #[doc(hidden)]
+pub mod vtab;
+#[doc(hidden)]
 pub mod watcher;
 
 #[cfg(feature = "cli")]

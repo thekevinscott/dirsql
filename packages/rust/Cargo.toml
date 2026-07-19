@@ -56,7 +56,7 @@ futures-channel.workspace = true
 globset = "0.4"
 notify = "7"
 regex.workspace = true
-rusqlite = { version = "0.34", features = ["bundled", "load_extension", "hooks"] }
+rusqlite = { version = "0.34", features = ["bundled", "load_extension", "hooks", "vtab"] }
 serde.workspace = true
 serde_json.workspace = true
 # Split a command *template* into argv with shell-like quoting (so
