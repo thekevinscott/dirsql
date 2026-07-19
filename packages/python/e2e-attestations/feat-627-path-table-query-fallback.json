@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/ -x -q",
+  "ran_at": 1784464756,
+  "exit_code": 0,
+  "commit": "e56393e018495ec4a3836dce9376b32f0582f681",
+  "branch": "feat/627-path-table-query-fallback"
+}
