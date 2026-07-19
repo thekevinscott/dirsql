@@ -22,6 +22,8 @@ But querying across many files is slow.
 
 `dirsql` bridges this gap. The filesystem remains the source of truth, but you get SQL queries and real-time change events for free. Define tables with glob patterns and on-file callbacks, and `dirsql` handles the rest.
 
+**`dirsql` never modifies your files.** It opens them for reading and nothing else — no writes, no moves, no deletes, no rewrites in place. Point it at anything and the worst it can do is read. This is permanent by design, not unimplemented; see [Read-only by design](./explanation#read-only-by-design) for its exact scope.
+
 ::: code-group
 
 ```python [Python]

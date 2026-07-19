@@ -216,6 +216,9 @@ Executes a SQL query and returns rows keyed by column name.
   before producing rows. Rust surfaces this as
   `DirSqlError::WriteForbidden`; Python raises a `RuntimeError` and
   TypeScript rejects with an `Error` carrying a "read-only" message.
+  This is the query-layer half of dirsql's broader guarantee that it never
+  modifies your files — see
+  [Read-only by design](../explanation#read-only-by-design).
 - Internal tracking columns (`_dirsql_file_path`, `_dirsql_row_index`) are
   excluded from `SELECT *` results; name them explicitly to see them.
 - SQLite values map back to language types:

@@ -9,6 +9,10 @@ a SQL database you can query over HTTP — without writing any code. You will:
 
 It takes about five minutes.
 
+`dirsql` only ever reads your files — it never writes, moves, or changes
+them — so it is safe to point at a real directory of your own once you are
+done here. See [Read-only by design](./explanation#read-only-by-design).
+
 **You need:** a terminal with `curl` and [`jq`](https://jqlang.org/), and
 Node ≥ 20.11 (for `npx`). Every `npx dirsql` step below also has a `uvx`
 tab that behaves identically, if you prefer Python tooling
