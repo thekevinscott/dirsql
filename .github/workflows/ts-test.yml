@@ -80,7 +80,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ["20.11", "24"]
+        node: ["24"]
     steps:
       - uses: actions/checkout@v6
 
@@ -121,7 +121,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ["20.11", "24"]
+        node: ["24"]
     steps:
       - uses: actions/checkout@v6
 
@@ -159,7 +159,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ["20.11", "24"]
+        node: ["24"]
     steps:
       - uses: actions/checkout@v6
 
