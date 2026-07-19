@@ -167,6 +167,52 @@ fn a_path_table_reflects_files_written_after_the_index_was_built() {
 }
 
 #[test]
+fn a_double_star_glob_reaches_any_depth() {
+    let root = fixture();
+    let db = open(&root);
+
+    let rows = db.query("SELECT path FROM './**/*.md'").unwrap();
+
+    assert_eq!(
+        texts(&rows, "path"),
+        vec!["docs/a.md", "docs/b.md", "notes/deep/d.md"]
+    );
+}
+
+#[test]
+fn content_is_hidden_from_star_but_filterable_by_name() {
+    let root = fixture();
+    let db = open(&root);
+
+    let starred = db.query("SELECT * FROM './docs/*.md'").unwrap();
+    assert!(
+        !starred[0].contains_key("content"),
+        "content must stay out of SELECT *: {starred:?}"
+    );
+
+    let rows = db
+        .query("SELECT path FROM './docs/*.md' WHERE content LIKE '%bravo%'")
+        .unwrap();
+    assert_eq!(texts(&rows, "path"), vec!["docs/b.md"]);
+}
+
+#[test]
+fn the_documented_stat_columns_are_all_present() {
+    let root = fixture();
+    let db = open(&root);
+
+    let rows = db
+        .query("SELECT path, basename, dir, ext, size, mtime, ctime FROM './docs/*.csv'")
+        .unwrap();
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("dir"), Some(&Value::Text("docs".into())));
+    assert_eq!(rows[0].get("ext"), Some(&Value::Text("csv".into())));
+    assert!(matches!(rows[0].get("mtime"), Some(Value::Integer(_))));
+    assert!(matches!(rows[0].get("ctime"), Some(Value::Integer(_))));
+}
+
+#[test]
 fn a_named_table_is_never_shadowed_by_the_fallback() {
     let root = fixture();
     let db = open(&root);

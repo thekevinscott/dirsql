@@ -737,10 +737,11 @@ impl DirSQL {
             poll_interval,
         } = prepared;
 
-        let (db, persist_ready) = match persist {
+        let (mut db, persist_ready) = match persist {
             Some(p) => (p.db, Some((p.deleted, p.meta))),
             None => (Db::new()?, None),
         };
+        db.set_path_table_root(root.clone());
 
         // Load extensions before any CREATE TABLE so a table's DDL and later
         // queries can use extension-provided functions. Loading is enabled
