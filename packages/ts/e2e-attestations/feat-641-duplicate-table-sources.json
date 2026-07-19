@@ -1,7 +1,7 @@
 {
   "command": "./node_modules/.bin/vitest run --dir tests/e2e --passWithNoTests",
-  "ran_at": 1784424730,
+  "ran_at": 1784424793,
   "exit_code": 0,
-  "commit": "2438265f20bf58844324fe4c436d33449c793938",
+  "commit": "b7cba634cd8efdba87b43d9f08bf64338ba4664c",
   "branch": "feat/641-duplicate-table-sources"
 }
