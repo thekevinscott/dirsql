@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1784464771,
+  "exit_code": 0,
+  "commit": "77e97ffb01c08e7a9261db31a7249f50a1bc6d34",
+  "branch": "feat/627-path-table-query-fallback"
+}

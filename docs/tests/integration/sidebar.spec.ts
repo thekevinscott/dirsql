@@ -74,7 +74,7 @@ test('the How-to Guides sidebar group lists the goal-named guides', async ({ pag
   ])
 })
 
-// The Reference tree (#375): the six reference pages plus Migrations.
+// The Reference tree (#375): the seven reference pages plus Migrations.
 test('the Reference sidebar group lists all reference pages', async ({ page }) => {
   await page.goto('./reference/cli.html')
   await page.waitForSelector('.VPSidebar .group')
@@ -92,6 +92,7 @@ test('the Reference sidebar group lists all reference pages', async ({ page }) =
     '/dirsql/reference/config.html',
     '/dirsql/reference/hooks.html',
     '/dirsql/reference/columns.html',
+    '/dirsql/reference/path-tables.html',
     '/dirsql/reference/http-api.html',
     '/dirsql/reference/sdk.html',
     '/dirsql/migrations.html'

@@ -149,6 +149,17 @@ describe("DirSQL delegation", () => {
     expect(inner.query).toHaveBeenCalledWith(sql);
   });
 
+  it("forwards a path-table name without rewriting it", async () => {
+    // Path-table resolution lives in the core; the SDK must not rewrite,
+    // quote, or normalize the name on the way down.
+    const inner = makeInner({ query: vi.fn().mockResolvedValue([]) });
+    openAsync.mockResolvedValue(inner);
+    const db = new DirSQL({ root: "/data" });
+    const sql = "SELECT basename FROM './docs/*.md'";
+    await db.query(sql);
+    expect(inner.query).toHaveBeenCalledWith(sql);
+  });
+
   it("startWatcher and pollEvents delegate to the core instance", async () => {
     const events: RowEvent[] = [
       { table: "t", action: "insert", row: { n: 1 } },

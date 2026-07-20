@@ -737,10 +737,11 @@ impl DirSQL {
             poll_interval,
         } = prepared;
 
-        let (db, persist_ready) = match persist {
+        let (mut db, persist_ready) = match persist {
             Some(p) => (p.db, Some((p.deleted, p.meta))),
             None => (Db::new()?, None),
         };
+        db.set_path_table_root(root.clone());
 
         // Load extensions before any CREATE TABLE so a table's DDL and later
         // queries can use extension-provided functions. Loading is enabled
@@ -2802,6 +2803,33 @@ mod internal_tests {
         assert!(db.query("SELECT * FROM a").is_ok());
         assert!(db.query("SELECT * FROM b").is_ok());
         assert_eq!(db.inner.poll_interval, Duration::from_millis(50));
+    }
+
+    #[test]
+    fn build_wires_the_index_root_as_the_path_table_root() {
+        let dir = TempDir::new().unwrap();
+        let db = DirSQL::builder().root(dir.path()).build().unwrap();
+
+        assert!(
+            db.query("SELECT path FROM './'").is_ok(),
+            "the path-table fallback must be armed on an ephemeral db"
+        );
+    }
+
+    #[test]
+    fn a_persisted_build_also_wires_the_path_table_root() {
+        let dir = TempDir::new().unwrap();
+        let cache = dir.path().join("cache.db");
+        let db = DirSQL::builder()
+            .root(dir.path())
+            .persist(Some(&cache))
+            .build()
+            .unwrap();
+
+        assert!(
+            db.query("SELECT path FROM './'").is_ok(),
+            "the persist branch must arm the fallback too"
+        );
     }
 
     #[test]

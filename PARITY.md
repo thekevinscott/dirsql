@@ -122,6 +122,16 @@ authorizer in the shared Rust core (`db::query`), so a read of any `_dirsql_*`
 table fails identically across all three SDKs (and the CLI's `POST /query`) with
 a "not authorized" error — no per-binding surface.
 
+**Path-tables in `query()` (#627, epic path-as-table) — parity by construction,
+no drift.** A table name SQLite does not know but which begins with `./`
+resolves to a live glob scan of the index root. The whole mechanism (prepare,
+read SQLite's `no such table` error, register a `dirsql_path` virtual table in
+the `temp` schema, re-prepare) lives in the shared Rust core (`db::query`), so
+`SELECT basename, size FROM './'`, the `did you mean './X'?` hint for a bare
+glob, and the unchanged error for an ordinary typo behave identically across
+all three SDKs and the CLI. No SDK signature changes: `query()` is the same
+function in every language, with a strictly larger set of accepted table names.
+
 ## AsyncDirSQL
 
 | API                        | Python                                | Rust                                   |

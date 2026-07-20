@@ -1,7 +1,9 @@
 use rusqlite::Connection;
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use thiserror::Error;
+
+use crate::vtab;
 
 #[derive(Error, Debug)]
 pub enum DbError {
@@ -24,6 +26,9 @@ pub enum DbError {
 
     #[error("{0}")]
     Unauthorized(String),
+
+    #[error("{0}")]
+    PathTable(String),
 }
 
 /// The reserved namespace for dirsql's internal bookkeeping tables. Every
@@ -46,6 +51,105 @@ const ATTACH_DENIED_MSG: &str = "not authorized: query() does not permit ATTACH 
 
 fn is_internal_table(name: &str) -> bool {
     name.starts_with(INTERNAL_TABLE_PREFIX)
+}
+
+/// The prefix SQLite puts on the one prepare error a path-table can rescue.
+const NO_SUCH_TABLE: &str = "no such table: ";
+
+/// Prefixes that make a name a *path*, and so a candidate for a path-table.
+/// A name outside this set is an ordinary identifier and never becomes one —
+/// which is what keeps a typo a typo.
+const PATH_PREFIXES: [&str; 4] = ["./", "../", "/", "~/"];
+
+/// The glob a bare `'./'` expands to: everything under the index root.
+const RECURSIVE_GLOB: &str = "**/*";
+
+/// What to do about a table SQLite could not find.
+#[derive(Debug, PartialEq)]
+enum Missing {
+    /// Register a path-table scanning this root-relative glob, then re-prepare.
+    Create(String),
+    /// A bare glob: almost certainly a path-table missing its `./`.
+    Hint,
+    /// Path-shaped, but a form the glob translation does not handle yet.
+    Unsupported,
+    /// An ordinary identifier. Not ours; the SQLite error stands.
+    NotAPath,
+}
+
+/// Extract the table name from a SQLite prepare error message.
+///
+/// This is the *only* discovery mechanism: dirsql never parses SQL, so joins,
+/// subqueries and CTEs work for free — SQLite names each missing target in turn.
+fn missing_table_name(message: &str) -> Option<&str> {
+    let name = message.strip_prefix(NO_SUCH_TABLE)?.trim();
+    (!name.is_empty()).then_some(name)
+}
+
+fn is_path_prefixed(name: &str) -> bool {
+    PATH_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+}
+
+fn has_glob_metacharacter(name: &str) -> bool {
+    name.contains(['*', '?', '['])
+}
+
+/// Translate a `./`-relative path-table name into the root-relative glob the
+/// `dirsql_path` module scans. Other path shapes (absolute, `../`, `~/`) need
+/// root resolution and are not translated here.
+fn path_table_glob(name: &str) -> Option<String> {
+    let rest = name.strip_prefix("./")?;
+    Some(if rest.is_empty() {
+        RECURSIVE_GLOB.to_string()
+    } else {
+        rest.to_string()
+    })
+}
+
+fn classify_missing(name: &str) -> Missing {
+    match path_table_glob(name) {
+        Some(glob) => Missing::Create(glob),
+        None if is_path_prefixed(name) => Missing::Unsupported,
+        None if has_glob_metacharacter(name) => Missing::Hint,
+        None => Missing::NotAPath,
+    }
+}
+
+fn bare_glob_hint(name: &str) -> String {
+    format!("{NO_SUCH_TABLE}{name}; did you mean './{name}'?")
+}
+
+fn unsupported_path_table(name: &str) -> String {
+    format!(
+        "path-table {name:?} is not supported yet: only './'-relative \
+         path-tables resolve today"
+    )
+}
+
+/// Wrap `s` as a SQL string literal.
+fn quote_literal(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// Wrap `s` as a double-quoted SQL identifier.
+fn quote_identifier(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+/// The DDL that mints a path-table.
+///
+/// It lands in `temp`, which is per-connection and never written to the
+/// persistent cache file — so a path-table can never leak into a persisted
+/// `sqlite_master`. `IF NOT EXISTS` makes a repeat reference a no-op, which is
+/// why no cross-call registry is needed.
+fn path_table_ddl(name: &str, root: &Path, glob: &str) -> String {
+    format!(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS temp.{} USING {}({}, {})",
+        quote_identifier(name),
+        vtab::MODULE_NAME,
+        quote_literal(&root.to_string_lossy()),
+        quote_literal(glob),
+    )
 }
 
 /// Validate that `s` is a safe unquoted SQL identifier: starts with an
@@ -99,6 +203,9 @@ pub fn ensure_internal_rows_table(conn: &Connection) -> rusqlite::Result<()> {
 
 pub struct Db {
     conn: Connection,
+    /// The directory a path-table's glob is resolved against. `None` disables
+    /// the path-table fallback entirely, leaving `query()` errors untouched.
+    path_table_root: Option<PathBuf>,
 }
 
 impl Db {
@@ -116,7 +223,11 @@ impl Db {
     pub fn new() -> Result<Self> {
         let conn = Connection::open("")?;
         ensure_internal_rows_table(&conn)?;
-        Ok(Self { conn })
+        vtab::load_module(&conn)?;
+        Ok(Self {
+            conn,
+            path_table_root: None,
+        })
     }
 
     /// Open a `Db` backed by a named on-disk SQLite file. Used by the
@@ -128,7 +239,18 @@ impl Db {
         let _mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         ensure_internal_rows_table(&conn)?;
-        Ok(Self { conn })
+        vtab::load_module(&conn)?;
+        Ok(Self {
+            conn,
+            path_table_root: None,
+        })
+    }
+
+    /// Set the directory a path-table's glob resolves against — the index
+    /// root, not this database's own file. Until it is set, `query()` reports
+    /// an unknown table exactly as SQLite does.
+    pub fn set_path_table_root(&mut self, root: PathBuf) {
+        self.path_table_root = Some(root);
     }
 
     /// Borrow the underlying SQLite connection. Internal use only — exposed
@@ -458,6 +580,51 @@ impl Db {
     /// internal writes (`insert_row`, delete-by-file, persist), which never go
     /// through `query()`, are unaffected.
     pub fn query(&self, sql: &str) -> Result<Vec<HashMap<String, Value>>> {
+        // Each iteration must register a table no earlier iteration did; a
+        // repeat means the fallback is not making progress, so the SQLite
+        // error stands. That is what bounds the loop.
+        let mut attempted: HashSet<String> = HashSet::new();
+
+        let mut stmt = loop {
+            let error = match self.prepare_guarded(sql) {
+                Ok(stmt) => break stmt,
+                Err(e) => e,
+            };
+            let Some((name, glob)) = self.path_table_for(&error)? else {
+                return Err(error);
+            };
+            if !attempted.insert(name.clone()) {
+                return Err(error);
+            }
+            self.create_path_table(&name, &glob)?;
+        };
+
+        if !stmt.readonly() {
+            return Err(DbError::WriteForbidden);
+        }
+        let column_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+
+        let rows = stmt.query_map([], |row| {
+            let mut map = HashMap::new();
+            for (i, name) in column_names.iter().enumerate() {
+                let val: rusqlite::types::Value = row.get(i)?;
+                map.insert(name.clone(), Value::from(val));
+            }
+            Ok(map)
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Prepare `sql` with the internal-table / ATTACH authorizer installed for
+    /// exactly that one call. The authorizer is installed and cleared around
+    /// every attempt, so a re-prepare after registering a path-table is gated
+    /// identically to the first.
+    fn prepare_guarded(&self, sql: &str) -> Result<rusqlite::Statement<'_>> {
         use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
         use std::sync::{Arc, Mutex};
 
@@ -480,7 +647,7 @@ impl Db {
                     Authorization::Deny
                 }
                 // ATTACH/DETACH are the only effectful actions SQLite classifies
-                // as read-only, so the `readonly()` gate below can't catch them;
+                // as read-only, so the `readonly()` gate can't catch them;
                 // deny here before the file is ever created or opened.
                 AuthAction::Attach { .. } | AuthAction::Detach { .. } => {
                     *denial_cb.lock().unwrap() = Some(ATTACH_DENIED_MSG);
@@ -494,36 +661,52 @@ impl Db {
         self.conn
             .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
 
-        let mut stmt = match prepared {
-            Ok(stmt) => stmt,
+        match prepared {
+            Ok(stmt) => Ok(stmt),
             Err(e)
                 if e.sqlite_error_code()
                     == Some(rusqlite::ErrorCode::AuthorizationForStatementDenied) =>
             {
                 let msg = denial.lock().unwrap().unwrap_or(INTERNAL_TABLE_DENIED_MSG);
-                return Err(DbError::Unauthorized(msg.to_string()));
+                Err(DbError::Unauthorized(msg.to_string()))
             }
-            Err(e) => return Err(DbError::Sqlite(e)),
+            Err(e) => Err(DbError::Sqlite(e)),
+        }
+    }
+
+    /// Decide whether `error` names a table a path-table can supply, yielding
+    /// its name and the glob to scan. `Ok(None)` means the error is not ours
+    /// and stands as SQLite reported it.
+    fn path_table_for(&self, error: &DbError) -> Result<Option<(String, String)>> {
+        if self.path_table_root.is_none() {
+            return Ok(None);
+        }
+        let DbError::Sqlite(sqlite_error) = error else {
+            return Ok(None);
         };
-        if !stmt.readonly() {
-            return Err(DbError::WriteForbidden);
-        }
-        let column_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+        let message = sqlite_error.to_string();
+        let Some(name) = missing_table_name(&message) else {
+            return Ok(None);
+        };
 
-        let rows = stmt.query_map([], |row| {
-            let mut map = HashMap::new();
-            for (i, name) in column_names.iter().enumerate() {
-                let val: rusqlite::types::Value = row.get(i)?;
-                map.insert(name.clone(), Value::from(val));
-            }
-            Ok(map)
-        })?;
-
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
+        match classify_missing(name) {
+            Missing::Create(glob) => Ok(Some((name.to_string(), glob))),
+            Missing::Hint => Err(DbError::PathTable(bare_glob_hint(name))),
+            Missing::Unsupported => Err(DbError::PathTable(unsupported_path_table(name))),
+            Missing::NotAPath => Ok(None),
         }
-        Ok(results)
+    }
+
+    /// Mint the path-table `name` over `glob`, out of band: the DDL runs
+    /// straight on the connection rather than through [`query`](Self::query),
+    /// which classifies `CREATE VIRTUAL TABLE` as a write and would reject it.
+    fn create_path_table(&self, name: &str, glob: &str) -> Result<()> {
+        let root = self
+            .path_table_root
+            .as_ref()
+            .ok_or_else(|| DbError::PathTable(unsupported_path_table(name)))?;
+        self.conn.execute_batch(&path_table_ddl(name, root, glob))?;
+        Ok(())
     }
 }
 
@@ -1840,5 +2023,199 @@ mod tests {
 
         let rows = db.get_rows_by_file("t", "a.json").unwrap();
         assert_eq!(rows.len(), 1, "delete must have rolled back");
+    }
+
+    #[test]
+    fn missing_table_name_extracts_the_name() {
+        assert_eq!(
+            missing_table_name("no such table: ./docs/*.md"),
+            Some("./docs/*.md")
+        );
+    }
+
+    #[test]
+    fn missing_table_name_ignores_other_errors() {
+        assert_eq!(missing_table_name("no such column: x"), None);
+    }
+
+    #[test]
+    fn missing_table_name_ignores_an_empty_name() {
+        assert_eq!(missing_table_name("no such table: "), None);
+    }
+
+    #[test]
+    fn is_path_prefixed_accepts_every_documented_prefix() {
+        assert!(is_path_prefixed("./a"));
+        assert!(is_path_prefixed("../a"));
+        assert!(is_path_prefixed("/a"));
+        assert!(is_path_prefixed("~/a"));
+    }
+
+    #[test]
+    fn is_path_prefixed_rejects_a_plain_identifier() {
+        assert!(!is_path_prefixed("users"));
+        assert!(!is_path_prefixed("~users"));
+        assert!(!is_path_prefixed(".hidden"));
+    }
+
+    #[test]
+    fn has_glob_metacharacter_finds_each_metacharacter() {
+        assert!(has_glob_metacharacter("**/*.md"));
+        assert!(has_glob_metacharacter("a?.md"));
+        assert!(has_glob_metacharacter("a[bc].md"));
+    }
+
+    #[test]
+    fn has_glob_metacharacter_rejects_a_plain_name() {
+        assert!(!has_glob_metacharacter("usrs"));
+    }
+
+    #[test]
+    fn path_table_glob_expands_a_bare_dot_slash_recursively() {
+        assert_eq!(path_table_glob("./"), Some(RECURSIVE_GLOB.to_string()));
+    }
+
+    #[test]
+    fn path_table_glob_strips_the_dot_slash_prefix() {
+        assert_eq!(
+            path_table_glob("./docs/*.md"),
+            Some("docs/*.md".to_string())
+        );
+    }
+
+    #[test]
+    fn path_table_glob_declines_other_path_shapes() {
+        assert_eq!(path_table_glob("../a"), None);
+        assert_eq!(path_table_glob("/a"), None);
+        assert_eq!(path_table_glob("~/a"), None);
+        assert_eq!(path_table_glob("users"), None);
+    }
+
+    #[test]
+    fn classify_missing_creates_for_a_dot_slash_name() {
+        assert_eq!(
+            classify_missing("./docs/*.md"),
+            Missing::Create("docs/*.md".to_string())
+        );
+    }
+
+    #[test]
+    fn classify_missing_defers_other_path_shapes() {
+        assert_eq!(classify_missing("/var/*.log"), Missing::Unsupported);
+        assert_eq!(classify_missing("../a"), Missing::Unsupported);
+        assert_eq!(classify_missing("~/notes"), Missing::Unsupported);
+    }
+
+    #[test]
+    fn classify_missing_hints_for_a_bare_glob() {
+        assert_eq!(classify_missing("**/*.md"), Missing::Hint);
+    }
+
+    #[test]
+    fn classify_missing_leaves_a_plain_identifier_alone() {
+        assert_eq!(classify_missing("usrs"), Missing::NotAPath);
+    }
+
+    #[test]
+    fn bare_glob_hint_names_the_dot_slash_form() {
+        assert_eq!(
+            bare_glob_hint("**/*.md"),
+            "no such table: **/*.md; did you mean './**/*.md'?"
+        );
+    }
+
+    #[test]
+    fn unsupported_path_table_names_the_table() {
+        assert!(unsupported_path_table("/var/*.log").contains("/var/*.log"));
+    }
+
+    #[test]
+    fn quote_literal_doubles_embedded_quotes() {
+        assert_eq!(quote_literal("it's"), "'it''s'");
+    }
+
+    #[test]
+    fn quote_identifier_doubles_embedded_quotes() {
+        assert_eq!(quote_identifier("a\"b"), "\"a\"\"b\"");
+    }
+
+    #[test]
+    fn path_table_ddl_creates_in_temp_if_not_exists() {
+        let ddl = path_table_ddl("./docs/*.md", Path::new("/root"), "docs/*.md");
+        assert_eq!(
+            ddl,
+            "CREATE VIRTUAL TABLE IF NOT EXISTS temp.\"./docs/*.md\" \
+             USING dirsql_path('/root', 'docs/*.md')"
+        );
+    }
+
+    #[test]
+    fn query_leaves_a_path_name_alone_without_a_root() {
+        let db = Db::new().unwrap();
+
+        let err = db.query("SELECT * FROM './'").unwrap_err().to_string();
+
+        assert!(
+            err.contains("no such table: ./"),
+            "the fallback is off until a root is set, got: {err}"
+        );
+        assert!(!err.contains("did you mean"), "got: {err}");
+    }
+
+    #[test]
+    fn query_resolves_a_path_table_once_a_root_is_set() {
+        let mut db = Db::new().unwrap();
+        db.set_path_table_root(PathBuf::from("/nonexistent-dirsql-root"));
+
+        let rows = db.query("SELECT path FROM './'").unwrap();
+
+        assert!(rows.is_empty(), "an empty root yields no rows: {rows:?}");
+    }
+
+    #[test]
+    fn query_hints_at_the_dot_slash_form_for_a_bare_glob() {
+        let mut db = Db::new().unwrap();
+        db.set_path_table_root(PathBuf::from("/nonexistent-dirsql-root"));
+
+        let err = db.query("SELECT * FROM '*.md'").unwrap_err().to_string();
+
+        assert!(err.contains("did you mean './*.md'?"), "got: {err}");
+    }
+
+    #[test]
+    fn query_defers_an_absolute_path_table() {
+        let mut db = Db::new().unwrap();
+        db.set_path_table_root(PathBuf::from("/nonexistent-dirsql-root"));
+
+        let err = db
+            .query("SELECT * FROM '/var/*.log'")
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("not supported yet"), "got: {err}");
+    }
+
+    #[test]
+    fn query_leaves_a_plain_typo_unchanged() {
+        let mut db = Db::new().unwrap();
+        db.set_path_table_root(PathBuf::from("/nonexistent-dirsql-root"));
+
+        let err = db.query("SELECT * FROM usrs").unwrap_err().to_string();
+
+        assert!(err.contains("no such table: usrs"), "got: {err}");
+        assert!(!err.contains("did you mean"), "got: {err}");
+    }
+
+    #[test]
+    fn query_still_denies_internal_tables_after_the_loop_restructure() {
+        let mut db = Db::new().unwrap();
+        db.set_path_table_root(PathBuf::from("/nonexistent-dirsql-root"));
+
+        let err = db
+            .query("SELECT * FROM _dirsql_internal_rows")
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("not authorized"), "got: {err}");
     }
 }

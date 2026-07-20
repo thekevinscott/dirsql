@@ -186,6 +186,18 @@ def describe_binding_layer():
             assert _FakeRustDirSQL.instances[0].queries == [sql]
             assert result == [{"ok": 1}]
 
+        @pytest.mark.asyncio
+        async def it_passes_a_path_table_name_through_untouched(mock_core):
+            # Path-table resolution lives in the core; the SDK must not
+            # rewrite, quote, or normalize the name on the way down.
+            db = async_mod.DirSQL("/root", tables=["t"])
+            await db.ready()
+
+            sql = "SELECT basename FROM './docs/*.md'"
+            await db.query(sql)
+
+            assert _FakeRustDirSQL.instances[0].queries == [sql]
+
     def describe_watch():
         # Feature: watch() is an async iterator of RowEvent. See
         # docs/reference/sdk.md and packages/python/README.md.
