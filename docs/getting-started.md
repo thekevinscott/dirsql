@@ -88,14 +88,15 @@ open a **second terminal** for the next step.
 
 ## 3. Query your files
 
-You gave `dirsql` no configuration, so it serves a single default table
-named `files` ([default mode](./reference/cli.md#default-mode)).
-Ask it how many rows it has:
+You gave `dirsql` no configuration, so no named tables exist. Query the
+filesystem directly with a [path-table](./reference/path-tables.md) — a
+quoted path where a table name goes. `'./'` means everything under the
+index root. Ask it how many files there are:
 
 ```bash
 curl -s http://localhost:7117/query \
   -H 'content-type: application/json' \
-  -d '{"sql":"SELECT COUNT(*) AS files FROM files"}'
+  -d '{"sql":"SELECT COUNT(*) AS files FROM \'./\'"}'
 ```
 
 ```
@@ -109,7 +110,7 @@ through `jq` to pretty-print. Now select some columns:
 ```bash
 curl -s http://localhost:7117/query \
   -H 'content-type: application/json' \
-  -d '{"sql":"SELECT path, size FROM files ORDER BY path"}' \
+  -d '{"sql":"SELECT path, size FROM \'./\' ORDER BY path"}' \
   | jq
 ```
 
@@ -185,8 +186,7 @@ Running at localhost:7117
 ```
 
 This time `dirsql` loaded your `.dirsql.toml` and served the `notes` table
-you defined instead of the default `files` table. Query it from the second
-terminal:
+you defined. Query it from the second terminal:
 
 ```bash
 curl -s http://localhost:7117/query \

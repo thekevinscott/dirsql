@@ -119,6 +119,13 @@ fn bare_glob_hint(name: &str) -> String {
     format!("{NO_SUCH_TABLE}{name}; did you mean './{name}'?")
 }
 
+/// The name the retired implicit no-config table used to have.
+const LEGACY_DEFAULT_TABLE: &str = "files";
+
+fn legacy_files_table_hint() -> String {
+    format!("{NO_SUCH_TABLE}{LEGACY_DEFAULT_TABLE}; did you mean FROM './'?")
+}
+
 fn unsupported_path_table(name: &str) -> String {
     format!(
         "path-table {name:?} is not supported yet: only './'-relative \
@@ -206,6 +213,11 @@ pub struct Db {
     /// The directory a path-table's glob is resolved against. `None` disables
     /// the path-table fallback entirely, leaving `query()` errors untouched.
     path_table_root: Option<PathBuf>,
+    /// Whether a missing `files` table should carry the path-table hint. Only
+    /// true for an index built with no config and no programmatic tables —
+    /// exactly where `files` used to exist implicitly. A user who declared
+    /// tables and forgot `files` gets the plain SQLite error.
+    hint_legacy_files_table: bool,
 }
 
 impl Db {
@@ -227,6 +239,7 @@ impl Db {
         Ok(Self {
             conn,
             path_table_root: None,
+            hint_legacy_files_table: false,
         })
     }
 
@@ -243,6 +256,7 @@ impl Db {
         Ok(Self {
             conn,
             path_table_root: None,
+            hint_legacy_files_table: false,
         })
     }
 
@@ -251,6 +265,12 @@ impl Db {
     /// an unknown table exactly as SQLite does.
     pub fn set_path_table_root(&mut self, root: PathBuf) {
         self.path_table_root = Some(root);
+    }
+
+    /// Arm the hint that redirects a missing `files` table to the path-table
+    /// form. Set only for a configless, tableless index; see the field docs.
+    pub fn set_hint_legacy_files_table(&mut self, hint: bool) {
+        self.hint_legacy_files_table = hint;
     }
 
     /// Borrow the underlying SQLite connection. Internal use only — exposed
@@ -693,8 +713,15 @@ impl Db {
             Missing::Create(glob) => Ok(Some((name.to_string(), glob))),
             Missing::Hint => Err(DbError::PathTable(bare_glob_hint(name))),
             Missing::Unsupported => Err(DbError::PathTable(unsupported_path_table(name))),
+            Missing::NotAPath if self.hints_legacy_files_table(name) => {
+                Err(DbError::PathTable(legacy_files_table_hint()))
+            }
             Missing::NotAPath => Ok(None),
         }
+    }
+
+    fn hints_legacy_files_table(&self, name: &str) -> bool {
+        self.hint_legacy_files_table && name == LEGACY_DEFAULT_TABLE
     }
 
     /// Mint the path-table `name` over `glob`, out of band: the DDL runs
@@ -2203,6 +2230,61 @@ mod tests {
         let err = db.query("SELECT * FROM usrs").unwrap_err().to_string();
 
         assert!(err.contains("no such table: usrs"), "got: {err}");
+        assert!(!err.contains("did you mean"), "got: {err}");
+    }
+
+    #[test]
+    fn legacy_files_table_hint_names_files_and_the_dot_slash_form() {
+        assert_eq!(
+            legacy_files_table_hint(),
+            "no such table: files; did you mean FROM './'?"
+        );
+    }
+
+    #[test]
+    fn query_hints_at_the_dot_slash_form_for_a_missing_files_table() {
+        let mut db = Db::new().unwrap();
+        db.set_path_table_root(PathBuf::from("/nonexistent-dirsql-root"));
+        db.set_hint_legacy_files_table(true);
+
+        let err = db.query("SELECT * FROM files").unwrap_err().to_string();
+
+        assert!(err.contains("no such table: files"), "got: {err}");
+        assert!(err.contains("did you mean FROM './'?"), "got: {err}");
+    }
+
+    #[test]
+    fn query_leaves_a_missing_files_table_unhinted_when_not_configless() {
+        let mut db = Db::new().unwrap();
+        db.set_path_table_root(PathBuf::from("/nonexistent-dirsql-root"));
+
+        let err = db.query("SELECT * FROM files").unwrap_err().to_string();
+
+        assert!(err.contains("no such table: files"), "got: {err}");
+        assert!(!err.contains("did you mean"), "got: {err}");
+    }
+
+    #[test]
+    fn the_files_hint_is_scoped_to_that_exact_name() {
+        let mut db = Db::new().unwrap();
+        db.set_path_table_root(PathBuf::from("/nonexistent-dirsql-root"));
+        db.set_hint_legacy_files_table(true);
+
+        let err = db.query("SELECT * FROM fyles").unwrap_err().to_string();
+
+        assert!(err.contains("no such table: fyles"), "got: {err}");
+        assert!(!err.contains("did you mean"), "got: {err}");
+    }
+
+    #[test]
+    fn set_hint_legacy_files_table_can_be_disarmed() {
+        let mut db = Db::new().unwrap();
+        db.set_path_table_root(PathBuf::from("/nonexistent-dirsql-root"));
+        db.set_hint_legacy_files_table(true);
+        db.set_hint_legacy_files_table(false);
+
+        let err = db.query("SELECT * FROM files").unwrap_err().to_string();
+
         assert!(!err.contains("did you mean"), "got: {err}");
     }
 

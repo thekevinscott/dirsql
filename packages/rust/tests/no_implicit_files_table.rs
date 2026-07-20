@@ -73,10 +73,7 @@ fn a_user_table_set_that_omits_files_gets_the_plain_error() {
     let db = DirSQL::new(root.path(), vec![posts_table()]).unwrap();
     let err = db.query("SELECT * FROM files").unwrap_err().to_string();
 
-    assert!(
-        err.contains("no such table: files"),
-        "got: {err}"
-    );
+    assert!(err.contains("no such table: files"), "got: {err}");
     assert!(
         !err.contains("did you mean"),
         "a user who defined tables and forgot `files` gets the plain error, got: {err}"
@@ -113,10 +110,7 @@ fn a_no_config_miss_on_another_name_gets_the_plain_error() {
     let db = DirSQL::builder().root(root.path()).build().unwrap();
     let err = db.query("SELECT * FROM fyles").unwrap_err().to_string();
 
-    assert!(
-        err.contains("no such table: fyles"),
-        "got: {err}"
-    );
+    assert!(err.contains("no such table: fyles"), "got: {err}");
     assert!(
         !err.contains("did you mean"),
         "the hint is scoped to the exact name `files`, got: {err}"

@@ -23,15 +23,15 @@ use dirsql::{DirSQL, Extension, Row, Table};
     about = "Ephemeral SQL index over a local directory, exposed over HTTP.",
     long_about = "Runs an HTTP server that exposes a SQL view of a local \
                   directory. Tables are defined by a `.dirsql.toml` config \
-                  file passed with `-c`; with no `-c`, the baked-in default \
-                  `files` table over every file in the directory is served — \
-                  a `./.dirsql.toml` on disk is NOT auto-loaded, pass it \
-                  explicitly. Config flags are subcommand-local: for `query` \
-                  pass them AFTER the subcommand (`dirsql query <sql> -c \
-                  <cfg>`); a flag before a subcommand is a hard error. With \
-                  the `init` subcommand, writes that same default `files` \
-                  table as a starter `.dirsql.toml` — no target-directory \
-                  inspection, no network, deterministic.",
+                  file passed with `-c`; with no `-c` there are no named \
+                  tables and filesystem queries go through path-tables \
+                  (`SELECT * FROM './'`) — a `./.dirsql.toml` on disk is NOT \
+                  auto-loaded, pass it explicitly. Config flags are \
+                  subcommand-local: for `query` pass them AFTER the \
+                  subcommand (`dirsql query <sql> -c <cfg>`); a flag before a \
+                  subcommand is a hard error. The `init` subcommand writes a \
+                  starter `.dirsql.toml` defining a `files` table — no \
+                  target-directory inspection, no network, deterministic.",
     args_conflicts_with_subcommands = true
 )]
 struct Cli {
@@ -65,22 +65,23 @@ struct ConfigArgs {
     /// Path to a config file. **Repeatable** (`-c a -c b`): the configs load
     /// and merge in argv order -- their `[[table]]`, `ignore`, and
     /// `[[dirsql.extension]]` entries accumulate, and their `pre-query` /
-    /// `post-query` hooks chain FIFO. With none given, the baked-in default
-    /// `files` table is served -- a `./.dirsql.toml` on disk is NOT auto-loaded
-    /// (#602); pass it explicitly to use it. A `-c` naming a missing file is an
-    /// error, not a silent fallback to the default. The index is rooted at the
+    /// `post-query` hooks chain FIFO. With none given, no named tables are
+    /// defined -- query the filesystem with a path-table (`FROM './'`). A
+    /// `./.dirsql.toml` on disk is NOT auto-loaded (#602); pass it explicitly
+    /// to use it. A `-c` naming a missing file is an error. The index is rooted at the
     /// invocation directory (cwd), not a config's location (#540). For `query`,
     /// pass this AFTER the subcommand (`dirsql query <sql> -c <cfg>`).
     #[arg(short = 'c', long)]
     config: Vec<PathBuf>,
 
-    /// Internal (launcher-only): seed the resolved config set with the baked-in
-    /// default `files` table *before* the `-c` configs, so an explicit `-c` no
-    /// longer suppresses the default. `--include-default -c <plugin>` yields the
-    /// baked-in default **plus** the plugin's tables — the additive composition
-    /// the plugin launcher (#529) injects for the no-user-`-c` case (#604).
-    /// Idempotent with no `-c` (just the bare default). Hidden from `--help`: it
-    /// is internal plumbing for the launcher, not a documented public flag.
+    /// Internal (launcher-only): seed the resolved config set with the shipped
+    /// starter `files` table *before* the `-c` configs, so an explicit `-c`
+    /// composes with it instead of standing alone. `--include-default -c
+    /// <plugin>` yields that table **plus** the plugin's tables — the additive
+    /// composition the plugin launcher (#529) injects for the no-user-`-c`
+    /// case (#604). This is an explicit opt-in, not the implicit no-`-c`
+    /// fallback (which was retired in #636). Hidden from `--help`: it is
+    /// internal plumbing for the launcher, not a documented public flag.
     #[arg(long = "include-default", hide = true)]
     include_default: bool,
 
@@ -117,7 +118,7 @@ impl ConfigArgs {
     }
 
     /// The config paths passed via `-c`/`--config`. Empty when none were given
-    /// -- the baked-in default `files` table is served, with no implicit
+    /// -- no named tables are defined, and there is no implicit
     /// `./.dirsql.toml` discovery (#602).
     fn config_paths(&self) -> Vec<PathBuf> {
         self.config.clone()
@@ -126,9 +127,9 @@ impl ConfigArgs {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Write the fixed starter `.dirsql.toml` — the same baked-in default
-    /// `files` table bare `dirsql` serves. The output does not auto-load; pass
-    /// it with `dirsql query <sql> -c ./.dirsql.toml`. No target-directory
+    /// Write the fixed starter `.dirsql.toml` — a `files` table over every
+    /// file in the directory. The output does not auto-load; pass it with
+    /// `dirsql query <sql> -c ./.dirsql.toml`. No target-directory
     /// inspection.
     Init(InitArgs),
 
@@ -278,20 +279,20 @@ async fn run_server(cli: Cli) -> ExitCode {
 }
 
 fn load_state(cfg: &ConfigArgs) -> AppState {
-    // No `-c` was given -> serve the baked-in default `files` table so dirsql
-    // is queryable out of the box. A `./.dirsql.toml` on disk is NOT consulted
-    // (#602); pass it explicitly with `-c` to use it.
-    if cfg.config.is_empty() {
-        return load_default_state(cfg);
+    // Neither a `-c` nor the launcher's `--include-default` -> index the
+    // invocation directory with no named tables. A `./.dirsql.toml` on disk is
+    // NOT consulted (#602); pass it explicitly with `-c` to use it.
+    if cfg.config.is_empty() && !cfg.include_default {
+        return load_configless_state(cfg);
     }
 
     let mut builder = DirSQL::builder();
-    // `--include-default` seeds the baked-in default `files` table before the
-    // `-c` configs, so an explicit config composes with the default instead of
-    // replacing it (#604). Programmatic tables sort before config tables in
-    // `resolve`, giving `[default] ++ [-c]`; a default-vs-config `files`
-    // collision hits the existing dedup in `compile_matcher`. Reached only when
-    // `-c` is present -- with none, the idempotent default path above handles it.
+    // `--include-default` seeds the shipped starter `files` table before the
+    // `-c` configs, so an explicit config composes with it instead of standing
+    // alone (#604). Programmatic tables sort before config tables in
+    // `resolve`, giving `[starter] ++ [-c]`; a starter-vs-config `files`
+    // collision hits the existing dedup in `compile_matcher`. With no `-c` at
+    // all the flag still applies, yielding just the starter table.
     if cfg.include_default {
         builder = builder.table(default_files_table());
     }
@@ -415,13 +416,11 @@ fn load_post_queries(cfg: &ConfigArgs) -> Vec<PostQuery> {
     hooks
 }
 
-/// The baked-in default. With no `-c`, dirsql indexes the invocation directory
-/// with a single default `files` table — one row per file, columns drawn
-/// entirely from filesystem facts — so `SELECT * FROM files` works immediately.
-/// This is the shipped default (`DEFAULT_CONFIG_TOML`), not a disk file: a
-/// `./.dirsql.toml` in the cwd is not consulted (#602). Pass a config with `-c`
-/// to fully overrule this default.
-fn load_default_state(cfg: &ConfigArgs) -> AppState {
+/// With no `-c`, dirsql indexes the invocation directory but defines no named
+/// tables: filesystem queries go through path-tables (`SELECT * FROM './'`),
+/// and a `files` query fails with a hint pointing at that form (#636). A
+/// `./.dirsql.toml` in the cwd is not consulted (#602).
+fn load_configless_state(cfg: &ConfigArgs) -> AppState {
     // Canonicalize for the same reason `load_state` does: `notify` misbehaves
     // when watching relative paths.
     let root = match PathBuf::from(".").canonicalize() {
@@ -431,22 +430,17 @@ fn load_default_state(cfg: &ConfigArgs) -> AppState {
         }
     };
 
-    // A builder with no config and no programmatic tables injects the baked-in
-    // default `files` table (#603), so the CLI's no-`-c` default is the exact
-    // same asset the SDK serves -- one implementation, no drift.
     let builder = cfg.apply_persist(DirSQL::builder().root(root));
     match builder.build() {
         Ok(db) => AppState::Ready(db),
-        Err(err) => AppState::Unavailable(format!("failed to build default index: {err}")),
+        Err(err) => AppState::Unavailable(format!("failed to build the index: {err}")),
     }
 }
 
-/// The baked-in default `files` table, parsed from the shared
-/// [`dirsql::DEFAULT_CONFIG_TOML`] asset. Used by the `--include-default` compose
-/// path (#604), which seeds it as a programmatic table *before* the `-c`
-/// configs so an explicit config no longer suppresses the default. The no-`-c`
-/// default path relies on the builder's own injection instead (#603); both draw
-/// from the one asset, so they cannot drift.
+/// The shipped starter `files` table, parsed from the [`dirsql::DEFAULT_CONFIG_TOML`]
+/// asset `dirsql init` writes. Used only by the explicit `--include-default`
+/// compose path (#604), which seeds it as a programmatic table *before* the
+/// `-c` configs. There is no implicit no-`-c` fallback (#636).
 fn default_files_table() -> Table {
     let config = dirsql::config::load_config_str(dirsql::DEFAULT_CONFIG_TOML)
         .expect("DEFAULT_CONFIG_TOML must be valid dirsql config TOML");

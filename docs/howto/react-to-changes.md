@@ -5,10 +5,21 @@ change — and [`GET /events`](../reference/http-api.md#get-events) pushes
 every row-level change to you as it happens. No polling, no diffing on your
 side.
 
+Row events are emitted for **named tables**, so this flow needs a config —
+[path-tables](../reference/path-tables.md) are scanned per query and are not
+watched. Define one next to your files:
+
+```toml
+# .dirsql.toml
+[[table]]
+ddl  = "CREATE TABLE files (path TEXT, basename TEXT, dir TEXT, ext TEXT, size INTEGER, mtime INTEGER, ctime INTEGER)"
+glob = "**/*"
+```
+
 ## 1. Open the stream
 
-With the server running (`npx dirsql` / `uvx dirsql`), subscribe from
-another terminal:
+With the server running (`npx dirsql -c ./.dirsql.toml` /
+`uvx dirsql -c ./.dirsql.toml`), subscribe from another terminal:
 
 ```bash
 curl -N http://localhost:7117/events

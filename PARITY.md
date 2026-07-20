@@ -26,18 +26,22 @@ uniformly across all three SDKs (#540): the explicit `root` when given, else
 the process cwd — the config file's location never sets the root. (The
 `[dirsql].root` config key was removed in #540.)
 
-**No-config default — at parity across all three SDKs (#603), no drift.**
-Constructing with neither a `config` nor programmatic `tables` serves the
-**baked-in default** `files` table (`DEFAULT_CONFIG_TOML`, one row per file
-over the root) — the same shipped default the CLI serves with no `-c`, not an
-empty index. The logic lives in the shared core builder (`DirSQLBuilder::resolve`
-injects the default when config paths and tables are both empty), so all three
-SDKs gain it at once. There is **no implicit `<root>/.dirsql.toml` discovery**
+**Configless construction — at parity across all three SDKs (#636), no drift.**
+Constructing with neither a `config` nor programmatic `tables` defines **no
+named tables** — the same as the CLI with no `-c`. Filesystem queries go
+through [path-tables](docs/reference/path-tables.md) (`SELECT * FROM './'`),
+and a `SELECT ... FROM files` in exactly that state fails with
+`no such table: files; did you mean FROM './'?`. The hint is scoped to the
+configless case: a config or table set that merely omits `files` gets the plain
+SQLite error. The logic lives in the shared core (`DirSQLBuilder::resolve` arms
+the hint when config paths and tables are both empty; `Db::query` emits it), so
+all three SDKs change at once. The implicit `files` table this replaced was
+added in #603 and retired in #636. There is **no implicit `<root>/.dirsql.toml` discovery**
 on any SDK: the root-joining Rust `DirSQL::from_config(root)` /
 `AsyncDirSQL::from_config(root)` shortcut was removed in #603 (use the explicit
 `from_config_path(root.join(".dirsql.toml"))` / `.config(path)`); Python and
 TypeScript never had a root-joiner — only the explicit `config=` — so nothing
-was removed there. This **restores parity** with the CLI's no-`-c` default (#602).
+was removed there. This **restores parity** with the CLI's no-`-c` behavior (#602).
 
 | API                        | Python                                         | Rust                                                 | TypeScript                                              |
 |----------------------------|------------------------------------------------|------------------------------------------------------|---------------------------------------------------------|
@@ -416,8 +420,8 @@ incl. #313).
 ### E2E (CLI / launcher) and distcheck tiers
 
 The CLI is a single Rust binary shipped through three channels, so its
-*behavior* (HTTP `/query` + `/events`, status codes, zero-config `files`
-table, `init`, `on-file` / `pre-query` / `post-query` hooks, signal
+*behavior* (HTTP `/query` + `/events`, status codes, configless
+path-table queries, `init`, `on-file` / `pre-query` / `post-query` hooks, signal
 handling) is covered once, in the Rust e2e/CLI suites (`cli_e2e.rs`,
 `cli_integration.rs`, `init_integration.rs`, `on_file_e2e.rs`). `init` is
 deterministic (#455) so its coverage needs no live-LLM e2e tier — there is
@@ -436,7 +440,7 @@ both bindings against a real wheel / npm install.
 | Launcher starts server; `POST /query` over HTTP | Y (`extension_package_test.py`) | Y | Y (`extension-package.test.ts`) |
 | `[[dirsql.extension]]` package name resolved by the launcher (#227) | Y | N/A | Y |
 | `interpret` subcommand removed; argv forwarded to clap (#321) | Y | core (clap dispatch) | Y |
-| HTTP semantics, SSE `/events`, hooks, `init`, zero-config `files` table | core | Y | core |
+| HTTP semantics, SSE `/events`, hooks, `init`, configless path-table queries | core | Y | core |
 | Distcheck: pack → install → run the published artifact | Y (`internals/distcheck` `dirsql-distcheck python`, against the packed wheel install) | N/A | Y (`internals/distcheck` `dirsql-distcheck node`) |
 
 ### Known gaps / follow-ups
