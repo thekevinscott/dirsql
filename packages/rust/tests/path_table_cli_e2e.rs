@@ -64,12 +64,12 @@ fn a_scoped_glob_limits_the_cli_scan() {
 }
 
 #[test]
-fn a_path_table_joins_against_the_default_files_table() {
+fn two_path_tables_join_against_each_other() {
     let dir = fixture();
     let out = run(
         &dir,
         "SELECT p.basename FROM './docs/*.md' AS p \
-         JOIN files AS f ON f.path = p.path",
+         JOIN './' AS f ON f.path = p.path",
     );
 
     assert_eq!(basenames(&out), vec!["a.md", "b.md"]);
