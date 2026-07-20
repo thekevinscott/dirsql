@@ -16,7 +16,11 @@ pub mod db;
 #[doc(hidden)]
 pub mod differ;
 #[doc(hidden)]
+pub mod infer;
+#[doc(hidden)]
 pub mod matcher;
+#[doc(hidden)]
+pub mod parsed_vtab;
 #[doc(hidden)]
 pub mod persist;
 #[doc(hidden)]
