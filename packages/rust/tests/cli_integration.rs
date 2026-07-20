@@ -29,9 +29,9 @@ use tempfile::TempDir;
 /// Build a `DirSQL` over a two-post blog fixture driven by `.dirsql.toml`.
 /// Returns the tempdir so the caller can mutate files while the server runs.
 ///
-/// `title` and `author` are captured from the file path (`posts/{author}/
-/// {title}.json`); `size` is included so content-only edits still change a
-/// column value and surface as `Update` events in the SSE stream.
+/// Rows are identified by `basename`, a filesystem-derived column; `size` is
+/// included so content-only edits still change a column value and surface as
+/// `Update` events in the SSE stream.
 fn blog_fixture() -> (TempDir, DirSQL) {
     let root = TempDir::new().unwrap();
     fs::create_dir_all(root.path().join("posts/alice")).unwrap();
@@ -42,8 +42,8 @@ fn blog_fixture() -> (TempDir, DirSQL) {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT, basename TEXT, size INTEGER)"
-glob = "posts/{author}/{title}.json"
+ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
+glob = "posts/*/*.json"
 "#,
     )
     .unwrap();
@@ -127,7 +127,7 @@ async fn post_query_returns_json_rows_on_success() {
 
     let resp = reqwest::Client::new()
         .post(format!("{}/query", base_url(&handle)))
-        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .json(&json!({"sql": "SELECT basename FROM posts ORDER BY basename"}))
         .send()
         .await
         .unwrap();
@@ -137,8 +137,8 @@ async fn post_query_returns_json_rows_on_success() {
     assert_eq!(
         body,
         vec![
-            json!({"title": "Hello-World"}),
-            json!({"title": "Second-Post"}),
+            json!({"basename": "Hello-World.json"}),
+            json!({"basename": "Second-Post.json"}),
         ]
     );
     handle.shutdown().await.unwrap();
@@ -328,7 +328,7 @@ async fn post_query_reshapes_response_body() {
 
     let resp = reqwest::Client::new()
         .post(format!("{}/query", base_url(&handle)))
-        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .json(&json!({"sql": "SELECT basename FROM posts ORDER BY basename"}))
         .send()
         .await
         .unwrap();
@@ -337,7 +337,7 @@ async fn post_query_reshapes_response_body() {
     let body: JsonValue = resp.json().await.unwrap();
     assert_eq!(
         body,
-        json!({"results": [{"title": "Hello-World"}, {"title": "Second-Post"}]})
+        json!({"results": [{"basename": "Hello-World.json"}, {"basename": "Second-Post.json"}]})
     );
     handle.shutdown().await.unwrap();
 }
@@ -349,7 +349,7 @@ async fn post_query_absent_returns_rows_unchanged() {
 
     let resp = reqwest::Client::new()
         .post(format!("{}/query", base_url(&handle)))
-        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .json(&json!({"sql": "SELECT basename FROM posts ORDER BY basename"}))
         .send()
         .await
         .unwrap();
@@ -359,8 +359,8 @@ async fn post_query_absent_returns_rows_unchanged() {
     assert_eq!(
         body,
         vec![
-            json!({"title": "Hello-World"}),
-            json!({"title": "Second-Post"}),
+            json!({"basename": "Hello-World.json"}),
+            json!({"basename": "Second-Post.json"}),
         ]
     );
     handle.shutdown().await.unwrap();
@@ -381,7 +381,7 @@ async fn post_query_command_failure_returns_5xx_with_stderr_tail() {
 
     let resp = reqwest::Client::new()
         .post(format!("{}/query", base_url(&handle)))
-        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .json(&json!({"sql": "SELECT basename FROM posts ORDER BY basename"}))
         .send()
         .await
         .unwrap();
@@ -410,7 +410,7 @@ async fn post_query_invalid_json_returns_5xx() {
 
     let resp = reqwest::Client::new()
         .post(format!("{}/query", base_url(&handle)))
-        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .json(&json!({"sql": "SELECT basename FROM posts ORDER BY basename"}))
         .send()
         .await
         .unwrap();

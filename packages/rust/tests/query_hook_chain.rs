@@ -30,8 +30,8 @@ fn blog_fixture() -> (TempDir, DirSQL) {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT)"
-glob = "posts/{author}/{title}.json"
+ddl = "CREATE TABLE posts (basename TEXT)"
+glob = "posts/*/*.json"
 "#,
     )
     .unwrap();
@@ -127,7 +127,7 @@ async fn two_post_query_stages_chain_fifo() {
 
     let resp = reqwest::Client::new()
         .post(format!("{}/query", base_url(&handle)))
-        .json(&json!({"sql": "SELECT title FROM posts"}))
+        .json(&json!({"sql": "SELECT basename FROM posts"}))
         .send()
         .await
         .unwrap();
@@ -136,7 +136,7 @@ async fn two_post_query_stages_chain_fifo() {
     let body: JsonValue = resp.json().await.unwrap();
     assert_eq!(
         body,
-        json!({"second": {"first": [{"title": "Hello-World"}]}}),
+        json!({"second": {"first": [{"basename": "Hello-World.json"}]}}),
         "both post-query stages must run, FIFO: rows -> stage1 -> stage2 -> response"
     );
     handle.shutdown().await.unwrap();
