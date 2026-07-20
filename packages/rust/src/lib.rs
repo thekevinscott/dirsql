@@ -1578,7 +1578,7 @@ fn parse_command_rows(payload: &str) -> std::result::Result<Vec<Row>, String> {
 /// Map a JSON value to a SQLite [`Value`]: `null` → `Null`; `bool` → `Integer`
 /// (0/1); an integral number → `Integer`, otherwise `Real`; `string` → `Text`;
 /// an array/object → its JSON text as `Text`.
-fn json_to_value(value: &serde_json::Value) -> Value {
+pub(crate) fn json_to_value(value: &serde_json::Value) -> Value {
     match value {
         serde_json::Value::Null => Value::Null,
         serde_json::Value::Bool(b) => Value::Integer(i64::from(*b)),

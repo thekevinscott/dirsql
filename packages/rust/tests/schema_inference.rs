@@ -42,7 +42,9 @@ fn column_names(conn: &Connection, sql: &str) -> Vec<String> {
 }
 
 fn declared_types(conn: &Connection) -> Vec<(String, String)> {
-    let mut stmt = conn.prepare("SELECT name, type FROM pragma_table_info('t')").unwrap();
+    let mut stmt = conn
+        .prepare("SELECT name, type FROM pragma_table_info('t')")
+        .unwrap();
     stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
         .unwrap()
         .map(Result::unwrap)
