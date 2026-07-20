@@ -3,7 +3,15 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+use crate::path_table::{self, PathTable, Resolution};
 use crate::vtab;
+
+/// The user's home directory, if the platform reports one. Injected here so
+/// the `~/` rule has a single production source.
+fn home_dir() -> Option<PathBuf> {
+    #[allow(deprecated)]
+    std::env::home_dir()
+}
 
 #[derive(Error, Debug)]
 pub enum DbError {
@@ -56,27 +64,6 @@ fn is_internal_table(name: &str) -> bool {
 /// The prefix SQLite puts on the one prepare error a path-table can rescue.
 const NO_SUCH_TABLE: &str = "no such table: ";
 
-/// Prefixes that make a name a *path*, and so a candidate for a path-table.
-/// A name outside this set is an ordinary identifier and never becomes one —
-/// which is what keeps a typo a typo.
-const PATH_PREFIXES: [&str; 4] = ["./", "../", "/", "~/"];
-
-/// The glob a bare `'./'` expands to: everything under the index root.
-const RECURSIVE_GLOB: &str = "**/*";
-
-/// What to do about a table SQLite could not find.
-#[derive(Debug, PartialEq)]
-enum Missing {
-    /// Register a path-table scanning this root-relative glob, then re-prepare.
-    Create(String),
-    /// A bare glob: almost certainly a path-table missing its `./`.
-    Hint,
-    /// Path-shaped, but a form the glob translation does not handle yet.
-    Unsupported,
-    /// An ordinary identifier. Not ours; the SQLite error stands.
-    NotAPath,
-}
-
 /// Extract the table name from a SQLite prepare error message.
 ///
 /// This is the *only* discovery mechanism: dirsql never parses SQL, so joins,
@@ -84,35 +71,6 @@ enum Missing {
 fn missing_table_name(message: &str) -> Option<&str> {
     let name = message.strip_prefix(NO_SUCH_TABLE)?.trim();
     (!name.is_empty()).then_some(name)
-}
-
-fn is_path_prefixed(name: &str) -> bool {
-    PATH_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
-}
-
-fn has_glob_metacharacter(name: &str) -> bool {
-    name.contains(['*', '?', '['])
-}
-
-/// Translate a `./`-relative path-table name into the root-relative glob the
-/// `dirsql_path` module scans. Other path shapes (absolute, `../`, `~/`) need
-/// root resolution and are not translated here.
-fn path_table_glob(name: &str) -> Option<String> {
-    let rest = name.strip_prefix("./")?;
-    Some(if rest.is_empty() {
-        RECURSIVE_GLOB.to_string()
-    } else {
-        rest.to_string()
-    })
-}
-
-fn classify_missing(name: &str) -> Missing {
-    match path_table_glob(name) {
-        Some(glob) => Missing::Create(glob),
-        None if is_path_prefixed(name) => Missing::Unsupported,
-        None if has_glob_metacharacter(name) => Missing::Hint,
-        None => Missing::NotAPath,
-    }
 }
 
 fn bare_glob_hint(name: &str) -> String {
@@ -126,10 +84,10 @@ fn legacy_files_table_hint() -> String {
     format!("{NO_SUCH_TABLE}{LEGACY_DEFAULT_TABLE}; did you mean FROM './'?")
 }
 
-fn unsupported_path_table(name: &str) -> String {
+fn no_home_path_table(name: &str) -> String {
     format!(
-        "path-table {name:?} is not supported yet: only './'-relative \
-         path-tables resolve today"
+        "path-table {name:?} cannot be resolved: no home directory for '~' \
+         (set HOME, or write the path out in full)"
     )
 }
 
@@ -149,13 +107,19 @@ fn quote_identifier(s: &str) -> String {
 /// persistent cache file — so a path-table can never leak into a persisted
 /// `sqlite_master`. `IF NOT EXISTS` makes a repeat reference a no-op, which is
 /// why no cross-call registry is needed.
-fn path_table_ddl(name: &str, root: &Path, glob: &str) -> String {
+fn path_table_ddl(name: &str, table: &PathTable, ignore: &[String]) -> String {
+    let mut args = vec![
+        quote_literal(&table.root.to_string_lossy()),
+        quote_literal(&table.glob),
+        quote_literal(&table.path_prefix),
+    ];
+    args.extend(ignore.iter().map(|p| quote_literal(p)));
+
     format!(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS temp.{} USING {}({}, {})",
+        "CREATE VIRTUAL TABLE IF NOT EXISTS temp.{} USING {}({})",
         quote_identifier(name),
         vtab::MODULE_NAME,
-        quote_literal(&root.to_string_lossy()),
-        quote_literal(glob),
+        args.join(", "),
     )
 }
 
@@ -218,6 +182,16 @@ pub struct Db {
     /// exactly where `files` used to exist implicitly. A user who declared
     /// tables and forgot `files` gets the plain SQLite error.
     hint_legacy_files_table: bool,
+    /// Skip rules a path-table scan applies, seeded with the built-in defaults.
+    path_table_ignore: Vec<String>,
+}
+
+/// The skip rules a fresh `Db` starts with.
+fn default_path_table_ignore() -> Vec<String> {
+    path_table::DEFAULT_IGNORES
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
 }
 
 impl Db {
@@ -240,6 +214,7 @@ impl Db {
             conn,
             path_table_root: None,
             hint_legacy_files_table: false,
+            path_table_ignore: default_path_table_ignore(),
         })
     }
 
@@ -257,6 +232,7 @@ impl Db {
             conn,
             path_table_root: None,
             hint_legacy_files_table: false,
+            path_table_ignore: default_path_table_ignore(),
         })
     }
 
@@ -271,6 +247,12 @@ impl Db {
     /// form. Set only for a configless, tableless index; see the field docs.
     pub fn set_hint_legacy_files_table(&mut self, hint: bool) {
         self.hint_legacy_files_table = hint;
+    }
+
+    /// Add the configured `ignore` patterns to the skip rules a path-table
+    /// scan applies, on top of the built-in defaults.
+    pub fn add_path_table_ignore(&mut self, patterns: Vec<String>) {
+        self.path_table_ignore.extend(patterns);
     }
 
     /// Borrow the underlying SQLite connection. Internal use only — exposed
@@ -610,13 +592,13 @@ impl Db {
                 Ok(stmt) => break stmt,
                 Err(e) => e,
             };
-            let Some((name, glob)) = self.path_table_for(&error)? else {
+            let Some((name, table)) = self.path_table_for(&error)? else {
                 return Err(error);
             };
             if !attempted.insert(name.clone()) {
                 return Err(error);
             }
-            self.create_path_table(&name, &glob)?;
+            self.create_path_table(&name, &table)?;
         };
 
         if !stmt.readonly() {
@@ -695,12 +677,12 @@ impl Db {
     }
 
     /// Decide whether `error` names a table a path-table can supply, yielding
-    /// its name and the glob to scan. `Ok(None)` means the error is not ours
+    /// its name and the resolved scan. `Ok(None)` means the error is not ours
     /// and stands as SQLite reported it.
-    fn path_table_for(&self, error: &DbError) -> Result<Option<(String, String)>> {
-        if self.path_table_root.is_none() {
+    fn path_table_for(&self, error: &DbError) -> Result<Option<(String, PathTable)>> {
+        let Some(root) = self.path_table_root.as_ref() else {
             return Ok(None);
-        }
+        };
         let DbError::Sqlite(sqlite_error) = error else {
             return Ok(None);
         };
@@ -709,14 +691,14 @@ impl Db {
             return Ok(None);
         };
 
-        match classify_missing(name) {
-            Missing::Create(glob) => Ok(Some((name.to_string(), glob))),
-            Missing::Hint => Err(DbError::PathTable(bare_glob_hint(name))),
-            Missing::Unsupported => Err(DbError::PathTable(unsupported_path_table(name))),
-            Missing::NotAPath if self.hints_legacy_files_table(name) => {
+        match path_table::resolve(name, root, home_dir().as_deref(), &|p| p.is_dir()) {
+            Resolution::Table(table) => Ok(Some((name.to_string(), table))),
+            Resolution::Hint => Err(DbError::PathTable(bare_glob_hint(name))),
+            Resolution::NoHome => Err(DbError::PathTable(no_home_path_table(name))),
+            Resolution::NotAPath if self.hints_legacy_files_table(name) => {
                 Err(DbError::PathTable(legacy_files_table_hint()))
             }
-            Missing::NotAPath => Ok(None),
+            Resolution::NotAPath => Ok(None),
         }
     }
 
@@ -724,15 +706,12 @@ impl Db {
         self.hint_legacy_files_table && name == LEGACY_DEFAULT_TABLE
     }
 
-    /// Mint the path-table `name` over `glob`, out of band: the DDL runs
+    /// Mint the path-table `name` over `table`, out of band: the DDL runs
     /// straight on the connection rather than through [`query`](Self::query),
     /// which classifies `CREATE VIRTUAL TABLE` as a write and would reject it.
-    fn create_path_table(&self, name: &str, glob: &str) -> Result<()> {
-        let root = self
-            .path_table_root
-            .as_ref()
-            .ok_or_else(|| DbError::PathTable(unsupported_path_table(name)))?;
-        self.conn.execute_batch(&path_table_ddl(name, root, glob))?;
+    fn create_path_table(&self, name: &str, table: &PathTable) -> Result<()> {
+        self.conn
+            .execute_batch(&path_table_ddl(name, table, &self.path_table_ignore))?;
         Ok(())
     }
 }
@@ -2071,79 +2050,6 @@ mod tests {
     }
 
     #[test]
-    fn is_path_prefixed_accepts_every_documented_prefix() {
-        assert!(is_path_prefixed("./a"));
-        assert!(is_path_prefixed("../a"));
-        assert!(is_path_prefixed("/a"));
-        assert!(is_path_prefixed("~/a"));
-    }
-
-    #[test]
-    fn is_path_prefixed_rejects_a_plain_identifier() {
-        assert!(!is_path_prefixed("users"));
-        assert!(!is_path_prefixed("~users"));
-        assert!(!is_path_prefixed(".hidden"));
-    }
-
-    #[test]
-    fn has_glob_metacharacter_finds_each_metacharacter() {
-        assert!(has_glob_metacharacter("**/*.md"));
-        assert!(has_glob_metacharacter("a?.md"));
-        assert!(has_glob_metacharacter("a[bc].md"));
-    }
-
-    #[test]
-    fn has_glob_metacharacter_rejects_a_plain_name() {
-        assert!(!has_glob_metacharacter("usrs"));
-    }
-
-    #[test]
-    fn path_table_glob_expands_a_bare_dot_slash_recursively() {
-        assert_eq!(path_table_glob("./"), Some(RECURSIVE_GLOB.to_string()));
-    }
-
-    #[test]
-    fn path_table_glob_strips_the_dot_slash_prefix() {
-        assert_eq!(
-            path_table_glob("./docs/*.md"),
-            Some("docs/*.md".to_string())
-        );
-    }
-
-    #[test]
-    fn path_table_glob_declines_other_path_shapes() {
-        assert_eq!(path_table_glob("../a"), None);
-        assert_eq!(path_table_glob("/a"), None);
-        assert_eq!(path_table_glob("~/a"), None);
-        assert_eq!(path_table_glob("users"), None);
-    }
-
-    #[test]
-    fn classify_missing_creates_for_a_dot_slash_name() {
-        assert_eq!(
-            classify_missing("./docs/*.md"),
-            Missing::Create("docs/*.md".to_string())
-        );
-    }
-
-    #[test]
-    fn classify_missing_defers_other_path_shapes() {
-        assert_eq!(classify_missing("/var/*.log"), Missing::Unsupported);
-        assert_eq!(classify_missing("../a"), Missing::Unsupported);
-        assert_eq!(classify_missing("~/notes"), Missing::Unsupported);
-    }
-
-    #[test]
-    fn classify_missing_hints_for_a_bare_glob() {
-        assert_eq!(classify_missing("**/*.md"), Missing::Hint);
-    }
-
-    #[test]
-    fn classify_missing_leaves_a_plain_identifier_alone() {
-        assert_eq!(classify_missing("usrs"), Missing::NotAPath);
-    }
-
-    #[test]
     fn bare_glob_hint_names_the_dot_slash_form() {
         assert_eq!(
             bare_glob_hint("**/*.md"),
@@ -2152,8 +2058,21 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_path_table_names_the_table() {
-        assert!(unsupported_path_table("/var/*.log").contains("/var/*.log"));
+    fn no_home_path_table_names_the_table() {
+        let msg = no_home_path_table("~/notes");
+        assert!(msg.contains("~/notes"), "got: {msg}");
+        assert!(
+            msg.contains("HOME"),
+            "the fix must be actionable, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn default_path_table_ignore_carries_the_documented_defaults() {
+        assert_eq!(
+            default_path_table_ignore(),
+            vec!["node_modules/**".to_string(), ".git/**".to_string()]
+        );
     }
 
     #[test]
@@ -2166,13 +2085,49 @@ mod tests {
         assert_eq!(quote_identifier("a\"b"), "\"a\"\"b\"");
     }
 
+    fn docs_path_table() -> PathTable {
+        PathTable {
+            root: PathBuf::from("/root"),
+            glob: "docs/*.md".to_string(),
+            path_prefix: String::new(),
+        }
+    }
+
     #[test]
     fn path_table_ddl_creates_in_temp_if_not_exists() {
-        let ddl = path_table_ddl("./docs/*.md", Path::new("/root"), "docs/*.md");
+        let ddl = path_table_ddl("./docs/*.md", &docs_path_table(), &[]);
         assert_eq!(
             ddl,
             "CREATE VIRTUAL TABLE IF NOT EXISTS temp.\"./docs/*.md\" \
-             USING dirsql_path('/root', 'docs/*.md')"
+             USING dirsql_path('/root', 'docs/*.md', '')"
+        );
+    }
+
+    #[test]
+    fn path_table_ddl_passes_the_path_prefix() {
+        let table = PathTable {
+            root: PathBuf::from("/var/log"),
+            glob: "*.log".to_string(),
+            path_prefix: "/var/log".to_string(),
+        };
+        assert!(
+            path_table_ddl("/var/log/*.log", &table, &[])
+                .ends_with("'/var/log', '*.log', '/var/log')"),
+            "got: {}",
+            path_table_ddl("/var/log/*.log", &table, &[])
+        );
+    }
+
+    #[test]
+    fn path_table_ddl_appends_every_ignore_pattern() {
+        let ddl = path_table_ddl(
+            "./",
+            &docs_path_table(),
+            &["node_modules/**".to_string(), "*.tmp".to_string()],
+        );
+        assert!(
+            ddl.ends_with("'', 'node_modules/**', '*.tmp')"),
+            "got: {ddl}"
         );
     }
 
@@ -2210,16 +2165,32 @@ mod tests {
     }
 
     #[test]
-    fn query_defers_an_absolute_path_table() {
+    fn query_resolves_an_absolute_path_table() {
         let mut db = Db::new().unwrap();
         db.set_path_table_root(PathBuf::from("/nonexistent-dirsql-root"));
 
-        let err = db
-            .query("SELECT * FROM '/var/*.log'")
-            .unwrap_err()
-            .to_string();
+        let rows = db
+            .query("SELECT path FROM '/nonexistent-dirsql-dir/*.log'")
+            .unwrap();
 
-        assert!(err.contains("not supported yet"), "got: {err}");
+        assert!(
+            rows.is_empty(),
+            "a missing directory yields no rows: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn add_path_table_ignore_extends_the_defaults() {
+        let mut db = Db::new().unwrap();
+        db.add_path_table_ignore(vec!["*.tmp".to_string()]);
+
+        assert_eq!(db.path_table_ignore.last(), Some(&"*.tmp".to_string()));
+        assert!(
+            db.path_table_ignore
+                .contains(&"node_modules/**".to_string()),
+            "the built-in defaults must survive: {:?}",
+            db.path_table_ignore
+        );
     }
 
     #[test]

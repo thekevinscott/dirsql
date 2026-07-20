@@ -136,6 +136,15 @@ glob, and the unchanged error for an ordinary typo behave identically across
 all three SDKs and the CLI. No SDK signature changes: `query()` is the same
 function in every language, with a strictly larger set of accepted table names.
 
+**Path-table glob semantics (#628, epic path-as-table) — parity by
+construction, no drift.** How a path-table string becomes a concrete scan —
+directories recursive by default, `'./*'` as the explicit non-recursive form, a
+single-file path as exactly one row, prefix resolution for `./ ../ / ~/`, and
+the skip rules (configured `ignore` plus the built-in `node_modules/**` and
+`.git/**`) — is decided in the shared Rust core (`path_table::resolve`, applied
+by `db::query` and the `dirsql_path` module). All three SDKs and the CLI get the
+same answers with no per-binding surface and no SDK signature changes.
+
 ## AsyncDirSQL
 
 | API                        | Python                                | Rust                                   |

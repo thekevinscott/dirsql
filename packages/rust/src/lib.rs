@@ -22,6 +22,8 @@ pub mod matcher;
 #[doc(hidden)]
 pub mod parsed_vtab;
 #[doc(hidden)]
+pub mod path_table;
+#[doc(hidden)]
 pub mod persist;
 #[doc(hidden)]
 pub mod scanner;
@@ -703,6 +705,7 @@ impl DirSQL {
             tables,
             extensions,
             matcher,
+            ignore,
             scanned_files,
             hint_legacy_files_table,
             persist: persist_ctx.map(|ctx| PreparedPersist {
@@ -739,6 +742,7 @@ impl DirSQL {
             tables,
             extensions,
             matcher,
+            ignore,
             scanned_files,
             persist,
             poll_interval,
@@ -751,6 +755,7 @@ impl DirSQL {
         };
         db.set_path_table_root(root.clone());
         db.set_hint_legacy_files_table(hint_legacy_files_table);
+        db.add_path_table_ignore(ignore);
 
         // Load extensions before any CREATE TABLE so a table's DDL and later
         // queries can use extension-provided functions. Loading is enabled
@@ -1186,6 +1191,9 @@ pub struct PreparedBuild {
     /// SQLite extensions to load onto the connection before any table DDL.
     extensions: Vec<Extension>,
     matcher: TableMatcher,
+    /// The configured skip rules, carried through so path-table scans apply
+    /// the same ones declared tables do.
+    ignore: Vec<String>,
     scanned_files: Vec<ScannedFile>,
     persist: Option<PreparedPersist>,
     poll_interval: Duration,
@@ -2036,6 +2044,7 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let matcher = TableMatcher::new(&[], &[]).unwrap();
         let prepared = PreparedBuild {
+            ignore: Vec::new(),
             root: dir.path().to_path_buf(),
             tables: Vec::new(),
             extensions: Vec::new(),
