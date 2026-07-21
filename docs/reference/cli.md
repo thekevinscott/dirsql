@@ -151,6 +151,25 @@ uses**, so behavior is identical to `POST /query` by construction:
   statements; dirsql separately never modifies the files it indexes — see
   [Read-only by design](../explanation#read-only-by-design).
 
+#### `--on-file <command>`
+
+Attach a parser to every [path-table](./path-tables.md#parsing-rows-with-on-file)
+in the query, so each matched file yields the rows the command prints (a JSON
+array of row objects) instead of the stat columns:
+
+```sh
+dirsql query "SELECT title, author FROM './posts/*.md'" \
+  --on-file 'extract.py {path}'
+```
+
+The command follows the [`on-file` hook contract](./hooks.md#on-file) — argv
+splitting, `{path}`/`{root}` placeholders, per-file failure isolation, and the
+timeout. The parser's output is the whole schema; the stat columns are not
+reachable on a parsed path-table. `--on-file` may be given **at most once** (a
+repeat is an error pointing at config files) and never touches config-declared
+tables. It is a `query`-only flag — server mode rejects it as an unknown
+argument.
+
 Errors print the same diagnostic the HTTP `{"error": …}` body carries —
 config failures, SQL errors, rejected reads, hook failures, timeouts — to
 stderr, with exit code `1`.
