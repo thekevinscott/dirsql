@@ -71,3 +71,37 @@ describe("DirSQL onFile error message", () => {
     await expect(db.ready).rejects.toThrow(/bad JSON in posts\/a\.json: boom/);
   });
 });
+
+describe("DirSQL Buffer -> BLOB", () => {
+  const payload = Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe]);
+
+  async function roundTrip(data: unknown): Promise<unknown> {
+    await writeFile(join(dir, "marker.json"), "{}");
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE blobs (name TEXT, data BLOB)",
+          glob: "*.json",
+          onFile: () => [{ name: "bin", data }],
+        },
+      ],
+    });
+    const rows = await db.query("SELECT * FROM blobs");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].name).toBe("bin");
+    return rows[0].data;
+  }
+
+  it("round-trips a Buffer through a BLOB column", async () => {
+    const data = await roundTrip(payload);
+    expect(Buffer.isBuffer(data)).toBe(true);
+    expect(Buffer.compare(data as Buffer, payload)).toBe(0);
+  });
+
+  it("maps a Uint8Array to a BLOB and returns it as a Buffer", async () => {
+    const data = await roundTrip(new Uint8Array(payload));
+    expect(Buffer.isBuffer(data)).toBe(true);
+    expect(Buffer.compare(data as Buffer, payload)).toBe(0);
+  });
+});

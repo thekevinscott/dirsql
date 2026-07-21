@@ -3,7 +3,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { DirSQL, type RowEvent, Table, type TableDef } from "dirsql";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -344,6 +344,119 @@ describe("DirSQL strict mode", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("apple");
     expect(rows[0].color).toBe("red");
+  });
+
+  it("rejects rows with missing keys when strict is true", async () => {
+    await writeFile(
+      join(dir, "items", "a.json"),
+      JSON.stringify({ name: "apple" }),
+    );
+
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE items (name TEXT, color TEXT)",
+          glob: "items/*.json",
+          onFile: (filePath: string) => [
+            JSON.parse(readFileSync(filePath, "utf8")),
+          ],
+          strict: true,
+        },
+      ],
+    });
+    await expect(db.ready).rejects.toThrow();
+  });
+});
+
+describe("DirSQL relaxed schema (default)", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "dirsql-relaxed-"));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const readJson = (filePath: string) => [
+    JSON.parse(readFileSync(filePath, "utf8")),
+  ];
+
+  it("ignores keys not declared in the DDL", async () => {
+    await writeFile(
+      join(dir, "a.json"),
+      JSON.stringify({ name: "apple", color: "red" }),
+    );
+
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE items (name TEXT)",
+          glob: "*.json",
+          onFile: readJson,
+        },
+      ],
+    });
+
+    const rows = await db.query("SELECT * FROM items");
+    expect(rows).toEqual([{ name: "apple" }]);
+  });
+
+  it("fills declared-but-missing columns with NULL", async () => {
+    await writeFile(join(dir, "a.json"), JSON.stringify({ name: "apple" }));
+
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE items (name TEXT, color TEXT)",
+          glob: "*.json",
+          onFile: readJson,
+        },
+      ],
+    });
+
+    const rows = await db.query("SELECT * FROM items");
+    expect(rows).toEqual([{ name: "apple", color: null }]);
+  });
+});
+
+describe("DirSQL onFile path argument", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "dirsql-onfile-"));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("passes the absolute path of the matched file", async () => {
+    await writeFile(join(dir, "item.json"), JSON.stringify({ name: "x" }));
+
+    const seenPaths: string[] = [];
+    const db = new DirSQL({
+      root: dir,
+      tables: [
+        {
+          ddl: "CREATE TABLE items (name TEXT)",
+          glob: "*.json",
+          onFile: (filePath: string) => {
+            seenPaths.push(filePath);
+            return [JSON.parse(readFileSync(filePath, "utf8"))];
+          },
+        },
+      ],
+    });
+    await db.ready;
+
+    expect(seenPaths).toHaveLength(1);
+    expect(isAbsolute(seenPaths[0])).toBe(true);
+    expect(seenPaths[0].endsWith("item.json")).toBe(true);
   });
 });
 

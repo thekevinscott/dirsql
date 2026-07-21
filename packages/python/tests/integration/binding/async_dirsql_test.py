@@ -231,6 +231,119 @@ def describe_DirSQL_async():
             assert insert.row["name"] == "apple"
 
         @pytest.mark.asyncio
+        async def it_sets_file_path_relative_to_root_on_events(tmp_dir):
+            os.makedirs(os.path.join(tmp_dir, "nested", "dir"), exist_ok=True)
+
+            db = DirSQL(
+                tmp_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE items (name TEXT)",
+                        glob="**/*.json",
+                        on_file=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
+                    ),
+                ],
+            )
+            await db.ready()
+
+            events = []
+
+            async def collect_events():
+                async for event in db.watch():
+                    if event.action != "insert":
+                        continue
+                    events.append(event)
+                    break
+
+            task = asyncio.create_task(collect_events())
+            await asyncio.sleep(0.3)
+
+            rel_path = os.path.join("nested", "dir", "new.json")
+            final = os.path.join(tmp_dir, rel_path)
+            tmp = final + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump({"name": "relative"}, f)
+            os.replace(tmp, final)
+
+            try:
+                await asyncio.wait_for(task, timeout=5.0)
+            except asyncio.TimeoutError:
+                pytest.fail("Timed out waiting for watch events")
+
+            assert len(events) == 1
+            file_path = events[0].file_path
+            assert file_path is not None
+            assert not os.path.isabs(file_path), (
+                f"file_path should be relative, got absolute: {file_path!r}"
+            )
+            assert file_path.replace("\\", "/") == rel_path.replace("\\", "/")
+
+        @pytest.mark.asyncio
+        async def it_emits_a_delete_when_a_multi_row_file_shrinks(tmp_dir):
+            path = os.path.join(tmp_dir, "rows.jsonl")
+            with open(path, "w") as f:
+                for i in range(3):
+                    f.write(json.dumps({"idx": i, "name": f"row-{i}"}) + "\n")
+
+            db = DirSQL(
+                tmp_dir,
+                tables=[
+                    Table(
+                        ddl="CREATE TABLE rows (idx INTEGER, name TEXT)",
+                        glob="*.jsonl",
+                        on_file=lambda path: [
+                            json.loads(line)
+                            for line in open(path, encoding="utf-8").read().splitlines()
+                            if line
+                        ],
+                    ),
+                ],
+            )
+            await db.ready()
+            assert len(await db.query("SELECT * FROM rows")) == 3
+
+            events = []
+
+            async def collect_events():
+                async for event in db.watch():
+                    events.append(event)
+                    # A shrink surfaces either as one positional delete (the
+                    # dropped third row) or as a full replace (3 deletes + 2
+                    # inserts); drain until we've seen enough to distinguish.
+                    inserts = len([e for e in events if e.action == "insert"])
+                    if len(events) >= 5 or (
+                        any(e.action == "delete" for e in events) and inserts >= 2
+                    ):
+                        break
+
+            task = asyncio.create_task(collect_events())
+            await asyncio.sleep(0.3)
+
+            with open(path, "w") as f:
+                for i in range(2):
+                    f.write(json.dumps({"idx": i, "name": f"row-{i}"}) + "\n")
+
+            try:
+                await asyncio.wait_for(task, timeout=5.0)
+            except asyncio.TimeoutError:
+                task.cancel()
+
+            deleted = {
+                e.row.get("name") for e in events if e.action == "delete" and e.row
+            }
+            assert deleted, (
+                f"expected at least one delete when the file shrinks; got {events!r}"
+            )
+            assert "row-2" in deleted, (
+                f"expected a delete for the dropped row-2; got deletes {deleted!r}"
+            )
+
+            post = await db.query("SELECT * FROM rows ORDER BY idx")
+            assert [r["idx"] for r in post] == [0, 1]
+
+        @pytest.mark.asyncio
         async def it_emits_delete_events_for_removed_files(tmp_dir):
             with open(os.path.join(tmp_dir, "doomed.json"), "w") as f:
                 json.dump({"name": "doomed"}, f)
