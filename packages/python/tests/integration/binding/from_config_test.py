@@ -1,10 +1,10 @@
 """Binding-tier tests (real core, real fs) for DirSQL(config=).
 
 Config-defined tables produce one row per matched file. Each row's columns
-come from filesystem facts: glob path captures and stat virtuals (`path`,
-`basename`, `dir`, `ext`, `size`, `mtime`, `ctime`). Content
-interpretation is intentionally out of scope; for that, register a
-programmatic Table with your own on_file function.
+come from filesystem facts: the stat virtuals (`path`, `basename`, `dir`,
+`ext`, `size`, `mtime`, `ctime`). Content interpretation is intentionally out
+of scope; for that, register a programmatic Table with your own on_file
+function.
 """
 
 import os
@@ -98,9 +98,7 @@ glob = "comments/{thread_id}/*.txt"
                 root=config_dir, config=os.path.join(config_dir, ".dirsql.toml")
             )
             await db.ready()
-            results = await db.query(
-                "SELECT basename FROM comments ORDER BY basename"
-            )
+            results = await db.query("SELECT basename FROM comments ORDER BY basename")
             assert len(results) == 2
             assert results[0]["basename"] == "a.txt"
             assert results[1]["basename"] == "b.txt"

@@ -1,10 +1,10 @@
 // Config-driven construction: `new DirSQL(configPath)`.
 //
 // Config-defined tables produce one row per matched file. Each row's columns
-// come from filesystem facts: glob path captures and stat virtuals (`path`,
-// `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`). Content
-// interpretation is intentionally out of scope; for that, register a
-// programmatic Table with your own onFile function.
+// come from filesystem facts: the stat virtuals (`path`, `basename`, `dir`,
+// `ext`, `size`, `mtime`, `ctime`). Content interpretation is intentionally
+// out of scope; for that, register a programmatic Table with your own onFile
+// function.
 
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";

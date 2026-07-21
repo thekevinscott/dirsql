@@ -1,144 +1,60 @@
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use regex::Regex;
-use std::collections::HashMap;
 use std::path::Path;
 
-/// Result of matching a file path against a glob pattern with captures.
+/// Result of matching a file path against a glob pattern.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchResult {
     pub table_name: String,
-    pub captures: HashMap<String, String>,
 }
 
-/// A compiled glob pattern that may contain `{name}` capture placeholders.
+/// A compiled glob pattern. `{name}` placeholders are rewritten to `*` before
+/// compilation, so they are pure match wildcards.
 struct PatternEntry {
     glob_set: GlobSet,
     table_name: String,
-    /// Capture names in order of appearance in the pattern.
-    capture_names: Vec<String>,
-    /// Regex for extracting capture values from matched paths.
-    /// None if pattern has no captures.
-    capture_regex: Option<Regex>,
-}
-
-impl PatternEntry {
-    /// Extract this pattern's `{name}` captures from `path`. Returns an empty
-    /// map when the pattern declares no captures or the path does not match
-    /// the capture regex.
-    fn extract_captures(&self, path: &Path) -> HashMap<String, String> {
-        let Some(regex) = &self.capture_regex else {
-            return HashMap::new();
-        };
-        let path_str = path.to_string_lossy();
-        regex
-            .captures(&path_str)
-            .map(|caps| {
-                self.capture_names
-                    .iter()
-                    .filter_map(|name| {
-                        caps.name(name)
-                            .map(|m| (name.clone(), m.as_str().to_string()))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
 }
 
 /// Maps file paths to table names based on glob patterns.
 /// Every matching pattern fires: a file matching N patterns yields N
 /// `MatchResult`s (one per table), so a file can belong to multiple tables.
-/// An ignore list filters paths entirely. Supports `{name}` placeholders in
-/// glob patterns that capture path segments.
+/// An ignore list filters paths entirely. `{name}` placeholders in glob
+/// patterns are accepted and behave like `*`.
 pub struct TableMatcher {
     entries: Vec<PatternEntry>,
     ignore_set: GlobSet,
 }
 
-/// Parse `{name}` placeholders from a glob pattern.
-/// Returns (glob_with_placeholders_replaced_by_star, capture_names, capture_regex).
-pub fn parse_captures(pattern: &str) -> (String, Vec<String>, Option<Regex>) {
-    let capture_re = Regex::new(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
-    let mut names = Vec::new();
-
-    for cap in capture_re.captures_iter(pattern) {
-        names.push(cap[1].to_string());
-    }
-
-    if names.is_empty() {
-        return (pattern.to_string(), names, None);
-    }
-
-    let glob_pattern = capture_re.replace_all(pattern, "*").to_string();
-
-    // Build a regex over the original pattern to extract capture values.
-    let mut regex_parts = Vec::new();
-    let mut last_end = 0;
-
-    for mat in capture_re.find_iter(pattern) {
-        let before = &pattern[last_end..mat.start()];
-        regex_parts.push(glob_segment_to_regex(before));
-        let name = &pattern[mat.start() + 1..mat.end() - 1];
-        regex_parts.push(format!("(?P<{}>[^/]+)", name));
-        last_end = mat.end();
-    }
-    let after = &pattern[last_end..];
-    regex_parts.push(glob_segment_to_regex(after));
-
-    let regex_str = format!("^{}$", regex_parts.join(""));
-    let capture_regex = Regex::new(&regex_str).ok();
-
-    (glob_pattern, names, capture_regex)
+/// Names of the `{name}` placeholders in `pattern`, in order of appearance.
+pub fn placeholder_names(pattern: &str) -> Vec<String> {
+    let re = Regex::new(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
+    re.captures_iter(pattern)
+        .map(|cap| cap[1].to_string())
+        .collect()
 }
 
-/// Convert a glob segment (no capture placeholders) to regex.
-fn glob_segment_to_regex(segment: &str) -> String {
-    let mut result = String::new();
-    let mut chars = segment.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '*' => {
-                if chars.peek() == Some(&'*') {
-                    chars.next();
-                    // ** matches anything including /
-                    if chars.peek() == Some(&'/') {
-                        chars.next();
-                        result.push_str("(?:.*/)?");
-                    } else {
-                        result.push_str(".*");
-                    }
-                } else {
-                    result.push_str("[^/]*");
-                }
-            }
-            '?' => result.push_str("[^/]"),
-            '.' | '+' | '(' | ')' | '|' | '^' | '$' | '@' | '%' => {
-                result.push('\\');
-                result.push(c);
-            }
-            _ => result.push(c),
-        }
-    }
-    result
+/// Rewrite `{name}` placeholders in a glob to `*`, so they match a single path
+/// segment without producing any captured value.
+fn glob_with_placeholders_as_star(pattern: &str) -> String {
+    let re = Regex::new(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
+    re.replace_all(pattern, "*").into_owned()
 }
 
 impl TableMatcher {
     /// Build a new matcher from (glob_pattern, table_name) pairs and ignore patterns.
-    /// Glob patterns may contain `{name}` placeholders that capture path segments.
+    /// Glob patterns may contain `{name}` placeholders, which match like `*`.
     pub fn new(
         mappings: &[(&str, &str)],
         ignore_patterns: &[&str],
     ) -> Result<Self, globset::Error> {
         let mut entries = Vec::new();
         for (pattern, table_name) in mappings {
-            let (glob_pattern, capture_names, capture_regex) = parse_captures(pattern);
+            let glob_pattern = glob_with_placeholders_as_star(pattern);
             let mut builder = GlobSetBuilder::new();
             builder.add(Glob::new(&glob_pattern)?);
             entries.push(PatternEntry {
                 glob_set: builder.build()?,
                 table_name: table_name.to_string(),
-                capture_names,
-                capture_regex,
             });
         }
 
@@ -155,30 +71,16 @@ impl TableMatcher {
     }
 
     /// Returns one [`MatchResult`] per matching pattern, in declaration order.
-    /// A file matching N patterns yields N results (fan-out); each result
-    /// carries the captures from its own pattern's glob. Empty when nothing
-    /// matches.
+    /// A file matching N patterns yields N results (fan-out). Empty when
+    /// nothing matches.
     pub fn match_all(&self, path: &Path) -> Vec<MatchResult> {
         self.entries
             .iter()
             .filter(|entry| entry.glob_set.is_match(path))
             .map(|entry| MatchResult {
                 table_name: entry.table_name.clone(),
-                captures: entry.extract_captures(path),
             })
             .collect()
-    }
-
-    /// Returns the captures that `table_name`'s own glob extracts from `path`.
-    /// Used when re-parsing a file already known to belong to a table (e.g.
-    /// the build/scan path), so captures stay per-glob rather than
-    /// first-match. Empty when the table is unknown or declares no captures.
-    pub fn captures_for(&self, path: &Path, table_name: &str) -> HashMap<String, String> {
-        self.entries
-            .iter()
-            .find(|entry| entry.table_name == table_name)
-            .map(|entry| entry.extract_captures(path))
-            .unwrap_or_default()
     }
 
     /// Returns true if the path matches any ignore pattern.
@@ -198,13 +100,6 @@ mod tests {
             .into_iter()
             .map(|m| m.table_name)
             .collect()
-    }
-
-    /// The single match for a one-table matcher (panics if zero matches).
-    fn only(matcher: &TableMatcher, path: &str) -> MatchResult {
-        let mut all = matcher.match_all(Path::new(path));
-        assert_eq!(all.len(), 1, "expected exactly one match for {path}");
-        all.remove(0)
     }
 
     #[test]
@@ -238,21 +133,16 @@ mod tests {
     }
 
     #[test]
-    fn match_all_captures_are_per_pattern() {
-        let matcher = TableMatcher::new(
-            &[("data/{id}/metadata.json", "a"), ("**/metadata.json", "b")],
-            &[],
-        )
-        .unwrap();
-        let all = matcher.match_all(Path::new("data/x/metadata.json"));
-        assert_eq!(all.len(), 2);
-        assert_eq!(all[0].table_name, "a");
-        assert_eq!(all[0].captures.get("id").map(String::as_str), Some("x"));
-        assert_eq!(all[1].table_name, "b");
-        assert!(
-            all[1].captures.is_empty(),
-            "the captureless glob yields no captures: {:?}",
-            all[1].captures
+    fn placeholder_glob_matches_like_a_star() {
+        // A `{name}` placeholder and a `*` compile to the same matcher: both
+        // globs match exactly the same file.
+        let placeholder = TableMatcher::new(&[("data/{id}/metadata.json", "a")], &[]).unwrap();
+        let star = TableMatcher::new(&[("data/*/metadata.json", "a")], &[]).unwrap();
+        let path = Path::new("data/x/metadata.json");
+        assert_eq!(names(&placeholder, "data/x/metadata.json"), vec!["a"]);
+        assert_eq!(
+            placeholder.match_all(path).is_empty(),
+            star.match_all(path).is_empty(),
         );
     }
 
@@ -310,100 +200,53 @@ mod tests {
     }
 
     #[test]
-    fn capture_single_segment() {
+    fn placeholder_matches_the_filled_segment() {
         let matcher =
             TableMatcher::new(&[("comments/{thread_id}/index.jsonl", "comments")], &[]).unwrap();
-        let result = only(&matcher, "comments/abc123/index.jsonl");
-        assert_eq!(result.table_name, "comments");
-        assert_eq!(result.captures.get("thread_id").unwrap(), "abc123");
+        assert_eq!(
+            names(&matcher, "comments/abc123/index.jsonl"),
+            vec!["comments"]
+        );
     }
 
     #[test]
-    fn capture_multiple_segments() {
+    fn multiple_placeholders_match() {
         let matcher = TableMatcher::new(&[("{org}/{repo}/data.json", "repos")], &[]).unwrap();
-        let result = only(&matcher, "acme/widgets/data.json");
-        assert_eq!(result.table_name, "repos");
-        assert_eq!(result.captures.get("org").unwrap(), "acme");
-        assert_eq!(result.captures.get("repo").unwrap(), "widgets");
+        assert_eq!(names(&matcher, "acme/widgets/data.json"), vec!["repos"]);
     }
 
     #[test]
-    fn no_captures_returns_empty_map() {
-        let matcher = TableMatcher::new(&[("*.csv", "data")], &[]).unwrap();
-        let result = only(&matcher, "report.csv");
-        assert_eq!(result.table_name, "data");
-        assert!(result.captures.is_empty());
-    }
-
-    #[test]
-    fn capture_with_glob_star() {
-        let matcher = TableMatcher::new(&[("logs/{date}/*.jsonl", "logs")], &[]).unwrap();
-        let result = only(&matcher, "logs/2024-01-15/events.jsonl");
-        assert_eq!(result.captures.get("date").unwrap(), "2024-01-15");
-    }
-
-    #[test]
-    fn capture_no_match_returns_empty() {
+    fn placeholder_no_match_returns_empty() {
         let matcher =
             TableMatcher::new(&[("comments/{thread_id}/index.jsonl", "comments")], &[]).unwrap();
         assert!(matcher.match_all(Path::new("other/file.txt")).is_empty());
     }
 
     #[test]
-    fn match_all_still_matches_pattern_with_captures() {
-        let matcher =
-            TableMatcher::new(&[("comments/{thread_id}/index.jsonl", "comments")], &[]).unwrap();
-        assert_eq!(
-            names(&matcher, "comments/abc/index.jsonl"),
-            vec!["comments"]
-        );
-    }
-
-    #[test]
-    fn capture_with_double_star() {
+    fn placeholder_with_double_star_matches() {
         let matcher = TableMatcher::new(&[("**/{category}/items.json", "items")], &[]).unwrap();
-        let result = only(&matcher, "shop/electronics/items.json");
-        assert_eq!(result.captures.get("category").unwrap(), "electronics");
-    }
-
-    #[test]
-    fn capture_with_trailing_double_star() {
-        let matcher = TableMatcher::new(&[("logs/{date}/**", "logs")], &[]).unwrap();
-        let result = only(&matcher, "logs/2024-01-15/deep/events.jsonl");
-        assert_eq!(result.table_name, "logs");
-        assert_eq!(result.captures.get("date").unwrap(), "2024-01-15");
-    }
-
-    #[test]
-    fn capture_with_question_mark() {
-        let matcher = TableMatcher::new(&[("{name}?.txt", "files")], &[]).unwrap();
-        let result = only(&matcher, "ab.txt");
-        assert_eq!(result.table_name, "files");
-        assert!(result.captures.contains_key("name"));
-    }
-
-    #[test]
-    fn captures_for_returns_the_named_tables_captures() {
-        let matcher = TableMatcher::new(
-            &[("data/{id}/metadata.json", "a"), ("**/metadata.json", "b")],
-            &[],
-        )
-        .unwrap();
-        let path = Path::new("data/x/metadata.json");
-        let a_caps = matcher.captures_for(path, "a");
-        assert_eq!(a_caps.get("id").map(String::as_str), Some("x"));
-        // `b`'s glob has no captures, so its per-table lookup is empty even
-        // though the same path matches it.
-        assert!(matcher.captures_for(path, "b").is_empty());
-    }
-
-    #[test]
-    fn captures_for_unknown_table_is_empty() {
-        let matcher = TableMatcher::new(&[("data/{id}/metadata.json", "a")], &[]).unwrap();
-        assert!(
-            matcher
-                .captures_for(Path::new("data/x/metadata.json"), "nope")
-                .is_empty()
+        assert_eq!(
+            names(&matcher, "shop/electronics/items.json"),
+            vec!["items"]
         );
+    }
+
+    #[test]
+    fn placeholder_with_question_mark_matches() {
+        let matcher = TableMatcher::new(&[("{name}?.txt", "files")], &[]).unwrap();
+        assert_eq!(names(&matcher, "ab.txt"), vec!["files"]);
+    }
+
+    #[test]
+    fn placeholder_names_lists_names_in_order() {
+        assert_eq!(
+            placeholder_names("{org}/{repo}/data.json"),
+            vec!["org".to_string(), "repo".to_string()]
+        );
+    }
+
+    #[test]
+    fn placeholder_names_empty_when_none() {
+        assert!(placeholder_names("data/*/metadata.json").is_empty());
     }
 }

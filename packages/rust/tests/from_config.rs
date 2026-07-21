@@ -3,9 +3,9 @@ use std::fs;
 use tempfile::TempDir;
 
 /// Config-defined tables produce one row per matched file. Every row's
-/// columns come from filesystem facts: glob path captures and stat virtuals
-/// (`path`, `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`).
-/// Content interpretation is intentionally out of scope.
+/// columns come from filesystem facts: the stat virtuals (`path`, `basename`,
+/// `dir`, `ext`, `size`, `mtime`, `ctime`). Content interpretation is
+/// intentionally out of scope.
 
 #[test]
 fn from_config_produces_one_row_per_matched_file() {
@@ -106,7 +106,9 @@ glob = "_comments/{thread_id}/*.txt"
         .config(root.path().join(".dirsql.toml"))
         .build()
     {
-        Ok(_) => panic!("a {{thread_id}} placeholder colliding with the thread_id column must error"),
+        Ok(_) => {
+            panic!("a {{thread_id}} placeholder colliding with the thread_id column must error")
+        }
         Err(e) => e,
     };
 
