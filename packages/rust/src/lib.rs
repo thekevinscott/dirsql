@@ -2866,24 +2866,26 @@ mod internal_tests {
 
     #[test]
     fn build_wires_the_path_table_parser_onto_the_index() {
-        // Covers the `Some(command)` arm of finish_build: a parser set on the
-        // builder mints path-tables over the parser, so a stat column is gone
-        // and a parser column resolves.
+        // Covers the `Some(command)` arm of finish_build: the parser is stored
+        // at build time and path-tables are minted over the parsed module. Over
+        // an empty root, a parsed path-table matches no files, so schema
+        // inference has no sample and the query reports the parsed-mode
+        // "no rows" error — proof the parser branch is armed, without writing
+        // any file (which the unit-isolation gate bars) or spawning the parser.
         let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("a.json"), r#"[{"k":"v"}]"#).unwrap();
         let db = DirSQL::builder()
             .root(dir.path())
             .path_table_parser("cat {path}")
             .build()
             .unwrap();
 
+        let err = db
+            .query("SELECT x FROM './*.json'")
+            .unwrap_err()
+            .to_string();
         assert!(
-            db.query("SELECT k FROM './*.json'").is_ok(),
-            "the parser column must resolve on a parsed path-table"
-        );
-        assert!(
-            db.query("SELECT size FROM './*.json'").is_err(),
-            "a stat column must not resolve on a parsed path-table"
+            err.contains("no rows"),
+            "a parsed path-table over an empty root reports the no-rows error; got: {err}"
         );
     }
 
