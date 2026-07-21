@@ -29,6 +29,8 @@ use rusqlite::{Connection, Error, Result, ffi};
 use crate::Value;
 use crate::command::{DEFAULT_COMMAND_TIMEOUT, Placeholder, run_command};
 use crate::infer::{JsonRow, cell, declared_schema, infer_schema, parse_rows};
+use crate::matcher::TableMatcher;
+use crate::path_table;
 use crate::scanner::{self, scan_glob};
 
 /// SQL module name a parsed path-table is created with.
@@ -181,7 +183,12 @@ unsafe impl<'vtab> VTab<'vtab> for ParsedTab {
             command,
         } = parse_module_args(args)?;
 
-        let rel_paths = scan_glob(&root, &glob);
+        // A parsed path-table applies no ignore filtering yet; the `--on-file`
+        // wiring (#631) owns that decision. An empty matcher matches scan_glob's
+        // prior two-argument behavior.
+        let ignore = TableMatcher::new(&[], &[]).map_err(|e| Error::ModuleError(e.to_string()))?;
+        let ignore_base = path_table::ignore_base(&pattern);
+        let rel_paths = scan_glob(&root, &glob, &ignore, &ignore_base);
         let rows = collect_rows(&rel_paths, &|rel| run_parser(&command, &root, rel))
             .map_err(Error::ModuleError)?;
 
