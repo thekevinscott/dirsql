@@ -710,7 +710,8 @@ fn invalid_glob_errors() {
     assert!(matches!(result, Err(dirsql::DirSqlError::Matcher { .. })));
 }
 
-// An undeclared glob capture is silently dropped during fact-merging.
+// A `{name}` placeholder that is not a declared column is a pure match
+// wildcard: it produces no column value and no error.
 #[test]
 fn undeclared_capture_is_dropped() {
     let root = TempDir::new().unwrap();
@@ -810,38 +811,26 @@ fn fanout_overlapping_distinct_globs_populate_both_tables() {
     assert_eq!(b_rows[0]["col_b"], Value::Text("B".into()));
 }
 
-// Captures are per-glob: table `a`'s rows carry `id` from its own glob, table
-// `b`'s rows (a captureless glob) do not (spec item 4).
+// A programmatic table whose glob declares a `{name}` placeholder colliding
+// with one of its DDL columns is rejected at construction, just like a
+// config-file table: captures no longer populate columns.
 #[test]
-fn fanout_captures_are_per_glob() {
+fn capture_column_collision_errors_on_construction() {
     let root = fanout_root();
     let a = Table::new(
         "CREATE TABLE a (id TEXT, col_a TEXT)",
         "data/{id}/metadata.json",
         |_path| vec![HashMap::from([("col_a".into(), Value::Text("A".into()))])],
     );
-    let b = Table::new(
-        "CREATE TABLE b (id TEXT, col_b TEXT)",
-        "**/metadata.json",
-        |_path| vec![HashMap::from([("col_b".into(), Value::Text("B".into()))])],
-    );
 
-    let db = DirSQL::new(root.path(), vec![a, b]).unwrap();
-
-    let a_rows = db.query("SELECT id, col_a FROM a").unwrap();
-    assert_eq!(a_rows.len(), 1);
-    assert_eq!(
-        a_rows[0]["id"],
-        Value::Text("2401.00001".into()),
-        "table a gets its own glob's capture"
-    );
-
-    let b_rows = db.query("SELECT id, col_b FROM b").unwrap();
-    assert_eq!(b_rows.len(), 1);
-    assert_eq!(
-        b_rows[0]["id"],
-        Value::Null,
-        "table b's captureless glob yields no id capture"
+    let err = match DirSQL::new(root.path(), vec![a]) {
+        Ok(_) => panic!("a {{id}} placeholder colliding with the id column must error"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("id") && msg.contains("collides"),
+        "error must name the collision, got: {msg}"
     );
 }
 

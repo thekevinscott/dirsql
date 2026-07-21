@@ -1,8 +1,7 @@
 """Binding-tier tests (real core, real fs) for fan-out file->table matching.
 
 A file matching N tables' globs populates all N tables; each table is an
-independent view over the files matching its glob (#580). Captures are
-per-glob.
+independent view over the files matching its glob (#580).
 """
 
 import os
@@ -67,7 +66,7 @@ def describe_fanout():
         assert b_rows[0]["col_b"] == "B"
 
     @pytest.mark.asyncio
-    async def it_applies_captures_per_glob(tmp_dir):
+    async def it_errors_when_a_placeholder_collides_with_a_column(tmp_dir):
         _write_fanout_file(tmp_dir)
         db = DirSQL(
             tmp_dir,
@@ -77,19 +76,7 @@ def describe_fanout():
                     glob="data/{id}/metadata.json",
                     on_file=lambda _path: [{"col_a": "A"}],
                 ),
-                Table(
-                    ddl="CREATE TABLE b (id TEXT, col_b TEXT)",
-                    glob="**/metadata.json",
-                    on_file=lambda _path: [{"col_b": "B"}],
-                ),
             ],
         )
-        await db.ready()
-
-        a_rows = await db.query("SELECT id, col_a FROM a")
-        assert len(a_rows) == 1
-        assert a_rows[0]["id"] == "2401.00001", "table a gets its glob's capture"
-
-        b_rows = await db.query("SELECT id, col_b FROM b")
-        assert len(b_rows) == 1
-        assert b_rows[0]["id"] is None, "table b's captureless glob yields no id"
+        with pytest.raises(Exception, match="id"):
+            await db.ready()

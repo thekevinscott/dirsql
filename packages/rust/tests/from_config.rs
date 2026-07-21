@@ -74,8 +74,11 @@ glob = "**/*.csv"
     assert_eq!(rows[0]["path"], Value::Text("data/a.csv".into()));
 }
 
+// A `{name}` glob placeholder whose name is ALSO a declared DDL column is a
+// load-time error: captures no longer populate columns, so the column would
+// read NULL forever. The error must name the placeholder and the fix.
 #[test]
-fn from_config_with_path_captures_promotes_them_to_columns() {
+fn from_config_capture_column_collision_errors() {
     let root = TempDir::new().unwrap();
 
     fs::write(
@@ -83,6 +86,53 @@ fn from_config_with_path_captures_promotes_them_to_columns() {
         r#"
 [[table]]
 ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
+glob = "_comments/{thread_id}/*.txt"
+"#,
+    )
+    .unwrap();
+
+    fs::create_dir_all(root.path().join("_comments").join("abc123")).unwrap();
+    fs::write(
+        root.path()
+            .join("_comments")
+            .join("abc123")
+            .join("first.txt"),
+        "hello",
+    )
+    .unwrap();
+
+    let err = match DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+    {
+        Ok(_) => panic!("a {{thread_id}} placeholder colliding with the thread_id column must error"),
+        Err(e) => e,
+    };
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("thread_id"),
+        "error must name the colliding placeholder/column, got: {msg}"
+    );
+    assert!(
+        msg.contains("collides"),
+        "error must explain the collision, got: {msg}"
+    );
+}
+
+// A `{name}` placeholder whose name is NOT a declared column keeps working
+// silently: matching is unchanged (it behaves like `*`), and the file's
+// filesystem columns still populate. Proves matching semantics are preserved.
+#[test]
+fn from_config_capture_placeholder_without_column_still_matches() {
+    let root = TempDir::new().unwrap();
+
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[table]]
+ddl = "CREATE TABLE comments (path TEXT, basename TEXT)"
 glob = "_comments/{thread_id}/*.txt"
 "#,
     )
@@ -113,14 +163,16 @@ glob = "_comments/{thread_id}/*.txt"
         .build()
         .unwrap();
     let rows = db
-        .query("SELECT thread_id, basename FROM comments ORDER BY thread_id")
+        .query("SELECT basename FROM comments ORDER BY basename")
         .unwrap();
 
-    assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0]["thread_id"], Value::Text("abc123".into()));
+    assert_eq!(rows.len(), 2, "{{thread_id}} still matches like `*`");
     assert_eq!(rows[0]["basename"], Value::Text("first.txt".into()));
-    assert_eq!(rows[1]["thread_id"], Value::Text("def456".into()));
     assert_eq!(rows[1]["basename"], Value::Text("second.txt".into()));
+    assert!(
+        !rows[0].contains_key("thread_id"),
+        "the placeholder no longer produces a column value"
+    );
 }
 
 #[test]
