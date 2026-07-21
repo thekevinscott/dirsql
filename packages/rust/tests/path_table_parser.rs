@@ -16,8 +16,16 @@ const CAT_PARSER: &str = "cat {path}";
 fn fixture() -> TempDir {
     let root = TempDir::new().unwrap();
     fs::create_dir_all(root.path().join("docs")).unwrap();
-    fs::write(root.path().join("docs/a.md"), r#"[{"title":"alpha","n":1}]"#).unwrap();
-    fs::write(root.path().join("docs/b.md"), r#"[{"title":"bravo","n":2}]"#).unwrap();
+    fs::write(
+        root.path().join("docs/a.md"),
+        r#"[{"title":"alpha","n":1}]"#,
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("docs/b.md"),
+        r#"[{"title":"bravo","n":2}]"#,
+    )
+    .unwrap();
     root
 }
 
@@ -51,7 +59,8 @@ fn a_parsed_path_table_serves_the_parser_rows_and_schema() {
     assert_eq!(texts(&rows, "title"), vec!["alpha", "bravo"]);
     // `n` is a parser column; a stat path-table never had it.
     assert!(
-        rows.iter().all(|r| matches!(r.get("n"), Some(Value::Integer(_)))),
+        rows.iter()
+            .all(|r| matches!(r.get("n"), Some(Value::Integer(_)))),
         "the parser's `n` column is present and integer-typed: {rows:?}"
     );
 }
