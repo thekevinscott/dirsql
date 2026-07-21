@@ -1,5 +1,6 @@
 use std::ffi::c_int;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use globset::GlobSet;
 use rusqlite::vtab::{
@@ -9,12 +10,17 @@ use rusqlite::vtab::{
 use rusqlite::{Connection, Error, Result, ffi};
 
 use crate::compute_stat_virtuals;
+use crate::matcher::TableMatcher;
+use crate::path_table;
 use crate::scanner::{self, scan_glob};
 use crate::{Row, Value};
 
 /// SQL module name a path-table is created with:
-/// `CREATE VIRTUAL TABLE t USING dirsql_path('<root>', '<glob>')`.
+/// `CREATE VIRTUAL TABLE t USING dirsql_path('<root>', '<glob>', '<path prefix>'[, '<ignore>'...])`.
 pub const MODULE_NAME: &str = "dirsql_path";
+
+/// Number of module arguments that are not ignore patterns.
+const FIXED_ARGS: usize = 3;
 
 /// The seven stat columns, in declaration order.
 pub const STAT_COLUMNS: [&str; 7] = ["path", "basename", "dir", "ext", "size", "mtime", "ctime"];
@@ -72,27 +78,60 @@ fn read_text(path: &Path) -> Option<String> {
         .and_then(|b| String::from_utf8(b).ok())
 }
 
-/// Parse a path-table's own `CREATE VIRTUAL TABLE` arguments into its root and
-/// compiled glob. `args[0..3]` are the module, database and table names; the
-/// module's own arguments follow.
-fn parse_module_args(args: &[&[u8]]) -> Result<(PathBuf, GlobSet)> {
+/// Everything a scan needs: where to walk, what to match, what to call the
+/// results, and what to skip.
+struct ScanSpec {
+    root: PathBuf,
+    glob: GlobSet,
+    /// Prepended to each matched path before the stat columns are computed.
+    /// Empty for index-root-relative tables.
+    path_prefix: PathBuf,
+    ignore: TableMatcher,
+    /// Literal directories the pattern named outright; skip rules are judged
+    /// below this.
+    ignore_base: PathBuf,
+}
+
+/// Compile the ignore patterns a path-table scan applies.
+fn compile_ignore(patterns: &[String]) -> Result<TableMatcher> {
+    let refs: Vec<&str> = patterns.iter().map(String::as_str).collect();
+    TableMatcher::new(&[], &refs).map_err(|e| Error::ModuleError(e.to_string()))
+}
+
+/// Parse a path-table's own `CREATE VIRTUAL TABLE` arguments into its scan
+/// spec. `args[0..3]` are the module, database and table names; the module's
+/// own arguments follow — root, glob, path prefix, then any ignore patterns.
+fn parse_module_args(args: &[&[u8]]) -> Result<ScanSpec> {
     let user_args: Vec<String> = args
         .iter()
         .skip(3)
-        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .map(|a| unquote(&String::from_utf8_lossy(a)).to_string())
         .collect();
 
-    let [root, pattern] = user_args.as_slice() else {
+    let [root, pattern, path_prefix, ignore @ ..] = user_args.as_slice() else {
         return Err(Error::ModuleError(format!(
-            "{MODULE_NAME} takes exactly two arguments (root, glob), got {}",
+            "{MODULE_NAME} takes at least {FIXED_ARGS} arguments \
+             (root, glob, path prefix), got {}",
             user_args.len()
         )));
     };
 
-    Ok((
-        PathBuf::from(unquote(root)),
-        compile_glob(unquote(pattern))?,
-    ))
+    Ok(ScanSpec {
+        root: PathBuf::from(root),
+        glob: compile_glob(pattern)?,
+        path_prefix: PathBuf::from(path_prefix),
+        ignore: compile_ignore(ignore)?,
+        ignore_base: path_table::ignore_base(pattern),
+    })
+}
+
+/// The string a matched file is reported under: the relative path as scanned,
+/// under the table's path prefix when it has one.
+fn reported_path(path_prefix: &Path, rel_path: &Path) -> String {
+    if path_prefix.as_os_str().is_empty() {
+        return rel_path.to_string_lossy().into_owned();
+    }
+    path_prefix.join(rel_path).to_string_lossy().into_owned()
 }
 
 /// Whether `column` addresses the hidden `content` column.
@@ -126,6 +165,7 @@ fn rowid_of(index: usize) -> i64 {
 /// [`compute_stat_virtuals`].
 fn build_rows(
     root: &Path,
+    path_prefix: &Path,
     rel_paths: Vec<PathBuf>,
     stat: &dyn Fn(&str, &Path) -> Row,
 ) -> Vec<FileRow> {
@@ -133,7 +173,7 @@ fn build_rows(
         .into_iter()
         .map(|rel_path| {
             let abs_path = root.join(&rel_path);
-            let stats = stat(&rel_path.to_string_lossy(), &abs_path);
+            let stats = stat(&reported_path(path_prefix, &rel_path), &abs_path);
             FileRow { abs_path, stats }
         })
         .collect()
@@ -149,8 +189,7 @@ pub fn load_module(conn: &Connection) -> Result<()> {
 struct PathTab {
     /// Base class. Must be first.
     base: ffi::sqlite3_vtab,
-    root: PathBuf,
-    glob: GlobSet,
+    spec: Arc<ScanSpec>,
 }
 
 unsafe impl<'vtab> VTab<'vtab> for PathTab {
@@ -162,11 +201,9 @@ unsafe impl<'vtab> VTab<'vtab> for PathTab {
         _aux: Option<&()>,
         args: &[&[u8]],
     ) -> Result<(String, Self)> {
-        let (root, glob) = parse_module_args(args)?;
         let vtab = Self {
             base: ffi::sqlite3_vtab::default(),
-            root,
-            glob,
+            spec: Arc::new(parse_module_args(args)?),
         };
         Ok((declared_schema(), vtab))
     }
@@ -179,8 +216,7 @@ unsafe impl<'vtab> VTab<'vtab> for PathTab {
     fn open(&'vtab mut self) -> Result<PathTabCursor> {
         Ok(PathTabCursor {
             base: ffi::sqlite3_vtab_cursor::default(),
-            root: self.root.clone(),
-            glob: self.glob.clone(),
+            spec: Arc::clone(&self.spec),
             rows: Vec::new(),
             index: 0,
         })
@@ -204,8 +240,7 @@ struct PathTabCursor {
     /// SQLite as a `sqlite3_vtab_cursor`, so anything ahead of it gets
     /// overwritten.
     base: ffi::sqlite3_vtab_cursor,
-    root: PathBuf,
-    glob: GlobSet,
+    spec: Arc<ScanSpec>,
     rows: Vec<FileRow>,
     index: usize,
 }
@@ -219,8 +254,14 @@ unsafe impl VTabCursor for PathTabCursor {
     ) -> Result<()> {
         // The scan runs here rather than at CREATE, which is what makes reads
         // live: each statement sees the filesystem as it is now.
-        let rel_paths = scan_glob(&self.root, &self.glob);
-        self.rows = build_rows(&self.root, rel_paths, &compute_stat_virtuals);
+        let spec = &self.spec;
+        let rel_paths = scan_glob(&spec.root, &spec.glob, &spec.ignore, &spec.ignore_base);
+        self.rows = build_rows(
+            &spec.root,
+            &spec.path_prefix,
+            rel_paths,
+            &compute_stat_virtuals,
+        );
         self.index = 0;
         Ok(())
     }
@@ -376,41 +417,108 @@ mod tests {
 
     #[test]
     fn parse_module_args_extracts_root_and_glob() {
-        let args = args_with(&[b"'/tmp/notes'", b"'**/*.md'"]);
-        let (root, glob) = parse_module_args(&args).unwrap();
+        let args = args_with(&[b"'/tmp/notes'", b"'**/*.md'", b"''"]);
+        let spec = parse_module_args(&args).unwrap();
 
-        assert_eq!(root, PathBuf::from("/tmp/notes"));
-        assert!(glob.is_match(Path::new("a.md")));
-        assert!(!glob.is_match(Path::new("a.csv")));
+        assert_eq!(spec.root, PathBuf::from("/tmp/notes"));
+        assert!(spec.glob.is_match(Path::new("a.md")));
+        assert!(!spec.glob.is_match(Path::new("a.csv")));
     }
 
     #[test]
     fn parse_module_args_accepts_unquoted_arguments() {
-        let args = args_with(&[b"/tmp/notes", b"**/*"]);
-        let (root, _) = parse_module_args(&args).unwrap();
-        assert_eq!(root, PathBuf::from("/tmp/notes"));
+        let args = args_with(&[b"/tmp/notes", b"**/*", b""]);
+        assert_eq!(
+            parse_module_args(&args).unwrap().root,
+            PathBuf::from("/tmp/notes")
+        );
+    }
+
+    #[test]
+    fn parse_module_args_extracts_the_path_prefix() {
+        let args = args_with(&[b"'/var/log'", b"'*.log'", b"'/var/log'"]);
+        assert_eq!(
+            parse_module_args(&args).unwrap().path_prefix,
+            PathBuf::from("/var/log")
+        );
+    }
+
+    #[test]
+    fn parse_module_args_derives_the_ignore_base_from_the_glob() {
+        let args = args_with(&[b"'/tmp'", b"'docs/**/*'", b"''"]);
+        assert_eq!(
+            parse_module_args(&args).unwrap().ignore_base,
+            PathBuf::from("docs")
+        );
+    }
+
+    #[test]
+    fn parse_module_args_compiles_trailing_ignore_patterns() {
+        let args = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'node_modules/**'"]);
+        let spec = parse_module_args(&args).unwrap();
+
+        assert!(spec.ignore.is_ignored(Path::new("node_modules/a.js")));
+        assert!(!spec.ignore.is_ignored(Path::new("docs/a.md")));
+    }
+
+    #[test]
+    fn parse_module_args_accepts_no_ignore_patterns() {
+        let args = args_with(&[b"'/tmp'", b"'**/*'", b"''"]);
+        let spec = parse_module_args(&args).unwrap();
+        assert!(!spec.ignore.is_ignored(Path::new("node_modules/a.js")));
     }
 
     #[test]
     fn parse_module_args_rejects_too_few_arguments() {
-        let args = args_with(&[b"'/tmp'"]);
-        let err = parse_module_args(&args).unwrap_err();
+        let args = args_with(&[b"'/tmp'", b"'**/*'"]);
+        let err = parse_module_args(&args)
+            .err()
+            .expect("arity must be enforced");
         assert!(
-            err.to_string().contains("exactly two arguments"),
+            err.to_string().contains("at least 3 arguments"),
             "error should name the arity, got: {err}"
         );
     }
 
     #[test]
-    fn parse_module_args_rejects_too_many_arguments() {
-        let args = args_with(&[b"'/tmp'", b"'**/*'", b"'extra'"]);
+    fn parse_module_args_rejects_an_invalid_glob() {
+        let args = args_with(&[b"'/tmp'", b"'['", b"''"]);
         assert!(parse_module_args(&args).is_err());
     }
 
     #[test]
-    fn parse_module_args_rejects_an_invalid_glob() {
-        let args = args_with(&[b"'/tmp'", b"'['"]);
+    fn parse_module_args_rejects_an_invalid_ignore_pattern() {
+        let args = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'['"]);
         assert!(parse_module_args(&args).is_err());
+    }
+
+    #[test]
+    fn compile_ignore_accepts_an_empty_pattern_list() {
+        assert!(compile_ignore(&[]).is_ok());
+    }
+
+    #[test]
+    fn compile_ignore_rejects_an_invalid_pattern() {
+        let err = compile_ignore(&["[".to_string()])
+            .err()
+            .expect("an invalid pattern must be rejected");
+        assert!(matches!(err, Error::ModuleError(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn reported_path_is_the_relative_path_without_a_prefix() {
+        assert_eq!(
+            reported_path(Path::new(""), Path::new("docs/a.md")),
+            "docs/a.md"
+        );
+    }
+
+    #[test]
+    fn reported_path_is_absolute_under_a_prefix() {
+        assert_eq!(
+            reported_path(Path::new("/var/log"), Path::new("a.log")),
+            "/var/log/a.log"
+        );
     }
 
     #[test]
@@ -477,6 +585,7 @@ mod tests {
     fn build_rows_joins_each_relative_path_onto_the_root() {
         let rows = build_rows(
             Path::new("/root"),
+            Path::new(""),
             vec![PathBuf::from("docs/a.md")],
             &|rel, _abs| stats_with("path", Value::Text(rel.to_string())),
         );
@@ -494,6 +603,7 @@ mod tests {
     fn build_rows_preserves_scan_order() {
         let rows = build_rows(
             Path::new("/root"),
+            Path::new(""),
             vec![PathBuf::from("a.md"), PathBuf::from("b.md")],
             &|rel, _abs| stats_with("path", Value::Text(rel.to_string())),
         );
@@ -507,7 +617,33 @@ mod tests {
 
     #[test]
     fn build_rows_yields_nothing_for_an_empty_scan() {
-        let rows = build_rows(Path::new("/root"), Vec::new(), &|_rel, _abs| Row::new());
+        let rows = build_rows(
+            Path::new("/root"),
+            Path::new(""),
+            Vec::new(),
+            &|_rel, _abs| Row::new(),
+        );
         assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn build_rows_reports_paths_under_the_prefix() {
+        let rows = build_rows(
+            Path::new("/var/log"),
+            Path::new("/var/log"),
+            vec![PathBuf::from("a.log")],
+            &|rel, _abs| stats_with("path", Value::Text(rel.to_string())),
+        );
+
+        assert_eq!(
+            rows[0].stats.get("path"),
+            Some(&Value::Text("/var/log/a.log".into())),
+            "an absolute path-table reports absolute paths"
+        );
+        assert_eq!(
+            rows[0].abs_path,
+            PathBuf::from("/var/log/a.log"),
+            "content is still read from the scanned file"
+        );
     }
 }

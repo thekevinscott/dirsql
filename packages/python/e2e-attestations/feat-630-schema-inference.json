@@ -1,7 +1,0 @@
-{
-  "command": "just test-e2e",
-  "ran_at": 1784544251,
-  "exit_code": 0,
-  "commit": "f235732a09fa9849eab8d08e43578e8bf04579b3",
-  "branch": "feat/630-schema-inference"
-}

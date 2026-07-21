@@ -32,26 +32,61 @@ Two consequences follow directly:
 
 ## Writing the path
 
-The path is relative to the **index root** — the directory dirsql is indexing,
-not your shell's working directory.
+A `./` path is relative to the **index root** — the directory dirsql is
+indexing, not your shell's working directory.
+
+**Directories are recursive by default.** Naming a directory scans everything
+beneath it; the non-recursive form is spelled explicitly with `*`.
 
 | You write | dirsql scans |
 | --- | --- |
 | `'./'` | every file under the index root, recursively |
+| `'./docs'` | every file under `docs/`, recursively |
+| `'./*'` | files directly inside the index root, and no deeper |
 | `'./docs/*.md'` | markdown files directly inside `docs/` |
 | `'./docs/**/*.md'` | markdown files at any depth under `docs/` |
+| `'./notes/today.md'` | exactly that one file — one file is one row |
 
-The `./` is required. A bare glob is rejected with a hint rather than silently
-accepted:
+A path containing `*`, `?` or `[` is a glob and is used exactly as written: `*`
+matches within a single directory, `**` crosses directories.
+
+A path naming a single file yields exactly one row. dirsql never splits a file
+into rows on its own — that is what a table's `on_file` hook is for.
+
+The `./` is required for index-relative paths. A bare glob is rejected with a
+hint rather than silently accepted:
 
 ```
 SELECT * FROM '**/*.md';
 -- no such table: **/*.md; did you mean './**/*.md'?
 ```
 
-Absolute (`/var/log/*.log`), parent-relative (`../notes`) and home-relative
-(`~/notes`) path-tables are recognized but not yet resolved; they report that
-they are unsupported rather than returning wrong rows.
+### Paths outside the index root
+
+Three other prefixes resolve, with their usual shell meanings:
+
+| You write | dirsql scans |
+| --- | --- |
+| `'/var/log/*.log'` | an absolute path |
+| `'../notes'` | relative to the index root's parent |
+| `'~/notes/*.md'` | relative to your home directory |
+
+`..` is folded out textually, not followed through symlinks, so the directory
+scanned is a function of the string you wrote.
+
+**These report absolute `path` values.** A `./` path-table reports paths
+relative to the index root, matching every other dirsql table; a `/`, `../` or
+`~/` path-table has no meaningful relative base — the root it scans is derived
+from the pattern, not named by you — so it reports the full path instead. The
+value you get back is one you can paste into another command:
+
+```sql
+SELECT path FROM '/var/log/*.log';
+-- /var/log/syslog
+```
+
+On a system with no home directory, a `~/` path-table reports that it cannot
+resolve rather than guessing.
 
 ## Columns
 
@@ -60,7 +95,7 @@ table:
 
 | Column | Type | Meaning |
 | --- | --- | --- |
-| `path` | TEXT | path relative to the index root |
+| `path` | TEXT | path relative to the index root (absolute for `/`, `../`, `~/` tables) |
 | `basename` | TEXT | filename with extension |
 | `dir` | TEXT | parent directory, relative to the index root |
 | `ext` | TEXT | extension without the dot |
@@ -88,6 +123,26 @@ and updated by the watcher. A file created a moment ago shows up immediately.
 Path-tables are per-connection and are never written to a persistent cache, so
 they cannot leak into `sqlite_master` or survive a restart. The reserved
 top-level `.dirsql/` directory is excluded from the scan, as everywhere else.
+
+## Skip rules
+
+A path-table scan applies the same [`ignore`](/reference/config) patterns your
+declared tables use, plus two built-in defaults so a zero-config
+`SELECT * FROM './'` does not drown in machinery:
+
+- `node_modules/**`
+- `.git/**`
+
+Skip rules are judged on the part of the path *below* what you named outright,
+so pointing at a skipped directory still scans it:
+
+```sql
+SELECT path FROM './';                     -- no node_modules rows
+SELECT path FROM './node_modules/*/package.json';  -- scans it anyway
+```
+
+Dotfiles are ordinary files: `'./'` and `'./*'` include them. Add an `ignore`
+pattern if you would rather not see them.
 
 ## Joining against declared tables
 

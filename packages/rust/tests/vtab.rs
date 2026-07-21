@@ -17,11 +17,24 @@ fn open_over(dir: &TempDir, glob: &str) -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     load_module(&conn).unwrap();
     conn.execute_batch(&format!(
-        "CREATE VIRTUAL TABLE t USING dirsql_path('{}', '{}')",
+        "CREATE VIRTUAL TABLE t USING dirsql_path('{}', '{}', '')",
         dir.path().display(),
         glob
     ))
     .unwrap();
+    conn
+}
+
+/// A connection whose vtab reports paths under `prefix` and skips `ignore`.
+fn open_over_with(dir: &TempDir, glob: &str, prefix: &str, ignore: &[&str]) -> Connection {
+    let conn = Connection::open_in_memory().unwrap();
+    load_module(&conn).unwrap();
+    let mut args = format!("'{}', '{}', '{}'", dir.path().display(), glob, prefix);
+    for pattern in ignore {
+        args.push_str(&format!(", '{pattern}'"));
+    }
+    conn.execute_batch(&format!("CREATE VIRTUAL TABLE t USING dirsql_path({args})"))
+        .unwrap();
     conn
 }
 
@@ -278,4 +291,47 @@ fn reads_are_live_across_statements() {
         .query_row("SELECT count(*) FROM t", [], |r| r.get(0))
         .unwrap();
     assert_eq!(after, 1, "the scan happens at query time, not at CREATE");
+}
+
+#[test]
+fn a_path_prefix_is_prepended_to_the_reported_path() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("a.md"), "x").unwrap();
+    let conn = open_over_with(&dir, "**/*", "/elsewhere", &[]);
+
+    let path: String = conn
+        .query_row("SELECT path FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(path, "/elsewhere/a.md");
+}
+
+#[test]
+fn ignore_patterns_skip_matching_files() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join("node_modules")).unwrap();
+    fs::write(dir.path().join("node_modules/x.js"), "x").unwrap();
+    fs::write(dir.path().join("a.md"), "x").unwrap();
+    let conn = open_over_with(&dir, "**/*", "", &["node_modules/**"]);
+
+    let paths: Vec<String> = conn
+        .prepare("SELECT path FROM t")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(paths, vec!["a.md"]);
+}
+
+#[test]
+fn a_pattern_naming_an_ignored_directory_still_scans_it() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join("node_modules")).unwrap();
+    fs::write(dir.path().join("node_modules/x.js"), "x").unwrap();
+    let conn = open_over_with(&dir, "node_modules/**/*", "", &["node_modules/**"]);
+
+    let count: i64 = conn
+        .query_row("SELECT count(*) FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1, "skip rules apply below the path you name");
 }
