@@ -1,10 +1,10 @@
 // Config-driven construction: `new DirSQL(configPath)`.
 //
 // Config-defined tables produce one row per matched file. Each row's columns
-// come from filesystem facts: glob path captures and stat virtuals (`path`,
-// `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`). Content
-// interpretation is intentionally out of scope; for that, register a
-// programmatic Table with your own onFile function.
+// come from filesystem facts: the stat virtuals (`path`, `basename`, `dir`,
+// `ext`, `size`, `mtime`, `ctime`). Content interpretation is intentionally
+// out of scope; for that, register a programmatic Table with your own onFile
+// function.
 
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -56,9 +56,8 @@ glob = "items/*.csv"
     expect(rows[1].basename).toBe("b.csv");
   });
 
-  it("injects glob path captures into rows", async () => {
+  it("rejects a glob placeholder that collides with a declared column", async () => {
     await seedFile(join(dir, "comments", "thread-1", "a.txt"), "x");
-    await seedFile(join(dir, "comments", "thread-2", "a.txt"), "x");
     await seedFile(
       configPath,
       `
@@ -69,13 +68,30 @@ glob = "comments/{thread_id}/*.txt"
     );
 
     const db = new DirSQL({ root: dir, config: configPath });
+    await expect(db.ready).rejects.toThrow(/thread_id/);
+  });
+
+  it("treats a non-colliding placeholder as a wildcard", async () => {
+    await seedFile(join(dir, "comments", "thread-1", "a.txt"), "x");
+    await seedFile(join(dir, "comments", "thread-2", "b.txt"), "x");
+    await seedFile(
+      configPath,
+      `
+[[table]]
+ddl = "CREATE TABLE comments (path TEXT, basename TEXT)"
+glob = "comments/{thread_id}/*.txt"
+`,
+    );
+
+    const db = new DirSQL({ root: dir, config: configPath });
     await db.ready;
     const rows = await db.query(
-      "SELECT thread_id, basename FROM comments ORDER BY thread_id",
+      "SELECT basename FROM comments ORDER BY basename",
     );
     expect(rows).toHaveLength(2);
-    expect(rows[0].thread_id).toBe("thread-1");
-    expect(rows[1].thread_id).toBe("thread-2");
+    expect(rows[0].basename).toBe("a.txt");
+    expect(rows[1].basename).toBe("b.txt");
+    expect(rows[0].thread_id).toBeUndefined();
   });
 
   it("exposes the full set of stat virtuals when declared in DDL", async () => {

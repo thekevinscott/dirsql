@@ -1,7 +1,6 @@
 // Binding-tier tests (real core, real fs) for fan-out file->table matching:
 // a file matching N tables' globs populates all N tables; each table is an
-// independent view over the files matching its glob (#580). Captures are
-// per-glob.
+// independent view over the files matching its glob (#580).
 
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -67,7 +66,7 @@ describe("DirSQL fan-out", () => {
     expect(b).toEqual([{ col_b: "B" }]);
   });
 
-  it("applies captures per glob", async () => {
+  it("rejects a glob placeholder that collides with a declared column", async () => {
     const db = new DirSQL({
       root: dir,
       tables: [
@@ -76,17 +75,9 @@ describe("DirSQL fan-out", () => {
           glob: "data/{id}/metadata.json",
           onFile: () => [{ col_a: "A" }],
         },
-        {
-          ddl: "CREATE TABLE b (id TEXT, col_b TEXT)",
-          glob: "**/metadata.json",
-          onFile: () => [{ col_b: "B" }],
-        },
       ],
     });
 
-    const a = await db.query("SELECT id, col_a FROM a");
-    expect(a).toEqual([{ id: "2401.00001", col_a: "A" }]);
-    const b = await db.query("SELECT id, col_b FROM b");
-    expect(b).toEqual([{ id: null, col_b: "B" }]);
+    await expect(db.ready).rejects.toThrow(/id/);
   });
 });

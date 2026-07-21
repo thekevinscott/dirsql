@@ -129,6 +129,14 @@ pub enum DirSqlError {
     },
 
     #[error(
+        "glob capture `{{{placeholder}}}` collides with declared column `{column}`: \
+         captures no longer populate columns, so `{column}` would always be NULL. \
+         Remove `{column}` from the table's DDL, or emit its value from the on-file \
+         hook by splitting `{{path}}` yourself."
+    )]
+    CaptureColumnCollision { placeholder: String, column: String },
+
+    #[error(
         "query() only accepts read-only statements; SQLite classified this statement as a write"
     )]
     WriteForbidden,
@@ -477,12 +485,7 @@ impl DirSQL {
                     events.extend(self.handle_delete(&m.table_name, &rel_path));
                 }
                 FileEvent::Created(_) | FileEvent::Modified(_) => {
-                    events.extend(self.handle_upsert(
-                        &m.table_name,
-                        &abs_path,
-                        &rel_path,
-                        &m.captures,
-                    ));
+                    events.extend(self.handle_upsert(&m.table_name, &abs_path, &rel_path));
                 }
             }
         }
@@ -521,13 +524,7 @@ impl DirSQL {
         differ::diff(table, Some(&old_rows), None, rel_path)
     }
 
-    fn handle_upsert(
-        &self,
-        table: &str,
-        abs_path: &Path,
-        rel_path: &str,
-        captures: &HashMap<String, String>,
-    ) -> Vec<RowEvent> {
+    fn handle_upsert(&self, table: &str, abs_path: &Path, rel_path: &str) -> Vec<RowEvent> {
         // The path may have vanished between the watcher event and now, or be a
         // directory (a `mkdir` under the root matches a `**/*` glob). Only
         // regular files become rows — mirror the initial scan, which skips
@@ -565,7 +562,7 @@ impl DirSQL {
                 Ok(cols) => cols,
                 Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
             };
-            let raw_rows = merge_filesystem_facts(raw_rows, captures, &stat, &declared_columns);
+            let raw_rows = merge_filesystem_facts(raw_rows, &stat, &declared_columns);
             let mut new_rows = Vec::with_capacity(raw_rows.len());
             for raw in &raw_rows {
                 match db.normalize_row(table, raw, strict) {
@@ -781,6 +778,18 @@ impl DirSQL {
             if !table_exists(&db, &table_name)? {
                 db.create_table(&table.ddl)?;
             }
+            // Reject a `{name}` glob placeholder whose name is also a declared
+            // column: captures no longer populate columns, so it would read
+            // NULL forever. The table exists here either way (freshly created
+            // or restored from cache), so its columns are knowable, and this
+            // runs before any file is ingested — a load-time failure.
+            let declared_columns = db.get_table_columns(&table_name).map_err(map_db_error)?;
+            if let Some(name) = find_capture_column_collision(&table.glob, &declared_columns) {
+                return Err(DirSqlError::CaptureColumnCollision {
+                    placeholder: name.clone(),
+                    column: name,
+                });
+            }
             on_file_map.insert(table_name.clone(), table.on_file);
             strict_map.insert(table_name.clone(), table.strict);
             ddl_map.insert(table_name, table.ddl);
@@ -823,13 +832,9 @@ impl DirSQL {
                     message: e.to_string(),
                 })?;
 
-            // Captures are per-glob: use the captures belonging to THIS
-            // entry's table, not a first-match lookup.
-            let captures = matcher.captures_for(Path::new(&rel_path), &table_name);
             let stat_virtuals = compute_stat_virtuals(&rel_path, &abs_path);
             let declared_columns = db.get_table_columns(&table_name).map_err(map_db_error)?;
-            let raw_rows =
-                merge_filesystem_facts(raw_rows, &captures, &stat_virtuals, &declared_columns);
+            let raw_rows = merge_filesystem_facts(raw_rows, &stat_virtuals, &declared_columns);
 
             // When updating an existing file in the persistent cache, drop
             // its old rows before inserting the new ones.
@@ -1677,18 +1682,25 @@ fn stat_virtuals(
     out
 }
 
-/// Merge filesystem-fact columns (stat virtuals + glob captures) into each
-/// raw row produced by an on_file closure. Auto-injected keys are filtered
-/// to those declared in `declared_columns`, so a strict-mode table with a
-/// minimal DDL is not broken by virtuals it didn't ask for. User-provided
-/// values in `raw_rows` win over auto-injected values: an on_file that
-/// explicitly emits e.g. `path` is honored.
-fn merge_filesystem_facts(
-    raw_rows: Vec<Row>,
-    captures: &HashMap<String, String>,
-    stat: &Row,
-    declared_columns: &[String],
-) -> Vec<Row> {
+/// Returns the first `{name}` placeholder in `glob` whose name is also one of
+/// `declared_columns`. `None` when the glob has no placeholders or none of
+/// them names a declared column. Pure: the sole input is the glob string and
+/// the column list, so it is exhaustively unit-testable.
+fn find_capture_column_collision(glob: &str, declared_columns: &[String]) -> Option<String> {
+    let declared: std::collections::HashSet<&str> =
+        declared_columns.iter().map(String::as_str).collect();
+    crate::matcher::placeholder_names(glob)
+        .into_iter()
+        .find(|name| declared.contains(name.as_str()))
+}
+
+/// Merge filesystem-fact columns (stat virtuals) into each raw row produced by
+/// an on_file closure. Auto-injected keys are filtered to those declared in
+/// `declared_columns`, so a strict-mode table with a minimal DDL is not broken
+/// by virtuals it didn't ask for. User-provided values in `raw_rows` win over
+/// auto-injected values: an on_file that explicitly emits e.g. `path` is
+/// honored.
+fn merge_filesystem_facts(raw_rows: Vec<Row>, stat: &Row, declared_columns: &[String]) -> Vec<Row> {
     let declared: std::collections::HashSet<&str> =
         declared_columns.iter().map(String::as_str).collect();
 
@@ -1699,11 +1711,6 @@ fn merge_filesystem_facts(
             for (k, v) in stat {
                 if declared.contains(k.as_str()) {
                     merged.insert(k.clone(), v.clone());
-                }
-            }
-            for (k, v) in captures {
-                if declared.contains(k.as_str()) {
-                    merged.insert(k.clone(), Value::Text(v.clone()));
                 }
             }
             for (k, v) in raw {
@@ -2446,7 +2453,7 @@ mod internal_tests {
         // The old-row snapshot succeeds but the delete itself fails: a
         // trigger aborts every DELETE on items.
         let (_dir, db, abs, rel) = upsert_fixture();
-        let events = db.handle_upsert("items", &abs, &rel, &HashMap::new());
+        let events = db.handle_upsert("items", &abs, &rel);
         assert_eq!(events.len(), 1, "fixture insert failed: {events:?}");
         {
             let guard = db.inner.db.lock().unwrap();
@@ -2470,7 +2477,7 @@ mod internal_tests {
     fn handle_upsert_surfaces_db_poison() {
         let (_dir, db, abs, rel) = upsert_fixture();
         poison(&db.inner.db);
-        let events = db.handle_upsert("items", &abs, &rel, &HashMap::new());
+        let events = db.handle_upsert("items", &abs, &rel);
         assert_single_lock_error(&events);
     }
 
@@ -2490,7 +2497,7 @@ mod internal_tests {
                 )
                 .unwrap();
         }
-        let events = db.handle_upsert("items", &abs, &rel, &HashMap::new());
+        let events = db.handle_upsert("items", &abs, &rel);
         assert_eq!(events.len(), 1, "expected one error event: {events:?}");
         let dbg = format!("{:?}", events[0]);
         assert!(dbg.contains("Error"), "expected an Error event: {dbg}");
@@ -2517,7 +2524,7 @@ mod internal_tests {
         )
         .unwrap();
 
-        let events = db.handle_upsert("files", &subdir, "subdir", &HashMap::new());
+        let events = db.handle_upsert("files", &subdir, "subdir");
         assert!(events.is_empty(), "a directory must not produce row events");
         assert!(
             db.query("SELECT * FROM files").unwrap().is_empty(),
@@ -2529,14 +2536,14 @@ mod internal_tests {
     fn handle_upsert_returns_empty_when_file_vanished() {
         let (dir, db, _abs, _rel) = upsert_fixture();
         let missing = dir.path().join("gone.txt");
-        let events = db.handle_upsert("items", &missing, "gone.txt", &HashMap::new());
+        let events = db.handle_upsert("items", &missing, "gone.txt");
         assert!(events.is_empty(), "vanished file must produce no events");
     }
 
     #[test]
     fn handle_upsert_returns_empty_for_unknown_table() {
         let (_dir, db, abs, rel) = upsert_fixture();
-        let events = db.handle_upsert("not_a_table", &abs, &rel, &HashMap::new());
+        let events = db.handle_upsert("not_a_table", &abs, &rel);
         assert!(events.is_empty(), "unknown table must produce no events");
     }
 
@@ -2564,7 +2571,7 @@ mod internal_tests {
         )
         .unwrap();
 
-        let events = db.handle_upsert("items", &abs, "a.txt", &HashMap::new());
+        let events = db.handle_upsert("items", &abs, "a.txt");
         assert_eq!(events.len(), 1, "expected one error event: {events:?}");
         let dbg = format!("{:?}", events[0]);
         assert!(dbg.contains("Error"), "expected an Error event: {dbg}");
@@ -2753,7 +2760,7 @@ mod internal_tests {
     #[test]
     fn handle_upsert_inserts_and_diffs_rows() {
         let (_dir, db, abs, rel) = upsert_fixture();
-        let events = db.handle_upsert("items", &abs, &rel, &HashMap::new());
+        let events = db.handle_upsert("items", &abs, &rel);
         assert_eq!(events.len(), 1, "got: {events:?}");
         assert!(matches!(&events[0], RowEvent::Insert { .. }));
 
@@ -2778,7 +2785,7 @@ mod internal_tests {
             Arc::new(fake),
         )
         .unwrap();
-        let events = db.handle_upsert("items", &abs, "a.txt", &HashMap::new());
+        let events = db.handle_upsert("items", &abs, "a.txt");
         assert_eq!(events.len(), 1, "got: {events:?}");
         let dbg = format!("{:?}", events[0]);
         assert!(dbg.contains("Error"), "got: {dbg}");
@@ -3014,9 +3021,6 @@ mod internal_tests {
 
     #[test]
     fn merge_filesystem_facts_filters_to_declared_columns() {
-        let mut captures = HashMap::new();
-        captures.insert("month".to_string(), "2024-01".to_string());
-        captures.insert("undeclared".to_string(), "drop".to_string());
         let mut stat = Row::new();
         stat.insert("path".to_string(), Value::Text("2024-01/a.txt".into()));
         stat.insert("size".to_string(), Value::Integer(9));
@@ -3024,18 +3028,74 @@ mod internal_tests {
             "name".to_string(),
             Value::Text("x".into()),
         )])];
-        let declared = vec!["name".to_string(), "month".to_string(), "path".to_string()];
-        let merged = merge_filesystem_facts(raw, &captures, &stat, &declared);
+        let declared = vec!["name".to_string(), "path".to_string()];
+        let merged = merge_filesystem_facts(raw, &stat, &declared);
         assert_eq!(merged.len(), 1);
         let row = &merged[0];
-        assert_eq!(row["month"], Value::Text("2024-01".into()));
         assert_eq!(row["path"], Value::Text("2024-01/a.txt".into()));
-        assert!(
-            !row.contains_key("undeclared"),
-            "undeclared capture dropped"
-        );
         assert!(!row.contains_key("size"), "undeclared stat dropped");
         assert_eq!(row["name"], Value::Text("x".into()));
+    }
+
+    #[test]
+    fn merge_filesystem_facts_raw_value_wins_over_stat() {
+        let mut stat = Row::new();
+        stat.insert("path".to_string(), Value::Text("auto".into()));
+        let raw = vec![Row::from_iter([(
+            "path".to_string(),
+            Value::Text("explicit".into()),
+        )])];
+        let declared = vec!["path".to_string()];
+        let merged = merge_filesystem_facts(raw, &stat, &declared);
+        assert_eq!(merged[0]["path"], Value::Text("explicit".into()));
+    }
+
+    #[test]
+    fn find_capture_column_collision_flags_a_placeholder_naming_a_column() {
+        let declared = vec!["thread_id".to_string(), "basename".to_string()];
+        assert_eq!(
+            find_capture_column_collision("_comments/{thread_id}/*.txt", &declared),
+            Some("thread_id".to_string())
+        );
+    }
+
+    #[test]
+    fn find_capture_column_collision_ignores_a_placeholder_with_no_column() {
+        let declared = vec!["path".to_string(), "basename".to_string()];
+        assert_eq!(
+            find_capture_column_collision("_comments/{thread_id}/*.txt", &declared),
+            None
+        );
+    }
+
+    #[test]
+    fn find_capture_column_collision_none_without_placeholders() {
+        let declared = vec!["thread_id".to_string()];
+        assert_eq!(
+            find_capture_column_collision("_comments/*/*.txt", &declared),
+            None
+        );
+    }
+
+    #[test]
+    fn find_capture_column_collision_returns_first_colliding_placeholder() {
+        let declared = vec!["repo".to_string(), "org".to_string()];
+        assert_eq!(
+            find_capture_column_collision("{org}/{repo}/data.json", &declared),
+            Some("org".to_string())
+        );
+    }
+
+    #[test]
+    fn capture_column_collision_error_names_placeholder_and_fix() {
+        let err = DirSqlError::CaptureColumnCollision {
+            placeholder: "thread_id".to_string(),
+            column: "thread_id".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("thread_id"));
+        assert!(msg.contains("collides"));
+        assert!(msg.contains("on-file"));
     }
 
     #[test]

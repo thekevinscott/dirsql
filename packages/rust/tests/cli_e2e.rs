@@ -844,6 +844,37 @@ fn query_subcommand_rejects_internal_table_read_with_the_http_error_message() {
 }
 
 #[test]
+fn query_subcommand_rejects_capture_column_collision() {
+    // A `{name}` glob placeholder that collides with a declared DDL column is
+    // a load-time error: captures no longer populate columns, so the column
+    // would read NULL forever. The CLI must exit non-zero and name the
+    // colliding placeholder/column.
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("_comments/abc123")).unwrap();
+    fs::write(root.path().join("_comments/abc123/first.txt"), "hi").unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[table]]
+ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
+glob = "_comments/{thread_id}/*.txt"
+"#,
+    )
+    .unwrap();
+
+    let out = run_query_subcommand_with_config(root.path(), "SELECT * FROM comments");
+    assert!(
+        !out.status.success(),
+        "a colliding capture config must be a non-zero exit, got {out:?}"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("thread_id") && stderr.contains("collides"),
+        "stderr must name the colliding placeholder/column, got {stderr:?}"
+    );
+}
+
+#[test]
 fn query_subcommand_rejects_blank_sql_with_nonzero_exit() {
     // The subcommand synthesizes the same `{"sql": …}` intake the server
     // parses, so blank SQL hits the shared empty-rejection with the same

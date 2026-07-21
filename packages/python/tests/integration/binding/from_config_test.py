@@ -1,10 +1,10 @@
 """Binding-tier tests (real core, real fs) for DirSQL(config=).
 
 Config-defined tables produce one row per matched file. Each row's columns
-come from filesystem facts: glob path captures and stat virtuals (`path`,
-`basename`, `dir`, `ext`, `size`, `mtime`, `ctime`). Content
-interpretation is intentionally out of scope; for that, register a
-programmatic Table with your own on_file function.
+come from filesystem facts: the stat virtuals (`path`, `basename`, `dir`,
+`ext`, `size`, `mtime`, `ctime`). Content interpretation is intentionally out
+of scope; for that, register a programmatic Table with your own on_file
+function.
 """
 
 import os
@@ -53,16 +53,12 @@ glob = "items/*.csv"
             assert results[1]["path"] == "items/b.csv"
             assert results[1]["basename"] == "b.csv"
 
-    def describe_path_captures():
+    def describe_glob_placeholders():
         @pytest.mark.asyncio
-        async def it_injects_path_captures_into_rows(config_dir):
+        async def it_errors_when_a_placeholder_collides_with_a_column(config_dir):
             _write(
                 os.path.join(config_dir, "comments", "thread-1", "a.txt"),
                 "hello",
-            )
-            _write(
-                os.path.join(config_dir, "comments", "thread-2", "a.txt"),
-                "world",
             )
             _write(
                 os.path.join(config_dir, ".dirsql.toml"),
@@ -76,13 +72,37 @@ glob = "comments/{thread_id}/*.txt"
             db = DirSQL(
                 root=config_dir, config=os.path.join(config_dir, ".dirsql.toml")
             )
-            await db.ready()
-            results = await db.query(
-                "SELECT thread_id, basename FROM comments ORDER BY thread_id"
+            with pytest.raises(Exception, match="thread_id"):
+                await db.ready()
+
+        @pytest.mark.asyncio
+        async def it_treats_a_non_colliding_placeholder_as_a_wildcard(config_dir):
+            _write(
+                os.path.join(config_dir, "comments", "thread-1", "a.txt"),
+                "hello",
             )
+            _write(
+                os.path.join(config_dir, "comments", "thread-2", "b.txt"),
+                "world",
+            )
+            _write(
+                os.path.join(config_dir, ".dirsql.toml"),
+                """\
+[[table]]
+ddl = "CREATE TABLE comments (path TEXT, basename TEXT)"
+glob = "comments/{thread_id}/*.txt"
+""",
+            )
+
+            db = DirSQL(
+                root=config_dir, config=os.path.join(config_dir, ".dirsql.toml")
+            )
+            await db.ready()
+            results = await db.query("SELECT basename FROM comments ORDER BY basename")
             assert len(results) == 2
-            assert results[0]["thread_id"] == "thread-1"
-            assert results[1]["thread_id"] == "thread-2"
+            assert results[0]["basename"] == "a.txt"
+            assert results[1]["basename"] == "b.txt"
+            assert "thread_id" not in results[0]
 
     def describe_stat_virtuals():
         @pytest.mark.asyncio
