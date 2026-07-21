@@ -87,4 +87,34 @@ describe("path-tables (#627)", () => {
     expect(message).toContain("no such table: usrs");
     expect(message).not.toContain("did you mean");
   });
+
+  it("reads the filesystem live", async () => {
+    const db = open();
+    await db.query("SELECT path FROM './docs/*.md'");
+
+    await writeFile(join(dir, "docs", "d.md"), "delta");
+
+    const rows = await db.query("SELECT path FROM './docs/*.md'");
+    expect(rows.map((r) => r.path)).toContain("docs/d.md");
+  });
+
+  it("excludes content from '*' but selects it by name", async () => {
+    const starred = await open().query("SELECT * FROM './docs/*.md'");
+    expect(starred[0]).not.toHaveProperty("content");
+
+    const named = await open().query(
+      "SELECT basename, content FROM './docs/*.md' WHERE basename = 'a.md'",
+    );
+    expect(named).toEqual([{ basename: "a.md", content: "alpha" }]);
+  });
+
+  it("yields null content for a non-UTF-8 file", async () => {
+    await writeFile(
+      join(dir, "docs", "logo.bin"),
+      Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x80, 0x90]),
+    );
+
+    const rows = await open().query("SELECT content FROM './docs/*.bin'");
+    expect(rows).toEqual([{ content: null }]);
+  });
 });
