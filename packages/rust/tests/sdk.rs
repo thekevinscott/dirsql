@@ -311,6 +311,35 @@ fn it_allows_exact_match_in_strict_mode() {
 }
 
 #[test]
+fn it_round_trips_blob_values_through_the_sdk() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("marker.json"), "{}").unwrap();
+
+    let payload: Vec<u8> = vec![0x00, 0x01, 0x02, 0xFF, 0xFE];
+    let payload_for_closure = payload.clone();
+
+    let db = DirSQL::new(
+        root.path(),
+        vec![Table::new(
+            "CREATE TABLE blobs (name TEXT, data BLOB)",
+            "*.json",
+            move |_path| {
+                vec![HashMap::from([
+                    ("name".into(), Value::Text("bin".into())),
+                    ("data".into(), Value::Blob(payload_for_closure.clone())),
+                ])]
+            },
+        )],
+    )
+    .unwrap();
+
+    let rows = db.query("SELECT name, data FROM blobs").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["name"], Value::Text("bin".into()));
+    assert_eq!(rows[0]["data"], Value::Blob(payload));
+}
+
+#[test]
 fn it_streams_watch_delete_events() {
     let root = TempDir::new().unwrap();
     fs::write(root.path().join("doomed.txt"), "doomed").unwrap();
