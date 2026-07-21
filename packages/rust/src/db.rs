@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+use crate::parsed_vtab;
 use crate::path_table::{self, PathTable, Resolution};
 use crate::vtab;
 
@@ -107,18 +108,41 @@ fn quote_identifier(s: &str) -> String {
 /// persistent cache file — so a path-table can never leak into a persisted
 /// `sqlite_master`. `IF NOT EXISTS` makes a repeat reference a no-op, which is
 /// why no cross-call registry is needed.
-fn path_table_ddl(name: &str, table: &PathTable, ignore: &[String]) -> String {
-    let mut args = vec![
-        quote_literal(&table.root.to_string_lossy()),
-        quote_literal(&table.glob),
-        quote_literal(&table.path_prefix),
-    ];
+///
+/// With a `parser` present (the CLI's `--on-file`), the table is minted over
+/// the parsed module instead: its rows and schema come from the parser, not
+/// the stat columns, and the `path_prefix` is irrelevant (a parser wanting a
+/// path emits it). Both forms carry the same ignore rules.
+fn path_table_ddl(
+    name: &str,
+    table: &PathTable,
+    ignore: &[String],
+    parser: Option<&str>,
+) -> String {
+    let (module, mut args) = match parser {
+        Some(command) => (
+            parsed_vtab::MODULE_NAME,
+            vec![
+                quote_literal(&table.root.to_string_lossy()),
+                quote_literal(&table.glob),
+                quote_literal(command),
+            ],
+        ),
+        None => (
+            vtab::MODULE_NAME,
+            vec![
+                quote_literal(&table.root.to_string_lossy()),
+                quote_literal(&table.glob),
+                quote_literal(&table.path_prefix),
+            ],
+        ),
+    };
     args.extend(ignore.iter().map(|p| quote_literal(p)));
 
     format!(
         "CREATE VIRTUAL TABLE IF NOT EXISTS temp.{} USING {}({})",
         quote_identifier(name),
-        vtab::MODULE_NAME,
+        module,
         args.join(", "),
     )
 }
@@ -184,6 +208,10 @@ pub struct Db {
     hint_legacy_files_table: bool,
     /// Skip rules a path-table scan applies, seeded with the built-in defaults.
     path_table_ignore: Vec<String>,
+    /// When set (the CLI's `--on-file`), every path-table is minted over the
+    /// parser instead of the stat columns: its rows and schema come from the
+    /// command's output. `None` keeps the stat path-table behavior.
+    path_table_parser: Option<String>,
 }
 
 /// The skip rules a fresh `Db` starts with.
@@ -210,11 +238,13 @@ impl Db {
         let conn = Connection::open("")?;
         ensure_internal_rows_table(&conn)?;
         vtab::load_module(&conn)?;
+        parsed_vtab::load_module(&conn)?;
         Ok(Self {
             conn,
             path_table_root: None,
             hint_legacy_files_table: false,
             path_table_ignore: default_path_table_ignore(),
+            path_table_parser: None,
         })
     }
 
@@ -228,11 +258,13 @@ impl Db {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         ensure_internal_rows_table(&conn)?;
         vtab::load_module(&conn)?;
+        parsed_vtab::load_module(&conn)?;
         Ok(Self {
             conn,
             path_table_root: None,
             hint_legacy_files_table: false,
             path_table_ignore: default_path_table_ignore(),
+            path_table_parser: None,
         })
     }
 
@@ -253,6 +285,13 @@ impl Db {
     /// scan applies, on top of the built-in defaults.
     pub fn add_path_table_ignore(&mut self, patterns: Vec<String>) {
         self.path_table_ignore.extend(patterns);
+    }
+
+    /// Attach a parser command to every path-table minted on this connection
+    /// (the CLI's `--on-file`). With it set, a path-table's rows and schema
+    /// come from the command's output instead of the stat columns.
+    pub fn set_path_table_parser(&mut self, command: String) {
+        self.path_table_parser = Some(command);
     }
 
     /// Borrow the underlying SQLite connection. Internal use only — exposed
@@ -710,8 +749,12 @@ impl Db {
     /// straight on the connection rather than through [`query`](Self::query),
     /// which classifies `CREATE VIRTUAL TABLE` as a write and would reject it.
     fn create_path_table(&self, name: &str, table: &PathTable) -> Result<()> {
-        self.conn
-            .execute_batch(&path_table_ddl(name, table, &self.path_table_ignore))?;
+        self.conn.execute_batch(&path_table_ddl(
+            name,
+            table,
+            &self.path_table_ignore,
+            self.path_table_parser.as_deref(),
+        ))?;
         Ok(())
     }
 }
@@ -2095,7 +2138,7 @@ mod tests {
 
     #[test]
     fn path_table_ddl_creates_in_temp_if_not_exists() {
-        let ddl = path_table_ddl("./docs/*.md", &docs_path_table(), &[]);
+        let ddl = path_table_ddl("./docs/*.md", &docs_path_table(), &[], None);
         assert_eq!(
             ddl,
             "CREATE VIRTUAL TABLE IF NOT EXISTS temp.\"./docs/*.md\" \
@@ -2111,10 +2154,10 @@ mod tests {
             path_prefix: "/var/log".to_string(),
         };
         assert!(
-            path_table_ddl("/var/log/*.log", &table, &[])
+            path_table_ddl("/var/log/*.log", &table, &[], None)
                 .ends_with("'/var/log', '*.log', '/var/log')"),
             "got: {}",
-            path_table_ddl("/var/log/*.log", &table, &[])
+            path_table_ddl("/var/log/*.log", &table, &[], None)
         );
     }
 
@@ -2124,11 +2167,59 @@ mod tests {
             "./",
             &docs_path_table(),
             &["node_modules/**".to_string(), "*.tmp".to_string()],
+            None,
         );
         assert!(
             ddl.ends_with("'', 'node_modules/**', '*.tmp')"),
             "got: {ddl}"
         );
+    }
+
+    #[test]
+    fn path_table_ddl_uses_the_parsed_module_when_a_parser_is_set() {
+        let ddl = path_table_ddl("./docs/*.md", &docs_path_table(), &[], Some("cat {path}"));
+        assert_eq!(
+            ddl,
+            "CREATE VIRTUAL TABLE IF NOT EXISTS temp.\"./docs/*.md\" \
+             USING dirsql_parsed('/root', 'docs/*.md', 'cat {path}')"
+        );
+    }
+
+    #[test]
+    fn path_table_ddl_parser_form_omits_the_path_prefix_and_carries_ignore() {
+        let table = PathTable {
+            root: PathBuf::from("/var/log"),
+            glob: "*.log".to_string(),
+            path_prefix: "/var/log".to_string(),
+        };
+        let ddl = path_table_ddl(
+            "/var/log/*.log",
+            &table,
+            &["node_modules/**".to_string()],
+            Some("parse.py {path}"),
+        );
+        assert!(
+            ddl.ends_with(
+                "USING dirsql_parsed('/var/log', '*.log', 'parse.py {path}', 'node_modules/**')"
+            ),
+            "the parser form drops the path prefix and keeps ignore rules, got: {ddl}"
+        );
+    }
+
+    #[test]
+    fn path_table_ddl_parser_form_quotes_a_command_with_a_quote() {
+        let ddl = path_table_ddl("./", &docs_path_table(), &[], Some("sh -c 'echo hi'"));
+        assert!(
+            ddl.contains("'sh -c ''echo hi'''"),
+            "an embedded quote must be doubled, got: {ddl}"
+        );
+    }
+
+    #[test]
+    fn set_path_table_parser_arms_the_parsed_module() {
+        let mut db = Db::new().unwrap();
+        db.set_path_table_parser("cat {path}".to_string());
+        assert_eq!(db.path_table_parser.as_deref(), Some("cat {path}"));
     }
 
     #[test]

@@ -76,13 +76,20 @@ fn titles(out: &Output) -> Vec<String> {
 #[test]
 fn a_parser_supplies_the_rows_and_the_schema() {
     let dir = fixture();
-    let out = run_on_file(&dir, "SELECT title, words FROM './**/*.md'", "./parse.sh {path}");
+    let out = run_on_file(
+        &dir,
+        "SELECT title, words FROM './**/*.md'",
+        "./parse.sh {path}",
+    );
 
     assert_eq!(titles(&out), vec!["alpha title", "bravo title"]);
     // The schema is the parser's output: `words` came from the parser, not a
     // stat column.
     let first = &rows(&out)[0];
-    assert!(first.get("words").is_some(), "parser column present: {first:?}");
+    assert!(
+        first.get("words").is_some(),
+        "parser column present: {first:?}"
+    );
 }
 
 #[test]
@@ -106,7 +113,11 @@ fn stat_columns_are_not_reachable_on_a_parsed_table() {
 #[test]
 fn a_failing_file_is_skipped_with_a_warning_and_the_scan_continues() {
     let dir = fixture();
-    fs::write(dir.path().join("docs/bad.md"), "POISON should abort only this file").unwrap();
+    fs::write(
+        dir.path().join("docs/bad.md"),
+        "POISON should abort only this file",
+    )
+    .unwrap();
 
     let out = run_on_file(&dir, "SELECT title FROM './**/*.md'", "./parse.sh {path}");
 
@@ -134,7 +145,10 @@ fn a_repeated_on_file_flag_is_an_error_pointing_at_config_files() {
         .output()
         .expect("spawning `dirsql query` failed");
 
-    assert!(!out.status.success(), "a repeated --on-file must be rejected");
+    assert!(
+        !out.status.success(),
+        "a repeated --on-file must be rejected"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("config"),

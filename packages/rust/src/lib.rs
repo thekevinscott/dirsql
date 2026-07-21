@@ -636,6 +636,7 @@ impl DirSQL {
             persist_path: None,
             poll_interval: DEFAULT_POLL_INTERVAL,
             hint_legacy_files_table: false,
+            path_table_parser: None,
         };
         let prepared = Self::prepare_resolved(resolved)?;
         Self::finish_build_with_fs(prepared, fs)
@@ -661,6 +662,7 @@ impl DirSQL {
             persist_path,
             poll_interval,
             hint_legacy_files_table,
+            path_table_parser,
         } = resolved;
 
         let (matcher, table_names) = compile_matcher(&tables, &ignore)?;
@@ -714,6 +716,7 @@ impl DirSQL {
                 meta: ctx.expected_meta,
             }),
             poll_interval,
+            path_table_parser,
         })
     }
 
@@ -747,6 +750,7 @@ impl DirSQL {
             persist,
             poll_interval,
             hint_legacy_files_table,
+            path_table_parser,
         } = prepared;
 
         let (mut db, persist_ready) = match persist {
@@ -756,6 +760,9 @@ impl DirSQL {
         db.set_path_table_root(root.clone());
         db.set_hint_legacy_files_table(hint_legacy_files_table);
         db.add_path_table_ignore(ignore);
+        if let Some(command) = path_table_parser {
+            db.set_path_table_parser(command);
+        }
 
         // Load extensions before any CREATE TABLE so a table's DDL and later
         // queries can use extension-provided functions. Loading is enabled
@@ -925,6 +932,7 @@ pub struct DirSQLBuilder {
     persist: bool,
     persist_path: Option<PathBuf>,
     poll_interval: Option<Duration>,
+    path_table_parser: Option<String>,
 }
 
 impl DirSQLBuilder {
@@ -1031,6 +1039,16 @@ impl DirSQLBuilder {
         self
     }
 
+    /// Attach a parser command to every path-table this index mints (the CLI's
+    /// `--on-file`): a path-table's rows and schema then come from the command's
+    /// output instead of the stat columns. Internal plumbing for the CLI flag —
+    /// no config-file or named-table interaction.
+    #[doc(hidden)]
+    pub fn path_table_parser(mut self, command: impl Into<String>) -> Self {
+        self.path_table_parser = Some(command.into());
+        self
+    }
+
     fn resolve(self) -> Result<ResolvedBuild> {
         let DirSQLBuilder {
             root: explicit_root,
@@ -1042,6 +1060,7 @@ impl DirSQLBuilder {
             persist,
             persist_path,
             poll_interval,
+            path_table_parser,
         } = self;
 
         // The index root is an operational fact owned by the runner: the
@@ -1116,6 +1135,7 @@ impl DirSQLBuilder {
             persist_path,
             poll_interval: poll_interval.unwrap_or(DEFAULT_POLL_INTERVAL),
             hint_legacy_files_table,
+            path_table_parser,
         })
     }
 
@@ -1169,6 +1189,9 @@ pub struct ResolvedBuild {
     pub poll_interval: Duration,
     /// Arms the missing-`files` path-table hint; see [`is_configless`].
     pub hint_legacy_files_table: bool,
+    /// When set (the CLI's `--on-file`), every path-table is minted over this
+    /// parser command instead of the stat columns.
+    pub path_table_parser: Option<String>,
 }
 
 /// A single file discovered during [`DirSQL::prepare_resolved`]: its
@@ -1198,6 +1221,7 @@ pub struct PreparedBuild {
     persist: Option<PreparedPersist>,
     poll_interval: Duration,
     hint_legacy_files_table: bool,
+    path_table_parser: Option<String>,
 }
 
 #[doc(hidden)]
@@ -2057,6 +2081,7 @@ mod internal_tests {
             poll_interval: DEFAULT_POLL_INTERVAL,
             persist: None,
             hint_legacy_files_table: false,
+            path_table_parser: None,
         };
         assert!(DirSQL::finish_build(prepared).is_err());
     }
@@ -2617,6 +2642,25 @@ mod internal_tests {
             resolved.tables.len()
         );
         assert!(resolved.hint_legacy_files_table);
+    }
+
+    #[test]
+    fn path_table_parser_defaults_to_none() {
+        let resolved = DirSQL::builder().root("/tmp/x").resolve().unwrap();
+        assert!(resolved.path_table_parser.is_none());
+    }
+
+    #[test]
+    fn path_table_parser_carries_the_command_through_resolve() {
+        let resolved = DirSQL::builder()
+            .root("/tmp/x")
+            .path_table_parser("parse.py {path}")
+            .resolve()
+            .unwrap();
+        assert_eq!(
+            resolved.path_table_parser.as_deref(),
+            Some("parse.py {path}")
+        );
     }
 
     #[test]

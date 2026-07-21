@@ -242,22 +242,44 @@ fn a_parser_producing_no_rows_is_an_error_at_registration() {
 }
 
 #[test]
-fn a_failing_parser_surfaces_at_registration() {
+fn a_failing_file_is_skipped_and_the_good_files_survive() {
+    // Per-file isolation (the `on-file` hook contract #631 finalizes): a file
+    // whose parser output does not parse contributes no rows, and the scan
+    // continues. Registration succeeds; the good file's rows are queryable and
+    // the schema is inferred from what did parse.
     let dir = TempDir::new().unwrap();
-    write(&dir, "a.json", "[]");
+    write(&dir, "a.json", r#"[{"id":"kept"}]"#);
+    write(&dir, "bad.json", "not valid json");
+    let conn = open_over(&dir, "**/*.json", CAT_PARSER);
+
+    let mut stmt = conn.prepare("SELECT id FROM t").unwrap();
+    let ids: Vec<String> = stmt
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(ids, vec!["kept"]);
+}
+
+#[test]
+fn a_scan_where_every_file_fails_cannot_infer_a_schema() {
+    // With no file parsing, there is no sample to infer from — the same
+    // no-rows error an empty sample raises.
+    let dir = TempDir::new().unwrap();
+    write(&dir, "bad.json", "not valid json");
     let conn = Connection::open_in_memory().unwrap();
     load_module(&conn).unwrap();
 
     let err = conn
         .execute_batch(&format!(
-            "CREATE VIRTUAL TABLE t USING dirsql_parsed('{}', '**/*.json', 'sh -c ''exit 7''')",
+            "CREATE VIRTUAL TABLE t USING dirsql_parsed('{}', '**/*.json', '{CAT_PARSER}')",
             dir.path().display()
         ))
         .unwrap_err();
 
     assert!(
-        err.to_string().contains("a.json"),
-        "the failing file is named; got: {err}"
+        err.to_string().contains("no rows"),
+        "an all-skipped scan yields no schema; got: {err}"
     );
 }
 

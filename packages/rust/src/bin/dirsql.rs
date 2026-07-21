@@ -146,8 +146,40 @@ struct QueryArgs {
     /// The SQL to run (a single read-only statement).
     sql: String,
 
+    /// Attach a parser to every path-table in the query. The command follows
+    /// the `on-file` hook contract (`docs/reference/hooks.md`): argv splitting,
+    /// `{path}`/`{root}` placeholders, a JSON array of row objects on stdout,
+    /// per-file failure isolation, and the hook timeout. With it set, a
+    /// path-table's rows and schema come from the parser instead of the stat
+    /// columns. One `--on-file` max; for multiple tables use a config file.
+    #[arg(long = "on-file")]
+    on_file: Vec<String>,
+
     #[command(flatten)]
     common: ConfigArgs,
+}
+
+/// Reduce the repeatable `--on-file` occurrences to at most one parser command.
+///
+/// `clap` collects repeats into a `Vec` so the error can name config files
+/// (its default "cannot be used multiple times" cannot). Empty → no parser;
+/// exactly one → that command; more than one → an error pointing at config
+/// files, where per-table parsers belong. A whitespace-only command is rejected
+/// up front (the hook contract forbids an empty command).
+fn resolve_on_file(occurrences: &[String]) -> std::result::Result<Option<String>, String> {
+    match occurrences {
+        [] => Ok(None),
+        [command] if command.trim().is_empty() => {
+            Err("--on-file needs a non-empty command".to_string())
+        }
+        [command] => Ok(Some(command.clone())),
+        _ => Err(
+            "--on-file may be given at most once; it applies to every path-table in the \
+             query. For per-table parsers, define tables in a config file with an \
+             `on-file` key and pass it with -c."
+                .to_string(),
+        ),
+    }
 }
 
 #[derive(Debug, Args)]
@@ -185,7 +217,14 @@ async fn main() -> ExitCode {
 /// message — the same string the HTTP `{"error": …}` body carries — to
 /// stderr with a non-zero exit.
 async fn run_query(args: QueryArgs) -> ExitCode {
-    let state = load_state(&args.common);
+    let parser = match resolve_on_file(&args.on_file) {
+        Ok(parser) => parser,
+        Err(message) => {
+            eprintln!("dirsql query: {message}");
+            return ExitCode::from(1);
+        }
+    };
+    let state = load_state(&args.common, parser);
     let pre_query = load_pre_queries(&args.common);
     let post_query = load_post_queries(&args.common);
     // Same default the server binds with; the pipeline enforces it.
@@ -246,7 +285,9 @@ fn run_init(args: InitArgs) -> ExitCode {
 }
 
 async fn run_server(cli: Cli) -> ExitCode {
-    let state = load_state(&cli.common);
+    // The server has no `--on-file`: clap rejects it as an unknown flag before
+    // reaching here. Path-tables served over HTTP keep their stat columns.
+    let state = load_state(&cli.common, None);
     let mut server_config = ServerConfig::bind(cli.host.clone(), cli.port);
     for pre_query in load_pre_queries(&cli.common) {
         server_config = server_config.with_pre_query(pre_query);
@@ -278,12 +319,12 @@ async fn run_server(cli: Cli) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn load_state(cfg: &ConfigArgs) -> AppState {
+fn load_state(cfg: &ConfigArgs, path_table_parser: Option<String>) -> AppState {
     // Neither a `-c` nor the launcher's `--include-default` -> index the
     // invocation directory with no named tables. A `./.dirsql.toml` on disk is
     // NOT consulted (#602); pass it explicitly with `-c` to use it.
     if cfg.config.is_empty() && !cfg.include_default {
-        return load_configless_state(cfg);
+        return load_configless_state(cfg, path_table_parser);
     }
 
     let mut builder = DirSQL::builder();
@@ -324,6 +365,12 @@ fn load_state(cfg: &ConfigArgs) -> AppState {
             .suppress_config_extensions(true);
     }
     builder = cfg.apply_persist(builder);
+    // `--on-file` touches path-tables only: config `[[table]]` definitions keep
+    // their own `on-file` hooks; a path-table named in the query gets this
+    // parser regardless of any `-c`.
+    if let Some(command) = path_table_parser {
+        builder = builder.path_table_parser(command);
+    }
     match builder.build() {
         Ok(db) => AppState::Ready(db),
         Err(err) => AppState::Unavailable(format!("failed to load config: {err}")),
@@ -420,7 +467,7 @@ fn load_post_queries(cfg: &ConfigArgs) -> Vec<PostQuery> {
 /// tables: filesystem queries go through path-tables (`SELECT * FROM './'`),
 /// and a `files` query fails with a hint pointing at that form (#636). A
 /// `./.dirsql.toml` in the cwd is not consulted (#602).
-fn load_configless_state(cfg: &ConfigArgs) -> AppState {
+fn load_configless_state(cfg: &ConfigArgs, path_table_parser: Option<String>) -> AppState {
     // Canonicalize for the same reason `load_state` does: `notify` misbehaves
     // when watching relative paths.
     let root = match PathBuf::from(".").canonicalize() {
@@ -430,7 +477,10 @@ fn load_configless_state(cfg: &ConfigArgs) -> AppState {
         }
     };
 
-    let builder = cfg.apply_persist(DirSQL::builder().root(root));
+    let mut builder = cfg.apply_persist(DirSQL::builder().root(root));
+    if let Some(command) = path_table_parser {
+        builder = builder.path_table_parser(command);
+    }
     match builder.build() {
         Ok(db) => AppState::Ready(db),
         Err(err) => AppState::Unavailable(format!("failed to build the index: {err}")),
@@ -603,6 +653,81 @@ mod tests {
         assert_eq!(
             query_common(&["dirsql", "query", "SELECT 1", "--persist"]).persist,
             Some(None)
+        );
+    }
+
+    /// The `on_file` occurrences parsed from a `query` invocation.
+    fn query_on_file(argv: &[&str]) -> Vec<String> {
+        match Cli::parse_from(argv).command {
+            Some(Command::Query(args)) => args.on_file,
+            other => panic!("expected a query subcommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn on_file_absent_leaves_no_occurrences() {
+        assert!(query_on_file(&["dirsql", "query", "SELECT 1"]).is_empty());
+    }
+
+    #[test]
+    fn on_file_parses_after_the_query_subcommand() {
+        assert_eq!(
+            query_on_file(&["dirsql", "query", "SELECT 1", "--on-file", "cat {path}"]),
+            vec!["cat {path}".to_string()]
+        );
+    }
+
+    #[test]
+    fn on_file_collects_every_repeat_for_the_arity_check() {
+        // clap collects repeats; `resolve_on_file` turns >1 into the pointed
+        // error rather than clap's generic "cannot be used multiple times".
+        assert_eq!(
+            query_on_file(&[
+                "dirsql",
+                "query",
+                "SELECT 1",
+                "--on-file",
+                "a",
+                "--on-file",
+                "b"
+            ]),
+            vec!["a".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn on_file_is_rejected_before_a_query_subcommand() {
+        // Like the other subcommand-local flags, `--on-file` ahead of the
+        // subcommand is not a server flag: clap rejects it.
+        assert!(Cli::try_parse_from(["dirsql", "--on-file", "cat", "query", "SELECT 1"]).is_err());
+    }
+
+    #[test]
+    fn resolve_on_file_is_none_without_the_flag() {
+        assert_eq!(resolve_on_file(&[]), Ok(None));
+    }
+
+    #[test]
+    fn resolve_on_file_returns_the_single_command() {
+        assert_eq!(
+            resolve_on_file(&["cat {path}".to_string()]),
+            Ok(Some("cat {path}".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_on_file_rejects_a_blank_command() {
+        let err = resolve_on_file(&["   ".to_string()]).unwrap_err();
+        assert!(err.contains("non-empty"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_on_file_rejects_a_repeat_and_points_at_config_files() {
+        let err = resolve_on_file(&["a".to_string(), "b".to_string()]).unwrap_err();
+        assert!(err.contains("at most once"), "got: {err}");
+        assert!(
+            err.contains("config file"),
+            "the error must point at config files, got: {err}"
         );
     }
 
