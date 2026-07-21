@@ -114,6 +114,39 @@ SELECT path FROM './docs/*.md' WHERE content LIKE '%deprecated%';
 A file that cannot be read, or is not valid UTF-8, yields `NULL` content rather
 than failing the query.
 
+## Parsing rows with `--on-file`
+
+By default a path-table's columns are the stat columns above — one row per
+file. When you want *one row per record inside* each file, attach a parser with
+the `dirsql query` flag [`--on-file`](/reference/cli):
+
+```sh
+dirsql query "SELECT title, author FROM './posts/*.md'" \
+  --on-file 'extract.py {path}'
+```
+
+The command runs once per matched file and prints a JSON array of row objects,
+exactly like a declared table's [`on-file` hook](/reference/hooks) — same argv
+splitting, same `{path}`/`{root}` placeholders, same timeout. Its output *is*
+the table:
+
+- **The parser supplies the whole schema.** Columns are inferred from the keys
+  across the emitted rows. The stat columns (`path`, `size`, …) are **not**
+  reachable on a parsed path-table — a parser that wants the path emits it (it
+  has `{path}`). The two modes stay cleanly separate.
+- **Failures are isolated per file.** A file whose parser fails (spawn, non-zero
+  exit, timeout, or no output) or whose output is not a JSON array of rows
+  contributes no rows; a one-line warning naming the file goes to stderr and the
+  scan continues. The schema is inferred from the files that did parse.
+- **The skip rules still apply.** A parsed scan honors the same `node_modules`
+  /`.git`/`ignore` rules a stat scan does (see below).
+
+`--on-file` applies to **every** path-table in the query and may be given **at
+most once**. For different parsers per file set, define named tables in a
+`.dirsql.toml` with their own `on-file` keys and pass it with `-c` — the flag
+never touches config-declared tables. It is a `query`-subcommand flag; server
+mode does not accept it.
+
 ## Freshness and scope
 
 A path-table is scanned when the statement runs, so it always reflects the

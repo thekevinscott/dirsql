@@ -267,6 +267,18 @@ All three share one global timeout override, `[dirsql].hook-timeout`
   **CLI-only** surface with **no** Python/TypeScript public-API binding,
   identical across every install, no drift.
 
+- **`--on-file` (path-table parser, #631).** A `dirsql query` flag naming a
+  command that supplies every path-table's rows and schema (a JSON array of row
+  objects; the `on-file` hook contract — argv splitting, `{path}`/`{root}`,
+  per-file failure isolation, `[dirsql].hook-timeout`). The stat columns are not
+  reachable on a parsed path-table; parsed scans honor the same skip rules stat
+  scans do. Threaded through the shared Rust core (`db::Db::set_path_table_parser`
+  → the `dirsql_parsed` module) via a **doc-hidden** `DirSQLBuilder::path_table_parser`
+  hook that is CLI plumbing only — a **CLI-only** surface with **no**
+  Python/TypeScript public-API binding, identical across every install, no drift.
+  For per-table parsers, `[[table]]` `on-file` config keys remain the SDK-reachable
+  path; the flag never touches config-declared tables.
+
 ## Language-Idiomatic Exceptions
 
 ### Python

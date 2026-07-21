@@ -54,67 +54,94 @@ fn unquote(arg: &str) -> &str {
     trimmed
 }
 
-/// The module's own arguments: root, glob pattern, and parser command.
-#[derive(Debug)]
+/// Number of module arguments that are not ignore patterns.
+const FIXED_ARGS: usize = 3;
+
+/// The module's own arguments: root, glob pattern, parser command, and the
+/// skip rules the scan applies (mirroring the stat path-table's ignore args).
 struct ModuleArgs {
     root: PathBuf,
     pattern: String,
     glob: GlobSet,
     command: String,
+    ignore: TableMatcher,
+}
+
+/// Compile the ignore patterns a parsed path-table scan applies.
+fn compile_ignore(patterns: &[String]) -> Result<TableMatcher> {
+    let refs: Vec<&str> = patterns.iter().map(String::as_str).collect();
+    TableMatcher::new(&[], &refs).map_err(|e| Error::ModuleError(e.to_string()))
 }
 
 /// Parse a parsed path-table's `CREATE VIRTUAL TABLE` arguments. `args[0..3]`
-/// are the module, database and table names; the module's own follow.
+/// are the module, database and table names; the module's own follow — root,
+/// glob, parser, then any ignore patterns.
 fn parse_module_args(args: &[&[u8]]) -> Result<ModuleArgs> {
     let user_args: Vec<String> = args
         .iter()
         .skip(3)
-        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .map(|a| unquote(&String::from_utf8_lossy(a)).to_string())
         .collect();
 
-    let [root, pattern, command] = user_args.as_slice() else {
+    let [root, pattern, command, ignore @ ..] = user_args.as_slice() else {
         return Err(Error::ModuleError(format!(
-            "{MODULE_NAME} takes exactly three arguments (root, glob, parser), got {}",
+            "{MODULE_NAME} takes at least {FIXED_ARGS} arguments (root, glob, parser), got {}",
             user_args.len()
         )));
     };
 
-    let pattern = unquote(pattern).to_string();
-    let glob = scanner::compile_glob(&pattern).map_err(|e| Error::ModuleError(e.to_string()))?;
+    let glob = scanner::compile_glob(pattern).map_err(|e| Error::ModuleError(e.to_string()))?;
 
     Ok(ModuleArgs {
-        root: PathBuf::from(unquote(root)),
-        pattern,
+        root: PathBuf::from(root),
+        pattern: pattern.clone(),
         glob,
-        command: unquote(command).to_string(),
+        command: command.clone(),
+        ignore: compile_ignore(ignore)?,
     })
 }
 
 /// Run the parser over every matched file and concatenate the rows.
 ///
-/// `run` is injected so the fan-out, the ordering, and the error wording can be
-/// unit-tested without spawning a process; production passes a closure over
-/// [`run_parser`]. A failure is fatal rather than per-file-skipped: the rows
-/// are the schema here, so silently dropping a file could silently drop a
-/// column.
+/// `run` is injected so the fan-out and the ordering can be unit-tested without
+/// spawning a process; `warn` is injected so the skip warnings can be captured.
+/// Production passes a closure over [`run_parser`] and `|m| eprintln!("{m}")`.
+///
+/// Per-file isolation, matching the `on-file` hook contract: a file whose
+/// parser fails (spawn/exit/timeout/no-output) or whose output does not parse
+/// contributes no rows and a one-line warning to `warn`; the scan continues.
+/// The schema is inferred from whatever files did parse.
 fn collect_rows(
     rel_paths: &[PathBuf],
     run: &dyn Fn(&Path) -> std::result::Result<String, String>,
-) -> std::result::Result<Vec<JsonRow>, String> {
+    warn: &dyn Fn(&str),
+) -> Vec<JsonRow> {
     let mut all = Vec::new();
     for rel_path in rel_paths {
-        let payload = run(rel_path).map_err(|e| failure_message(rel_path, &e))?;
-        let rows = parse_rows(&payload).map_err(|e| failure_message(rel_path, &e))?;
-        all.extend(rows);
+        match run(rel_path) {
+            Err(error) => warn(&command_skip_message(rel_path, &error)),
+            Ok(payload) => match parse_rows(&payload) {
+                Ok(rows) => all.extend(rows),
+                Err(message) => warn(&parse_skip_message(rel_path, &message)),
+            },
+        }
     }
-    Ok(all)
+    all
 }
 
-/// Name the file a parser failure came from, so a bad parser over a large tree
-/// is one grep away from the offending input.
-fn failure_message(rel_path: &Path, detail: &str) -> String {
+/// Warning for a file whose parser command itself failed. Mirrors the `on-file`
+/// hook's wording so both surfaces read identically.
+fn command_skip_message(rel_path: &Path, error: &str) -> String {
     format!(
-        "{MODULE_NAME}: parser failed for `{}`: {detail}",
+        "dirsql: skipping `{}`: on-file command failed: {error}",
+        rel_path.display()
+    )
+}
+
+/// Warning for a file whose parser output was not a JSON array of rows.
+fn parse_skip_message(rel_path: &Path, message: &str) -> String {
+    format!(
+        "dirsql: skipping `{}`: on-file output was not a JSON array of rows: {message}",
         rel_path.display()
     )
 }
@@ -181,16 +208,19 @@ unsafe impl<'vtab> VTab<'vtab> for ParsedTab {
             pattern,
             glob,
             command,
+            ignore,
         } = parse_module_args(args)?;
 
-        // A parsed path-table applies no ignore filtering yet; the `--on-file`
-        // wiring (#631) owns that decision. An empty matcher matches scan_glob's
-        // prior two-argument behavior.
-        let ignore = TableMatcher::new(&[], &[]).map_err(|e| Error::ModuleError(e.to_string()))?;
+        // A parsed path-table honors the same skip rules a stat path-table does
+        // (node_modules/.git plus any configured ignore), so a parsed
+        // `SELECT * FROM './'` doesn't drown in dependency trees.
         let ignore_base = path_table::ignore_base(&pattern);
         let rel_paths = scan_glob(&root, &glob, &ignore, &ignore_base);
-        let rows = collect_rows(&rel_paths, &|rel| run_parser(&command, &root, rel))
-            .map_err(Error::ModuleError)?;
+        let rows = collect_rows(
+            &rel_paths,
+            &|rel| run_parser(&command, &root, rel),
+            &|message| eprintln!("{message}"),
+        );
 
         let columns = infer_schema(&rows);
         if columns.is_empty() {
@@ -347,19 +377,31 @@ mod tests {
     }
 
     #[test]
-    fn parse_module_args_rejects_too_few_arguments() {
-        let args = args_with(&[b"'/tmp'", b"'**/*'"]);
-        let err = parse_module_args(&args).unwrap_err();
-        assert!(
-            err.to_string().contains("exactly three arguments"),
-            "error should name the arity, got: {err}"
-        );
+    fn parse_module_args_compiles_trailing_ignore_patterns() {
+        let args = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'node_modules/**'"]);
+        let parsed = parse_module_args(&args).unwrap();
+        assert!(parsed.ignore.is_ignored(Path::new("node_modules/pkg/a.js")));
+        assert!(!parsed.ignore.is_ignored(Path::new("docs/a.md")));
     }
 
     #[test]
-    fn parse_module_args_rejects_too_many_arguments() {
-        let args = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'extra'"]);
-        assert!(parse_module_args(&args).is_err());
+    fn parse_module_args_with_no_ignore_patterns_ignores_nothing() {
+        let args = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'"]);
+        let parsed = parse_module_args(&args).unwrap();
+        assert!(!parsed.ignore.is_ignored(Path::new("node_modules/pkg/a.js")));
+    }
+
+    #[test]
+    fn parse_module_args_rejects_too_few_arguments() {
+        let args = args_with(&[b"'/tmp'", b"'**/*'"]);
+        let err = match parse_module_args(&args) {
+            Err(err) => err,
+            Ok(_) => panic!("two arguments must be rejected"),
+        };
+        assert!(
+            err.to_string().contains("at least"),
+            "error should name the arity, got: {err}"
+        );
     }
 
     #[test]
@@ -368,72 +410,106 @@ mod tests {
         assert!(parse_module_args(&args).is_err());
     }
 
+    #[test]
+    fn parse_module_args_rejects_an_invalid_ignore_pattern() {
+        let args = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'['"]);
+        assert!(parse_module_args(&args).is_err());
+    }
+
     fn ok(payload: &'static str) -> impl Fn(&Path) -> std::result::Result<String, String> {
         move |_| Ok(payload.to_string())
+    }
+
+    fn collect_with_warnings(
+        paths: &[PathBuf],
+        run: &dyn Fn(&Path) -> std::result::Result<String, String>,
+    ) -> (Vec<JsonRow>, Vec<String>) {
+        let warnings = std::cell::RefCell::new(Vec::new());
+        let rows = collect_rows(paths, run, &|m| warnings.borrow_mut().push(m.to_string()));
+        (rows, warnings.into_inner())
     }
 
     #[test]
     fn collect_rows_concatenates_every_files_rows_in_scan_order() {
         let paths = vec![PathBuf::from("a.json"), PathBuf::from("b.json")];
-        let rows = collect_rows(&paths, &|rel| {
+        let (rows, warnings) = collect_with_warnings(&paths, &|rel| {
             Ok(format!(r#"[{{"id":"{}"}}]"#, rel.display()))
-        })
-        .unwrap();
+        });
 
         let ids: Vec<_> = rows
             .iter()
             .map(|r| r.get("id").unwrap().as_str().unwrap().to_string())
             .collect();
         assert_eq!(ids, vec!["a.json", "b.json"]);
+        assert!(
+            warnings.is_empty(),
+            "no failures, no warnings: {warnings:?}"
+        );
     }
 
     #[test]
     fn collect_rows_keeps_every_row_a_file_emitted() {
         let paths = vec![PathBuf::from("a.json")];
-        let rows = collect_rows(&paths, &ok(r#"[{"i":1},{"i":2}]"#)).unwrap();
+        let (rows, _) = collect_with_warnings(&paths, &ok(r#"[{"i":1},{"i":2}]"#));
         assert_eq!(rows.len(), 2);
     }
 
     #[test]
     fn collect_rows_over_no_files_is_no_rows() {
-        assert_eq!(collect_rows(&[], &ok("[]")).unwrap(), Vec::new());
+        let (rows, warnings) = collect_with_warnings(&[], &ok("[]"));
+        assert_eq!(rows, Vec::new());
+        assert!(warnings.is_empty());
     }
 
     #[test]
-    fn collect_rows_propagates_a_run_failure_and_names_the_file() {
-        let paths = vec![PathBuf::from("bad.json")];
-        let err = collect_rows(&paths, &|_| Err("exit 7".to_string())).unwrap_err();
-        assert!(err.contains("bad.json"), "got: {err}");
-        assert!(err.contains("exit 7"), "got: {err}");
-    }
-
-    #[test]
-    fn collect_rows_propagates_a_parse_failure_and_names_the_file() {
-        let paths = vec![PathBuf::from("bad.json")];
-        let err = collect_rows(&paths, &ok("not json")).unwrap_err();
-        assert!(err.contains("bad.json"), "got: {err}");
-    }
-
-    #[test]
-    fn collect_rows_stops_at_the_first_failure() {
+    fn collect_rows_skips_a_run_failure_warns_and_continues() {
         let paths = vec![PathBuf::from("bad.json"), PathBuf::from("good.json")];
-        let err = collect_rows(&paths, &|rel| {
+        let (rows, warnings) = collect_with_warnings(&paths, &|rel| {
             if rel == Path::new("bad.json") {
-                Err("boom".to_string())
+                Err("exit 7".to_string())
             } else {
-                panic!("must not run the parser after a failure");
+                Ok(r#"[{"i":1}]"#.to_string())
             }
-        })
-        .unwrap_err();
-        assert!(err.contains("bad.json"), "got: {err}");
+        });
+
+        assert_eq!(rows.len(), 1, "the good file still contributes its row");
+        assert_eq!(warnings.len(), 1, "the bad file warns once: {warnings:?}");
+        assert!(warnings[0].contains("bad.json"), "got: {}", warnings[0]);
+        assert!(warnings[0].contains("exit 7"), "got: {}", warnings[0]);
     }
 
     #[test]
-    fn failure_message_names_the_module_the_file_and_the_detail() {
-        let message = failure_message(Path::new("a/b.json"), "exit 3");
-        assert!(message.contains(MODULE_NAME), "got: {message}");
+    fn collect_rows_skips_a_parse_failure_warns_and_continues() {
+        let paths = vec![PathBuf::from("bad.json"), PathBuf::from("good.json")];
+        let (rows, warnings) = collect_with_warnings(&paths, &|rel| {
+            if rel == Path::new("bad.json") {
+                Ok("not json".to_string())
+            } else {
+                Ok(r#"[{"i":1}]"#.to_string())
+            }
+        });
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("bad.json"), "got: {}", warnings[0]);
+    }
+
+    #[test]
+    fn command_skip_message_names_the_file_and_the_error() {
+        let message = command_skip_message(Path::new("a/b.json"), "exit 3");
         assert!(message.contains("a/b.json"), "got: {message}");
         assert!(message.contains("exit 3"), "got: {message}");
+        assert!(message.contains("on-file command failed"), "got: {message}");
+    }
+
+    #[test]
+    fn parse_skip_message_names_the_file_and_the_defect() {
+        let message = parse_skip_message(Path::new("a/b.json"), "expected an array");
+        assert!(message.contains("a/b.json"), "got: {message}");
+        assert!(
+            message.contains("not a JSON array of rows"),
+            "got: {message}"
+        );
     }
 
     #[test]
