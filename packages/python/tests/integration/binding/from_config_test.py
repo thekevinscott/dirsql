@@ -210,8 +210,8 @@ glob = "*.json"
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
-ddl = "CREATE TABLE items (name TEXT, size INTEGER)"
-glob = "items/{name}.json"
+ddl = "CREATE TABLE items (basename TEXT, size INTEGER)"
+glob = "items/*.json"
 """,
             )
 
@@ -219,9 +219,11 @@ glob = "items/{name}.json"
                 root=config_dir, config=os.path.join(config_dir, ".dirsql.toml")
             )
             await db.ready()
-            results = await db.query("SELECT name FROM items WHERE name = 'apple'")
+            results = await db.query(
+                "SELECT basename FROM items WHERE basename = 'apple.json'"
+            )
             assert len(results) == 1
-            assert results[0]["name"] == "apple"
+            assert results[0]["basename"] == "apple.json"
 
             results = await db.query("SELECT * FROM items LIMIT 1")
             assert "_dirsql_file_path" not in results[0]

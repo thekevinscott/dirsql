@@ -27,8 +27,8 @@ use tempfile::TempDir;
 /// Write a two-post blog fixture into a fresh tempdir and return it.
 /// The `.dirsql.toml` lives at the root; bare `dirsql` no longer auto-loads it
 /// (#602), so callers pass it with `-c .dirsql.toml`.
-/// `title` and `author` are captured from the file path
-/// (`posts/{author}/{title}.json`).
+/// `basename` is a filesystem-derived column, so rows are identified by their
+/// file name (`Hello-World.json`) rather than by any path-derived value.
 fn blog_fixture() -> TempDir {
     let root = TempDir::new().unwrap();
     fs::create_dir_all(root.path().join("posts/alice")).unwrap();
@@ -39,8 +39,8 @@ fn blog_fixture() -> TempDir {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT, basename TEXT, size INTEGER)"
-glob = "posts/{author}/{title}.json"
+ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
+glob = "posts/*/*.json"
 "#,
     )
     .unwrap();
@@ -59,8 +59,8 @@ fn quoted_blog_fixture() -> TempDir {
         // Single-quoted TOML string so the embedded double quotes are literal.
         r#"
 [[table]]
-ddl = 'CREATE TABLE "posts" (title TEXT, author TEXT, basename TEXT)'
-glob = "posts/{author}/{title}.json"
+ddl = 'CREATE TABLE "posts" (basename TEXT)'
+glob = "posts/*/*.json"
 "#,
     )
     .unwrap();
@@ -205,7 +205,7 @@ fn post_query_returns_rows_over_http() {
 
     let resp = Client::new()
         .post(format!("http://localhost:{port}/query"))
-        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .json(&json!({"sql": "SELECT basename FROM posts ORDER BY basename"}))
         .send()
         .unwrap();
 
@@ -214,8 +214,8 @@ fn post_query_returns_rows_over_http() {
     assert_eq!(
         body,
         vec![
-            json!({"title": "Hello-World"}),
-            json!({"title": "Second-Post"}),
+            json!({"basename": "Hello-World.json"}),
+            json!({"basename": "Second-Post.json"}),
         ]
     );
 
@@ -295,7 +295,7 @@ fn get_events_emits_insert_event_when_file_created() {
         .recv_timeout(Duration::from_secs(5))
         .expect("SSE stream never produced a ready sentinel");
     std::thread::sleep(Duration::from_millis(200));
-    // Write into an author dir that already exists at startup so notify's
+    // Write into a post dir that already exists at startup so notify's
     // watch is guaranteed to be installed. Creating a new dir + writing
     // immediately races inotify's recursive-watch installation; that race
     // is observable and flaky, not a feature under test here.
@@ -444,12 +444,12 @@ fn quoted_identifier_table_in_toml_is_served_over_http() {
 
     let resp = Client::new()
         .post(format!("http://localhost:{port}/query"))
-        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .json(&json!({"sql": "SELECT basename FROM posts ORDER BY basename"}))
         .send()
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Vec<Value> = resp.json().unwrap();
-    assert_eq!(body, vec![json!({"title": "Hello-World"})]);
+    assert_eq!(body, vec![json!({"basename": "Hello-World.json"})]);
 
     kill_and_wait(child);
 }
@@ -512,7 +512,7 @@ fn pre_query_hook_rewrites_body_into_sql_over_http() {
     let root = blog_fixture();
     fs::write(
         root.path().join("to_sql.sh"),
-        "echo \"SELECT title FROM posts ORDER BY title\"\n",
+        "echo \"SELECT basename FROM posts ORDER BY basename\"\n",
     )
     .unwrap();
     fs::write(
@@ -522,8 +522,8 @@ fn pre_query_hook_rewrites_body_into_sql_over_http() {
 pre-query = "sh to_sql.sh {args}"
 
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT, basename TEXT, size INTEGER)"
-glob = "posts/{author}/{title}.json"
+ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
+glob = "posts/*/*.json"
 "#,
     )
     .unwrap();
@@ -542,8 +542,8 @@ glob = "posts/{author}/{title}.json"
     assert_eq!(
         body,
         vec![
-            json!({"title": "Hello-World"}),
-            json!({"title": "Second-Post"}),
+            json!({"basename": "Hello-World.json"}),
+            json!({"basename": "Second-Post.json"}),
         ]
     );
 
@@ -569,8 +569,8 @@ fn post_query_hook_reshapes_response_over_http() {
 post-query = "sh wrap.sh {args}"
 
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT, basename TEXT, size INTEGER)"
-glob = "posts/{author}/{title}.json"
+ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
+glob = "posts/*/*.json"
 "#,
     )
     .unwrap();
@@ -581,14 +581,14 @@ glob = "posts/{author}/{title}.json"
 
     let resp = Client::new()
         .post(format!("http://localhost:{port}/query"))
-        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .json(&json!({"sql": "SELECT basename FROM posts ORDER BY basename"}))
         .send()
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = resp.json().unwrap();
     assert_eq!(
         body,
-        json!({"results": [{"title": "Hello-World"}, {"title": "Second-Post"}]})
+        json!({"results": [{"basename": "Hello-World.json"}, {"basename": "Second-Post.json"}]})
     );
 
     kill_and_wait(child);
@@ -602,7 +602,7 @@ fn pre_query_hook_exceeding_configured_timeout_returns_500() {
     let root = blog_fixture();
     fs::write(
         root.path().join("slow_to_sql.sh"),
-        "sleep 3\necho \"SELECT title FROM posts ORDER BY title\"\n",
+        "sleep 3\necho \"SELECT basename FROM posts ORDER BY basename\"\n",
     )
     .unwrap();
     fs::write(
@@ -613,8 +613,8 @@ pre-query = "sh slow_to_sql.sh {args}"
 hook-timeout = 1
 
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT, basename TEXT, size INTEGER)"
-glob = "posts/{author}/{title}.json"
+ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
+glob = "posts/*/*.json"
 "#,
     )
     .unwrap();
@@ -650,7 +650,7 @@ fn pre_query_hook_within_generous_configured_timeout_succeeds() {
     let root = blog_fixture();
     fs::write(
         root.path().join("slowish_to_sql.sh"),
-        "sleep 2\necho \"SELECT title FROM posts ORDER BY title\"\n",
+        "sleep 2\necho \"SELECT basename FROM posts ORDER BY basename\"\n",
     )
     .unwrap();
     fs::write(
@@ -661,8 +661,8 @@ pre-query = "sh slowish_to_sql.sh {args}"
 hook-timeout = 60
 
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT, basename TEXT, size INTEGER)"
-glob = "posts/{author}/{title}.json"
+ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
+glob = "posts/*/*.json"
 "#,
     )
     .unwrap();
@@ -684,8 +684,8 @@ glob = "posts/{author}/{title}.json"
     assert_eq!(
         body,
         vec![
-            json!({"title": "Hello-World"}),
-            json!({"title": "Second-Post"}),
+            json!({"basename": "Hello-World.json"}),
+            json!({"basename": "Second-Post.json"}),
         ]
     );
 
@@ -709,8 +709,8 @@ post-query = "sh slow_wrap.sh {args}"
 hook-timeout = 1
 
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT, basename TEXT, size INTEGER)"
-glob = "posts/{author}/{title}.json"
+ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
+glob = "posts/*/*.json"
 "#,
     )
     .unwrap();
@@ -724,7 +724,7 @@ glob = "posts/{author}/{title}.json"
         .build()
         .unwrap()
         .post(format!("http://localhost:{port}/query"))
-        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .json(&json!({"sql": "SELECT basename FROM posts ORDER BY basename"}))
         .send()
         .unwrap();
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -774,7 +774,7 @@ fn query_subcommand_stdout_is_byte_identical_to_the_http_response() {
     // must yield identical bytes — the subcommand is a thin adapter over the
     // same execute_query pipeline the server uses, so stdout IS the HTTP body.
     let root = blog_fixture();
-    let sql = "SELECT title FROM posts ORDER BY title";
+    let sql = "SELECT basename FROM posts ORDER BY basename";
 
     let port = free_port();
     let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
@@ -1024,23 +1024,23 @@ fn include_default_composes_baked_in_files_with_an_explicit_config() {
     let posts = run_query_include_default(
         root.path(),
         &[".dirsql.toml"],
-        "SELECT title FROM posts ORDER BY title",
+        "SELECT basename FROM posts ORDER BY basename",
     );
     assert!(
         posts.status.success(),
         "the explicit config's `posts` table must ALSO be present, got {posts:?}"
     );
     let rows: Value = serde_json::from_slice(&posts.stdout).unwrap();
-    let titles: Vec<&str> = rows
+    let basenames: Vec<&str> = rows
         .as_array()
         .unwrap()
         .iter()
-        .filter_map(|r| r["title"].as_str())
+        .filter_map(|r| r["basename"].as_str())
         .collect();
     assert_eq!(
-        titles,
-        vec!["Hello-World", "Second-Post"],
-        "the config's posts must load alongside the default files table, got {titles:?}"
+        basenames,
+        vec!["Hello-World.json", "Second-Post.json"],
+        "the config's posts must load alongside the default files table, got {basenames:?}"
     );
 }
 
@@ -1273,8 +1273,8 @@ fn config_elsewhere_indexes_invocation_cwd_not_config_parent() {
         elsewhere.path().join(".dirsql.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE posts (title TEXT, author TEXT)"
-glob = "posts/{author}/{title}.json"
+ddl = "CREATE TABLE posts (basename TEXT)"
+glob = "posts/*/*.json"
 "#,
     )
     .unwrap();
@@ -1423,7 +1423,7 @@ fn persist_flag_writes_default_cache_and_restart_serves() {
     wait_until_ready(port, Duration::from_secs(10));
     let first = Client::new()
         .post(format!("http://localhost:{port}/query"))
-        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .json(&json!({"sql": "SELECT basename FROM posts ORDER BY basename"}))
         .send()
         .unwrap()
         .text()
@@ -1443,7 +1443,7 @@ fn persist_flag_writes_default_cache_and_restart_serves() {
     wait_until_ready(port, Duration::from_secs(10));
     let second = Client::new()
         .post(format!("http://localhost:{port}/query"))
-        .json(&json!({"sql": "SELECT title FROM posts ORDER BY title"}))
+        .json(&json!({"sql": "SELECT basename FROM posts ORDER BY basename"}))
         .send()
         .unwrap()
         .text()

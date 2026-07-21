@@ -555,9 +555,9 @@ glob = "*.json"
 fn builder_explicit_root_wins_over_config_directory() {
     // With `root` gone from config (#540), the index root is the explicit
     // `.root(...)`, never the config file's own directory. The config's parent
-    // holds a decoy; only the explicit root's file is indexed. The `name`
-    // column comes from a glob path capture so the test doesn't depend on
-    // content parsing.
+    // holds a decoy; only the explicit root's file is indexed. The `basename`
+    // column is filesystem-derived so the test doesn't depend on content
+    // parsing.
     let temp = TempDir::new().unwrap();
     let cfg_dir = temp.path().join("cfgdir");
     let data_dir = temp.path().join("data");
@@ -571,8 +571,8 @@ fn builder_explicit_root_wins_over_config_directory() {
         &cfg_path,
         r#"
 [[table]]
-ddl = "CREATE TABLE items (name TEXT)"
-glob = "{name}.json"
+ddl = "CREATE TABLE items (basename TEXT)"
+glob = "*.json"
 "#,
     )
     .unwrap();
@@ -582,9 +582,9 @@ glob = "{name}.json"
         .config(&cfg_path)
         .build()
         .unwrap();
-    let rows = db.query("SELECT name FROM items").unwrap();
+    let rows = db.query("SELECT basename FROM items").unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["name"], Value::Text("present".into()));
+    assert_eq!(rows[0]["basename"], Value::Text("present.json".into()));
 }
 
 #[test]
