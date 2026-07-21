@@ -2,8 +2,8 @@
 
 Map a glob of files to a named SQL table so you query exactly the files you
 care about, with exactly the columns you care about — instead of the
-catch-all `files` table that [default mode](../reference/cli.md#default-mode)
-serves.
+ad-hoc [path-tables](../reference/path-tables.md)
+[configless mode](../reference/cli.md#configless-mode) leaves you with.
 
 ## 1. Create a config next to your files
 
@@ -39,8 +39,7 @@ dirsql query "SELECT path, size FROM posts ORDER BY path" -c ./.dirsql.toml
 ```
 
 Files that don't match the glob (a `README.txt` next to `posts/`, say) are
-simply not in the table. Passing a config with `-c` fully replaces the
-default `files` table — only the tables you define are served.
+simply not in the table. Only the tables you define are served.
 
 ## Multiple tables
 

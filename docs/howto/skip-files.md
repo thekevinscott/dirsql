@@ -45,7 +45,7 @@ dirsql query "SELECT path FROM notes ORDER BY path" -c ./.dirsql.toml
 ## Notes
 
 - `ignore` lives in a config file, so it needs one:
-  [default mode](../reference/cli.md#default-mode) indexes
+  [configless mode](../reference/cli.md#configless-mode) indexes
   everything with no ignores.
 - The top-level `.dirsql/` directory is always excluded, ignore list or
   not — it is reserved for `dirsql`'s own metadata

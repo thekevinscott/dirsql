@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/ -x -q",
+  "ran_at": 1784545269,
+  "exit_code": 0,
+  "commit": "4952cabd13663bccfcdd5f3a63e6e050477a51d3",
+  "branch": "feat/636-drop-implicit-files-table"
+}

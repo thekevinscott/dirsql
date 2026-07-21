@@ -45,7 +45,7 @@ requests, closes open `/events` streams, and exits.
 
 | Flag | Default | Description |
 |---|---|---|
-| `-c, --config <path>` | baked-in default | Path to a [config file](./config.md). **Repeatable** (`-c a -c b`): the configs load and merge in argv order — see [Composing multiple configs](./config.md#composing-multiple-configs). The index is always rooted at the **invocation directory** (the current working directory), regardless of where a config lives — so `--config /elsewhere/.dirsql.toml` still indexes the directory you ran `dirsql` from. With none given, the [baked-in default](#default-mode) `files` table is served — a `./.dirsql.toml` on disk is **not** auto-loaded; pass it explicitly. A `-c` naming a file that does not exist is an [error](#degraded-mode), not a silent fallback to the default. |
+| `-c, --config <path>` | none | Path to a [config file](./config.md). **Repeatable** (`-c a -c b`): the configs load and merge in argv order — see [Composing multiple configs](./config.md#composing-multiple-configs). The index is always rooted at the **invocation directory** (the current working directory), regardless of where a config lives — so `--config /elsewhere/.dirsql.toml` still indexes the directory you ran `dirsql` from. With none given, **no named tables are defined** — query the filesystem with a [path-table](./path-tables.md) (`FROM './'`). A `./.dirsql.toml` on disk is **not** auto-loaded; pass it explicitly. A `-c` naming a file that does not exist is an [error](#degraded-mode). |
 | `--host <addr>` | `localhost` | Bind address. |
 | `--port <n>` | `7117` | TCP port to bind. |
 | `--persist [<path>]` | off | Keep the SQLite index on disk between runs so a restart only re-parses files that actually changed. Bare `--persist` caches at `<root>/.dirsql/cache.db`; `--persist <path>` caches at `<path>`. Off by default (the index is ephemeral). Also available on [`dirsql query`](#dirsql-query), passed after the subcommand. See [Keep the index across restarts](../howto/persist.md). |
@@ -61,24 +61,25 @@ requests, closes open `/events` streams, and exits.
   **30-second** timeout each, overridable with the config key
   [`[dirsql].hook-timeout`](./config.md#dirsql-keys).
 
-### Default mode
+### Configless mode
 
-With no `-c/--config`, the server serves the **baked-in default** — the
-shipped config compiled into the binary, indexing the invocation directory
-with a single table named `files`. This is a fixed default, *not* a
-`.dirsql.toml` read from disk: a `./.dirsql.toml` sitting in the current
-directory is **not** auto-loaded (pass it with `-c ./.dirsql.toml` to use
-it). The default `files` table:
+With no `-c/--config`, the server indexes the invocation directory but
+defines **no named tables**. Filesystem queries go through
+[path-tables](./path-tables.md): a quoted path in place of a table name,
+scanned live. A `./.dirsql.toml` sitting in the current directory is **not**
+auto-loaded (pass it with `-c ./.dirsql.toml` to use it).
 
-- Glob: `**/*` — every file under the root, at any depth, no ignores.
-- One row per file, with all seven
-  [stat columns](./columns.md): `path`, `basename`, `dir`, `ext`,
-  `size`, `mtime`, `ctime`.
+`'./'` is the whole root — every file at any depth, one row per file, with
+all seven [stat columns](./columns.md): `path`, `basename`, `dir`, `ext`,
+`size`, `mtime`, `ctime`.
 
 ```bash
 curl -s localhost:7117/query -H 'content-type: application/json' \
-  -d '{"sql":"SELECT basename, size FROM files ORDER BY size DESC LIMIT 5"}'
+  -d '{"sql":"SELECT basename, size FROM \'./\' ORDER BY size DESC LIMIT 5"}'
 ```
+
+Earlier versions served an implicit table named `files` here. It is gone; a
+`SELECT ... FROM files` with no config now fails and points at `FROM './'`.
 
 Passing a config with `-c` fully overrules this default. A `-c` naming a file
 that does not exist is an error (not a fallback to the default); a config that
@@ -111,8 +112,8 @@ non-zero exit with the diagnostic on stderr.
 Run a SQL query from the shell:
 
 ```bash
-# No -c: the baked-in default `files` table.
-dirsql query "SELECT basename, size FROM files ORDER BY size DESC LIMIT 5"
+# No -c: query the filesystem with a path-table.
+dirsql query "SELECT basename, size FROM './' ORDER BY size DESC LIMIT 5"
 # [{"basename":"model.bin","size":104857600}, …]
 
 # A config table (`posts`) needs its config passed explicitly, AFTER the subcommand.
@@ -135,7 +136,7 @@ response body), and exits `0`.
 uses**, so behavior is identical to `POST /query` by construction:
 
 - **Config discovery** honors `--config` passed after the subcommand (with none
-  given, the [baked-in default](#default-mode)), and `--extension` overrides,
+  given, [no named tables](#configless-mode)), and `--extension` overrides,
   exactly as server mode does.
 - **`--persist [<path>]`** is honored, so a repeated `dirsql query` reuses the
   on-disk cache. Because its value is optional, place a bare `--persist` after
@@ -163,8 +164,8 @@ stderr, with exit code `1`.
 
 ## `dirsql init`
 
-Writes a starter `.dirsql.toml` — the same table the [baked-in
-default](#default-mode) serves — as a scaffold to edit:
+Writes a starter `.dirsql.toml` defining a catch-all `files` table, as a
+scaffold to edit:
 
 ```bash
 dirsql init
@@ -205,7 +206,7 @@ installed in the same environment as `dirsql` (`pip install …`, or
 loads its fragment — its tables are queryable with zero config edits.
 Installed = active: there is no enable step and no naming convention. The
 fragment is composed *after* your own `-c` configs (so your config takes
-precedence in ordering), and the baked-in `files` table is preserved.
+precedence in ordering), and the shipped starter `files` table is preserved.
 
 Discovery is **launcher-only** — the standalone `cargo`-installed binary does no
 discovery, and the SDKs never auto-discover (pass a plugin's config explicitly

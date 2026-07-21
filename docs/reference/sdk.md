@@ -97,10 +97,12 @@ Creates a SQLite index over a directory. The index root is the explicit
 `root` when given, else the **process cwd** — the `config` file's location
 never sets the root.
 
-Constructing with **neither a `config` nor programmatic `tables`** serves the
-**baked-in default** `files` table (one row per file, over the root) — the
-same shipped default the CLI serves with no [`-c`](./cli.md#default-mode), not
-an empty index. There is no implicit `<root>/.dirsql.toml` discovery: to read a
+Constructing with **neither a `config` nor programmatic `tables`** defines
+**no named tables** — the same as the CLI with no
+[`-c`](./cli.md#configless-mode). Query the filesystem with a
+[path-table](./path-tables.md) (`SELECT * FROM './'`); a `SELECT ... FROM
+files` in that state fails with a hint pointing at that form. There is no
+implicit `<root>/.dirsql.toml` discovery: to read a
 config on disk, pass its path via `config` (Rust: `.config(path)` /
 `DirSQL::from_config_path(path)`). The root-joining `DirSQL::from_config(root)`
 shortcut was removed in #603 — use

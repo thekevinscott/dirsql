@@ -8,7 +8,7 @@ all-defaults one. Unknown keys are a parse error at every level (top level,
 fails loudly, naming the offending key, rather than silently no-opping.
 
 The [CLI](./cli.md) loads a config only when you pass it with `-c/--config`;
-with none given it serves the [baked-in default](./cli.md#default-mode) (a
+with none given [no named tables](./cli.md#configless-mode) are defined (a
 `./.dirsql.toml` on disk is **not** auto-loaded). The [SDKs](./sdk.md) load a
 config via the `config` constructor parameter.
 
@@ -161,8 +161,8 @@ The configs load and merge in **argv order**:
   error**, naming the table.
 
 The index [root](./cli.md#flags) is the invocation directory regardless of where
-any config lives. With no `-c`, the [baked-in default](./cli.md#default-mode) is
-served (no `./.dirsql.toml` auto-discovery); a single `-c` behaves exactly as
+any config lives. With no `-c`, [no named tables](./cli.md#configless-mode) are
+defined (no `./.dirsql.toml` auto-discovery); a single `-c` behaves exactly as
 before.
 
 ## Parse errors

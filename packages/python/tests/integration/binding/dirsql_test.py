@@ -58,16 +58,24 @@ def describe_DirSQL():
             ids = {r["id"] for r in results}
             assert ids == {"abc"}
 
-    def describe_default_config():
+    def describe_no_config():
         @pytest.mark.asyncio
-        async def it_serves_the_baked_in_files_table_with_no_config(tmp_path):
-            # #603: a DirSQL with no `config` and no `tables` serves the
-            # baked-in default `files` table (parity with the CLI's no-`-c`
-            # default), not an empty index.
+        async def it_defines_no_named_tables(tmp_path):
             (tmp_path / "readme.md").write_text("hello")
             db = DirSQL(str(tmp_path))
             await db.ready()
-            rows = await db.query("SELECT basename FROM files")
+            with pytest.raises(Exception) as excinfo:
+                await db.query("SELECT basename FROM files")
+            message = str(excinfo.value)
+            assert "no such table: files" in message
+            assert "did you mean FROM './'?" in message
+
+        @pytest.mark.asyncio
+        async def it_serves_path_tables(tmp_path):
+            (tmp_path / "readme.md").write_text("hello")
+            db = DirSQL(str(tmp_path))
+            await db.ready()
+            rows = await db.query("SELECT basename FROM './'")
             names = {r["basename"] for r in rows}
             assert "readme.md" in names
 
