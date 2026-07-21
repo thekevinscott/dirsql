@@ -2865,6 +2865,29 @@ mod internal_tests {
     }
 
     #[test]
+    fn build_wires_the_path_table_parser_onto_the_index() {
+        // Covers the `Some(command)` arm of finish_build: a parser set on the
+        // builder mints path-tables over the parser, so a stat column is gone
+        // and a parser column resolves.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("a.json"), r#"[{"k":"v"}]"#).unwrap();
+        let db = DirSQL::builder()
+            .root(dir.path())
+            .path_table_parser("cat {path}")
+            .build()
+            .unwrap();
+
+        assert!(
+            db.query("SELECT k FROM './*.json'").is_ok(),
+            "the parser column must resolve on a parsed path-table"
+        );
+        assert!(
+            db.query("SELECT size FROM './*.json'").is_err(),
+            "a stat column must not resolve on a parsed path-table"
+        );
+    }
+
+    #[test]
     fn a_persisted_build_also_wires_the_path_table_root() {
         let dir = TempDir::new().unwrap();
         let cache = dir.path().join("cache.db");
