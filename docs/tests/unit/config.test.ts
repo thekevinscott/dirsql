@@ -63,6 +63,7 @@ describe('vitepress config', () => {
     const howTo = sidebar['/'].find((group) => group.text === 'How-to Guides')
     const links = (howTo!.items ?? []).map((item) => item.link)
     expect(links).toEqual([
+      '/howto/query-without-config',
       '/howto/define-tables',
       '/howto/columns-from-paths',
       '/howto/extract-from-contents',

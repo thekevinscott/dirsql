@@ -61,6 +61,7 @@ test('the How-to Guides sidebar group lists the goal-named guides', async ({ pag
     )
   })
   expect(howtoLinks).toEqual([
+    '/dirsql/howto/query-without-config.html',
     '/dirsql/howto/define-tables.html',
     '/dirsql/howto/columns-from-paths.html',
     '/dirsql/howto/extract-from-contents.html',

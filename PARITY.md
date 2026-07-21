@@ -145,6 +145,18 @@ the skip rules (configured `ignore` plus the built-in `node_modules/**` and
 by `db::query` and the `dirsql_path` module). All three SDKs and the CLI get the
 same answers with no per-binding surface and no SDK signature changes.
 
+**Path-table parity proven per binding (#629, epic path-as-table close) —
+restoring/confirming parity, no drift.** #627/#628 landed the mechanism in the
+shared core; #629 *proves* the bindings inherit it by exercising path-tables
+through each SDK's real-core (`binding`) tier: the live glob scan, glob scoping,
+zero-match-yields-zero-rows, live re-scan across statements, JOIN against a named
+table, the hidden lazy `content` column (excluded from `SELECT *`, selectable by
+name, `NULL` for a non-UTF-8 file), and the error surface (`no such table` plus
+the verbatim `did you mean './…'?` hint reaching the SDK caller; a plain typo
+left unchanged). No implementation was needed — the tests passed on first run,
+confirming the core logic crosses both the PyO3 and napi boundaries unchanged.
+This closes epic #622.
+
 ## AsyncDirSQL
 
 | API                        | Python                                | Rust                                   |
@@ -312,6 +324,7 @@ Real-core file map:
 | Table-name resolution (#204) | `table_name_resolution_test.py` | `table_name_resolution.rs` | `table-name-resolution.test.ts` |
 | Docs examples | `docs_examples_test.py` | `docs_examples.rs` | `docs-examples.test.ts` |
 | Docs gap-fills | `docs_gaps_test.py` | `docs_gaps.rs` | `docs-gaps.test.ts` |
+| Path-tables (#627/#628/#629) | `path_table_test.py` | `path_table_query.rs`, `path_table_globs.rs`, `vtab.rs` | `path-table.test.ts` |
 
 Hermetic integration subdir (mocked core + fs, both bindings, #289): Python
 `tests/integration/hermetic/dirsql_test.py` (ready/query/watch/kwarg
@@ -351,6 +364,9 @@ incl. #313).
 | Strict mode (exact match)  | Y      | Y    | Y          |
 | `Table` construction + `ddl`/`glob` attributes | Y | Y | Y (`Table` class + plain-object interchangeability) |
 | Quoted-identifier DDL registers/queries by bare name (#204) | Y | Y | Y |
+| Path-table query (`FROM './'`, glob scoping, zero-match rows, live re-scan, JOIN vs named) | Y (#629) | Y | Y (#629) |
+| Path-table hidden `content` (excluded from `*`, selectable by name, non-UTF-8 → NULL) | Y (#629) | Y | Y (#629) |
+| Path-table error surface (`no such table` + `did you mean './…'?` hint reaches the caller; plain typo unchanged) | Y (#629) | Y | Y (#629) |
 
 ### Ready / async semantics
 

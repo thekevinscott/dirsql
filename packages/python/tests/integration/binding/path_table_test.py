@@ -102,3 +102,24 @@ def describe_path_tables():
 
         rows = await db.query("SELECT path FROM './docs/*.md'")
         assert "docs/d.md" in [r["path"] for r in rows]
+
+    @pytest.mark.asyncio
+    async def it_excludes_content_from_star_but_selects_it_by_name(docs_dir):
+        db = _open(docs_dir)
+
+        starred = await db.query("SELECT * FROM './docs/*.md'")
+        assert "content" not in starred[0]
+
+        named = await db.query(
+            "SELECT basename, content FROM './docs/*.md' WHERE basename = 'a.md'"
+        )
+        assert named == [{"basename": "a.md", "content": "alpha"}]
+
+    @pytest.mark.asyncio
+    async def it_yields_null_content_for_a_non_utf8_file(docs_dir):
+        with open(os.path.join(docs_dir, "docs", "logo.bin"), "wb") as fh:
+            fh.write(b"\xff\xd8\xff\xe0\x00\x80\x90")
+
+        rows = await _open(docs_dir).query("SELECT content FROM './docs/*.bin'")
+
+        assert rows == [{"content": None}]

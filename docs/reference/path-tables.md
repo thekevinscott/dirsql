@@ -120,9 +120,25 @@ A path-table is scanned when the statement runs, so it always reflects the
 filesystem as it is *now* — unlike declared tables, which are indexed on build
 and updated by the watcher. A file created a moment ago shows up immediately.
 
+The scan is live all the way down to `content`: a file's body is read when the
+query names the `content` column, not when the row is discovered. A file
+deleted *after* the scan finds it but *before* its `content` is read yields
+`NULL` content — the same NULL an unreadable or non-UTF-8 file gives — rather
+than failing the query. This is an accepted consequence of reading live, not a
+bug to design around.
+
 Path-tables are per-connection and are never written to a persistent cache, so
 they cannot leak into `sqlite_master` or survive a restart. The reserved
 top-level `.dirsql/` directory is excluded from the scan, as everywhere else.
+
+### When to promote to a declared table
+
+Every query re-scans the filesystem: a path-table has no index, no watcher, and
+no persistent cache. That is the right trade for a hundreds-of-files, run-it-once
+question. When the same tree is queried repeatedly, or is large, declare a
+[table](/reference/config) for it instead — a declared table is indexed on
+build, kept fresh by the watcher, and (with `--persist`) survives restarts, so
+its rows are read from SQLite rather than re-walked each time.
 
 ## Skip rules
 
