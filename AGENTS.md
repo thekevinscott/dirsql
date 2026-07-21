@@ -192,11 +192,11 @@ For docs/lint/typo-only PRs, include the section with a single line: `N/A - docs
 
 CI never runs the e2e suites; instead `conventions.yml`'s `e2e-verify` gate checks, per package, a committed attestation (`packages/python/e2e-attestation.json`, `packages/ts/e2e-attestation.json`) recording that the suite ran against the package's current code. **Regenerate the attestation for each package you changed, as the last commit touching that package before you push**: `just e2e-attest-python` / `just e2e-attest-ts` (needs `pip install testing-conventions`). Multi-package PRs: attest each package right after finishing *its* changes -- attesting both at the very end leaves the second one stale. **Any `packages/rust/src` change (including `cli/`) stales BOTH bindings' attestations** (CI-enforced via `[e2e].extra_scope`), so re-attest both after core changes. Full mechanics and debugging: `agents/reference/e2e-attestation.md`.
 
-### Docs as Spec
+### Docs as Reference
 
-**Docs are the canonical specification.** Every documented feature must have a corresponding test. Every test must trace back to a documented feature. If it's not in the docs, don't test it (and question whether it should exist). If it's in the docs, it must have a test.
+**Docs are the canonical description of intended behavior** -- the human source of truth for what the product does. They carry **no** test obligation: there is no rule that every documented feature must have a test, that every test must trace back to a doc, or that tests update whenever docs change. Docs themselves are not tested.
 
-When adding a feature, the PR must include docs AND tests. When docs change, tests update to match. Agents must run e2e tests locally before pushing substantial changes.
+Product *behavior* stays covered by the normal unit / integration / binding / e2e tiers -- that is unchanged. When adding a feature, the PR still includes docs (the human description) and whatever behavior tests the change warrants; the two are simply no longer coupled by a gate.
 
 ### Changelog and Migrations
 
