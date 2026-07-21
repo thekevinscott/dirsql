@@ -122,6 +122,8 @@ The `dirsql` Rust crate handles all heavy lifting:
 
 Wraps `rusqlite` with an anonymous disk-backed temp database (#402) — ephemeral like `:memory:`, but index pages spill to disk so resident memory does not scale with the corpus. Handles DDL execution (run verbatim -- no injected columns, epic #358), row insertion with per-file ownership recorded in the internal `_dirsql_internal_rows` table, querying, and row deletion by file path. The internal bookkeeping tables (`_dirsql_internal_rows`, `_dirsql_files`, `_dirsql_meta`) are a private surface: a SQLite authorizer installed on the `query()` path denies any read (or schema `PRAGMA`) targeting the reserved `_dirsql_*` namespace, so they are unreachable through the public query surface (issue #378) while the engine still writes them in the same transaction as the user rows.
 
+**Named tables are real; path-tables are virtual.** A declared `[[table]]` (or programmatic `Table`) is a real SQLite table whose rows are inserted on build and maintained by the watcher — the `db` module above. A [path-table](../docs/reference/path-tables.md) (`SELECT * FROM './'`, epic path-as-table) is a `dirsql_path` **virtual table** (`vtab.rs` / `path_table.rs`, rusqlite's `vtab` feature): no rows are stored, no reconcile or watcher runs, and the filesystem is walked live at query time (`xFilter`/`xNext` enumerate matched files; `xColumn` supplies stat values and lazily reads `content`). SQLite stays the entire query engine either way; the vtab only enumerates rows and supplies column values. Path-tables are registered on demand — see *Query execution* below.
+
 ### `scanner` -- Directory traversal
 
 Walks a directory tree and matches files against table globs. Returns a list of `(file_path, table_name)` pairs. Uses the `matcher` module internally.
@@ -206,5 +208,6 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 
 1. Python calls `db.query(sql)`
 2. A SQLite authorizer is installed for the prepare, denying reads of the internal `_dirsql_*` bookkeeping tables (issue #378); a query touching one fails with a "not authorized" error
-3. Rust executes the SQL against the ephemeral SQLite database
-4. Results are converted from `HashMap<String, Value>` to Python dicts -- exactly the user's declared columns, no filtering (epic #358)
+3. Rust prepares the SQL against the ephemeral SQLite database. On a `no such table: X` error where `X` is path-shaped (`./`, `../`, `/`, `~/`), it registers a `dirsql_path` virtual table for `X` in the `temp` schema and re-prepares; the loop repeats until prepare succeeds or the error is not path-shaped. A bare glob (`'**/*.md'`) is left unresolved but its error gains a `did you mean './**/*.md'?` hint; an ordinary typo is left untouched. Named tables always win — the fallback fires only for names SQLite could not resolve (epic path-as-table)
+4. Rust executes the prepared statement
+5. Results are converted from `HashMap<String, Value>` to Python dicts -- exactly the user's declared columns, no filtering (epic #358)

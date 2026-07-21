@@ -37,6 +37,7 @@ export default defineConfig({
         {
           text: 'How-to Guides',
           items: [
+            { text: 'Query files without a config', link: '/howto/query-without-config' },
             { text: 'Define tables for your files', link: '/howto/define-tables' },
             { text: 'Derive columns from file paths', link: '/howto/columns-from-paths' },
             { text: 'Extract rows from file contents', link: '/howto/extract-from-contents' },
