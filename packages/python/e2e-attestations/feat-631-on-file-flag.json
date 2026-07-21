@@ -1,0 +1,7 @@
+{
+  "command": "UV_NO_SYNC=1 uv run python -m pytest tests/e2e/ -x -q",
+  "ran_at": 1784651629,
+  "exit_code": 0,
+  "commit": "dab4a83291564b6b4eb60477d355785cf1566f31",
+  "branch": "feat/631-on-file-flag"
+}

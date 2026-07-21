@@ -1,7 +1,0 @@
-{
-  "command": "uv run python -m pytest tests/e2e/ -x -q",
-  "ran_at": 1784633695,
-  "exit_code": 0,
-  "commit": "32b9fb9bfd746c5fd433778220eca5b6309a49c6",
-  "branch": "feat/628-path-table-glob-semantics"
-}
