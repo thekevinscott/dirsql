@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1784824771,
+  "exit_code": 1,
+  "commit": "29592389e6e67e2f8db6bf6d7e6f0306ca69fcba",
+  "branch": "feat/637-init-escalation-example"
+}
