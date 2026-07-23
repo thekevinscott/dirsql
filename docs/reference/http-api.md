@@ -27,7 +27,7 @@ The `200` response is a JSON array of row objects keyed by column name:
 ```bash
 curl -s http://localhost:7117/query \
   -H 'content-type: application/json' \
-  -d '{"sql":"SELECT COUNT(*) AS n FROM files"}' \
+  -d '{"sql":"SELECT COUNT(*) AS n FROM \'./\'"}' \
   | jq
 ```
 

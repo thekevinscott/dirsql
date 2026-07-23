@@ -198,9 +198,9 @@ pattern if you would rather not see them.
 Path-tables are ordinary SQLite tables once resolved, so they join freely:
 
 ```sql
-SELECT p.basename, f.size
+SELECT p.basename, d.size
 FROM './docs/*.md' AS p
-JOIN files AS f ON f.path = p.path;
+JOIN pages AS d ON d.path = p.path;
 ```
 
 A zero-match path-table is not an error — it is an empty table, and the query

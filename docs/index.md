@@ -34,7 +34,7 @@ db = DirSQL(
     "./my-project",
     tables=[
         Table(
-            ddl="CREATE TABLE files (name TEXT, size INTEGER, type TEXT)",
+            ddl="CREATE TABLE records (name TEXT, size INTEGER, type TEXT)",
             glob="data/*.json",
             on_file=lambda path: [json.loads(open(path, encoding="utf-8").read())],
         ),
@@ -42,7 +42,7 @@ db = DirSQL(
 )
 
 # SQL queries over your filesystem
-large = db.query("SELECT * FROM files WHERE size > 1000")
+large = db.query("SELECT * FROM records WHERE size > 1000")
 ```
 
 ```rust [Rust]
@@ -52,14 +52,14 @@ let db = DirSQL::new(
     "./my-project",
     vec![
         Table::new(
-            "CREATE TABLE files (name TEXT, size INTEGER, type TEXT)",
+            "CREATE TABLE records (name TEXT, size INTEGER, type TEXT)",
             "data/*.json",
             |path| vec![serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()],
         ),
     ],
 )?;
 
-let large = db.query("SELECT * FROM files WHERE size > 1000")?;
+let large = db.query("SELECT * FROM records WHERE size > 1000")?;
 ```
 
 ```typescript [TypeScript]
@@ -70,14 +70,14 @@ const db = new DirSQL({
   root: './my-project',
   tables: [
     new Table({
-      ddl: 'CREATE TABLE files (name TEXT, size INTEGER, type TEXT)',
+      ddl: 'CREATE TABLE records (name TEXT, size INTEGER, type TEXT)',
       glob: 'data/*.json',
       onFile: (path) => [JSON.parse(readFileSync(path, 'utf8'))],
     }),
   ],
 });
 
-const large = await db.query('SELECT * FROM files WHERE size > 1000');
+const large = await db.query('SELECT * FROM records WHERE size > 1000');
 ```
 
 :::
