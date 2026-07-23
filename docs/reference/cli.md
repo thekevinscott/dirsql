@@ -168,7 +168,9 @@ timeout. The parser's output is the whole schema; the stat columns are not
 reachable on a parsed path-table. `--on-file` may be given **at most once** (a
 repeat is an error pointing at config files) and never touches config-declared
 tables. It is a `query`-only flag — server mode rejects it as an unknown
-argument.
+argument. The command string is copy-paste identical to a `[[table]]`
+`on-file` key, so an inline parser graduates to a config file unchanged — see
+[Parse your files into columns](../howto/parse-files-into-columns.md).
 
 Errors print the same diagnostic the HTTP `{"error": …}` body carries —
 config failures, SQL errors, rejected reads, hook failures, timeouts — to

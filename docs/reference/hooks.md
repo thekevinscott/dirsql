@@ -99,6 +99,17 @@ every watched change. The command reads the file itself and prints a JSON
 array of row objects; see [`[[table]]`](./config.md#table) for the
 row-mapping rules.
 
+The same command is attachable two ways, over the same contract: the
+`on-file` config key on a `[[table]]`, and the
+[`--on-file <command>`](./cli.md#on-file-command) flag on `dirsql query`,
+which attaches it to every [path-table](./path-tables.md#parsing-rows-with-on-file)
+in the query. The command string is identical between the two spellings — the
+flag is the inline form, the config key the declared form (see
+[Parse your files into columns](../howto/parse-files-into-columns.md)). The one
+behavioral difference is not in this contract but in the surrounding table: a
+declared `[[table]]` merges the filesystem facts onto each parsed row, while a
+parsed path-table exposes only the parser's output.
+
 | Placeholder | Value |
 |---|---|
 | `{path}` | The matched file's **absolute** path. `on-file = "extract.py {path}"` — self-sufficient from any working directory, so the command resolves it even when the config lives outside the index. |
