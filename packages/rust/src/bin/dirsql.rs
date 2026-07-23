@@ -75,7 +75,7 @@ struct ConfigArgs {
     config: Vec<PathBuf>,
 
     /// Internal (launcher-only): seed the resolved config set with the shipped
-    /// starter `files` table *before* the `-c` configs, so an explicit `-c`
+    /// starter `records` table *before* the `-c` configs, so an explicit `-c`
     /// composes with it instead of standing alone. `--include-default -c
     /// <plugin>` yields that table **plus** the plugin's tables — the additive
     /// composition the plugin launcher (#529) injects for the no-user-`-c`
@@ -287,14 +287,14 @@ fn load_state(cfg: &ConfigArgs) -> AppState {
     }
 
     let mut builder = DirSQL::builder();
-    // `--include-default` seeds the shipped starter `files` table before the
+    // `--include-default` seeds the shipped starter `records` table before the
     // `-c` configs, so an explicit config composes with it instead of standing
     // alone (#604). Programmatic tables sort before config tables in
-    // `resolve`, giving `[starter] ++ [-c]`; a starter-vs-config `files`
+    // `resolve`, giving `[starter] ++ [-c]`; a starter-vs-config `records`
     // collision hits the existing dedup in `compile_matcher`. With no `-c` at
     // all the flag still applies, yielding just the starter table.
     if cfg.include_default {
-        builder = builder.table(default_files_table());
+        builder = builder.table(default_records_table());
     }
     for config_path in &cfg.config {
         // Canonicalize so config-relative paths (extension libraries, hook
@@ -437,11 +437,11 @@ fn load_configless_state(cfg: &ConfigArgs) -> AppState {
     }
 }
 
-/// The shipped starter `files` table, parsed from the [`dirsql::DEFAULT_CONFIG_TOML`]
+/// The shipped starter `records` table, parsed from the [`dirsql::DEFAULT_CONFIG_TOML`]
 /// asset `dirsql init` writes. Used only by the explicit `--include-default`
 /// compose path (#604), which seeds it as a programmatic table *before* the
 /// `-c` configs. There is no implicit no-`-c` fallback (#636).
-fn default_files_table() -> Table {
+fn default_records_table() -> Table {
     let config = dirsql::config::load_config_str(dirsql::DEFAULT_CONFIG_TOML)
         .expect("DEFAULT_CONFIG_TOML must be valid dirsql config TOML");
     let table_config = &config.tables[0];

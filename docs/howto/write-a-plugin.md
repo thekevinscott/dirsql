@@ -217,7 +217,7 @@ Discovery is deliberately narrow. Know exactly who does what:
   your config still takes ordering precedence
   ([composing configs](../reference/config.md#composing-multiple-configs)). When
   you pass no `-c` of your own, the launcher also keeps the
-  shipped starter `files` table (an internal `--include-default`), so plugins
+  shipped starter `records` table (an internal `--include-default`), so plugins
   **add** tables rather than standing alone. Discovery is **pip/uvx only** for now — the `npx`
   launcher does not yet discover — and is switched off per invocation with
   [`--no-plugin` or `DIRSQL_NO_PLUGIN=1`](../reference/cli.md#plugins).

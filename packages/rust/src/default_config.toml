@@ -1,3 +1,33 @@
+# You do NOT need this file to use dirsql.
+#
+# Any FROM target that starts with ./, ../, /, or ~/ is a live, read-only
+# view of the filesystem -- no config required. To list every file under the
+# current directory:
+#
+#     dirsql query "SELECT * FROM './'"
+#
+# That path-table gives you path, basename, dir, ext, size, mtime and ctime
+# for free, and takes a glob to scope it: "SELECT * FROM './**/*.md'".
+#
+# Reach for a config file only to ESCALATE past that floor: to name a table,
+# scope it, pin a schema, and pull STRUCTURED rows out of your files. The
+# example below does exactly that -- edit it, then run:
+#
+#     dirsql query "SELECT * FROM records" -c .dirsql.toml
+
 [[table]]
-ddl  = "CREATE TABLE files (path TEXT, basename TEXT, dir TEXT, ext TEXT, size INTEGER, mtime INTEGER, ctime INTEGER)"
-glob = "**/*"
+# The files this table is built from (glob, relative to the index root).
+glob = "**/*.json"
+
+# The table's schema. Rows come entirely from the on-file hook below --
+# dirsql injects no columns of its own -- so the hook must emit exactly
+# these fields.
+ddl = "CREATE TABLE records (id TEXT, name TEXT)"
+
+# on-file runs once per matched file, receives its absolute {path}, and
+# prints a JSON array of row objects. Each *.json file here is already such
+# an array, so `cat` is enough. For any other format, point this at your own
+# parser instead -- it just has to read {path} and print the same JSON shape:
+#
+#     on-file = "./parse.py {path}"
+on-file = "cat {path}"

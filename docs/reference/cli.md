@@ -164,8 +164,11 @@ stderr, with exit code `1`.
 
 ## `dirsql init`
 
-Writes a starter `.dirsql.toml` defining a catch-all `files` table, as a
-scaffold to edit:
+Writes a starter `.dirsql.toml` as a scaffold to edit. It does **not**
+duplicate the zero-config floor (`SELECT * FROM './'` already lists every file
+with no config); instead it shows the **escalation**: one named `[[table]]`
+with a glob, a schema, and a real `on-file` hook that pulls structured rows
+out of your files.
 
 ```bash
 dirsql init
@@ -206,7 +209,7 @@ installed in the same environment as `dirsql` (`pip install …`, or
 loads its fragment — its tables are queryable with zero config edits.
 Installed = active: there is no enable step and no naming convention. The
 fragment is composed *after* your own `-c` configs (so your config takes
-precedence in ordering), and the shipped starter `files` table is preserved.
+precedence in ordering), and the shipped starter `records` table is preserved.
 
 Discovery is **launcher-only** — the standalone `cargo`-installed binary does no
 discovery, and the SDKs never auto-discover (pass a plugin's config explicitly

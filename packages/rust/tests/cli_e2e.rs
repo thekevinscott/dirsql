@@ -1141,7 +1141,8 @@ fn explicit_config_without_include_default_suppresses_the_baked_in_records() {
         "the explicit config's `posts` table must load, got {posts:?}"
     );
 
-    let records = run_query_subcommand_with_config(root.path(), "SELECT COUNT(*) AS n FROM records");
+    let records =
+        run_query_subcommand_with_config(root.path(), "SELECT COUNT(*) AS n FROM records");
     assert!(
         !records.status.success(),
         "an explicit `-c` without --include-default must suppress the baked-in \
