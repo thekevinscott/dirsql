@@ -1,7 +1,7 @@
 # Keep the index across restarts
 
 By default the database is ephemeral: rebuilt from your files on every
-startup and discarded on exit. The [`--persist [PATH]`](../reference/cli.md#server-mode)
+startup and discarded on exit. The [`--persist [PATH]`](../reference/cli.md#dirsql-server)
 flag keeps the SQLite index on disk instead, so a restart only re-parses
 files that actually changed — the difference between seconds and
 milliseconds on large trees, and between re-running and skipping expensive

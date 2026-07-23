@@ -1,6 +1,6 @@
 # HTTP API
 
-The [`dirsql` server](./cli.md#server-mode) (default `localhost:7117`)
+The [`dirsql` server](./cli.md#dirsql-server) (default `localhost:7117`)
 exposes two endpoints: `POST /query` and `GET /events`.
 
 ## `POST /query`

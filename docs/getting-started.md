@@ -68,11 +68,11 @@ this directory anyway — from inside `my-notes`, run one command:
 ::: code-group
 
 ```bash [npm]
-npx dirsql query "SELECT COUNT(*) AS files FROM './'"
+npx dirsql "SELECT COUNT(*) AS files FROM './'"
 ```
 
 ```bash [PyPI]
-uvx dirsql query "SELECT COUNT(*) AS files FROM './'"
+uvx dirsql "SELECT COUNT(*) AS files FROM './'"
 ```
 
 :::
@@ -168,11 +168,11 @@ pass it explicitly with `-c`, **after** the SQL:
 ::: code-group
 
 ```bash [npm]
-npx dirsql query "SELECT dir, basename, size FROM notes ORDER BY dir, basename" -c .dirsql.toml | jq
+npx dirsql "SELECT dir, basename, size FROM notes ORDER BY dir, basename" -c .dirsql.toml | jq
 ```
 
 ```bash [PyPI]
-uvx dirsql query "SELECT dir, basename, size FROM notes ORDER BY dir, basename" -c .dirsql.toml | jq
+uvx dirsql "SELECT dir, basename, size FROM notes ORDER BY dir, basename" -c .dirsql.toml | jq
 ```
 
 :::

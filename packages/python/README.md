@@ -116,7 +116,7 @@ Each event has `.action` (`"insert"`, `"update"`, `"delete"`, or `"error"`), `.t
 
 ## CLI
 
-`pip install dirsql` also installs a `dirsql` console script that runs an HTTP server exposing the SDK over HTTP: `POST /query` for SQL and `GET /events` for a Server-Sent Events change stream. Run `dirsql` (or `uvx dirsql`) to start it. See the [CLI reference](https://thekevinscott.github.io/dirsql/reference/cli).
+`pip install dirsql` also installs a `dirsql` console script. `dirsql "<sql>"` (or `uvx dirsql "<sql>"`) runs one query and prints the rows as JSON — the default. `dirsql server` starts an HTTP server exposing the SDK over HTTP: `POST /query` for SQL and `GET /events` for a Server-Sent Events change stream. See the [CLI reference](https://thekevinscott.github.io/dirsql/reference/cli).
 
 ## License
 

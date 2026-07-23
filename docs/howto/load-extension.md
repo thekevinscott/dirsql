@@ -53,7 +53,7 @@ entrypoint = "sqlite3_vec_init"
 ```
 
 ```bash
-uvx --with sqlite-vec dirsql -c ./.dirsql.toml
+uvx --with sqlite-vec dirsql server -c ./.dirsql.toml
 ```
 
 **Node (`npx dirsql`, TypeScript SDK).** Use the *npm package name* — but
