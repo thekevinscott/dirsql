@@ -40,7 +40,9 @@ fn spawn_dirsql(dir: &std::path::Path, port: u16) -> Child {
 fn spawn_dirsql_with(cwd: &std::path::Path, config: Option<&std::path::Path>, port: u16) -> Child {
     let mut cmd: StdCommand = std::process::Command::cargo_bin("dirsql")
         .expect("`dirsql` binary must be built with --features cli");
-    cmd.arg("--port")
+    // #662: the HTTP server is behind the `server` subcommand now.
+    cmd.arg("server")
+        .arg("--port")
         .arg(port.to_string())
         .arg("--host")
         .arg("localhost");

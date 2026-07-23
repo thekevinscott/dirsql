@@ -160,6 +160,7 @@ beforeAll(async () => {
     process.execPath,
     [
       LAUNCHER,
+      "server",
       "--config",
       cfg,
       "--host",

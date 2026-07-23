@@ -216,6 +216,7 @@ async function runServerAndQuery(configPath: string): Promise<unknown[]> {
     process.execPath,
     [
       LAUNCHER,
+      "server",
       "--config",
       configPath,
       "--host",

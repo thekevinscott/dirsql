@@ -104,6 +104,7 @@ def describe_query_contract():
                 sys.executable,
                 "-c",
                 "import sys; from dirsql.cli.main import main; sys.exit(main())",
+                "server",
                 "--config",
                 str(cfg),
                 "--host",
