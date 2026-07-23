@@ -34,7 +34,7 @@ on-file = "cat {path}"
     fs::create_dir_all(root.path().join("p1")).unwrap();
     fs::write(
         root.path().join("p1").join("meta.json"),
-        r#"[{"paper_id":"a","title":"First"},{"paper_id":"b","title":"Second"}]"#,
+        r#"[{"paper_id":"a","title":"First","basename":"meta.json"},{"paper_id":"b","title":"Second","basename":"meta.json"}]"#,
     )
     .unwrap();
 
@@ -50,7 +50,6 @@ on-file = "cat {path}"
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["paper_id"], Value::Text("a".into()));
     assert_eq!(rows[0]["title"], Value::Text("First".into()));
-    // Filesystem facts are still merged onto on-file rows.
     assert_eq!(rows[0]["basename"], Value::Text("meta.json".into()));
     assert_eq!(rows[1]["paper_id"], Value::Text("b".into()));
     assert_eq!(rows[1]["title"], Value::Text("Second".into()));

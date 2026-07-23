@@ -42,6 +42,7 @@ fn tables_accumulate_across_config_entries() {
 [[table]]
 ddl = "CREATE TABLE alpha (basename TEXT)"
 glob = "a.json"
+on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
 "#,
     );
     let cfg_b = TempDir::new().unwrap();
@@ -51,6 +52,7 @@ glob = "a.json"
 [[table]]
 ddl = "CREATE TABLE beta (basename TEXT)"
 glob = "b.json"
+on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
 "#,
     );
 
@@ -219,6 +221,7 @@ ignore = ["**/skip_a/**"]
 [[table]]
 ddl = "CREATE TABLE files (basename TEXT)"
 glob = "**/*.json"
+on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
 "#,
     );
     let cfg_b = TempDir::new().unwrap();

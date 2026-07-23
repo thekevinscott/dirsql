@@ -167,8 +167,15 @@ fn i8_ext_preserves_original_case() {
     std::fs::write(dir.path().join("Photo.JPG"), b"").unwrap();
     let db = DirSQL::new(
         dir.path(),
-        vec![Table::new("CREATE TABLE pics (ext TEXT)", "**/*", |_| {
-            vec![Row::new()]
+        vec![Table::new("CREATE TABLE pics (ext TEXT)", "**/*", |path| {
+            let mut row = Row::new();
+            if let Some(ext) = std::path::Path::new(path).extension() {
+                row.insert(
+                    "ext".into(),
+                    Value::Text(ext.to_string_lossy().into_owned()),
+                );
+            }
+            vec![row]
         })],
     )
     .unwrap();

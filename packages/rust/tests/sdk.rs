@@ -602,6 +602,7 @@ fn builder_explicit_root_wins_over_config_directory() {
 [[table]]
 ddl = "CREATE TABLE items (basename TEXT)"
 glob = "*.json"
+on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
 "#,
     )
     .unwrap();
@@ -877,7 +878,16 @@ fn binary_file_under_glob_does_not_break_build() {
     let table = Table::new(
         "CREATE TABLE assets (path TEXT, basename TEXT)",
         "*.png",
-        |_path| vec![Row::new()],
+        |path| {
+            let mut row = Row::new();
+            if let Some(base) = std::path::Path::new(path).file_name() {
+                row.insert(
+                    "basename".into(),
+                    Value::Text(base.to_string_lossy().into_owned()),
+                );
+            }
+            vec![row]
+        },
     );
 
     let db = DirSQL::new(root.path(), vec![table]).expect("build must not fail on a binary file");

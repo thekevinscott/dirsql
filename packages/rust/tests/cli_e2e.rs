@@ -41,6 +41,7 @@ fn blog_fixture() -> TempDir {
 [[table]]
 ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
 glob = "posts/*/*.json"
+on-file = '''sh -c 'base=${1##*/}; size=$(wc -c < "$1" | tr -d " "); printf "[{\"basename\":\"%s\",\"size\":%s}]" "$base" "$size"' sh {path}'''
 "#,
     )
     .unwrap();
@@ -61,6 +62,7 @@ fn quoted_blog_fixture() -> TempDir {
 [[table]]
 ddl = 'CREATE TABLE "posts" (basename TEXT)'
 glob = "posts/*/*.json"
+on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
 "#,
     )
     .unwrap();
@@ -524,6 +526,7 @@ pre-query = "sh to_sql.sh {args}"
 [[table]]
 ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
 glob = "posts/*/*.json"
+on-file = '''sh -c 'base=${1##*/}; size=$(wc -c < "$1" | tr -d " "); printf "[{\"basename\":\"%s\",\"size\":%s}]" "$base" "$size"' sh {path}'''
 "#,
     )
     .unwrap();
@@ -571,6 +574,7 @@ post-query = "sh wrap.sh {args}"
 [[table]]
 ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
 glob = "posts/*/*.json"
+on-file = '''sh -c 'base=${1##*/}; size=$(wc -c < "$1" | tr -d " "); printf "[{\"basename\":\"%s\",\"size\":%s}]" "$base" "$size"' sh {path}'''
 "#,
     )
     .unwrap();
@@ -615,6 +619,7 @@ hook-timeout = 1
 [[table]]
 ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
 glob = "posts/*/*.json"
+on-file = '''sh -c 'base=${1##*/}; size=$(wc -c < "$1" | tr -d " "); printf "[{\"basename\":\"%s\",\"size\":%s}]" "$base" "$size"' sh {path}'''
 "#,
     )
     .unwrap();
@@ -663,6 +668,7 @@ hook-timeout = 60
 [[table]]
 ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
 glob = "posts/*/*.json"
+on-file = '''sh -c 'base=${1##*/}; size=$(wc -c < "$1" | tr -d " "); printf "[{\"basename\":\"%s\",\"size\":%s}]" "$base" "$size"' sh {path}'''
 "#,
     )
     .unwrap();
@@ -711,6 +717,7 @@ hook-timeout = 1
 [[table]]
 ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
 glob = "posts/*/*.json"
+on-file = '''sh -c 'base=${1##*/}; size=$(wc -c < "$1" | tr -d " "); printf "[{\"basename\":\"%s\",\"size\":%s}]" "$base" "$size"' sh {path}'''
 "#,
     )
     .unwrap();
@@ -905,10 +912,12 @@ fn query_subcommand_fans_out_file_to_overlapping_tables() {
 [[table]]
 ddl = "CREATE TABLE ta (path TEXT)"
 glob = "data/*/metadata.json"
+on-file = '''sh -c 'rel=${1#"$2"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''
 
 [[table]]
 ddl = "CREATE TABLE tb (path TEXT)"
 glob = "data/**/metadata.json"
+on-file = '''sh -c 'rel=${1#"$2"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''
 "#,
     )
     .unwrap();

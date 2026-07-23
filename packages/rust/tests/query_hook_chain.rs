@@ -32,6 +32,7 @@ fn blog_fixture() -> (TempDir, DirSQL) {
 [[table]]
 ddl = "CREATE TABLE posts (basename TEXT)"
 glob = "posts/*/*.json"
+on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
 "#,
     )
     .unwrap();
