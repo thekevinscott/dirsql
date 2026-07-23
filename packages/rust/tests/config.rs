@@ -66,18 +66,24 @@ fn unknown_key_at_each_schema_level_errors() {
 // cli <-> config module boundary, so this lives here rather than as a unit
 // test in either module -- per the `unit lint` isolation rule.
 #[test]
-fn default_config_toml_parses_to_a_single_files_table_with_every_stat_column() {
+fn default_config_toml_is_an_escalation_example_with_a_named_table_and_on_file_hook() {
     let config = load_config_str(DEFAULT_CONFIG_TOML)
         .expect("DEFAULT_CONFIG_TOML must be valid dirsql config TOML");
     assert_eq!(config.tables.len(), 1);
     let table = &config.tables[0];
-    assert_eq!(table.glob, "**/*");
-    assert!(table.ddl.starts_with("CREATE TABLE files ("));
-    for col in ["path", "basename", "dir", "ext", "size", "mtime", "ctime"] {
-        assert!(
-            table.ddl.contains(col),
-            "DEFAULT_CONFIG_TOML's DDL must declare {col}, got: {}",
-            table.ddl
-        );
-    }
+    // The scaffold escalates past the zero-config path-table floor: it names a
+    // table, scopes it with a glob, and pins a schema.
+    assert_eq!(table.glob, "**/*.json");
+    assert!(
+        table.ddl.starts_with("CREATE TABLE records ("),
+        "DEFAULT_CONFIG_TOML's DDL must declare the `records` table, got: {}",
+        table.ddl
+    );
+    // The table carries a real `on-file` hook: rows come from the hook, not from
+    // stat-fact injection. This keeps the asset loadable once hook-less
+    // `[[table]]` entries become a config error.
+    assert!(
+        table.on_file.is_some(),
+        "DEFAULT_CONFIG_TOML's table must carry an `on-file` hook, got None",
+    );
 }
