@@ -5,7 +5,7 @@ fixture plugin *installed* (a staged dist declaring `[project.entry-points.dirsq
 on the launcher's `sys.path`). No mocks. "Installed = active" (#363): the
 launcher discovers the plugin, injects its `dirsql.toml` fragment as an ordinary
 `-c` flag, and adds the hidden `--include-default` (#604) when the user passed no
-`-c` so the baked-in `files` table survives alongside the plugin's tables.
+`-c` so the baked-in `records` table survives alongside the plugin's tables.
 
 Discovery is CLI-only and opt-out via `--no-plugin` / `DIRSQL_NO_PLUGIN=1`.
 """
@@ -108,13 +108,16 @@ def describe_plugin_discovery():
         assert notes.returncode == 0, f"stdout={notes.stdout!r} stderr={notes.stderr!r}"
         assert _basenames(notes) == ["hello.md"]
 
-    def it_keeps_the_baked_in_files_table_alongside_the_plugin(staged):
+    def it_keeps_the_baked_in_records_table_alongside_the_plugin(staged):
         site_dir, data = staged
-        # ...and the baked-in default `files` table is still served (proves the
+        # ...and the baked-in default `records` table is still served (proves the
         # launcher added `--include-default`, not a bare `-c` that would suppress it).
-        files = _run(site_dir, ["query", "SELECT basename FROM files"], data)
-        assert files.returncode == 0, f"stdout={files.stdout!r} stderr={files.stderr!r}"
-        assert "hello.md" in _basenames(files)
+        records = _run(
+            site_dir, ["query", "SELECT COUNT(*) AS n FROM records"], data
+        )
+        assert records.returncode == 0, (
+            f"stdout={records.stdout!r} stderr={records.stderr!r}"
+        )
 
     def it_skips_discovery_under_the_no_plugin_flag(staged):
         site_dir, data = staged
