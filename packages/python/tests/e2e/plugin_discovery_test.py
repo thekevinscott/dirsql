@@ -112,9 +112,7 @@ def describe_plugin_discovery():
         site_dir, data = staged
         # ...and the baked-in default `records` table is still served (proves the
         # launcher added `--include-default`, not a bare `-c` that would suppress it).
-        records = _run(
-            site_dir, ["query", "SELECT COUNT(*) AS n FROM records"], data
-        )
+        records = _run(site_dir, ["query", "SELECT COUNT(*) AS n FROM records"], data)
         assert records.returncode == 0, (
             f"stdout={records.stdout!r} stderr={records.stderr!r}"
         )
