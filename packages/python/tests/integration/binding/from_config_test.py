@@ -1,9 +1,10 @@
 """Binding-tier tests (real core, real fs) for DirSQL(config=).
 
 Config-defined tables produce one row per matched file. Each row's columns
-come from filesystem facts: the stat virtuals (`path`, `basename`, `dir`,
-`ext`, `size`, `mtime`, `ctime`). Content interpretation is intentionally out
-of scope; for that, register a programmatic Table with your own on_file
+come from the table's `on-file` hook: a small `sh` command that derives the
+stat facts (`path`, `basename`, `dir`, `ext`, `size`, `mtime`) from the file
+and emits them as a JSON row. Content interpretation beyond that is out of
+scope; for richer parsing, register a programmatic Table with your own on_file
 function.
 """
 
@@ -13,6 +14,13 @@ import tempfile
 import pytest
 
 from dirsql import DirSQL
+
+# `on-file` hooks that emit the stat facts a row needs, derived from the
+# file path (`{path}`) relative to the scan root (`{root}`). Emitting a
+# superset of the DDL's columns is safe -- undeclared keys are dropped.
+_HOOK_PATH = r"""on-file = '''sh -c 'rel=${1#"$2"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''"""
+_HOOK_PATH_BASENAME = r"""on-file = '''sh -c 'rel=${1#"$2"/}; base=${1##*/}; printf "[{\"path\":\"%s\",\"basename\":\"%s\"}]" "$rel" "$base"' sh {path} {root}'''"""
+_HOOK_STAT = r"""on-file = '''sh -c 'rel=${1#"$2"/}; base=${1##*/}; case "$rel" in */*) dir=${rel%/*};; *) dir="";; esac; ext=${base##*.}; [ "$ext" = "$base" ] && ext=""; size=$(wc -c < "$1" | tr -d " "); mtime=$(stat -c %Y "$1"); printf "[{\"path\":\"%s\",\"basename\":\"%s\",\"dir\":\"%s\",\"ext\":\"%s\",\"size\":%s,\"mtime\":%s}]" "$rel" "$base" "$dir" "$ext" "$size" "$mtime"' sh {path} {root}'''"""
 
 
 @pytest.fixture
@@ -39,7 +47,9 @@ def describe_DirSQL_from_config():
 [[table]]
 ddl = "CREATE TABLE items (path TEXT, basename TEXT)"
 glob = "items/*.csv"
-""",
+"""
+                + _HOOK_PATH_BASENAME
+                + "\n",
             )
 
             db = DirSQL(
@@ -91,7 +101,9 @@ glob = "comments/{thread_id}/*.txt"
 [[table]]
 ddl = "CREATE TABLE comments (path TEXT, basename TEXT)"
 glob = "comments/{thread_id}/*.txt"
-""",
+"""
+                + _HOOK_PATH_BASENAME
+                + "\n",
             )
 
             db = DirSQL(
@@ -115,7 +127,9 @@ glob = "comments/{thread_id}/*.txt"
 [[table]]
 ddl = "CREATE TABLE files (path TEXT, basename TEXT, dir TEXT, ext TEXT, size INTEGER, mtime INTEGER)"
 glob = "docs/*.md"
-""",
+"""
+                + _HOOK_STAT
+                + "\n",
             )
 
             db = DirSQL(
@@ -152,7 +166,9 @@ ignore = ["**/node_modules/**"]
 [[table]]
 ddl = "CREATE TABLE items (path TEXT)"
 glob = "data/**/*.json"
-""",
+"""
+                + _HOOK_PATH
+                + "\n",
             )
 
             db = DirSQL(
@@ -174,11 +190,16 @@ glob = "data/**/*.json"
 [[table]]
 ddl = "CREATE TABLE posts (basename TEXT)"
 glob = "posts/*.txt"
+"""
+                + _HOOK_PATH_BASENAME
+                + """
 
 [[table]]
 ddl = "CREATE TABLE authors (basename TEXT)"
 glob = "authors/*.txt"
-""",
+"""
+                + _HOOK_PATH_BASENAME
+                + "\n",
             )
 
             db = DirSQL(
@@ -232,7 +253,9 @@ glob = "*.json"
 [[table]]
 ddl = "CREATE TABLE items (basename TEXT, size INTEGER)"
 glob = "items/*.json"
-""",
+"""
+                + _HOOK_PATH_BASENAME
+                + "\n",
             )
 
             db = DirSQL(

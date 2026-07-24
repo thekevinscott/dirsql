@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1784897533,
+  "exit_code": 0,
+  "commit": "6285e8c0753676dbe7333f42d3a66749a2e808b8",
+  "branch": "feat/634-prep-python-selfemit"
+}

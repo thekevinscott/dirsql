@@ -32,6 +32,10 @@ import dirsql as _dirsql_pkg  # noqa: E402
 
 _BINARY_STAGE_DIR = os.path.join(os.path.dirname(_dirsql_pkg.__file__), "_binary")
 
+# An `on-file` hook emitting `path` and `basename`, derived from the file
+# path (`{path}`) relative to the scan root (`{root}`).
+_HOOK_PATH_BASENAME = r"""on-file = '''sh -c 'rel=${1#"$2"/}; base=${1##*/}; printf "[{\"path\":\"%s\",\"basename\":\"%s\"}]" "$rel" "$base"' sh {path} {root}'''"""
+
 
 def _stage_plugin(site_dir):
     """Stage the fixture plugin as a discoverable dist under `site_dir`:
@@ -145,6 +149,7 @@ def describe_plugin_discovery():
             "[[table]]\n"
             'ddl = "CREATE TABLE posts (path TEXT, basename TEXT)"\n'
             'glob = "*.md"\n'
+            f"{_HOOK_PATH_BASENAME}\n"
         )
         # A user `-c` is the base; the plugin is appended -> both tables load.
         # Config flags are subcommand-local (#609), so `-c` follows the SQL.

@@ -28,6 +28,10 @@ import dirsql as _dirsql_pkg  # noqa: E402
 
 _BINARY_STAGE_DIR = os.path.join(os.path.dirname(_dirsql_pkg.__file__), "_binary")
 
+# An `on-file` hook emitting `path`, derived from the file path (`{path}`)
+# relative to the scan root (`{root}`).
+_HOOK_PATH = r"""on-file = '''sh -c 'rel=${1#"$2"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''"""
+
 
 def _free_port():
     with socket.socket() as s:
@@ -84,10 +88,12 @@ def describe_fanout():
             "[[table]]\n"
             'ddl = "CREATE TABLE ta (path TEXT)"\n'
             'glob = "data/*/metadata.json"\n'
+            f"{_HOOK_PATH}\n"
             "\n"
             "[[table]]\n"
             'ddl = "CREATE TABLE tb (path TEXT)"\n'
             'glob = "data/**/metadata.json"\n'
+            f"{_HOOK_PATH}\n"
         )
 
         port = _free_port()

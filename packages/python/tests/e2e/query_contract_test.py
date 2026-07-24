@@ -37,6 +37,10 @@ import dirsql as _dirsql_pkg  # noqa: E402
 
 _BINARY_STAGE_DIR = os.path.join(os.path.dirname(_dirsql_pkg.__file__), "_binary")
 
+# An `on-file` hook emitting `path`, derived from the file path (`{path}`)
+# relative to the scan root (`{root}`).
+_HOOK_PATH = r"""on-file = '''sh -c 'rel=${1#"$2"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''"""
+
 
 def _free_port():
     with socket.socket() as s:
@@ -96,6 +100,7 @@ def describe_query_contract():
         cfg = root / ".dirsql.toml"
         cfg.write_text(
             '[[table]]\nddl = "CREATE TABLE files (path TEXT)"\nglob = "*.txt"\n'
+            f"{_HOOK_PATH}\n"
         )
 
         port = _free_port()

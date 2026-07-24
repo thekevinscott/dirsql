@@ -40,6 +40,10 @@ import dirsql as _dirsql_pkg  # noqa: E402
 
 _BINARY_STAGE_DIR = os.path.join(os.path.dirname(_dirsql_pkg.__file__), "_binary")
 
+# An `on-file` hook emitting `path`, derived from the file path (`{path}`)
+# relative to the scan root (`{root}`).
+_HOOK_PATH = r"""on-file = '''sh -c 'rel=${1#"$2"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''"""
+
 
 def _build_fixture_extension(target_dir):
     proc = subprocess.run(
@@ -143,6 +147,7 @@ def describe_cli_extension_by_package_name():
             "[[table]]\n"
             'ddl = "CREATE TABLE files (path TEXT)"\n'
             'glob = "*.txt"\n'
+            f"{_HOOK_PATH}\n"
         )
 
         port = _free_port()
