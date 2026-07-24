@@ -12,6 +12,10 @@ import pytest
 
 from dirsql import DirSQL
 
+# An `on-file` hook that emits `basename`, derived from the file path
+# (`{path}`) relative to the scan root (`{root}`).
+_HOOK_BASENAME = r"""on-file = '''sh -c 'base=${1##*/}; printf "[{\"basename\":\"%s\"}]" "$base"' sh {path} {root}'''"""
+
 
 @pytest.fixture
 def config_dir():
@@ -26,7 +30,10 @@ def _write(path, content):
 
 
 def _table_config(name, glob):
-    return f'[[table]]\nddl = "CREATE TABLE {name} (basename TEXT)"\nglob = "{glob}"\n'
+    return (
+        f'[[table]]\nddl = "CREATE TABLE {name} (basename TEXT)"\nglob = "{glob}"\n'
+        f"{_HOOK_BASENAME}\n"
+    )
 
 
 def describe_repeatable_config():

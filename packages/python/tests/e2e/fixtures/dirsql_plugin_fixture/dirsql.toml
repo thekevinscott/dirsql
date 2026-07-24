@@ -5,3 +5,4 @@
 [[table]]
 ddl = "CREATE TABLE notes (path TEXT, basename TEXT)"
 glob = "*.md"
+on-file = '''sh -c 'rel=${1#"$2"/}; base=${1##*/}; printf "[{\"path\":\"%s\",\"basename\":\"%s\"}]" "$rel" "$base"' sh {path} {root}'''
