@@ -1,7 +1,0 @@
-{
-  "command": "just test-e2e",
-  "ran_at": 1784634695,
-  "exit_code": 0,
-  "commit": "d5dfb6f091ee4270d20067031e22b20ffe356dd9",
-  "branch": "feat/655-drop-glob-captures"
-}

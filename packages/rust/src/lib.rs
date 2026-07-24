@@ -67,11 +67,12 @@ pub use crate::watcher::FileEvent as RawFileEvent;
 pub type Row = HashMap<String, Value>;
 pub type WatchStream = UnboundedReceiver<RowEvent>;
 
-/// The baked-in default config -- a single `files` table over every file, built
-/// from the seven stat columns. A builder with no `.config()` and no
-/// programmatic tables serves this (parity with the CLI's no-`-c` default,
-/// #603); `dirsql init` writes it verbatim; the CLI serves it directly. One
-/// asset, so the SDK default, the CLI default, and `init` can never drift.
+/// The escalation scaffold `dirsql init` writes verbatim: one named
+/// `[[table]]` (glob + DDL + a real `on-file` hook) demonstrating how to pull
+/// structured rows out of files, rather than duplicating the zero-config
+/// path-table floor (`SELECT * FROM './'`). The `--include-default` launcher
+/// path also seeds this table's glob/DDL. Carrying a genuine hook keeps it a
+/// valid config even once hook-less `[[table]]` entries become a load error.
 pub const DEFAULT_CONFIG_TOML: &str = include_str!("default_config.toml");
 
 type BoxError = Box<dyn StdError + Send + Sync + 'static>;

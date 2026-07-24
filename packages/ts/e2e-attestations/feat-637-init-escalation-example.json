@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1784824970,
+  "exit_code": 0,
+  "commit": "af4e75cb826890a49691448e26a29c33881bdee4",
+  "branch": "feat/637-init-escalation-example"
+}

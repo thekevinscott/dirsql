@@ -1034,22 +1034,22 @@ fn run_query_include_default(
 }
 
 #[test]
-fn include_default_composes_baked_in_files_with_an_explicit_config() {
+fn include_default_composes_baked_in_records_with_an_explicit_config() {
     // #604: the hidden `--include-default` flag seeds the baked-in default
-    // `files` table BEFORE the explicit `-c` configs, so a config no longer
+    // `records` table BEFORE the explicit `-c` configs, so a config no longer
     // suppresses the default. This is the additive composition the plugin
     // launcher (#529) injects for row 2 (no user `-c` + plugin): the result is
     // the baked-in default PLUS the config's own tables.
     let root = blog_fixture(); // `.dirsql.toml` defines `posts`
 
-    let files = run_query_include_default(
+    let records = run_query_include_default(
         root.path(),
         &[".dirsql.toml"],
-        "SELECT COUNT(*) AS n FROM files",
+        "SELECT COUNT(*) AS n FROM records",
     );
     assert!(
-        files.status.success(),
-        "the baked-in `files` table must be present under --include-default, got {files:?}"
+        records.status.success(),
+        "the baked-in `records` table must be present under --include-default, got {records:?}"
     );
 
     let posts = run_query_include_default(
@@ -1071,7 +1071,7 @@ fn include_default_composes_baked_in_files_with_an_explicit_config() {
     assert_eq!(
         basenames,
         vec!["Hello-World.json", "Second-Post.json"],
-        "the config's posts must load alongside the default files table, got {basenames:?}"
+        "the config's posts must load alongside the default records table, got {basenames:?}"
     );
 }
 
@@ -1079,32 +1079,28 @@ fn include_default_composes_baked_in_files_with_an_explicit_config() {
 fn include_default_with_no_config_serves_the_bare_default() {
     // #604: `--include-default` with no `-c` is idempotent — it is exactly the
     // bare baked-in default (row 1). Seeding the default and then merging an
-    // empty config set changes nothing.
+    // empty config set changes nothing: the `records` table (glob `**/*.json`)
+    // is served on its own.
     let dir = TempDir::new().unwrap();
-    fs::write(dir.path().join("readme.md"), "hello").unwrap();
+    fs::write(dir.path().join("a.json"), "[]").unwrap();
 
-    let out = run_query_include_default(dir.path(), &[], "SELECT basename FROM files");
+    let out = run_query_include_default(dir.path(), &[], "SELECT COUNT(*) AS n FROM records");
     assert!(
         out.status.success(),
-        "`--include-default` alone must serve the default files table, got {out:?}"
+        "`--include-default` alone must serve the default records table, got {out:?}"
     );
     let rows: Value = serde_json::from_slice(&out.stdout).unwrap();
-    let names: Vec<&str> = rows
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|r| r["basename"].as_str())
-        .collect();
-    assert!(
-        names.contains(&"readme.md"),
-        "expected the default files table to contain readme.md, got {names:?}"
+    let n = rows.as_array().unwrap()[0]["n"].as_i64().unwrap();
+    assert_eq!(
+        n, 1,
+        "the default records table must match the one *.json file, got {n}"
     );
 }
 
 #[test]
-fn include_default_conflicting_files_table_exits_nonzero_naming_files() {
-    // #604: seeding the baked-in `files` table and then loading a `-c` config
-    // that ALSO defines `files` is a duplicate-table conflict, caught by the
+fn include_default_conflicting_records_table_exits_nonzero_naming_records() {
+    // #604: seeding the baked-in `records` table and then loading a `-c` config
+    // that ALSO defines `records` is a duplicate-table conflict, caught by the
     // existing dedup (no new conflict machinery). The diagnostic names the
     // duplicated table.
     let dir = TempDir::new().unwrap();
@@ -1112,8 +1108,9 @@ fn include_default_conflicting_files_table_exits_nonzero_naming_files() {
         dir.path().join("dup.toml"),
         r#"
 [[table]]
-ddl = "CREATE TABLE files (x TEXT)"
+ddl = "CREATE TABLE records (x TEXT)"
 glob = "**/*"
+on-file = "cat {path}"
 "#,
     )
     .unwrap();
@@ -1121,22 +1118,22 @@ glob = "**/*"
     let out = run_query_include_default(dir.path(), &["dup.toml"], "SELECT 1");
     assert!(
         !out.status.success(),
-        "a config redefining `files` under --include-default must conflict, got {out:?}"
+        "a config redefining `records` under --include-default must conflict, got {out:?}"
     );
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(
-        stderr.contains("files") && stderr.to_lowercase().contains("duplicate"),
-        "the conflict must name the duplicate `files` table, got {stderr:?}"
+        stderr.contains("records") && stderr.to_lowercase().contains("duplicate"),
+        "the conflict must name the duplicate `records` table, got {stderr:?}"
     );
 }
 
 #[test]
-fn explicit_config_without_include_default_suppresses_the_baked_in_files() {
+fn explicit_config_without_include_default_suppresses_the_baked_in_records() {
     // #604 row 3: an explicit `-c` WITHOUT `--include-default` keeps the
     // replacement semantics of #602 — the baked-in default is suppressed, so
     // only the config's own tables exist. This is what makes --include-default
     // meaningful (it opts the default back IN) and pins the flag's condition.
-    let root = blog_fixture(); // `.dirsql.toml` defines `posts`, never `files`
+    let root = blog_fixture(); // `.dirsql.toml` defines `posts`, never `records`
 
     let posts = run_query_subcommand_with_config(root.path(), "SELECT COUNT(*) AS n FROM posts");
     assert!(
@@ -1144,16 +1141,17 @@ fn explicit_config_without_include_default_suppresses_the_baked_in_files() {
         "the explicit config's `posts` table must load, got {posts:?}"
     );
 
-    let files = run_query_subcommand_with_config(root.path(), "SELECT COUNT(*) AS n FROM files");
+    let records =
+        run_query_subcommand_with_config(root.path(), "SELECT COUNT(*) AS n FROM records");
     assert!(
-        !files.status.success(),
+        !records.status.success(),
         "an explicit `-c` without --include-default must suppress the baked-in \
-         `files` table, got {files:?}"
+         `records` table, got {records:?}"
     );
-    let stderr = String::from_utf8(files.stderr).unwrap();
+    let stderr = String::from_utf8(records.stderr).unwrap();
     assert!(
-        stderr.contains("files"),
-        "the error should name the absent `files` table, got {stderr:?}"
+        stderr.contains("records"),
+        "the error should name the absent `records` table, got {stderr:?}"
     );
 }
 
@@ -1176,11 +1174,17 @@ fn include_default_is_hidden_from_help() {
 
 #[test]
 fn init_output_loads_when_passed_explicitly_with_config_flag() {
-    // #602: `dirsql init` remains a scaffold, but its output no longer
-    // auto-loads — you pass it explicitly with `-c`. Write the starter, then
-    // load it via `-c` and confirm it serves the `files` table it declares.
+    // #602/#637: `dirsql init` writes an escalation scaffold that no longer
+    // auto-loads — you pass it explicitly with `-c`. The scaffold must WORK as
+    // written: its `records` table globs `**/*.json` and pipes each match
+    // through `on-file = "cat {path}"`, so a `.json` file that is already a JSON
+    // array of rows lands in the table verbatim.
     let dir = TempDir::new().unwrap();
-    fs::write(dir.path().join("readme.md"), "hello").unwrap();
+    fs::write(
+        dir.path().join("data.json"),
+        r#"[{"id":"1","name":"widget"}]"#,
+    )
+    .unwrap();
 
     let init = std::process::Command::cargo_bin("dirsql")
         .expect("binary must exist")
@@ -1196,7 +1200,7 @@ fn init_output_loads_when_passed_explicitly_with_config_flag() {
     let out = std::process::Command::cargo_bin("dirsql")
         .expect("binary must exist")
         .arg("query")
-        .arg("SELECT basename FROM files")
+        .arg("SELECT name FROM records")
         .arg("-c")
         .arg(".dirsql.toml")
         .current_dir(dir.path())
@@ -1211,11 +1215,11 @@ fn init_output_loads_when_passed_explicitly_with_config_flag() {
         .as_array()
         .unwrap()
         .iter()
-        .filter_map(|r| r["basename"].as_str())
+        .filter_map(|r| r["name"].as_str())
         .collect();
     assert!(
-        names.contains(&"readme.md"),
-        "the init config's files table must contain readme.md, got {names:?}"
+        names.contains(&"widget"),
+        "the init scaffold's records table must contain the parsed row, got {names:?}"
     );
 }
 
