@@ -165,9 +165,12 @@ beforeAll(async () => {
   await mkdir(dataDir);
   await writeFile(join(dataDir, "a.txt"), "hello");
   const cfg = join(dataDir, ".dirsql.toml");
+  // The table emits its own `path` column via an `on-file` hook (the core no
+  // longer injects filesystem facts): strip the root prefix and print it.
+  const pathHook = `on-file = '''sh -c 'rel=\${1#"$2"/}; printf "[{\\"path\\":\\"%s\\"}]" "$rel"' sh {path} {root}'''`;
   await writeFile(
     cfg,
-    `[[table]]\nddl = "CREATE TABLE files (path TEXT)"\nglob = "*.txt"\n`,
+    `[[table]]\nddl = "CREATE TABLE files (path TEXT)"\nglob = "*.txt"\n${pathHook}\n`,
   );
 
   serverPort = await freePort();
