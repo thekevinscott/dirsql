@@ -19,6 +19,16 @@ async function seedFile(path: string, content: string): Promise<void> {
   await writeFile(path, content);
 }
 
+// Each fixture emits its own filesystem-fact columns via an `on-file` hook
+// rather than relying on the core injecting them. Hook output overrides
+// injection, so results are identical while injection remains and stay green
+// once it is removed. `{path}` is the absolute path, `{root}` the index root;
+// the relative path is `{path}` with the `{root}/` prefix stripped.
+const pathHook = `on-file = '''sh -c 'rel=\${1#"$2"/}; printf "[{\\"path\\":\\"%s\\"}]" "$rel"' sh {path} {root}'''`;
+const pathBasenameHook = `on-file = '''sh -c 'rel=\${1#"$2"/}; base=\${1##*/}; printf "[{\\"path\\":\\"%s\\",\\"basename\\":\\"%s\\"}]" "$rel" "$base"' sh {path} {root}'''`;
+const basenameHook = `on-file = '''sh -c 'printf "[{\\"basename\\":\\"%s\\"}]" "\${1##*/}"' sh {path}'''`;
+const statHook = `on-file = '''sh -c 'rel=\${1#"$2"/}; base=\${1##*/}; case "$rel" in */*) dir=\${rel%/*};; *) dir="";; esac; ext=\${base##*.}; [ "$ext" = "$base" ] && ext=""; size=$(wc -c < "$1" | tr -d " "); mtime=$(stat -c %Y "$1"); printf "[{\\"path\\":\\"%s\\",\\"basename\\":\\"%s\\",\\"dir\\":\\"%s\\",\\"ext\\":\\"%s\\",\\"size\\":%s,\\"mtime\\":%s}]" "$rel" "$base" "$dir" "$ext" "$size" "$mtime"' sh {path} {root}'''`;
+
 describe("new DirSQL(configPath)", () => {
   let dir: string;
   let configPath: string;
@@ -41,6 +51,7 @@ describe("new DirSQL(configPath)", () => {
 [[table]]
 ddl = "CREATE TABLE items (path TEXT, basename TEXT)"
 glob = "items/*.csv"
+${pathBasenameHook}
 `,
     );
 
@@ -80,6 +91,7 @@ glob = "comments/{thread_id}/*.txt"
 [[table]]
 ddl = "CREATE TABLE comments (path TEXT, basename TEXT)"
 glob = "comments/{thread_id}/*.txt"
+${pathBasenameHook}
 `,
     );
 
@@ -103,6 +115,7 @@ glob = "comments/{thread_id}/*.txt"
 [[table]]
 ddl = "CREATE TABLE files (path TEXT, basename TEXT, dir TEXT, ext TEXT, size INTEGER, mtime INTEGER)"
 glob = "docs/*.md"
+${statHook}
 `,
     );
 
@@ -134,6 +147,7 @@ ignore = ["**/node_modules/**"]
 [[table]]
 ddl = "CREATE TABLE items (path TEXT)"
 glob = "data/**/*.json"
+${pathHook}
 `,
     );
 
@@ -153,10 +167,12 @@ glob = "data/**/*.json"
 [[table]]
 ddl = "CREATE TABLE posts (basename TEXT)"
 glob = "posts/*.txt"
+${basenameHook}
 
 [[table]]
 ddl = "CREATE TABLE authors (basename TEXT)"
 glob = "authors/*.txt"
+${basenameHook}
 `,
     );
 
