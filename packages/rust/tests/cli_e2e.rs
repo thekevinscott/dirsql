@@ -83,7 +83,10 @@ fn free_port() -> u16 {
 fn spawn_dirsql(dir: &std::path::Path, port: u16) -> Child {
     let mut cmd: StdCommand = std::process::Command::cargo_bin("dirsql")
         .expect("`dirsql` binary must be built by `cargo test` with --features cli");
-    cmd.arg("--port")
+    // #662: the HTTP server moved behind the `server` subcommand; `--host` /
+    // `--port` are now server-local flags.
+    cmd.arg("server")
+        .arg("--port")
         .arg(port.to_string())
         .arg("--host")
         .arg("localhost")
@@ -93,12 +96,13 @@ fn spawn_dirsql(dir: &std::path::Path, port: u16) -> Child {
     cmd.spawn().expect("spawning dirsql failed")
 }
 
-/// Spawn `dirsql` bound to `--port <port>` in `dir` with `extra` args
+/// Spawn `dirsql server` bound to `--port <port>` in `dir` with `extra` args
 /// appended (e.g. `--persist`). Mirrors [`spawn_dirsql`] otherwise.
 fn spawn_dirsql_with_args(dir: &std::path::Path, port: u16, extra: &[&str]) -> Child {
     let mut cmd: StdCommand = std::process::Command::cargo_bin("dirsql")
         .expect("`dirsql` binary must be built by `cargo test` with --features cli");
-    cmd.arg("--port")
+    cmd.arg("server")
+        .arg("--port")
         .arg(port.to_string())
         .arg("--host")
         .arg("localhost");
@@ -165,17 +169,34 @@ fn version_flag_prints_and_exits_zero() {
 }
 
 #[test]
-fn help_flag_prints_and_exits_zero() {
-    // Every flag documented in docs/reference/cli.md must appear in `--help`.
+fn help_flag_lists_the_subcommands_and_default_query_flags() {
+    // #662: the top-level `--help` documents the default query mode and its
+    // flags (`-c`, `--persist`), plus the `query`/`server`/`init` subcommands.
+    // `--host`/`--port` moved under `dirsql server` and are no longer here.
     std::process::Command::cargo_bin("dirsql")
         .expect("binary must exist")
         .arg("--help")
         .assert()
         .success()
         .stdout(predicates::str::contains("-c, --config"))
+        .stdout(predicates::str::contains("--persist"))
+        .stdout(predicates::str::contains("server"))
+        .stdout(predicates::str::contains("query"))
+        .stdout(predicates::str::contains("init"));
+}
+
+#[test]
+fn server_help_lists_the_bind_flags() {
+    // #662: `--host`/`--port` are server-local now, documented under
+    // `dirsql server --help`.
+    std::process::Command::cargo_bin("dirsql")
+        .expect("binary must exist")
+        .arg("server")
+        .arg("--help")
+        .assert()
+        .success()
         .stdout(predicates::str::contains("--host"))
-        .stdout(predicates::str::contains("--port"))
-        .stdout(predicates::str::contains("--persist"));
+        .stdout(predicates::str::contains("--port"));
 }
 
 #[test]
@@ -775,6 +796,100 @@ fn run_query_subcommand_with_config(dir: &std::path::Path, sql: &str) -> std::pr
         .expect("spawning `dirsql query` failed")
 }
 
+/// Run bare `dirsql <sql>` (no subcommand, the #662 default) in `dir`.
+fn run_bare_query(dir: &std::path::Path, sql: &str) -> std::process::Output {
+    std::process::Command::cargo_bin("dirsql")
+        .expect("binary must exist")
+        .arg(sql)
+        .current_dir(dir)
+        .output()
+        .expect("spawning bare `dirsql` failed")
+}
+
+#[test]
+fn bare_dirsql_runs_the_headline_query_and_returns_rows() {
+    // #662: the epic headline `dirsql "SELECT * FROM './'"` must work with no
+    // subcommand — query is now the default. Rows come back as JSON on stdout.
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("readme.md"), "hello").unwrap();
+
+    let out = run_bare_query(dir.path(), "SELECT basename FROM './'");
+    assert!(
+        out.status.success(),
+        "bare `dirsql \"<sql>\"` must run the default query, got {out:?}"
+    );
+    let rows: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let names: Vec<&str> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["basename"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"readme.md"),
+        "the default query must serve the path-table, got {names:?}"
+    );
+}
+
+#[test]
+fn bare_dirsql_and_query_subcommand_are_byte_identical() {
+    // #662: bare `dirsql <sql>` is exactly `dirsql query <sql>` — same pipeline,
+    // same bytes.
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("readme.md"), "hello").unwrap();
+    let sql = "SELECT basename FROM './' ORDER BY basename";
+
+    let bare = run_bare_query(dir.path(), sql);
+    let sub = run_query_subcommand(dir.path(), sql);
+    assert!(bare.status.success() && sub.status.success());
+    assert_eq!(
+        bare.stdout, sub.stdout,
+        "bare `dirsql <sql>` and `dirsql query <sql>` must be byte-identical"
+    );
+}
+
+#[test]
+fn bare_dirsql_default_query_honors_config_flag() {
+    // #662: the default query mode accepts `-c` after the SQL, just like the
+    // `query` subcommand.
+    let root = blog_fixture(); // `.dirsql.toml` defines `posts`
+    let out = std::process::Command::cargo_bin("dirsql")
+        .expect("binary must exist")
+        .arg("SELECT COUNT(*) AS n FROM posts")
+        .arg("-c")
+        .arg(".dirsql.toml")
+        .current_dir(root.path())
+        .output()
+        .expect("spawning bare `dirsql` failed");
+    assert!(
+        out.status.success(),
+        "bare `dirsql <sql> -c <cfg>` must load the config, got {out:?}"
+    );
+    let rows: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(rows, json!([{"n": 2}]));
+}
+
+#[test]
+fn no_subcommand_and_no_sql_errors_pointing_at_dirsql_server() {
+    // #662: bare `dirsql` with no SQL must NOT silently start the server (that
+    // would re-invert the default). It errors and points at `dirsql server`.
+    let dir = TempDir::new().unwrap();
+    let out = std::process::Command::cargo_bin("dirsql")
+        .expect("binary must exist")
+        .current_dir(dir.path())
+        .output()
+        .expect("spawning bare `dirsql` failed");
+    assert!(
+        !out.status.success(),
+        "bare `dirsql` with no query must be a non-zero exit, got {out:?}"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("dirsql server"),
+        "the no-args error must point at `dirsql server`, got {stderr:?}"
+    );
+}
+
 #[test]
 fn query_subcommand_stdout_is_byte_identical_to_the_http_response() {
     // #439 parity: the same SQL over the same fixture through both surfaces
@@ -1326,7 +1441,8 @@ glob = "posts/*/*.json"
     let port = free_port();
     let mut cmd: StdCommand =
         std::process::Command::cargo_bin("dirsql").expect("binary must exist");
-    cmd.arg("--port")
+    cmd.arg("server")
+        .arg("--port")
         .arg(port.to_string())
         .arg("--host")
         .arg("localhost")
@@ -1364,7 +1480,8 @@ fn explicit_config_flag_loads_the_named_config() {
     let port = free_port();
     let mut cmd: StdCommand =
         std::process::Command::cargo_bin("dirsql").expect("binary must exist");
-    cmd.arg("--port")
+    cmd.arg("server")
+        .arg("--port")
         .arg(port.to_string())
         .arg("--host")
         .arg("localhost")
@@ -1395,7 +1512,8 @@ fn short_config_flag_loads_the_named_config() {
     let port = free_port();
     let mut cmd: StdCommand =
         std::process::Command::cargo_bin("dirsql").expect("binary must exist");
-    cmd.arg("--port")
+    cmd.arg("server")
+        .arg("--port")
         .arg(port.to_string())
         .arg("--host")
         .arg("localhost")

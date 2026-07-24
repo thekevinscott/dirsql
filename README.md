@@ -21,9 +21,9 @@ pip install dirsql                 # Python
 cargo add dirsql                   # Rust (library)
 npm add dirsql                     # TypeScript
 
-# CLI (HTTP server, identical functionality)
-npx dirsql                         # via npm
-uvx dirsql                         # via PyPI
+# CLI: query is the default (`dirsql server` starts the HTTP server)
+npx dirsql "SELECT * FROM './'"    # via npm
+uvx dirsql "SELECT * FROM './'"    # via PyPI
 cargo install dirsql --features cli
 ```
 

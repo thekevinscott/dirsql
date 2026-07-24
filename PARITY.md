@@ -192,6 +192,20 @@ const rows = await db.query("SELECT ...");
 for await (const event of db.watch()) { ... }
 ```
 
+## CLI: invocation modes
+
+**Parity by construction, no drift; no SDK API change (#662).** Query is the
+default CLI mode: `dirsql "<sql>"` runs one query and prints JSON rows,
+identical to the retained explicit synonym `dirsql query "<sql>"`. The HTTP
+server is the `dirsql server` subcommand (`--host`/`--port`/`--persist` are
+`server`-local flags); `dirsql init` is unchanged; bare `dirsql` with no SQL
+is a usage error pointing at `dirsql server`. This command structure lives in
+the shared Rust binary (`packages/rust/src/bin/dirsql.rs`); the `pip`/`npx`
+launchers forward argv verbatim, so every install (`pip` / `npm` / `cargo`)
+gets identical dispatch. This is a **CLI-only** change — no binding's public
+API (`DirSQL`, `Table`, `query`, `watch`) shifts, so there is no SDK parity
+surface here.
+
 ## CLI: plugin discovery
 
 **Intentional drift — pip/uvx launcher only (#529/#363).** Installed plugins

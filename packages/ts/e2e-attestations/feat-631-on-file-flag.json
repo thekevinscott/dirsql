@@ -1,7 +1,0 @@
-{
-  "command": "pnpm test:e2e",
-  "ran_at": 1784652827,
-  "exit_code": 0,
-  "commit": "59b6b068d66490b11a0ae161d7d7c8025623cacb",
-  "branch": "feat/631-on-file-flag"
-}

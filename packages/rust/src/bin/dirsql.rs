@@ -1,8 +1,11 @@
-//! `dirsql` CLI binary. Three modes:
-//! - No subcommand: HTTP server documented in `docs/reference/cli.md`.
-//! - `query`: one-shot query over the same pipeline the server uses; see
+//! `dirsql` CLI binary. Query is the default; the server is a subcommand:
+//! - No subcommand + SQL (`dirsql "<sql>"`): one-shot query, the default
+//!   behavior. Identical to `dirsql query "<sql>"`.
+//! - `query`: explicit synonym for the default one-shot query; see
 //!   `docs/reference/cli.md`.
+//! - `server`: the HTTP server documented in `docs/reference/cli.md`.
 //! - `init`: writes a fixed starter `.dirsql.toml`; see `docs/reference/cli.md`.
+//! - No subcommand and no SQL: a usage error pointing at `dirsql server`.
 //!
 //! Only compiled with `--features cli`.
 
@@ -20,14 +23,18 @@ use dirsql::{DirSQL, Extension, Row, Table};
 #[command(
     name = "dirsql",
     version,
-    about = "Ephemeral SQL index over a local directory, exposed over HTTP.",
-    long_about = "Runs an HTTP server that exposes a SQL view of a local \
-                  directory. Tables are defined by a `.dirsql.toml` config \
-                  file passed with `-c`; with no `-c` there are no named \
-                  tables and filesystem queries go through path-tables \
+    about = "Query a local directory as SQL. `dirsql \"<sql>\"` runs one query; \
+             `dirsql server` starts the HTTP server.",
+    long_about = "Runs one SQL query over a local directory and prints the \
+                  result rows as JSON. `dirsql \"SELECT * FROM './'\"` is the \
+                  default; `dirsql query \"<sql>\"` is an explicit synonym. \
+                  Tables are defined by a `.dirsql.toml` config file passed \
+                  with `-c`; with no `-c` there are no named tables and \
+                  filesystem queries go through path-tables \
                   (`SELECT * FROM './'`) — a `./.dirsql.toml` on disk is NOT \
-                  auto-loaded, pass it explicitly. Config flags are \
-                  subcommand-local: for `query` pass them AFTER the \
+                  auto-loaded, pass it explicitly. The `server` subcommand \
+                  runs the long-lived HTTP server instead. Config flags are \
+                  subcommand-local: for `query`/`server` pass them AFTER the \
                   subcommand (`dirsql query <sql> -c <cfg>`); a flag before a \
                   subcommand is a hard error. The `init` subcommand writes a \
                   starter `.dirsql.toml` defining a `files` table — no \
@@ -38,21 +45,23 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 
-    /// Server-mode config flags. With no subcommand, dirsql runs the HTTP
-    /// server and these configure it. They are subcommand-local, not global:
-    /// for `query` the same flags are passed AFTER the subcommand
-    /// (`dirsql query <sql> -c <cfg>`); a config flag placed BEFORE a
-    /// subcommand is a hard error, never silently dropped (#609).
+    /// The SQL to run in the default (query) mode: `dirsql "<sql>"`. With no
+    /// subcommand and no SQL, dirsql prints a usage error pointing at
+    /// `dirsql server`. Identical to `dirsql query "<sql>"`.
+    sql: Option<String>,
+
+    /// Attach a parser to every path-table in the default-mode query — the
+    /// same `--on-file` the `query` subcommand takes (see [`QueryArgs`]).
+    #[arg(long = "on-file")]
+    on_file: Vec<String>,
+
+    /// Config flags for the default (query) mode. They are subcommand-local,
+    /// not global: for the `query`/`server` subcommands the same flags are
+    /// passed AFTER the subcommand (`dirsql query <sql> -c <cfg>`); a config
+    /// flag placed BEFORE a subcommand is a hard error, never silently
+    /// dropped (#609).
     #[command(flatten)]
     common: ConfigArgs,
-
-    /// Bind address. Used when no subcommand is given.
-    #[arg(long, default_value = "localhost")]
-    host: String,
-
-    /// TCP port to bind. Used when no subcommand is given.
-    #[arg(long, default_value_t = 7117)]
-    port: u16,
 }
 
 /// The config-layer flags shared by server mode and the `query` subcommand.
@@ -134,11 +143,31 @@ enum Command {
     Init(InitArgs),
 
     /// Run one SQL query against the indexed directory, print the result
-    /// rows as JSON on stdout, and exit. No server, no watch. Shares the
+    /// rows as JSON on stdout, and exit. No server, no watch. This is the
+    /// explicit synonym for the default `dirsql "<sql>"`. Shares the
     /// server's query pipeline, so config loading, hooks, the query
     /// timeout, the read-only rule, and error classification are identical
     /// to `POST /query`. Config flags follow the SQL: `dirsql query <sql> -c <cfg>`.
     Query(QueryArgs),
+
+    /// Start the long-lived HTTP server exposing a SQL view of the directory
+    /// over `POST /query` and `GET /events`. Config flags follow the
+    /// subcommand: `dirsql server -c <cfg>`. Runs until `SIGINT` / `SIGTERM`.
+    Server(ServerArgs),
+}
+
+#[derive(Debug, Args)]
+struct ServerArgs {
+    /// Bind address.
+    #[arg(long, default_value = "localhost")]
+    host: String,
+
+    /// TCP port to bind.
+    #[arg(long, default_value_t = 7117)]
+    port: u16,
+
+    #[command(flatten)]
+    common: ConfigArgs,
 }
 
 #[derive(Debug, Args)]
@@ -206,7 +235,33 @@ async fn main() -> ExitCode {
     match cli.command.take() {
         Some(Command::Init(args)) => run_init(args),
         Some(Command::Query(args)) => run_query(args).await,
-        None => run_server(cli).await,
+        Some(Command::Server(args)) => run_server(args).await,
+        None => run_default(cli).await,
+    }
+}
+
+/// The default (no-subcommand) behavior: run the positional SQL as a one-shot
+/// query, exactly as `dirsql query "<sql>"` does. With no SQL there is nothing
+/// to run and no mode selected, so print a usage error pointing at
+/// `dirsql server` — silently starting the server here would re-invert the
+/// default this design deliberately fixed (#662).
+async fn run_default(cli: Cli) -> ExitCode {
+    match cli.sql {
+        Some(sql) => {
+            run_query(QueryArgs {
+                sql,
+                on_file: cli.on_file,
+                common: cli.common,
+            })
+            .await
+        }
+        None => {
+            eprintln!(
+                "dirsql: no query given. Run a query with `dirsql \"SELECT * FROM './'\"`, \
+                 or start the HTTP server with `dirsql server`. See `dirsql --help`."
+            );
+            ExitCode::from(2)
+        }
     }
 }
 
@@ -284,19 +339,19 @@ fn run_init(args: InitArgs) -> ExitCode {
     }
 }
 
-async fn run_server(cli: Cli) -> ExitCode {
+async fn run_server(args: ServerArgs) -> ExitCode {
     // The server has no `--on-file`: clap rejects it as an unknown flag before
     // reaching here. Path-tables served over HTTP keep their stat columns.
-    let state = load_state(&cli.common, None);
-    let mut server_config = ServerConfig::bind(cli.host.clone(), cli.port);
-    for pre_query in load_pre_queries(&cli.common) {
+    let state = load_state(&args.common, None);
+    let mut server_config = ServerConfig::bind(args.host.clone(), args.port);
+    for pre_query in load_pre_queries(&args.common) {
         server_config = server_config.with_pre_query(pre_query);
     }
-    for post_query in load_post_queries(&cli.common) {
+    for post_query in load_post_queries(&args.common) {
         server_config = server_config.with_post_query(post_query);
     }
 
-    let host = cli.host.clone();
+    let host = args.host.clone();
     let handle = match serve_with_state(server_config, state).await {
         Ok(handle) => handle,
         Err(err) => {
@@ -559,21 +614,102 @@ mod tests {
 
     #[test]
     fn config_paths_is_empty_without_a_config_flag() {
-        // No `-c` -> no config paths at all: bare `dirsql` serves the baked-in
-        // default, with no implicit `./.dirsql.toml` discovery (#602).
-        let cli = Cli::parse_from(["dirsql"]);
+        // No `-c` -> no config paths at all, with no implicit `./.dirsql.toml`
+        // discovery (#602).
+        let cli = Cli::parse_from(["dirsql", "SELECT 1"]);
         assert!(cli.common.config_paths().is_empty());
     }
 
     #[test]
     fn config_paths_returns_exactly_the_passed_paths() {
-        // Server mode (no subcommand): `-c` accumulates at the top level; the
-        // paths are exactly those, in argv order.
-        let cli = Cli::parse_from(["dirsql", "-c", "a.toml", "-c", "b.toml"]);
+        // Default query mode (no subcommand): `-c` accumulates at the top
+        // level alongside the positional SQL; the paths are exactly those, in
+        // argv order.
+        let cli = Cli::parse_from(["dirsql", "SELECT 1", "-c", "a.toml", "-c", "b.toml"]);
         assert_eq!(
             cli.common.config_paths(),
             vec![PathBuf::from("a.toml"), PathBuf::from("b.toml")]
         );
+    }
+
+    #[test]
+    fn bare_sql_parses_as_the_default_query_with_no_subcommand() {
+        // #662: `dirsql "<sql>"` (no subcommand) carries the SQL as the
+        // top-level positional and selects no command -> the default query.
+        let cli = Cli::parse_from(["dirsql", "SELECT * FROM './'"]);
+        assert!(cli.command.is_none());
+        assert_eq!(cli.sql.as_deref(), Some("SELECT * FROM './'"));
+    }
+
+    #[test]
+    fn bare_sql_carries_config_flags_for_the_default_query() {
+        // #662: the default query mode accepts the same `-c` the `query`
+        // subcommand does, after the SQL.
+        let cli = Cli::parse_from(["dirsql", "SELECT 1", "-c", "a.toml"]);
+        assert!(cli.command.is_none());
+        assert_eq!(cli.sql.as_deref(), Some("SELECT 1"));
+        assert_eq!(cli.common.config_paths(), vec![PathBuf::from("a.toml")]);
+    }
+
+    #[test]
+    fn bare_sql_carries_on_file_for_the_default_query() {
+        // #662: `--on-file` works in the default mode exactly as under `query`.
+        let cli = Cli::parse_from(["dirsql", "SELECT 1", "--on-file", "cat {path}"]);
+        assert!(cli.command.is_none());
+        assert_eq!(cli.on_file, vec!["cat {path}".to_string()]);
+    }
+
+    #[test]
+    fn no_subcommand_and_no_sql_selects_neither() {
+        // #662: bare `dirsql` with nothing else parses cleanly (no command, no
+        // SQL); `run_default` turns that into the usage error at runtime.
+        let cli = Cli::parse_from(["dirsql"]);
+        assert!(cli.command.is_none());
+        assert!(cli.sql.is_none());
+    }
+
+    #[test]
+    fn server_subcommand_parses_host_and_port() {
+        // #662: the server moved behind `dirsql server`; `--host`/`--port` are
+        // now server-local flags.
+        match Cli::parse_from(["dirsql", "server", "--host", "0.0.0.0", "--port", "9000"]).command {
+            Some(Command::Server(args)) => {
+                assert_eq!(args.host, "0.0.0.0");
+                assert_eq!(args.port, 9000);
+            }
+            other => panic!("expected a server subcommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn server_subcommand_defaults_host_and_port() {
+        match Cli::parse_from(["dirsql", "server"]).command {
+            Some(Command::Server(args)) => {
+                assert_eq!(args.host, "localhost");
+                assert_eq!(args.port, 7117);
+            }
+            other => panic!("expected a server subcommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn server_subcommand_carries_config_flags() {
+        // Config flags are subcommand-local: `dirsql server -c a -c b`.
+        match Cli::parse_from(["dirsql", "server", "-c", "a.toml", "-c", "b.toml"]).command {
+            Some(Command::Server(args)) => assert_eq!(
+                args.common.config_paths(),
+                vec![PathBuf::from("a.toml"), PathBuf::from("b.toml")]
+            ),
+            other => panic!("expected a server subcommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn host_and_port_are_not_top_level_flags() {
+        // #662: `--host`/`--port` moved under `server`; at the top level they
+        // are unknown flags now.
+        assert!(Cli::try_parse_from(["dirsql", "--host", "0.0.0.0"]).is_err());
+        assert!(Cli::try_parse_from(["dirsql", "--port", "9000"]).is_err());
     }
 
     #[test]

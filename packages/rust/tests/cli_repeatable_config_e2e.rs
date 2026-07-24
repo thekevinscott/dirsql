@@ -83,7 +83,9 @@ fn server_serves_tables_from_two_config_flags() {
     let port = free_port();
     let mut cmd: StdCommand = std::process::Command::cargo_bin("dirsql")
         .expect("`dirsql` binary must be built by `cargo test` with --features cli");
-    cmd.arg("--port")
+    // #662: server flags live under the `server` subcommand now.
+    cmd.arg("server")
+        .arg("--port")
         .arg(port.to_string())
         .arg("--host")
         .arg("localhost")

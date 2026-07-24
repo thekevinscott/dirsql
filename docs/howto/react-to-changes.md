@@ -18,8 +18,8 @@ glob = "**/*"
 
 ## 1. Open the stream
 
-With the server running (`npx dirsql -c ./.dirsql.toml` /
-`uvx dirsql -c ./.dirsql.toml`), subscribe from another terminal:
+With the server running (`npx dirsql server -c ./.dirsql.toml` /
+`uvx dirsql server -c ./.dirsql.toml`), subscribe from another terminal:
 
 ```bash
 curl -N http://localhost:7117/events

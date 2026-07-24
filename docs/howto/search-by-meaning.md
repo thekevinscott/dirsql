@@ -10,7 +10,7 @@ embed each question at query time.
 ::: tip Just want it working?
 [`dirsql-plugin-embeddings`](https://pypi.org/project/dirsql-plugin-embeddings/)
 packages exactly what this guide builds, ready to install:
-`uvx --with dirsql-plugin-embeddings dirsql`. Keep reading to see how it's
+`uvx --with dirsql-plugin-embeddings dirsql server`. Keep reading to see how it's
 built — the same three pieces, from scratch.
 :::
 

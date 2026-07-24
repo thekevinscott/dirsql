@@ -40,7 +40,7 @@ hook-timeout = 300
 ```
 
 Persistence is not a config key. Keep the SQLite index on disk between runs
-with the [`--persist [PATH]` CLI flag](./cli.md#server-mode) — a machine-local
+with the [`--persist [PATH]` CLI flag](./cli.md#dirsql-server) — a machine-local
 operational choice that belongs to the runner, not to shareable config.
 
 ## `[[dirsql.extension]]`

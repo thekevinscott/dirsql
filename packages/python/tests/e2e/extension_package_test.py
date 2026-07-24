@@ -160,6 +160,7 @@ def describe_cli_extension_by_package_name():
                 sys.executable,
                 "-c",
                 "import sys; from dirsql.cli.main import main; sys.exit(main())",
+                "server",
                 "--config",
                 str(cfg),
                 "--host",

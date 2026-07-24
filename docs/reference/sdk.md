@@ -130,7 +130,7 @@ shortcut was removed in #603 — use
   ephemeral, rebuilt every startup). The cache lives at
   `<root>/.dirsql/cache.db` by default; on restart, only files whose stat
   changed are re-parsed. (The CLI exposes the same switch as the
-  [`--persist [PATH]`](./cli.md#server-mode) flag; it is not a config key.)
+  [`--persist [PATH]`](./cli.md#dirsql-server) flag; it is not a config key.)
 - `persist_path` / `persistPath` — Override the cache location. Ignored when
   persistence is off. Constructor values are used as given. In Rust these two
   parameters collapse into a single builder method: `.persist(None)` enables
