@@ -122,7 +122,7 @@ just test-conventions
 
 ### Mutation (testing-conventions)
 
-The `unit mutation` gate mutates PR-changed source lines and fails on any mutant no unit test kills (engines: cosmic-ray / Stryker / cargo-mutants, all self-provisioned; PR-only, diff-scoped via `--base`). All three SDKs run it inside `conventions.yml`. Fix a survivor with a **new assertion**, never by weakening a test; only a genuinely equivalent mutant gets a reason-required `mutation` exemption (none today). **Known false green (#659): the Rust gate tests 0 mutants both locally and in CI** -- a cargo-workspace vs `--relative` path mismatch upstream -- so Rust mutation is currently unenforced; run it manually via the direct `cargo mutants` command in `agents/reference/testing-gates.md`. Local run commands and per-language details: `agents/reference/testing-gates.md`.
+The `unit mutation` gate mutates PR-changed source lines and fails on any mutant no unit test kills (engines: cosmic-ray / Stryker / cargo-mutants, all self-provisioned; PR-only, diff-scoped via `--base`). All three SDKs run it inside `conventions.yml`. Fix a survivor with a **new assertion**, never by weakening a test; only a genuinely equivalent mutant gets a reason-required `mutation` exemption (none today). Local run commands and per-language details: `agents/reference/testing-gates.md`.
 
 ### Test Boundaries -- What to Mock, What Not To
 

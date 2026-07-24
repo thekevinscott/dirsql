@@ -32,27 +32,18 @@ The gate reruns the real unit suite per mutant, so it needs the native bindings 
 
 **Python mutation now runs in the reusable workflow too** (`conventions.yml`, `python-sdk` gates: `mutation`): the testing-conventions wheel bundles the cosmic-ray adapter as a runtime dependency, so the reusable mutation job resolves the engine from the same `python_env=uv` (`uv sync`) environment it provisions for coverage — no separate install and no bespoke workflow. This retired `python-mutation.yml` (#426). All three SDKs' `mutation` gates now run inside `conventions.yml`.
 
-Run Python / TypeScript locally (after building the native artifact), against your PR's base:
+Run a language locally (after building its native artifact), against your PR's base:
 
 ```bash
 # from packages/python (maturin venv active, cosmic-ray installed)
 npx -y testing-conventions unit mutation --language python --base origin/main dirsql
 # from packages/ts (after pnpm build)
 npx -y testing-conventions unit mutation --language typescript --base origin/main src
+# from repo root (the tool provisions cargo-mutants itself)
+npx -y testing-conventions unit mutation --language rust --base origin/main packages/rust
 ```
 
-**Rust is broken through testing-conventions -- do NOT trust it (#659).** `testing-conventions unit mutation --language rust --base origin/main packages/rust` (or `packages/rust/src`) prints `unit mutation: no surviving mutants — every mutation was caught (0 mutant(s) tested)` and exits **0** while testing **nothing**, against any real diff. The tool generates the diff with `git diff --relative` (crate-relative paths, e.g. `src/matcher.rs`) and feeds it to `cargo-mutants --in-diff`, but `packages/rust` is a member of the cargo workspace rooted at the repo root, so cargo-mutants matches mutants by **workspace-relative** paths (`packages/rust/src/matcher.rs`). The two forms never match, so every mutant is filtered out (`No mutants to filter`) and none are tested. No base/path/CWD variation fixes it -- the tool unconditionally `chdir`s into the crate and adds `--relative`. **The same binary drives CI's `rust / Unit mutation — changed lines` job, so that job is *also* a false green** (verified: it likewise prints `0 mutant(s) tested` on a real `packages/rust/src` diff). Rust mutation is therefore currently **unenforced everywhere**, pending an upstream fix (`thekevinscott/testing-conventions`: don't `--relative` the base diff for a workspace-member crate, or rewrite its paths to the workspace root). Python/TS are unaffected -- cosmic-ray/Stryker operate rooted at the package dir, so their per-package paths match the `--relative` diff.
-
-Until upstream is fixed, run Rust mutation by driving `cargo-mutants` directly with a **workspace-relative** diff:
-
-```bash
-# on your PR branch, from the repo root
-git diff origin/main...HEAD > /tmp/mutation.diff   # workspace-relative paths (NO --relative)
-cd packages/rust
-cargo mutants --features cli --in-diff /tmp/mutation.diff
-```
-
-`--features cli` matches `[rust].features` in `testing-conventions.toml` (the crate's unit suite needs it to build). Any surviving mutant is a real gap -- kill it with a new assertion.
+The Rust arm handles `packages/rust` being a member of the repo-root cargo workspace: testing-conventions ≥ 0.0.88 rebases the diff it feeds cargo-mutants onto the workspace root (dirsql#659, fixed upstream in thekevinscott/testing-conventions#467), and `[rust].features` in `testing-conventions.toml` supplies `--features cli` to the engine's build. A passing run states its evidence — `(N mutant(s) tested)` with N > 0 whenever the diff touched mutatable Rust lines; treat a `0 mutant(s) tested` pass on a diff that changed Rust source as a bug, not a pass.
 
 **Survivors.** The fix is almost always a **new assertion** that kills the mutant. Only a genuinely *equivalent* or intentionally-defensive mutant is lifted, via a `[[<language>.exempt]]` entry in `testing-conventions.toml` whose `rules` includes `"mutation"` (with a real `path` and a `reason`) -- never weaken a test to make a survivor pass. There are none today.
 ## Coverage Floor
