@@ -56,3 +56,6 @@ docs/playwright-report/
 docs/blob-report/
 docs/.playwright/
 actionlint
+
+# cargo-mutants run output (never commit)
+mutants.out/
