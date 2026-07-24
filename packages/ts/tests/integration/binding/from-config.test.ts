@@ -198,6 +198,19 @@ ${basenameHook}
     await expect(db.ready).rejects.toThrow();
   });
 
+  it("rejects a hook-less table, pointing at the path-table replacement", async () => {
+    await seedFile(
+      configPath,
+      `
+[[table]]
+ddl = "CREATE TABLE files (path TEXT, size INTEGER)"
+glob = "**/*.md"
+`,
+    );
+    const db = new DirSQL(configPath);
+    await expect(db.ready).rejects.toThrow(/FROM '\.\/'/);
+  });
+
   it("rejects table entries missing ddl", async () => {
     await seedFile(
       configPath,

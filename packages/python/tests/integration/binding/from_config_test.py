@@ -231,6 +231,20 @@ glob = "authors/*.txt"
                 await db.ready()
 
         @pytest.mark.asyncio
+        async def it_raises_on_a_hookless_table(config_dir):
+            _write(
+                os.path.join(config_dir, ".dirsql.toml"),
+                """\
+[[table]]
+ddl = "CREATE TABLE files (path TEXT, size INTEGER)"
+glob = "**/*.md"
+""",
+            )
+            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
+            with pytest.raises(Exception, match="FROM './'"):
+                await db.ready()
+
+        @pytest.mark.asyncio
         async def it_raises_on_missing_ddl(config_dir):
             _write(
                 os.path.join(config_dir, ".dirsql.toml"),
