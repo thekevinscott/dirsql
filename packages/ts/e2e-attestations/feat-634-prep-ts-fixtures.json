@@ -1,7 +1,0 @@
-{
-  "command": "pnpm test:e2e",
-  "ran_at": 1784900845,
-  "exit_code": 0,
-  "commit": "5af7e609587b68c08bf8ab5f9eb9a9297a847609",
-  "branch": "feat/634-prep-ts-fixtures"
-}

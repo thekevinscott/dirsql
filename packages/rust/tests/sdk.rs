@@ -232,6 +232,27 @@ fn it_fills_missing_keys_with_null() {
 }
 
 #[test]
+fn it_does_not_inject_stat_columns_the_hook_omits() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("item.txt"), "apple").unwrap();
+
+    let db = DirSQL::new(
+        root.path(),
+        vec![Table::new(
+            "CREATE TABLE items (path TEXT, size INTEGER)",
+            "*.txt",
+            |_path| vec![HashMap::from([("size".into(), Value::Integer(42))])],
+        )],
+    )
+    .unwrap();
+
+    let rows = db.query("SELECT * FROM items").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["size"], Value::Integer(42));
+    assert_eq!(rows[0]["path"], Value::Null);
+}
+
+#[test]
 fn it_raises_on_extra_keys_in_strict_mode() {
     let root = TempDir::new().unwrap();
     fs::write(root.path().join("item.txt"), "apple|red").unwrap();
