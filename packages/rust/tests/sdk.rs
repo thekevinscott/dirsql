@@ -241,12 +241,7 @@ fn it_does_not_inject_stat_columns_the_hook_omits() {
         vec![Table::new(
             "CREATE TABLE items (path TEXT, size INTEGER)",
             "*.txt",
-            |_path| {
-                vec![HashMap::from([(
-                    "size".into(),
-                    Value::Integer(42),
-                )])]
-            },
+            |_path| vec![HashMap::from([("size".into(), Value::Integer(42))])],
         )],
     )
     .unwrap();

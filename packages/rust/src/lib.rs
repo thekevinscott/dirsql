@@ -547,8 +547,6 @@ impl DirSQL {
             Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
         };
 
-        let stat = compute_stat_virtuals(rel_path, abs_path);
-
         let strict = *self.inner.strict_map.get(table).unwrap_or(&false);
 
         // Normalize, snapshot the file's previous rows, and apply the
@@ -559,11 +557,6 @@ impl DirSQL {
                 Ok(g) => g,
                 Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
             };
-            let declared_columns = match db.get_table_columns(table) {
-                Ok(cols) => cols,
-                Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
-            };
-            let raw_rows = merge_filesystem_facts(raw_rows, &stat, &declared_columns);
             let mut new_rows = Vec::with_capacity(raw_rows.len());
             for raw in &raw_rows {
                 match db.normalize_row(table, raw, strict) {
@@ -839,10 +832,6 @@ impl DirSQL {
                     path: rel_path.clone(),
                     message: e.to_string(),
                 })?;
-
-            let stat_virtuals = compute_stat_virtuals(&rel_path, &abs_path);
-            let declared_columns = db.get_table_columns(&table_name).map_err(map_db_error)?;
-            let raw_rows = merge_filesystem_facts(raw_rows, &stat_virtuals, &declared_columns);
 
             // When updating an existing file in the persistent cache, drop
             // its old rows before inserting the new ones.
@@ -1475,21 +1464,14 @@ fn relative_path(root: &Path, path: &Path) -> String {
 
 /// Build [`Table`] objects from a parsed config.
 ///
-/// A plain config-defined table produces one row per matched file built
-/// entirely from filesystem facts: glob path captures and stat virtuals
-/// (`path`, `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`) are
-/// injected by the core pipeline ([`merge_filesystem_facts`]). Its synthesized
-/// on_file emits a single empty row per file; the fact-injection layer fills it
-/// in.
-///
-/// A table with an `on-file` command instead runs that command once per matched
-/// file (see [`run_on_file`]): the command reads the file and prints a JSON
-/// array of row objects on stdout, which becomes the file's rows (filesystem
-/// facts are still merged on top, user values winning). `config_dir` is the
-/// command's working directory (the config file's parent) and `root` is the
-/// resolved index root exposed as the `{root}` placeholder. `timeout` bounds
-/// each `on-file` run; the caller resolves it from the global
-/// `[dirsql].hook-timeout` key, falling back to
+/// A config-defined table runs its `on-file` command once per matched file
+/// (see [`run_on_file`]): the command reads the file and prints a JSON array of
+/// row objects on stdout, which becomes the file's rows verbatim. The core
+/// injects nothing — a DDL column the hook does not emit is NULL, validated
+/// against the DDL as usual. `config_dir` is the command's working directory
+/// (the config file's parent) and `root` is the resolved index root exposed as
+/// the `{root}` placeholder. `timeout` bounds each `on-file` run; the caller
+/// resolves it from the global `[dirsql].hook-timeout` key, falling back to
 /// [`command::DEFAULT_COMMAND_TIMEOUT`].
 /// Whether this build declared no tables by any route — neither a config file
 /// nor a programmatic table. That is exactly the state in which `files` used to
@@ -1717,33 +1699,6 @@ fn find_capture_column_collision(glob: &str, declared_columns: &[String]) -> Opt
     crate::matcher::placeholder_names(glob)
         .into_iter()
         .find(|name| declared.contains(name.as_str()))
-}
-
-/// Merge filesystem-fact columns (stat virtuals) into each raw row produced by
-/// an on_file closure. Auto-injected keys are filtered to those declared in
-/// `declared_columns`, so a strict-mode table with a minimal DDL is not broken
-/// by virtuals it didn't ask for. User-provided values in `raw_rows` win over
-/// auto-injected values: an on_file that explicitly emits e.g. `path` is
-/// honored.
-fn merge_filesystem_facts(raw_rows: Vec<Row>, stat: &Row, declared_columns: &[String]) -> Vec<Row> {
-    let declared: std::collections::HashSet<&str> =
-        declared_columns.iter().map(String::as_str).collect();
-
-    raw_rows
-        .into_iter()
-        .map(|raw| {
-            let mut merged = Row::new();
-            for (k, v) in stat {
-                if declared.contains(k.as_str()) {
-                    merged.insert(k.clone(), v.clone());
-                }
-            }
-            for (k, v) in raw {
-                merged.insert(k, v);
-            }
-            merged
-        })
-        .collect()
 }
 
 /// Async wrapper around [`DirSQL`] whose constructor returns immediately while
@@ -2157,7 +2112,7 @@ mod internal_tests {
         let db = DirSQL::with_ignore_and_fs(
             &root,
             vec![Table::new(
-                "CREATE TABLE items (name TEXT, path TEXT)",
+                "CREATE TABLE items (name TEXT)",
                 "**/*.txt",
                 |_| {
                     vec![Row::from_iter([(
@@ -2174,10 +2129,9 @@ mod internal_tests {
         let events = db.process_file_event(FileEvent::Created(abs));
         assert_eq!(events.len(), 1, "expected one insert: {events:?}");
         match &events[0] {
-            RowEvent::Insert { row, .. } => {
+            RowEvent::Insert { file_path, .. } => {
                 assert_eq!(
-                    row.get("path"),
-                    Some(&Value::Text("nested/a.txt".to_string())),
+                    file_path, "nested/a.txt",
                     "watch_root prefix must be stripped to a root-relative path"
                 );
             }
@@ -2195,7 +2149,7 @@ mod internal_tests {
         let mut db = DirSQL::with_ignore_and_fs(
             &root,
             vec![Table::new(
-                "CREATE TABLE items (name TEXT, path TEXT)",
+                "CREATE TABLE items (name TEXT)",
                 "**/*.txt",
                 |_| {
                     vec![Row::from_iter([(
@@ -2215,10 +2169,9 @@ mod internal_tests {
         let events = db.process_file_event(FileEvent::Created(abs));
         assert_eq!(events.len(), 1, "expected one insert: {events:?}");
         match &events[0] {
-            RowEvent::Insert { row, .. } => {
+            RowEvent::Insert { file_path, .. } => {
                 assert_eq!(
-                    row.get("path"),
-                    Some(&Value::Text("b.txt".to_string())),
+                    file_path, "b.txt",
                     "root fallback must strip the user-supplied root prefix"
                 );
             }
@@ -3087,37 +3040,6 @@ mod internal_tests {
             matches!(stat.get(STAT_MTIME), Some(Value::Integer(_))),
             "mtime present"
         );
-    }
-
-    #[test]
-    fn merge_filesystem_facts_filters_to_declared_columns() {
-        let mut stat = Row::new();
-        stat.insert("path".to_string(), Value::Text("2024-01/a.txt".into()));
-        stat.insert("size".to_string(), Value::Integer(9));
-        let raw = vec![Row::from_iter([(
-            "name".to_string(),
-            Value::Text("x".into()),
-        )])];
-        let declared = vec!["name".to_string(), "path".to_string()];
-        let merged = merge_filesystem_facts(raw, &stat, &declared);
-        assert_eq!(merged.len(), 1);
-        let row = &merged[0];
-        assert_eq!(row["path"], Value::Text("2024-01/a.txt".into()));
-        assert!(!row.contains_key("size"), "undeclared stat dropped");
-        assert_eq!(row["name"], Value::Text("x".into()));
-    }
-
-    #[test]
-    fn merge_filesystem_facts_raw_value_wins_over_stat() {
-        let mut stat = Row::new();
-        stat.insert("path".to_string(), Value::Text("auto".into()));
-        let raw = vec![Row::from_iter([(
-            "path".to_string(),
-            Value::Text("explicit".into()),
-        )])];
-        let declared = vec!["path".to_string()];
-        let merged = merge_filesystem_facts(raw, &stat, &declared);
-        assert_eq!(merged[0]["path"], Value::Text("explicit".into()));
     }
 
     #[test]
