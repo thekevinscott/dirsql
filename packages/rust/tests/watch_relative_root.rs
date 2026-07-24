@@ -98,12 +98,11 @@ fn watch_with_relative_root_emits_events() {
         "relative-root watcher must emit an Insert event (#250); saw: {events:?}"
     );
 
-    // `path` must stay root-relative — the canonical watch-root must not
-    // leak its absolute prefix into the event path.
-    if let Some(dirsql::RowEvent::Insert { row, .. }) = insert {
+    // The event's file_path must stay root-relative — the canonical
+    // watch-root must not leak its absolute prefix into the event path.
+    if let Some(dirsql::RowEvent::Insert { file_path, .. }) = insert {
         assert_eq!(
-            row.get("path"),
-            Some(&Value::Text("apple.txt".to_string())),
+            file_path, "apple.txt",
             "path must stay root-relative for a relative root"
         );
     }

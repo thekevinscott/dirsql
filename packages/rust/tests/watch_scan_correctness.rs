@@ -10,16 +10,23 @@ use std::time::{Duration, Instant};
 
 /// A table matching *every* path (like the default `files` table's `**/*`),
 /// so a newly created subdirectory is a matcher candidate on the watch path.
-fn files_table() -> Table {
+fn files_table(root: &std::path::Path) -> Table {
+    let root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     Table::new(
         "CREATE TABLE files (name TEXT, path TEXT)",
         "**/*",
-        |path| {
+        move |path| {
             let content = fs::read_to_string(path).unwrap_or_default();
-            vec![HashMap::from([(
-                "name".to_string(),
-                Value::Text(content.trim().to_string()),
-            )])]
+            let abs = std::path::Path::new(path);
+            let rel = abs
+                .strip_prefix(&root)
+                .unwrap_or(abs)
+                .to_string_lossy()
+                .into_owned();
+            vec![HashMap::from([
+                ("name".to_string(), Value::Text(content.trim().to_string())),
+                ("path".to_string(), Value::Text(rel)),
+            ])]
         },
     )
 }
@@ -38,7 +45,7 @@ fn paths(db: &DirSQL) -> Vec<String> {
 #[test]
 fn mkdir_under_root_inserts_no_row() {
     let dir = tempfile::TempDir::new().unwrap();
-    let db = DirSQL::new(dir.path(), vec![files_table()]).unwrap();
+    let db = DirSQL::new(dir.path(), vec![files_table(dir.path())]).unwrap();
     db.start_watching().unwrap();
     std::thread::sleep(Duration::from_millis(250));
 
@@ -70,7 +77,7 @@ fn rename_out_deletes_rows() {
     let outside = tempfile::TempDir::new().unwrap();
     fs::write(dir.path().join("a.txt"), "alpha").unwrap();
 
-    let db = DirSQL::new(dir.path(), vec![files_table()]).unwrap();
+    let db = DirSQL::new(dir.path(), vec![files_table(dir.path())]).unwrap();
     assert!(
         paths(&db).iter().any(|p| p == "a.txt"),
         "initial scan should index a.txt; rows: {:?}",
