@@ -75,6 +75,7 @@ ${pathBasenameHook}
 [[table]]
 ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
 glob = "comments/{thread_id}/*.txt"
+${pathBasenameHook}
 `,
     );
 

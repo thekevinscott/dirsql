@@ -260,7 +260,7 @@ describe("dirsql CLI --config: extension by package name (#299)", () => {
     await writeFile(join(dir, "a.txt"), "x");
     await writeFile(
       join(dir, ".dirsql.toml"),
-      `[[dirsql.extension]]\npath = "${PKG_NAME}"\nentrypoint = "sqlite3_extension_init"\n\n[[table]]\nddl = "CREATE TABLE files (path TEXT)"\nglob = "*.txt"\n`,
+      `[[dirsql.extension]]\npath = "${PKG_NAME}"\nentrypoint = "sqlite3_extension_init"\n\n[[table]]\nddl = "CREATE TABLE files (path TEXT)"\nglob = "*.txt"\non-file = "cat {path}"\n`,
     );
     const rows = await runServerAndQuery(join(dir, ".dirsql.toml"));
     expect(rows).toEqual([{ a: 42 }]);

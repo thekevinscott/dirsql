@@ -86,7 +86,7 @@ fn a_configured_table_set_that_omits_files_gets_the_plain_error() {
     let config = root.path().join("dirsql.toml");
     fs::write(
         &config,
-        "[[table]]\nddl = \"CREATE TABLE posts (path TEXT)\"\nglob = \"**/*.md\"\n",
+        "[[table]]\nddl = \"CREATE TABLE posts (path TEXT)\"\nglob = \"**/*.md\"\non-file = \"cat {path}\"\n",
     )
     .unwrap();
 

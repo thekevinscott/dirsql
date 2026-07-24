@@ -980,6 +980,7 @@ fn query_subcommand_rejects_capture_column_collision() {
 [[table]]
 ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
 glob = "_comments/{thread_id}/*.txt"
+on-file = "cat {path}"
 "#,
     )
     .unwrap();
@@ -1110,6 +1111,41 @@ fn missing_explicit_config_exits_nonzero_naming_the_file() {
     assert!(
         stderr.contains("missing.toml"),
         "stderr must name the missing config file, got {stderr:?}"
+    );
+}
+
+#[test]
+fn hookless_table_config_exits_nonzero_pointing_at_the_path_table() {
+    // #634: a `[[table]]` with no `on-file` hook would emit only all-NULL rows
+    // after fact-injection removal, so it is a load error. The diagnostic names
+    // the missing hook and points at the `FROM './'` path-table replacement.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(".dirsql.toml"),
+        "[[table]]\nddl = \"CREATE TABLE files (path TEXT, size INTEGER)\"\nglob = \"**/*.md\"\n",
+    )
+    .unwrap();
+    let out = std::process::Command::cargo_bin("dirsql")
+        .expect("binary must exist")
+        .arg("query")
+        .arg("SELECT * FROM files")
+        .arg("-c")
+        .arg(".dirsql.toml")
+        .current_dir(dir.path())
+        .output()
+        .expect("spawning `dirsql query` failed");
+    assert!(
+        !out.status.success(),
+        "a hook-less [[table]] config must be a non-zero exit, got {out:?}"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("on-file"),
+        "stderr must name the missing on-file hook, got {stderr:?}"
+    );
+    assert!(
+        stderr.contains("FROM './'"),
+        "stderr must point at the path-table replacement, got {stderr:?}"
     );
 }
 
@@ -1434,6 +1470,7 @@ fn config_elsewhere_indexes_invocation_cwd_not_config_parent() {
 [[table]]
 ddl = "CREATE TABLE posts (basename TEXT)"
 glob = "posts/*/*.json"
+on-file = "printf '[{}]'"
 "#,
     )
     .unwrap();

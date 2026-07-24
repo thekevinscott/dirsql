@@ -1490,28 +1490,17 @@ fn build_tables_from_config(
     let mut tables = Vec::with_capacity(cfg.tables.len());
 
     for table_cfg in &cfg.tables {
-        let mut table = match &table_cfg.on_file {
-            Some(command) => {
-                let command = command.clone();
-                let config_dir = config_dir.to_path_buf();
-                let root = root.to_path_buf();
-                // `Table::new` (infallible): `run_on_file` isolates its own
-                // errors to an empty row set so one bad file never aborts the
-                // scan (the scan aborts on an on_file `Err`).
-                Table::new(
-                    table_cfg.ddl.clone(),
-                    table_cfg.glob.clone(),
-                    move |abs_path: &str| {
-                        run_on_file(&command, abs_path, &config_dir, &root, timeout)
-                    },
-                )
-            }
-            None => Table::new(
-                table_cfg.ddl.clone(),
-                table_cfg.glob.clone(),
-                |_path: &str| vec![Row::new()],
-            ),
-        };
+        let command = table_cfg.on_file.clone();
+        let config_dir = config_dir.to_path_buf();
+        let root = root.to_path_buf();
+        // `Table::new` (infallible): `run_on_file` isolates its own errors to an
+        // empty row set so one bad file never aborts the scan (the scan aborts
+        // on an on_file `Err`).
+        let mut table = Table::new(
+            table_cfg.ddl.clone(),
+            table_cfg.glob.clone(),
+            move |abs_path: &str| run_on_file(&command, abs_path, &config_dir, &root, timeout),
+        );
 
         if table_cfg.strict == Some(true) {
             table.strict = true;
@@ -3091,11 +3080,12 @@ mod internal_tests {
     }
 
     #[test]
-    fn build_tables_from_config_creates_plain_and_on_file_tables() {
+    fn build_tables_from_config_creates_on_file_tables() {
         let cfg = config::load_config_str(concat!(
             "[[table]]\n",
             "ddl = \"CREATE TABLE a (x TEXT)\"\n",
-            "glob = \"*.a\"\n\n",
+            "glob = \"*.a\"\n",
+            "on-file = \"printf '[{\\\"x\\\":1}]'\"\n\n",
             "[[table]]\n",
             "ddl = \"CREATE TABLE b (y TEXT)\"\n",
             "glob = \"*.b\"\n",
@@ -3112,7 +3102,12 @@ mod internal_tests {
         )
         .unwrap();
         assert_eq!(tables.len(), 2);
-        assert_eq!((tables[0].on_file)("/whatever").unwrap().len(), 1);
+        assert_eq!(
+            (tables[0].on_file)(&dir.path().join("f.a").to_string_lossy())
+                .unwrap()
+                .len(),
+            1
+        );
         assert!(tables[1].strict, "on-file table preserves strict flag");
     }
 

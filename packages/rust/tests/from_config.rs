@@ -89,6 +89,7 @@ fn from_config_capture_column_collision_errors() {
 [[table]]
 ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
 glob = "_comments/{thread_id}/*.txt"
+on-file = "cat {path}"
 "#,
     )
     .unwrap();
@@ -301,6 +302,7 @@ fn from_config_with_no_matching_files_yields_empty_table() {
 [[table]]
 ddl = "CREATE TABLE empty_t (path TEXT)"
 glob = "nothing_here/*.txt"
+on-file = "cat {path}"
 "#,
     )
     .unwrap();
@@ -332,6 +334,7 @@ persist = true
 [[table]]
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.csv"
+on-file = "cat {path}"
 "#,
     )
     .unwrap();

@@ -76,7 +76,9 @@ glob = "items/*.csv"
 [[table]]
 ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
 glob = "comments/{thread_id}/*.txt"
-""",
+"""
+                + _HOOK_PATH_BASENAME
+                + "\n",
             )
 
             db = DirSQL(
