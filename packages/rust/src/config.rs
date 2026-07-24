@@ -881,8 +881,12 @@ on-file = "cat {path}"
 
     #[test]
     fn combine_duplicate_table_name_errors_naming_both_sources() {
-        let a = cfg("[[table]]\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\non-file = \"cat {path}\"\n");
-        let b = cfg("[[table]]\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\non-file = \"cat {path}\"\n");
+        let a = cfg(
+            "[[table]]\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\non-file = \"cat {path}\"\n",
+        );
+        let b = cfg(
+            "[[table]]\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\non-file = \"cat {path}\"\n",
+        );
         let err = combine_configs(&[
             (src("/proj/.dirsql.toml"), a),
             (src("/plugin/frag.toml"), b),
@@ -942,8 +946,12 @@ on-file = "cat {path}"
 
     #[test]
     fn combine_duplicate_table_name_detected_through_quoting() {
-        let a = cfg("[[table]]\nddl = 'CREATE TABLE \"t\" (x TEXT)'\nglob = \"a/*.json\"\non-file = \"cat {path}\"\n");
-        let b = cfg("[[table]]\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\non-file = \"cat {path}\"\n");
+        let a = cfg(
+            "[[table]]\nddl = 'CREATE TABLE \"t\" (x TEXT)'\nglob = \"a/*.json\"\non-file = \"cat {path}\"\n",
+        );
+        let b = cfg(
+            "[[table]]\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\non-file = \"cat {path}\"\n",
+        );
         let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
         assert!(
             matches!(&err, ConfigError::DuplicateTable { name, .. } if name == "t"),
@@ -953,8 +961,12 @@ on-file = "cat {path}"
 
     #[test]
     fn combine_unparseable_ddl_concatenates_without_collision_check() {
-        let a = cfg("[[table]]\nddl = \"not a create table\"\nglob = \"a/*.json\"\non-file = \"cat {path}\"\n");
-        let b = cfg("[[table]]\nddl = \"also not a create table\"\nglob = \"b/*.json\"\non-file = \"cat {path}\"\n");
+        let a = cfg(
+            "[[table]]\nddl = \"not a create table\"\nglob = \"a/*.json\"\non-file = \"cat {path}\"\n",
+        );
+        let b = cfg(
+            "[[table]]\nddl = \"also not a create table\"\nglob = \"b/*.json\"\non-file = \"cat {path}\"\n",
+        );
         let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
         assert_eq!(merged.tables.len(), 2);
     }
@@ -1000,8 +1012,12 @@ on-file = "cat {path}"
 
     #[test]
     fn combine_error_display_includes_package_source_verbatim() {
-        let a = cfg("[[table]]\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\non-file = \"cat {path}\"\n");
-        let b = cfg("[[table]]\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\non-file = \"cat {path}\"\n");
+        let a = cfg(
+            "[[table]]\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\non-file = \"cat {path}\"\n",
+        );
+        let b = cfg(
+            "[[table]]\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\non-file = \"cat {path}\"\n",
+        );
         let err = combine_configs(&[
             (src("/proj/.dirsql.toml"), a),
             (Source::Package("dirsql-plugin-notes".to_string()), b),
@@ -1017,7 +1033,9 @@ on-file = "cat {path}"
         let a = cfg(
             "[dirsql]\nignore = [\"a/**\"]\n\n[[table]]\nddl = \"CREATE TABLE a (x TEXT)\"\nglob = \"a/*\"\non-file = \"cat {path}\"\n",
         );
-        let b = cfg("[[table]]\nddl = \"CREATE TABLE b (x TEXT)\"\nglob = \"b/*\"\non-file = \"cat {path}\"\n");
+        let b = cfg(
+            "[[table]]\nddl = \"CREATE TABLE b (x TEXT)\"\nglob = \"b/*\"\non-file = \"cat {path}\"\n",
+        );
         let c = cfg(
             "[dirsql]\nignore = [\"c/**\"]\n\n[[table]]\nddl = \"CREATE TABLE c (x TEXT)\"\nglob = \"c/*\"\non-file = \"cat {path}\"\n",
         );
