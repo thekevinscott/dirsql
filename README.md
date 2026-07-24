@@ -56,7 +56,7 @@ Rust and TypeScript versions are in [`docs/howto/embed.md`](docs/howto/embed.md)
 
 ## Tutorial
 
-*Your first dirsql database* -- a hands-on lesson: create a toy dataset, start the server, run queries, and watch changes flow through. The reader performs every step and sees output at each one.
+*Your first dirsql database* -- a hands-on lesson: create a toy dataset, query it with a single command and zero configuration, then declare a table to name and reuse a shape. The reader performs every step and sees output at each one.
 
 → [`docs/getting-started.md`](docs/getting-started.md)
 
