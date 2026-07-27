@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1785113955,
+  "exit_code": 0,
+  "commit": "b99e3307772fab1e523936e505433403b05fa572",
+  "branch": "fix/672-rust-mutation-ci"
+}
