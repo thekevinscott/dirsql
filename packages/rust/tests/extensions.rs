@@ -78,6 +78,7 @@ path = "/nonexistent/dirsql-no-such-extension.so"
 [[table]]
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.txt"
+on-file = "cat {path}"
 "#,
     )
     .unwrap();
@@ -167,6 +168,7 @@ entrypoint = "sqlite3_extension_init"
 [[table]]
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.txt"
+on-file = "cat {{path}}"
 "#,
             ext.display(),
         ),
@@ -216,6 +218,7 @@ path = "does/not/exist.so"
 [[table]]
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.txt"
+on-file = "cat {path}"
 "#,
     )
     .unwrap();

@@ -1,7 +1,0 @@
-{
-  "command": "just test-e2e",
-  "ran_at": 1784902229,
-  "exit_code": 0,
-  "commit": "7571e0d010b096821bfc99b1f893db2b320347dc",
-  "branch": "feat/634-core-remove-injection"
-}

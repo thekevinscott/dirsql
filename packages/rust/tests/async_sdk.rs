@@ -158,6 +158,7 @@ async fn from_config_path_loads_config_with_explicit_root() {
 [[table]]
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.csv"
+on-file = "printf '[{}]'"
 "#,
     )
     .unwrap();

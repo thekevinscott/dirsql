@@ -76,7 +76,9 @@ glob = "items/*.csv"
 [[table]]
 ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
 glob = "comments/{thread_id}/*.txt"
-""",
+"""
+                + _HOOK_PATH_BASENAME
+                + "\n",
             )
 
             db = DirSQL(
@@ -228,6 +230,20 @@ glob = "authors/*.txt"
             )
             db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
             with pytest.raises(Exception):
+                await db.ready()
+
+        @pytest.mark.asyncio
+        async def it_raises_on_a_hookless_table(config_dir):
+            _write(
+                os.path.join(config_dir, ".dirsql.toml"),
+                """\
+[[table]]
+ddl = "CREATE TABLE files (path TEXT, size INTEGER)"
+glob = "**/*.md"
+""",
+            )
+            db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
+            with pytest.raises(Exception, match="FROM './'"):
                 await db.ready()
 
         @pytest.mark.asyncio

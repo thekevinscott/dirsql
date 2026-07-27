@@ -44,6 +44,7 @@ def describe_capture_column_collision():
                 "[[table]]\n"
                 'ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"\n'
                 'glob = "_comments/{thread_id}/*.txt"\n'
+                'on-file = "cat {path}"\n'
             )
 
             proc = subprocess.run(

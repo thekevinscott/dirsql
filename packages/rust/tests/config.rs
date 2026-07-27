@@ -19,6 +19,7 @@ fn load_config_from_file() {
 [[table]]
 ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.csv"
+on-file = "cat {path}"
 "#,
     )
     .unwrap();
@@ -40,7 +41,7 @@ fn unknown_key_at_each_schema_level_errors() {
         ),
         (
             "[[table]]",
-            "[[table]]\nddl = \"CREATE TABLE t (path TEXT)\"\nglob = \"*.json\"\nformat = \"json\"\n",
+            "[[table]]\nddl = \"CREATE TABLE t (path TEXT)\"\nglob = \"*.json\"\non-file = \"cat {path}\"\nformat = \"json\"\n",
             "format",
         ),
         (
@@ -83,7 +84,7 @@ fn default_config_toml_is_an_escalation_example_with_a_named_table_and_on_file_h
     // stat-fact injection. This keeps the asset loadable once hook-less
     // `[[table]]` entries become a config error.
     assert!(
-        table.on_file.is_some(),
-        "DEFAULT_CONFIG_TOML's table must carry an `on-file` hook, got None",
+        !table.on_file.is_empty(),
+        "DEFAULT_CONFIG_TOML's table must carry an `on-file` hook, got an empty command",
     );
 }

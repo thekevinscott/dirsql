@@ -262,6 +262,7 @@ fn duplicate_table_names_across_config_entries_error() {
 [[table]]
 ddl = "CREATE TABLE dup (basename TEXT)"
 glob = "*.json"
+on-file = "cat {path}"
 "#,
     );
     let cfg_b = TempDir::new().unwrap();
@@ -271,6 +272,7 @@ glob = "*.json"
 [[table]]
 ddl = "CREATE TABLE dup (basename TEXT)"
 glob = "*.json"
+on-file = "cat {path}"
 "#,
     );
 

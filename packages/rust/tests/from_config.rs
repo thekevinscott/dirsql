@@ -89,6 +89,7 @@ fn from_config_capture_column_collision_errors() {
 [[table]]
 ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
 glob = "_comments/{thread_id}/*.txt"
+on-file = "cat {path}"
 "#,
     )
     .unwrap();
@@ -259,6 +260,38 @@ fn from_config_missing_config_file_returns_error() {
     assert!(result.is_err());
 }
 
+// A `[[table]]` with no `on-file` hook emits no columns of its own, so every
+// row would be all-NULL. That is never useful, so it is a load error pointing
+// at the path-table replacement instead of silently producing NULL rows.
+#[test]
+fn from_config_hookless_table_errors() {
+    let root = TempDir::new().unwrap();
+
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[table]]
+ddl = "CREATE TABLE files (path TEXT, size INTEGER)"
+glob = "**/*.md"
+"#,
+    )
+    .unwrap();
+
+    let err = match DirSQL::from_config_path(root.path().join(".dirsql.toml")) {
+        Ok(_) => panic!("a hook-less [[table]] must fail to load"),
+        Err(err) => err,
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("on-file"),
+        "error must name the missing on-file hook, got: {msg}"
+    );
+    assert!(
+        msg.contains("FROM './'"),
+        "error must point at the path-table replacement, got: {msg}"
+    );
+}
+
 #[test]
 fn from_config_with_no_matching_files_yields_empty_table() {
     let root = TempDir::new().unwrap();
@@ -269,6 +302,7 @@ fn from_config_with_no_matching_files_yields_empty_table() {
 [[table]]
 ddl = "CREATE TABLE empty_t (path TEXT)"
 glob = "nothing_here/*.txt"
+on-file = "cat {path}"
 "#,
     )
     .unwrap();
@@ -300,6 +334,7 @@ persist = true
 [[table]]
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.csv"
+on-file = "cat {path}"
 "#,
     )
     .unwrap();

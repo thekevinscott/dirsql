@@ -167,6 +167,7 @@ def describe_plugin_discovery():
         cfg = data / "dup.toml"
         cfg.write_text(
             '[[table]]\nddl = "CREATE TABLE notes (path TEXT)"\nglob = "*.md"\n'
+            'on-file = "cat {path}"\n'
         )
         out = _run(site_dir, ["query", "SELECT 1", "-c", "dup.toml"], data)
         assert out.returncode != 0, (

@@ -588,6 +588,7 @@ fn builder_config_loads_tables_with_explicit_root() {
 [[table]]
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.json"
+on-file = "printf '[{}]'"
 "#,
     )
     .unwrap();
@@ -652,6 +653,7 @@ fn builder_appends_programmatic_tables_to_config_tables() {
 [[table]]
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.json"
+on-file = "printf '[{}]'"
 "#,
     )
     .unwrap();

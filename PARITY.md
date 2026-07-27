@@ -248,15 +248,18 @@ behavior with no per-SDK code. Individual event rows land here as B2–B4 ship.
 All three share one global timeout override, `[dirsql].hook-timeout`
 (`config::Config::hook_timeout`, positive seconds, default 30s; #351).
 
-- **`on-file` (B2 #327).** A `[[table]]` key naming a per-file command whose
-  JSON-array stdout becomes the table's rows (interpolation-only placeholders
-  `{path}` (the file's **absolute** path, #542) / `{root}` — a template that
-  omits one receives no value, no append-if-absent, #538/#539; per-file error
-  isolation; 30s default timeout, overridable via the global
-  `[dirsql].hook-timeout` key in positive seconds, #351). Parsed and executed in the
-  shared Rust core (`config::TableConfig::on_file` + the `build_tables_from_config`
-  on-file path), with **no** Python/TypeScript public-API surface — identical
-  across all three installs, no drift.
+- **`on-file` (B2 #327).** A **required** `[[table]]` key naming a per-file
+  command whose JSON-array stdout becomes the table's rows (interpolation-only
+  placeholders `{path}` (the file's **absolute** path, #542) / `{root}` — a
+  template that omits one receives no value, no append-if-absent, #538/#539;
+  per-file error isolation; 30s default timeout, overridable via the global
+  `[dirsql].hook-timeout` key in positive seconds, #351). A `[[table]]` without
+  it is a load error since #634 (after fact-injection removal a hook-less table
+  would emit only all-NULL rows), so `config::TableConfig::on_file` is `String`,
+  not `Option<String>`. Parsed and executed in the shared Rust core
+  (`config::TableConfig::on_file` + the `build_tables_from_config` on-file path),
+  with **no** Python/TypeScript public-API surface — the hook-less-table error is
+  identical across all three installs, no drift.
 
 - **`pre-query` (B3 #328).** A **server-wide** `[dirsql]` key naming a command
   that rewrites each `POST /query` body (passed as the `{args}` placeholder) into
