@@ -30,3 +30,4 @@ def test_base_defaults_to_origin_main():
     (option,) = cli.params
     assert option.name == "base"
     assert option.default == "origin/main"
+    assert option.show_default is True
