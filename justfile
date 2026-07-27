@@ -27,9 +27,12 @@ test-integration:
 test-binding:
     uv run python -m pytest packages/python/tests/integration/binding/ -x -q
 
-# Run e2e tests (local only, not CI)
+# Run e2e tests (local only). Runs from packages/python so `uv run` resolves
+# that package's own venv -- in a worktree, the worktree-local
+# packages/python/.venv, not the shared repo-root .venv every worktree would
+# otherwise trample (#682).
 test-e2e:
-    uv run python -m pytest packages/python/tests/e2e/ -x -q
+    cd packages/python && uv run python -m pytest tests/e2e/ -x -q
 
 # Run the Python packaging distcheck flow (build the wheel, install into a fresh
 # venv, run the installed CLI) from the internals/distcheck package (#520). Runs in
