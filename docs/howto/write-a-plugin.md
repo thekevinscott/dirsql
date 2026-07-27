@@ -72,7 +72,7 @@ Both hook command styles from the [hook contract](../reference/hooks.md) work
 in a plugin fragment:
 
 - **Console scripts** — a `bin`-style entry point your package installs on
-  `PATH` (`embed-file {path}`). Recommended for published plugins: the command
+  `PATH` (`embed-file {path} {root}`). Recommended for published plugins: the command
   is bound to your package's interpreter and dependencies, and it is
   language-neutral (the fragment names a command, not a Python file).
 - **Relative scripts** — a path resolved against the fragment's own directory
@@ -116,23 +116,28 @@ entrypoint = "sqlite3_vec_init"
 [[table]]
 ddl     = "CREATE TABLE notes (path TEXT, text TEXT, embedding TEXT)"
 glob    = "notes/*.md"
-on-file = "uv run --with model2vec python embed.py {path}"
+on-file = "uv run --with model2vec python embed.py {path} {root}"
 ```
 
-`embed.py` turns one file into one row carrying its text and its embedding:
+`embed.py` turns one file into one row carrying its path, text, and embedding.
+dirsql injects no columns, so the script emits the path itself, from the
+`{path}`/`{root}` the hook passes in:
 
 ```python
 """Embed one file's text; print a dirsql row array on stdout."""
 import json
+import os
 import sys
 
 from model2vec import StaticModel
 
-path = sys.argv[1]
+path, root = sys.argv[1], sys.argv[2]
 text = open(path, encoding="utf-8").read()
 model = StaticModel.from_pretrained("minishlab/potion-base-8M")
 vector = model.encode([text])[0]
-print(json.dumps([{"text": text, "embedding": json.dumps([round(float(x), 6) for x in vector])}]))
+row = {"path": os.path.relpath(path, root), "text": text,
+       "embedding": json.dumps([round(float(x), 6) for x in vector])}
+print(json.dumps([row]))
 ```
 
 `search.py` turns a `{"q": "..."}` request body into nearest-neighbor SQL:

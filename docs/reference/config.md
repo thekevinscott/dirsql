@@ -90,28 +90,29 @@ rejected; call the extension's functions in queries instead.
 
 ## `[[table]]`
 
-Each entry maps a glob pattern to a SQL table. Every matched file produces
-rows whose columns come from filesystem facts — [glob captures and virtual
-columns](./columns.md) — plus, when `on-file` is set, the output of a
-per-file command.
+Each entry maps a glob pattern to a SQL table. A table's columns are exactly
+what its required `on-file` command emits — dirsql injects nothing (see
+[Columns](./columns.md)).
 
 | Key | Required | Description |
 |---|---|---|
-| `ddl` | yes | A SQLite `CREATE TABLE` statement. The table name is parsed from it. Only columns declared here are populated; auto-injected facts not in the DDL are dropped. |
-| `glob` | yes | Glob pattern matched against root-relative paths. May contain `{name}` [capture segments](./columns.md#glob-captures). Every table whose glob matches a file receives that file's rows — a file can populate multiple tables. |
-| `strict` | no (default `false`) | When `true`, rows whose keys do not exactly match the declared columns are rejected with an error: extra keys error, and every declared column must be supplied (by the command/on-file output, a glob capture, or a stat column). When `false`, extra keys are dropped and missing columns become `NULL`. |
-| `on-file` | no | A command run once per matched file; its stdout (a JSON array of row objects) becomes the file's rows. Must be non-empty. See [Command hooks](./hooks.md#on-file). |
+| `ddl` | yes | A SQLite `CREATE TABLE` statement. The table name is parsed from it. Only the columns declared here are kept; keys the `on-file` command emits that are not declared are dropped. |
+| `glob` | yes | Glob pattern matched against root-relative paths. Every table whose glob matches a file receives that file's rows — a file can populate multiple tables. A `{name}` segment is rewritten to `*` (it matches one path segment but captures nothing). |
+| `on-file` | **yes** | A command run once per matched file; its stdout (a JSON array of row objects) becomes the file's rows. Must be non-empty. A `[[table]]` with no `on-file` is a load error (see [parse errors](#parse-errors)). See [Command hooks](./hooks.md#on-file). |
+| `strict` | no (default `false`) | When `true`, rows whose keys do not exactly match the declared columns are rejected with an error: extra keys error, and every declared column must be supplied by the `on-file` output. When `false`, extra keys are dropped and missing columns become `NULL`. |
 
-Without `on-file`, a table produces exactly one row per matched file, built
-entirely from filesystem facts. Content interpretation (frontmatter, JSON
-fields, CSV parsing) is out of scope for plain config tables — use
-`on-file`, or a programmatic [SDK table](./sdk.md#table) with an `on_file`
-callback.
+`on-file` is required because a table's rows come from nowhere else. dirsql
+does not read file contents or merge filesystem facts on your behalf: the
+command reads the file (it receives `{path}`) and prints the rows, and those
+rows — filtered to the DDL — are the table. For plain stat columns with no
+command, query the path directly with a [path-table](./path-tables.md)
+instead of declaring a table.
 
 ```toml
 [[table]]
-ddl  = "CREATE TABLE comments (path TEXT, basename TEXT, mtime INTEGER)"
-glob = "_comments/*/*.jsonl"
+ddl     = "CREATE TABLE comments (path TEXT, author TEXT, body TEXT)"
+glob    = "_comments/*/*.jsonl"
+on-file = "jq -c -s '.' {path}"
 
 [[table]]
 ddl     = "CREATE TABLE papers (paper_id TEXT, title TEXT)"
@@ -127,10 +128,10 @@ JSON values map to SQLite as: `null` → `NULL`; `true`/`false` → `1`/`0`; an
 integral number → `INTEGER`, any other number → `REAL`; a string → `TEXT`; a
 nested array or object → its JSON text as `TEXT`.
 
-Filesystem facts are still merged onto every `on-file` row; a column emitted
-by the command wins over a same-named fact. Output that is not a JSON array
-of objects is a per-file failure: the file is skipped with a stderr warning
-and the scan continues (see [failure semantics](./hooks.md#failure-semantics)).
+A row's columns are exactly the keys the command emits, narrowed to the DDL;
+dirsql merges nothing else in. Output that is not a JSON array of objects is a
+per-file failure: the file is skipped with a stderr warning and the scan
+continues (see [failure semantics](./hooks.md#failure-semantics)).
 
 ## Composing multiple configs
 
@@ -174,8 +175,13 @@ SDKs raise/reject) when:
 - Any table contains an unknown key (top level, `[dirsql]`, `[[table]]`, or
   `[[dirsql.extension]]`). The error names the offending key.
 - A `[[table]]` entry omits `ddl` or `glob`.
+- A `[[table]]` entry omits `on-file` (or it is empty/whitespace). The error
+  names the offending glob and points at the fix:
+
+  > `[[table]] '**/*.md' has no on-file hook, so every row would be all-NULL. Add an `on-file` hook that emits the columns, or, for stat columns with no code, query the path directly: `FROM './'``
+
 - A `[[dirsql.extension]]` entry omits `path`, or `path` is empty.
-- `on-file`, `pre-query`, or `post-query` is present but empty/whitespace.
+- `pre-query` or `post-query` is present but empty/whitespace.
 - `hook-timeout` is zero or negative.
 
 ## Full example
@@ -193,10 +199,12 @@ path       = "sqlite_vec"            # Python module name; on Node use the
 entrypoint = "sqlite3_vec_init"
 
 [[table]]
-ddl  = "CREATE TABLE comments (path TEXT, basename TEXT, mtime INTEGER)"
-glob = "_comments/*/*.jsonl"
+ddl     = "CREATE TABLE comments (author TEXT, body TEXT)"
+glob    = "_comments/*/*.jsonl"
+on-file = "jq -c -s '.' {path}"
 
 [[table]]
-ddl  = "CREATE TABLE documents (path TEXT, basename TEXT, size INTEGER)"
-glob = "**/index.md"
+ddl     = "CREATE TABLE documents (title TEXT, summary TEXT)"
+glob    = "**/index.md"
+on-file = "uv run python extract_doc.py {path}"
 ```

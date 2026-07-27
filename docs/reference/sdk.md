@@ -338,17 +338,17 @@ Maps files to table rows.
 
 - `ddl` — A SQLite `CREATE TABLE` statement; the table name is parsed from
   it. Table names must be unique across all tables.
-- `glob` — Glob pattern matched against root-relative paths. May contain
-  `{name}` [captures](./columns.md#glob-captures). Every table whose glob
-  matches a file receives that file's rows — a file can populate multiple
-  tables.
+- `glob` — Glob pattern matched against root-relative paths. Every table whose
+  glob matches a file receives that file's rows — a file can populate multiple
+  tables. A `{name}` segment is rewritten to `*` (it matches one path segment
+  but captures nothing).
 - `on_file` (`on_file` / `onFile`) — Callback receiving the matched file's full path (the root
   joined with the file's relative path — absolute when `root` is absolute)
-  and returning the rows that file contributes. `dirsql` never reads file
-  contents itself; a callback that needs the body reads the path. Return
-  an empty list to skip a file. [Stat columns and glob
-  captures](./columns.md) are merged onto each returned row; values the
-  callback emits win over same-named facts.
+  and returning the rows that file contributes. Required. A row's columns are
+  exactly what the callback returns, narrowed to the DDL — `dirsql` injects
+  nothing (see [Columns](./columns.md)). A callback that wants the path, stat
+  metadata, or file body computes it from the path it receives; `dirsql` never
+  reads file contents itself. Return an empty list to skip a file.
 - `strict` — Default off: extra row keys are dropped and missing declared
   columns become `NULL`. When on, any extra or missing key is an error
   (see [`strict`](./config.md#table)).

@@ -18,7 +18,7 @@ stdout works. With [`jq`](https://jqlang.org/):
 
 ```toml
 [[table]]
-ddl     = "CREATE TABLE books (title TEXT, author TEXT, year INTEGER, path TEXT)"
+ddl     = "CREATE TABLE books (title TEXT, author TEXT, year INTEGER)"
 glob    = "books/*.json"
 on-file = "jq -c '[{title, author, year}]' {path}"
 ```
@@ -35,17 +35,16 @@ Pass the config with [`-c`](../reference/cli.md#flags) (`dirsql` does not
 auto-load a `.dirsql.toml` from the current directory):
 
 ```bash
-dirsql query "SELECT title, author, year, path FROM books ORDER BY year" -c ./.dirsql.toml
+dirsql query "SELECT title, author, year FROM books ORDER BY year" -c ./.dirsql.toml
 ```
 
 ```json
-[{"path":"books/bleak-house.json","author":"Charles Dickens","title":"Bleak House","year":1852},{"path":"books/middlemarch.json","author":"George Eliot","title":"Middlemarch","year":1871}]
+[{"author":"Charles Dickens","title":"Bleak House","year":1852},{"author":"George Eliot","title":"Middlemarch","year":1871}]
 ```
 
-Filesystem facts are still merged onto every row — `path` above comes from
-`dirsql`, not from `jq`. When the command emits a key that collides with a
-fact, the command wins
-([precedence](../reference/columns.md#precedence)).
+The table's columns are exactly what the command emits, narrowed to the DDL —
+`dirsql` adds nothing. To include the file's `path`, have the command emit it
+(it has `{path}`); dirsql will not merge it in for you.
 
 ## Multiple rows per file
 
@@ -54,7 +53,7 @@ row per line, slurp it:
 
 ```toml
 [[table]]
-ddl     = "CREATE TABLE events (event TEXT, user TEXT, path TEXT)"
+ddl     = "CREATE TABLE events (event TEXT, user TEXT)"
 glob    = "logs/*.jsonl"
 on-file = "jq -c -s '.' {path}"
 ```

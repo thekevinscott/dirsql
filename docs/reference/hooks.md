@@ -105,10 +105,10 @@ The same command is attachable two ways, over the same contract: the
 which attaches it to every [path-table](./path-tables.md#parsing-rows-with-on-file)
 in the query. The command string is identical between the two spellings — the
 flag is the inline form, the config key the declared form (see
-[Parse your files into columns](../howto/parse-files-into-columns.md)). The one
-behavioral difference is not in this contract but in the surrounding table: a
-declared `[[table]]` merges the filesystem facts onto each parsed row, while a
-parsed path-table exposes only the parser's output.
+[Parse your files into columns](../howto/parse-files-into-columns.md)). In both
+spellings the table's columns are exactly what the command emits, narrowed to
+the DDL — `dirsql` injects no filesystem facts either way. A command that wants
+the path or stat metadata emits it (it has `{path}`).
 
 | Placeholder | Value |
 |---|---|

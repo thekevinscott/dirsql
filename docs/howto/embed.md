@@ -34,22 +34,25 @@ comments/t2/c1.json    # {"body": "following up", "author": "alice"}
 ```
 
 Unlike a config-file table, a programmatic table takes an `on_file`
-callback — your code reads each matched file and returns its rows, with
-[glob captures and stat columns](../reference/columns.md) merged on
-automatically (here, `{thread}` from the path):
+callback — your code reads each matched file and returns its rows. The row's
+columns are exactly what the callback returns; `dirsql` merges nothing on top
+(see [Columns](../reference/columns.md)), so the callback derives the `thread`
+from the file's path itself:
 
 ::: code-group
 
 ```python [Python]
 import asyncio
 import json
+import os
 
 from dirsql import DirSQL, Table
 
 
 def on_file(path: str) -> list[dict]:
+    thread = os.path.basename(os.path.dirname(path))
     with open(path, encoding="utf-8") as f:
-        return [json.load(f)]
+        return [{**json.load(f), "thread": thread}]
 
 
 async def main() -> None:
@@ -58,7 +61,7 @@ async def main() -> None:
         tables=[
             Table(
                 ddl="CREATE TABLE comments (thread TEXT, author TEXT, body TEXT)",
-                glob="comments/{thread}/*.json",
+                glob="comments/*/*.json",
                 on_file=on_file,
             )
         ],
@@ -73,6 +76,7 @@ asyncio.run(main())
 
 ```typescript [TypeScript]
 import { readFileSync } from "node:fs";
+import { basename, dirname } from "node:path";
 import { DirSQL } from "dirsql";
 
 const db = new DirSQL({
@@ -80,8 +84,10 @@ const db = new DirSQL({
   tables: [
     {
       ddl: "CREATE TABLE comments (thread TEXT, author TEXT, body TEXT)",
-      glob: "comments/{thread}/*.json",
-      onFile: (path) => [JSON.parse(readFileSync(path, "utf8"))],
+      glob: "comments/*/*.json",
+      onFile: (path) => [
+        { ...JSON.parse(readFileSync(path, "utf8")), thread: basename(dirname(path)) },
+      ],
     },
   ],
 });
@@ -110,6 +116,12 @@ fn on_file(path: &str) -> Vec<HashMap<String, Value>> {
             row.insert(key, Value::Text(s));
         }
     }
+    let thread = std::path::Path::new(path)
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    row.insert("thread".into(), Value::Text(thread.into()));
     vec![row]
 }
 
@@ -118,7 +130,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .root("./comments-root")
         .table(Table::new(
             "CREATE TABLE comments (thread TEXT, author TEXT, body TEXT)",
-            "comments/{thread}/*.json",
+            "comments/*/*.json",
             on_file,
         ))
         .build()?;

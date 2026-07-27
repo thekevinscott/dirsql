@@ -106,10 +106,9 @@ Same command, same rows. The difference is what a declared table brings: it is
 indexed on build, kept fresh by the watcher, survives restarts with
 [`--persist`](./persist.md), and a config can declare
 [many tables](./define-tables.md) — each with its own `on-file` — where the flag
-gives every path-table one parser. A declared table also merges the filesystem
-facts back onto each row, so a `path TEXT` column in the DDL is populated by
-`dirsql` even though the parser did not emit it
-([precedence](../reference/columns.md#precedence)).
+gives every path-table one parser. In both spellings the table's columns are
+exactly what the parser emits: `dirsql` merges no filesystem facts back on. A
+row that needs the file's `path` emits it (the parser has `{path}`).
 
 ## Going further
 
