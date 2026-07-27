@@ -27,8 +27,7 @@ def describe_dirsql_interpret_removed():
         proc = subprocess.run(
             [_cli(), "interpret", "some-config.py"],
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=10,
         )
@@ -40,8 +39,7 @@ def describe_dirsql_interpret_removed():
         proc = subprocess.run(
             [_cli(), "interpret", "some-config.py"],
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=10,
         )

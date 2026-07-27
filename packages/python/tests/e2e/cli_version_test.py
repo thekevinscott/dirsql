@@ -56,8 +56,7 @@ def describe_dirsql_version_flag():
         proc = subprocess.run(
             [_cli(), "--version"],
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=30,
         )

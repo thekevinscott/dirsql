@@ -31,7 +31,7 @@ dev = [
     "pytest-describe>=2",
     "pytest-asyncio>=0.23",
     "pytest-cov>=5",
-    "ruff==0.15.22",
+    "ruff==0.16.0",
     "maturin>=1.0",
     # ty is pre-1.0 -- pin tightly. Re-pin in lockstep with CI.
     "ty==0.0.42",
@@ -91,11 +91,53 @@ exclude = [
 [tool.ty.environment]
 python-version = "3.11"
 
+# ruff 0.16.0 formats Python code blocks in Markdown by default. Keep ruff
+# scoped to Python source (its effective scope under the prior pin): the README
+# and the append-only migration/changelog fragments are prose we don't want the
+# formatter rewriting.
+[tool.ruff]
+extend-exclude = ["*.md"]
+
 # Ruff enforces "every type-ignore must cite a rule code" (PGH003) so a
 # `# type: ignore` or `# ty: ignore` without `[...]` fails lint. Stops the
 # escape hatch from quietly widening.
 [tool.ruff.lint]
 extend-select = ["PGH003"]
+
+# ruff 0.16.0 turned on a much larger default rule set (413 rules, up from 59).
+# The findings below describe production hot-path concerns that do not apply to
+# the code they flag; each is silenced at the narrowest scope with the reason.
+[tool.ruff.lint.per-file-ignores]
+# Test suites open real files and spawn real subprocesses directly. In short,
+# synchronous test bodies these async-safety / resource-lifetime rules add no
+# safety and would only churn the fixtures:
+#   SIM115   - transient `open(...)` in a test needs no context manager
+#   ASYNC230 - a blocking `open` inside an async test is not a latency concern
+#   ASYNC251 - likewise for a blocking `time.sleep` in an async test
+#   B017     - a test may legitimately assert that *any* exception is raised
+#   PLW1510  - subprocess tests inspect `returncode`; `check=` would defeat that
+#   BLE001   - broad `except` in a test's teardown / assertion helper is fine
+#   FLY002   - `"".join([...])` here deliberately builds a non-interned string
+#              so an `is`-vs-`==` mutant survives only if the test uses the
+#              literal; collapsing to the literal would weaken the mutation test
+"**/*_test.py" = ["SIM115", "ASYNC230", "ASYNC251", "B017", "PLW1510", "BLE001", "FLY002"]
+
+# The CLI entry point catches broadly on purpose (any startup failure becomes a
+# friendly stderr line + exit 1) and the Windows fallback returns the child's
+# exit code directly, with no `check=`.
+"dirsql/cli/main.py" = ["BLE001", "PLW1510"]
+# Deferred-error pattern: a failed background build is captured and re-raised on
+# first use, so the constructor must catch broadly.
+"dirsql/_async.py" = ["BLE001"]
+# Three disjoint prefix clauses are kept explicit alongside the comment that
+# enumerates them; collapsing into a `startswith` tuple would obscure the cases.
+"dirsql/cli/discover_plugins/user_passed_config.py" = ["PIE810"]
+# Curated barrel: the public class leads the re-export / `__all__` order rather
+# than alphabetical.
+"dirsql/__init__.py" = ["I001", "RUF022"]
+# Hand-maintained stub mirroring the native module; the `Row` alias and the
+# explicit `@override __repr__` document the real surface and stay as written.
+"dirsql/_dirsql.pyi" = ["PYI026", "PYI029"]
 
 [tool.coverage.run]
 omit = [

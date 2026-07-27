@@ -13,6 +13,7 @@ the Rust core's own suites.
 """
 
 import asyncio
+from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -27,7 +28,7 @@ class _FakeRustDirSQL:
     binding layer passes them through untouched.
     """
 
-    instances: list = []
+    instances: ClassVar[list] = []
 
     def __init__(
         self,
