@@ -7,13 +7,16 @@ side.
 
 Row events are emitted for **named tables**, so this flow needs a config —
 [path-tables](../reference/path-tables.md) are scanned per query and are not
-watched. Define one next to your files:
+watched. Define one next to your files. A named table's columns are whatever
+its [`on-file`](../reference/config.md#table) hook emits; here a minimal hook
+prints each file's basename:
 
 ```toml
 # .dirsql.toml
 [[table]]
-ddl  = "CREATE TABLE files (path TEXT, basename TEXT, dir TEXT, ext TEXT, size INTEGER, mtime INTEGER, ctime INTEGER)"
-glob = "**/*"
+ddl     = "CREATE TABLE files (basename TEXT)"
+glob    = "**/*"
+on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
 ```
 
 ## 1. Open the stream
@@ -44,7 +47,7 @@ The stream delivers the resulting row change:
 
 ```
 event: row
-data: {"action":"insert","file_path":"inbox/two.txt","old_row":null,"row":{"basename":"two.txt","ctime":1783170226,"dir":"inbox","ext":"txt","mtime":1783170226,"path":"inbox/two.txt","size":7},"table":"files"}
+data: {"action":"insert","file_path":"inbox/two.txt","old_row":null,"row":{"basename":"two.txt"},"table":"files"}
 ```
 
 Edits arrive as `update` events carrying both the old and new row;

@@ -22,8 +22,9 @@ Exclude the noise in `.dirsql.toml`:
 ignore = ["notes/drafts/**", "**/*.tmp"]
 
 [[table]]
-ddl  = "CREATE TABLE notes (path TEXT)"
-glob = "notes/**/*"
+ddl     = "CREATE TABLE notes (basename TEXT)"
+glob    = "notes/**/*"
+on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
 ```
 
 Patterns match against root-relative paths, the same way table globs do. An
@@ -35,11 +36,11 @@ Pass the config with [`-c`](../reference/cli.md#flags) (`dirsql` does not
 auto-load a `.dirsql.toml` from the current directory):
 
 ```bash
-dirsql query "SELECT path FROM notes ORDER BY path" -c ./.dirsql.toml
+dirsql query "SELECT basename FROM notes ORDER BY basename" -c ./.dirsql.toml
 ```
 
 ```json
-[{"path":"notes/final.md"}]
+[{"basename":"final.md"}]
 ```
 
 ## Notes

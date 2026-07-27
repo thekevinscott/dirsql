@@ -1,12 +1,12 @@
 # Your first dirsql database
 
 In this tutorial you will turn a directory of three tiny markdown files into
-a SQL database — with a single command, and without writing any code. You
-will:
+a SQL database. You will:
 
 1. Create the directory and files.
-2. Query them straight away with zero configuration.
-3. Declare your own table to name and reuse a shape, and query it.
+2. Query them straight away with zero configuration and no code.
+3. Declare your own named table — with a tiny parser that pulls a column out
+   of each file — and query it.
 
 It takes about five minutes.
 
@@ -140,25 +140,44 @@ A declared table fixes a shape once: you give it a name, scope it to exactly
 the files you care about, and then query it by name instead of repeating a
 path in every question. It is also the on-ramp to everything a path-table
 can't do — a named table can be kept live by the watcher, persisted across
-restarts, and given a parser that reads inside your files.
+restarts, and given a parser that reads *inside* your files.
 
-Still inside `my-notes`, create a `.dirsql.toml`:
+That parser is the point: a named table's columns are exactly what its
+`on-file` command emits. `dirsql` adds nothing on its own — so this is where
+you pull a value out of each file. Still inside `my-notes`, write a tiny
+parser that reads a note's title line (the `# Heading`) and its author (the
+folder name), and prints them as a JSON row:
+
+```bash
+cat > note.sh <<'EOF'
+#!/usr/bin/env sh
+title=$(sed -n 's/^# //p' "$1" | head -n1)
+author=$(basename "$(dirname "$1")")
+printf '[{"title":%s,"author":%s}]' \
+  "$(jq -Rn --arg t "$title" '$t')" \
+  "$(jq -Rn --arg a "$author" '$a')"
+EOF
+```
+
+Now create a `.dirsql.toml` that points a table at it:
 
 ```bash
 cat > .dirsql.toml <<'EOF'
 [[table]]
-ddl  = "CREATE TABLE notes (dir TEXT, basename TEXT, size INTEGER)"
-glob = "notes/**/*.md"
+ddl     = "CREATE TABLE notes (title TEXT, author TEXT)"
+glob    = "notes/**/*.md"
+on-file = "sh note.sh {path}"
 EOF
 ```
 
-Two keys define the table:
+Three keys define the table:
 
 - `glob` selects which files feed the table — every `.md` at any depth under
   `notes/`, relative to the directory the config sits in.
 - `ddl` is ordinary `CREATE TABLE` SQL naming the columns you want to keep.
-  Each is a [stat column](./reference/columns.md#stat-columns) `dirsql`
-  computes for every file.
+- `on-file` is the command run once per matched file; `{path}` is the file's
+  path, and its printed JSON row becomes the file's row. The columns are
+  exactly what it emits — `title` from the heading, `author` from the folder.
 
 ## 5. Query the table
 
@@ -168,11 +187,11 @@ pass it explicitly with `-c`, **after** the SQL:
 ::: code-group
 
 ```bash [npm]
-npx dirsql "SELECT dir, basename, size FROM notes ORDER BY dir, basename" -c .dirsql.toml | jq
+npx dirsql "SELECT title, author FROM notes ORDER BY author, title" -c .dirsql.toml | jq
 ```
 
 ```bash [PyPI]
-uvx dirsql "SELECT dir, basename, size FROM notes ORDER BY dir, basename" -c .dirsql.toml | jq
+uvx dirsql "SELECT title, author FROM notes ORDER BY author, title" -c .dirsql.toml | jq
 ```
 
 :::
@@ -180,35 +199,33 @@ uvx dirsql "SELECT dir, basename, size FROM notes ORDER BY dir, basename" -c .di
 ```json
 [
   {
-    "basename": "ideas.md",
-    "dir": "notes/alice",
-    "size": 52
+    "author": "alice",
+    "title": "Ideas"
   },
   {
-    "basename": "welcome.md",
-    "dir": "notes/alice",
-    "size": 66
+    "author": "alice",
+    "title": "Welcome"
   },
   {
-    "basename": "reading-list.md",
-    "dir": "notes/bob",
-    "size": 41
+    "author": "bob",
+    "title": "Reading list"
   }
 ]
 ```
 
-You queried `FROM notes` by name — no path, no glob to repeat. And because
-`dir` is a real SQL column, you can aggregate on it. Count each author's
-notes by their folder:
+You queried `FROM notes` by name — no path, no glob to repeat — and `title`
+came from *inside* each file, something a path-table can't reach. Because
+`author` is a real SQL column, you can aggregate on it. Count each author's
+notes:
 
 ::: code-group
 
 ```bash [npm]
-npx dirsql query "SELECT dir, COUNT(*) AS notes FROM notes GROUP BY dir ORDER BY dir" -c .dirsql.toml | jq
+npx dirsql query "SELECT author, COUNT(*) AS notes FROM notes GROUP BY author ORDER BY author" -c .dirsql.toml | jq
 ```
 
 ```bash [PyPI]
-uvx dirsql query "SELECT dir, COUNT(*) AS notes FROM notes GROUP BY dir ORDER BY dir" -c .dirsql.toml | jq
+uvx dirsql query "SELECT author, COUNT(*) AS notes FROM notes GROUP BY author ORDER BY author" -c .dirsql.toml | jq
 ```
 
 :::
@@ -216,11 +233,11 @@ uvx dirsql query "SELECT dir, COUNT(*) AS notes FROM notes GROUP BY dir ORDER BY
 ```json
 [
   {
-    "dir": "notes/alice",
+    "author": "alice",
     "notes": 2
   },
   {
-    "dir": "notes/bob",
+    "author": "bob",
     "notes": 1
   }
 ]
@@ -234,7 +251,7 @@ configuration, and a declared table when you want a named shape to reuse.
 - [Query files without a config](./howto/query-without-config.md) — more
   path-table questions you can ask with no setup at all.
 - [Define tables for your files](./howto/define-tables.md) — the full
-  `[[table]]` recipe: multiple tables, ignore patterns.
+  `[[table]]` recipe: multiple tables, each with its own `on-file` parser.
 - [Extract rows from file contents](./howto/extract-from-contents.md) —
   pull columns out of *inside* your files with an `on-file` parser.
 - [CLI](./reference/cli.md) — every flag, plus running `dirsql` as a

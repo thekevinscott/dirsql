@@ -3,14 +3,21 @@
 ## Scope
 
 `dirsql` is a queryable index over a local filesystem. Files are rows; the
-database is the index. Columns of any dirsql table come from filesystem-level
-facts:
+database is the index. Where a table's columns come from depends on the table
+kind, and dirsql never injects a column the table did not produce:
 
-- The path itself, and parts derived from it (`path`, `basename`, `dir`,
-  `ext`).
-- Named captures in the glob pattern (`posts/{thread_id}/*.md` →
-  `thread_id`).
-- Stat metadata (`size`, `mtime`, `ctime`).
+- **Named tables** (`[[table]]` / SDK `Table`) have exactly the columns their
+  `on_file` hook emits, narrowed to the DDL. A hook is required; a hook-less
+  `[[table]]` is a config-load error (every row would be all-NULL). A hook that
+  wants the path or stat metadata computes it from the path it receives.
+- **Path-tables** (`FROM './'`) expose seven filesystem stat columns (`path`,
+  `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`) plus a lazily-read hidden
+  `content` column — the one place dirsql supplies columns for you. Attaching a
+  `--on-file` parser replaces the stat columns with the parser's output.
+
+There is no automatic fact injection and no glob capture: a `{name}` glob
+segment is rewritten to `*` and captures nothing. (Both mechanisms were
+removed in the fact-removal epic, [#624](https://github.com/thekevinscott/dirsql/issues/624).)
 
 **Content interpretation is intentionally out of scope.** dirsql does not
 parse markdown frontmatter, JSON, CSV, YAML, TOML, or any other file format
@@ -130,7 +137,7 @@ Walks a directory tree and matches files against table globs. Returns a list of 
 
 ### `matcher` -- Glob-to-table mapping
 
-Maps glob patterns to table names and handles ignore patterns. A file is matched against every glob in registration order; every matching pattern fires, so a file can belong to multiple tables. Glob patterns may contain `{name}` capture placeholders; the matcher returns captured segments alongside each table name.
+Maps glob patterns to table names and handles ignore patterns. A file is matched against every glob in registration order; every matching pattern fires, so a file can belong to multiple tables. A `{name}` placeholder in a glob is rewritten to `*` before compilation, so it matches a single path segment but captures no value (glob captures were removed in #624).
 
 ### `watcher` -- Filesystem monitoring
 
@@ -140,29 +147,24 @@ Wraps the `notify` crate to watch for filesystem changes. Emits `FileEvent` vari
 
 Compares old and new row sets for a file to produce `RowEvent` variants: `Insert`, `Update`, `Delete`, `Error`. Rows are compared by position (index within the file).
 
-### Filesystem-fact injection (in `lib.rs`)
+### Named-table rows (in `lib.rs`)
 
-The `on_file` callback receives only the matched file's absolute path; dirsql
-does not read file contents on its behalf. A callback that needs the file body
-reads it itself. After `on_file` returns, and before SQLite insertion, the core
-merges two sources of filesystem-derived columns into every row:
+A named table's rows come entirely from its `on_file` hook — the core injects
+no columns. The `on_file` callback receives only the matched file's absolute
+path; dirsql does not read file contents on its behalf. A callback that needs
+the file body, path parts, or stat metadata computes them from that path and
+emits them as ordinary keys.
 
-- **Glob path captures**, by capture name (`{thread_id}` → `thread_id`).
-- **Stat columns**, under bare names: `path`, `basename`, `dir`, `ext`,
-  `size`, `mtime`, `ctime`. These are ordinary stored columns, not SQLite
-  `GENERATED ... VIRTUAL` columns -- "stat" describes where the value comes
-  from, not how it is stored. See `docs/reference/columns.md`.
+The returned keys are filtered to the columns declared in the table's DDL (via
+`db.get_table_columns`) before SQLite insertion; keys not in the DDL are
+dropped. This is the sole transformation the core applies to hook output.
 
-Auto-injected keys are filtered to the columns declared in the table's DDL
-(via `db.get_table_columns`), so a table with a minimal DDL is not broken by
-stat columns it didn't ask for. User on-file values win over auto-injected
-values when the keys collide.
-
-Config-defined tables (`[[table]]` entries in `.dirsql.toml`) use a
-synthesized `on_file` that returns one empty row per matched file; the
-filesystem-fact layer fills it in. Programmatic tables (`Table::new` /
-`Table::strict`) get the same auto-injection applied to whatever rows their
-on_file callback returns.
+Because a hook is the only column source, a `[[table]]` with no `on-file` is
+rejected at config load (`ConfigError::HooklessTable`) — every row would be
+all-NULL. The stat-fact injection layer and glob captures that formerly filled
+such tables were removed in the fact-removal epic
+([#624](https://github.com/thekevinscott/dirsql/issues/624)); stat columns now
+live only on path-tables (`dirsql_path` virtual table, see Query execution).
 
 ## Python SDK (`packages/python/`)
 
@@ -188,8 +190,8 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 2. Rust executes DDL to create SQLite tables
 3. `scanner` walks the directory and matches files to tables
 4. For each matched file, Python `on_file` is called via PyO3
-5. The core merges glob captures and stat columns (filtered to the DDL's
-   declared columns) into each returned row
+5. The returned rows are filtered to the DDL's declared columns (no columns are
+   injected); rows are the hook's output alone
 6. Rows are inserted into SQLite with tracking metadata
 7. File-to-rows mapping is stored for later diffing
 
@@ -198,8 +200,8 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 1. `notify` detects a filesystem event (create/modify/delete)
 2. The matcher checks if the file belongs to a table
 3. For create/modify: `on_file` is called with the file's absolute path
-   (reading the file itself if it needs the body), captures and stat columns
-   are merged, `differ` compares old and new rows
+   (reading the file itself if it needs the body); its rows are filtered to the
+   DDL's columns (no injection), then `differ` compares old and new rows
 4. For delete: old rows are retrieved, all emitted as delete events
 5. SQLite is updated (old rows deleted, new rows inserted)
 6. `RowEvent` objects are returned to Python

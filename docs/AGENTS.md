@@ -57,7 +57,8 @@ migrated -- a page survives only if a slot wants its content):
   `dirsql` in an application.
 - **Reference** (`reference/`) -- CLI flags and defaults; the complete
   `.dirsql.toml` schema; the command hook contract (placeholders, stdout
-  protocol, exit codes, timeouts); stat columns and glob captures; the
+  protocol, exit codes, timeouts); the columns model (named tables get their
+  hook's output; path-tables get stat columns); the
   HTTP API; the SDK page (`reference/sdk.md`, one page with
   Python/TypeScript/Rust code-groups -- the sole SDK home); plus the
   Migrations include (`migrations.md`).
