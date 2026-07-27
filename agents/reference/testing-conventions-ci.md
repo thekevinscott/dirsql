@@ -22,11 +22,12 @@ Every adoptable gate runs inside `conventions.yml`, per package; `testing-conven
 | unit-lint | ✅ | ✅ | ✅ |
 | integration-lint | ✅ | ✅ | ✅ |
 | unit-coverage | ✅ | ✅ | ❌ bespoke in `rust-test.yml` -- permanent, see below |
-| mutation | ✅ | ✅ | ✅ |
+| mutation | ✅ | ✅ | ❌ bespoke in `rust-test.yml` -- permanent, see below |
 | e2e-verify | ✅ | ✅ | N/A by design, see below |
 | packaging | ✅ | ✅ | ✅ (workspace-member support, upstream #360/#362) |
 
 The binding crates (`packages/ts/napi`, `packages/python`) additionally run colocated-test + unit-lint at their own crate roots (#405).
 
 - **Rust unit-coverage is bespoke PERMANENTLY, not pending upstream.** The `branch` floor needs nightly (`cargo llvm-cov --branch`); the reusable coverage job provisions stable, and upstream declined a toolchain input. The sanctioned alternative -- a crate-root `packages/rust/rust-toolchain.toml` -- was probed in #437 and **breaks the release build**: the release precheck cross-compiles from `packages/rust` on stable with added musl/darwin targets, and the pin switched that build to nightly (`E0463: can't find crate for core` on every target). One crate, one directory, two callers needing different channels -- a crate-root pin cannot serve both, so `rust-test.yml`'s coverage job scopes nightly to its own step. Revisit only if upstream gains a toolchain selector that does not leak to other builds of the same crate.
+- **Rust mutation is bespoke, not pending upstream.** testing-conventions feeds cargo-mutants a `git diff --relative` (crate-relative paths), but `packages/rust` is a cargo *workspace member*, so cargo-mutants matches `--in-diff` hunks by workspace-relative path -- the two never line up, every mutant is filtered, and the job prints `0 mutant(s) tested`, exit 0: a false green (#672). The `mutation` gate is therefore dropped from `conventions.yml`'s `rust` call and replaced by a `mutation` job in `rust-test.yml` running `dirsql-checks rust-mutation`, which builds a workspace-relative diff and drives cargo-mutants directly. A follow-up should report the bug upstream so the built-in gate becomes usable for workspace repos; until then the bespoke gate is the only invocation that tests >0 mutants.
 - **Rust has no e2e-verify because it has nothing to attest.** Attestations are receipts for suites CI cannot run (they spawn the shipped binary through the real launchers); rust's outermost tier (`packages/rust/tests/`) runs directly in CI on every PR, so a receipt would be strictly weaker evidence than the run itself. Core changes are still e2e-freshness-enforced through BOTH bindings via `[e2e].extra_scope` (see *E2E Attestation*).

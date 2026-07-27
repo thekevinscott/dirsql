@@ -130,6 +130,47 @@ jobs:
       - name: Unit coverage floor (testing-conventions)
         run: npx -y testing-conventions unit coverage --language rust packages/rust/src
 
+  mutation:
+    name: Unit mutation — changed Rust lines
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history so the PR's merge-base diff (base.sha...HEAD) resolves.
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-stable-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@cargo-mutants
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Sync the checks package
+        run: uv sync --project internals/checks
+
+      # Bespoke correct invocation (#672). testing-conventions' built-in rust
+      # `mutation` gate feeds cargo-mutants a crate-relative diff (`git diff
+      # --relative`), but packages/rust is a cargo workspace member so
+      # cargo-mutants matches --in-diff hunks by workspace-relative path -> every
+      # mutant is filtered, the job prints `0 mutant(s) tested` and exits 0 (a
+      # false green). This check builds a workspace-relative diff and drives
+      # cargo-mutants directly; the logic + colocated tests live in
+      # internals/checks per AGENTS.md ("CI logic lives in scripts").
+      - name: Unit mutation (changed Rust lines)
+        run: uv run --project internals/checks dirsql-checks rust-mutation --base ${{ github.event.pull_request.base.sha || 'origin/main' }}
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

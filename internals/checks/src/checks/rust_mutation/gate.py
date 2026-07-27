@@ -33,8 +33,11 @@ def _write_temp_diff(diff):
 
 
 def build_diff(base, runner):
+    # No `--relative`: cargo-mutants matches --in-diff hunks by workspace-relative
+    # path (packages/rust is a cargo workspace member), so the diff must carry
+    # workspace-root paths. `--relative` yields crate-relative paths that match nothing.
     result = runner(
-        ["git", "diff", "--relative", f"{base}...HEAD"],
+        ["git", "diff", f"{base}...HEAD"],
         capture_output=True,
         text=True,
         check=True,
@@ -49,6 +52,6 @@ def run(base, runner=subprocess.run, writer=_write_temp_diff):
         ["cargo", "mutants", "--features", "cli", "--in-diff", diff_path],
         cwd=CRATE_DIR,
     )
-    if result.returncode != 0:
+    if result.returncode:
         print(SURVIVOR_HINT)
     return result.returncode

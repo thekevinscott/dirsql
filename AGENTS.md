@@ -45,7 +45,7 @@ Default to no comments. Only add one when the WHY is non-obvious -- a hidden con
 
 ### Reusable-workflow gates (testing-conventions)
 
-`conventions.yml` calls the `testing-conventions` reusable workflow at the **moving tag `@v0`**. The essentials: a removed/renamed input startup-fails the whole workflow on `main` and every PR (0 jobs, no job logs -- WebFetch the run's `html_url` and read the annotation first, never hypothesize); an unknown `testing-conventions.toml` key fails EVERY gate; read upstream behavior at a pinned sha and trust its `MIGRATIONS.md` over probing; a stale e2e attestation after a squash merge is ours to re-attest, never a tool bug; never retire a bespoke gate before a green proof. Full operational lore, the per-language gate adoption map, and the two permanent exceptions (Rust unit-coverage stays bespoke; Rust has no e2e-verify): `agents/reference/testing-conventions-ci.md`.
+`conventions.yml` calls the `testing-conventions` reusable workflow at the **moving tag `@v0`**. The essentials: a removed/renamed input startup-fails the whole workflow on `main` and every PR (0 jobs, no job logs -- WebFetch the run's `html_url` and read the annotation first, never hypothesize); an unknown `testing-conventions.toml` key fails EVERY gate; read upstream behavior at a pinned sha and trust its `MIGRATIONS.md` over probing; a stale e2e attestation after a squash merge is ours to re-attest, never a tool bug; never retire a bespoke gate before a green proof. Full operational lore, the per-language gate adoption map, and the permanent Rust exceptions (unit-coverage stays bespoke; mutation is bespoke -- the reusable gate false-greens for the workspace-member crate, #672; no e2e-verify): `agents/reference/testing-conventions-ci.md`.
 
 ## Imports
 
@@ -122,7 +122,7 @@ just test-conventions
 
 ### Mutation (testing-conventions)
 
-The `unit mutation` gate mutates PR-changed source lines and fails on any mutant no unit test kills (engines: cosmic-ray / Stryker / cargo-mutants, all self-provisioned; PR-only, diff-scoped via `--base`). All three SDKs run it inside `conventions.yml`. Fix a survivor with a **new assertion**, never by weakening a test; only a genuinely equivalent mutant gets a reason-required `mutation` exemption (none today). Local run commands and per-language details: `agents/reference/testing-gates.md`.
+The `unit mutation` gate mutates PR-changed source lines and fails on any mutant no unit test kills (engines: cosmic-ray / Stryker / cargo-mutants, all self-provisioned; PR-only, diff-scoped via `--base`). Python/TS run it inside `conventions.yml`; **Rust runs a bespoke `mutation` job in `rust-test.yml`** (`dirsql-checks rust-mutation`) because testing-conventions feeds cargo-mutants a crate-relative diff that matches nothing for the workspace-member crate `packages/rust` -- a `0 mutant(s) tested` false green (#672). Fix a survivor with a **new assertion**, never by weakening a test; only a genuinely equivalent mutant gets a reason-required `mutation` exemption (none today). Local run commands and per-language details: `agents/reference/testing-gates.md`.
 
 ### Test Boundaries -- What to Mock, What Not To
 

@@ -34,7 +34,12 @@ jobs:
       source: packages/rust
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint", "integration-lint", "mutation", "packaging"]'
+      # NB: no "mutation" here. testing-conventions feeds cargo-mutants a
+      # `git diff --relative` (crate-relative paths), but packages/rust is a cargo
+      # workspace member so cargo-mutants matches --in-diff by workspace-relative
+      # path -> every mutant filtered, `0 mutant(s) tested`, false green (#672).
+      # The Rust mutation gate runs bespoke in rust-test.yml with a correct diff.
+      gates: '["colocated-test", "unit-lint", "integration-lint", "packaging"]'
 
   rust-napi-binding:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
