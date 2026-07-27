@@ -11,3 +11,7 @@ def test_changelog_gate_is_registered():
 
 def test_pytest_gate_is_registered():
     assert "pytest-gate" in main.commands
+
+
+def test_rust_mutation_is_registered():
+    assert "rust-mutation" in main.commands

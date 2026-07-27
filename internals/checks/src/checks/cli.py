@@ -9,6 +9,7 @@ import click
 
 from checks.changelog_gate.cli import cli as changelog_gate
 from checks.pytest_gate.cli import cli as pytest_gate
+from checks.rust_mutation.cli import cli as rust_mutation
 
 
 @click.group()
@@ -18,3 +19,4 @@ def main() -> None:
 
 main.add_command(changelog_gate, name="changelog-gate")
 main.add_command(pytest_gate, name="pytest-gate")
+main.add_command(rust_mutation, name="rust-mutation")
