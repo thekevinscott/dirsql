@@ -21,7 +21,7 @@ _RELEASE = os.path.join(_REPO_ROOT, "target", "release", "dirsql")
 _DEBUG = os.path.join(_REPO_ROOT, "target", "debug", "dirsql")
 _BINARY = _RELEASE if os.path.exists(_RELEASE) else _DEBUG
 
-import dirsql as _dirsql_pkg  # noqa: E402
+import dirsql as _dirsql_pkg
 
 _BINARY_STAGE_DIR = os.path.join(os.path.dirname(_dirsql_pkg.__file__), "_binary")
 
@@ -68,8 +68,7 @@ def describe_on_file_query():
                 *args,
             ],
             cwd=str(root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
         )
 

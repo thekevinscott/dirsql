@@ -181,9 +181,9 @@ def describe_bare_name_package_resolution():
         with (
             mock.patch.object(re.os.path, "isfile", return_value=False),
             mock.patch.object(re.importlib.util, "find_spec", return_value=None),
+            pytest.raises(ValueError, match="not installed"),
         ):
-            with pytest.raises(ValueError, match="not installed"):
-                re.resolve_extension_path("nope", base="/c", resolve_relative=True)
+            re.resolve_extension_path("nope", base="/c", resolve_relative=True)
 
     def it_wraps_a_find_spec_error():
         with (
@@ -191,9 +191,9 @@ def describe_bare_name_package_resolution():
             mock.patch.object(
                 re.importlib.util, "find_spec", side_effect=ImportError("boom")
             ),
+            pytest.raises(ValueError, match="could not resolve extension package"),
         ):
-            with pytest.raises(ValueError, match="could not resolve extension package"):
-                re.resolve_extension_path("nope", base="/c", resolve_relative=True)
+            re.resolve_extension_path("nope", base="/c", resolve_relative=True)
 
     def it_errors_when_the_spec_has_no_package_directory():
         with (
@@ -203,9 +203,9 @@ def describe_bare_name_package_resolution():
                 "find_spec",
                 return_value=_spec(origin="built-in"),
             ),
+            pytest.raises(ValueError, match="no package directory"),
         ):
-            with pytest.raises(ValueError, match="no package directory"):
-                re.resolve_extension_path("nope", base="/c", resolve_relative=True)
+            re.resolve_extension_path("nope", base="/c", resolve_relative=True)
 
     def it_errors_when_no_loadable_file_is_found():
         with (
@@ -217,9 +217,9 @@ def describe_bare_name_package_resolution():
                 return_value=_spec(locations=["/site/x"]),
             ),
             mock.patch.object(re._glob, "glob", return_value=[]),
+            pytest.raises(ValueError, match="no loadable extension file"),
         ):
-            with pytest.raises(ValueError, match="no loadable extension file"):
-                re.resolve_extension_path("x", base="/c", resolve_relative=True)
+            re.resolve_extension_path("x", base="/c", resolve_relative=True)
 
     def it_errors_when_multiple_loadable_files_are_found():
         with (
@@ -233,6 +233,6 @@ def describe_bare_name_package_resolution():
             mock.patch.object(
                 re._glob, "glob", return_value=["/site/x/a.so", "/site/x/b.so"]
             ),
+            pytest.raises(ValueError, match="multiple loadable extension files"),
         ):
-            with pytest.raises(ValueError, match="multiple loadable extension files"):
-                re.resolve_extension_path("x", base="/c", resolve_relative=True)
+            re.resolve_extension_path("x", base="/c", resolve_relative=True)

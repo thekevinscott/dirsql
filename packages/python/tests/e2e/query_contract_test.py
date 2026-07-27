@@ -33,7 +33,7 @@ _DEBUG = os.path.join(_REPO_ROOT, "target", "debug", "dirsql")
 _BINARY = _RELEASE if os.path.exists(_RELEASE) else _DEBUG
 
 # Where the launcher's `binary_path()` looks: `<dirsql package>/_binary/dirsql`.
-import dirsql as _dirsql_pkg  # noqa: E402
+import dirsql as _dirsql_pkg
 
 _BINARY_STAGE_DIR = os.path.join(os.path.dirname(_dirsql_pkg.__file__), "_binary")
 

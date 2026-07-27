@@ -222,7 +222,7 @@ def describe_DirSQL_async():
 
             try:
                 await asyncio.wait_for(task, timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pytest.fail("Timed out waiting for watch events")
 
             insert = next((e for e in events if e.action == "insert"), None)
@@ -269,7 +269,7 @@ def describe_DirSQL_async():
 
             try:
                 await asyncio.wait_for(task, timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pytest.fail("Timed out waiting for watch events")
 
             assert len(events) == 1
@@ -284,8 +284,9 @@ def describe_DirSQL_async():
         async def it_emits_a_delete_when_a_multi_row_file_shrinks(tmp_dir):
             path = os.path.join(tmp_dir, "rows.jsonl")
             with open(path, "w") as f:
-                for i in range(3):
-                    f.write(json.dumps({"idx": i, "name": f"row-{i}"}) + "\n")
+                f.writelines(
+                    json.dumps({"idx": i, "name": f"row-{i}"}) + "\n" for i in range(3)
+                )
 
             db = DirSQL(
                 tmp_dir,
@@ -322,12 +323,13 @@ def describe_DirSQL_async():
             await asyncio.sleep(0.3)
 
             with open(path, "w") as f:
-                for i in range(2):
-                    f.write(json.dumps({"idx": i, "name": f"row-{i}"}) + "\n")
+                f.writelines(
+                    json.dumps({"idx": i, "name": f"row-{i}"}) + "\n" for i in range(2)
+                )
 
             try:
                 await asyncio.wait_for(task, timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 task.cancel()
 
             deleted = {
@@ -380,7 +382,7 @@ def describe_DirSQL_async():
 
             try:
                 await asyncio.wait_for(task, timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pytest.fail("Timed out waiting for watch events")
 
             assert len(events) >= 1
@@ -431,7 +433,7 @@ def describe_DirSQL_async():
 
             try:
                 await asyncio.wait_for(task, timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pytest.fail("Timed out waiting for watch events")
 
             assert len(events) >= 1
@@ -473,7 +475,7 @@ def describe_DirSQL_async():
 
             try:
                 await asyncio.wait_for(task, timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pytest.fail("Timed out waiting for watch events")
 
             assert len(events) >= 1
@@ -524,7 +526,7 @@ def describe_DirSQL_async():
 
             try:
                 await asyncio.wait_for(task, timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pytest.fail("Timed out waiting for watch events")
 
             results = await db.query("SELECT * FROM items")
@@ -569,7 +571,7 @@ def describe_DirSQL_async():
 
             try:
                 await asyncio.wait_for(task, timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pytest.fail("Timed out waiting for watch events")
 
             assert len(events) == 1

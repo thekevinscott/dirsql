@@ -39,16 +39,20 @@ def describe_fragment_path():
         assert module_dir.joined == "dirsql.toml"
 
     def it_raises_naming_the_module_when_not_importable():
-        with patch.object(
-            module.resources,
-            "files",
-            side_effect=ModuleNotFoundError("no module named plug"),
+        with (
+            patch.object(
+                module.resources,
+                "files",
+                side_effect=ModuleNotFoundError("no module named plug"),
+            ),
+            pytest.raises(ValueError, match="plug"),
         ):
-            with pytest.raises(ValueError, match="plug"):
-                fragment_path("plug")
+            fragment_path("plug")
 
     def it_raises_naming_the_fragment_when_absent():
         module_dir = _FakeModuleDir(_FakeFragment("/abs/plug/dirsql.toml", False))
-        with patch.object(module.resources, "files", return_value=module_dir):
-            with pytest.raises(ValueError, match="dirsql.toml"):
-                fragment_path("plug")
+        with (
+            patch.object(module.resources, "files", return_value=module_dir),
+            pytest.raises(ValueError, match="dirsql.toml"),
+        ):
+            fragment_path("plug")

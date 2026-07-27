@@ -14,6 +14,7 @@ import glob
 import importlib.util
 import os
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import mock_open, patch
 
 import pytest
@@ -24,7 +25,7 @@ from dirsql import _async as async_mod
 class _FakeRustDirSQL:
     """Test double for the PyO3 ``DirSQL`` class, recording constructor kwargs."""
 
-    instances: list = []
+    instances: ClassVar[list] = []
 
     def __init__(
         self,
