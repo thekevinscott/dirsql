@@ -1,7 +1,0 @@
-{
-  "command": "just test-e2e",
-  "ran_at": 1784908753,
-  "exit_code": 0,
-  "commit": "f07fcf90987684b0edc4fd44f57f5003d329bd74",
-  "branch": "feat/634-slice4-hookless-error"
-}
