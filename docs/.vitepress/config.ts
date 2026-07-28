@@ -5,6 +5,17 @@ export default defineConfig({
   description: 'Ephemeral SQL index over a local directory. Watches a filesystem, ingests structured files into an ephemeral SQLite database, and exposes a SQL query interface.',
   base: '/dirsql/',
 
+  // Vite blocks dev-server requests whose Host header isn't allowlisted, so
+  // `pnpm dev --host` reached by a network hostname (e.g. a Tailscale
+  // `*.ts.net` name) 400s. Allow extra hosts from the environment so a
+  // personal hostname never has to be committed:
+  //   VITEPRESS_ALLOWED_HOSTS=my.host.ts.net pnpm dev --host
+  vite: {
+    server: {
+      allowedHosts: process.env.VITEPRESS_ALLOWED_HOSTS?.split(',') ?? []
+    }
+  },
+
   themeConfig: {
     search: {
       provider: 'local'
