@@ -55,6 +55,14 @@ _FIXTURES = {
     "tomatoes.md": "Plant tomato seeds and water the seedlings each morning.",
 }
 
+# A PDF among the Markdown notes: it must be matched by the fragment's glob and
+# read through the extension routing, or it never reaches the index at all.
+# Two `garlic` hits and nothing else, so a garlic question ranks it ahead of
+# pasta.md (which dilutes garlic with pasta and cook).
+_PDF_FIXTURES = {
+    "garlic.pdf": "Garlic confit: roast whole garlic cloves slowly in olive oil.",
+}
+
 
 def _run(query, data_dir, base_url):
     env = {
@@ -87,7 +95,7 @@ def _run(query, data_dir, base_url):
 
 def describe_semantic_search():
     @pytest.fixture
-    def staged(tmp_path):
+    def staged(tmp_path, make_pdf):
         assert os.path.exists(_BINARY), (
             f"dirsql binary not built at {_BINARY}; "
             "run `cargo build -p dirsql --features cli` first"
@@ -101,6 +109,8 @@ def describe_semantic_search():
         data.mkdir()
         for name, text in _FIXTURES.items():
             (data / name).write_text(text, encoding="utf-8")
+        for name, text in _PDF_FIXTURES.items():
+            (data / name).write_bytes(make_pdf(text))
         try:
             yield data
         finally:
@@ -125,3 +135,14 @@ def describe_semantic_search():
         )
         rows = json.loads(result.stdout)
         assert os.path.basename(rows[0]["path"]) == "branches.md", rows
+
+    def it_returns_a_pdf_backed_note_as_the_nearest_hit(staged, stub_server):
+        result = _run('{"q": "how do I roast garlic?"}', staged, stub_server)
+        assert result.returncode == 0, (
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        rows = json.loads(result.stdout)
+        assert rows, f"no rows returned: {result.stdout!r}"
+        # The PDF only ranks if the glob matched it AND its text was extracted:
+        # unindexed, or indexed as raw bytes, and pasta.md wins on `garlic`.
+        assert os.path.basename(rows[0]["path"]) == "garlic.pdf", rows
