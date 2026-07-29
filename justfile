@@ -101,6 +101,21 @@ unit-coverage:
     cd packages/ts && testing-conventions unit coverage --language typescript --config ../../testing-conventions.toml src
     testing-conventions unit coverage --language rust --config testing-conventions.toml packages/rust/src
 
+# Mutation gate, diff-scoped against BASE (default origin/main) the way CI scopes
+# it to a PR's own changed lines. Needs the native build first, as unit-coverage does.
+#
+# The python arm MUST run through `uv run` from packages/python. cosmic-ray's
+# test-command is a bare `python3 -m pytest`, resolved off PATH: outside the venv
+# that picks an interpreter without pytest at all, so the unmutated baseline is
+# judged failing and the gate aborts before testing a single mutant (#706). `--with`
+# rather than a bare `uv run` so this works without `pip install
+# testing-conventions`, which cannot build in the hosted sandbox.
+mutation BASE="origin/main":
+    cd packages/python && uv run --with testing-conventions testing-conventions unit mutation --language python --base {{BASE}} --config ../../testing-conventions.toml dirsql
+    # npm CLI, not the pypi one: only it appends `--ts-mutation-adapter`, which the rule requires.
+    cd packages/ts && npx -y testing-conventions unit mutation --language typescript --base {{BASE}} --config ../../testing-conventions.toml src
+    testing-conventions unit mutation --language rust --base {{BASE}} --config testing-conventions.toml packages/rust
+
 # Packaging gate: assert no test files ship in the built .whl / .tgz / .crate.
 # Mirrors the testing-conventions `packaging` gate run in conventions.yml;
 # requires uv, pnpm, cargo, and `pip install testing-conventions`.

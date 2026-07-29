@@ -32,16 +32,25 @@ The gate reruns the real unit suite per mutant, so it needs the native bindings 
 
 **Python mutation now runs in the reusable workflow too** (`conventions.yml`, `python-sdk` gates: `mutation`): the testing-conventions wheel bundles the cosmic-ray adapter as a runtime dependency, so the reusable mutation job resolves the engine from the same `python_env=uv` (`uv sync`) environment it provisions for coverage — no separate install and no bespoke workflow. This retired `python-mutation.yml` (#426). All three SDKs' `mutation` gates now run inside `conventions.yml`.
 
-Run a language locally (after building its native artifact), against your PR's base:
+Run a language locally (after building its native artifact), against your PR's base -- `just mutation` runs all three, or one at a time:
 
 ```bash
-# from packages/python (maturin venv active, cosmic-ray installed)
-npx -y testing-conventions unit mutation --language python --base origin/main dirsql
+# from packages/python -- `uv run` is REQUIRED, see below
+cd packages/python && uv run --with testing-conventions testing-conventions unit mutation --language python --base origin/main --config ../../testing-conventions.toml dirsql
 # from packages/ts (after pnpm build)
 npx -y testing-conventions unit mutation --language typescript --base origin/main src
 # from repo root (the tool provisions cargo-mutants itself)
 npx -y testing-conventions unit mutation --language rust --base origin/main packages/rust
 ```
+
+**The python arm must run inside the package venv, and fails confusingly when it does not** (#706). cosmic-ray's test-command is a bare `python3 -m pytest`, resolved off `PATH`. Run the gate through a wrapper that does not put `packages/python/.venv/bin` first -- `uvx testing-conventions ...`, or any shell without the venv activated -- and that `python3` is the tool's own interpreter, which answers `No module named pytest` (and, where pytest does exist, still lacks `pytest-describe` and the built extension). cosmic-ray judges the *unmutated* baseline as failing and the adapter aborts:
+
+```
+error: the Python mutation adapter failed in `packages/python/dirsql`:
+the Python unit suite did not pass unmutated (cosmic-ray baseline outcome was 'killed', not 'survived'):
+```
+
+The message names no cause because cosmic-ray hands back an empty `output` for the run, so the adapter has nothing to append (upstream gap; the check otherwise follows the actionable-error rule). Read it as **"wrong interpreter"**, not "the suite is broken" -- confirm with `uv run python -m pytest dirsql/ -q`, which passes. A green run states its evidence: `no surviving mutants — every mutation was caught (N mutant(s) tested)`; an `N` of 0 on a diff that changed python source means the diff scope missed, not that the gate passed.
 
 The Rust arm handles `packages/rust` being a member of the repo-root cargo workspace: testing-conventions ≥ 0.0.88 rebases the diff it feeds cargo-mutants onto the workspace root (dirsql#659, fixed upstream in thekevinscott/testing-conventions#467), and `[rust].features` in `testing-conventions.toml` supplies `--features cli` to the engine's build. A passing run states its evidence — `(N mutant(s) tested)` with N > 0 whenever the diff touched mutatable Rust lines; treat a `0 mutant(s) tested` pass on a diff that changed Rust source as a bug, not a pass.
 
