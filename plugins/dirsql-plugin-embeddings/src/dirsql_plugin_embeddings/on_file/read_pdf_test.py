@@ -7,6 +7,8 @@ tiers once `read_pdf` is wired to the console script.
 
 from unittest import mock
 
+import pytest
+
 from . import read_pdf as module
 from .read_pdf import read_pdf
 
@@ -39,10 +41,9 @@ def describe_read_pdf():
 
     def it_propagates_an_extraction_failure():
         boom = ValueError("corrupt xref")
-        with mock.patch.object(module, "PdfReader", side_effect=boom):
-            try:
-                read_pdf("/abs/broken.pdf")
-            except ValueError as exc:
-                assert exc is boom
-            else:
-                raise AssertionError("expected the pypdf error to propagate")
+        with (
+            mock.patch.object(module, "PdfReader", side_effect=boom),
+            pytest.raises(ValueError) as caught,
+        ):
+            read_pdf("/abs/broken.pdf")
+        assert caught.value is boom
