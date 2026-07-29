@@ -12,6 +12,9 @@ dynamic = ["version"]
 description = "First-party dirsql plugin: semantic search via an OpenAI-compatible embeddings endpoint."
 readme = "README.md"
 requires-python = ">=3.11"
+# pypdf, not pymupdf: pymupdf is AGPL-3.0, and a runtime dependency of this
+# MIT-licensed package propagates to everyone who installs it.
+dependencies = ["pypdf>=6"]
 
 [tool.hatch.version]
 source = "vcs"
