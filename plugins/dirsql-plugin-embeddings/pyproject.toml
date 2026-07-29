@@ -16,8 +16,8 @@ requires-python = ">=3.10"
 # MIT-licensed package propagates to everyone who installs it.
 #
 # cachetta >=0.6.15 is load-bearing, not a nicety: every earlier release
-# declares `requires-python >=3.12`, which would drag this package's `>=3.11`
-# floor up with it. 0.6.15 lowered it to `>=3.10`.
+# declares `requires-python >=3.12`, which would drag this package's floor up
+# with it. 0.6.15 lowered cachetta's own floor to `>=3.10`, matching ours.
 dependencies = ["pypdf>=6", "cachetta>=0.6.15"]
 
 [tool.hatch.version]

@@ -12,7 +12,10 @@ hook-timeout = 300
 path = "sqlite_vec"
 entrypoint = "sqlite3_vec_init"
 
+# The brace is globset alternation, not a dirsql `{name}` placeholder: the core
+# rewrites those to `*`, but only when the braces hold a bare identifier, so a
+# comma-separated list reaches globset intact.
 [[table]]
 ddl = "CREATE TABLE documents (path TEXT, text TEXT, embedding TEXT)"
-glob = "**/*.md"
+glob = "**/*.{md,pdf}"
 on-file = "dirsql-embeddings-on-file {path}"

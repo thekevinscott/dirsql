@@ -17,6 +17,10 @@ import sys
 
 _SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
+# Two `garlic` hits and no other keyword, so the stub's count vector pins that
+# the row's text is extracted PDF text rather than the file's raw bytes.
+_PDF_TEXT = "Garlic confit: roast whole garlic cloves slowly in olive oil."
+
 
 def _run(target, arg, base_url):
     module, attr = target.split(":")
@@ -60,6 +64,26 @@ def describe_on_file_script():
         assert isinstance(vector, list)
         # pasta=1, cook=1, garlic=1 -> keyword-count vector from the stub.
         assert vector[:3] == [1.0, 1.0, 1.0]
+
+    def it_embeds_the_extracted_text_of_a_real_pdf(tmp_path, stub_server, make_pdf):
+        paper = tmp_path / "garlic.pdf"
+        paper.write_bytes(make_pdf(_PDF_TEXT))
+
+        payload = _run("on_file:on_file", str(paper), stub_server)
+        (row,) = json.loads(payload)
+
+        assert row["path"] == str(paper)
+        assert row["text"] == _PDF_TEXT
+        # pasta=0, cook=0, garlic=2 -> the text came out of the PDF, not bytes.
+        assert json.loads(row["embedding"])[:3] == [0.0, 0.0, 2.0]
+
+    def it_routes_an_uppercase_pdf_extension_too(tmp_path, stub_server, make_pdf):
+        paper = tmp_path / "GARLIC.PDF"
+        paper.write_bytes(make_pdf(_PDF_TEXT))
+
+        (row,) = json.loads(_run("on_file:on_file", str(paper), stub_server))
+
+        assert row["text"] == _PDF_TEXT
 
 
 def describe_pre_query_script():
