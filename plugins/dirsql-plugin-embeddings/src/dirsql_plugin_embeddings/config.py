@@ -23,7 +23,4 @@ CACHE_DURATION = timedelta(days=365)
 # result, and the hooks are subprocesses, so an inherited environment variable
 # is what reaches them.
 ENV_CACHE_READ = "DIRSQL_EMBEDDINGS_CACHE_READ"
-
-
-def cache_reads_enabled() -> bool:
-    return os.environ.get(ENV_CACHE_READ, "1") != "0"
+CACHE_READ = os.environ.get(ENV_CACHE_READ, "1") != "0"

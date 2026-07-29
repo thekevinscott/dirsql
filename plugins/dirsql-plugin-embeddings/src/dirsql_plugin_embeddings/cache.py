@@ -10,11 +10,11 @@ their argument shapes matched.
 
 from cachetta import Cachetta
 
-from .config import CACHE_DIR, CACHE_DURATION, cache_reads_enabled
+from .config import CACHE_DIR, CACHE_DURATION, CACHE_READ
 
 cache = Cachetta(
     path=CACHE_DIR,
     hashed=True,
     duration=CACHE_DURATION,
-    read=cache_reads_enabled(),
+    read=CACHE_READ,
 )
