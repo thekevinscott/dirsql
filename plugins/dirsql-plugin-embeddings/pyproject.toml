@@ -14,7 +14,11 @@ readme = "README.md"
 requires-python = ">=3.11"
 # pypdf, not pymupdf: pymupdf is AGPL-3.0, and a runtime dependency of this
 # MIT-licensed package propagates to everyone who installs it.
-dependencies = ["pypdf>=6"]
+#
+# cachetta >=0.6.15 is load-bearing, not a nicety: every earlier release
+# declares `requires-python >=3.12`, which would drag this package's `>=3.11`
+# floor up with it. 0.6.15 lowered it to `>=3.10`.
+dependencies = ["pypdf>=6", "cachetta>=0.6.15"]
 
 [tool.hatch.version]
 source = "vcs"

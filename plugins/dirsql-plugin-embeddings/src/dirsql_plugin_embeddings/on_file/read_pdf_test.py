@@ -13,6 +13,7 @@ user cache.
 import hashlib
 import json
 import os
+from datetime import timedelta
 from unittest import mock
 
 import pytest
@@ -136,3 +137,20 @@ def describe_caching():
             read_pdf(str(_pdf(tmp_path, name="one.pdf")))
             read_pdf(str(_pdf(tmp_path, name="two.pdf")))
         assert len(list((tmp_path / "cache" / "pdf-text").iterdir())) == 2
+
+
+def describe_cache_wiring():
+    def it_buckets_every_pdf_under_one_subdirectory(tmp_path):
+        with _cache_at(tmp_path):
+            assert module.pdf_cache_dir("/abs/paper.pdf", 1.0) == (
+                tmp_path / "cache" / "pdf-text"
+            )
+
+    def it_pins_the_decorator_configuration():
+        # Reaching into cachetta's wrapper on purpose: these three settings are
+        # the whole contract (bucket, key-per-arg-set, freshness), and reading
+        # them back is what makes a silent upstream rename fail loudly.
+        cache = module.extract._cache
+        assert cache.path is module.pdf_cache_dir
+        assert cache.hashed is True
+        assert cache.duration == timedelta(days=365)
