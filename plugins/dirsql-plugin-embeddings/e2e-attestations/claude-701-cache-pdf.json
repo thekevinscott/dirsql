@@ -1,7 +1,7 @@
 {
   "command": "uv run --with sqlite-vec --with-editable . --with-editable ../../packages/python python -m pytest tests/e2e -x -q",
-  "ran_at": 1785327835,
+  "ran_at": 1785329429,
   "exit_code": 0,
-  "commit": "6b391ab92fa5db30a681eccc440d9f9163ea415c",
+  "commit": "ce80d1f9d98979b72eeeb5368d3813f7b12510b8",
   "branch": "claude/701-cache-pdf"
 }
