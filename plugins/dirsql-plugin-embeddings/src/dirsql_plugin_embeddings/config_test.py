@@ -1,13 +1,17 @@
 """Colocated unit test for the plugin's cache configuration.
 
-`CACHE_READ` is read from the environment at import, so the environment cases
-re-import the module rather than patching after the fact.
+Only what can fail for a reason worth knowing about. Asserting a constant
+equals the literal it was assigned pins nothing -- change the source and the
+test changes with it -- so the constants are covered by the modules that
+consume them, not restated here.
+
+`CACHE_READ` is read from the environment at import, so these re-import the
+module rather than patching after the fact.
 """
 
 import importlib
 import os
 from datetime import timedelta
-from pathlib import Path
 from unittest import mock
 
 from . import config
@@ -18,17 +22,11 @@ def _reloaded(**env):
         return importlib.reload(config)
 
 
-def describe_constants():
-    def it_names_the_cache_after_the_distribution():
-        assert config.PLUGIN_NAME == "dirsql-plugin-embeddings"
-
-    def it_puts_the_cache_under_the_plugin_name():
-        assert config.CACHE_DIR == Path.home() / ".cache" / config.PLUGIN_NAME
-
-    def it_keeps_entries_far_past_cachettas_default():
-        # (path, mtime) keying means a hit can never be stale, so expiry would
-        # only re-do work for a file nothing has touched.
-        assert config.CACHE_DURATION == timedelta(days=365)
+def describe_cache_duration():
+    def it_outlives_cachettas_default():
+        # (path, mtime) keying means a hit can never be stale, so an expiry
+        # inside cachetta's 7-day default would only re-extract a file that
+        # nothing has touched.
         assert config.CACHE_DURATION > timedelta(days=7)
 
 
