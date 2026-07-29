@@ -8,11 +8,19 @@ real model or network.
 `make_pdf` builds a real PDF by hand rather than pulling in a writer library:
 these tiers mock nothing, and a one-page catalog with a `BT ... Tj ET` content
 stream is enough for pypdf to extract the text back out.
+
+Cache reads are switched off for both tiers. These tiers run the hooks as
+subprocesses, which no in-process mock can reach, so a cached extraction from an
+earlier run would otherwise decide this one's result. Writes are left alone --
+they are harmless, and it is only the read that leaks state between runs.
 """
 
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+os.environ["DIRSQL_EMBEDDINGS_CACHE_READ"] = "0"
 
 import pytest
 

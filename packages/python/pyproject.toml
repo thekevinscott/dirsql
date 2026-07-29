@@ -11,13 +11,19 @@ name = "dirsql"
 dynamic = ["version"]
 description = "Ephemeral SQL index over a local directory"
 license = "MIT"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 authors = [
     { name = "Kevin Scott" },
 ]
 repository = "https://github.com/thekevinscott/dirsql"
 keywords = ["sql", "filesystem", "directory", "sqlite", "index"]
 readme = "README.md"
+dependencies = [
+    # `tomllib` is stdlib only on 3.11+; `resolve_config_extensions` falls back
+    # to the backport it was derived from. Drop this the day the floor reaches
+    # 3.11 again.
+    'tomli>=2; python_version < "3.11"',
+]
 
 # Dev/test dependencies live in a PEP 735 dependency-group (not a
 # `[project.optional-dependencies]` extra) so a plain `uv sync` installs them
@@ -89,7 +95,10 @@ exclude = [
 ]
 
 [tool.ty.environment]
-python-version = "3.11"
+# Tracks `requires-python`: type-check against the FLOOR so a 3.11-only symbol
+# (`tomllib`, `StrEnum`, `typing.Self`) fails here rather than at a user's
+# import on the oldest supported interpreter.
+python-version = "3.10"
 
 # ruff 0.16.0 formats Python code blocks in Markdown by default. Keep ruff
 # scoped to Python source (its effective scope under the prior pin): the README

@@ -11,9 +11,9 @@ same PR -- and ``PARITY.md`` is the canonical reminder.
 
 from collections.abc import Callable
 from os import PathLike
-from typing import Any, NotRequired, TypedDict
+from typing import Any, TypedDict
 
-from typing_extensions import override
+from typing_extensions import NotRequired, override
 
 __version__: str
 
