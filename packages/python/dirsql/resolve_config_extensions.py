@@ -14,9 +14,27 @@ Shared by the ``DirSQL`` constructor (``config=`` path) and the CLI launcher
 from __future__ import annotations
 
 import os
-import tomllib
+import sys
+from importlib import import_module
 
 from .resolve_extension import is_bare_name, resolve_extension_path
+
+
+def _load_toml_module():
+    """Return the TOML parser module for the running interpreter.
+
+    ``tomllib`` is stdlib only on 3.11+; on 3.10 the ``tomli`` backport it was
+    derived from (a version-gated dependency) provides the same surface.
+    Imported by name so a unit test can exercise both arms on any
+    interpreter -- a literal ``import tomllib`` is unreachable on 3.10 no
+    matter what ``sys.version_info`` claims.
+    """
+    if sys.version_info >= (3, 11):
+        return import_module("tomllib")
+    return import_module("tomli")
+
+
+_toml = _load_toml_module()
 
 
 def _load_extension_entries(config_path):
@@ -29,8 +47,8 @@ def _load_extension_entries(config_path):
         return None
     try:
         with open(config_path, "rb") as f:
-            doc = tomllib.load(f)
-    except (OSError, tomllib.TOMLDecodeError):
+            doc = _toml.load(f)
+    except (OSError, _toml.TOMLDecodeError):
         # Leave a malformed / unreadable config for the core to report.
         return None
 

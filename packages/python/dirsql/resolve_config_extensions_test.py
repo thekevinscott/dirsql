@@ -35,21 +35,26 @@ def _patch():
 
 
 def describe_load_toml_module():
-    # `version_info` is patched rather than skipping per interpreter: both arms
-    # must be exercised on every CI leg, and `tomli` is a dev dependency on all
-    # versions so the backport arm really imports.
-    def _under(version):
-        with mock.patch.object(sys, "version_info", version):
-            return rce._load_toml_module().__name__
+    # `import_module` is mocked and `version_info` patched so both arms run on
+    # every interpreter -- neither `tomllib` (absent on 3.10) nor `tomli`
+    # (absent on 3.11+) is importable everywhere.
+    def _requested(version):
+        with (
+            mock.patch.object(sys, "version_info", version),
+            mock.patch.object(rce, "import_module") as import_module,
+        ):
+            assert rce._load_toml_module() is import_module.return_value
+        (name,) = import_module.call_args.args
+        return name
 
     def it_uses_the_stdlib_parser_on_the_version_that_gained_it():
-        assert _under((3, 11, 0)) == "tomllib"
+        assert _requested((3, 11, 0)) == "tomllib"
 
     def it_uses_the_stdlib_parser_on_newer_versions():
-        assert _under((3, 12, 4)) == "tomllib"
+        assert _requested((3, 12, 4)) == "tomllib"
 
     def it_uses_the_tomli_backport_below_311():
-        assert _under((3, 10, 17)) == "tomli"
+        assert _requested((3, 10, 17)) == "tomli"
 
 
 def describe_resolve_config_extension_specs():
