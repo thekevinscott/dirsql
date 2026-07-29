@@ -19,7 +19,7 @@ module = sys.modules[on_file.__module__]
 def describe_on_file():
     def it_reads_embeds_and_prints_a_one_line_row_array(capsys):
         with (
-            mock.patch.object(module, "read_text", return_value="body text") as read,
+            mock.patch.object(module, "read_content", return_value="body text") as read,
             mock.patch.object(module, "embed", return_value=[0.5, 0.25]) as embed,
             mock.patch.object(
                 module,
@@ -38,7 +38,7 @@ def describe_on_file():
     def it_defaults_to_sys_argv(capsys):
         with (
             mock.patch.object(module.sys, "argv", ["prog", "/x.md"]),
-            mock.patch.object(module, "read_text", return_value="t"),
+            mock.patch.object(module, "read_content", return_value="t"),
             mock.patch.object(module, "embed", return_value=[1.0]),
             mock.patch.object(module, "build_rows", return_value=[{"path": "/x.md"}]),
         ):

@@ -1,7 +1,7 @@
 {
   "command": "uv run --with sqlite-vec --with-editable . --with-editable ../../packages/python python -m pytest tests/e2e -x -q",
-  "ran_at": 1785323892,
+  "ran_at": 1785324484,
   "exit_code": 0,
-  "commit": "35c1c6929c4a8b517032cc51e0cc6720f43b58f4",
-  "branch": "claude/on-file-integration-e2e-lpeicb"
+  "commit": "e8600a3672b0ecd9c604c3c22ecc5be49adc5df5",
+  "branch": "claude/on-file-integration-e2e-lpeicb-read-content"
 }
