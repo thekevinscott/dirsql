@@ -4,12 +4,6 @@ Reaching into cachetta's dataclass fields on purpose: the singleton's whole job
 is to carry these defaults to every sub-cache, so reading them back is what
 makes an upstream rename or a changed default fail loudly here rather than
 silently in whichever module derives from it.
-
-The singleton resolves its directory at import. `Cachetta.__truediv__` calls a
-callable ``path`` and stores the result, so a lazy base would be frozen by the
-first ``/`` anyway -- and the hooks run as fresh subprocesses, where import time
-*is* process start. `_reloaded` re-imports under a patched environment to test
-that resolution.
 """
 
 import importlib
@@ -21,12 +15,10 @@ from unittest import mock
 from . import cache as module
 from .cache import cache
 
-
 # Literals, not imports from `config`: a unit test that reads the same
 # constant it asserts pins nothing, and importing the collaborator breaks
 # isolation.
-ENV_CACHE_DIR = "DIRSQL_EMBEDDINGS_CACHE_DIR"
-ENV_XDG_CACHE_HOME = "XDG_CACHE_HOME"
+ENV_CACHE_READ = "DIRSQL_EMBEDDINGS_CACHE_READ"
 PLUGIN_NAME = "dirsql-plugin-embeddings"
 CACHE_DURATION = timedelta(days=365)
 
@@ -43,19 +35,22 @@ def describe_cache_singleton():
     def it_carries_the_configured_duration():
         assert cache.duration == CACHE_DURATION
 
-    def it_resolves_the_directory_rather_than_deferring_it():
-        # A callable would be resolved by the first `/` regardless, so storing
-        # one would imply a laziness the sub-caches do not have.
+    def it_lives_under_the_plugin_name():
         assert isinstance(cache.path, Path)
+        assert cache.path.name == PLUGIN_NAME
 
-    def it_reads_the_override_from_the_environment():
-        assert _reloaded(**{ENV_CACHE_DIR: "/late/binding"}).path == Path(
-            "/late/binding"
-        )
 
-    def it_falls_back_to_the_xdg_directory_under_the_plugin_name():
-        reloaded = _reloaded(**{ENV_XDG_CACHE_HOME: "/xdg"})
-        assert reloaded.path == Path("/xdg") / PLUGIN_NAME
+def describe_disabling_reads():
+    def it_reads_the_cache_by_default():
+        assert _reloaded().read is True
+
+    def it_stops_reading_when_the_variable_is_zero():
+        assert _reloaded(**{ENV_CACHE_READ: "0"}).read is False
+
+    def it_keeps_writing_when_reads_are_off():
+        # Writes are harmless; it is a read of another run's leftovers that
+        # would decide this run's result.
+        assert _reloaded(**{ENV_CACHE_READ: "0"}).write is True
 
 
 def describe_sub_caches():
@@ -66,6 +61,7 @@ def describe_sub_caches():
         sub = cache / "read_pdf"
         assert sub.hashed is True
         assert sub.duration == CACHE_DURATION
+        assert sub.read == cache.read
 
     def it_leaves_the_singleton_untouched():
         before = cache.path
