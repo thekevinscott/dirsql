@@ -40,6 +40,11 @@ def describe_cache_read():
     def it_treats_any_other_value_as_enabled():
         assert _reloaded(**{config.ENV_CACHE_READ: "1"}).CACHE_READ is True
 
+    def it_treats_a_blank_value_as_enabled():
+        # Sorts below "0", so an ordering comparison in place of the
+        # membership test would answer differently here.
+        assert _reloaded(**{config.ENV_CACHE_READ: ""}).CACHE_READ is True
+
 
 def teardown_module():
     # `_reloaded` mutated the imported module object; restore it so import
