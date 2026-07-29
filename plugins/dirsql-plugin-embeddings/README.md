@@ -1,7 +1,7 @@
 # dirsql-plugin-embeddings
 
 A first-party [`dirsql`](https://github.com/thekevinscott/dirsql) plugin that
-adds **semantic search** over a directory of Markdown files. It is the worked
+adds **semantic search** over a directory of Markdown files and PDFs. It is the worked
 implementation behind the [Search documents by
 meaning](https://thekevinscott.github.io/dirsql/howto/search-by-meaning) how-to,
 swapping that guide's local `model2vec` model for any OpenAI-compatible
@@ -21,12 +21,23 @@ is installed alongside it. The fragment declares:
 
 - the [`sqlite-vec`](https://github.com/asg017/sqlite-vec) extension, for
   `vec_distance_cosine()`;
-- a `documents` table whose `on-file` hook embeds each `**/*.md` file into a
-  TEXT `embedding` column;
+- a `documents` table whose `on-file` hook embeds each `**/*.{md,pdf}` file into
+  a TEXT `embedding` column;
 - a `pre-query` hook that embeds the incoming question and emits the
   nearest-neighbor SQL.
 
 Both hooks are console scripts that call the same embedder.
+
+Markdown is read as UTF-8 text; a `.pdf` is read with
+[pypdf](https://pypdf.readthedocs.io), whose per-page extracted text is joined
+and embedded like any other document. The extension check is case-insensitive
+(`.PDF` is a PDF), though the glob above is not — globset matches case-sensitively,
+so an uppercase-suffixed file needs its own `glob` entry to be picked up at all.
+
+A PDF that cannot be parsed aborts the scan rather than being skipped: the hook
+exits non-zero and dirsql reports the path and the pypdf reason. A *scanned*,
+image-only PDF is not a failure — pypdf yields no text, and the file is indexed
+with an empty `text`, exactly like an empty `.md`.
 
 ## Configuration
 
@@ -43,7 +54,7 @@ self-managed OpenAI-compatible inference server):
 
 | Script | Hook | Input | Output |
 |---|---|---|---|
-| `dirsql-embeddings-on-file` | `on-file` | a file's absolute path (`argv[1]`) | one-line JSON row array with `path`, `text`, `embedding` |
+| `dirsql-embeddings-on-file` | `on-file` | a file's absolute path (`argv[1]`), text or PDF | one-line JSON row array with `path`, `text`, `embedding` |
 | `dirsql-embeddings-pre-query` | `pre-query` | a raw request body (`argv[1]`) | nearest-neighbor SQL over `documents` |
 
 `pre-query` accepts both a verbatim server body (`{"q": ...}`) and the CLI
