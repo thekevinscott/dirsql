@@ -39,7 +39,7 @@ git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--mat
 [project.scripts]
 # The two command hooks the fragment invokes; installing the package puts them
 # on PATH so `dirsql` resolves them when it spawns the hooks.
-dirsql-embeddings-on-file = "dirsql_plugin_embeddings.on_file:main"
+dirsql-embeddings-on-file = "dirsql_plugin_embeddings.on_file:on_file"
 dirsql-embeddings-pre-query = "dirsql_plugin_embeddings.pre_query:main"
 
 [project.entry-points.dirsql]
