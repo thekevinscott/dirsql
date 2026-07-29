@@ -53,6 +53,12 @@ _FIXTURES = {
     "pasta.md": "Cook the pasta: boil spaghetti, then toss with garlic.",
     "branches.md": "Git branches let you review code before you merge.",
     "tomatoes.md": "Plant tomato seeds and water the seedlings each morning.",
+    # One per non-Markdown prose extension the fragment claims to index. Each
+    # repeats a single keyword and no other, so its embedding points straight
+    # down that axis and it outranks the .md note that mentions the same word
+    # in passing -- which it can only do if the glob reached the file at all.
+    "trays.txt": "Tomato, tomato, and more tomato.",
+    "reviews.rst": "Review the review, then review again.",
 }
 
 # A PDF among the Markdown notes: it must be matched by the fragment's glob and
@@ -127,6 +133,22 @@ def describe_semantic_search():
         # Distances are ordered ascending (nearest first).
         distances = [row["distance"] for row in rows]
         assert distances == sorted(distances), rows
+
+    def it_indexes_a_plain_text_note(staged, stub_server):
+        result = _run('{"q": "tomato"}', staged, stub_server)
+        assert result.returncode == 0, (
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        rows = json.loads(result.stdout)
+        assert os.path.basename(rows[0]["path"]) == "trays.txt", rows
+
+    def it_indexes_a_restructuredtext_note(staged, stub_server):
+        result = _run('{"q": "review"}', staged, stub_server)
+        assert result.returncode == 0, (
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        rows = json.loads(result.stdout)
+        assert os.path.basename(rows[0]["path"]) == "reviews.rst", rows
 
     def it_answers_a_different_question_with_a_different_note(staged, stub_server):
         result = _run('{"q": "reviewing code on git"}', staged, stub_server)

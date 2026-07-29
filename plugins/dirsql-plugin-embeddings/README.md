@@ -1,7 +1,8 @@
 # dirsql-plugin-embeddings
 
 A first-party [`dirsql`](https://github.com/thekevinscott/dirsql) plugin that
-adds **semantic search** over a directory of Markdown files and PDFs. It is the worked
+adds **semantic search** over a directory of documents -- Markdown, plain
+text, reStructuredText and PDFs. It is the worked
 implementation behind the [Search documents by
 meaning](https://thekevinscott.github.io/dirsql/howto/search-by-meaning) how-to,
 swapping that guide's local `model2vec` model for any OpenAI-compatible
@@ -21,18 +22,25 @@ is installed alongside it. The fragment declares:
 
 - the [`sqlite-vec`](https://github.com/asg017/sqlite-vec) extension, for
   `vec_distance_cosine()`;
-- a `documents` table whose `on-file` hook embeds each `**/*.{md,pdf}` file into
-  a TEXT `embedding` column;
+- a `documents` table whose `on-file` hook embeds each
+  `**/*.{md,markdown,mdx,rst,txt,pdf}` file into a TEXT `embedding` column;
 - a `pre-query` hook that embeds the incoming question and emits the
   nearest-neighbor SQL.
 
 Both hooks are console scripts that call the same embedder.
 
-Markdown is read as UTF-8 text; a `.pdf` is read with
+Every matched extension except `.pdf` is read as UTF-8 text; a `.pdf` is read with
 [pypdf](https://pypdf.readthedocs.io), whose per-page extracted text is joined
 and embedded like any other document. The extension check is case-insensitive
 (`.PDF` is a PDF), though the glob above is not — globset matches case-sensitively,
 so an uppercase-suffixed file needs its own `glob` entry to be picked up at all.
+
+The glob is an allowlist rather than `**/*` for a reason worth knowing: a hook
+that exits non-zero aborts the entire scan
+([dirsql#697](https://github.com/thekevinscott/dirsql/issues/697)), and reading a
+PNG as UTF-8 does exactly that. Matching everything would mean one image anywhere
+under the root produces no index at all, so the list stays limited to what the
+plugin can actually read.
 
 A PDF that cannot be parsed aborts the scan rather than being skipped: the hook
 exits non-zero and dirsql reports the path and the pypdf reason. A *scanned*,
