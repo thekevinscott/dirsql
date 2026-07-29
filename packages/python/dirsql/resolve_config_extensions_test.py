@@ -47,8 +47,10 @@ def describe_load_toml_module():
         (name,) = import_module.call_args.args
         return name
 
+    # Exactly `(3, 11)`, not `(3, 11, 0)`: the latter compares greater than the
+    # bare `(3, 11)` literal, so it cannot tell `>=` from `>`.
     def it_uses_the_stdlib_parser_on_the_version_that_gained_it():
-        assert _requested((3, 11, 0)) == "tomllib"
+        assert _requested((3, 11)) == "tomllib"
 
     def it_uses_the_stdlib_parser_on_newer_versions():
         assert _requested((3, 12, 4)) == "tomllib"
