@@ -4,11 +4,19 @@
 `/v1/embeddings` endpoint. Its embedding is a deterministic keyword-count
 vector, so nearest-neighbor search over the fixtures is reproducible without a
 real model or network.
+
+Cache reads are switched off for both tiers. These tiers run the hooks as
+subprocesses, which no in-process mock can reach, so a cached extraction from an
+earlier run would otherwise decide this one's result. Writes are left alone --
+they are harmless, and it is only the read that leaks state between runs.
 """
 
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+os.environ["DIRSQL_EMBEDDINGS_CACHE_READ"] = "0"
 
 import pytest
 
