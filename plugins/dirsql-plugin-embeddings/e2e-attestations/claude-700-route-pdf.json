@@ -1,7 +1,7 @@
 {
   "command": "uv run --with sqlite-vec --with-editable . --with-editable ../../packages/python python -m pytest tests/e2e -x -q",
-  "ran_at": 1785327923,
+  "ran_at": 1785328512,
   "exit_code": 0,
-  "commit": "ad48795ad04fbee5ecdde7f1b88126635883e9b5",
+  "commit": "a645daa2b82a2360c03f18cc8d00d58e3c0817f9",
   "branch": "claude/700-route-pdf"
 }
