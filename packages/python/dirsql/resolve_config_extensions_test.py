@@ -6,6 +6,7 @@ Real `.dirsql.toml` files are parsed; the only mocked collaborator is
 """
 
 import os
+import sys
 import tempfile
 from unittest import mock
 
@@ -31,6 +32,24 @@ def _patch():
         "resolve_extension_path",
         side_effect=lambda path, base, resolve_relative: f"R:{path}",
     )
+
+
+def describe_load_toml_module():
+    # `version_info` is patched rather than skipping per interpreter: both arms
+    # must be exercised on every CI leg, and `tomli` is a dev dependency on all
+    # versions so the backport arm really imports.
+    def _under(version):
+        with mock.patch.object(sys, "version_info", version):
+            return rce._load_toml_module().__name__
+
+    def it_uses_the_stdlib_parser_on_the_version_that_gained_it():
+        assert _under((3, 11, 0)) == "tomllib"
+
+    def it_uses_the_stdlib_parser_on_newer_versions():
+        assert _under((3, 12, 4)) == "tomllib"
+
+    def it_uses_the_tomli_backport_below_311():
+        assert _under((3, 10, 17)) == "tomli"
 
 
 def describe_resolve_config_extension_specs():
