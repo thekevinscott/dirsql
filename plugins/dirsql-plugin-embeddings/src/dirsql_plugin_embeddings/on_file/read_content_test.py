@@ -33,6 +33,14 @@ def describe_read_content():
         read_text.assert_called_once_with("/abs/LICENSE")
         read_pdf.assert_not_called()
 
+    def it_reads_an_extension_sorting_after_pdf_as_text():
+        # `.txt` sorts above `.pdf`: the dispatch is an equality test, not an
+        # ordering one, so every other extension must still read as text.
+        result, read_text, read_pdf = _dispatch("/abs/notes.txt")
+        assert result == "text body"
+        read_text.assert_called_once_with("/abs/notes.txt")
+        read_pdf.assert_not_called()
+
     def it_reads_a_pdf_with_read_pdf():
         result, read_text, read_pdf = _dispatch("/abs/paper.pdf")
         assert result == "pdf body"
