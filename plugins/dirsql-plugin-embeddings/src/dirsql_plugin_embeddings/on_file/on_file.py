@@ -13,13 +13,13 @@ import sys
 
 from ..embedder import embed
 from .build_rows import build_rows
-from .read_text import read_text
+from .read_content import read_content
 
 
 def on_file(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv
     path = argv[1]
-    text = read_text(path)
+    text = read_content(path)
     print(json.dumps(build_rows(path, text, embed(text))))
     return 0
