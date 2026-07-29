@@ -1,14 +1,7 @@
 {
   "command": "uv run --with sqlite-vec --with-editable . --with-editable ../../packages/python python -m pytest tests/e2e -x -q",
-<<<<<<<< HEAD:plugins/dirsql-plugin-embeddings/e2e-attestations/claude-700-route-pdf.json
-  "ran_at": 1785328512,
+  "ran_at": 1785338799,
   "exit_code": 0,
-  "commit": "a645daa2b82a2360c03f18cc8d00d58e3c0817f9",
+  "commit": "fcca643ac74c98dd9a6b525681711c720c303250",
   "branch": "claude/700-route-pdf"
-========
-  "ran_at": 1785337806,
-  "exit_code": 0,
-  "commit": "43a5ab7f9e72cde7f55e943649f4e24b85d7fe69",
-  "branch": "claude/701-cache-pdf"
->>>>>>>> origin/main:plugins/dirsql-plugin-embeddings/e2e-attestations/claude-701-cache-pdf.json
 }
