@@ -21,7 +21,11 @@ import pytest
 from . import read_pdf as module
 from .read_pdf import read_pdf
 
-ENV_CACHE_DIR = "DIRSQL_EMBEDDINGS_CACHE_DIR"
+# Literals rather than imports from `config` / `cache`: importing a
+# collaborator into a unit test breaks isolation, and asserting a constant
+# against itself pins nothing.
+PLUGIN_NAME = "dirsql-plugin-embeddings"
+CACHE_DURATION = timedelta(days=365)
 
 # `os.utime` writes these verbatim, so the expected cache key below is exact
 # rather than whatever the clock read when the fixture was written.
@@ -34,7 +38,10 @@ def _reader(*pages):
 
 
 def _cache_at(tmp_path):
-    return mock.patch.dict(os.environ, {ENV_CACHE_DIR: str(tmp_path / "cache")})
+    # The sub-cache resolved its directory when the decorator ran at import, so
+    # patching the environment now would be a no-op and every test would write
+    # to the caller's real cache. Redirect the resolved path itself instead.
+    return mock.patch.object(module.extract._cache, "path", tmp_path / "cache")
 
 
 def _pdf(tmp_path, name="paper.pdf", mtime=MTIME):
@@ -127,7 +134,7 @@ def describe_caching():
             {"args": [str(pdf), float(MTIME)], "kwargs": {}}, sort_keys=True, default=str
         )
         digest = hashlib.sha256(key.encode()).hexdigest()[:16]
-        assert (tmp_path / "cache" / "pdf-text" / digest).is_file()
+        assert (tmp_path / "cache" / digest).is_file()
 
     def it_writes_one_cache_entry_per_distinct_pdf(tmp_path):
         with (
@@ -136,21 +143,19 @@ def describe_caching():
         ):
             read_pdf(str(_pdf(tmp_path, name="one.pdf")))
             read_pdf(str(_pdf(tmp_path, name="two.pdf")))
-        assert len(list((tmp_path / "cache" / "pdf-text").iterdir())) == 2
+        assert len(list((tmp_path / "cache").iterdir())) == 2
 
 
 def describe_cache_wiring():
-    def it_buckets_every_pdf_under_one_subdirectory(tmp_path):
-        with _cache_at(tmp_path):
-            assert module.pdf_cache_dir("/abs/paper.pdf", 1.0) == (
-                tmp_path / "cache" / "pdf-text"
-            )
+    def it_names_the_sub_cache_after_the_function_it_caches():
+        # cachetta hashes a call's arguments, not the function's identity, so
+        # the per-function subdirectory is what stops two cached functions with
+        # matching argument shapes from reading each other's entries.
+        assert module.extract._cache.path.name == "extract"
 
-    def it_pins_the_decorator_configuration():
-        # Reaching into cachetta's wrapper on purpose: these three settings are
-        # the whole contract (bucket, key-per-arg-set, freshness), and reading
-        # them back is what makes a silent upstream rename fail loudly.
-        cache = module.extract._cache
-        assert cache.path is module.pdf_cache_dir
-        assert cache.hashed is True
-        assert cache.duration == timedelta(days=365)
+    def it_nests_that_sub_cache_under_the_plugins_own_directory():
+        assert module.extract._cache.path.parent.name == PLUGIN_NAME
+
+    def it_inherits_the_shared_singletons_defaults():
+        assert module.extract._cache.hashed is True
+        assert module.extract._cache.duration == CACHE_DURATION

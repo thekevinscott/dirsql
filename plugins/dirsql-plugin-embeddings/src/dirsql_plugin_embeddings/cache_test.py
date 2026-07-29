@@ -14,12 +14,21 @@ that resolution.
 
 import importlib
 import os
+from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 
 from . import cache as module
-from . import config
 from .cache import cache
+
+
+# Literals, not imports from `config`: a unit test that reads the same
+# constant it asserts pins nothing, and importing the collaborator breaks
+# isolation.
+ENV_CACHE_DIR = "DIRSQL_EMBEDDINGS_CACHE_DIR"
+ENV_XDG_CACHE_HOME = "XDG_CACHE_HOME"
+PLUGIN_NAME = "dirsql-plugin-embeddings"
+CACHE_DURATION = timedelta(days=365)
 
 
 def _reloaded(**env):
@@ -32,7 +41,7 @@ def describe_cache_singleton():
         assert cache.hashed is True
 
     def it_carries_the_configured_duration():
-        assert cache.duration == config.CACHE_DURATION
+        assert cache.duration == CACHE_DURATION
 
     def it_resolves_the_directory_rather_than_deferring_it():
         # A callable would be resolved by the first `/` regardless, so storing
@@ -40,13 +49,13 @@ def describe_cache_singleton():
         assert isinstance(cache.path, Path)
 
     def it_reads_the_override_from_the_environment():
-        assert _reloaded(**{config.ENV_CACHE_DIR: "/late/binding"}).path == Path(
+        assert _reloaded(**{ENV_CACHE_DIR: "/late/binding"}).path == Path(
             "/late/binding"
         )
 
     def it_falls_back_to_the_xdg_directory_under_the_plugin_name():
-        reloaded = _reloaded(**{config.ENV_XDG_CACHE_HOME: "/xdg"})
-        assert reloaded.path == Path("/xdg") / config.PLUGIN_NAME
+        reloaded = _reloaded(**{ENV_XDG_CACHE_HOME: "/xdg"})
+        assert reloaded.path == Path("/xdg") / PLUGIN_NAME
 
 
 def describe_sub_caches():
@@ -56,7 +65,7 @@ def describe_sub_caches():
     def it_keeps_the_singletons_defaults():
         sub = cache / "read_pdf"
         assert sub.hashed is True
-        assert sub.duration == config.CACHE_DURATION
+        assert sub.duration == CACHE_DURATION
 
     def it_leaves_the_singleton_untouched():
         before = cache.path
