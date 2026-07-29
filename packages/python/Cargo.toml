@@ -5,9 +5,9 @@ name = "dirsql-py-ext"
 # `maturin build`. `pyproject.toml` declares `dynamic = ["version"]`
 # and maturin reads this field. Mirrors `packages/rust/Cargo.toml`.
 version = "0.2.7"
-# abi3 note: the `abi3-py311` pyo3 feature (below) builds ONE stable-ABI
-# `cp311-abi3` wheel per platform that loads on every CPython >= 3.11
-# (matching `pyproject.toml`'s `requires-python = ">=3.11"`), instead of
+# abi3 note: the `abi3-py310` pyo3 feature (below) builds ONE stable-ABI
+# `cp310-abi3` wheel per platform that loads on every CPython >= 3.10
+# (matching `pyproject.toml`'s `requires-python = ">=3.10"`), instead of
 # one wheel per interpreter. putitoutthere's `wheel-abi` detector (#401)
 # reads the abi3 feature straight off this direct `pyo3` dependency and
 # collapses the per-version build fan to a single wheel -- no
@@ -22,7 +22,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 dirsql.workspace = true
-pyo3 = { version = "0.28", features = ["extension-module", "generate-import-lib", "abi3-py311"], optional = true }
+pyo3 = { version = "0.28", features = ["extension-module", "generate-import-lib", "abi3-py310"], optional = true }
 
 [features]
 default = []

@@ -6,6 +6,7 @@ Real `.dirsql.toml` files are parsed; the only mocked collaborator is
 """
 
 import os
+import sys
 import tempfile
 from unittest import mock
 
@@ -31,6 +32,31 @@ def _patch():
         "resolve_extension_path",
         side_effect=lambda path, base, resolve_relative: f"R:{path}",
     )
+
+
+def describe_load_toml_module():
+    # `import_module` is mocked and `version_info` patched so both arms run on
+    # every interpreter -- neither `tomllib` (absent on 3.10) nor `tomli`
+    # (absent on 3.11+) is importable everywhere.
+    def _requested(version):
+        with (
+            mock.patch.object(sys, "version_info", version),
+            mock.patch.object(rce, "import_module") as import_module,
+        ):
+            assert rce._load_toml_module() is import_module.return_value
+        (name,) = import_module.call_args.args
+        return name
+
+    # Exactly `(3, 11)`, not `(3, 11, 0)`: the latter compares greater than the
+    # bare `(3, 11)` literal, so it cannot tell `>=` from `>`.
+    def it_uses_the_stdlib_parser_on_the_version_that_gained_it():
+        assert _requested((3, 11)) == "tomllib"
+
+    def it_uses_the_stdlib_parser_on_newer_versions():
+        assert _requested((3, 12, 4)) == "tomllib"
+
+    def it_uses_the_tomli_backport_below_311():
+        assert _requested((3, 10, 17)) == "tomli"
 
 
 def describe_resolve_config_extension_specs():
