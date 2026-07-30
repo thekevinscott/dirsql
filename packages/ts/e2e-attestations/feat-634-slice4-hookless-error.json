@@ -1,7 +1,0 @@
-{
-  "command": "pnpm test:e2e",
-  "ran_at": 1784908765,
-  "exit_code": 0,
-  "commit": "5fbb8ac73679e6bb37d48b0e0d47b029e12ca126",
-  "branch": "feat/634-slice4-hookless-error"
-}
