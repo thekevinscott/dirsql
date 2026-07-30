@@ -78,6 +78,16 @@ pub const DEFAULT_CONFIG_TOML: &str = include_str!("default_config.toml");
 type BoxError = Box<dyn StdError + Send + Sync + 'static>;
 type OnFileFn = dyn Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static;
 
+/// One file whose on-file hook failed, carried so a scan can report every
+/// failure rather than only whichever came first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnFileFailure {
+    /// Path relative to the scan root.
+    pub path: String,
+    /// The hook's error, as rendered by its `Display`.
+    pub message: String,
+}
+
 #[derive(Debug, Error)]
 pub enum DirSqlError {
     #[error(transparent)]
@@ -121,6 +131,20 @@ pub enum DirSqlError {
 
     #[error("on-file error for {path}: {message}")]
     OnFile { path: String, message: String },
+
+    /// Several files' on-file hooks failed during one scan. A scan attempts
+    /// every matched file, so more than one can fail; reporting only the first
+    /// would make the rest invisible until it was fixed and the scan re-run.
+    #[error(
+        "{} files failed their on-file hook:\n{}",
+        .failures.len(),
+        .failures
+            .iter()
+            .map(|OnFileFailure { path, message }| format!("  {path}: {message}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )]
+    OnFileMany { failures: Vec<OnFileFailure> },
 
     #[error("config error: {message}")]
     Config {
@@ -816,6 +840,7 @@ impl DirSQL {
         }
 
         let snapshot_ns = now_ns();
+        let mut on_file_failures: Vec<OnFileFailure> = Vec::new();
         for ScannedFile {
             rel_path,
             table_name,
@@ -827,11 +852,20 @@ impl DirSQL {
             })?;
             let strict = *strict_map.get(&table_name).unwrap_or(&false);
             let abs_path = root.join(&rel_path);
-            let raw_rows =
-                on_file(&abs_path.to_string_lossy()).map_err(|e| DirSqlError::OnFile {
-                    path: rel_path.clone(),
-                    message: e.to_string(),
-                })?;
+            // A hook failure is this file's problem, not the scan's: record it
+            // and keep going, so one unreadable file cannot hide the state of
+            // every file after it. The collected failures still fail the build
+            // below -- whether a partial index commits is dirsql#697.
+            let raw_rows = match on_file(&abs_path.to_string_lossy()) {
+                Ok(rows) => rows,
+                Err(e) => {
+                    on_file_failures.push(OnFileFailure {
+                        path: rel_path.clone(),
+                        message: e.to_string(),
+                    });
+                    continue;
+                }
+            };
 
             // When updating an existing file in the persistent cache, drop
             // its old rows before inserting the new ones.
@@ -868,6 +902,27 @@ impl DirSQL {
         // next startup).
         if let Some((_, meta)) = persist_ready.as_ref() {
             write_meta(db.conn(), meta).map_err(DirSqlError::sqlite)?;
+        }
+
+        // Returning before the commit drops `_tx`, so a scan with failures
+        // still leaves the cache exactly as it was -- the pre-existing
+        // behavior. The single-failure case keeps its original error verbatim;
+        // only the multi-failure case reports more than it used to. Whether a
+        // partial index should commit instead is dirsql#697.
+        match on_file_failures.len() {
+            0 => {}
+            1 => {
+                let only = on_file_failures.remove(0);
+                return Err(DirSqlError::OnFile {
+                    path: only.path,
+                    message: only.message,
+                });
+            }
+            _ => {
+                return Err(DirSqlError::OnFileMany {
+                    failures: on_file_failures,
+                });
+            }
         }
 
         // Commit the ingest transaction.
