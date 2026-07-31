@@ -10,8 +10,9 @@
 #![cfg(unix)]
 
 use std::fs;
+use std::sync::{Arc, Mutex};
 
-use dirsql::{DirSQL, Value};
+use dirsql::{DirSQL, Table, Value};
 use tempfile::TempDir;
 
 /// An `on-file` command that reads the matched file (a JSON array of row
@@ -342,4 +343,65 @@ on-file = "sh slowish.sh {path}"
     let rows = db.query("SELECT name FROM items").unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["name"], Value::Text("ok".into()));
+}
+
+/// A scan attempts every matched file. One hook failure is that file's
+/// problem, so it must not stop the files after it from being tried.
+#[test]
+fn build_attempts_every_matched_file_even_after_one_fails() {
+    let dir = TempDir::new().unwrap();
+    for name in ["a.txt", "b.txt"] {
+        fs::write(dir.path().join(name), "x").unwrap();
+    }
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let recorder = Arc::clone(&seen);
+
+    let built = DirSQL::new(
+        dir.path(),
+        vec![Table::try_new(
+            "CREATE TABLE items (name TEXT)",
+            "**/*.txt",
+            move |path| {
+                recorder.lock().unwrap().push(path.to_string());
+                Err("boom".into())
+            },
+        )],
+    );
+
+    assert!(built.is_err(), "expected the build to fail");
+    // One guard: `Mutex` is not reentrant, so locking twice in the same
+    // assert expression deadlocks rather than failing.
+    let attempted = seen.lock().unwrap();
+    assert_eq!(
+        attempted.len(),
+        2,
+        "every matched file should be attempted, got: {attempted:?}"
+    );
+}
+
+/// Reporting only the first failure hides the rest until it is fixed and the
+/// scan re-run, one file at a time.
+#[test]
+fn build_reports_every_failing_file_not_only_the_first() {
+    let dir = TempDir::new().unwrap();
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        fs::write(dir.path().join(name), "x").unwrap();
+    }
+
+    let err = match DirSQL::new(
+        dir.path(),
+        vec![Table::try_new(
+            "CREATE TABLE items (name TEXT)",
+            "**/*.txt",
+            |path| Err(format!("boom for {path}").into()),
+        )],
+    ) {
+        Ok(_) => panic!("expected an on-file error"),
+        Err(e) => e,
+    };
+
+    let msg = err.to_string();
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        assert!(msg.contains(name), "{name} missing from: {msg}");
+    }
 }

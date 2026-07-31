@@ -2812,62 +2812,6 @@ mod internal_tests {
     }
 
     #[test]
-    fn build_reports_every_failing_file_not_only_the_first() {
-        // The scan short-circuits on the first failure, so the other files are
-        // never attempted and the operator learns about one of them at a time.
-        let dir = TempDir::new().unwrap();
-        for name in ["a.txt", "b.txt", "c.txt"] {
-            std::fs::write(dir.path().join(name), "x").unwrap();
-        }
-        let err = match DirSQL::new(
-            dir.path(),
-            vec![Table::try_new(
-                "CREATE TABLE items (name TEXT)",
-                "**/*.txt",
-                |path| Err(format!("boom for {path}").into()),
-            )],
-        ) {
-            Ok(_) => panic!("expected an on-file error"),
-            Err(e) => e,
-        };
-        let msg = err.to_string();
-        for name in ["a.txt", "b.txt", "c.txt"] {
-            assert!(msg.contains(name), "{name} missing from: {msg}");
-        }
-    }
-
-    #[test]
-    fn build_keeps_scanning_past_a_failing_file() {
-        // A file that fails must not stop the ones after it from being tried.
-        let dir = TempDir::new().unwrap();
-        for name in ["a.txt", "b.txt"] {
-            std::fs::write(dir.path().join(name), "x").unwrap();
-        }
-        let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let recorder = Arc::clone(&seen);
-        let err = DirSQL::new(
-            dir.path(),
-            vec![Table::try_new(
-                "CREATE TABLE items (name TEXT)",
-                "**/*.txt",
-                move |path| {
-                    recorder.lock().unwrap().push(path.to_string());
-                    Err("boom".into())
-                },
-            )],
-        );
-        assert!(err.is_err(), "expected the build to fail");
-        // One guard: `std::sync::Mutex` is not reentrant, so locking twice in
-        // the same assert expression deadlocks rather than failing.
-        let attempted = seen.lock().unwrap();
-        assert_eq!(
-            attempted.len(),
-            2,
-            "every matched file should be attempted, got: {attempted:?}"
-        );
-    }
-
-    #[test]
     fn handle_upsert_surfaces_on_file_error() {
         let dir = TempDir::new().unwrap();
         let abs = dir.path().join("a.txt");
