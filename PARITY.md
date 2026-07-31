@@ -314,6 +314,7 @@ All three share one global timeout override, `[dirsql].hook-timeout`
 - `AsyncDirSQL` uses tokio and `OnceCell` internally.
 - Watch returns `futures_channel::mpsc::UnboundedReceiver<RowEvent>` implementing `Stream`.
 - All fallible operations return `Result<T, DirSqlError>`. Statements classified as writes by SQLite's `sqlite3_stmt_readonly` surface as the unit variant `DirSqlError::WriteForbidden`; in the Python/TS bindings the same condition is a `RuntimeError` / `Error` with a "read-only" message.
+- **Drift (Rust only, dirsql#710):** a scan attempts every matched file and reports every failing `on-file` hook. Several failures raise `DirSqlError::OnFileMany { failures: Vec<OnFileFailure> }`, where `OnFileFailure` is a public `{ path, message }` struct; a single failure still raises `DirSqlError::OnFile` as before. The bindings currently flatten both to their existing error type, so the per-file list is not reachable from Python or TypeScript — tracked under #697's bindings slice.
 
 ### TypeScript
 - Uses `camelCase` for method names.
