@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/ -x -q",
+  "ran_at": 1785678666,
+  "exit_code": 0,
+  "commit": "7de7557be856f19685344a4118e1ead9e4bae405",
+  "branch": "claude/715-binding-scan-failures"
+}
