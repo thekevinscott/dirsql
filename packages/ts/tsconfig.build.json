@@ -1,4 +1,12 @@
 {
   "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Both map kinds point at `../src/*.ts`, which `package.json`'s `files`
+    // does not ship -- so in the published tarball they resolve to nothing.
+    // The base config keeps them on for local debugging; the build that
+    // becomes the tarball drops them (#720).
+    "sourceMap": false,
+    "declarationMap": false
+  },
   "exclude": ["node_modules", "dist", "tests", "**/*.test.ts", "**/*.spec.ts"]
 }
