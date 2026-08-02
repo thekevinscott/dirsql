@@ -1,5 +1,4 @@
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use regex::Regex;
 use std::path::Path;
 
 /// Result of matching a file path against a glob pattern.
@@ -25,19 +24,62 @@ pub struct TableMatcher {
     ignore_set: GlobSet,
 }
 
+/// Byte spans of the `{name}` placeholders in `pattern`, in order: `(start,
+/// end, name)` with `end` past the closing brace.
+///
+/// The grammar is exactly `{` `[a-zA-Z_][a-zA-Z0-9_]*` `}`. Anything else --
+/// `{}`, `{1a}`, `{a-b}`, an unclosed `{` -- is not a placeholder and is left
+/// alone, matching the leftmost-first, non-overlapping scan the equivalent
+/// regex performed.
+fn placeholder_spans(pattern: &str) -> Vec<(usize, usize, String)> {
+    let bytes = pattern.as_bytes();
+    let mut spans = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            let mut j = i + 1;
+            if j < bytes.len() && (bytes[j].is_ascii_alphabetic() || bytes[j] == b'_') {
+                j += 1;
+                while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                    j += 1;
+                }
+                if j < bytes.len() && bytes[j] == b'}' {
+                    // Every byte in `i..=j` is ASCII, so these are char boundaries.
+                    spans.push((i, j + 1, pattern[i + 1..j].to_string()));
+                    i = j + 1;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    spans
+}
+
 /// Names of the `{name}` placeholders in `pattern`, in order of appearance.
 pub fn placeholder_names(pattern: &str) -> Vec<String> {
-    let re = Regex::new(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
-    re.captures_iter(pattern)
-        .map(|cap| cap[1].to_string())
+    placeholder_spans(pattern)
+        .into_iter()
+        .map(|(_, _, name)| name)
         .collect()
 }
 
 /// Rewrite `{name}` placeholders in a glob to `*`, so they match a single path
 /// segment without producing any captured value.
 fn glob_with_placeholders_as_star(pattern: &str) -> String {
-    let re = Regex::new(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}").unwrap();
-    re.replace_all(pattern, "*").into_owned()
+    let spans = placeholder_spans(pattern);
+    if spans.is_empty() {
+        return pattern.to_string();
+    }
+    let mut out = String::with_capacity(pattern.len());
+    let mut last = 0;
+    for (start, end, _) in spans {
+        out.push_str(&pattern[last..start]);
+        out.push('*');
+        last = end;
+    }
+    out.push_str(&pattern[last..]);
+    out
 }
 
 impl TableMatcher {
