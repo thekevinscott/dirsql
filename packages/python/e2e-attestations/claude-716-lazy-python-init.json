@@ -1,7 +1,7 @@
 {
   "command": "uv run python -m pytest tests/e2e/ -x -q",
-  "ran_at": 1785674243,
+  "ran_at": 1785676830,
   "exit_code": 0,
-  "commit": "c53727dc3992c981ce7e63ec7bab42b005857931",
+  "commit": "60ba1132d1be8fd153c6c654c135ba80a77c42f5",
   "branch": "claude/716-lazy-python-init"
 }
