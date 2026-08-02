@@ -24,7 +24,9 @@ describe("DirSQL scanFailures", () => {
   });
 
   const write = (...names: string[]) => {
-    for (const name of names) writeFileSync(join(dir, name), "{}");
+    for (const name of names) {
+      writeFileSync(join(dir, name), "{}");
+    }
   };
 
   const mkdb = (
@@ -53,7 +55,9 @@ describe("DirSQL scanFailures", () => {
   it("names each skipped file", async () => {
     write("good.json", "bad.json");
     const db = mkdb((filePath) => {
-      if (filePath.endsWith("bad.json")) throw new Error("boom");
+      if (filePath.endsWith("bad.json")) {
+        throw new Error("boom");
+      }
       return [{ name: "ok" }];
     });
     await db.ready;

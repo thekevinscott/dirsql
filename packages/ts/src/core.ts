@@ -1,6 +1,6 @@
 // Lazy access to the napi-rs core module.
 
-import type { ExtensionSpec, RowEvent } from "./dirsql.js";
+import type { ExtensionSpec, RowEvent, ScanFailure } from "./dirsql.js";
 import { loadNativeCore as defaultLoadNativeCore } from "./load-native-core.js";
 import type { TableDef } from "./table.js";
 
@@ -9,6 +9,8 @@ export interface NativeDirSQL {
   query(sql: string): Promise<Record<string, unknown>[]>;
   startWatcher(): Promise<void>;
   pollEvents(timeoutMs: number): Promise<RowEvent[]>;
+  // Synchronous: reads a list the scan already produced, no threadpool hop.
+  scanFailures(): ScanFailure[];
   close(): void;
 }
 

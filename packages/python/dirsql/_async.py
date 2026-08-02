@@ -182,6 +182,23 @@ class DirSQL:
         assert db is not None  # ready() returned, so _init_bg set _db
         return await asyncio.to_thread(db.query, sql)
 
+    async def scan_failures(self):
+        """The files the initial scan could not index.
+
+        Each entry carries ``path`` (relative to the root) and ``message``
+        (the hook's own error). Empty after a clean scan, which is the signal
+        to check: a non-empty list means the index is *incomplete*, not wrong,
+        and those files are retried on the next scan.
+
+        Awaits :meth:`ready` first, so the scan has finished before the answer
+        is read -- otherwise a caller could see an empty list simply because
+        the scan had not reached the failing file yet.
+        """
+        await self.ready()
+        db = self._db
+        assert db is not None  # ready() returned, so _init_bg set _db
+        return db.scan_failures()
+
     def watch(self):
         """Start watching for file changes. Returns an async iterable of RowEvent.
 

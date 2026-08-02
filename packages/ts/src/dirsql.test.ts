@@ -22,6 +22,7 @@ type FakeInner = {
   query: ReturnType<typeof vi.fn>;
   startWatcher: ReturnType<typeof vi.fn>;
   pollEvents: ReturnType<typeof vi.fn>;
+  scanFailures: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
 };
 
@@ -38,6 +39,7 @@ function makeInner(overrides: Partial<FakeInner> = {}): FakeInner {
     query: vi.fn().mockResolvedValue([]),
     startWatcher: vi.fn().mockResolvedValue(undefined),
     pollEvents: vi.fn().mockResolvedValue([]),
+    scanFailures: vi.fn(() => []),
     close: vi.fn(),
     ...overrides,
   };
@@ -282,6 +284,17 @@ describe("DirSQL", () => {
       const db = new DirSQL({ root: "/d" });
       expect(await db.query("SELECT 1")).toEqual([{ ok: 1 }]);
       expect(inner.query).toHaveBeenCalledWith("SELECT 1");
+    });
+
+    it("scanFailures awaits ready then forwards to the inner instance", async () => {
+      const failures = [{ path: "bad.json", message: "boom" }];
+      const withFailures = makeInner({ scanFailures: vi.fn(() => failures) });
+      installFakeCore(withFailures);
+      const db = new DirSQL({ root: "/d" });
+      // Awaiting ready first is the point: reading before the scan finishes
+      // would report an empty list for a scan that had not got there yet.
+      expect(await db.scanFailures()).toEqual(failures);
+      expect(withFailures.scanFailures).toHaveBeenCalledOnce();
     });
 
     it("startWatcher forwards to the inner instance", async () => {

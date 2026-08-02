@@ -97,6 +97,31 @@ mod python {
         }
     }
 
+    /// One file the initial scan could not index, with the hook's own error.
+    ///
+    /// A scan failure is not a scan *error*: the other files are indexed and
+    /// the database is usable. This is how a caller learns the index is
+    /// incomplete, and which files are missing from it.
+    #[pyclass(name = "ScanFailure", frozen)]
+    struct PyScanFailure {
+        /// Path relative to the scan root.
+        #[pyo3(get)]
+        path: String,
+        /// The hook's error, as it rendered it.
+        #[pyo3(get)]
+        message: String,
+    }
+
+    #[pymethods]
+    impl PyScanFailure {
+        fn __repr__(&self) -> String {
+            format!(
+                "ScanFailure(path={:?}, message={:?})",
+                self.path, self.message
+            )
+        }
+    }
+
     /// Synchronous binding class. `dirsql._async.DirSQL` wraps it with
     /// `asyncio.to_thread` to produce the async public API.
     #[pyclass(name = "DirSQL")]
@@ -177,6 +202,17 @@ mod python {
                 list.append(value_row_to_py_dict(py, &row)?)?;
             }
             Ok(list.unbind())
+        }
+
+        fn scan_failures(&self) -> Vec<PyScanFailure> {
+            self.inner
+                .scan_failures()
+                .iter()
+                .map(|f| PyScanFailure {
+                    path: f.path.clone(),
+                    message: f.message.clone(),
+                })
+                .collect()
         }
 
         fn _start_watcher(&self, py: Python<'_>) -> PyResult<()> {
@@ -415,6 +451,7 @@ mod python {
         m.add_class::<PyTable>()?;
         m.add_class::<PyDirSQL>()?;
         m.add_class::<PyRowEvent>()?;
+        m.add_class::<PyScanFailure>()?;
         Ok(())
     }
 

@@ -5,6 +5,7 @@ export type {
   DirSQLOptions,
   ExtensionSpec,
   RowEvent,
+  ScanFailure,
 } from "./dirsql.js";
 export { parseTableName } from "./parse-table-name.js";
 export { Table } from "./table.js";
