@@ -32,13 +32,11 @@ const PARTIAL: i32 = 23;
 /// A hook that exits non-zero for any file containing `BOOM`, and otherwise
 /// emits one row. Kept in a script rather than inline TOML to sidestep
 /// nested-quote parsing.
-const EXTRACT: &str =
-    "#!/bin/sh\nif grep -q BOOM \"$1\"; then echo \"cannot read $1\" >&2; exit 1; fi\nprintf '[{\"name\":\"ok\"}]'\n";
+const EXTRACT: &str = "#!/bin/sh\nif grep -q BOOM \"$1\"; then echo \"cannot read $1\" >&2; exit 1; fi\nprintf '[{\"name\":\"ok\"}]'\n";
 
 /// A hook that emits an unexpected column for any file containing `BAD`. Under
 /// `strict = true` that row fails normalization.
-const STRICTGEN: &str =
-    "#!/bin/sh\nif grep -q BAD \"$1\"; then printf '[{\"nope\":1}]'; else printf '[{\"name\":\"ok\"}]'; fi\n";
+const STRICTGEN: &str = "#!/bin/sh\nif grep -q BAD \"$1\"; then printf '[{\"nope\":1}]'; else printf '[{\"name\":\"ok\"}]'; fi\n";
 
 fn fixture(script: &str, config: &str) -> TempDir {
     let root = TempDir::new().unwrap();
@@ -74,8 +72,12 @@ fn query(root: &TempDir) -> Output {
 }
 
 fn stdout_rows(out: &Output) -> Value {
-    serde_json::from_slice(&out.stdout)
-        .unwrap_or_else(|e| panic!("stdout was not JSON ({e}): {:?}", String::from_utf8_lossy(&out.stdout)))
+    serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+        panic!(
+            "stdout was not JSON ({e}): {:?}",
+            String::from_utf8_lossy(&out.stdout)
+        )
+    })
 }
 
 #[test]
@@ -97,7 +99,7 @@ fn a_scan_with_no_failures_still_exits_zero() {
 
 #[test]
 fn a_skipped_file_exits_with_the_partial_code() {
-    // Today this exits 0, so `dirsql "SELECT …" | jq` cannot tell a complete
+    // Without a distinct code, `dirsql "SELECT …" | jq` cannot tell a complete
     // index from one missing half its files.
     let root = fixture(EXTRACT, LENIENT_CONFIG);
     fs::write(root.path().join("good.txt"), "fine\n").unwrap();
@@ -121,8 +123,8 @@ fn a_skipped_file_exits_with_the_partial_code() {
 
 #[test]
 fn a_strict_violation_skips_only_that_file() {
-    // The one genuine #697-shaped bug reachable from the CLI: one file's bad
-    // column currently aborts the whole scan, costing every other file's rows.
+    // A rejected row is the hook's mistake, so it costs that file alone --
+    // aborting here would lose every other file's rows to one bad column.
     let root = fixture(STRICTGEN, STRICT_CONFIG);
     fs::write(root.path().join("a_good.txt"), "fine\n").unwrap();
     fs::write(root.path().join("z_bad.txt"), "BAD\n").unwrap();

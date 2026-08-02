@@ -280,6 +280,7 @@ async fn run_query(args: QueryArgs) -> ExitCode {
         }
     };
     let state = load_state(&args.common, parser);
+    let skipped = report_scan_failures(&state);
     let pre_query = load_pre_queries(&args.common);
     let post_query = load_post_queries(&args.common);
     // Same default the server binds with; the pipeline enforces it.
@@ -296,13 +297,53 @@ async fn run_query(args: QueryArgs) -> ExitCode {
     {
         Ok(value) => {
             println!("{value}");
-            ExitCode::SUCCESS
+            // The query ran and its rows are on stdout, so this is not a
+            // failure -- but the index behind them is missing files, and a
+            // caller piping into `jq` under `set -e` has no other way to find
+            // that out.
+            if skipped {
+                ExitCode::from(PARTIAL_SCAN_EXIT)
+            } else {
+                ExitCode::SUCCESS
+            }
         }
         Err(failure) => {
             eprintln!("dirsql query: {}", failure.message());
             ExitCode::from(1)
         }
     }
+}
+
+/// Exit code for "the scan completed, but some files were skipped" -- distinct
+/// from `1` so a script can tell a partial index from a run that failed.
+/// Follows rsync's `23` ("partial transfer due to error").
+const PARTIAL_SCAN_EXIT: u8 = 23;
+
+/// How many skipped files to name before collapsing the rest into a count. A
+/// directory of unreadable files should not bury the terminal.
+const MAX_REPORTED_FAILURES: usize = 10;
+
+/// Print the scan's skipped files to stderr, capped, and report whether there
+/// were any. stdout is left for the query result alone.
+fn report_scan_failures(state: &AppState) -> bool {
+    let AppState::Ready(db) = state else {
+        return false;
+    };
+    let failures = db.scan_failures();
+    if failures.is_empty() {
+        return false;
+    }
+    for failure in failures.iter().take(MAX_REPORTED_FAILURES) {
+        eprintln!("dirsql: skipping `{}`: {}", failure.path, failure.message);
+    }
+    if let Some(rest) = failures
+        .len()
+        .checked_sub(MAX_REPORTED_FAILURES)
+        .filter(|n| *n > 0)
+    {
+        eprintln!("dirsql: ... and {rest} more");
+    }
+    true
 }
 
 /// Synthesize the exact `POST /query` body for a positional SQL argument,

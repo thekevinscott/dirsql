@@ -275,11 +275,15 @@ fn it_raises_on_extra_keys_in_strict_mode() {
         )],
     );
 
-    assert!(result.is_err());
+    // Since #714 a rejected row costs its own file, not the scan: the build
+    // succeeds, the row is absent, and the file is reported as skipped.
+    let db = result.expect("a strict violation is one file's failure");
+    assert_eq!(db.scan_failures().len(), 1, "{:?}", db.scan_failures());
+    assert!(db.query("SELECT * FROM items").unwrap().is_empty());
 }
 
 #[test]
-fn it_raises_on_missing_keys_in_strict_mode() {
+fn it_reports_missing_keys_in_strict_mode() {
     let root = TempDir::new().unwrap();
     fs::write(root.path().join("item.txt"), "apple").unwrap();
 
@@ -298,7 +302,9 @@ fn it_raises_on_missing_keys_in_strict_mode() {
         )],
     );
 
-    assert!(result.is_err());
+    let db = result.expect("a strict violation is one file's failure");
+    assert_eq!(db.scan_failures().len(), 1, "{:?}", db.scan_failures());
+    assert!(db.query("SELECT * FROM items").unwrap().is_empty());
 }
 
 #[test]
@@ -792,23 +798,23 @@ fn duplicate_table_name_errors() {
 }
 
 #[test]
-fn on_file_error_surfaces_as_on_file_error() {
+fn on_file_error_surfaces_as_a_reported_skip() {
+    // Since #714 a failing hook does not fail the scan; the file is skipped and
+    // named, with the hook's own message carried through verbatim so the caller
+    // can tell *why* rather than only *that*.
     let root = TempDir::new().unwrap();
     fs::write(root.path().join("boom.txt"), "data").unwrap();
     let table = Table::try_new("CREATE TABLE items (name TEXT)", "*.txt", |_| {
         Err("kaboom".into())
     });
-    let err = match DirSQL::new(root.path(), vec![table]) {
-        Ok(_) => panic!("expected an on-file error from the failing on-file closure"),
-        Err(e) => e,
-    };
-    match err {
-        dirsql::DirSqlError::OnFile { message, path } => {
-            assert!(message.contains("kaboom"));
-            assert!(path.contains("boom.txt"));
-        }
-        other => panic!("expected OnFile error, got: {other:?}"),
-    }
+
+    let db = DirSQL::new(root.path(), vec![table])
+        .expect("a failing hook is that file's problem, not the scan's");
+
+    let failures = db.scan_failures();
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(failures[0].message.contains("kaboom"), "{failures:?}");
+    assert!(failures[0].path.contains("boom.txt"), "{failures:?}");
 }
 
 // ---------------------------------------------------------------------------
