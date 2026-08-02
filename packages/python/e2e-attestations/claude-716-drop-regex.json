@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/ -x -q",
+  "ran_at": 1785679612,
+  "exit_code": 0,
+  "commit": "f24a5f661d5538bc5f3ef27a266fac7cc1e955ad",
+  "branch": "claude/716-drop-regex"
+}
