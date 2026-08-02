@@ -86,7 +86,7 @@ What a failure *means* differs per hook:
 
 | Hook | On failure |
 |---|---|
-| `on-file` | **Per-file isolation.** The file contributes no rows; a one-line warning naming the file and error goes to stderr; the scan continues. One bad file never aborts the scan. |
+| `on-file` | **Per-file isolation.** The file contributes no rows and is reported as skipped; the scan indexes every other file and commits. The CLI names up to ten skipped files on stderr, then `... and N more`, and exits `23` — distinct from `0` (clean) and `1` (the run failed), so a caller can tell a partial index from a complete one. A row the table rejects under `strict` counts as the same kind of failure. |
 | `pre-query` | The request returns `500 Internal Server Error` with the command's stderr tail in the JSON `error` body. |
 | `post-query` | The request returns `500 Internal Server Error` with the command's stderr tail (or, for unparseable output, `post-query did not return valid JSON: <err>`) in the JSON `error` body. |
 

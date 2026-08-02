@@ -58,7 +58,7 @@ def describe_DirSQL_async():
             assert len(results) == 3
 
         @pytest.mark.asyncio
-        async def it_raises_on_extract_error_during_ready(tmp_dir):
+        async def it_skips_the_file_on_extract_error_during_ready(tmp_dir):
             os.makedirs(os.path.join(tmp_dir, "data"), exist_ok=True)
             with open(os.path.join(tmp_dir, "data", "bad.json"), "w") as f:
                 f.write("not valid json")
@@ -75,8 +75,11 @@ def describe_DirSQL_async():
                     ),
                 ],
             )
-            with pytest.raises(Exception):
-                await db.ready()
+            # Since dirsql#714 a hook that raises costs its own file, not the
+            # scan: `ready()` resolves and that file contributes nothing. Which
+            # file was skipped is not reachable from this binding yet (#715).
+            await db.ready()
+            assert await db.query("SELECT * FROM items") == []
 
         @pytest.mark.asyncio
         async def it_allows_multiple_ready_calls(jsonl_dir):
@@ -579,15 +582,19 @@ def describe_DirSQL_async():
 
         @pytest.mark.asyncio
         async def it_surfaces_the_real_init_error_on_watch_without_ready(tmp_dir):
+            # The construction error has to be a genuinely fatal one. Since
+            # dirsql#714 a hook that raises only skips its file, so a bad
+            # payload builds fine and `watch()` would then block forever
+            # waiting for an event that never comes. Invalid DDL still aborts.
             os.makedirs(os.path.join(tmp_dir, "data"), exist_ok=True)
-            with open(os.path.join(tmp_dir, "data", "bad.json"), "w") as f:
-                f.write("not valid json")
+            with open(os.path.join(tmp_dir, "data", "a.json"), "w") as f:
+                json.dump({"name": "apple"}, f)
 
             db = DirSQL(
                 tmp_dir,
                 tables=[
                     Table(
-                        ddl="CREATE TABLE items (name TEXT)",
+                        ddl="NOT VALID SQL",
                         glob="data/*.json",
                         on_file=lambda path: [
                             json.loads(open(path, encoding="utf-8").read())

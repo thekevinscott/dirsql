@@ -129,23 +129,6 @@ pub enum DirSqlError {
     #[error("duplicate table name: {0}")]
     DuplicateTable(String),
 
-    #[error("on-file error for {path}: {message}")]
-    OnFile { path: String, message: String },
-
-    /// Several files' on-file hooks failed during one scan. A scan attempts
-    /// every matched file, so more than one can fail; reporting only the first
-    /// would make the rest invisible until it was fixed and the scan re-run.
-    #[error(
-        "{} files failed their on-file hook:\n{}",
-        .failures.len(),
-        .failures
-            .iter()
-            .map(|OnFileFailure { path, message }| format!("  {path}: {message}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    )]
-    OnFileMany { failures: Vec<OnFileFailure> },
-
     #[error("config error: {message}")]
     Config {
         message: String,
@@ -273,6 +256,8 @@ struct DirSqlInner {
     matcher: TableMatcher,
     on_file_map: HashMap<String, Arc<OnFileFn>>,
     strict_map: HashMap<String, bool>,
+    /// Files the initial scan could not index. Empty for a clean scan.
+    scan_failures: Vec<OnFileFailure>,
     watcher: Mutex<Option<Watcher>>,
     /// Locks out [`DirSQL::watch`] once [`DirSQL::poll_events`] has run:
     /// both would drain the same underlying watcher.
@@ -735,6 +720,18 @@ impl DirSQL {
         })
     }
 
+    /// The files the initial scan could not index, in scan order — each with
+    /// the path relative to the root and the hook's own error.
+    ///
+    /// A hook that fails, or returns a row the table rejects, costs that file
+    /// and no other: the scan indexes everything else and records the failure
+    /// here. Empty for a clean scan, which is the signal a caller checks —
+    /// non-empty means the index is *incomplete*, not wrong, and the missing
+    /// files are retried on the next scan.
+    pub fn scan_failures(&self) -> &[OnFileFailure] {
+        &self.inner.scan_failures
+    }
+
     /// Split-phase construction — part 2. Consumes the intermediate state from
     /// [`prepare_resolved`](Self::prepare_resolved): creates the SQLite
     /// database (or wires up the persistent on-disk one), runs each table's
@@ -873,9 +870,29 @@ impl DirSQL {
                 db.delete_rows_by_file(&table_name, &rel_path)
                     .map_err(map_db_error)?;
             }
-            for (row_index, raw_row) in raw_rows.iter().enumerate() {
-                let row = db.normalize_row(&table_name, raw_row, strict)?;
-                db.insert_row(&table_name, &row, &rel_path, row_index)
+            // Normalize every row before inserting any: a row the hook got
+            // wrong is that file's failure, and half-inserting a file would
+            // leave rows behind for a file the scan reports as skipped.
+            let mut normalized = Vec::with_capacity(raw_rows.len());
+            let mut rejected = None;
+            for raw_row in &raw_rows {
+                match db.normalize_row(&table_name, raw_row, strict) {
+                    Ok(row) => normalized.push(row),
+                    Err(e) => {
+                        rejected = Some(e.to_string());
+                        break;
+                    }
+                }
+            }
+            if let Some(message) = rejected {
+                on_file_failures.push(OnFileFailure {
+                    path: rel_path.clone(),
+                    message,
+                });
+                continue;
+            }
+            for (row_index, row) in normalized.iter().enumerate() {
+                db.insert_row(&table_name, row, &rel_path, row_index)
                     .map_err(map_db_error)?;
             }
 
@@ -904,26 +921,12 @@ impl DirSQL {
             write_meta(db.conn(), meta).map_err(DirSqlError::sqlite)?;
         }
 
-        // Returning before the commit drops `_tx`, so a scan with failures
-        // still leaves the cache exactly as it was -- the pre-existing
-        // behavior. The single-failure case keeps its original error verbatim;
-        // only the multi-failure case reports more than it used to. Whether a
-        // partial index should commit instead is dirsql#697.
-        match on_file_failures.len() {
-            0 => {}
-            1 => {
-                let only = on_file_failures.remove(0);
-                return Err(DirSqlError::OnFile {
-                    path: only.path,
-                    message: only.message,
-                });
-            }
-            _ => {
-                return Err(DirSqlError::OnFileMany {
-                    failures: on_file_failures,
-                });
-            }
-        }
+        // A per-file failure no longer cancels the scan: what could be indexed
+        // is committed, and the failures ride on the built database for the
+        // caller to report (`scan_failures`). A file that failed never reached
+        // `upsert_file`, so it is absent from the cache index and is retried on
+        // the next scan -- the cache is incomplete, never wrong. SQLite, DDL
+        // and extension errors still propagate above, unchanged.
 
         // Commit the ingest transaction.
         _tx.commit().map_err(DirSqlError::sqlite)?;
@@ -940,6 +943,7 @@ impl DirSQL {
                 matcher,
                 on_file_map,
                 strict_map,
+                scan_failures: on_file_failures,
                 watcher: Mutex::new(None),
                 poll_used: AtomicBool::new(false),
                 watch_thread_started: AtomicBool::new(false),
@@ -1548,10 +1552,9 @@ fn build_tables_from_config(
         let command = table_cfg.on_file.clone();
         let config_dir = config_dir.to_path_buf();
         let root = root.to_path_buf();
-        // `Table::new` (infallible): `run_on_file` isolates its own errors to an
-        // empty row set so one bad file never aborts the scan (the scan aborts
-        // on an on_file `Err`).
-        let mut table = Table::new(
+        // `Table::try_new`: a hook failure is the scan's to record, not this
+        // closure's to hide. The scan skips the file and reports it.
+        let mut table = Table::try_new(
             table_cfg.ddl.clone(),
             table_cfg.glob.clone(),
             move |abs_path: &str| run_on_file(&command, abs_path, &config_dir, &root, timeout),
@@ -1575,38 +1578,33 @@ fn build_tables_from_config(
 /// config lives outside the index still resolves it. A template that omits a
 /// placeholder simply never receives its value — nothing is appended.
 ///
-/// Per-file isolation: any failure — a spawn/exit/timeout error from
-/// [`command::run_command`], or output that is not a JSON array of objects —
-/// is logged to stderr and yields no rows (`vec![]`). Returning `Err` here
-/// would abort the whole scan, so it never does. `timeout` bounds the run —
-/// the table's configured value, or the shared default.
+/// Any failure — a spawn/exit/timeout error from [`command::run_command`], or
+/// output that is not a JSON array of objects — is returned to the caller. The
+/// scan turns it into a skipped file rather than a scan error, and needs the
+/// `Err` to tell a skip apart from a file that legitimately produced no rows.
+/// `timeout` bounds the run — the table's configured value, or the shared
+/// default.
 fn run_on_file(
     command: &str,
     abs_path: &str,
     config_dir: &Path,
     root: &Path,
     timeout: Duration,
-) -> Vec<Row> {
+) -> std::result::Result<Vec<Row>, BoxError> {
     let placeholders = [
         Placeholder::new("path", abs_path),
         Placeholder::new("root", root.to_string_lossy().into_owned()),
     ];
 
-    match command::run_command(command, &placeholders, config_dir, timeout, None) {
-        Ok(output) => match parse_command_rows(&output.payload) {
-            Ok(rows) => rows,
-            Err(message) => {
-                eprintln!(
-                    "dirsql: skipping `{abs_path}`: on-file output was not a JSON array of rows: {message}"
-                );
-                Vec::new()
-            }
-        },
-        Err(error) => {
-            eprintln!("dirsql: skipping `{abs_path}`: on-file command failed: {error}");
-            Vec::new()
-        }
-    }
+    // Errors travel to the caller rather than being logged and flattened to an
+    // empty row set here. Swallowing them made a skip indistinguishable from a
+    // file that legitimately produced no rows, so the scan could not count what
+    // it dropped, cap the report, or exit differently.
+    let output = command::run_command(command, &placeholders, config_dir, timeout, None)
+        .map_err(|error| -> BoxError { format!("on-file command failed: {error}").into() })?;
+    parse_command_rows(&output.payload).map_err(|message| -> BoxError {
+        format!("on-file output was not a JSON array of rows: {message}").into()
+    })
 }
 
 /// Parse an `on-file` command's stdout payload — a JSON array of row objects —
@@ -3206,7 +3204,8 @@ mod internal_tests {
             dir.path(),
             dir.path(),
             command::DEFAULT_COMMAND_TIMEOUT,
-        );
+        )
+        .expect("a well-formed payload parses");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["n"], Value::Integer(1));
     }
@@ -3225,7 +3224,8 @@ mod internal_tests {
             dir.path(),
             dir.path(),
             command::DEFAULT_COMMAND_TIMEOUT,
-        );
+        )
+        .expect("a well-formed payload parses");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["q"], Value::Text("{abspath}".into()));
     }
@@ -3245,7 +3245,8 @@ mod internal_tests {
             dir.path(),
             dir.path(),
             command::DEFAULT_COMMAND_TIMEOUT,
-        );
+        )
+        .expect("a well-formed payload parses");
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0]["p"],
@@ -3253,31 +3254,41 @@ mod internal_tests {
         );
     }
 
-    /// A command that cannot be spawned yields no rows (per-file isolation).
+    /// A command that cannot be spawned is an error the caller records, not an
+    /// empty row set: a skip and a file that legitimately produced no rows must
+    /// stay distinguishable.
     #[test]
-    fn run_on_file_returns_no_rows_on_spawn_failure() {
+    fn run_on_file_errors_on_spawn_failure() {
         let dir = TempDir::new().unwrap();
-        let rows = run_on_file(
+        let error = run_on_file(
             "definitely-not-a-real-binary-xyzzy",
             "/outside/f.txt",
             dir.path(),
             dir.path(),
             command::DEFAULT_COMMAND_TIMEOUT,
+        )
+        .expect_err("an unspawnable command is a failure");
+        assert!(
+            error.to_string().contains("on-file command failed"),
+            "the error names the stage: {error}"
         );
-        assert!(rows.is_empty());
     }
 
     #[test]
-    fn run_on_file_returns_no_rows_on_non_json_output() {
+    fn run_on_file_errors_on_non_json_output() {
         let dir = TempDir::new().unwrap();
-        let rows = run_on_file(
+        let error = run_on_file(
             "echo not-json",
             "/outside/f.txt",
             dir.path(),
             dir.path(),
             command::DEFAULT_COMMAND_TIMEOUT,
+        )
+        .expect_err("a non-JSON payload is a failure");
+        assert!(
+            error.to_string().contains("not a JSON array of rows"),
+            "the error names the stage: {error}"
         );
-        assert!(rows.is_empty());
     }
 
     #[tokio::test]

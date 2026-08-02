@@ -345,6 +345,43 @@ on-file = "sh slowish.sh {path}"
     assert_eq!(rows[0]["name"], Value::Text("ok".into()));
 }
 
+/// A row that fails strict normalization is the hook's mistake, not the
+/// database's, so it costs that file and no other. Before dirsql#714 the bare
+/// `?` on `normalize_row` aborted the whole scan, and the well-formed file's
+/// rows were lost with it.
+#[test]
+fn a_strict_violation_skips_only_that_file() {
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("gen.sh"),
+        "#!/bin/sh\nif grep -q BAD \"$1\"; then printf '[{\"nope\":1}]'; else printf '[{\"name\":\"ok\"}]'; fi\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[table]]
+ddl = "CREATE TABLE items (name TEXT)"
+glob = "*.txt"
+strict = true
+on-file = "sh gen.sh {path}"
+"#,
+    )
+    .unwrap();
+    fs::write(root.path().join("a_good.txt"), "fine\n").unwrap();
+    fs::write(root.path().join("z_bad.txt"), "BAD\n").unwrap();
+
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .expect("one bad row must not fail the build");
+    let rows = db.query("SELECT name FROM items").unwrap();
+
+    assert_eq!(rows.len(), 1, "the good file's row must survive: {rows:?}");
+    assert_eq!(rows[0]["name"], Value::Text("ok".into()));
+}
+
 /// A scan attempts every matched file. One hook failure is that file's
 /// problem, so it must not stop the files after it from being tried.
 #[test]
@@ -368,7 +405,11 @@ fn build_attempts_every_matched_file_even_after_one_fails() {
         )],
     );
 
-    assert!(built.is_err(), "expected the build to fail");
+    assert!(
+        built.is_ok(),
+        "per-file failures no longer cancel the scan: {:?}",
+        built.err()
+    );
     // One guard: `Mutex` is not reentrant, so locking twice in the same
     // assert expression deadlocks rather than failing.
     let attempted = seen.lock().unwrap();
@@ -388,20 +429,21 @@ fn build_reports_every_failing_file_not_only_the_first() {
         fs::write(dir.path().join(name), "x").unwrap();
     }
 
-    let err = match DirSQL::new(
+    let db = DirSQL::new(
         dir.path(),
         vec![Table::try_new(
             "CREATE TABLE items (name TEXT)",
             "**/*.txt",
             |path| Err(format!("boom for {path}").into()),
         )],
-    ) {
-        Ok(_) => panic!("expected an on-file error"),
-        Err(e) => e,
-    };
+    )
+    .expect("per-file failures no longer cancel the scan");
 
-    let msg = err.to_string();
+    let reported = db.scan_failures();
     for name in ["a.txt", "b.txt", "c.txt"] {
-        assert!(msg.contains(name), "{name} missing from: {msg}");
+        assert!(
+            reported.iter().any(|f| f.path.contains(name)),
+            "{name} missing from: {reported:?}"
+        );
     }
 }

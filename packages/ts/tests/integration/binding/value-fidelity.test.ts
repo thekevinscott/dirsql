@@ -53,9 +53,13 @@ describe("DirSQL BigInt onFile", () => {
     expect(rows[0].v).toBe(42);
   });
 
-  it("throws on a BigInt beyond i64 range", async () => {
+  it("skips the file for a BigInt beyond i64 range", async () => {
+    // Since dirsql#714 an unrepresentable value is the hook's mistake and
+    // costs its own file; the build resolves with that file contributing
+    // nothing. Which file was skipped is not reachable here yet (#715).
     const db = mkdb(() => [{ v: 2n ** 64n }]);
-    await expect(db.ready).rejects.toThrow(/i64|range|exceed|BigInt/i);
+    await db.ready;
+    expect(await db.query("SELECT v FROM t")).toEqual([]);
   });
 });
 
@@ -64,11 +68,15 @@ describe("DirSQL onFile error message", () => {
     await writeFile(join(dir, "marker.json"), "{}");
   });
 
-  it("propagates the thrown onFile error message", async () => {
+  it("skips the file whose onFile threw", async () => {
+    // Since dirsql#714 a throwing hook no longer fails the scan. The message
+    // is carried on the core's failure list, which this binding cannot reach
+    // yet (#715) -- so all that is observable here is the absent row.
     const db = mkdb(() => {
       throw new Error("bad JSON in posts/a.json: boom");
     });
-    await expect(db.ready).rejects.toThrow(/bad JSON in posts\/a\.json: boom/);
+    await db.ready;
+    expect(await db.query("SELECT v FROM t")).toEqual([]);
   });
 });
 
