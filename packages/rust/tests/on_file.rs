@@ -345,6 +345,43 @@ on-file = "sh slowish.sh {path}"
     assert_eq!(rows[0]["name"], Value::Text("ok".into()));
 }
 
+/// A row that fails strict normalization is the hook's mistake, not the
+/// database's, so it costs that file and no other. Before dirsql#714 the bare
+/// `?` on `normalize_row` aborted the whole scan, and the well-formed file's
+/// rows were lost with it.
+#[test]
+fn a_strict_violation_skips_only_that_file() {
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("gen.sh"),
+        "#!/bin/sh\nif grep -q BAD \"$1\"; then printf '[{\"nope\":1}]'; else printf '[{\"name\":\"ok\"}]'; fi\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[table]]
+ddl = "CREATE TABLE items (name TEXT)"
+glob = "*.txt"
+strict = true
+on-file = "sh gen.sh {path}"
+"#,
+    )
+    .unwrap();
+    fs::write(root.path().join("a_good.txt"), "fine\n").unwrap();
+    fs::write(root.path().join("z_bad.txt"), "BAD\n").unwrap();
+
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .expect("one bad row must not fail the build");
+    let rows = db.query("SELECT name FROM items").unwrap();
+
+    assert_eq!(rows.len(), 1, "the good file's row must survive: {rows:?}");
+    assert_eq!(rows[0]["name"], Value::Text("ok".into()));
+}
+
 /// A scan attempts every matched file. One hook failure is that file's
 /// problem, so it must not stop the files after it from being tried.
 #[test]
