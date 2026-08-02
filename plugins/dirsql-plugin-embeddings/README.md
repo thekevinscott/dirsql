@@ -35,17 +35,18 @@ and embedded like any other document. The extension check is case-insensitive
 (`.PDF` is a PDF), though the glob above is not — globset matches case-sensitively,
 so an uppercase-suffixed file needs its own `glob` entry to be picked up at all.
 
-The glob is an allowlist rather than `**/*` for a reason worth knowing: a hook
-that exits non-zero aborts the entire scan
-([dirsql#697](https://github.com/thekevinscott/dirsql/issues/697)), and reading a
-PNG as UTF-8 does exactly that. Matching everything would mean one image anywhere
-under the root produces no index at all, so the list stays limited to what the
-plugin can actually read.
+The glob is an allowlist rather than `**/*` on cost, not correctness. Every
+matched file costs a hook subprocess, and every file the plugin can decode costs
+a billed embedding call — so pointing `**/*` at a tree containing `node_modules`
+or `.git` makes for a slow and expensive scan. The list is what is worth
+embedding; widening it trades money for recall.
 
-A PDF that cannot be parsed aborts the scan rather than being skipped: the hook
-exits non-zero and dirsql reports the path and the pypdf reason. A *scanned*,
-image-only PDF is not a failure — pypdf yields no text, and the file is indexed
-with an empty `text`, exactly like an empty `.md`.
+A file the plugin cannot read is skipped, not fatal. The hook exits non-zero,
+dirsql names the file on stderr and carries on indexing the rest, and the run
+exits `23` — "completed, some files skipped". From the SDK the same information
+is on `scan_failures()` / `scanFailures()`. A *scanned*, image-only PDF is not a
+failure at all: pypdf yields no text, and the file is indexed with an empty
+`text`, exactly like an empty `.md`.
 
 ## Configuration
 
