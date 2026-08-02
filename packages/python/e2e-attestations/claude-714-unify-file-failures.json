@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/ -x -q",
+  "ran_at": 1785673957,
+  "exit_code": 0,
+  "commit": "484c89828d5a512f7fd51dc8e5995d498e857c0b",
+  "branch": "claude/714-unify-file-failures"
+}
