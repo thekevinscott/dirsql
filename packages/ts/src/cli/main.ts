@@ -14,7 +14,7 @@ export async function main(
   const binary = resolveBinary();
   // Resolve any package-name extensions in a TOML config here (the binary
   // can't) and pass them as `--extension` flags; a no-op otherwise.
-  const result = spawnSync(binary, withResolvedExtensions(argv), {
+  const result = spawnSync(binary, await withResolvedExtensions(argv), {
     stdio: "inherit",
   });
   if (result.error) {

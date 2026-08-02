@@ -12,7 +12,7 @@ vi.mock("./resolve-config-extensions.js", async () => ({
   ...(await vi.importActual<typeof import("./resolve-config-extensions.js")>(
     "./resolve-config-extensions.js",
   )),
-  withResolvedExtensions: vi.fn((argv: string[]) => argv),
+  withResolvedExtensions: vi.fn(async (argv: string[]) => argv),
 }));
 
 const TEST_PID = 42;
@@ -37,7 +37,7 @@ describe("main", () => {
 
   beforeEach(() => {
     vi.mocked(resolveBinary).mockReturnValue("/bin/dirsql");
-    vi.mocked(withResolvedExtensions).mockImplementation((argv) => argv);
+    vi.mocked(withResolvedExtensions).mockImplementation(async (argv) => argv);
     vi.mocked(die).mockImplementation(((msg: string) => {
       throw new Error(`DIE: ${msg}`);
     }) as typeof die);

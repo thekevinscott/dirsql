@@ -11,7 +11,7 @@
 // dispatches those to `dirsql interpret`, whose handshake already carries
 // resolved paths.
 
-import { resolveConfigExtensionSpecs } from "../resolve-config-extensions.js";
+import { existsSync } from "node:fs";
 
 // Config extensions the binary dispatches to `dirsql interpret`; never
 // pre-resolved here (that path resolves via the handshake).
@@ -37,7 +37,9 @@ function configPathFromArgv(argv: string[]): string {
  * unchanged. Throws if a package name cannot be resolved (surfaced by the
  * launcher as a clean error).
  */
-export function withResolvedExtensions(argv: string[]): string[] {
+export async function withResolvedExtensions(
+  argv: string[],
+): Promise<string[]> {
   if (argv[0] === "init") {
     return argv;
   }
@@ -45,6 +47,15 @@ export function withResolvedExtensions(argv: string[]): string[] {
   if (NATIVE_CONFIG_SUFFIXES.some((s) => configPath.endsWith(s))) {
     return argv;
   }
+  // The shared resolver pulls in smol-toml, which only a TOML config on disk
+  // can need. Guarding on the same `existsSync` the resolver itself starts
+  // with keeps the parser off the common launch path entirely (#720).
+  if (!existsSync(configPath)) {
+    return argv;
+  }
+  const { resolveConfigExtensionSpecs } = await import(
+    "../resolve-config-extensions.js"
+  );
   const specs = resolveConfigExtensionSpecs(configPath);
   if (specs === null) {
     return argv;
