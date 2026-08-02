@@ -84,6 +84,20 @@ export interface RowEvent {
 }
 
 /**
+ * One file the initial scan could not index.
+ *
+ * A scan failure is not a scan *error*: the other files are indexed and the
+ * database is usable. This is how a caller learns the index is incomplete,
+ * and which files are missing from it.
+ */
+export interface ScanFailure {
+  /** Path relative to the scan root. */
+  path: string;
+  /** The hook's error, as it rendered it. */
+  message: string;
+}
+
+/**
  * Ephemeral SQL index over a local directory.
  *
  * The constructor is overloaded: pass a config-file path directly, or an
@@ -200,6 +214,22 @@ export class DirSQL {
   async query(sql: string): Promise<Record<string, unknown>[]> {
     await this.ready;
     return this._inner.query(sql);
+  }
+
+  /**
+   * The files the initial scan could not index, each with its root-relative
+   * `path` and the hook's own `message`.
+   *
+   * Empty after a clean scan, which is the signal to check: a non-empty list
+   * means the index is *incomplete*, not wrong, and those files are retried
+   * on the next scan.
+   *
+   * Awaits the initial scan first, so a caller cannot see an empty list
+   * merely because the scan had not yet reached the failing file.
+   */
+  async scanFailures(): Promise<ScanFailure[]> {
+    await this.ready;
+    return this._inner.scanFailures();
   }
 
   /**

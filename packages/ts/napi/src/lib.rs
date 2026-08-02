@@ -69,6 +69,21 @@ pub struct ExtensionSpec {
     pub entrypoint: Option<String>,
 }
 
+/// One file the initial scan could not index, with the hook's own error.
+///
+/// A scan failure is not a scan *error*: the other files are indexed and the
+/// database is usable. This is how a caller learns the index is incomplete,
+/// and which files are missing from it.
+///
+/// Output-only (`object_from_js = false`): JS never constructs one.
+#[napi(object, object_from_js = false)]
+pub struct ScanFailure {
+    /// Path relative to the scan root.
+    pub path: String,
+    /// The hook's error, as it rendered it.
+    pub message: String,
+}
+
 /// The main DirSQL class. Creates an ephemeral SQLite index over a directory.
 #[napi(js_name = "DirSQL")]
 pub struct DirSQL {
@@ -166,6 +181,29 @@ impl DirSQL {
     pub fn poll_events(&self, timeout_ms: u32) -> AsyncTask<PollEventsTask> {
         let inner = self.inner.borrow().as_ref().cloned();
         AsyncTask::new(PollEventsTask { inner, timeout_ms })
+    }
+
+    /// The files the initial scan could not index. Empty after a clean scan.
+    ///
+    /// Reads an in-memory list the scan already produced, so unlike the other
+    /// methods here it needs no threadpool hop and returns synchronously; the
+    /// public wrapper is what makes it a `Promise`, so that it can await the
+    /// scan first.
+    #[napi(js_name = "scanFailures")]
+    pub fn scan_failures(&self) -> Vec<ScanFailure> {
+        self.inner
+            .borrow()
+            .as_ref()
+            .map(|db| {
+                db.scan_failures()
+                    .iter()
+                    .map(|f| ScanFailure {
+                        path: f.path.clone(),
+                        message: f.message.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Explicitly close the database connection. Called for cleanup or to

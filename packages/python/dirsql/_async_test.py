@@ -30,10 +30,14 @@ class _FakeRustDirSQL:
         self.extensions = extensions
         self.suppress_config_extensions = suppress_config_extensions
         self.query_calls = []
+        self.scan_failures_value = []
 
     def query(self, sql):
         self.query_calls.append(sql)
         return [{"sql": sql}]
+
+    def scan_failures(self):
+        return self.scan_failures_value
 
 
 class _FakeWatcherDb:
@@ -50,6 +54,14 @@ class _FakeWatcherDb:
         if self.events:
             return self.events.pop(0)
         return []
+
+
+class _Failure:
+    """Stand-in for the core's ScanFailure; the wrapper only passes it along."""
+
+    def __init__(self, path, message):
+        self.path = path
+        self.message = message
 
 
 class _ReadyOwner:
@@ -95,6 +107,27 @@ def describe_DirSQL_async():
                 assert db._db.extensions == [{"path": "R:ext/a.so", "entrypoint": None}]
                 assert db._db.query_calls == ["SELECT 1"]
                 assert results == [{"sql": "SELECT 1"}]
+
+        @pytest.mark.asyncio
+        async def it_awaits_ready_then_forwards_scan_failures():
+            # Awaiting ready first is the point: reading before the scan
+            # finishes would report an empty list for a scan that had simply
+            # not reached the failing file yet.
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                db = async_mod.DirSQL("/tmp/root")
+                await db.ready()
+                db._db.scan_failures_value = [_Failure("bad.json", "boom")]
+
+                (failure,) = await db.scan_failures()
+
+                assert failure.path == "bad.json"
+                assert failure.message == "boom"
+
+        @pytest.mark.asyncio
+        async def it_reports_no_scan_failures_for_a_clean_scan():
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                db = async_mod.DirSQL("/tmp/root")
+                assert await db.scan_failures() == []
 
         @pytest.mark.asyncio
         async def it_passes_no_extensions_through_unresolved():
