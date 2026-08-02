@@ -22,6 +22,18 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt", "sync"] }
 futures-channel = "0.3"
 
+# Cargo's default release profile ships every binary unstripped, without
+# cross-crate optimization. The three published artifacts (CLI bin, pyo3
+# extension, napi addon) are each a statically linked copy of the whole core,
+# so the defaults cost ~31% of every download (#717).
+#
+# `panic` stays at the default `unwind`: pyo3 and napi turn Rust panics into
+# Python/JS exceptions, which requires unwinding.
+[profile.release]
+strip = "symbols"
+lto = "fat"
+codegen-units = 1
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 rust_2018_idioms = { level = "warn", priority = -1 }
