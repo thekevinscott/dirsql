@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1785679627,
+  "exit_code": 0,
+  "commit": "054471a11ada1b60788d3615a14d078574c0cc63",
+  "branch": "claude/716-drop-regex"
+}
