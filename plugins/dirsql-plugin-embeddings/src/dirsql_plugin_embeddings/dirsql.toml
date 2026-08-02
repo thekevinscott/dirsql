@@ -16,11 +16,11 @@ entrypoint = "sqlite3_vec_init"
 # rewrites those to `*`, but only when the braces hold a bare identifier, so a
 # comma-separated list reaches globset intact.
 #
-# An allowlist rather than `**/*`, and not for tidiness: a hook that fails takes
-# the whole scan down (dirsql#697), and reading a PNG as UTF-8 fails. Matching
-# everything would mean one image anywhere under the root yields no index at
-# all. The list is therefore what `read_content` can actually read -- prose, not
-# source -- and widening it is safe only as far as that stays true.
+# An allowlist rather than `**/*` because every matched file costs a hook
+# subprocess and, for anything `read_content` can decode, a billed embedding
+# call. Pointed at a tree holding `node_modules` or `.git`, `**/*` is a slow
+# and expensive scan, not a broken one -- unreadable files are skipped. So the
+# list is what is worth embedding, and widening it trades money for recall.
 [[table]]
 ddl = "CREATE TABLE documents (path TEXT, text TEXT, embedding TEXT)"
 glob = "**/*.{md,markdown,mdx,rst,txt,pdf}"
