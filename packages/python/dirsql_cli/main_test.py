@@ -37,7 +37,7 @@ def describe_main():
                 patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(main_module, "with_resolved_extensions", lambda a: a),
                 patch(
-                    "dirsql.cli.main.subprocess.run", return_value=_Completed(7)
+                    "dirsql_cli.main.subprocess.run", return_value=_Completed(7)
                 ) as run,
             ):
                 assert main(["--version"]) == 7
@@ -49,7 +49,7 @@ def describe_main():
                 patch.object(main_module, "is_windows", return_value=True),
                 patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(main_module, "with_resolved_extensions", lambda a: a),
-                patch("dirsql.cli.main.subprocess.run", return_value=_Completed(0)),
+                patch("dirsql_cli.main.subprocess.run", return_value=_Completed(0)),
                 patch.object(os, "execv") as execv,
             ):
                 main([])
@@ -149,7 +149,7 @@ def describe_main():
                 patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(main_module, "with_resolved_extensions", lambda a: a),
                 patch(
-                    "dirsql.cli.main.subprocess.run", return_value=_Completed(0)
+                    "dirsql_cli.main.subprocess.run", return_value=_Completed(0)
                 ) as run,
             ):
                 main(argv=None)
@@ -166,7 +166,7 @@ def describe_main():
                 patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(main_module, "with_resolved_extensions", lambda a: a),
                 patch(
-                    "dirsql.cli.main.subprocess.run", return_value=_Completed(2)
+                    "dirsql_cli.main.subprocess.run", return_value=_Completed(2)
                 ) as run,
             ):
                 assert main(["interpret", "config.py"]) == 2

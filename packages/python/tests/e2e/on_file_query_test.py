@@ -1,7 +1,7 @@
 """CLI e2e: `dirsql query --on-file '<command>'` through the real launcher +
 bundled binary (docs/reference/path-tables.md#parsing-rows-with-on-file).
 
-Runs the Python launcher (`dirsql.cli.main:main`) as a subprocess over a real
+Runs the Python launcher (`dirsql_cli.main:main`) as a subprocess over a real
 temp tree with a real parser script. Asserts the documented behavior end to
 end: the parser supplies the rows and schema, a failing file is isolated with a
 stderr warning while the good files still return, and a repeated flag errors.
@@ -64,7 +64,7 @@ def describe_on_file_query():
             [
                 sys.executable,
                 "-c",
-                "import sys; from dirsql.cli.main import main; sys.exit(main())",
+                "import sys; from dirsql_cli.main import main; sys.exit(main())",
                 *args,
             ],
             cwd=str(root),

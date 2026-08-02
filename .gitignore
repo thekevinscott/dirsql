@@ -30,7 +30,7 @@ __pycache__/
 .coverage
 .pytest_cache/
 # Rust CLI binary bundled into the wheel by CI (not in source control).
-packages/python/dirsql/_binary/
+packages/python/dirsql_cli/_binary/
 
 # putitoutthere per-(mode, triple) staging outputs
 packages/ts/build/

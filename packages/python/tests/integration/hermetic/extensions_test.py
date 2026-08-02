@@ -2,7 +2,7 @@
 
 These exercise the SDK public API with the Rust core mocked and every
 filesystem / import-machinery probe faked: programmatic extension entries
-flow through ``dirsql.resolve_extension`` (run for real) and must reach the
+flow through ``_dirsql_shared.resolve_extension`` (run for real) and must reach the
 core resolved. Only the third-party boundaries are patched -- the PyO3 core
 class and the effectful stdlib probes (``os.path.isfile``,
 ``importlib.util.find_spec``, ``glob.glob``). Real extension *loading* (a

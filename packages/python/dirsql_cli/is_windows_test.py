@@ -3,7 +3,7 @@
 import os
 from unittest.mock import patch
 
-from dirsql.cli.is_windows import is_windows
+from dirsql_cli.is_windows import is_windows
 
 
 def describe_is_windows():

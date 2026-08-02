@@ -8,7 +8,7 @@ construction.
 
 from unittest import mock
 
-import dirsql.cli.resolve_config_extensions as rce
+import dirsql_cli.resolve_config_extensions as rce
 
 
 def _patch(specs):

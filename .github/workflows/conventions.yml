@@ -18,6 +18,31 @@ jobs:
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
 
+  # The launcher and the resolvers it shares with the SDK are top-level packages
+  # beside `dirsql/`, so the python-sdk job's `source` no longer reaches them
+  # (#718). `e2e verify --scope` must be a descendant of the package root, so no
+  # single scope covers all three dirs; each job verifies the same
+  # `packages/python/e2e-attestations/` receipt against its own scope, and a
+  # change to any one of them stales it. `integration-lint` and `packaging` are
+  # package- rather than source-scoped and already run once above.
+  python-cli:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["python"]'
+      source: packages/python/dirsql_cli
+      config: testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation", "e2e-verify"]'
+
+  python-shared:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["python"]'
+      source: packages/python/_dirsql_shared
+      config: testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["colocated-test", "unit-lint", "unit-coverage", "mutation", "e2e-verify"]'
+
   typescript-sdk:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:

@@ -44,18 +44,23 @@ dev = [
 ]
 
 [project.scripts]
-dirsql = "dirsql.cli.main:main"
+dirsql = "dirsql_cli.main:main"
 
 [tool.maturin]
 features = ["extension-module"]
 # Keep test files out of the built wheel/sdist. `tests/` is the integration
 # suite; `**/*_test.py` / `**/test_*.py` are the colocated unit tests that live
-# inside the `dirsql/` package and would otherwise ship as package data.
+# inside the shipped packages and would otherwise ship as package data.
 # Enforced by the `packaging` gate (testing-conventions) in CI.
 exclude = [
     "tests/",
     "**/*_test.py",
     "**/test_*.py",
+    # `python-packages` (the two top-level siblings) does not filter compiled
+    # bytecode the way the module-name package does, so a build in a tree where
+    # the suite has run would otherwise ship `__pycache__/` -- including the
+    # colocated tests' `.pyc`, which the `packaging` gate rejects.
+    "**/__pycache__/**",
 ]
 # `python-source` intentionally unset: the maturin-recommended mixed
 # layout (`python-source = "python"`) is unsupported by upstream
@@ -66,13 +71,20 @@ exclude = [
 # `python-source = "python"`) once upstream's verifier handles
 # python-source stripping.
 module-name = "dirsql._dirsql"
+# The launcher and the resolvers it shares with the SDK are top-level packages,
+# not submodules of `dirsql`. Importing `dirsql.cli.main` would first execute
+# `dirsql/__init__.py`, dlopening the multi-megabyte extension and importing
+# asyncio -- work every `dirsql` invocation threw away moments later at
+# `os.execv` (#718). Maturin's flat layout ships only the module-name package,
+# so both siblings are named here.
+python-packages = ["dirsql_cli", "_dirsql_shared"]
 # putitoutthere's `[package.bundle_cli]` recipe (see putitoutthere.toml)
 # cross-compiles the `dirsql` bin per target and stages it under
-# `dirsql/_binary/` before `maturin build`, so it ships inside each
+# `dirsql_cli/_binary/` before `maturin build`, so it ships inside each
 # wheel as package data. The directory is `.gitignore`d; not in
 # source control.
 include = [
-    { path = "dirsql/_binary/*", format = "wheel" },
+    { path = "dirsql_cli/_binary/*", format = "wheel" },
     { path = "docs/**/*", format = "sdist" },
 ]
 
@@ -91,7 +103,7 @@ exclude = [
     "**/*_test.py",
     "tests/",
     "build/",
-    "dirsql/_binary/",
+    "dirsql_cli/_binary/",
 ]
 
 [tool.ty.environment]
@@ -134,13 +146,13 @@ extend-select = ["PGH003"]
 # The CLI entry point catches broadly on purpose (any startup failure becomes a
 # friendly stderr line + exit 1) and the Windows fallback returns the child's
 # exit code directly, with no `check=`.
-"dirsql/cli/main.py" = ["BLE001", "PLW1510"]
+"dirsql_cli/main.py" = ["BLE001", "PLW1510"]
 # Deferred-error pattern: a failed background build is captured and re-raised on
 # first use, so the constructor must catch broadly.
 "dirsql/_async.py" = ["BLE001"]
 # Three disjoint prefix clauses are kept explicit alongside the comment that
 # enumerates them; collapsing into a `startswith` tuple would obscure the cases.
-"dirsql/cli/discover_plugins/user_passed_config.py" = ["PIE810"]
+"dirsql_cli/discover_plugins/user_passed_config.py" = ["PIE810"]
 # Curated barrel: the public class leads the re-export / `__all__` order rather
 # than alphabetical.
 "dirsql/__init__.py" = ["I001", "RUF022"]
@@ -154,7 +166,7 @@ omit = [
     # them lets a test double's own branches pad the metric (e.g. a fake's
     # empty-list return). Exclude test files so the floor reflects only
     # library code. Recursive glob so nested packages (e.g.
-    # `dirsql/cli/`) are covered too.
+    # `dirsql_cli/`) are covered too.
     "**/test_*.py",
     "**/*_test.py",
 ]

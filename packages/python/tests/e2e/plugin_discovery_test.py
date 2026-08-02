@@ -1,6 +1,6 @@
 """CLI e2e: installed plugins are auto-activated by the Python launcher.
 
-Drives the real launcher (`dirsql.cli.main:main`) + bundled binary with a
+Drives the real launcher (`dirsql_cli.main:main`) + bundled binary with a
 fixture plugin *installed* (a staged dist declaring `[project.entry-points.dirsql]`
 on the launcher's `sys.path`). No mocks. "Installed = active" (#363): the
 launcher discovers the plugin, injects its `dirsql.toml` fragment as an ordinary
@@ -66,7 +66,7 @@ def _run(site_dir, args, cwd, env_extra=None):
         [
             sys.executable,
             "-c",
-            "import sys; from dirsql.cli.main import main; sys.exit(main())",
+            "import sys; from dirsql_cli.main import main; sys.exit(main())",
             *args,
         ],
         cwd=str(cwd),

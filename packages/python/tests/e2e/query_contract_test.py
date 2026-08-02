@@ -1,7 +1,7 @@
 """CLI e2e: the documented `POST /query` contract through the real launcher +
 binary (docs/reference/http-api.md).
 
-Boots the Python launcher (`dirsql.cli.main:main`) over a real `.dirsql.toml`
+Boots the Python launcher (`dirsql_cli.main:main`) over a real `.dirsql.toml`
 and asserts the documented query contract end to end: a JSON array of row
 objects on success, and each documented failure class -- malformed JSON body,
 missing/empty `sql`, SQL errors, the read-only rule, and the `_dirsql_*`
@@ -108,7 +108,7 @@ def describe_query_contract():
             [
                 sys.executable,
                 "-c",
-                "import sys; from dirsql.cli.main import main; sys.exit(main())",
+                "import sys; from dirsql_cli.main import main; sys.exit(main())",
                 "server",
                 "--config",
                 str(cfg),

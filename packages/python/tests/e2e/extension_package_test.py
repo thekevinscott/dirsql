@@ -1,7 +1,7 @@
 """CLI e2e: load a SQLite extension by **package name** through the real
 `dirsql` launcher + binary.
 
-Drives the Python launcher (`dirsql.cli.main:main`) against a real
+Drives the Python launcher (`dirsql_cli.main:main`) against a real
 `.dirsql.toml` whose `[[dirsql.extension]].path` is a bare package name
 installed on the launcher's `sys.path`, then queries the running HTTP server
 and asserts the extension's function is callable. No mocks. The launcher
@@ -159,7 +159,7 @@ def describe_cli_extension_by_package_name():
             [
                 sys.executable,
                 "-c",
-                "import sys; from dirsql.cli.main import main; sys.exit(main())",
+                "import sys; from dirsql_cli.main import main; sys.exit(main())",
                 "server",
                 "--config",
                 str(cfg),

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from importlib.resources import files
 
-from dirsql.cli.is_windows import is_windows
+from .is_windows import is_windows
 
 
 def binary_path() -> str:
@@ -12,7 +12,7 @@ def binary_path() -> str:
     # Chained rather than `joinpath("_binary", name)`: multi-segment joinpath
     # is 3.11+, and `files()` returns a bare `Traversable` for non-filesystem
     # loaders.
-    path = files("dirsql").joinpath("_binary").joinpath(name)
+    path = files("dirsql_cli").joinpath("_binary").joinpath(name)
     if not path.is_file():
         raise FileNotFoundError(
             f"bundled `{name}` not found at {path}. The dirsql PyPI wheel "

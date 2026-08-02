@@ -12,7 +12,7 @@ from unittest import mock
 
 import pytest
 
-import dirsql.resolve_config_extensions as rce
+import _dirsql_shared.resolve_config_extensions as rce
 
 
 @pytest.fixture

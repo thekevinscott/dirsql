@@ -3,7 +3,7 @@
 The compiled ``dirsql`` binary loads a config's extensions literally -- it
 has no ``importlib``, so it cannot resolve a bare **package name**. When a
 TOML config names an extension by package name, the shared SDK resolver
-(:mod:`dirsql.resolve_config_extensions`) resolves every one of its
+(:mod:`_dirsql_shared.resolve_config_extensions`) resolves every one of its
 extensions and this launcher passes the resolved literal paths to the binary
 via repeatable ``--extension`` flags; the binary then loads those and ignores
 the config's own extension entries.
@@ -15,7 +15,7 @@ carries resolved paths.
 
 from __future__ import annotations
 
-from ..resolve_config_extensions import resolve_config_extension_specs
+from _dirsql_shared.resolve_config_extensions import resolve_config_extension_specs
 
 # Config extensions the binary dispatches to `dirsql interpret`; never
 # pre-resolved here (that path resolves via the handshake).

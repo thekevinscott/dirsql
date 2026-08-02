@@ -101,7 +101,7 @@ def describe_fanout():
             [
                 sys.executable,
                 "-c",
-                "import sys; from dirsql.cli.main import main; sys.exit(main())",
+                "import sys; from dirsql_cli.main import main; sys.exit(main())",
                 "server",
                 "--config",
                 str(cfg),

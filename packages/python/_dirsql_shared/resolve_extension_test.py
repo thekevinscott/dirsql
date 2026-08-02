@@ -10,7 +10,7 @@ from unittest import mock
 
 import pytest
 
-import dirsql.resolve_extension as re
+import _dirsql_shared.resolve_extension as re
 
 
 def _spec(*, locations=None, origin=None):

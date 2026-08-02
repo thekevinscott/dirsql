@@ -51,7 +51,7 @@ def describe_capture_column_collision():
                 [
                     sys.executable,
                     "-c",
-                    "import sys; from dirsql.cli.main import main; sys.exit(main())",
+                    "import sys; from dirsql_cli.main import main; sys.exit(main())",
                     "query",
                     "SELECT * FROM comments",
                     "--config",
