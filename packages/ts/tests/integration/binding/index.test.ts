@@ -317,7 +317,11 @@ describe("DirSQL strict mode", () => {
         },
       ],
     });
-    await expect(db.ready).rejects.toThrow();
+    // Since dirsql#714 a rejected row costs its own file, not the scan:
+    // the build resolves and the offending file simply contributes nothing.
+    // Which file was skipped is not reachable from this binding yet (#715).
+    await db.ready;
+    expect(await db.query("SELECT * FROM items")).toEqual([]);
   });
 
   it("allows rows with exact key match when strict is true", async () => {
@@ -365,7 +369,11 @@ describe("DirSQL strict mode", () => {
         },
       ],
     });
-    await expect(db.ready).rejects.toThrow();
+    // Since dirsql#714 a rejected row costs its own file, not the scan:
+    // the build resolves and the offending file simply contributes nothing.
+    // Which file was skipped is not reachable from this binding yet (#715).
+    await db.ready;
+    expect(await db.query("SELECT * FROM items")).toEqual([]);
   });
 });
 
@@ -717,6 +725,10 @@ describe("Table class", () => {
     });
     expect(t.strict).toBe(true);
     const db = new DirSQL({ root: dir, tables: [t] });
-    await expect(db.ready).rejects.toThrow();
+    // Since dirsql#714 a rejected row costs its own file, not the scan:
+    // the build resolves and the offending file simply contributes nothing.
+    // Which file was skipped is not reachable from this binding yet (#715).
+    await db.ready;
+    expect(await db.query("SELECT * FROM users")).toEqual([]);
   });
 });

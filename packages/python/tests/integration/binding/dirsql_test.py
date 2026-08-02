@@ -566,7 +566,7 @@ def describe_DirSQL():
             assert results[0]["count"] is None
 
         @pytest.mark.asyncio
-        async def it_raises_on_extra_keys_in_strict_mode(tmp_dir):
+        async def it_skips_the_file_on_extra_keys_in_strict_mode(tmp_dir):
             with open(os.path.join(tmp_dir, "item.json"), "w") as f:
                 json.dump({"name": "apple", "color": "red"}, f)
 
@@ -583,11 +583,14 @@ def describe_DirSQL():
                     ),
                 ],
             )
-            with pytest.raises(Exception):
-                await db.ready()
+            # Since dirsql#714 a rejected row costs its own file, not the
+            # scan: `ready()` resolves and the file contributes nothing. Which
+            # file was skipped is not reachable from this binding yet (#715).
+            await db.ready()
+            assert await db.query("SELECT * FROM items") == []
 
         @pytest.mark.asyncio
-        async def it_raises_on_missing_keys_in_strict_mode(tmp_dir):
+        async def it_skips_the_file_on_missing_keys_in_strict_mode(tmp_dir):
             with open(os.path.join(tmp_dir, "item.json"), "w") as f:
                 json.dump({"name": "apple"}, f)
 
@@ -604,8 +607,8 @@ def describe_DirSQL():
                     ),
                 ],
             )
-            with pytest.raises(Exception):
-                await db.ready()
+            await db.ready()
+            assert await db.query("SELECT * FROM items") == []
 
         @pytest.mark.asyncio
         async def it_allows_exact_match_in_strict_mode(tmp_dir):
