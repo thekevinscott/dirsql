@@ -42,7 +42,8 @@ fn basenames(out: &Output) -> Vec<String> {
         "expected success, stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let rows: Vec<Value> = serde_json::from_slice(&out.stdout).expect("stdout must be a JSON array");
+    let rows: Vec<Value> =
+        serde_json::from_slice(&out.stdout).expect("stdout must be a JSON array");
     let mut names: Vec<String> = rows
         .into_iter()
         .map(|r| r["basename"].as_str().unwrap().to_string())

@@ -5,6 +5,7 @@ use thiserror::Error;
 
 use crate::parsed_vtab;
 use crate::path_table::{self, PathTable, Resolution};
+use crate::scanner;
 use crate::vtab;
 
 /// The user's home directory, if the platform reports one. Injected here so
@@ -117,6 +118,7 @@ fn path_table_ddl(
     name: &str,
     table: &PathTable,
     ignore: &[String],
+    gitignore: bool,
     parser: Option<&str>,
 ) -> String {
     let (module, mut args) = match parser {
@@ -137,6 +139,11 @@ fn path_table_ddl(
             ],
         ),
     };
+    args.push(quote_literal(if gitignore {
+        scanner::GITIGNORE_ARG
+    } else {
+        scanner::NO_GITIGNORE_ARG
+    }));
     args.extend(ignore.iter().map(|p| quote_literal(p)));
 
     format!(
@@ -208,6 +215,9 @@ pub struct Db {
     hint_legacy_files_table: bool,
     /// Skip rules a path-table scan applies, seeded with the built-in defaults.
     path_table_ignore: Vec<String>,
+    /// Whether a path-table scan respects `.gitignore` files. On by default;
+    /// the CLI's `--no-ignore` turns it off.
+    path_table_gitignore: bool,
     /// When set (the CLI's `--on-file`), every path-table is minted over the
     /// parser instead of the stat columns: its rows and schema come from the
     /// command's output. `None` keeps the stat path-table behavior.
@@ -244,6 +254,7 @@ impl Db {
             path_table_root: None,
             hint_legacy_files_table: false,
             path_table_ignore: default_path_table_ignore(),
+            path_table_gitignore: true,
             path_table_parser: None,
         })
     }
@@ -264,6 +275,7 @@ impl Db {
             path_table_root: None,
             hint_legacy_files_table: false,
             path_table_ignore: default_path_table_ignore(),
+            path_table_gitignore: true,
             path_table_parser: None,
         })
     }
@@ -285,6 +297,13 @@ impl Db {
     /// scan applies, on top of the built-in defaults.
     pub fn add_path_table_ignore(&mut self, patterns: Vec<String>) {
         self.path_table_ignore.extend(patterns);
+    }
+
+    /// Set whether a path-table scan respects `.gitignore` files. On by
+    /// default; `false` is the CLI's `--no-ignore`. The built-in defaults and
+    /// configured `ignore` patterns apply either way.
+    pub fn set_path_table_gitignore(&mut self, gitignore: bool) {
+        self.path_table_gitignore = gitignore;
     }
 
     /// Attach a parser command to every path-table minted on this connection
@@ -753,6 +772,7 @@ impl Db {
             name,
             table,
             &self.path_table_ignore,
+            self.path_table_gitignore,
             self.path_table_parser.as_deref(),
         ))?;
         Ok(())
@@ -2138,11 +2158,11 @@ mod tests {
 
     #[test]
     fn path_table_ddl_creates_in_temp_if_not_exists() {
-        let ddl = path_table_ddl("./docs/*.md", &docs_path_table(), &[], None);
+        let ddl = path_table_ddl("./docs/*.md", &docs_path_table(), &[], true, None);
         assert_eq!(
             ddl,
             "CREATE VIRTUAL TABLE IF NOT EXISTS temp.\"./docs/*.md\" \
-             USING dirsql_path('/root', 'docs/*.md', '')"
+             USING dirsql_path('/root', 'docs/*.md', '', 'gitignore')"
         );
     }
 
@@ -2154,10 +2174,19 @@ mod tests {
             path_prefix: "/var/log".to_string(),
         };
         assert!(
-            path_table_ddl("/var/log/*.log", &table, &[], None)
-                .ends_with("'/var/log', '*.log', '/var/log')"),
+            path_table_ddl("/var/log/*.log", &table, &[], true, None)
+                .contains("'/var/log', '*.log', '/var/log', 'gitignore')"),
             "got: {}",
-            path_table_ddl("/var/log/*.log", &table, &[], None)
+            path_table_ddl("/var/log/*.log", &table, &[], true, None)
+        );
+    }
+
+    #[test]
+    fn path_table_ddl_carries_the_no_gitignore_switch() {
+        let ddl = path_table_ddl("./", &docs_path_table(), &[], false, None);
+        assert!(
+            ddl.ends_with("'', 'no-gitignore')"),
+            "gitignore off must emit the no-gitignore switch, got: {ddl}"
         );
     }
 
@@ -2167,21 +2196,28 @@ mod tests {
             "./",
             &docs_path_table(),
             &["node_modules/**".to_string(), "*.tmp".to_string()],
+            true,
             None,
         );
         assert!(
-            ddl.ends_with("'', 'node_modules/**', '*.tmp')"),
+            ddl.ends_with("'', 'gitignore', 'node_modules/**', '*.tmp')"),
             "got: {ddl}"
         );
     }
 
     #[test]
     fn path_table_ddl_uses_the_parsed_module_when_a_parser_is_set() {
-        let ddl = path_table_ddl("./docs/*.md", &docs_path_table(), &[], Some("cat {path}"));
+        let ddl = path_table_ddl(
+            "./docs/*.md",
+            &docs_path_table(),
+            &[],
+            true,
+            Some("cat {path}"),
+        );
         assert_eq!(
             ddl,
             "CREATE VIRTUAL TABLE IF NOT EXISTS temp.\"./docs/*.md\" \
-             USING dirsql_parsed('/root', 'docs/*.md', 'cat {path}')"
+             USING dirsql_parsed('/root', 'docs/*.md', 'cat {path}', 'gitignore')"
         );
     }
 
@@ -2196,11 +2232,13 @@ mod tests {
             "/var/log/*.log",
             &table,
             &["node_modules/**".to_string()],
+            true,
             Some("parse.py {path}"),
         );
         assert!(
             ddl.ends_with(
-                "USING dirsql_parsed('/var/log', '*.log', 'parse.py {path}', 'node_modules/**')"
+                "USING dirsql_parsed('/var/log', '*.log', 'parse.py {path}', 'gitignore', \
+                 'node_modules/**')"
             ),
             "the parser form drops the path prefix and keeps ignore rules, got: {ddl}"
         );
@@ -2208,7 +2246,7 @@ mod tests {
 
     #[test]
     fn path_table_ddl_parser_form_quotes_a_command_with_a_quote() {
-        let ddl = path_table_ddl("./", &docs_path_table(), &[], Some("sh -c 'echo hi'"));
+        let ddl = path_table_ddl("./", &docs_path_table(), &[], true, Some("sh -c 'echo hi'"));
         assert!(
             ddl.contains("'sh -c ''echo hi'''"),
             "an embedded quote must be doubled, got: {ddl}"
@@ -2220,6 +2258,19 @@ mod tests {
         let mut db = Db::new().unwrap();
         db.set_path_table_parser("cat {path}".to_string());
         assert_eq!(db.path_table_parser.as_deref(), Some("cat {path}"));
+    }
+
+    #[test]
+    fn path_table_gitignore_defaults_on() {
+        let db = Db::new().unwrap();
+        assert!(db.path_table_gitignore);
+    }
+
+    #[test]
+    fn set_path_table_gitignore_turns_the_switch_off() {
+        let mut db = Db::new().unwrap();
+        db.set_path_table_gitignore(false);
+        assert!(!db.path_table_gitignore);
     }
 
     #[test]

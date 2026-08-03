@@ -151,6 +151,33 @@ fn a_path_table_rooted_inside_a_gitignored_directory_still_scans() {
 }
 
 #[test]
+fn no_ignore_restores_gitignored_files_but_keeps_the_built_in_floor() {
+    let root = fixture();
+    fs::create_dir_all(root.path().join("node_modules/pkg")).unwrap();
+    fs::write(root.path().join("node_modules/pkg/index.js"), "js").unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .no_ignore(true)
+        .build()
+        .unwrap();
+
+    let scanned = paths(&db.query("SELECT path FROM './'").unwrap());
+
+    assert!(
+        scanned.contains(&"dist/bundle.js".to_string()),
+        "no_ignore must disable gitignore respect, got: {scanned:?}"
+    );
+    assert!(
+        scanned.contains(&"debug.log".to_string()),
+        "file-level gitignore rules are off too, got: {scanned:?}"
+    );
+    assert!(
+        !scanned.contains(&"node_modules/pkg/index.js".to_string()),
+        "the built-in defaults still apply under no_ignore, got: {scanned:?}"
+    );
+}
+
+#[test]
 fn a_scoped_glob_still_honors_gitignore_rules_beneath_its_base() {
     let root = TempDir::new().unwrap();
     fs::create_dir_all(root.path().join("docs")).unwrap();

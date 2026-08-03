@@ -17,7 +17,7 @@ fn open_over(dir: &TempDir, glob: &str) -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     load_module(&conn).unwrap();
     conn.execute_batch(&format!(
-        "CREATE VIRTUAL TABLE t USING dirsql_path('{}', '{}', '')",
+        "CREATE VIRTUAL TABLE t USING dirsql_path('{}', '{}', '', 'gitignore')",
         dir.path().display(),
         glob
     ))
@@ -29,7 +29,12 @@ fn open_over(dir: &TempDir, glob: &str) -> Connection {
 fn open_over_with(dir: &TempDir, glob: &str, prefix: &str, ignore: &[&str]) -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     load_module(&conn).unwrap();
-    let mut args = format!("'{}', '{}', '{}'", dir.path().display(), glob, prefix);
+    let mut args = format!(
+        "'{}', '{}', '{}', 'gitignore'",
+        dir.path().display(),
+        glob,
+        prefix
+    );
     for pattern in ignore {
         args.push_str(&format!(", '{pattern}'"));
     }
