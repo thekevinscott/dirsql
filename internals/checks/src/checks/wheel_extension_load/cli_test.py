@@ -6,8 +6,7 @@ from unittest import mock
 
 import pytest
 
-from checks.wheel_extension_load.cli import cli
-from checks.wheel_extension_load.gate import ProbeError
+from checks.wheel_extension_load.cli import ProbeError, cli
 
 
 def test_exits_with_runs_return_code():

@@ -45,17 +45,8 @@ def list_names(dist_dir: str, listdir=os.listdir) -> list[str]:
         return []
 
 
-def sole_wheel(names) -> str | None:
-    wheels = sorted(name for name in names if name.endswith(".whl"))
-    if not wheels:
-        return None
-    if len(wheels) > 1:
-        raise ProbeError(
-            f"expected exactly one wheel to probe, saw {wheels}. "
-            "Tighten the download-artifact pattern in release-precheck.yml "
-            "so only the x86_64 Linux wheel lands in the probe's dist dir."
-        )
-    return wheels[0]
+def wheel_names(names) -> list[str]:
+    return sorted(name for name in names if name.endswith(".whl"))
 
 
 def write_text(path: str, content: str) -> None:
@@ -82,20 +73,26 @@ def diagnose(result) -> str:
 
 def run(
     dist_dir: str,
-    *,
     runner=subprocess.run,
     listdir=os.listdir,
     mkdtemp=tempfile.mkdtemp,
     makedirs=os.makedirs,
     writer=write_text,
 ) -> int:
-    wheel_name = sole_wheel(list_names(dist_dir, listdir))
-    if wheel_name is None:
+    wheels = wheel_names(list_names(dist_dir, listdir))
+    if len(wheels) > 1:
+        raise ProbeError(
+            f"expected exactly one wheel to probe, saw {wheels}. "
+            "Tighten the download-artifact pattern in release-precheck.yml "
+            "so only the x86_64 Linux wheel lands in the probe's dist dir."
+        )
+    if not wheels:
         print(
             f"No wheel under {dist_dir} -- the precheck matrix planned no "
             "dirsql-py build for this PR; extension-load probe skipped."
         )
         return 0
+    (wheel_name,) = wheels
     wheel = os.path.join(dist_dir, wheel_name)
 
     staging = mkdtemp("dirsql-extension-probe-")
