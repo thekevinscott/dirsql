@@ -100,6 +100,16 @@ SDKs via the binding's `extensions` + `suppress_config_extensions` /
 still loaded by the core directly. Parity restored across Python and
 TypeScript; Rust stays file-path-only by design (epic #227 carve-out).
 
+**Intentional drift — config-flag scanning breadth
+([#754](https://github.com/thekevinscott/dirsql/issues/754)).** The binary's
+`-c`/`--config` flag is repeatable and accepts `-c X`, `-c=X`, `-cX`,
+`--config X`, and `--config=X`. The **Python launcher** collects every
+occurrence in argv order (so discovery-injected plugin fragments and repeated
+user flags all get package-name resolution, via the plural
+`resolve_configs_extension_specs`); the **Node launcher** still reads only the
+first `--config X` / `--config=X` — tracked in
+[#757](https://github.com/thekevinscott/dirsql/issues/757).
+
 All three bindings share a single Rust implementation: `dirsql::DirSQL` handles
 the initial scan, SQL, watcher, and row diffing. Python (`dirsql-py-ext`) and
 TypeScript (`dirsql-napi`) bindings are thin shims that only marshal values
