@@ -1,7 +1,0 @@
-{
-  "command": "pnpm test:e2e",
-  "ran_at": 1785677260,
-  "exit_code": 0,
-  "commit": "1c31e07f80e134180a3dfec36927a5f399ea620d",
-  "branch": "claude/716-npm-trims"
-}
