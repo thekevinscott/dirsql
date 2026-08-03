@@ -24,6 +24,18 @@ crate-type = ["cdylib", "rlib"]
 dirsql.workspace = true
 pyo3 = { version = "0.28", features = ["extension-module", "generate-import-lib", "abi3-py310"], optional = true }
 
+# Opted in per-crate rather than via `[lints] workspace = true`: the workspace
+# block also carries `clippy::pedantic`, which currently reports 475 warnings
+# across the three crates and would fail `clippy -D warnings` immediately
+# (#763).
+#
+# `deny`, not the workspace's aspirational `forbid`: pyo3's proc macros emit `#[allow(unsafe_code)]`, which `forbid`
+# rejects outright (E0453).
+# `deny` still blocks new hand-written `unsafe` unless a site opts in
+# explicitly, which is the guarantee we want.
+[lints.rust]
+unsafe_code = "deny"
+
 [features]
 default = []
 extension-module = ["pyo3/extension-module"]

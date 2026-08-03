@@ -198,6 +198,7 @@ struct ParsedTab {
     rows: Vec<JsonRow>,
 }
 
+#[expect(unsafe_code, reason = "rusqlite requires VTab to be an unsafe trait")]
 unsafe impl<'vtab> VTab<'vtab> for ParsedTab {
     type Aux = ();
     type Cursor = ParsedTabCursor;
@@ -271,6 +272,10 @@ struct ParsedTabCursor {
     index: usize,
 }
 
+#[expect(
+    unsafe_code,
+    reason = "rusqlite requires VTabCursor to be an unsafe trait"
+)]
 unsafe impl VTabCursor for ParsedTabCursor {
     fn filter(
         &mut self,
