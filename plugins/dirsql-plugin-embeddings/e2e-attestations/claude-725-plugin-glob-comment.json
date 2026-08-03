@@ -1,7 +1,0 @@
-{
-  "command": "uv run --with sqlite-vec --with-editable . --with-editable ../../packages/python python -m pytest tests/e2e -q",
-  "ran_at": 1785680099,
-  "exit_code": 0,
-  "commit": "0030917b47975bfa9b4d7412e7f00ca2b760f292",
-  "branch": "claude/725-plugin-glob-comment"
-}
