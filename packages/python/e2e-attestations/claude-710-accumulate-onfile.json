@@ -1,7 +1,0 @@
-{
-  "command": "uv run python -m pytest tests/e2e/ -x -q",
-  "ran_at": 1785444370,
-  "exit_code": 0,
-  "commit": "287fb980b2380a894543a652a0439f6ab8ea71cf",
-  "branch": "claude/710-accumulate-onfile"
-}

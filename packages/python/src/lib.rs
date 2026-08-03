@@ -137,12 +137,13 @@ mod python {
         /// which the core lacks) and passing the resolved literal paths via
         /// `extensions`, so the entries are not loaded twice.
         #[new]
-        #[pyo3(signature = (root=None, *, tables=None, ignore=None, config=None, persist=false, persist_path=None, extensions=None, suppress_config_extensions=false))]
+        #[pyo3(signature = (root=None, *, tables=None, ignore=None, no_ignore=false, config=None, persist=false, persist_path=None, extensions=None, suppress_config_extensions=false))]
         fn new(
             py: Python<'_>,
             root: Option<String>,
             tables: Option<Vec<PyRef<'_, PyTable>>>,
             ignore: Option<Vec<String>>,
+            no_ignore: bool,
             config: Option<Vec<String>>,
             persist: bool,
             persist_path: Option<PathBuf>,
@@ -175,6 +176,7 @@ mod python {
                     if let Some(ig) = ignore {
                         builder = builder.ignore(ig);
                     }
+                    builder = builder.no_ignore(no_ignore);
                     for c in config.into_iter().flatten() {
                         builder = builder.config(c);
                     }

@@ -15,6 +15,7 @@ class _FakeRustDirSQL:
         *,
         tables=None,
         ignore=None,
+        no_ignore=False,
         config=None,
         persist=False,
         persist_path=None,
@@ -24,6 +25,7 @@ class _FakeRustDirSQL:
         self.root = root
         self.tables = tables
         self.ignore = ignore
+        self.no_ignore = no_ignore
         self.config = config
         self.persist = persist
         self.persist_path = persist_path
@@ -107,6 +109,22 @@ def describe_DirSQL_async():
                 assert db._db.extensions == [{"path": "R:ext/a.so", "entrypoint": None}]
                 assert db._db.query_calls == ["SELECT 1"]
                 assert results == [{"sql": "SELECT 1"}]
+
+        @pytest.mark.asyncio
+        async def it_forwards_no_ignore_to_the_core():
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                db = async_mod.DirSQL("/tmp/root", no_ignore=True)
+                await db.ready()
+
+                assert db._db.no_ignore is True
+
+        @pytest.mark.asyncio
+        async def it_defaults_no_ignore_to_false():
+            with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
+                db = async_mod.DirSQL("/tmp/root")
+                await db.ready()
+
+                assert db._db.no_ignore is False
 
         @pytest.mark.asyncio
         async def it_awaits_ready_then_forwards_scan_failures():

@@ -65,6 +65,7 @@ class DirSQL:
         *,
         tables: list[Table] | None = None,
         ignore: list[str] | None = None,
+        no_ignore: bool = False,
         config: list[str] | None = None,
         persist: bool = False,
         persist_path: str | PathLike[str] | None = None,
