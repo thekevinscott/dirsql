@@ -179,8 +179,11 @@ A path-table scan applies the same [`ignore`](/reference/config) patterns your
 declared tables use, plus two built-in defaults so a zero-config
 `SELECT * FROM './'` does not drown in machinery:
 
-- `node_modules/**`
-- `.git/**`
+- `**/node_modules/**`
+- `**/.git/**`
+
+Both apply at any depth, so a `node_modules` nested inside a subdirectory is
+skipped just like one at the top.
 
 Skip rules are judged on the part of the path *below* what you named outright,
 so pointing at a skipped directory still scans it:

@@ -23,6 +23,7 @@ struct PatternEntry {
 pub struct TableMatcher {
     entries: Vec<PatternEntry>,
     ignore_set: GlobSet,
+    ignore_dir_set: GlobSet,
 }
 
 /// Names of the `{name}` placeholders in `pattern`, in order of appearance.
@@ -59,14 +60,20 @@ impl TableMatcher {
         }
 
         let mut ignore_builder = GlobSetBuilder::new();
+        let mut ignore_dir_builder = GlobSetBuilder::new();
         for pattern in ignore_patterns {
             ignore_builder.add(Glob::new(pattern)?);
+            if let Some(subtree) = pattern.strip_suffix("/**") {
+                ignore_dir_builder.add(Glob::new(subtree)?);
+            }
         }
         let ignore_set = ignore_builder.build()?;
+        let ignore_dir_set = ignore_dir_builder.build()?;
 
         Ok(Self {
             entries,
             ignore_set,
+            ignore_dir_set,
         })
     }
 
@@ -86,6 +93,13 @@ impl TableMatcher {
     /// Returns true if the path matches any ignore pattern.
     pub fn is_ignored(&self, path: &Path) -> bool {
         self.ignore_set.is_match(path)
+    }
+
+    /// True when an ignore pattern covers the whole subtree beneath `dir`
+    /// (the `<dir>/**` form), so a walk may skip the directory without
+    /// reading it.
+    pub(crate) fn is_ignored_dir(&self, dir: &Path) -> bool {
+        self.ignore_dir_set.is_match(dir)
     }
 }
 
@@ -163,6 +177,33 @@ mod tests {
     fn is_ignored_returns_false_for_non_matching_path() {
         let matcher = TableMatcher::new(&[], &["*.tmp"]).unwrap();
         assert!(!matcher.is_ignored(Path::new("data.csv")));
+    }
+
+    #[test]
+    fn a_leading_double_star_ignore_matches_at_any_depth_including_the_top() {
+        let matcher = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
+        assert!(matcher.is_ignored(Path::new("node_modules/pkg/index.js")));
+        assert!(matcher.is_ignored(Path::new("apps/site/node_modules/pkg/index.js")));
+    }
+
+    #[test]
+    fn is_ignored_dir_matches_the_directory_a_subtree_pattern_covers() {
+        let matcher = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
+        assert!(matcher.is_ignored_dir(Path::new("node_modules")));
+        assert!(matcher.is_ignored_dir(Path::new("apps/site/node_modules")));
+    }
+
+    #[test]
+    fn is_ignored_dir_rejects_a_directory_no_subtree_pattern_covers() {
+        let matcher = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
+        assert!(!matcher.is_ignored_dir(Path::new("docs")));
+        assert!(!matcher.is_ignored_dir(Path::new("node_modules/pkg")));
+    }
+
+    #[test]
+    fn a_non_subtree_ignore_pattern_never_marks_a_directory() {
+        let matcher = TableMatcher::new(&[], &["*.tmp"]).unwrap();
+        assert!(!matcher.is_ignored_dir(Path::new("scratch.tmp")));
     }
 
     #[test]
