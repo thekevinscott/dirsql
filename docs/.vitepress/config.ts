@@ -29,6 +29,7 @@ export default defineConfig({
       { text: 'How-to Guides', link: '/howto/define-tables' },
       { text: 'Reference', link: '/reference/cli' },
       { text: 'Explanation', link: '/explanation' },
+      { text: 'Plugins', link: '/plugins' },
       { text: 'GitHub', link: 'https://github.com/thekevinscott/dirsql' }
     ],
 
@@ -79,6 +80,12 @@ export default defineConfig({
           text: 'Explanation',
           items: [
             { text: 'How dirsql thinks', link: '/explanation' }
+          ]
+        },
+        {
+          text: 'Plugins',
+          items: [
+            { text: 'Available plugins', link: '/plugins' }
           ]
         }
       ]
