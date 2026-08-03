@@ -154,9 +154,7 @@ def describe_plugin_extension_discovery():
         # Pure discovery: no `-c` from the user. The plugin's fragment declares
         # `path = "dirsql_testext_pkg"`; the launcher must resolve it to the
         # staged `.so` or the binary fails to load the extension.
-        out = _run(
-            site_dir, ["query", "SELECT dirsql_testext_answer() AS a"], data
-        )
+        out = _run(site_dir, ["query", "SELECT dirsql_testext_answer() AS a"], data)
         assert out.returncode == 0, f"stdout={out.stdout!r} stderr={out.stderr!r}"
         assert json.loads(out.stdout) == [{"a": 42}]
 
