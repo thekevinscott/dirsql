@@ -38,7 +38,7 @@ export DIRSQL_EMBEDDINGS_BASE_URL="https://api.openai.com"
 export DIRSQL_EMBEDDINGS_MODEL="text-embedding-3-small"
 export DIRSQL_EMBEDDINGS_API_KEY="sk-…"
 
-uvx --with dirsql-plugin-embeddings --with sqlite-vec dirsql server
+uvx --with dirsql-plugin-embeddings dirsql server
 ```
 
 The launcher finds the package through its `dirsql` entry point and injects
@@ -46,7 +46,7 @@ the shipped `dirsql.toml` fragment as an ordinary `-c` flag, composed after
 your own configs. The fragment declares three things:
 
 - the `sqlite-vec` extension (resolved from the installed `sqlite-vec`
-  package — hence the second `--with`), for `vec_distance_cosine()`;
+  package, which the plugin depends on), for `vec_distance_cosine()`;
 - the `documents` table (`path`, `text`, `embedding`), whose
   [`on-file`](./reference/hooks.md#on-file) hook embeds each matched file at
   index time;
@@ -59,7 +59,7 @@ Ask a question as a `{"q": …}` body — via `POST /query` against the server,
 or in one shot from the shell:
 
 ```sh
-uvx --with dirsql-plugin-embeddings --with sqlite-vec \
+uvx --with dirsql-plugin-embeddings \
   dirsql query '{"q": "how do I cook spaghetti?"}'
 # [{"path":"pasta.md","distance":0.113}, …]
 ```
