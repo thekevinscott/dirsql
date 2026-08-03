@@ -128,6 +128,23 @@ describe("DirSQL construction", () => {
     ]);
   });
 
+  it("forwards noIgnore as openAsync's ninth arg (#746)", async () => {
+    openAsync.mockResolvedValue(makeInner());
+    const db = new DirSQL({ root: "/data", noIgnore: true });
+    await db.ready;
+    expect(openAsync).toHaveBeenCalledWith(
+      "/data",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      false,
+      true,
+    );
+  });
+
   it("rejects ready when the core scan fails, and query surfaces the same error", async () => {
     openAsync.mockRejectedValue(new Error("core scan failed"));
     const db = new DirSQL({});
