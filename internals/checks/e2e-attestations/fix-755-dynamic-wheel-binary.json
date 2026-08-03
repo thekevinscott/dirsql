@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1785788713,
+  "exit_code": 0,
+  "commit": "b05c245e7c77732f0af4bd76075969abb69ef21d",
+  "branch": "fix/755-dynamic-wheel-binary"
+}
