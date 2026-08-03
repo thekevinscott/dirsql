@@ -26,22 +26,23 @@ const NATIVE_CONFIG_SUFFIXES = [".py", ".js", ".mjs", ".cjs"];
  */
 function configPathsFromArgv(argv: string[]): string[] {
   const paths: string[] = [];
-  let i = 0;
-  while (i < argv.length) {
-    const a = argv[i];
-    if (a === "--config" || a === "-c") {
-      // A bare trailing flag (no following value) yields "".
-      paths.push(argv[i + 1] ?? "");
-      i += 2;
-      continue;
-    }
-    if (a?.startsWith("--config=")) {
+  let expectValue = false;
+  for (const a of argv) {
+    if (expectValue) {
+      paths.push(a);
+      expectValue = false;
+    } else if (a === "--config" || a === "-c") {
+      expectValue = true;
+    } else if (a.startsWith("--config=")) {
       paths.push(a.slice("--config=".length));
-    } else if (a?.startsWith("-c")) {
+    } else if (a.startsWith("-c")) {
       const value = a.slice("-c".length);
       paths.push(value.startsWith("=") ? value.slice("=".length) : value);
     }
-    i++;
+  }
+  if (expectValue) {
+    // A bare trailing flag (no following value) yields "".
+    paths.push("");
   }
   return paths.length > 0 ? paths : ["./.dirsql.toml"];
 }
