@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/ -x -q",
+  "ran_at": 1785790657,
+  "exit_code": 0,
+  "commit": "b9066a68f84aec1e806c17a7f1f4168d6f28f73c",
+  "branch": "claude/763-forbid-unsafe"
+}
