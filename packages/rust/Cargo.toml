@@ -73,6 +73,20 @@ toml = "0.8"
 wait-timeout = "0.2"
 walkdir = "2"
 
+# Opted in per-crate rather than via `[lints] workspace = true`: the workspace
+# block also carries `clippy::pedantic`, which currently reports 475 warnings
+# across the three crates and would fail `clippy -D warnings` immediately
+# (#763). This is the lint whose absence actually mattered -- it forbids
+# nothing until a crate opts in.
+[lints.rust]
+# `deny`, not `forbid`: rusqlite's API imposes five unavoidable `unsafe`
+# sites (the `load_extension` guard and four `unsafe impl VTab`/`VTabCursor`).
+# `forbid` cannot be overridden at all, so it would make the crate
+# uncompilable; `deny` blocks new `unsafe` unless a site opts in explicitly
+# with `#[expect(unsafe_code, reason = ...)]`, which is the guarantee we
+# actually want (#763).
+unsafe_code = "deny"
+
 [[bin]]
 name = "dirsql"
 path = "src/bin/dirsql.rs"

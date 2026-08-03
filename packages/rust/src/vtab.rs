@@ -197,6 +197,7 @@ struct PathTab {
     spec: Arc<ScanSpec>,
 }
 
+#[expect(unsafe_code, reason = "rusqlite requires VTab to be an unsafe trait")]
 unsafe impl<'vtab> VTab<'vtab> for PathTab {
     type Aux = ();
     type Cursor = PathTabCursor;
@@ -250,6 +251,7 @@ struct PathTabCursor {
     index: usize,
 }
 
+#[expect(unsafe_code, reason = "rusqlite requires VTabCursor to be an unsafe trait")]
 unsafe impl VTabCursor for PathTabCursor {
     fn filter(
         &mut self,
