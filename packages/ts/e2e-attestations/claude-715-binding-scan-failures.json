@@ -1,7 +1,0 @@
-{
-  "command": "pnpm test:e2e",
-  "ran_at": 1785678838,
-  "exit_code": 0,
-  "commit": "6244aa45f7a92d27683432e663cd6a1004125ccf",
-  "branch": "claude/715-binding-scan-failures"
-}
