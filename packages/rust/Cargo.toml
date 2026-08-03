@@ -54,6 +54,9 @@ clap = { version = "4", features = ["derive"], optional = true }
 futures = { version = "0.3", optional = true }
 futures-channel.workspace = true
 globset = "0.4"
+# Hierarchical `.gitignore` matching for path-table scans (the fd/ripgrep
+# semantics), without adopting its walker: the scan keeps `walkdir`.
+ignore = "0.4"
 notify = "7"
 rusqlite = { version = "0.34", features = ["bundled", "load_extension", "hooks", "vtab"] }
 serde.workspace = true

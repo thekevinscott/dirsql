@@ -16,11 +16,12 @@ use crate::scanner::{self, scan_glob};
 use crate::{Row, Value};
 
 /// SQL module name a path-table is created with:
-/// `CREATE VIRTUAL TABLE t USING dirsql_path('<root>', '<glob>', '<path prefix>'[, '<ignore>'...])`.
+/// `CREATE VIRTUAL TABLE t USING dirsql_path('<root>', '<glob>', '<path prefix>',
+/// '<gitignore|no-gitignore>'[, '<ignore>'...])`.
 pub const MODULE_NAME: &str = "dirsql_path";
 
 /// Number of module arguments that are not ignore patterns.
-const FIXED_ARGS: usize = 3;
+const FIXED_ARGS: usize = 4;
 
 /// The seven stat columns, in declaration order.
 pub const STAT_COLUMNS: [&str; 7] = ["path", "basename", "dir", "ext", "size", "mtime", "ctime"];
@@ -90,6 +91,8 @@ struct ScanSpec {
     /// Literal directories the pattern named outright; skip rules are judged
     /// below this.
     ignore_base: PathBuf,
+    /// Whether the scan respects `.gitignore` files (off under `--no-ignore`).
+    gitignore: bool,
 }
 
 /// Compile the ignore patterns a path-table scan applies.
@@ -100,7 +103,8 @@ fn compile_ignore(patterns: &[String]) -> Result<TableMatcher> {
 
 /// Parse a path-table's own `CREATE VIRTUAL TABLE` arguments into its scan
 /// spec. `args[0..3]` are the module, database and table names; the module's
-/// own arguments follow — root, glob, path prefix, then any ignore patterns.
+/// own arguments follow — root, glob, path prefix, the gitignore switch, then
+/// any ignore patterns.
 fn parse_module_args(args: &[&[u8]]) -> Result<ScanSpec> {
     let user_args: Vec<String> = args
         .iter()
@@ -108,10 +112,10 @@ fn parse_module_args(args: &[&[u8]]) -> Result<ScanSpec> {
         .map(|a| unquote(&String::from_utf8_lossy(a)).to_string())
         .collect();
 
-    let [root, pattern, path_prefix, ignore @ ..] = user_args.as_slice() else {
+    let [root, pattern, path_prefix, gitignore, ignore @ ..] = user_args.as_slice() else {
         return Err(Error::ModuleError(format!(
             "{MODULE_NAME} takes at least {FIXED_ARGS} arguments \
-             (root, glob, path prefix), got {}",
+             (root, glob, path prefix, gitignore switch), got {}",
             user_args.len()
         )));
     };
@@ -122,6 +126,7 @@ fn parse_module_args(args: &[&[u8]]) -> Result<ScanSpec> {
         path_prefix: PathBuf::from(path_prefix),
         ignore: compile_ignore(ignore)?,
         ignore_base: path_table::ignore_base(pattern),
+        gitignore: scanner::parse_gitignore_arg(gitignore).map_err(Error::ModuleError)?,
     })
 }
 
@@ -255,7 +260,13 @@ unsafe impl VTabCursor for PathTabCursor {
         // The scan runs here rather than at CREATE, which is what makes reads
         // live: each statement sees the filesystem as it is now.
         let spec = &self.spec;
-        let rel_paths = scan_glob(&spec.root, &spec.glob, &spec.ignore, &spec.ignore_base);
+        let rel_paths = scan_glob(
+            &spec.root,
+            &spec.glob,
+            &spec.ignore,
+            &spec.ignore_base,
+            spec.gitignore,
+        );
         self.rows = build_rows(
             &spec.root,
             &spec.path_prefix,
@@ -417,7 +428,7 @@ mod tests {
 
     #[test]
     fn parse_module_args_extracts_root_and_glob() {
-        let args = args_with(&[b"'/tmp/notes'", b"'**/*.md'", b"''"]);
+        let args = args_with(&[b"'/tmp/notes'", b"'**/*.md'", b"''", b"'gitignore'"]);
         let spec = parse_module_args(&args).unwrap();
 
         assert_eq!(spec.root, PathBuf::from("/tmp/notes"));
@@ -427,7 +438,7 @@ mod tests {
 
     #[test]
     fn parse_module_args_accepts_unquoted_arguments() {
-        let args = args_with(&[b"/tmp/notes", b"**/*", b""]);
+        let args = args_with(&[b"/tmp/notes", b"**/*", b"", b"gitignore"]);
         assert_eq!(
             parse_module_args(&args).unwrap().root,
             PathBuf::from("/tmp/notes")
@@ -436,7 +447,7 @@ mod tests {
 
     #[test]
     fn parse_module_args_extracts_the_path_prefix() {
-        let args = args_with(&[b"'/var/log'", b"'*.log'", b"'/var/log'"]);
+        let args = args_with(&[b"'/var/log'", b"'*.log'", b"'/var/log'", b"'gitignore'"]);
         assert_eq!(
             parse_module_args(&args).unwrap().path_prefix,
             PathBuf::from("/var/log")
@@ -445,7 +456,7 @@ mod tests {
 
     #[test]
     fn parse_module_args_derives_the_ignore_base_from_the_glob() {
-        let args = args_with(&[b"'/tmp'", b"'docs/**/*'", b"''"]);
+        let args = args_with(&[b"'/tmp'", b"'docs/**/*'", b"''", b"'gitignore'"]);
         assert_eq!(
             parse_module_args(&args).unwrap().ignore_base,
             PathBuf::from("docs")
@@ -453,8 +464,32 @@ mod tests {
     }
 
     #[test]
+    fn parse_module_args_reads_the_gitignore_switch() {
+        let on = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'gitignore'"]);
+        assert!(parse_module_args(&on).unwrap().gitignore);
+
+        let off = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'no-gitignore'"]);
+        assert!(!parse_module_args(&off).unwrap().gitignore);
+    }
+
+    #[test]
+    fn parse_module_args_rejects_an_unknown_gitignore_switch() {
+        let args = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'sometimes'"]);
+        let err = parse_module_args(&args)
+            .err()
+            .expect("an unknown switch must be rejected");
+        assert!(err.to_string().contains("no-gitignore"), "got: {err}");
+    }
+
+    #[test]
     fn parse_module_args_compiles_trailing_ignore_patterns() {
-        let args = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'node_modules/**'"]);
+        let args = args_with(&[
+            b"'/tmp'",
+            b"'**/*'",
+            b"''",
+            b"'gitignore'",
+            b"'node_modules/**'",
+        ]);
         let spec = parse_module_args(&args).unwrap();
 
         assert!(spec.ignore.is_ignored(Path::new("node_modules/a.js")));
@@ -463,32 +498,32 @@ mod tests {
 
     #[test]
     fn parse_module_args_accepts_no_ignore_patterns() {
-        let args = args_with(&[b"'/tmp'", b"'**/*'", b"''"]);
+        let args = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'gitignore'"]);
         let spec = parse_module_args(&args).unwrap();
         assert!(!spec.ignore.is_ignored(Path::new("node_modules/a.js")));
     }
 
     #[test]
     fn parse_module_args_rejects_too_few_arguments() {
-        let args = args_with(&[b"'/tmp'", b"'**/*'"]);
+        let args = args_with(&[b"'/tmp'", b"'**/*'", b"''"]);
         let err = parse_module_args(&args)
             .err()
             .expect("arity must be enforced");
         assert!(
-            err.to_string().contains("at least 3 arguments"),
+            err.to_string().contains("at least 4 arguments"),
             "error should name the arity, got: {err}"
         );
     }
 
     #[test]
     fn parse_module_args_rejects_an_invalid_glob() {
-        let args = args_with(&[b"'/tmp'", b"'['", b"''"]);
+        let args = args_with(&[b"'/tmp'", b"'['", b"''", b"'gitignore'"]);
         assert!(parse_module_args(&args).is_err());
     }
 
     #[test]
     fn parse_module_args_rejects_an_invalid_ignore_pattern() {
-        let args = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'['"]);
+        let args = args_with(&[b"'/tmp'", b"'**/*'", b"''", b"'gitignore'", b"'['"]);
         assert!(parse_module_args(&args).is_err());
     }
 

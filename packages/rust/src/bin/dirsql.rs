@@ -113,17 +113,24 @@ struct ConfigArgs {
     /// Off by default (ephemeral index).
     #[arg(long, num_args = 0..=1)]
     persist: Option<Option<PathBuf>>,
+
+    /// Scan files a `.gitignore` would hide. Path-tables respect `.gitignore`
+    /// files by default (hierarchically, like fd/ripgrep); this flag restores
+    /// the full walk. The built-in skips (`node_modules`/`.git`) and any
+    /// configured `ignore` patterns still apply.
+    #[arg(long = "no-ignore")]
+    no_ignore: bool,
 }
 
 impl ConfigArgs {
-    /// Apply the `--persist [PATH]` flag to a builder. Absent → no change;
-    /// bare `--persist` → persist at the default location; `--persist <path>`
-    /// → persist at `<path>`.
-    fn apply_persist(&self, mut builder: dirsql::DirSQLBuilder) -> dirsql::DirSQLBuilder {
+    /// Apply the index-shaping flags to a builder: `--persist [PATH]` (absent
+    /// → no change; bare `--persist` → the default location; `--persist
+    /// <path>` → that path) and `--no-ignore`.
+    fn apply_index_flags(&self, mut builder: dirsql::DirSQLBuilder) -> dirsql::DirSQLBuilder {
         if let Some(path) = &self.persist {
             builder = builder.persist(path.as_ref());
         }
-        builder
+        builder.no_ignore(self.no_ignore)
     }
 
     /// The config paths passed via `-c`/`--config`. Empty when none were given
@@ -460,7 +467,7 @@ fn load_state(cfg: &ConfigArgs, path_table_parser: Option<String>) -> AppState {
             .extensions(parse_extension_specs(&cfg.extension))
             .suppress_config_extensions(true);
     }
-    builder = cfg.apply_persist(builder);
+    builder = cfg.apply_index_flags(builder);
     // `--on-file` touches path-tables only: config `[[table]]` definitions keep
     // their own `on-file` hooks; a path-table named in the query gets this
     // parser regardless of any `-c`.
@@ -573,7 +580,7 @@ fn load_configless_state(cfg: &ConfigArgs, path_table_parser: Option<String>) ->
         }
     };
 
-    let mut builder = cfg.apply_persist(DirSQL::builder().root(root));
+    let mut builder = cfg.apply_index_flags(DirSQL::builder().root(root));
     if let Some(command) = path_table_parser {
         builder = builder.path_table_parser(command);
     }
@@ -821,6 +828,23 @@ mod tests {
             cli.common.persist,
             Some(Some(PathBuf::from("/var/cache/x.db")))
         );
+    }
+
+    #[test]
+    fn no_ignore_flag_defaults_false() {
+        let cli = Cli::parse_from(["dirsql"]);
+        assert!(!cli.common.no_ignore);
+    }
+
+    #[test]
+    fn no_ignore_flag_sets_true_in_the_default_query_mode() {
+        let cli = Cli::parse_from(["dirsql", "SELECT 1", "--no-ignore"]);
+        assert!(cli.common.no_ignore);
+    }
+
+    #[test]
+    fn no_ignore_flag_parses_after_the_query_subcommand() {
+        assert!(query_common(&["dirsql", "query", "SELECT 1", "--no-ignore"]).no_ignore);
     }
 
     #[test]

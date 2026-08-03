@@ -8,9 +8,10 @@
 
 use std::path::{Component, Path, PathBuf};
 
-/// Directories a path-table scan skips. They are skipped only *beneath* the
-/// literal part of the path you write, so naming one explicitly still scans it.
-pub const DEFAULT_IGNORES: [&str; 2] = ["node_modules/**", ".git/**"];
+/// Directories a path-table scan skips, at any depth. They are skipped only
+/// *beneath* the literal part of the path you write, so naming one explicitly
+/// still scans it.
+pub const DEFAULT_IGNORES: [&str; 2] = ["**/node_modules/**", "**/.git/**"];
 
 /// The glob a directory expands to: recursion is the default, and the
 /// non-recursive form is spelled explicitly as `*`.
@@ -220,7 +221,7 @@ mod tests {
 
     #[test]
     fn default_ignores_cover_vcs_and_dependency_directories() {
-        assert_eq!(DEFAULT_IGNORES, ["node_modules/**", ".git/**"]);
+        assert_eq!(DEFAULT_IGNORES, ["**/node_modules/**", "**/.git/**"]);
     }
 
     #[test]

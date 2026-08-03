@@ -145,6 +145,15 @@ the skip rules (configured `ignore` plus the built-in `node_modules/**` and
 by `db::query` and the `dirsql_path` module). All three SDKs and the CLI get the
 same answers with no per-binding surface and no SDK signature changes.
 
+**Gitignore-by-default in path-tables (#742) — behavior at parity, opt-out
+drifts.** Path-table scans respect `.gitignore` files by default
+(hierarchical, traversal-pruned, hidden files still scanned). The *behavior*
+lives in the shared core's scanner, so all three SDKs and the CLI inherit it
+with no binding work. The *opt-out* is drift: the CLI has `--no-ignore` and
+the **Rust** builder has `.no_ignore(bool)`, but **Python** and **TypeScript**
+expose no equivalent constructor parameter yet — tracked in #745 (Python) and
+#746 (TypeScript).
+
 **Path-table parity proven per binding (#629, epic path-as-table close) —
 restoring/confirming parity, no drift.** #627/#628 landed the mechanism in the
 shared core; #629 *proves* the bindings inherit it by exercising path-tables

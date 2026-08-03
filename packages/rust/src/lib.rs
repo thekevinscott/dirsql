@@ -637,6 +637,7 @@ impl DirSQL {
             poll_interval: DEFAULT_POLL_INTERVAL,
             hint_legacy_files_table: false,
             path_table_parser: None,
+            no_ignore: false,
         };
         let prepared = Self::prepare_resolved(resolved)?;
         Self::finish_build_with_fs(prepared, fs)
@@ -663,6 +664,7 @@ impl DirSQL {
             poll_interval,
             hint_legacy_files_table,
             path_table_parser,
+            no_ignore,
         } = resolved;
 
         let (matcher, table_names) = compile_matcher(&tables, &ignore)?;
@@ -717,6 +719,7 @@ impl DirSQL {
             }),
             poll_interval,
             path_table_parser,
+            no_ignore,
         })
     }
 
@@ -763,6 +766,7 @@ impl DirSQL {
             poll_interval,
             hint_legacy_files_table,
             path_table_parser,
+            no_ignore,
         } = prepared;
 
         let (mut db, persist_ready) = match persist {
@@ -772,6 +776,7 @@ impl DirSQL {
         db.set_path_table_root(root.clone());
         db.set_hint_legacy_files_table(hint_legacy_files_table);
         db.add_path_table_ignore(ignore);
+        db.set_path_table_gitignore(!no_ignore);
         if let Some(command) = path_table_parser {
             db.set_path_table_parser(command);
         }
@@ -987,6 +992,7 @@ pub struct DirSQLBuilder {
     persist_path: Option<PathBuf>,
     poll_interval: Option<Duration>,
     path_table_parser: Option<String>,
+    no_ignore: bool,
 }
 
 impl DirSQLBuilder {
@@ -1103,6 +1109,16 @@ impl DirSQLBuilder {
         self
     }
 
+    /// Disable `.gitignore` respect in path-table scans (the CLI's
+    /// `--no-ignore`). Path-tables honor `.gitignore` files by default;
+    /// with this set they scan the full tree. The built-in skips
+    /// (`node_modules`/`.git`) and configured [`ignore`](Self::ignore)
+    /// patterns apply either way.
+    pub fn no_ignore(mut self, no_ignore: bool) -> Self {
+        self.no_ignore = no_ignore;
+        self
+    }
+
     fn resolve(self) -> Result<ResolvedBuild> {
         let DirSQLBuilder {
             root: explicit_root,
@@ -1115,6 +1131,7 @@ impl DirSQLBuilder {
             persist_path,
             poll_interval,
             path_table_parser,
+            no_ignore,
         } = self;
 
         // The index root is an operational fact owned by the runner: the
@@ -1190,6 +1207,7 @@ impl DirSQLBuilder {
             poll_interval: poll_interval.unwrap_or(DEFAULT_POLL_INTERVAL),
             hint_legacy_files_table,
             path_table_parser,
+            no_ignore,
         })
     }
 
@@ -1246,6 +1264,9 @@ pub struct ResolvedBuild {
     /// When set (the CLI's `--on-file`), every path-table is minted over this
     /// parser command instead of the stat columns.
     pub path_table_parser: Option<String>,
+    /// When set (the CLI's `--no-ignore`), path-table scans do not respect
+    /// `.gitignore` files.
+    pub no_ignore: bool,
 }
 
 /// A single file discovered during [`DirSQL::prepare_resolved`]: its
@@ -1276,6 +1297,7 @@ pub struct PreparedBuild {
     poll_interval: Duration,
     hint_legacy_files_table: bool,
     path_table_parser: Option<String>,
+    no_ignore: bool,
 }
 
 #[doc(hidden)]
@@ -2030,6 +2052,22 @@ mod internal_tests {
     }
 
     #[test]
+    fn builder_defaults_to_respecting_gitignore() {
+        let resolved = DirSQL::builder().root("/idx").resolve().unwrap();
+        assert!(!resolved.no_ignore);
+    }
+
+    #[test]
+    fn builder_no_ignore_flows_into_the_resolved_build() {
+        let resolved = DirSQL::builder()
+            .root("/idx")
+            .no_ignore(true)
+            .resolve()
+            .unwrap();
+        assert!(resolved.no_ignore);
+    }
+
+    #[test]
     fn stat_virtuals_populates_all_fields() {
         let stat = stat_virtuals("nested/sub.txt", Some(5), Some(100), Some(50));
         assert_eq!(stat[STAT_PATH], Value::Text("nested/sub.txt".into()));
@@ -2087,6 +2125,7 @@ mod internal_tests {
             persist: None,
             hint_legacy_files_table: false,
             path_table_parser: None,
+            no_ignore: false,
         };
         assert!(DirSQL::finish_build(prepared).is_err());
     }

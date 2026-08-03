@@ -179,19 +179,48 @@ A path-table scan applies the same [`ignore`](/reference/config) patterns your
 declared tables use, plus two built-in defaults so a zero-config
 `SELECT * FROM './'` does not drown in machinery:
 
-- `node_modules/**`
-- `.git/**`
+- `**/node_modules/**`
+- `**/.git/**`
+
+Both apply at any depth, so a `node_modules` nested inside a subdirectory is
+skipped just like one at the top.
+
+### `.gitignore`
+
+Path-table scans also respect `.gitignore` files by default, the way fd and
+ripgrep do: a `.gitignore` anywhere in the tree applies below its own
+directory, deeper files override shallower ones, `!pattern` re-includes, and
+an ignored directory is pruned rather than walked. In a typical repo this
+excludes build output, virtualenvs, and caches with zero ceremony. No `.git`
+directory is required — a `.gitignore` in any scanned directory counts — and
+the built-in defaults above remain as a floor for directories with no
+`.gitignore` at all.
+
+Pass [`--no-ignore`](./cli.md#flags) to restore the full walk — the
+determinism switch for scripted use, since results otherwise depend on
+`.gitignore` state. It disables only the `.gitignore` respect; the built-in
+defaults and configured `ignore` patterns still apply.
+
+### Naming a skipped directory
 
 Skip rules are judged on the part of the path *below* what you named outright,
-so pointing at a skipped directory still scans it:
+so pointing at a skipped directory — built-in or gitignored — still scans it:
 
 ```sql
 SELECT path FROM './';                     -- no node_modules rows
 SELECT path FROM './node_modules/*/package.json';  -- scans it anyway
+SELECT path FROM './dist';                 -- scans dist/ even when gitignored
 ```
 
-Dotfiles are ordinary files: `'./'` and `'./*'` include them. Add an `ignore`
-pattern if you would rather not see them.
+A `.gitignore` at or below the directory you named still filters beneath it;
+only rules inherited from above it are set aside.
+
+### Hidden files
+
+Dotfiles are ordinary files: `'./'` and `'./*'` include them, with or without
+`--no-ignore`. This is a deliberate divergence from fd/ripgrep — querying
+dotfile directories (`.claude/`, …) is a first-class `dirsql` use case. Add an
+`ignore` pattern if you would rather not see them.
 
 ## Joining against declared tables
 
