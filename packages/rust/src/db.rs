@@ -327,7 +327,10 @@ impl Db {
     /// call via [`rusqlite::LoadExtensionGuard`] and disabled again on return,
     /// so the SQL `load_extension()` function is never left exposed to later
     /// queries. A missing or unloadable file surfaces as [`DbError::Sqlite`].
-    #[expect(unsafe_code, reason = "rusqlite's load_extension API is unsafe by design")]
+    #[expect(
+        unsafe_code,
+        reason = "rusqlite's load_extension API is unsafe by design"
+    )]
     pub fn load_extension(&self, path: &Path, entrypoint: Option<&str>) -> Result<()> {
         // SAFETY: loading an extension executes native code from `path`. The
         // path is operator-supplied configuration (a `[[dirsql.extension]]`

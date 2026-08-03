@@ -251,7 +251,10 @@ struct PathTabCursor {
     index: usize,
 }
 
-#[expect(unsafe_code, reason = "rusqlite requires VTabCursor to be an unsafe trait")]
+#[expect(
+    unsafe_code,
+    reason = "rusqlite requires VTabCursor to be an unsafe trait"
+)]
 unsafe impl VTabCursor for PathTabCursor {
     fn filter(
         &mut self,

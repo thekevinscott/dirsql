@@ -139,6 +139,10 @@ fn kill_and_wait(mut child: Child) {
     {
         use std::os::unix::process::ExitStatusExt;
         let pid = child.id();
+        #[expect(
+            unsafe_code,
+            reason = "no safe std API sends a signal to another process"
+        )]
         unsafe {
             libc::kill(pid as i32, libc::SIGINT);
         }
