@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1785790757,
+  "exit_code": 0,
+  "commit": "968fa25e35ae10a9ab3820f25410a64f19618079",
+  "branch": "claude/763-forbid-unsafe"
+}
