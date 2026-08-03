@@ -45,7 +45,7 @@ was removed there. This **restores parity** with the CLI's no-`-c` behavior (#60
 
 | API                        | Python                                         | Rust                                                 | TypeScript                                              |
 |----------------------------|------------------------------------------------|------------------------------------------------------|---------------------------------------------------------|
-| Constructor                | `DirSQL(root=None, *, tables=None, ignore=None, config=None, persist=False, persist_path=None, extensions=None)` | `DirSQL::builder().root(..).tables(..).ignore(..).config(..).persist(Option<path>).extensions(..).build()` (also `DirSQL::new`/`with_ignore` shortcuts) | `new DirSQL(configPath)` or `new DirSQL({ root?, tables?, ignore?, config?, persist?, persistPath?, extensions? })` + `await db.ready` |
+| Constructor                | `DirSQL(root=None, *, tables=None, ignore=None, no_ignore=False, config=None, persist=False, persist_path=None, extensions=None)` | `DirSQL::builder().root(..).tables(..).ignore(..).config(..).persist(Option<path>).extensions(..).build()` (also `DirSQL::new`/`with_ignore` shortcuts) | `new DirSQL(configPath)` or `new DirSQL({ root?, tables?, ignore?, config?, persist?, persistPath?, extensions? })` + `await db.ready` |
 | Query (read-only; rejects non-SELECT) | `db.query(sql) -> list[dict]`        | `db.query(sql) -> Result<Vec<Row>>`                  | `await db.query(sql) -> Record[]` (runs on libuv threadpool) |
 | Start watcher              | `db._start_watcher()`                          | `db.start_watching()`                                | `await db.startWatcher()` (runs on libuv threadpool)    |
 | Poll events                | `db._poll_events(ms)`                          | `db.poll_events(duration)`                           | `await db.pollEvents(ms)` (runs on libuv threadpool)    |
@@ -100,15 +100,19 @@ SDKs via the binding's `extensions` + `suppress_config_extensions` /
 still loaded by the core directly. Parity restored across Python and
 TypeScript; Rust stays file-path-only by design (epic #227 carve-out).
 
-**Intentional drift — config-flag scanning breadth
-([#754](https://github.com/thekevinscott/dirsql/issues/754)).** The binary's
+**Config-flag scanning breadth
+([#754](https://github.com/thekevinscott/dirsql/issues/754) /
+[#757](https://github.com/thekevinscott/dirsql/issues/757)).** The binary's
 `-c`/`--config` flag is repeatable and accepts `-c X`, `-c=X`, `-cX`,
-`--config X`, and `--config=X`. The **Python launcher** collects every
-occurrence in argv order (so discovery-injected plugin fragments and repeated
-user flags all get package-name resolution, via the plural
-`resolve_configs_extension_specs`); the **Node launcher** still reads only the
-first `--config X` / `--config=X` — tracked in
-[#757](https://github.com/thekevinscott/dirsql/issues/757).
+`--config X`, and `--config=X`. Both launchers collect every occurrence in
+argv order and resolve the whole set via the plural shared resolver
+(`resolve_configs_extension_specs` / `resolveConfigsExtensionSpecs`) — the
+Python fix landed in [#756](https://github.com/thekevinscott/dirsql/pull/756),
+the Node fix in [#758](https://github.com/thekevinscott/dirsql/pull/758)
+(restoring parity). Python additionally feeds discovery-injected plugin
+fragments through this path; Node has no plugin discovery (intentional drift,
+[#529](https://github.com/thekevinscott/dirsql/issues/529)), so its scan
+covers user-passed flags only.
 
 All three bindings share a single Rust implementation: `dirsql::DirSQL` handles
 the initial scan, SQL, watcher, and row diffing. Python (`dirsql-py-ext`) and
@@ -160,9 +164,10 @@ drifts.** Path-table scans respect `.gitignore` files by default
 (hierarchical, traversal-pruned, hidden files still scanned). The *behavior*
 lives in the shared core's scanner, so all three SDKs and the CLI inherit it
 with no binding work. The *opt-out* is drift: the CLI has `--no-ignore` and
-the **Rust** builder has `.no_ignore(bool)`, but **Python** and **TypeScript**
-expose no equivalent constructor parameter yet — tracked in #745 (Python) and
-#746 (TypeScript).
+the **Rust** builder has `.no_ignore(bool)`; **Python** restored its side in
+#745 (`DirSQL(..., no_ignore=True)`, plumbed through the PyO3 binding to the
+core builder), but **TypeScript** exposes no equivalent constructor parameter
+yet — tracked in #746.
 
 **Path-table parity proven per binding (#629, epic path-as-table close) —
 restoring/confirming parity, no drift.** #627/#628 landed the mechanism in the

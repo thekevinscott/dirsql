@@ -59,6 +59,11 @@ class DirSQL:
     is no ``[dirsql].root`` config key. Constructing with neither ``root``
     nor ``config`` roots at the cwd (no error is raised).
 
+    Path-table scans (``SELECT ... FROM './'``) respect ``.gitignore`` files
+    by default. Pass ``no_ignore=True`` to restore the full walk; the built-in
+    ``node_modules``/``.git`` defaults and any ``ignore`` patterns still
+    apply.
+
     Pass ``persist=True`` to keep an on-disk SQLite cache (default location:
     ``<root>/.dirsql/cache.db``). Override the location with ``persist_path``.
 
@@ -76,6 +81,7 @@ class DirSQL:
         *,
         tables=None,
         ignore=None,
+        no_ignore=False,
         config=None,
         persist=False,
         persist_path=None,
@@ -84,6 +90,7 @@ class DirSQL:
         self._root = root
         self._tables = tables
         self._ignore = ignore
+        self._no_ignore = no_ignore
         self._config = config
         # A single path or a list of paths; the list merges in order (each
         # config's [[table]] / ignore / [[dirsql.extension]] accumulate).
@@ -134,6 +141,7 @@ class DirSQL:
             self._root,
             tables=self._tables,
             ignore=self._ignore,
+            no_ignore=self._no_ignore,
             config=self._config_paths or None,
             persist=self._persist,
             persist_path=self._persist_path,

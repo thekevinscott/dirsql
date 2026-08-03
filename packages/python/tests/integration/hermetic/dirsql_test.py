@@ -37,6 +37,7 @@ class _FakeRustDirSQL:
         tables=None,
         ignore=None,
         config=None,
+        no_ignore=False,
         persist=False,
         persist_path=None,
         extensions=None,
@@ -45,6 +46,7 @@ class _FakeRustDirSQL:
         self.root = root
         self.tables = tables
         self.ignore = ignore
+        self.no_ignore = no_ignore
         self.config = config
         self.persist = persist
         self.persist_path = persist_path
@@ -300,6 +302,23 @@ def describe_binding_layer():
             db = async_mod.DirSQL("/root", tables=["t"])
             await db.ready()
             assert _FakeRustDirSQL.instances[0].ignore is None
+
+    def describe_no_ignore_kwarg():
+        # Feature: gitignore opt-out for path-table scans. See
+        # docs/reference/path-tables.md.
+        @pytest.mark.asyncio
+        async def it_forwards_no_ignore_to_core(mock_core):
+            db = async_mod.DirSQL("/root", no_ignore=True)
+            await db.ready()
+
+            assert _FakeRustDirSQL.instances[0].no_ignore is True
+
+        @pytest.mark.asyncio
+        async def it_defaults_no_ignore_to_false(mock_core):
+            db = async_mod.DirSQL("/root")
+            await db.ready()
+
+            assert _FakeRustDirSQL.instances[0].no_ignore is False
 
     def describe_persist_kwargs():
         # Feature: persist / persist_path. See docs/howto/persist.md.
