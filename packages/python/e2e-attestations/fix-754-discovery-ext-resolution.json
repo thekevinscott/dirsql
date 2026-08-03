@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1785779409,
+  "exit_code": 0,
+  "commit": "610d8ff41538de6e3d5f19b4abea3ec1b351986a",
+  "branch": "fix/754-discovery-ext-resolution"
+}

@@ -10,13 +10,11 @@ stub (a real HTTP server), because CI/e2e cannot call a hosted model --
 everything else is the shipped stack.
 
 The plugin's `dirsql.toml` is passed with an explicit `--config` (and
-`--no-plugin`), NOT auto-discovery: the launcher only resolves package-name
-extensions for the long `--config` flag, while plugin discovery injects the
-fragment as the short `-c`, which `resolve_config_extensions` does not scan --
-so `sqlite_vec` stays unresolved on the discovery path. That is a `packages/python`
-launcher gap (a follow-up), not a plugin defect; discovery itself is covered by
-the core's own plugin_discovery_test. Driving the fragment via `--config` here
-exercises the plugin's real machinery (extension + both hooks + vec ranking).
+`--no-plugin`), NOT auto-discovery: driving the fragment directly exercises
+the plugin's real machinery (extension + both hooks + vec ranking) without
+depending on the discovery scan. The discovery path -- including package-name
+extension resolution for discovery-injected `-c` fragments (#754) -- is
+covered by the core's own plugin_discovery_test / plugin_extension_discovery_test.
 
 Run under an environment that has `dirsql`, `sqlite_vec`, and this plugin
 installed together, e.g.:

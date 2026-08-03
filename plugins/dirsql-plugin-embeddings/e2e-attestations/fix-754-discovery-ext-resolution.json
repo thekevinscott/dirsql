@@ -1,0 +1,7 @@
+{
+  "command": "uv run --with-editable . --with-editable ../../packages/python python -m pytest tests/e2e -q",
+  "ran_at": 1785779437,
+  "exit_code": 0,
+  "commit": "0aa15ed8c10f6a0f9937f3121ffa8074eac9e7bb",
+  "branch": "fix/754-discovery-ext-resolution"
+}
