@@ -23,13 +23,13 @@ describe("getCore", () => {
 });
 
 describe("NativeDirSQLConstructor contract", () => {
-  it("accepts extensions and suppressConfigExtensions as openAsync's trailing arguments (#230 / #313)", () => {
+  it("accepts extensions, suppressConfigExtensions, and noIgnore as openAsync's trailing arguments (#230 / #313 / #746)", () => {
     const openAsync = vi.fn().mockResolvedValue({});
     const ctor = { openAsync } as unknown as NativeDirSQLConstructor;
-    // Typed against the real interface: dropping the 7th or 8th argument
-    // would fail to compile, so this call pins the extensions and
-    // suppressConfigExtensions parameters into the contract the `DirSQL`
-    // wrapper relies on.
+    // Typed against the real interface: dropping the 7th, 8th, or 9th
+    // argument would fail to compile, so this call pins the extensions,
+    // suppressConfigExtensions, and noIgnore parameters into the contract
+    // the `DirSQL` wrapper relies on.
     ctor.openAsync(
       "/r",
       null,
@@ -38,6 +38,7 @@ describe("NativeDirSQLConstructor contract", () => {
       null,
       null,
       [{ path: "/ext/vec0.so", entrypoint: "sqlite3_vec_init" }],
+      true,
       true,
     );
     expect(openAsync).toHaveBeenCalledWith(
@@ -48,6 +49,7 @@ describe("NativeDirSQLConstructor contract", () => {
       null,
       null,
       [{ path: "/ext/vec0.so", entrypoint: "sqlite3_vec_init" }],
+      true,
       true,
     );
   });
@@ -66,12 +68,14 @@ describe("NativeDirSQLConstructor contract", () => {
       null,
       null,
       null,
+      null,
     );
     expect(openAsync).toHaveBeenCalledWith(
       "/r",
       null,
       null,
       ["/a.toml", "/b.toml"],
+      null,
       null,
       null,
       null,

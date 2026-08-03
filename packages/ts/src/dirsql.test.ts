@@ -68,6 +68,7 @@ describe("DirSQL", () => {
         "/cache.db",
         null,
         false,
+        null,
       );
       expect(resolveConfigsExtensionSpecs).not.toHaveBeenCalled();
     });
@@ -89,6 +90,7 @@ describe("DirSQL", () => {
         null,
         null,
         false,
+        null,
       );
     });
 
@@ -119,6 +121,24 @@ describe("DirSQL", () => {
           { path: "R:/ext/spellfix.so", entrypoint: undefined },
         ],
         false,
+        null,
+      );
+    });
+
+    it("forwards noIgnore as openAsync's ninth arg (#746)", async () => {
+      const openAsync = installFakeCore(makeInner());
+      const db = new DirSQL({ root: "/data", noIgnore: true });
+      await db.ready;
+      expect(openAsync).toHaveBeenCalledWith(
+        "/data",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        true,
       );
     });
 
@@ -136,6 +156,7 @@ describe("DirSQL", () => {
         null,
         null,
         false,
+        null,
       );
       expect(db._options).toEqual({ config: "/cfg.toml" });
     });
@@ -158,6 +179,7 @@ describe("DirSQL", () => {
         null,
         null,
         false,
+        null,
       );
     });
 
@@ -177,6 +199,7 @@ describe("DirSQL", () => {
         null,
         null,
         false,
+        null,
       );
     });
 
@@ -205,6 +228,7 @@ describe("DirSQL", () => {
           { path: "/env/pkg/ext.so", entrypoint: "init" },
         ],
         true,
+        null,
       );
     });
 
@@ -224,6 +248,7 @@ describe("DirSQL", () => {
         null,
         [{ path: "/env/pkg/ext.so", entrypoint: undefined }],
         true,
+        null,
       );
     });
 
@@ -244,6 +269,7 @@ describe("DirSQL", () => {
         null,
         [{ path: "R:ext/a.so", entrypoint: undefined }],
         false,
+        null,
       );
     });
   });

@@ -123,6 +123,7 @@ impl DirSQL {
         persist_path: Option<String>,
         extensions: Option<Vec<ExtensionSpec>>,
         suppress_config_extensions: Option<bool>,
+        no_ignore: Option<bool>,
     ) -> Result<AsyncTask<OpenTask>> {
         let rust_tables = match tables {
             Some(ts) => parse_tables_from_js(env, ts)?,
@@ -149,6 +150,7 @@ impl DirSQL {
             persist_path: persist_path.map(PathBuf::from),
             extensions: rust_extensions,
             suppress_config_extensions: suppress_config_extensions.unwrap_or(false),
+            no_ignore: no_ignore.unwrap_or(false),
         }))
     }
 
@@ -238,6 +240,7 @@ pub struct OpenTask {
     /// resolved and included them).
     extensions: Vec<Extension>,
     suppress_config_extensions: bool,
+    no_ignore: bool,
 }
 
 impl Task for OpenTask {
@@ -255,7 +258,8 @@ impl Task for OpenTask {
             .tables(tables)
             .ignore(ignore)
             .extensions(extensions)
-            .suppress_config_extensions(self.suppress_config_extensions);
+            .suppress_config_extensions(self.suppress_config_extensions)
+            .no_ignore(self.no_ignore);
         if let Some(root) = self.root.take() {
             builder = builder.root(root);
         }

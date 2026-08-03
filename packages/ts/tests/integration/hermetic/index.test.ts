@@ -67,6 +67,7 @@ describe("DirSQL construction", () => {
       null,
       null,
       false,
+      null,
     );
   });
 
@@ -97,6 +98,7 @@ describe("DirSQL construction", () => {
       "/cache.db",
       null,
       false,
+      null,
     );
   });
 
@@ -126,6 +128,23 @@ describe("DirSQL construction", () => {
       },
       asLiteral,
     ]);
+  });
+
+  it("forwards noIgnore as openAsync's ninth arg (#746)", async () => {
+    openAsync.mockResolvedValue(makeInner());
+    const db = new DirSQL({ root: "/data", noIgnore: true });
+    await db.ready;
+    expect(openAsync).toHaveBeenCalledWith(
+      "/data",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      false,
+      true,
+    );
   });
 
   it("rejects ready when the core scan fails, and query surfaces the same error", async () => {

@@ -66,6 +66,12 @@ export interface DirSQLOptions {
    * installed package under `node_modules`.
    */
   extensions?: ExtensionSpec[];
+  /**
+   * Opt path-table scans out of their default `.gitignore` respect, restoring
+   * the gitignored files to scan results. The built-in floor (`node_modules`,
+   * `.git`) and any `ignore` patterns still apply.
+   */
+  noIgnore?: boolean;
 }
 
 /** A row-level event emitted by the file watcher. */
@@ -196,6 +202,7 @@ export class DirSQL {
           options.persistPath ?? null,
           merged,
           configExtensions !== null,
+          options.noIgnore ?? null,
         );
       })
       .then((inner) => {

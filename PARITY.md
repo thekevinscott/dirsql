@@ -45,7 +45,7 @@ was removed there. This **restores parity** with the CLI's no-`-c` behavior (#60
 
 | API                        | Python                                         | Rust                                                 | TypeScript                                              |
 |----------------------------|------------------------------------------------|------------------------------------------------------|---------------------------------------------------------|
-| Constructor                | `DirSQL(root=None, *, tables=None, ignore=None, no_ignore=False, config=None, persist=False, persist_path=None, extensions=None)` | `DirSQL::builder().root(..).tables(..).ignore(..).config(..).persist(Option<path>).extensions(..).build()` (also `DirSQL::new`/`with_ignore` shortcuts) | `new DirSQL(configPath)` or `new DirSQL({ root?, tables?, ignore?, config?, persist?, persistPath?, extensions? })` + `await db.ready` |
+| Constructor                | `DirSQL(root=None, *, tables=None, ignore=None, no_ignore=False, config=None, persist=False, persist_path=None, extensions=None)` | `DirSQL::builder().root(..).tables(..).ignore(..).config(..).persist(Option<path>).extensions(..).build()` (also `DirSQL::new`/`with_ignore` shortcuts) | `new DirSQL(configPath)` or `new DirSQL({ root?, tables?, ignore?, config?, persist?, persistPath?, extensions?, noIgnore? })` + `await db.ready` |
 | Query (read-only; rejects non-SELECT) | `db.query(sql) -> list[dict]`        | `db.query(sql) -> Result<Vec<Row>>`                  | `await db.query(sql) -> Record[]` (runs on libuv threadpool) |
 | Start watcher              | `db._start_watcher()`                          | `db.start_watching()`                                | `await db.startWatcher()` (runs on libuv threadpool)    |
 | Poll events                | `db._poll_events(ms)`                          | `db.poll_events(duration)`                           | `await db.pollEvents(ms)` (runs on libuv threadpool)    |
@@ -159,15 +159,15 @@ the skip rules (configured `ignore` plus the built-in `node_modules/**` and
 by `db::query` and the `dirsql_path` module). All three SDKs and the CLI get the
 same answers with no per-binding surface and no SDK signature changes.
 
-**Gitignore-by-default in path-tables (#742) — behavior at parity, opt-out
-drifts.** Path-table scans respect `.gitignore` files by default
+**Gitignore-by-default in path-tables (#742) — at parity, opt-out
+restored (#745/#746).** Path-table scans respect `.gitignore` files by default
 (hierarchical, traversal-pruned, hidden files still scanned). The *behavior*
 lives in the shared core's scanner, so all three SDKs and the CLI inherit it
-with no binding work. The *opt-out* is drift: the CLI has `--no-ignore` and
-the **Rust** builder has `.no_ignore(bool)`; **Python** restored its side in
-#745 (`DirSQL(..., no_ignore=True)`, plumbed through the PyO3 binding to the
-core builder), but **TypeScript** exposes no equivalent constructor parameter
-yet — tracked in #746.
+with no binding work. The *opt-out* is at parity too: the CLI has
+`--no-ignore`, the **Rust** builder has `.no_ignore(bool)`, **Python** has
+`DirSQL(..., no_ignore=True)` (#745, plumbed through the PyO3 binding to the
+core builder), and **TypeScript** has the `noIgnore` constructor option
+(#746).
 
 **Path-table parity proven per binding (#629, epic path-as-table close) —
 restoring/confirming parity, no drift.** #627/#628 landed the mechanism in the
