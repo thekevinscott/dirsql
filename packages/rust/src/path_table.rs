@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn default_ignores_cover_vcs_and_dependency_directories() {
-        assert_eq!(DEFAULT_IGNORES, ["node_modules/**", ".git/**"]);
+        assert_eq!(DEFAULT_IGNORES, ["**/node_modules/**", "**/.git/**"]);
     }
 
     #[test]

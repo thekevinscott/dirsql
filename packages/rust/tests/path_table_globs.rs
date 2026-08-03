@@ -149,6 +149,54 @@ fn naming_a_skipped_directory_explicitly_still_scans_it() {
 }
 
 #[test]
+fn a_recursive_scan_skips_nested_vcs_and_dependency_directories() {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("apps/site/node_modules/pkg")).unwrap();
+    fs::create_dir_all(root.path().join("apps/site/.git")).unwrap();
+    fs::write(root.path().join("apps/site/main.js"), "js").unwrap();
+    fs::write(root.path().join("apps/site/node_modules/pkg/index.js"), "js").unwrap();
+    fs::write(root.path().join("apps/site/.git/config"), "cfg").unwrap();
+    let db = DirSQL::new(root.path(), vec![]).unwrap();
+
+    let found = paths(&db, "SELECT path FROM './'");
+
+    assert_eq!(
+        found,
+        vec!["apps/site/main.js"],
+        "node_modules and .git must be skipped at any depth, not only at the root"
+    );
+}
+
+#[test]
+fn a_scoped_directory_scan_also_skips_nested_dependency_directories() {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("apps/site/node_modules/pkg")).unwrap();
+    fs::write(root.path().join("apps/site/main.js"), "js").unwrap();
+    fs::write(root.path().join("apps/site/node_modules/pkg/index.js"), "js").unwrap();
+    let db = DirSQL::new(root.path(), vec![]).unwrap();
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './apps'"),
+        vec!["apps/site/main.js"],
+        "the skip rules apply inside a scoped directory scan too"
+    );
+}
+
+#[test]
+fn naming_a_nested_skipped_directory_explicitly_still_scans_it() {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("apps/site/node_modules/pkg")).unwrap();
+    fs::write(root.path().join("apps/site/node_modules/pkg/index.js"), "js").unwrap();
+    let db = DirSQL::new(root.path(), vec![]).unwrap();
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './apps/site/node_modules'"),
+        vec!["apps/site/node_modules/pkg/index.js"],
+        "skip rules apply beneath the path you name, not to the path itself"
+    );
+}
+
+#[test]
 fn configured_ignore_patterns_apply_to_a_path_table() {
     let root = fixture();
     let db = DirSQL::with_ignore(root.path(), vec![], ["skip/**"]).unwrap();

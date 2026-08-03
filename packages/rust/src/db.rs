@@ -2114,7 +2114,7 @@ mod tests {
     fn default_path_table_ignore_carries_the_documented_defaults() {
         assert_eq!(
             default_path_table_ignore(),
-            vec!["node_modules/**".to_string(), ".git/**".to_string()]
+            vec!["**/node_modules/**".to_string(), "**/.git/**".to_string()]
         );
     }
 
@@ -2278,7 +2278,7 @@ mod tests {
         assert_eq!(db.path_table_ignore.last(), Some(&"*.tmp".to_string()));
         assert!(
             db.path_table_ignore
-                .contains(&"node_modules/**".to_string()),
+                .contains(&"**/node_modules/**".to_string()),
             "the built-in defaults must survive: {:?}",
             db.path_table_ignore
         );
