@@ -42,7 +42,7 @@ Do **NOT** hardcode `/home/duncan/...`. Use `$PWD` or the actual sandbox root (e
 
 - Python: run `pytest` directly against `packages/python`.
 - TypeScript: `pnpm --dir packages/ts run <script>`.
-- Rust: `cargo test --workspace`; `cargo bench -p dirsql` for benches.
+- Rust: `cargo test --workspace --features cli` (plain `cargo test --workspace` skips the feature-gated CLI e2e tests); `cargo bench -p dirsql` for benches.
 
 The testing-conventions gates are the trap here: `pip install testing-conventions` cannot build in the sandbox, so `uvx testing-conventions <gate>` is the natural reach -- and for the **python mutation** gate it is wrong. `uvx` runs the tool from its own environment, so cosmic-ray's `python3 -m pytest` resolves to an interpreter with no pytest instead of `packages/python/.venv`, and the gate dies on a baseline failure that names no cause (#706). Run that one through the project venv instead:
 

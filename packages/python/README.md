@@ -80,6 +80,14 @@ db = DirSQL(
 )
 ```
 
+Path-table scans (`SELECT ... FROM './'`) respect `.gitignore` files by
+default. Pass `no_ignore=True` to restore the full walk; the built-in
+`node_modules`/`.git` defaults and any `ignore` patterns still apply:
+
+```python
+db = DirSQL("./my-blog", no_ignore=True)
+```
+
 ## Loading SQLite extensions
 
 Pass `extensions` to load SQLite extension shared libraries onto the connection at startup (before any `CREATE TABLE`). Each entry is a dict with a `path` and an optional `entrypoint` init-symbol override:

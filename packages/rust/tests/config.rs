@@ -5,7 +5,6 @@
 //! (effectful std), so per the `unit lint` isolation rule it belongs in the
 //! integration tier rather than the inline unit module.
 
-use dirsql::cli::DEFAULT_CONFIG_TOML;
 use dirsql::config::{ConfigError, load_config, load_config_str};
 use tempfile::TempDir;
 
@@ -65,9 +64,15 @@ fn unknown_key_at_each_schema_level_errors() {
 
 // `DEFAULT_CONFIG_TOML` (packages/rust/src/cli/mod.rs) crosses the
 // cli <-> config module boundary, so this lives here rather than as a unit
-// test in either module -- per the `unit lint` isolation rule.
+// test in either module -- per the `unit lint` isolation rule. Gated on the
+// `cli` feature (like the sibling CLI test files) so the default-feature
+// `cargo test --workspace` still compiles; the other tests in this file need
+// no CLI and keep running without the feature.
+#[cfg(feature = "cli")]
 #[test]
 fn default_config_toml_is_an_escalation_example_with_a_named_table_and_on_file_hook() {
+    use dirsql::cli::DEFAULT_CONFIG_TOML;
+
     let config = load_config_str(DEFAULT_CONFIG_TOML)
         .expect("DEFAULT_CONFIG_TOML must be valid dirsql config TOML");
     assert_eq!(config.tables.len(), 1);
