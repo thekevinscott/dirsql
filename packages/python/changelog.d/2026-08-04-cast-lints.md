@@ -1,0 +1,1 @@
+**Changed** — the pyo3 binding crate now enforces the clippy cast lints (`cast_lossless`, `cast_possible_truncation`, `cast_possible_wrap`, `cast_precision_loss`, `cast_sign_loss`) via `[lints.clippy]`, so a future lossy numeric cast at the binding boundary fails the build. No code changes were needed; no observable behavior change.

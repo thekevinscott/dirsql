@@ -60,7 +60,7 @@ impl FileStat {
         let ctime_ns = system_time_to_ns(meta.created().ok());
         let (inode, dev) = inode_dev(meta);
         Self {
-            size: meta.len() as i64,
+            size: i64::try_from(meta.len()).expect("file size fits in i64"),
             mtime_ns,
             ctime_ns,
             inode,
@@ -70,6 +70,10 @@ impl FileStat {
 }
 
 #[cfg(unix)]
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "inode/device numbers are opaque bit patterns; wrapping reinterpretation is intended"
+)]
 fn inode_dev(meta: &fs::Metadata) -> (i64, i64) {
     use std::os::unix::fs::MetadataExt;
     (meta.ino() as i64, meta.dev() as i64)

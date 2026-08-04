@@ -353,7 +353,7 @@ impl Task for PollEventsTask {
             .as_ref()
             .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
         inner
-            .wait_file_events(Duration::from_millis(self.timeout_ms as u64))
+            .wait_file_events(Duration::from_millis(u64::from(self.timeout_ms)))
             .map_err(to_napi_err)
     }
 
@@ -462,7 +462,7 @@ impl FnRef {
         let status = napi::sys::napi_create_string_utf8(
             env,
             abs_path.as_ptr() as *const _,
-            abs_path.len() as isize,
+            len_isize(abs_path),
             &mut js_path,
         );
         if status != napi::sys::Status::napi_ok {
@@ -533,6 +533,11 @@ impl std::error::Error for OnFileError {}
 
 fn to_napi_err<E: std::fmt::Display>(e: E) -> Error {
     Error::new(Status::GenericFailure, e.to_string())
+}
+
+/// A `&str` length as the `isize` the raw napi_sys string APIs take.
+fn len_isize(s: &str) -> isize {
+    isize::try_from(s.len()).expect("string length fits in isize")
 }
 
 #[expect(unsafe_code, reason = "raw napi_sys FFI")]
@@ -614,6 +619,12 @@ unsafe fn js_val_to_value(env: napi::sys::napi_env, val: napi::sys::napi_value) 
             napi::sys::napi_get_value_bool(env, val, &mut b);
             Ok(Value::Integer(if b { 1 } else { 0 }))
         }
+        #[expect(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            reason = "the range guard plus Rust's saturating float-to-int cast keep the conversion \
+                      defined; JS integers beyond 2^53 already lost precision in the double"
+        )]
         3 => {
             let mut n: f64 = 0.0;
             napi::sys::napi_get_value_double(env, val, &mut n);
@@ -694,7 +705,7 @@ unsafe fn extract_exception_message(
     napi::sys::napi_create_string_utf8(
         env,
         "message".as_ptr() as *const _,
-        "message".len() as isize,
+        len_isize("message"),
         &mut key,
     );
 
@@ -767,12 +778,7 @@ unsafe fn get_string_property(
     name: &str,
 ) -> Result<String> {
     let mut key = std::ptr::null_mut();
-    napi::sys::napi_create_string_utf8(
-        env,
-        name.as_ptr() as *const _,
-        name.len() as isize,
-        &mut key,
-    );
+    napi::sys::napi_create_string_utf8(env, name.as_ptr() as *const _, len_isize(name), &mut key);
 
     let mut has = false;
     napi::sys::napi_has_property(env, obj, key, &mut has);
@@ -808,12 +814,7 @@ unsafe fn get_bool_property(
     default: bool,
 ) -> bool {
     let mut key = std::ptr::null_mut();
-    napi::sys::napi_create_string_utf8(
-        env,
-        name.as_ptr() as *const _,
-        name.len() as isize,
-        &mut key,
-    );
+    napi::sys::napi_create_string_utf8(env, name.as_ptr() as *const _, len_isize(name), &mut key);
 
     let mut has = false;
     napi::sys::napi_has_property(env, obj, key, &mut has);
@@ -842,12 +843,7 @@ unsafe fn get_function_property(
     name: &str,
 ) -> Result<napi::sys::napi_value> {
     let mut key = std::ptr::null_mut();
-    napi::sys::napi_create_string_utf8(
-        env,
-        name.as_ptr() as *const _,
-        name.len() as isize,
-        &mut key,
-    );
+    napi::sys::napi_create_string_utf8(env, name.as_ptr() as *const _, len_isize(name), &mut key);
 
     let mut has = false;
     napi::sys::napi_has_property(env, obj, key, &mut has);
@@ -1123,6 +1119,13 @@ mod tests {
     fn to_napi_err_carries_message() {
         let err = to_napi_err("kaboom");
         assert!(err.reason.contains("kaboom"));
+    }
+
+    #[test]
+    fn len_isize_is_the_byte_length() {
+        assert_eq!(len_isize(""), 0);
+        assert_eq!(len_isize("message"), 7);
+        assert_eq!(len_isize("héllo"), 6);
     }
 
     #[test]

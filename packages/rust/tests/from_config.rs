@@ -215,7 +215,10 @@ on-file = '''sh -c 'rel=${1#"$2"/}; base=${1##*/}; case "$rel" in */*) dir=${rel
     assert_eq!(r["basename"], Value::Text("readme.md".into()));
     assert_eq!(r["dir"], Value::Text("docs".into()));
     assert_eq!(r["ext"], Value::Text("md".into()));
-    assert_eq!(r["size"], Value::Integer(body.len() as i64));
+    assert_eq!(
+        r["size"],
+        Value::Integer(i64::try_from(body.len()).unwrap())
+    );
     // mtime is a unix timestamp; confirm it's a positive integer.
     assert!(
         matches!(&r["mtime"], Value::Integer(n) if *n > 0),

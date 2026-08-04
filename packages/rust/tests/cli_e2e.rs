@@ -144,7 +144,7 @@ fn kill_and_wait(mut child: Child) {
             reason = "no safe std API sends a signal to another process"
         )]
         unsafe {
-            libc::kill(pid as i32, libc::SIGINT);
+            libc::kill(i32::try_from(pid).unwrap(), libc::SIGINT);
         }
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
