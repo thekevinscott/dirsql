@@ -24,17 +24,22 @@ crate-type = ["cdylib", "rlib"]
 dirsql.workspace = true
 pyo3 = { version = "0.28", features = ["extension-module", "generate-import-lib", "abi3-py310"], optional = true }
 
-# Opted in per-crate rather than via `[lints] workspace = true`: the workspace
-# block also carries `clippy::pedantic`, which currently reports 475 warnings
-# across the three crates and would fail `clippy -D warnings` immediately
-# (#763).
-#
-# `deny`, not the workspace's aspirational `forbid`: pyo3's proc macros emit `#[allow(unsafe_code)]`, which `forbid`
-# rejects outright (E0453).
-# `deny` still blocks new hand-written `unsafe` unless a site opts in
-# explicitly, which is the guarantee we want.
 [lints.rust]
+# `deny`, not `forbid`: pyo3's proc macros emit `#[allow(unsafe_code)]`, which
+# `forbid` rejects outright (E0453). `deny` still blocks new hand-written
+# `unsafe` unless a site opts in explicitly, which is the guarantee we want.
 unsafe_code = "deny"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+# The narrow slice of clippy::pedantic worth enforcing (#763); mirrors the
+# core crate's block. No sites in this crate today -- the value is catching
+# future lossy casts at the binding boundary.
+[lints.clippy]
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_precision_loss = "warn"
+cast_sign_loss = "warn"
 
 [features]
 default = []

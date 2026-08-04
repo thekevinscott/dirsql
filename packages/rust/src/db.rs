@@ -465,7 +465,12 @@ impl Db {
         conn.execute(
             "INSERT INTO _dirsql_internal_rows (table_name, file_path, row_index, rowid_ref) \
              VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![table, file_path, row_index as i64, rowid],
+            rusqlite::params![
+                table,
+                file_path,
+                i64::try_from(row_index).expect("row index fits in i64"),
+                rowid
+            ],
         )?;
         Ok(())
     }
@@ -1054,7 +1059,7 @@ mod tests {
         for (i, action) in ["created", "resolved", "reopened"].iter().enumerate() {
             let row = HashMap::from([
                 ("action".into(), Value::Text(action.to_string())),
-                ("ts".into(), Value::Integer(i as i64)),
+                ("ts".into(), Value::Integer(i64::try_from(i).unwrap())),
             ]);
             db.insert_row("events", &row, "thread.jsonl", i).unwrap();
         }

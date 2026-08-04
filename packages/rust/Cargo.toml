@@ -73,11 +73,6 @@ toml = "0.8"
 wait-timeout = "0.2"
 walkdir = "2"
 
-# Opted in per-crate rather than via `[lints] workspace = true`: the workspace
-# block also carries `clippy::pedantic`, which currently reports 475 warnings
-# across the three crates and would fail `clippy -D warnings` immediately
-# (#763). This is the lint whose absence actually mattered -- it forbids
-# nothing until a crate opts in.
 [lints.rust]
 # `deny`, not `forbid`: rusqlite's API imposes five unavoidable `unsafe`
 # sites (the `load_extension` guard and four `unsafe impl VTab`/`VTabCursor`).
@@ -86,6 +81,19 @@ walkdir = "2"
 # with `#[expect(unsafe_code, reason = ...)]`, which is the guarantee we
 # actually want (#763).
 unsafe_code = "deny"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+# The narrow slice of clippy::pedantic worth enforcing (#763): dirsql marshals
+# sizes, timestamps, and row indexes between usize/u64 and SQLite's i64, where
+# a silent lossy cast corrupts data. The rest of pedantic is style noise here
+# and stays off. Intentional lossy/bit-preserving casts opt out per-site with
+# `#[expect(clippy::cast_..., reason = ...)]`.
+[lints.clippy]
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_precision_loss = "warn"
+cast_sign_loss = "warn"
 
 [[bin]]
 name = "dirsql"

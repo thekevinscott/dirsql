@@ -1,7 +1,0 @@
-{
-  "command": "just test-e2e",
-  "ran_at": 1785777931,
-  "exit_code": 0,
-  "commit": "ef9db367f3a4979a0006e7bd40b0808f433b26ee",
-  "branch": "feat/745-python-no-ignore"
-}

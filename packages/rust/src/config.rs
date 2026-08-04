@@ -358,7 +358,9 @@ pub fn load_config_str(content: &str) -> Result<Config> {
 fn parse_timeout_secs(field: &'static str, raw: Option<i64>) -> Result<Option<Duration>> {
     match raw {
         Some(secs) if secs <= 0 => Err(ConfigError::InvalidTimeout { field, value: secs }),
-        Some(secs) => Ok(Some(Duration::from_secs(secs as u64))),
+        Some(secs) => Ok(Some(Duration::from_secs(
+            u64::try_from(secs).expect("non-positive values rejected above"),
+        ))),
         None => Ok(None),
     }
 }

@@ -1,3 +1,9 @@
+#![expect(
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    reason = "bench fixture indices are small; the casts are exact"
+)]
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use dirsql::db::{Db, Value};
 use std::collections::HashMap;

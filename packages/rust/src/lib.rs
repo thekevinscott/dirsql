@@ -1692,10 +1692,10 @@ pub(crate) fn compute_stat_virtuals(rel_path: &str, abs_path: &Path) -> Row {
             let to_secs = |t: std::io::Result<std::time::SystemTime>| {
                 t.ok()
                     .and_then(|st| st.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs() as i64)
+                    .and_then(|d| i64::try_from(d.as_secs()).ok())
             };
             (
-                Some(metadata.len() as i64),
+                i64::try_from(metadata.len()).ok(),
                 to_secs(metadata.modified()),
                 to_secs(metadata.created()),
             )

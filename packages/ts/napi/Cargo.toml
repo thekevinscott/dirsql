@@ -12,5 +12,24 @@ dirsql.workspace = true
 napi = { version = "3", features = ["napi6"] }
 napi-derive = "3"
 
+[lints.rust]
+# `deny`, not `forbid`: napi's proc macros emit `#[allow(unsafe_code)]`, which
+# `forbid` rejects outright (E0453), and the hand-written napi_sys FFI helpers
+# in lib.rs are unavoidably `unsafe`. `deny` still blocks new hand-written
+# `unsafe` unless a site opts in explicitly with
+# `#[expect(unsafe_code, reason = ...)]`, which is the guarantee we want.
+unsafe_code = "deny"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+# The narrow slice of clippy::pedantic worth enforcing (#763); mirrors the
+# core crate's block. The JS<->SQLite value marshaling in lib.rs is exactly
+# where a silent lossy cast corrupts data.
+[lints.clippy]
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_precision_loss = "warn"
+cast_sign_loss = "warn"
+
 [build-dependencies]
 napi-build = "2"

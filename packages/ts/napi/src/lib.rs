@@ -116,7 +116,7 @@ impl DirSQL {
     pub fn open_async(
         env: Env,
         root: Option<String>,
-        tables: Option<Array>,
+        tables: Option<Array<'_>>,
         ignore: Option<Vec<String>>,
         config: Option<Vec<String>>,
         persist: Option<bool>,
@@ -353,7 +353,7 @@ impl Task for PollEventsTask {
             .as_ref()
             .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
         inner
-            .wait_file_events(Duration::from_millis(self.timeout_ms as u64))
+            .wait_file_events(Duration::from_millis(u64::from(self.timeout_ms)))
             .map_err(to_napi_err)
     }
 
@@ -370,7 +370,11 @@ impl Task for PollEventsTask {
 /// Parse a JS array of `TableDef` objects into Rust [`Table`]s. Must run on
 /// the JS thread: creates a persistent napi reference to each `onFile`
 /// callback so it can be invoked later without a live JS call frame.
-fn parse_tables_from_js(env: Env, tables: Array) -> Result<Vec<Table>> {
+#[expect(
+    unsafe_code,
+    reason = "raw napi_sys property reads and reference creation"
+)]
+fn parse_tables_from_js(env: Env, tables: Array<'_>) -> Result<Vec<Table>> {
     let raw_env = env.raw();
     let tables_len = tables.len();
     let mut rust_tables: Vec<Table> = Vec::with_capacity(tables_len as usize);
@@ -408,10 +412,19 @@ struct FnRef {
     raw_ref: napi::sys::napi_ref,
 }
 
+#[expect(
+    unsafe_code,
+    reason = "napi refs lack Send/Sync; all access stays on the JS thread"
+)]
 unsafe impl Send for FnRef {}
+#[expect(
+    unsafe_code,
+    reason = "napi refs lack Send/Sync; all access stays on the JS thread"
+)]
 unsafe impl Sync for FnRef {}
 
 impl FnRef {
+    #[expect(unsafe_code, reason = "raw napi_sys reference creation")]
     unsafe fn new(env: napi::sys::napi_env, value: napi::sys::napi_value) -> Result<Self> {
         let mut raw_ref = std::ptr::null_mut();
         let status = napi::sys::napi_create_reference(env, value, 1, &mut raw_ref);
@@ -427,6 +440,7 @@ impl FnRef {
         })
     }
 
+    #[expect(unsafe_code, reason = "raw napi_sys reference read")]
     unsafe fn get_value(&self) -> Result<napi::sys::napi_value> {
         let mut result = std::ptr::null_mut();
         let status = napi::sys::napi_get_reference_value(self.raw_env, self.raw_ref, &mut result);
@@ -439,6 +453,7 @@ impl FnRef {
         Ok(result)
     }
 
+    #[expect(unsafe_code, reason = "raw napi_sys function invocation")]
     unsafe fn call_on_file(&self, abs_path: &str) -> Result<Vec<HashMap<String, Value>>> {
         let env = self.raw_env;
         let func = self.get_value()?;
@@ -447,7 +462,7 @@ impl FnRef {
         let status = napi::sys::napi_create_string_utf8(
             env,
             abs_path.as_ptr() as *const _,
-            abs_path.len() as isize,
+            len_isize(abs_path),
             &mut js_path,
         );
         if status != napi::sys::Status::napi_ok {
@@ -486,6 +501,7 @@ impl FnRef {
 }
 
 impl Drop for FnRef {
+    #[expect(unsafe_code, reason = "raw napi_sys reference deletion")]
     fn drop(&mut self) {
         unsafe {
             napi::sys::napi_delete_reference(self.raw_env, self.raw_ref);
@@ -495,6 +511,7 @@ impl Drop for FnRef {
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
+#[expect(unsafe_code, reason = "invokes the raw napi_sys onFile callback")]
 fn make_on_file_closure(
     fn_ref: Arc<FnRef>,
 ) -> impl Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static {
@@ -518,6 +535,12 @@ fn to_napi_err<E: std::fmt::Display>(e: E) -> Error {
     Error::new(Status::GenericFailure, e.to_string())
 }
 
+/// A `&str` length as the `isize` the raw napi_sys string APIs take.
+fn len_isize(s: &str) -> isize {
+    isize::try_from(s.len()).expect("string length fits in isize")
+}
+
+#[expect(unsafe_code, reason = "raw napi_sys FFI")]
 unsafe fn parse_js_array_of_objects(
     env: napi::sys::napi_env,
     array: napi::sys::napi_value,
@@ -584,6 +607,7 @@ unsafe fn parse_js_array_of_objects(
     Ok(rows)
 }
 
+#[expect(unsafe_code, reason = "raw napi_sys FFI")]
 unsafe fn js_val_to_value(env: napi::sys::napi_env, val: napi::sys::napi_value) -> Result<Value> {
     let mut value_type = 0i32;
     napi::sys::napi_typeof(env, val, &mut value_type);
@@ -595,6 +619,12 @@ unsafe fn js_val_to_value(env: napi::sys::napi_env, val: napi::sys::napi_value) 
             napi::sys::napi_get_value_bool(env, val, &mut b);
             Ok(Value::Integer(if b { 1 } else { 0 }))
         }
+        #[expect(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            reason = "the range guard plus Rust's saturating float-to-int cast keep the conversion \
+                      defined; JS integers beyond 2^53 already lost precision in the double"
+        )]
         3 => {
             let mut n: f64 = 0.0;
             napi::sys::napi_get_value_double(env, val, &mut n);
@@ -635,6 +665,7 @@ unsafe fn js_val_to_value(env: napi::sys::napi_env, val: napi::sys::napi_value) 
 }
 
 /// Read a JS string value into a Rust `String`.
+#[expect(unsafe_code, reason = "raw napi_sys FFI")]
 unsafe fn read_js_string(env: napi::sys::napi_env, val: napi::sys::napi_value) -> String {
     let mut len = 0usize;
     napi::sys::napi_get_value_string_utf8(env, val, std::ptr::null_mut(), 0, &mut len);
@@ -652,6 +683,7 @@ unsafe fn read_js_string(env: napi::sys::napi_env, val: napi::sys::napi_value) -
 
 /// Coerce any JS value to a string (via `String(value)` semantics),
 /// returning `"[object]"` if coercion itself fails.
+#[expect(unsafe_code, reason = "raw napi_sys FFI")]
 unsafe fn coerce_js_to_string(env: napi::sys::napi_env, val: napi::sys::napi_value) -> String {
     let mut str_val = std::ptr::null_mut();
     let status = napi::sys::napi_coerce_to_string(env, val, &mut str_val);
@@ -664,6 +696,7 @@ unsafe fn coerce_js_to_string(env: napi::sys::napi_env, val: napi::sys::napi_val
 /// The message of a thrown JS value: an `Error`'s `message` when present,
 /// otherwise the value coerced to a string (`throw "oops"`). Mirrors the
 /// pyo3 side, which surfaces the real Python exception text.
+#[expect(unsafe_code, reason = "raw napi_sys FFI")]
 unsafe fn extract_exception_message(
     env: napi::sys::napi_env,
     exception: napi::sys::napi_value,
@@ -672,7 +705,7 @@ unsafe fn extract_exception_message(
     napi::sys::napi_create_string_utf8(
         env,
         "message".as_ptr() as *const _,
-        "message".len() as isize,
+        len_isize("message"),
         &mut key,
     );
 
@@ -694,6 +727,7 @@ unsafe fn extract_exception_message(
 /// for any other JS value (including other TypedArray element types, whose
 /// numeric interpretation would be lossy — they keep the string-coercion
 /// fallback).
+#[expect(unsafe_code, reason = "raw napi_sys FFI")]
 unsafe fn get_u8_array_bytes(
     env: napi::sys::napi_env,
     val: napi::sys::napi_value,
@@ -737,18 +771,14 @@ unsafe fn get_u8_array_bytes(
     Some(std::slice::from_raw_parts(data as *const u8, length).to_vec())
 }
 
+#[expect(unsafe_code, reason = "raw napi_sys FFI")]
 unsafe fn get_string_property(
     env: napi::sys::napi_env,
     obj: napi::sys::napi_value,
     name: &str,
 ) -> Result<String> {
     let mut key = std::ptr::null_mut();
-    napi::sys::napi_create_string_utf8(
-        env,
-        name.as_ptr() as *const _,
-        name.len() as isize,
-        &mut key,
-    );
+    napi::sys::napi_create_string_utf8(env, name.as_ptr() as *const _, len_isize(name), &mut key);
 
     let mut has = false;
     napi::sys::napi_has_property(env, obj, key, &mut has);
@@ -776,6 +806,7 @@ unsafe fn get_string_property(
     Ok(String::from_utf8_lossy(&buf[..actual]).to_string())
 }
 
+#[expect(unsafe_code, reason = "raw napi_sys FFI")]
 unsafe fn get_bool_property(
     env: napi::sys::napi_env,
     obj: napi::sys::napi_value,
@@ -783,12 +814,7 @@ unsafe fn get_bool_property(
     default: bool,
 ) -> bool {
     let mut key = std::ptr::null_mut();
-    napi::sys::napi_create_string_utf8(
-        env,
-        name.as_ptr() as *const _,
-        name.len() as isize,
-        &mut key,
-    );
+    napi::sys::napi_create_string_utf8(env, name.as_ptr() as *const _, len_isize(name), &mut key);
 
     let mut has = false;
     napi::sys::napi_has_property(env, obj, key, &mut has);
@@ -810,18 +836,14 @@ unsafe fn get_bool_property(
     b
 }
 
+#[expect(unsafe_code, reason = "raw napi_sys FFI")]
 unsafe fn get_function_property(
     env: napi::sys::napi_env,
     obj: napi::sys::napi_value,
     name: &str,
 ) -> Result<napi::sys::napi_value> {
     let mut key = std::ptr::null_mut();
-    napi::sys::napi_create_string_utf8(
-        env,
-        name.as_ptr() as *const _,
-        name.len() as isize,
-        &mut key,
-    );
+    napi::sys::napi_create_string_utf8(env, name.as_ptr() as *const _, len_isize(name), &mut key);
 
     let mut has = false;
     napi::sys::napi_has_property(env, obj, key, &mut has);
@@ -858,6 +880,7 @@ pub enum JsRowValue {
 }
 
 impl ToNapiValue for JsRowValue {
+    #[expect(unsafe_code, reason = "`ToNapiValue` declares this method unsafe")]
     unsafe fn to_napi_value(env: napi::sys::napi_env, val: Self) -> Result<napi::sys::napi_value> {
         match val {
             JsRowValue::Null => Null::to_napi_value(env, Null),
@@ -1096,6 +1119,13 @@ mod tests {
     fn to_napi_err_carries_message() {
         let err = to_napi_err("kaboom");
         assert!(err.reason.contains("kaboom"));
+    }
+
+    #[test]
+    fn len_isize_is_the_byte_length() {
+        assert_eq!(len_isize(""), 0);
+        assert_eq!(len_isize("message"), 7);
+        assert_eq!(len_isize("héllo"), 6);
     }
 
     #[test]
