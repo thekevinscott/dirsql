@@ -12,5 +12,18 @@ dirsql.workspace = true
 napi = { version = "3", features = ["napi6"] }
 napi-derive = "3"
 
+# Opted in per-crate rather than via `[lints] workspace = true`: the workspace
+# block also carries `clippy::pedantic`, which currently reports 475 warnings
+# across the three crates and would fail `clippy -D warnings` immediately
+# (#763).
+#
+# `deny`, not the workspace's aspirational `forbid`: napi's proc macros emit
+# `#[allow(unsafe_code)]`, which `forbid` rejects outright (E0453), and the
+# hand-written napi_sys FFI helpers in lib.rs are unavoidably `unsafe`. `deny`
+# still blocks new hand-written `unsafe` unless a site opts in explicitly with
+# `#[expect(unsafe_code, reason = ...)]`, which is the guarantee we want.
+[lints.rust]
+unsafe_code = "deny"
+
 [build-dependencies]
 napi-build = "2"
