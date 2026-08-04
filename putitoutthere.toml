@@ -84,11 +84,12 @@ crate_path = "packages/rust"
 stage_to   = "dirsql/_binary"
 features   = ["cli"]
 
-# npm: the dual-family pattern. `@dirsql/lib-{triple}` ships the napi-rs
-# `.node` addon; `@dirsql/cli-{triple}` ships the CLI binary. The
-# top-level `dirsql` package's `optionalDependencies` pin one of each
-# per platform; npm installs exactly the right pair at install time.
-# This is the `@swc/core` / dirsql distribution shape.
+# npm: one family. `@dirsql/lib-{triple}` ships the napi-rs `.node`
+# addon, which since #739 carries the CLI too (`runCli`, built with the
+# core's `cli` feature) — the launcher calls it in-process instead of
+# spawning a binary. The `@dirsql/cli-{triple}` family that used to ship
+# a second copy of the core is gone; the top-level `dirsql` package's
+# `optionalDependencies` pin one addon per platform.
 [[package]]
 name  = "dirsql-npm"
 npm   = "dirsql"
@@ -103,8 +104,7 @@ globs = [
 depends_on    = ["dirsql-rust"]
 first_version = "0.2.8"
 build = [
-  { mode = "napi",        name = "@dirsql/lib-{triple}" },
-  { mode = "bundled-cli", name = "@dirsql/cli-{triple}" },
+  { mode = "napi", name = "@dirsql/lib-{triple}" },
 ]
 targets = [
   "linux-x64-gnu",
@@ -118,25 +118,11 @@ targets = [
   { triple = "win32-x64-msvc", runner = "windows-2025-vs2026" },
 ]
 
-# Same `[package.bundle_cli]` shape as the pypi block above, with the
-# same crate / bin / features. Required by upstream `_matrix.yml`: every
-# cross-compile / stage / verify step on the npm bundled-cli row is
-# gated on `matrix.bundle_cli`, so without this subtable the upstream
-# pipeline produces no binary at all and the consumer's local
-# `npm run build` (`packages/ts/tools/stage-platform.ts`) silently fills
-# the gap with `cargo build --target x86_64-unknown-linux-gnu` on the
-# ubuntu-latest runner — yielding the glibc-2.39-linked binary that
-# shipped in 0.3.11 / 0.3.12 (dirsql#189). With this block, upstream
-# compiles Linux rows via cargo-zigbuild against the declared gnu
-# triple at a pinned glibc 2.17 floor (putitoutthere#605 — dynamic, so
-# extensions can dlopen, #762; previously the static musl mapping) and
-# stages the binary into `packages/ts/build/bundled-cli-{triple}/`
-# AFTER `npm run build` (putitoutthere#386 ordering fix), so that
-# binary is what reaches the upload-artifact step.
-[package.bundle_cli]
-bin        = "dirsql"
-crate_path = "packages/rust"
-features   = ["cli"]
+# No `[package.bundle_cli]` here any more (#739): the npm lane ships no
+# standalone binary. The addon built by the `napi` row carries the CLI,
+# so the cross-compile / stage / verify steps upstream gates on
+# `matrix.bundle_cli` have nothing to do for this package. The pypi
+# block above still declares one until #738 lands.
 
 # PyPI: the in-repo embeddings plugin (plugins/dirsql-plugin-embeddings/).
 # Pure-Python (hatchling) — no `build = "maturin"`, no native `targets`,

@@ -1,13 +1,13 @@
-import { spawnSync } from "node:child_process";
+import { mainInProcess } from "bin-shim";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadNativeCore } from "../load-native-core.js";
 import { die } from "./die.js";
 import { main } from "./main.js";
-import { resolveBinary } from "./resolve-binary.js";
 import { withResolvedExtensions } from "./resolve-config-extensions.js";
 
-vi.mock("./resolve-binary.js");
+vi.mock("bin-shim");
+vi.mock("../load-native-core.js");
 vi.mock("./die.js");
-vi.mock("node:child_process");
 vi.mock("./resolve-config-extensions.js", async () => ({
   ...(await vi.importActual<typeof import("./resolve-config-extensions.js")>(
     "./resolve-config-extensions.js",
@@ -15,42 +15,23 @@ vi.mock("./resolve-config-extensions.js", async () => ({
   withResolvedExtensions: vi.fn(async (argv: string[]) => argv),
 }));
 
-const TEST_PID = 42;
-
-type SpawnResult = ReturnType<typeof spawnSync>;
-
-function fakeResult(overrides: Record<string, unknown>): SpawnResult {
-  return {
-    pid: TEST_PID,
-    stdout: Buffer.from(""),
-    stderr: Buffer.from(""),
-    output: [],
-    status: 0,
-    signal: null,
-    ...overrides,
-  } as unknown as SpawnResult;
-}
-
 describe("main", () => {
   let exit: ReturnType<typeof vi.fn>;
-  let kill: ReturnType<typeof vi.fn>;
+  let on: ReturnType<typeof vi.fn>;
+  const runCli = vi.fn(() => 0);
 
   beforeEach(() => {
-    vi.mocked(resolveBinary).mockReturnValue("/bin/dirsql");
+    vi.mocked(loadNativeCore).mockReturnValue({ runCli } as never);
     vi.mocked(withResolvedExtensions).mockImplementation(async (argv) => argv);
+    vi.mocked(mainInProcess).mockResolvedValue(0);
     vi.mocked(die).mockImplementation(((msg: string) => {
       throw new Error(`DIE: ${msg}`);
     }) as typeof die);
     exit = vi.fn().mockImplementation((code: number) => {
       throw new Error(`EXIT_${code}`);
     });
-    kill = vi.fn();
-    vi.stubGlobal("process", {
-      ...process,
-      exit,
-      kill,
-      pid: TEST_PID,
-    });
+    on = vi.fn();
+    vi.stubGlobal("process", { ...process, exit, on });
   });
 
   afterEach(() => {
@@ -58,66 +39,94 @@ describe("main", () => {
     vi.resetAllMocks();
   });
 
-  it("spawns the resolved binary with the argv and exits with the spawn status", async () => {
-    vi.mocked(spawnSync).mockReturnValue(fakeResult({ status: 0 }));
+  it("runs the CLI in-process and exits with its code", async () => {
+    vi.mocked(mainInProcess).mockResolvedValue(23);
 
-    await expect(main(["--version"])).rejects.toThrow("EXIT_0");
-    expect(withResolvedExtensions).toHaveBeenCalledWith(["--version"]);
-    expect(spawnSync).toHaveBeenCalledWith("/bin/dirsql", ["--version"], {
-      stdio: "inherit",
-    });
-    expect(exit).toHaveBeenCalledWith(0);
-  });
-
-  it("falls back to exit code 1 when spawn returns a null status", async () => {
-    vi.mocked(spawnSync).mockReturnValue(fakeResult({ status: null }));
-
-    await expect(main([])).rejects.toThrow("EXIT_1");
-    expect(exit).toHaveBeenCalledWith(1);
-  });
-
-  it("calls die with the spawn error message when spawn reports an error", async () => {
-    vi.mocked(spawnSync).mockReturnValue(
-      fakeResult({ status: null, error: new Error("spawn ENOENT") }),
+    await expect(main(["query", "SELECT 1"])).rejects.toThrow("EXIT_23");
+    expect(withResolvedExtensions).toHaveBeenCalledWith(["query", "SELECT 1"]);
+    expect(mainInProcess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        argv: ["query", "SELECT 1"],
+        binaryName: "dirsql",
+        runCli,
+      }),
     );
-
-    await expect(main([])).rejects.toThrow("DIE: spawn ENOENT");
-    expect(die).toHaveBeenCalledWith("spawn ENOENT", 1);
   });
 
-  it("re-raises the spawned process's signal against the current pid before exiting", async () => {
-    vi.mocked(spawnSync).mockReturnValue(
-      fakeResult({ status: 0, signal: "SIGINT" }),
+  it("passes the resolver's augmented argv, not the raw argv", async () => {
+    vi.mocked(withResolvedExtensions).mockResolvedValue([
+      "query",
+      "SELECT 1",
+      "--extension",
+      "/r/vec0",
+    ]);
+
+    await expect(main(["query", "SELECT 1"])).rejects.toThrow("EXIT_0");
+    expect(mainInProcess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        argv: ["query", "SELECT 1", "--extension", "/r/vec0"],
+      }),
     );
-
-    await expect(main([])).rejects.toThrow("EXIT_0");
-    expect(kill).toHaveBeenCalledWith(TEST_PID, "SIGINT");
   });
 
-  it("defaults argv to process.argv.slice(2) when called with no args", async () => {
-    vi.mocked(spawnSync).mockReturnValue(fakeResult({ status: 0 }));
+  it("defaults argv to process.argv minus the node/script slots", async () => {
     vi.stubGlobal("process", {
       ...process,
-      argv: ["node", "dirsql", "--help"],
+      argv: ["node", "dirsql", "--version"],
       exit,
-      kill,
-      pid: TEST_PID,
+      on,
     });
 
     await expect(main()).rejects.toThrow("EXIT_0");
-    expect(spawnSync).toHaveBeenCalledWith("/bin/dirsql", ["--help"], {
-      stdio: "inherit",
-    });
+    expect(withResolvedExtensions).toHaveBeenCalledWith(["--version"]);
   });
 
-  it("forwards a subcommand verbatim to the binary instead of intercepting it", async () => {
-    vi.mocked(spawnSync).mockReturnValue(fakeResult({ status: 0 }));
+  it("installs the signal listeners before running the CLI", async () => {
+    // Ordering is the whole fix: signal-hook chains to the handler installed
+    // BEFORE it, and bare Node leaves SIG_DFL, which it does not emulate. A
+    // listener registered after the core's would not keep Ctrl-C fatal.
+    const order: string[] = [];
+    on.mockImplementation((signal: string) => order.push(`on:${signal}`));
+    vi.mocked(mainInProcess).mockImplementation(async () => {
+      order.push("runCli");
+      return 0;
+    });
 
-    await expect(main(["interpret", "config.mjs"])).rejects.toThrow("EXIT_0");
-    expect(spawnSync).toHaveBeenCalledWith(
-      "/bin/dirsql",
-      ["interpret", "config.mjs"],
-      { stdio: "inherit" },
-    );
+    await expect(main([])).rejects.toThrow("EXIT_0");
+    expect(order).toEqual(["on:SIGINT", "on:SIGTERM", "runCli"]);
+  });
+
+  it("exits 130 on SIGINT and 143 on SIGTERM", async () => {
+    const handlers: Record<string, () => void> = {};
+    on.mockImplementation((signal: string, handler: () => void) => {
+      handlers[signal] = handler;
+    });
+
+    await expect(main([])).rejects.toThrow("EXIT_0");
+    expect(() => handlers.SIGINT?.()).toThrow("EXIT_130");
+    expect(() => handlers.SIGTERM?.()).toThrow("EXIT_143");
+  });
+
+  it("dies with the message when the addon cannot be loaded", async () => {
+    vi.mocked(loadNativeCore).mockImplementation(() => {
+      throw new Error("no prebuilt addon for linux-x64");
+    });
+
+    await expect(main([])).rejects.toThrow("DIE: no prebuilt addon");
+    expect(mainInProcess).not.toHaveBeenCalled();
+  });
+
+  it("dies when the addon carries no callable runCli", async () => {
+    // A `@dirsql/lib-*` built without the `cli` feature loads fine but has no
+    // CLI; say so rather than throwing a bare TypeError.
+    vi.mocked(loadNativeCore).mockReturnValue({} as never);
+
+    await expect(main([])).rejects.toThrow("no callable `runCli` export");
+  });
+
+  it("stringifies a non-Error rejection", async () => {
+    vi.mocked(mainInProcess).mockRejectedValue("boom");
+
+    await expect(main([])).rejects.toThrow("DIE: boom");
   });
 });

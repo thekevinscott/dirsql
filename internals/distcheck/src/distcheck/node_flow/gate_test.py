@@ -22,32 +22,35 @@ class _Host:
     """Local stand-in for platforms.Platform -- the fields the gate reads."""
 
     slug: str = "linux-x64-gnu"
-    bin_name: str = "dirsql"
-    name: str = "@dirsql/cli-linux-x64-gnu"
+    addon_name: str = "dirsql.linux-x64-gnu.node"
+    name: str = "@dirsql/lib-linux-x64-gnu"
     os: list[str] = field(default_factory=lambda: ["linux"])
     cpu: list[str] = field(default_factory=lambda: ["x64"])
 
 
 _HOST = _Host()
-_CLI_TGZ = "dirsql-cli-linux-x64-gnu-0.0.0-e2e.tgz"
+_CLI_TGZ = "dirsql-lib-linux-x64-gnu-0.0.0-e2e.tgz"
 _MAIN_TGZ = "dirsql-0.0.1.tgz"
-_STAGED = "/ts/build/bundled-cli-linux-x64-gnu/dirsql"
+_STAGED = "/ts/build/napi-linux-x64-gnu/dirsql.linux-x64-gnu.node"
 _BIN = "/inst/node_modules/.bin/dirsql"
-_CLI_PKG = "/inst/node_modules/@dirsql/cli-linux-x64-gnu"
+_CLI_PKG = "/inst/node_modules/@dirsql/lib-linux-x64-gnu"
 
 
 def _res(rc=0, stdout="", stderr=""):
     return mock.Mock(returncode=rc, stdout=stdout, stderr=stderr)
 
 
-def _fs(exists=True, read_name="@dirsql/cli-linux-x64-gnu"):
+def _fs(exists=True, read_name="@dirsql/lib-linux-x64-gnu"):
     fs = mock.Mock()
     fs.mkdtemp.side_effect = ["/stg", "/inst"]
     fs.listdir.side_effect = [[_CLI_TGZ], [_CLI_TGZ, _MAIN_TGZ]]
     if callable(exists):
         fs.exists.side_effect = exists
     else:
-        fs.exists.return_value = exists
+        # A blanket True would also claim the retired `@dirsql/cli-<slug>`
+        # package is installed, which the gate now treats as a failure; the
+        # happy path is "everything present EXCEPT that".
+        fs.exists.side_effect = lambda p: exists and "@dirsql/cli-" not in p
     fs.read_text.return_value = json.dumps({"name": read_name})
     return fs
 
@@ -57,29 +60,29 @@ def _ok_sequence():
 
 
 def test_select_tarball_finds_the_cli_tarball():
-    assert select_tarball([_CLI_TGZ, _MAIN_TGZ], "dirsql-cli-") == _CLI_TGZ
+    assert select_tarball([_CLI_TGZ, _MAIN_TGZ], "dirsql-lib-") == _CLI_TGZ
 
 
 def test_select_tarball_excludes_the_cli_tarball_for_the_main_prefix():
     assert (
-        select_tarball([_CLI_TGZ, _MAIN_TGZ], "dirsql-", exclude="dirsql-cli-")
+        select_tarball([_CLI_TGZ, _MAIN_TGZ], "dirsql-", exclude="dirsql-lib-")
         == _MAIN_TGZ
     )
 
 
 def test_select_tarball_rejects_none():
     with pytest.raises(DistcheckError, match="exactly one"):
-        select_tarball(["other.tgz"], "dirsql-cli-")
+        select_tarball(["other.tgz"], "dirsql-lib-")
 
 
 def test_select_tarball_rejects_many():
     with pytest.raises(DistcheckError, match="exactly one"):
-        select_tarball(["dirsql-cli-a.tgz", "dirsql-cli-b.tgz"], "dirsql-cli-")
+        select_tarball(["dirsql-lib-a.tgz", "dirsql-lib-b.tgz"], "dirsql-lib-")
 
 
 def test_select_tarball_ignores_non_tgz():
     with pytest.raises(DistcheckError, match="exactly one"):
-        select_tarball(["dirsql-cli-a.txt"], "dirsql-cli-")
+        select_tarball(["dirsql-lib-a.txt"], "dirsql-lib-")
 
 
 def test_run_success_executes_the_full_sequence():
@@ -87,14 +90,15 @@ def test_run_success_executes_the_full_sequence():
     runner = mock.Mock(side_effect=_ok_sequence())
     assert run("/ts", _HOST, runner=runner, fs=fs) == 0
 
-    fs.copy.assert_called_once_with(_STAGED, "/stg/cli-pkg/dirsql")
-    fs.chmod.assert_called_once_with("/stg/cli-pkg/dirsql", 0o755)
+    fs.copy.assert_called_once_with(_STAGED, "/stg/lib-pkg/dirsql.linux-x64-gnu.node")
+    fs.chmod.assert_called_once_with("/stg/lib-pkg/dirsql.linux-x64-gnu.node", 0o755)
 
     cli_json = json.loads(fs.write_text.call_args_list[0].args[1])
-    assert fs.write_text.call_args_list[0].args[0] == "/stg/cli-pkg/package.json"
+    assert fs.write_text.call_args_list[0].args[0] == "/stg/lib-pkg/package.json"
     assert cli_json == {
-        "name": "@dirsql/cli-linux-x64-gnu",
+        "name": "@dirsql/lib-linux-x64-gnu",
         "version": "0.0.0-e2e",
+        "main": "dirsql.linux-x64-gnu.node",
         "os": ["linux"],
         "cpu": ["x64"],
     }
@@ -112,7 +116,7 @@ def test_run_success_executes_the_full_sequence():
     assert runner.call_args_list == [
         mock.call(
             ["npm", "pack", "--pack-destination", "/stg"],
-            cwd="/stg/cli-pkg",
+            cwd="/stg/lib-pkg",
             capture_output=True,
             text=True,
         ),
@@ -149,7 +153,7 @@ def test_run_missing_staged_binary_raises_prereq():
 def test_run_cli_pack_failure():
     fs = _fs()
     runner = mock.Mock(side_effect=[_res(rc=1, stdout="o", stderr="e")])
-    with pytest.raises(DistcheckError, match="cli npm pack failed"):
+    with pytest.raises(DistcheckError, match="addon npm pack failed"):
         run("/ts", _HOST, runner=runner, fs=fs)
 
 
@@ -191,13 +195,13 @@ def test_run_version_missing_marker():
 def test_run_cli_subpkg_missing():
     fs = _fs(exists=lambda p: p != _CLI_PKG)
     runner = mock.Mock(side_effect=_ok_sequence())
-    with pytest.raises(DistcheckError, match="cli sub-pkg missing"):
+    with pytest.raises(DistcheckError, match="addon sub-pkg missing"):
         run("/ts", _HOST, runner=runner, fs=fs)
 
 
 def test_run_cli_subpkg_name_mismatch_greater():
     # A name lexicographically GREATER than host.name -- kills `!=` -> `<`.
-    fs = _fs(read_name="@dirsql/cli-wrong")
+    fs = _fs(read_name="@dirsql/lib-wrong")
     runner = mock.Mock(side_effect=_ok_sequence())
     with pytest.raises(DistcheckError, match="name mismatch"):
         run("/ts", _HOST, runner=runner, fs=fs)
@@ -205,7 +209,7 @@ def test_run_cli_subpkg_name_mismatch_greater():
 
 def test_run_cli_subpkg_name_mismatch_lesser():
     # A name lexicographically LESS than host.name -- kills `!=` -> `>`.
-    fs = _fs(read_name="@dirsql/cli-aaa")
+    fs = _fs(read_name="@dirsql/lib-aaa")
     runner = mock.Mock(side_effect=_ok_sequence())
     with pytest.raises(DistcheckError, match="name mismatch"):
         run("/ts", _HOST, runner=runner, fs=fs)
@@ -223,3 +227,15 @@ def test_run_rejects_positional_runner():
     # (guards the `*` marker against a `/` positional-only mutation).
     with pytest.raises(TypeError):
         run("/ts", _HOST, mock.Mock())
+
+
+def test_run_rejects_a_still_published_standalone_cli_subpkg():
+    # The addon carries the CLI since #739. If a `@dirsql/cli-<slug>` package
+    # reappears in an install, every consumer is carrying the core twice --
+    # exactly the duplication this slice removed.
+    runner = mock.Mock(side_effect=_ok_sequence())
+    fs = _fs()
+    fs.exists.side_effect = lambda p: True  # including the retired cli- path
+
+    with pytest.raises(DistcheckError, match="standalone-CLI sub-package"):
+        run("/ts", _HOST, runner=runner, fs=fs)

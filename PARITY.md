@@ -513,8 +513,15 @@ those land.
 
 | Surface | Python | Rust | TypeScript |
 |---------|--------|------|------------|
-| `run_cli(argv) -> i32` callable entry point | N (#738) | Y (`cli::run_cli`) | N (#739) |
-| CLI reached by spawning the bundled binary | Y | Y (`cargo install`) | Y |
+| `run_cli(argv)` callable entry point | N (#738) | Y (`cli::run_cli`) | Y (napi `runCli`) |
+| CLI runs in-process through the binding | N (#738) | N/A (is the core) | Y (#739) |
+| CLI reached by spawning a bundled binary | Y | Y (`cargo install`) | N — retired (#739) |
+| Per-platform packages shipping the core | 1 wheel (binary + `.so`) | 1 | **1** (addon only) |
+
+TypeScript closed its half of the gap in #739: the napi addon exports `runCli`
+and the launcher calls it in-process, so the `@dirsql/cli-*` family is no
+longer published (−42.8% per-platform native payload). Python still spawns its
+bundled binary until #738 lands, which is the remaining drift.
 
 ### E2E (CLI / launcher) and distcheck tiers
 

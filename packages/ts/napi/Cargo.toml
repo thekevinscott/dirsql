@@ -8,7 +8,10 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-dirsql.workspace = true
+# `cli` is on so the addon carries `dirsql::cli::run_cli`: the npm launcher
+# calls it in-process instead of spawning a bundled binary (#739), which is
+# what lets the `@dirsql/cli-*` package family go away.
+dirsql = { workspace = true, features = ["cli"] }
 napi = { version = "3", features = ["napi6"] }
 napi-derive = "3"
 

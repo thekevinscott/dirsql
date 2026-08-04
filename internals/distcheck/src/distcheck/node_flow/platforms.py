@@ -1,9 +1,9 @@
 """Host-platform detection for the node distcheck flow (#520).
 
 A Python port of the host-row lookup in `packages/ts/src/platforms.ts`: enough
-of each published target to reconstruct the host's `@dirsql/cli-<slug>`
-sub-package (name, os/cpu constraints, binary suffix) and locate its staged
-binary. Pure -- callers pass the detected `sys.platform` / `platform.machine()`
+of each published target to reconstruct the host's `@dirsql/lib-<slug>`
+sub-package (name, os/cpu constraints, addon filename) and locate its staged
+addon. Pure -- callers pass the detected `sys.platform` / `platform.machine()`
 so both the mapping and the lookup are unit-testable.
 """
 from __future__ import annotations
@@ -22,12 +22,17 @@ class Platform:
 
     @property
     def name(self) -> str:
-        """CLI sub-package name (`@dirsql/cli-<slug>`)."""
-        return f"@dirsql/cli-{self.slug}"
+        """napi addon sub-package name (`@dirsql/lib-<slug>`).
+
+        Since #739 this is the only per-platform family: the addon carries
+        the CLI (`runCli`), so no `@dirsql/cli-<slug>` is published.
+        """
+        return f"@dirsql/lib-{self.slug}"
 
     @property
-    def bin_name(self) -> str:
-        return "dirsql.exe" if self.exe else "dirsql"
+    def addon_name(self) -> str:
+        """The `.node` filename napi emits for this triple."""
+        return f"dirsql.{self.slug}.node"
 
 
 # Mirror of PLATFORMS in packages/ts/src/platforms.ts (the fields the node distcheck
