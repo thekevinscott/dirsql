@@ -34,9 +34,11 @@ use crate::command::DEFAULT_COMMAND_TIMEOUT;
 pub mod execute;
 pub mod init;
 pub mod router;
+pub mod run;
 pub mod serialize;
 pub mod server;
 
+pub use run::run_cli;
 pub use server::{serve, serve_with_state};
 
 /// Re-export of the crate-level baked-in default config

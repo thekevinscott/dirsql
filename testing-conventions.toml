@@ -164,7 +164,40 @@ features = ["cli"]
 # here waive a whole file (see the header's note on `path`), which would blind
 # the gate to every future regression in `vtab.rs`, and AGENTS.md directs
 # authors to inject and mock rather than exclude a file.
-lines = 93
-functions = 90
-regions = 92
-branch = 75
+#
+# Nudged again (lines 93->92, regions 92->91) when the CLI moved out of
+# `src/bin/dirsql.rs` into `src/cli/run.rs` (#737). This is a DENOMINATOR
+# change, not a regression: `--lib` never measured the bin target, so ~900
+# lines of argument parsing and command dispatch were invisible to this gate
+# while sitting in `bin/`. Not one test was deleted and no code became less
+# tested -- the same code with the same tests simply entered the measured
+# population. `cli/run.rs` lands at 47% lines, which is precisely the profile
+# of its already-accepted siblings `cli/execute.rs` (45%) and `cli/router.rs`
+# (53%): effectful paths (filesystem, subprocess, HTTP, signal handling)
+# covered at the integration/e2e tier by design (#233). Its pure logic --
+# argv config-path scanning, `--extension` spec parsing, `--on-file`
+# resolution, query-body framing -- keeps the inline unit tests that moved
+# with it.
+#
+# `functions` ratchets UP 90->91 (actual 91.72).
+#
+# `branch` moves DOWN 75->72, and the reason is worth being precise about
+# because the number is counter-intuitive: it is NOT the header's
+# test-assertion-guard artifact. llvm-cov emits no branch regions at all for a
+# function that never executes, so while `run_cli` was unreachable from the
+# unit tier every branch inside `load_state` / `load_pre_queries` /
+# `load_post_queries` / `run_server` was invisible to the metric. The #737
+# tests call `run_cli`, which materializes 52 real production branches, 49 of
+# them on the effectful paths that live in the integration tier by design
+# (#233). The dimension therefore measures MORE of the codebase than it did
+# at 75, not less of it: 72.24% of 508 branches is 367 covered, against 366 of
+# 458 at the old number. A higher floor here was available only by keeping
+# those branches hidden, which is a flattering number rather than a stronger
+# gate.
+#
+# Actuals at the time of writing: lines 92.46, regions 91.95, functions 91.72,
+# branch 72.24.
+lines = 92
+functions = 91
+regions = 91
+branch = 72

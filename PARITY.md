@@ -496,6 +496,26 @@ incl. #313).
 | Config `[[dirsql.extension]]` `path` as bare package name via SDK `config=` (#313) | Y + integration | N/A | Y + integration |
 | `load_extension()` locked after startup; `suppress_config_extensions` seam | core | Y (`extensions.rs`) | core |
 
+### CLI entry point
+
+**Intentional drift, opened by #737 (slice 1 of #721).** The Rust crate now
+exposes `dirsql::cli::run_cli(argv) -> i32` (behind `--features cli`): the
+CLI's whole argument-parsing and dispatch path as a callable function that
+returns its exit code instead of terminating the process. Python and
+TypeScript have no equivalent yet — their launchers still spawn the bundled
+`dirsql` binary as a subprocess.
+
+That gap is the point of the epic rather than an oversight: #739 (npm) and
+#738 (pip) route each launcher through its binding to this same function, and
+#740 then drops the separately-shipped binary from the wheels/packages, so
+each SDK carries one copy of the core instead of two. Parity is restored when
+those land.
+
+| Surface | Python | Rust | TypeScript |
+|---------|--------|------|------------|
+| `run_cli(argv) -> i32` callable entry point | N (#738) | Y (`cli::run_cli`) | N (#739) |
+| CLI reached by spawning the bundled binary | Y | Y (`cargo install`) | Y |
+
 ### E2E (CLI / launcher) and distcheck tiers
 
 The CLI is a single Rust binary shipped through three channels, so its
