@@ -19,6 +19,7 @@ napi-derive = "3"
 # `unsafe` unless a site opts in explicitly with
 # `#[expect(unsafe_code, reason = ...)]`, which is the guarantee we want.
 unsafe_code = "deny"
+rust_2018_idioms = { level = "warn", priority = -1 }
 
 # The narrow slice of clippy::pedantic worth enforcing (#763); mirrors the
 # core crate's block. The JS<->SQLite value marshaling in lib.rs is exactly

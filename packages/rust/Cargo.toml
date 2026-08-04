@@ -81,6 +81,7 @@ walkdir = "2"
 # with `#[expect(unsafe_code, reason = ...)]`, which is the guarantee we
 # actually want (#763).
 unsafe_code = "deny"
+rust_2018_idioms = { level = "warn", priority = -1 }
 
 # The narrow slice of clippy::pedantic worth enforcing (#763): dirsql marshals
 # sizes, timestamps, and row indexes between usize/u64 and SQLite's i64, where

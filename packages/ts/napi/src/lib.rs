@@ -116,7 +116,7 @@ impl DirSQL {
     pub fn open_async(
         env: Env,
         root: Option<String>,
-        tables: Option<Array>,
+        tables: Option<Array<'_>>,
         ignore: Option<Vec<String>>,
         config: Option<Vec<String>>,
         persist: Option<bool>,
@@ -374,7 +374,7 @@ impl Task for PollEventsTask {
     unsafe_code,
     reason = "raw napi_sys property reads and reference creation"
 )]
-fn parse_tables_from_js(env: Env, tables: Array) -> Result<Vec<Table>> {
+fn parse_tables_from_js(env: Env, tables: Array<'_>) -> Result<Vec<Table>> {
     let raw_env = env.raw();
     let tables_len = tables.len();
     let mut rust_tables: Vec<Table> = Vec::with_capacity(tables_len as usize);

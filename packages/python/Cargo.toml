@@ -29,6 +29,7 @@ pyo3 = { version = "0.28", features = ["extension-module", "generate-import-lib"
 # `forbid` rejects outright (E0453). `deny` still blocks new hand-written
 # `unsafe` unless a site opts in explicitly, which is the guarantee we want.
 unsafe_code = "deny"
+rust_2018_idioms = { level = "warn", priority = -1 }
 
 # The narrow slice of clippy::pedantic worth enforcing (#763); mirrors the
 # core crate's block. No sites in this crate today -- the value is catching

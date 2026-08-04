@@ -33,10 +33,3 @@ futures-channel = "0.3"
 strip = "symbols"
 lto = "fat"
 codegen-units = 1
-
-# NB: no crate inherits this table ([lints] workspace = true would also drag
-# in lints the crates opt into individually); it only still exists to park
-# rust_2018_idioms until #767 decides its fate. Real lint policy lives in each
-# crate's own [lints] table.
-[workspace.lints.rust]
-rust_2018_idioms = { level = "warn", priority = -1 }
