@@ -77,11 +77,22 @@ than it delivers:
 
 **The Rust crate (`packages/rust/`) is the single source of truth for all business logic.** Every language SDK is a thin binding layer that wraps it -- it does NOT reimplement it.
 
-- **`packages/rust/`** -- the `dirsql` Rust crate. All business logic lives here: SQLite operations, glob matching, file scanning, row diffing, file watching, plus the ergonomic user-facing Rust API (builder pattern, async support via tokio). This is the only crate published to crates.io.
+- **`packages/rust/`** -- the `dirsql` Rust crate. All business logic lives here: SQLite operations, glob matching, file scanning, row diffing, file watching, plus the ergonomic user-facing Rust API (builder pattern, async support via tokio) and, behind the `cli` feature, the CLI itself (`src/cli/`). This is the only crate published to crates.io.
 - **`packages/python/`** -- PyO3 bindings wrapping `dirsql`. Thin glue code + async Python wrapper. The underlying binding crate (`dirsql-py-ext`) is not published to crates.io.
 - **`packages/ts/`** -- the `dirsql` npm package. The TypeScript SDK sources live under `src/`; the napi-rs binding crate (`dirsql-napi`) is colocated under `napi/`, built into the `.node` addon the SDK loads at runtime. The binding crate is a Cargo workspace member but is not published to crates.io.
 
 **Never reimplement core logic in a language SDK.** If you're writing SQLite operations, glob matching, file scanning, or row diffing in Python or TypeScript, that code belongs in the Rust crate with a binding exposed to the SDK. The entire point of this architecture is a fast Rust core with language bindings, not three independent implementations.
+
+### The CLI is the binding path, not a separate binary (#721)
+
+The shipped `dirsql` CLI **is** the in-process binding path. `packages/rust/src/cli/` exposes `run_cli(argv) -> i32`; each binding re-exports it (pyo3 `run_cli`, napi `runCli`) and each launcher calls it in its own process. `cargo install dirsql --features cli` still produces a standalone executable — a ~20-line shim over the same `run_cli`, so every entry path runs identical code.
+
+This reverses an earlier statement that the CLI was "a pure Rust binary that never crosses a binding". It did, and that cost every package a second copy of the core: the wheel shipped an extension module *plus* a bundled binary, and npm published `@dirsql/cli-*` alongside `@dirsql/lib-*`. For npm the removal was measured at **−42.8%** of the per-platform native payload (10,139,000 → 5,799,904 B). The pypi wheel drops a binary measured at **5,574,232 B** in #717; the compressed-wheel delta has not been measured on a release build and should be recorded here once a release matrix has run.
+
+Two things fell out of the change and are worth keeping in mind before touching this area:
+
+- **Process semantics are per-launcher, under one shared contract.** Both launchers front the same `run_cli`, but each host needs different wiring to reach the same observable behavior. Node must install a signal listener *before* the call or a signalled process wedges (signal-hook chains to the prior handler; bare Node leaves `SIG_DFL`, which it does not emulate). CPython must *stop* `default_int_handler`'s `KeyboardInterrupt` from overwriting the core's graceful exit code. Both were measured, not reasoned about; the details live in each package's migration fragment.
+- **`run_cli` always returns.** It never terminates the host process, and its codes are ordinary status codes — never 130/143. An embedder stays in control of its own exit.
 
 ## Cross-Language Parity
 
