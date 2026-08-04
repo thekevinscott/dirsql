@@ -1,7 +1,0 @@
-{
-  "command": "pnpm test:e2e",
-  "ran_at": 1785778037,
-  "exit_code": 0,
-  "commit": "6648e353cbed528d53badd06fbfdd9e0cc696df9",
-  "branch": "feat/746-ts-noignore"
-}
