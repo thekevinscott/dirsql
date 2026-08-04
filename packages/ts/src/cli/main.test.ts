@@ -121,7 +121,12 @@ describe("main", () => {
     // CLI; say so rather than throwing a bare TypeError.
     vi.mocked(loadNativeCore).mockReturnValue({} as never);
 
-    await expect(main([])).rejects.toThrow("no callable `runCli` export");
+    // The whole message matters: naming the missing `cli` feature is the
+    // half that tells someone how to fix their build.
+    await expect(main([])).rejects.toThrow(
+      "dirsql: the native addon has no callable `runCli` export; " +
+        "it was built without the `cli` feature.",
+    );
   });
 
   it("stringifies a non-Error rejection", async () => {
