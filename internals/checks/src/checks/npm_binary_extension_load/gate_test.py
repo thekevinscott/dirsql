@@ -36,6 +36,16 @@ def describe_find_binaries():
         ]
         walker.assert_called_once_with("dist")
 
+    def matches_by_value_not_identity():
+        # A name `os.walk` hands back is a fresh string object, never the
+        # interned BIN_NAME literal -- an identity comparison would find
+        # nothing in the real artifact tree.
+        name = "".join(["dir", "sql"])
+        assert name == BIN_NAME
+        assert name is not BIN_NAME
+        walker = mock.Mock(return_value=[("dist", [], [name])])
+        assert find_binaries("dist", walker) == [os.path.join("dist", BIN_NAME)]
+
     def ignores_other_names():
         walker = mock.Mock(return_value=[("dist", [], ["dirsql.exe", "notes.txt"])])
         assert find_binaries("dist", walker) == []
