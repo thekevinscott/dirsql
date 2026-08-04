@@ -956,7 +956,10 @@ mod tests {
             no_ignore: false,
         };
         assert!(cfg.config.is_empty(), "this is the configless shape");
-        assert!(!cfg.extension.is_empty(), "and it still carries an extension");
+        assert!(
+            !cfg.extension.is_empty(),
+            "and it still carries an extension"
+        );
         let specs = parse_extension_specs(&cfg.extension);
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].path, PathBuf::from("/ext/vec0.so"));
