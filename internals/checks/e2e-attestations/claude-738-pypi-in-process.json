@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1785876927,
+  "exit_code": 0,
+  "commit": "b8cd570288699edf47bbd48c43ed8883c26f236d",
+  "branch": "claude/738-pypi-in-process"
+}
