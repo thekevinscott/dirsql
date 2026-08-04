@@ -39,11 +39,13 @@ const HOST = PLATFORMS.find(
 if (!HOST) {
   throw new Error(`unsupported host ${process.platform}-${process.arch}`);
 }
-const BINARY = join(
+// The addon carries the CLI since #739; there is no standalone binary to
+// stage. `pnpm build` drops it under build/napi-<slug>/.
+const ADDON = join(
   PKG_ROOT,
   "build",
-  `bundled-cli-${librarySlug(HOST)}`,
-  HOST.exe ? "dirsql.exe" : "dirsql",
+  `napi-${librarySlug(HOST)}`,
+  `dirsql.${librarySlug(HOST)}.node`,
 );
 
 const PKG_NAME = "dirsql-testext-pkg";
@@ -53,7 +55,7 @@ const PKG_DIR = join(PKG_ROOT, "node_modules", PKG_NAME);
 // `require.resolve("@dirsql/cli-<slug>/dirsql")`. That optional-dep package
 // isn't installed in this dev tree, so stage the freshly-built binary as it so
 // the launcher — which is the entry point under test — can find it.
-const CLI_PKG_DIR = join(PKG_ROOT, "node_modules", HOST.name);
+const CLI_PKG_DIR = join(PKG_ROOT, "node_modules", HOST.libName);
 // The Node launcher entry (package.json `bin.dirsql`), set in beforeAll.
 let LAUNCHER: string;
 
@@ -116,13 +118,17 @@ beforeAll(async () => {
 
   // Stage the built binary as the `@dirsql/cli-<slug>` sub-package the launcher
   // resolves.
-  const binName = HOST.exe ? "dirsql.exe" : "dirsql";
+  const addonName = `dirsql.${librarySlug(HOST)}.node`;
   await mkdir(CLI_PKG_DIR, { recursive: true });
   await writeFile(
     join(CLI_PKG_DIR, "package.json"),
-    JSON.stringify({ name: HOST.name, version: "0.0.0" }),
+    JSON.stringify({
+      name: HOST.libName,
+      version: "0.0.0",
+      main: addonName,
+    }),
   );
-  execFileSync("cp", [BINARY, join(CLI_PKG_DIR, binName)]);
+  execFileSync("cp", [ADDON, join(CLI_PKG_DIR, addonName)]);
 
   // Shim so the binary's `dirsql interpret` spawn (native configs) resolves
   // to the Node launcher.
