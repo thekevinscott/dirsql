@@ -446,6 +446,26 @@ mod python {
         }
     }
 
+    /// Run the `dirsql` CLI in this process and return its exit code.
+    ///
+    /// The console script calls this instead of exec'ing a bundled binary, so
+    /// the wheel ships one copy of the core rather than two (#738). `argv`
+    /// excludes the program name; the core prepends it for clap.
+    ///
+    /// Returns rather than exiting — the caller (bin-shim) owns the process
+    /// exit. Codes are ordinary status codes, never 130/143 (#737).
+    ///
+    /// The GIL is released for the duration: the CLI can run a long-lived
+    /// server, and holding the GIL would wedge every other Python thread in
+    /// the host for its lifetime.
+    #[pyfunction]
+    fn run_cli(py: Python<'_>, argv: Vec<String>) -> i32 {
+        let mut full = Vec::with_capacity(argv.len() + 1);
+        full.push("dirsql".to_string());
+        full.extend(argv);
+        py.detach(|| dirsql::cli::run_cli(full))
+    }
+
     #[pymodule]
     #[pyo3(name = "_dirsql")]
     fn py_dirsql_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -454,6 +474,7 @@ mod python {
         m.add_class::<PyDirSQL>()?;
         m.add_class::<PyRowEvent>()?;
         m.add_class::<PyScanFailure>()?;
+        m.add_function(wrap_pyfunction!(run_cli, m)?)?;
         Ok(())
     }
 

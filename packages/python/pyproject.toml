@@ -66,13 +66,11 @@ exclude = [
 # `python-source = "python"`) once upstream's verifier handles
 # python-source stripping.
 module-name = "dirsql._dirsql"
-# putitoutthere's `[package.bundle_cli]` recipe (see putitoutthere.toml)
-# cross-compiles the `dirsql` bin per target and stages it under
-# `dirsql/_binary/` before `maturin build`, so it ships inside each
-# wheel as package data. The directory is `.gitignore`d; not in
-# source control.
+# No `dirsql/_binary/*` row any more (#738): the wheel ships no standalone
+# binary. The extension module built here carries the CLI (`run_cli`, via
+# the core's `cli` feature) and the console script calls it in-process, so
+# the wheel holds one copy of the core instead of a `.so` plus a binary.
 include = [
-    { path = "dirsql/_binary/*", format = "wheel" },
     { path = "docs/**/*", format = "sdist" },
 ]
 

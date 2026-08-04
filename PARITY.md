@@ -513,15 +513,23 @@ those land.
 
 | Surface | Python | Rust | TypeScript |
 |---------|--------|------|------------|
-| `run_cli(argv)` callable entry point | N (#738) | Y (`cli::run_cli`) | Y (napi `runCli`) |
-| CLI runs in-process through the binding | N (#738) | N/A (is the core) | Y (#739) |
-| CLI reached by spawning a bundled binary | Y | Y (`cargo install`) | N — retired (#739) |
-| Per-platform packages shipping the core | 1 wheel (binary + `.so`) | 1 | **1** (addon only) |
+| `run_cli(argv)` callable entry point | Y (pyo3 `run_cli`) | Y (`cli::run_cli`) | Y (napi `runCli`) |
+| CLI runs in-process through the binding | Y (#738) | N/A (is the core) | Y (#739) |
+| CLI reached by spawning a bundled binary | N — retired (#738) | Y (`cargo install`) | N — retired (#739) |
+| Per-platform artifacts shipping the core | **1** (`.so` only) | 1 | **1** (addon only) |
+| `dirsql server` + Ctrl-C exit code | 0 | 0 | 0 |
 
-TypeScript closed its half of the gap in #739: the napi addon exports `runCli`
-and the launcher calls it in-process, so the `@dirsql/cli-*` family is no
-longer published (−42.8% per-platform native payload). Python still spawns its
-bundled binary until #738 lands, which is the remaining drift.
+**Parity restored.** All three languages now front the same `run_cli`: Rust is
+the core, and both bindings call it in-process rather than spawning a copy.
+Neither published package ships a standalone binary — `cargo install dirsql
+--features cli` remains the way to get one, and it is the same code.
+
+The Ctrl-C row is called out because it is the one place the two launchers
+could silently diverge. Each host reaches a 0 differently: bare Node would
+wedge without a pre-installed listener, while CPython would report 130 unless
+the launcher stops `default_int_handler`'s `KeyboardInterrupt` from
+overwriting the core's graceful 0. Both are handled per-launcher, and both
+were measured rather than assumed (#739, #738).
 
 ### E2E (CLI / launcher) and distcheck tiers
 

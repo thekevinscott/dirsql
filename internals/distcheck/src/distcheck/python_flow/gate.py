@@ -1,8 +1,7 @@
 """Packaging distcheck flow for the published PyPI wheel (#520; was
 the per-package `build_test.py`).
 
-build -> pack -> install -> run: stage the cargo-built `dirsql` binary under
-`dirsql/_binary/` the way the release pipeline's bundle_cli step would, build
+build -> pack -> install -> run: build
 the wheel with `maturin build`, install it into a fresh venv with `pip install`,
 and run the installed `dirsql --version` console script plus an `import dirsql`.
 No mocks -- exactly what `pip install dirsql` gives an end user.
@@ -10,8 +9,8 @@ No mocks -- exactly what `pip install dirsql` gives an end user.
 Caveats:
 - Tests only the host triple/interpreter. Cross-target coverage lives in the
   release pipeline's install matrix (one runner per target).
-- The binary staging is reconstructed here because it is normally done by the
-  release tool. The staged path is the one `dirsql.cli.binary_path()` consumes,
+- No binary staging since #738: the wheel's extension module carries the CLI
+  and the console script calls it in-process, so there is nothing to stage
   so this still exercises the real launcher resolution path.
 
 Effects funnel through an injected `runner` (subprocess.run) and `fs`
@@ -42,11 +41,6 @@ def bin_subdir(os_name: str = os.name) -> str:
     return {"nt": "Scripts"}.get(os_name, "bin")
 
 
-def select_binary(release: str, debug: str, exists) -> str:
-    """Prefer the release binary; fall back to the debug build."""
-    return release if exists(release) else debug
-
-
 def sole_wheel(names) -> str:
     """The single `.whl` among `names`, or raise -- the build must emit one."""
     wheels = [name for name in names if name.endswith(".whl")]
@@ -75,23 +69,7 @@ def run(
     runner=subprocess.run,
     fs: FileSystem = FileSystem(),
 ) -> int:
-    release = os.path.join(repo_root, "target", "release", "dirsql")
-    debug = os.path.join(repo_root, "target", "debug", "dirsql")
-    binary = select_binary(release, debug, fs.exists)
-    if not fs.exists(binary):
-        raise DistcheckError(
-            f"prerequisite missing: dirsql binary not built at {binary}; "
-            "run `cargo build -p dirsql --features cli` first"
-        )
-
-    # Where maturin's wheel `include` (pyproject `dirsql/_binary/*`) picks the
-    # binary up, and where the installed launcher's `binary_path()` looks.
-    stage_dir = os.path.join(pkg_root, "dirsql", "_binary")
     staging = fs.mkdtemp("dirsql-distcheck-")
-    fs.makedirs(stage_dir)
-    staged_binary = os.path.join(stage_dir, "dirsql")
-    fs.copy(binary, staged_binary)
-    fs.chmod(staged_binary, 0o755)
     try:
         wheel_dir = os.path.join(staging, "dist")
         fs.makedirs(wheel_dir)
@@ -157,5 +135,5 @@ def run(
         if not imported.stdout.strip():
             raise DistcheckError(imported_err)
     finally:
-        fs.rmtree(stage_dir)
+        fs.rmtree(staging)
     return 0

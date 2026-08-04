@@ -31,15 +31,10 @@ globs = [
 ]
 first_version = "0.2.8"
 
-# PyPI: maturin-built wheels per target with the Rust CLI binary bundled
-# inside each wheel. `[package.bundle_cli]` below (putitoutthere ≥
-# v0.2.17) cross-compiles the `dirsql` bin per target with
-# `--features cli` (gated behind `[[bin]] required-features` in
-# `packages/rust/Cargo.toml`), stages it into
-# `packages/python/dirsql/_binary/`, and the `[tool.maturin].include`
-# glob picks it up so `pip install dirsql && dirsql ...` and `uvx
-# dirsql` work end-to-end. Upstream verifies wheel contents post-build
-# (`_matrix.yml` wheel-content guard).
+# PyPI: maturin-built wheels per target. The wheel's extension module
+# carries both the SDK and the CLI (`run_cli`, built with the core's `cli`
+# feature), so `pip install dirsql && dirsql ...` and `uvx dirsql` work
+# end-to-end off one artifact -- no bundled binary since #738.
 [[package]]
 name  = "dirsql-py"
 pypi  = "dirsql"
@@ -73,16 +68,10 @@ targets = [
   { triple = "x86_64-pc-windows-msvc", runner = "windows-2025-vs2026" },
 ]
 
-# `crate_path` points at the member crate that declares `[[bin]] dirsql`.
-# putitoutthere #337 makes this work for the cargo-workspace layout: the
-# check walks `[workspace].members`, and the build step pins
-# `--target-dir target` so the cross-compiled binary lands at
-# `packages/rust/target/<triple>/release/dirsql` for the stage step.
-[package.bundle_cli]
-bin        = "dirsql"
-crate_path = "packages/rust"
-stage_to   = "dirsql/_binary"
-features   = ["cli"]
+# No `[package.bundle_cli]` for pypi either (#738): the wheel's extension
+# module carries the CLI, so there is no per-target binary to cross-compile
+# or stage. Neither published package ships a standalone binary now; the
+# crates.io lane still builds one via `cargo install dirsql --features cli`.
 
 # npm: one family. `@dirsql/lib-{triple}` ships the napi-rs `.node`
 # addon, which since #739 carries the CLI too (`runCli`, built with the
@@ -121,8 +110,7 @@ targets = [
 # No `[package.bundle_cli]` here any more (#739): the npm lane ships no
 # standalone binary. The addon built by the `napi` row carries the CLI,
 # so the cross-compile / stage / verify steps upstream gates on
-# `matrix.bundle_cli` have nothing to do for this package. The pypi
-# block above still declares one until #738 lands.
+# `matrix.bundle_cli` have nothing to do for this package.
 
 # PyPI: the in-repo embeddings plugin (plugins/dirsql-plugin-embeddings/).
 # Pure-Python (hatchling) — no `build = "maturin"`, no native `targets`,

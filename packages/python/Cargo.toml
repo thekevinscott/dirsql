@@ -21,7 +21,10 @@ name = "dirsql_py_ext"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-dirsql.workspace = true
+# `cli` is on so the extension module carries `dirsql::cli::run_cli`: the
+# console script calls it in-process instead of exec'ing a bundled binary
+# (#738), which is what lets `dirsql/_binary/` leave the wheel.
+dirsql = { workspace = true, features = ["cli"] }
 pyo3 = { version = "0.28", features = ["extension-module", "generate-import-lib", "abi3-py310"], optional = true }
 
 [lints.rust]
