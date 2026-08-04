@@ -120,17 +120,19 @@ targets = [
 
 # Same `[package.bundle_cli]` shape as the pypi block above, with the
 # same crate / bin / features. Required by upstream `_matrix.yml`: every
-# musl / cross-compile / stage / verify step on the npm bundled-cli row
-# is gated on `matrix.bundle_cli`, so without this subtable the upstream
+# cross-compile / stage / verify step on the npm bundled-cli row is
+# gated on `matrix.bundle_cli`, so without this subtable the upstream
 # pipeline produces no binary at all and the consumer's local
 # `npm run build` (`packages/ts/tools/stage-platform.ts`) silently fills
 # the gap with `cargo build --target x86_64-unknown-linux-gnu` on the
 # ubuntu-latest runner — yielding the glibc-2.39-linked binary that
 # shipped in 0.3.11 / 0.3.12 (dirsql#189). With this block, upstream
-# cross-compiles against the musl-mapped triple and stages the static
-# binary into `packages/ts/build/bundled-cli-{triple}/` AFTER
-# `npm run build` (putitoutthere#386 ordering fix), so the static binary
-# is what reaches the upload-artifact step.
+# compiles Linux rows via cargo-zigbuild against the declared gnu
+# triple at a pinned glibc 2.17 floor (putitoutthere#605 — dynamic, so
+# extensions can dlopen, #762; previously the static musl mapping) and
+# stages the binary into `packages/ts/build/bundled-cli-{triple}/`
+# AFTER `npm run build` (putitoutthere#386 ordering fix), so that
+# binary is what reaches the upload-artifact step.
 [package.bundle_cli]
 bin        = "dirsql"
 crate_path = "packages/rust"

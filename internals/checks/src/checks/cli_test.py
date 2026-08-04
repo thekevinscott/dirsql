@@ -16,3 +16,7 @@ def test_pytest_gate_is_registered():
 
 def test_wheel_extension_load_is_registered():
     assert "wheel-extension-load" in main.commands
+
+
+def test_npm_binary_extension_load_is_registered():
+    assert "npm-binary-extension-load" in main.commands
