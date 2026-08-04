@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1785870777,
+  "exit_code": 0,
+  "commit": "bde85b715dfbabe01485ce6d46a1328e3be310b4",
+  "branch": "claude/762-npm-extension-guard"
+}
