@@ -103,7 +103,8 @@ def run(
     # The probe runs the binary with `cwd` set to a scratch dir, so a relative
     # `--dist-dir` (what release-precheck.yml passes) would otherwise resolve
     # against that scratch dir at exec time and die with ENOENT.
-    binary = abspath(binaries[0])
+    (binary,) = binaries
+    binary = abspath(binary)
     # actions/download-artifact does not preserve the executable bit.
     chmod(binary, 0o755)
 
