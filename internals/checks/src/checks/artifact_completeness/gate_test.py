@@ -1,6 +1,7 @@
 """Colocated unit tests for the artifact-completeness gate (#790)."""
 
 from checks.artifact_completeness.gate import (
+    built_packages,
     declared_targets,
     missing,
     populated,
@@ -55,7 +56,26 @@ def empty(_d):
     return [("x", [], [])]
 
 
+def describe_built_packages():
+    def it_names_a_package_with_any_artifact():
+        assert built_packages([("pkg", "t1")], ["pkg-main"]) == {"pkg"}
+
+    def it_omits_a_package_the_plan_did_not_build():
+        assert built_packages([("pkg", "t1")], ["other-t1"]) == set()
+
+
 def describe_missing():
+    def it_skips_a_package_the_plan_did_not_build_at_all():
+        # The precheck matrix only builds packages the PR touched; a docs-only
+        # PR legitimately produces nothing and must not fail.
+        assert missing("dist", [("pkg", "t1")], [], full) == []
+
+    def it_still_fails_a_built_package_missing_a_target():
+        # #788's signature: the `main` row shipped, the platform rows did not.
+        assert missing("dist", [("pkg", "t1")], ["pkg-main"], full) == [
+            "pkg / t1: no artifact directory matching *t1*"
+        ]
+
     def it_reports_a_target_with_no_matching_artifact():
         assert missing("dist", [("pkg", "aarch64")], ["pkg-x86_64"], full) == [
             "pkg / aarch64: no artifact directory matching *aarch64*"
@@ -84,7 +104,7 @@ def describe_missing():
         assert missing("dist", [("pkg", "t1")], ["pkg-t1", "pkg-napi-t1"], walk) == []
 
     def it_reports_every_failing_pair():
-        assert len(missing("dist", [("p", "a"), ("p", "b")], [], full)) == 2
+        assert len(missing("dist", [("p", "t1"), ("p", "t2")], ["p-main"], full)) == 2
 
 
 def describe_subdirectories():
@@ -127,7 +147,7 @@ def describe_run():
         lines = []
         code = drive(["dirsql-npm-linux-x64-gnu", "dirsql-npm-darwin-arm64"], echo=lines.append)
         assert code == 0
-        assert lines == ["ok artifact-completeness: all 2 declared (package, target) pairs present"]
+        assert lines == ["ok artifact-completeness: all 2 built (package, target) pairs present"]
 
     def it_returns_one_and_names_the_pair_and_the_likely_cause():
         lines = []
@@ -137,8 +157,16 @@ def describe_run():
             "incomplete artifact -- dirsql-npm / darwin-arm64: "
             "no artifact directory matching *darwin-arm64*"
         )
-        assert "1 of 2 declared" in lines[1]
+        assert "1 of the built" in lines[1]
         assert "stages where the engine packages from" in lines[1]
+
+    def it_passes_and_says_so_when_the_plan_built_nothing():
+        lines = []
+        assert drive([], echo=lines.append) == 0
+        assert lines == [
+            "skip artifact-completeness: dirsql-npm -- the plan built no artifacts for it",
+            "ok artifact-completeness: all 0 built (package, target) pairs present",
+        ]
 
     def it_takes_dist_dir_and_config_by_keyword():
         # `*` (not `/`) before the injected seams keeps both nameable.

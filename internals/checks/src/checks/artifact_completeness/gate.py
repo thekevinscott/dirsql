@@ -42,6 +42,17 @@ def populated(directory: str, walk: Callable[[str], Iterable]) -> bool:
     return any(files for _root, _dirs, files in walk(directory))
 
 
+def built_packages(expected: list[tuple[str, str]], entries: list[str]) -> set[str]:
+    """Packages the plan actually built this run.
+
+    The precheck matrix only builds packages whose globs the PR touched, so a
+    PR that changes no shipped source legitimately produces nothing. A package
+    with no artifact at all was not planned; a package with *some* artifacts but
+    missing targets is the #788 signature and must fail.
+    """
+    return {name for name, _ in expected if any(name in entry for entry in entries)}
+
+
 def missing(
     dist_dir: str,
     expected: list[tuple[str, str]],
@@ -49,8 +60,11 @@ def missing(
     walk: Callable[[str], Iterable],
 ) -> list[str]:
     """One `<package> / <target>: <reason>` line per target with no usable artifact."""
+    built = built_packages(expected, entries)
     problems = []
     for name, triple in expected:
+        if name not in built:
+            continue
         matches = [e for e in entries if name in e and triple in e]
         if not matches:
             problems.append(f"{name} / {triple}: no artifact directory matching *{triple}*")
@@ -85,17 +99,24 @@ def run(
     echo: Callable[[str], None] = warn,
 ) -> int:
     expected = declared_targets(config(config_path))
-    problems = missing(dist_dir, expected, entries(dist_dir), walk)
+    found = entries(dist_dir)
+    built = built_packages(expected, found)
+    for name in sorted({n for n, _ in expected} - built):
+        # Logged, never silent: if a package you expected to be built shows up
+        # here, the plan did not build it and this check asserted nothing.
+        echo(f"skip artifact-completeness: {name} -- the plan built no artifacts for it")
+    problems = missing(dist_dir, expected, found, walk)
     for problem in problems:
         echo(f"incomplete artifact -- {problem}")
     if problems:
         echo(
-            f"artifact-completeness: {len(problems)} of {len(expected)} declared "
+            f"artifact-completeness: {len(problems)} of the built "
             f"(package, target) pairs produced no usable artifact in {dist_dir}. "
             "A build row that stages into the wrong directory uploads nothing and "
             "still reports success, so publish would fail after merge. Check the "
             "row's build script stages where the engine packages from."
         )
         return 1
-    echo(f"ok artifact-completeness: all {len(expected)} declared (package, target) pairs present")
+    checked = len([1 for name, _ in expected if name in built])
+    echo(f"ok artifact-completeness: all {checked} built (package, target) pairs present")
     return 0
