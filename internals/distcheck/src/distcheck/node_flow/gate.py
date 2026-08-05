@@ -65,7 +65,7 @@ def run(
 ) -> int:
     # pnpm build (napi:build + tsc + stage:platform) is a CI prerequisite; the
     # staged host addon is its output. Sanity-check rather than rebuild.
-    staged_dir = os.path.join(ts_pkg, "build", f"napi-{host.slug}")
+    staged_dir = os.path.join(ts_pkg, "build", host.slug)
     staged_addon = os.path.join(staged_dir, host.addon_name)
     if not fs.exists(staged_addon):
         raise DistcheckError(
