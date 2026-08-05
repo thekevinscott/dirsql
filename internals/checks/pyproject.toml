@@ -10,7 +10,7 @@ name = "dirsql-github-checks"
 version = "0"
 description = "Repo-only CI helper checks for dirsql, run via .github/workflows."
 requires-python = ">=3.11"
-dependencies = ["click>=8.1"]
+dependencies = ["click>=8.1", "pyyaml>=6"]
 
 [project.scripts]
 # A single entry point for the whole suite -- the click group in `checks/cli.py`

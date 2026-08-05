@@ -17,9 +17,23 @@ The scan covers the two native **binding crates** too (#405): `conventions.yml`'
 Run it locally before pushing:
 
 ```bash
-pip install testing-conventions   # CI always uses the latest release
-just test-conventions
+just preflight                    # every (root, gate) pair conventions.yml declares
+just preflight --dry-run          # print the derived matrix without running it
+just preflight --gate unit-lint   # narrow to one gate (repeatable)
 ```
+
+`just preflight` is `dirsql-checks preflight` (#781): it **derives** the pairs from
+`conventions.yml` rather than restating them, so a caller added to the workflow is a
+pair it runs. It replaced four hand-written recipes that between them named 6 pairs
+across 3 of the 8 scan roots -- so a locally-green run said nothing about the other
+33 pairs, which is how the #777 failures reached CI. It also encodes the invocations
+that differ from the naive one, each of which was a silent false pass before:
+python `mutation` / `unit-coverage` run through the package's own venv (#706),
+typescript through `npx` (only the npm CLI appends `--ts-mutation-adapter`), rust
+`colocated-test` takes no `--base`, `packaging` takes no `--config`, `e2e verify`
+takes neither and wants the package root with `--scope` plus the `[e2e]` table as
+flags. `packaging` is reported **SKIP**: it inspects a built artifact, so use
+`just test-packaging`.
 
 **Exemptions.** The goal is **zero** exemptions, and barrels are no longer an excuse for one. A re-export barrel gets a **colocated test that asserts its public surface** (TS `src/index.ts` ↔ `index.test.ts`, python `dirsql/__init__.py` ↔ `__init___test.py`), exactly as any module would -- it is *tested*, not exempted, so a broken re-export is caught. An `__init__.py` carrying no executable logic is made **truly empty** (0 bytes), which the tool auto-skips with no config entry. A package shell left dead by a feature removal is **deleted**, not parked behind an exemption. When a "barrel" actually holds logic, the fix remains to **extract that logic into colocated-tested modules** (#239). The npm `bin` shim `src/cli/dirsql.ts` is likewise *not* exempt: its error-handling lives in the unit-tested `cli/run-cli.ts`, leaving a trivial `runCli()` shim covered by a mocked distcheck-test.
 
@@ -32,7 +46,7 @@ The gate reruns the real unit suite per mutant, so it needs the native bindings 
 
 **Python mutation now runs in the reusable workflow too** (`conventions.yml`, `python-sdk` gates: `mutation`): the testing-conventions wheel bundles the cosmic-ray adapter as a runtime dependency, so the reusable mutation job resolves the engine from the same `python_env=uv` (`uv sync`) environment it provisions for coverage — no separate install and no bespoke workflow. This retired `python-mutation.yml` (#426). All three SDKs' `mutation` gates now run inside `conventions.yml`.
 
-Run a language locally (after building its native artifact), against your PR's base -- `just mutation` runs all three, or one at a time:
+Run a language locally (after building its native artifact), against your PR's base -- `just preflight --gate mutation` runs all three, or one at a time:
 
 ```bash
 # from packages/python -- `uv run` is REQUIRED, see below
