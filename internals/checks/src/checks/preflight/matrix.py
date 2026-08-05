@@ -28,7 +28,7 @@ ROOT_GATES = [
     "e2e-verify",
 ]
 
-@dataclass(frozen=True)
+@dataclass
 class Gate:
     """A gate's CLI subcommand and which of the shared options it accepts.
 
@@ -62,13 +62,15 @@ GATES = {
 }
 
 
-@dataclass(frozen=True)
+@dataclass
 class Root:
     job: str
     source: str
     languages: list[str]
     gates: list[str]
-    config: str | None = None
+    # "" rather than None when a caller declares no config, keeping every path
+    # in the matrix a plain str.
+    config: str = ""
 
 
 def parse_gate_matrix(text: str) -> list[Root]:
@@ -84,7 +86,7 @@ def parse_gate_matrix(text: str) -> list[Root]:
                 source=inputs["source"],
                 languages=json.loads(inputs.get("languages") or "[]"),
                 gates=json.loads(inputs["gates"]) if inputs.get("gates") else list(ROOT_GATES),
-                config=inputs.get("config"),
+                config=inputs.get("config", ""),
             )
         )
     return roots

@@ -41,10 +41,12 @@ LAUNCHERS = {
 }
 
 
-@dataclass(frozen=True)
+@dataclass
 class Invocation:
     argv: list[str]
-    cwd: str | None
+    # "." rather than None for the repo root: `subprocess.run(cwd=".")` is the
+    # same call, and it keeps every path in this module a plain str.
+    cwd: str
 
 
 def package_root(source: str, exists: Callable[[str], bool]) -> str:
@@ -73,7 +75,7 @@ def invocation(
     gate_name: str,
     base: str,
     exists: Callable[[str], bool],
-    e2e: dict | None = None,
+    e2e: dict,
 ) -> Invocation:
     gate = GATES[gate_name]
     options = []
@@ -89,9 +91,9 @@ def invocation(
         return Invocation(
             [
                 *["uvx", "testing-conventions", *gate.command, *options],
-                *["--scope", root.source, *e2e_flags(e2e or {}), home],
+                *["--scope", root.source, *e2e_flags(e2e), home],
             ],
-            None,
+            ".",
         )
     if gate.runs_suite and language in LAUNCHERS:
         # Paths become relative to the package root we run from, not the repo.
@@ -100,14 +102,14 @@ def invocation(
             options[-1] = os.path.relpath(root.config, cwd)
         source = os.path.relpath(root.source, cwd)
         return Invocation([*LAUNCHERS[language], *gate.command, *options, source], cwd)
-    return Invocation(["uvx", "testing-conventions", *gate.command, *options, root.source], None)
+    return Invocation(["uvx", "testing-conventions", *gate.command, *options, root.source], ".")
 
 
-def default_runner(argv: Sequence[str], cwd: str | None) -> int:
+def default_runner(argv: Sequence[str], cwd: str) -> int:
     return subprocess.run(argv, cwd=cwd, check=False).returncode
 
 
-def read_e2e(config: str | None) -> dict:
+def read_e2e(config: str) -> dict:
     """The `[e2e]` table of a root's testing-conventions config, if it has one."""
     if not config or not os.path.exists(config):
         return {}
@@ -119,16 +121,14 @@ def run(
     conventions: str,
     base: str,
     *,
+    runner: Callable[[Sequence[str], str], int],
+    exists: Callable[[str], bool],
+    e2e_config: Callable[[str], dict],
+    echo: Callable[[str], None],
     only: Sequence[str] = (),
     dry_run: bool = False,
-    runner: Callable[[Sequence[str], str | None], int] = default_runner,
-    exists: Callable[[str], bool] | None = None,
-    e2e_config: Callable[[str | None], dict] | None = None,
-    echo: Callable[[str], None] = print,
 ) -> int:
     """Run the whole matrix; return 0 only when every pair passed."""
-    resolve = exists or os.path.exists
-    read = e2e_config or read_e2e
     failures = []
     skipped = []
     for root, language, gate in pairs(parse_gate_matrix(conventions)):
@@ -139,7 +139,7 @@ def run(
             skipped.append(label)
             echo(f"SKIP {label}: needs a built artifact, which CI builds from the manifest")
             continue
-        call = invocation(root, language, gate, base, resolve, read(root.config))
+        call = invocation(root, language, gate, base, exists, e2e_config(root.config))
         echo(f"==> {label}: {' '.join(call.argv)}")
         if dry_run:
             continue

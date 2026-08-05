@@ -10,14 +10,14 @@ jobs:
       languages: '["python"]'
       source: packages/python/dirsql
       config: testing-conventions.toml
+  unrelated:
+    runs-on: ubuntu-latest
   rust:
     uses: x/y/.github/workflows/testing-conventions.yml@v0
     with:
       languages: '["rust"]'
       source: packages/rust
       gates: '["colocated-test", "packaging"]'
-  unrelated:
-    runs-on: ubuntu-latest
 """
 
 
@@ -35,9 +35,9 @@ def describe_parse_gate_matrix():
         (python, _rust) = parse_gate_matrix(CONVENTIONS)
         assert python.gates == ROOT_GATES
 
-    def it_leaves_config_unset_when_a_caller_omits_it():
+    def it_leaves_config_empty_when_a_caller_omits_it():
         (_python, rust) = parse_gate_matrix(CONVENTIONS)
-        assert rust.config is None
+        assert rust.config == ""
 
     def it_defaults_languages_to_empty_when_a_caller_omits_them():
         text = CONVENTIONS.replace("      languages: '[\"rust\"]'\n", "")
@@ -45,6 +45,8 @@ def describe_parse_gate_matrix():
         assert rust.languages == []
 
     def it_ignores_jobs_that_do_not_call_the_reusable_workflow():
+        # `unrelated` sits BETWEEN two callers in the fixture, so skipping it must
+        # not stop the walk at the first non-caller.
         assert [e.job for e in parse_gate_matrix(CONVENTIONS)] == ["python-sdk", "rust"]
 
 
@@ -52,17 +54,33 @@ def describe_GATES():
     def it_names_a_cli_subcommand_for_every_default_gate():
         assert sorted(GATES) == sorted(ROOT_GATES)
 
-    def it_records_the_options_each_subcommand_actually_accepts():
-        assert (GATES["packaging"].config, GATES["packaging"].base) == (False, False)
-        assert GATES["e2e-verify"].language is False
-        assert GATES["unit-lint"].base is False
-        assert GATES["mutation"].base is True
+    def it_records_the_options_and_needs_of_every_gate():
+        # Every flag in the table asserted at once: each is the difference between
+        # a real run and an argv error or a silent false pass.
+        shape = {
+            name: (g.language, g.config, g.base, g.runs_suite, g.needs_artifact)
+            for name, g in GATES.items()
+        }
+        assert shape == {
+            "colocated-test": (True, True, True, False, False),
+            "unit-lint": (True, True, False, False, False),
+            "integration-lint": (True, True, False, False, False),
+            "unit-coverage": (True, True, True, True, False),
+            "mutation": (True, True, True, True, False),
+            "packaging": (True, False, False, False, True),
+            "e2e-verify": (False, False, True, False, False),
+        }
 
-    def it_flags_the_gates_that_execute_a_suite_or_need_a_built_artifact():
-        assert [name for name, gate in GATES.items() if gate.runs_suite] == [
-            *["unit-coverage", "mutation"]
-        ]
-        assert [name for name, gate in GATES.items() if gate.needs_artifact] == ["packaging"]
+    def it_maps_each_gate_to_its_cli_subcommand():
+        assert {name: g.command for name, g in GATES.items()} == {
+            "colocated-test": ("unit", "colocated-test"),
+            "unit-lint": ("unit", "lint"),
+            "integration-lint": ("integration", "lint"),
+            "unit-coverage": ("unit", "coverage"),
+            "mutation": ("unit", "mutation"),
+            "packaging": ("packaging",),
+            "e2e-verify": ("e2e", "verify"),
+        }
 
 
 def describe_pairs():

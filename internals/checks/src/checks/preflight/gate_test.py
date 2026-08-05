@@ -41,6 +41,9 @@ jobs:
       source: packages/python/dirsql
       gates: '["unit-lint", "mutation"]'
 """
+# `packaging` first, so a `break` in place of the skip's `continue` would drop
+# the pair after it.
+ARTIFACT_FIRST = CONVENTIONS.replace('"unit-lint", "mutation"', '"packaging", "unit-lint"')
 
 
 def has_manifest(path: str) -> bool:
@@ -48,7 +51,7 @@ def has_manifest(path: str) -> bool:
 
 
 def call(root, language, gate, e2e=None):
-    return invocation(root, language, gate, "origin/main", has_manifest, e2e)
+    return invocation(root, language, gate, "origin/main", has_manifest, e2e or {})
 
 
 def describe_package_root():
@@ -81,8 +84,17 @@ def describe_invocation():
                 *["--language", "python"],
                 *["--config", "testing-conventions.toml", "packages/python/dirsql"],
             ],
-            None,
+            ".",
         )
+
+    def it_takes_the_ordinary_path_for_a_gate_name_sorting_below_e2e_verify():
+        # Both paths start `uvx testing-conventions`, so `--scope` is what tells
+        # them apart -- an `<=` here would route colocated-test into e2e's branch.
+        assert call(PY, "python", "colocated-test").argv == [
+            *["uvx", "testing-conventions", "unit", "colocated-test"],
+            *["--language", "python", "--base", "origin/main"],
+            *["--config", "testing-conventions.toml", "packages/python/dirsql"],
+        ]
 
     def it_omits_base_for_a_whole_tree_gate_that_does_not_accept_it():
         assert "--base" not in call(PY, "python", "unit-lint").argv
@@ -109,7 +121,7 @@ def describe_invocation():
                 *["--scope", "packages/python/dirsql"],
                 *["--extra-scope", "packages/rust/src", "packages/python"],
             ],
-            None,
+            ".",
         )
 
     def it_omits_language_for_e2e_verify_which_does_not_accept_it():
@@ -145,7 +157,7 @@ def describe_invocation():
         assert (mutation.cwd, mutation.argv[-1]) == (".", "packages/ts/src")
 
     def it_keeps_a_rust_mutation_gate_on_uvx():
-        assert call(RUST, "rust", "mutation").cwd is None
+        assert call(RUST, "rust", "mutation").cwd == "."
 
 
 def describe_read_e2e():
@@ -176,20 +188,21 @@ def describe_default_runner():
         subprocess_run.assert_called_once_with(["x"], cwd="dir", check=False)
 
 
-def drive(**kwargs):
+def drive(conventions=None, **kwargs):
     defaults = {
+        "runner": lambda _argv, _cwd: 0,
         "exists": has_manifest,
         "e2e_config": lambda _config: {},
         "echo": lambda _line: None,
     }
-    return run(CONVENTIONS, "origin/main", **{**defaults, **kwargs})
+    return run(conventions or CONVENTIONS, "origin/main", **{**defaults, **kwargs})
 
 
 def describe_run():
     def it_runs_every_pair_and_returns_zero_when_all_pass():
         calls = []
         assert drive(runner=lambda argv, cwd: calls.append((argv, cwd)) or 0) == 0
-        assert [c[1] for c in calls] == [None, "packages/python"]
+        assert [c[1] for c in calls] == [".", "packages/python"]
 
     def it_returns_one_and_names_each_failing_pair():
         lines = []
@@ -198,19 +211,33 @@ def describe_run():
         assert "FAIL python-sdk [python] mutation" in lines
         assert "preflight: 1 failing pair(s), 0 skipped" in lines
 
+    def it_counts_any_non_zero_exit_as_a_failure_including_a_negative_one():
+        # A signal-killed gate reports a negative code; `> 0` would call it a pass.
+        assert drive(runner=lambda _argv, _cwd: -1) == 1
+
     def it_skips_an_artifact_gate_without_failing_and_says_so():
         lines = []
-        code = run(
-            CONVENTIONS.replace('"unit-lint", "mutation"', '"unit-lint", "packaging"'),
-            "origin/main",
+        code = drive(
+            conventions=ARTIFACT_FIRST,
             runner=lambda _argv, _cwd: 0,
-            exists=has_manifest,
-            e2e_config=lambda _config: {},
             echo=lines.append,
         )
         assert code == 0
-        assert "SKIP python-sdk [python] packaging: needs a built artifact, which CI builds from the manifest" in lines
+        assert lines[0] == (
+            "SKIP python-sdk [python] packaging: "
+            "needs a built artifact, which CI builds from the manifest"
+        )
         assert "preflight: 0 failing pair(s), 1 skipped" in lines
+
+    def it_keeps_going_past_a_skipped_gate_to_the_pairs_after_it():
+        lines = []
+        drive(conventions=ARTIFACT_FIRST, runner=lambda _argv, _cwd: 0, echo=lines.append)
+        assert [line[:4] for line in lines[:2]] == ["SKIP", "==> "]
+
+    def it_keeps_going_past_a_filtered_out_gate_to_the_pairs_after_it():
+        lines = []
+        drive(only=["mutation"], echo=lines.append)
+        assert len([line for line in lines if line.startswith("==>")]) == 1
 
     def it_echoes_the_argv_it_is_about_to_run():
         lines = []
@@ -228,15 +255,24 @@ def describe_run():
             "testing-conventions unit mutation --language python --base origin/main dirsql"
         ]
 
-    def it_prints_without_running_when_dry_run():
-        calls = []
-        code = drive(dry_run=True, runner=lambda argv, cwd: calls.append((argv, cwd)) or 1)
+    def it_prints_every_pair_without_running_any_when_dry_run():
+        calls, lines = [], []
+        code = drive(
+            dry_run=True,
+            runner=lambda argv, cwd: calls.append((argv, cwd)) or 1,
+            echo=lines.append,
+        )
         assert (calls, code) == ([], 0)
+        assert len([line for line in lines if line.startswith("==>")]) == 2
 
-    def it_defaults_to_the_real_runner_filesystem_and_config_reader():
-        with mock.patch(
-            "checks.preflight.gate.subprocess.run",
-            return_value=mock.Mock(returncode=0),
-        ):
-            with mock.patch("checks.preflight.gate.os.path.exists", return_value=False):
-                assert run(CONVENTIONS, "origin/main", echo=lambda _line: None) == 0
+    def it_takes_conventions_and_base_by_keyword():
+        # `*` (not `/`) before the injected seams: the two leading parameters must
+        # stay nameable, since every caller passes the workflow text by name.
+        assert run(
+            conventions=CONVENTIONS,
+            base="origin/main",
+            runner=lambda _argv, _cwd: 0,
+            exists=has_manifest,
+            e2e_config=lambda _config: {},
+            echo=lambda _line: None,
+        ) == 0
