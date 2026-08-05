@@ -1,4 +1,4 @@
-// Stage napi addons + bundled CLI binaries for every target the host
+// Stage napi addons for every target the host
 // runner can build. Putitoutthere's matrix runs `npm run build` on a
 // runner without passing `matrix.target`, so this script can't ask
 // which (mode, triple) the current row wants. We instead build for
@@ -65,7 +65,7 @@ export interface StagePlatformOptions {
 }
 
 export interface StageResult {
-  staged: { triple: string; napiOutDir: string; cliOutDir: string }[];
+  staged: { triple: string; napiOutDir: string }[];
 }
 
 export function stagePlatform(opts: StagePlatformOptions = {}): StageResult {
@@ -99,9 +99,6 @@ function stageOne(args: StageOneArgs): StageResult["staged"][number] {
   const { tsPkg, repo, host, target, spawn } = args;
   const triple = librarySlug(target);
   const isHost = host.triple === target.triple;
-  const exe = target.exe === true;
-  const binName = exe ? "dirsql.exe" : "dirsql";
-
   // 1. Ensure the cargo target is installed (idempotent). Must run
   //    before any cross-target build — both `napi build --target` and
   //    `cargo build --target` shell out to rustc, which fails with
@@ -175,45 +172,13 @@ function stageOne(args: StageOneArgs): StageResult["staged"][number] {
   mkdirSync(napiOutDir, { recursive: true });
   copyFileSync(napiSrc, join(napiOutDir, `dirsql.${triple}.node`));
 
-  // 3. Cargo build the standalone CLI binary. The bin is gated behind
-  //    `--features cli` (packages/rust/Cargo.toml `[[bin]]
-  //    required-features`); without the flag cargo silently skips it.
-  const cargo = spawn(
-    "cargo",
-    [
-      "build",
-      "--release",
-      "--bin",
-      "dirsql",
-      "--features",
-      "cli",
-      "--manifest-path",
-      join(repo, "packages", "rust", "Cargo.toml"),
-      "--target",
-      target.triple,
-    ],
-    { stdio: "inherit" },
-  );
-  if (cargo.status !== 0) {
-    throw new Error(`cargo build failed (exit ${cargo.status})`);
-  }
-
-  const cliSrc = join(repo, "target", target.triple, "release", binName);
-  /* v8 ignore start -- defensive: cargo returned 0 but produced no binary */
-  if (!existsSync(cliSrc)) {
-    throw new Error(`cargo build: missing binary at ${cliSrc}`);
-  }
-  /* v8 ignore stop */
-
-  const cliOutDir = join(tsPkg, "build", `bundled-cli-${triple}`);
-  rmSync(cliOutDir, { recursive: true, force: true });
-  mkdirSync(cliOutDir, { recursive: true });
-  copyFileSync(cliSrc, join(cliOutDir, binName));
-
+  // No standalone CLI binary is staged any more (#739): the addon above
+  // carries `runCli`, and the launcher calls it in-process. Building one
+  // here would compile a second copy of the core that nothing ships.
   process.stdout.write(
-    `staged ${triple} (${isHost ? "host" : "cross"}): napi -> ${napiOutDir}, cli -> ${cliOutDir}\n`,
+    `staged ${triple} (${isHost ? "host" : "cross"}): napi -> ${napiOutDir}\n`,
   );
-  return { triple, napiOutDir, cliOutDir };
+  return { triple, napiOutDir };
 }
 
 /* v8 ignore start -- script-invocation guard; tests import `stagePlatform` directly */

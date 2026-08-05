@@ -15,7 +15,6 @@ from distcheck.python_flow.gate import (
     bin_subdir,
     check_wheel_tag,
     run,
-    select_binary,
     sole_wheel,
 )
 
@@ -66,14 +65,6 @@ def test_run_rejects_positional_maturin():
         run("/pkg", "/repo", "maturin")
 
 
-def test_select_binary_prefers_release_when_present():
-    assert select_binary("rel", "dbg", lambda p: p == "rel") == "rel"
-
-
-def test_select_binary_falls_back_to_debug():
-    assert select_binary("rel", "dbg", lambda p: False) == "dbg"
-
-
 def test_sole_wheel_returns_the_single_wheel():
     assert sole_wheel(["notes.txt", _WHEEL]) == _WHEEL
 
@@ -108,11 +99,11 @@ def test_run_success_executes_the_full_sequence():
     # maturin defaulted (not passed) -- proves the default tool name is used.
     assert run("/pkg", "/repo", runner=runner, fs=fs) == 0
 
-    fs.copy.assert_called_once_with(
-        "/repo/target/release/dirsql", "/pkg/dirsql/_binary/dirsql"
-    )
-    fs.chmod.assert_called_once_with("/pkg/dirsql/_binary/dirsql", 0o755)
-    fs.rmtree.assert_called_once_with("/pkg/dirsql/_binary")
+    # Nothing is staged into the package tree any more (#738): the wheel's
+    # extension module carries the CLI, so there is no binary to copy in.
+    fs.copy.assert_not_called()
+    fs.chmod.assert_not_called()
+    fs.rmtree.assert_called_once_with("/stg")
 
     # Full calls -- kwargs asserted too, so a flipped capture_output/text/cwd
     # does not survive.
@@ -145,19 +136,12 @@ def test_run_success_executes_the_full_sequence():
     )
 
 
-def test_run_missing_binary_raises_prereq_before_staging():
-    fs = _fs(exists=lambda p: False)
-    with pytest.raises(DistcheckError, match="prerequisite missing"):
-        run("/pkg", "/repo", runner=mock.Mock(), fs=fs)
-    fs.copy.assert_not_called()
-
-
 def test_run_maturin_build_failure_still_cleans_up():
     fs = _fs()
     runner = mock.Mock(side_effect=[_res(rc=1, stdout="o", stderr="e")])
     with pytest.raises(DistcheckError, match="maturin build failed"):
         run("/pkg", "/repo", runner=runner, fs=fs)
-    fs.rmtree.assert_called_once_with("/pkg/dirsql/_binary")
+    fs.rmtree.assert_called_once_with("/stg")
 
 
 def test_run_venv_failure():

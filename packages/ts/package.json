@@ -147,6 +147,7 @@
     }
   },
   "dependencies": {
+    "bin-shim": "^0.2.0",
     "smol-toml": "^1.6.1"
   },
   "devDependencies": {

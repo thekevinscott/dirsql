@@ -39,6 +39,22 @@ pub fn parse_table_name(ddl: String) -> Option<String> {
     core_parse_table_name(&ddl)
 }
 
+/// Run the `dirsql` CLI in this process and return its exit code.
+///
+/// The npm launcher calls this instead of spawning a bundled binary, so the
+/// addon is the only copy of the core a package ships (#739). `argv` excludes
+/// the program name; the core prepends it for clap.
+///
+/// Returns rather than exiting — the caller (bin-shim's `mainInProcess`) owns
+/// the process exit. Codes are ordinary status codes, never 130/143 (#737).
+#[napi(js_name = "runCli")]
+pub fn run_cli(argv: Vec<String>) -> i32 {
+    let mut full = Vec::with_capacity(argv.len() + 1);
+    full.push("dirsql".to_string());
+    full.extend(argv);
+    dirsql::cli::run_cli(full)
+}
+
 /// A row-level event emitted by the file watcher.
 ///
 /// `table` is nullable because error events may occur before a file has

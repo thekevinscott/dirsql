@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/ -x -q",
+  "ran_at": 1785873153,
+  "exit_code": 0,
+  "commit": "c5f2a08d38a02c59dde741cddad42720e7efc003",
+  "branch": "claude/737-cli-run-shim"
+}

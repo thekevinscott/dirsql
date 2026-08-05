@@ -39,11 +39,13 @@ const HOST = PLATFORMS.find(
 if (!HOST) {
   throw new Error(`unsupported host ${process.platform}-${process.arch}`);
 }
-const BINARY = join(
+// The addon carries the CLI since #739; there is no standalone binary to
+// stage. `pnpm build` drops it under build/napi-<slug>/.
+const ADDON = join(
   PKG_ROOT,
   "build",
-  `bundled-cli-${librarySlug(HOST)}`,
-  HOST.exe ? "dirsql.exe" : "dirsql",
+  `napi-${librarySlug(HOST)}`,
+  `dirsql.${librarySlug(HOST)}.node`,
 );
 
 let LAUNCHER: string;
@@ -151,14 +153,18 @@ beforeAll(async () => {
   // private node_modules, delivered via NODE_PATH (see header comment).
   STAGE_ROOT = await mkdtemp(join(tmpdir(), "dirsql-query-contract-"));
   NODE_PATH_DIR = join(STAGE_ROOT, "node_modules");
-  const cliPkgDir = join(NODE_PATH_DIR, HOST.name);
-  const binName = HOST.exe ? "dirsql.exe" : "dirsql";
+  const cliPkgDir = join(NODE_PATH_DIR, HOST.libName);
+  const addonName = `dirsql.${librarySlug(HOST)}.node`;
   await mkdir(cliPkgDir, { recursive: true });
   await writeFile(
     join(cliPkgDir, "package.json"),
-    JSON.stringify({ name: HOST.name, version: "0.0.0" }),
+    JSON.stringify({
+      name: HOST.libName,
+      version: "0.0.0",
+      main: addonName,
+    }),
   );
-  execFileSync("cp", [BINARY, join(cliPkgDir, binName)]);
+  execFileSync("cp", [ADDON, join(cliPkgDir, addonName)]);
 
   // One server over a one-file table for the whole (read-only) suite.
   const dataDir = join(STAGE_ROOT, "data");

@@ -496,6 +496,41 @@ incl. #313).
 | Config `[[dirsql.extension]]` `path` as bare package name via SDK `config=` (#313) | Y + integration | N/A | Y + integration |
 | `load_extension()` locked after startup; `suppress_config_extensions` seam | core | Y (`extensions.rs`) | core |
 
+### CLI entry point
+
+**Intentional drift, opened by #737 (slice 1 of #721).** The Rust crate now
+exposes `dirsql::cli::run_cli(argv) -> i32` (behind `--features cli`): the
+CLI's whole argument-parsing and dispatch path as a callable function that
+returns its exit code instead of terminating the process. Python and
+TypeScript have no equivalent yet — their launchers still spawn the bundled
+`dirsql` binary as a subprocess.
+
+That gap is the point of the epic rather than an oversight: #739 (npm) and
+#738 (pip) route each launcher through its binding to this same function, and
+#740 then drops the separately-shipped binary from the wheels/packages, so
+each SDK carries one copy of the core instead of two. Parity is restored when
+those land.
+
+| Surface | Python | Rust | TypeScript |
+|---------|--------|------|------------|
+| `run_cli(argv)` callable entry point | Y (pyo3 `run_cli`) | Y (`cli::run_cli`) | Y (napi `runCli`) |
+| CLI runs in-process through the binding | Y (#738) | N/A (is the core) | Y (#739) |
+| CLI reached by spawning a bundled binary | N — retired (#738) | Y (`cargo install`) | N — retired (#739) |
+| Per-platform artifacts shipping the core | **1** (`.so` only) | 1 | **1** (addon only) |
+| `dirsql server` + Ctrl-C exit code | 0 | 0 | 0 |
+
+**Parity restored.** All three languages now front the same `run_cli`: Rust is
+the core, and both bindings call it in-process rather than spawning a copy.
+Neither published package ships a standalone binary — `cargo install dirsql
+--features cli` remains the way to get one, and it is the same code.
+
+The Ctrl-C row is called out because it is the one place the two launchers
+could silently diverge. Each host reaches a 0 differently: bare Node would
+wedge without a pre-installed listener, while CPython would report 130 unless
+the launcher stops `default_int_handler`'s `KeyboardInterrupt` from
+overwriting the core's graceful 0. Both are handled per-launcher, and both
+were measured rather than assumed (#739, #738).
+
 ### E2E (CLI / launcher) and distcheck tiers
 
 The CLI is a single Rust binary shipped through three channels, so its

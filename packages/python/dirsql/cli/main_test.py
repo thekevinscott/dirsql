@@ -1,173 +1,166 @@
 """Unit tests for the launcher's `main`."""
 
 import io
-import os
 import sys
 from unittest.mock import patch
 
 from . import main as main_module
-from .main import main
+from .main import _absorb_interrupt, main, with_core_owned_signals
 
 
-class _Completed:
-    def __init__(self, returncode: int):
-        self.returncode = returncode
+def describe_with_core_owned_signals():
+    def it_installs_the_absorbing_handler_and_returns_the_previous_one():
+        recorded = {}
+
+        def fake_signal(signum, new):
+            recorded["signum"] = signum
+            recorded["new"] = new
+            return "prior-handler"
+
+        assert with_core_owned_signals(fake_signal) == "prior-handler"
+        assert recorded["signum"] == main_module.signal.SIGINT
+        assert recorded["new"] is _absorb_interrupt
+
+    def it_absorbs_the_interrupt_without_raising():
+        # The whole point: it must NOT raise KeyboardInterrupt, or a graceful
+        # `dirsql server` shutdown (the core returns 0) surfaces as 130.
+        assert _absorb_interrupt(main_module.signal.SIGINT, None) is None
 
 
 def describe_main():
-    def describe_when_binary_path_raises_file_not_found():
+    def describe_when_argv_middleware_raises():
         def it_returns_1_and_writes_a_dirsql_prefixed_message_to_stderr():
             fake_stderr = io.StringIO()
             with (
                 patch.object(
                     main_module,
-                    "binary_path",
-                    side_effect=FileNotFoundError("bundled `dirsql` missing"),
+                    "with_discovered_plugins",
+                    side_effect=RuntimeError("plugin blew up"),
                 ),
                 patch.object(sys, "stderr", fake_stderr),
             ):
                 assert main([]) == 1
-            assert fake_stderr.getvalue() == "dirsql: bundled `dirsql` missing\n"
+            assert fake_stderr.getvalue() == "dirsql: plugin blew up\n"
 
-    def describe_on_windows():
-        def it_runs_the_binary_via_subprocess_and_returns_its_returncode():
+    def describe_when_the_core_runs():
+        def it_returns_the_cores_exit_code():
             with (
-                patch.object(main_module, "binary_path", return_value="C:/dirsql.exe"),
-                patch.object(main_module, "is_windows", return_value=True),
                 patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(main_module, "with_resolved_extensions", lambda a: a),
-                patch(
-                    "dirsql.cli.main.subprocess.run", return_value=_Completed(7)
-                ) as run,
-            ):
-                assert main(["--version"]) == 7
-            run.assert_called_once_with(["C:/dirsql.exe", "--version"])
-
-        def it_does_not_invoke_execv():
-            with (
-                patch.object(main_module, "binary_path", return_value="C:/dirsql.exe"),
-                patch.object(main_module, "is_windows", return_value=True),
-                patch.object(main_module, "with_discovered_plugins", lambda a: a),
-                patch.object(main_module, "with_resolved_extensions", lambda a: a),
-                patch("dirsql.cli.main.subprocess.run", return_value=_Completed(0)),
-                patch.object(os, "execv") as execv,
-            ):
-                main([])
-            execv.assert_not_called()
-
-    def describe_on_posix():
-        def it_hands_off_to_execv_with_the_binary_argv_pair():
-            with (
                 patch.object(
-                    main_module, "binary_path", return_value="/usr/local/bin/dirsql"
+                    main_module, "with_core_owned_signals", return_value="prior"
                 ),
-                patch.object(main_module, "is_windows", return_value=False),
-                patch.object(main_module, "with_discovered_plugins", lambda a: a),
-                patch.object(main_module, "with_resolved_extensions", lambda a: a),
-                patch.object(os, "execv") as execv,
-            ):
-                main(["query", "select 1"])
-            execv.assert_called_once_with(
-                "/usr/local/bin/dirsql",
-                ["/usr/local/bin/dirsql", "query", "select 1"],
-            )
-
-        def it_resolves_config_extensions_before_handing_off():
-            with (
-                patch.object(main_module, "binary_path", return_value="/bin/dirsql"),
-                patch.object(main_module, "is_windows", return_value=False),
-                patch.object(main_module, "with_discovered_plugins", lambda a: a),
+                patch.object(main_module.signal, "signal"),
                 patch.object(
-                    main_module,
-                    "with_resolved_extensions",
-                    lambda a: [*a, "--extension", "/abs/x.so"],
-                ),
-                patch.object(os, "execv") as execv,
+                    main_module, "run_in_process", return_value=23
+                ) as run_in_process,
             ):
-                main(["--config", "cfg.toml"])
-            execv.assert_called_once_with(
-                "/bin/dirsql",
-                ["/bin/dirsql", "--config", "cfg.toml", "--extension", "/abs/x.so"],
+                assert main(["query", "SELECT 1"]) == 23
+            run_in_process.assert_called_once_with(
+                argv=["query", "SELECT 1"], module="dirsql._dirsql"
             )
 
         def it_discovers_plugins_before_resolving_extensions():
-            # Discovery injects `-c <fragment>` into argv; extension resolution
-            # must then see the already-injected argv (so a fragment's own
-            # extensions could be resolved). Order matters.
-            seen: list[list[str]] = []
+            # Discovery injects `-c <fragment>`; extension resolution must see
+            # that fragment, so the order is load-bearing.
             with (
-                patch.object(main_module, "binary_path", return_value="/bin/dirsql"),
-                patch.object(main_module, "is_windows", return_value=False),
                 patch.object(
-                    main_module,
-                    "with_discovered_plugins",
-                    lambda a: [*a, "-c", "/frag.toml"],
+                    main_module, "with_discovered_plugins", lambda a: [*a, "-c", "p"]
                 ),
                 patch.object(
                     main_module,
                     "with_resolved_extensions",
-                    lambda a: seen.append(list(a)) or a,
+                    lambda a: [*a, "--extension", "/r/vec0"],
                 ),
-                patch.object(os, "execv"),
+                patch.object(
+                    main_module, "with_core_owned_signals", return_value="prior"
+                ),
+                patch.object(main_module.signal, "signal"),
+                patch.object(
+                    main_module, "run_in_process", return_value=0
+                ) as run_in_process,
             ):
-                main([])
-            assert seen == [["-c", "/frag.toml"]]
+                assert main(["query"]) == 0
+            assert run_in_process.call_args.kwargs["argv"] == [
+                "query",
+                "-c",
+                "p",
+                "--extension",
+                "/r/vec0",
+            ]
 
-        def it_returns_1_when_extension_resolution_fails():
+        def it_defaults_argv_to_sys_argv_minus_the_program_name():
+            with (
+                patch.object(sys, "argv", ["dirsql", "--version"]),
+                patch.object(main_module, "with_discovered_plugins", lambda a: a),
+                patch.object(main_module, "with_resolved_extensions", lambda a: a),
+                patch.object(
+                    main_module, "with_core_owned_signals", return_value="prior"
+                ),
+                patch.object(main_module.signal, "signal"),
+                patch.object(
+                    main_module, "run_in_process", return_value=0
+                ) as run_in_process,
+            ):
+                assert main() == 0
+            assert run_in_process.call_args.kwargs["argv"] == ["--version"]
+
+    def describe_when_the_core_cannot_be_reached():
+        def it_returns_1_with_the_message():
             fake_stderr = io.StringIO()
             with (
-                patch.object(main_module, "binary_path", return_value="/bin/dirsql"),
                 patch.object(main_module, "with_discovered_plugins", lambda a: a),
+                patch.object(main_module, "with_resolved_extensions", lambda a: a),
+                patch.object(
+                    main_module, "with_core_owned_signals", return_value="prior"
+                ),
+                patch.object(main_module.signal, "signal"),
                 patch.object(
                     main_module,
-                    "with_resolved_extensions",
-                    side_effect=ValueError("not installed"),
+                    "run_in_process",
+                    side_effect=RuntimeError("no run_cli export"),
                 ),
                 patch.object(sys, "stderr", fake_stderr),
             ):
-                assert main(["--config", "cfg.toml"]) == 1
-            assert "not installed" in fake_stderr.getvalue()
+                assert main([]) == 1
+            assert fake_stderr.getvalue() == "dirsql: no run_cli export\n"
 
-        def it_returns_0_when_execv_returns():
-            # In production `os.execv` never returns. The mock returns,
-            # so `main` falls through to `return 0`.
+    def describe_signal_ownership():
+        def it_restores_the_previous_handler_after_the_run():
+            restored = []
             with (
-                patch.object(main_module, "binary_path", return_value="/bin/dirsql"),
-                patch.object(main_module, "is_windows", return_value=False),
                 patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(main_module, "with_resolved_extensions", lambda a: a),
-                patch.object(os, "execv"),
+                patch.object(
+                    main_module, "with_core_owned_signals", return_value="prior"
+                ),
+                patch.object(
+                    main_module.signal,
+                    "signal",
+                    lambda signum, h: restored.append((signum, h)),
+                ),
+                patch.object(main_module, "run_in_process", return_value=0),
             ):
                 assert main([]) == 0
+            assert restored == [(main_module.signal.SIGINT, "prior")]
 
-    def describe_when_argv_is_none():
-        def it_pulls_from_sys_argv_skipping_the_program_name():
+        def it_restores_the_previous_handler_even_when_the_run_raises():
+            restored = []
             with (
-                patch.object(sys, "argv", ["dirsql", "--help"]),
-                patch.object(main_module, "binary_path", return_value="C:/dirsql.exe"),
-                patch.object(main_module, "is_windows", return_value=True),
                 patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(main_module, "with_resolved_extensions", lambda a: a),
-                patch(
-                    "dirsql.cli.main.subprocess.run", return_value=_Completed(0)
-                ) as run,
+                patch.object(
+                    main_module, "with_core_owned_signals", return_value="prior"
+                ),
+                patch.object(
+                    main_module.signal,
+                    "signal",
+                    lambda signum, h: restored.append((signum, h)),
+                ),
+                patch.object(
+                    main_module, "run_in_process", side_effect=RuntimeError("boom")
+                ),
+                patch.object(sys, "stderr", io.StringIO()),
             ):
-                main(argv=None)
-            run.assert_called_once_with(["C:/dirsql.exe", "--help"])
-
-    def describe_when_argv0_is_interpret():
-        """`interpret` is forwarded to the bundled Rust binary like any other
-        argv (the binary rejects it as an unknown subcommand)."""
-
-        def it_forwards_interpret_to_the_binary_instead_of_intercepting():
-            with (
-                patch.object(main_module, "binary_path", return_value="/bin/dirsql"),
-                patch.object(main_module, "is_windows", return_value=True),
-                patch.object(main_module, "with_discovered_plugins", lambda a: a),
-                patch.object(main_module, "with_resolved_extensions", lambda a: a),
-                patch(
-                    "dirsql.cli.main.subprocess.run", return_value=_Completed(2)
-                ) as run,
-            ):
-                assert main(["interpret", "config.py"]) == 2
-            run.assert_called_once_with(["/bin/dirsql", "interpret", "config.py"])
+                assert main([]) == 1
+            assert restored == [(main_module.signal.SIGINT, "prior")]

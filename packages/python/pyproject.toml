@@ -23,6 +23,9 @@ dependencies = [
     # to the backport it was derived from. Drop this the day the floor reaches
     # 3.11 again.
     'tomli>=2; python_version < "3.11"',
+    # The console script runs the CLI in-process through this (#738); without
+    # it `dirsql.cli.main` cannot import.
+    "bin-shim>=0.1",
 ]
 
 # Dev/test dependencies live in a PEP 735 dependency-group (not a
@@ -66,13 +69,11 @@ exclude = [
 # `python-source = "python"`) once upstream's verifier handles
 # python-source stripping.
 module-name = "dirsql._dirsql"
-# putitoutthere's `[package.bundle_cli]` recipe (see putitoutthere.toml)
-# cross-compiles the `dirsql` bin per target and stages it under
-# `dirsql/_binary/` before `maturin build`, so it ships inside each
-# wheel as package data. The directory is `.gitignore`d; not in
-# source control.
+# No `dirsql/_binary/*` row any more (#738): the wheel ships no standalone
+# binary. The extension module built here carries the CLI (`run_cli`, via
+# the core's `cli` feature) and the console script calls it in-process, so
+# the wheel holds one copy of the core instead of a `.so` plus a binary.
 include = [
-    { path = "dirsql/_binary/*", format = "wheel" },
     { path = "docs/**/*", format = "sdist" },
 ]
 

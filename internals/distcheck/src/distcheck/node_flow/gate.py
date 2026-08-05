@@ -64,20 +64,21 @@ def run(
     fs: FileSystem = FileSystem(),
 ) -> int:
     # pnpm build (napi:build + tsc + stage:platform) is a CI prerequisite; the
-    # staged host CLI binary is its output. Sanity-check rather than rebuild.
-    staged_cli = os.path.join(ts_pkg, "build", f"bundled-cli-{host.slug}")
-    staged_binary = os.path.join(staged_cli, host.bin_name)
-    if not fs.exists(staged_binary):
+    # staged host addon is its output. Sanity-check rather than rebuild.
+    staged_dir = os.path.join(ts_pkg, "build", f"napi-{host.slug}")
+    staged_addon = os.path.join(staged_dir, host.addon_name)
+    if not fs.exists(staged_addon):
         raise DistcheckError(
-            f"prerequisite missing: {staged_binary}. "
+            f"prerequisite missing: {staged_addon}. "
             "Run `pnpm build` from packages/ts first."
         )
 
     staging = fs.mkdtemp("dirsql-distcheck-")
 
-    # 1. Reconstruct + pack the host `@dirsql/cli-<slug>` sub-package -- the
-    #    minimum shape the launcher's `require.resolve('<pkg>/dirsql')` needs.
-    cli_pkg_dir = os.path.join(staging, "cli-pkg")
+    # 1. Reconstruct + pack the host `@dirsql/lib-<slug>` sub-package -- the
+    #    minimum shape `loadNativeCore()` needs to `require` the addon, which
+    #    since #739 serves the CLI as well as the SDK.
+    cli_pkg_dir = os.path.join(staging, "lib-pkg")
     fs.makedirs(cli_pkg_dir)
     fs.write_text(
         os.path.join(cli_pkg_dir, "package.json"),
@@ -85,14 +86,15 @@ def run(
             {
                 "name": host.name,
                 "version": "0.0.0-e2e",
+                "main": host.addon_name,
                 "os": host.os,
                 "cpu": host.cpu,
             }
         ),
     )
-    packed_binary = os.path.join(cli_pkg_dir, host.bin_name)
-    fs.copy(staged_binary, packed_binary)
-    fs.chmod(packed_binary, 0o755)
+    packed_addon = os.path.join(cli_pkg_dir, host.addon_name)
+    fs.copy(staged_addon, packed_addon)
+    fs.chmod(packed_addon, 0o755)
 
     cli_pack = runner(
         ["npm", "pack", "--pack-destination", staging],
@@ -100,9 +102,9 @@ def run(
         capture_output=True,
         text=True,
     )
-    _require_zero(cli_pack, f"cli npm pack failed:\n{cli_pack.stdout}\n{cli_pack.stderr}")
+    _require_zero(cli_pack, f"addon npm pack failed:\n{cli_pack.stdout}\n{cli_pack.stderr}")
     cli_tarball = os.path.join(
-        staging, select_tarball(fs.listdir(staging), "dirsql-cli-")
+        staging, select_tarball(fs.listdir(staging), "dirsql-lib-")
     )
 
     # 2. Pack the main `dirsql` package through its real `prepack` hook.
@@ -116,7 +118,7 @@ def run(
         main_pack, f"main pnpm pack failed:\n{main_pack.stdout}\n{main_pack.stderr}"
     )
     main_tarball = os.path.join(
-        staging, select_tarball(fs.listdir(staging), "dirsql-", exclude="dirsql-cli-")
+        staging, select_tarball(fs.listdir(staging), "dirsql-", exclude="dirsql-lib-")
     )
 
     # 3. Fresh dir, exactly what an end user installs into.
@@ -133,7 +135,7 @@ def run(
     )
     _require_zero(npm_install, f"npm install failed:\n{npm_install.stderr}")
 
-    # 4. The `dirsql` bin should exist and execute against the bundled binary.
+    # 4. The `dirsql` bin should exist and run the CLI in-process via the addon.
     bin_path = os.path.join(install_root, "node_modules", ".bin", "dirsql")
     if not fs.exists(bin_path):
         raise DistcheckError(f"bin missing at {bin_path}")
@@ -147,15 +149,25 @@ def run(
         raise DistcheckError(version_err)
 
     # 5. Cross-check the published layout: the launcher resolves to a real
-    #    binary inside the installed `@dirsql/cli-<slug>` sub-package.
+    #    addon inside the installed `@dirsql/lib-<slug>` sub-package, and no
+    #    standalone-CLI family is installed alongside it (#739).
     cli_pkg_installed = os.path.join(
         install_root, "node_modules", *host.name.split("/")
     )
     if not fs.exists(cli_pkg_installed):
-        raise DistcheckError(f"cli sub-pkg missing at {cli_pkg_installed}")
+        raise DistcheckError(f"addon sub-pkg missing at {cli_pkg_installed}")
     installed = json.loads(fs.read_text(os.path.join(cli_pkg_installed, "package.json")))
     if installed.get("name") != host.name:
         raise DistcheckError(
-            f"cli sub-pkg name mismatch: expected {host.name!r}, saw {installed.get('name')!r}"
+            f"addon sub-pkg name mismatch: expected {host.name!r}, saw {installed.get('name')!r}"
+        )
+    stale_cli = os.path.join(
+        install_root, "node_modules", "@dirsql", f"cli-{host.slug}"
+    )
+    if fs.exists(stale_cli):
+        raise DistcheckError(
+            f"a standalone-CLI sub-package is still published at {stale_cli}; "
+            "the addon carries the CLI since #739, so shipping one would put "
+            "a second copy of the core in every install."
         )
     return 0
