@@ -87,7 +87,22 @@ than it delivers:
 
 The shipped `dirsql` CLI **is** the in-process binding path. `packages/rust/src/cli/` exposes `run_cli(argv) -> i32`; each binding re-exports it (pyo3 `run_cli`, napi `runCli`) and each launcher calls it in its own process. `cargo install dirsql --features cli` still produces a standalone executable — a ~20-line shim over the same `run_cli`, so every entry path runs identical code.
 
-This reverses an earlier statement that the CLI was "a pure Rust binary that never crosses a binding". It did, and that cost every package a second copy of the core: the wheel shipped an extension module *plus* a bundled binary, and npm published `@dirsql/cli-*` alongside `@dirsql/lib-*`. For npm the removal was measured at **−42.8%** of the per-platform native payload (10,139,000 → 5,799,904 B). The pypi wheel drops a binary measured at **5,574,232 B** in #717; the compressed-wheel delta has not been measured on a release build and should be recorded here once a release matrix has run.
+This reverses an earlier statement that the CLI was "a pure Rust binary that never crosses a binding". It did, and that cost every package a second copy of the core: the wheel shipped an extension module *plus* a bundled binary, and npm published `@dirsql/cli-*` alongside `@dirsql/lib-*`.
+
+Both registries are now measured on published artifacts, not projected. For npm, **−42.8%** of the per-platform native payload (10,139,000 → 5,799,904 B), one artifact per platform instead of two. For pypi, the compressed wheels published to the index (`0.4.14`, the last release carrying the bundled binary, against `0.4.15`, the first without it):
+
+| wheel | 0.4.14 | 0.4.15 | delta |
+| --- | ---: | ---: | ---: |
+| `macosx_10_12_x86_64` | 4,680,619 | 2,665,292 | −43.06% |
+| `macosx_11_0_arm64` | 4,390,969 | 2,502,594 | −43.01% |
+| `manylinux_2_39_aarch64` | 4,735,237 | 2,686,944 | −43.26% |
+| `manylinux_2_39_x86_64` | 5,009,679 | 2,834,832 | −43.41% |
+| `win_amd64` | 4,835,120 | 2,792,775 | −42.24% |
+| **all five** | **23,651,624** | **13,482,437** | **−43.00%** |
+
+The sdist grows 387,241 → 393,115 B (+1.52%), which is expected: it ships source, and the relocation added some.
+
+Two numbers from the planning phase should not be quoted as the wheel result. #717 measured the bundled binary at **5,574,232 B** — that is the *uncompressed* file removed, not the compressed delta. The spike's **−50.8%** was the *installed native payload* (9,992,536 → 4,916,576 B), again uncompressed. Compressed wheels shrink less because the binary and the extension module share compressible content; **−43.00%** is the figure a user's download actually changes by.
 
 Two things fell out of the change and are worth keeping in mind before touching this area:
 
