@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1785874337,
+  "exit_code": 0,
+  "commit": "b17fb6d3368d869e4d87d4498af30dfbbd67b633",
+  "branch": "claude/775-probe-abspath"
+}

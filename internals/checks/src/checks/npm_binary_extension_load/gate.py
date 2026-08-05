@@ -83,6 +83,7 @@ def run(
     makedirs=os.makedirs,
     chmod=os.chmod,
     writer=write_text,
+    abspath=os.path.abspath,
 ) -> int:
     binaries = find_binaries(dist_dir, walker)
     if len(binaries) > 1:
@@ -99,7 +100,11 @@ def run(
             "probe skipped."
         )
         return 0
+    # The probe runs the binary with `cwd` set to a scratch dir, so a relative
+    # `--dist-dir` (what release-precheck.yml passes) would otherwise resolve
+    # against that scratch dir at exec time and die with ENOENT.
     (binary,) = binaries
+    binary = abspath(binary)
     # actions/download-artifact does not preserve the executable bit.
     chmod(binary, 0o755)
 

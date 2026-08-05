@@ -112,6 +112,7 @@ def describe_run():
         makedirs = mock.Mock()
         chmod = mock.Mock()
         writer = mock.Mock()
+        abspath = mock.Mock(side_effect=lambda p: os.path.join("/abs", p))
         assert (
             run(
                 "dist",
@@ -121,10 +122,11 @@ def describe_run():
                 makedirs=makedirs,
                 chmod=chmod,
                 writer=writer,
+                abspath=abspath,
             )
             == 0
         )
-        binary = os.path.join("dist", BIN_NAME)
+        binary = os.path.join("/abs", "dist", BIN_NAME)
         chmod.assert_called_once_with(binary, 0o755)
         mkdtemp.assert_called_once_with("dirsql-npm-extension-probe-")
         makedirs.assert_called_once_with(os.path.join("/staging", "data"))
@@ -174,6 +176,7 @@ def describe_run():
             makedirs=mock.Mock(),
             chmod=mock.Mock(),
             writer=mock.Mock(),
+            abspath=mock.Mock(side_effect=lambda p: os.path.join("/abs", p)),
         )
 
     def venv_failure_raises():
@@ -244,8 +247,24 @@ def describe_run():
         )
         assert _run_with(runner) == 0
         out = capsys.readouterr().out
-        binary = os.path.join("dist", BIN_NAME)
+        binary = os.path.join("/abs", "dist", BIN_NAME)
         assert (
             f'ok npm-binary-extension-load: {binary} loaded sqlite-vec ([{{"v":"v0.1.9"}}])'
             in out
         )
+
+    def runs_the_binary_by_absolute_path():
+        # The probe execs with `cwd` set to a scratch dir, so a relative
+        # --dist-dir (what release-precheck.yml passes) must be resolved
+        # first or the exec dies with ENOENT against the scratch dir.
+        runner = mock.Mock(
+            side_effect=[
+                _result(0),
+                _result(0),
+                _result(0, stdout="/v/vec0\n"),
+                _result(0, stdout='[{"v":"v0.1.9"}]'),
+            ]
+        )
+        assert _run_with(runner) == 0
+        probe_argv = runner.call_args_list[3][0][0]
+        assert os.path.isabs(probe_argv[0]), probe_argv[0]

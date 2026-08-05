@@ -581,6 +581,15 @@ fn load_configless_state(cfg: &ConfigArgs, path_table_parser: Option<String>) ->
     };
 
     let mut builder = cfg.apply_index_flags(DirSQL::builder().root(root));
+    // `--extension` applies here too (#772). Without this the flag was
+    // silently ignored whenever no `-c` was given: `dirsql query "SELECT
+    // vec_version()" --extension <path>` reported `no such function` rather
+    // than loading anything, and `--extension /nonexistent.so` exited 0. A
+    // path-table query over an extension-provided function is a legitimate
+    // configless use, and a bad path must still fail loudly.
+    if !cfg.extension.is_empty() {
+        builder = builder.extensions(parse_extension_specs(&cfg.extension));
+    }
     if let Some(command) = path_table_parser {
         builder = builder.path_table_parser(command);
     }
@@ -930,6 +939,31 @@ mod tests {
             err.contains("config file"),
             "the error must point at config files, got: {err}"
         );
+    }
+
+    #[test]
+    fn configless_state_still_carries_extension_specs() {
+        // `--extension` with no `-c` took the configless path, which never
+        // applied the specs: the flag was silently ignored and a bad path
+        // exited 0 (#772). Parsing is the seam a unit test can reach; the
+        // load itself needs a real SQLite handle and is covered at the
+        // integration tier.
+        let cfg = ConfigArgs {
+            config: Vec::new(),
+            include_default: false,
+            extension: vec!["/ext/vec0.so::sqlite3_vec_init".to_string()],
+            persist: None,
+            no_ignore: false,
+        };
+        assert!(cfg.config.is_empty(), "this is the configless shape");
+        assert!(
+            !cfg.extension.is_empty(),
+            "and it still carries an extension"
+        );
+        let specs = parse_extension_specs(&cfg.extension);
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].path, PathBuf::from("/ext/vec0.so"));
+        assert_eq!(specs[0].entrypoint.as_deref(), Some("sqlite3_vec_init"));
     }
 
     #[test]
