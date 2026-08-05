@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1785971858,
+  "exit_code": 0,
+  "commit": "29c86aa4e99c0d7c8b81c4e7764a409f495f1940",
+  "branch": "claude/790-artifact-completeness"
+}
