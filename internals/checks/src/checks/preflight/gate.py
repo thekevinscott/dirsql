@@ -5,6 +5,11 @@ from `conventions.yml`, and hand-transcribed shell one-liners whose non-zero exi
 gets masked (`... ; echo ok`). Here the argv is derived and the exit code is the
 return value.
 
+Before the gates, each python root gets two drift guards (#782): `uv sync`, which
+reconciles the venv with the manifest, and `declared-deps`, which asserts every
+import is declared. A `uv pip install` leaves the local venv strictly more capable
+than any real install, and no amount of running more gates catches that.
+
 Three pairs cannot be run the naive way, and each is encoded rather than skipped:
 
   * python `mutation` / `unit-coverage` -- `uvx` supplies its own environment, so
@@ -117,6 +122,36 @@ def read_e2e(config: str) -> dict:
         return tomllib.load(handle).get("e2e", {})
 
 
+def prepare(roots: list[Root], exists: Callable[[str], bool]) -> list[tuple[str, str, Invocation]]:
+    """Per-python-root steps that guard against venv drift (#782).
+
+    `uv sync` reconciles the venv with the manifest, *removing* anything a
+    `uv pip install` left behind, so an undeclared dependency stops resolving
+    locally the way it never resolved in CI. `declared-deps` is the direct
+    assertion, independent of whatever the venv happens to hold.
+    """
+    steps = []
+    for root in roots:
+        if "python" not in root.languages:
+            continue
+        home = package_root(root.source, exists)
+        steps.append((root.job, "uv-sync", Invocation(["uv", "sync", "--project", home], ".")))
+        steps.append(
+            (
+                root.job,
+                "declared-deps",
+                Invocation(
+                    [
+                        *["uv", "run", "--project", "internals/checks", "dirsql-checks"],
+                        *["declared-deps", root.source],
+                    ],
+                    ".",
+                ),
+            )
+        )
+    return steps
+
+
 def run(
     conventions: str,
     base: str,
@@ -129,9 +164,20 @@ def run(
     dry_run: bool = False,
 ) -> int:
     """Run the whole matrix; return 0 only when every pair passed."""
+    roots = parse_gate_matrix(conventions)
     failures = []
     skipped = []
-    for root, language, gate in pairs(parse_gate_matrix(conventions)):
+
+    def attempt(label: str, call: Invocation) -> None:
+        echo(f"==> {label}: {' '.join(call.argv)}")
+        if not dry_run and runner(call.argv, call.cwd) != 0:
+            failures.append(label)
+
+    for job, step, call in prepare(roots, exists):
+        if only and step not in only:
+            continue
+        attempt(f"{job} [python] {step}", call)
+    for root, language, gate in pairs(roots):
         if only and gate not in only:
             continue
         label = f"{root.job} [{language}] {gate}"
@@ -139,12 +185,7 @@ def run(
             skipped.append(label)
             echo(f"SKIP {label}: needs a built artifact, which CI builds from the manifest")
             continue
-        call = invocation(root, language, gate, base, exists, e2e_config(root.config))
-        echo(f"==> {label}: {' '.join(call.argv)}")
-        if dry_run:
-            continue
-        if runner(call.argv, call.cwd) != 0:
-            failures.append(label)
+        attempt(label, invocation(root, language, gate, base, exists, e2e_config(root.config)))
     for label in failures:
         echo(f"FAIL {label}")
     echo(f"preflight: {len(failures)} failing pair(s), {len(skipped)} skipped")

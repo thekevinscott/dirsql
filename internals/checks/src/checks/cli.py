@@ -9,6 +9,7 @@ from __future__ import annotations
 import click
 
 from checks.changelog_gate.cli import cli as changelog_gate
+from checks.declared_deps.cli import cli as declared_deps
 from checks.npm_binary_extension_load.cli import cli as npm_binary_extension_load
 from checks.preflight.cli import cli as preflight
 from checks.pytest_gate.cli import cli as pytest_gate
@@ -21,6 +22,7 @@ def main() -> None:
 
 
 main.add_command(changelog_gate, name="changelog-gate")
+main.add_command(declared_deps, name="declared-deps")
 main.add_command(npm_binary_extension_load, name="npm-binary-extension-load")
 main.add_command(preflight, name="preflight")
 main.add_command(pytest_gate, name="pytest-gate")

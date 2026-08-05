@@ -82,6 +82,10 @@ e2e-attest-ts:
 #
 # `packaging` is reported SKIP, not run: it inspects a BUILT artifact, which CI
 # builds from each manifest. Use `just test-packaging` for that locally.
+#
+# Each python root is first reconciled with its manifest (`uv sync`) and checked
+# for undeclared imports (`declared-deps`, #782) -- a `uv pip install` leaves the
+# venv strictly more capable than any real install, which no gate can detect.
 preflight *ARGS:
     uv run --project internals/checks dirsql-checks preflight {{ARGS}}
 

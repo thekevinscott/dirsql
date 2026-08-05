@@ -4,6 +4,7 @@ from unittest import mock
 
 from checks.preflight.gate import (
     Invocation,
+    prepare,
     default_runner,
     e2e_flags,
     invocation,
@@ -188,6 +189,29 @@ def describe_default_runner():
         subprocess_run.assert_called_once_with(["x"], cwd="dir", check=False)
 
 
+def describe_prepare():
+    def it_syncs_and_checks_declared_deps_for_each_python_root():
+        assert [(job, step, call.argv) for job, step, call in prepare([PY], has_manifest)] == [
+            ("python-sdk", "uv-sync", ["uv", "sync", "--project", "packages/python"]),
+            (
+                "python-sdk",
+                "declared-deps",
+                [
+                    *["uv", "run", "--project", "internals/checks", "dirsql-checks"],
+                    *["declared-deps", "packages/python/dirsql"],
+                ],
+            ),
+        ]
+
+    def it_skips_a_root_with_no_python():
+        assert prepare([RUST], has_manifest) == []
+
+    def it_keeps_going_past_a_non_python_root_to_the_ones_after_it():
+        assert [job for job, _step, _call in prepare([RUST, PY], has_manifest)] == [
+            *["python-sdk", "python-sdk"]
+        ]
+
+
 def drive(conventions=None, **kwargs):
     defaults = {
         "runner": lambda _argv, _cwd: 0,
@@ -199,14 +223,18 @@ def drive(conventions=None, **kwargs):
 
 
 def describe_run():
-    def it_runs_every_pair_and_returns_zero_when_all_pass():
+    def it_runs_the_drift_guards_first_then_every_pair():
         calls = []
         assert drive(runner=lambda argv, cwd: calls.append((argv, cwd)) or 0) == 0
-        assert [c[1] for c in calls] == [".", "packages/python"]
+        assert [argv[:2] for argv, _cwd in calls] == [
+            *[["uv", "sync"], ["uv", "run"]],
+            *[["uvx", "testing-conventions"], ["uv", "run"]],
+        ]
+        assert [cwd for _argv, cwd in calls] == [".", ".", ".", "packages/python"]
 
     def it_returns_one_and_names_each_failing_pair():
         lines = []
-        code = drive(runner=lambda argv, _cwd: 0 if "lint" in argv else 1, echo=lines.append)
+        code = drive(runner=lambda argv, _cwd: 1 if "mutation" in argv else 0, echo=lines.append)
         assert code == 1
         assert "FAIL python-sdk [python] mutation" in lines
         assert "preflight: 1 failing pair(s), 0 skipped" in lines
@@ -223,15 +251,19 @@ def describe_run():
             echo=lines.append,
         )
         assert code == 0
-        assert lines[0] == (
+        assert (
             "SKIP python-sdk [python] packaging: "
             "needs a built artifact, which CI builds from the manifest"
-        )
+        ) in lines
         assert "preflight: 0 failing pair(s), 1 skipped" in lines
 
     def it_keeps_going_past_a_skipped_gate_to_the_pairs_after_it():
         lines = []
-        drive(conventions=ARTIFACT_FIRST, runner=lambda _argv, _cwd: 0, echo=lines.append)
+        drive(
+            conventions=ARTIFACT_FIRST,
+            only=["packaging", "unit-lint"],
+            echo=lines.append,
+        )
         assert [line[:4] for line in lines[:2]] == ["SKIP", "==> "]
 
     def it_keeps_going_past_a_filtered_out_gate_to_the_pairs_after_it():
@@ -241,7 +273,7 @@ def describe_run():
 
     def it_echoes_the_argv_it_is_about_to_run():
         lines = []
-        drive(runner=lambda _argv, _cwd: 0, echo=lines.append)
+        drive(only=["unit-lint"], echo=lines.append)
         assert lines[0] == (
             "==> python-sdk [python] unit-lint: uvx testing-conventions unit lint "
             "--language python packages/python/dirsql"
@@ -263,7 +295,7 @@ def describe_run():
             echo=lines.append,
         )
         assert (calls, code) == ([], 0)
-        assert len([line for line in lines if line.startswith("==>")]) == 2
+        assert len([line for line in lines if line.startswith("==>")]) == 4
 
     def it_takes_conventions_and_base_by_keyword():
         # `*` (not `/`) before the injected seams: the two leading parameters must

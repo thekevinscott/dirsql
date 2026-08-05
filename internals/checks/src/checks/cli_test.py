@@ -22,5 +22,9 @@ def test_npm_binary_extension_load_is_registered():
     assert "npm-binary-extension-load" in main.commands
 
 
+def test_declared_deps_is_registered():
+    assert "declared-deps" in main.commands
+
+
 def test_preflight_is_registered():
     assert "preflight" in main.commands
