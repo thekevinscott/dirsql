@@ -101,7 +101,7 @@ def run(
     expected = declared_targets(config(config_path))
     found = entries(dist_dir)
     built = built_packages(expected, found)
-    for name in sorted({n for n, _ in expected} - built):
+    for name in sorted({n for n, _ in expected if n not in built}):
         # Logged, never silent: if a package you expected to be built shows up
         # here, the plan did not build it and this check asserted nothing.
         echo(f"skip artifact-completeness: {name} -- the plan built no artifacts for it")
@@ -117,6 +117,6 @@ def run(
             "row's build script stages where the engine packages from."
         )
         return 1
-    checked = len([1 for name, _ in expected if name in built])
+    checked = len([name for name, _ in expected if name in built])
     echo(f"ok artifact-completeness: all {checked} built (package, target) pairs present")
     return 0

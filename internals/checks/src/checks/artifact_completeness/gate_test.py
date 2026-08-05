@@ -70,6 +70,13 @@ def describe_missing():
         # PR legitimately produces nothing and must not fail.
         assert missing("dist", [("pkg", "t1")], [], full) == []
 
+    def it_keeps_checking_packages_after_one_it_skipped():
+        # `unbuilt` sorts before `pkg`, so a `break` on the skip would hide the
+        # real failure behind a package the plan never built.
+        assert missing("dist", [("unbuilt", "t1"), ("pkg", "t1")], ["pkg-main"], full) == [
+            "pkg / t1: no artifact directory matching *t1*"
+        ]
+
     def it_still_fails_a_built_package_missing_a_target():
         # #788's signature: the `main` row shipped, the platform rows did not.
         assert missing("dist", [("pkg", "t1")], ["pkg-main"], full) == [
