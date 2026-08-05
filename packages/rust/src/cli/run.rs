@@ -614,16 +614,20 @@ fn load_configless_state(cfg: &ConfigArgs, path_table_parser: Option<String>) ->
         }
     };
 
-    let mut builder = cfg.apply_index_flags(DirSQL::builder().root(root));
     // `--extension` applies here too (#772). Without this the flag was
     // silently ignored whenever no `-c` was given: `dirsql query "SELECT
     // vec_version()" --extension <path>` reported `no such function` rather
     // than loading anything, and `--extension /nonexistent.so` exited 0. A
     // path-table query over an extension-provided function is a legitimate
     // configless use, and a bad path must still fail loudly.
-    if !cfg.extension.is_empty() {
-        builder = builder.extensions(parse_extension_specs(&cfg.extension));
-    }
+    //
+    // Applied unconditionally: `extensions([])` assigns the builder's own
+    // default, and `apply_index_flags` never touches the field, so an
+    // `is_empty()` guard would only add a branch no unit test can reach --
+    // `load_configless_state` needs a real cwd and index (#233).
+    let mut builder = cfg
+        .apply_index_flags(DirSQL::builder().root(root))
+        .extensions(parse_extension_specs(&cfg.extension));
     if let Some(command) = path_table_parser {
         builder = builder.path_table_parser(command);
     }
