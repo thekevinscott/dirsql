@@ -1,12 +1,15 @@
-// Stage napi addons for every target the host
-// runner can build. Putitoutthere's matrix runs `npm run build` on a
-// runner without passing `matrix.target`, so this script can't ask
-// which (mode, triple) the current row wants. We instead build for
-// every target in the same platform family as the host (darwin host →
-// both darwin-x64 and darwin-arm64; linux host → just the host triple,
-// since linux-x64 and linux-arm64 each have their own native runner;
-// windows host → the host triple) and let the workflow's per-row
-// upload step pick from `build/{mode}-{triple}/`.
+// Stage napi addons for every target the host runner can build, into
+// `build/<triple>/` — the directory putitoutthere packages per-platform
+// artifacts from (its README → Recipes → napi family).
+//
+// We build the whole host platform family rather than one triple (darwin host
+// → both darwin-x64 and darwin-arm64; linux host → just the host triple, since
+// linux-x64 and linux-arm64 each get their own native runner; windows host →
+// the host triple) and let the workflow's per-row upload step take the
+// directory its row wants. That is a convenience, not a necessity: the matrix
+// does pass `TARGET` (and `BUILD`) per row, so a future version could build
+// exactly the requested triple. Staging the extra darwin arch costs one cross
+// build and keeps this script independent of the env contract.
 //
 // The napi:build wireit task produces `dirsql.<host-triple>.node` at
 // the package root. For each additional in-family target we run
@@ -167,7 +170,14 @@ function stageOne(args: StageOneArgs): StageResult["staged"][number] {
     napiSrc = out;
   }
 
-  const napiOutDir = join(tsPkg, "build", `napi-${triple}`);
+  // `build/<triple>/` is the directory the engine packages per-platform
+  // artifacts from. A `napi-` prefix here matches nothing at upload time, so
+  // every platform artifact ships EMPTY while the build job still reports
+  // success -- publish only catches it later, at the completeness check (#788).
+  // The prefix was load-bearing while npm had two build rows (napi +
+  // bundled-cli) and the mode segment kept them apart; #776 removed the
+  // second row, and with it the reason for the prefix.
+  const napiOutDir = join(tsPkg, "build", triple);
   rmSync(napiOutDir, { recursive: true, force: true });
   mkdirSync(napiOutDir, { recursive: true });
   copyFileSync(napiSrc, join(napiOutDir, `dirsql.${triple}.node`));
