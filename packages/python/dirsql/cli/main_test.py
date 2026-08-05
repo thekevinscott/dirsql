@@ -1,7 +1,6 @@
 """Unit tests for the launcher's `main`."""
 
 import io
-import signal
 import sys
 from unittest.mock import patch
 
@@ -19,13 +18,13 @@ def describe_with_core_owned_signals():
             return "prior-handler"
 
         assert with_core_owned_signals(fake_signal) == "prior-handler"
-        assert recorded["signum"] == signal.SIGINT
+        assert recorded["signum"] == main_module.signal.SIGINT
         assert recorded["new"] is _absorb_interrupt
 
     def it_absorbs_the_interrupt_without_raising():
         # The whole point: it must NOT raise KeyboardInterrupt, or a graceful
         # `dirsql server` shutdown (the core returns 0) surfaces as 130.
-        assert _absorb_interrupt(signal.SIGINT, None) is None
+        assert _absorb_interrupt(main_module.signal.SIGINT, None) is None
 
 
 def describe_main():
@@ -143,7 +142,7 @@ def describe_main():
                 patch.object(main_module, "run_in_process", return_value=0),
             ):
                 assert main([]) == 0
-            assert restored == [(signal.SIGINT, "prior")]
+            assert restored == [(main_module.signal.SIGINT, "prior")]
 
         def it_restores_the_previous_handler_even_when_the_run_raises():
             restored = []
@@ -164,4 +163,4 @@ def describe_main():
                 patch.object(sys, "stderr", io.StringIO()),
             ):
                 assert main([]) == 1
-            assert restored == [(signal.SIGINT, "prior")]
+            assert restored == [(main_module.signal.SIGINT, "prior")]
