@@ -23,6 +23,9 @@ dependencies = [
     # to the backport it was derived from. Drop this the day the floor reaches
     # 3.11 again.
     'tomli>=2; python_version < "3.11"',
+    # The console script runs the CLI in-process through this (#738); without
+    # it `dirsql.cli.main` cannot import.
+    "bin-shim>=0.1",
 ]
 
 # Dev/test dependencies live in a PEP 735 dependency-group (not a
