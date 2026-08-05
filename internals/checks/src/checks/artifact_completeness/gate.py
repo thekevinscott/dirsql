@@ -79,22 +79,17 @@ def run(
     dist_dir: str,
     config_path: str,
     *,
-    config: Callable[[str], dict] | None = None,
-    entries: Callable[[str], list[str]] | None = None,
+    config: Callable[[str], dict] = read_config,
+    entries: Callable[[str], list[str]] = subdirectories,
     walk: Callable[[str], Iterable] = os.walk,
-    echo: Callable[[str], None] | None = None,
+    echo: Callable[[str], None] = warn,
 ) -> int:
-    # Sentinels rather than direct defaults: a default binds the function object
-    # at def time, so patching the module attribute in a test would not take.
-    read = config or read_config
-    listing = entries or subdirectories
-    say = echo or warn
-    expected = declared_targets(read(config_path))
-    problems = missing(dist_dir, expected, listing(dist_dir), walk)
+    expected = declared_targets(config(config_path))
+    problems = missing(dist_dir, expected, entries(dist_dir), walk)
     for problem in problems:
-        say(f"incomplete artifact -- {problem}")
+        echo(f"incomplete artifact -- {problem}")
     if problems:
-        say(
+        echo(
             f"artifact-completeness: {len(problems)} of {len(expected)} declared "
             f"(package, target) pairs produced no usable artifact in {dist_dir}. "
             "A build row that stages into the wrong directory uploads nothing and "
@@ -102,5 +97,5 @@ def run(
             "row's build script stages where the engine packages from."
         )
         return 1
-    say(f"ok artifact-completeness: all {len(expected)} declared (package, target) pairs present")
+    echo(f"ok artifact-completeness: all {len(expected)} declared (package, target) pairs present")
     return 0

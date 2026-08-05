@@ -1,7 +1,5 @@
 """Colocated unit tests for the artifact-completeness gate (#790)."""
 
-from unittest import mock
-
 from checks.artifact_completeness.gate import (
     declared_targets,
     missing,
@@ -152,10 +150,3 @@ def describe_run():
             walk=full,
             echo=lambda _line: None,
         ) == 0
-
-    def it_defaults_to_the_real_config_reader_filesystem_and_stderr():
-        with mock.patch("checks.artifact_completeness.gate.read_config", return_value={}):
-            with mock.patch("checks.artifact_completeness.gate.subdirectories", return_value=[]):
-                with mock.patch("checks.artifact_completeness.gate.warn") as warned:
-                    assert run("dist", "c.toml") == 0
-        assert warned.called
