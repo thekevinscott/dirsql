@@ -40,11 +40,11 @@ if (!HOST) {
   throw new Error(`unsupported host ${process.platform}-${process.arch}`);
 }
 // The addon carries the CLI since #739; there is no standalone binary to
-// stage. `pnpm build` drops it under build/napi-<slug>/.
+// stage. `pnpm build` drops it under build/<slug>/.
 const ADDON = join(
   PKG_ROOT,
   "build",
-  `napi-${librarySlug(HOST)}`,
+  librarySlug(HOST),
   `dirsql.${librarySlug(HOST)}.node`,
 );
 

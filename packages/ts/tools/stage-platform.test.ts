@@ -130,7 +130,7 @@ describe("stagePlatform", () => {
     const result = stagePlatform({ tsPkg, repo, platform: linuxX64, spawn });
 
     expect(result.staged.map((s) => s.triple)).toEqual(["linux-x64-gnu"]);
-    expect(existsSync(join(tsPkg, "build", "napi-linux-x64-gnu", "dirsql.linux-x64-gnu.node"))).toBe(true);
+    expect(existsSync(join(tsPkg, "build", "linux-x64-gnu", "dirsql.linux-x64-gnu.node"))).toBe(true);
   });
 
   it("on a darwin-arm64 host cross-compiles darwin-x64 from the arm64 host", () => {
@@ -142,9 +142,9 @@ describe("stagePlatform", () => {
     expect(triples).toEqual(["darwin-arm64", "darwin-x64"]);
 
     // Host target picked up the seeded napi output.
-    expect(readFileSync(join(tsPkg, "build", "napi-darwin-arm64", "dirsql.darwin-arm64.node"), "utf8")).toBe("fake-host-node");
+    expect(readFileSync(join(tsPkg, "build", "darwin-arm64", "dirsql.darwin-arm64.node"), "utf8")).toBe("fake-host-node");
     // Cross target invoked napi build --target.
-    expect(readFileSync(join(tsPkg, "build", "napi-darwin-x64", "dirsql.darwin-x64.node"), "utf8")).toBe("fake-cross-darwin-x64");
+    expect(readFileSync(join(tsPkg, "build", "darwin-x64", "dirsql.darwin-x64.node"), "utf8")).toBe("fake-cross-darwin-x64");
   });
 
   it("stages the addon on a Windows host", () => {
@@ -156,7 +156,7 @@ describe("stagePlatform", () => {
 
     expect(
       existsSync(
-        join(tsPkg, "build", "napi-win32-x64-msvc", "dirsql.win32-x64-msvc.node"),
+        join(tsPkg, "build", "win32-x64-msvc", "dirsql.win32-x64-msvc.node"),
       ),
     ).toBe(true);
   });
@@ -166,7 +166,26 @@ describe("stagePlatform", () => {
     const spawn = fakeSpawn();
     stagePlatform({ tsPkg, repo, platform: linuxX64, spawn });
 
-    expect(existsSync(join(tsPkg, "build", "napi-linux-x64-gnu", "dirsql.linux-x64-gnu.node"))).toBe(true);
+    expect(existsSync(join(tsPkg, "build", "linux-x64-gnu", "dirsql.linux-x64-gnu.node"))).toBe(true);
+  });
+
+  it("stages into build/<triple>/ — the directory the engine packages from", () => {
+    // #788: the engine packages per-platform artifacts from `build/<triple>/`
+    // (putitoutthere README → Recipes → napi family). While npm had two build
+    // rows the mode segment was required to keep napi and bundled-cli apart;
+    // #776 dropped the second row, so a `napi-` prefix here means the upload
+    // matches nothing, every platform artifact ships empty, and publish fails
+    // the completeness check while the build job still reports success.
+    seedHostNapiOutput(linuxX64.triple, "suffixed");
+    const spawn = fakeSpawn();
+    const result = stagePlatform({ tsPkg, repo, platform: linuxX64, spawn });
+
+    expect(
+      existsSync(join(tsPkg, "build", "linux-x64-gnu", "dirsql.linux-x64-gnu.node")),
+    ).toBe(true);
+    // And NOT the mode-prefixed directory the engine no longer packages.
+    expect(existsSync(join(tsPkg, "build", "napi-linux-x64-gnu"))).toBe(false);
+    expect(result.staged[0].napiOutDir).toBe(join(tsPkg, "build", "linux-x64-gnu"));
   });
 
   it("throws when no host .node file is present", () => {

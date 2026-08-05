@@ -31,7 +31,7 @@ class _Host:
 _HOST = _Host()
 _CLI_TGZ = "dirsql-lib-linux-x64-gnu-0.0.0-e2e.tgz"
 _MAIN_TGZ = "dirsql-0.0.1.tgz"
-_STAGED = "/ts/build/napi-linux-x64-gnu/dirsql.linux-x64-gnu.node"
+_STAGED = "/ts/build/linux-x64-gnu/dirsql.linux-x64-gnu.node"
 _BIN = "/inst/node_modules/.bin/dirsql"
 _CLI_PKG = "/inst/node_modules/@dirsql/lib-linux-x64-gnu"
 
