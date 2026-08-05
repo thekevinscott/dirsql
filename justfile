@@ -72,49 +72,18 @@ e2e-attest-python:
 e2e-attest-ts:
     cd packages/ts && testing-conventions e2e attest 'pnpm test:e2e'
 
-# Verify each package's e2e attestation is fresh. Mirrors the CI gate, which now
-# runs inside conventions.yml (python-sdk / typescript-sdk `e2e-verify`).
-e2e-verify:
-    cd packages/python && testing-conventions e2e verify
-    cd packages/ts && testing-conventions e2e verify
-    cd internals/checks && testing-conventions e2e verify
-
-# Enforce colocated unit tests via the testing-conventions CLI
-# (install: pip install testing-conventions). Exemptions live in
-# testing-conventions.toml, which the CLI reads by default.
-test-conventions:
-    testing-conventions unit colocated-test --language python packages/python/dirsql
-    testing-conventions unit colocated-test --language typescript packages/ts/src
-    testing-conventions unit colocated-test --language rust packages/rust/src
-    # Isolation (unit lint): all three SDKs.
-    testing-conventions unit lint --language python packages/python/dirsql
-    testing-conventions unit lint --language typescript packages/ts/src
-    testing-conventions unit lint --language rust packages/rust/src
-
-# Enforce the unit-only coverage floor via testing-conventions (#234/#295).
-# Floors live in testing-conventions.toml ([python|typescript|rust].coverage).
-# Needs the native build first (maturin / napi); run `just build` if missing.
-# Rust's branch floor runs `cargo llvm-cov --lib --features cli --branch`, which
-# needs a nightly toolchain + llvm-tools-preview as the active toolchain.
-unit-coverage:
-    cd packages/python && uv run testing-conventions unit coverage --language python --config ../../testing-conventions.toml dirsql
-    cd packages/ts && testing-conventions unit coverage --language typescript --config ../../testing-conventions.toml src
-    testing-conventions unit coverage --language rust --config testing-conventions.toml packages/rust/src
-
-# Mutation gate, diff-scoped against BASE (default origin/main) the way CI scopes
-# it to a PR's own changed lines. Needs the native build first, as unit-coverage does.
+# Every testing-conventions gate CI declares, derived from the (source, gates)
+# pairs in .github/workflows/conventions.yml -- 39 pairs across 8 scan roots
+# (#781). Supersedes the hand-restated `test-conventions` / `unit-coverage` /
+# `mutation` / `e2e-verify` recipes, which named 6 pairs across 3 roots and
+# drifted from the workflow. `--gate` narrows it (repeatable); `--dry-run`
+# prints the matrix without running it. Needs the native build first for the
+# suite-executing gates (maturin / napi); run `just build` if missing.
 #
-# The python arm MUST run through `uv run` from packages/python. cosmic-ray's
-# test-command is a bare `python3 -m pytest`, resolved off PATH: outside the venv
-# that picks an interpreter without pytest at all, so the unmutated baseline is
-# judged failing and the gate aborts before testing a single mutant (#706). `--with`
-# rather than a bare `uv run` so this works without `pip install
-# testing-conventions`, which cannot build in the hosted sandbox.
-mutation BASE="origin/main":
-    cd packages/python && uv run --with testing-conventions testing-conventions unit mutation --language python --base {{BASE}} --config ../../testing-conventions.toml dirsql
-    # npm CLI, not the pypi one: only it appends `--ts-mutation-adapter`, which the rule requires.
-    cd packages/ts && npx -y testing-conventions unit mutation --language typescript --base {{BASE}} --config ../../testing-conventions.toml src
-    testing-conventions unit mutation --language rust --base {{BASE}} --config testing-conventions.toml packages/rust
+# `packaging` is reported SKIP, not run: it inspects a BUILT artifact, which CI
+# builds from each manifest. Use `just test-packaging` for that locally.
+preflight *ARGS:
+    uv run --project internals/checks dirsql-checks preflight {{ARGS}}
 
 # Packaging gate: assert no test files ship in the built .whl / .tgz / .crate.
 # Mirrors the testing-conventions `packaging` gate run in conventions.yml;
@@ -161,4 +130,4 @@ ci:
     just fmt-check
     just test-rust
     just test-ci
-    just test-conventions
+    just preflight

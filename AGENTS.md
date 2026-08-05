@@ -113,12 +113,7 @@ A feature is not done until integration tests pass and cover the new functionali
 
 The colocation rule is a blocking CI gate ([`testing-conventions`](https://github.com/thekevinscott/testing-conventions), wired in `conventions.yml` + `testing-conventions.toml`): every source file needs a colocated unit test (Rust: inline `#[cfg(test)]`), a PR-only co-change check flags modified sources whose test didn't change, and `unit lint` enforces **isolation** -- a unit test must mock every collaborator (Python `patch(...)`, TS `vi.mock`, Rust trait double or relocate the effectful test), never weaken the test. The gates also cover the two binding crates and the repo-tooling `internals/checks` / `internals/distcheck` uv packages. **The exemption count is zero and stays there**: barrels get a colocated surface test, logic gets extracted, dead shells get deleted -- an exemption is never the escape hatch. Full wiring, per-package gate map, and history: `agents/reference/testing-gates.md`.
 
-Run it locally before pushing:
-
-```bash
-pip install testing-conventions   # CI always uses the latest release
-just test-conventions
-```
+**Run every gate CI declares before pushing** with `just preflight` (#781), which *derives* the (source, gate) pairs from `conventions.yml` instead of restating them -- 39 pairs across 8 scan roots, versus the 6 across 3 the four hand-written recipes it replaced covered. It also encodes the invocations that differ from the naive one (python suites via the package venv, typescript via `npx`, per-gate option support), each of which used to pass locally while failing in CI. `--dry-run` prints the matrix; `--gate <name>` narrows it; `packaging` reports SKIP since it needs a built artifact (`just test-packaging`).
 
 ### Mutation (testing-conventions)
 

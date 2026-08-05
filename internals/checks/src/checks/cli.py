@@ -10,6 +10,7 @@ import click
 
 from checks.changelog_gate.cli import cli as changelog_gate
 from checks.npm_binary_extension_load.cli import cli as npm_binary_extension_load
+from checks.preflight.cli import cli as preflight
 from checks.pytest_gate.cli import cli as pytest_gate
 from checks.wheel_extension_load.cli import cli as wheel_extension_load
 
@@ -21,5 +22,6 @@ def main() -> None:
 
 main.add_command(changelog_gate, name="changelog-gate")
 main.add_command(npm_binary_extension_load, name="npm-binary-extension-load")
+main.add_command(preflight, name="preflight")
 main.add_command(pytest_gate, name="pytest-gate")
 main.add_command(wheel_extension_load, name="wheel-extension-load")

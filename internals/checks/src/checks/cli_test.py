@@ -20,3 +20,7 @@ def test_wheel_extension_load_is_registered():
 
 def test_npm_binary_extension_load_is_registered():
     assert "npm-binary-extension-load" in main.commands
+
+
+def test_preflight_is_registered():
+    assert "preflight" in main.commands
