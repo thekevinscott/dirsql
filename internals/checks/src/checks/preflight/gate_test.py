@@ -266,6 +266,14 @@ def describe_run():
         )
         assert [line[:4] for line in lines[:2]] == ["SKIP", "==> "]
 
+    def it_keeps_going_past_a_filtered_out_drift_guard_to_the_next_one():
+        # `uv-sync` comes first, so a `break` on the filter would drop declared-deps.
+        lines = []
+        drive(only=["declared-deps"], echo=lines.append)
+        assert [line.split(": ")[0] for line in lines if line.startswith("==>")] == [
+            "==> python-sdk [python] declared-deps"
+        ]
+
     def it_keeps_going_past_a_filtered_out_gate_to_the_pairs_after_it():
         lines = []
         drive(only=["mutation"], echo=lines.append)

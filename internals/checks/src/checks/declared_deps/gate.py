@@ -37,7 +37,7 @@ def normalize(name: str) -> str:
 def requirement_name(spec: str) -> str:
     """The distribution name from a requirement string, dropping any version/extras."""
     for separator in ("[", "<", ">", "=", "!", "~", ";", " "):
-        spec = spec.split(separator, 1)[0]
+        spec = spec.split(separator)[0]
     return normalize(spec)
 
 

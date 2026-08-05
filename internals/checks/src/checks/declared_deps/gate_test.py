@@ -83,8 +83,8 @@ def describe_package_root():
 
 def describe_first_party():
     def it_names_the_scanned_dir_and_everything_directly_inside_it():
-        assert first_party("src/checks", lambda _d: ["cli.py", "preflight"]) == {
-            *["checks", "cli", "preflight"]
+        assert first_party("src/checks", lambda _d: ["changelog.py", "preflight"]) == {
+            *["checks", "changelog", "preflight"]
         }
 
     def it_ignores_a_trailing_slash_on_the_scanned_dir():
@@ -117,11 +117,25 @@ def describe_undeclared():
     def it_accepts_the_standard_library():
         assert check({"src/main.py": "import os\nimport tomllib\n"}) == []
 
+    def it_keeps_scanning_a_file_after_an_accepted_import():
+        # `ast` sorts before `bin_shim`, so a `break` on the skip would hide it.
+        assert check({"src/main.py": "import ast\nfrom bin_shim import x\n"}) == [
+            "src/main.py: bin_shim"
+        ]
+
     def it_accepts_a_first_party_module():
         assert check({"src/main.py": "import checks\n"}, ours={"checks"}) == []
 
     def it_accepts_a_dev_dependency_in_a_colocated_test():
         assert check({"src/main_test.py": "import pytest\n"}) == []
+
+    def it_accepts_a_dependency_declared_in_both_groups_from_a_test():
+        # `runtime | dev`, not `^`: a name in both lists is still allowed.
+        both = {
+            "project": {"dependencies": ["click"]},
+            "dependency-groups": {"dev": ["click"]},
+        }
+        assert check({"src/main_test.py": "import click\n"}, manifest=both) == []
 
     def it_rejects_a_dev_dependency_in_shipped_source():
         assert check({"src/main.py": "import pytest\n"}) == ["src/main.py: pytest"]
@@ -180,6 +194,18 @@ def describe_run():
         lines = []
         drive({"pkg/src/m.py": "import os\n"}, echo=lines.append)
         assert lines == []
+
+    def it_takes_source_by_keyword():
+        # `*` (not `/`) before the injected seams keeps `source` nameable.
+        assert run(
+            source="pkg/src",
+            manifest=lambda _path: {},
+            distributions=lambda: {},
+            read=lambda _path: "",
+            files=lambda _source: [],
+            ours=lambda _source: set(),
+            echo=lambda _line: None,
+        ) == 0
 
     def it_reads_the_manifest_beside_the_derived_package_root():
         seen = []
