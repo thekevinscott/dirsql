@@ -169,6 +169,24 @@ describe("stagePlatform", () => {
     expect(existsSync(join(tsPkg, "build", "napi-linux-x64-gnu", "dirsql.linux-x64-gnu.node"))).toBe(true);
   });
 
+  it("stages into build/<triple>/ — the directory the engine packages from", () => {
+    // #788: the engine packages per-platform artifacts from `build/<triple>/`
+    // (putitoutthere README → Recipes → napi family). While npm had two build
+    // rows the mode segment was required to keep napi and bundled-cli apart;
+    // #776 dropped the second row, so a `napi-` prefix here means the upload
+    // matches nothing, every platform artifact ships empty, and publish fails
+    // the completeness check while the build job still reports success.
+    seedHostNapiOutput(linuxX64.triple, "suffixed");
+    const spawn = fakeSpawn();
+    const result = stagePlatform({ tsPkg, repo, platform: linuxX64, spawn });
+
+    expect(
+      existsSync(join(tsPkg, "build", "linux-x64-gnu", "dirsql.linux-x64-gnu.node")),
+    ).toBe(true);
+    expect(existsSync(join(tsPkg, "build", "napi-linux-x64-gnu"))).toBe(false);
+    expect(result.staged[0].napiOutDir).toBe(join(tsPkg, "build", "linux-x64-gnu"));
+  });
+
   it("throws when no host .node file is present", () => {
     const spawn = fakeSpawn();
     expect(() => stagePlatform({ tsPkg, repo, platform: linuxX64, spawn })).toThrow(/napi:build produced no .node file/);
