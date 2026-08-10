@@ -462,6 +462,84 @@ fn query_subcommand_rejects_unknown_config_key_with_nonzero_exit() {
 }
 
 #[test]
+fn pre_query_key_in_config_is_rejected_as_unknown() {
+    // The `pre-query` hook is removed (#803): the key is no longer part of the
+    // schema, so `dirsql query` exits non-zero and names it on stderr.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(".dirsql.toml"),
+        "[dirsql]\npre-query = \"echo SELECT 42 AS answer\"\n",
+    )
+    .unwrap();
+
+    let out = run_query_subcommand_with_config(dir.path(), "SELECT 1");
+    assert!(
+        !out.status.success(),
+        "a config carrying the removed `pre-query` key must be a non-zero exit, got {out:?}"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("pre-query"),
+        "stderr must name the removed key, got {stderr:?}"
+    );
+}
+
+#[test]
+fn post_query_key_in_config_is_rejected_as_unknown() {
+    // Same removal contract for `post-query` (#803).
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(".dirsql.toml"),
+        "[dirsql]\npost-query = \"cat\"\n",
+    )
+    .unwrap();
+
+    let out = run_query_subcommand_with_config(dir.path(), "SELECT 1");
+    assert!(
+        !out.status.success(),
+        "a config carrying the removed `post-query` key must be a non-zero exit, got {out:?}"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("post-query"),
+        "stderr must name the removed key, got {stderr:?}"
+    );
+}
+
+#[test]
+fn pre_query_key_degrades_server_with_503_naming_the_key() {
+    // On the server surface the removed key follows the unknown-config-key
+    // contract: the server degrades and `POST /query` returns 503 whose
+    // diagnostic names `pre-query` (#803).
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(".dirsql.toml"),
+        "[dirsql]\npre-query = \"echo SELECT 42 AS answer\"\n",
+    )
+    .unwrap();
+    let port = free_port();
+    let child = spawn_dirsql_with_args(dir.path(), port, &["-c", ".dirsql.toml"]);
+    wait_until_ready(port, Duration::from_secs(10));
+
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT 1"}))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let error = resp.json::<Value>().unwrap()["error"]
+        .as_str()
+        .expect("503 body carries an `error` string")
+        .to_string();
+    assert!(
+        error.contains("pre-query"),
+        "503 diagnostic must name the removed key, got {error:?}"
+    );
+
+    kill_and_wait(child);
+}
+
+#[test]
 fn quoted_identifier_table_in_toml_is_served_over_http() {
     // The quoted DDL identifier resolves to the bare table name `posts`.
     let root = quoted_blog_fixture();
