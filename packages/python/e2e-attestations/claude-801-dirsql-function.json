@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/ -x -q",
+  "ran_at": 1786395102,
+  "exit_code": 0,
+  "commit": "eba891a37ace916246168557b4594b899bb2bc57",
+  "branch": "claude/801-dirsql-function"
+}
