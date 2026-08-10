@@ -265,11 +265,10 @@ Python, Rust, and TypeScript (see *Core Types* and *DirSQL* above).
 **Command-backed events (Epic B, #322) — parity by construction, no drift.**
 The command runner primitive (`dirsql::command::run_command`, B1 #326) lives entirely in
 the Rust core and is **not exposed on any binding's public API** — it has no
-Python/TypeScript surface to keep in parity. The events built on it (`on-file`,
-`pre-query`, `post-query`) are `.dirsql.toml` keys parsed by the shared Rust
-config loader, so every install (`pip` / `npm` / `cargo`) gets identical
-behavior with no per-SDK code. Individual event rows land here as B2–B4 ship.
-All three share one global timeout override, `[dirsql].hook-timeout`
+Python/TypeScript surface to keep in parity. The event built on it (`on-file`)
+is a `.dirsql.toml` key parsed by the shared Rust config loader, so every
+install (`pip` / `npm` / `cargo`) gets identical behavior with no per-SDK
+code. Its timeout override is the global `[dirsql].hook-timeout`
 (`config::Config::hook_timeout`, positive seconds, default 30s; #351).
 
 - **`on-file` (B2 #327).** A **required** `[[table]]` key naming a per-file
@@ -285,28 +284,14 @@ All three share one global timeout override, `[dirsql].hook-timeout`
   with **no** Python/TypeScript public-API surface — the hook-less-table error is
   identical across all three installs, no drift.
 
-- **`pre-query` (B3 #328).** A **server-wide** `[dirsql]` key naming a command
-  that rewrites each `POST /query` body (passed as the `{args}` placeholder) into
-  the plain-text SQL to run; failure → 500 with the stderr tail; 30s default
-  timeout, overridable via the global `[dirsql].hook-timeout` (positive seconds, #351).
-  Parsed by the shared Rust config loader (`config::Config::pre_query`) and
-  wired through the CLI server (`cli::ServerConfig::pre_query` / the `/query`
-  handler; `cli::PreQuery` carries the timeout) — a **CLI-only** surface with
-  **no** Python/TypeScript public-API
-  binding, identical across every install, no drift.
-
-- **`post-query` (B4 #329).** A **server-wide** `[dirsql]` key naming a command
-  that reshapes each successful `POST /query` result set (rows serialized as a
-  JSON array, delivered on stdin and as the `{args}` placeholder for payloads
-  ≤ 96 KiB) into the JSON response body it prints; invalid JSON or a failure
-  (non-zero exit, timeout, spawn error) → 500; 30s default timeout, overridable
-  via the global `[dirsql].hook-timeout` (positive seconds, #351). Parsed by the shared
-  Rust config loader (`config::Config::post_query`) and
-  wired through the CLI
-  server (`cli::ServerConfig::post_query` / the `/query` handler;
-  `cli::PostQuery` carries the timeout) — a
-  **CLI-only** surface with **no** Python/TypeScript public-API binding,
-  identical across every install, no drift.
+- **`pre-query` / `post-query` (B3 #328 / B4 #329) — REMOVED (#803).** The
+  server-wide query hooks (body-rewriting `pre-query`, result-reshaping
+  `post-query`) were deleted in the #800 plugin redesign: the
+  `[dirsql].pre-query` / `[dirsql].post-query` config keys now fail with the
+  standard unknown-key error, and the `cli::PreQuery` / `cli::PostQuery`
+  types (with `ServerConfig::with_pre_query` / `with_post_query`) are gone.
+  They were a **CLI-only** surface with **no** Python/TypeScript public-API
+  binding, so the removal is identical across every install — no drift.
 
 - **`--on-file` (path-table parser, #631).** A `dirsql query` flag naming a
   command that supplies every path-table's rows and schema (a JSON array of row
@@ -535,7 +520,7 @@ were measured rather than assumed (#739, #738).
 
 The CLI is a single Rust binary shipped through three channels, so its
 *behavior* (HTTP `/query` + `/events`, status codes, configless
-path-table queries, `init`, `on-file` / `pre-query` / `post-query` hooks, signal
+path-table queries, `init`, `on-file` hooks, signal
 handling) is covered once, in the Rust e2e/CLI suites (`cli_e2e.rs`,
 `cli_integration.rs`, `init_integration.rs`, `on_file_e2e.rs`). `init` is
 deterministic (#455) so its coverage needs no live-LLM e2e tier — there is

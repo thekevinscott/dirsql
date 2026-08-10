@@ -75,10 +75,10 @@ impl std::fmt::Display for Source {
 /// Order-significant; at least one entry is required and a single entry is
 /// returned unchanged. List-shaped config (`[[table]]`, `[[dirsql.extension]]`,
 /// `ignore`) concatenates in input order. A table-name collision anywhere in
-/// the combined set errors, naming both sources. Single-valued keys
-/// (`pre-query`, `post-query`, `hook-timeout`) defined by more than
-/// one config error, naming both sources — no silent shadowing, no precedence;
-/// defined in exactly one config they merge through unchanged.
+/// the combined set errors, naming both sources. The single-valued
+/// `hook-timeout` key defined by more than one config errors, naming both
+/// sources — no silent shadowing, no precedence; defined in exactly one
+/// config it merges through unchanged.
 ///
 /// Tables whose DDL yields no parseable table name are concatenated without a
 /// collision check; `Db::create_table` rejects them downstream.
@@ -94,8 +94,6 @@ pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
     let mut table_sources: std::collections::HashMap<String, &Source> =
         std::collections::HashMap::new();
 
-    let mut pre_query: Option<(&Source, String)> = None;
-    let mut post_query: Option<(&Source, String)> = None;
     let mut hook_timeout: Option<(&Source, Duration)> = None;
 
     for (source, config) in configs {
@@ -115,18 +113,6 @@ pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
         extensions.extend(config.extensions.iter().cloned());
 
         merge_single(
-            "pre-query",
-            &mut pre_query,
-            config.pre_query.as_ref(),
-            source,
-        )?;
-        merge_single(
-            "post-query",
-            &mut post_query,
-            config.post_query.as_ref(),
-            source,
-        )?;
-        merge_single(
             "hook-timeout",
             &mut hook_timeout,
             config.hook_timeout.as_ref(),
@@ -138,8 +124,6 @@ pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
         ignore,
         tables,
         extensions,
-        pre_query: pre_query.map(|(_, value)| value),
-        post_query: post_query.map(|(_, value)| value),
         hook_timeout: hook_timeout.map(|(_, value)| value),
     })
 }
@@ -175,24 +159,10 @@ pub struct Config {
     /// relative paths are resolved against the config file's parent directory
     /// by the caller (`DirSQLBuilder::resolve`).
     pub extensions: Vec<ExtensionSpec>,
-    /// Optional server-wide `pre-query` command (`[dirsql].pre-query`). When
-    /// set, the HTTP server passes each `POST /query` request body to this
-    /// command as `{args}` and runs the plain-text SQL it prints, instead of
-    /// parsing the body as `{"sql": …}`. See `dirsql::command` for the
-    /// execution contract. Only the CLI server consults this; the SDK ignores
-    /// it.
-    pub pre_query: Option<String>,
-    /// Optional server-wide `post-query` command (`[dirsql].post-query`). When
-    /// set, the HTTP server hands each successful `POST /query` result set (the
-    /// rows serialized as a JSON array) to this command as `{args}` and on
-    /// stdin, and returns the JSON body the command prints, instead of returning
-    /// the rows as-is. See `dirsql::command` for the execution contract. Only
-    /// the CLI server consults this; the SDK ignores it.
-    pub post_query: Option<String>,
-    /// Optional timeout for every command-backed hook — `on-file`, `pre-query`,
-    /// and `post-query` alike (`[dirsql].hook-timeout`, positive seconds). One
-    /// global bound rather than a per-hook knob. When absent, hooks fall back to
-    /// the shared 30-second default ([`crate::command::DEFAULT_COMMAND_TIMEOUT`]).
+    /// Optional timeout for every `on-file` hook run (`[dirsql].hook-timeout`,
+    /// positive seconds). One global bound rather than a per-hook knob. When
+    /// absent, hooks fall back to the shared 30-second default
+    /// ([`crate::command::DEFAULT_COMMAND_TIMEOUT`]).
     pub hook_timeout: Option<Duration>,
 }
 
@@ -248,10 +218,6 @@ struct RawConfig {
 struct RawDirsql {
     ignore: Option<Vec<String>>,
     extension: Option<Vec<RawExtension>>,
-    #[serde(rename = "pre-query")]
-    pre_query: Option<String>,
-    #[serde(rename = "post-query")]
-    post_query: Option<String>,
     #[serde(rename = "hook-timeout")]
     hook_timeout: Option<i64>,
 }
@@ -286,25 +252,7 @@ pub fn load_config_str(content: &str) -> Result<Config> {
     let d = raw.dirsql.unwrap_or_default();
     let ignore = d.ignore.unwrap_or_default();
     let raw_extensions = d.extension.unwrap_or_default();
-    let raw_pre_query = d.pre_query;
-    let raw_post_query = d.post_query;
     let hook_timeout = parse_timeout_secs("hook-timeout", d.hook_timeout)?;
-
-    // Present-but-empty hook commands are rejected at parse time rather than
-    // spawning an empty command later.
-    let pre_query = match raw_pre_query {
-        Some(cmd) if cmd.trim().is_empty() => {
-            return Err(ConfigError::EmptyField("pre-query"));
-        }
-        other => other,
-    };
-
-    let post_query = match raw_post_query {
-        Some(cmd) if cmd.trim().is_empty() => {
-            return Err(ConfigError::EmptyField("post-query"));
-        }
-        other => other,
-    };
 
     let mut extensions = Vec::with_capacity(raw_extensions.len());
     for raw_ext in raw_extensions {
@@ -347,8 +295,6 @@ pub fn load_config_str(content: &str) -> Result<Config> {
         ignore,
         tables,
         extensions,
-        pre_query,
-        post_query,
         hook_timeout,
     })
 }
@@ -698,86 +644,28 @@ on-file = "   "
     }
 
     #[test]
-    fn pre_query_parses_when_present() {
+    fn pre_query_key_is_rejected_as_unknown() {
+        // The `pre-query` hook is removed (#803); the key errors like any
+        // other unknown key, naming it.
         let toml = r#"
 [dirsql]
 pre-query = "uv run python to_sql.py {args}"
-
-[[table]]
-ddl = "CREATE TABLE t (path TEXT)"
-glob = "*.json"
-on-file = "cat {path}"
-"#;
-        let config = load_config_str(toml).unwrap();
-        assert_eq!(
-            config.pre_query.as_deref(),
-            Some("uv run python to_sql.py {args}")
-        );
-    }
-
-    #[test]
-    fn pre_query_absent_is_none() {
-        let toml = r#"
-[[table]]
-ddl = "CREATE TABLE t (path TEXT)"
-glob = "*.json"
-on-file = "cat {path}"
-"#;
-        let config = load_config_str(toml).unwrap();
-        assert!(config.pre_query.is_none());
-    }
-
-    #[test]
-    fn pre_query_empty_errors() {
-        let toml = r#"
-[dirsql]
-pre-query = "   "
 "#;
         let err = load_config_str(toml).unwrap_err();
-        assert!(
-            matches!(err, ConfigError::EmptyField("pre-query")),
-            "got: {err:?}"
-        );
+        assert!(matches!(err, ConfigError::Toml(_)), "got: {err:?}");
+        assert!(err.to_string().contains("pre-query"), "got: {err}");
     }
 
     #[test]
-    fn post_query_parses_when_present() {
+    fn post_query_key_is_rejected_as_unknown() {
+        // Same removal contract for `post-query` (#803).
         let toml = r#"
 [dirsql]
 post-query = "jq '{results: .}'"
-
-[[table]]
-ddl = "CREATE TABLE t (path TEXT)"
-glob = "*.json"
-on-file = "cat {path}"
-"#;
-        let config = load_config_str(toml).unwrap();
-        assert_eq!(config.post_query.as_deref(), Some("jq '{results: .}'"));
-    }
-
-    #[test]
-    fn post_query_absent_is_none() {
-        let toml = r#"
-[[table]]
-ddl = "CREATE TABLE t (path TEXT)"
-glob = "*.json"
-on-file = "cat {path}"
-"#;
-        let config = load_config_str(toml).unwrap();
-        assert!(config.post_query.is_none());
-    }
-
-    #[test]
-    fn post_query_empty_errors() {
-        let toml = r#"
-[dirsql]
-post-query = "   "
 "#;
         let err = load_config_str(toml).unwrap_err();
-        assert!(
-            matches!(err, ConfigError::EmptyField("post-query")),
-            "got: {err:?}"
-        );
+        assert!(matches!(err, ConfigError::Toml(_)), "got: {err:?}");
+        assert!(err.to_string().contains("post-query"), "got: {err}");
     }
 
     fn src(label: &str) -> Source {
@@ -799,8 +687,7 @@ post-query = "   "
         let config = cfg(r#"
 [dirsql]
 ignore = ["*.tmp"]
-pre-query = "to_sql {args}"
-post-query = "jq '{results: .}'"
+hook-timeout = 120
 
 [[dirsql.extension]]
 path = "vec0.so"
@@ -814,8 +701,7 @@ on-file = "cat {path}"
         let merged = combine_configs(&[(src("/proj/.dirsql.toml"), config.clone())]).unwrap();
         assert_eq!(merged.ignore, config.ignore);
         assert_eq!(merged.extensions, config.extensions);
-        assert_eq!(merged.pre_query, config.pre_query);
-        assert_eq!(merged.post_query, config.post_query);
+        assert_eq!(merged.hook_timeout, config.hook_timeout);
         assert_eq!(merged.tables.len(), 1);
         assert_eq!(merged.tables[0].ddl, config.tables[0].ddl);
         assert_eq!(merged.tables[0].glob, config.tables[0].glob);
@@ -974,13 +860,13 @@ on-file = "cat {path}"
     }
 
     #[test]
-    fn combine_pre_query_in_two_configs_errors_naming_both_sources() {
-        let a = cfg("[dirsql]\npre-query = \"to_sql_a {args}\"\n");
-        let b = cfg("[dirsql]\npre-query = \"to_sql_b {args}\"\n");
+    fn combine_hook_timeout_in_two_configs_errors_naming_both_sources() {
+        let a = cfg("[dirsql]\nhook-timeout = 60\n");
+        let b = cfg("[dirsql]\nhook-timeout = 120\n");
         let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
         match &err {
             ConfigError::ConflictingKey { key, first, second } => {
-                assert_eq!(*key, "pre-query");
+                assert_eq!(*key, "hook-timeout");
                 assert_eq!(first, &src("/a"));
                 assert_eq!(second, &src("/b"));
             }
@@ -989,27 +875,11 @@ on-file = "cat {path}"
     }
 
     #[test]
-    fn combine_post_query_in_two_configs_errors_naming_both_sources() {
-        let a = cfg("[dirsql]\npost-query = \"jq_a\"\n");
-        let b = cfg("[dirsql]\npost-query = \"jq_b\"\n");
-        let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
-        match &err {
-            ConfigError::ConflictingKey { key, first, second } => {
-                assert_eq!(*key, "post-query");
-                assert_eq!(first, &src("/a"));
-                assert_eq!(second, &src("/b"));
-            }
-            other => panic!("got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn combine_hooks_in_one_config_merge_through() {
-        let a = cfg("[dirsql]\npre-query = \"to_sql {args}\"\npost-query = \"jq -c .\"\n");
+    fn combine_hook_timeout_in_one_config_merges_through() {
+        let a = cfg("[dirsql]\nhook-timeout = 60\n");
         let b = cfg("[dirsql]\nignore = [\"c/**\"]\n");
         let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
-        assert_eq!(merged.pre_query.as_deref(), Some("to_sql {args}"));
-        assert_eq!(merged.post_query.as_deref(), Some("jq -c ."));
+        assert_eq!(merged.hook_timeout, Some(Duration::from_secs(60)));
     }
 
     #[test]

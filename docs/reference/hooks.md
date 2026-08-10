@@ -1,8 +1,8 @@
 # Command hooks
 
-Three [config keys](./config.md) run an external command: `on-file` (per
-`[[table]]`), and the server-wide `pre-query` and `post-query` (under
-`[dirsql]`; CLI server only). All three share one execution contract.
+The `on-file` [config key](./config.md) (per `[[table]]`, also available as
+the [`--on-file` flag](./cli.md#on-file-command) on `dirsql query`) runs an
+external command under the execution contract below.
 
 ## Execution contract
 
@@ -32,8 +32,8 @@ occurrence, within whole argv tokens, in a single left-to-right pass:
   `{…}` is inert.
 - An unrecognized `{…}` is left literal.
 
-Which placeholders exist depends on the hook (see
-[per-hook contracts](#per-hook-contracts) below).
+The available placeholders are listed under the
+[`on-file` contract](#on-file-contract) below.
 
 ### Working directory and environment
 
@@ -62,7 +62,7 @@ compactly on one line.
 
 Every hook run is bounded by a **30-second** default timeout. A run
 exceeding it is killed and treated as a failure. One global config key
-raises (or tightens) the bound for **all** hooks:
+raises (or tightens) the bound:
 
 ```toml
 [dirsql]
@@ -80,19 +80,16 @@ A hook run fails when the command:
   stderr tail are reported),
 - exceeds the timeout (killed; stderr tail reported),
 - exits zero but prints no non-empty stdout line,
-- or (per hook, below) prints output that does not parse as expected.
+- or prints output that does not parse as a JSON array of row objects.
 
-What a failure *means* differs per hook:
+What a failure *means*: **per-file isolation.** The file contributes no rows
+and is reported as skipped; the scan indexes every other file and commits.
+The CLI names up to ten skipped files on stderr, then `... and N more`, and
+exits `23` — distinct from `0` (clean) and `1` (the run failed), so a caller
+can tell a partial index from a complete one. A row the table rejects under
+`strict` counts as the same kind of failure.
 
-| Hook | On failure |
-|---|---|
-| `on-file` | **Per-file isolation.** The file contributes no rows and is reported as skipped; the scan indexes every other file and commits. The CLI names up to ten skipped files on stderr, then `... and N more`, and exits `23` — distinct from `0` (clean) and `1` (the run failed), so a caller can tell a partial index from a complete one. A row the table rejects under `strict` counts as the same kind of failure. |
-| `pre-query` | The request returns `500 Internal Server Error` with the command's stderr tail in the JSON `error` body. |
-| `post-query` | The request returns `500 Internal Server Error` with the command's stderr tail (or, for unparseable output, `post-query did not return valid JSON: <err>`) in the JSON `error` body. |
-
-## Per-hook contracts
-
-### `on-file`
+## `on-file` contract
 
 Runs once per file matched by the table's `glob`, at initial scan and on
 every watched change. The command reads the file itself and prints a JSON
@@ -114,38 +111,3 @@ the path or stat metadata emits it (it has `{path}`).
 |---|---|
 | `{path}` | The matched file's **absolute** path. `on-file = "extract.py {path}"` — self-sufficient from any working directory, so the command resolves it even when the config lives outside the index. |
 | `{root}` | The index root directory. Derive a root-relative path with `relpath({path}, {root})`. |
-
-### `pre-query`
-
-Runs once per `POST /query` request, before the query. The raw request body
-goes in; plain-text SQL comes out (the stdout payload line). `dirsql` runs
-that SQL and returns rows as usual. With no `pre-query` key, the body is
-parsed as `{"sql": …}` instead — see [HTTP API](./http-api.md#post-query).
-
-| Placeholder | Value |
-|---|---|
-| `{args}` | The raw `POST /query` request body, verbatim, as one argv token. |
-
-**The hook owns SQL safety.** The `{args}` substitution keeps the untrusted
-body inert *as an argv token*, but whatever SQL string the hook prints is
-executed as-is. Validate, escape, or parameterize inside the hook.
-
-### `post-query`
-
-Runs once per successful `POST /query`, after the query. The result rows
-are serialized to a JSON array and delivered two ways:
-
-- **On stdin** — always, unbounded. This is the recommended path.
-- **As `{args}`** — only when the serialized payload is ≤ **96 KiB**. Above
-  that, `{args}` is substituted with an **empty string** and a stderr
-  warning naming the byte size directs the operator to stdin. The full
-  payload is still on stdin — this is a fallback, not truncation.
-
-| Placeholder | Value |
-|---|---|
-| `{args}` | The result rows as a JSON array, as one argv token; emptied (with a stderr warning) when the payload exceeds 96 KiB. |
-
-The stdout payload line is parsed as JSON and returned verbatim as the
-`200 application/json` response body. A payload that is not valid JSON
-fails the request (`500`). With no `post-query` key, the bare row array is
-returned — see [HTTP API](./http-api.md#post-query).

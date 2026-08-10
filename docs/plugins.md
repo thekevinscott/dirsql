@@ -22,10 +22,6 @@ question into nearest-neighbor SQL over that table, ranked by
 [PyPI](https://pypi.org/project/dirsql-plugin-embeddings/) ·
 [Source](https://github.com/thekevinscott/dirsql/tree/main/plugins/dirsql-plugin-embeddings)
 
-It is the packaged form of the
-[Search documents by meaning](./howto/search-by-meaning.md) how-to, with that
-guide's local `model2vec` model swapped for a hosted endpoint.
-
 ### Install and launch
 
 The plugin is a normal PyPI package; installing it alongside `dirsql` is the
@@ -43,29 +39,10 @@ uvx --with dirsql-plugin-embeddings dirsql server
 
 The launcher finds the package through its `dirsql` entry point and injects
 the shipped `dirsql.toml` fragment as an ordinary `-c` flag, composed after
-your own configs. The fragment declares three things:
-
-- the `sqlite-vec` extension (resolved from the installed `sqlite-vec`
-  package, which the plugin depends on), for `vec_distance_cosine()`;
-- the `documents` table (`path`, `text`, `embedding`), whose
-  [`on-file`](./reference/hooks.md#on-file) hook embeds each matched file at
-  index time;
-- a [`pre-query`](./reference/hooks.md#pre-query) hook that embeds each
-  incoming question and emits the nearest-neighbor SQL, plus a 300-second
-  [`hook-timeout`](./reference/config.md#dirsql-keys) so slow embedding calls
-  don't hit the 30-second default.
-
-Ask a question as a `{"q": …}` body — via `POST /query` against the server,
-or in one shot from the shell:
-
-```sh
-uvx --with dirsql-plugin-embeddings \
-  dirsql query '{"q": "how do I cook spaghetti?"}'
-# [{"path":"pasta.md","distance":0.113}, …]
-```
-
-The result is the three nearest documents, closest first. Discovery can be
-turned off per-invocation with `--no-plugin` or `DIRSQL_NO_PLUGIN=1`
+your own configs. The fragment declares the `sqlite-vec` extension (resolved
+from the installed `sqlite-vec` package, which the plugin depends on), so
+`vec_distance_cosine()` is callable in queries. Discovery can be turned off
+per-invocation with `--no-plugin` or `DIRSQL_NO_PLUGIN=1`
 ([reference](./reference/cli.md#plugins)).
 
 ### Configuration
