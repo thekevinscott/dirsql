@@ -64,7 +64,7 @@ def describe_extension_only_fragment():
         assert "no such table: documents" in result.stderr, result.stderr
 
     def it_queries_files_with_no_endpoint_configured(notes):
-        result = _run("SELECT path FROM '*.md' ORDER BY path", notes)
+        result = _run("SELECT path FROM './*.md' ORDER BY path", notes)
         assert result.returncode == 0, (
             f"stdout={result.stdout!r} stderr={result.stderr!r}"
         )

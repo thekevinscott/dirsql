@@ -78,4 +78,8 @@ jobs:
       source: plugins/dirsql-plugin-embeddings/src
       config: plugins/dirsql-plugin-embeddings/testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint", "integration-lint", "unit-coverage", "mutation", "e2e-verify"]'
+      # unit-coverage is parked while the package ships no unit-testable
+      # source (the old surface is deleted, the embed() rebuild is in
+      # flight — #800): the gate errors outright on a suite that collects
+      # zero tests. Restore it with the rebuild's first source module.
+      gates: '["colocated-test", "unit-lint", "integration-lint", "mutation", "e2e-verify"]'
