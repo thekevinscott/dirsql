@@ -1,0 +1,7 @@
+{
+  "command": "uv run --with-editable . --with-editable ../../packages/python python -m pytest tests/e2e -q",
+  "ran_at": 1786393699,
+  "exit_code": 0,
+  "commit": "ffbc42f0457f1509a16f80654c7090550f1a5c93",
+  "branch": "claude/802-delete-old-surface"
+}
