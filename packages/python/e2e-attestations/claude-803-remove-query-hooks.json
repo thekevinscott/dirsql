@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/ -x -q",
+  "ran_at": 1786398172,
+  "exit_code": 0,
+  "commit": "d068adceb7a4bc3c88a35f30077fc9068f8e19c8",
+  "branch": "claude/803-remove-query-hooks"
+}
