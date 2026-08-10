@@ -60,7 +60,12 @@ dirsql-embeddings-pre-query = "dirsql_plugin_embeddings.pre_query:main"
 embeddings = "dirsql_plugin_embeddings"
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-cov>=5", "pytest-describe>=2"]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "pytest-describe>=2",
+    "tomli>=2; python_version < '3.11'",
+]
 
 [tool.hatch.build]
 exclude = ["**/*_test.py"]
