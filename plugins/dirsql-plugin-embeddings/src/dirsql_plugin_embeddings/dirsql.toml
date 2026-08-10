@@ -4,3 +4,13 @@
 [[dirsql.extension]]
 path = "sqlite_vec"
 entrypoint = "sqlite3_vec_init"
+
+# The embed() SQL scalar function, served by the plugin's worker process over
+# newline-delimited JSON on stdin/stdout. Inert until a query calls it. The
+# generous timeout absorbs the first call's model download.
+[[dirsql.function]]
+name = "embed"
+args = [1, 2]
+command = "dirsql-plugin-embeddings worker"
+deterministic = true
+timeout = "600s"
