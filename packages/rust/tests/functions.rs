@@ -274,9 +274,8 @@ command = "python3 worker.py"
     .unwrap();
 
     let db = build(&root).unwrap();
-    let one = |kind: &str| {
-        db.query(&format!("SELECT typed('{kind}') AS v")).unwrap()[0]["v"].clone()
-    };
+    let one =
+        |kind: &str| db.query(&format!("SELECT typed('{kind}') AS v")).unwrap()[0]["v"].clone();
     assert_eq!(one("int"), Value::Integer(7));
     assert_eq!(one("real"), Value::Real(2.5));
     assert_eq!(one("null"), Value::Null);
@@ -495,10 +494,7 @@ command = "python3 worker.py"
 
     let db = build(&root).unwrap();
     let err = db.query("SELECT nope('a') AS v").unwrap_err();
-    assert!(
-        err.to_string().contains("no such function"),
-        "got: {err}"
-    );
+    assert!(err.to_string().contains("no such function"), "got: {err}");
 }
 
 #[test]

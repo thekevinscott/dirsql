@@ -16,6 +16,8 @@ pub mod db;
 #[doc(hidden)]
 pub mod differ;
 #[doc(hidden)]
+pub mod functions;
+#[doc(hidden)]
 pub mod infer;
 #[doc(hidden)]
 pub mod matcher;
@@ -36,7 +38,9 @@ pub mod watcher;
 pub mod cli;
 
 use crate::command::Placeholder;
+use crate::config::Source;
 use crate::db::{Db, parse_table_name};
+use crate::functions::ResolvedFunction;
 use crate::matcher::TableMatcher;
 use crate::persist::{
     CachedFile, FileStat, build_meta, canonical_root, compute_glob_config_hash,
@@ -632,6 +636,7 @@ impl DirSQL {
             tables,
             ignore: ignore.into_iter().map(Into::into).collect(),
             extensions: Vec::new(),
+            functions: Vec::new(),
             persist: false,
             persist_path: None,
             poll_interval: DEFAULT_POLL_INTERVAL,
@@ -659,6 +664,7 @@ impl DirSQL {
             tables,
             ignore,
             extensions,
+            functions,
             persist,
             persist_path,
             poll_interval,
@@ -708,6 +714,7 @@ impl DirSQL {
             root,
             tables,
             extensions,
+            functions,
             matcher,
             ignore,
             scanned_files,
@@ -759,6 +766,7 @@ impl DirSQL {
             root,
             tables,
             extensions,
+            functions,
             matcher,
             ignore,
             scanned_files,
@@ -791,6 +799,11 @@ impl DirSQL {
                     source,
                 })?;
         }
+
+        // Register declared functions after extensions so both are available
+        // to queries. Registration is inert: no worker process exists until a
+        // query's first call to the function.
+        functions::register_all(db.conn(), &functions).map_err(DirSqlError::sqlite)?;
 
         let mut on_file_map: HashMap<String, Arc<OnFileFn>> = HashMap::new();
         let mut strict_map: HashMap<String, bool> = HashMap::new();
@@ -1148,14 +1161,26 @@ impl DirSQLBuilder {
         // accumulate in `.config()` call order; a single entry makes the in-order
         // merge below byte-for-byte identical to a single pass.
         let mut config_entries: Vec<ResolvedConfigEntry> = Vec::new();
+        let mut functions: Vec<ResolvedFunction> = Vec::new();
+        let mut function_sources: HashMap<String, PathBuf> = HashMap::new();
         for cfg_path in &config_paths {
-            let cfg = config::load_config(cfg_path).map_err(DirSqlError::config)?;
+            let mut cfg = config::load_config(cfg_path).map_err(DirSqlError::config)?;
 
             let cfg_parent = cfg_path
                 .parent()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
             let hook_timeout = cfg.hook_timeout.unwrap_or(command::DEFAULT_COMMAND_TIMEOUT);
+
+            resolve_functions(
+                std::mem::take(&mut cfg.functions),
+                cfg_path,
+                &cfg_parent,
+                hook_timeout,
+                &mut function_sources,
+                &mut functions,
+            )?;
+
             config_entries.push(ResolvedConfigEntry {
                 config: cfg,
                 config_dir: cfg_parent,
@@ -1202,6 +1227,7 @@ impl DirSQLBuilder {
             tables,
             ignore,
             extensions,
+            functions,
             persist,
             persist_path,
             poll_interval: poll_interval.unwrap_or(DEFAULT_POLL_INTERVAL),
@@ -1256,6 +1282,9 @@ pub struct ResolvedBuild {
     pub tables: Vec<Table>,
     pub ignore: Vec<String>,
     pub extensions: Vec<Extension>,
+    /// Worker-backed SQL scalar functions to register at startup
+    /// (`[[dirsql.function]]`), already resolved per source config.
+    pub functions: Vec<ResolvedFunction>,
     pub persist: bool,
     pub persist_path: Option<PathBuf>,
     pub poll_interval: Duration,
@@ -1288,6 +1317,8 @@ pub struct PreparedBuild {
     tables: Vec<Table>,
     /// SQLite extensions to load onto the connection before any table DDL.
     extensions: Vec<Extension>,
+    /// Worker-backed SQL scalar functions to register after extensions load.
+    functions: Vec<ResolvedFunction>,
     matcher: TableMatcher,
     /// The configured skip rules, carried through so path-table scans apply
     /// the same ones declared tables do.
@@ -1560,6 +1591,42 @@ fn relative_path(root: &Path, path: &Path) -> String {
 /// path-table hint. Pure so the whole truth table is unit-testable without I/O.
 fn is_configless(config_paths: &[PathBuf], tables: &[Table]) -> bool {
     config_paths.is_empty() && tables.is_empty()
+}
+
+/// Fold one config's `[[dirsql.function]]` entries into the accumulated
+/// resolved list. Each function's worker runs from its own config's directory
+/// (`cfg_dir`), and its per-call timeout falls back to that config's
+/// `hook_timeout` (already defaulted to the shared 30s by the caller). A name
+/// declared by two configs — or twice in one — is a hard error naming both
+/// sources, the same rule duplicate tables follow.
+fn resolve_functions(
+    specs: Vec<config::FunctionSpec>,
+    cfg_path: &Path,
+    cfg_dir: &Path,
+    hook_timeout: Duration,
+    sources: &mut HashMap<String, PathBuf>,
+    out: &mut Vec<ResolvedFunction>,
+) -> Result<()> {
+    for spec in specs {
+        if let Some(prior) = sources.insert(spec.name.clone(), cfg_path.to_path_buf()) {
+            return Err(DirSqlError::config(
+                config::ConfigError::DuplicateFunction {
+                    name: spec.name,
+                    first: Source::Path(prior),
+                    second: Source::Path(cfg_path.to_path_buf()),
+                },
+            ));
+        }
+        out.push(ResolvedFunction {
+            name: spec.name,
+            args: spec.args,
+            command: spec.command,
+            deterministic: spec.deterministic,
+            timeout: spec.timeout.unwrap_or(hook_timeout),
+            cwd: cfg_dir.to_path_buf(),
+        });
+    }
+    Ok(())
 }
 
 fn build_tables_from_config(
@@ -2115,6 +2182,7 @@ mod internal_tests {
             root: dir.path().to_path_buf(),
             tables: Vec::new(),
             extensions: Vec::new(),
+            functions: Vec::new(),
             matcher,
             scanned_files: vec![ScannedFile {
                 rel_path: "ghost.txt".into(),
@@ -3229,6 +3297,128 @@ mod internal_tests {
             (tables[0].on_file)(&abs.to_string_lossy()).unwrap().len(),
             1
         );
+    }
+
+    fn function_spec(name: &str, timeout: Option<Duration>) -> config::FunctionSpec {
+        config::FunctionSpec {
+            name: name.to_string(),
+            args: vec![1, 2],
+            command: "worker cmd".to_string(),
+            deterministic: true,
+            timeout,
+        }
+    }
+
+    #[test]
+    fn resolve_functions_maps_spec_fields_and_config_context() {
+        let mut sources = HashMap::new();
+        let mut out = Vec::new();
+        resolve_functions(
+            vec![function_spec("embed", Some(Duration::from_secs(600)))],
+            Path::new("/proj/.dirsql.toml"),
+            Path::new("/proj"),
+            Duration::from_secs(30),
+            &mut sources,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "embed");
+        assert_eq!(out[0].args, vec![1, 2]);
+        assert_eq!(out[0].command, "worker cmd");
+        assert!(out[0].deterministic);
+        assert_eq!(out[0].timeout, Duration::from_secs(600));
+        assert_eq!(out[0].cwd, PathBuf::from("/proj"));
+    }
+
+    #[test]
+    fn resolve_functions_falls_back_to_the_hook_timeout() {
+        let mut sources = HashMap::new();
+        let mut out = Vec::new();
+        resolve_functions(
+            vec![function_spec("embed", None)],
+            Path::new("/proj/.dirsql.toml"),
+            Path::new("/proj"),
+            Duration::from_secs(7),
+            &mut sources,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(out[0].timeout, Duration::from_secs(7));
+    }
+
+    #[test]
+    fn resolve_functions_rejects_a_duplicate_name_naming_both_sources() {
+        let mut sources = HashMap::new();
+        let mut out = Vec::new();
+        resolve_functions(
+            vec![function_spec("dup", None)],
+            Path::new("/a/frag.toml"),
+            Path::new("/a"),
+            Duration::from_secs(30),
+            &mut sources,
+            &mut out,
+        )
+        .unwrap();
+        let err = resolve_functions(
+            vec![function_spec("dup", None)],
+            Path::new("/b/frag.toml"),
+            Path::new("/b"),
+            Duration::from_secs(30),
+            &mut sources,
+            &mut out,
+        )
+        .err()
+        .expect("duplicate function name must error");
+        let msg = err.to_string();
+        assert!(msg.contains("'dup'"), "got: {msg}");
+        assert!(msg.contains("/a/frag.toml"), "got: {msg}");
+        assert!(msg.contains("/b/frag.toml"), "got: {msg}");
+        assert_eq!(out.len(), 1, "the duplicate must not be resolved");
+    }
+
+    #[test]
+    fn resolve_functions_rejects_a_duplicate_within_one_config() {
+        let mut sources = HashMap::new();
+        let mut out = Vec::new();
+        let err = resolve_functions(
+            vec![function_spec("dup", None), function_spec("dup", None)],
+            Path::new("/a/frag.toml"),
+            Path::new("/a"),
+            Duration::from_secs(30),
+            &mut sources,
+            &mut out,
+        )
+        .err()
+        .expect("intra-config duplicate must error");
+        assert!(err.to_string().contains("'dup'"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_functions_accumulates_across_configs_in_order() {
+        let mut sources = HashMap::new();
+        let mut out = Vec::new();
+        resolve_functions(
+            vec![function_spec("fa", None)],
+            Path::new("/a/frag.toml"),
+            Path::new("/a"),
+            Duration::from_secs(30),
+            &mut sources,
+            &mut out,
+        )
+        .unwrap();
+        resolve_functions(
+            vec![function_spec("fb", None)],
+            Path::new("/b/frag.toml"),
+            Path::new("/b"),
+            Duration::from_secs(30),
+            &mut sources,
+            &mut out,
+        )
+        .unwrap();
+        let names: Vec<&str> = out.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["fa", "fb"]);
+        assert_eq!(out[1].cwd, PathBuf::from("/b"));
     }
 
     #[test]

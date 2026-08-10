@@ -222,7 +222,10 @@ pub fn run_command(
 
 /// Split a command template into argv (shell-like quoting, no shell) and
 /// substitute placeholders into whole tokens.
-fn build_argv(command: &str, placeholders: &[Placeholder]) -> Result<Vec<String>, CommandError> {
+pub(crate) fn build_argv(
+    command: &str,
+    placeholders: &[Placeholder],
+) -> Result<Vec<String>, CommandError> {
     let tokens =
         shlex::split(command).ok_or_else(|| CommandError::InvalidCommand(command.to_string()))?;
     if tokens.is_empty() {
