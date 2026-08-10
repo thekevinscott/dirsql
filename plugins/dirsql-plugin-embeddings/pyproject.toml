@@ -3,27 +3,20 @@ requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
-# First-party dirsql plugin, published independently to PyPI: the worked
-# implementation behind docs/howto/search-by-meaning.md, backed by an
-# OpenAI-compatible /v1/embeddings endpoint. Exists to prove the plugin
-# rails (#531, part of #363) and power the semantic-search demo.
+# First-party dirsql plugin, published independently to PyPI. Mid-rebuild:
+# today it only loads sqlite-vec; the embed() SQL function surface is landing
+# in follow-up slices.
 name = "dirsql-plugin-embeddings"
 dynamic = ["version"]
-description = "First-party dirsql plugin: semantic search via an OpenAI-compatible embeddings endpoint."
+description = "First-party dirsql plugin: semantic search over files (rebuild in progress)."
 readme = "README.md"
 requires-python = ">=3.10"
-# pypdf, not pymupdf: pymupdf is AGPL-3.0, and a runtime dependency of this
-# MIT-licensed package propagates to everyone who installs it.
-#
-# cachetta >=0.6.15 is load-bearing, not a nicety: every earlier release
-# declares `requires-python >=3.12`, which would drag this package's floor up
-# with it. 0.6.15 lowered cachetta's own floor to `>=3.10`, matching ours.
 # sqlite-vec is a runtime dependency, not a docs suggestion: the shipped
 # dirsql.toml fragment declares `path = "sqlite_vec"`, which the launcher can
 # only resolve when the package is installed. Declaring it here makes the
 # quickstart (`uvx --with dirsql-plugin-embeddings dirsql`) work without a
 # separate `--with sqlite-vec`.
-dependencies = ["pypdf>=6", "cachetta>=0.6.15", "sqlite-vec>=0.1"]
+dependencies = ["sqlite-vec>=0.1"]
 
 [tool.hatch.version]
 source = "vcs"
@@ -47,12 +40,6 @@ root = "../.."
 # `--match` constrains `git describe` itself to this package's own
 # tag prefix.
 git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "dirsql-plugin-embeddings-v*"]
-
-[project.scripts]
-# The two command hooks the fragment invokes; installing the package puts them
-# on PATH so `dirsql` resolves them when it spawns the hooks.
-dirsql-embeddings-on-file = "dirsql_plugin_embeddings.on_file:on_file"
-dirsql-embeddings-pre-query = "dirsql_plugin_embeddings.pre_query:main"
 
 [project.entry-points.dirsql]
 # How the #529 launcher discovers the plugin: group `dirsql`, value = the

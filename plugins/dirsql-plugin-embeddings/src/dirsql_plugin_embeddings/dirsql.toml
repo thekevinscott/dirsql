@@ -1,27 +1,6 @@
 # Fragment shipped by the dirsql-plugin-embeddings plugin.
 # Discovered via the package's [project.entry-points.dirsql] declaration and
-# injected by the launcher as an ordinary -c flag ("installed = active", #529).
-#
-# The table name here MUST match pre_query.TABLE_NAME (the SQL the pre-query
-# hook prints queries this table).
-[dirsql]
-pre-query = "dirsql-embeddings-pre-query {args}"
-hook-timeout = 300
-
+# injected by the launcher as an ordinary -c flag ("installed = active").
 [[dirsql.extension]]
 path = "sqlite_vec"
 entrypoint = "sqlite3_vec_init"
-
-# The brace is globset alternation, not a dirsql `{name}` placeholder: the core
-# rewrites those to `*`, but only when the braces hold a bare identifier, so a
-# comma-separated list reaches globset intact.
-#
-# An allowlist rather than `**/*` because every matched file costs a hook
-# subprocess and, for anything `read_content` can decode, a billed embedding
-# call. Pointed at a tree holding `node_modules` or `.git`, `**/*` is a slow
-# and expensive scan, not a broken one -- unreadable files are skipped. So the
-# list is what is worth embedding, and widening it trades money for recall.
-[[table]]
-ddl = "CREATE TABLE documents (path TEXT, text TEXT, embedding TEXT)"
-glob = "**/*.{md,markdown,mdx,rst,txt,pdf}"
-on-file = "dirsql-embeddings-on-file {path}"
