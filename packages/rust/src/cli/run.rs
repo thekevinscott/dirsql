@@ -132,7 +132,6 @@ impl ConfigArgs {
         }
         builder.no_ignore(self.no_ignore)
     }
-
 }
 
 #[derive(Debug, Subcommand)]
