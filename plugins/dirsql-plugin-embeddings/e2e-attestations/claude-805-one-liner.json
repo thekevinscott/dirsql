@@ -1,7 +1,7 @@
 {
   "command": "uv run --with-editable ../../packages/python python -m pytest tests/e2e/ -x -q",
-  "ran_at": 1786458049,
+  "ran_at": 1786459020,
   "exit_code": 0,
-  "commit": "3efb2ea90f5be693954e5a7e400205aa93e3b4de",
+  "commit": "1bd863d143acbb821b3e6e594e1e1688a5e1178d",
   "branch": "claude/805-one-liner"
 }
