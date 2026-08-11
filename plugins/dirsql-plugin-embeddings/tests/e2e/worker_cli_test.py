@@ -47,13 +47,14 @@ def describe_worker_cli():
         assert code == 0
         assert stderr == ""
 
-    def it_shows_group_help_listing_worker_when_run_bare(spawn_worker):
+    def it_errors_actionably_about_the_missing_glob_when_run_bare(spawn_worker):
         script = shutil.which("dirsql-plugin-embeddings")
         assert script
         worker = spawn_worker(argv=[script])
         code, stderr = worker.close()
         assert code == 2
-        assert "worker" in stderr
+        assert "Missing argument" in stderr
+        assert "GLOB" in stderr
 
     def it_shows_group_help_on_help_flag(spawn_worker):
         script = shutil.which("dirsql-plugin-embeddings")
