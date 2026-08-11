@@ -20,22 +20,14 @@ use serde_json::json;
 use tokio::sync::{broadcast, watch};
 use tokio_stream::wrappers::BroadcastStream;
 
+use super::AppState;
 use super::execute::{QueryFailure, execute_query, require_ready};
-use super::{AppState, PostQuery, PreQuery};
 
 pub(super) struct AppContext {
     pub state: AppState,
     pub events: broadcast::Sender<String>,
     pub cancel: watch::Receiver<bool>,
     pub query_timeout: Duration,
-    /// Ordered `pre-query` command chain. Empty means `POST /query` parses the
-    /// body as `{"sql": …}`; otherwise the raw body is piped through each stage
-    /// in order (body → stage₁ → … → SQL).
-    pub pre_query: Vec<PreQuery>,
-    /// Ordered `post-query` command chain. Empty means the rows are returned
-    /// as-is; otherwise a successful result set is piped through each stage in
-    /// order (rows → stage₁ → … → response).
-    pub post_query: Vec<PostQuery>,
 }
 
 pub(super) type SharedCtx = Arc<AppContext>;
@@ -54,15 +46,7 @@ pub(super) fn router(ctx: SharedCtx) -> Router {
 }
 
 async fn handle_query(State(ctx): State<SharedCtx>, body: String) -> Response {
-    match execute_query(
-        &ctx.state,
-        body,
-        ctx.query_timeout,
-        &ctx.pre_query,
-        &ctx.post_query,
-    )
-    .await
-    {
+    match execute_query(&ctx.state, body, ctx.query_timeout).await {
         Ok(value) => Json(value).into_response(),
         Err(failure) => failure_response(&failure),
     }
@@ -141,7 +125,7 @@ pub(super) fn error_response(status: StatusCode, message: impl Into<String>) -> 
 mod tests {
     use super::*;
 
-    // The pipeline itself (intake validation, hooks, timeout, execution,
+    // The pipeline itself (intake validation, timeout, execution,
     // error classification) is unit-tested in `cli/execute.rs` and covered
     // end-to-end by `tests/cli_integration.rs`. What remains here is the
     // HTTP adapter's own behavior: the failure -> status mapping and the

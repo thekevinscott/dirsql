@@ -18,6 +18,33 @@ pub enum ConfigError {
     #[error("Missing required field '{0}' in [[dirsql.extension]] entry")]
     MissingExtensionField(&'static str),
 
+    #[error("Missing required field '{0}' in [[dirsql.function]] entry")]
+    MissingFunctionField(&'static str),
+
+    #[error(
+        "[[dirsql.function]] '{name}' is not a valid SQL function name: use an \
+         ASCII letter or underscore followed by letters, digits, or underscores"
+    )]
+    InvalidFunctionName { name: String },
+
+    #[error(
+        "[[dirsql.function]] '{name}': 'args' must list at least one accepted \
+         arity (e.g. args = [1])"
+    )]
+    EmptyFunctionArgs { name: String },
+
+    #[error("[[dirsql.function]] '{name}': arity {value} is out of range (0..=127)")]
+    InvalidFunctionArity { name: String, value: i64 },
+
+    #[error("[[dirsql.function]] '{name}': arity {value} is listed more than once in 'args'")]
+    DuplicateFunctionArity { name: String, value: i64 },
+
+    #[error(
+        "[[dirsql.function]] '{name}': 'timeout' must be positive whole seconds \
+         (timeout = 600) or a duration string like \"600s\" or \"250ms\", got {value}"
+    )]
+    InvalidFunctionTimeout { name: String, value: String },
+
     #[error("Field '{0}' must not be empty")]
     EmptyField(&'static str),
 
@@ -36,6 +63,13 @@ pub enum ConfigError {
 
     #[error("Table '{name}' is defined by both {first} and {second}")]
     DuplicateTable {
+        name: String,
+        first: Source,
+        second: Source,
+    },
+
+    #[error("Function '{name}' is declared by both {first} and {second}")]
+    DuplicateFunction {
         name: String,
         first: Source,
         second: Source,
@@ -74,11 +108,11 @@ impl std::fmt::Display for Source {
 ///
 /// Order-significant; at least one entry is required and a single entry is
 /// returned unchanged. List-shaped config (`[[table]]`, `[[dirsql.extension]]`,
-/// `ignore`) concatenates in input order. A table-name collision anywhere in
-/// the combined set errors, naming both sources. Single-valued keys
-/// (`pre-query`, `post-query`, `hook-timeout`) defined by more than
-/// one config error, naming both sources — no silent shadowing, no precedence;
-/// defined in exactly one config they merge through unchanged.
+/// `[[dirsql.function]]`, `ignore`) concatenates in input order. A table-name
+/// or function-name collision anywhere in the combined set errors, naming both
+/// sources. The single-valued `hook-timeout` key defined by more than one
+/// config errors, naming both sources — no silent shadowing, no precedence;
+/// defined in exactly one config it merges through unchanged.
 ///
 /// Tables whose DDL yields no parseable table name are concatenated without a
 /// collision check; `Db::create_table` rejects them downstream.
@@ -91,11 +125,12 @@ pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
     let mut tables = Vec::new();
     let mut ignore = Vec::new();
     let mut extensions = Vec::new();
+    let mut functions = Vec::new();
     let mut table_sources: std::collections::HashMap<String, &Source> =
         std::collections::HashMap::new();
+    let mut function_sources: std::collections::HashMap<String, &Source> =
+        std::collections::HashMap::new();
 
-    let mut pre_query: Option<(&Source, String)> = None;
-    let mut post_query: Option<(&Source, String)> = None;
     let mut hook_timeout: Option<(&Source, Duration)> = None;
 
     for (source, config) in configs {
@@ -113,19 +148,17 @@ pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
         }
         ignore.extend(config.ignore.iter().cloned());
         extensions.extend(config.extensions.iter().cloned());
+        for function in &config.functions {
+            if let Some(prior) = function_sources.insert(function.name.clone(), source) {
+                return Err(ConfigError::DuplicateFunction {
+                    name: function.name.clone(),
+                    first: prior.clone(),
+                    second: source.clone(),
+                });
+            }
+            functions.push(function.clone());
+        }
 
-        merge_single(
-            "pre-query",
-            &mut pre_query,
-            config.pre_query.as_ref(),
-            source,
-        )?;
-        merge_single(
-            "post-query",
-            &mut post_query,
-            config.post_query.as_ref(),
-            source,
-        )?;
         merge_single(
             "hook-timeout",
             &mut hook_timeout,
@@ -138,8 +171,7 @@ pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
         ignore,
         tables,
         extensions,
-        pre_query: pre_query.map(|(_, value)| value),
-        post_query: post_query.map(|(_, value)| value),
+        functions,
         hook_timeout: hook_timeout.map(|(_, value)| value),
     })
 }
@@ -175,24 +207,16 @@ pub struct Config {
     /// relative paths are resolved against the config file's parent directory
     /// by the caller (`DirSQLBuilder::resolve`).
     pub extensions: Vec<ExtensionSpec>,
-    /// Optional server-wide `pre-query` command (`[dirsql].pre-query`). When
-    /// set, the HTTP server passes each `POST /query` request body to this
-    /// command as `{args}` and runs the plain-text SQL it prints, instead of
-    /// parsing the body as `{"sql": …}`. See `dirsql::command` for the
-    /// execution contract. Only the CLI server consults this; the SDK ignores
-    /// it.
-    pub pre_query: Option<String>,
-    /// Optional server-wide `post-query` command (`[dirsql].post-query`). When
-    /// set, the HTTP server hands each successful `POST /query` result set (the
-    /// rows serialized as a JSON array) to this command as `{args}` and on
-    /// stdin, and returns the JSON body the command prints, instead of returning
-    /// the rows as-is. See `dirsql::command` for the execution contract. Only
-    /// the CLI server consults this; the SDK ignores it.
-    pub post_query: Option<String>,
-    /// Optional timeout for every command-backed hook — `on-file`, `pre-query`,
-    /// and `post-query` alike (`[dirsql].hook-timeout`, positive seconds). One
-    /// global bound rather than a per-hook knob. When absent, hooks fall back to
-    /// the shared 30-second default ([`crate::command::DEFAULT_COMMAND_TIMEOUT`]).
+    /// Worker-backed SQL scalar functions, declared via `[[dirsql.function]]`.
+    /// Registered on the connection at startup; nothing runs until a query
+    /// calls one. See [`FunctionSpec`].
+    pub functions: Vec<FunctionSpec>,
+    /// Optional timeout for every command-backed hook — `on-file` runs and
+    /// `[[dirsql.function]]` worker calls alike (`[dirsql].hook-timeout`,
+    /// positive seconds). One global bound rather than a per-hook knob; a
+    /// function entry's own `timeout` overrides it. When absent, hooks fall
+    /// back to the shared 30-second default
+    /// ([`crate::command::DEFAULT_COMMAND_TIMEOUT`]).
     pub hook_timeout: Option<Duration>,
 }
 
@@ -212,6 +236,29 @@ pub struct ExtensionSpec {
     /// point from the filename, which often does not match — set this when
     /// the extension's init function isn't `sqlite3_<filename>_init`.
     pub entrypoint: Option<String>,
+}
+
+/// A worker-backed SQL scalar function declared via `[[dirsql.function]]`.
+///
+/// The function is registered on the connection once per accepted arity
+/// (SQLite supports same-name multi-arity registration). Registration is
+/// inert: the `command` worker process is spawned lazily on the function's
+/// first call and kept alive for the rest of the invocation, speaking
+/// newline-delimited JSON over stdin/stdout (see `dirsql::functions`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FunctionSpec {
+    /// The SQL name queries call the function by.
+    pub name: String,
+    /// Accepted arities; the function is registered once per entry.
+    pub args: Vec<u8>,
+    /// The worker command template. Spawned (argv-split, no shell) from the
+    /// config file's directory on the function's first call.
+    pub command: String,
+    /// When true, the function is registered with `SQLITE_DETERMINISTIC`.
+    pub deterministic: bool,
+    /// Optional per-round-trip-call timeout, overriding the config's
+    /// `[dirsql].hook-timeout` (and its shared 30s default).
+    pub timeout: Option<Duration>,
 }
 
 /// Configuration for a single table.
@@ -248,12 +295,29 @@ struct RawConfig {
 struct RawDirsql {
     ignore: Option<Vec<String>>,
     extension: Option<Vec<RawExtension>>,
-    #[serde(rename = "pre-query")]
-    pre_query: Option<String>,
-    #[serde(rename = "post-query")]
-    post_query: Option<String>,
+    function: Option<Vec<RawFunction>>,
     #[serde(rename = "hook-timeout")]
     hook_timeout: Option<i64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawFunction {
+    name: Option<String>,
+    args: Option<Vec<i64>>,
+    command: Option<String>,
+    deterministic: Option<bool>,
+    timeout: Option<RawFunctionTimeout>,
+}
+
+/// The `timeout` key accepts positive whole seconds (`timeout = 600`, the
+/// `hook-timeout` shape) or a suffixed duration string (`timeout = "600s"`,
+/// `"250ms"`).
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawFunctionTimeout {
+    Secs(i64),
+    Text(String),
 }
 
 #[derive(Deserialize)]
@@ -286,25 +350,7 @@ pub fn load_config_str(content: &str) -> Result<Config> {
     let d = raw.dirsql.unwrap_or_default();
     let ignore = d.ignore.unwrap_or_default();
     let raw_extensions = d.extension.unwrap_or_default();
-    let raw_pre_query = d.pre_query;
-    let raw_post_query = d.post_query;
     let hook_timeout = parse_timeout_secs("hook-timeout", d.hook_timeout)?;
-
-    // Present-but-empty hook commands are rejected at parse time rather than
-    // spawning an empty command later.
-    let pre_query = match raw_pre_query {
-        Some(cmd) if cmd.trim().is_empty() => {
-            return Err(ConfigError::EmptyField("pre-query"));
-        }
-        other => other,
-    };
-
-    let post_query = match raw_post_query {
-        Some(cmd) if cmd.trim().is_empty() => {
-            return Err(ConfigError::EmptyField("post-query"));
-        }
-        other => other,
-    };
 
     let mut extensions = Vec::with_capacity(raw_extensions.len());
     for raw_ext in raw_extensions {
@@ -318,6 +364,11 @@ pub fn load_config_str(content: &str) -> Result<Config> {
             path: PathBuf::from(path),
             entrypoint: raw_ext.entrypoint,
         });
+    }
+
+    let mut functions = Vec::new();
+    for raw_function in d.function.unwrap_or_default() {
+        functions.push(parse_function(raw_function)?);
     }
 
     let raw_tables = raw.table.unwrap_or_default();
@@ -347,10 +398,105 @@ pub fn load_config_str(content: &str) -> Result<Config> {
         ignore,
         tables,
         extensions,
-        pre_query,
-        post_query,
+        functions,
         hook_timeout,
     })
+}
+
+/// Validate one `[[dirsql.function]]` entry into a [`FunctionSpec`].
+fn parse_function(raw: RawFunction) -> Result<FunctionSpec> {
+    let name = raw
+        .name
+        .filter(|n| !n.is_empty())
+        .ok_or(ConfigError::MissingFunctionField("name"))?;
+    if !is_valid_function_name(&name) {
+        return Err(ConfigError::InvalidFunctionName { name });
+    }
+
+    let command = match raw.command {
+        Some(cmd) if cmd.trim().is_empty() => {
+            return Err(ConfigError::MissingFunctionField("command"));
+        }
+        Some(cmd) => cmd,
+        None => return Err(ConfigError::MissingFunctionField("command")),
+    };
+
+    let raw_args = raw.args.ok_or(ConfigError::MissingFunctionField("args"))?;
+    if raw_args.is_empty() {
+        return Err(ConfigError::EmptyFunctionArgs { name });
+    }
+    let mut args = Vec::with_capacity(raw_args.len());
+    for value in raw_args {
+        // SQLite caps function arity at 127.
+        let arity = u8::try_from(value)
+            .ok()
+            .filter(|a| *a <= 127)
+            .ok_or_else(|| ConfigError::InvalidFunctionArity {
+                name: name.clone(),
+                value,
+            })?;
+        if args.contains(&arity) {
+            return Err(ConfigError::DuplicateFunctionArity {
+                name: name.clone(),
+                value,
+            });
+        }
+        args.push(arity);
+    }
+
+    let timeout = match raw.timeout {
+        None => None,
+        Some(raw_timeout) => Some(parse_function_timeout(&name, &raw_timeout)?),
+    };
+
+    Ok(FunctionSpec {
+        name,
+        args,
+        command,
+        deterministic: raw.deterministic.unwrap_or(false),
+        timeout,
+    })
+}
+
+/// Whether `name` is registrable and callable as an unquoted SQL function
+/// name: an ASCII letter or underscore followed by ASCII letters, digits, or
+/// underscores.
+fn is_valid_function_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Validate a `[[dirsql.function]]` `timeout` value into a [`Duration`]:
+/// positive whole seconds, or a positive-integer string suffixed `s` or `ms`.
+fn parse_function_timeout(name: &str, raw: &RawFunctionTimeout) -> Result<Duration> {
+    let invalid = |value: String| ConfigError::InvalidFunctionTimeout {
+        name: name.to_string(),
+        value,
+    };
+    match raw {
+        RawFunctionTimeout::Secs(secs) if *secs > 0 => Ok(Duration::from_secs(
+            u64::try_from(*secs).expect("positive i64 fits in u64"),
+        )),
+        RawFunctionTimeout::Secs(secs) => Err(invalid(secs.to_string())),
+        RawFunctionTimeout::Text(text) => {
+            let (digits, from_int): (&str, fn(u64) -> Duration) =
+                if let Some(digits) = text.strip_suffix("ms") {
+                    (digits, Duration::from_millis)
+                } else if let Some(digits) = text.strip_suffix('s') {
+                    (digits, Duration::from_secs)
+                } else {
+                    return Err(invalid(format!("{text:?}")));
+                };
+            match digits.parse::<u64>() {
+                Ok(value) if value > 0 => Ok(from_int(value)),
+                _ => Err(invalid(format!("{text:?}"))),
+            }
+        }
+    }
 }
 
 /// Validate an optional timeout config value (whole seconds) into a
@@ -698,86 +844,28 @@ on-file = "   "
     }
 
     #[test]
-    fn pre_query_parses_when_present() {
+    fn pre_query_key_is_rejected_as_unknown() {
+        // The `pre-query` hook is removed (#803); the key errors like any
+        // other unknown key, naming it.
         let toml = r#"
 [dirsql]
 pre-query = "uv run python to_sql.py {args}"
-
-[[table]]
-ddl = "CREATE TABLE t (path TEXT)"
-glob = "*.json"
-on-file = "cat {path}"
-"#;
-        let config = load_config_str(toml).unwrap();
-        assert_eq!(
-            config.pre_query.as_deref(),
-            Some("uv run python to_sql.py {args}")
-        );
-    }
-
-    #[test]
-    fn pre_query_absent_is_none() {
-        let toml = r#"
-[[table]]
-ddl = "CREATE TABLE t (path TEXT)"
-glob = "*.json"
-on-file = "cat {path}"
-"#;
-        let config = load_config_str(toml).unwrap();
-        assert!(config.pre_query.is_none());
-    }
-
-    #[test]
-    fn pre_query_empty_errors() {
-        let toml = r#"
-[dirsql]
-pre-query = "   "
 "#;
         let err = load_config_str(toml).unwrap_err();
-        assert!(
-            matches!(err, ConfigError::EmptyField("pre-query")),
-            "got: {err:?}"
-        );
+        assert!(matches!(err, ConfigError::Toml(_)), "got: {err:?}");
+        assert!(err.to_string().contains("pre-query"), "got: {err}");
     }
 
     #[test]
-    fn post_query_parses_when_present() {
+    fn post_query_key_is_rejected_as_unknown() {
+        // Same removal contract for `post-query` (#803).
         let toml = r#"
 [dirsql]
 post-query = "jq '{results: .}'"
-
-[[table]]
-ddl = "CREATE TABLE t (path TEXT)"
-glob = "*.json"
-on-file = "cat {path}"
-"#;
-        let config = load_config_str(toml).unwrap();
-        assert_eq!(config.post_query.as_deref(), Some("jq '{results: .}'"));
-    }
-
-    #[test]
-    fn post_query_absent_is_none() {
-        let toml = r#"
-[[table]]
-ddl = "CREATE TABLE t (path TEXT)"
-glob = "*.json"
-on-file = "cat {path}"
-"#;
-        let config = load_config_str(toml).unwrap();
-        assert!(config.post_query.is_none());
-    }
-
-    #[test]
-    fn post_query_empty_errors() {
-        let toml = r#"
-[dirsql]
-post-query = "   "
 "#;
         let err = load_config_str(toml).unwrap_err();
-        assert!(
-            matches!(err, ConfigError::EmptyField("post-query")),
-            "got: {err:?}"
-        );
+        assert!(matches!(err, ConfigError::Toml(_)), "got: {err:?}");
+        assert!(err.to_string().contains("post-query"), "got: {err}");
     }
 
     fn src(label: &str) -> Source {
@@ -799,8 +887,7 @@ post-query = "   "
         let config = cfg(r#"
 [dirsql]
 ignore = ["*.tmp"]
-pre-query = "to_sql {args}"
-post-query = "jq '{results: .}'"
+hook-timeout = 120
 
 [[dirsql.extension]]
 path = "vec0.so"
@@ -814,8 +901,7 @@ on-file = "cat {path}"
         let merged = combine_configs(&[(src("/proj/.dirsql.toml"), config.clone())]).unwrap();
         assert_eq!(merged.ignore, config.ignore);
         assert_eq!(merged.extensions, config.extensions);
-        assert_eq!(merged.pre_query, config.pre_query);
-        assert_eq!(merged.post_query, config.post_query);
+        assert_eq!(merged.hook_timeout, config.hook_timeout);
         assert_eq!(merged.tables.len(), 1);
         assert_eq!(merged.tables[0].ddl, config.tables[0].ddl);
         assert_eq!(merged.tables[0].glob, config.tables[0].glob);
@@ -974,13 +1060,13 @@ on-file = "cat {path}"
     }
 
     #[test]
-    fn combine_pre_query_in_two_configs_errors_naming_both_sources() {
-        let a = cfg("[dirsql]\npre-query = \"to_sql_a {args}\"\n");
-        let b = cfg("[dirsql]\npre-query = \"to_sql_b {args}\"\n");
+    fn combine_hook_timeout_in_two_configs_errors_naming_both_sources() {
+        let a = cfg("[dirsql]\nhook-timeout = 60\n");
+        let b = cfg("[dirsql]\nhook-timeout = 120\n");
         let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
         match &err {
             ConfigError::ConflictingKey { key, first, second } => {
-                assert_eq!(*key, "pre-query");
+                assert_eq!(*key, "hook-timeout");
                 assert_eq!(first, &src("/a"));
                 assert_eq!(second, &src("/b"));
             }
@@ -989,27 +1075,11 @@ on-file = "cat {path}"
     }
 
     #[test]
-    fn combine_post_query_in_two_configs_errors_naming_both_sources() {
-        let a = cfg("[dirsql]\npost-query = \"jq_a\"\n");
-        let b = cfg("[dirsql]\npost-query = \"jq_b\"\n");
-        let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
-        match &err {
-            ConfigError::ConflictingKey { key, first, second } => {
-                assert_eq!(*key, "post-query");
-                assert_eq!(first, &src("/a"));
-                assert_eq!(second, &src("/b"));
-            }
-            other => panic!("got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn combine_hooks_in_one_config_merge_through() {
-        let a = cfg("[dirsql]\npre-query = \"to_sql {args}\"\npost-query = \"jq -c .\"\n");
+    fn combine_hook_timeout_in_one_config_merges_through() {
+        let a = cfg("[dirsql]\nhook-timeout = 60\n");
         let b = cfg("[dirsql]\nignore = [\"c/**\"]\n");
         let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
-        assert_eq!(merged.pre_query.as_deref(), Some("to_sql {args}"));
-        assert_eq!(merged.post_query.as_deref(), Some("jq -c ."));
+        assert_eq!(merged.hook_timeout, Some(Duration::from_secs(60)));
     }
 
     #[test]
@@ -1133,6 +1203,344 @@ hook-timeout = -5
             err.to_string(),
             "Field 'hook-timeout' must be a positive number of seconds, got -1"
         );
+    }
+
+    #[test]
+    fn function_parses_every_field() {
+        let toml = r#"
+[[dirsql.function]]
+name = "embed"
+args = [1, 2]
+command = "dirsql-plugin-embeddings worker"
+deterministic = true
+timeout = "600s"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert_eq!(
+            config.functions,
+            vec![FunctionSpec {
+                name: "embed".to_string(),
+                args: vec![1, 2],
+                command: "dirsql-plugin-embeddings worker".to_string(),
+                deterministic: true,
+                timeout: Some(Duration::from_secs(600)),
+            }]
+        );
+    }
+
+    #[test]
+    fn function_deterministic_and_timeout_default_off() {
+        let toml = r#"
+[[dirsql.function]]
+name = "f"
+args = [1]
+command = "worker"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert!(!config.functions[0].deterministic);
+        assert!(config.functions[0].timeout.is_none());
+    }
+
+    #[test]
+    fn functions_default_empty_when_absent() {
+        let config = load_config_str("").unwrap();
+        assert!(config.functions.is_empty());
+    }
+
+    #[test]
+    fn multiple_functions_preserve_order() {
+        let toml = r#"
+[[dirsql.function]]
+name = "a"
+args = [1]
+command = "worker-a"
+
+[[dirsql.function]]
+name = "b"
+args = [1]
+command = "worker-b"
+"#;
+        let config = load_config_str(toml).unwrap();
+        let names: Vec<&str> = config.functions.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn function_timeout_accepts_integer_seconds() {
+        let toml = r#"
+[[dirsql.function]]
+name = "f"
+args = [1]
+command = "worker"
+timeout = 90
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert_eq!(config.functions[0].timeout, Some(Duration::from_secs(90)));
+    }
+
+    #[test]
+    fn function_timeout_accepts_millisecond_strings() {
+        let toml = r#"
+[[dirsql.function]]
+name = "f"
+args = [1]
+command = "worker"
+timeout = "250ms"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert_eq!(
+            config.functions[0].timeout,
+            Some(Duration::from_millis(250))
+        );
+    }
+
+    #[test]
+    fn function_timeout_rejects_invalid_shapes() {
+        for (value, want) in [
+            ("0", "0"),
+            ("-5", "-5"),
+            ("\"0s\"", "\"0s\""),
+            ("\"abc\"", "\"abc\""),
+            ("\"5m\"", "\"5m\""),
+            ("\"s\"", "\"s\""),
+            ("\"-1s\"", "\"-1s\""),
+        ] {
+            let toml = format!(
+                "[[dirsql.function]]\nname = \"f\"\nargs = [1]\ncommand = \"w\"\ntimeout = {value}\n"
+            );
+            let err = load_config_str(&toml).unwrap_err();
+            match &err {
+                ConfigError::InvalidFunctionTimeout { name, value } => {
+                    assert_eq!(name, "f");
+                    assert_eq!(value, want);
+                }
+                other => panic!("timeout = {value}: got {other:?}"),
+            }
+            let msg = err.to_string();
+            assert!(msg.contains("600s"), "got: {msg}");
+        }
+    }
+
+    #[test]
+    fn function_missing_name_errors() {
+        let toml = r#"
+[[dirsql.function]]
+args = [1]
+command = "worker"
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::MissingFunctionField("name")),
+            "got: {err:?}"
+        );
+        assert!(
+            err.to_string().contains("[[dirsql.function]]"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn function_missing_command_errors() {
+        let toml = r#"
+[[dirsql.function]]
+name = "f"
+args = [1]
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::MissingFunctionField("command")),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn function_blank_command_errors() {
+        let toml = r#"
+[[dirsql.function]]
+name = "f"
+args = [1]
+command = "   "
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::MissingFunctionField("command")),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn function_missing_args_errors() {
+        let toml = r#"
+[[dirsql.function]]
+name = "f"
+command = "worker"
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::MissingFunctionField("args")),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn function_empty_args_list_errors() {
+        let toml = r#"
+[[dirsql.function]]
+name = "f"
+args = []
+command = "worker"
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(&err, ConfigError::EmptyFunctionArgs { name } if name == "f"),
+            "got: {err:?}"
+        );
+        assert!(err.to_string().contains("args = [1]"), "got: {err}");
+    }
+
+    #[test]
+    fn function_arity_out_of_range_errors() {
+        for bad in ["-1", "128"] {
+            let toml =
+                format!("[[dirsql.function]]\nname = \"f\"\nargs = [{bad}]\ncommand = \"w\"\n");
+            let err = load_config_str(&toml).unwrap_err();
+            match &err {
+                ConfigError::InvalidFunctionArity { name, value } => {
+                    assert_eq!(name, "f");
+                    assert_eq!(value.to_string(), bad);
+                }
+                other => panic!("args = [{bad}]: got {other:?}"),
+            }
+            assert!(err.to_string().contains("0..=127"), "got: {err}");
+        }
+    }
+
+    #[test]
+    fn function_boundary_arities_are_accepted() {
+        let toml = r#"
+[[dirsql.function]]
+name = "f"
+args = [0, 127]
+command = "worker"
+"#;
+        let config = load_config_str(toml).unwrap();
+        assert_eq!(config.functions[0].args, vec![0, 127]);
+    }
+
+    #[test]
+    fn function_duplicate_arity_errors() {
+        let toml = r#"
+[[dirsql.function]]
+name = "f"
+args = [1, 1]
+command = "worker"
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                ConfigError::DuplicateFunctionArity { name, value: 1 } if name == "f"
+            ),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn function_invalid_name_errors() {
+        for bad in ["1bad", "bad-name", "bad name", "bad.name"] {
+            let toml =
+                format!("[[dirsql.function]]\nname = \"{bad}\"\nargs = [1]\ncommand = \"w\"\n");
+            let err = load_config_str(&toml).unwrap_err();
+            assert!(
+                matches!(&err, ConfigError::InvalidFunctionName { name } if name == bad),
+                "name {bad}: got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn function_valid_names_are_accepted() {
+        for good in ["embed", "_private", "f2", "UPPER_case"] {
+            let toml =
+                format!("[[dirsql.function]]\nname = \"{good}\"\nargs = [1]\ncommand = \"w\"\n");
+            let config = load_config_str(&toml).unwrap();
+            assert_eq!(config.functions[0].name, good);
+        }
+    }
+
+    #[test]
+    fn function_empty_name_is_missing() {
+        let toml = r#"
+[[dirsql.function]]
+name = ""
+args = [1]
+command = "worker"
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::MissingFunctionField("name")),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_key_in_function_is_rejected() {
+        let toml = r#"
+[[dirsql.function]]
+name = "f"
+args = [1]
+command = "worker"
+determinstic = true
+"#;
+        let err = load_config_str(toml).unwrap_err();
+        assert!(matches!(err, ConfigError::Toml(_)), "got: {err:?}");
+        assert!(err.to_string().contains("determinstic"), "got: {err}");
+    }
+
+    #[test]
+    fn combine_concatenates_functions_in_input_order() {
+        let a = cfg("[[dirsql.function]]\nname = \"fa\"\nargs = [1]\ncommand = \"wa\"\n");
+        let b = cfg("[[dirsql.function]]\nname = \"fb\"\nargs = [1]\ncommand = \"wb\"\n");
+        let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
+        let names: Vec<&str> = merged.functions.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["fa", "fb"]);
+    }
+
+    #[test]
+    fn combine_duplicate_function_name_errors_naming_both_sources() {
+        let a = cfg("[[dirsql.function]]\nname = \"dup\"\nargs = [1]\ncommand = \"wa\"\n");
+        let b = cfg("[[dirsql.function]]\nname = \"dup\"\nargs = [2]\ncommand = \"wb\"\n");
+        let err = combine_configs(&[
+            (src("/proj/.dirsql.toml"), a),
+            (Source::Package("dirsql-plugin-embeddings".to_string()), b),
+        ])
+        .unwrap_err();
+        match &err {
+            ConfigError::DuplicateFunction {
+                name,
+                first,
+                second,
+            } => {
+                assert_eq!(name, "dup");
+                assert_eq!(first, &src("/proj/.dirsql.toml"));
+                assert_eq!(
+                    second,
+                    &Source::Package("dirsql-plugin-embeddings".to_string())
+                );
+            }
+            other => panic!("got: {other:?}"),
+        }
+        let msg = err.to_string();
+        assert!(msg.contains("'dup'"), "got: {msg}");
+        assert!(msg.contains("/proj/.dirsql.toml"), "got: {msg}");
+        assert!(msg.contains("dirsql-plugin-embeddings"), "got: {msg}");
+    }
+
+    #[test]
+    fn combine_singleton_keeps_functions_unchanged() {
+        let config = cfg("[[dirsql.function]]\nname = \"f\"\nargs = [1]\ncommand = \"w\"\n");
+        let merged = combine_configs(&[(src("/a"), config.clone())]).unwrap();
+        assert_eq!(merged.functions, config.functions);
     }
 
     #[test]

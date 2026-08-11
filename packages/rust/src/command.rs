@@ -1,6 +1,5 @@
 //! Reusable shell-command runner — the foundation for the command-backed
-//! events (`on-file`, `pre-query`, `post-query`), which are thin wiring on
-//! top of it.
+//! `on-file` event, which is thin wiring on top of it.
 //!
 //! ## Contract
 //!
@@ -33,9 +32,9 @@ use std::time::Duration;
 
 use wait_timeout::ChildExt;
 
-/// The default timeout for every command-backed event (`on-file`,
-/// `pre-query`, `post-query`) when the config declares no override
-/// (`[dirsql].hook-timeout`, positive whole seconds).
+/// The default timeout for every command-backed `on-file` run when the
+/// config declares no override (`[dirsql].hook-timeout`, positive whole
+/// seconds).
 pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A named placeholder substituted into a command's argv.
@@ -223,7 +222,10 @@ pub fn run_command(
 
 /// Split a command template into argv (shell-like quoting, no shell) and
 /// substitute placeholders into whole tokens.
-fn build_argv(command: &str, placeholders: &[Placeholder]) -> Result<Vec<String>, CommandError> {
+pub(crate) fn build_argv(
+    command: &str,
+    placeholders: &[Placeholder],
+) -> Result<Vec<String>, CommandError> {
     let tokens =
         shlex::split(command).ok_or_else(|| CommandError::InvalidCommand(command.to_string()))?;
     if tokens.is_empty() {

@@ -1,10 +1,9 @@
 //! Transport-agnostic `/query` pipeline.
 //!
 //! The full orchestration for running one query — intake validation,
-//! the `pre-query` hook, the query timeout, [`DirSQL::query`], row
-//! serialization, the `post-query` hook, and error classification —
-//! lives here exactly once. The HTTP handler and the one-shot
-//! `dirsql query` subcommand are thin transport adapters over
+//! the query timeout, [`DirSQL::query`], row serialization, and error
+//! classification — lives here exactly once. The HTTP handler and the
+//! one-shot `dirsql query` subcommand are thin transport adapters over
 //! [`execute_query`], so the two surfaces cannot drift behaviorally:
 //! per-surface code only maps [`QueryFailure`] to a status code or an
 //! exit code.
@@ -14,16 +13,9 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::AppState;
 use super::serialize::rows_to_json;
-use super::{AppState, PostQuery, PreQuery};
-use crate::command::{Placeholder, run_command};
 use crate::{DirSQL, DirSqlError};
-
-/// Cap on the serialized result payload passed as the `{args}` argv token.
-/// Beyond this, `{args}` is emptied and the operator is directed to stdin
-/// (which always carries the full payload) — comfortably under Linux's 128 KiB
-/// single-arg `MAX_ARG_STRLEN`.
-const POST_QUERY_ARGS_MAX: usize = 96 * 1024;
 
 /// Why a query failed, classified independently of transport. The HTTP
 /// adapter maps each arm to a status code (400 / 408 / 500 / 503); the CLI
@@ -35,8 +27,7 @@ pub enum QueryFailure {
     BadRequest(String),
     /// The query exceeded the configured timeout (HTTP 408).
     Timeout(Duration),
-    /// A server-side fault: hook failure, join error, lock poisoning
-    /// (HTTP 500).
+    /// A server-side fault: join error, lock poisoning (HTTP 500).
     Internal(String),
     /// The index never became ready — the degraded config state (HTTP 503).
     Unavailable(String),
@@ -58,33 +49,17 @@ struct QueryBody {
     sql: Option<String>,
 }
 
-/// Run one query end to end: resolve the SQL from `raw_body` (through the
-/// `pre-query` hook when present, else parsed as `{"sql": …}`), execute it
-/// against the index under `timeout`, serialize the rows, and reshape them
-/// through the `post-query` hook when present. `raw_body` is the exact
-/// payload a `POST /query` request carries; the CLI adapter synthesizes the
-/// same shape so both surfaces share intake validation and hook semantics.
+/// Run one query end to end: parse the SQL from `raw_body` (`{"sql": …}`),
+/// execute it against the index under `timeout`, and serialize the rows.
+/// `raw_body` is the exact payload a `POST /query` request carries; the CLI
+/// adapter synthesizes the same shape so both surfaces share intake
+/// validation.
 pub async fn execute_query(
     state: &AppState,
     raw_body: String,
     timeout: Duration,
-    pre_query: &[PreQuery],
-    post_query: &[PostQuery],
 ) -> Result<Value, QueryFailure> {
-    // Resolve the SQL to run. A `pre-query` chain pipes the raw body FIFO
-    // through each stage (body → stage₁ → … → SQL), each stage receiving the
-    // previous stage's output as its `{args}`; with no stage the body is parsed
-    // as `{"sql": …}`. A failing stage fails the request (its `?` short-circuits
-    // the chain).
-    let sql = if pre_query.is_empty() {
-        parse_sql_body(&raw_body)?
-    } else {
-        let mut payload = raw_body;
-        for pq in pre_query {
-            payload = run_pre_query(pq, payload).await?;
-        }
-        payload
-    };
+    let sql = parse_sql_body(&raw_body)?;
 
     let db = require_ready(state)?;
 
@@ -92,21 +67,7 @@ pub async fn execute_query(
         tokio::time::timeout(timeout, tokio::task::spawn_blocking(move || db.query(&sql))).await;
 
     match join {
-        Ok(Ok(Ok(rows))) => {
-            let rows_json = rows_to_json(&rows);
-            // A `post-query` chain pipes the rows FIFO through each stage
-            // (rows → stage₁ → … → response), each stage receiving the previous
-            // stage's output; with no stage the rows return as-is.
-            if post_query.is_empty() {
-                Ok(Value::Array(rows_json))
-            } else {
-                let mut payload = Value::Array(rows_json);
-                for pq in post_query {
-                    payload = run_post_query(pq, payload).await?;
-                }
-                Ok(payload)
-            }
-        }
+        Ok(Ok(Ok(rows))) => Ok(Value::Array(rows_to_json(&rows))),
         Ok(Ok(Err(err))) => Err(classify_query_error(err)),
         Ok(Err(join_err)) => Err(QueryFailure::Internal(join_err.to_string())),
         Err(_elapsed) => Err(QueryFailure::Timeout(timeout)),
@@ -144,90 +105,6 @@ fn classify_query_error(err: DirSqlError) -> QueryFailure {
         }
         _ => QueryFailure::Internal(err.to_string()),
     }
-}
-
-/// Run the `pre-query` hook over the raw request body and return the SQL it
-/// prints. The body is passed as the injection-safe `{args}` placeholder (a
-/// single argv token); the command's last non-empty stdout line is the SQL to
-/// run. Any failure (non-zero exit, timeout, spawn error) maps to `Internal`
-/// carrying the command's stderr tail.
-async fn run_pre_query(pq: &PreQuery, raw_body: String) -> Result<String, QueryFailure> {
-    let command = pq.command.clone();
-    let config_dir = pq.config_dir.clone();
-    let timeout = pq.timeout;
-    // `run_command` is blocking — it spawns a child and joins drain threads —
-    // so run it off the async runtime. It enforces the hook's timeout
-    // (the global `[dirsql].hook-timeout`, default 30s) internally, so no outer
-    // `tokio::time::timeout` is needed.
-    let outcome = tokio::task::spawn_blocking(move || {
-        run_command(
-            &command,
-            &[Placeholder::new("args", &raw_body)],
-            &config_dir,
-            timeout,
-            None,
-        )
-    })
-    .await
-    .map_err(|join_err| QueryFailure::Internal(join_err.to_string()))?;
-
-    // `run_command` only returns `Ok` with a non-empty last stdout line
-    // (`EmptyOutput` otherwise), so the payload is the SQL as-is.
-    outcome
-        .map(|out| out.payload)
-        .map_err(|err| QueryFailure::Internal(err.to_string()))
-}
-
-/// Run one `post-query` stage over its `input` JSON and return the JSON body it
-/// prints. `input` is the serialized result rows for the first stage, or the
-/// previous stage's output thereafter. It is serialized and delivered two ways:
-/// always on the child's stdin (unbounded, injection-safe), and as the `{args}`
-/// placeholder when the payload is within [`POST_QUERY_ARGS_MAX`] (beyond that
-/// `{args}` is emptied and a warning names the size, directing the operator to
-/// stdin — never silent truncation). The command's last non-empty stdout line
-/// is parsed as JSON and returned as the result; anything that isn't valid
-/// JSON, or any failure (non-zero exit, timeout, spawn error), maps to
-/// `Internal`.
-async fn run_post_query(pq: &PostQuery, input: Value) -> Result<Value, QueryFailure> {
-    let payload =
-        serde_json::to_string(&input).map_err(|err| QueryFailure::Internal(err.to_string()))?;
-    let command = pq.command.clone();
-    let config_dir = pq.config_dir.clone();
-    let timeout = pq.timeout;
-    // `run_command` is blocking — it spawns a child and joins drain threads —
-    // so run it off the async runtime. It enforces the hook's timeout
-    // (the global `[dirsql].hook-timeout`, default 30s) internally, so no outer
-    // `tokio::time::timeout` is needed.
-    let outcome = tokio::task::spawn_blocking(move || {
-        let args_value = if payload.len() <= POST_QUERY_ARGS_MAX {
-            payload.clone()
-        } else {
-            eprintln!(
-                "dirsql: post-query result payload is {} bytes, exceeding the \
-                 {POST_QUERY_ARGS_MAX}-byte argv threshold; `{{args}}` is emptied — \
-                 read the rows from stdin instead",
-                payload.len()
-            );
-            String::new()
-        };
-        run_command(
-            &command,
-            &[Placeholder::new("args", &args_value)],
-            &config_dir,
-            timeout,
-            Some(payload.as_bytes()),
-        )
-    })
-    .await
-    .map_err(|join_err| QueryFailure::Internal(join_err.to_string()))?;
-
-    let out = outcome.map_err(|err| QueryFailure::Internal(err.to_string()))?;
-
-    // The command's payload (last non-empty stdout line) is the JSON result
-    // body; reject anything that doesn't parse as JSON.
-    serde_json::from_str(&out.payload).map_err(|err| {
-        QueryFailure::Internal(format!("post-query did not return valid JSON: {err}"))
-    })
 }
 
 #[cfg(test)]
@@ -278,10 +155,10 @@ mod tests {
         }
     }
 
-    // `parse_sql_body` is the no-`pre-query` intake path: it is pure (serde
-    // only), so it is unit-tested here directly rather than through the async
-    // `execute_query` pipeline (which needs a live index and is covered at
-    // the integration tier).
+    // `parse_sql_body` is the intake path: it is pure (serde only), so it is
+    // unit-tested here directly rather than through the async `execute_query`
+    // pipeline (which needs a live index and is covered at the integration
+    // tier).
 
     #[test]
     fn parse_sql_body_returns_trimmed_sql() {

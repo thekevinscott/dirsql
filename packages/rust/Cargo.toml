@@ -58,7 +58,7 @@ globset = "0.4"
 # semantics), without adopting its walker: the scan keeps `walkdir`.
 ignore = "0.4"
 notify = "7"
-rusqlite = { version = "0.34", features = ["bundled", "load_extension", "hooks", "vtab"] }
+rusqlite = { version = "0.34", features = ["bundled", "load_extension", "hooks", "vtab", "functions"] }
 serde.workspace = true
 serde_json.workspace = true
 # Split a command *template* into argv with shell-like quoting (so
