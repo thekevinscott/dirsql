@@ -34,7 +34,7 @@ configuration at all):
 uvx --with dirsql-plugin-embeddings dirsql "
   SELECT path
   FROM (SELECT path, embed(content ->> 'abstract') AS emb
-        FROM 'arxiv-firehose/data/**/metadata.json')
+        FROM './arxiv-firehose/data/**/metadata.json')
   ORDER BY vec_distance_cosine(emb, embed('local private models'))
   LIMIT 10"
 ```
@@ -55,7 +55,10 @@ uvx dirsql-plugin-embeddings '**/*.md' "local private models" -k 10
 ```
 
 The corpus glob is a **required** first positional — the plugin never picks a
-default corpus for you. See
+default corpus for you — and a bare glob is normalized to the `./`-relative
+form the SQL layer requires. Results print as ranked `path<TAB>distance`
+lines, closest first; `dirsql-plugin-embeddings search …` is the explicit
+subcommand spelling of the same command. See
 [Search documents by meaning](./howto/search-by-meaning.md) for the guide to
 both styles.
 

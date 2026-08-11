@@ -12,7 +12,7 @@ function that turns TEXT or BLOB values into embedding vectors:
 uvx --with dirsql-plugin-embeddings dirsql "
   SELECT path
   FROM (SELECT path, embed(content ->> 'abstract') AS emb
-        FROM 'arxiv-firehose/data/**/metadata.json')
+        FROM './arxiv-firehose/data/**/metadata.json')
   ORDER BY vec_distance_cosine(emb, embed('local private models'))
   LIMIT 10"
 ```
@@ -25,15 +25,20 @@ uvx dirsql-plugin-embeddings '**/*.md' "local private models" -k 10
 ```
 
 - **Corpus glob: required first positional.** The plugin never picks a
-  default corpus; you always say which files are in scope.
-- **Query text: second positional.**
+  default corpus; you always say which files are in scope. A bare glob is
+  fine here — the command normalizes it to the `./`-relative form the SQL
+  layer requires (`**/*.md` → `./**/*.md`).
+- **Query text: second positional.** Query text, model id, and glob are
+  SQL-escaped into the generated query.
 - **`-k` / `--limit`** (both spellings, default 10): the number of results.
   It is exactly the SQL `LIMIT` of the generated query — no other cutoff
   exists.
 - **`--model <id>`**: templates the model id as `embed()`'s second argument
   in the generated SQL (see [Model](#model)).
 
-Results print ranked, closest first: path plus cosine distance.
+Results print one `path<TAB>distance` line per match, closest first. The
+explicit subcommand spelling `dirsql-plugin-embeddings search <glob> <query>`
+also works — bare arguments route to it.
 
 > **Top-k is `LIMIT k`.** sqlite-vec's `MATCH ... AND k = N` idiom belongs to
 > its `vec0` virtual table, which `dirsql` does not use. For plain

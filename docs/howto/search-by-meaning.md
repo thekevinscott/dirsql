@@ -26,7 +26,9 @@ uvx dirsql-plugin-embeddings 'notes/*.md' "how do I cook pasta?" -k 3
 ```
 
 - The **corpus glob is required**, and always first: the plugin never picks a
-  default corpus, so you always say exactly which files are in scope.
+  default corpus, so you always say exactly which files are in scope. A bare
+  glob is fine — the command normalizes it to the `./`-relative form the SQL
+  layer requires.
 - The question is the second positional.
 - `-k` / `--limit` (both spellings, default 10) is the number of results —
   it is exactly the SQL `LIMIT` of the generated query; there is no other
@@ -34,9 +36,12 @@ uvx dirsql-plugin-embeddings 'notes/*.md' "how do I cook pasta?" -k 3
 - `--model <id>` switches the embedding model
   ([model story](../plugins.md#model)).
 
+(`dirsql-plugin-embeddings search 'notes/*.md' "…"` is the explicit
+subcommand spelling of the same command — bare arguments route to it.)
+
 The first-ever run downloads the model (on the order of a hundred megabytes,
 with progress on stderr); after that it loads from the local cache. Results
-come back ranked closest-first, path plus distance.
+print one `path<TAB>distance` line per match, closest first.
 
 ## The SQL behind it
 
@@ -48,7 +53,7 @@ join, a `WHERE` clause, a subset of a JSON file's content:
 uvx --with dirsql-plugin-embeddings dirsql "
   SELECT path,
          vec_distance_cosine(emb, embed('how do I cook pasta?')) AS distance
-  FROM (SELECT path, embed(content) AS emb FROM 'notes/*.md')
+  FROM (SELECT path, embed(content) AS emb FROM './notes/*.md')
   ORDER BY distance
   LIMIT 3"
 ```
@@ -63,9 +68,11 @@ distance ranking is doing the work.
 Reading the query inside-out:
 
 1. The subquery scans the [path-table](../reference/path-tables.md)
-   `'notes/*.md'` and embeds each file's
+   `'./notes/*.md'` and embeds each file's
    [`content`](../reference/path-tables.md#columns) — only the files the
-   glob matches are ever read or embedded.
+   glob matches are ever read or embedded. In hand-written SQL the `./`
+   prefix is [required](../reference/path-tables.md#writing-the-path); only
+   the one-liner normalizes a bare glob for you.
 2. `embed('how do I cook pasta?')` embeds the question once (the function is
    deterministic, so SQLite reuses the value across rows).
 3. `vec_distance_cosine(...)` computes cosine distance between the two
@@ -77,7 +84,7 @@ of the whole file:
 ```sql
 SELECT path
 FROM (SELECT path, embed(content ->> 'abstract') AS emb
-      FROM 'papers/**/metadata.json')
+      FROM './papers/**/metadata.json')
 ORDER BY vec_distance_cosine(emb, embed('local private models'))
 LIMIT 10
 ```
