@@ -117,6 +117,29 @@ describe("DirSQL persist", () => {
     expect(rows[0].name).toBe("apple");
   });
 
+  it("leaves the cache file untouched on an unchanged warm start", async () => {
+    const db1 = new DirSQL({
+      root: dir,
+      tables: [makeTable({ count: 0 })],
+      persist: true,
+    });
+    await db1.ready;
+
+    const cache = join(dir, ".dirsql", "cache.db");
+    const before = await readFile(cache);
+
+    const db2 = new DirSQL({
+      root: dir,
+      tables: [makeTable({ count: 0 })],
+      persist: true,
+    });
+    await db2.ready;
+
+    const after = await readFile(cache);
+    expect(after.length).toBe(before.length);
+    expect(after.equals(before)).toBe(true);
+  });
+
   it("re-parses changed files", async () => {
     const box1 = { count: 0 };
     const db1 = new DirSQL({

@@ -576,6 +576,38 @@ fn a_hook_failure_commits_the_files_that_parsed() {
 }
 
 #[test]
+fn warm_start_over_an_unchanged_tree_leaves_the_cache_untouched() {
+    let root = TempDir::new().unwrap();
+    write_csv(root.path(), "a.csv", &["alpha"]);
+    write_csv(root.path(), "b.csv", &["beta"]);
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    {
+        let _db = open(root.path(), counter.clone());
+    }
+
+    let cache = root.path().join(".dirsql").join("cache.db");
+    let size_before = fs::metadata(&cache).unwrap().len();
+    let digest_before = blake3::hash(&fs::read(&cache).unwrap());
+
+    {
+        let _db = open(root.path(), counter.clone());
+    }
+
+    assert_eq!(counter.load(Ordering::SeqCst), 2, "cold parses, warm skips");
+    assert_eq!(
+        fs::metadata(&cache).unwrap().len(),
+        size_before,
+        "an unchanged tree must not grow the cache",
+    );
+    assert_eq!(
+        blake3::hash(&fs::read(&cache).unwrap()),
+        digest_before,
+        "an unchanged tree must not rewrite the cache",
+    );
+}
+
+#[test]
 fn persist_cache_uses_wal_journal_mode() {
     use rusqlite::Connection;
 
