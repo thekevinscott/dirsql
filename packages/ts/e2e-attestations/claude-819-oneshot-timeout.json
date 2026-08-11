@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1786473969,
+  "exit_code": 0,
+  "commit": "5fc0dd4c53afa15f81c773101f0c5af17d64520e",
+  "branch": "claude/819-oneshot-timeout"
+}
