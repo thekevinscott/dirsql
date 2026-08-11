@@ -1,11 +1,13 @@
 # Configuration file (`.dirsql.toml`)
 
 `.dirsql.toml` is a TOML file with one optional `[dirsql]` section, zero or
-more `[[dirsql.extension]]` entries, and zero or more `[[table]]` entries.
+more `[[dirsql.extension]]` entries, zero or more `[[dirsql.function]]`
+entries, and zero or more `[[table]]` entries.
 An empty file is valid. A missing `[dirsql]` section behaves as an
 all-defaults one. Unknown keys are a parse error at every level (top level,
-`[dirsql]`, `[[table]]`, `[[dirsql.extension]]`) — a typo or a removed key
-fails loudly, naming the offending key, rather than silently no-opping.
+`[dirsql]`, `[[table]]`, `[[dirsql.extension]]`, `[[dirsql.function]]`) — a
+typo or a removed key fails loudly, naming the offending key, rather than
+silently no-opping.
 
 The [CLI](./cli.md) loads a config only when you pass it with `-c/--config`;
 with none given [no named tables](./cli.md#configless-mode) are defined (a
@@ -23,7 +25,7 @@ the config file's location. See [`--config`](./cli.md#flags).
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `ignore` | array of strings | `[]` | Glob patterns matched against root-relative paths. Matched files are skipped entirely — excluded from the initial scan and from watch events. |
-| `hook-timeout` | integer (seconds) | `30` | One global per-run timeout for every `on-file` command hook run. Positive whole seconds; zero and negative values are a config error. See [Command hooks](./hooks.md#timeout). |
+| `hook-timeout` | integer (seconds) | `30` | One global per-run timeout for every `on-file` command hook run, and the default per-call timeout for [`[[dirsql.function]]`](#dirsql-function) worker calls (a function entry's own `timeout` overrides it). Positive whole seconds; zero and negative values are a config error. See [Command hooks](./hooks.md#timeout). |
 
 The top-level `.dirsql/` directory under the root is always excluded from
 scanning, whether or not it appears in `ignore` — it is reserved for
@@ -86,6 +88,72 @@ extension-backed **virtual table** cannot be declared as a `[[table]]` —
 `dirsql` tables are per-file row tables, so a `CREATE VIRTUAL TABLE` DDL is
 rejected; call the extension's functions in queries instead.
 
+## `[[dirsql.function]]`
+
+Each entry declares a **worker-backed SQL scalar function**: a function
+queries can call by name, whose values are computed by an external worker
+process you (or a [plugin](../plugins.md)) provide. This is how a plugin adds
+computed values — an embedding, a hash, a classification — to SQL without
+`dirsql` knowing anything about the domain: the config names the function and
+the command, the worker does the work. The first-party
+[`dirsql-plugin-embeddings`](../plugins.md#dirsql-plugin-embeddings) declares
+its `embed()` function exactly this way.
+
+| Key | Required | Description |
+|---|---|---|
+| `name` | yes | The SQL name queries call. Must be a plain identifier — an ASCII letter or underscore followed by ASCII letters, digits, or underscores. |
+| `args` | yes | The accepted arities (argument counts), each `0`–`127`. The function is registered once per listed arity, so `args = [1, 2]` makes both `f(x)` and `f(x, y)` callable and any other count a SQL error. An empty list, an out-of-range value, or a repeated value is a config error. |
+| `command` | yes (non-empty) | The worker command. Argv-split with the same no-shell quoting rules as [command hooks](./hooks.md#argv-not-a-shell); runs in the config file's directory. |
+| `deterministic` | no (default `false`) | When `true`, the function is registered with `SQLITE_DETERMINISTIC`, letting SQLite cache and reuse results for identical arguments within a query. Only set it when the worker really is a pure function of its arguments. |
+| `timeout` | no | Per-**call** time bound: a positive integer is whole seconds (`timeout = 600`), a string is an integer suffixed `s` or `ms` (`"600s"`, `"250ms"`). Overrides [`hook-timeout`](#dirsql-keys); when absent, the declaring config's `hook-timeout` applies, else the shared 30-second default. |
+
+```toml
+[[dirsql.function]]
+name          = "embed"
+args          = [1, 2]
+command       = "dirsql-plugin-embeddings worker"
+deterministic = true
+timeout       = "600s"   # generous: absorbs a first-call model download
+```
+
+### Worker lifecycle
+
+Declaring a function is **inert**: at startup the function is registered on
+the connection and nothing else happens. No process is spawned and nothing is
+read until a query actually calls the function — a declared function nobody
+calls costs nothing.
+
+On the **first call**, `dirsql` spawns `command` and keeps that one worker
+process alive for the rest of the invocation, sending it every subsequent
+call — one process total, never one per row or per file. The worker is torn
+down when the invocation ends.
+
+The `timeout` bounds each **round-trip call**, not the query: a query that
+calls the function on 10 000 rows is 10 000 individually timed calls. A call
+that times out, or a worker that crashes or closes its pipes, fails the query
+with an actionable error naming the function and command; the worker is
+killed and the next call starts a fresh one.
+
+Calling a function that no loaded config declares (say, the plugin providing
+it is not installed) is SQLite's ordinary `no such function` error.
+
+### Worker protocol
+
+The worker speaks **newline-delimited JSON** over its stdin/stdout — one
+request line in, one response line out, per call:
+
+- **Request:** `{"call": [<arg>, ...]}` with the call's SQL arguments
+  encoded as: TEXT → JSON string, INTEGER/REAL → JSON number, NULL → `null`,
+  BLOB → `{"$bytes": "<base64>"}`.
+- **Response:** `{"ok": <value>}` with the same scalar encodings — a JSON
+  array or any other object is bound as TEXT, its JSON text (which is how an
+  embedding worker returns a vector: `sqlite-vec`'s distance functions accept
+  JSON-text vectors) — or `{"err": "message"}`, which **fails the query**
+  with that message. An `{"err": ...}` response leaves the healthy worker
+  running; only transport failures (timeout, crash) recycle it.
+- **stderr passes through** to `dirsql`'s stderr, so a worker's progress
+  bars and download logs reach the terminal.
+
 ## `[[table]]`
 
 Each entry maps a glob pattern to a SQL table. A table's columns are exactly
@@ -143,16 +211,19 @@ dirsql -c ./.dirsql.toml -c ~/team/embeddings.toml -c ./local.toml
 
 The configs load and merge in **argv order**:
 
-- **`[[table]]`, `ignore`, and `[[dirsql.extension]]` entries accumulate** across
-  all configs, in order.
-- **Each config's `on-file` hooks run from that config file's own
-  directory**, under that config's own [`hook-timeout`](#dirsql-keys) — so a
-  relative command like `on-file = "sh ./extract.sh"` resolves against the
-  config that declared it, wherever it lives.
+- **`[[table]]`, `ignore`, `[[dirsql.extension]]`, and `[[dirsql.function]]`
+  entries accumulate** across all configs, in order.
+- **Each config's `on-file` hooks and `[[dirsql.function]]` workers run from
+  that config file's own directory**, under that config's own
+  [`hook-timeout`](#dirsql-keys) — so a relative command like
+  `on-file = "sh ./extract.sh"` resolves against the config that declared it,
+  wherever it lives.
 - Each config is **validated on its own** (the [parse errors](#parse-errors)
-  below apply per file). There is no cross-file merge validation, with one
-  structural exception: **two configs defining a table of the same name is an
-  error**, naming the table.
+  below apply per file). There is no cross-file merge validation, with two
+  structural exceptions: **two configs defining a table of the same name is
+  an error**, naming the table, and **two configs declaring a function of the
+  same name is an error**, naming the function and both sources — never a
+  silent last-writer-wins.
 
 The index [root](./cli.md#flags) is the invocation directory regardless of where
 any config lives. With no `-c`, [no named tables](./cli.md#configless-mode) are
@@ -174,6 +245,11 @@ SDKs raise/reject) when:
   > `[[table]] '**/*.md' has no on-file hook, so every row would be all-NULL. Add an `on-file` hook that emits the columns, or, for stat columns with no code, query the path directly: `FROM './'``
 
 - A `[[dirsql.extension]]` entry omits `path`, or `path` is empty.
+- A `[[dirsql.function]]` entry omits `name`, `command`, or `args` (or
+  `command` is empty/whitespace); its `name` is not a plain identifier; its
+  `args` list is empty, repeats an arity, or lists one outside `0`–`127`; or
+  its `timeout` is not positive whole seconds / a positive-integer `"...s"` or
+  `"...ms"` string.
 - `hook-timeout` is zero or negative.
 
 ## Full example
@@ -187,6 +263,13 @@ hook-timeout = 120
 path       = "sqlite_vec"            # Python module name; on Node use the
                                      # platform package, e.g. sqlite-vec-linux-x64
 entrypoint = "sqlite3_vec_init"
+
+[[dirsql.function]]
+name          = "embed"
+args          = [1, 2]
+command       = "dirsql-plugin-embeddings worker"
+deterministic = true
+timeout       = "600s"
 
 [[table]]
 ddl     = "CREATE TABLE comments (author TEXT, body TEXT)"

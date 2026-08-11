@@ -12,12 +12,14 @@ This page lists the first-party plugins.
 
 ## `dirsql-plugin-embeddings`
 
-Semantic search over a directory of documents. The plugin embeds every matched
-file — `**/*.{md,markdown,mdx,rst,txt,pdf}` — into a `documents` table through
-any OpenAI-compatible `/v1/embeddings` endpoint, then turns each incoming
-question into nearest-neighbor SQL over that table, ranked by
-[`sqlite-vec`](https://github.com/asg017/sqlite-vec)'s
-`vec_distance_cosine()`.
+Semantic search over files. The plugin's product is content → vectors: it
+declares an `embed()` SQL scalar function (via
+[`[[dirsql.function]]`](./reference/config.md#dirsql-function)) that turns
+TEXT or BLOB values into embedding vectors, and loads
+[`sqlite-vec`](https://github.com/asg017/sqlite-vec) so
+`vec_distance_cosine()` and friends do the distance math. You scope the
+search with an ordinary [path-table](./reference/path-tables.md) glob, rank
+with `ORDER BY`, and cut with `LIMIT` — search is plain SQL.
 
 [PyPI](https://pypi.org/project/dirsql-plugin-embeddings/) ·
 [Source](https://github.com/thekevinscott/dirsql/tree/main/plugins/dirsql-plugin-embeddings)
@@ -25,76 +27,74 @@ question into nearest-neighbor SQL over that table, ranked by
 ### Install and launch
 
 The plugin is a normal PyPI package; installing it alongside `dirsql` is the
-whole install story (installed = active — there is no enable step). Point the
-three environment variables at any OpenAI-compatible inference server, hosted
-or self-managed:
+whole install story (installed = active — there is no enable step, and no
+configuration at all):
 
 ```sh
-export DIRSQL_EMBEDDINGS_BASE_URL="https://api.openai.com"
-export DIRSQL_EMBEDDINGS_MODEL="text-embedding-3-small"
-export DIRSQL_EMBEDDINGS_API_KEY="sk-…"
-
-uvx --with dirsql-plugin-embeddings dirsql server
+uvx --with dirsql-plugin-embeddings dirsql "
+  SELECT path
+  FROM (SELECT path, embed(content ->> 'abstract') AS emb
+        FROM './arxiv-firehose/data/**/metadata.json')
+  ORDER BY vec_distance_cosine(emb, embed('local private models'))
+  LIMIT 10"
 ```
 
 The launcher finds the package through its `dirsql` entry point and injects
 the shipped `dirsql.toml` fragment as an ordinary `-c` flag, composed after
 your own configs. The fragment declares the `sqlite-vec` extension (resolved
-from the installed `sqlite-vec` package, which the plugin depends on), so
-`vec_distance_cosine()` is callable in queries. Discovery can be turned off
-per-invocation with `--no-plugin` or `DIRSQL_NO_PLUGIN=1`
+from the installed `sqlite-vec` package, which the plugin depends on) and the
+`embed()` function entry. Discovery can be turned off per-invocation with
+`--no-plugin` or `DIRSQL_NO_PLUGIN=1`
 ([reference](./reference/cli.md#plugins)).
 
-### Configuration
+For the common case — one glob, one question, top-k paths — the package is
+also its own command, generating and running exactly that SQL:
 
-The v0.1 configuration surface is environment variables. The hooks run as
-subprocesses, so the variables must be set in the environment `dirsql` itself
-runs in — they are inherited, not read from a file.
+```sh
+uvx dirsql-plugin-embeddings '**/*.md' "local private models" -k 10
+```
 
-| Variable | Required | Meaning |
-|---|---|---|
-| `DIRSQL_EMBEDDINGS_BASE_URL` | yes | Base URL of the embeddings server; `/v1/embeddings` is appended. |
-| `DIRSQL_EMBEDDINGS_MODEL` | yes | Model name sent in each request. |
-| `DIRSQL_EMBEDDINGS_API_KEY` | yes | Bearer token for the `Authorization` header. |
-| `DIRSQL_EMBEDDINGS_CACHE_READ` | no | Set to `0` to bypass reads of the on-disk PDF text-extraction cache (see below). Anything else, or unset, leaves the cache on. |
+The corpus glob is a **required** first positional — the plugin never picks a
+default corpus for you — and a bare glob is normalized to the `./`-relative
+form the SQL layer requires. Results print as ranked `path<TAB>distance`
+lines, closest first. See
+[Search documents by meaning](./howto/search-by-meaning.md) for the guide to
+both styles.
 
-PDF text extraction is the expensive step of a scan, and a scan re-reads every
-matched file — so extracted text is cached on disk at
-`~/.cache/dirsql-plugin-embeddings/`, keyed on the file's path and mtime. An
-edited PDF is a cache miss, never a stale hit. `DIRSQL_EMBEDDINGS_CACHE_READ=0`
-forces every call to re-extract; writes still happen, so the cache stays warm
-for the next run that reads it.
+### Zero cost when unused
 
-### What gets indexed
+`embed()` is [inert until called](./reference/config.md#worker-lifecycle):
+installing the plugin changes nothing for queries that never call it. No
+worker process is spawned, no model is loaded or downloaded, and no cache is
+touched. Only what a query's glob actually selects is ever embedded — the
+worker receives **values, not paths**, and never opens files itself.
 
-Every file matching `**/*.{md,markdown,mdx,rst,txt,pdf}` under the root.
-Everything except `.pdf` is read as UTF-8 text; a `.pdf` is read with
-[pypdf](https://pypdf.readthedocs.io), its per-page text joined and embedded
-like any other document. The extension check is case-insensitive (`.PDF` is a
-PDF), but the glob itself is not — an uppercase-suffixed file is not matched
-at all.
+### Model
 
-The glob is an allowlist rather than `**/*` on cost, not correctness: every
-matched file costs a hook subprocess, and every file the plugin can decode
-costs a billed embedding call. Widening the list trades money for recall.
+Embeddings come from [model2vec](https://github.com/MinishLab/model2vec)
+static models — inference needs numpy and tokenizers only, no torch, so the
+plugin stays light enough for `uvx` ephemeral environments and is fast on
+CPU. The default model is
+[`minishlab/potion-retrieval-32M`](https://huggingface.co/minishlab/potion-retrieval-32M).
 
-A *scanned*, image-only PDF is not an error: pypdf yields no text and the file
-is indexed with an empty `text`, exactly like an empty `.md`.
+The very first `embed()` call downloads the model (on the order of a hundred
+megabytes — expect seconds to a few minutes depending on your connection,
+with progress on stderr) into the standard Hugging Face cache
+(`~/.cache/huggingface`), which persists across `uvx` environments; every
+later run loads it from disk.
 
-### When a file fails
+Override the model per call with the optional second argument —
+`embed(text, 'model-id')` — or per run with the one-liner's `--model` flag,
+which templates the same second argument. The id must be a
+**model2vec-loadable** model; sentence-transformers/torch models are out of
+scope.
 
-A file the plugin cannot process — an unreadable file, a failed embedding
-call — is skipped, not fatal. Per the
-[`on-file` failure contract](./reference/hooks.md#failure-semantics), the file
-contributes no rows, `dirsql` names it on stderr and keeps indexing the rest,
-and the run exits `23`: a partial index, distinct from `0` (clean) and `1`
-(the run failed). From the SDK the same information is available via
-`scan_failures()` / `scanFailures()`.
+### Vector cache
 
-### Planned configurability
-
-v0.1 is deliberately minimal: one provider shape, one table, one file = one
-row = one embedding (no chunking), and a hardcoded glob. Configurability —
-alternate embedding backends, chunking strategies, choosing which files get
-indexed, cache knobs — is tracked in
-[#619](https://github.com/thekevinscott/dirsql/issues/619).
+Computed vectors are cached at `~/.cache/dirsql/embeddings/` (respecting
+`XDG_CACHE_HOME`), keyed on the SHA-256 of the value bytes plus the model
+identifier. Changing either recomputes — switching models never serves stale
+vectors — and re-running a query over unchanged files is cache hits all the
+way. There is no eviction: the directory is **safe to wipe at any time**; the
+only cost is re-embedding. The cache never lives inside a queried tree — the
+worker writes nothing into the directories you query.

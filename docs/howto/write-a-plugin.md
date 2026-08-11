@@ -54,6 +54,9 @@ structurally **identical to a user config**. It may declare
 [`[[table]]`](../reference/config.md#table) (with
 [`on-file`](../reference/hooks.md#on-file)),
 [`[[dirsql.extension]]`](../reference/config.md#dirsql-extension),
+[`[[dirsql.function]]`](../reference/config.md#dirsql-function) (how
+[`dirsql-plugin-embeddings`](../plugins.md#dirsql-plugin-embeddings) provides
+its `embed()` SQL function),
 [`ignore`](../reference/config.md#dirsql-keys), and
 [`hook-timeout`](../reference/hooks.md#timeout).
 
@@ -202,7 +205,8 @@ Discovery is deliberately narrow. Know exactly who does what:
   [convention above](#sdk-style-convention-expose-the-config)).
 - **Name collisions are a hard error.** Because fragments compose like any
   [multiple configs](../reference/config.md#composing-multiple-configs), two
-  plugins (or a plugin and your config) defining a table of the same name
+  plugins (or a plugin and your config) defining a table — or declaring a
+  [function](../reference/config.md#dirsql-function) — of the same name
   fail loudly, naming the conflict. It is never a silent
   last-writer-wins.
 
