@@ -57,8 +57,7 @@ uvx dirsql-plugin-embeddings '**/*.md' "local private models" -k 10
 The corpus glob is a **required** first positional — the plugin never picks a
 default corpus for you — and a bare glob is normalized to the `./`-relative
 form the SQL layer requires. Results print as ranked `path<TAB>distance`
-lines, closest first; `dirsql-plugin-embeddings search …` is the explicit
-subcommand spelling of the same command. See
+lines, closest first. See
 [Search documents by meaning](./howto/search-by-meaning.md) for the guide to
 both styles.
 

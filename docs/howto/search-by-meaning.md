@@ -36,9 +36,6 @@ uvx dirsql-plugin-embeddings 'notes/*.md' "how do I cook pasta?" -k 3
 - `--model <id>` switches the embedding model
   ([model story](../plugins.md#model)).
 
-(`dirsql-plugin-embeddings search 'notes/*.md' "…"` is the explicit
-subcommand spelling of the same command — bare arguments route to it.)
-
 The first-ever run downloads the model (on the order of a hundred megabytes,
 with progress on stderr); after that it loads from the local cache. Results
 print one `path<TAB>distance` line per match, closest first.

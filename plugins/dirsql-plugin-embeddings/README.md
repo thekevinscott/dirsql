@@ -36,9 +36,7 @@ uvx dirsql-plugin-embeddings '**/*.md' "local private models" -k 10
 - **`--model <id>`**: templates the model id as `embed()`'s second argument
   in the generated SQL (see [Model](#model)).
 
-Results print one `path<TAB>distance` line per match, closest first. The
-explicit subcommand spelling `dirsql-plugin-embeddings search <glob> <query>`
-also works — bare arguments route to it.
+Results print one `path<TAB>distance` line per match, closest first.
 
 > **Top-k is `LIMIT k`.** sqlite-vec's `MATCH ... AND k = N` idiom belongs to
 > its `vec0` virtual table, which `dirsql` does not use. For plain
