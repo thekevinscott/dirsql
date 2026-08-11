@@ -76,8 +76,9 @@ Config flags are subcommand-local: pass them after `server`
 
 ### Defaults
 
-- Per-query timeout: **30 seconds**. A query exceeding it returns
-  `408 Request Timeout`.
+- Per-query timeout: **30 seconds**, in server mode only. A query exceeding
+  it returns `408 Request Timeout`. One-shot [`dirsql query`](#dirsql-query)
+  has no built-in timeout.
 - `on-file` command hooks run **unbounded**; bound one by wrapping its
   command in `timeout(1)` (see
   [Bounding a hook](./hooks.md#bounding-a-hook)).
@@ -168,11 +169,15 @@ uses**, so behavior is identical to `POST /query` by construction:
   `.gitignore` would hide. See [Skip rules](./path-tables.md#skip-rules).
 - **`on-file` hooks** apply identically (unbounded; wrap in `timeout(1)` to
   bound — see [Bounding a hook](./hooks.md#bounding-a-hook)).
-- The **30-second query timeout**, the **read-only rule**, and the
-  `_dirsql_*` **internal-table denial** apply identically. A rejected read
-  is an error, not empty output. The read-only rule here governs SQL
-  statements; dirsql separately never modifies the files it indexes — see
+- The **read-only rule** and the `_dirsql_*` **internal-table denial** apply
+  identically. A rejected read is an error, not empty output. The read-only
+  rule here governs SQL statements; dirsql separately never modifies the
+  files it indexes — see
   [Read-only by design](../explanation#read-only-by-design).
+- **No per-query timeout.** Unlike the server's 30-second bound (`408`),
+  a one-shot query runs to completion — the process *is* the query, so
+  cap it from the shell if you want one: `timeout 60 dirsql query "<sql>"`
+  (see `timeout(1)`).
 
 #### `--on-file <command>`
 
