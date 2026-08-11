@@ -1,7 +1,0 @@
-{
-  "command": "uv run python -m pytest tests/e2e/ -x -q",
-  "ran_at": 1785877241,
-  "exit_code": 0,
-  "commit": "83f767a7d90cefe1aa6ab136e36a739cfb5dc425",
-  "branch": "claude/772-extension-without-config"
-}

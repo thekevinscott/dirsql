@@ -1,7 +1,0 @@
-{
-  "command": "just test-e2e",
-  "ran_at": 1785867315,
-  "exit_code": 0,
-  "commit": "48dbead65b0060f7ee5cad2e0db969467febbaf3",
-  "branch": "chore/766-narrow-pedantic"
-}
