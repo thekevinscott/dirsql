@@ -1,10 +1,10 @@
 import json
 from hashlib import sha256
 
-from .. import model
-from ..cache import make_cache
-from ..progress import stderr_is_tty
-from ..values import ProtocolError, decode_value
+from . import model
+from .cache import make_cache
+from .progress import stderr_is_tty
+from .values import ProtocolError, decode_value
 
 MALFORMED_SHAPE = (
     'malformed request: expected {"call": [value, model_id?]} on one line'

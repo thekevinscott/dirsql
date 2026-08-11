@@ -53,4 +53,4 @@ def describe_console_scripts():
         (script,) = entry_points(
             group="console_scripts", name="dirsql-plugin-embeddings"
         )
-        assert script.value == "dirsql_plugin_embeddings.cli:main"
+        assert script.value == "dirsql_plugin_embeddings.cli.main:main"

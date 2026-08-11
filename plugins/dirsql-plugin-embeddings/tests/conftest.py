@@ -28,7 +28,7 @@ VOCAB = {"[UNK]": 0, "hello": 1, "world": 2}
 WORKER_ARGV = [
     sys.executable,
     "-c",
-    "import sys; from dirsql_plugin_embeddings.cli import main; sys.exit(main())",
+    "import sys; from dirsql_plugin_embeddings.cli.main import main; sys.exit(main())",
     "worker",
 ]
 

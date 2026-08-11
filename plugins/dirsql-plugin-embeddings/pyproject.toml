@@ -27,7 +27,7 @@ dependencies = [
 ]
 
 [project.scripts]
-dirsql-plugin-embeddings = "dirsql_plugin_embeddings.cli:main"
+dirsql-plugin-embeddings = "dirsql_plugin_embeddings.cli.main:main"
 
 [tool.hatch.version]
 source = "vcs"

@@ -2,12 +2,12 @@ import sys
 
 import click
 
-from ..progress import configure
-from .worker import Worker
+from ..embedding.progress import configure
+from ..embedding.worker import Worker
 
 
 @click.command()
-def cli():
+def worker():
     """Serve embed() requests as newline-delimited JSON on stdin/stdout."""
     configure()
     Worker().serve(sys.stdin, sys.stdout)

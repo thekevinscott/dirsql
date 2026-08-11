@@ -17,8 +17,8 @@ DEFAULT_PATCH_ARGV_PREFIX = [
     "-c",
     "import sys\n"
     "from unittest.mock import patch\n"
-    "from dirsql_plugin_embeddings import model\n"
-    "from dirsql_plugin_embeddings.cli import main\n"
+    "from dirsql_plugin_embeddings.embedding import model\n"
+    "from dirsql_plugin_embeddings.cli.main import main\n"
     "with patch.object(model, 'DEFAULT_MODEL_ID', sys.argv.pop(1)):\n"
     "    sys.exit(main())\n",
 ]
