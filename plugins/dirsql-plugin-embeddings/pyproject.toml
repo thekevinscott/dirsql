@@ -18,7 +18,16 @@ requires-python = ">=3.10"
 # model2vec (NOT sentence-transformers/torch) is the inference stack: static
 # embeddings whose runtime deps are numpy + tokenizers, viable in uvx
 # ephemeral envs. cachetta is the vector cache; tqdm the stderr progress UI.
+#
+# dirsql is the SDK the one-liner search command runs its generated SQL
+# through. Functionally it needs >= 0.4.17 (the first release with the core
+# [[dirsql.function]] mechanism), but the requirement stays unversioned: the
+# in-repo editable SDK builds under the stale on-disk version literal (the
+# release pipeline rewrites it at publish time), so any floor would make the
+# local e2e overlay (`uv run --with-editable ../../packages/python`)
+# unresolvable. Fresh installs resolve the latest release regardless.
 dependencies = [
+    "dirsql",
     "sqlite-vec>=0.1",
     "model2vec>=0.6",
     "cachetta>=0.7",

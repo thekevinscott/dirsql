@@ -65,9 +65,11 @@ def describe_search_cli():
         assert distances[1] == pytest.approx(1.0)
         assert distances == sorted(distances)
 
-    def it_limits_results_to_k(tree, tiny_model, cache_home):
+    def it_limits_results_to_k_and_accepts_a_bare_glob(
+        tree, tiny_model, cache_home
+    ):
         result = _search(
-            ["./notes/*.txt", "world", "-k", "1", "--model", tiny_model],
+            ["notes/*.txt", "world", "-k", "1", "--model", tiny_model],
             tree,
             cache_home,
         )
