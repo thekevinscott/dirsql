@@ -3,12 +3,10 @@ requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
-# First-party dirsql plugin, published independently to PyPI. Mid-rebuild:
-# today it only loads sqlite-vec; the embed() SQL function surface is landing
-# in follow-up slices.
+# First-party dirsql plugin, published independently to PyPI.
 name = "dirsql-plugin-embeddings"
 dynamic = ["version"]
-description = "First-party dirsql plugin: semantic search over files (rebuild in progress)."
+description = "First-party dirsql plugin: semantic search over files."
 readme = "README.md"
 requires-python = ">=3.10"
 # sqlite-vec is a runtime dependency, not a docs suggestion: the shipped
@@ -16,7 +14,29 @@ requires-python = ">=3.10"
 # only resolve when the package is installed. Declaring it here makes the
 # quickstart (`uvx --with dirsql-plugin-embeddings dirsql`) work without a
 # separate `--with sqlite-vec`.
-dependencies = ["sqlite-vec>=0.1"]
+#
+# model2vec (NOT sentence-transformers/torch) is the inference stack: static
+# embeddings whose runtime deps are numpy + tokenizers, viable in uvx
+# ephemeral envs. cachetta is the vector cache; tqdm the stderr progress UI.
+#
+# dirsql is the SDK the one-liner search command runs its generated SQL
+# through. Functionally it needs >= 0.4.17 (the first release with the core
+# [[dirsql.function]] mechanism), but the requirement stays unversioned: the
+# in-repo editable SDK builds under the stale on-disk version literal (the
+# release pipeline rewrites it at publish time), so any floor would make the
+# local e2e overlay (`uv run --with-editable ../../packages/python`)
+# unresolvable. Fresh installs resolve the latest release regardless.
+dependencies = [
+    "dirsql",
+    "sqlite-vec>=0.1",
+    "model2vec>=0.6",
+    "cachetta>=0.7",
+    "tqdm>=4",
+    "click>=8",
+]
+
+[project.scripts]
+dirsql-plugin-embeddings = "dirsql_plugin_embeddings.cli.main:main"
 
 [tool.hatch.version]
 source = "vcs"
@@ -47,7 +67,12 @@ git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--mat
 embeddings = "dirsql_plugin_embeddings"
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-cov>=5", "pytest-describe>=2"]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "pytest-describe>=2",
+    "tomli>=2; python_version < '3.11'",
+]
 
 [tool.hatch.build]
 exclude = ["**/*_test.py"]

@@ -78,10 +78,4 @@ jobs:
       source: plugins/dirsql-plugin-embeddings/src
       config: plugins/dirsql-plugin-embeddings/testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      # unit-coverage and e2e-verify are parked while the package ships no
-      # source or test suites (the old surface is deleted, the embed()
-      # rebuild is in flight — #800): unit-coverage errors outright on a
-      # suite that collects zero tests, and e2e-verify demands a receipt for
-      # an e2e tier that does not exist. Restore both with the rebuild's
-      # first source module and suites.
-      gates: '["colocated-test", "unit-lint", "integration-lint", "mutation"]'
+      gates: '["colocated-test", "unit-lint", "integration-lint", "unit-coverage", "mutation", "e2e-verify"]'
