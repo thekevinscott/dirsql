@@ -378,10 +378,10 @@ timeout = "1s"
 }
 
 #[test]
-fn function_timeout_overrides_hook_timeout() {
+fn a_function_without_a_timeout_gets_the_thirty_second_default() {
     let root = TempDir::new().unwrap();
-    // hook-timeout alone would kill this 2s call at 1s; the function-level
-    // timeout overrides it upward and the call succeeds.
+    // 2s is over any sub-second bound but comfortably under the 30s default:
+    // the call must succeed, proving the default is the mechanism's own 30s.
     write_worker(
         root.path(),
         "worker.py",
@@ -391,14 +391,10 @@ resp = {"ok": "done"}"#,
     fs::write(
         root.path().join(".dirsql.toml"),
         r#"
-[dirsql]
-hook-timeout = 1
-
 [[dirsql.function]]
 name = "slowok"
 args = [1]
 command = "python3 worker.py"
-timeout = "20s"
 "#,
     )
     .unwrap();
@@ -406,40 +402,6 @@ timeout = "20s"
     let db = build(&root).unwrap();
     let rows = db.query("SELECT slowok('x') AS v").unwrap();
     assert_eq!(rows[0]["v"], Value::Text("done".into()));
-}
-
-#[test]
-fn hook_timeout_bounds_calls_when_no_function_timeout_is_set() {
-    let root = TempDir::new().unwrap();
-    write_worker(
-        root.path(),
-        "worker.py",
-        r#"time.sleep(30)
-resp = {"ok": None}"#,
-    );
-    fs::write(
-        root.path().join(".dirsql.toml"),
-        r#"
-[dirsql]
-hook-timeout = 1
-
-[[dirsql.function]]
-name = "slow"
-args = [1]
-command = "python3 worker.py"
-"#,
-    )
-    .unwrap();
-
-    let db = build(&root).unwrap();
-    let started = Instant::now();
-    let err = db.query("SELECT slow('x') AS v").unwrap_err();
-    assert!(err.to_string().contains("timed out"), "got: {err}");
-    assert!(
-        started.elapsed() < Duration::from_secs(15),
-        "hook-timeout must bound the call, took {:?}",
-        started.elapsed()
-    );
 }
 
 #[test]

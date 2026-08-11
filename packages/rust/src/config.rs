@@ -55,8 +55,13 @@ pub enum ConfigError {
     )]
     HooklessTable { glob: String },
 
-    #[error("Field '{field}' must be a positive number of seconds, got {value}")]
-    InvalidTimeout { field: &'static str, value: i64 },
+    #[error(
+        "'hook-timeout' has been removed: `on-file` hooks run unbounded. Delete the \
+         key from [dirsql]; to bound a hook, wrap its command in timeout(1) \
+         (on-file = \"timeout 30 my-extractor {{path}}\"). A [[dirsql.function]] \
+         entry bounds each worker call with its own `timeout` key (default 30s)."
+    )]
+    RemovedHookTimeout,
 
     #[error("Cannot combine an empty list of configs")]
     NoConfigs,
@@ -71,13 +76,6 @@ pub enum ConfigError {
     #[error("Function '{name}' is declared by both {first} and {second}")]
     DuplicateFunction {
         name: String,
-        first: Source,
-        second: Source,
-    },
-
-    #[error("Key '{key}' is set by both {first} and {second}")]
-    ConflictingKey {
-        key: &'static str,
         first: Source,
         second: Source,
     },
@@ -110,9 +108,7 @@ impl std::fmt::Display for Source {
 /// returned unchanged. List-shaped config (`[[table]]`, `[[dirsql.extension]]`,
 /// `[[dirsql.function]]`, `ignore`) concatenates in input order. A table-name
 /// or function-name collision anywhere in the combined set errors, naming both
-/// sources. The single-valued `hook-timeout` key defined by more than one
-/// config errors, naming both sources — no silent shadowing, no precedence;
-/// defined in exactly one config it merges through unchanged.
+/// sources.
 ///
 /// Tables whose DDL yields no parseable table name are concatenated without a
 /// collision check; `Db::create_table` rejects them downstream.
@@ -130,8 +126,6 @@ pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
         std::collections::HashMap::new();
     let mut function_sources: std::collections::HashMap<String, &Source> =
         std::collections::HashMap::new();
-
-    let mut hook_timeout: Option<(&Source, Duration)> = None;
 
     for (source, config) in configs {
         for table in &config.tables {
@@ -158,13 +152,6 @@ pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
             }
             functions.push(function.clone());
         }
-
-        merge_single(
-            "hook-timeout",
-            &mut hook_timeout,
-            config.hook_timeout.as_ref(),
-            source,
-        )?;
     }
 
     Ok(Config {
@@ -172,29 +159,7 @@ pub fn combine_configs(configs: &[(Source, Config)]) -> Result<Config> {
         tables,
         extensions,
         functions,
-        hook_timeout: hook_timeout.map(|(_, value)| value),
     })
-}
-
-/// Fold one config's value for a single-valued key into the merge `slot`,
-/// erroring when a prior config already defined it.
-fn merge_single<'a, T: Clone>(
-    key: &'static str,
-    slot: &mut Option<(&'a Source, T)>,
-    value: Option<&T>,
-    source: &'a Source,
-) -> Result<()> {
-    if let Some(value) = value {
-        if let Some((prior, _)) = slot {
-            return Err(ConfigError::ConflictingKey {
-                key,
-                first: (*prior).clone(),
-                second: source.clone(),
-            });
-        }
-        *slot = Some((source, value.clone()));
-    }
-    Ok(())
 }
 
 /// Parsed configuration from a `.dirsql.toml` file.
@@ -211,13 +176,6 @@ pub struct Config {
     /// Registered on the connection at startup; nothing runs until a query
     /// calls one. See [`FunctionSpec`].
     pub functions: Vec<FunctionSpec>,
-    /// Optional timeout for every command-backed hook — `on-file` runs and
-    /// `[[dirsql.function]]` worker calls alike (`[dirsql].hook-timeout`,
-    /// positive seconds). One global bound rather than a per-hook knob; a
-    /// function entry's own `timeout` overrides it. When absent, hooks fall
-    /// back to the shared 30-second default
-    /// ([`crate::command::DEFAULT_COMMAND_TIMEOUT`]).
-    pub hook_timeout: Option<Duration>,
 }
 
 /// A SQLite extension to load at startup.
@@ -256,8 +214,8 @@ pub struct FunctionSpec {
     pub command: String,
     /// When true, the function is registered with `SQLITE_DETERMINISTIC`.
     pub deterministic: bool,
-    /// Optional per-round-trip-call timeout, overriding the config's
-    /// `[dirsql].hook-timeout` (and its shared 30s default).
+    /// Optional per-round-trip-call timeout, overriding the function
+    /// mechanism's own 30-second default.
     pub timeout: Option<Duration>,
 }
 
@@ -296,8 +254,10 @@ struct RawDirsql {
     ignore: Option<Vec<String>>,
     extension: Option<Vec<RawExtension>>,
     function: Option<Vec<RawFunction>>,
+    // Removed key, still deserialized (any shape) so a config declaring it
+    // hits the dedicated actionable error, not the generic unknown-key one.
     #[serde(rename = "hook-timeout")]
-    hook_timeout: Option<i64>,
+    hook_timeout: Option<toml::Value>,
 }
 
 #[derive(Deserialize)]
@@ -310,9 +270,8 @@ struct RawFunction {
     timeout: Option<RawFunctionTimeout>,
 }
 
-/// The `timeout` key accepts positive whole seconds (`timeout = 600`, the
-/// `hook-timeout` shape) or a suffixed duration string (`timeout = "600s"`,
-/// `"250ms"`).
+/// The `timeout` key accepts positive whole seconds (`timeout = 600`) or a
+/// suffixed duration string (`timeout = "600s"`, `"250ms"`).
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum RawFunctionTimeout {
@@ -348,9 +307,11 @@ pub fn load_config_str(content: &str) -> Result<Config> {
     let raw: RawConfig = toml::from_str(content)?;
 
     let d = raw.dirsql.unwrap_or_default();
+    if d.hook_timeout.is_some() {
+        return Err(ConfigError::RemovedHookTimeout);
+    }
     let ignore = d.ignore.unwrap_or_default();
     let raw_extensions = d.extension.unwrap_or_default();
-    let hook_timeout = parse_timeout_secs("hook-timeout", d.hook_timeout)?;
 
     let mut extensions = Vec::with_capacity(raw_extensions.len());
     for raw_ext in raw_extensions {
@@ -399,7 +360,6 @@ pub fn load_config_str(content: &str) -> Result<Config> {
         tables,
         extensions,
         functions,
-        hook_timeout,
     })
 }
 
@@ -496,18 +456,6 @@ fn parse_function_timeout(name: &str, raw: &RawFunctionTimeout) -> Result<Durati
                 _ => Err(invalid(format!("{text:?}"))),
             }
         }
-    }
-}
-
-/// Validate an optional timeout config value (whole seconds) into a
-/// [`Duration`], rejecting zero and negative values at parse time.
-fn parse_timeout_secs(field: &'static str, raw: Option<i64>) -> Result<Option<Duration>> {
-    match raw {
-        Some(secs) if secs <= 0 => Err(ConfigError::InvalidTimeout { field, value: secs }),
-        Some(secs) => Ok(Some(Duration::from_secs(
-            u64::try_from(secs).expect("non-positive values rejected above"),
-        ))),
-        None => Ok(None),
     }
 }
 
@@ -887,7 +835,6 @@ post-query = "jq '{results: .}'"
         let config = cfg(r#"
 [dirsql]
 ignore = ["*.tmp"]
-hook-timeout = 120
 
 [[dirsql.extension]]
 path = "vec0.so"
@@ -901,7 +848,6 @@ on-file = "cat {path}"
         let merged = combine_configs(&[(src("/proj/.dirsql.toml"), config.clone())]).unwrap();
         assert_eq!(merged.ignore, config.ignore);
         assert_eq!(merged.extensions, config.extensions);
-        assert_eq!(merged.hook_timeout, config.hook_timeout);
         assert_eq!(merged.tables.len(), 1);
         assert_eq!(merged.tables[0].ddl, config.tables[0].ddl);
         assert_eq!(merged.tables[0].glob, config.tables[0].glob);
@@ -1060,29 +1006,6 @@ on-file = "cat {path}"
     }
 
     #[test]
-    fn combine_hook_timeout_in_two_configs_errors_naming_both_sources() {
-        let a = cfg("[dirsql]\nhook-timeout = 60\n");
-        let b = cfg("[dirsql]\nhook-timeout = 120\n");
-        let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
-        match &err {
-            ConfigError::ConflictingKey { key, first, second } => {
-                assert_eq!(*key, "hook-timeout");
-                assert_eq!(first, &src("/a"));
-                assert_eq!(second, &src("/b"));
-            }
-            other => panic!("got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn combine_hook_timeout_in_one_config_merges_through() {
-        let a = cfg("[dirsql]\nhook-timeout = 60\n");
-        let b = cfg("[dirsql]\nignore = [\"c/**\"]\n");
-        let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
-        assert_eq!(merged.hook_timeout, Some(Duration::from_secs(60)));
-    }
-
-    #[test]
     fn combine_error_display_includes_package_source_verbatim() {
         let a = cfg(
             "[[table]]\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\non-file = \"cat {path}\"\n",
@@ -1134,75 +1057,39 @@ on-file = "cat {path}"
     }
 
     #[test]
-    fn hook_timeout_parses_to_duration_seconds() {
+    fn hook_timeout_key_is_rejected_with_the_replacement_idiom() {
+        // The key is removed; the error must name the timeout(1) wrapper
+        // idiom and the function-level `timeout` replacement.
         let toml = r#"
 [dirsql]
-hook-timeout = 300
-"#;
-        let config = load_config_str(toml).unwrap();
-        assert_eq!(config.hook_timeout, Some(Duration::from_secs(300)));
-    }
-
-    #[test]
-    fn hook_timeout_absent_is_none() {
-        let toml = r#"
-[[table]]
-ddl = "CREATE TABLE t (x TEXT)"
-glob = "*.json"
-on-file = "cat {path}"
-"#;
-        let config = load_config_str(toml).unwrap();
-        assert!(config.hook_timeout.is_none());
-    }
-
-    #[test]
-    fn hook_timeout_zero_errors() {
-        let toml = r#"
-[dirsql]
-hook-timeout = 0
+hook-timeout = 120
 "#;
         let err = load_config_str(toml).unwrap_err();
         assert!(
-            matches!(
-                err,
-                ConfigError::InvalidTimeout {
-                    field: "hook-timeout",
-                    value: 0
-                }
-            ),
+            matches!(err, ConfigError::RemovedHookTimeout),
             "got: {err:?}"
         );
+        let msg = err.to_string();
+        assert!(msg.contains("hook-timeout"), "got: {msg}");
+        assert!(msg.contains("timeout 30 my-extractor {path}"), "got: {msg}");
+        assert!(msg.contains("timeout(1)"), "got: {msg}");
+        assert!(msg.contains("[[dirsql.function]]"), "got: {msg}");
+        assert!(msg.contains("default 30s"), "got: {msg}");
     }
 
     #[test]
-    fn hook_timeout_negative_errors() {
-        let toml = r#"
-[dirsql]
-hook-timeout = -5
-"#;
-        let err = load_config_str(toml).unwrap_err();
-        assert!(
-            matches!(
-                err,
-                ConfigError::InvalidTimeout {
-                    field: "hook-timeout",
-                    value: -5
-                }
-            ),
-            "got: {err:?}"
-        );
-    }
-
-    #[test]
-    fn invalid_timeout_error_names_the_field_and_value() {
-        let err = ConfigError::InvalidTimeout {
-            field: "hook-timeout",
-            value: -1,
-        };
-        assert_eq!(
-            err.to_string(),
-            "Field 'hook-timeout' must be a positive number of seconds, got -1"
-        );
+    fn hook_timeout_key_is_rejected_regardless_of_value_shape() {
+        // Any declared shape (string, zero, negative) hits the same removal
+        // error rather than a type or range error for a key that no longer
+        // exists.
+        for value in ["\"30s\"", "0", "-5", "true"] {
+            let toml = format!("[dirsql]\nhook-timeout = {value}\n");
+            let err = load_config_str(&toml).unwrap_err();
+            assert!(
+                matches!(err, ConfigError::RemovedHookTimeout),
+                "hook-timeout = {value}: got {err:?}"
+            );
+        }
     }
 
     #[test]

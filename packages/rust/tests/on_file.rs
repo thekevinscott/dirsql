@@ -272,10 +272,11 @@ on-file = "sh extract.sh {path}"
     assert_eq!(rows[0]["name"], Value::Text("ok".into()));
 }
 
-/// Under the default 30-second timeout this command would finish; the skip
-/// proves the configured 1-second `hook-timeout` bounded the run.
+/// Bounding a hook is the command's job now: a `timeout(1)`-wrapped hook that
+/// overruns its bound exits non-zero, which isolates to a skip like any other
+/// hook failure.
 #[test]
-fn on_file_exceeding_configured_timeout_skips_the_file() {
+fn a_timeout_wrapped_hook_that_overruns_skips_the_file() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("slow.sh"),
@@ -285,19 +286,16 @@ fn on_file_exceeding_configured_timeout_skips_the_file() {
     fs::write(
         root.path().join(".dirsql.toml"),
         r#"
-[dirsql]
-hook-timeout = 1
-
 [[table]]
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
-on-file = "sh slow.sh {path}"
+on-file = "timeout 0.5 sh slow.sh {path}"
 "#,
     )
     .unwrap();
     fs::write(root.path().join("a.txt"), "x\n").unwrap();
 
-    // The scan must succeed; the timed-out file contributes no rows.
+    // The scan must succeed; the killed hook's file contributes no rows.
     let db = DirSQL::builder()
         .root(root.path())
         .config(root.path().join(".dirsql.toml"))
@@ -306,14 +304,14 @@ on-file = "sh slow.sh {path}"
     let rows = db.query("SELECT name FROM items").unwrap();
     assert!(
         rows.is_empty(),
-        "a file whose on-file run exceeds `hook-timeout = 1` must be skipped, got {rows:?}"
+        "a file whose timeout(1)-wrapped hook overruns must be skipped, got {rows:?}"
     );
 }
 
-/// Proves `hook-timeout` is read as seconds: `hook-timeout = 5` with a
-/// 2-second command lands rows.
+/// A slow hook is no longer killed by any built-in bound: a 2-second run
+/// (over what used to be configurable) completes and lands its rows.
 #[test]
-fn on_file_within_generous_configured_timeout_lands_rows() {
+fn a_slow_unwrapped_hook_runs_to_completion() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("slowish.sh"),
@@ -323,9 +321,6 @@ fn on_file_within_generous_configured_timeout_lands_rows() {
     fs::write(
         root.path().join(".dirsql.toml"),
         r#"
-[dirsql]
-hook-timeout = 5
-
 [[table]]
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"

@@ -25,7 +25,12 @@ the config file's location. See [`--config`](./cli.md#flags).
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `ignore` | array of strings | `[]` | Glob patterns matched against root-relative paths. Matched files are skipped entirely — excluded from the initial scan and from watch events. |
-| `hook-timeout` | integer (seconds) | `30` | One global per-run timeout for every `on-file` command hook run, and the default per-call timeout for [`[[dirsql.function]]`](#dirsql-function) worker calls (a function entry's own `timeout` overrides it). Positive whole seconds; zero and negative values are a config error. See [Command hooks](./hooks.md#timeout). |
+
+There is no timeout key. `on-file` hook runs are unbounded; to bound one, wrap
+its command in `timeout(1)` (see [Command hooks](./hooks.md#bounding-a-hook)).
+A config that still declares the removed `hook-timeout` key fails to load with
+an error naming that replacement. [`[[dirsql.function]]`](#dirsql-function)
+worker calls have their own per-call `timeout` key (default 30 seconds).
 
 The top-level `.dirsql/` directory under the root is always excluded from
 scanning, whether or not it appears in `ignore` — it is reserved for
@@ -36,7 +41,6 @@ directory.
 ```toml
 [dirsql]
 ignore = ["node_modules/**", ".git/**"]
-hook-timeout = 300
 ```
 
 Persistence is not a config key. Keep the SQLite index on disk between runs
@@ -105,7 +109,7 @@ its `embed()` function exactly this way.
 | `args` | yes | The accepted arities (argument counts), each `0`–`127`. The function is registered once per listed arity, so `args = [1, 2]` makes both `f(x)` and `f(x, y)` callable and any other count a SQL error. An empty list, an out-of-range value, or a repeated value is a config error. |
 | `command` | yes (non-empty) | The worker command. Argv-split with the same no-shell quoting rules as [command hooks](./hooks.md#argv-not-a-shell); runs in the config file's directory. |
 | `deterministic` | no (default `false`) | When `true`, the function is registered with `SQLITE_DETERMINISTIC`, letting SQLite cache and reuse results for identical arguments within a query. Only set it when the worker really is a pure function of its arguments. |
-| `timeout` | no | Per-**call** time bound: a positive integer is whole seconds (`timeout = 600`), a string is an integer suffixed `s` or `ms` (`"600s"`, `"250ms"`). Overrides [`hook-timeout`](#dirsql-keys); when absent, the declaring config's `hook-timeout` applies, else the shared 30-second default. |
+| `timeout` | no | Per-**call** time bound: a positive integer is whole seconds (`timeout = 600`), a string is an integer suffixed `s` or `ms` (`"600s"`, `"250ms"`). When absent, the function mechanism's own 30-second default applies. |
 
 ```toml
 [[dirsql.function]]
@@ -214,8 +218,7 @@ The configs load and merge in **argv order**:
 - **`[[table]]`, `ignore`, `[[dirsql.extension]]`, and `[[dirsql.function]]`
   entries accumulate** across all configs, in order.
 - **Each config's `on-file` hooks and `[[dirsql.function]]` workers run from
-  that config file's own directory**, under that config's own
-  [`hook-timeout`](#dirsql-keys) — so a relative command like
+  that config file's own directory** — so a relative command like
   `on-file = "sh ./extract.sh"` resolves against the config that declared it,
   wherever it lives.
 - Each config is **validated on its own** (the [parse errors](#parse-errors)
@@ -250,14 +253,14 @@ SDKs raise/reject) when:
   `args` list is empty, repeats an arity, or lists one outside `0`–`127`; or
   its `timeout` is not positive whole seconds / a positive-integer `"...s"` or
   `"...ms"` string.
-- `hook-timeout` is zero or negative.
+- `[dirsql]` declares the removed `hook-timeout` key (the error names the
+  `timeout(1)` replacement).
 
 ## Full example
 
 ```toml
 [dirsql]
 ignore = ["node_modules/**", ".git/**", "dist/**"]
-hook-timeout = 120
 
 [[dirsql.extension]]
 path       = "sqlite_vec"            # Python module name; on Node use the
