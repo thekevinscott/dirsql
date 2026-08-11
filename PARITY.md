@@ -52,6 +52,7 @@ was removed there. This **restores parity** with the CLI's no-`-c` behavior (#60
 | Watch (channel/stream)     | `async for event in db.watch()` (via `_async.py`) | `db.watch() -> WatchStream` (channel)                | `for await (const ev of db.watch())`                    |
 | Load SQLite extension(s)   | `DirSQL(extensions=[{path, entrypoint?}])`; `[[dirsql.extension]]` config entries | `.extension(Extension)` / `.extensions(I)` builder; `[[dirsql.extension]]` config entries (`path` + optional `entrypoint`) | `new DirSQL({ extensions: [{ path, entrypoint? }] })`; `[[dirsql.extension]]` config entries |
 | Multiple config files (merge in order) | `config=` accepts `str` or `list[str]` (#588) | `.config(path)` **repeatable** — each call appends; configs merge in call order (#545/#553) | `config` accepts `string` or `string[]` (#589) |
+| Worker-backed SQL functions (`[[dirsql.function]]`) | Y — config entries parsed and registered by the shared core (via `config=`) | Y — `[[dirsql.function]]` config entries (name, args arities, command, deterministic, timeout) | Y — config entries parsed and registered by the shared core (via `config`) |
 
 **Multiple config files — at parity across all three SDKs.** Several
 `.dirsql.toml` files merge in call order (`[[table]]` / `ignore` /
@@ -60,6 +61,12 @@ errors), matching the CLI's repeatable `-c/--config` (#547). **Rust**'s
 builder `.config()` is repeatable (#545/#553), **Python**'s `config=` accepts
 a `str` or a `list[str]` (#588), and **TypeScript**'s `config` accepts a
 `string` or a `string[]` (#589). No drift.
+
+**Worker-backed SQL functions (`[[dirsql.function]]`, #801) — at parity by
+construction.** The mechanism lives entirely in the shared Rust core (config
+parsing, registration, worker lifecycle), so every SDK and the CLI gain it
+through their existing `config` surface; no per-SDK API was added or changed.
+No drift.
 
 **Extension loading — at parity across all three SDKs, see #225 / #229 / #230.**
 The Rust core loads SQLite extensions declared as `[[dirsql.extension]]` config
