@@ -5,16 +5,21 @@ from .worker import worker
 
 
 class DefaultCommandGroup(click.Group):
-    """Route non-subcommand invocations to the search command.
+    """Route non-`worker` invocations to the hidden search command.
 
-    Bare positionals are the plugin's primary interface
-    (`dirsql-plugin-embeddings '<glob>' '<query>'`), so anything that is not
-    a known subcommand or the group's own --help is re-parsed as arguments
-    to `search`.
+    Bare positionals are the plugin's only search interface
+    (`dirsql-plugin-embeddings '<glob>' '<query>'`): a first token counts as
+    a subcommand only when it names a *visible* command, so a literal
+    'search' first token is a corpus glob, not a spelling of the command.
     """
 
     def parse_args(self, ctx, args):
-        if not args or (args[0] != "--help" and args[0] not in self.commands):
+        visible = [
+            name
+            for name, command in self.commands.items()
+            if not command.hidden
+        ]
+        if not args or (args[0] != "--help" and args[0] not in visible):
             args = [search.name, *args]
         return super().parse_args(ctx, args)
 
@@ -23,7 +28,7 @@ class DefaultCommandGroup(click.Group):
 def main():
     """dirsql embeddings plugin.
 
-    Bare arguments run the search command:
+    Bare arguments run the semantic search:
     dirsql-plugin-embeddings '<glob>' '<query>' [-k N] [--model ID]
     """
 

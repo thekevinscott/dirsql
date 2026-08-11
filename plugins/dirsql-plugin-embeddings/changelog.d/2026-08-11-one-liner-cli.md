@@ -9,5 +9,6 @@ subquery over the glob's rows, `vec_distance_cosine` against
 Python SDK (now a declared dependency; needs dirsql >= 0.4.17, the first
 release with `[[dirsql.function]]`) with the packaged
 config fragment, and prints ranked `path<TAB>distance` lines. Query text,
-model id, and glob are SQL-escaped. The `worker` subcommand is unchanged; an
-explicit `search` subcommand spelling also works.
+model id, and glob are SQL-escaped. The `worker` subcommand is unchanged;
+there is no explicit `search` spelling — a literal `search` first token is a
+corpus glob.

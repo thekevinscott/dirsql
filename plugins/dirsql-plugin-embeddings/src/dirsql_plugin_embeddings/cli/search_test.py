@@ -8,6 +8,9 @@ def describe_search_command():
         assert search.search.name == "search"
         assert callable(search.search.callback)
 
+    def it_is_hidden_from_help_listings():
+        assert search.search.hidden is True
+
     def it_requires_glob_then_query_as_positional_arguments():
         arguments = [
             param

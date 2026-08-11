@@ -85,10 +85,10 @@ def describe_default_command():
         assert result.exit_code == 0, result.output
         assert queried_sql(dirsql_class).endswith("ORDER BY distance LIMIT 5")
 
-    def it_works_as_the_explicit_search_subcommand_too(dirsql_class):
-        result = invoke(["search", "docs/**/*.md", "local models"])
+    def it_treats_a_literal_search_first_token_as_a_glob(dirsql_class):
+        result = invoke(["search", "local models"])
         assert result.exit_code == 0, result.output
-        assert "'./docs/**/*.md'" in queried_sql(dirsql_class)
+        assert "FROM './search'" in queried_sql(dirsql_class)
 
 
 def describe_escaping():
@@ -131,8 +131,9 @@ def describe_argument_errors():
     def it_still_dispatches_the_worker_subcommand():
         assert "worker" in main.commands
 
-    def it_shows_help_listing_both_commands():
+    def it_shows_help_listing_only_the_worker_command():
         result = invoke(["--help"])
         assert result.exit_code == 0
-        assert "worker" in result.output
-        assert "search" in result.output
+        commands_block = result.output.split("Commands:")[1]
+        assert "worker" in commands_block
+        assert "search" not in commands_block

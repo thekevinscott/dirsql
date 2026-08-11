@@ -35,11 +35,11 @@ def describe_default_command_routing():
     def it_inserts_search_for_a_leading_option():
         assert _parsed(["-k", "3", "g", "q"]) == ["search", "-k", "3", "g", "q"]
 
-    def it_leaves_a_known_subcommand_alone():
+    def it_leaves_the_visible_worker_subcommand_alone():
         assert _parsed(["worker"]) == ["worker"]
 
-    def it_leaves_the_explicit_search_subcommand_alone():
-        assert _parsed(["search", "g", "q"]) == ["search", "g", "q"]
+    def it_treats_a_literal_search_token_as_a_glob():
+        assert _parsed(["search", "x"]) == ["search", "search", "x"]
 
     def it_leaves_the_group_help_flag_alone():
         assert _parsed(["--help"]) == ["--help"]

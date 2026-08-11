@@ -3,7 +3,7 @@ import click
 from ..search.run import run_search
 
 
-@click.command()
+@click.command(hidden=True)
 @click.argument("glob")
 @click.argument("query")
 @click.option(
