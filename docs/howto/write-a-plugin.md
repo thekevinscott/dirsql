@@ -57,8 +57,7 @@ structurally **identical to a user config**. It may declare
 [`[[dirsql.function]]`](../reference/config.md#dirsql-function) (how
 [`dirsql-plugin-embeddings`](../plugins.md#dirsql-plugin-embeddings) provides
 its `embed()` SQL function),
-[`ignore`](../reference/config.md#dirsql-keys), and
-[`hook-timeout`](../reference/hooks.md#timeout).
+and [`ignore`](../reference/config.md#dirsql-keys).
 
 There are **no plugin-specific keys and no plugin-specific restrictions**. The
 config schema is content-only: the index `root` and `--persist` are
@@ -104,9 +103,6 @@ distance math, and an `on-file` command to embed each file.
 The fragment, `src/dirsql_embeddings/dirsql.toml`:
 
 ```toml
-[dirsql]
-hook-timeout = 300   # headroom for the first-run model download
-
 [[dirsql.extension]]
 path       = "sqlite_vec"
 entrypoint = "sqlite3_vec_init"

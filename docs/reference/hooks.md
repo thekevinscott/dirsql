@@ -58,22 +58,30 @@ everything above the last line. `jq` users: pass `-c` so the JSON is emitted
 compactly on one line.
 :::
 
-### Timeout
+### Bounding a hook
 
-Every hook run is bounded by a **30-second** default timeout. A run
-exceeding it is killed and treated as a failure. One global config key
-raises (or tightens) the bound:
+Hook runs are **unbounded** — `dirsql` imposes no timeout of its own. To
+bound a hook, make the bound part of the command by wrapping it in
+`timeout(1)`:
 
 ```toml
-[dirsql]
-hook-timeout = 300   # positive whole seconds
+on-file = "timeout 30 my-extractor {path}"
 ```
 
-Zero and negative values are a config error.
+When the wrapper kills an overrunning command, the run exits non-zero and
+the ordinary [failure semantics](#failure-semantics) apply — the file is
+skipped, the scan continues.
 
-The same key is also the default per-call timeout for
-[`[[dirsql.function]]`](./config.md#dirsql-function) worker calls; a function
-entry's own `timeout` overrides it.
+::: warning Windows
+Windows's built-in `timeout` command is a *sleep*, not a bound — it cannot
+wrap another command. On Windows, bound the work inside the command itself
+(or accept unbounded runs).
+:::
+
+[`[[dirsql.function]]`](./config.md#dirsql-function) worker calls are
+different: a call is a round-trip on a persistent worker process, which
+`timeout(1)` cannot express, so the function mechanism carries its own
+per-call `timeout` key with a 30-second default.
 
 ### Failure semantics
 
@@ -81,8 +89,8 @@ A hook run fails when the command:
 
 - cannot be spawned (e.g. the program is not found),
 - exits non-zero (the exit code — or `signal`, if killed by one — and the
-  stderr tail are reported),
-- exceeds the timeout (killed; stderr tail reported),
+  stderr tail are reported; a `timeout(1)` wrapper killing an overrun lands
+  here),
 - exits zero but prints no non-empty stdout line,
 - or prints output that does not parse as a JSON array of row objects.
 
