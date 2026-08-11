@@ -275,15 +275,19 @@ the Rust core and is **not exposed on any binding's public API** — it has no
 Python/TypeScript surface to keep in parity. The event built on it (`on-file`)
 is a `.dirsql.toml` key parsed by the shared Rust config loader, so every
 install (`pip` / `npm` / `cargo`) gets identical behavior with no per-SDK
-code. Its timeout override is the global `[dirsql].hook-timeout`
-(`config::Config::hook_timeout`, positive seconds, default 30s; #351).
+code. Hook runs are unbounded (#820 removed `[dirsql].hook-timeout`; a config
+still declaring it fails with an error naming the `timeout(1)` idiom).
+`[[dirsql.function]]` worker calls keep their per-call `timeout`, defaulting
+to the Rust-core-public `functions::DEFAULT_FUNCTION_TIMEOUT` (30s, #820) —
+config-schema surface shared by every install, with **no** Python/TypeScript
+public-API binding, so no drift.
 
 - **`on-file` (B2 #327).** A **required** `[[table]]` key naming a per-file
   command whose JSON-array stdout becomes the table's rows (interpolation-only
   placeholders `{path}` (the file's **absolute** path, #542) / `{root}` — a
   template that omits one receives no value, no append-if-absent, #538/#539;
-  per-file error isolation; 30s default timeout, overridable via the global
-  `[dirsql].hook-timeout` key in positive seconds, #351). A `[[table]]` without
+  per-file error isolation; unbounded since #820 — bound a hook by wrapping
+  its command in `timeout(1)`). A `[[table]]` without
   it is a load error since #634 (after fact-injection removal a hook-less table
   would emit only all-NULL rows), so `config::TableConfig::on_file` is `String`,
   not `Option<String>`. Parsed and executed in the shared Rust core
@@ -303,7 +307,7 @@ code. Its timeout override is the global `[dirsql].hook-timeout`
 - **`--on-file` (path-table parser, #631).** A `dirsql query` flag naming a
   command that supplies every path-table's rows and schema (a JSON array of row
   objects; the `on-file` hook contract — argv splitting, `{path}`/`{root}`,
-  per-file failure isolation, `[dirsql].hook-timeout`). The stat columns are not
+  per-file failure isolation). The stat columns are not
   reachable on a parsed path-table; parsed scans honor the same skip rules stat
   scans do. Threaded through the shared Rust core (`db::Db::set_path_table_parser`
   → the `dirsql_parsed` module) via a **doc-hidden** `DirSQLBuilder::path_table_parser`

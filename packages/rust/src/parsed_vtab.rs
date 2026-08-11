@@ -27,7 +27,7 @@ use rusqlite::vtab::{
 use rusqlite::{Connection, Error, Result, ffi};
 
 use crate::Value;
-use crate::command::{DEFAULT_COMMAND_TIMEOUT, Placeholder, run_command};
+use crate::command::{Placeholder, run_command};
 use crate::infer::{JsonRow, cell, declared_schema, infer_schema, parse_rows};
 use crate::matcher::TableMatcher;
 use crate::path_table;
@@ -166,7 +166,7 @@ fn run_parser(command: &str, root: &Path, rel_path: &Path) -> std::result::Resul
         Placeholder::new("root", root.to_string_lossy().into_owned()),
     ];
 
-    run_command(command, &placeholders, root, DEFAULT_COMMAND_TIMEOUT, None)
+    run_command(command, &placeholders, root, None)
         .map(|output| output.payload)
         .map_err(|e| e.to_string())
 }

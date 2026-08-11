@@ -83,6 +83,8 @@ Follow **red/green** (test-first) methodology:
 4. **Make the minimal change to pass (GREEN)** -- only then write the implementation, committed and pushed separately so CI flips from red to green.
 5. Refactor if needed, keeping tests green
 
+**Removals are exempt.** Red/green applies to adding or changing behavior. When a change *removes* functionality, do not write red tests enforcing the absence of the removed behavior, and the pushed-RED-CI gate does not apply: delete or update the tests that covered the removed behavior, keep the suite green, and commit implementation + test updates normally. If the removal introduces genuinely new observable behavior (e.g. a new error message when a retired config key is used), that new behavior follows normal red/green.
+
 ### TDD Order: Outside-In
 
 Tests are written **before** implementation, starting from the outermost layer:

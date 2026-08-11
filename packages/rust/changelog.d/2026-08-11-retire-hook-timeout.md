@@ -1,0 +1,3 @@
+**Removed**
+
+- **The `[dirsql].hook-timeout` config key is removed and `on-file` hook runs are now unbounded.** To bound a hook, make the bound part of the command by wrapping it in `timeout(1)` (`on-file = "timeout 30 my-extractor {path}"`); the wrapper's kill surfaces as an ordinary non-zero exit with the usual per-file isolation. A config still declaring `hook-timeout` fails to load with an error naming that replacement. `[[dirsql.function]]` worker calls keep their per-call `timeout` key, now defaulting to the function mechanism's own 30 seconds (`functions::DEFAULT_FUNCTION_TIMEOUT`). `command::run_command` lost its `timeout` parameter and `CommandError::Timeout` variant. (#820)
