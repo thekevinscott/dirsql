@@ -167,6 +167,13 @@ struct Parsed {
 /// what lets an unchanged tree leave the cache file byte-for-byte alone. A file
 /// whose parse failed is left uncached and retried next run, matching the
 /// declared-table contract: the cache is incomplete, never wrong.
+///
+/// A failed *write* is warned about and swallowed. The rows are already correct
+/// and the next run simply re-parses; failing the user's query over a lost
+/// optimization would be the worse outcome. It is reachable: the cache file is
+/// normally WAL, where this connection's write and the owning connection's read
+/// coexist, but WAL is unavailable on some filesystems and there the two can
+/// genuinely contend.
 fn collect_rows_cached(
     cache: &dyn RowCache,
     rel_paths: &[PathBuf],
@@ -238,11 +245,21 @@ fn collect_rows_cached(
         .filter(|key| !live.contains(key))
         .collect();
 
-    if !writes.is_empty() || !stale.is_empty() {
-        cache.commit(&writes, &stale)?;
+    if (!writes.is_empty() || !stale.is_empty())
+        && let Err(error) = cache.commit(&writes, &stale)
+    {
+        warn(&cache_write_skip_message(&error));
     }
 
     Ok(rows)
+}
+
+/// Warning for a cache the run could not update. Says what was lost (the reuse,
+/// not the rows) so the reader knows this is a slow next run, not a wrong one.
+fn cache_write_skip_message(error: &Error) -> String {
+    format!(
+        "dirsql: could not update the persist cache: {error}; rows are unaffected, the next run re-parses"
+    )
 }
 
 /// The filesystem questions the cached collection asks, injected so the reuse
@@ -849,7 +866,8 @@ mod tests {
     struct FakeCache {
         entries: std::cell::RefCell<HashMap<String, CachedParse>>,
         commits: std::cell::RefCell<usize>,
-        fail: bool,
+        fail_read: bool,
+        fail_commit: bool,
     }
 
     impl FakeCache {
@@ -894,7 +912,7 @@ mod tests {
 
     impl RowCache for FakeCache {
         fn read(&self) -> rusqlite::Result<HashMap<String, CachedParse>> {
-            if self.fail {
+            if self.fail_read {
                 return Err(rusqlite::Error::InvalidQuery);
             }
             Ok(self.entries.borrow().clone())
@@ -902,6 +920,9 @@ mod tests {
 
         fn commit(&self, writes: &[Entry<'_>], deletes: &[&str]) -> rusqlite::Result<()> {
             *self.commits.borrow_mut() += 1;
+            if self.fail_commit {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
             for entry in writes {
                 self.put(
                     entry.rel_path,
@@ -1100,9 +1121,36 @@ mod tests {
     }
 
     #[test]
+    fn collect_rows_cached_warns_but_returns_rows_when_the_cache_cannot_be_written() {
+        let cache = FakeCache {
+            fail_commit: true,
+            ..FakeCache::default()
+        };
+        let fs = FakeFs::with(&[("a.json", 10)]);
+
+        let (rows, warnings) =
+            collect_cached(&cache, &fs, &paths(&["a.json"]), &ok(r#"[{"id":1}]"#));
+
+        assert_eq!(ids(&rows), vec![1], "the rows are correct regardless");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("next run re-parses"),
+            "the warning says what was lost, got: {}",
+            warnings[0],
+        );
+    }
+
+    #[test]
+    fn cache_write_skip_message_names_the_error_and_the_consequence() {
+        let message = cache_write_skip_message(&Error::SqliteSingleThreadedMode);
+        assert!(message.contains("persist cache"), "got: {message}");
+        assert!(message.contains("rows are unaffected"), "got: {message}");
+    }
+
+    #[test]
     fn collect_rows_cached_propagates_a_cache_read_failure() {
         let cache = FakeCache {
-            fail: true,
+            fail_read: true,
             ..FakeCache::default()
         };
         let fs = FakeFs::with(&[("a.json", 10)]);
