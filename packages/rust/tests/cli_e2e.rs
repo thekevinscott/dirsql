@@ -462,6 +462,84 @@ fn query_subcommand_rejects_unknown_config_key_with_nonzero_exit() {
 }
 
 #[test]
+fn pre_query_key_in_config_is_rejected_as_unknown() {
+    // The `pre-query` hook is removed (#803): the key is no longer part of the
+    // schema, so `dirsql query` exits non-zero and names it on stderr.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(".dirsql.toml"),
+        "[dirsql]\npre-query = \"echo SELECT 42 AS answer\"\n",
+    )
+    .unwrap();
+
+    let out = run_query_subcommand_with_config(dir.path(), "SELECT 1");
+    assert!(
+        !out.status.success(),
+        "a config carrying the removed `pre-query` key must be a non-zero exit, got {out:?}"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("pre-query"),
+        "stderr must name the removed key, got {stderr:?}"
+    );
+}
+
+#[test]
+fn post_query_key_in_config_is_rejected_as_unknown() {
+    // Same removal contract for `post-query` (#803).
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(".dirsql.toml"),
+        "[dirsql]\npost-query = \"cat\"\n",
+    )
+    .unwrap();
+
+    let out = run_query_subcommand_with_config(dir.path(), "SELECT 1");
+    assert!(
+        !out.status.success(),
+        "a config carrying the removed `post-query` key must be a non-zero exit, got {out:?}"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("post-query"),
+        "stderr must name the removed key, got {stderr:?}"
+    );
+}
+
+#[test]
+fn pre_query_key_degrades_server_with_503_naming_the_key() {
+    // On the server surface the removed key follows the unknown-config-key
+    // contract: the server degrades and `POST /query` returns 503 whose
+    // diagnostic names `pre-query` (#803).
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(".dirsql.toml"),
+        "[dirsql]\npre-query = \"echo SELECT 42 AS answer\"\n",
+    )
+    .unwrap();
+    let port = free_port();
+    let child = spawn_dirsql_with_args(dir.path(), port, &["-c", ".dirsql.toml"]);
+    wait_until_ready(port, Duration::from_secs(10));
+
+    let resp = Client::new()
+        .post(format!("http://localhost:{port}/query"))
+        .json(&json!({"sql": "SELECT 1"}))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let error = resp.json::<Value>().unwrap()["error"]
+        .as_str()
+        .expect("503 body carries an `error` string")
+        .to_string();
+    assert!(
+        error.contains("pre-query"),
+        "503 diagnostic must name the removed key, got {error:?}"
+    );
+
+    kill_and_wait(child);
+}
+
+#[test]
 fn quoted_identifier_table_in_toml_is_served_over_http() {
     // The quoted DDL identifier resolves to the bare table name `posts`.
     let root = quoted_blog_fixture();
@@ -525,246 +603,6 @@ fn no_config_serves_path_tables_not_a_files_table() {
     assert!(
         names.contains(&"readme.md"),
         "expected the path-table to contain readme.md, got {names:?}"
-    );
-
-    kill_and_wait(child);
-}
-
-#[cfg(unix)]
-#[test]
-fn pre_query_hook_rewrites_body_into_sql_over_http() {
-    // The passthrough path would 400 on this non-JSON body, so rows coming
-    // back proves the hook ran. The script is referenced by a bare relative
-    // name to exercise cwd = the config file's directory.
-    let root = blog_fixture();
-    fs::write(
-        root.path().join("to_sql.sh"),
-        "echo \"SELECT basename FROM posts ORDER BY basename\"\n",
-    )
-    .unwrap();
-    fs::write(
-        root.path().join(".dirsql.toml"),
-        r#"
-[dirsql]
-pre-query = "sh to_sql.sh {args}"
-
-[[table]]
-ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
-glob = "posts/*/*.json"
-on-file = '''sh -c 'base=${1##*/}; size=$(wc -c < "$1" | tr -d " "); printf "[{\"basename\":\"%s\",\"size\":%s}]" "$base" "$size"' sh {path}'''
-"#,
-    )
-    .unwrap();
-
-    let port = free_port();
-    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
-    wait_until_ready(port, Duration::from_secs(10));
-
-    let resp = Client::new()
-        .post(format!("http://localhost:{port}/query"))
-        .body("please give me the posts")
-        .send()
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body: Vec<Value> = resp.json().unwrap();
-    assert_eq!(
-        body,
-        vec![
-            json!({"basename": "Hello-World.json"}),
-            json!({"basename": "Second-Post.json"}),
-        ]
-    );
-
-    kill_and_wait(child);
-}
-
-#[cfg(unix)]
-#[test]
-fn post_query_hook_reshapes_response_over_http() {
-    // The `{results: …}` envelope coming back proves the hook reshaped the
-    // response. The script is referenced by a bare relative name to exercise
-    // cwd = the config file's directory.
-    let root = blog_fixture();
-    fs::write(
-        root.path().join("wrap.sh"),
-        "data=$(cat)\necho \"{\\\"results\\\": $data}\"\n",
-    )
-    .unwrap();
-    fs::write(
-        root.path().join(".dirsql.toml"),
-        r#"
-[dirsql]
-post-query = "sh wrap.sh {args}"
-
-[[table]]
-ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
-glob = "posts/*/*.json"
-on-file = '''sh -c 'base=${1##*/}; size=$(wc -c < "$1" | tr -d " "); printf "[{\"basename\":\"%s\",\"size\":%s}]" "$base" "$size"' sh {path}'''
-"#,
-    )
-    .unwrap();
-
-    let port = free_port();
-    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
-    wait_until_ready(port, Duration::from_secs(10));
-
-    let resp = Client::new()
-        .post(format!("http://localhost:{port}/query"))
-        .json(&json!({"sql": "SELECT basename FROM posts ORDER BY basename"}))
-        .send()
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body: Value = resp.json().unwrap();
-    assert_eq!(
-        body,
-        json!({"results": [{"basename": "Hello-World.json"}, {"basename": "Second-Post.json"}]})
-    );
-
-    kill_and_wait(child);
-}
-
-#[cfg(unix)]
-#[test]
-fn pre_query_hook_exceeding_configured_timeout_returns_500() {
-    // Under the default 30s timeout this hook would finish; the 500 proves
-    // the configured 1-second `hook-timeout` applied.
-    let root = blog_fixture();
-    fs::write(
-        root.path().join("slow_to_sql.sh"),
-        "sleep 3\necho \"SELECT basename FROM posts ORDER BY basename\"\n",
-    )
-    .unwrap();
-    fs::write(
-        root.path().join(".dirsql.toml"),
-        r#"
-[dirsql]
-pre-query = "sh slow_to_sql.sh {args}"
-hook-timeout = 1
-
-[[table]]
-ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
-glob = "posts/*/*.json"
-on-file = '''sh -c 'base=${1##*/}; size=$(wc -c < "$1" | tr -d " "); printf "[{\"basename\":\"%s\",\"size\":%s}]" "$base" "$size"' sh {path}'''
-"#,
-    )
-    .unwrap();
-
-    let port = free_port();
-    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
-    wait_until_ready(port, Duration::from_secs(10));
-
-    let resp = Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .unwrap()
-        .post(format!("http://localhost:{port}/query"))
-        .body("please give me the posts")
-        .send()
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    let body: Value = resp.json().unwrap();
-    let error = body["error"].as_str().unwrap_or_default();
-    assert!(
-        error.contains("timed out"),
-        "500 body should describe the timeout, got {error:?}"
-    );
-
-    kill_and_wait(child);
-}
-
-#[cfg(unix)]
-#[test]
-fn pre_query_hook_within_generous_configured_timeout_succeeds() {
-    // Proves `hook-timeout` is read as seconds: a 60 read as milliseconds
-    // would kill this 2-second hook.
-    let root = blog_fixture();
-    fs::write(
-        root.path().join("slowish_to_sql.sh"),
-        "sleep 2\necho \"SELECT basename FROM posts ORDER BY basename\"\n",
-    )
-    .unwrap();
-    fs::write(
-        root.path().join(".dirsql.toml"),
-        r#"
-[dirsql]
-pre-query = "sh slowish_to_sql.sh {args}"
-hook-timeout = 60
-
-[[table]]
-ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
-glob = "posts/*/*.json"
-on-file = '''sh -c 'base=${1##*/}; size=$(wc -c < "$1" | tr -d " "); printf "[{\"basename\":\"%s\",\"size\":%s}]" "$base" "$size"' sh {path}'''
-"#,
-    )
-    .unwrap();
-
-    let port = free_port();
-    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
-    wait_until_ready(port, Duration::from_secs(10));
-
-    let resp = Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .unwrap()
-        .post(format!("http://localhost:{port}/query"))
-        .body("please give me the posts")
-        .send()
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body: Vec<Value> = resp.json().unwrap();
-    assert_eq!(
-        body,
-        vec![
-            json!({"basename": "Hello-World.json"}),
-            json!({"basename": "Second-Post.json"}),
-        ]
-    );
-
-    kill_and_wait(child);
-}
-
-#[cfg(unix)]
-#[test]
-fn post_query_hook_exceeding_configured_timeout_returns_500() {
-    let root = blog_fixture();
-    fs::write(
-        root.path().join("slow_wrap.sh"),
-        "data=$(cat)\nsleep 3\necho \"{\\\"results\\\": $data}\"\n",
-    )
-    .unwrap();
-    fs::write(
-        root.path().join(".dirsql.toml"),
-        r#"
-[dirsql]
-post-query = "sh slow_wrap.sh {args}"
-hook-timeout = 1
-
-[[table]]
-ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
-glob = "posts/*/*.json"
-on-file = '''sh -c 'base=${1##*/}; size=$(wc -c < "$1" | tr -d " "); printf "[{\"basename\":\"%s\",\"size\":%s}]" "$base" "$size"' sh {path}'''
-"#,
-    )
-    .unwrap();
-
-    let port = free_port();
-    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
-    wait_until_ready(port, Duration::from_secs(10));
-
-    let resp = Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .unwrap()
-        .post(format!("http://localhost:{port}/query"))
-        .json(&json!({"sql": "SELECT basename FROM posts ORDER BY basename"}))
-        .send()
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    let body: Value = resp.json().unwrap();
-    let error = body["error"].as_str().unwrap_or_default();
-    assert!(
-        error.contains("timed out"),
-        "500 body should describe the timeout, got {error:?}"
     );
 
     kill_and_wait(child);

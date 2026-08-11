@@ -62,6 +62,31 @@ fn unknown_key_at_each_schema_level_errors() {
     }
 }
 
+// The `pre-query` / `post-query` hooks are removed (#803): the keys are no
+// longer part of the schema, so a config carrying one fails with the standard
+// unknown-key error naming the key -- never silently accepted.
+#[test]
+fn removed_query_hook_keys_are_rejected_as_unknown() {
+    let cases = [
+        (
+            "pre-query",
+            "[dirsql]\npre-query = \"echo SELECT 1 AS one\"\n",
+        ),
+        ("post-query", "[dirsql]\npost-query = \"cat\"\n"),
+    ];
+    for (key, toml) in cases {
+        let err = load_config_str(toml).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::Toml(_)),
+            "`{key}`: expected a TOML parse error, got: {err:?}"
+        );
+        assert!(
+            err.to_string().contains(key),
+            "`{key}`: error must name the removed key, got: {err}"
+        );
+    }
+}
+
 // `DEFAULT_CONFIG_TOML` (packages/rust/src/cli/mod.rs) crosses the
 // cli <-> config module boundary, so this lives here rather than as a unit
 // test in either module -- per the `unit lint` isolation rule. Gated on the

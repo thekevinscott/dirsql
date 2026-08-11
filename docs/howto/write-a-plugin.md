@@ -24,8 +24,7 @@ dirsql-embeddings/
     └── dirsql_embeddings/
         ├── __init__.py
         ├── dirsql.toml       # the config fragment
-        ├── embed.py          # on-file hook
-        └── search.py         # pre-query hook
+        └── embed.py          # on-file hook
 ```
 
 The entry point maps a **source label** (the name) to the **module that
@@ -55,8 +54,7 @@ structurally **identical to a user config**. It may declare
 [`[[table]]`](../reference/config.md#table) (with
 [`on-file`](../reference/hooks.md#on-file)),
 [`[[dirsql.extension]]`](../reference/config.md#dirsql-extension),
-[`ignore`](../reference/config.md#dirsql-keys),
-[`pre-query`/`post-query`](../reference/hooks.md#pre-query), and
+[`ignore`](../reference/config.md#dirsql-keys), and
 [`hook-timeout`](../reference/hooks.md#timeout).
 
 There are **no plugin-specific keys and no plugin-specific restrictions**. The
@@ -96,17 +94,14 @@ matter most for a published plugin:
 ## Worked example: an embeddings plugin
 
 Here is the whole plugin — vector search over a directory of notes, buildable
-in about fifty lines. It composes the same three pieces as
-[Search documents by meaning](./search-by-meaning.md): the
+in about forty lines. It composes two pieces: the
 [`sqlite-vec`](https://github.com/asg017/sqlite-vec) extension for the
-distance math, an `on-file` command to embed each file, and a `pre-query`
-command to embed the question.
+distance math, and an `on-file` command to embed each file.
 
 The fragment, `src/dirsql_embeddings/dirsql.toml`:
 
 ```toml
 [dirsql]
-pre-query    = "uv run --with model2vec python search.py {args}"
 hook-timeout = 300   # headroom for the first-run model download
 
 [[dirsql.extension]]
@@ -140,46 +135,23 @@ row = {"path": os.path.relpath(path, root), "text": text,
 print(json.dumps([row]))
 ```
 
-`search.py` turns a `{"q": "..."}` request body into nearest-neighbor SQL:
-
-```python
-"""Turn a {"q": "..."} request body into a nearest-neighbor SQL query."""
-import json
-import sys
-
-from model2vec import StaticModel
-
-body = json.loads(sys.argv[1])
-model = StaticModel.from_pretrained("minishlab/potion-base-8M")
-vector = model.encode([body["q"]])[0]
-needle = json.dumps([round(float(x), 6) for x in vector])
-print(
-    "SELECT path, ROUND(vec_distance_cosine(embedding, '%s'), 3) AS distance "
-    "FROM notes ORDER BY distance LIMIT 3" % needle
-)
-```
-
-::: warning The hook owns SQL safety
-Whatever SQL `pre-query` prints is executed as-is. Here the interpolated
-value is a numeric vector the script itself produced; never splice raw request
-text into SQL. See [`pre-query`](../reference/hooks.md#pre-query).
-:::
-
-The relative `embed.py` / `search.py` above resolve against the fragment
-directory, which is convenient during development. For a published plugin,
-promote them to console scripts (`[project.scripts]` → `embed-file`,
-`embed-search`) so the commands carry their own interpreter and dependencies
-and no longer depend on `uv run --with`.
+The relative `embed.py` above resolves against the fragment directory, which
+is convenient during development. For a published plugin, promote it to a
+console script (`[project.scripts]` → `embed-file`) so the command carries
+its own interpreter and dependencies and no longer depends on
+`uv run --with`.
 
 Once the package is installed alongside the launcher, its `notes` table is
 queryable with no config edits:
 
 ```bash
-uvx --with dirsql-embeddings dirsql query '{"q": "how do I cook pasta?"}'
+uvx --with dirsql-embeddings dirsql query \
+  "SELECT path FROM notes ORDER BY vec_distance_cosine(embedding, '[0.1, ...]') LIMIT 3"
 ```
 
 The launcher discovers the installed plugin, composes its fragment, and the
-`pre-query` hook turns the question into vector-distance SQL.
+`notes` table (with `vec_distance_cosine()` from the loaded extension) is
+available to the query.
 
 ## SDK-style convention: expose the config
 
@@ -230,8 +202,8 @@ Discovery is deliberately narrow. Know exactly who does what:
   [convention above](#sdk-style-convention-expose-the-config)).
 - **Name collisions are a hard error.** Because fragments compose like any
   [multiple configs](../reference/config.md#composing-multiple-configs), two
-  plugins (or a plugin and your config) defining a table of the same name — or
-  the same query hook — fail loudly, naming the conflict. It is never a silent
+  plugins (or a plugin and your config) defining a table of the same name
+  fail loudly, naming the conflict. It is never a silent
   last-writer-wins.
 
 ::: warning Config flags are subcommand-local

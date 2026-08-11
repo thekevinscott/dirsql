@@ -48,11 +48,11 @@ excluded from `SELECT *` results.
 
 | Status | When |
 |---|---|
-| `200` | Query succeeded. Body: array of row objects (or the [`post-query`](./hooks.md#post-query) hook's JSON). |
+| `200` | Query succeeded. Body: array of row objects. |
 | `400` | Malformed JSON body, missing or empty `sql` field, or a SQL error (syntax error, unknown table, or a statement SQLite classifies as a write — queries are read-only). |
 | `405` | `GET /query`. Plain-text body `method not allowed`. |
 | `408` | The query exceeded the 30-second per-query timeout. |
-| `500` | Internal server fault, or a failed [`pre-query`](./hooks.md#pre-query) / [`post-query`](./hooks.md#post-query) hook. |
+| `500` | Internal server fault. |
 | `503` | The server is in [degraded mode](./cli.md#degraded-mode) (the config file exists but failed to load). |
 
 All error responses (except `405`) are `application/json`:
@@ -60,15 +60,6 @@ All error responses (except `405`) are `application/json`:
 ```json
 {"error": "syntax error near \"SLECT\""}
 ```
-
-### Hook interactions
-
-- With [`[dirsql].pre-query`](./config.md#dirsql-keys) configured, the
-  request body is **not** parsed as `{"sql": …}`; the raw body is passed to
-  the hook, which prints the SQL to run. Hook failure → `500`.
-- With [`[dirsql].post-query`](./config.md#dirsql-keys) configured, the
-  `200` body is whatever JSON the hook prints instead of the bare row
-  array. Hook failure or non-JSON output → `500`.
 
 ## `GET /events`
 

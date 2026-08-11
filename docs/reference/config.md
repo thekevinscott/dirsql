@@ -23,9 +23,7 @@ the config file's location. See [`--config`](./cli.md#flags).
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `ignore` | array of strings | `[]` | Glob patterns matched against root-relative paths. Matched files are skipped entirely — excluded from the initial scan and from watch events. |
-| `pre-query` | string | none | Server-wide command hook: the raw `POST /query` request body is passed to this command as `{args}`, and the plain-text SQL it prints is executed instead of parsing the body as `{"sql": …}`. CLI server only; the SDKs ignore it. Must be non-empty. See [Command hooks](./hooks.md#pre-query). |
-| `post-query` | string | none | Server-wide command hook: each successful `POST /query` result set is handed to this command (as a JSON array on stdin, and as `{args}` up to 96 KiB), and the JSON body it prints is returned instead of the bare row array. CLI server only; the SDKs ignore it. Must be non-empty. See [Command hooks](./hooks.md#post-query). |
-| `hook-timeout` | integer (seconds) | `30` | One global per-run timeout for every command hook — `on-file`, `pre-query`, and `post-query` alike. Positive whole seconds; zero and negative values are a config error. See [Command hooks](./hooks.md#timeout). |
+| `hook-timeout` | integer (seconds) | `30` | One global per-run timeout for every `on-file` command hook run. Positive whole seconds; zero and negative values are a config error. See [Command hooks](./hooks.md#timeout). |
 
 The top-level `.dirsql/` directory under the root is always excluded from
 scanning, whether or not it appears in `ignore` — it is reserved for
@@ -147,15 +145,10 @@ The configs load and merge in **argv order**:
 
 - **`[[table]]`, `ignore`, and `[[dirsql.extension]]` entries accumulate** across
   all configs, in order.
-- **Each config's `on-file`, `pre-query`, and `post-query` hooks run from that
-  config file's own directory**, under that config's own
-  [`hook-timeout`](#dirsql-keys) — so a relative command like
-  `on-file = "sh ./extract.sh"` resolves against the config that declared it,
-  wherever it lives.
-- **`pre-query` / `post-query` hooks chain FIFO**: the request body flows through
-  each `pre-query` stage in order to the final SQL, and the result rows flow
-  through each `post-query` stage to the response. See the
-  [hook contract](./hooks.md).
+- **Each config's `on-file` hooks run from that config file's own
+  directory**, under that config's own [`hook-timeout`](#dirsql-keys) — so a
+  relative command like `on-file = "sh ./extract.sh"` resolves against the
+  config that declared it, wherever it lives.
 - Each config is **validated on its own** (the [parse errors](#parse-errors)
   below apply per file). There is no cross-file merge validation, with one
   structural exception: **two configs defining a table of the same name is an
@@ -181,7 +174,6 @@ SDKs raise/reject) when:
   > `[[table]] '**/*.md' has no on-file hook, so every row would be all-NULL. Add an `on-file` hook that emits the columns, or, for stat columns with no code, query the path directly: `FROM './'``
 
 - A `[[dirsql.extension]]` entry omits `path`, or `path` is empty.
-- `pre-query` or `post-query` is present but empty/whitespace.
 - `hook-timeout` is zero or negative.
 
 ## Full example
@@ -189,8 +181,6 @@ SDKs raise/reject) when:
 ```toml
 [dirsql]
 ignore = ["node_modules/**", ".git/**", "dist/**"]
-pre-query = "uv run python to_sql.py {args}"
-post-query = "jq -c '{results: .}'"
 hook-timeout = 120
 
 [[dirsql.extension]]

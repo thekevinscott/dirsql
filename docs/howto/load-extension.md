@@ -85,5 +85,3 @@ interpreter to resolve package names with
 - Embedding `dirsql` in a program? The SDK constructor takes the same
   specs via its `extensions` parameter
   ([SDK reference](../reference/sdk.md#constructor)).
-- The payoff use case — `sqlite-vec` powering semantic search — is
-  [Search documents by meaning](./search-by-meaning.md).
