@@ -71,6 +71,10 @@ hook-timeout = 300   # positive whole seconds
 
 Zero and negative values are a config error.
 
+The same key is also the default per-call timeout for
+[`[[dirsql.function]]`](./config.md#dirsql-function) worker calls; a function
+entry's own `timeout` overrides it.
+
 ### Failure semantics
 
 A hook run fails when the command:
