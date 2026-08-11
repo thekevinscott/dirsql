@@ -1,7 +1,0 @@
-{
-  "command": "pnpm test:e2e",
-  "ran_at": 1785867389,
-  "exit_code": 0,
-  "commit": "6a7ef0ca3244b5110c6ce230a84d7c4d97483c1c",
-  "branch": "chore/766-narrow-pedantic"
-}
