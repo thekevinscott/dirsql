@@ -47,10 +47,18 @@ def describe_worker_cli():
         assert code == 0
         assert stderr == ""
 
-    def it_requires_a_subcommand(spawn_worker):
+    def it_shows_group_help_listing_worker_when_run_bare(spawn_worker):
         script = shutil.which("dirsql-plugin-embeddings")
         assert script
         worker = spawn_worker(argv=[script])
         code, stderr = worker.close()
         assert code == 2
         assert "worker" in stderr
+
+    def it_shows_group_help_on_help_flag(spawn_worker):
+        script = shutil.which("dirsql-plugin-embeddings")
+        assert script
+        process = spawn_worker(argv=[script, "--help"]).process
+        stdout, _ = process.communicate(timeout=30)
+        assert process.returncode == 0
+        assert "worker" in stdout

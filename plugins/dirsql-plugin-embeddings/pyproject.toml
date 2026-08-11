@@ -23,6 +23,7 @@ dependencies = [
     "model2vec>=0.6",
     "cachetta>=0.7",
     "tqdm>=4",
+    "click>=8",
 ]
 
 [project.scripts]
