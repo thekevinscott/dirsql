@@ -484,7 +484,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "toml",
- "wait-timeout",
  "walkdir",
 ]
 

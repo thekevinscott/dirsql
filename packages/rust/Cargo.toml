@@ -68,9 +68,6 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-stream = { version = "0.1", features = ["sync"], optional = true }
 toml = "0.8"
-# Enforce a per-command timeout: wait for the child up to a deadline,
-# then kill it. No async runtime required in the core.
-wait-timeout = "0.2"
 walkdir = "2"
 
 [lints.rust]

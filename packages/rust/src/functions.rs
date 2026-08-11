@@ -22,9 +22,9 @@
 //!   stderr.
 //!
 //! Each round-trip is bounded by the function's per-call timeout (its
-//! `timeout` key, else the config's `[dirsql].hook-timeout`, else the shared
-//! 30s default). A timeout or a worker crash kills the worker and fails the
-//! query with an actionable error; the next call starts a fresh worker.
+//! `timeout` key, else the 30-second default — [`DEFAULT_FUNCTION_TIMEOUT`]).
+//! A timeout or a worker crash kills the worker and fails the query with an
+//! actionable error; the next call starts a fresh worker.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -38,10 +38,16 @@ use rusqlite::functions::FunctionFlags;
 
 use crate::db::Value;
 
+/// The per-call timeout when a `[[dirsql.function]]` entry declares no
+/// `timeout` of its own. A round-trip on a persistent worker cannot be
+/// bounded by wrapping the command in `timeout(1)`, so the mechanism carries
+/// its own default.
+pub const DEFAULT_FUNCTION_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// A `[[dirsql.function]]` entry with its per-config context resolved: the
 /// worker's working directory (the config file's parent) and the effective
-/// per-call timeout (the entry's own `timeout`, else that config's
-/// `hook-timeout`, else the shared default).
+/// per-call timeout (the entry's own `timeout`, else
+/// [`DEFAULT_FUNCTION_TIMEOUT`]).
 #[doc(hidden)]
 pub struct ResolvedFunction {
     pub name: String,
@@ -188,8 +194,8 @@ impl Worker {
                 inner.transport = None;
                 Err(format!(
                     "call to function `{}` timed out after {:?} (worker command `{}`); \
-                     raise the function's `timeout` (or `[dirsql].hook-timeout`) if the \
-                     worker legitimately needs longer per call",
+                     raise the function's `timeout` if the worker legitimately needs \
+                     longer per call",
                     self.name, self.timeout, self.command
                 ))
             }
@@ -567,6 +573,13 @@ mod tests {
         assert_eq!(base64_decode("a==="), None); // over-padding
     }
 
+    // --- defaults -----------------------------------------------------------
+
+    #[test]
+    fn the_default_function_timeout_is_thirty_seconds() {
+        assert_eq!(DEFAULT_FUNCTION_TIMEOUT, Duration::from_secs(30));
+    }
+
     // --- registration flags ------------------------------------------------
 
     #[test]
@@ -691,7 +704,7 @@ mod tests {
         let err = worker.call(&[]).unwrap_err();
         assert!(err.contains("timed out after 5s"), "got: {err}");
         assert!(err.contains("`embed`"), "got: {err}");
-        assert!(err.contains("hook-timeout"), "got: {err}");
+        assert!(err.contains("`timeout`"), "got: {err}");
         // The next call starts a fresh worker.
         assert_eq!(worker.call(&[]).unwrap(), Value::Integer(1));
         assert_eq!(*spawns.lock().unwrap(), 2);

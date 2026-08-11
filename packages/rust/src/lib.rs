@@ -1069,8 +1069,8 @@ impl DirSQLBuilder {
     ///
     /// Call repeatedly to load several configs: their `[[table]]`, `ignore`, and
     /// `[[dirsql.extension]]` entries accumulate in call order, and each config's
-    /// `on-file` hooks run from that config file's own directory under its own
-    /// `[dirsql].hook-timeout`. A single call is identical to before.
+    /// `on-file` hooks run from that config file's own directory. A single call
+    /// is identical to before.
     pub fn config(mut self, config_path: impl Into<PathBuf>) -> Self {
         self.config_paths.push(config_path.into());
         self
@@ -1156,10 +1156,10 @@ impl DirSQLBuilder {
         };
 
         // The config layer is an ordered list of entries, each carrying its
-        // loaded `config`, its `config_dir` (where `on-file` hooks run and the
-        // base for extension path resolution), and its `hook_timeout`. Configs
-        // accumulate in `.config()` call order; a single entry makes the in-order
-        // merge below byte-for-byte identical to a single pass.
+        // loaded `config` and its `config_dir` (where `on-file` hooks run and
+        // the base for extension path resolution). Configs accumulate in
+        // `.config()` call order; a single entry makes the in-order merge
+        // below byte-for-byte identical to a single pass.
         let mut config_entries: Vec<ResolvedConfigEntry> = Vec::new();
         let mut functions: Vec<ResolvedFunction> = Vec::new();
         let mut function_sources: HashMap<String, PathBuf> = HashMap::new();
@@ -1170,13 +1170,11 @@ impl DirSQLBuilder {
                 .parent()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
-            let hook_timeout = cfg.hook_timeout.unwrap_or(command::DEFAULT_COMMAND_TIMEOUT);
 
             resolve_functions(
                 std::mem::take(&mut cfg.functions),
                 cfg_path,
                 &cfg_parent,
-                hook_timeout,
                 &mut function_sources,
                 &mut functions,
             )?;
@@ -1184,7 +1182,6 @@ impl DirSQLBuilder {
             config_entries.push(ResolvedConfigEntry {
                 config: cfg,
                 config_dir: cfg_parent,
-                hook_timeout,
             });
         }
 
@@ -1192,13 +1189,12 @@ impl DirSQLBuilder {
             let ResolvedConfigEntry {
                 config: cfg,
                 config_dir: cfg_parent,
-                hook_timeout,
             } = entry;
 
             // `on-file` commands run in the config file's directory; `{path}`
             // is the matched file's absolute path and `{root}` the resolved
             // index root.
-            let cfg_tables = build_tables_from_config(&cfg, &cfg_parent, &root, hook_timeout)?;
+            let cfg_tables = build_tables_from_config(&cfg, &cfg_parent, &root)?;
             tables.extend(cfg_tables);
             ignore.extend(cfg.ignore);
 
@@ -1264,14 +1260,13 @@ impl DirSQLBuilder {
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 /// One resolved config file in the ordered list [`DirSQLBuilder::resolve`]
-/// merges over. Carries the loaded `config`, its `config_dir` (the config
+/// merges over. Carries the loaded `config` and its `config_dir` (the config
 /// file's parent -- where `on-file` hooks run and the base for extension path
-/// resolution), and the `hook_timeout` bounding each `on-file` run. The index
-/// root is owned by the runner (#540), not derived per config entry.
+/// resolution). The index root is owned by the runner (#540), not derived per
+/// config entry.
 struct ResolvedConfigEntry {
     config: config::Config,
     config_dir: PathBuf,
-    hook_timeout: Duration,
 }
 
 /// Fully-resolved builder inputs: the result of merging programmatic
@@ -1582,9 +1577,8 @@ fn relative_path(root: &Path, path: &Path) -> String {
 /// injects nothing — a DDL column the hook does not emit is NULL, validated
 /// against the DDL as usual. `config_dir` is the command's working directory
 /// (the config file's parent) and `root` is the resolved index root exposed as
-/// the `{root}` placeholder. `timeout` bounds each `on-file` run; the caller
-/// resolves it from the global `[dirsql].hook-timeout` key, falling back to
-/// [`command::DEFAULT_COMMAND_TIMEOUT`].
+/// the `{root}` placeholder. Runs are unbounded; a config that wants a bound
+/// wraps its command in `timeout(1)`.
 /// Whether this build declared no tables by any route — neither a config file
 /// nor a programmatic table. That is exactly the state in which `files` used to
 /// exist implicitly, and so the only state whose missing-`files` error earns the
@@ -1595,15 +1589,14 @@ fn is_configless(config_paths: &[PathBuf], tables: &[Table]) -> bool {
 
 /// Fold one config's `[[dirsql.function]]` entries into the accumulated
 /// resolved list. Each function's worker runs from its own config's directory
-/// (`cfg_dir`), and its per-call timeout falls back to that config's
-/// `hook_timeout` (already defaulted to the shared 30s by the caller). A name
-/// declared by two configs — or twice in one — is a hard error naming both
-/// sources, the same rule duplicate tables follow.
+/// (`cfg_dir`), and its per-call timeout falls back to the function
+/// mechanism's own 30s default. A name declared by two configs — or twice in
+/// one — is a hard error naming both sources, the same rule duplicate tables
+/// follow.
 fn resolve_functions(
     specs: Vec<config::FunctionSpec>,
     cfg_path: &Path,
     cfg_dir: &Path,
-    hook_timeout: Duration,
     sources: &mut HashMap<String, PathBuf>,
     out: &mut Vec<ResolvedFunction>,
 ) -> Result<()> {
@@ -1622,7 +1615,7 @@ fn resolve_functions(
             args: spec.args,
             command: spec.command,
             deterministic: spec.deterministic,
-            timeout: spec.timeout.unwrap_or(hook_timeout),
+            timeout: spec.timeout.unwrap_or(functions::DEFAULT_FUNCTION_TIMEOUT),
             cwd: cfg_dir.to_path_buf(),
         });
     }
@@ -1633,7 +1626,6 @@ fn build_tables_from_config(
     cfg: &config::Config,
     config_dir: &Path,
     root: &Path,
-    timeout: Duration,
 ) -> Result<Vec<Table>> {
     let mut tables = Vec::with_capacity(cfg.tables.len());
 
@@ -1646,7 +1638,7 @@ fn build_tables_from_config(
         let mut table = Table::try_new(
             table_cfg.ddl.clone(),
             table_cfg.glob.clone(),
-            move |abs_path: &str| run_on_file(&command, abs_path, &config_dir, &root, timeout),
+            move |abs_path: &str| run_on_file(&command, abs_path, &config_dir, &root),
         );
 
         if table_cfg.strict == Some(true) {
@@ -1667,18 +1659,16 @@ fn build_tables_from_config(
 /// config lives outside the index still resolves it. A template that omits a
 /// placeholder simply never receives its value — nothing is appended.
 ///
-/// Any failure — a spawn/exit/timeout error from [`command::run_command`], or
-/// output that is not a JSON array of objects — is returned to the caller. The
-/// scan turns it into a skipped file rather than a scan error, and needs the
-/// `Err` to tell a skip apart from a file that legitimately produced no rows.
-/// `timeout` bounds the run — the table's configured value, or the shared
-/// default.
+/// Any failure — a spawn/exit error from [`command::run_command`], or output
+/// that is not a JSON array of objects — is returned to the caller. The scan
+/// turns it into a skipped file rather than a scan error, and needs the `Err`
+/// to tell a skip apart from a file that legitimately produced no rows. The
+/// run is unbounded; a hook that wants a bound wraps itself in `timeout(1)`.
 fn run_on_file(
     command: &str,
     abs_path: &str,
     config_dir: &Path,
     root: &Path,
-    timeout: Duration,
 ) -> std::result::Result<Vec<Row>, BoxError> {
     let placeholders = [
         Placeholder::new("path", abs_path),
@@ -1689,7 +1679,7 @@ fn run_on_file(
     // empty row set here. Swallowing them made a skip indistinguishable from a
     // file that legitimately produced no rows, so the scan could not count what
     // it dropped, cap the report, or exit differently.
-    let output = command::run_command(command, &placeholders, config_dir, timeout, None)
+    let output = command::run_command(command, &placeholders, config_dir, None)
         .map_err(|error| -> BoxError { format!("on-file command failed: {error}").into() })?;
     parse_command_rows(&output.payload).map_err(|message| -> BoxError {
         format!("on-file output was not a JSON array of rows: {message}").into()
@@ -3254,13 +3244,7 @@ mod internal_tests {
         ))
         .unwrap();
         let dir = TempDir::new().unwrap();
-        let tables = build_tables_from_config(
-            &cfg,
-            dir.path(),
-            dir.path(),
-            command::DEFAULT_COMMAND_TIMEOUT,
-        )
-        .unwrap();
+        let tables = build_tables_from_config(&cfg, dir.path(), dir.path()).unwrap();
         assert_eq!(tables.len(), 2);
         assert_eq!(
             (tables[0].on_file)(&dir.path().join("f.a").to_string_lossy())
@@ -3269,34 +3253,6 @@ mod internal_tests {
             1
         );
         assert!(tables[1].strict, "on-file table preserves strict flag");
-    }
-
-    #[test]
-    fn build_tables_from_config_uses_the_caller_supplied_timeout() {
-        // The timeout is now threaded in as an explicit argument rather than
-        // re-derived from `cfg.hook_timeout` inside the function; a table built
-        // from a config declaring its own `hook-timeout` must honor the value
-        // the caller passes, independent of the config key.
-        let cfg = config::load_config_str(concat!(
-            "[dirsql]\n",
-            "hook-timeout = 999\n\n",
-            "[[table]]\n",
-            "ddl = \"CREATE TABLE b (y TEXT)\"\n",
-            "glob = \"*.b\"\n",
-            "on-file = \"printf '[{\\\"y\\\":1}]'\"\n",
-        ))
-        .unwrap();
-        let dir = TempDir::new().unwrap();
-        let abs = dir.path().join("f.b");
-        let tables =
-            build_tables_from_config(&cfg, dir.path(), dir.path(), Duration::from_secs(5)).unwrap();
-        assert_eq!(tables.len(), 1);
-        // The passed timeout is generous, so the on-file command runs and its
-        // row is produced -- proving the argument path is live.
-        assert_eq!(
-            (tables[0].on_file)(&abs.to_string_lossy()).unwrap().len(),
-            1
-        );
     }
 
     fn function_spec(name: &str, timeout: Option<Duration>) -> config::FunctionSpec {
@@ -3317,7 +3273,6 @@ mod internal_tests {
             vec![function_spec("embed", Some(Duration::from_secs(600)))],
             Path::new("/proj/.dirsql.toml"),
             Path::new("/proj"),
-            Duration::from_secs(30),
             &mut sources,
             &mut out,
         )
@@ -3332,19 +3287,18 @@ mod internal_tests {
     }
 
     #[test]
-    fn resolve_functions_falls_back_to_the_hook_timeout() {
+    fn resolve_functions_defaults_the_timeout_to_thirty_seconds() {
         let mut sources = HashMap::new();
         let mut out = Vec::new();
         resolve_functions(
             vec![function_spec("embed", None)],
             Path::new("/proj/.dirsql.toml"),
             Path::new("/proj"),
-            Duration::from_secs(7),
             &mut sources,
             &mut out,
         )
         .unwrap();
-        assert_eq!(out[0].timeout, Duration::from_secs(7));
+        assert_eq!(out[0].timeout, Duration::from_secs(30));
     }
 
     #[test]
@@ -3355,7 +3309,6 @@ mod internal_tests {
             vec![function_spec("dup", None)],
             Path::new("/a/frag.toml"),
             Path::new("/a"),
-            Duration::from_secs(30),
             &mut sources,
             &mut out,
         )
@@ -3364,7 +3317,6 @@ mod internal_tests {
             vec![function_spec("dup", None)],
             Path::new("/b/frag.toml"),
             Path::new("/b"),
-            Duration::from_secs(30),
             &mut sources,
             &mut out,
         )
@@ -3385,7 +3337,6 @@ mod internal_tests {
             vec![function_spec("dup", None), function_spec("dup", None)],
             Path::new("/a/frag.toml"),
             Path::new("/a"),
-            Duration::from_secs(30),
             &mut sources,
             &mut out,
         )
@@ -3402,7 +3353,6 @@ mod internal_tests {
             vec![function_spec("fa", None)],
             Path::new("/a/frag.toml"),
             Path::new("/a"),
-            Duration::from_secs(30),
             &mut sources,
             &mut out,
         )
@@ -3411,7 +3361,6 @@ mod internal_tests {
             vec![function_spec("fb", None)],
             Path::new("/b/frag.toml"),
             Path::new("/b"),
-            Duration::from_secs(30),
             &mut sources,
             &mut out,
         )
@@ -3432,7 +3381,6 @@ mod internal_tests {
             &abs.to_string_lossy(),
             dir.path(),
             dir.path(),
-            command::DEFAULT_COMMAND_TIMEOUT,
         )
         .expect("a well-formed payload parses");
         assert_eq!(rows.len(), 1);
@@ -3452,7 +3400,6 @@ mod internal_tests {
             &abs.to_string_lossy(),
             dir.path(),
             dir.path(),
-            command::DEFAULT_COMMAND_TIMEOUT,
         )
         .expect("a well-formed payload parses");
         assert_eq!(rows.len(), 1);
@@ -3473,7 +3420,6 @@ mod internal_tests {
             &abs.to_string_lossy(),
             dir.path(),
             dir.path(),
-            command::DEFAULT_COMMAND_TIMEOUT,
         )
         .expect("a well-formed payload parses");
         assert_eq!(rows.len(), 1);
@@ -3494,7 +3440,6 @@ mod internal_tests {
             "/outside/f.txt",
             dir.path(),
             dir.path(),
-            command::DEFAULT_COMMAND_TIMEOUT,
         )
         .expect_err("an unspawnable command is a failure");
         assert!(
@@ -3506,14 +3451,8 @@ mod internal_tests {
     #[test]
     fn run_on_file_errors_on_non_json_output() {
         let dir = TempDir::new().unwrap();
-        let error = run_on_file(
-            "echo not-json",
-            "/outside/f.txt",
-            dir.path(),
-            dir.path(),
-            command::DEFAULT_COMMAND_TIMEOUT,
-        )
-        .expect_err("a non-JSON payload is a failure");
+        let error = run_on_file("echo not-json", "/outside/f.txt", dir.path(), dir.path())
+            .expect_err("a non-JSON payload is a failure");
         assert!(
             error.to_string().contains("not a JSON array of rows"),
             "the error names the stage: {error}"

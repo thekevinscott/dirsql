@@ -14,28 +14,20 @@
 //!   value that itself contains `{…}` is never re-scanned — a substituted value
 //!   is always exactly one argv element, keeping values with spaces (and
 //!   untrusted input) injection-safe. An unknown `{…}` is left literal.
-//! - **cwd / env / timeout.** The child runs in `cwd` (the config file's
-//!   directory), inherits dirsql's environment (so `uvx --with …` / `npx …`
-//!   dependency resolution works), and is killed if it exceeds `timeout`.
+//! - **cwd / env.** The child runs in `cwd` (the config file's directory) and
+//!   inherits dirsql's environment (so `uvx --with …` / `npx …` dependency
+//!   resolution works). The run is unbounded — a caller that wants a bound
+//!   wraps the command in `timeout(1)`.
 //! - **stdin.** An optional payload is written to the child's stdin (used by
 //!   events whose payload may exceed the OS argv limit).
 //! - **Framing.** The output payload is the **last non-empty line of stdout**;
 //!   any chatter/log lines above it are ignored. stderr is never data — it is
 //!   captured only to enrich errors.
-//! - **Errors.** A non-zero exit or a timeout is a failure carrying the tail of
-//!   stderr.
+//! - **Errors.** A non-zero exit is a failure carrying the tail of stderr.
 
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::Duration;
-
-use wait_timeout::ChildExt;
-
-/// The default timeout for every command-backed `on-file` run when the
-/// config declares no override (`[dirsql].hook-timeout`, positive whole
-/// seconds).
-pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A named placeholder substituted into a command's argv.
 ///
@@ -91,14 +83,6 @@ pub enum CommandError {
         stderr_tail: String,
     },
 
-    /// The child ran longer than the configured timeout and was killed.
-    #[error("command `{command}` timed out after {timeout:?}: {stderr_tail}")]
-    Timeout {
-        command: String,
-        timeout: Duration,
-        stderr_tail: String,
-    },
-
     /// The child exited cleanly but wrote no non-empty line to stdout.
     #[error("command `{command}` produced no output on stdout")]
     EmptyOutput { command: String },
@@ -115,13 +99,13 @@ pub enum CommandError {
 /// Run `command` to completion and return its payload.
 ///
 /// See the [module docs](self) for the full contract. `cwd` is the child's
-/// working directory (the config file's directory), `timeout` bounds the run,
-/// and `stdin_payload`, when `Some`, is written to the child's stdin.
+/// working directory (the config file's directory) and `stdin_payload`, when
+/// `Some`, is written to the child's stdin. The run is unbounded; wrap the
+/// command in `timeout(1)` to bound it.
 pub fn run_command(
     command: &str,
     placeholders: &[Placeholder],
     cwd: &Path,
-    timeout: Duration,
     stdin_payload: Option<&[u8]>,
 ) -> Result<CommandOutput, CommandError> {
     let argv = build_argv(command, placeholders)?;
@@ -170,28 +154,10 @@ pub fn run_command(
         buf
     });
 
-    let status = match child
-        .wait_timeout(timeout)
-        .map_err(|source| CommandError::Io {
-            command: command.to_string(),
-            source,
-        })? {
-        Some(status) => status,
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            if let Some(t) = stdin_thread {
-                let _ = t.join();
-            }
-            let _ = stdout_thread.join();
-            let stderr = stderr_thread.join().unwrap_or_default();
-            return Err(CommandError::Timeout {
-                command: command.to_string(),
-                timeout,
-                stderr_tail: stderr_tail(&stderr),
-            });
-        }
-    };
+    let status = child.wait().map_err(|source| CommandError::Io {
+        command: command.to_string(),
+        source,
+    })?;
 
     if let Some(t) = stdin_thread {
         let _ = t.join();
@@ -444,40 +410,19 @@ mod tests {
 
     #[test]
     fn run_command_returns_last_nonempty_stdout_line() {
-        let out = run_command(
-            "sh -c 'echo chatter; echo PAYLOAD'",
-            &[],
-            &cwd(),
-            Duration::from_secs(30),
-            None,
-        )
-        .unwrap();
+        let out = run_command("sh -c 'echo chatter; echo PAYLOAD'", &[], &cwd(), None).unwrap();
         assert_eq!(out.payload, "PAYLOAD");
     }
 
     #[test]
     fn run_command_writes_stdin_payload_to_the_child() {
-        let out = run_command(
-            "cat",
-            &[],
-            &cwd(),
-            Duration::from_secs(30),
-            Some(b"hello-stdin"),
-        )
-        .unwrap();
+        let out = run_command("cat", &[], &cwd(), Some(b"hello-stdin")).unwrap();
         assert_eq!(out.payload, "hello-stdin");
     }
 
     #[test]
     fn run_command_reports_nonzero_exit_with_stderr_tail() {
-        let err = run_command(
-            "sh -c 'echo oops >&2; exit 3'",
-            &[],
-            &cwd(),
-            Duration::from_secs(30),
-            None,
-        )
-        .unwrap_err();
+        let err = run_command("sh -c 'echo oops >&2; exit 3'", &[], &cwd(), None).unwrap_err();
         match err {
             CommandError::NonZeroExit {
                 code, stderr_tail, ..
@@ -491,7 +436,7 @@ mod tests {
 
     #[test]
     fn run_command_reports_empty_output_when_stdout_is_blank() {
-        let err = run_command("true", &[], &cwd(), Duration::from_secs(30), None).unwrap_err();
+        let err = run_command("true", &[], &cwd(), None).unwrap_err();
         assert!(
             matches!(err, CommandError::EmptyOutput { .. }),
             "got: {err:?}"
@@ -500,27 +445,7 @@ mod tests {
 
     #[test]
     fn run_command_reports_spawn_failure_for_a_missing_program() {
-        let err = run_command(
-            "definitely-not-a-real-binary-xyzzy",
-            &[],
-            &cwd(),
-            Duration::from_secs(30),
-            None,
-        )
-        .unwrap_err();
+        let err = run_command("definitely-not-a-real-binary-xyzzy", &[], &cwd(), None).unwrap_err();
         assert!(matches!(err, CommandError::Spawn { .. }), "got: {err:?}");
-    }
-
-    #[test]
-    fn run_command_kills_and_reports_timeout_even_with_stdin() {
-        let err = run_command(
-            "sh -c 'sleep 30'",
-            &[],
-            &cwd(),
-            Duration::from_millis(50),
-            Some(b"x"),
-        )
-        .unwrap_err();
-        assert!(matches!(err, CommandError::Timeout { .. }), "got: {err:?}");
     }
 }

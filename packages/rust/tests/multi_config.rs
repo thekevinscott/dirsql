@@ -2,10 +2,9 @@
 //! as an ordered accumulation.
 //!
 //! `[[table]]` and `ignore` accumulate across entries in list order; each
-//! entry's `on-file` hooks run from **its own** config file's directory under
-//! **its own** file's `hook-timeout`; a duplicate table name across entries
-//! hits the existing `DuplicateTable` error. No merge step, no cross-file
-//! validation.
+//! entry's `on-file` hooks run from **its own** config file's directory; a
+//! duplicate table name across entries hits the existing `DuplicateTable`
+//! error. No merge step, no cross-file validation.
 //!
 //! Driven through the public builder's repeatable `.config()` (the #545
 //! surface over #553's core plumbing) — today the second call replaces the
@@ -135,10 +134,10 @@ on-file = "sh ./emit.sh {path}"
 }
 
 #[test]
-fn hook_timeout_scopes_to_its_declaring_config() {
-    // Distinct globs (one-file-one-table). Config A bounds ITS hooks at 1s and
-    // declares a 3s hook: its rows are skipped. Config B declares no timeout:
-    // its fast hook is unaffected.
+fn a_timeout_wrapped_hook_in_one_config_leaves_the_other_untouched() {
+    // Distinct globs (one-file-one-table). Config A wraps ITS slow hook in
+    // timeout(1): its rows are skipped (per-file failure isolation). Config B's
+    // unwrapped fast hook is unaffected.
     let data = TempDir::new().unwrap();
     fs::write(data.path().join("a.json"), "{}").unwrap();
     fs::write(data.path().join("b.json"), "{}").unwrap();
@@ -152,13 +151,10 @@ fn hook_timeout_scopes_to_its_declaring_config() {
     let cfg_a_path = write_config(
         cfg_a.path(),
         r#"
-[dirsql]
-hook-timeout = 1
-
 [[table]]
 ddl = "CREATE TABLE slow (v TEXT)"
 glob = "a.json"
-on-file = "sh ./slow.sh {path}"
+on-file = "timeout 0.5 sh ./slow.sh {path}"
 "#,
     );
 
@@ -191,7 +187,7 @@ on-file = "sh ./fast.sh {path}"
     assert_eq!(
         slow.len(),
         0,
-        "a hook exceeding its own file's timeout skips rows"
+        "a hook killed by its timeout(1) wrapper skips rows"
     );
 
     let fast = db
