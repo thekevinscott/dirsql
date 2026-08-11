@@ -236,7 +236,9 @@ fn a_new_file_is_the_only_one_parsed() {
     let _ = fx.run(&parser, true);
     fx.reset_counter();
 
-    fs::write(fx.file(40), payload(40, "v1")).unwrap();
+    let added = fx.file(40);
+    fs::create_dir_all(added.parent().unwrap()).unwrap();
+    fs::write(added, payload(40, "v1")).unwrap();
     let (rows, _) = fx.run(&parser, true);
 
     assert_eq!(fx.parses(), 1, "only the new file is parsed");

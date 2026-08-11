@@ -114,12 +114,18 @@ fn quote_identifier(s: &str) -> String {
 /// the parsed module instead: its rows and schema come from the parser, not
 /// the stat columns, and the `path_prefix` is irrelevant (a parser wanting a
 /// path emits it). Both forms carry the same ignore rules.
+///
+/// A parsed table also carries `cache` — the persistent cache path when the
+/// index has one — so it can serve an unchanged file's rows without re-running
+/// the parser. The stat module takes no such argument: its columns are the
+/// stat tuple the scan already has, so there is nothing to save.
 fn path_table_ddl(
     name: &str,
     table: &PathTable,
     ignore: &[String],
     gitignore: bool,
     parser: Option<&str>,
+    cache: Option<&Path>,
 ) -> String {
     let (module, mut args) = match parser {
         Some(command) => (
@@ -144,6 +150,13 @@ fn path_table_ddl(
     } else {
         scanner::NO_GITIGNORE_ARG
     }));
+    if parser.is_some() {
+        args.push(quote_literal(
+            &cache
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        ));
+    }
     args.extend(ignore.iter().map(|p| quote_literal(p)));
 
     format!(
@@ -222,6 +235,9 @@ pub struct Db {
     /// parser instead of the stat columns: its rows and schema come from the
     /// command's output. `None` keeps the stat path-table behavior.
     path_table_parser: Option<String>,
+    /// The persistent cache a parsed path-table reuses across runs. `None` for
+    /// an ephemeral index, which has nowhere to cache to.
+    path_table_cache: Option<PathBuf>,
 }
 
 /// The skip rules a fresh `Db` starts with.
@@ -256,6 +272,7 @@ impl Db {
             path_table_ignore: default_path_table_ignore(),
             path_table_gitignore: true,
             path_table_parser: None,
+            path_table_cache: None,
         })
     }
 
@@ -277,6 +294,7 @@ impl Db {
             path_table_ignore: default_path_table_ignore(),
             path_table_gitignore: true,
             path_table_parser: None,
+            path_table_cache: None,
         })
     }
 
@@ -311,6 +329,14 @@ impl Db {
     /// come from the command's output instead of the stat columns.
     pub fn set_path_table_parser(&mut self, command: String) {
         self.path_table_parser = Some(command);
+    }
+
+    /// Point every parsed path-table minted on this connection at the
+    /// persistent cache, so an unchanged file's rows are served from it
+    /// instead of re-running the parser. Set only when the index persists;
+    /// an ephemeral index has nowhere to cache to.
+    pub fn set_path_table_cache(&mut self, path: PathBuf) {
+        self.path_table_cache = Some(path);
     }
 
     /// Borrow the underlying SQLite connection. Internal use only — exposed
@@ -783,6 +809,7 @@ impl Db {
             &self.path_table_ignore,
             self.path_table_gitignore,
             self.path_table_parser.as_deref(),
+            self.path_table_cache.as_deref(),
         ))?;
         Ok(())
     }
@@ -2167,7 +2194,7 @@ mod tests {
 
     #[test]
     fn path_table_ddl_creates_in_temp_if_not_exists() {
-        let ddl = path_table_ddl("./docs/*.md", &docs_path_table(), &[], true, None);
+        let ddl = path_table_ddl("./docs/*.md", &docs_path_table(), &[], true, None, None);
         assert_eq!(
             ddl,
             "CREATE VIRTUAL TABLE IF NOT EXISTS temp.\"./docs/*.md\" \
@@ -2183,16 +2210,16 @@ mod tests {
             path_prefix: "/var/log".to_string(),
         };
         assert!(
-            path_table_ddl("/var/log/*.log", &table, &[], true, None)
+            path_table_ddl("/var/log/*.log", &table, &[], true, None, None)
                 .contains("'/var/log', '*.log', '/var/log', 'gitignore')"),
             "got: {}",
-            path_table_ddl("/var/log/*.log", &table, &[], true, None)
+            path_table_ddl("/var/log/*.log", &table, &[], true, None, None)
         );
     }
 
     #[test]
     fn path_table_ddl_carries_the_no_gitignore_switch() {
-        let ddl = path_table_ddl("./", &docs_path_table(), &[], false, None);
+        let ddl = path_table_ddl("./", &docs_path_table(), &[], false, None, None);
         assert!(
             ddl.ends_with("'', 'no-gitignore')"),
             "gitignore off must emit the no-gitignore switch, got: {ddl}"
@@ -2206,6 +2233,7 @@ mod tests {
             &docs_path_table(),
             &["node_modules/**".to_string(), "*.tmp".to_string()],
             true,
+            None,
             None,
         );
         assert!(
@@ -2222,11 +2250,44 @@ mod tests {
             &[],
             true,
             Some("cat {path}"),
+            None,
         );
         assert_eq!(
             ddl,
             "CREATE VIRTUAL TABLE IF NOT EXISTS temp.\"./docs/*.md\" \
-             USING dirsql_parsed('/root', 'docs/*.md', 'cat {path}', 'gitignore')"
+             USING dirsql_parsed('/root', 'docs/*.md', 'cat {path}', 'gitignore', '')"
+        );
+    }
+
+    #[test]
+    fn path_table_ddl_parser_form_carries_the_cache_path() {
+        let ddl = path_table_ddl(
+            "./docs/*.md",
+            &docs_path_table(),
+            &[],
+            true,
+            Some("cat {path}"),
+            Some(Path::new("/cache/dirsql.db")),
+        );
+        assert!(
+            ddl.ends_with("'cat {path}', 'gitignore', '/cache/dirsql.db')"),
+            "a persisted index points the parsed module at its cache, got: {ddl}"
+        );
+    }
+
+    #[test]
+    fn path_table_ddl_stat_form_takes_no_cache_path() {
+        let ddl = path_table_ddl(
+            "./docs/*.md",
+            &docs_path_table(),
+            &[],
+            true,
+            None,
+            Some(Path::new("/cache/dirsql.db")),
+        );
+        assert!(
+            ddl.ends_with("'', 'gitignore')"),
+            "the stat form has nothing to cache, got: {ddl}"
         );
     }
 
@@ -2243,11 +2304,12 @@ mod tests {
             &["node_modules/**".to_string()],
             true,
             Some("parse.py {path}"),
+            None,
         );
         assert!(
             ddl.ends_with(
                 "USING dirsql_parsed('/var/log', '*.log', 'parse.py {path}', 'gitignore', \
-                 'node_modules/**')"
+                 '', 'node_modules/**')"
             ),
             "the parser form drops the path prefix and keeps ignore rules, got: {ddl}"
         );
@@ -2255,7 +2317,14 @@ mod tests {
 
     #[test]
     fn path_table_ddl_parser_form_quotes_a_command_with_a_quote() {
-        let ddl = path_table_ddl("./", &docs_path_table(), &[], true, Some("sh -c 'echo hi'"));
+        let ddl = path_table_ddl(
+            "./",
+            &docs_path_table(),
+            &[],
+            true,
+            Some("sh -c 'echo hi'"),
+            None,
+        );
         assert!(
             ddl.contains("'sh -c ''echo hi'''"),
             "an embedded quote must be doubled, got: {ddl}"
@@ -2267,6 +2336,17 @@ mod tests {
         let mut db = Db::new().unwrap();
         db.set_path_table_parser("cat {path}".to_string());
         assert_eq!(db.path_table_parser.as_deref(), Some("cat {path}"));
+    }
+
+    #[test]
+    fn set_path_table_cache_points_parsed_tables_at_the_cache() {
+        let mut db = Db::new().unwrap();
+        assert_eq!(db.path_table_cache, None, "an ephemeral index has no cache");
+        db.set_path_table_cache(PathBuf::from("/cache/dirsql.db"));
+        assert_eq!(
+            db.path_table_cache.as_deref(),
+            Some(Path::new("/cache/dirsql.db"))
+        );
     }
 
     #[test]

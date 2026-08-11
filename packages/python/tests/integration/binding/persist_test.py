@@ -95,7 +95,9 @@ def describe_persist():
             del db2
 
             after = open(cache, "rb").read()
-            assert len(after) == len(before), "an unchanged tree must not grow the cache"
+            assert len(after) == len(before), (
+                "an unchanged tree must not grow the cache"
+            )
             assert after == before, "an unchanged tree must not rewrite the cache"
 
     def describe_changed_file():

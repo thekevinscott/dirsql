@@ -15,7 +15,12 @@
 //! materialized once. Re-parsing every file on every statement would make a
 //! join over a parsed table quadratic in parser invocations, and re-inferring
 //! could change the schema out from under a prepared statement.
+//!
+//! Under `--persist` that materialization is cached across *runs* too: a file
+//! whose stat tuple has not moved serves the payload the parser produced last
+//! time and the process is never spawned. See [`crate::parsed_cache`].
 
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_int;
 use std::path::{Path, PathBuf};
 
@@ -30,7 +35,9 @@ use crate::Value;
 use crate::command::{Placeholder, run_command};
 use crate::infer::{JsonRow, cell, declared_schema, infer_schema, parse_rows};
 use crate::matcher::TableMatcher;
+use crate::parsed_cache::{self, CachedParse, Entry, RowCache, SqliteRowCache};
 use crate::path_table;
+use crate::persist::{FileStat, hash_file, now_ns};
 use crate::scanner::{self, scan_glob};
 
 /// SQL module name a parsed path-table is created with.
@@ -55,10 +62,11 @@ fn unquote(arg: &str) -> &str {
 }
 
 /// Number of module arguments that are not ignore patterns.
-const FIXED_ARGS: usize = 4;
+const FIXED_ARGS: usize = 5;
 
 /// The module's own arguments: root, glob pattern, parser command, the
-/// gitignore switch, and the skip rules the scan applies (mirroring the stat
+/// gitignore switch, the persistent cache path (empty when the index is
+/// ephemeral), and the skip rules the scan applies (mirroring the stat
 /// path-table's ignore args).
 struct ModuleArgs {
     root: PathBuf,
@@ -66,6 +74,7 @@ struct ModuleArgs {
     glob: GlobSet,
     command: String,
     gitignore: bool,
+    cache: Option<PathBuf>,
     ignore: TableMatcher,
 }
 
@@ -77,7 +86,8 @@ fn compile_ignore(patterns: &[String]) -> Result<TableMatcher> {
 
 /// Parse a parsed path-table's `CREATE VIRTUAL TABLE` arguments. `args[0..3]`
 /// are the module, database and table names; the module's own follow — root,
-/// glob, parser, the gitignore switch, then any ignore patterns.
+/// glob, parser, the gitignore switch, the cache path, then any ignore
+/// patterns.
 fn parse_module_args(args: &[&[u8]]) -> Result<ModuleArgs> {
     let user_args: Vec<String> = args
         .iter()
@@ -85,10 +95,10 @@ fn parse_module_args(args: &[&[u8]]) -> Result<ModuleArgs> {
         .map(|a| unquote(&String::from_utf8_lossy(a)).to_string())
         .collect();
 
-    let [root, pattern, command, gitignore, ignore @ ..] = user_args.as_slice() else {
+    let [root, pattern, command, gitignore, cache, ignore @ ..] = user_args.as_slice() else {
         return Err(Error::ModuleError(format!(
             "{MODULE_NAME} takes at least {FIXED_ARGS} arguments \
-             (root, glob, parser, gitignore switch), got {}",
+             (root, glob, parser, gitignore switch, cache path), got {}",
             user_args.len()
         )));
     };
@@ -101,6 +111,9 @@ fn parse_module_args(args: &[&[u8]]) -> Result<ModuleArgs> {
         glob,
         command: command.clone(),
         gitignore: scanner::parse_gitignore_arg(gitignore).map_err(Error::ModuleError)?,
+        // The empty string is how "no cache" is spelled: a module argument
+        // cannot be absent without shifting every argument after it.
+        cache: Some(PathBuf::from(cache)).filter(|p| !p.as_os_str().is_empty()),
         ignore: compile_ignore(ignore)?,
     })
 }
@@ -131,6 +144,131 @@ fn collect_rows(
         }
     }
     all
+}
+
+/// The rows for one file, and whether they came from a fresh parse that the
+/// cache should learn.
+struct Parsed {
+    payload: String,
+    stat: FileStat,
+    fresh: bool,
+}
+
+/// The same fan-out as [`collect_rows`], with the persistent cache in front of
+/// the parser: a file whose stat tuple matches its cached entry serves that
+/// entry's payload and is never handed to `run`.
+///
+/// Everything effectful is injected — `stat`, `hash`, `run`, `warn` — so the
+/// reuse decision can be exercised without a filesystem or a child process.
+/// `hash` is only ever called for a file the stat tuple alone cannot settle,
+/// which is what keeps an unchanged tree free of file reads.
+///
+/// The cache is only written when the scan actually changed something, which is
+/// what lets an unchanged tree leave the cache file byte-for-byte alone. A file
+/// whose parse failed is left uncached and retried next run, matching the
+/// declared-table contract: the cache is incomplete, never wrong.
+fn collect_rows_cached(
+    cache: &dyn RowCache,
+    rel_paths: &[PathBuf],
+    fs: &dyn ParsedFs,
+    run: &dyn Fn(&Path) -> std::result::Result<String, String>,
+    warn: &dyn Fn(&str),
+) -> Result<Vec<JsonRow>> {
+    let cached: HashMap<String, CachedParse> = cache.read()?;
+    let snapshot_ns = now_ns();
+
+    let mut seen: Vec<(String, Parsed)> = Vec::with_capacity(rel_paths.len());
+    for rel_path in rel_paths {
+        let key = rel_path.to_string_lossy().into_owned();
+        let Some(live) = fs.stat(rel_path) else {
+            // The file vanished between the scan and the stat. Nothing to
+            // parse and nothing to cache; the next run decides afresh.
+            continue;
+        };
+        let entry = cached.get(&key);
+        if parsed_cache::is_fresh(entry, &live, || fs.hash(rel_path)) {
+            let payload = entry.expect("is_fresh implies an entry").payload.clone();
+            seen.push((
+                key,
+                Parsed {
+                    payload,
+                    stat: live,
+                    fresh: false,
+                },
+            ));
+            continue;
+        }
+        match run(rel_path) {
+            Err(error) => warn(&command_skip_message(rel_path, &error)),
+            Ok(payload) => seen.push((
+                key,
+                Parsed {
+                    payload,
+                    stat: live,
+                    fresh: true,
+                },
+            )),
+        }
+    }
+
+    let mut rows = Vec::new();
+    let mut writes: Vec<Entry<'_>> = Vec::new();
+    for (key, parsed) in &seen {
+        match parse_rows(&parsed.payload) {
+            Ok(parsed_rows) => {
+                rows.extend(parsed_rows);
+                if parsed.fresh {
+                    writes.push(Entry {
+                        rel_path: key,
+                        stat: &parsed.stat,
+                        content_hash: fs.hash(Path::new(key)),
+                        snapshot_ns,
+                        payload: &parsed.payload,
+                    });
+                }
+            }
+            Err(message) => warn(&parse_skip_message(Path::new(key), &message)),
+        }
+    }
+
+    let live: HashSet<&str> = seen.iter().map(|(key, _)| key.as_str()).collect();
+    let stale: Vec<&str> = cached
+        .keys()
+        .map(String::as_str)
+        .filter(|key| !live.contains(key))
+        .collect();
+
+    if !writes.is_empty() || !stale.is_empty() {
+        cache.commit(&writes, &stale)?;
+    }
+
+    Ok(rows)
+}
+
+/// The filesystem questions the cached collection asks, injected so the reuse
+/// decision is testable without a real tree.
+trait ParsedFs {
+    /// The file's stat tuple, or `None` when it is gone.
+    fn stat(&self, rel_path: &Path) -> Option<FileStat>;
+    /// The file's content hash. Best-effort: `None` only costs a re-parse.
+    fn hash(&self, rel_path: &Path) -> Option<[u8; 32]>;
+}
+
+/// The production [`ParsedFs`]: paths resolved against the scan root.
+struct RootedFs<'a> {
+    root: &'a Path,
+}
+
+impl ParsedFs for RootedFs<'_> {
+    fn stat(&self, rel_path: &Path) -> Option<FileStat> {
+        std::fs::metadata(self.root.join(rel_path))
+            .ok()
+            .map(|meta| FileStat::from_metadata(&meta))
+    }
+
+    fn hash(&self, rel_path: &Path) -> Option<[u8; 32]> {
+        hash_file(&self.root.join(rel_path)).ok()
+    }
 }
 
 /// Warning for a file whose parser command itself failed. Mirrors the `on-file`
@@ -214,6 +352,7 @@ unsafe impl<'vtab> VTab<'vtab> for ParsedTab {
             glob,
             command,
             gitignore,
+            cache,
             ignore,
         } = parse_module_args(args)?;
 
@@ -222,11 +361,16 @@ unsafe impl<'vtab> VTab<'vtab> for ParsedTab {
         // parsed `SELECT * FROM './'` doesn't drown in dependency trees.
         let ignore_base = path_table::ignore_base(&pattern);
         let rel_paths = scan_glob(&root, &glob, &ignore, &ignore_base, gitignore);
-        let rows = collect_rows(
-            &rel_paths,
-            &|rel| run_parser(&command, &root, rel),
-            &|message| eprintln!("{message}"),
-        );
+        let run = |rel: &Path| run_parser(&command, &root, rel);
+        let warn = |message: &str| eprintln!("{message}");
+        let rows = match &cache {
+            None => collect_rows(&rel_paths, &run, &warn),
+            Some(path) => {
+                let key = parsed_cache::table_key(&root, &pattern, &command);
+                let cache = SqliteRowCache::open(path, key)?;
+                collect_rows_cached(&cache, &rel_paths, &RootedFs { root: &root }, &run, &warn)?
+            }
+        };
 
         let columns = infer_schema(&rows);
         if columns.is_empty() {
@@ -372,6 +516,7 @@ mod tests {
             b"'**/*.json'",
             b"'cat {path}'",
             b"'gitignore'",
+            b"''",
         ]);
         let parsed = parse_module_args(&args).unwrap();
 
@@ -384,7 +529,7 @@ mod tests {
 
     #[test]
     fn parse_module_args_accepts_unquoted_arguments() {
-        let args = args_with(&[b"/tmp/notes", b"**/*", b"cat", b"gitignore"]);
+        let args = args_with(&[b"/tmp/notes", b"**/*", b"cat", b"gitignore", b""]);
         assert_eq!(
             parse_module_args(&args).unwrap().root,
             PathBuf::from("/tmp/notes")
@@ -393,16 +538,16 @@ mod tests {
 
     #[test]
     fn parse_module_args_reads_the_gitignore_switch() {
-        let on = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'gitignore'"]);
+        let on = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'gitignore'", b"''"]);
         assert!(parse_module_args(&on).unwrap().gitignore);
 
-        let off = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'no-gitignore'"]);
+        let off = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'no-gitignore'", b"''"]);
         assert!(!parse_module_args(&off).unwrap().gitignore);
     }
 
     #[test]
     fn parse_module_args_rejects_an_unknown_gitignore_switch() {
-        let args = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'sometimes'"]);
+        let args = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'sometimes'", b"''"]);
         let err = match parse_module_args(&args) {
             Err(err) => err,
             Ok(_) => panic!("an unknown switch must be rejected"),
@@ -417,6 +562,7 @@ mod tests {
             b"'**/*'",
             b"'cat'",
             b"'gitignore'",
+            b"''",
             b"'node_modules/**'",
         ]);
         let parsed = parse_module_args(&args).unwrap();
@@ -426,17 +572,17 @@ mod tests {
 
     #[test]
     fn parse_module_args_with_no_ignore_patterns_ignores_nothing() {
-        let args = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'gitignore'"]);
+        let args = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'gitignore'", b"''"]);
         let parsed = parse_module_args(&args).unwrap();
         assert!(!parsed.ignore.is_ignored(Path::new("node_modules/pkg/a.js")));
     }
 
     #[test]
     fn parse_module_args_rejects_too_few_arguments() {
-        let args = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'"]);
+        let args = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'gitignore'"]);
         let err = match parse_module_args(&args) {
             Err(err) => err,
-            Ok(_) => panic!("three arguments must be rejected"),
+            Ok(_) => panic!("four arguments must be rejected"),
         };
         assert!(
             err.to_string().contains("at least"),
@@ -446,13 +592,41 @@ mod tests {
 
     #[test]
     fn parse_module_args_rejects_an_invalid_glob() {
-        let args = args_with(&[b"'/tmp'", b"'['", b"'cat'", b"'gitignore'"]);
+        let args = args_with(&[b"'/tmp'", b"'['", b"'cat'", b"'gitignore'", b"''"]);
         assert!(parse_module_args(&args).is_err());
     }
 
     #[test]
+    fn parse_module_args_reads_the_cache_path() {
+        let args = args_with(&[
+            b"'/tmp'",
+            b"'**/*'",
+            b"'cat'",
+            b"'gitignore'",
+            b"'/cache/dirsql.db'",
+        ]);
+        assert_eq!(
+            parse_module_args(&args).unwrap().cache,
+            Some(PathBuf::from("/cache/dirsql.db"))
+        );
+    }
+
+    #[test]
+    fn parse_module_args_reads_an_empty_cache_path_as_no_cache() {
+        let args = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'gitignore'", b"''"]);
+        assert_eq!(parse_module_args(&args).unwrap().cache, None);
+    }
+
+    #[test]
     fn parse_module_args_rejects_an_invalid_ignore_pattern() {
-        let args = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'gitignore'", b"'['"]);
+        let args = args_with(&[
+            b"'/tmp'",
+            b"'**/*'",
+            b"'cat'",
+            b"'gitignore'",
+            b"''",
+            b"'['",
+        ]);
         assert!(parse_module_args(&args).is_err());
     }
 
@@ -634,4 +808,310 @@ mod tests {
         let err = run_parser("sh -c 'exit 7'", Path::new("."), Path::new("a.json")).unwrap_err();
         assert!(err.contains('7'), "the exit code is reported, got: {err}");
     }
+
+    /// A [`ParsedFs`] over a fixed table of stats and hashes, so the reuse
+    /// decision is exercised without a filesystem. `hashed` records every hash
+    /// asked for, which is how "an unchanged tree reads no files" is asserted.
+    #[derive(Default)]
+    struct FakeFs {
+        stats: HashMap<String, FileStat>,
+        hashes: HashMap<String, [u8; 32]>,
+        hashed: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl FakeFs {
+        fn with(paths: &[(&str, i64)]) -> Self {
+            let mut fs = Self::default();
+            for (path, mtime_ns) in paths {
+                fs.stats.insert((*path).to_string(), stat(*mtime_ns));
+            }
+            fs
+        }
+    }
+
+    impl ParsedFs for FakeFs {
+        fn stat(&self, rel_path: &Path) -> Option<FileStat> {
+            self.stats
+                .get(&rel_path.to_string_lossy().to_string())
+                .cloned()
+        }
+
+        fn hash(&self, rel_path: &Path) -> Option<[u8; 32]> {
+            let key = rel_path.to_string_lossy().to_string();
+            self.hashed.borrow_mut().push(key.clone());
+            self.hashes.get(&key).copied()
+        }
+    }
+
+    /// An in-memory [`RowCache`] that records what it was asked to commit, so
+    /// the unit under test is exercised without a database.
+    #[derive(Default)]
+    struct FakeCache {
+        entries: std::cell::RefCell<HashMap<String, CachedParse>>,
+        commits: std::cell::RefCell<usize>,
+        fail: bool,
+    }
+
+    impl FakeCache {
+        /// Seed the cache as a prior run would have, with a snapshot far enough
+        /// ahead of the file's mtime to be outside the racy window.
+        fn seeded(entries: &[(&str, i64, &str)]) -> Self {
+            let cache = Self::default();
+            for (rel_path, mtime_ns, payload) in entries {
+                cache.put(rel_path, stat(*mtime_ns), None, mtime_ns + 1, payload);
+            }
+            cache
+        }
+
+        fn put(
+            &self,
+            rel_path: &str,
+            stat: FileStat,
+            content_hash: Option<[u8; 32]>,
+            snapshot_ns: i64,
+            payload: &str,
+        ) {
+            self.entries.borrow_mut().insert(
+                rel_path.to_string(),
+                CachedParse {
+                    rel_path: rel_path.to_string(),
+                    stat,
+                    content_hash,
+                    snapshot_ns,
+                    payload: payload.to_string(),
+                },
+            );
+        }
+
+        fn payloads(&self) -> std::collections::BTreeMap<String, String> {
+            self.entries
+                .borrow()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.payload.clone()))
+                .collect()
+        }
+    }
+
+    impl RowCache for FakeCache {
+        fn read(&self) -> rusqlite::Result<HashMap<String, CachedParse>> {
+            if self.fail {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+            Ok(self.entries.borrow().clone())
+        }
+
+        fn commit(&self, writes: &[Entry<'_>], deletes: &[&str]) -> rusqlite::Result<()> {
+            *self.commits.borrow_mut() += 1;
+            for entry in writes {
+                self.put(
+                    entry.rel_path,
+                    entry.stat.clone(),
+                    entry.content_hash,
+                    entry.snapshot_ns,
+                    entry.payload,
+                );
+            }
+            for rel_path in deletes {
+                self.entries.borrow_mut().remove(*rel_path);
+            }
+            Ok(())
+        }
+    }
+
+    fn stat(mtime_ns: i64) -> FileStat {
+        FileStat {
+            size: 3,
+            mtime_ns,
+            ctime_ns: 1,
+            inode: 2,
+            dev: 4,
+        }
+    }
+
+    fn paths(names: &[&str]) -> Vec<PathBuf> {
+        names.iter().map(PathBuf::from).collect()
+    }
+
+    fn collect_cached(
+        cache: &FakeCache,
+        fs: &FakeFs,
+        rel_paths: &[PathBuf],
+        run: &dyn Fn(&Path) -> std::result::Result<String, String>,
+    ) -> (Vec<JsonRow>, Vec<String>) {
+        let warnings = std::cell::RefCell::new(Vec::new());
+        let rows = collect_rows_cached(cache, rel_paths, fs, run, &|m| {
+            warnings.borrow_mut().push(m.to_string())
+        })
+        .unwrap();
+        (rows, warnings.into_inner())
+    }
+
+    fn ids(rows: &[JsonRow]) -> Vec<i64> {
+        rows.iter()
+            .map(|r| r.get("id").unwrap().as_i64().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn collect_rows_cached_parses_a_file_the_cache_does_not_know() {
+        let cache = FakeCache::default();
+        let fs = FakeFs::with(&[("a.json", 10)]);
+
+        let (rows, warnings) =
+            collect_cached(&cache, &fs, &paths(&["a.json"]), &ok(r#"[{"id":1}]"#));
+
+        assert_eq!(ids(&rows), vec![1]);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(cache.payloads()["a.json"], r#"[{"id":1}]"#);
+    }
+
+    #[test]
+    fn collect_rows_cached_serves_an_unchanged_file_without_parsing_or_reading_it() {
+        let cache = FakeCache::seeded(&[("a.json", 10, r#"[{"id":9}]"#)]);
+        let fs = FakeFs::with(&[("a.json", 10)]);
+
+        let (rows, _) = collect_cached(&cache, &fs, &paths(&["a.json"]), &|_| {
+            panic!("an unchanged file must not reach the parser")
+        });
+
+        assert_eq!(ids(&rows), vec![9], "the cached payload is served");
+        assert!(
+            fs.hashed.borrow().is_empty(),
+            "a file outside the racy window is not read: {:?}",
+            fs.hashed.borrow(),
+        );
+    }
+
+    #[test]
+    fn collect_rows_cached_leaves_the_cache_alone_when_nothing_changed() {
+        let cache = FakeCache::seeded(&[("a.json", 10, r#"[{"id":9}]"#)]);
+        let fs = FakeFs::with(&[("a.json", 10)]);
+
+        collect_cached(&cache, &fs, &paths(&["a.json"]), &ok("[]"));
+
+        assert_eq!(
+            *cache.commits.borrow(),
+            0,
+            "an unchanged scan writes nothing at all",
+        );
+    }
+
+    #[test]
+    fn collect_rows_cached_reparses_a_file_whose_stat_moved() {
+        let cache = FakeCache::seeded(&[("a.json", 10, r#"[{"id":9}]"#)]);
+        let fs = FakeFs::with(&[("a.json", 20)]);
+
+        let (rows, _) = collect_cached(&cache, &fs, &paths(&["a.json"]), &ok(r#"[{"id":2}]"#));
+
+        assert_eq!(ids(&rows), vec![2]);
+        assert_eq!(
+            cache.payloads()["a.json"],
+            r#"[{"id":2}]"#,
+            "the cache learns the new payload",
+        );
+    }
+
+    #[test]
+    fn collect_rows_cached_forgets_a_file_the_scan_no_longer_matches() {
+        let cache = FakeCache::seeded(&[
+            ("a.json", 10, r#"[{"id":9}]"#),
+            ("gone.json", 10, r#"[{"id":8}]"#),
+        ]);
+        let fs = FakeFs::with(&[("a.json", 10)]);
+
+        let (rows, _) = collect_cached(&cache, &fs, &paths(&["a.json"]), &ok("[]"));
+
+        assert_eq!(ids(&rows), vec![9]);
+        assert_eq!(
+            cache.payloads().keys().collect::<Vec<_>>(),
+            vec!["a.json"],
+            "the vanished file's entry is dropped",
+        );
+    }
+
+    #[test]
+    fn collect_rows_cached_skips_a_file_that_vanished_before_the_stat() {
+        let cache = FakeCache::default();
+        let fs = FakeFs::default();
+
+        let (rows, warnings) = collect_cached(&cache, &fs, &paths(&["ghost.json"]), &|_| {
+            panic!("a vanished file must not reach the parser")
+        });
+
+        assert!(rows.is_empty());
+        assert!(warnings.is_empty(), "a race is not a parse failure");
+        assert_eq!(*cache.commits.borrow(), 0);
+    }
+
+    #[test]
+    fn collect_rows_cached_isolates_a_parser_failure_and_leaves_it_uncached() {
+        let cache = FakeCache::default();
+        let fs = FakeFs::with(&[("bad.json", 10), ("good.json", 10)]);
+
+        let (rows, warnings) =
+            collect_cached(&cache, &fs, &paths(&["bad.json", "good.json"]), &|rel| {
+                if rel == Path::new("bad.json") {
+                    Err("exit 7".to_string())
+                } else {
+                    Ok(r#"[{"id":1}]"#.to_string())
+                }
+            });
+
+        assert_eq!(ids(&rows), vec![1], "the good file still contributes");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("bad.json"));
+        assert!(
+            !cache.payloads().contains_key("bad.json"),
+            "a failed file stays uncached so the next run retries it",
+        );
+    }
+
+    #[test]
+    fn collect_rows_cached_isolates_output_that_is_not_a_row_array() {
+        let cache = FakeCache::default();
+        let fs = FakeFs::with(&[("a.json", 10)]);
+
+        let (rows, warnings) = collect_cached(&cache, &fs, &paths(&["a.json"]), &ok("not json"));
+
+        assert!(rows.is_empty());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("a.json"), "got: {}", warnings[0]);
+        assert_eq!(
+            *cache.commits.borrow(),
+            0,
+            "unparseable output is not worth caching",
+        );
+    }
+
+    #[test]
+    fn collect_rows_cached_hash_confirms_a_file_inside_the_racy_window() {
+        // snapshot_ns == mtime_ns puts the entry inside the racy window, where
+        // the stat tuple alone cannot settle it.
+        let cache = FakeCache::default();
+        cache.put("a.json", stat(10), Some([3u8; 32]), 10, "[]");
+        let mut fs = FakeFs::with(&[("a.json", 10)]);
+        fs.hashes.insert("a.json".to_string(), [3u8; 32]);
+
+        collect_cached(&cache, &fs, &paths(&["a.json"]), &|_| {
+            panic!("a hash-confirmed file must not reach the parser")
+        });
+
+        assert_eq!(fs.hashed.borrow().len(), 1, "the file is hashed once");
+    }
+
+    #[test]
+    fn collect_rows_cached_propagates_a_cache_read_failure() {
+        let cache = FakeCache {
+            fail: true,
+            ..FakeCache::default()
+        };
+        let fs = FakeFs::with(&[("a.json", 10)]);
+        let err =
+            collect_rows_cached(&cache, &paths(&["a.json"]), &fs, &ok("[]"), &|_| {}).unwrap_err();
+        assert!(matches!(err, Error::InvalidQuery), "got: {err}");
+    }
+
+    // RootedFs answers real filesystem questions, so the isolation rule keeps
+    // it out of the unit tier: `tests/persist_parsed_path_table.rs` exercises
+    // it against a real tree, the way `vtab.rs`'s `read_text` is covered.
 }

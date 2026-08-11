@@ -22,6 +22,8 @@ pub mod infer;
 #[doc(hidden)]
 pub mod matcher;
 #[doc(hidden)]
+pub mod parsed_cache;
+#[doc(hidden)]
 pub mod parsed_vtab;
 #[doc(hidden)]
 pub mod path_table;
@@ -45,8 +47,8 @@ use crate::matcher::TableMatcher;
 use crate::persist::{
     CachedFile, FileStat, build_meta, canonical_root, compute_glob_config_hash,
     create_sidecar_tables, delete_file as cache_delete_file, drop_user_tables, ensure_parent_dir,
-    hash_file, meta_is_compatible, now_ns, read_cached_files, read_meta, resolve_persist_path,
-    upsert_file, write_meta,
+    hash_file, is_trusted, meta_is_compatible, now_ns, read_cached_files, read_meta,
+    resolve_persist_path, upsert_file, write_meta,
 };
 use crate::scanner::scan_directory;
 use crate::watcher::{FileEvent, Watcher};
@@ -721,8 +723,10 @@ impl DirSQL {
             hint_legacy_files_table,
             persist: persist_ctx.map(|ctx| PreparedPersist {
                 db: ctx.db,
+                path: ctx.path,
                 deleted,
                 meta: ctx.expected_meta,
+                meta_current: ctx.meta_current,
             }),
             poll_interval,
             path_table_parser,
@@ -778,7 +782,11 @@ impl DirSQL {
         } = prepared;
 
         let (mut db, persist_ready) = match persist {
-            Some(p) => (p.db, Some((p.deleted, p.meta))),
+            Some(p) => {
+                let mut db = p.db;
+                db.set_path_table_cache(p.path);
+                (db, Some((p.deleted, p.meta, p.meta_current)))
+            }
             None => (Db::new()?, None),
         };
         db.set_path_table_root(root.clone());
@@ -846,7 +854,7 @@ impl DirSQL {
         // Drop cached rows for files that disappeared since the last cache
         // write. Trusted files need no work: their rows already live in the
         // on-disk SQLite.
-        if let Some((deleted, _)) = persist_ready.as_ref() {
+        if let Some((deleted, _, _)) = persist_ready.as_ref() {
             for (rel_path, table_name) in deleted {
                 db.delete_rows_by_file(table_name, rel_path)
                     .map_err(map_db_error)?;
@@ -935,7 +943,9 @@ impl DirSQL {
         // single transaction opened above. A crash mid-build leaves the cache
         // exactly as it was before the build started (detected via meta on
         // next startup).
-        if let Some((_, meta)) = persist_ready.as_ref() {
+        if let Some((_, meta, current)) = persist_ready.as_ref()
+            && !current
+        {
             write_meta(db.conn(), meta).map_err(DirSqlError::sqlite)?;
         }
 
@@ -1329,8 +1339,13 @@ pub struct PreparedBuild {
 #[doc(hidden)]
 pub struct PreparedPersist {
     db: Db,
+    path: PathBuf,
     deleted: Vec<(String, String)>,
     meta: HashMap<String, String>,
+    /// Whether the cache already holds exactly `meta`. When it does the meta
+    /// write is skipped, so a run that changed nothing leaves the cache file
+    /// byte-for-byte alone.
+    meta_current: bool,
 }
 
 /// A file the reconcile decided to trust: its cached rows are kept as-is and
@@ -1343,10 +1358,15 @@ pub struct TrustedFile {
 
 struct PersistContext {
     db: Db,
+    /// Where the cache lives, carried through so parsed path-tables can reuse
+    /// their rows from the same file.
+    path: PathBuf,
     /// Cached file bookkeeping keyed by `(rel_path, table_name)` — a file may
     /// be cached under several tables under fan-out.
     cached: HashMap<(String, String), CachedFile>,
     expected_meta: HashMap<String, String>,
+    /// Whether the on-disk meta already equals `expected_meta`.
+    meta_current: bool,
 }
 
 fn compile_matcher(
@@ -1411,7 +1431,11 @@ fn prepare_persist(
 
     Ok(PersistContext {
         db,
+        path,
         cached,
+        // Compatible means every expected key matches; equal length makes it
+        // equality, which is what lets the write be skipped outright.
+        meta_current: compatible && cached_meta.len() == expected_meta.len(),
         expected_meta,
     })
 }
@@ -1472,21 +1496,15 @@ fn reconcile_scan(
         let stat = fs.stat(&path)?;
 
         let cached = ctx.cached.get(&(rel_path.clone(), table_name.clone()));
-        let trust = match cached {
-            Some(c) if c.stat == stat => {
-                // Stat matches. Outside the racy window? Trust the cache.
-                if c.snapshot_ns > stat.mtime_ns {
-                    true
-                } else {
-                    // Hash-confirm.
-                    match (fs.hash(&path).ok(), c.content_hash) {
-                        (Some(live), Some(cached_hash)) => live == cached_hash,
-                        _ => false,
-                    }
-                }
-            }
-            _ => false,
-        };
+        let trust = cached.is_some_and(|c| {
+            is_trusted(
+                &c.stat,
+                c.content_hash.as_ref(),
+                c.snapshot_ns,
+                &stat,
+                || fs.hash(&path).ok(),
+            )
+        });
 
         if trust {
             trusted.push(TrustedFile {
@@ -2376,8 +2394,10 @@ mod internal_tests {
         );
         let ctx = PersistContext {
             db: Db::new().unwrap(),
+            path: PathBuf::from("/unused/cache.db"),
             cached,
             expected_meta: HashMap::new(),
+            meta_current: false,
         };
         let scanned = vec![(abs.clone(), "t".to_string())];
         let (to_parse, trusted, deleted) =
@@ -2411,8 +2431,10 @@ mod internal_tests {
         );
         let ctx = PersistContext {
             db: Db::new().unwrap(),
+            path: PathBuf::from("/unused/cache.db"),
             cached,
             expected_meta: HashMap::new(),
+            meta_current: false,
         };
         let scanned = vec![(abs.clone(), "t".to_string())];
         let (to_parse, trusted, _deleted) =
@@ -2426,8 +2448,10 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let ctx = PersistContext {
             db: Db::new().unwrap(),
+            path: PathBuf::from("/unused/cache.db"),
             cached: HashMap::new(),
             expected_meta: HashMap::new(),
+            meta_current: false,
         };
         let missing = dir.path().join("ghost.txt");
         let scanned = vec![(missing, "t".to_string())];
@@ -3097,8 +3121,10 @@ mod internal_tests {
         );
         let ctx = PersistContext {
             db: Db::new().unwrap(),
+            path: PathBuf::from("/unused/cache.db"),
             cached,
             expected_meta: HashMap::new(),
+            meta_current: false,
         };
         let scanned = vec![(abs, "t".to_string())];
         let (to_parse, trusted, deleted) =
@@ -3129,8 +3155,10 @@ mod internal_tests {
         );
         let ctx = PersistContext {
             db: Db::new().unwrap(),
+            path: PathBuf::from("/unused/cache.db"),
             cached,
             expected_meta: HashMap::new(),
+            meta_current: false,
         };
         let scanned = vec![(abs, "t".to_string())];
         let (to_parse, trusted, _deleted) =
@@ -3155,8 +3183,10 @@ mod internal_tests {
         );
         let ctx = PersistContext {
             db: Db::new().unwrap(),
+            path: PathBuf::from("/unused/cache.db"),
             cached,
             expected_meta: HashMap::new(),
+            meta_current: false,
         };
         let fake = FakeFs::default();
         let (to_parse, trusted, deleted) =

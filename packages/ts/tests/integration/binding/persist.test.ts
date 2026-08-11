@@ -124,6 +124,9 @@ describe("DirSQL persist", () => {
       persist: true,
     });
     await db1.ready;
+    // Close before reading: the cache is WAL, so an open connection may still
+    // be holding this run's writes in the sidecar rather than the db file.
+    db1.close();
 
     const cache = join(dir, ".dirsql", "cache.db");
     const before = await readFile(cache);
@@ -134,6 +137,7 @@ describe("DirSQL persist", () => {
       persist: true,
     });
     await db2.ready;
+    db2.close();
 
     const after = await readFile(cache);
     expect(after.length).toBe(before.length);

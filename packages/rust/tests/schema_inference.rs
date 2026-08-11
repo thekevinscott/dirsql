@@ -22,8 +22,10 @@ const CAT_PARSER: &str = "cat {path}";
 fn open_over(dir: &TempDir, glob: &str, command: &str) -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     load_module(&conn).unwrap();
+    // The trailing empty argument is the cache path: this vtab is ephemeral,
+    // so there is nowhere to reuse rows from.
     conn.execute_batch(&format!(
-        "CREATE VIRTUAL TABLE t USING dirsql_parsed('{}', '{}', '{}', 'gitignore')",
+        "CREATE VIRTUAL TABLE t USING dirsql_parsed('{}', '{}', '{}', 'gitignore', '')",
         dir.path().display(),
         glob,
         command
@@ -231,7 +233,7 @@ fn a_parser_producing_no_rows_is_an_error_at_registration() {
     let err = conn
         .execute_batch(&format!(
             "CREATE VIRTUAL TABLE t USING dirsql_parsed('{}', '**/*.json', '{CAT_PARSER}', \
-             'gitignore')",
+             'gitignore', '')",
             dir.path().display()
         ))
         .unwrap_err();
@@ -274,7 +276,7 @@ fn a_scan_where_every_file_fails_cannot_infer_a_schema() {
     let err = conn
         .execute_batch(&format!(
             "CREATE VIRTUAL TABLE t USING dirsql_parsed('{}', '**/*.json', '{CAT_PARSER}', \
-             'gitignore')",
+             'gitignore', '')",
             dir.path().display()
         ))
         .unwrap_err();

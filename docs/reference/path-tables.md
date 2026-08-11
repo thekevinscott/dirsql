@@ -140,6 +140,12 @@ the table:
   scan continues. The schema is inferred from the files that did parse.
 - **The skip rules still apply.** A parsed scan honors the same `node_modules`
   /`.git`/`ignore` rules a stat scan does (see below).
+- **`--persist` skips the parser for unchanged files.** With a
+  [persistent cache](/howto/persist), each file's parser output is stored
+  against its stat metadata, so a later run over an unchanged tree serves the
+  rows from the cache and spawns no process. Change the file, the glob, the
+  parser command, or the dirsql version and that file (or that whole table) is
+  parsed again.
 
 `--on-file` applies to **every** path-table in the query and may be given **at
 most once**. For different parsers per file set, define named tables in a
@@ -160,15 +166,17 @@ deleted *after* the scan finds it but *before* its `content` is read yields
 than failing the query. This is an accepted consequence of reading live, not a
 bug to design around.
 
-Path-tables are per-connection and are never written to a persistent cache, so
-they cannot leak into `sqlite_master` or survive a restart. The reserved
-top-level `.dirsql/` directory is excluded from the scan, as everywhere else.
+The table itself is per-connection: it lives in `temp`, so it cannot leak into
+`sqlite_master` or survive a restart. Under `--persist` a *parsed* table's rows
+outlive the connection in the cache (above), but the table is still minted
+fresh each run and the scan still decides what exists. The reserved top-level
+`.dirsql/` directory is excluded from the scan, as everywhere else.
 
 ### When to promote to a declared table
 
-Every query re-scans the filesystem: a path-table has no index, no watcher, and
-no persistent cache. That is the right trade for a hundreds-of-files, run-it-once
-question. When the same tree is queried repeatedly, or is large, declare a
+Every query re-scans the filesystem: a path-table has no index and no watcher.
+That is the right trade for a hundreds-of-files, run-it-once question. When the
+same tree is queried repeatedly, or is large, declare a
 [table](/reference/config) for it instead — a declared table is indexed on
 build, kept fresh by the watcher, and (with `--persist`) survives restarts, so
 its rows are read from SQLite rather than re-walked each time.

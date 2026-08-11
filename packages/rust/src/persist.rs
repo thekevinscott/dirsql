@@ -115,6 +115,36 @@ pub fn hash_file(path: &Path) -> io::Result<[u8; 32]> {
     Ok(*blake3::hash(&bytes).as_bytes())
 }
 
+/// Whether a cached entry still describes the live file.
+///
+/// The racy-stat rule, in one place because both cache tiers (the declared
+/// tables' `_dirsql_files` and the parsed path-tables' row cache) must decide
+/// it identically: an unchanged stat tuple is trusted outright once the cache
+/// write is known to postdate the file's mtime, and hash-confirmed when it is
+/// not (the file could have changed within the same timestamp tick). A cached
+/// entry with no hash cannot be confirmed, so it is not trusted.
+///
+/// `hash` is lazy: it is only called for entries inside the racy window, which
+/// is what keeps the common path free of file reads.
+pub fn is_trusted(
+    cached: &FileStat,
+    cached_hash: Option<&[u8; 32]>,
+    snapshot_ns: i64,
+    live: &FileStat,
+    hash: impl FnOnce() -> Option<[u8; 32]>,
+) -> bool {
+    if cached != live {
+        return false;
+    }
+    if snapshot_ns > live.mtime_ns {
+        return true;
+    }
+    match (hash(), cached_hash) {
+        (Some(live_hash), Some(cached_hash)) => live_hash == *cached_hash,
+        _ => false,
+    }
+}
+
 /// Compute the canonical glob-config hash. Includes table name, DDL, glob,
 /// and strict flag for every table, plus the ignore list, in a
 /// deterministic order. A mismatch against the cached value triggers a
@@ -176,8 +206,9 @@ pub fn ensure_parent_dir(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Create the `_dirsql_meta` and `_dirsql_files` sidecar tables (if they
-/// don't already exist).
+/// Create the `_dirsql_meta`, `_dirsql_files` and `_dirsql_parsed_rows`
+/// sidecar tables (if they don't already exist). The parsed path-table's own
+/// table is created by the module that owns its shape.
 pub fn create_sidecar_tables(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS _dirsql_meta (
@@ -197,7 +228,7 @@ pub fn create_sidecar_tables(conn: &Connection) -> rusqlite::Result<()> {
             PRIMARY KEY (rel_path, table_name)
          );",
     )?;
-    Ok(())
+    crate::parsed_cache::create_table(conn)
 }
 
 /// Read all `_dirsql_meta` key/value pairs.
@@ -275,40 +306,50 @@ pub fn meta_is_compatible(
     true
 }
 
+/// The bookkeeping columns every cache tier stores per file, in the order
+/// [`read_cached_file_row`] expects them selected.
+pub const FILE_COLUMNS: &str =
+    "rel_path, size, mtime_ns, ctime_ns, inode, dev, content_hash, snapshot_ns";
+
+/// Read one file's bookkeeping from a row whose first eight columns are
+/// [`FILE_COLUMNS`]. Shared so the declared-table index (`_dirsql_files`) and
+/// the parsed path-table row cache (`_dirsql_parsed_rows`) store and interpret
+/// a file's identity identically; each supplies its own `table_name` (the
+/// declared table, or the path-table's identity key).
+pub fn read_cached_file_row(
+    row: &rusqlite::Row<'_>,
+    table_name: &str,
+) -> rusqlite::Result<CachedFile> {
+    let hash_bytes: Option<Vec<u8>> = row.get(6)?;
+    // A hash of the wrong width is not a hash: drop it and let the entry fall
+    // back to a re-parse rather than compare against a truncated digest.
+    let content_hash = hash_bytes.and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok());
+    Ok(CachedFile {
+        rel_path: row.get(0)?,
+        table_name: table_name.to_string(),
+        stat: FileStat {
+            size: row.get(1)?,
+            mtime_ns: row.get(2)?,
+            ctime_ns: row.get(3)?,
+            inode: row.get(4)?,
+            dev: row.get(5)?,
+        },
+        content_hash,
+        snapshot_ns: row.get(7)?,
+    })
+}
+
 /// Read every `_dirsql_files` row, keyed by the `(rel_path, table_name)` pair
 /// (a file may be bookkept under several tables under fan-out).
 pub fn read_cached_files(
     conn: &Connection,
 ) -> rusqlite::Result<HashMap<(String, String), CachedFile>> {
-    let mut stmt = conn.prepare(
-        "SELECT rel_path, table_name, size, mtime_ns, ctime_ns, inode, dev,
-                content_hash, snapshot_ns
-         FROM _dirsql_files",
-    )?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {FILE_COLUMNS}, table_name FROM _dirsql_files"
+    ))?;
     let rows = stmt.query_map([], |row| {
-        let hash_bytes: Option<Vec<u8>> = row.get(7)?;
-        let content_hash = hash_bytes.and_then(|b| {
-            if b.len() == 32 {
-                let mut arr = [0u8; 32];
-                arr.copy_from_slice(&b);
-                Some(arr)
-            } else {
-                None
-            }
-        });
-        Ok(CachedFile {
-            rel_path: row.get(0)?,
-            table_name: row.get(1)?,
-            stat: FileStat {
-                size: row.get(2)?,
-                mtime_ns: row.get(3)?,
-                ctime_ns: row.get(4)?,
-                inode: row.get(5)?,
-                dev: row.get(6)?,
-            },
-            content_hash,
-            snapshot_ns: row.get(8)?,
-        })
+        let table_name: String = row.get(8)?;
+        read_cached_file_row(row, &table_name)
     })?;
     let mut out = HashMap::new();
     for row in rows {
@@ -386,6 +427,10 @@ pub fn drop_user_tables(conn: &Connection) -> rusqlite::Result<()> {
     // Wipe the row mapping too: a cold rebuild re-ingests every file and
     // `insert_row` repopulates it; stale rows would duplicate/orphan state.
     conn.execute("DELETE FROM _dirsql_internal_rows", [])?;
+    // The parsed path-table rows are keyed by their own identity hash, not by
+    // the meta the caller just rejected, but they are cached data in a cache
+    // being discarded: keep the file one thing, wholly stale or wholly warm.
+    crate::parsed_cache::clear(conn)?;
     Ok(())
 }
 
