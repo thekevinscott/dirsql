@@ -1,7 +1,0 @@
-{
-  "command": "just test-e2e",
-  "ran_at": 1786474023,
-  "exit_code": 0,
-  "commit": "ba3b18743135098021c33355e1a0a82da2812b07",
-  "branch": "claude/820-retire-hook-timeout"
-}
