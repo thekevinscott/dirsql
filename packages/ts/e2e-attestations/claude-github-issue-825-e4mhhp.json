@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1786484718,
+  "exit_code": 0,
+  "commit": "718653c864475cf5d848fc196b6102a2309bdb3e",
+  "branch": "claude/github-issue-825-e4mhhp"
+}
