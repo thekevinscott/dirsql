@@ -1,13 +1,14 @@
 //! Transport-agnostic `/query` pipeline.
 //!
 //! The full orchestration for running one query — intake validation,
-//! the query timeout, [`DirSQL::query`], row serialization, and error
-//! classification — lives here exactly once. The HTTP handler and the
-//! one-shot `dirsql query` subcommand are thin transport adapters over
+//! the optional query timeout, [`DirSQL::query`], row serialization, and
+//! error classification — lives here exactly once. The HTTP handler and
+//! the one-shot `dirsql query` subcommand are thin transport adapters over
 //! [`execute_query`], so the two surfaces cannot drift behaviorally:
 //! per-surface code only maps [`QueryFailure`] to a status code or an
 //! exit code.
 
+use std::future::Future;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -50,27 +51,41 @@ struct QueryBody {
 }
 
 /// Run one query end to end: parse the SQL from `raw_body` (`{"sql": …}`),
-/// execute it against the index under `timeout`, and serialize the rows.
-/// `raw_body` is the exact payload a `POST /query` request carries; the CLI
-/// adapter synthesizes the same shape so both surfaces share intake
-/// validation.
+/// execute it against the index — bounded by `timeout` when one is given
+/// (the server's 408 path), unbounded with `None` (the one-shot CLI, where
+/// the process is the query and an external `timeout(1)` expresses any cap
+/// natively) — and serialize the rows. `raw_body` is the exact payload a
+/// `POST /query` request carries; the CLI adapter synthesizes the same
+/// shape so both surfaces share intake validation.
 pub async fn execute_query(
     state: &AppState,
     raw_body: String,
-    timeout: Duration,
+    timeout: Option<Duration>,
 ) -> Result<Value, QueryFailure> {
     let sql = parse_sql_body(&raw_body)?;
 
     let db = require_ready(state)?;
 
-    let join =
-        tokio::time::timeout(timeout, tokio::task::spawn_blocking(move || db.query(&sql))).await;
+    let join = run_bounded(timeout, tokio::task::spawn_blocking(move || db.query(&sql))).await?;
 
     match join {
-        Ok(Ok(Ok(rows))) => Ok(Value::Array(rows_to_json(&rows))),
-        Ok(Ok(Err(err))) => Err(classify_query_error(err)),
-        Ok(Err(join_err)) => Err(QueryFailure::Internal(join_err.to_string())),
-        Err(_elapsed) => Err(QueryFailure::Timeout(timeout)),
+        Ok(Ok(rows)) => Ok(Value::Array(rows_to_json(&rows))),
+        Ok(Err(err)) => Err(classify_query_error(err)),
+        Err(join_err) => Err(QueryFailure::Internal(join_err.to_string())),
+    }
+}
+
+/// Await `task`, bounded by `timeout` when one is given ([`QueryFailure::Timeout`]
+/// carrying the bound on expiry) and to completion with `None`.
+async fn run_bounded<T>(
+    timeout: Option<Duration>,
+    task: impl Future<Output = T>,
+) -> Result<T, QueryFailure> {
+    match timeout {
+        Some(bound) => tokio::time::timeout(bound, task)
+            .await
+            .map_err(|_elapsed| QueryFailure::Timeout(bound)),
+        None => Ok(task.await),
     }
 }
 
@@ -195,6 +210,31 @@ mod tests {
         match failure {
             QueryFailure::BadRequest(msg) => assert_eq!(msg, "missing `sql` field"),
             other => panic!("expected BadRequest, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_bounded_without_a_timeout_runs_to_completion() {
+        // `None` is the one-shot CLI's mode: the task is awaited unbounded.
+        let result = run_bounded(None, async { 42 }).await;
+        assert!(matches!(result, Ok(42)), "got: {result:?}");
+    }
+
+    #[tokio::test]
+    async fn run_bounded_with_an_unexpired_bound_yields_the_output() {
+        let result = run_bounded(Some(Duration::from_secs(5)), async { "rows" }).await;
+        assert!(matches!(result, Ok("rows")), "got: {result:?}");
+    }
+
+    #[tokio::test]
+    async fn run_bounded_with_an_expired_bound_yields_timeout_carrying_it() {
+        // The server's 408 path: an expired bound surfaces as `Timeout`
+        // holding the exact duration, never the task's output.
+        let bound = Duration::from_millis(1);
+        let result = run_bounded(Some(bound), std::future::pending::<()>()).await;
+        match result {
+            Err(QueryFailure::Timeout(d)) => assert_eq!(d, bound),
+            other => panic!("expected Timeout, got: {other:?}"),
         }
     }
 

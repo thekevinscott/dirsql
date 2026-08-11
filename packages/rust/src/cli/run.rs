@@ -145,9 +145,11 @@ enum Command {
     /// Run one SQL query against the indexed directory, print the result
     /// rows as JSON on stdout, and exit. No server, no watch. This is the
     /// explicit synonym for the default `dirsql "<sql>"`. Shares the
-    /// server's query pipeline, so config loading, hooks, the query
-    /// timeout, the read-only rule, and error classification are identical
-    /// to `POST /query`. Config flags follow the SQL: `dirsql query <sql> -c <cfg>`.
+    /// server's query pipeline, so config loading, hooks, the read-only
+    /// rule, and error classification are identical to `POST /query`.
+    /// Unlike the server there is no per-query timeout: the query runs to
+    /// completion (cap it externally, e.g. `timeout 60 dirsql query ...`).
+    /// Config flags follow the SQL: `dirsql query <sql> -c <cfg>`.
     Query(QueryArgs),
 
     /// Start the long-lived HTTP server exposing a SQL view of the directory
@@ -316,10 +318,10 @@ async fn run_query(args: QueryArgs) -> u8 {
     };
     let state = load_state(&args.common, parser);
     let skipped = report_scan_failures(&state);
-    // Same default the server binds with; the pipeline enforces it.
-    let timeout = ServerConfig::default().query_timeout;
 
-    match execute_query(&state, query_body(&args.sql), timeout).await {
+    // Unbounded: the process IS the query, so `timeout(1)` expresses any cap
+    // natively; only the long-lived server enforces `query_timeout` (408).
+    match execute_query(&state, query_body(&args.sql), None).await {
         Ok(value) => {
             println!("{value}");
             // The query ran and its rows are on stdout, so this is not a

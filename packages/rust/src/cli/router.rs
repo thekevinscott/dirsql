@@ -46,7 +46,7 @@ pub(super) fn router(ctx: SharedCtx) -> Router {
 }
 
 async fn handle_query(State(ctx): State<SharedCtx>, body: String) -> Response {
-    match execute_query(&ctx.state, body, ctx.query_timeout).await {
+    match execute_query(&ctx.state, body, Some(ctx.query_timeout)).await {
         Ok(value) => Json(value).into_response(),
         Err(failure) => failure_response(&failure),
     }

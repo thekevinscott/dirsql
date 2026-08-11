@@ -516,6 +516,14 @@ the core, and both bindings call it in-process rather than spawning a copy.
 Neither published package ships a standalone binary — `cargo install dirsql
 --features cli` remains the way to get one, and it is the same code.
 
+#819 removed the per-query timeout from one-shot `dirsql query` in the core
+(server mode's `query_timeout` / `408` pipeline is unchanged). This is a
+CLI-lane behavior change, not an SDK-surface one: all three channels front the
+same `run_cli`, so the behavior shifts identically everywhere and no
+per-language drift opens. The only signature change is the Rust-only,
+`--features cli`-gated `cli::execute::execute_query`, which now takes
+`Option<Duration>` (`None` = unbounded).
+
 The Ctrl-C row is called out because it is the one place the two launchers
 could silently diverge. Each host reaches a 0 differently: bare Node would
 wedge without a pre-installed listener, while CPython would report 130 unless
