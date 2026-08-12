@@ -1,0 +1,3 @@
+**Fixed**
+
+- **A search that ranks nothing now says why and exits nonzero, instead of printing nothing and exiting 0.** Silent empty output was indistinguishable from "searched and found nothing relevant" — the reported case was running `dirsql-plugin-embeddings 'docs/**/*.md' <query>` from inside `docs/`, where the glob matches nothing. The message names the glob and the directory it searched from (`no files matched 'docs/**/*.md' (searched from /current/dir)`), and distinguishes that from a corpus whose files all matched but had no embeddable text, so it never claims the wrong reason. (#816)

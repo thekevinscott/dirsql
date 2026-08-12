@@ -35,11 +35,13 @@ def describe_run_search():
 
     def it_defaults_the_model_to_none():
         fake_dirsql = MagicMock()
-        fake_dirsql.DirSQL.return_value.query = AsyncMock(return_value=[])
+        fake_dirsql.DirSQL.return_value.query = AsyncMock(
+            return_value=[{"path": "a", "distance": 0.5}]
+        )
         with patch.object(run, "build_search_sql", return_value="SQL") as build:
             with patch.object(run, "dirsql", fake_dirsql):
                 with patch.object(run, "config_fragment", return_value="frag"):
-                    assert run.run_search("g", "q", 5) == []
+                    assert run.run_search("g", "q", 5) == ["a\t0.500000"]
         build.assert_called_once_with("g", "q", 5, None)
 
 

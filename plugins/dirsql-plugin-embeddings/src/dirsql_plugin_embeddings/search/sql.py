@@ -30,3 +30,7 @@ def build_search_sql(glob, query, limit, model=None):
         f" FROM (SELECT path, {inner} AS emb FROM {quote(normalize_glob(glob))})"
         f" ORDER BY distance LIMIT {int(limit):d}"
     )
+
+
+def count_corpus_sql(glob):
+    return f"SELECT COUNT(*) AS n FROM {quote(normalize_glob(glob))}"

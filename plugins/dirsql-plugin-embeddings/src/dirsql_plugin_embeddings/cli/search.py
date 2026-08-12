@@ -1,6 +1,6 @@
 import click
 
-from ..search.run import run_search
+from ..search.run import NothingToRank, run_search
 
 
 @click.command(hidden=True)
@@ -22,5 +22,10 @@ from ..search.run import run_search
 )
 def search(glob, query, limit, model):
     """Rank files matching GLOB by semantic similarity to QUERY."""
-    for line in run_search(glob, query, limit, model):
+    try:
+        lines = run_search(glob, query, limit, model)
+    except NothingToRank as error:
+        click.echo(f"dirsql-plugin-embeddings: {error}", err=True)
+        raise SystemExit(1) from None
+    for line in lines:
         click.echo(line)
