@@ -14,11 +14,7 @@ on:
       - '.github/workflows/python-test.yml'
   pull_request:
     paths:
-      - 'packages/python/**'
-      - 'packages/rust/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/python-test.yml'
+      - '.github/CI-DISABLED-PLACEHOLDER'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

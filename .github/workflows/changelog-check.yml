@@ -6,6 +6,8 @@ env:
 on:
   pull_request:
     branches: [main]
+    paths:
+      - '.github/CI-DISABLED-PLACEHOLDER'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

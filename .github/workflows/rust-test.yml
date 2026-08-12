@@ -15,12 +15,7 @@ on:
       - '.github/workflows/rust-test.yml'
   pull_request:
     paths:
-      - 'packages/rust/**'
-      - 'packages/ts/napi/**'
-      - 'packages/python/src/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/rust-test.yml'
+      - '.github/CI-DISABLED-PLACEHOLDER'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

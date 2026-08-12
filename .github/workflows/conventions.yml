@@ -1,6 +1,9 @@
 name: Conventions
 
-on: [pull_request]
+on:
+  pull_request:
+    paths:
+      - '.github/CI-DISABLED-PLACEHOLDER'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

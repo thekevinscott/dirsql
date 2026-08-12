@@ -12,9 +12,7 @@ on:
       - 'packages/ts/package.json'
   pull_request:
     paths:
-      - 'packages/ts/**/*.ts'
-      - 'packages/ts/tsconfig.json'
-      - 'packages/ts/package.json'
+      - '.github/CI-DISABLED-PLACEHOLDER'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

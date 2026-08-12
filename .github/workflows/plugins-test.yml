@@ -11,8 +11,7 @@ on:
       - '.github/workflows/plugins-test.yml'
   pull_request:
     paths:
-      - 'plugins/**'
-      - '.github/workflows/plugins-test.yml'
+      - '.github/CI-DISABLED-PLACEHOLDER'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

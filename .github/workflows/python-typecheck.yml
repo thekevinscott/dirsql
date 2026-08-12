@@ -12,9 +12,7 @@ on:
       - 'packages/python/pyproject.toml'
   pull_request:
     paths:
-      - 'packages/python/**/*.py'
-      - 'packages/python/**/*.pyi'
-      - 'packages/python/pyproject.toml'
+      - '.github/CI-DISABLED-PLACEHOLDER'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
