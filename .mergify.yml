@@ -7,54 +7,182 @@
 merge_protections_settings:
   post_comment: false
 
+# Each anchored workflow gets its own protection, gated by `if:` on the files
+# it covers. Without the gate, path-filtering a workflow deadlocks the merge
+# gate: a workflow that does not run reports no check, so an unconditional
+# anchor naming it pends forever (#832).
+#
+# INVARIANT: an entry's `if` must never match more PRs than its workflow's
+# `paths:` filter does. Narrower is safe (the workflow runs unanchored);
+# broader deadlocks (the anchor waits on a check that never appears). Where
+# the workflow uses `!` exclusions, the `if` below enumerates directories
+# positively instead -- deliberately narrower.
 merge_protections:
-  - name: All CI green
-    description: >-
-      Aggregate merge gate: nothing failed, nothing is still running, and every
-      unconditionally-triggered workflow actually reported.
+  - name: Nothing failed
+    description: No check on this PR reported a failure.
     if:
       - base = main
     success_conditions:
+      # Blind to a workflow that dies before emitting any check-run (bad YAML,
+      # or a `testing-conventions@v0` input the moving tag no longer defines):
+      # zero check-runs contributed reads as "nothing failed". Also vacuously
+      # true before CI has started. The per-workflow anchors below close both
+      # holes, and are what keep the gate from going green mid-run.
+      #
+      # Do NOT add `#check-pending = 0` here. Mergify counts its own
+      # in-progress check toward that total, so it can never reach zero and the
+      # gate deadlocks (#832).
       - "#check-failure = 0"
 
-      # Do NOT add `#check-pending = 0` here. Mergify counts its own in-progress
-      # check toward that total, so it can never reach zero and the gate
-      # deadlocks: Mergify stays running because the count is non-zero, and the
-      # count is non-zero because Mergify is running.
-      #
-      # The count above is blind to a workflow that dies before emitting any
-      # check-run (bad YAML, or a `testing-conventions@v0` input the moving tag
-      # no longer defines): zero check-runs contributed reads as "nothing
-      # failed". It is also vacuously true in the window before CI has started.
-      # The anchors below close both holes by requiring each always-triggered
-      # workflow to have produced a passing check, which is also what keeps the
-      # gate from going green mid-run.
-      #
-      # Path-filtered workflows are deliberately absent -- one that does not run
-      # reports no status at all, so naming it here would pend forever.
-      #
-      # Anchors match the caller job id, which this repo owns, rather than inner
-      # job names owned by the `@v0` reusable workflows upstream. An upstream
-      # rename must not silently unblock the gate.
-      # Conventions
+  # --- Conventions lanes -----------------------------------------------------
+  # Anchors match the caller job id, which this repo owns, rather than inner job
+  # names owned by the `@v0` reusable workflows upstream. An upstream rename must
+  # not silently unblock the gate. Job ids therefore MUST survive the lane split.
+
+  - name: Conventions python-sdk reported
+    if:
+      - base = main
+      - or:
+          - files ~= ^packages/python/dirsql/
+          - files ~= ^packages/python/pyproject\.toml$
+          - files ~= ^packages/python/e2e-attestations/
+          - files ~= ^packages/rust/
+          - files ~= ^Cargo\.(toml|lock)$
+          - files ~= ^testing-conventions\.toml$
+          - files ~= ^\.github/workflows/conventions-python-sdk\.yml$
+    success_conditions:
       - "check-success ~= ^python-sdk /"
+
+  - name: Conventions typescript-sdk reported
+    if:
+      - base = main
+      - or:
+          - files ~= ^packages/ts/src/
+          - files ~= ^packages/ts/package\.json$
+          - files ~= ^packages/ts/tsconfig.*\.json$
+          - files ~= ^packages/ts/biome\.json$
+          - files ~= ^packages/ts/vitest\.config\.ts$
+          - files ~= ^packages/ts/pnpm-.*\.yaml$
+          - files ~= ^packages/ts/e2e-attestations/
+          - files ~= ^packages/rust/
+          - files ~= ^Cargo\.(toml|lock)$
+          - files ~= ^testing-conventions\.toml$
+          - files ~= ^\.github/workflows/conventions-typescript-sdk\.yml$
+    success_conditions:
       - "check-success ~= ^typescript-sdk /"
+
+  - name: Conventions rust reported
+    if:
+      - base = main
+      - or:
+          - files ~= ^packages/rust/
+          - files ~= ^Cargo\.(toml|lock)$
+          - files ~= ^testing-conventions\.toml$
+          - files ~= ^\.github/workflows/conventions-rust\.yml$
+    success_conditions:
+      # The trailing space in `^rust ` is load-bearing: it stops this matching
+      # `rust-napi-binding / ...` and `rust-python-binding / ...`.
       - "check-success ~= ^rust /"
+
+  - name: Conventions rust-napi-binding reported
+    if:
+      - base = main
+      - or:
+          - files ~= ^packages/ts/napi/
+          - files ~= ^packages/rust/
+          - files ~= ^Cargo\.(toml|lock)$
+          - files ~= ^testing-conventions\.toml$
+          - files ~= ^\.github/workflows/conventions-rust-napi-binding\.yml$
+    success_conditions:
       - "check-success ~= ^rust-napi-binding /"
+
+  - name: Conventions rust-python-binding reported
+    if:
+      - base = main
+      - or:
+          - files ~= ^packages/python/src/
+          - files ~= ^packages/python/Cargo\.toml$
+          - files ~= ^packages/rust/
+          - files ~= ^Cargo\.(toml|lock)$
+          - files ~= ^testing-conventions\.toml$
+          - files ~= ^\.github/workflows/conventions-rust-python-binding\.yml$
+    success_conditions:
       - "check-success ~= ^rust-python-binding /"
+
+  - name: Conventions internals-checks reported
+    if:
+      - base = main
+      - or:
+          - files ~= ^internals/checks/
+          - files ~= ^\.github/workflows/conventions-internals-checks\.yml$
+    success_conditions:
       - "check-success ~= ^internals-checks /"
+
+  - name: Conventions internals-distcheck reported
+    if:
+      - base = main
+      - or:
+          - files ~= ^internals/distcheck/
+          # This lane passes no `config:`, so the reusable workflow's default
+          # applies and the ROOT testing-conventions.toml governs it -- an
+          # unknown key there fails this lane too.
+          - files ~= ^testing-conventions\.toml$
+          - files ~= ^\.github/workflows/conventions-internals-distcheck\.yml$
+    success_conditions:
       - "check-success ~= ^internals-distcheck /"
+
+  - name: Conventions plugins-embeddings reported
+    if:
+      - base = main
+      - or:
+          - files ~= ^plugins/
+          - files ~= ^\.github/workflows/conventions-plugins-embeddings\.yml$
+    success_conditions:
       - "check-success ~= ^plugins-embeddings /"
 
-      # Release Precheck
+  # --- Release Precheck ------------------------------------------------------
+  # Deliberately narrower than the workflow's `packages/**` + exclusions: this
+  # enumerates the shipping subtrees positively, so a fragment-only or
+  # attestation-only PR cannot demand a check that will not run.
+
+  - name: Release Precheck reported
+    if:
+      - base = main
+      - or:
+          - files ~= ^packages/[^/]+/(dirsql|src|napi)/
+          - files ~= ^packages/[^/]+/(pyproject\.toml|Cargo\.toml|package\.json)$
+          - files ~= ^internals/checks/
+          - files ~= ^Cargo\.(toml|lock)$
+          - files ~= ^putitoutthere\.toml$
+          - files ~= ^\.github/workflows/release-precheck\.yml$
+    success_conditions:
       - "check-success ~= ^precheck /"
       - "check-success = Artifact completeness"
 
-      # Release Config Check calls a reusable workflow from its `check` job, so
-      # its checks are `check / <inner>`. Changelog Check runs its `check` job
-      # directly, so its check is the bare name. Both job ids are `check`; the
-      # trailing separator is what tells them apart.
+  # --- Release Config Check / Changelog Check --------------------------------
+  # Release Config Check calls a reusable workflow from its `check` job, so its
+  # checks are `check / <inner>`. Changelog Check runs its `check` job directly,
+  # so its check is the bare name. Both job ids are `check`; the trailing
+  # separator is what tells them apart.
+
+  - name: Release Config Check reported
+    if:
+      - base = main
+      - or:
+          - files ~= ^putitoutthere\.toml$
+          - files ~= ^\.github/workflows/release-config-check\.yml$
+    success_conditions:
       - "check-success ~= ^check /"
+
+  - name: Changelog Check reported
+    if:
+      - base = main
+      - or:
+          - files ~= ^packages/[^/]+/(dirsql|src|napi|tests|changelog\.d|migrations\.d)/
+          - files ~= ^packages/[^/]+/(pyproject\.toml|Cargo\.toml|package\.json)$
+          - files ~= ^internals/checks/
+          - files ~= ^\.github/workflows/changelog-check\.yml$
+    success_conditions:
       - "check-success = check"
 
 pull_request_rules:
