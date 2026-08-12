@@ -35,6 +35,7 @@ uvx --with dirsql-plugin-embeddings dirsql "
   SELECT path
   FROM (SELECT path, embed(content ->> 'abstract') AS emb
         FROM './arxiv-firehose/data/**/metadata.json')
+  WHERE emb IS NOT NULL
   ORDER BY vec_distance_cosine(emb, embed('local private models'))
   LIMIT 10"
 ```

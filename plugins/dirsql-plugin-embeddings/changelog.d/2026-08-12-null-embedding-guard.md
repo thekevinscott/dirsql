@@ -1,0 +1,3 @@
+**Fixed**
+
+- **Files that cannot be embedded no longer take the top of the ranking (and no longer break the search).** A matched file that is unreadable, not valid UTF-8, or deleted mid-scan has NULL `content`, so `embed(content)` is NULL — and SQLite sorts NULLs *first* ascending, so those files occupied the top-k slots before anything else went wrong. The generated search SQL now carries `WHERE emb IS NOT NULL`, which fixes the ranking and the failure it led to (a `TypeError` formatting a NULL distance, or, depending on the sqlite-vec build, `Error reading 1st vector: ... found NULL` from SQLite itself). The documented hand-written idiom carries the same guard. (#817)

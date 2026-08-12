@@ -48,6 +48,7 @@ def describe_build_search_sql():
             "SELECT path,"
             " vec_distance_cosine(emb, embed('local models')) AS distance"
             " FROM (SELECT path, embed(content) AS emb FROM './docs/**/*.md')"
+            " WHERE emb IS NOT NULL"
             " ORDER BY distance LIMIT 10"
         )
 
@@ -57,8 +58,17 @@ def describe_build_search_sql():
             " vec_distance_cosine(emb, embed('q', 'my/model')) AS distance"
             " FROM (SELECT path, embed(content, 'my/model') AS emb"
             " FROM './docs/**/*.md')"
+            " WHERE emb IS NOT NULL"
             " ORDER BY distance LIMIT 3"
         )
+
+    def it_drops_rows_whose_embedding_is_null():
+        # A file that is unreadable or not valid UTF-8 has NULL content, so
+        # embed() returns NULL and vec_distance_cosine() does too. SQLite
+        # sorts NULLs first ascending, so without this guard those files take
+        # the top-k slots and then break the distance formatting.
+        built = sql.build_search_sql("./docs/**/*.md", "q", 10)
+        assert " WHERE emb IS NOT NULL ORDER BY distance" in built
 
     def it_normalizes_a_bare_glob_into_the_from_clause():
         built = sql.build_search_sql("docs/**/*.md", "q", 10)

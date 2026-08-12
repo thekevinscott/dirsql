@@ -51,6 +51,7 @@ uvx --with dirsql-plugin-embeddings dirsql "
   SELECT path,
          vec_distance_cosine(emb, embed('how do I cook pasta?')) AS distance
   FROM (SELECT path, embed(content) AS emb FROM './notes/*.md')
+  WHERE emb IS NOT NULL
   ORDER BY distance
   LIMIT 3"
 ```
@@ -72,7 +73,12 @@ Reading the query inside-out:
    the one-liner normalizes a bare glob for you.
 2. `embed('how do I cook pasta?')` embeds the question once (the function is
    deterministic, so SQLite reuses the value across rows).
-3. `vec_distance_cosine(...)` computes cosine distance between the two
+3. `WHERE emb IS NOT NULL` drops the files that could not be embedded. A
+   file that is unreadable or not valid UTF-8 has
+   [`NULL` content](../reference/path-tables.md#columns), so its embedding
+   and its distance are NULL too — and SQLite sorts NULLs *first* ascending,
+   so without this line the unrankable files take the top-k slots.
+4. `vec_distance_cosine(...)` computes cosine distance between the two
    vectors; `ORDER BY distance LIMIT 3` keeps the three nearest.
 
 Structured files compose with SQL's JSON operators — embed one field instead
@@ -82,6 +88,7 @@ of the whole file:
 SELECT path
 FROM (SELECT path, embed(content ->> 'abstract') AS emb
       FROM './papers/**/metadata.json')
+WHERE emb IS NOT NULL
 ORDER BY vec_distance_cosine(emb, embed('local private models'))
 LIMIT 10
 ```
