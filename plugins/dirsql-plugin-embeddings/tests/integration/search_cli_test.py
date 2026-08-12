@@ -137,3 +137,25 @@ def describe_argument_errors():
         commands_block = result.output.split("Commands:")[1]
         assert "worker" in commands_block
         assert "search" not in commands_block
+
+
+def describe_empty_corpus():
+    def it_exits_nonzero_naming_the_glob_when_nothing_matched():
+        with patch("dirsql.DirSQL") as dirsql_class:
+            dirsql_class.return_value.query = AsyncMock(
+                side_effect=[[], [{"n": 0}]]
+            )
+            result = invoke(["docs/**/*.md", "local models"])
+        assert result.exit_code == 1, result.output
+        assert "no files matched 'docs/**/*.md'" in result.output
+        assert "Traceback" not in result.output
+
+    def it_says_files_matched_but_none_embedded_when_the_corpus_is_unreadable():
+        with patch("dirsql.DirSQL") as dirsql_class:
+            dirsql_class.return_value.query = AsyncMock(
+                side_effect=[[], [{"n": 2}]]
+            )
+            result = invoke(["docs/**/*.md", "local models"])
+        assert result.exit_code == 1, result.output
+        assert "2" in result.output
+        assert "no files matched" not in result.output

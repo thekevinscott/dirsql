@@ -80,6 +80,24 @@ def describe_search_cli():
         assert len(lines) == 1
         assert os.path.basename(lines[0].split("\t")[0]) == "planet.txt"
 
+    def it_fails_loudly_when_the_glob_matches_no_files(
+        tree, tiny_model, cache_home
+    ):
+        """Silent empty output is indistinguishable from "searched and found
+        nothing relevant" (#816). A glob that matches nothing is a mistake the
+        user can fix, so say so and exit nonzero."""
+        result = _search(
+            ["./nowhere/*.txt", "world", "--model", tiny_model],
+            tree,
+            cache_home,
+        )
+
+        assert result.returncode != 0, f"stdout={result.stdout!r}"
+        assert result.stdout == ""
+        assert "no files matched './nowhere/*.txt'" in result.stderr
+        assert str(tree) in result.stderr, "the message names where it looked"
+        assert "Traceback" not in result.stderr
+
     def it_errors_actionably_when_the_query_is_missing(tree, cache_home):
         result = _search(["./notes/*.txt"], tree, cache_home)
         assert result.returncode == 2
