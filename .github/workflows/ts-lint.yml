@@ -11,12 +11,14 @@ on:
       - 'packages/ts/**/*.js'
       - 'packages/ts/biome.json'
       - 'packages/ts/package.json'
+      - '.github/workflows/ts-lint.yml'
   pull_request:
     paths:
       - 'packages/ts/**/*.ts'
       - 'packages/ts/**/*.js'
       - 'packages/ts/biome.json'
       - 'packages/ts/package.json'
+      - '.github/workflows/ts-lint.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
