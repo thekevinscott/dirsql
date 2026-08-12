@@ -92,3 +92,4 @@ receives values, not paths, and writes nothing anywhere else.
   — the guide to both invocation styles.
 - [`[[dirsql.function]]`](https://thekevinscott.github.io/dirsql/reference/config#dirsql-function)
   — the core mechanism `embed()` is built on.
+
