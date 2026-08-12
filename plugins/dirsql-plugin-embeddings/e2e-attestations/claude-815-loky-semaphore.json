@@ -1,0 +1,7 @@
+{
+  "command": "uv run --with-editable ../../packages/python --with-editable . python -m pytest tests/e2e -q",
+  "ran_at": 1786559931,
+  "exit_code": 0,
+  "commit": "b63619a59bf6138234daa5c08d2e29981729642d",
+  "branch": "claude/815-loky-semaphore"
+}

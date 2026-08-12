@@ -22,10 +22,12 @@ def describe_configure():
     def it_silences_hf_hub_progress_when_stderr_is_not_a_tty():
         with patch.object(progress, "stderr_is_tty", return_value=False):
             with patch.dict(progress.os.environ, clear=True):
-                progress.configure()
-                assert (
-                    progress.os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] == "1"
-                )
+                with patch.object(progress, "tqdm", MagicMock()):
+                    progress.configure()
+                    assert (
+                        progress.os.environ["HF_HUB_DISABLE_PROGRESS_BARS"]
+                        == "1"
+                    )
 
     def it_keeps_an_explicit_user_setting():
         with patch.object(progress, "stderr_is_tty", return_value=False):
@@ -34,15 +36,37 @@ def describe_configure():
                 {"HF_HUB_DISABLE_PROGRESS_BARS": "0"},
                 clear=True,
             ):
-                progress.configure()
-                assert (
-                    progress.os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] == "0"
-                )
+                with patch.object(progress, "tqdm", MagicMock()):
+                    progress.configure()
+                    assert (
+                        progress.os.environ["HF_HUB_DISABLE_PROGRESS_BARS"]
+                        == "0"
+                    )
 
     def it_leaves_the_environment_alone_when_stderr_is_a_tty():
         with patch.object(progress, "stderr_is_tty", return_value=True):
             with patch.dict(progress.os.environ, clear=True):
-                progress.configure()
-                assert (
-                    "HF_HUB_DISABLE_PROGRESS_BARS" not in progress.os.environ
-                )
+                with patch.object(progress, "tqdm", MagicMock()):
+                    progress.configure()
+                    assert (
+                        "HF_HUB_DISABLE_PROGRESS_BARS"
+                        not in progress.os.environ
+                    )
+
+    def it_installs_a_process_local_tqdm_write_lock():
+        fake_tqdm = MagicMock()
+        with patch.object(progress, "stderr_is_tty", return_value=True):
+            with patch.dict(progress.os.environ, clear=True):
+                with patch.object(progress, "tqdm", fake_tqdm):
+                    progress.configure()
+        fake_tqdm.set_lock.assert_called_once()
+        (lock,) = fake_tqdm.set_lock.call_args.args
+        assert isinstance(lock, type(progress.threading.RLock()))
+
+    def it_installs_the_lock_when_stderr_is_not_a_tty_too():
+        fake_tqdm = MagicMock()
+        with patch.object(progress, "stderr_is_tty", return_value=False):
+            with patch.dict(progress.os.environ, clear=True):
+                with patch.object(progress, "tqdm", fake_tqdm):
+                    progress.configure()
+        fake_tqdm.set_lock.assert_called_once()
