@@ -1,0 +1,7 @@
+{
+  "command": "uv run --with-editable ../../packages/python python -m pytest tests/e2e/ -x -q",
+  "ran_at": 1786558054,
+  "exit_code": 0,
+  "commit": "f1af2bf7bf4c21dd62350b48b4d441356047ef59",
+  "branch": "claude/817-null-embedding-guard"
+}
