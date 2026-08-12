@@ -47,6 +47,17 @@ def describe_worker_cli():
         assert code == 0
         assert stderr == ""
 
+    def it_leaks_no_semaphore_when_torn_down_by_kill(spawn_worker, tiny_model):
+        # dirsql's core tears the worker transport down with a kill, not a
+        # graceful stdin close; nothing the worker allocated may depend on
+        # interpreter shutdown to avoid a resource-tracker complaint.
+        worker = spawn_worker(argv=worker_argv())
+        worker.request("hello", tiny_model)
+        worker.process.kill()
+        worker.process.wait(timeout=30)
+        stderr = worker.process.stderr.read()
+        assert "leaked semaphore" not in stderr
+
     def it_errors_actionably_about_the_missing_glob_when_run_bare(spawn_worker):
         script = shutil.which("dirsql-plugin-embeddings")
         assert script

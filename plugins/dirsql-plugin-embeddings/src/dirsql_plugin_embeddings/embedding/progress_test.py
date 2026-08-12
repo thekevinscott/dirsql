@@ -46,3 +46,21 @@ def describe_configure():
                 assert (
                     "HF_HUB_DISABLE_PROGRESS_BARS" not in progress.os.environ
                 )
+
+    def it_installs_a_process_local_tqdm_write_lock():
+        fake_tqdm = MagicMock()
+        with patch.object(progress, "stderr_is_tty", return_value=True):
+            with patch.dict(progress.os.environ, clear=True):
+                with patch.object(progress, "tqdm", fake_tqdm):
+                    progress.configure()
+        fake_tqdm.set_lock.assert_called_once()
+        (lock,) = fake_tqdm.set_lock.call_args.args
+        assert isinstance(lock, type(progress.threading.RLock()))
+
+    def it_installs_the_lock_when_stderr_is_not_a_tty_too():
+        fake_tqdm = MagicMock()
+        with patch.object(progress, "stderr_is_tty", return_value=False):
+            with patch.dict(progress.os.environ, clear=True):
+                with patch.object(progress, "tqdm", fake_tqdm):
+                    progress.configure()
+        fake_tqdm.set_lock.assert_called_once()
