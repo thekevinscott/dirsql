@@ -1,0 +1,35 @@
+name: Internals checks CI
+
+# Verification for the internals/checks uv package (the dirsql-checks CLI).
+# Deliberately does NOT fan out to this package's consumers (changelog-check,
+# the release prechecks): the lane's own 100%-floor unit suite and mutation
+# gate are the guard; a consumer run for every helper edit is not.
+on:
+  pull_request:
+    paths:
+      - 'internals/checks/src/**'
+      - 'internals/checks/tests/**'
+      - 'internals/checks/pyproject.toml'
+      # Gate config and attestation receipts feed the lane: an unknown config
+      # key fails every gate, and e2e-verify walks the receipts for freshness.
+      - 'internals/checks/testing-conventions.toml'
+      - 'internals/checks/e2e-attestations/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Job id kept from the conventions.yml lane: check-runs surface as
+  # `internals-checks / <gate>`.
+  internals-checks:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["python"]'
+      source: internals/checks/src
+      config: internals/checks/testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["colocated-test", "unit-lint", "integration-lint", "unit-coverage", "mutation", "e2e-verify"]'
