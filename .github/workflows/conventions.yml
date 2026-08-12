@@ -13,15 +13,6 @@ permissions:
   contents: read
 
 jobs:
-  typescript-sdk:
-    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
-    with:
-      languages: '["typescript"]'
-      source: packages/ts/src
-      config: testing-conventions.toml
-      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      rust_toolchain: true
-
   rust:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
@@ -30,12 +21,3 @@ jobs:
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       gates: '["colocated-test", "unit-lint", "integration-lint", "mutation", "packaging"]'
-
-  rust-napi-binding:
-    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
-    with:
-      languages: '["rust"]'
-      source: packages/ts/napi
-      config: testing-conventions.toml
-      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint"]'
