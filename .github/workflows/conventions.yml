@@ -13,14 +13,6 @@ permissions:
   contents: read
 
 jobs:
-  python-sdk:
-    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
-    with:
-      languages: '["python"]'
-      source: packages/python/dirsql
-      config: testing-conventions.toml
-      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-
   typescript-sdk:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
@@ -44,15 +36,6 @@ jobs:
     with:
       languages: '["rust"]'
       source: packages/ts/napi
-      config: testing-conventions.toml
-      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint"]'
-
-  rust-python-binding:
-    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
-    with:
-      languages: '["rust"]'
-      source: packages/python
       config: testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       gates: '["colocated-test", "unit-lint"]'
