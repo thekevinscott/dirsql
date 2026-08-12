@@ -1,8 +1,15 @@
-name: Rust Test
+name: dirsql Rust CI
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
+# All PR verification for the Rust core (packages/rust): unit + integration
+# tests, the bespoke nightly coverage job, clippy/fmt lint, and the
+# testing-conventions gate suite. Merged from rust-test.yml and the
+# conventions.yml `rust` lane so one paths filter governs the whole set.
+#
+# The binding crates fan in (packages/ts/napi, packages/python/src): they are
+# cargo workspace members, so the workspace-wide unit/lint jobs compile them.
+# The root testing-conventions.toml carries this lane's config and the
+# [rust.coverage] floors the coverage job reads.
+# No self-path on pull_request, per the #834 stack convention.
 on:
   push:
     branches: [main]
@@ -12,16 +19,39 @@ on:
       - 'packages/python/src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - '.github/workflows/rust-test.yml'
+      - 'testing-conventions.toml'
+      - '.github/workflows/dirsql-rust-ci.yml'
   pull_request:
     paths:
-      - '.github/CI-DISABLED-PLACEHOLDER'
+      - 'packages/rust/**'
+      - '!packages/rust/changelog.d/**'
+      - '!packages/rust/migrations.d/**'
+      - '!packages/rust/README.md'
+      - 'packages/ts/napi/**'
+      - 'packages/python/src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'testing-conventions.toml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
+  # Job id `rust` kept from its conventions.yml lane so check-run names are
+  # unchanged.
+  rust:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["rust"]'
+      source: packages/rust
+      config: testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["colocated-test", "unit-lint", "integration-lint", "mutation", "packaging"]'
+
   unit:
     name: Unit tests
     runs-on: ubuntu-latest
