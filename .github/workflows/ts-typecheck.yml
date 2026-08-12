@@ -8,13 +8,15 @@ on:
     branches: [main]
     paths:
       - 'packages/ts/**/*.ts'
-      - 'packages/ts/tsconfig.json'
+      - 'packages/ts/tsconfig*.json'
       - 'packages/ts/package.json'
+      - '.github/workflows/ts-typecheck.yml'
   pull_request:
     paths:
       - 'packages/ts/**/*.ts'
-      - 'packages/ts/tsconfig.json'
+      - 'packages/ts/tsconfig*.json'
       - 'packages/ts/package.json'
+      - '.github/workflows/ts-typecheck.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
