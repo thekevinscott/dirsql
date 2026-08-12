@@ -1,0 +1,7 @@
+{
+  "command": "uv run --with-editable ../../packages/python python -m pytest tests/e2e/ -x -q",
+  "ran_at": 1786552638,
+  "exit_code": 0,
+  "commit": "8da2287441b50991e2b619f30f814fc463ea81b5",
+  "branch": "claude/816-empty-corpus-error"
+}
