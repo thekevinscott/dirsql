@@ -6,6 +6,7 @@ use thiserror::Error;
 use crate::parsed_vtab;
 use crate::path_table::{self, PathTable, Resolution};
 use crate::scanner;
+use crate::sql_literal::{quote_identifier, quote_literal};
 use crate::vtab;
 
 /// The user's home directory, if the platform reports one. Injected here so
@@ -94,15 +95,6 @@ fn no_home_path_table(name: &str) -> String {
 }
 
 /// Wrap `s` as a SQL string literal.
-fn quote_literal(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
-}
-
-/// Wrap `s` as a double-quoted SQL identifier.
-fn quote_identifier(s: &str) -> String {
-    format!("\"{}\"", s.replace('"', "\"\""))
-}
-
 /// The DDL that mints a path-table.
 ///
 /// It lands in `temp`, which is per-connection and never written to the
@@ -2172,16 +2164,6 @@ mod tests {
             default_path_table_ignore(),
             vec!["**/node_modules/**".to_string(), "**/.git/**".to_string()]
         );
-    }
-
-    #[test]
-    fn quote_literal_doubles_embedded_quotes() {
-        assert_eq!(quote_literal("it's"), "'it''s'");
-    }
-
-    #[test]
-    fn quote_identifier_doubles_embedded_quotes() {
-        assert_eq!(quote_identifier("a\"b"), "\"a\"\"b\"");
     }
 
     fn docs_path_table() -> PathTable {

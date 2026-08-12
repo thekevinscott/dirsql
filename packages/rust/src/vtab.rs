@@ -13,6 +13,7 @@ use crate::compute_stat_virtuals;
 use crate::matcher::TableMatcher;
 use crate::path_table;
 use crate::scanner::{self, scan_glob};
+use crate::sql_literal::unquote;
 use crate::{Row, Value};
 
 /// SQL module name a path-table is created with:
@@ -56,18 +57,6 @@ fn column_type(column: &str) -> &'static str {
 /// SQLite reports it against the `CREATE VIRTUAL TABLE` statement.
 fn compile_glob(pattern: &str) -> Result<GlobSet> {
     scanner::compile_glob(pattern).map_err(|e| Error::ModuleError(e.to_string()))
-}
-
-/// Strip one layer of SQL string quoting from a `CREATE VIRTUAL TABLE`
-/// argument. SQLite hands module arguments through verbatim, quotes included.
-fn unquote(arg: &str) -> &str {
-    let trimmed = arg.trim();
-    for quote in ['\'', '"'] {
-        if trimmed.len() >= 2 && trimmed.starts_with(quote) && trimmed.ends_with(quote) {
-            return &trimmed[1..trimmed.len() - 1];
-        }
-    }
-    trimmed
 }
 
 /// Read `path` as text, yielding `None` when it is unreadable or not valid
@@ -374,36 +363,6 @@ mod tests {
     #[test]
     fn module_name_is_stable() {
         assert_eq!(MODULE_NAME, "dirsql_path");
-    }
-
-    #[test]
-    fn unquote_strips_single_quotes() {
-        assert_eq!(unquote("'./docs'"), "./docs");
-    }
-
-    #[test]
-    fn unquote_strips_double_quotes() {
-        assert_eq!(unquote("\"./docs\""), "./docs");
-    }
-
-    #[test]
-    fn unquote_trims_surrounding_whitespace() {
-        assert_eq!(unquote("  './docs'  "), "./docs");
-    }
-
-    #[test]
-    fn unquote_leaves_unquoted_arguments_alone() {
-        assert_eq!(unquote("./docs"), "./docs");
-    }
-
-    #[test]
-    fn unquote_leaves_a_lone_quote_alone() {
-        assert_eq!(unquote("'"), "'");
-    }
-
-    #[test]
-    fn unquote_leaves_mismatched_quotes_alone() {
-        assert_eq!(unquote("'./docs\""), "'./docs\"");
     }
 
     #[test]
