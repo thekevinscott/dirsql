@@ -13,9 +13,14 @@ uvx --with dirsql-plugin-embeddings dirsql "
   SELECT path
   FROM (SELECT path, embed(content ->> 'abstract') AS emb
         FROM './arxiv-firehose/data/**/metadata.json')
+  WHERE emb IS NOT NULL
   ORDER BY vec_distance_cosine(emb, embed('local private models'))
   LIMIT 10"
 ```
+
+`WHERE emb IS NOT NULL` is not optional bookkeeping: a file that is unreadable
+or not valid UTF-8 has NULL content, so its distance is NULL, and SQLite sorts
+NULLs *first* ascending — without the guard those files take the top slots.
 
 For the common case — one glob, one question, top-k paths — the package is
 also its own command, generating and running exactly that SQL:
