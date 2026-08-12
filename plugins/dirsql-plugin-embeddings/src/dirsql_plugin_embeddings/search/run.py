@@ -32,8 +32,10 @@ async def _search(glob, query, limit, model):
         return rows, None
     # Only now, on the error path, is the second scan worth its cost: it is
     # what tells "no files matched" apart from "matched, none embeddable".
-    counted = await db.query(count_corpus_sql(glob))
-    return rows, counted[0]["n"]
+    # One row, always: `SELECT COUNT(*)` cannot return anything else, and
+    # unpacking says so rather than trusting an index.
+    (counted,) = await db.query(count_corpus_sql(glob))
+    return rows, counted["n"]
 
 
 def run_search(glob, query, limit, model=None):
