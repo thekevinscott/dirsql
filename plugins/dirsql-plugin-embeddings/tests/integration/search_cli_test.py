@@ -29,6 +29,21 @@ def dirsql_class():
         yield dirsql_class
 
 
+@pytest.fixture
+def ranking_nothing():
+    """The SDK with a ranking that returns no rows; the test picks how many
+    files the corpus count then reports, which is what decides the reason."""
+    with patch("dirsql.DirSQL") as dirsql_class:
+
+        def with_corpus_of(matched):
+            dirsql_class.return_value.query = AsyncMock(
+                side_effect=[[], [{"n": matched}]]
+            )
+            return dirsql_class
+
+        yield with_corpus_of
+
+
 def invoke(args):
     return CliRunner().invoke(main, args)
 
@@ -137,3 +152,21 @@ def describe_argument_errors():
         commands_block = result.output.split("Commands:")[1]
         assert "worker" in commands_block
         assert "search" not in commands_block
+
+
+def describe_empty_corpus():
+    def it_exits_nonzero_naming_the_glob_when_nothing_matched(ranking_nothing):
+        ranking_nothing(0)
+        result = invoke(["docs/**/*.md", "local models"])
+        assert result.exit_code == 1, result.output
+        assert "no files matched 'docs/**/*.md'" in result.output
+        assert "Traceback" not in result.output
+
+    def it_says_files_matched_but_none_embedded_when_the_corpus_is_unreadable(
+        ranking_nothing,
+    ):
+        ranking_nothing(2)
+        result = invoke(["docs/**/*.md", "local models"])
+        assert result.exit_code == 1, result.output
+        assert "2" in result.output
+        assert "no files matched" not in result.output

@@ -50,3 +50,35 @@ def describe_search_command():
             with patch.object(search, "click", MagicMock()):
                 search.search.callback("g", "q", 3, "my/model")
         run.assert_called_once_with("g", "q", 3, "my/model")
+
+
+def describe_nothing_to_rank():
+    def it_reports_the_reason_on_stderr_and_exits_nonzero():
+        fake_click = MagicMock()
+        error = search.NothingToRank("no files matched 'g/**'")
+        with patch.object(search, "run_search", side_effect=error):
+            with patch.object(search, "click", fake_click):
+                try:
+                    search.search.callback("g/**", "hello", 10, None)
+                except SystemExit as exit_:
+                    code = exit_.code
+                else:
+                    raise AssertionError("an empty search must not exit 0")
+        assert code == 1
+        (message,), kwargs = fake_click.echo.call_args
+        assert kwargs == {"err": True}, "the reason belongs on stderr"
+        assert message == (
+            "dirsql-plugin-embeddings: no files matched 'g/**'"
+        )
+
+    def it_prints_no_result_lines():
+        fake_click = MagicMock()
+        with patch.object(
+            search, "run_search", side_effect=search.NothingToRank("nope")
+        ):
+            with patch.object(search, "click", fake_click):
+                try:
+                    search.search.callback("g", "q", 10, None)
+                except SystemExit:
+                    pass
+        assert fake_click.echo.call_count == 1

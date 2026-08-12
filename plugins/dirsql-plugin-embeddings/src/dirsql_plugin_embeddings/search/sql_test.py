@@ -74,3 +74,16 @@ def describe_build_search_sql():
 
     def it_coerces_the_limit_to_a_decimal_integer():
         assert sql.build_search_sql("g", "q", "12").endswith("LIMIT 12")
+
+
+def describe_count_corpus_sql():
+    def it_counts_the_files_the_glob_matches():
+        assert sql.count_corpus_sql("./docs/**/*.md") == (
+            "SELECT COUNT(*) AS n FROM './docs/**/*.md'"
+        )
+
+    def it_normalizes_a_bare_glob():
+        assert "FROM './docs/**/*.md'" in sql.count_corpus_sql("docs/**/*.md")
+
+    def it_escapes_quotes_in_the_glob():
+        assert "FROM './it''s/**'" in sql.count_corpus_sql("it's/**")
