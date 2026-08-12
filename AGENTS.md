@@ -257,15 +257,24 @@ Run `cargo bench -p dirsql` after significant changes to the Rust codebase. Not 
 
 ### PR Monitoring
 
-Merge gating is via **pr-monitor** (`thekevinscott/pr-monitor@v1`, `.github/workflows/pr-monitor.yml`): the **`CI Gate`** check is an *aggregator*, not a test — it polls every *other* workflow run on the PR and is the single check the merge waits on. Any red among the others turns `CI Gate` red; there is no named-required-checks allowlist in branch protection, so *any* CI/workflow change (renaming/adding/removing a job or check in any `.github/workflows/*.yml`) needs no branch-protection coordination and can't orphan a required check — don't flag that concern.
+Merge gating is via **Mergify** (`.mergify.yml`, the **`Mergify Merge Protections`** check). It is an *aggregator*, not a test: `#check-failure = 0` plus `#check-pending = 0` mean nothing is red and nothing is still running, so a green `Mergify Merge Protections` means the whole PR is green. There is no named-required-checks allowlist in branch protection, so adding/renaming/removing a job in a *path-filtered* workflow needs no branch-protection coordination and can't orphan a required check — don't flag that concern.
 
-**When `CI Gate` is red, read its log's last line before acting** — it disambiguates two very different causes:
+**Mergify reads `.mergify.yml` from `main` only.** Editing it on a feature branch changes nothing until that PR merges; the config gating your PR is the one already on `main`.
 
-- `Non-passing runs: ["<Workflow> (failure | startup_failure)"]` → a **real** red in `<Workflow>`; `CI Gate` is only reporting it. A `startup_failure` produces *no separate check-run*, so `CI Gate` can look like the **only** red while masking the actual failure (e.g. a `conventions.yml` input the `@v0` tag no longer defines). Fix/re-run **that** workflow — re-triggering `CI Gate` alone won't help.
-- a **timeout** (it waits up to 20 min for slow jobs like Release Precheck) or "still in progress" → *usually* a flake. **Re-trigger `CI Gate`** (re-run the PR Monitor run, or push any commit) once the underlying jobs have finished; it then reads them green. This is the common "`CI Gate` is the lone red → re-run → all green" case.
-  **But check the named job is actually progressing before you re-run.** A *hung* job is indistinguishable from a slow one here — `CI Gate` reports both as `Still in progress: ["<Workflow>"]` — and re-triggering a hang just reproduces it. Open the run and look at the job's current *step*: a slow job advances, a hung one sits in one step (and its sibling jobs finish in seconds). Cancel a hung run rather than letting it burn its timeout, then fix the cause. Learned on #727, where a test awaited an event that a behavior change meant would never arrive: three jobs sat in one step for 35+ minutes and the timeout was read as flake twice before anyone looked at the steps.
+**The anchor conditions are the part you can break.** Those two counts are blind to a workflow that *startup-fails*, because one that dies before emitting a check-run contributes zero check-runs — "nothing failed, nothing pending" is then vacuously true. `success_conditions` therefore names one anchor per **unconditionally-triggered** workflow (`Conventions`, `Release Precheck`, `Release Config Check`, `Changelog Check`), matching the caller job id this repo owns rather than inner job names owned by the `@v0` reusable workflows upstream. Two consequences:
 
-A green `CI Gate` therefore means the whole PR is green.
+- **Renaming a caller job id** in `conventions.yml` or either release workflow **requires the matching `.mergify.yml` edit in the same PR.** Miss it and the gate pends forever.
+- **Never anchor a path-filtered workflow.** One that doesn't run reports no status at all, so a condition naming it could never be satisfied.
+
+**When the gate is red or stuck, read the Mergify check's summary** — it lists which conditions are unmet:
+
+- a named check under `#check-failure` → a **real** red; fix that workflow.
+- an unmet **anchor** while everything visible is green → that workflow produced no check at all. Almost always a `startup_failure` (e.g. a `conventions.yml` input the `@v0` moving tag no longer defines) or a caller job id renamed without updating `.mergify.yml`. There is no check-run to click through, so open the workflow's run list directly.
+- `#check-pending` never reaching 0 → a job is hung, not slow. Open the run and look at the job's current *step*: a slow job advances, a hung one sits in one step while its siblings finish in seconds. Cancel it rather than letting it burn its timeout. Learned on #727, where a test awaited an event that a behavior change meant would never arrive: three jobs sat in one step for 35+ minutes and it was read as flake twice before anyone looked at the steps.
+
+**Flaky jobs are Mergify's job now.** CI Insights tracks per-job history (two conclusions on the same SHA = flaky) and auto-retry re-runs matching workflows, so the old "re-trigger the gate and it goes green" ritual is gone — if a job is genuinely flaky, fix or quarantine it rather than leaning on the retry.
+
+**Auto-merge is opt-in per PR:** label it `auto-merge` and Mergify merges once the PR is approved and every check is green.
 
 When monitoring PRs to get them across the finish line (shepherding to green):
 

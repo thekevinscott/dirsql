@@ -1,0 +1,59 @@
+# Mergify reads this file from the default branch only. Edits on a feature
+# branch are inert until they land on main.
+
+merge_protections:
+  - name: All CI green
+    description: >-
+      Aggregate merge gate: nothing failed, nothing is still running, and every
+      unconditionally-triggered workflow actually reported.
+    if:
+      - base = main
+    success_conditions:
+      - "#check-failure = 0"
+      - "#check-pending = 0"
+
+      # The two counts above are blind to a workflow that dies before emitting
+      # any check-run (bad YAML, or a `testing-conventions@v0` input the moving
+      # tag no longer defines): zero check-runs contributed reads as "nothing
+      # failed, nothing pending". They are also vacuously true in the window
+      # before CI has started. The anchors below close both holes by requiring
+      # each always-triggered workflow to have produced a passing check.
+      #
+      # Path-filtered workflows are deliberately absent -- one that does not run
+      # reports no status at all, so naming it here would pend forever.
+      #
+      # Anchors match the caller job id, which this repo owns, rather than inner
+      # job names owned by the `@v0` reusable workflows upstream. An upstream
+      # rename must not silently unblock the gate.
+      # Conventions
+      - "check-success ~= ^python-sdk /"
+      - "check-success ~= ^typescript-sdk /"
+      - "check-success ~= ^rust /"
+      - "check-success ~= ^rust-napi-binding /"
+      - "check-success ~= ^rust-python-binding /"
+      - "check-success ~= ^internals-checks /"
+      - "check-success ~= ^internals-distcheck /"
+      - "check-success ~= ^plugins-embeddings /"
+
+      # Release Precheck
+      - "check-success ~= ^precheck /"
+      - "check-success = Artifact completeness"
+
+      # Release Config Check calls a reusable workflow from its `check` job, so
+      # its checks are `check / <inner>`. Changelog Check runs its `check` job
+      # directly, so its check is the bare name. Both job ids are `check`; the
+      # trailing separator is what tells them apart.
+      - "check-success ~= ^check /"
+      - "check-success = check"
+
+pull_request_rules:
+  - name: Auto-merge labelled PRs once every check is green
+    conditions:
+      - base = main
+      - label = auto-merge
+      - "#approved-reviews-by >= 1"
+      - "#check-failure = 0"
+      - "#check-pending = 0"
+    actions:
+      merge:
+        method: merge
