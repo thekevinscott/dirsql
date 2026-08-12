@@ -98,6 +98,31 @@ def describe_search_cli():
         assert str(tree) in result.stderr, "the message names where it looked"
         assert "Traceback" not in result.stderr
 
+    def it_skips_files_whose_content_cannot_be_embedded(
+        tree, tiny_model, cache_home
+    ):
+        """A dirty corpus: a file that is not valid UTF-8 has NULL content, so
+        its embedding and distance are NULL. Without a guard SQLite sorts
+        those NULLs into the top-k slots and the distance formatting breaks
+        (#817); the file must simply not be ranked."""
+        (tree / "notes" / "binary.txt").write_bytes(b"\xff\xfe\x00garbage")
+
+        result = _search(
+            ["./notes/*.txt", "world", "--model", tiny_model], tree, cache_home
+        )
+
+        assert result.returncode == 0, (
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert "Traceback" not in result.stderr
+        lines = result.stdout.splitlines()
+        paths = [os.path.basename(line.split("\t")[0]) for line in lines]
+        assert paths == ["planet.txt", "greeting.txt"], (
+            f"the unreadable file must not be ranked: {result.stdout!r}"
+        )
+        distances = [float(line.split("\t")[1]) for line in lines]
+        assert distances == sorted(distances)
+
     def it_errors_actionably_when_the_query_is_missing(tree, cache_home):
         result = _search(["./notes/*.txt"], tree, cache_home)
         assert result.returncode == 2

@@ -60,6 +60,7 @@ def describe_default_command():
             "SELECT path,"
             " vec_distance_cosine(emb, embed('local models')) AS distance"
             " FROM (SELECT path, embed(content) AS emb FROM './docs/**/*.md')"
+            " WHERE emb IS NOT NULL"
             " ORDER BY distance LIMIT 10"
         )
 
@@ -87,6 +88,7 @@ def describe_default_command():
             " AS distance"
             " FROM (SELECT path, embed(content, 'my/model') AS emb"
             " FROM './docs/**/*.md')"
+            " WHERE emb IS NOT NULL"
             " ORDER BY distance LIMIT 10"
         )
 
