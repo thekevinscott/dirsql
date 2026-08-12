@@ -1,7 +1,7 @@
 {
   "command": "uv run --with-editable ../../packages/python python -m pytest tests/e2e/ -x -q",
-  "ran_at": 1786552257,
+  "ran_at": 1786552300,
   "exit_code": 0,
-  "commit": "23a8521666615b2bcc56e09c2b47c96ad10767a0",
+  "commit": "b1fc5a6a475a8f93eab7a3a652b5c982269768a8",
   "branch": "claude/814-suppress-per-call-progress"
 }
