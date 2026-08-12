@@ -10,11 +10,13 @@ on:
       - 'packages/python/**/*.py'
       - 'packages/python/**/*.pyi'
       - 'packages/python/pyproject.toml'
+      - '.github/workflows/python-typecheck.yml'
   pull_request:
     paths:
       - 'packages/python/**/*.py'
       - 'packages/python/**/*.pyi'
       - 'packages/python/pyproject.toml'
+      - '.github/workflows/python-typecheck.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
