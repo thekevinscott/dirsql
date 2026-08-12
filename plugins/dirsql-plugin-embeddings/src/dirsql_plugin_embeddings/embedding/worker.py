@@ -3,7 +3,6 @@ from hashlib import sha256
 
 from . import model
 from .cache import make_cache
-from .progress import stderr_is_tty
 from .values import ProtocolError, decode_value
 
 MALFORMED_SHAPE = (
@@ -27,7 +26,10 @@ class Worker:
 
     def _compute(self, digest, identifier):
         text, loaded = self._pending
-        (vector,) = loaded.encode([text], show_progress_bar=stderr_is_tty())
+        # No progress bar: the protocol embeds one value per round trip, so a
+        # per-call bar can only ever say 1/1. The model *download* bar, which
+        # measures something, is TTY-gated in `progress.configure`.
+        (vector,) = loaded.encode([text], show_progress_bar=False)
         return [float(component) for component in vector]
 
     def embed(self, text, model_id):
