@@ -48,23 +48,21 @@ def describe_compute():
         loaded = MagicMock()
         loaded.encode.return_value = [[1, 2.5]]
         built._pending = ("hello", loaded)
-        with patch.object(
-            worker, "stderr_is_tty", return_value=False
-        ) as is_tty:
-            vector = built._compute(HELLO_DIGEST, "m1")
-        is_tty.assert_called_once_with()
+        vector = built._compute(HELLO_DIGEST, "m1")
         loaded.encode.assert_called_once_with(["hello"], show_progress_bar=False)
         assert vector == [1.0, 2.5]
         assert all(isinstance(component, float) for component in vector)
 
-    def it_shows_a_progress_bar_when_stderr_is_a_tty():
+    def it_never_shows_a_per_call_progress_bar_even_on_a_tty():
+        # The protocol embeds exactly one value per round trip, so a per-call
+        # bar can only ever say 1/1 -- one meaningless bar per embedded value.
         built, _ = make_worker()
         loaded = MagicMock()
         loaded.encode.return_value = [[0.0]]
         built._pending = ("hello", loaded)
-        with patch.object(worker, "stderr_is_tty", return_value=True):
+        with patch("sys.stderr.isatty", return_value=True):
             built._compute(HELLO_DIGEST, "m1")
-        loaded.encode.assert_called_once_with(["hello"], show_progress_bar=True)
+        loaded.encode.assert_called_once_with(["hello"], show_progress_bar=False)
 
 
 def describe_embed():
