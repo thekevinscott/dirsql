@@ -10,14 +10,19 @@ merge_protections:
       - base = main
     success_conditions:
       - "#check-failure = 0"
-      - "#check-pending = 0"
 
-      # The two counts above are blind to a workflow that dies before emitting
-      # any check-run (bad YAML, or a `testing-conventions@v0` input the moving
-      # tag no longer defines): zero check-runs contributed reads as "nothing
-      # failed, nothing pending". They are also vacuously true in the window
-      # before CI has started. The anchors below close both holes by requiring
-      # each always-triggered workflow to have produced a passing check.
+      # Do NOT add `#check-pending = 0` here. Mergify counts its own in-progress
+      # check toward that total, so it can never reach zero and the gate
+      # deadlocks: Mergify stays running because the count is non-zero, and the
+      # count is non-zero because Mergify is running.
+      #
+      # The count above is blind to a workflow that dies before emitting any
+      # check-run (bad YAML, or a `testing-conventions@v0` input the moving tag
+      # no longer defines): zero check-runs contributed reads as "nothing
+      # failed". It is also vacuously true in the window before CI has started.
+      # The anchors below close both holes by requiring each always-triggered
+      # workflow to have produced a passing check, which is also what keeps the
+      # gate from going green mid-run.
       #
       # Path-filtered workflows are deliberately absent -- one that does not run
       # reports no status at all, so naming it here would pend forever.
