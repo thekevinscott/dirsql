@@ -9,10 +9,12 @@ on:
     paths:
       - 'packages/python/**/*.py'
       - 'packages/python/pyproject.toml'
+      - '.github/workflows/python-lint.yml'
   pull_request:
     paths:
       - 'packages/python/**/*.py'
       - 'packages/python/pyproject.toml'
+      - '.github/workflows/python-lint.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
