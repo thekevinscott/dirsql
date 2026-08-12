@@ -73,6 +73,33 @@ def describe_persist():
             assert len(results) == 1
             assert results[0]["name"] == "apple"
 
+        @pytest.mark.asyncio
+        async def it_leaves_the_cache_file_untouched(persist_dir):
+            """An unchanged tree is a no-op: the cache is read, never rewritten."""
+            _write(
+                os.path.join(persist_dir, "items", "a.json"),
+                json.dumps({"name": "apple", "price": 1.5}),
+            )
+
+            box1 = [0]
+            db1 = DirSQL(persist_dir, tables=[_items_table(box1)], persist=True)
+            await db1.ready()
+            del db1
+
+            cache = os.path.join(persist_dir, ".dirsql", "cache.db")
+            before = open(cache, "rb").read()
+
+            box2 = [0]
+            db2 = DirSQL(persist_dir, tables=[_items_table(box2)], persist=True)
+            await db2.ready()
+            del db2
+
+            after = open(cache, "rb").read()
+            assert len(after) == len(before), (
+                "an unchanged tree must not grow the cache"
+            )
+            assert after == before, "an unchanged tree must not rewrite the cache"
+
     def describe_changed_file():
         @pytest.mark.asyncio
         async def it_reparses_changed_files(persist_dir):

@@ -369,7 +369,7 @@ Real-core file map:
 | Async / ready | `async_dirsql_test.py` | `async_sdk.rs` | `index.test.ts` |
 | Watch events | `async_dirsql_test.py`, `docs_gaps_test.py` | `sdk.rs`, `watcher.rs`, `watch_relative_root.rs` | `watch.test.ts`, `index.test.ts` |
 | Config file | `from_config_test.py` | `from_config.rs`, `config.rs` | `from-config.test.ts` |
-| Persistence | `persist_test.py` | `persist.rs` | `persist.test.ts` |
+| Persistence | `persist_test.py` | `persist.rs`, `persist_parsed_path_table.rs` | `persist.test.ts` |
 | Extensions | `extensions_test.py`, `extension_package_test.py`, `config_extension_package_test.py` | `extensions.rs` | `extensions.test.ts`, `extension-package.test.ts`, `config-extension-package.test.ts` |
 | Table-name resolution (#204) | `table_name_resolution_test.py` | `table_name_resolution.rs` | `table-name-resolution.test.ts` |
 | Docs examples | `docs_examples_test.py` | `docs_examples.rs` | `docs-examples.test.ts` |
@@ -477,6 +477,8 @@ incl. #313).
 | Persist: dirsql_version bump rebuilds  | Y      | Y    | Y          |
 | Persist: `.dirsql/` excluded from walk | Y      | Y    | Y          |
 | Persist: custom persist_path honored   | Y      | Y    | Y          |
+| Persist: unchanged run leaves cache byte-identical | Y | Y | Y |
+| Persist: parsed path-table reuses cached rows (#825) | N/A — `--on-file` is a CLI flag, not an SDK surface | Y (`persist_parsed_path_table.rs`) | N/A — same |
 
 ### Extensions
 
