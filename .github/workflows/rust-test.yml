@@ -12,6 +12,7 @@ on:
       - 'packages/python/src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'testing-conventions.toml'
       - '.github/workflows/rust-test.yml'
   pull_request:
     paths:
@@ -20,6 +21,7 @@ on:
       - 'packages/python/src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'testing-conventions.toml'
       - '.github/workflows/rust-test.yml'
 
 concurrency:
