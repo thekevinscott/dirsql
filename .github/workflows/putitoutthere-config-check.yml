@@ -1,4 +1,4 @@
-name: Release Config Check
+name: putitoutthere Config Check
 
 # Fast PR-time config sanity gate. Runs putitoutthere's `check` reusable
 # workflow, which parses `putitoutthere.toml`, validates the schema, checks
@@ -16,7 +16,7 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - '.github/CI-DISABLED-PLACEHOLDER'
+      - 'putitoutthere.toml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
