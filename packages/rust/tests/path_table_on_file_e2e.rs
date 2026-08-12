@@ -93,6 +93,21 @@ fn a_parser_supplies_the_rows_and_the_schema() {
 }
 
 #[test]
+fn a_parser_command_containing_a_quote_runs_as_written() {
+    // `sh -c '<script>'` is the documented way to ask for a shell, so a quote
+    // inside the command is the first thing a non-trivial parser hits. The
+    // command reaches the module as a SQL literal; what goes in must come out.
+    let dir = fixture();
+    let out = run_on_file(
+        &dir,
+        "SELECT title FROM './**/*.md'",
+        r#"sh -c './parse.sh "$1"' sh {path}"#,
+    );
+
+    assert_eq!(titles(&out), vec!["alpha title", "bravo title"]);
+}
+
+#[test]
 fn stat_columns_are_not_reachable_on_a_parsed_table() {
     let dir = fixture();
     // `size` is a stat column; a parsed path-table's schema is the parser's
