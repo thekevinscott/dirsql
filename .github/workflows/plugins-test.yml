@@ -11,7 +11,9 @@ on:
       - '.github/workflows/plugins-test.yml'
   pull_request:
     paths:
-      - '.github/CI-DISABLED-PLACEHOLDER'
+      - 'plugins/dirsql-plugin-embeddings/src/**'
+      - 'plugins/dirsql-plugin-embeddings/tests/**'
+      - 'plugins/dirsql-plugin-embeddings/pyproject.toml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
