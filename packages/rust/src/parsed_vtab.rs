@@ -39,6 +39,7 @@ use crate::parsed_cache::{self, CachedParse, Entry, RowCache, SqliteRowCache};
 use crate::path_table;
 use crate::persist::{FileStat, hash_file, now_ns};
 use crate::scanner::{self, scan_glob};
+use crate::sql_literal::unquote;
 
 /// SQL module name a parsed path-table is created with.
 pub const MODULE_NAME: &str = "dirsql_parsed";
@@ -47,18 +48,6 @@ pub const MODULE_NAME: &str = "dirsql_parsed";
 pub fn load_module(conn: &Connection) -> Result<()> {
     let aux: Option<()> = None;
     conn.create_module(MODULE_NAME, read_only_module::<ParsedTab>(), aux)
-}
-
-/// Strip one layer of SQL string quoting from a `CREATE VIRTUAL TABLE`
-/// argument. SQLite hands module arguments through verbatim, quotes included.
-fn unquote(arg: &str) -> &str {
-    let trimmed = arg.trim();
-    for quote in ['\'', '"'] {
-        if trimmed.len() >= 2 && trimmed.starts_with(quote) && trimmed.ends_with(quote) {
-            return &trimmed[1..trimmed.len() - 1];
-        }
-    }
-    trimmed
 }
 
 /// Number of module arguments that are not ignore patterns.
@@ -483,36 +472,6 @@ mod tests {
     #[test]
     fn module_name_is_stable() {
         assert_eq!(MODULE_NAME, "dirsql_parsed");
-    }
-
-    #[test]
-    fn unquote_strips_single_quotes() {
-        assert_eq!(unquote("'./docs'"), "./docs");
-    }
-
-    #[test]
-    fn unquote_strips_double_quotes() {
-        assert_eq!(unquote("\"./docs\""), "./docs");
-    }
-
-    #[test]
-    fn unquote_trims_surrounding_whitespace() {
-        assert_eq!(unquote("  './docs'  "), "./docs");
-    }
-
-    #[test]
-    fn unquote_leaves_unquoted_arguments_alone() {
-        assert_eq!(unquote("./docs"), "./docs");
-    }
-
-    #[test]
-    fn unquote_leaves_a_lone_quote_alone() {
-        assert_eq!(unquote("'"), "'");
-    }
-
-    #[test]
-    fn unquote_leaves_mismatched_quotes_alone() {
-        assert_eq!(unquote("'./docs\""), "'./docs\"");
     }
 
     /// The three fixed arguments SQLite prepends before the module's own.

@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1786553304,
+  "exit_code": 0,
+  "commit": "13e7c73751944729be9687780d52ed47908ccd2c",
+  "branch": "claude/827-unquote-doubled-quotes"
+}

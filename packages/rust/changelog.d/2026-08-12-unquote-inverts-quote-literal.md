@@ -1,0 +1,3 @@
+**Fixed**
+
+- **A path-table argument containing a single quote now reaches the module as written.** `dirsql --on-file "sh -c 'jq . \"$1\"' sh {path}"` — `sh -c '…'` being the documented way to ask for a shell — arrived at the parser as `sh -c ''…''` and ran a different script. Minting a path-table writes its arguments as SQL literals, where an embedded quote is escaped by doubling; the modules stripped the surrounding quotes without undoing the doubling. The same corruption applied to any glob or ignore pattern carrying a quote. `quote_literal`, `quote_identifier` and `unquote` now live together in one module with a round-trip property test, so the encoder and decoder cannot drift apart again. (#827)
