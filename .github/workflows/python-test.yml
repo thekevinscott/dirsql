@@ -8,14 +8,22 @@ on:
     branches: [main]
     paths:
       - 'packages/python/**'
+      - '!packages/python/changelog.d/**'
+      - '!packages/python/migrations.d/**'
+      - '!packages/python/e2e-attestations/**'
       - 'packages/rust/**'
+      - 'internals/distcheck/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/python-test.yml'
   pull_request:
     paths:
       - 'packages/python/**'
+      - '!packages/python/changelog.d/**'
+      - '!packages/python/migrations.d/**'
+      - '!packages/python/e2e-attestations/**'
       - 'packages/rust/**'
+      - 'internals/distcheck/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/python-test.yml'
