@@ -1149,3 +1149,4 @@ mod tests {
         assert_eq!(OnFileError("bad".to_string()).to_string(), "bad");
     }
 }
+
