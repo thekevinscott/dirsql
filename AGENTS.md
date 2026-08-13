@@ -288,3 +288,4 @@ When monitoring PRs to get them across the finish line (shepherding to green):
 ### Coverage Floor
 
 All three SDKs enforce unit-coverage floors via testing-conventions `unit coverage`; floors live in `testing-conventions.toml`. Python/TS run inside `conventions.yml` at 100% (plus a PR-only changed-lines check); the Rust core is bespoke in `rust-test.yml` (nightly `cargo llvm-cov --lib --features cli --branch`; floors: lines 94 / regions 93 / functions 91 / branch 75, pinned near actuals -- if adding tests lowers `branch`, nudge the floor down rather than chasing it). **Floors apply to unit tests only** -- integration/binding/e2e never pad the number; every covered source file needs in-process unit tests (inject and mock the binding layer rather than excluding a file; only line-scoped, reason-required coverage exemptions exist, and there are none today). Full rationale, Rust branch-floor caveats, and exemption rules: `agents/reference/testing-gates.md`.
+
