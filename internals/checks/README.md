@@ -54,3 +54,4 @@ cd internals/checks && uvx testing-conventions e2e attest 'uv run python -m pyte
 2. Register it in `src/checks/cli.py`: import the command and `main.add_command(..., name="...")`.
 3. Add it to `src/checks/cli_test.py`'s registration test.
 4. Wire the workflow step that needs it to `uv run --project internals/checks dirsql-checks <check>`.
+
