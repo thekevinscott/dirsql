@@ -79,3 +79,4 @@ uv run --project internals/distcheck python -m pytest internals/distcheck/src in
 3. Add it to `src/distcheck/cli_test.py`'s registration test.
 4. Wire the workflow step that needs it to
    `uv run --project internals/distcheck dirsql-distcheck <flow>`.
+
