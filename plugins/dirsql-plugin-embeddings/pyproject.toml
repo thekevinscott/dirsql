@@ -89,3 +89,4 @@ packages = ["src/dirsql_plugin_embeddings"]
 # `src` layout: put it on the path so modules and their colocated tests import
 # the package normally (`from dirsql_plugin_embeddings import ...`).
 pythonpath = ["src"]
+
