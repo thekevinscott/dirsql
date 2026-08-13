@@ -33,3 +33,4 @@ futures-channel = "0.3"
 strip = "symbols"
 lto = "fat"
 codegen-units = 1
+
