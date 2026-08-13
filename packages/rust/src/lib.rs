@@ -3642,3 +3642,4 @@ mod command_rows_tests {
         );
     }
 }
+
