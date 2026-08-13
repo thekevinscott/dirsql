@@ -129,3 +129,4 @@ Each event has `.action` (`"insert"`, `"update"`, `"delete"`, or `"error"`), `.t
 ## License
 
 MIT
+
