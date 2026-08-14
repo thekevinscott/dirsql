@@ -26,6 +26,9 @@ on:
       - '!packages/python/migrations.d/**'
       - '!packages/python/README.md'
       - 'packages/rust/**'
+      - '!packages/rust/changelog.d/**'
+      - '!packages/rust/migrations.d/**'
+      - '!packages/rust/README.md'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'testing-conventions.toml'
@@ -58,6 +61,7 @@ jobs:
       gates: '["colocated-test", "unit-lint"]'
 
   lint:
+    name: lint (python)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -261,7 +265,7 @@ jobs:
     # gate does NOT do (that gate only asserts no test files ship in the
     # artifact). No mocks. The flow lives in the internals/distcheck package
     # (#520); this job invokes its `dirsql-distcheck python` entry point.
-    name: Packaging distcheck (install + run)
+    name: Packaging distcheck (python)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
