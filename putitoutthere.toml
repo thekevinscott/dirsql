@@ -40,6 +40,12 @@ name  = "dirsql-py"
 pypi  = "dirsql"
 kind  = "pypi"
 build = "maturin"
+# Build linux wheels in the manylinux_2_28 container so the platform tag
+# pins a glibc 2.28 floor. Without it, wheels are tagged with the
+# runner's glibc (manylinux_2_39 on ubuntu-24.04) and pip on any older
+# host silently falls back to the sdist and compiles from source
+# (dirsql#818).
+manylinux = "2_28"
 path  = "packages/python"
 globs = [
   "packages/python/**",
