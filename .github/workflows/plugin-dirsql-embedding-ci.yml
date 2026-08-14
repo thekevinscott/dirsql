@@ -21,6 +21,7 @@ on:
       # receipts for freshness.
       - 'plugins/dirsql-plugin-embeddings/testing-conventions.toml'
       - 'plugins/dirsql-plugin-embeddings/e2e-attestations/**'
+      - '.github/workflows/plugin-dirsql-embedding-ci.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
