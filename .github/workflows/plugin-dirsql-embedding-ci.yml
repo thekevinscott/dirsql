@@ -31,8 +31,6 @@ permissions:
   contents: read
 
 jobs:
-  # Job id kept from the conventions.yml lane: check-runs surface as
-  # `plugins-embeddings / <gate>`.
   plugins-embeddings:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:

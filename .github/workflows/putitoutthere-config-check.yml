@@ -4,7 +4,7 @@ name: putitoutthere Config Check
 # workflow, which parses `putitoutthere.toml`, validates the schema, checks
 # for common-mistake typos (`[[packages]]` vs `[[package]]`, etc.), enforces
 # unique package names, and detects `depends_on` cycles -- all without
-# spinning up the per-target compile matrix. Pairs with `release-precheck.yml`
+# spinning up the per-target compile matrix. Pairs with release-ci.yml
 # (which exercises the full build matrix): config errors fail here in
 # seconds; build/toolchain regressions fail there.
 #

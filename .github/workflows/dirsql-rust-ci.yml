@@ -1,15 +1,9 @@
 name: dirsql Rust CI
 
-# All PR verification for the Rust core (packages/rust): unit + integration
-# tests, the bespoke nightly coverage job, clippy/fmt lint, and the
-# testing-conventions gate suite. Merged from rust-test.yml and the
-# conventions.yml `rust` lane so one paths filter governs the whole set.
-#
 # The binding crates fan in (packages/ts/napi, packages/python/src): they are
 # cargo workspace members, so the workspace-wide unit/lint jobs compile them.
 # The root testing-conventions.toml carries this lane's config and the
 # [rust.coverage] floors the coverage job reads.
-# No self-path on pull_request, per the #834 stack convention.
 on:
   push:
     branches: [main]
@@ -42,8 +36,6 @@ permissions:
   contents: read
 
 jobs:
-  # Job id `rust` kept from its conventions.yml lane so check-run names are
-  # unchanged.
   rust:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
@@ -141,17 +133,9 @@ jobs:
         with:
           node-version: "24"
 
-      # Unit-only coverage floor (#295). Replaces the bespoke `cargo llvm-cov
-      # --fail-under-*` gate. The CLI scopes to `--lib` (so the integration
-      # tier under packages/rust/tests/ no longer pads the number --
-      # testing-conventions #269), reads `[rust].features` (= cli) so the
-      # `#[cfg(feature = "cli")]` module is measured (#270), and enforces the
-      # `[rust.coverage]` lines/functions/regions/branch floors from
-      # testing-conventions.toml (#271).
-      #
       # Whole-tree only: unlike the Python/TS jobs there is no `--base`
       # changed-lines check. Rust's effectful paths (filesystem / subprocess /
-      # HTTP / `notify`) are unit-uncovered by design (#233); a per-PR
+      # HTTP / `notify`) are unit-uncovered by design, so a per-PR
       # changed-lines floor would fail legitimate integration-tier edits.
       - name: Unit coverage floor (testing-conventions)
         run: npx -y testing-conventions unit coverage --language rust packages/rust/src

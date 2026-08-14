@@ -1,14 +1,7 @@
 name: dirsql Python CI
 
-# All PR verification for the Python SDK (packages/python): lint, typecheck,
-# the four test tiers, and the testing-conventions gate suites for the SDK
-# and the PyO3 binding crate. Merged from python-lint.yml, python-typecheck.yml,
-# python-test.yml and two conventions.yml lanes so one paths filter governs
-# the whole set.
-#
 # packages/rust/** fans in: the core compiles into the binding, and
 # [e2e].extra_scope means a core change stales this package's attestation.
-# No self-path on pull_request, per the #834 stack convention.
 on:
   push:
     branches: [main]
@@ -42,8 +35,6 @@ permissions:
   contents: read
 
 jobs:
-  # Job ids `python-sdk` / `rust-python-binding` kept from their
-  # conventions.yml lanes so check-run names are unchanged.
   python-sdk:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
@@ -73,12 +64,8 @@ jobs:
       - name: Install just
         uses: extractions/setup-just@v2
 
-      # Lint/format only touch the `.py` source and never execute the
-      # compiled extension, so skip installing/building the local maturin
-      # project (`uv sync` would otherwise pay a full Rust build just to run
-      # ruff). `uv run --no-sync` keeps the `ruff` invocations from
-      # re-triggering the project install that a plain `uv run` performs
-      # implicitly.
+      # ruff never executes the compiled extension, so skip the maturin
+      # project install -- a plain `uv run` would pay a full Rust build.
       - name: Install dependencies
         run: uv sync --no-install-project
         working-directory: packages/python
@@ -99,12 +86,8 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
-      # `ty` type-checks the `.py` source statically and never imports the
-      # compiled extension, so skip installing/building the local maturin
-      # project (`uv sync` would otherwise pay a full Rust build just to
-      # typecheck). `uv run --no-sync` keeps the `ty` invocation from
-      # re-triggering the project install that a plain `uv run` performs
-      # implicitly.
+      # `ty` checks statically and never imports the compiled extension, so
+      # skip the maturin project install -- `uv run` would pay a Rust build.
       - name: Install dependencies
         run: uv sync --no-install-project
         working-directory: packages/python
@@ -162,9 +145,8 @@ jobs:
         working-directory: packages/python
 
   integration:
-    # Hermetic tier (#289): SDK public API with the Rust core and the
-    # filesystem mocked. The PyO3 extension is still built because
-    # `dirsql/__init__.py` imports `dirsql._dirsql` at module load.
+    # Hermetic tier: core and filesystem mocked. The PyO3 extension is still
+    # built because `dirsql/__init__.py` imports `dirsql._dirsql` at load.
     name: Integration tests
     runs-on: ubuntu-latest
     strategy:
@@ -206,9 +188,8 @@ jobs:
         working-directory: packages/python
 
   binding:
-    # Binding tier (#289): the SDK public API against the real PyO3 core and
-    # a real filesystem — proves the SDK↔core marshaling that the hermetic
-    # integration tier mocks out.
+    # Binding tier: real PyO3 core and real filesystem -- proves the
+    # SDK↔core marshaling the hermetic tier mocks out.
     name: Binding tests
     runs-on: ubuntu-latest
     strategy:
@@ -249,23 +230,9 @@ jobs:
         run: uv run python -m pytest tests/integration/binding/ -x -q --tb=short
         working-directory: packages/python
 
-  # Unit coverage now runs in the reusable testing-conventions workflow
-  # (conventions.yml, `python-sdk` gates: unit-coverage) after upstream #284
-  # taught the coverage suite job to install/build from the derived package
-  # root (python_env=uv -> `uv sync` builds maturin; provision_rust). The
-  # bespoke coverage job that lived here is retired (#412).
-
   distcheck:
-    # Functional publishability gate (#344, mirroring ts-test.yml's distcheck
-    # job): build the real `dirsql` CLI binary via cargo, stage it under
-    # `dirsql/_binary/` the way the release pipeline's bundle_cli step
-    # would, build the wheel with `maturin build`, `pip install` it into a
-    # fresh venv, and run the installed `dirsql --version` console script
-    # plus `import dirsql`. Red here means the PyPI release is broken and
-    # must not go out. This is the install-and-run check the `packaging`
-    # gate does NOT do (that gate only asserts no test files ship in the
-    # artifact). No mocks. The flow lives in the internals/distcheck package
-    # (#520); this job invokes its `dirsql-distcheck python` entry point.
+    # Installs and runs the built wheel, which the `packaging` gate does not
+    # do -- that gate only asserts no test files ship in the artifact.
     name: Packaging distcheck (python)
     runs-on: ubuntu-latest
     steps:

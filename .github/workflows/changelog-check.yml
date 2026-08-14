@@ -47,7 +47,7 @@ jobs:
       # Logic (packages/<pkg>/ source detection, per-package fragment
       # detection, raw-body skip-changelog scanning) lives in internals/checks'
       # changelog_gate check, colocated-tested at 100% coverage, per
-      # AGENTS.md "CI Workflows". Mirrors template-lib's reference gate (#566).
+      # AGENTS.md "CI Workflows".
       - name: Require a per-package changelog fragment for SDK code changes
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}

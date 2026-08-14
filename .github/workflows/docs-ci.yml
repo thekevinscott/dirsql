@@ -1,8 +1,8 @@
 name: Docs Build
 
-# Verification only. `docs.yml` builds and publishes on push to main, but its
-# deploy job consumes the Pages artifact its build job uploads in the same run,
-# so it cannot be reused here -- gating that deploy with `if:` would still
+# Verification only. docs-release.yml publishes on push to main; its deploy
+# job consumes the Pages artifact its build job uploads in the same run, so
+# it cannot be reused here -- gating that deploy with `if:` would still
 # report a second, skipped check on every docs PR.
 on:
   pull_request:

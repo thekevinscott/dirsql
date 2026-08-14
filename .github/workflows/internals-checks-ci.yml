@@ -24,8 +24,6 @@ permissions:
   contents: read
 
 jobs:
-  # Job id kept from the conventions.yml lane: check-runs surface as
-  # `internals-checks / <gate>`.
   internals-checks:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:

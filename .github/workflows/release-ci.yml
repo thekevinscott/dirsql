@@ -60,16 +60,14 @@ jobs:
   precheck:
     uses: thekevinscott/putitoutthere/.github/workflows/build.yml@v0
 
-  # Artifact completeness (#790). `upload-artifact` only *warns* when its
-  # path matches nothing, so a build row that stages into the wrong
-  # directory uploads nothing and still reports success. Precheck has no
-  # publish job, so it never reached the completeness check publish
-  # performs -- #776/#777/#778 were all green while leaving `main`
-  # unpublishable, and it surfaced only after merge (#788). This asserts
-  # every (package, target) our own release config declares produced a
-  # non-empty artifact. It deliberately matches on package name + target
-  # and NOT on the engine's `{mode}` segment, which is exactly what
-  # shifted under us in #788.
+  # `upload-artifact` only *warns* when its path matches nothing, so a build
+  # row staging into the wrong directory uploads nothing and still reports
+  # success. Precheck has no publish job, so it never reaches the
+  # completeness check publish performs -- PRs have gone green while leaving
+  # `main` unpublishable. Asserts every (package, target) the release config
+  # declares produced a non-empty artifact. Deliberately matches on package
+  # name + target and NOT the engine's `{mode}` segment, which has shifted
+  # under us before.
   artifact-completeness:
     name: Artifact completeness
     needs: precheck
@@ -89,7 +87,7 @@ jobs:
       - name: Assert every declared (package, target) produced an artifact
         run: uv run --project internals/checks dirsql-checks artifact-completeness --dist-dir dist/
 
-  # Extension-load guard (#755): the precheck matrix builds the Linux
+  # Extension-load guard: the precheck matrix builds the Linux
   # wheel with the same bundle_cli linking as the release path, so this
   # is the only PR-time tier where a statically-linked bundled binary
   # (which cannot dlopen -> `Dynamic loading not supported`) is
@@ -118,7 +116,7 @@ jobs:
       - name: Probe extension loading through the installed wheel
         run: uv run --project internals/checks dirsql-checks wheel-extension-load --dist-dir dist/
 
-  # npm twin of the wheel probe (#762): the precheck matrix builds the
+  # npm twin of the wheel probe: the precheck matrix builds the
   # npm bundled-cli Linux binary with the same linking as the release
   # path (cargo-zigbuild dynamic gnu since putitoutthere#605), so this
   # is the only PR-time tier where a statically-linked binary (which

@@ -1,14 +1,7 @@
 name: dirsql TypeScript CI
 
-# All PR verification for the TypeScript SDK (packages/ts): biome lint, tsc
-# typecheck, the napi build + four test tiers, and the testing-conventions
-# gate suites for the SDK and the napi binding crate. Merged from ts-lint.yml,
-# ts-typecheck.yml, ts-test.yml and two conventions.yml lanes so one paths
-# filter governs the whole set.
-#
 # packages/rust/** fans in: the core compiles into the binding, and
 # [e2e].extra_scope means a core change stales this package's attestation.
-# No self-path on pull_request, per the #834 stack convention.
 on:
   push:
     branches: [main]
@@ -42,8 +35,6 @@ permissions:
   contents: read
 
 jobs:
-  # Job ids `typescript-sdk` / `rust-napi-binding` kept from their
-  # conventions.yml lanes so check-run names are unchanged.
   typescript-sdk:
     uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
     with:
@@ -90,14 +81,10 @@ jobs:
         working-directory: packages/ts
         run: pnpm format:check
 
-# `tsc` already runs as part of `pnpm build` in `ts-test.yml`, so this is
-# redundant in the strict sense. It exists for the same reason
-# `python-typecheck.yml` does: a dedicated, fast-failing type-check signal
-# that doesn't require the napi-rs build chain (~seconds instead of minutes)
-# and shows up as its own red check rather than "Unit tests" failing on a
-# pure type error. The native addon is loaded at runtime via `createRequire`
-# (see `src/load-native-core.ts`), so `tsc --noEmit` does not need
-# `dirsql.node` or the generated `index.d.ts` to succeed.
+# Redundant with the `tsc` inside `pnpm build`, but this leg skips the
+# napi-rs build chain (seconds, not minutes) and surfaces a type error as
+# its own check rather than as a unit-test failure. The addon loads at
+# runtime via `createRequire`, so `--noEmit` needs no built artifact.
   tsc:
     runs-on: ubuntu-latest
     steps:
@@ -122,8 +109,8 @@ jobs:
         run: pnpm exec tsc --noEmit
 
   build:
-    # Builds the napi addon once and shares it with unit/binding/distcheck below
-    # (#483) instead of each job/matrix-cell rebuilding it independently.
+    # Builds the napi addon once and shares it with unit/binding/distcheck
+    # below instead of each job/matrix-cell rebuilding it independently.
     # The addon is N-API (napi6, see packages/ts/napi/Cargo.toml), which is
     # ABI-stable across Node majors, so one build serves the whole Node
     # 20/22/24 matrix.
@@ -209,9 +196,8 @@ jobs:
         run: pnpm exec vitest run --dir src
 
   integration:
-    # Hermetic tier (#289): SDK public API with the native core mocked
-    # (`vi.mock`) and no filesystem access — no Rust toolchain or napi build
-    # needed.
+    # Hermetic tier: native core mocked (`vi.mock`), no filesystem access --
+    # no Rust toolchain or napi build needed.
     name: Integration tests (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
     strategy:
@@ -240,9 +226,8 @@ jobs:
         run: pnpm test:integration
 
   binding:
-    # Binding tier (#289): the SDK public API against the real napi core and
-    # a real filesystem — proves the SDK↔core marshaling that the hermetic
-    # integration tier mocks out.
+    # Binding tier: real napi core and real filesystem -- proves the SDK↔core
+    # marshaling the hermetic tier mocks out.
     #
     # Keeps its own Rust toolchain + rust-cache (unlike unit/distcheck below):
     # tests/binding/*.test.ts shell out to `cargo` directly at test-run time
@@ -292,21 +277,9 @@ jobs:
         working-directory: packages/ts
         run: pnpm exec vitest run --dir tests/integration/binding --passWithNoTests
 
-  # Unit coverage now runs in the reusable testing-conventions workflow
-  # (conventions.yml, `typescript-sdk` gates: unit-coverage) after upstream
-  # #284 taught the coverage suite job to install/build from the derived
-  # package root. The bespoke coverage job that lived here is retired (#412).
-
   distcheck:
-    # Functional publishability gate: build the real binary + napi addon,
-    # pack the main `dirsql` package and the host's `@dirsql/cli-<slug>`
-    # sub-package the way the release pipeline would, `npm install` both
-    # into a fresh dir, and run `node_modules/.bin/dirsql --version`. Red
-    # here means the npm release is broken and must not go out. This is the
-    # install-and-run check the `packaging` gate does NOT do (that gate only
-    # asserts no test files ship in the artifact). No mocks. The flow lives
-    # in the internals/distcheck package (#520); this job invokes its
-    # `dirsql-distcheck node` entry point (which drives npm/pnpm from Python).
+    # Installs and runs the packed tarballs, which the `packaging` gate does
+    # not do -- that gate only asserts no test files ship in the artifact.
     name: Packaging distcheck (ts)
     needs: build
     runs-on: ubuntu-latest
