@@ -238,6 +238,10 @@ Run `cargo bench -p dirsql` after significant changes to the Rust codebase. Not 
 
 ## Git and GitHub Workflows
 
+### Releases: Merging to Main Publishes
+
+**Merging to `main` is the release trigger — there is no separate release step.** dirsql publishes via [putitoutthere](https://github.com/thekevinscott/putitoutthere) (`putitoutthere.toml` at the repo root; `release.yml` calls its `@v0` reusable workflow on every push to `main`). Each merge whose changed files match a package's release `globs` publishes that package to its registry immediately, with no version bump, tag, or human sign-off in between — and `depends_on` cascades: a `packages/rust/**` change republishes the PyPI and npm packages too. A merge matching no package's globs (root config, docs, CI) publishes nothing. This is why agents shepherd PRs to green and **stop**: merging is publishing, and only the maintainer merges.
+
 ### PR Sizing and Issues
 
 - **Every PR is M or smaller.** A change larger than M is broken into a sequence of smaller PRs, each independently reviewable and mergeable. Size by review surface, not raw line count -- a mechanical rename spanning many files can be M, while a subtle core change of far fewer lines may not be.
