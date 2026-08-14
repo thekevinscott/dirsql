@@ -13,6 +13,7 @@ on:
       # applies and the ROOT testing-conventions.toml governs it -- an unknown
       # key there fails this lane too.
       - 'testing-conventions.toml'
+      - '.github/workflows/internals-distcheck-ci.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

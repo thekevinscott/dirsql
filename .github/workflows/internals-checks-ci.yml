@@ -14,6 +14,7 @@ on:
       # key fails every gate, and e2e-verify walks the receipts for freshness.
       - 'internals/checks/testing-conventions.toml'
       - 'internals/checks/e2e-attestations/**'
+      - '.github/workflows/internals-checks-ci.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
