@@ -13,10 +13,14 @@ merge_protections:
     if:
       - base = main
     success_conditions:
-      # Names no checks deliberately: a path-filtered workflow that does not run
-      # reports nothing, so an anchor naming it would pend forever.
+      # Do NOT add `#check-pending = 0`: merge protections count their own
+      # in-progress check, so the total never reaches zero and the gate
+      # deadlocks. Confirmed on #946 -- Mergify sat pending with an empty
+      # "waiting checks" list after every other check had finished.
+      #
+      # The cost is that this condition is vacuously true before CI starts,
+      # so the gate goes green while checks are still running (#943).
       - "#check-failure = 0"
-      - "#check-pending = 0"
 
 pull_request_rules:
   - name: Auto-merge labelled PRs once every check is green
