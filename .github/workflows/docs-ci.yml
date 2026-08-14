@@ -8,6 +8,7 @@ on:
   pull_request:
     paths:
       - 'docs/**'
+      - '.github/workflows/docs-ci.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
