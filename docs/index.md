@@ -81,4 +81,3 @@ const large = await db.query('SELECT * FROM records WHERE size > 1000');
 ```
 
 :::
-
