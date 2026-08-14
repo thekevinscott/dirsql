@@ -26,6 +26,9 @@ on:
       - '!packages/ts/migrations.d/**'
       - '!packages/ts/README.md'
       - 'packages/rust/**'
+      - '!packages/rust/changelog.d/**'
+      - '!packages/rust/migrations.d/**'
+      - '!packages/rust/README.md'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'testing-conventions.toml'
@@ -59,6 +62,7 @@ jobs:
       gates: '["colocated-test", "unit-lint"]'
 
   lint:
+    name: lint (ts)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -302,7 +306,7 @@ jobs:
     # asserts no test files ship in the artifact). No mocks. The flow lives
     # in the internals/distcheck package (#520); this job invokes its
     # `dirsql-distcheck node` entry point (which drives npm/pnpm from Python).
-    name: Packaging distcheck (install + run)
+    name: Packaging distcheck (ts)
     needs: build
     runs-on: ubuntu-latest
     steps:
