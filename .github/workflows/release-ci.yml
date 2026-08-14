@@ -25,6 +25,8 @@ on:
     branches: [main]
     paths:
       - 'packages/rust/**'
+      - '!packages/rust/changelog.d/**'
+      - '!packages/rust/migrations.d/**'
       - 'packages/python/**'
       - '!packages/python/changelog.d/**'
       - '!packages/python/migrations.d/**'

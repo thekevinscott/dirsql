@@ -16,7 +16,6 @@ env:
 # gap, tracked in its own issue.
 on:
   pull_request:
-    branches: [main]
     paths:
       - 'packages/**'
       # Attestations are filtered out of the gate's code_touched, so they
