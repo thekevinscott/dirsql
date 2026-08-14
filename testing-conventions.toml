@@ -201,3 +201,5 @@ lines = 92
 functions = 91
 regions = 91
 branch = 72
+
+# canary: merge-gate timing observation (#943) -- do not merge

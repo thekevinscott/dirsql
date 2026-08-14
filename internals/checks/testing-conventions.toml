@@ -17,3 +17,5 @@
 [python.coverage]
 fail_under = 100
 branch = true
+
+# canary: merge-gate timing observation (#943) -- do not merge

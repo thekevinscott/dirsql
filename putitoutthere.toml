@@ -134,3 +134,5 @@ globs = [
   "plugins/dirsql-plugin-embeddings/**",
 ]
 first_version = "0.1.0"
+
+# canary: merge-gate timing observation (#943) -- do not merge
