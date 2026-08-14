@@ -1,8 +1,14 @@
-name: TS Test
+name: dirsql TypeScript CI
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
+# All PR verification for the TypeScript SDK (packages/ts): biome lint, tsc
+# typecheck, the napi build + four test tiers, and the testing-conventions
+# gate suites for the SDK and the napi binding crate. Merged from ts-lint.yml,
+# ts-typecheck.yml, ts-test.yml and two conventions.yml lanes so one paths
+# filter governs the whole set.
+#
+# packages/rust/** fans in: the core compiles into the binding, and
+# [e2e].extra_scope means a core change stales this package's attestation.
+# No self-path on pull_request, per the #834 stack convention.
 on:
   push:
     branches: [main]
@@ -11,20 +17,110 @@ on:
       - 'packages/rust/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - '.github/workflows/ts-test.yml'
+      - 'testing-conventions.toml'
+      - '.github/workflows/dirsql-typescript-ci.yml'
   pull_request:
     paths:
       - 'packages/ts/**'
+      - '!packages/ts/changelog.d/**'
+      - '!packages/ts/migrations.d/**'
+      - '!packages/ts/README.md'
       - 'packages/rust/**'
+      - '!packages/rust/changelog.d/**'
+      - '!packages/rust/migrations.d/**'
+      - '!packages/rust/README.md'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - '.github/workflows/ts-test.yml'
+      - 'testing-conventions.toml'
+      - '.github/workflows/dirsql-typescript-ci.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
+  # Job ids `typescript-sdk` / `rust-napi-binding` kept from their
+  # conventions.yml lanes so check-run names are unchanged.
+  typescript-sdk:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["typescript"]'
+      source: packages/ts/src
+      config: testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      rust_toolchain: true
+
+  rust-napi-binding:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["rust"]'
+      source: packages/ts/napi
+      config: testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["colocated-test", "unit-lint"]'
+
+  lint:
+    name: lint (ts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Install dependencies
+        working-directory: packages/ts
+        run: pnpm install
+
+      - name: Lint
+        working-directory: packages/ts
+        run: pnpm lint
+
+      - name: Format check
+        working-directory: packages/ts
+        run: pnpm format:check
+
+# `tsc` already runs as part of `pnpm build` in `ts-test.yml`, so this is
+# redundant in the strict sense. It exists for the same reason
+# `python-typecheck.yml` does: a dedicated, fast-failing type-check signal
+# that doesn't require the napi-rs build chain (~seconds instead of minutes)
+# and shows up as its own red check rather than "Unit tests" failing on a
+# pure type error. The native addon is loaded at runtime via `createRequire`
+# (see `src/load-native-core.ts`), so `tsc --noEmit` does not need
+# `dirsql.node` or the generated `index.d.ts` to succeed.
+  tsc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Install dependencies
+        working-directory: packages/ts
+        run: pnpm install
+
+      - name: Type check
+        working-directory: packages/ts
+        run: pnpm exec tsc --noEmit
+
   build:
     # Builds the napi addon once and shares it with unit/binding/distcheck below
     # (#483) instead of each job/matrix-cell rebuilding it independently.
@@ -211,7 +307,7 @@ jobs:
     # asserts no test files ship in the artifact). No mocks. The flow lives
     # in the internals/distcheck package (#520); this job invokes its
     # `dirsql-distcheck node` entry point (which drives npm/pnpm from Python).
-    name: Packaging distcheck (install + run)
+    name: Packaging distcheck (ts)
     needs: build
     runs-on: ubuntu-latest
     steps:

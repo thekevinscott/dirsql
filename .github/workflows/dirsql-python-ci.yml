@@ -1,8 +1,14 @@
-name: Python Test
+name: dirsql Python CI
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
+# All PR verification for the Python SDK (packages/python): lint, typecheck,
+# the four test tiers, and the testing-conventions gate suites for the SDK
+# and the PyO3 binding crate. Merged from python-lint.yml, python-typecheck.yml,
+# python-test.yml and two conventions.yml lanes so one paths filter governs
+# the whole set.
+#
+# packages/rust/** fans in: the core compiles into the binding, and
+# [e2e].extra_scope means a core change stales this package's attestation.
+# No self-path on pull_request, per the #834 stack convention.
 on:
   push:
     branches: [main]
@@ -11,20 +17,102 @@ on:
       - 'packages/rust/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - '.github/workflows/python-test.yml'
+      - 'testing-conventions.toml'
+      - '.github/workflows/dirsql-python-ci.yml'
   pull_request:
     paths:
       - 'packages/python/**'
+      - '!packages/python/changelog.d/**'
+      - '!packages/python/migrations.d/**'
+      - '!packages/python/README.md'
       - 'packages/rust/**'
+      - '!packages/rust/changelog.d/**'
+      - '!packages/rust/migrations.d/**'
+      - '!packages/rust/README.md'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - '.github/workflows/python-test.yml'
+      - 'testing-conventions.toml'
+      - '.github/workflows/dirsql-python-ci.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
+  # Job ids `python-sdk` / `rust-python-binding` kept from their
+  # conventions.yml lanes so check-run names are unchanged.
+  python-sdk:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["python"]'
+      source: packages/python/dirsql
+      config: testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+
+  rust-python-binding:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["rust"]'
+      source: packages/python
+      config: testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["colocated-test", "unit-lint"]'
+
+  lint:
+    name: lint (python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      # Lint/format only touch the `.py` source and never execute the
+      # compiled extension, so skip installing/building the local maturin
+      # project (`uv sync` would otherwise pay a full Rust build just to run
+      # ruff). `uv run --no-sync` keeps the `ruff` invocations from
+      # re-triggering the project install that a plain `uv run` performs
+      # implicitly.
+      - name: Install dependencies
+        run: uv sync --no-install-project
+        working-directory: packages/python
+
+      - name: Lint
+        run: uv run --no-sync ruff check .
+        working-directory: packages/python
+
+      - name: Format check
+        run: uv run --no-sync ruff format --check .
+        working-directory: packages/python
+
+  ty:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # `ty` type-checks the `.py` source statically and never imports the
+      # compiled extension, so skip installing/building the local maturin
+      # project (`uv sync` would otherwise pay a full Rust build just to
+      # typecheck). `uv run --no-sync` keeps the `ty` invocation from
+      # re-triggering the project install that a plain `uv run` performs
+      # implicitly.
+      - name: Install dependencies
+        run: uv sync --no-install-project
+        working-directory: packages/python
+
+      - name: Type check (all rules promoted to error)
+        run: uv run --no-sync ty check --error all --error-on-warning dirsql/
+        working-directory: packages/python
+
   unit:
     name: Unit tests
     runs-on: ubuntu-latest
@@ -178,7 +266,7 @@ jobs:
     # gate does NOT do (that gate only asserts no test files ship in the
     # artifact). No mocks. The flow lives in the internals/distcheck package
     # (#520); this job invokes its `dirsql-distcheck python` entry point.
-    name: Packaging distcheck (install + run)
+    name: Packaging distcheck (python)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

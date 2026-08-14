@@ -1,4 +1,4 @@
-name: Release Precheck
+name: Release CI
 
 # PR-time gate that runs putitoutthere's plan + build matrix using the
 # same `_matrix.yml` reusable workflow that drives the release path.
@@ -14,9 +14,40 @@ name: Release Precheck
 # Pin to `@v0` deliberately: matches what `release.yml` calls so the
 # precheck stays in lockstep with the real release matrix.
 
+# Paths are the union of every [[package]] globs entry in putitoutthere.toml
+# plus the config itself: the plan job change-detects against those same
+# globs, so per-package subdivision happens inside the run (a python-only PR
+# plans only dirsql-py). putitoutthere's build.yml exposes no package filter,
+# and the release cascade (rust -> py -> npm) is cross-package by design, so
+# this stays one workflow rather than splitting per package.
 on:
   pull_request:
     branches: [main]
+    paths:
+      - 'packages/rust/**'
+      - '!packages/rust/changelog.d/**'
+      - '!packages/rust/migrations.d/**'
+      - 'packages/python/**'
+      - '!packages/python/changelog.d/**'
+      - '!packages/python/migrations.d/**'
+      - '!packages/python/e2e-attestations/**'
+      - 'packages/ts/**'
+      - '!packages/ts/changelog.d/**'
+      - '!packages/ts/migrations.d/**'
+      - '!packages/ts/e2e-attestations/**'
+      # putitoutthere's plugin globs are plugins/dirsql-plugin-embeddings/**;
+      # README stays in scope here (hatchling embeds it as the PyPI
+      # long-description, so it is a build input), fragments and receipts
+      # do not ship.
+      - 'plugins/dirsql-plugin-embeddings/**'
+      - '!plugins/dirsql-plugin-embeddings/changelog.d/**'
+      - '!plugins/dirsql-plugin-embeddings/migrations.d/**'
+      - '!plugins/dirsql-plugin-embeddings/e2e-attestations/**'
+      - '!plugins/dirsql-plugin-embeddings/tests/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'putitoutthere.toml'
+      - '.github/workflows/release-ci.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

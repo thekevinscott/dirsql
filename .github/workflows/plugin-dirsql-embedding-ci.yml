@@ -1,0 +1,66 @@
+name: Plugin dirsql-embedding CI
+
+# All PR verification for plugins/dirsql-plugin-embeddings: the
+# testing-conventions gate suite (unit tier, lint, coverage, mutation,
+# e2e attestation) and the integration matrix. The workflow's own file is
+# deliberately absent from paths -- editing a workflow must not run it, so
+# each glob stays observable against an empty baseline.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/dirsql-plugin-embeddings/**'
+      - '.github/workflows/plugin-dirsql-embedding-ci.yml'
+  pull_request:
+    paths:
+      - 'plugins/dirsql-plugin-embeddings/src/**'
+      - 'plugins/dirsql-plugin-embeddings/tests/**'
+      - 'plugins/dirsql-plugin-embeddings/pyproject.toml'
+      # Gate config and attestation receipts feed the conventions job: an
+      # unknown config key fails every gate, and e2e-verify walks the
+      # receipts for freshness.
+      - 'plugins/dirsql-plugin-embeddings/testing-conventions.toml'
+      - 'plugins/dirsql-plugin-embeddings/e2e-attestations/**'
+      - '.github/workflows/plugin-dirsql-embedding-ci.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Job id kept from the conventions.yml lane: check-runs surface as
+  # `plugins-embeddings / <gate>`.
+  plugins-embeddings:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["python"]'
+      source: plugins/dirsql-plugin-embeddings/src
+      config: plugins/dirsql-plugin-embeddings/testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["colocated-test", "unit-lint", "integration-lint", "unit-coverage", "mutation", "e2e-verify"]'
+
+  embeddings-integration:
+    # The conventions job runs the plugin's colocated unit tier and checks its
+    # e2e attestation, but nothing there runs tests/integration/ — the tier
+    # that proves the worker protocol over real pipes and each
+    # `[project.scripts]` target is importable and runnable as declared.
+    name: dirsql-plugin-embeddings integration tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Low leg = the plugin's `requires-python` floor.
+        python-version: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run integration tests
+        run: uv run --with-editable . python -m pytest tests/integration/ -x -q --tb=short
+        working-directory: plugins/dirsql-plugin-embeddings

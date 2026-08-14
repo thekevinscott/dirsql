@@ -1,4 +1,4 @@
-name: Release Config Check
+name: putitoutthere Config Check
 
 # Fast PR-time config sanity gate. Runs putitoutthere's `check` reusable
 # workflow, which parses `putitoutthere.toml`, validates the schema, checks
@@ -15,6 +15,9 @@ name: Release Config Check
 on:
   pull_request:
     branches: [main]
+    paths:
+      - 'putitoutthere.toml'
+      - '.github/workflows/putitoutthere-config-check.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
