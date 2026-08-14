@@ -47,6 +47,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'putitoutthere.toml'
+      - '.github/workflows/release-ci.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

@@ -21,6 +21,7 @@ on:
       # Attestations are filtered out of the gate's code_touched, so they
       # cannot alter its verdict.
       - '!packages/*/e2e-attestations/**'
+      - '.github/workflows/changelog-check.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

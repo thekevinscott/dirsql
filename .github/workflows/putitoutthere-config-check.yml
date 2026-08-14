@@ -17,6 +17,7 @@ on:
     branches: [main]
     paths:
       - 'putitoutthere.toml'
+      - '.github/workflows/putitoutthere-config-check.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
