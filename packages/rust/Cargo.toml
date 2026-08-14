@@ -20,6 +20,9 @@ repository.workspace = true
 # published `.crate` (enforced by the `packaging` gate in CI). Inline unit tests
 # stay (they are `#[cfg(test)]` modules inside `src/`, not separate files).
 exclude = [
+    # Repo changelog inputs, not crate contents.
+    "changelog.d/",
+    "migrations.d/",
     "tests/",
     "docs/.vitepress",
     "docs/.claude",
