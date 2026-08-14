@@ -137,3 +137,4 @@ The `cli` feature is **opt-in** -- `cargo add dirsql` pulls no CLI dependencies.
 ## License
 
 MIT
+
