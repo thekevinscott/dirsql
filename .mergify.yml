@@ -9,22 +9,14 @@ merge_protections_settings:
 
 merge_protections:
   - name: All CI green
-    description: No check on this PR reported a failure.
+    description: Every check on this PR finished, and none failed.
     if:
       - base = main
     success_conditions:
-      # Do NOT add `#check-pending = 0` here. Mergify counts its own in-progress
-      # check toward that total, so it can never reach zero and the gate
-      # deadlocks: Mergify stays running because the count is non-zero, and the
-      # count is non-zero because Mergify is running.
-      #
-      # This condition is blind to a workflow that dies before emitting any
-      # check-run, and is vacuously true before CI has started. Naming each
-      # workflow's checks closed those holes, but coupled the gate to the
-      # trigger filters: a path-filtered workflow that does not run reports no
-      # check, so an anchor naming it pends forever. That coupling is the
-      # accepted cost being traded away here.
+      # Names no checks deliberately: a path-filtered workflow that does not run
+      # reports nothing, so an anchor naming it would pend forever.
       - "#check-failure = 0"
+      - "#check-pending = 0"
 
 pull_request_rules:
   - name: Auto-merge labelled PRs once every check is green
