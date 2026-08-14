@@ -9,7 +9,7 @@ on:
     paths:
       - 'docs/**'
       - 'MIGRATIONS.md'
-      - '.github/workflows/docs.yml'
+      - '.github/workflows/docs-release.yml'
   workflow_dispatch:
 
 permissions:

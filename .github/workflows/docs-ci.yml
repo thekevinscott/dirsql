@@ -1,0 +1,36 @@
+name: Docs Build
+
+# Verification only. docs-release.yml publishes on push to main; its deploy
+# job consumes the Pages artifact its build job uploads in the same run, so
+# it cannot be reused here -- gating that deploy with `if:` would still
+# report a second, skipped check on every docs PR.
+on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs-ci.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        working-directory: docs
+        run: npm install
+
+      - name: Build VitePress
+        working-directory: docs
+        run: npx vitepress build

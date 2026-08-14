@@ -1,8 +1,7 @@
-name: TS Test
+name: dirsql TypeScript CI
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
+# packages/rust/** fans in: the core compiles into the binding, and
+# [e2e].extra_scope means a core change stales this package's attestation.
 on:
   push:
     branches: [main]
@@ -11,23 +10,107 @@ on:
       - 'packages/rust/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - '.github/workflows/ts-test.yml'
+      - 'testing-conventions.toml'
+      - '.github/workflows/dirsql-typescript-ci.yml'
   pull_request:
     paths:
       - 'packages/ts/**'
+      - '!packages/ts/changelog.d/**'
+      - '!packages/ts/migrations.d/**'
+      - '!packages/ts/README.md'
       - 'packages/rust/**'
+      - '!packages/rust/changelog.d/**'
+      - '!packages/rust/migrations.d/**'
+      - '!packages/rust/README.md'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - '.github/workflows/ts-test.yml'
+      - 'testing-conventions.toml'
+      - '.github/workflows/dirsql-typescript-ci.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
+  typescript-sdk:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["typescript"]'
+      source: packages/ts/src
+      config: testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      rust_toolchain: true
+
+  rust-napi-binding:
+    uses: thekevinscott/testing-conventions/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["rust"]'
+      source: packages/ts/napi
+      config: testing-conventions.toml
+      base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+      gates: '["colocated-test", "unit-lint"]'
+
+  lint:
+    name: lint (ts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Install dependencies
+        working-directory: packages/ts
+        run: pnpm install
+
+      - name: Lint
+        working-directory: packages/ts
+        run: pnpm lint
+
+      - name: Format check
+        working-directory: packages/ts
+        run: pnpm format:check
+
+# Redundant with the `tsc` inside `pnpm build`, but this leg skips the
+# napi-rs build chain (seconds, not minutes) and surfaces a type error as
+# its own check rather than as a unit-test failure. The addon loads at
+# runtime via `createRequire`, so `--noEmit` needs no built artifact.
+  tsc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Install dependencies
+        working-directory: packages/ts
+        run: pnpm install
+
+      - name: Type check
+        working-directory: packages/ts
+        run: pnpm exec tsc --noEmit
+
   build:
-    # Builds the napi addon once and shares it with unit/binding/distcheck below
-    # (#483) instead of each job/matrix-cell rebuilding it independently.
+    # Builds the napi addon once and shares it with unit/binding/distcheck
+    # below instead of each job/matrix-cell rebuilding it independently.
     # The addon is N-API (napi6, see packages/ts/napi/Cargo.toml), which is
     # ABI-stable across Node majors, so one build serves the whole Node
     # 20/22/24 matrix.
@@ -113,9 +196,8 @@ jobs:
         run: pnpm exec vitest run --dir src
 
   integration:
-    # Hermetic tier (#289): SDK public API with the native core mocked
-    # (`vi.mock`) and no filesystem access — no Rust toolchain or napi build
-    # needed.
+    # Hermetic tier: native core mocked (`vi.mock`), no filesystem access --
+    # no Rust toolchain or napi build needed.
     name: Integration tests (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
     strategy:
@@ -144,9 +226,8 @@ jobs:
         run: pnpm test:integration
 
   binding:
-    # Binding tier (#289): the SDK public API against the real napi core and
-    # a real filesystem — proves the SDK↔core marshaling that the hermetic
-    # integration tier mocks out.
+    # Binding tier: real napi core and real filesystem -- proves the SDK↔core
+    # marshaling the hermetic tier mocks out.
     #
     # Keeps its own Rust toolchain + rust-cache (unlike unit/distcheck below):
     # tests/binding/*.test.ts shell out to `cargo` directly at test-run time
@@ -196,22 +277,10 @@ jobs:
         working-directory: packages/ts
         run: pnpm exec vitest run --dir tests/integration/binding --passWithNoTests
 
-  # Unit coverage now runs in the reusable testing-conventions workflow
-  # (conventions.yml, `typescript-sdk` gates: unit-coverage) after upstream
-  # #284 taught the coverage suite job to install/build from the derived
-  # package root. The bespoke coverage job that lived here is retired (#412).
-
   distcheck:
-    # Functional publishability gate: build the real binary + napi addon,
-    # pack the main `dirsql` package and the host's `@dirsql/cli-<slug>`
-    # sub-package the way the release pipeline would, `npm install` both
-    # into a fresh dir, and run `node_modules/.bin/dirsql --version`. Red
-    # here means the npm release is broken and must not go out. This is the
-    # install-and-run check the `packaging` gate does NOT do (that gate only
-    # asserts no test files ship in the artifact). No mocks. The flow lives
-    # in the internals/distcheck package (#520); this job invokes its
-    # `dirsql-distcheck node` entry point (which drives npm/pnpm from Python).
-    name: Packaging distcheck (install + run)
+    # Installs and runs the packed tarballs, which the `packaging` gate does
+    # not do -- that gate only asserts no test files ship in the artifact.
+    name: Packaging distcheck (ts)
     needs: build
     runs-on: ubuntu-latest
     steps:
