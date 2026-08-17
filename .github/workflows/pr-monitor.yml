@@ -1,0 +1,30 @@
+name: PR Monitor
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  monitor:
+    name: 'CI Gate'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: thekevinscott/pr-monitor@v1
+        with:
+          # Path filtering (#834) means a PR can legitimately trigger zero
+          # checks; zero runs after pre-sleep is a pass, not a wait (#943).
+          minimum-checks: 0
+          # With minimum-checks at 0, pre-sleep is the only guard against
+          # polling before other workflows register. Observed dispatch fan-out
+          # is ~2s across all nine workflows (#946); 30s is ~15x margin.
+          pre-sleep: 30
+          # Full fan-out completes in under 3 minutes (#946); a timeout at 20
+          # is a hung job or a real slowdown, not flake.
+          timeout: 20
