@@ -25,6 +25,8 @@ jobs:
           # polling before other workflows register. Observed dispatch fan-out
           # is ~2s across all nine workflows (#946); 30s is ~15x margin.
           pre-sleep: 30
-          # Full fan-out completes in under 3 minutes (#946); a timeout at 20
-          # is a hung job or a real slowdown, not flake.
-          timeout: 20
+          # Double the longest run observed in the accessible Actions history
+          # (Release Precheck, 22m21s, under multi-PR contention on 2026-08-12
+          # — which also outran the old gate's 20-minute timeout). Post-#834
+          # fan-out completes in ~3 minutes, so a firing means a hung job.
+          timeout: 45
