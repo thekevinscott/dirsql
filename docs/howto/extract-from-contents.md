@@ -77,6 +77,9 @@ SQLite value mapping is under
 
 ## Going further
 
+- Just want to read a field or two out of some JSON files? SQLite's JSON
+  operators work directly on a path-table's `content` column, with no config
+  and no command — [Query JSON file contents](./query-json.md).
 - The command re-runs on every startup and on every change to a matched
   file. If it is expensive, [keep the index across restarts](./persist.md).
 - Embedding `dirsql` in a program instead? The SDK's `on_file` callback
