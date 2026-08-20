@@ -133,6 +133,11 @@ process alive for the rest of the invocation, sending it every subsequent
 call — one process total, never one per row or per file. The worker is torn
 down when the invocation ends.
 
+A query paying per-row round trips reports them on stderr while it runs
+(`dirsql: running 9204 worker calls`), on the same terms as every other
+[progress line](./cli.md#progress-reporting): terminal-only by default, silent
+on a pipe, and gone before the result is printed.
+
 The `timeout` bounds each **round-trip call**, not the query: a query that
 calls the function on 10 000 rows is 10 000 individually timed calls. A call
 that times out, or a worker that crashes or closes its pipes, fails the query

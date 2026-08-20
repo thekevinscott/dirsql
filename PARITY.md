@@ -56,6 +56,15 @@ Python, Rust and TypeScript. No SDK exposes a knob for it: an SDK-level
 `progress=` argument would be exactly the kind of per-SDK surface this table
 exists to prevent.
 
+The same reporter covers **query time** (#1001): a `query` whose declared
+`[[dirsql.function]]` workers make round trips reports a running count of them
+(`dirsql: running 9204 worker calls`). It lives in `Db::query`, below every
+SDK's `query`/`await db.query`, so again all three change at once and none
+carries a copy. Notably this is the progress `dirsql-plugin-embeddings` gets
+for its `embed(content)`-per-row search: the plugin drives the Python SDK,
+which drives the same `Db::query`, so no plugin-side reporting exists or is
+needed.
+
 | API                        | Python                                         | Rust                                                 | TypeScript                                              |
 |----------------------------|------------------------------------------------|------------------------------------------------------|---------------------------------------------------------|
 | Constructor                | `DirSQL(root=None, *, tables=None, ignore=None, no_ignore=False, config=None, persist=False, persist_path=None, extensions=None)` | `DirSQL::builder().root(..).tables(..).ignore(..).config(..).persist(Option<path>).extensions(..).build()` (also `DirSQL::new`/`with_ignore` shortcuts) | `new DirSQL(configPath)` or `new DirSQL({ root?, tables?, ignore?, config?, persist?, persistPath?, extensions?, noIgnore? })` + `await db.ready` |

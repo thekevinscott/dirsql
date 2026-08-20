@@ -483,6 +483,24 @@ dirsql: indexed 41231 files in 3m12s
 
 stdout is untouched — it carries the query result and nothing else.
 
+A query gets the same treatment when it calls a
+[worker-backed function](./config.md#dirsql-function). Those cost one round
+trip per row, so a query that calls one over a whole corpus is the slowest
+thing dirsql does:
+
+```
+dirsql: running 9204 worker calls
+```
+
+and, when the query ends:
+
+```
+dirsql: ran 41231 worker calls in 2m41s
+```
+
+A query that calls no worker prints nothing, whatever the setting — the
+reporting only ever speaks when there is something to report.
+
 By default this is **terminal-only, and only for work slow enough to wonder
 about**: a phase that finishes in under half a second prints nothing at all,
 and a run whose stderr is a pipe or a file prints nothing regardless of how
