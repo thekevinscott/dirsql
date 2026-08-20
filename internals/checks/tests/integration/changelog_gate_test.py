@@ -168,6 +168,16 @@ def describe_run_against_a_real_repo():
         assert run(base_sha, head_sha) == 0
         assert "bypassing changelog enforcement" in capsys.readouterr().out
 
+    def it_passes_when_only_the_package_gate_config_changes(repo, capsys):
+        tmp_path, base_sha = repo
+        _write(
+            tmp_path / "packages" / "python" / "testing-conventions.toml",
+            "[python.coverage]\nfail_under = 100\n",
+        )
+        head_sha = _commit("narrow the python coverage config")
+
+        assert run(base_sha, head_sha) == 0
+
     def it_passes_when_no_package_source_changed(repo, capsys):
         tmp_path, base_sha = repo
         (tmp_path / "README.md").write_text("hello again\n")
