@@ -19,8 +19,14 @@ repository.workspace = true
 # `tests/` is the integration suite -- excluded so test files never ship in the
 # published `.crate` (enforced by the `packaging` gate in CI). Inline unit tests
 # stay (they are `#[cfg(test)]` modules inside `src/`, not separate files).
+# The fragment dirs are repo inputs -- one file per change, assembled into
+# nothing and read by no crate consumer. They need naming here because cargo
+# ships whatever is not excluded; npm and maturin drop theirs structurally, via
+# an allowlist and the wheel layout respectively.
 exclude = [
     "tests/",
+    "changelog.d/",
+    "migrations.d/",
     "docs/.vitepress",
     "docs/.claude",
     "docs/tests",
