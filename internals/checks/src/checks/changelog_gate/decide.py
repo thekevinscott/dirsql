@@ -2,12 +2,17 @@
 
 Mirrors template-lib's reference gate (#566) in structure, adapted to dirsql's
 **per-package colocation**: fragments live inside the package they document --
-``packages/<pkg>/changelog.d/`` and ``packages/<pkg>/migrations.d/`` -- so they
-ship with that package. A PR that changes non-test source under
-``packages/<pkg>/`` must add a fragment under that package's own fragment
+``<root>/<pkg>/changelog.d/`` and ``<root>/<pkg>/migrations.d/`` -- so they ship
+with that package. Two top-level roots hold independently published packages:
+``packages/`` (the three SDKs) and ``plugins/``. A PR that changes non-test
+source under one of them must add a fragment under that package's own fragment
 folders, named ``YYYY-MM-DD-<slug>.md`` (the directory identifies the package,
 so no package token in the filename). The ``skip-changelog:`` commit-body line
 is the bypass.
+
+A package is identified throughout by its **root-qualified directory**
+(``packages/rust``, ``plugins/dirsql-plugin-embeddings``) rather than its bare
+name, so the same name under two roots stays two packages.
 """
 
 import re
@@ -17,9 +22,13 @@ import re
 # trailer -- this sidesteps the blank-line-splits-the-trailer footgun.
 _SKIP_TRAILER = re.compile(r"(?im)^skip-changelog:")
 
+_ROOTS = ("packages", "plugins")
+
 # A fragment sits directly inside a package's changelog.d/ or migrations.d/.
-# Captures (<pkg>, <filename>); the trailing segment forbids nested paths.
-_FRAGMENT_RE = re.compile(r"packages/([^/]+)/(?:changelog|migrations)\.d/([^/]+)")
+# Captures (<pkg dir>, <filename>); the trailing segment forbids nested paths.
+_FRAGMENT_RE = re.compile(
+    rf"((?:{'|'.join(_ROOTS)})/[^/]+)/(?:changelog|migrations)\.d/([^/]+)"
+)
 
 # Template-lib fragment name: an ISO date, a kebab-case slug, and `.md`.
 _FRAGMENT_NAME = re.compile(r"\d{4}-\d{2}-\d{2}-[a-z0-9-]+\.md")
@@ -31,11 +40,11 @@ def has_skip_trailer(commit_messages: str) -> bool:
 
 
 def changed_packages(changed) -> list[str]:
-    """Unique, sorted package names touched under ``packages/<name>/...``."""
+    """Unique, sorted package dirs (``<root>/<name>``) the paths touch."""
     pkgs = {
-        parts[1]
+        f"{parts[0]}/{parts[1]}"
         for path in changed
-        if len(parts := path.split("/")) >= 2 and parts[0] == "packages"
+        if len(parts := path.split("/")) >= 2 and parts[0] in _ROOTS
     }
     return sorted(pkgs)
 
@@ -51,25 +60,25 @@ def _is_exempt(path: str, pkg: str) -> bool:
     """
     p = re.escape(pkg)
     return bool(
-        re.fullmatch(rf"packages/{p}/(CHANGELOG|MIGRATIONS)\.md", path)
-        or re.match(rf"packages/{p}/(changelog|migrations)\.d/", path)
-        or re.match(rf"packages/{p}/e2e-attestations/", path)
-        or re.fullmatch(rf"packages/{p}/.*_test\.py", path)
-        or re.fullmatch(rf"packages/{p}/.*\.(test|spec)\.(ts|tsx|js|mjs|cjs)", path)
-        or re.match(rf"packages/{p}/tests?/", path)
+        re.fullmatch(rf"{p}/(CHANGELOG|MIGRATIONS)\.md", path)
+        or re.match(rf"{p}/(changelog|migrations)\.d/", path)
+        or re.match(rf"{p}/e2e-attestations/", path)
+        or re.fullmatch(rf"{p}/.*_test\.py", path)
+        or re.fullmatch(rf"{p}/.*\.(test|spec)\.(ts|tsx|js|mjs|cjs)", path)
+        or re.match(rf"{p}/tests?/", path)
     )
 
 
 def code_touched(changed, pkg: str) -> bool:
     """True if the package has non-stub, non-test source changes."""
-    prefix = f"packages/{pkg}/"
+    prefix = f"{pkg}/"
     return any(
         path.startswith(prefix) and not _is_exempt(path, pkg) for path in changed
     )
 
 
 def _fragment(path: str):
-    """``(<pkg>, <filename>)`` if ``path`` sits directly in a package's
+    """``(<pkg dir>, <filename>)`` if ``path`` sits directly in a package's
     changelog.d/ or migrations.d/, else ``None``."""
     match = _FRAGMENT_RE.fullmatch(path)
     return (match.group(1), match.group(2)) if match is not None else None

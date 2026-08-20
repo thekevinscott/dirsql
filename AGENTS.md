@@ -203,9 +203,9 @@ Product *behavior* stays covered by the normal unit / integration / binding / e2
 
 ### Changelog and Migrations
 
-**Every PR touching non-test source under `packages/<pkg>/` must add a changelog fragment** at `packages/<pkg>/changelog.d/YYYY-MM-DD-<slug>.md` (UTC merge date; body leads with a bold Keep-a-Changelog category, e.g. `**Fixed**`), one per changed package. Enforced by the `changelog-gate` check in CI. Escape hatch for truly no-observable-change PRs: a `skip-changelog: <reason>` line in any commit message. Fragments are permanent and append-only; the root `CHANGELOG.md` / `MIGRATIONS.md` are **frozen** pointer stubs -- never write into them; stray entries get relocated into the owning package's fragment dir, never folded into the frozen files.
+**Every PR touching non-test source under `packages/<pkg>/` or `plugins/<pkg>/` must add a changelog fragment** at `<root>/<pkg>/changelog.d/YYYY-MM-DD-<slug>.md` (UTC merge date; body leads with a bold Keep-a-Changelog category, e.g. `**Fixed**`), one per changed package. Enforced by the `changelog-gate` check in CI. Escape hatch for truly no-observable-change PRs: a `skip-changelog: <reason>` line in any commit message. Fragments are permanent and append-only; the root `CHANGELOG.md` / `MIGRATIONS.md` are **frozen** pointer stubs -- never write into them; stray entries get relocated into the owning package's fragment dir, never folded into the frozen files.
 
-**A migration fragment** (`packages/<pkg>/migrations.d/YYYY-MM-DD-<slug>.md`) is additionally required when a PR breaks a public API, removes a deprecated symbol, or changes runtime behavior without an API change. It needs all five subsections (Summary / Required changes / Deprecations removed / Behavior changes without code changes / Verification); write `_None._` under any that don't apply. Template at the bottom of the frozen root `MIGRATIONS.md`. Purely additive changes and behavior-preserving fixes need no migration entry.
+**A migration fragment** (`<root>/<pkg>/migrations.d/YYYY-MM-DD-<slug>.md`) is additionally required when a PR breaks a public API, removes a deprecated symbol, or changes runtime behavior without an API change. It needs all five subsections (Summary / Required changes / Deprecations removed / Behavior changes without code changes / Verification); write `_None._` under any that don't apply. Template at the bottom of the frozen root `MIGRATIONS.md`. Purely additive changes and behavior-preserving fixes need no migration entry.
 
 Full mechanics (scope/exemptions, fragment format details, relocation rules): `agents/reference/changelog-migrations.md`.
 
@@ -214,8 +214,8 @@ Full mechanics (scope/exemptions, fragment format details, relocation rules): `a
 ```markdown
 ## Changelog / Migrations
 
-- [ ] Changelog fragment added under `packages/<pkg>/changelog.d/` for each changed package (or: `skip-changelog` trailer on a commit with reason)
-- [ ] Migration fragment added under `packages/<pkg>/migrations.d/` (or: not required -- additive/bugfix only)
+- [ ] Changelog fragment added under `<root>/<pkg>/changelog.d/` for each changed package (or: `skip-changelog` trailer on a commit with reason)
+- [ ] Migration fragment added under `<root>/<pkg>/migrations.d/` (or: not required -- additive/bugfix only)
 ```
 
 Orchestrators must block merges of SDK-touching PRs that miss either file when required.
