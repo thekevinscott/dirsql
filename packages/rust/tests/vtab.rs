@@ -6,10 +6,20 @@
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 
 use dirsql::vtab::load_module;
 use rusqlite::Connection;
 use tempfile::TempDir;
+
+/// Strip every permission bit from `path`, reporting whether the OS actually
+/// enforces the result. A privileged process -- root, or anything holding
+/// `CAP_DAC_OVERRIDE` -- reads the file regardless, so the unreadable
+/// precondition cannot hold there and the caller has nothing to assert.
+fn make_unreadable(path: &Path) -> bool {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o000)).unwrap();
+    fs::read(path).is_err()
+}
 
 /// A connection with the path-table module registered and one vtab named `t`
 /// spanning `glob` under `dir`.
@@ -148,7 +158,10 @@ fn unreadable_file_yields_null_content_without_erroring_the_row() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("secret.md");
     fs::write(&path, "classified").unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    if !make_unreadable(&path) {
+        eprintln!("skipped: this process bypasses file permission bits");
+        return;
+    }
     let conn = open_over(&dir, "**/*");
 
     let (name, body): (String, Option<String>) = conn
@@ -166,7 +179,10 @@ fn star_does_not_read_file_bodies() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("locked.md");
     fs::write(&path, "unreadable").unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    if !make_unreadable(&path) {
+        eprintln!("skipped: this process bypasses file permission bits");
+        return;
+    }
     let conn = open_over(&dir, "**/*");
 
     // If SELECT * read content eagerly this would surface the permission
