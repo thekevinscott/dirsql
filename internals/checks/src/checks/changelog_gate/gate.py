@@ -1,11 +1,11 @@
 """Orchestration for the changelog-gate check (#494/#496).
 
 Mirrors template-lib's reference gate (#566), adapted to dirsql's per-package
-colocation: a PR that changes non-test source under ``packages/<pkg>/`` must
-add a fragment under that same package's ``changelog.d/`` (or
-``migrations.d/``), named ``YYYY-MM-DD-<slug>.md``. A ``skip-changelog:``
-commit-body line bypasses the whole gate. The git plumbing is injected so the
-orchestration unit-tests without a real repo.
+colocation: a PR that changes non-test source under ``packages/<pkg>/`` or
+``plugins/<pkg>/`` must add a fragment under that same package's
+``changelog.d/`` (or ``migrations.d/``), named ``YYYY-MM-DD-<slug>.md``. A
+``skip-changelog:`` commit-body line bypasses the whole gate. The git plumbing
+is injected so the orchestration unit-tests without a real repo.
 """
 
 from __future__ import annotations
@@ -55,9 +55,9 @@ def run(
         if added_fragments(added, pkg):
             continue
         print(
-            f"::error::packages/{pkg} has code changes but no changelog fragment "
-            f"was added. Add packages/{pkg}/changelog.d/YYYY-MM-DD-<slug>.md (plus "
-            f"a packages/{pkg}/migrations.d/ fragment if the change is breaking), "
+            f"::error::{pkg} has code changes but no changelog fragment "
+            f"was added. Add {pkg}/changelog.d/YYYY-MM-DD-<slug>.md (plus "
+            f"a {pkg}/migrations.d/ fragment if the change is breaking), "
             f"or add a 'skip-changelog: <reason>' line to any commit for a "
             f"genuinely internal refactor. See AGENTS.md, 'Changelog and Migrations'."
         )

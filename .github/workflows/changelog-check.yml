@@ -5,22 +5,19 @@ env:
 
 # The gate itself decides per package whether a fragment is required
 # (changed_packages / code_touched in internals/checks); these paths only
-# decide whether the decision is worth a runner. packages/** covers both the
-# code that demands a fragment and the fragment dirs that satisfy it, so the
-# near-miss diagnostics (malformed fragment names) still run on
+# decide whether the decision is worth a runner. Each root's /** covers both
+# the code that demands a fragment and the fragment dirs that satisfy it, so
+# the near-miss diagnostics (malformed fragment names) still run on
 # fragment-only PRs.
-#
-# plugins/ is deliberately absent: the gate's matchers are hardcoded to
-# packages/<pkg>/, so it cannot see plugin fragments -- running it on a
-# plugin change is a vacuous pass. Plugin changelog enforcement is a gate
-# gap, tracked in its own issue.
 on:
   pull_request:
     paths:
       - 'packages/**'
+      - 'plugins/**'
       # Attestations are filtered out of the gate's code_touched, so they
       # cannot alter its verdict.
       - '!packages/*/e2e-attestations/**'
+      - '!plugins/*/e2e-attestations/**'
       - '.github/workflows/changelog-check.yml'
 
 concurrency:
@@ -44,11 +41,11 @@ jobs:
       - name: Sync the checks package
         run: uv sync --project internals/checks
 
-      # Logic (packages/<pkg>/ source detection, per-package fragment
-      # detection, raw-body skip-changelog scanning) lives in internals/checks'
-      # changelog_gate check, colocated-tested at 100% coverage, per
-      # AGENTS.md "CI Workflows".
-      - name: Require a per-package changelog fragment for SDK code changes
+      # Logic (packages/<pkg>/ and plugins/<pkg>/ source detection,
+      # per-package fragment detection, raw-body skip-changelog scanning)
+      # lives in internals/checks' changelog_gate check, colocated-tested at
+      # 100% coverage, per AGENTS.md "CI Workflows".
+      - name: Require a per-package changelog fragment for package code changes
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}

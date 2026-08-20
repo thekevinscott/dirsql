@@ -99,6 +99,58 @@ def describe_run_against_a_real_repo():
         assert run(base_sha, head_sha) == 1
         assert "fragment filenames must match" in capsys.readouterr().out
 
+    def it_fails_when_plugin_source_changes_without_a_fragment(repo, capsys):
+        tmp_path, base_sha = repo
+        _write(
+            tmp_path / "plugins" / "dirsql-plugin-embeddings" / "src" / "x.py",
+            "# code\n",
+        )
+        head_sha = _commit("add plugin code")
+
+        assert run(base_sha, head_sha) == 1
+        out = capsys.readouterr().out
+        assert "plugins/dirsql-plugin-embeddings has code changes" in out
+
+    def it_passes_when_a_colocated_plugin_fragment_is_added(repo, capsys):
+        tmp_path, base_sha = repo
+        plugin = tmp_path / "plugins" / "dirsql-plugin-embeddings"
+        _write(plugin / "src" / "x.py", "# code\n")
+        _write(plugin / "changelog.d" / "2026-08-12-fix.md", "**Fixed** a thing.\n")
+        head_sha = _commit("add plugin code with fragment")
+
+        assert run(base_sha, head_sha) == 0
+
+    def it_fails_when_the_plugin_fragment_is_in_a_package(repo, capsys):
+        tmp_path, base_sha = repo
+        _write(
+            tmp_path / "plugins" / "dirsql-plugin-embeddings" / "src" / "x.py",
+            "# code\n",
+        )
+        _write(
+            tmp_path / "packages" / "python" / "changelog.d" / "2026-08-12-fix.md",
+            "**Fixed.**\n",
+        )
+        head_sha = _commit("plugin change, package fragment")
+
+        assert run(base_sha, head_sha) == 1
+        out = capsys.readouterr().out
+        assert "plugins/dirsql-plugin-embeddings has code changes" in out
+
+    def it_flags_a_malformed_plugin_fragment_filename(repo, capsys):
+        tmp_path, base_sha = repo
+        _write(
+            tmp_path
+            / "plugins"
+            / "dirsql-plugin-embeddings"
+            / "changelog.d"
+            / "notes.md",
+            "x\n",
+        )
+        head_sha = _commit("bad plugin fragment name")
+
+        assert run(base_sha, head_sha) == 1
+        assert "fragment filenames must match" in capsys.readouterr().out
+
     def it_passes_via_the_skip_changelog_line(repo, capsys):
         tmp_path, base_sha = repo
         _write(tmp_path / "packages" / "rust" / "src" / "lib.rs")

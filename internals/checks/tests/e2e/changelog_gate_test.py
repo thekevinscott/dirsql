@@ -95,6 +95,28 @@ def describe_dirsql_checks_changelog_gate():
         assert proc.returncode == 1, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
         assert "packages/rust has code changes" in proc.stdout
 
+    def it_exits_nonzero_when_plugin_source_changes_without_a_fragment(repo):
+        tmp_path, base_sha = repo
+        _write(
+            tmp_path / "plugins" / "dirsql-plugin-embeddings" / "src" / "x.py",
+            "# code\n",
+        )
+        head_sha = _commit(tmp_path, "add plugin code")
+
+        proc = _gate(tmp_path, base_sha, head_sha)
+        assert proc.returncode == 1, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        assert "plugins/dirsql-plugin-embeddings has code changes" in proc.stdout
+
+    def it_exits_zero_when_a_colocated_plugin_fragment_is_added(repo):
+        tmp_path, base_sha = repo
+        plugin = tmp_path / "plugins" / "dirsql-plugin-embeddings"
+        _write(plugin / "src" / "x.py", "# code\n")
+        _write(plugin / "changelog.d" / "2026-08-12-fix.md", "**Fixed** a thing.\n")
+        head_sha = _commit(tmp_path, "add plugin code with fragment")
+
+        proc = _gate(tmp_path, base_sha, head_sha)
+        assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+
     def it_exits_zero_via_the_skip_changelog_line(repo):
         tmp_path, base_sha = repo
         _write(tmp_path / "packages" / "rust" / "src" / "lib.rs")

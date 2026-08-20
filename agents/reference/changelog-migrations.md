@@ -5,21 +5,21 @@ Extracted from AGENTS.md (see "Changelog and Migrations" there for the summary).
 
 **Every PR that touches public-facing SDK code must add a changelog fragment.** This is enforced in CI by the `changelog-gate` check (`internals/checks`), whose implementation mirrors [template-lib](https://github.com/thekevinbot/template-lib)'s reference gate (#566); an unmet gate blocks merge.
 
-The scope: any change to non-test source under `packages/<pkg>/` requires a fragment naming that package. Exempt are test files (`*_test.py`, `*.test.ts` / `*.spec.ts`, anything under `packages/<pkg>/tests/`), the package `CHANGELOG.md` / `MIGRATIONS.md` pointer stubs, and the fragment folders themselves. We err toward requiring entries because the project does not yet strictly follow semver, so the changelog must carry the signal that semver would otherwise provide.
+The scope: any change to non-test source under a package root -- `packages/<pkg>/` (the three SDKs) or `plugins/<pkg>/` (independently published plugins, #896) -- requires a fragment naming that package. A package is identified by its root-qualified directory, so `plugins/ts` and `packages/ts` would be two packages. Exempt are test files (`*_test.py`, `*.test.ts` / `*.spec.ts`, anything under `<root>/<pkg>/tests/`), the package `CHANGELOG.md` / `MIGRATIONS.md` pointer stubs, the `e2e-attestations/` receipts, and the fragment folders themselves. We err toward requiring entries because the project does not yet strictly follow semver, so the changelog must carry the signal that semver would otherwise provide.
 
-**Fragments are per-package and colocated (#565), so they ship with the package.** Each SDK package (`python`, `ts`, `rust`) owns its own changelog under `packages/<pkg>/changelog.d/`, and a PR adds one fragment per **changed package** -- the fragment lives under the same package whose source changed:
+**Fragments are per-package and colocated (#565), so they ship with the package.** Each SDK package (`python`, `ts`, `rust`) owns its own changelog under `packages/<pkg>/changelog.d/`, as does each plugin under `plugins/<pkg>/changelog.d/`, and a PR adds one fragment per **changed package** -- the fragment lives under the same package whose source changed:
 
 ```
-packages/<pkg>/changelog.d/YYYY-MM-DD-<slug>.md
+<root>/<pkg>/changelog.d/YYYY-MM-DD-<slug>.md
 ```
 
-- `<pkg>` is the package whose public source the PR changed. The Rust core is `rust` (`packages/rust/`), the Python package/binding is `python` (`packages/python/`), the TS package + napi crate is `ts` (`packages/ts/`). The directory identifies the package, so the filename carries no package token. A PR that touches more than one package needs a fragment in each.
+- `<pkg>` is the package whose public source the PR changed. The Rust core is `rust` (`packages/rust/`), the Python package/binding is `python` (`packages/python/`), the TS package + napi crate is `ts` (`packages/ts/`), and the embeddings plugin is `plugins/dirsql-plugin-embeddings/`. The directory identifies the package, so the filename carries no package token. A PR that touches more than one package needs a fragment in each.
 - `YYYY-MM-DD` is the UTC merge date; `<slug>` is a short kebab-case description (`2026-07-13-fix-watcher-race.md`).
 - The body leads with a Keep a Changelog **category** in bold -- `**Added**` / `**Changed**` / `**Deprecated**` / `**Removed**` / `**Fixed**` / `**Security**` -- then the entry text, exactly as it would read in a changelog. The category lives in the body, **not** the filename.
 
 Fragments are **permanent and append-only** -- nothing is ever assembled back into a root `CHANGELOG.md` and deleted. The root `CHANGELOG.md` / `MIGRATIONS.md` are **frozen** pointer stubs holding only the pre-fragment history (#563/#564); do not edit them. Version history is the `git log --tags` record (the repo tags a release on every merge).
 
-> **Direction of travel is one-way: entries become fragments, never the reverse.** The root `CHANGELOG.md` / `MIGRATIONS.md` are a *closed archive* -- a new entry (even one that documents an already-released change, or a stray fragment left in an old location) is **never** appended, merged, or "folded" into them. The correct home for *any* changelog/migration content that is not already frozen is a fragment under `packages/<pkg>/changelog.d/` (or `migrations.d/`). If you find loose entries in a wrong location -- e.g. the retired **root** `changelog.d/` / `migrations.d/` (the dual-mode dirs that predate the per-package layout, #565) -- **relocate them to the owning package's fragment dir** (renamed to `YYYY-MM-DD-<slug>.md`, body leading with its category), one copy per package the change affected; do **not** move them into the frozen files. Writing into the frozen archive is the mistake the freeze exists to prevent -- if you're adding lines to root `CHANGELOG.md`/`MIGRATIONS.md`, stop: you want a fragment.
+> **Direction of travel is one-way: entries become fragments, never the reverse.** The root `CHANGELOG.md` / `MIGRATIONS.md` are a *closed archive* -- a new entry (even one that documents an already-released change, or a stray fragment left in an old location) is **never** appended, merged, or "folded" into them. The correct home for *any* changelog/migration content that is not already frozen is a fragment under `<root>/<pkg>/changelog.d/` (or `migrations.d/`). If you find loose entries in a wrong location -- e.g. the retired **root** `changelog.d/` / `migrations.d/` (the dual-mode dirs that predate the per-package layout, #565) -- **relocate them to the owning package's fragment dir** (renamed to `YYYY-MM-DD-<slug>.md`, body leading with its category), one copy per package the change affected; do **not** move them into the frozen files. Writing into the frozen archive is the mistake the freeze exists to prevent -- if you're adding lines to root `CHANGELOG.md`/`MIGRATIONS.md`, stop: you want a fragment.
 
 **Escape hatch.** If a PR genuinely has no observable change -- a pure refactor, an internal rename, a type-signature tidy with the same runtime -- bypass the gate by adding a `skip-changelog:` line to any commit message on the PR:
 
@@ -37,7 +37,7 @@ The gate scans raw commit bodies (#566, mirroring template-lib), so the line wor
 
 Purely additive changes and behavior-preserving bug fixes do NOT require a migration entry.
 
-Migration fragments are per-package too, one file per changed package under `packages/<pkg>/migrations.d/YYYY-MM-DD-<slug>.md` (same naming as changelog fragments). Each is a complete entry -- a `### <title>` heading plus the five required subsections:
+Migration fragments are per-package too, one file per changed package under `<root>/<pkg>/migrations.d/YYYY-MM-DD-<slug>.md` (same naming as changelog fragments). Each is a complete entry -- a `### <title>` heading plus the five required subsections:
 
 1. **Summary** -- one paragraph: what broke, which SDKs/call sites, and why.
 2. **Required changes** -- table of before/after snippets for every affected surface (config, CLI, action inputs, function signatures, return types).
@@ -54,8 +54,8 @@ The frozen root `MIGRATIONS.md` is not published on the docs site: it holds only
 ```markdown
 ## Changelog / Migrations
 
-- [ ] Changelog fragment added under `packages/<pkg>/changelog.d/` for each changed package (or: `skip-changelog` trailer on a commit with reason)
-- [ ] Migration fragment added under `packages/<pkg>/migrations.d/` (or: not required -- additive/bugfix only)
+- [ ] Changelog fragment added under `<root>/<pkg>/changelog.d/` for each changed package (or: `skip-changelog` trailer on a commit with reason)
+- [ ] Migration fragment added under `<root>/<pkg>/migrations.d/` (or: not required -- additive/bugfix only)
 ```
 
 Orchestrators must block merges of SDK-touching PRs that miss either file when required.

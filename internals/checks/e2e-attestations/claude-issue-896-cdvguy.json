@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1787247270,
+  "exit_code": 0,
+  "commit": "f4cc4a8c31d4bf2a3e50a0fc33f13bb075cc11e6",
+  "branch": "claude/issue-896-cdvguy"
+}
