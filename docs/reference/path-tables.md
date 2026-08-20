@@ -61,6 +61,17 @@ SELECT * FROM '**/*.md';
 -- no such table: **/*.md; did you mean './**/*.md'?
 ```
 
+**The quotes are required too.** A path is not a bare SQL identifier — `./` is
+punctuation to SQLite's parser, so an unquoted path fails at parse time, before
+dirsql ever sees a table name to resolve. Single or double quotes both work;
+the error names the quoted form:
+
+```
+SELECT * FROM ./;
+-- near ".": syntax error in SELECT * FROM ./ at offset 14
+-- hint: paths used as table names must be quoted; did you mean "./"?
+```
+
 ### Paths outside the index root
 
 Three other prefixes resolve, with their usual shell meanings:

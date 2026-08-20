@@ -188,6 +188,15 @@ left unchanged). No implementation was needed — the tests passed on first run,
 confirming the core logic crosses both the PyO3 and napi boundaries unchanged.
 This closes epic #622.
 
+**Unquoted-path hint (#951) — parity by construction, no drift.** A path
+written without quotes (`FROM ./`) is punctuation to SQLite's parser, so the
+statement dies before the `no such table` fallback above can see it. `db::query`
+now widens SQLite's reported error offset over the surrounding path characters
+and appends `hint: paths used as table names must be quoted; did you mean
+"./"?` when the recovered token contains a `/`. Like every other path-table
+diagnostic this lives in the shared core, so all three SDKs and the CLI get the
+identical message with no per-binding surface and no SDK signature changes.
+
 ## AsyncDirSQL
 
 | API                        | Python                                | Rust                                   |

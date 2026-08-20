@@ -323,3 +323,49 @@ fn path_tables_never_leak_into_the_persisted_schema() {
         "a path-table lives in temp and must not appear in main's schema: {names:?}"
     );
 }
+
+#[test]
+fn an_unquoted_path_fails_with_a_quoting_hint() {
+    let root = fixture();
+    let db = open(&root);
+
+    let err = db.query("SELECT * FROM ./").unwrap_err().to_string();
+
+    assert!(
+        err.contains("syntax error"),
+        "SQLite's own error must survive, got: {err}"
+    );
+    assert!(
+        err.contains(r#"did you mean "./"?"#),
+        "an unquoted path must name its quoted form, got: {err}"
+    );
+}
+
+#[test]
+fn an_unquoted_nested_path_names_the_whole_path_in_the_hint() {
+    let root = fixture();
+    let db = open(&root);
+
+    let err = db
+        .query("SELECT * FROM ./docs/a.md")
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        err.contains(r#"did you mean "./docs/a.md"?"#),
+        "the hint must quote the whole path, not the token SQLite choked on, got: {err}"
+    );
+}
+
+#[test]
+fn an_ordinary_syntax_error_carries_no_quoting_hint() {
+    let root = fixture();
+    let db = open(&root);
+
+    let err = db.query("SELECT * FROM").unwrap_err().to_string();
+
+    assert!(
+        !err.contains("did you mean"),
+        "a syntax error with no path in it must stay unhinted, got: {err}"
+    );
+}
