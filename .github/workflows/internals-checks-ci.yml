@@ -32,3 +32,22 @@ jobs:
       config: internals/checks/testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       gates: '["colocated-test", "unit-lint", "integration-lint", "unit-coverage", "mutation", "e2e-verify"]'
+
+  internals-checks-integration:
+    # The conventions job runs this package's colocated unit tier and checks its
+    # e2e attestation; neither runs tests/integration/, the tier that reads the
+    # repo's real workflow files. Without it a workflow rename can delete the
+    # ground truth a check reads and no job notices (#973).
+    name: internals/checks integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.11"
+
+      - name: Run integration tests
+        run: uv run python -m pytest tests/integration/ -x -q --tb=short
+        working-directory: internals/checks
