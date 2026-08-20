@@ -1,9 +1,9 @@
-"""Binding-tier tests (real core) for table-name resolution from DDL.
+"""Binding-tier tests (real core) for a quoted-identifier DDL.
 
-The only thing dirsql needs from a (bring-your-own) DDL is the table *name*,
-which must also resolve for a **quoted identifier** -- the canonical shape
-emitted by ORMs / schema tools. ``Table.name`` must be the bare identifier,
-and a quoted-DDL table fully usable end to end.
+A table's name is declared, but its ``ddl`` is bring-your-own -- including the
+**quoted identifier** ORMs and schema tools emit. Quotes are SQL *delimiters*,
+not part of the name, so SQLite records the bare identifier and the declared
+``name`` matches it without dirsql reading the DDL text.
 """
 
 import json
@@ -15,20 +15,13 @@ from dirsql import DirSQL, Table
 
 
 def describe_quoted_identifier_ddl():
-    def it_resolves_table_name_to_the_bare_identifier():
-        table = Table(
-            ddl='CREATE TABLE "comments" (id TEXT, body TEXT, author TEXT)',
-            glob="comments/**/index.jsonl",
-            on_file=lambda path: [],
-        )
-        assert table.name == "comments"
-
     @pytest.mark.asyncio
     async def it_registers_and_queries_a_quoted_ddl_table(jsonl_dir):
         db = DirSQL(
             jsonl_dir,
             tables=[
                 Table(
+                    name="comments",
                     ddl='CREATE TABLE "comments" (id TEXT, body TEXT, author TEXT)',
                     glob="comments/**/index.jsonl",
                     on_file=lambda path: [

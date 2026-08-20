@@ -31,7 +31,7 @@ def _write(path, content):
 
 def _table_config(name, glob):
     return (
-        f'[[table]]\nddl = "CREATE TABLE {name} (basename TEXT)"\nglob = "{glob}"\n'
+        f'[[table]]\nname = "{name}"\nddl = "CREATE TABLE {name} (basename TEXT)"\nglob = "{glob}"\n'
         f"{_HOOK_BASENAME}\n"
     )
 

@@ -39,6 +39,7 @@ fn blog_fixture() -> TempDir {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "posts"
 ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
 glob = "posts/*/*.json"
 on-file = '''sh -c 'base=${1##*/}; size=$(wc -c < "$1" | tr -d " "); printf "[{\"basename\":\"%s\",\"size\":%s}]" "$base" "$size"' sh {path}'''
@@ -60,6 +61,7 @@ fn quoted_blog_fixture() -> TempDir {
         // Single-quoted TOML string so the embedded double quotes are literal.
         r#"
 [[table]]
+name = "posts"
 ddl = 'CREATE TABLE "posts" (basename TEXT)'
 glob = "posts/*/*.json"
 on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
@@ -820,6 +822,7 @@ fn query_subcommand_rejects_capture_column_collision() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "comments"
 ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
 glob = "_comments/{thread_id}/*.txt"
 on-file = "cat {path}"
@@ -868,11 +871,13 @@ fn query_subcommand_fans_out_file_to_overlapping_tables() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "ta"
 ddl = "CREATE TABLE ta (path TEXT)"
 glob = "data/*/metadata.json"
 on-file = '''sh -c 'rel=${1#"$2"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''
 
 [[table]]
+name = "tb"
 ddl = "CREATE TABLE tb (path TEXT)"
 glob = "data/**/metadata.json"
 on-file = '''sh -c 'rel=${1#"$2"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''
@@ -964,7 +969,7 @@ fn hookless_table_config_exits_nonzero_pointing_at_the_path_table() {
     let dir = TempDir::new().unwrap();
     fs::write(
         dir.path().join(".dirsql.toml"),
-        "[[table]]\nddl = \"CREATE TABLE files (path TEXT, size INTEGER)\"\nglob = \"**/*.md\"\n",
+        "[[table]]\nname = \"files\"\nddl = \"CREATE TABLE files (path TEXT, size INTEGER)\"\nglob = \"**/*.md\"\n",
     )
     .unwrap();
     let out = std::process::Command::cargo_bin("dirsql")
@@ -1110,6 +1115,7 @@ fn include_default_conflicting_records_table_exits_nonzero_naming_records() {
         dir.path().join("dup.toml"),
         r#"
 [[table]]
+name = "records"
 ddl = "CREATE TABLE records (x TEXT)"
 glob = "**/*"
 on-file = "cat {path}"
@@ -1310,6 +1316,7 @@ fn config_elsewhere_indexes_invocation_cwd_not_config_parent() {
         elsewhere.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "posts"
 ddl = "CREATE TABLE posts (basename TEXT)"
 glob = "posts/*/*.json"
 on-file = "printf '[{}]'"

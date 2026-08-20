@@ -3,7 +3,7 @@
 // requires the napi binary — it hands back a fake core module instead.
 // Real-core behaviour is covered by `tests/binding/`.
 
-import { DirSQL, type RowEvent, Table, parseTableName } from "dirsql";
+import { DirSQL, type RowEvent, Table } from "dirsql";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // The mocked `createRequire` resolves every specifier to this object, so the
@@ -12,7 +12,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { fakeCore } = vi.hoisted(() => ({
   fakeCore: {
     DirSQL: { openAsync: vi.fn() },
-    parseTableName: vi.fn(),
   },
 }));
 
@@ -75,6 +74,7 @@ describe("DirSQL construction", () => {
     openAsync.mockResolvedValue(makeInner());
     const tables = [
       {
+        name: "t",
         ddl: "CREATE TABLE t (n INTEGER)",
         glob: "**/*.json",
         onFile: () => [],
@@ -106,12 +106,14 @@ describe("DirSQL construction", () => {
     openAsync.mockResolvedValue(makeInner());
     const onFile = () => [];
     const asClass = new Table({
+      name: "a",
       ddl: "CREATE TABLE a (n INTEGER)",
       glob: "a/**",
       onFile,
       strict: true,
     });
     const asLiteral = {
+      name: "b",
       ddl: "CREATE TABLE b (n INTEGER)",
       glob: "b/**",
       onFile,
@@ -121,6 +123,7 @@ describe("DirSQL construction", () => {
     const [, forwarded] = openAsync.mock.calls[0] as [unknown, unknown[]];
     expect(forwarded).toEqual([
       {
+        name: "a",
         ddl: "CREATE TABLE a (n INTEGER)",
         glob: "a/**",
         onFile,
@@ -219,19 +222,5 @@ describe("DirSQL watch", () => {
     }
     expect(inner.startWatcher).toHaveBeenCalledOnce();
     expect(seen.map((e) => e.action)).toEqual(["insert", "insert", "delete"]);
-  });
-});
-
-describe("parseTableName", () => {
-  it("delegates DDL to the core's parser", () => {
-    fakeCore.parseTableName.mockImplementation((ddl: string) =>
-      ddl.includes("comments") ? "comments" : null,
-    );
-    expect(parseTableName('CREATE TABLE "comments" (n INTEGER)')).toBe(
-      "comments",
-    );
-    expect(fakeCore.parseTableName).toHaveBeenCalledWith(
-      'CREATE TABLE "comments" (n INTEGER)',
-    );
   });
 });

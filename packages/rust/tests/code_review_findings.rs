@@ -13,6 +13,7 @@ fn s1_ddl_with_semicolon_in_table_name_slot_is_rejected() {
     let result = DirSQL::new(
         dir.path(),
         vec![Table::new(
+            "evil;DROP_TABLE_bar--",
             "CREATE TABLE evil;DROP_TABLE_bar--(id TEXT)",
             "*.json",
             |_| vec![],
@@ -39,11 +40,16 @@ fn s1_column_name_with_sql_syntax_produces_clean_error() {
     std::fs::write(dir.path().join("a.json"), b"{}").unwrap();
     let result = DirSQL::new(
         dir.path(),
-        vec![Table::strict("CREATE TABLE t (id TEXT)", "*.json", |_| {
-            let mut row = Row::new();
-            row.insert("id); DROP TABLE t; --".into(), Value::Text("x".into()));
-            vec![row]
-        })],
+        vec![Table::strict(
+            "t",
+            "CREATE TABLE t (id TEXT)",
+            "*.json",
+            |_| {
+                let mut row = Row::new();
+                row.insert("id); DROP TABLE t; --".into(), Value::Text("x".into()));
+                vec![row]
+            },
+        )],
     );
     // The row is still rejected; since #714 the rejection costs that file
     // rather than the scan, so it surfaces as a reported skip instead of a
@@ -73,11 +79,16 @@ fn one_row_db(dir: &TempDir) -> DirSQL {
     std::fs::write(dir.path().join("a.json"), b"{}").unwrap();
     DirSQL::new(
         dir.path(),
-        vec![Table::new("CREATE TABLE t (id TEXT)", "*.json", |_| {
-            let mut row = Row::new();
-            row.insert("id".into(), Value::Text("x".into()));
-            vec![row]
-        })],
+        vec![Table::new(
+            "t",
+            "CREATE TABLE t (id TEXT)",
+            "*.json",
+            |_| {
+                let mut row = Row::new();
+                row.insert("id".into(), Value::Text("x".into()));
+                vec![row]
+            },
+        )],
     )
     .unwrap()
 }
@@ -131,7 +142,12 @@ fn p7_builder_exposes_poll_interval() {
     let dir = TempDir::new().unwrap();
     let _db = DirSQL::builder()
         .root(dir.path())
-        .table(Table::new("CREATE TABLE t (id TEXT)", "*.json", |_| vec![]))
+        .table(Table::new(
+            "t",
+            "CREATE TABLE t (id TEXT)",
+            "*.json",
+            |_| vec![],
+        ))
         .poll_interval(Duration::from_millis(50))
         .build()
         .unwrap();
@@ -142,7 +158,12 @@ fn i3_watch_error_exposes_underlying_source() {
     let dir = TempDir::new().unwrap();
     let db = DirSQL::new(
         dir.path(),
-        vec![Table::new("CREATE TABLE t (id TEXT)", "*.json", |_| vec![])],
+        vec![Table::new(
+            "t",
+            "CREATE TABLE t (id TEXT)",
+            "*.json",
+            |_| vec![],
+        )],
     )
     .unwrap();
     // Delete the directory out from under the watcher so `start_watching`
@@ -178,16 +199,21 @@ fn i8_ext_preserves_original_case() {
     std::fs::write(dir.path().join("Photo.JPG"), b"").unwrap();
     let db = DirSQL::new(
         dir.path(),
-        vec![Table::new("CREATE TABLE pics (ext TEXT)", "**/*", |path| {
-            let mut row = Row::new();
-            if let Some(ext) = std::path::Path::new(path).extension() {
-                row.insert(
-                    "ext".into(),
-                    Value::Text(ext.to_string_lossy().into_owned()),
-                );
-            }
-            vec![row]
-        })],
+        vec![Table::new(
+            "pics",
+            "CREATE TABLE pics (ext TEXT)",
+            "**/*",
+            |path| {
+                let mut row = Row::new();
+                if let Some(ext) = std::path::Path::new(path).extension() {
+                    row.insert(
+                        "ext".into(),
+                        Value::Text(ext.to_string_lossy().into_owned()),
+                    );
+                }
+                vec![row]
+            },
+        )],
     )
     .unwrap();
     let rows = db.query("SELECT ext FROM pics").unwrap();

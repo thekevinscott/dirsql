@@ -12,7 +12,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { fakeCore } = vi.hoisted(() => ({
   fakeCore: {
     DirSQL: { openAsync: vi.fn() },
-    parseTableName: vi.fn(),
   },
 }));
 
@@ -50,7 +49,12 @@ describe("the onFile table seam", () => {
     const db = new DirSQL({
       root: "/data",
       tables: [
-        { ddl: "CREATE TABLE t (n INTEGER)", glob: "**/*.json", onFile },
+        {
+          name: "t",
+          ddl: "CREATE TABLE t (n INTEGER)",
+          glob: "**/*.json",
+          onFile,
+        },
       ],
     });
     await db.ready;
@@ -59,13 +63,19 @@ describe("the onFile table seam", () => {
       Array<Record<string, unknown>>,
     ];
     expect(forwarded).toEqual([
-      { ddl: "CREATE TABLE t (n INTEGER)", glob: "**/*.json", onFile },
+      {
+        name: "t",
+        ddl: "CREATE TABLE t (n INTEGER)",
+        glob: "**/*.json",
+        onFile,
+      },
     ]);
   });
 
   it("Table copies onFile and carries no extract property", () => {
     const onFile = () => [];
     const table = new Table({
+      name: "t",
       ddl: "CREATE TABLE t (n INTEGER)",
       glob: "**/*.json",
       onFile,

@@ -35,6 +35,7 @@ Format is **inferrable from glob extension**: `.json` -> `json`, `.jsonl`/`.ndjs
 
 ```toml
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT, price REAL)"
 glob = "catalog/*.json"
 each = "data.items"
@@ -45,6 +46,7 @@ each = "data.items"
 
 ```toml
 [[table]]
+name = "comments"
 ddl = "CREATE TABLE comments (thread_id TEXT, body TEXT, author TEXT)"
 glob = "comments/{thread_id}/index.jsonl"
 # thread_id captured from glob path, body and author from JSONL content
@@ -67,6 +69,7 @@ columns.display_name = "metadata.author.name"   # dot-path into nested object
 
 ```toml
 [[table]]
+name = "posts"
 ddl = "CREATE TABLE posts (title TEXT, author TEXT)"
 glob = "posts/*.json"
 # format inferred from .json, columns match JSON keys 1:1
@@ -79,19 +82,23 @@ glob = "posts/*.json"
 ignore = ["node_modules/**", ".git/**"]
 
 [[table]]
+name = "comments"
 ddl = "CREATE TABLE comments (thread_id TEXT, body TEXT, author TEXT, resolved INTEGER)"
 glob = "_comments/{thread_id}/index.jsonl"
 
 [[table]]
+name = "documents"
 ddl = "CREATE TABLE documents (title TEXT, draft INTEGER, body TEXT)"
 glob = "**/index.md"
 
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT, price REAL)"
 glob = "catalog/*.json"
 each = "data.items"
 
 [[table]]
+name = "metrics"
 ddl = "CREATE TABLE metrics (date TEXT, requests INTEGER, errors INTEGER)"
 glob = "logs/*.csv"
 ```

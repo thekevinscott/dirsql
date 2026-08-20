@@ -27,6 +27,7 @@ def _open(root):
         root,
         tables=[
             Table(
+                name="rows_csv",
                 ddl="CREATE TABLE rows_csv (path TEXT)",
                 glob="docs/*.csv",
                 on_file=lambda path: [{"path": "docs/c.csv"}],

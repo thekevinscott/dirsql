@@ -21,6 +21,7 @@ def _write_fanout_file(tmp_dir):
 
 def _table(name, glob, col, val):
     return Table(
+        name=name,
         ddl=f"CREATE TABLE {name} ({col} TEXT)",
         glob=glob,
         on_file=lambda _path, col=col, val=val: [{col: val}],
@@ -72,6 +73,7 @@ def describe_fanout():
             tmp_dir,
             tables=[
                 Table(
+                    name="a",
                     ddl="CREATE TABLE a (id TEXT, col_a TEXT)",
                     glob="data/{id}/metadata.json",
                     on_file=lambda _path: [{"col_a": "A"}],

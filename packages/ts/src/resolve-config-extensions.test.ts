@@ -49,7 +49,9 @@ describe("resolveConfigExtensionSpecs", () => {
   });
 
   it("returns null when the config has no [dirsql] section at all", () => {
-    stubConfig({ table: [{ ddl: "CREATE TABLE t (x TEXT)", glob: "*" }] });
+    stubConfig({
+      table: [{ name: "t", ddl: "CREATE TABLE t (x TEXT)", glob: "*" }],
+    });
     expect(resolveConfigExtensionSpecs("/x/.dirsql.toml")).toBeNull();
   });
 
@@ -126,6 +128,7 @@ describe("resolveConfigsExtensionSpecs", () => {
         dirsql: { extension: [{ path: "ext/a.so" }] },
       } as ReturnType<typeof parseToml>)
       .mockReturnValueOnce({
+        name: "t",
         table: [{ ddl: "CREATE TABLE t (x TEXT)", glob: "*" }],
       } as ReturnType<typeof parseToml>);
     expect(resolveConfigsExtensionSpecs(["/a.toml", "/b.toml"])).toBeNull();

@@ -57,5 +57,7 @@ docs/blob-report/
 docs/.playwright/
 actionlint
 
-# cargo-mutants run output (never commit)
+# cargo-mutants run output (never commit). The tool rotates the previous
+# run's directory to `.old` on every re-run, so both forms need ignoring.
 mutants.out/
+mutants.out.old/

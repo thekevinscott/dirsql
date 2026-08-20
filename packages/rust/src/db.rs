@@ -405,11 +405,13 @@ impl Db {
     /// entirely in `_dirsql_internal_rows`, so a table's schema is exactly
     /// the DDL the user wrote.
     ///
-    /// Validates that the parsed table name is a safe unquoted SQL identifier
-    /// before handing the DDL to SQLite, so a DDL like
-    /// `CREATE TABLE foo;DROP_TABLE_bar--(id TEXT)` can't yield a poisoned
-    /// table name that breaks downstream `format!()`-built SQL.
-    pub fn create_table(&self, ddl: &str) -> Result<()> {
+    /// `name` is the table's declared name, validated as a safe unquoted SQL
+    /// identifier before the DDL reaches SQLite: it is spliced into
+    /// `format!()`-built INSERT/DELETE SQL downstream, so a poisoned name must
+    /// never get that far. Whether the DDL actually creates a table by that
+    /// name is settled afterwards against SQLite's catalog, not by reading the
+    /// DDL text.
+    pub fn create_table(&self, name: &str, ddl: &str) -> Result<()> {
         // A dirsql table is a per-file row table; an extension-backed virtual
         // table is not one, so reject `CREATE VIRTUAL TABLE` with a clear
         // message. Load the extension and use its functions in queries instead.
@@ -421,14 +423,13 @@ impl Db {
                     .to_string(),
             ));
         }
-        let table = parse_table_name(ddl).ok_or_else(|| DbError::DdlParse(ddl.to_string()))?;
-        validate_identifier(&table)?;
+        validate_identifier(name)?;
         // A `WITHOUT ROWID` table has no rowid, so `last_insert_rowid()` cannot
         // identify the inserted row and the `_dirsql_internal_rows.rowid_ref`
         // mapping would be meaningless. Warn; the table is still created.
         if is_without_rowid_ddl(ddl) {
             eprintln!(
-                "dirsql: table `{table}` is declared WITHOUT ROWID; internal row \
+                "dirsql: table `{name}` is declared WITHOUT ROWID; internal row \
                  bookkeeping relies on rowid and WITHOUT ROWID tables will be \
                  rejected in a future release"
             );
@@ -899,136 +900,6 @@ impl rusqlite::types::ToSql for Value {
     }
 }
 
-/// Extract the table name from a `CREATE TABLE` DDL statement.
-///
-/// The name token in `CREATE TABLE [IF NOT EXISTS] <name> (...)` may be:
-///   - a bare identifier:    `comments`
-///   - a quoted identifier:  `"comments"`, `` `comments` ``, `[comments]`
-///   - schema-qualified:     `main.comments`, `"main"."comments"`
-///
-/// Surrounding quotes are SQL *delimiters*, not part of the name, so they are
-/// stripped: a tool that emits `CREATE TABLE "comments" (...)` (as ORMs and
-/// schema generators routinely do) names the table `comments`. Schema-qualified
-/// names resolve to the table segment. Returns `None` when the input isn't a
-/// `CREATE TABLE` or carries no name token.
-///
-/// Deliberately a small, pure tokenizer rather than a full SQL parser:
-/// dirsql constrains table names to safe unquoted identifiers via
-/// [`validate_identifier`], so the handful of forms above are the only ones
-/// that can actually resolve to a usable table.
-/// Strip leading whitespace and SQL comments (`-- ...` to end-of-line and
-/// `/* ... */` blocks, repeated) from `s`. An unterminated block comment
-/// consumes the rest of the input. Every returned slice starts on a char
-/// boundary, so callers can index it safely.
-fn skip_ws_comments(s: &str) -> &str {
-    let mut s = s;
-    loop {
-        let trimmed = s.trim_start();
-        if let Some(after) = trimmed.strip_prefix("--") {
-            match after.find('\n') {
-                Some(i) => s = &after[i + 1..],
-                None => return "",
-            }
-        } else if let Some(after) = trimmed.strip_prefix("/*") {
-            match after.find("*/") {
-                Some(i) => s = &after[i + 2..],
-                None => return "",
-            }
-        } else {
-            return trimmed;
-        }
-    }
-}
-
-/// If `s` begins with the ASCII keyword `kw` (case-insensitive) followed by a
-/// non-identifier boundary, return the remainder after it; otherwise `None`.
-/// The boundary check keeps a longer identifier (`TABLES`, `iffy`) from
-/// matching a keyword prefix.
-fn strip_keyword_ci<'a>(s: &'a str, kw: &str) -> Option<&'a str> {
-    let bytes = s.as_bytes();
-    if bytes.len() < kw.len() || !bytes[..kw.len()].eq_ignore_ascii_case(kw.as_bytes()) {
-        return None;
-    }
-    let rest = &s[kw.len()..];
-    match rest.chars().next() {
-        Some(c) if c.is_alphanumeric() || c == '_' => None,
-        _ => Some(rest),
-    }
-}
-
-pub fn parse_table_name(ddl: &str) -> Option<String> {
-    // Match `CREATE TABLE` only as the *statement head*: skip leading
-    // whitespace and line/block comments and scan the original `ddl` by byte
-    // offset (never a `to_uppercase()` copy, whose length can differ from the
-    // source and mis-slice on Unicode). A `-- CREATE TABLE ...` comment must
-    // not hijack the name.
-    let rest = skip_ws_comments(ddl);
-    let rest = strip_keyword_ci(rest, "CREATE")?;
-    let rest = strip_keyword_ci(skip_ws_comments(rest), "TABLE")?;
-    let mut rest = skip_ws_comments(rest);
-
-    // Skip optional "IF NOT EXISTS". The keyword boundary check in
-    // `strip_keyword_ci` keeps a table literally named e.g. `iffy` from being
-    // mistaken for `IF`.
-    if let Some(after_if) = strip_keyword_ci(rest, "IF") {
-        let after_not = strip_keyword_ci(skip_ws_comments(after_if), "NOT")?;
-        let after_exists = strip_keyword_ci(skip_ws_comments(after_not), "EXISTS")?;
-        rest = skip_ws_comments(after_exists);
-    }
-
-    // `schema.table`: keep the last dot-separated segment. Each segment may
-    // be quoted independently.
-    let mut chars = rest.chars().peekable();
-    let mut table = parse_identifier(&mut chars)?;
-    while chars.peek() == Some(&'.') {
-        chars.next();
-        table = parse_identifier(&mut chars)?;
-    }
-
-    if table.is_empty() { None } else { Some(table) }
-}
-
-/// Read one identifier segment from `chars`: a quoted identifier
-/// (`"..."`, `` `...` ``, or `[...]`, with the doubled-delimiter escape for the
-/// matching close on the SQL-standard quote forms) or a bare run up to the
-/// first whitespace, `(`, or `.`. Returns the *unquoted* text. Returns `None`
-/// only when the cursor is already exhausted.
-fn parse_identifier(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
-    let (open, close) = match *chars.peek()? {
-        '"' => ('"', '"'),
-        '`' => ('`', '`'),
-        '[' => ('[', ']'),
-        _ => {
-            let mut bare = String::new();
-            while let Some(&c) = chars.peek() {
-                if c.is_whitespace() || c == '(' || c == '.' {
-                    break;
-                }
-                bare.push(c);
-                chars.next();
-            }
-            return Some(bare);
-        }
-    };
-
-    chars.next();
-    let mut name = String::new();
-    while let Some(c) = chars.next() {
-        if c == close {
-            // On `"` / `` ` ``, a doubled close delimiter is an escaped literal
-            // (`""` -> `"`); SQLite's `[...]` form has no such escape.
-            if open != '[' && chars.peek() == Some(&close) {
-                chars.next();
-                name.push(close);
-                continue;
-            }
-            break;
-        }
-        name.push(c);
-    }
-    Some(name)
-}
-
 /// True if `ddl` is a `CREATE VIRTUAL TABLE` statement. dirsql tables are
 /// per-file row tables, structurally incompatible with an extension-backed
 /// virtual table, so those are rejected with a clear error.
@@ -1065,8 +936,11 @@ mod tests {
     #[test]
     fn create_table_from_ddl() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE comments (id TEXT PRIMARY KEY, body TEXT, resolved INTEGER)")
-            .unwrap();
+        db.create_table(
+            "comments",
+            "CREATE TABLE comments (id TEXT PRIMARY KEY, body TEXT, resolved INTEGER)",
+        )
+        .unwrap();
 
         let rows = db.query("SELECT * FROM comments").unwrap();
         assert_eq!(rows.len(), 0);
@@ -1075,14 +949,14 @@ mod tests {
     #[test]
     fn create_table_invalid_ddl_returns_error() {
         let db = Db::new().unwrap();
-        let result = db.create_table("NOT VALID SQL");
+        let result = db.create_table("t", "NOT VALID SQL");
         assert!(result.is_err());
     }
 
     #[test]
     fn create_table_runs_ddl_verbatim_no_injected_columns() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         db.insert_row(
             "t",
             &HashMap::from([("id".into(), Value::Text("1".into()))]),
@@ -1103,7 +977,7 @@ mod tests {
     #[test]
     fn pragma_table_info_matches_user_ddl_exactly() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE posts (title TEXT, draft INTEGER)")
+        db.create_table("posts", "CREATE TABLE posts (title TEXT, draft INTEGER)")
             .unwrap();
         assert_eq!(
             db.get_table_columns("posts").unwrap(),
@@ -1114,7 +988,7 @@ mod tests {
     #[test]
     fn insert_and_query_rows() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE docs (title TEXT, draft INTEGER)")
+        db.create_table("docs", "CREATE TABLE docs (title TEXT, draft INTEGER)")
             .unwrap();
 
         let row = HashMap::from([
@@ -1132,7 +1006,7 @@ mod tests {
     #[test]
     fn insert_multiple_rows_from_same_file() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE events (action TEXT, ts INTEGER)")
+        db.create_table("events", "CREATE TABLE events (action TEXT, ts INTEGER)")
             .unwrap();
 
         for (i, action) in ["created", "resolved", "reopened"].iter().enumerate() {
@@ -1152,7 +1026,7 @@ mod tests {
     #[test]
     fn delete_rows_by_file_path() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE comments (id TEXT, body TEXT)")
+        db.create_table("comments", "CREATE TABLE comments (id TEXT, body TEXT)")
             .unwrap();
 
         for (i, (id, file)) in [("1", "a.jsonl"), ("2", "a.jsonl"), ("3", "b.jsonl")]
@@ -1177,7 +1051,7 @@ mod tests {
     #[test]
     fn query_with_where_clause() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE items (name TEXT, count INTEGER)")
+        db.create_table("items", "CREATE TABLE items (name TEXT, count INTEGER)")
             .unwrap();
 
         for (i, (name, count)) in [("apple", 5), ("banana", 0), ("cherry", 3)]
@@ -1200,174 +1074,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_table_name_simple() {
-        assert_eq!(
-            parse_table_name("CREATE TABLE comments (id TEXT)"),
-            Some("comments".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_table_name_if_not_exists() {
-        assert_eq!(
-            parse_table_name("CREATE TABLE IF NOT EXISTS comments (id TEXT)"),
-            Some("comments".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_table_name_no_space_before_paren() {
-        assert_eq!(
-            parse_table_name("CREATE TABLE t(id TEXT)"),
-            Some("t".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_table_name_invalid() {
-        assert_eq!(parse_table_name("NOT A DDL"), None);
-    }
-
-    #[test]
-    fn parse_table_name_empty_after_create_table() {
-        assert_eq!(parse_table_name("CREATE TABLE "), None);
-    }
-
-    #[test]
-    fn parse_table_name_double_quoted() {
-        assert_eq!(
-            parse_table_name(r#"CREATE TABLE "comments" (id TEXT)"#),
-            Some("comments".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_table_name_double_quoted_no_space_before_paren() {
-        assert_eq!(
-            parse_table_name(r#"CREATE TABLE "comments"(id TEXT)"#),
-            Some("comments".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_table_name_backtick_quoted() {
-        assert_eq!(
-            parse_table_name("CREATE TABLE `comments` (id TEXT)"),
-            Some("comments".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_table_name_bracket_quoted() {
-        assert_eq!(
-            parse_table_name("CREATE TABLE [comments] (id TEXT)"),
-            Some("comments".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_table_name_double_quote_escape() {
-        // `""` inside a double-quoted identifier is one literal `"`.
-        assert_eq!(
-            parse_table_name(r#"CREATE TABLE "we""ird" (id TEXT)"#),
-            Some("we\"ird".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_table_name_if_not_exists_quoted_mixed_case() {
-        assert_eq!(
-            parse_table_name(r#"CREATE TABLE if not exists "comments" (id TEXT)"#),
-            Some("comments".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_table_name_schema_qualified() {
-        assert_eq!(
-            parse_table_name("CREATE TABLE main.comments (id TEXT)"),
-            Some("comments".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_table_name_schema_qualified_quoted() {
-        assert_eq!(
-            parse_table_name(r#"CREATE TABLE "main"."comments" (id TEXT)"#),
-            Some("comments".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_table_name_runs_to_end_of_input() {
-        assert_eq!(
-            parse_table_name("CREATE TABLE comments"),
-            Some("comments".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_table_name_missing_name_is_none() {
-        assert_eq!(parse_table_name("CREATE TABLE (id TEXT)"), None);
-    }
-
-    #[test]
-    fn parse_table_name_ignores_leading_line_comment() {
-        assert_eq!(
-            parse_table_name("-- create table old\nCREATE TABLE t (x TEXT)"),
-            Some("t".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_table_name_ignores_leading_block_comment() {
-        assert_eq!(
-            parse_table_name("/* CREATE TABLE old */ CREATE TABLE t (x TEXT)"),
-            Some("t".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_table_name_unterminated_comment_is_none() {
-        // Unterminated `--` and `/* */` comments consume the rest of the input,
-        // leaving no statement head.
-        assert_eq!(parse_table_name("-- no newline, no statement"), None);
-        assert_eq!(parse_table_name("/* unterminated CREATE TABLE t"), None);
-    }
-
-    #[test]
-    fn parse_table_name_rejects_keyword_prefix() {
-        // `CREATE TABLES` must not match the `TABLE` keyword prefix.
-        assert_eq!(parse_table_name("CREATE TABLES foo (id TEXT)"), None);
-    }
-
-    #[test]
-    fn parse_table_name_if_prefixed_name_is_not_if_not_exists() {
-        // A table whose name merely starts with `if` is not `IF NOT EXISTS`.
-        assert_eq!(
-            parse_table_name("CREATE TABLE ifx (id TEXT)"),
-            Some("ifx".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_table_name_unicode_in_comment_does_not_panic() {
-        // A case-length-changing char (`ﬁ`) in a comment must neither hijack
-        // the name nor panic on a byte-index slice.
-        assert_eq!(
-            parse_table_name("-- ﬁ\nCREATE TABLE t (x TEXT)"),
-            Some("t".to_string())
-        );
-        assert_eq!(
-            parse_table_name("/* ﬁﬁﬁ */ CREATE TABLE t (x TEXT)"),
-            Some("t".to_string())
-        );
-    }
-
-    #[test]
     fn get_table_columns_returns_user_columns_only() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (name TEXT, count INTEGER)")
+        db.create_table("t", "CREATE TABLE t (name TEXT, count INTEGER)")
             .unwrap();
         let cols = db.get_table_columns("t").unwrap();
         assert!(cols.contains(&"name".to_string()));
@@ -1378,7 +1087,7 @@ mod tests {
     #[test]
     fn normalize_row_relaxed_drops_extra_keys() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (name TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (name TEXT)").unwrap();
         let row = HashMap::from([
             ("name".into(), Value::Text("apple".into())),
             ("color".into(), Value::Text("red".into())),
@@ -1392,7 +1101,7 @@ mod tests {
     #[test]
     fn normalize_row_relaxed_fills_missing_with_null() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (name TEXT, color TEXT)")
+        db.create_table("t", "CREATE TABLE t (name TEXT, color TEXT)")
             .unwrap();
         let row = HashMap::from([("name".into(), Value::Text("apple".into()))]);
         let normalized = db.normalize_row("t", &row, false).unwrap();
@@ -1404,7 +1113,7 @@ mod tests {
     #[test]
     fn normalize_row_strict_errors_on_extra_keys() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (name TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (name TEXT)").unwrap();
         let row = HashMap::from([
             ("name".into(), Value::Text("apple".into())),
             ("color".into(), Value::Text("red".into())),
@@ -1418,7 +1127,7 @@ mod tests {
     #[test]
     fn normalize_row_strict_errors_on_missing_keys() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (name TEXT, color TEXT)")
+        db.create_table("t", "CREATE TABLE t (name TEXT, color TEXT)")
             .unwrap();
         let row = HashMap::from([("name".into(), Value::Text("apple".into()))]);
         let result = db.normalize_row("t", &row, true);
@@ -1430,7 +1139,7 @@ mod tests {
     #[test]
     fn normalize_row_strict_accepts_exact_match() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (name TEXT, color TEXT)")
+        db.create_table("t", "CREATE TABLE t (name TEXT, color TEXT)")
             .unwrap();
         let row = HashMap::from([
             ("name".into(), Value::Text("apple".into())),
@@ -1443,7 +1152,7 @@ mod tests {
     #[test]
     fn insert_and_query_real_value() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (price REAL)").unwrap();
+        db.create_table("t", "CREATE TABLE t (price REAL)").unwrap();
         let row = HashMap::from([("price".into(), Value::Real(9.99))]);
         db.insert_row("t", &row, "test.json", 0).unwrap();
         let results = db.query("SELECT price FROM t").unwrap();
@@ -1454,7 +1163,7 @@ mod tests {
     #[test]
     fn insert_and_query_null_value() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (name TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (name TEXT)").unwrap();
         let row = HashMap::from([("name".into(), Value::Null)]);
         db.insert_row("t", &row, "test.json", 0).unwrap();
         let results = db.query("SELECT name FROM t").unwrap();
@@ -1465,7 +1174,7 @@ mod tests {
     #[test]
     fn insert_and_query_blob_value() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (data BLOB)").unwrap();
+        db.create_table("t", "CREATE TABLE t (data BLOB)").unwrap();
         let row = HashMap::from([("data".into(), Value::Blob(vec![0xFF, 0x00]))]);
         db.insert_row("t", &row, "test.json", 0).unwrap();
         let results = db.query("SELECT data FROM t").unwrap();
@@ -1476,7 +1185,7 @@ mod tests {
     #[test]
     fn select_star_returns_only_user_columns() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
         db.insert_row("t", &row, "file.json", 0).unwrap();
         let results = db.query("SELECT * FROM t").unwrap();
@@ -1487,7 +1196,7 @@ mod tests {
     #[test]
     fn dirsql_columns_no_longer_exist_on_user_tables() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
         db.insert_row("t", &row, "file.json", 0).unwrap();
 
@@ -1536,7 +1245,7 @@ mod tests {
     #[test]
     fn query_allows_pragma_on_a_user_table() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         let rows = db.query("PRAGMA table_info(t)").unwrap();
         assert_eq!(rows.len(), 1, "expected one column row, got {rows:?}");
         assert_eq!(rows[0]["name"], Value::Text("id".into()));
@@ -1547,7 +1256,7 @@ mod tests {
         // `delete_rows_by_file` reads `_dirsql_internal_rows` without routing
         // through query(), so a leaked authorizer would make it fail.
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
         db.insert_row("t", &row, "file.json", 0).unwrap();
 
@@ -1602,7 +1311,7 @@ mod tests {
         // The authorizer is cleared after each query, so a denied ATTACH must
         // not poison the next normal read.
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         let _ = db.query("ATTACH 'x.db' AS ext").unwrap_err();
         let rows = db.query("SELECT * FROM t").unwrap();
         assert_eq!(rows.len(), 0);
@@ -1649,7 +1358,7 @@ mod tests {
     #[test]
     fn delete_rows_by_file_returns_zero_for_no_matching_rows() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         let row = HashMap::from([("id".into(), Value::Text("1".into()))]);
         db.insert_row("t", &row, "a.json", 0).unwrap();
         let deleted = db.delete_rows_by_file("t", "nonexistent.json").unwrap();
@@ -1672,7 +1381,7 @@ mod tests {
     #[test]
     fn get_rows_by_file_returns_rows_in_row_index_order() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         // Row indices are deliberately out of insertion order.
         let second = HashMap::from([("id".into(), Value::Text("second".into()))]);
         let first = HashMap::from([("id".into(), Value::Text("first".into()))]);
@@ -1688,8 +1397,8 @@ mod tests {
     #[test]
     fn get_rows_by_file_scopes_by_file_and_table() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
-        db.create_table("CREATE TABLE u (id TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
+        db.create_table("u", "CREATE TABLE u (id TEXT)").unwrap();
         let t_row = HashMap::from([("id".into(), Value::Text("t-row".into()))]);
         let u_row = HashMap::from([("id".into(), Value::Text("u-row".into()))]);
         let other = HashMap::from([("id".into(), Value::Text("other-file".into()))]);
@@ -1708,8 +1417,11 @@ mod tests {
     #[test]
     fn get_rows_by_file_round_trips_all_value_variants() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (i INTEGER, r REAL, s TEXT, b BLOB, n TEXT)")
-            .unwrap();
+        db.create_table(
+            "t",
+            "CREATE TABLE t (i INTEGER, r REAL, s TEXT, b BLOB, n TEXT)",
+        )
+        .unwrap();
         let row = HashMap::from([
             ("i".to_string(), Value::Integer(42)),
             ("r".to_string(), Value::Real(1.5)),
@@ -1742,12 +1454,12 @@ mod tests {
     }
 
     #[test]
-    fn create_table_without_parseable_name_fails_at_parse() {
+    fn create_table_rejects_an_unsafe_declared_name() {
         let db = Db::new().unwrap();
         let err = db
-            .create_table("CREATE TABLE (this is not valid)")
+            .create_table("t; DROP TABLE u; --", "CREATE TABLE t (id TEXT)")
             .unwrap_err();
-        assert!(matches!(err, DbError::DdlParse(_)), "got: {err}");
+        assert!(matches!(err, DbError::InvalidIdentifier(_)), "got: {err}");
     }
 
     #[test]
@@ -1797,7 +1509,10 @@ mod tests {
     fn create_table_rejects_ddl_with_sql_syntax_in_name_slot() {
         let db = Db::new().unwrap();
         let err = db
-            .create_table("CREATE TABLE evil;DROP_TABLE--(id TEXT)")
+            .create_table(
+                "evil;DROP_TABLE--",
+                "CREATE TABLE evil;DROP_TABLE--(id TEXT)",
+            )
             .unwrap_err();
         assert!(matches!(err, DbError::InvalidIdentifier(_)), "got: {err:?}");
     }
@@ -1805,7 +1520,7 @@ mod tests {
     #[test]
     fn insert_row_rejects_column_name_with_sql_syntax() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         let row = HashMap::from([("id); DROP TABLE t; --".into(), Value::Text("x".into()))]);
         let err = db.insert_row("t", &row, "f.json", 0).unwrap_err();
         assert!(matches!(err, DbError::InvalidIdentifier(_)), "got: {err:?}");
@@ -1814,7 +1529,7 @@ mod tests {
     #[test]
     fn insert_row_round_trips_reserved_word_column() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (path TEXT, \"order\" INTEGER)")
+        db.create_table("t", "CREATE TABLE t (path TEXT, \"order\" INTEGER)")
             .unwrap();
         let row = HashMap::from([
             ("path".into(), Value::Text("a".into())),
@@ -1840,7 +1555,10 @@ mod tests {
     fn create_table_rejects_virtual_table_with_clear_error() {
         let db = Db::new().unwrap();
         let err = db
-            .create_table("CREATE VIRTUAL TABLE vss USING vec0(embedding float[4])")
+            .create_table(
+                "vss",
+                "CREATE VIRTUAL TABLE vss USING vec0(embedding float[4])",
+            )
             .unwrap_err();
         // Must be a clear "not supported" message, NOT the generic `DdlParse`
         // echo (which trivially contains "virtual table" because it echoes
@@ -1931,7 +1649,7 @@ mod tests {
     #[test]
     fn insert_row_records_mapping() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         db.insert_row(
             "t",
             &HashMap::from([("id".into(), Value::Text("a".into()))]),
@@ -1956,7 +1674,7 @@ mod tests {
         // A user-declared `INTEGER PRIMARY KEY` is a rowid alias: the
         // inserted value becomes the rowid.
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+        db.create_table("t", "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
             .unwrap();
         db.insert_row(
             "t",
@@ -1977,7 +1695,7 @@ mod tests {
     #[test]
     fn delete_rows_by_file_removes_mapping() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         for (i, file) in ["a.jsonl", "a.jsonl", "b.jsonl"].iter().enumerate() {
             db.insert_row(
                 "t",
@@ -1997,7 +1715,7 @@ mod tests {
     #[test]
     fn delete_rows_by_file_resolves_ownership_through_mapping() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         db.insert_row(
             "t",
             &HashMap::from([("id".into(), Value::Text("a".into()))]),
@@ -2020,8 +1738,8 @@ mod tests {
         // Rows in different tables can share a rowid; the delete must not
         // cross tables for the same file path.
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t1 (id TEXT)").unwrap();
-        db.create_table("CREATE TABLE t2 (id TEXT)").unwrap();
+        db.create_table("t1", "CREATE TABLE t1 (id TEXT)").unwrap();
+        db.create_table("t2", "CREATE TABLE t2 (id TEXT)").unwrap();
         db.insert_row(
             "t1",
             &HashMap::from([("id".into(), Value::Text("x".into()))]),
@@ -2048,7 +1766,8 @@ mod tests {
     #[test]
     fn failed_row_insert_leaves_no_mapping_row() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT UNIQUE)").unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT UNIQUE)")
+            .unwrap();
         db.insert_row(
             "t",
             &HashMap::from([("id".into(), Value::Text("dup".into()))]),
@@ -2078,7 +1797,7 @@ mod tests {
     #[test]
     fn failed_mapping_insert_rolls_back_row_insert() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         // Remove the mapping table so the second statement in the transaction
         // errors with "no such table".
         db.conn
@@ -2104,7 +1823,7 @@ mod tests {
     #[test]
     fn create_table_allows_without_rowid_and_warns() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT PRIMARY KEY) WITHOUT ROWID")
+        db.create_table("t", "CREATE TABLE t (id TEXT PRIMARY KEY) WITHOUT ROWID")
             .unwrap();
         let rows = db.query("SELECT * FROM t").unwrap();
         assert_eq!(rows.len(), 0);
@@ -2124,7 +1843,7 @@ mod tests {
     #[test]
     fn insert_row_joins_callers_open_transaction() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         let tx = db.conn.unchecked_transaction().unwrap();
         db.insert_row(
             "t",
@@ -2145,7 +1864,7 @@ mod tests {
     #[test]
     fn insert_row_inside_committed_transaction_persists() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         let tx = db.conn.unchecked_transaction().unwrap();
         db.insert_row(
             "t",
@@ -2164,7 +1883,7 @@ mod tests {
     #[test]
     fn delete_rows_by_file_joins_callers_open_transaction() {
         let db = Db::new().unwrap();
-        db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         db.insert_row(
             "t",
             &HashMap::from([("id".into(), Value::Text("x".into()))]),

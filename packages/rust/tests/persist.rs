@@ -17,15 +17,20 @@ use tempfile::TempDir;
 /// Returns a CSV table whose extract function increments `counter` every time
 /// it runs. Used to verify that warm starts skip extract for unchanged files.
 fn counting_csv_table(counter: Arc<AtomicUsize>) -> Table {
-    Table::new("CREATE TABLE rows (col TEXT)", "**/*.csv", move |path| {
-        let content = std::fs::read_to_string(path).unwrap();
-        counter.fetch_add(1, Ordering::SeqCst);
-        content
-            .lines()
-            .skip(1) // header
-            .map(|line| HashMap::from([("col".into(), Value::Text(line.trim().to_string()))]))
-            .collect::<Vec<Row>>()
-    })
+    Table::new(
+        "rows",
+        "CREATE TABLE rows (col TEXT)",
+        "**/*.csv",
+        move |path| {
+            let content = std::fs::read_to_string(path).unwrap();
+            counter.fetch_add(1, Ordering::SeqCst);
+            content
+                .lines()
+                .skip(1) // header
+                .map(|line| HashMap::from([("col".into(), Value::Text(line.trim().to_string()))]))
+                .collect::<Vec<Row>>()
+        },
+    )
 }
 
 fn write_csv(root: &Path, name: &str, body_lines: &[&str]) {
@@ -241,18 +246,25 @@ fn glob_config_change_forces_full_rebuild() {
     let csv_counter = Arc::new(AtomicUsize::new(0));
     let tsv_counter = Arc::new(AtomicUsize::new(0));
     let csv_table = counting_csv_table(csv_counter.clone());
-    let tsv_table = Table::new("CREATE TABLE tsv_rows (col TEXT)", "**/*.tsv", {
-        let c = tsv_counter.clone();
-        move |path| {
-            let content = std::fs::read_to_string(path).unwrap();
-            c.fetch_add(1, Ordering::SeqCst);
-            content
-                .lines()
-                .skip(1)
-                .map(|line| HashMap::from([("col".into(), Value::Text(line.trim().to_string()))]))
-                .collect::<Vec<Row>>()
-        }
-    });
+    let tsv_table = Table::new(
+        "tsv_rows",
+        "CREATE TABLE tsv_rows (col TEXT)",
+        "**/*.tsv",
+        {
+            let c = tsv_counter.clone();
+            move |path| {
+                let content = std::fs::read_to_string(path).unwrap();
+                c.fetch_add(1, Ordering::SeqCst);
+                content
+                    .lines()
+                    .skip(1)
+                    .map(|line| {
+                        HashMap::from([("col".into(), Value::Text(line.trim().to_string()))])
+                    })
+                    .collect::<Vec<Row>>()
+            }
+        },
+    );
 
     let db = DirSQL::builder()
         .root(root.path())
@@ -357,6 +369,7 @@ fn dirsql_directory_excluded_when_persist_disabled() {
 /// A counting table over `**/*.csv` with a distinct name/column.
 fn counting_named_table(name: &'static str, col: &'static str, counter: Arc<AtomicUsize>) -> Table {
     Table::new(
+        name,
         &format!("CREATE TABLE {name} ({col} TEXT)"),
         "**/*.csv",
         move |path| {
@@ -529,6 +542,7 @@ fn a_hook_failure_commits_the_files_that_parsed() {
     let db = DirSQL::builder()
         .root(root.path())
         .table(Table::try_new(
+            "rows",
             "CREATE TABLE rows (col TEXT)",
             "**/*.csv",
             move |path| {

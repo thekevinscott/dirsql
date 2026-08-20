@@ -22,6 +22,7 @@ fn table_config(name: &str) -> String {
     format!(
         r#"
 [[table]]
+name = "{name}"
 ddl = "CREATE TABLE {name} (basename TEXT)"
 glob = "*.json"
 on-file = '''sh -c 'printf "[{{\"basename\":\"%s\"}}]" "${{1##*/}}"' sh {{path}}'''

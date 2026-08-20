@@ -16,6 +16,10 @@
 #     dirsql query "SELECT * FROM records" -c .dirsql.toml
 
 [[table]]
+# The table's SQL name. Declared, not guessed from the DDL below -- the two
+# must agree, and dirsql checks that against SQLite's catalog at startup.
+name = "records"
+
 # The files this table is built from (glob, relative to the index root).
 glob = "**/*.json"
 

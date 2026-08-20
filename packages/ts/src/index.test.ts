@@ -6,7 +6,6 @@ describe("public barrel", () => {
   it("re-exports the runtime values", () => {
     expect(typeof api.DirSQL).toBe("function");
     expect(typeof api.Table).toBe("function");
-    expect(typeof api.parseTableName).toBe("function");
   });
 
   it("re-exports the ScanFailure type with its documented shape (#715)", () => {
@@ -19,8 +18,6 @@ describe("public barrel", () => {
   });
 
   it("exposes exactly the public runtime exports", () => {
-    expect(Object.keys(api).sort()).toEqual(
-      ["DirSQL", "Table", "parseTableName"].sort(),
-    );
+    expect(Object.keys(api).sort()).toEqual(["DirSQL", "Table"].sort());
   });
 });

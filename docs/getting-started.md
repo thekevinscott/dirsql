@@ -164,6 +164,7 @@ Now create a `.dirsql.toml` that points a table at it:
 ```bash
 cat > .dirsql.toml <<'EOF'
 [[table]]
+name = "notes"
 ddl     = "CREATE TABLE notes (title TEXT, author TEXT)"
 glob    = "notes/**/*.md"
 on-file = "sh note.sh {path}"

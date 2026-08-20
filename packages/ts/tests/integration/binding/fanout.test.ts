@@ -26,11 +26,13 @@ describe("DirSQL fan-out", () => {
       root: dir,
       tables: [
         {
+          name: "ta",
           ddl: "CREATE TABLE ta (col_a TEXT)",
           glob: "data/*/metadata.json",
           onFile: () => [{ col_a: "A" }],
         },
         {
+          name: "tb",
           ddl: "CREATE TABLE tb (col_b TEXT)",
           glob: "data/*/metadata.json",
           onFile: () => [{ col_b: "B" }],
@@ -49,11 +51,13 @@ describe("DirSQL fan-out", () => {
       root: dir,
       tables: [
         {
+          name: "ta",
           ddl: "CREATE TABLE ta (col_a TEXT)",
           glob: "data/*/metadata.json",
           onFile: () => [{ col_a: "A" }],
         },
         {
+          name: "tb",
           ddl: "CREATE TABLE tb (col_b TEXT)",
           glob: "data/**/metadata.json",
           onFile: () => [{ col_b: "B" }],
@@ -71,6 +75,7 @@ describe("DirSQL fan-out", () => {
       root: dir,
       tables: [
         {
+          name: "a",
           ddl: "CREATE TABLE a (id TEXT, col_a TEXT)",
           glob: "data/{id}/metadata.json",
           onFile: () => [{ col_a: "A" }],

@@ -24,6 +24,7 @@ fn fixture() -> TempDir {
 /// against ordinary tables.
 fn csv_table() -> Table {
     Table::new(
+        "rows_csv",
         "CREATE TABLE rows_csv (path TEXT, cells TEXT)",
         "docs/*.csv",
         |path| {

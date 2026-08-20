@@ -16,6 +16,7 @@ describe("path-tables (#627)", () => {
       root: dir,
       tables: [
         {
+          name: "rows_csv",
           ddl: "CREATE TABLE rows_csv (path TEXT)",
           glob: "docs/*.csv",
           onFile: () => [{ path: "docs/c.csv" }],

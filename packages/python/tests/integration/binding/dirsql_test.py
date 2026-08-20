@@ -16,6 +16,7 @@ def describe_DirSQL():
                 jsonl_dir,
                 tables=[
                     Table(
+                        name="comments",
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
                         on_file=lambda path: [
@@ -39,6 +40,7 @@ def describe_DirSQL():
                 ignore=["**/def/**"],
                 tables=[
                     Table(
+                        name="comments",
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
                         on_file=lambda path: [
@@ -86,6 +88,7 @@ def describe_DirSQL():
                 jsonl_dir,
                 tables=[
                     Table(
+                        name="comments",
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
                         on_file=lambda path: [
@@ -110,6 +113,7 @@ def describe_DirSQL():
                 jsonl_dir,
                 tables=[
                     Table(
+                        name="comments",
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
                         on_file=lambda path: [
@@ -137,6 +141,7 @@ def describe_DirSQL():
                 jsonl_dir,
                 tables=[
                     Table(
+                        name="comments",
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
                         on_file=lambda path: [
@@ -162,6 +167,7 @@ def describe_DirSQL():
                 jsonl_dir,
                 tables=[
                     Table(
+                        name="comments",
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
                         on_file=lambda path: [
@@ -193,6 +199,7 @@ def describe_DirSQL():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT, count INTEGER)",
                         glob="data/*.json",
                         on_file=lambda path: [
@@ -223,6 +230,7 @@ def describe_DirSQL():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="posts",
                         ddl="CREATE TABLE posts (title TEXT, author_id TEXT)",
                         glob="posts/*.json",
                         on_file=lambda path: [
@@ -230,6 +238,7 @@ def describe_DirSQL():
                         ],
                     ),
                     Table(
+                        name="authors",
                         ddl="CREATE TABLE authors (id TEXT, name TEXT)",
                         glob="authors/*.json",
                         on_file=lambda path: [
@@ -261,6 +270,7 @@ def describe_DirSQL():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="posts",
                         ddl="CREATE TABLE posts (title TEXT, author_id TEXT)",
                         glob="posts/*.json",
                         on_file=lambda path: [
@@ -268,6 +278,7 @@ def describe_DirSQL():
                         ],
                     ),
                     Table(
+                        name="authors",
                         ddl="CREATE TABLE authors (id TEXT, name TEXT)",
                         glob="authors/*.json",
                         on_file=lambda path: [
@@ -292,6 +303,7 @@ def describe_DirSQL():
                 jsonl_dir,
                 tables=[
                     Table(
+                        name="comments",
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
                         on_file=lambda path: [
@@ -319,6 +331,7 @@ def describe_DirSQL():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="*.json",
                         on_file=lambda path: [
@@ -355,6 +368,7 @@ def describe_DirSQL():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="*.json",
                         on_file=lambda path: [
@@ -396,6 +410,7 @@ def describe_DirSQL():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="data/*.json",
                         on_file=lambda path: [
@@ -417,6 +432,7 @@ def describe_DirSQL():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="t",
                         ddl="NOT A CREATE TABLE",
                         glob="*.json",
                         on_file=lambda path: [],
@@ -432,6 +448,7 @@ def describe_DirSQL():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="**/*.json",
                         on_file=lambda path: [
@@ -453,6 +470,7 @@ def describe_DirSQL():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="**/*.json",
                         on_file=lambda path: [],
@@ -480,6 +498,7 @@ def describe_DirSQL():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="t",
                         ddl="CREATE TABLE t (val INTEGER)",
                         glob="*.json",
                         on_file=on_file,
@@ -502,6 +521,7 @@ def describe_DirSQL():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl='CREATE TABLE items (name TEXT, "order" INTEGER)',
                         glob="*.json",
                         on_file=lambda path: [
@@ -526,6 +546,7 @@ def describe_DirSQL():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="*.json",
                         on_file=lambda path: [
@@ -550,6 +571,7 @@ def describe_DirSQL():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT, color TEXT, count INTEGER)",
                         glob="*.json",
                         on_file=lambda path: [
@@ -574,6 +596,7 @@ def describe_DirSQL():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="*.json",
                         on_file=lambda path: [
@@ -598,6 +621,7 @@ def describe_DirSQL():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT, color TEXT)",
                         glob="*.json",
                         on_file=lambda path: [
@@ -619,6 +643,7 @@ def describe_DirSQL():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT, color TEXT)",
                         glob="*.json",
                         on_file=lambda path: [

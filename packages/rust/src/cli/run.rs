@@ -556,6 +556,7 @@ fn default_records_table() -> Table {
         .expect("DEFAULT_CONFIG_TOML must be valid dirsql config TOML");
     let table_config = &config.tables[0];
     Table::new(
+        table_config.name.clone(),
         table_config.ddl.clone(),
         table_config.glob.clone(),
         |_path| vec![Row::new()],

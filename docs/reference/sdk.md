@@ -317,27 +317,30 @@ rather than waiting — an intentional, language-idiomatic difference.
 ::: code-group
 
 ```python [Python]
-Table(*, ddl: str, glob: str, on_file: Callable[[str], list[dict]], strict: bool = False)
+Table(*, name: str, ddl: str, glob: str, on_file: Callable[[str], list[dict]], strict: bool = False)
 ```
 
 ```typescript [TypeScript]
-new Table({ ddl, glob, onFile, strict? })
+new Table({ name, ddl, glob, onFile, strict? })
 // or a plain object — TableDef and Table are interchangeable:
-{ ddl: string, glob: string, onFile: (path: string) => Record<string, unknown>[], strict?: boolean }
+{ name: string, ddl: string, glob: string, onFile: (path: string) => Record<string, unknown>[], strict?: boolean }
 ```
 
 ```rust [Rust]
-Table::new(ddl, glob, on_file)      // on_file: Fn(&str) -> Vec<Row>, infallible
-Table::try_new(ddl, glob, on_file)  // on_file: Fn(&str) -> Result<Vec<Row>, _>
-Table::strict(ddl, glob, on_file)   // Table::new with strict = true
+Table::new(name, ddl, glob, on_file)      // on_file: Fn(&str) -> Vec<Row>, infallible
+Table::try_new(name, ddl, glob, on_file)  // on_file: Fn(&str) -> Result<Vec<Row>, _>
+Table::strict(name, ddl, glob, on_file)   // Table::new with strict = true
 ```
 
 :::
 
 Maps files to table rows.
 
-- `ddl` — A SQLite `CREATE TABLE` statement; the table name is parsed from
-  it. Table names must be unique across all tables.
+- `name` — The table's SQL name, declared rather than derived from `ddl`.
+  Must be unique across all tables. Building fails if the `ddl` creates no
+  table by this name (checked against SQLite's catalog, before any file is
+  indexed).
+- `ddl` — A SQLite `CREATE TABLE` statement, run verbatim.
 - `glob` — Glob pattern matched against root-relative paths. Every table whose
   glob matches a file receives that file's rows — a file can populate multiple
   tables. A `{name}` segment is rewritten to `*` (it matches one path segment

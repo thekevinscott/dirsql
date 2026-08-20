@@ -30,6 +30,7 @@ class ExtensionSpec(TypedDict):
 class Table:
     """A table definition. Construct via keyword arguments only."""
 
+    name: str
     ddl: str
     glob: str
     strict: bool
@@ -37,6 +38,7 @@ class Table:
     def __init__(
         self,
         *,
+        name: str,
         ddl: str,
         glob: str,
         on_file: Callable[[str], list[Row]],

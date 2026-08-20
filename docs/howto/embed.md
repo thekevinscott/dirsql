@@ -60,6 +60,7 @@ async def main() -> None:
         "./comments-root",
         tables=[
             Table(
+                name="comments",
                 ddl="CREATE TABLE comments (thread TEXT, author TEXT, body TEXT)",
                 glob="comments/*/*.json",
                 on_file=on_file,
@@ -83,6 +84,7 @@ const db = new DirSQL({
   root: "./comments-root",
   tables: [
     {
+      name: "comments",
       ddl: "CREATE TABLE comments (thread TEXT, author TEXT, body TEXT)",
       glob: "comments/*/*.json",
       onFile: (path) => [
@@ -129,6 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = DirSQL::builder()
         .root("./comments-root")
         .table(Table::new(
+            "comments",
             "CREATE TABLE comments (thread TEXT, author TEXT, body TEXT)",
             "comments/*/*.json",
             on_file,

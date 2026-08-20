@@ -161,7 +161,7 @@ beforeAll(async () => {
   const pathHook = `on-file = '''sh -c 'rel=\${1#"$2"/}; printf "[{\\"path\\":\\"%s\\"}]" "$rel"' sh {path} {root}'''`;
   await writeFile(
     cfg,
-    `[[table]]\nddl = "CREATE TABLE ta (path TEXT)"\nglob = "data/*/metadata.json"\n${pathHook}\n\n[[table]]\nddl = "CREATE TABLE tb (path TEXT)"\nglob = "data/**/metadata.json"\n${pathHook}\n`,
+    `[[table]]\nname = "ta"\nddl = "CREATE TABLE ta (path TEXT)"\nglob = "data/*/metadata.json"\n${pathHook}\n\n[[table]]\nname = "tb"\nddl = "CREATE TABLE tb (path TEXT)"\nglob = "data/**/metadata.json"\n${pathHook}\n`,
   );
 
   serverPort = await freePort();

@@ -25,6 +25,7 @@ fn on_file_rows_appear_in_query_results() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "papers"
 ddl = "CREATE TABLE papers (paper_id TEXT, title TEXT, basename TEXT)"
 glob = "**/meta.json"
 on-file = "cat {path}"
@@ -73,6 +74,7 @@ fn on_file_abspath_token_is_no_longer_substituted() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (q TEXT)"
 glob = "*.json"
 on-file = "sh echo_args.sh {path} {abspath}"
@@ -101,6 +103,7 @@ fn on_file_omitting_path_no_longer_appends_it() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.json"
 on-file = "cat"
@@ -137,6 +140,7 @@ fn on_file_receives_absolute_path() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.json"
 on-file = "sh abscheck.sh {path}"
@@ -176,6 +180,7 @@ fn on_file_absolute_path_resolves_when_root_differs_from_config_dir() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "**/meta.json"
 on-file = "sh abscheck.sh {path}"
@@ -217,6 +222,7 @@ fn a_failing_command_skips_only_that_file() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
 on-file = "sh extract.sh {path}"
@@ -253,6 +259,7 @@ fn malformed_output_skips_only_that_file() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
 on-file = "sh extract.sh {path}"
@@ -287,6 +294,7 @@ fn a_timeout_wrapped_hook_that_overruns_skips_the_file() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
 on-file = "timeout 0.5 sh slow.sh {path}"
@@ -322,6 +330,7 @@ fn a_slow_unwrapped_hook_runs_to_completion() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
 on-file = "sh slowish.sh {path}"
@@ -356,6 +365,7 @@ fn a_strict_violation_skips_only_that_file() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
 strict = true
@@ -391,6 +401,7 @@ fn build_attempts_every_matched_file_even_after_one_fails() {
     let built = DirSQL::new(
         dir.path(),
         vec![Table::try_new(
+            "items",
             "CREATE TABLE items (name TEXT)",
             "**/*.txt",
             move |path| {
@@ -427,6 +438,7 @@ fn build_reports_every_failing_file_not_only_the_first() {
     let db = DirSQL::new(
         dir.path(),
         vec![Table::try_new(
+            "items",
             "CREATE TABLE items (name TEXT)",
             "**/*.txt",
             |path| Err(format!("boom for {path}").into()),

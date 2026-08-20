@@ -13,10 +13,10 @@ import pytest
 from dirsql import DirSQL, Table
 
 
-def _db(tmp_dir, on_file, ddl="CREATE TABLE items (name TEXT)", **kw):
+def _db(tmp_dir, on_file, name="items", ddl="CREATE TABLE items (name TEXT)", **kw):
     return DirSQL(
         tmp_dir,
-        tables=[Table(ddl=ddl, glob="*.json", on_file=on_file, **kw)],
+        tables=[Table(name=name, ddl=ddl, glob="*.json", on_file=on_file, **kw)],
     )
 
 

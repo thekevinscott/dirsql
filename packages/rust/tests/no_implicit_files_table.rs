@@ -18,12 +18,17 @@ fn fixture() -> TempDir {
 
 /// A user-declared table that is deliberately *not* named `files`.
 fn posts_table() -> Table {
-    Table::new("CREATE TABLE posts (path TEXT)", "**/*.md", |path| {
-        vec![HashMap::from([(
-            "path".into(),
-            Value::Text(path.to_string()),
-        )])]
-    })
+    Table::new(
+        "posts",
+        "CREATE TABLE posts (path TEXT)",
+        "**/*.md",
+        |path| {
+            vec![HashMap::from([(
+                "path".into(),
+                Value::Text(path.to_string()),
+            )])]
+        },
+    )
 }
 
 #[test]
@@ -86,7 +91,7 @@ fn a_configured_table_set_that_omits_files_gets_the_plain_error() {
     let config = root.path().join("dirsql.toml");
     fs::write(
         &config,
-        "[[table]]\nddl = \"CREATE TABLE posts (path TEXT)\"\nglob = \"**/*.md\"\non-file = \"cat {path}\"\n",
+        "[[table]]\nname = \"posts\"\nddl = \"CREATE TABLE posts (path TEXT)\"\nglob = \"**/*.md\"\non-file = \"cat {path}\"\n",
     )
     .unwrap();
 

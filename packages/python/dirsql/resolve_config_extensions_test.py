@@ -70,7 +70,9 @@ def describe_resolve_config_extension_specs():
 
     def it_returns_none_when_there_is_no_dirsql_section(cfg_dir):
         path = os.path.join(cfg_dir, ".dirsql.toml")
-        _write(path, '[[table]]\nddl = "CREATE TABLE t (x TEXT)"\nglob = "*"\n')
+        _write(
+            path, '[[table]]\nname = "t"\nddl = "CREATE TABLE t (x TEXT)"\nglob = "*"\n'
+        )
         assert rce.resolve_config_extension_specs(path) is None
 
     def it_returns_none_when_no_extensions_are_declared(cfg_dir):
@@ -146,7 +148,9 @@ def describe_resolve_configs_extension_specs():
         a = os.path.join(cfg_dir, "a.toml")
         b = os.path.join(cfg_dir, "b.toml")
         _write(a, '[[dirsql.extension]]\npath = "ext/a.so"\n')
-        _write(b, '[[table]]\nddl = "CREATE TABLE t (x TEXT)"\nglob = "*"\n')
+        _write(
+            b, '[[table]]\nname = "t"\nddl = "CREATE TABLE t (x TEXT)"\nglob = "*"\n'
+        )
         with _patch() as resolver:
             assert rce.resolve_configs_extension_specs([a, b]) is None
             resolver.assert_not_called()

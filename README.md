@@ -40,6 +40,7 @@ async def main():
         "./my-blog",
         tables=[
             Table(
+                name="posts",
                 ddl="CREATE TABLE posts (title TEXT, author TEXT)",
                 glob="posts/*.json",
                 on_file=lambda path: [json.loads(open(path, encoding="utf-8").read())],

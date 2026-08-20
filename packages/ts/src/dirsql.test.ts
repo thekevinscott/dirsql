@@ -77,7 +77,12 @@ describe("DirSQL", () => {
       const openAsync = installFakeCore(makeInner());
       const onFile = () => [];
       const tables = [
-        { ddl: "CREATE TABLE t (n INTEGER)", glob: "**/*.json", onFile },
+        {
+          name: "t",
+          ddl: "CREATE TABLE t (n INTEGER)",
+          glob: "**/*.json",
+          onFile,
+        },
       ];
       const db = new DirSQL({ root: "/data", tables });
       await db.ready;

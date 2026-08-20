@@ -36,6 +36,7 @@ async function collectFromWatch(
 
 function jsonTable(glob: string) {
   return {
+    name: "items",
     ddl: "CREATE TABLE items (name TEXT)",
     glob,
     onFile: (filePath: string) => [JSON.parse(readFileSync(filePath, "utf8"))],
@@ -219,6 +220,7 @@ describe("DirSQL watch() async iterator", () => {
         root: dir,
         tables: [
           {
+            name: "rows",
             ddl: "CREATE TABLE rows (idx INTEGER, name TEXT)",
             glob: "*.jsonl",
             onFile: (filePath: string) =>

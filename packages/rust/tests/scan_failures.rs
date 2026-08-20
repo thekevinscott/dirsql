@@ -27,6 +27,7 @@ fn skipped_files_are_reported_on_the_built_database() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
 on-file = "sh extract.sh {path}"
@@ -58,6 +59,7 @@ fn a_clean_scan_reports_no_skipped_files() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
 on-file = "printf '[{\"name\":\"ok\"}]'"

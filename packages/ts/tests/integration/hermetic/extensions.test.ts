@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // Fake native core module, delivered through the mocked `createRequire` so
 // the real `loadNativeCore()` / `getCore()` chain runs unmodified.
 const { fakeCore } = vi.hoisted(() => ({
-  fakeCore: { DirSQL: { openAsync: vi.fn() }, parseTableName: vi.fn() },
+  fakeCore: { DirSQL: { openAsync: vi.fn() } },
 }));
 
 vi.mock("node:fs", async (importOriginal) => ({

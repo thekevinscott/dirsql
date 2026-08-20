@@ -163,6 +163,7 @@ def describe_plugin_extension_discovery():
         cfg = data / "user.toml"
         cfg.write_text(
             "[[table]]\n"
+            'name = "posts"\n'
             'ddl = "CREATE TABLE posts (path TEXT)"\n'
             'glob = "*.md"\n'
             'on-file = "cat {path}"\n'

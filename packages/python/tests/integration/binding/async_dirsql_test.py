@@ -17,6 +17,7 @@ def describe_DirSQL_async():
                 jsonl_dir,
                 tables=[
                     Table(
+                        name="comments",
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
                         on_file=lambda path: [
@@ -39,6 +40,7 @@ def describe_DirSQL_async():
                 jsonl_dir,
                 tables=[
                     Table(
+                        name="comments",
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
                         on_file=lambda path: [
@@ -67,6 +69,7 @@ def describe_DirSQL_async():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="data/*.json",
                         on_file=lambda path: [
@@ -87,6 +90,7 @@ def describe_DirSQL_async():
                 jsonl_dir,
                 tables=[
                     Table(
+                        name="comments",
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
                         on_file=lambda path: [
@@ -113,6 +117,7 @@ def describe_DirSQL_async():
                 jsonl_dir,
                 tables=[
                     Table(
+                        name="comments",
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
                         on_file=lambda path: [
@@ -140,6 +145,7 @@ def describe_DirSQL_async():
                 jsonl_dir,
                 tables=[
                     Table(
+                        name="comments",
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
                         on_file=lambda path: [
@@ -165,6 +171,7 @@ def describe_DirSQL_async():
                 jsonl_dir,
                 tables=[
                     Table(
+                        name="comments",
                         ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                         glob="comments/**/index.jsonl",
                         on_file=lambda path: [
@@ -190,6 +197,7 @@ def describe_DirSQL_async():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="**/*.json",
                         on_file=lambda path: [
@@ -241,6 +249,7 @@ def describe_DirSQL_async():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="**/*.json",
                         on_file=lambda path: [
@@ -295,6 +304,7 @@ def describe_DirSQL_async():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="rows",
                         ddl="CREATE TABLE rows (idx INTEGER, name TEXT)",
                         glob="*.jsonl",
                         on_file=lambda path: [
@@ -357,6 +367,7 @@ def describe_DirSQL_async():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="**/*.json",
                         on_file=lambda path: [
@@ -405,6 +416,7 @@ def describe_DirSQL_async():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="**/*.json",
                         on_file=lambda path: [
@@ -450,6 +462,7 @@ def describe_DirSQL_async():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="**/*.json",
                         on_file=lambda path: [
@@ -495,6 +508,7 @@ def describe_DirSQL_async():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="**/*.json",
                         on_file=lambda path: [
@@ -545,6 +559,7 @@ def describe_DirSQL_async():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT)",
                         glob="**/*.json",
                         on_file=lambda path: [
@@ -594,6 +609,7 @@ def describe_DirSQL_async():
                 tmp_dir,
                 tables=[
                     Table(
+                        name="t",
                         ddl="NOT VALID SQL",
                         glob="data/*.json",
                         on_file=lambda path: [

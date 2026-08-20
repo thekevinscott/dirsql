@@ -86,11 +86,13 @@ def describe_fanout():
         cfg = root / ".dirsql.toml"
         cfg.write_text(
             "[[table]]\n"
+            'name = "ta"\n'
             'ddl = "CREATE TABLE ta (path TEXT)"\n'
             'glob = "data/*/metadata.json"\n'
             f"{_HOOK_PATH}\n"
             "\n"
             "[[table]]\n"
+            'name = "tb"\n'
             'ddl = "CREATE TABLE tb (path TEXT)"\n'
             'glob = "data/**/metadata.json"\n'
             f"{_HOOK_PATH}\n"

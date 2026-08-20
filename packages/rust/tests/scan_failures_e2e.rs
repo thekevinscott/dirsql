@@ -47,6 +47,7 @@ fn fixture(script: &str, config: &str) -> TempDir {
 
 const LENIENT_CONFIG: &str = r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
 on-file = "sh hook.sh {path}"
@@ -54,6 +55,7 @@ on-file = "sh hook.sh {path}"
 
 const STRICT_CONFIG: &str = r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
 strict = true
@@ -182,6 +184,7 @@ fn a_sqlite_error_still_fails_the_whole_run() {
         EXTRACT,
         r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT"
 glob = "*.txt"
 on-file = "sh hook.sh {path}"
