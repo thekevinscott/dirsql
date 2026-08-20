@@ -2,6 +2,12 @@ name: dirsql Python CI
 
 # packages/rust/** fans in: the core compiles into the binding, and
 # [e2e].extra_scope means a core change stales this package's attestation.
+#
+# The gate config is packages/python/testing-conventions.toml, not the root
+# file: [e2e] is global to whichever config a caller reads, so this lane's own
+# freshness scope (core + PyO3 glue, #933) needs a config of its own. The
+# packages/python/** glob already triggers on it, so the root file -- which no
+# job in this lane now reads -- is not a path trigger here.
 on:
   push:
     branches: [main]
@@ -10,7 +16,6 @@ on:
       - 'packages/rust/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - 'testing-conventions.toml'
       - '.github/workflows/dirsql-python-ci.yml'
   pull_request:
     paths:
@@ -24,7 +29,6 @@ on:
       - '!packages/rust/README.md'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - 'testing-conventions.toml'
       - '.github/workflows/dirsql-python-ci.yml'
 
 concurrency:
@@ -40,7 +44,7 @@ jobs:
     with:
       languages: '["python"]'
       source: packages/python/dirsql
-      config: testing-conventions.toml
+      config: packages/python/testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
 
   rust-python-binding:
@@ -48,7 +52,7 @@ jobs:
     with:
       languages: '["rust"]'
       source: packages/python
-      config: testing-conventions.toml
+      config: packages/python/testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       gates: '["colocated-test", "unit-lint"]'
 
