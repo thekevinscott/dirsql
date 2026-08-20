@@ -82,7 +82,10 @@ fn forced_progress_reports_the_ingest_phase_on_stderr() {
 }
 
 /// The walk runs before anything can be counted against a total, so it reports
-/// a running count of the files it has found.
+/// a running count of the files it has found -- and the count has to be the
+/// files it actually reached. Asserting the number, not just the label, is
+/// what catches a walk that reports a frozen counter (a surviving
+/// `seen += 1` mutant did exactly that).
 #[test]
 fn forced_progress_reports_the_walk_phase_on_stderr() {
     let root = fixture(3);
@@ -93,6 +96,12 @@ fn forced_progress_reports_the_walk_phase_on_stderr() {
     assert!(
         err.contains("dirsql: scanning"),
         "the directory walk draws a labeled progress line: {err:?}"
+    );
+    // Four: the three fixture files plus the `.dirsql.toml` the walk also
+    // visits. The walk counts files it reached, not rows it matched.
+    assert!(
+        err.contains("dirsql: scanned 4 files in "),
+        "the walk summarizes the files it actually reached: {err:?}"
     );
 }
 
