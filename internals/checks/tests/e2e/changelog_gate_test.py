@@ -117,6 +117,17 @@ def describe_dirsql_checks_changelog_gate():
         proc = _gate(tmp_path, base_sha, head_sha)
         assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
 
+    def it_exits_zero_when_only_the_package_gate_config_changes(repo):
+        tmp_path, base_sha = repo
+        _write(
+            tmp_path / "packages" / "python" / "testing-conventions.toml",
+            "[python.coverage]\nfail_under = 100\n",
+        )
+        head_sha = _commit(tmp_path, "narrow the python coverage config")
+
+        proc = _gate(tmp_path, base_sha, head_sha)
+        assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+
     def it_exits_zero_via_the_skip_changelog_line(repo):
         tmp_path, base_sha = repo
         _write(tmp_path / "packages" / "rust" / "src" / "lib.rs")

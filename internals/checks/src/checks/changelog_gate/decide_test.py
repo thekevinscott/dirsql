@@ -156,6 +156,22 @@ def describe_code_touched():
             ["packages/python/e2e-attestationsX/foo.py"], "packages/python"
         )
 
+    def false_for_the_package_root_gate_config():
+        assert not code_touched(
+            ["packages/python/testing-conventions.toml"], "packages/python"
+        )
+        assert not code_touched(["packages/ts/testing-conventions.toml"], "packages/ts")
+        assert not code_touched(
+            ["plugins/dirsql-plugin-embeddings/testing-conventions.toml"],
+            "plugins/dirsql-plugin-embeddings",
+        )
+
+    def true_for_a_gate_config_that_is_not_at_the_package_root():
+        assert code_touched(
+            ["packages/python/dirsql/testing-conventions.toml"], "packages/python"
+        )
+        assert code_touched(["packages/ts/my-testing-conventions.toml"], "packages/ts")
+
     def ignores_other_packages():
         assert not code_touched(["packages/ts/src/bar.ts"], "packages/python")
 

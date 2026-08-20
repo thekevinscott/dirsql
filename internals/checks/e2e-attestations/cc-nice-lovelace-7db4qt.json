@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1787257108,
+  "exit_code": 0,
+  "commit": "047bd55743d01b021d0913aa52fa4824ea40c4a0",
+  "branch": "cc/nice-lovelace-7db4qt"
+}
