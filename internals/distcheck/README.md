@@ -12,8 +12,8 @@ not a behavior test of an SDK, so it lives here rather than in an SDK package's
 subcommand. Run a flow locally:
 
 ```bash
-# build -> pack -> install -> run the published PyPI wheel (needs a cargo dirsql
-# binary + maturin on PATH)
+# build -> pack -> install -> run the published PyPI wheel (needs maturin on
+# PATH)
 uv run --project internals/distcheck dirsql-distcheck python
 
 # build -> pack -> install -> run the published npm artifact set (needs
@@ -26,10 +26,10 @@ tooling, so one tested home matters more than language purity of the harness.
 
 ## What the flows verify
 
-- **`python`** -- stages the cargo-built `dirsql` binary under `dirsql/_binary/`
-  the way the release pipeline's bundle step would, builds the wheel with
-  `maturin build`, `pip install`s it into a fresh venv, and runs the installed
-  `dirsql --version` console script plus `import dirsql`.
+- **`python`** -- builds the wheel with `maturin build`, `pip install`s it into a
+  fresh venv, and runs the installed `dirsql --version` console script plus
+  `import dirsql`. Nothing is staged: since #738 the wheel's extension module
+  carries the CLI and the console script calls it in-process.
 - **`node`** -- packs the main `dirsql` package and a reconstructed host
   `@dirsql/cli-<slug>` sub-package, `npm install`s both into a fresh dir, and
   runs `node_modules/.bin/dirsql --version`, cross-checking the installed
