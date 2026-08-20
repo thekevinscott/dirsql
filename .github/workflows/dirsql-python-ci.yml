@@ -260,8 +260,5 @@ jobs:
       - name: Put maturin on PATH
         run: echo "$PWD/packages/python/.venv/bin" >> "$GITHUB_PATH"
 
-      - name: Build dirsql CLI binary
-        run: cargo build -p dirsql --features cli
-
       - name: Run packaging distcheck (build -> pack -> install -> run)
         run: uv run --project internals/distcheck dirsql-distcheck python
