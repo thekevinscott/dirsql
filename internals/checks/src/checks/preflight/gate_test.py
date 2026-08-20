@@ -212,14 +212,14 @@ def describe_prepare():
         ]
 
 
-def drive(conventions=None, **kwargs):
+def drive(workflows=None, **kwargs):
     defaults = {
         "runner": lambda _argv, _cwd: 0,
         "exists": has_manifest,
         "e2e_config": lambda _config: {},
         "echo": lambda _line: None,
     }
-    return run(conventions or CONVENTIONS, "origin/main", **{**defaults, **kwargs})
+    return run(workflows or [CONVENTIONS], "origin/main", **{**defaults, **kwargs})
 
 
 def describe_run():
@@ -246,7 +246,7 @@ def describe_run():
     def it_skips_an_artifact_gate_without_failing_and_says_so():
         lines = []
         code = drive(
-            conventions=ARTIFACT_FIRST,
+            workflows=[ARTIFACT_FIRST],
             runner=lambda _argv, _cwd: 0,
             echo=lines.append,
         )
@@ -260,7 +260,7 @@ def describe_run():
     def it_keeps_going_past_a_skipped_gate_to_the_pairs_after_it():
         lines = []
         drive(
-            conventions=ARTIFACT_FIRST,
+            workflows=[ARTIFACT_FIRST],
             only=["packaging", "unit-lint"],
             echo=lines.append,
         )
@@ -305,11 +305,30 @@ def describe_run():
         assert (calls, code) == ([], 0)
         assert len([line for line in lines if line.startswith("==>")]) == 4
 
-    def it_takes_conventions_and_base_by_keyword():
+    def it_runs_the_pairs_of_every_workflow_it_is_given():
+        # Post-#834 the callers live in six workflows, so a matrix built from the
+        # first one alone would be a green run covering one lane (#973).
+        lines = []
+        drive(
+            workflows=[CONVENTIONS, CONVENTIONS.replace("python-sdk", "internals-checks")],
+            only=["unit-lint"],
+            echo=lines.append,
+        )
+        assert [line.split(": ")[0] for line in lines if line.startswith("==>")] == [
+            "==> python-sdk [python] unit-lint",
+            "==> internals-checks [python] unit-lint",
+        ]
+
+    def it_derives_no_pair_from_a_workflow_with_no_callers():
+        lines = []
+        assert drive(workflows=["jobs: {}"], echo=lines.append) == 0
+        assert lines == ["preflight: 0 failing pair(s), 0 skipped"]
+
+    def it_takes_the_workflows_and_base_by_keyword():
         # `*` (not `/`) before the injected seams: the two leading parameters must
-        # stay nameable, since every caller passes the workflow text by name.
+        # stay nameable, since every caller passes the workflow texts by name.
         assert run(
-            conventions=CONVENTIONS,
+            workflows=[CONVENTIONS],
             base="origin/main",
             runner=lambda _argv, _cwd: 0,
             exists=has_manifest,

@@ -1,6 +1,22 @@
 """Colocated unit tests for the CI gate-matrix parser (#781)."""
 
-from checks.preflight.matrix import GATES, ROOT_GATES, parse_gate_matrix, pairs
+from unittest import mock
+
+import pytest
+
+from checks.preflight.matrix import (
+    GATES,
+    NoGateMatrix,
+    REUSABLE,
+    ROOT_GATES,
+    WORKFLOWS,
+    discovered,
+    named,
+    pairs,
+    parse_gate_matrix,
+    read_text,
+    sources,
+)
 
 CONVENTIONS = """
 jobs:
@@ -49,6 +65,17 @@ def describe_parse_gate_matrix():
         # not stop the walk at the first non-caller.
         assert [e.job for e in parse_gate_matrix(CONVENTIONS)] == ["python-sdk", "rust"]
 
+    def it_reads_nothing_from_a_document_that_is_not_a_mapping():
+        # Discovery hands it every file in the workflows directory, so a stray
+        # list or scalar has to come back empty rather than raise.
+        assert parse_gate_matrix("- one\n- two\n") == []
+
+    def it_reads_nothing_from_a_workflow_that_declares_no_jobs():
+        assert parse_gate_matrix("name: Docs\non: push\n") == []
+
+    def it_reads_nothing_from_an_empty_jobs_key():
+        assert parse_gate_matrix("jobs:\n") == []
+
 
 def describe_GATES():
     def it_names_a_cli_subcommand_for_every_default_gate():
@@ -95,3 +122,126 @@ def describe_pairs():
     def it_drops_a_root_that_declares_no_languages():
         text = CONVENTIONS.replace("'[\"rust\"]'", "'[]'")
         assert all(lang != "rust" for _root, lang, _gate in pairs(parse_gate_matrix(text)))
+
+
+NOT_A_CALLER = "jobs:\n  build:\n    runs-on: ubuntu-latest\n"
+
+
+def reader(files):
+    """A `read` that only knows the files it was given -- anything else raises."""
+    return lambda path: files[path]
+
+
+def describe_read_text():
+    def it_reads_a_workflow_as_utf8():
+        with mock.patch("checks.preflight.matrix.open", mock.mock_open(read_data=CONVENTIONS)) as opened:
+            assert read_text("wf.yml") == CONVENTIONS
+        opened.assert_called_once_with("wf.yml", encoding="utf-8")
+
+
+def describe_named():
+    def it_returns_the_text_of_a_workflow_that_calls_the_reusable_workflow():
+        assert named("wf.yml", reader({"wf.yml": CONVENTIONS})) == CONVENTIONS
+
+    def it_names_the_file_and_the_fix_when_it_cannot_be_read():
+        # The #973 regression exactly: the default target stopped existing and the
+        # command died on a bare FileNotFoundError instead of saying what to do.
+        def read(path):
+            raise FileNotFoundError(2, "No such file or directory", path)
+
+        with pytest.raises(NoGateMatrix) as caught:
+            named(".github/workflows/conventions.yml", read)
+
+        message = str(caught.value)
+        assert "--conventions .github/workflows/conventions.yml: no such workflow" in message
+        assert REUSABLE in message
+        assert WORKFLOWS in message
+
+    def it_rejects_a_workflow_that_declares_no_caller():
+        # Accepting it would leave a green run whose matrix is empty.
+        with pytest.raises(NoGateMatrix) as caught:
+            named("docs.yml", reader({"docs.yml": NOT_A_CALLER}))
+
+        assert "--conventions docs.yml: no job in it calls" in str(caught.value)
+
+
+def describe_discovered():
+    FILES = {
+        ".github/workflows/b-ci.yml": CONVENTIONS,
+        ".github/workflows/a-ci.yaml": CONVENTIONS,
+        ".github/workflows/docs.yml": NOT_A_CALLER,
+    }
+
+    def it_returns_every_caller_it_finds_in_sorted_order():
+        found = discovered(
+            ".github/workflows",
+            lambda _directory: ["b-ci.yml", "docs.yml", "a-ci.yaml"],
+            reader(FILES),
+        )
+
+        assert found == [
+            (".github/workflows/a-ci.yaml", CONVENTIONS),
+            (".github/workflows/b-ci.yml", CONVENTIONS),
+        ]
+
+    def it_never_reads_a_file_that_is_not_a_workflow():
+        # `reader` raises for anything it was not given, so a README that got
+        # opened fails here rather than passing quietly.
+        found = discovered(
+            ".github/workflows",
+            lambda _directory: ["README.md", "b-ci.yml"],
+            reader(FILES),
+        )
+
+        assert [path for path, _text in found] == [".github/workflows/b-ci.yml"]
+
+    def it_names_the_directory_and_the_fix_when_it_does_not_exist():
+        def listdir(directory):
+            raise FileNotFoundError(2, "No such file or directory", directory)
+
+        with pytest.raises(NoGateMatrix) as caught:
+            discovered(".github/workflows", listdir, reader(FILES))
+
+        assert "no .github/workflows directory here" in str(caught.value)
+        assert "--conventions" in str(caught.value)
+
+    def it_fails_when_no_workflow_in_the_directory_calls_the_reusable_workflow():
+        with pytest.raises(NoGateMatrix) as caught:
+            discovered(".github/workflows", lambda _directory: ["docs.yml"], reader(FILES))
+
+        message = str(caught.value)
+        assert f"no workflow in .github/workflows calls {REUSABLE}" in message
+        assert "matrix.py" in message
+
+
+def describe_sources():
+    def it_reads_each_named_workflow_in_the_order_given():
+        files = {"b.yml": CONVENTIONS, "a.yml": CONVENTIONS}
+
+        assert sources(["b.yml", "a.yml"], read=reader(files)) == [
+            ("b.yml", CONVENTIONS),
+            ("a.yml", CONVENTIONS),
+        ]
+
+    def it_discovers_the_callers_when_no_workflow_is_named():
+        found = sources(
+            (),
+            directory="wf",
+            listdir=lambda _directory: ["ci.yml"],
+            read=reader({"wf/ci.yml": CONVENTIONS}),
+        )
+
+        assert found == [("wf/ci.yml", CONVENTIONS)]
+
+    def it_discovers_from_the_workflows_directory_by_default():
+        # The default is the whole point: #834 deleted the workflow the command
+        # used to name, and nothing pinned where it looks instead.
+        looked = []
+
+        sources(
+            (),
+            listdir=lambda directory: looked.append(directory) or ["ci.yml"],
+            read=reader({".github/workflows/ci.yml": CONVENTIONS}),
+        )
+
+        assert looked == [WORKFLOWS] == [".github/workflows"]

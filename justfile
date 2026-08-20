@@ -73,12 +73,14 @@ e2e-attest-ts:
     cd packages/ts && testing-conventions e2e attest 'pnpm test:e2e'
 
 # Every testing-conventions gate CI declares, derived from the (source, gates)
-# pairs in .github/workflows/conventions.yml -- 39 pairs across 8 scan roots
-# (#781). Supersedes the hand-restated `test-conventions` / `unit-coverage` /
-# `mutation` / `e2e-verify` recipes, which named 6 pairs across 3 roots and
-# drifted from the workflow. `--gate` narrows it (repeatable); `--dry-run`
-# prints the matrix without running it. Needs the native build first for the
-# suite-executing gates (maturin / napi); run `just build` if missing.
+# pairs of every workflow in .github/workflows that calls the reusable workflow
+# -- 40 pairs across 8 scan roots in 6 workflows today (#781, #973). Supersedes
+# the hand-restated `test-conventions` / `unit-coverage` / `mutation` /
+# `e2e-verify` recipes, which named 6 pairs across 3 roots and drifted from the
+# workflow. `--conventions` narrows it to named workflows (repeatable), `--gate`
+# to named gates; `--dry-run` prints the matrix without running it. Needs the
+# native build first for the suite-executing gates (maturin / napi); run
+# `just build` if missing.
 #
 # `packaging` is reported SKIP, not run: it inspects a BUILT artifact, which CI
 # builds from each manifest. Use `just test-packaging` for that locally.

@@ -40,8 +40,9 @@ def describe_dirsql_checks_preflight():
 
         assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
         assert "==> python-sdk [python] unit-lint" in proc.stdout
+        assert "==> typescript-sdk [typescript] unit-lint" in proc.stdout
+        assert "==> rust [rust] unit-lint" in proc.stdout
         assert "==> internals-checks [python] unit-lint" in proc.stdout
-        assert "==> rust-core [rust] unit-lint" in proc.stdout
 
     def it_exits_with_an_actionable_message_when_a_named_workflow_is_missing():
         proc = preflight("--conventions", ".github/workflows/conventions.yml")
