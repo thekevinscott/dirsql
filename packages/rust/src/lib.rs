@@ -310,6 +310,12 @@ pub struct DirSQL {
     inner: Arc<DirSqlInner>,
 }
 
+/// Internal scan seam: the startup directory walk, injectable so unit tests
+/// can observe whether it ran. The walk has no result a caller can tell apart
+/// from not walking, so *whether* it ran takes a seam. Production always
+/// passes [`scan_directory`].
+type ScanFn<'a> = &'a dyn Fn(&Path, &TableMatcher) -> Vec<(PathBuf, String)>;
+
 impl DirSQL {
     /// Start building a `DirSQL`. See [`DirSQLBuilder`] for the available
     /// configuration methods. Call `.build()` to finish construction
@@ -690,6 +696,10 @@ impl DirSQL {
     /// JS main thread for the napi-rs TypeScript binding).
     #[doc(hidden)]
     pub fn prepare_resolved(resolved: ResolvedBuild) -> Result<PreparedBuild> {
+        Self::prepare_resolved_with(resolved, &scan_directory)
+    }
+
+    fn prepare_resolved_with(resolved: ResolvedBuild, scan: ScanFn<'_>) -> Result<PreparedBuild> {
         let ResolvedBuild {
             root,
             tables,
@@ -719,7 +729,15 @@ impl DirSQL {
             None
         };
 
-        let scanned = scan_directory(&root, &matcher);
+        // Zero tables means an empty `TableMatcher`, and `match_all` filters
+        // its entries -- so the walk is guaranteed to return nothing. That is
+        // the configless case (path-tables run their own per-statement scan),
+        // where the walk was the bulk of startup.
+        let scanned = if table_names.is_empty() {
+            Vec::new()
+        } else {
+            scan(&root, &matcher)
+        };
 
         // When persist is enabled, files whose stat tuple matches the cache
         // (and that pass the racy-window check) are trusted instead of
@@ -738,8 +756,6 @@ impl DirSQL {
             }
             Some(ctx) => reconcile_scan(&root, scanned, ctx, &RealFs)?,
         };
-
-        let _ = table_names;
 
         Ok(PreparedBuild {
             root,
@@ -2076,6 +2092,7 @@ mod readonly_tests {
 #[cfg(test)]
 mod internal_tests {
     use super::*;
+    use std::cell::Cell;
     use std::collections::HashMap as StdHashMap;
     use std::collections::HashSet as StdHashSet;
     use tempfile::TempDir;
@@ -2152,6 +2169,114 @@ mod internal_tests {
                 .cloned()
                 .unwrap_or_else(|| root.to_string_lossy().into_owned())
         }
+    }
+
+    /// Records how many times the startup walk ran and hands back a canned
+    /// result, so the assertion is about the walk happening, not about any
+    /// tree on disk.
+    struct RecordingScan {
+        calls: Cell<usize>,
+        found: Vec<(PathBuf, String)>,
+    }
+
+    impl RecordingScan {
+        fn new(found: Vec<(PathBuf, String)>) -> Self {
+            Self {
+                calls: Cell::new(0),
+                found,
+            }
+        }
+
+        fn scan(&self, _root: &Path, _matcher: &TableMatcher) -> Vec<(PathBuf, String)> {
+            self.calls.set(self.calls.get() + 1);
+            self.found.clone()
+        }
+    }
+
+    fn resolved_over(root: &Path, tables: Vec<Table>, persist: bool) -> ResolvedBuild {
+        ResolvedBuild {
+            root: root.to_path_buf(),
+            tables,
+            ignore: Vec::new(),
+            extensions: Vec::new(),
+            functions: Vec::new(),
+            persist,
+            persist_path: None,
+            poll_interval: DEFAULT_POLL_INTERVAL,
+            hint_legacy_files_table: false,
+            path_table_parser: None,
+            no_ignore: false,
+        }
+    }
+
+    fn txt_table() -> Table {
+        Table::new(
+            "items",
+            "CREATE TABLE items (name TEXT)",
+            "**/*.txt",
+            |_| Vec::new(),
+        )
+    }
+
+    /// Configless startup declares zero tables, so nothing the walk could
+    /// visit can match: the walk must not run at all.
+    #[test]
+    fn prepare_does_not_walk_the_tree_when_no_tables_are_declared() {
+        let dir = TempDir::new().unwrap();
+        let scan = RecordingScan::new(vec![(dir.path().join("a.txt"), "items".into())]);
+
+        let prepared = DirSQL::prepare_resolved_with(
+            resolved_over(dir.path(), Vec::new(), false),
+            &|root, matcher| scan.scan(root, matcher),
+        )
+        .unwrap();
+
+        assert_eq!(
+            scan.calls.get(),
+            0,
+            "zero tables can match nothing, so the startup walk is pure waste"
+        );
+        assert!(prepared.scanned_files.is_empty());
+    }
+
+    /// The skip is narrow: one declared table still walks, and prepare still
+    /// carries what the walk found.
+    #[test]
+    fn prepare_walks_the_tree_when_a_table_is_declared() {
+        let dir = TempDir::new().unwrap();
+        let scan = RecordingScan::new(vec![(dir.path().join("a.txt"), "items".into())]);
+
+        let prepared = DirSQL::prepare_resolved_with(
+            resolved_over(dir.path(), vec![txt_table()], false),
+            &|root, matcher| scan.scan(root, matcher),
+        )
+        .unwrap();
+
+        assert_eq!(scan.calls.get(), 1);
+        let found: Vec<&str> = prepared
+            .scanned_files
+            .iter()
+            .map(|f| f.rel_path.as_str())
+            .collect();
+        assert_eq!(found, vec!["a.txt"]);
+    }
+
+    /// Skipping the walk skips only the walk: with persist on, the cache is
+    /// still opened and reconciled against the (empty) scan.
+    #[test]
+    fn prepare_still_opens_the_persist_cache_when_no_tables_are_declared() {
+        let dir = TempDir::new().unwrap();
+        let scan = RecordingScan::new(Vec::new());
+
+        let prepared = DirSQL::prepare_resolved_with(
+            resolved_over(dir.path(), Vec::new(), true),
+            &|root, matcher| scan.scan(root, matcher),
+        )
+        .unwrap();
+
+        assert_eq!(scan.calls.get(), 0);
+        let persist = prepared.persist.expect("persist context");
+        assert!(persist.deleted.is_empty());
     }
 
     /// A canned [`FileStat`] for tests that only need a stat to succeed.
