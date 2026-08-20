@@ -19,6 +19,7 @@
 //! - [`execute`] — the transport-agnostic query pipeline shared by the
 //!   HTTP handler and the one-shot `dirsql query` subcommand.
 //! - [`repl`] — the read-eval-print loop behind bare `dirsql`.
+//! - [`table`] — result rows rendered for reading rather than piping.
 //! - [`serialize`] — row + event → JSON.
 
 use std::net::SocketAddr;
@@ -37,6 +38,7 @@ pub mod router;
 pub mod run;
 pub mod serialize;
 pub mod server;
+pub mod table;
 
 pub use run::run_cli;
 pub use server::{serve, serve_with_state};

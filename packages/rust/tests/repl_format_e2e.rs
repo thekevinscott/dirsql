@@ -174,7 +174,7 @@ fn a_null_is_named_rather_than_rendered_as_a_blank() {
     // A blank cell is indistinguishable from an empty string.
     let root = fixture();
 
-    let out = query(&root, "SELECT NULL AS nothing", &["--format", "table"]);
+    let out = query(&root, "SELECT NULL AS blank", &["--format", "table"]);
 
     assert!(stdout_of(&out).contains("NULL"), "got {}", stdout_of(&out));
 }

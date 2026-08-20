@@ -61,7 +61,11 @@ dirsql
 # `exit`, `quit`, or Ctrl-D to leave.
 #
 # dirsql> SELECT count(*) AS files FROM './';
-# [{"files":128}]
+# files
+# -----
+# 128
+#
+# 1 row
 # dirsql>
 ```
 
@@ -78,6 +82,51 @@ The index is built **once**, before the first prompt: statements share one scan
 rather than re-walking the directory each time, and the live watcher keeps it
 fresh between them. Files the scan had to skip are named on stderr once, up
 front.
+
+### Output format
+
+Rows go where they are useful: a **table** when stdout is a terminal, the
+**JSON array** when it is piped or redirected. `SELECT * FROM './'` in a
+5000-file tree should not put a 5000-element JSON array in front of a person,
+and `dirsql "…" | jq` should not have to parse a table.
+
+`--format` overrides that, in both directions, and is valid in the REPL and in
+[`dirsql query`](#dirsql-query) alike:
+
+| Value | Renders |
+|---|---|
+| `auto` (default) | Table if stdout is a terminal, JSON otherwise. |
+| `table` | Always a table — including into a pipe or a file. |
+| `json` | Always the JSON array — including at a terminal. |
+
+```bash
+dirsql "SELECT basename, size FROM './' ORDER BY basename" --format table
+# basename  size
+# --------  ----
+# a.md      6
+# bb.md     10
+#
+# 2 rows
+```
+
+There is no `.mode`: dirsql has no dot-commands to extend (see
+[Leaving](#leaving)), and a flag serves the one-shot query too. `dirsql server`
+does not take `--format` — its transport is JSON over HTTP.
+
+**`auto` keys on stdout, not stdin.** `dirsql > rows.json` typed at a terminal
+is still headed for a file, and the file gets JSON.
+
+Table rendering is deliberately plain: aligned columns, a rule under the
+header, a row count, and `NULL` spelled out so it cannot be confused with an
+empty string. Two things happen to a value on its way into a cell, both
+because a `content` column holds a whole file: **newlines, tabs and other
+control characters are escaped** (`\n`, `\t`, `\u{…}`) so one row cannot span
+several lines, and **anything longer than 60 characters is truncated with
+`…`** so one column cannot set the width of every row. `--format json`
+returns the values unaltered.
+
+Laying the table out to the terminal's width, and paging a long result, are
+both out of scope; pipe to `less` for the latter.
 
 ### Where a statement ends
 
@@ -157,7 +206,11 @@ failure:
 dirsql> SELECT nope FROM missing;
 dirsql: SQLite error: no such table: missing
 dirsql> SELECT 1 AS n;
-[{"n":1}]
+n
+-
+1
+
+1 row
 ```
 
 A config that cannot be loaded is different in kind: it fails identically for
@@ -330,6 +383,12 @@ argument. The command string is copy-paste identical to a `[[table]]`
 Errors print the same diagnostic the HTTP `{"error": …}` body carries —
 config failures, SQL errors, rejected reads, hook failures, timeouts — to
 stderr, with exit code `1`.
+
+#### `--format {auto,table,json}`
+
+How to render the result rows — the same flag [the REPL](#output-format)
+takes, with the same `auto` default. A one-shot query is usually piped, so
+`auto` usually means JSON; `--format table` is there for the times it is not.
 
 ### Exit codes
 

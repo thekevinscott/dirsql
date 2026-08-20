@@ -38,7 +38,7 @@ use serde_json::Value;
 
 use super::AppState;
 use super::execute::{QueryFailure, execute_query};
-use super::run::query_body;
+use super::run::{Format, query_body, render_rows};
 
 /// The interactive prompt, split as reedline renders it: the left half, then
 /// the indicator that follows it.
@@ -97,6 +97,7 @@ trait Lines {
 /// line for every statement the user types.
 pub(super) async fn run_repl<R, W, E>(
     state: &AppState,
+    format: Format,
     input: R,
     out: &mut W,
     err: &mut E,
@@ -114,9 +115,17 @@ where
     let statements = StateStatements(state);
 
     if interactive {
-        repl_loop(&statements, EditorLines::new(), out, err, true).await
+        repl_loop(&statements, EditorLines::new(), out, err, format, true).await
     } else {
-        repl_loop(&statements, PipedLines(Some(input)), out, err, false).await
+        repl_loop(
+            &statements,
+            PipedLines(Some(input)),
+            out,
+            err,
+            format,
+            false,
+        )
+        .await
     }
 }
 
@@ -127,6 +136,7 @@ async fn repl_loop<S, L, W, E>(
     mut lines: L,
     out: &mut W,
     err: &mut E,
+    format: Format,
     interactive: bool,
 ) -> u8
 where
@@ -166,7 +176,7 @@ where
                 // A closed stdout (`dirsql < script.sql | head -1`) means
                 // nothing downstream is listening; keep reading and there is
                 // a whole script left to execute into a broken pipe.
-                if writeln!(out, "{value}").is_err() {
+                if write!(out, "{}", render_rows(&value, format)).is_err() {
                     return 0;
                 }
             }
@@ -524,7 +534,15 @@ mod tests {
     async fn drive(entries: Vec<Entry>) -> (FakeStatements, String, String, u8) {
         let fake = FakeStatements::default();
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = repl_loop(&fake, FakeLines::of(entries), &mut out, &mut err, false).await;
+        let code = repl_loop(
+            &fake,
+            FakeLines::of(entries),
+            &mut out,
+            &mut err,
+            Format::Json,
+            false,
+        )
+        .await;
         (fake, text(&out), text(&err), code)
     }
 
@@ -538,6 +556,7 @@ mod tests {
             FakeLines::statements(&["SELECT 1", "SELECT 2"]),
             &mut out,
             &mut err,
+            Format::Json,
             false,
         )
         .await;
@@ -557,6 +576,7 @@ mod tests {
             FakeLines::statements(&["   SELECT 1   \n"]),
             &mut out,
             &mut err,
+            Format::Json,
             false,
         )
         .await;
@@ -633,6 +653,7 @@ mod tests {
             FakeLines::statements(&["SELECT nope", "SELECT 1"]),
             &mut out,
             &mut err,
+            Format::Json,
             false,
         )
         .await;
@@ -657,7 +678,15 @@ mod tests {
         let fake = FakeStatements::default();
         let (mut out, mut err) = (Vec::new(), Vec::new());
 
-        repl_loop(&fake, FakeLines::of(vec![]), &mut out, &mut err, true).await;
+        repl_loop(
+            &fake,
+            FakeLines::of(vec![]),
+            &mut out,
+            &mut err,
+            Format::Json,
+            true,
+        )
+        .await;
 
         assert!(text(&out).ends_with("\n\n\n"), "{:?}", text(&out));
     }
@@ -667,7 +696,15 @@ mod tests {
         let fake = FakeStatements::default();
         let (mut out, mut err) = (Vec::new(), Vec::new());
 
-        repl_loop(&fake, FakeLines::of(vec![]), &mut out, &mut err, true).await;
+        repl_loop(
+            &fake,
+            FakeLines::of(vec![]),
+            &mut out,
+            &mut err,
+            Format::Json,
+            true,
+        )
+        .await;
 
         assert!(text(&out).starts_with(&banner()), "{:?}", text(&out));
     }
@@ -682,6 +719,7 @@ mod tests {
             FakeLines::statements(&["SELECT 1"]),
             &mut BrokenPipe,
             &mut err,
+            Format::Json,
             true,
         )
         .await;
@@ -703,6 +741,7 @@ mod tests {
             FakeLines::statements(&["SELECT 1"]),
             &mut FlushFails,
             &mut err,
+            Format::Json,
             true,
         )
         .await;
@@ -716,7 +755,15 @@ mod tests {
         let fake = FakeStatements::default();
         let (mut out, mut err) = (Vec::new(), Vec::new());
 
-        let code = repl_loop(&fake, FakeLines::failing(), &mut out, &mut err, false).await;
+        let code = repl_loop(
+            &fake,
+            FakeLines::failing(),
+            &mut out,
+            &mut err,
+            Format::Json,
+            false,
+        )
+        .await;
 
         assert_eq!(code, 1);
         assert_eq!(
@@ -737,6 +784,7 @@ mod tests {
             FakeLines::statements(&["SELECT 1", "SELECT 2"]),
             &mut BrokenPipe,
             &mut err,
+            Format::Json,
             false,
         )
         .await;
@@ -757,6 +805,7 @@ mod tests {
             PipedLines(Some(input("SELECT 1\nSELECT 2\n"))),
             &mut out,
             &mut err,
+            Format::Json,
             false,
         )
         .await;
@@ -775,6 +824,7 @@ mod tests {
             PipedLines(Some(input("SELECT 1"))),
             &mut out,
             &mut err,
+            Format::Json,
             false,
         )
         .await;
@@ -792,6 +842,7 @@ mod tests {
             PipedLines(Some(BrokenReader)),
             &mut out,
             &mut err,
+            Format::Json,
             false,
         )
         .await;
@@ -821,6 +872,7 @@ mod tests {
 
         let code = run_repl(
             &state,
+            Format::Json,
             input("SELECT 1\nSELECT 2\n"),
             &mut out,
             &mut err,

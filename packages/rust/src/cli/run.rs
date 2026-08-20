@@ -19,10 +19,11 @@ use std::path::PathBuf;
 
 use super::{
     AppState, ServerConfig, execute::execute_query, init::InitOptions, repl::run_repl,
-    serve_with_state,
+    serve_with_state, table,
 };
 use crate::{DirSQL, Extension, Row, Table};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use serde_json::Value;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -63,6 +64,11 @@ struct Cli {
     /// same `--on-file` the `query` subcommand takes (see [`QueryArgs`]).
     #[arg(long = "on-file")]
     on_file: Vec<String>,
+
+    /// How to render result rows — the same `--format` the `query` subcommand
+    /// takes (see [`Format`]). Applies to the REPL too.
+    #[arg(long, value_enum, default_value_t = Format::Auto)]
+    format: Format,
 
     /// Config flags for the default (query) mode. They are subcommand-local,
     /// not global: for the `query`/`server` subcommands the same flags are
@@ -195,8 +201,51 @@ struct QueryArgs {
     #[arg(long = "on-file")]
     on_file: Vec<String>,
 
+    /// How to render result rows. See [`Format`].
+    #[arg(long, value_enum, default_value_t = Format::Auto)]
+    format: Format,
+
     #[command(flatten)]
     common: ConfigArgs,
+}
+
+/// How result rows are rendered.
+///
+/// Deliberately a flag rather than a `.mode` meta-command: dirsql has no
+/// dot-commands to extend (#953), and a flag serves the one-shot query as
+/// well as the REPL. It is **not** on `server`, whose transport is JSON over
+/// HTTP and cannot honour it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(super) enum Format {
+    /// Pick by destination: a table when stdout is a terminal, JSON when it
+    /// is redirected or piped.
+    Auto,
+    /// An aligned table with a row count, for reading.
+    Table,
+    /// The JSON array every other surface returns, for `jq`.
+    Json,
+}
+
+impl Format {
+    /// Settle `Auto` against the destination, yielding `Table` or `Json`.
+    ///
+    /// Keys on **stdout**, not stdin: `dirsql > rows.json` typed at a
+    /// terminal is still headed for a file, and the file wants JSON.
+    fn resolve(self, stdout_is_terminal: bool) -> Self {
+        match self {
+            Self::Auto if stdout_is_terminal => Self::Table,
+            Self::Auto => Self::Json,
+            settled => settled,
+        }
+    }
+}
+
+/// Render one result the way `format` asks. `Auto` must already be settled.
+pub(super) fn render_rows(value: &Value, format: Format) -> String {
+    match format {
+        Format::Table => table::render(value.as_array().map_or(&[][..], Vec::as_slice)),
+        _ => format!("{value}\n"),
+    }
 }
 
 /// Reduce the repeatable `--on-file` occurrences to at most one parser command.
@@ -300,6 +349,7 @@ async fn run_default(cli: Cli) -> u8 {
             run_query(QueryArgs {
                 sql,
                 on_file: cli.on_file,
+                format: cli.format,
                 common: cli.common,
             })
             .await
@@ -319,6 +369,7 @@ async fn run_default(cli: Cli) -> u8 {
             report_scan_failures(&state);
             run_repl(
                 &state,
+                cli.format.resolve(std::io::stdout().is_terminal()),
                 // `StdinLock` is not `Send`, so it cannot cross into the
                 // blocking read; `BufReader<Stdin>` locks per call and can.
                 std::io::BufReader::new(std::io::stdin()),
@@ -350,9 +401,11 @@ async fn run_query(args: QueryArgs) -> u8 {
 
     // Unbounded: the process IS the query, so `timeout(1)` expresses any cap
     // natively; only the long-lived server enforces `query_timeout` (408).
+    let format = args.format.resolve(std::io::stdout().is_terminal());
+
     match execute_query(&state, query_body(&args.sql), None).await {
         Ok(value) => {
-            println!("{value}");
+            print!("{}", render_rows(&value, format));
             // The query ran and its rows are on stdout, so this is not a
             // failure -- but the index behind them is missing files, and a
             // caller piping into `jq` under `set -e` has no other way to find
@@ -702,6 +755,89 @@ mod tests {
         let cli = Cli::parse_from(["dirsql"]);
         assert!(cli.command.is_none());
         assert!(cli.sql.is_none());
+    }
+
+    /// One result row, built from `Value` alone so the test reaches for
+    /// nothing outside the module.
+    fn one_row() -> Value {
+        Value::Array(vec![Value::from_iter([("n".to_string(), Value::from(1))])])
+    }
+
+    #[test]
+    fn format_defaults_to_auto() {
+        assert_eq!(Cli::parse_from(["dirsql", "SELECT 1"]).format, Format::Auto);
+    }
+
+    #[test]
+    fn format_parses_for_the_repl_and_the_default_query() {
+        assert_eq!(
+            Cli::parse_from(["dirsql", "--format", "table"]).format,
+            Format::Table
+        );
+        assert_eq!(
+            Cli::parse_from(["dirsql", "SELECT 1", "--format", "json"]).format,
+            Format::Json
+        );
+    }
+
+    #[test]
+    fn format_parses_after_the_query_subcommand() {
+        match Cli::parse_from(["dirsql", "query", "SELECT 1", "--format", "table"]).command {
+            Some(Command::Query(args)) => assert_eq!(args.format, Format::Table),
+            other => panic!("expected a query subcommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_server_takes_no_format_flag() {
+        // Its transport is JSON over HTTP; a rendering flag there would be a
+        // promise the transport cannot keep.
+        assert!(Cli::try_parse_from(["dirsql", "server", "--format", "table"]).is_err());
+    }
+
+    #[test]
+    fn an_unknown_format_is_rejected_rather_than_falling_back() {
+        // Silently defaulting would hide a typo until someone read the output.
+        assert!(Cli::try_parse_from(["dirsql", "SELECT 1", "--format", "yaml"]).is_err());
+    }
+
+    #[test]
+    fn auto_becomes_a_table_at_a_terminal() {
+        assert_eq!(Format::Auto.resolve(true), Format::Table);
+    }
+
+    #[test]
+    fn auto_becomes_json_anywhere_else() {
+        assert_eq!(Format::Auto.resolve(false), Format::Json);
+    }
+
+    #[test]
+    fn an_explicit_format_ignores_the_destination() {
+        // The point of the flag: a table into a pipe, JSON at a terminal.
+        assert_eq!(Format::Table.resolve(false), Format::Table);
+        assert_eq!(Format::Json.resolve(true), Format::Json);
+    }
+
+    #[test]
+    fn json_rendering_is_the_value_and_a_newline() {
+        // Byte-identical to what the one-shot query printed before `--format`
+        // existed, which is the regression that matters most.
+        assert_eq!(render_rows(&one_row(), Format::Json), "[{\"n\":1}]\n");
+    }
+
+    #[test]
+    fn table_rendering_takes_the_other_route() {
+        let rendered = render_rows(&one_row(), Format::Table);
+
+        assert!(rendered.contains("1 row"), "{rendered:?}");
+        assert!(!rendered.contains('{'), "no JSON in a table, {rendered:?}");
+    }
+
+    #[test]
+    fn a_result_that_is_not_an_array_renders_as_an_empty_table() {
+        // The pipeline only ever returns an array; rendering must still not
+        // panic if that ever stops being true.
+        assert_eq!(render_rows(&Value::Null, Format::Table), "(no rows)\n");
     }
 
     #[test]

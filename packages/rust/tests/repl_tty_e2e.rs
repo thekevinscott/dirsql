@@ -66,13 +66,26 @@ impl Session {
 struct Terminal {
     home: TempDir,
     root: TempDir,
+    args: String,
 }
 
 impl Terminal {
+    /// A session that asks for JSON, so a case can assert on rows without
+    /// also asserting on a table layout.
     fn new() -> Self {
+        Self::with_args("--format json")
+    }
+
+    /// A session with no `--format`, so the default rendering applies.
+    fn default_format() -> Self {
+        Self::with_args("")
+    }
+
+    fn with_args(args: &str) -> Self {
         Self {
             home: TempDir::new().unwrap(),
             root: TempDir::new().unwrap(),
+            args: args.to_string(),
         }
     }
 
@@ -83,7 +96,16 @@ impl Terminal {
     fn type_in(&self, keys: &str) -> Session {
         let mut child = Command::new("script")
             .arg("-qec")
-            .arg(cargo_bin("dirsql").to_str().expect("a UTF-8 binary path"))
+            // `--format json` keeps these cases about *where a statement
+            // ends*: on a terminal the REPL renders a table by default
+            // (#989), and asserting rows through a table layout would make
+            // every one of them a rendering test too. `repl_format_e2e.rs`
+            // covers the rendering.
+            .arg(format!(
+                "{} {}",
+                cargo_bin("dirsql").to_str().expect("a UTF-8 binary path"),
+                self.args
+            ))
             .arg("/dev/null")
             .current_dir(self.root.path())
             // Keep history inside the test's own tree: a suite that wrote to
@@ -384,6 +406,25 @@ fn ctrl_d_leaves_the_session() {
         session.code,
         Some(0),
         "Ctrl-D ends the session cleanly, got:\n{}",
+        session.screen
+    );
+}
+
+#[test]
+fn a_terminal_session_renders_a_table_by_default() {
+    // The other half of #989's rule, and the only place it can be seen: with
+    // no `--format`, a session whose stdout is a terminal lays its rows out
+    // to be read rather than piped.
+    let session = Terminal::default_format().type_in("SELECT 1 AS n;\nquit\n");
+
+    assert!(
+        session.shows("1 row"),
+        "a table footer, got:\n{}",
+        session.screen
+    );
+    assert!(
+        !session.shows(r#"[{"n":1}]"#),
+        "not the JSON array, got:\n{}",
         session.screen
     );
 }
