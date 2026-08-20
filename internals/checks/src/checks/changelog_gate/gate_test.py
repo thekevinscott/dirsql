@@ -78,6 +78,43 @@ def describe_run():
         assert rc == 1
         assert "No package source changed" not in capsys.readouterr().out
 
+    def fails_when_a_changed_plugin_has_no_fragment(capsys):
+        rc = _run(["plugins/dirsql-plugin-embeddings/src/x.py"])
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "plugins/dirsql-plugin-embeddings has code changes" in out
+        assert (
+            "plugins/dirsql-plugin-embeddings/changelog.d/YYYY-MM-DD-<slug>.md" in out
+        )
+
+    def passes_when_the_changed_plugin_has_a_fragment(capsys):
+        rc = _run(
+            ["plugins/dirsql-plugin-embeddings/src/x.py"],
+            ["plugins/dirsql-plugin-embeddings/changelog.d/2026-08-12-fix.md"],
+        )
+        assert rc == 0
+
+    def a_package_fragment_does_not_satisfy_a_plugin(capsys):
+        rc = _run(
+            ["plugins/dirsql-plugin-embeddings/src/x.py"],
+            ["packages/python/changelog.d/2026-08-12-fix.md"],
+        )
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "plugins/dirsql-plugin-embeddings has code changes" in out
+
+    def flags_a_malformed_plugin_fragment_filename(capsys):
+        rc = _run(["plugins/dirsql-plugin-embeddings/changelog.d/notes.md"])
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "fragment filenames must match" in out
+        assert "plugins/dirsql-plugin-embeddings/changelog.d/notes.md" in out
+
+    def skips_a_plugin_whose_only_changes_are_exempt(capsys):
+        rc = _run(["plugins/dirsql-plugin-embeddings/tests/e2e/search_cli_test.py"])
+        assert rc == 0
+        assert "No package source changed" not in capsys.readouterr().out
+
     def reports_every_uncovered_package(capsys):
         rc = _run(["packages/rust/src/lib.rs", "packages/ts/src/x.ts"])
         assert rc == 1
