@@ -220,3 +220,29 @@ fn a_typoed_table_name_fails_without_a_hint() {
         "a typo must carry no path-table hint, got: {stderr}"
     );
 }
+
+#[test]
+fn an_unquoted_path_fails_with_the_quoting_hint() {
+    let dir = fixture();
+    let out = run(&dir, "SELECT * FROM ./");
+
+    assert!(!out.status.success(), "an unquoted path must not succeed");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(r#"did you mean "./"?"#),
+        "expected the quoting hint, got: {stderr}"
+    );
+}
+
+#[test]
+fn an_ordinary_syntax_error_carries_no_quoting_hint() {
+    let dir = fixture();
+    let out = run(&dir, "SELECT * FROM");
+
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("did you mean"),
+        "a syntax error with no path in it must stay unhinted, got: {stderr}"
+    );
+}
