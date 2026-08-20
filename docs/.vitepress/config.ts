@@ -72,8 +72,7 @@ export default defineConfig({
             { text: 'Columns', link: '/reference/columns' },
             { text: 'Path-tables', link: '/reference/path-tables' },
             { text: 'HTTP API', link: '/reference/http-api' },
-            { text: 'SDK', link: '/reference/sdk' },
-            { text: 'Migrations', link: '/migrations' }
+            { text: 'SDK', link: '/reference/sdk' }
           ]
         },
         {

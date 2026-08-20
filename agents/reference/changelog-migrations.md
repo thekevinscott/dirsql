@@ -47,7 +47,7 @@ Migration fragments are per-package too, one file per changed package under `pac
 
 If a subsection does not apply, keep the heading and write `_None._`. Do not omit subsections. The template lives at the bottom of the frozen root `MIGRATIONS.md`.
 
-The frozen root `MIGRATIONS.md` is surfaced on the docs site at `/migrations` via a VitePress include (`docs/migrations.md`). Do not edit the rendered page.
+The frozen root `MIGRATIONS.md` is not published on the docs site: it holds only pre-fragment history, so a page built from it silently omits every migration written under the fragment convention -- an upgrade guide that looks authoritative and is not (#885). Aggregating `packages/*/migrations.d/*.md` into a page at build time is the option not taken; it needs a build step and a fragment ordering convention.
 
 **PR body requirement:** PRs that touch SDK code must contain the following block (checkboxes filled in):
 

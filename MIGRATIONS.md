@@ -9,11 +9,9 @@ migration entries are **per-package fragments** under
 five-subsection entry — so PRs never conflict on a shared file. See each
 package's `MIGRATIONS.md` (`packages/python`, `packages/ts`, `packages/rust`)
 and AGENTS.md, "Changelog and Migrations". This frozen archive is still the
-source of truth for the pre-fragment history; the docs site
-([Migrations](https://thekevinscott.github.io/dirsql/migrations)) surfaces it
-via a VitePress include — do not edit the rendered page.
+source of truth for the pre-fragment history.
 
-See also: [`CHANGELOG.md`](https://github.com/thekevinscott/dirsql/blob/main/CHANGELOG.md) for the full release log. (The relative path is not used because this file is also included into the docs site via a VitePress include, where relative paths would break.)
+See also: [`CHANGELOG.md`](CHANGELOG.md) for the full release log.
 
 ## Frozen history (pre-fragment)
 
