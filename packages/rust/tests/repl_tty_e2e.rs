@@ -109,6 +109,10 @@ impl Terminal {
         settle(&screen, &finished, |shown| {
             String::from_utf8_lossy(shown).contains("Ctrl-D")
         });
+        // The banner is written before the editor starts reading, so its
+        // arrival does not mean a keystroke would land anywhere. Waiting for
+        // the output to stop does: the last thing drawn is the prompt.
+        quiesce(&screen, &finished);
         // One line at a time, waiting for the editor to finish reacting to
         // each. Sent in one burst, a keystroke aimed at the *next* prompt can
         // arrive while the previous statement is still running and be lost --
@@ -369,13 +373,13 @@ fn ctrl_d_leaves_the_session() {
     // The editor reports `Ctrl+D` distinctly from every other signal, and
     // confusing the two would turn the standard way out of a shell into a
     // keystroke that clears the line and does nothing else.
-    let session = Terminal::new().type_in("SELECT 1 AS n;\n\u{4}");
+    //
+    // Sent at a fresh prompt rather than after a statement: a key aimed at
+    // the prompt that follows an executed statement can land in the gap
+    // before the editor resumes reading, and the point here is Ctrl-D, not
+    // that race.
+    let session = Terminal::new().type_in("\u{4}");
 
-    assert!(
-        session.shows(r#"[{"n":1}]"#),
-        "the statement ran first, got:\n{}",
-        session.screen
-    );
     assert_eq!(
         session.code,
         Some(0),
