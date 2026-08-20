@@ -87,6 +87,43 @@ fn legacy_files_table_hint() -> String {
     format!("{NO_SUCH_TABLE}{LEGACY_DEFAULT_TABLE}; did you mean FROM './'?")
 }
 
+/// The characters a bare filesystem path can be spelled with where a table
+/// name goes. Widening SQLite's error offset over these recovers the whole
+/// path from whichever character its tokenizer happened to reject.
+fn is_path_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '.' | '/' | '_' | '-' | '~' | '*' | '?')
+}
+
+/// The bare path around `offset` in `sql`, if there is one.
+///
+/// SQLite reports the offset of the character it choked on, which is not where
+/// the path starts: `FROM ./` rejects the leading `.`, while `FROM src/main.rs`
+/// rejects the `/` in the middle. Widening in both directions recovers the same
+/// token either way. A `/` is required, which keeps an ordinary syntax error
+/// over an identifier or a number out of the hint.
+fn path_token_at(sql: &str, offset: usize) -> Option<&str> {
+    if !sql.is_char_boundary(offset) {
+        return None;
+    }
+    let start = sql[..offset]
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| is_path_char(*c))
+        .last()
+        .map_or(offset, |(i, _)| i);
+    let end = offset
+        + sql[offset..]
+            .find(|c: char| !is_path_char(c))
+            .unwrap_or(sql.len() - offset);
+
+    let token = &sql[start..end];
+    token.contains('/').then_some(token)
+}
+
+fn unquoted_path_hint(token: &str) -> String {
+    format!("hint: paths used as table names must be quoted; did you mean {token:?}?")
+}
+
 fn no_home_path_table(name: &str) -> String {
     format!(
         "path-table {name:?} cannot be resolved: no home directory for '~' \
@@ -678,7 +715,7 @@ impl Db {
                 Err(e) => e,
             };
             let Some((name, table)) = self.path_table_for(&error)? else {
-                return Err(error);
+                return Err(self.hint_unquoted_path(error));
             };
             if !attempted.insert(name.clone()) {
                 return Err(error);
@@ -785,6 +822,29 @@ impl Db {
             }
             Resolution::NotAPath => Ok(None),
         }
+    }
+
+    /// Append the quoting hint when `error` is a syntax error over a bare
+    /// filesystem path. SQLite parses `./` as punctuation, so `FROM ./` dies in
+    /// the parser and never reaches the `no such table` fallback the rest of
+    /// this module rides on -- quoting the path is what gets it there.
+    fn hint_unquoted_path(&self, error: DbError) -> DbError {
+        match self.unquoted_path_hint_for(&error) {
+            Some(hint) => DbError::PathTable(format!("{error}\n{hint}")),
+            None => error,
+        }
+    }
+
+    /// The hint `error` earns, or `None` when it is not a syntax error over a
+    /// path. Without a root the fallback is off, so a quoted path would fail
+    /// too and the hint would be a dead end.
+    fn unquoted_path_hint_for(&self, error: &DbError) -> Option<String> {
+        self.path_table_root.as_ref()?;
+        let DbError::Sqlite(rusqlite::Error::SqlInputError { sql, offset, .. }) = error else {
+            return None;
+        };
+        let offset = usize::try_from(*offset).ok()?;
+        path_token_at(sql, offset).map(unquoted_path_hint)
     }
 
     fn hints_legacy_files_table(&self, name: &str) -> bool {
@@ -2138,6 +2198,91 @@ mod tests {
     #[test]
     fn missing_table_name_ignores_an_empty_name() {
         assert_eq!(missing_table_name("no such table: "), None);
+    }
+
+    #[test]
+    fn path_token_at_recovers_a_path_from_its_first_character() {
+        assert_eq!(
+            path_token_at("SELECT * FROM ./docs/a.md", 14),
+            Some("./docs/a.md")
+        );
+    }
+
+    #[test]
+    fn path_token_at_widens_left_when_sqlite_points_mid_path() {
+        assert_eq!(
+            path_token_at("SELECT * FROM src/main.rs", 17),
+            Some("src/main.rs")
+        );
+    }
+
+    #[test]
+    fn path_token_at_stops_at_the_first_non_path_character() {
+        assert_eq!(path_token_at("SELECT * FROM a/b, c", 15), Some("a/b"));
+    }
+
+    #[test]
+    fn path_token_at_ignores_a_token_with_no_slash() {
+        assert_eq!(path_token_at("SELECT * FROM 1nvalid", 14), None);
+    }
+
+    #[test]
+    fn path_token_at_ignores_an_offset_inside_a_character() {
+        // `é` is two bytes, so offset 15 splits it; slicing there would panic.
+        assert_eq!(path_token_at("SELECT * FROM é/x", 15), None);
+    }
+
+    #[test]
+    fn unquoted_path_hint_names_the_quoted_form() {
+        assert_eq!(
+            unquoted_path_hint("./"),
+            r#"hint: paths used as table names must be quoted; did you mean "./"?"#
+        );
+    }
+
+    #[test]
+    fn query_hints_at_quoting_for_an_unquoted_path() {
+        let mut db = Db::new().unwrap();
+        db.set_path_table_root(PathBuf::from("/nonexistent-dirsql-root"));
+
+        let err = db.query("SELECT * FROM ./").unwrap_err().to_string();
+
+        assert!(err.contains("syntax error"), "got: {err}");
+        assert!(err.contains(r#"did you mean "./"?"#), "got: {err}");
+    }
+
+    #[test]
+    fn query_leaves_an_unquoted_path_unhinted_without_a_root() {
+        let db = Db::new().unwrap();
+
+        let err = db.query("SELECT * FROM ./").unwrap_err().to_string();
+
+        assert!(err.contains("syntax error"), "got: {err}");
+        assert!(
+            !err.contains("did you mean"),
+            "quoting leads nowhere without a root, got: {err}"
+        );
+    }
+
+    #[test]
+    fn query_leaves_a_pathless_syntax_error_unhinted() {
+        let mut db = Db::new().unwrap();
+        db.set_path_table_root(PathBuf::from("/nonexistent-dirsql-root"));
+
+        let err = db.query("SELECT * FROM 1nvalid").unwrap_err().to_string();
+
+        assert!(!err.contains("did you mean"), "got: {err}");
+    }
+
+    #[test]
+    fn query_leaves_an_offsetless_syntax_error_unhinted() {
+        let mut db = Db::new().unwrap();
+        db.set_path_table_root(PathBuf::from("/nonexistent-dirsql-root"));
+
+        // "incomplete input" names no token, so there is no offset to widen from.
+        let err = db.query("SELECT * FROM").unwrap_err().to_string();
+
+        assert!(!err.contains("did you mean"), "got: {err}");
     }
 
     #[test]
