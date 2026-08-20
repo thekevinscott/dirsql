@@ -1,9 +1,12 @@
-"""Derive the testing-conventions gate matrix from `.github/workflows/conventions.yml` (#781).
+"""Derive the testing-conventions gate matrix from the CI workflows (#781).
 
 The justfile's `test-conventions` recipe restated the (source, gates) pairs by
 hand and covered 3 of the 8 scan roots CI declares, so a locally-green run said
-nothing about 34 of the ~40 pairs. Reading the workflow makes that drift
-impossible: a caller added to `conventions.yml` is a pair `preflight` runs.
+nothing about most of the pairs. Reading the workflows makes that drift
+impossible: a caller added to any of them is a pair `preflight` runs.
+
+The callers were one file until #861 split `conventions.yml` into one workflow
+per domain, so the matrix now spans every document in `.github/workflows/`.
 """
 
 from __future__ import annotations
@@ -73,22 +76,28 @@ class Root:
     config: str = ""
 
 
-def parse_gate_matrix(text: str) -> list[Root]:
-    """Every `conventions.yml` job that calls the reusable workflow, as a Root."""
+def parse_gate_matrix(texts: list[str]) -> list[Root]:
+    """Every job across `texts` that calls the reusable workflow, as a Root.
+
+    Most of `.github/workflows/` does not call it at all (the release, docs and
+    gate workflows), so a document with no `jobs:` mapping -- or none at all --
+    contributes nothing rather than raising.
+    """
     roots = []
-    for job, spec in yaml.safe_load(text)["jobs"].items():
-        if REUSABLE not in spec.get("uses", ""):
-            continue
-        inputs = spec.get("with", {})
-        roots.append(
-            Root(
-                job=job,
-                source=inputs["source"],
-                languages=json.loads(inputs.get("languages") or "[]"),
-                gates=json.loads(inputs["gates"]) if inputs.get("gates") else list(ROOT_GATES),
-                config=inputs.get("config", ""),
+    for text in texts:
+        for job, spec in ((yaml.safe_load(text) or {}).get("jobs") or {}).items():
+            if REUSABLE not in spec.get("uses", ""):
+                continue
+            inputs = spec.get("with", {})
+            roots.append(
+                Root(
+                    job=job,
+                    source=inputs["source"],
+                    languages=json.loads(inputs.get("languages") or "[]"),
+                    gates=json.loads(inputs["gates"]) if inputs.get("gates") else list(ROOT_GATES),
+                    config=inputs.get("config", ""),
+                )
             )
-        )
     return roots
 
 

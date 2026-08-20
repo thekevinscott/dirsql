@@ -33,7 +33,7 @@ PY = Root(
     config="testing-conventions.toml",
 )
 RUST = Root(job="rust", source="packages/rust", languages=["rust"], gates=["packaging"])
-CONVENTIONS = """
+PYTHON_CI = """
 jobs:
   python-sdk:
     uses: x/.github/workflows/testing-conventions.yml@v0
@@ -42,9 +42,10 @@ jobs:
       source: packages/python/dirsql
       gates: '["unit-lint", "mutation"]'
 """
+WORKFLOWS = [PYTHON_CI]
 # `packaging` first, so a `break` in place of the skip's `continue` would drop
 # the pair after it.
-ARTIFACT_FIRST = CONVENTIONS.replace('"unit-lint", "mutation"', '"packaging", "unit-lint"')
+ARTIFACT_FIRST = [PYTHON_CI.replace('"unit-lint", "mutation"', '"packaging", "unit-lint"')]
 
 
 def has_manifest(path: str) -> bool:
@@ -212,14 +213,14 @@ def describe_prepare():
         ]
 
 
-def drive(conventions=None, **kwargs):
+def drive(workflows=None, **kwargs):
     defaults = {
         "runner": lambda _argv, _cwd: 0,
         "exists": has_manifest,
         "e2e_config": lambda _config: {},
         "echo": lambda _line: None,
     }
-    return run(conventions or CONVENTIONS, "origin/main", **{**defaults, **kwargs})
+    return run(workflows or WORKFLOWS, "origin/main", **{**defaults, **kwargs})
 
 
 def describe_run():
@@ -246,7 +247,7 @@ def describe_run():
     def it_skips_an_artifact_gate_without_failing_and_says_so():
         lines = []
         code = drive(
-            conventions=ARTIFACT_FIRST,
+            workflows=ARTIFACT_FIRST,
             runner=lambda _argv, _cwd: 0,
             echo=lines.append,
         )
@@ -260,7 +261,7 @@ def describe_run():
     def it_keeps_going_past_a_skipped_gate_to_the_pairs_after_it():
         lines = []
         drive(
-            conventions=ARTIFACT_FIRST,
+            workflows=ARTIFACT_FIRST,
             only=["packaging", "unit-lint"],
             echo=lines.append,
         )
@@ -305,11 +306,11 @@ def describe_run():
         assert (calls, code) == ([], 0)
         assert len([line for line in lines if line.startswith("==>")]) == 4
 
-    def it_takes_conventions_and_base_by_keyword():
+    def it_takes_workflows_and_base_by_keyword():
         # `*` (not `/`) before the injected seams: the two leading parameters must
-        # stay nameable, since every caller passes the workflow text by name.
+        # stay nameable, since every caller passes the workflow texts by name.
         assert run(
-            conventions=CONVENTIONS,
+            workflows=WORKFLOWS,
             base="origin/main",
             runner=lambda _argv, _cwd: 0,
             exists=has_manifest,

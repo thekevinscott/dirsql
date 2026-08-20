@@ -71,9 +71,19 @@ def describe_parse_gate_matrix():
         assert rust.languages == []
 
     def it_ignores_jobs_that_do_not_call_the_reusable_workflow():
-        # `unrelated` sits AFTER a caller in its file, so skipping it must not
-        # stop the walk at the first non-caller.
         assert [e.job for e in parse_gate_matrix([PYTHON_CI])] == ["python-sdk"]
+
+    def it_keeps_walking_a_document_past_a_job_that_is_not_a_caller():
+        # `unrelated` sits BETWEEN two callers here, so skipping it must not end
+        # the walk at the first non-caller.
+        text = PYTHON_CI + """  rust-python-binding:
+    uses: x/y/.github/workflows/testing-conventions.yml@v0
+    with:
+      languages: '["rust"]'
+      source: packages/python
+"""
+        jobs = [e.job for e in parse_gate_matrix([text])]
+        assert jobs == ["python-sdk", "rust-python-binding"]
 
 
 def describe_GATES():
