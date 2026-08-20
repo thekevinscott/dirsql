@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use super::{AppState, ServerConfig, execute::execute_query, init::InitOptions, serve_with_state};
 use crate::{DirSQL, Extension, Row, Table};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -230,6 +230,14 @@ struct InitArgs {
     force: bool,
 }
 
+/// `Cli::try_parse_from`, with `--version` reporting `version` instead of the
+/// version the derive baked in at compile time.
+fn parse_cli(argv: Vec<String>, version: &str) -> Result<Cli, clap::Error> {
+    let mut command = Cli::command().version(version.to_string());
+    let mut matches = command.try_get_matches_from_mut(argv)?;
+    Cli::from_arg_matches_mut(&mut matches).map_err(|err| err.format(&mut command))
+}
+
 /// Run the CLI over an explicit `argv` and return its exit code.
 ///
 /// The single entry point every packaging path shares: the `dirsql` binary is
@@ -246,8 +254,22 @@ struct InitArgs {
 /// Clap's own `parse()` exits the process on `--help`, `--version` and usage
 /// errors, so this parses fallibly and renders the result itself — same text,
 /// same streams, same codes, minus the exit.
+///
+/// `--version` reports **this crate's** version, right for the `dirsql` binary
+/// and wrong for an artifact published on its own version line; those call
+/// [`run_cli_with_version`].
 pub fn run_cli(argv: Vec<String>) -> i32 {
-    let mut cli = match Cli::try_parse_from(argv) {
+    run_cli_with_version(argv, env!("CARGO_PKG_VERSION"))
+}
+
+/// [`run_cli`], with the version `--version` reports supplied by the caller.
+///
+/// The PyPI wheel and the npm addon embed this crate but publish on their own
+/// version line, and the release tooling rewrites their manifests rather than
+/// this crate's literal — so reporting `CARGO_PKG_VERSION` there names a
+/// version nobody installed: `dirsql@0.4.20` answered `0.2.7` (#958).
+pub fn run_cli_with_version(argv: Vec<String>, version: &str) -> i32 {
+    let mut cli = match parse_cli(argv, version) {
         Ok(cli) => cli,
         Err(err) => {
             let code = err.exit_code();
@@ -934,6 +956,31 @@ mod tests {
         let exts = parse_extension_specs(&specs);
         assert_eq!(exts[0].path, PathBuf::from("/a.so"));
         assert_eq!(exts[0].entrypoint.as_deref(), Some("init::extra"));
+    }
+
+    #[test]
+    fn version_flag_renders_the_version_the_caller_supplied() {
+        // The #958 contract: what `--version` prints is the caller's version,
+        // not this crate's. clap reports `--version` as an "error", and that
+        // error carries the exact text `print()` would emit.
+        let err = parse_cli(vec!["dirsql".into(), "--version".into()], "9.9.9").unwrap_err();
+        assert_eq!(err.render().to_string().trim(), "dirsql 9.9.9");
+    }
+
+    #[test]
+    fn run_cli_with_version_returns_zero_for_version_instead_of_exiting() {
+        assert_eq!(
+            run_cli_with_version(vec!["dirsql".into(), "--version".into()], "9.9.9"),
+            0
+        );
+    }
+
+    #[test]
+    fn run_cli_with_version_returns_clap_usage_code_for_an_unknown_flag() {
+        assert_eq!(
+            run_cli_with_version(vec!["dirsql".into(), "--nope".into()], "9.9.9"),
+            2
+        );
     }
 
     #[test]

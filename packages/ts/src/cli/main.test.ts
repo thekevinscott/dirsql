@@ -2,7 +2,7 @@ import { mainInProcess } from "bin-shim";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadNativeCore } from "../load-native-core.js";
 import { die } from "./die.js";
-import { main } from "./main.js";
+import { main, packageVersion } from "./main.js";
 import { withResolvedExtensions } from "./resolve-config-extensions.js";
 
 vi.mock("bin-shim");
@@ -48,9 +48,46 @@ describe("main", () => {
       expect.objectContaining({
         argv: ["query", "SELECT 1"],
         binaryName: "dirsql",
-        runCli,
+        runCli: expect.any(Function),
       }),
     );
+  });
+
+  it("hands the addon this package's version, so `--version` reports it", async () => {
+    // #958: the addon's own copy of the core carries a literal that only the
+    // crates.io release lane rewrites, so left to itself it reports a version
+    // nobody installed. Let the shim invoke the callable it was handed, as the
+    // real one does, rather than inspecting it.
+    vi.mocked(mainInProcess).mockImplementation(
+      async ({ argv = [], runCli: forwarded }) => forwarded?.(argv) ?? 0,
+    );
+
+    await expect(main(["--version"])).rejects.toThrow("EXIT_0");
+    expect(runCli).toHaveBeenCalledExactlyOnceWith(
+      ["--version"],
+      // The real manifest, read through the default requirer: a specifier that
+      // missed it would come back undefined.
+      expect.stringMatching(/^\d+\.\d+\.\d+/),
+    );
+  });
+
+  describe("packageVersion", () => {
+    it("reads `version` from the manifest two levels up", () => {
+      const requirer = vi.fn(() => ({ version: "4.2.0" }));
+
+      expect(packageVersion(requirer)).toBe("4.2.0");
+      expect(requirer).toHaveBeenCalledExactlyOnceWith("../../package.json");
+    });
+
+    it("falls back to undefined rather than failing the CLI", () => {
+      // Either way the addon's own version stands: wrong, but it starts.
+      expect(
+        packageVersion(() => {
+          throw new Error("Cannot find module '../../package.json'");
+        }),
+      ).toBeUndefined();
+      expect(packageVersion(() => ({ version: 42 }))).toBeUndefined();
+    });
   });
 
   it("passes the resolver's augmented argv, not the raw argv", async () => {

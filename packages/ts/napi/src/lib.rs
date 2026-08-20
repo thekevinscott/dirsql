@@ -45,14 +45,23 @@ pub fn parse_table_name(ddl: String) -> Option<String> {
 /// addon is the only copy of the core a package ships (#739). `argv` excludes
 /// the program name; the core prepends it for clap.
 ///
+/// `version` is what `--version` reports. The launcher passes the `dirsql`
+/// package's own, since that is the version npm installed; this crate's
+/// `CARGO_PKG_VERSION` is the workspace placeholder and the core's is rewritten
+/// only in the crates.io lane, so neither names the published addon (#958).
+/// Omitted, the core's version stands.
+///
 /// Returns rather than exiting — the caller (bin-shim's `mainInProcess`) owns
 /// the process exit. Codes are ordinary status codes, never 130/143 (#737).
 #[napi(js_name = "runCli")]
-pub fn run_cli(argv: Vec<String>) -> i32 {
+pub fn run_cli(argv: Vec<String>, version: Option<String>) -> i32 {
     let mut full = Vec::with_capacity(argv.len() + 1);
     full.push("dirsql".to_string());
     full.extend(argv);
-    dirsql::cli::run_cli(full)
+    match version {
+        Some(version) => dirsql::cli::run_cli_with_version(full, &version),
+        None => dirsql::cli::run_cli(full),
+    }
 }
 
 /// A row-level event emitted by the file watcher.

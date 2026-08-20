@@ -446,6 +446,15 @@ mod python {
         }
     }
 
+    /// This wheel's version: `packages/python/Cargo.toml`'s `[package].version`,
+    /// which maturin writes into the wheel metadata and the release tooling
+    /// rewrites to the published version at build time.
+    ///
+    /// The CLI and `__version__` both read it, so they cannot disagree — and
+    /// neither reports the embedded core crate's literal, which no release
+    /// lane but crates.io rewrites (#958).
+    const VERSION: &str = env!("CARGO_PKG_VERSION");
+
     /// Run the `dirsql` CLI in this process and return its exit code.
     ///
     /// The console script calls this instead of exec'ing a bundled binary, so
@@ -463,13 +472,13 @@ mod python {
         let mut full = Vec::with_capacity(argv.len() + 1);
         full.push("dirsql".to_string());
         full.extend(argv);
-        py.detach(|| dirsql::cli::run_cli(full))
+        py.detach(|| dirsql::cli::run_cli_with_version(full, VERSION))
     }
 
     #[pymodule]
     #[pyo3(name = "_dirsql")]
     fn py_dirsql_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
-        m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+        m.add("__version__", VERSION)?;
         m.add_class::<PyTable>()?;
         m.add_class::<PyDirSQL>()?;
         m.add_class::<PyRowEvent>()?;

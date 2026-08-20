@@ -6,13 +6,33 @@
 // `@dirsql/lib-*` addon the SDK loads carries the CLI, so a package ships one
 // copy of the core instead of two (#739).
 
+import { createRequire } from "node:module";
 import { mainInProcess } from "bin-shim";
 import { loadNativeCore } from "../load-native-core.js";
 import { die } from "./die.js";
 import { withResolvedExtensions } from "./resolve-config-extensions.js";
 
 /** The addon's CLI entry point, as napi exports it. */
-type RunCli = (argv: readonly string[]) => number;
+type RunCli = (argv: readonly string[], version?: string) => number;
+
+/**
+ * This package's version, or `undefined` if its manifest cannot be read.
+ *
+ * `package.json` sits two levels above this module both in `src/` and in
+ * `dist/`. Falling back rather than throwing keeps a `--version` the addon can
+ * still answer (with its own, wrong number) preferable to a CLI that refuses to
+ * start.
+ */
+export function packageVersion(
+  requirer: (specifier: string) => unknown = createRequire(import.meta.url),
+): string | undefined {
+  try {
+    const { version } = requirer("../../package.json") as { version?: unknown };
+    return typeof version === "string" ? version : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Resolve `runCli` off the same addon the SDK loads.
@@ -23,8 +43,11 @@ type RunCli = (argv: readonly string[]) => number;
  * `loadNativeCore` keeps one resolution rule for the SDK and the CLI —
  * including its dev fallback to a locally built `dirsql.node` — so a
  * monorepo checkout and a published install take the same path.
+ *
+ * The addon is handed this package's version, because the core crate compiled
+ * into it carries a literal no npm release rewrites (#958).
  */
-function resolveRunCli(): RunCli {
+function resolveRunCli(): (argv: readonly string[]) => number {
   const core = loadNativeCore() as { runCli?: unknown };
   if (typeof core.runCli !== "function") {
     throw new Error(
@@ -32,7 +55,9 @@ function resolveRunCli(): RunCli {
         "it was built without the `cli` feature.",
     );
   }
-  return core.runCli as RunCli;
+  const runCli = core.runCli as RunCli;
+  const version = packageVersion();
+  return (argv) => runCli(argv, version);
 }
 
 /**

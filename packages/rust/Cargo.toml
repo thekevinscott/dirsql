@@ -50,7 +50,9 @@ cli = [
 [dependencies]
 axum = { version = "0.8", optional = true }
 blake3 = "1"
-clap = { version = "4", features = ["derive"], optional = true }
+# `string`: `--version` is set at runtime from an owned `String` (the host
+# package's version, #958), and clap only accepts one behind this feature.
+clap = { version = "4", features = ["derive", "string"], optional = true }
 futures = { version = "0.3", optional = true }
 futures-channel.workspace = true
 globset = "0.4"

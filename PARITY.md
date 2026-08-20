@@ -516,11 +516,21 @@ those land.
 | CLI reached by spawning a bundled binary | N — retired (#738) | Y (`cargo install`) | N — retired (#739) |
 | Per-platform artifacts shipping the core | **1** (`.so` only) | 1 | **1** (addon only) |
 | `dirsql server` + Ctrl-C exit code | 0 | 0 | 0 |
+| `--version` reports the installed artifact's version (#958) | Y — the wheel's, via the pyo3 crate | Y — the core crate's | Y — `package.json`'s, read by the launcher |
 
 **Parity restored.** All three languages now front the same `run_cli`: Rust is
 the core, and both bindings call it in-process rather than spawning a copy.
 Neither published package ships a standalone binary — `cargo install dirsql
 --features cli` remains the way to get one, and it is the same code.
+
+**#958 restored parity on the version string**, which had rendered the core
+crate's `CARGO_PKG_VERSION` — a literal only the crates.io lane rewrites, so
+both bindings reported `0.2.7` forever. The core gained
+`cli::run_cli_with_version(argv, version)` and each binding passes the version
+of the artifact it ships inside. The plumbing is asymmetric because the
+manifest a publisher rewrites differs per lane: pyo3's `run_cli(argv)` bakes in
+its own crate version (the constant it also exports as `__version__`), napi's
+`runCli(argv, version?)` takes one. Both are launcher-facing, not SDK API.
 
 #819 removed the per-query timeout from one-shot `dirsql query` in the core
 (server mode's `query_timeout` / `408` pipeline is unchanged). This is a
@@ -556,7 +566,7 @@ both bindings against a real wheel / npm install.
 
 | Test Scenario              | Python (`tests/e2e/`) | Rust (`tests/`) | TypeScript (`tests/e2e/`) |
 |----------------------------|--------|------|------------|
-| `--version` exits 0 and prints the version | Y (`cli_version_test.py`) | Y (`cli_e2e.rs`) | Y (`internals/distcheck` `dirsql-distcheck node`, against the packed npm install) |
+| `--version` exits 0 and prints the *installed artifact's* version (#958) | Y (`cli_version_test.py`; `dirsql-distcheck python` against the pip-installed wheel) | Y (`cli_e2e.rs`) | Y (`internals/distcheck` `dirsql-distcheck node`, against the packed npm install) |
 | Launcher starts server; `POST /query` over HTTP | Y (`extension_package_test.py`) | Y | Y (`extension-package.test.ts`) |
 | `[[dirsql.extension]]` package name resolved by the launcher (#227) | Y | N/A | Y |
 | `interpret` subcommand removed; argv forwarded to clap (#321) | Y | core (clap dispatch) | Y |

@@ -36,7 +36,7 @@ pub mod run;
 pub mod serialize;
 pub mod server;
 
-pub use run::run_cli;
+pub use run::{run_cli, run_cli_with_version};
 pub use server::{serve, serve_with_state};
 
 /// Re-export of the crate-level baked-in default config

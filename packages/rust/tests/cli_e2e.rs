@@ -163,13 +163,18 @@ fn kill_and_wait(mut child: Child) {
 }
 
 #[test]
-fn version_flag_prints_and_exits_zero() {
+fn version_flag_prints_this_crates_version_and_exits_zero() {
+    // The binary is this crate, so it reports this crate's version -- the one
+    // putitoutthere rewrites for the crates.io release. The bindings ship the
+    // core inside an artifact versioned separately and pass their own instead
+    // (#958); pinning the exact string here is what keeps `run_cli`'s default
+    // honest.
     std::process::Command::cargo_bin("dirsql")
         .expect("binary must exist (cargo install --features cli / `cargo test --features cli`)")
         .arg("--version")
         .assert()
         .success()
-        .stdout(predicates::str::is_match(r"^dirsql \d+\.\d+\.\d+").unwrap());
+        .stdout(format!("dirsql {}\n", env!("CARGO_PKG_VERSION")));
 }
 
 #[test]

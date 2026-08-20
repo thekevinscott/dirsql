@@ -71,7 +71,7 @@ Config flags are subcommand-local: pass them after `server`
 | `--persist [<path>]` | off | Keep the SQLite index on disk between runs so a restart only re-parses files that actually changed. Bare `--persist` caches at `<root>/.dirsql/cache.db`; `--persist <path>` caches at `<path>`. Off by default (the index is ephemeral). Also available on [`dirsql query`](#dirsql-query). See [Keep the index across restarts](../howto/persist.md). |
 | `--no-ignore` | off | Scan files a `.gitignore` would hide. [Path-tables](./path-tables.md#skip-rules) respect `.gitignore` files by default; this flag restores the full walk. The built-in skips (`node_modules`/`.git`) and configured `ignore` patterns still apply. Also available on [`dirsql query`](#dirsql-query). |
 | `--extension <path>` | none | Load a SQLite extension by literal path, overriding the config's `[[dirsql.extension]]` entries. Repeatable. Format: `<path>` or `<path>::<entrypoint>`. Internal plumbing for the pip/npm launchers, which resolve package-name extensions and pass the resolved paths here — not intended for direct use. When any `--extension` is present, the config file's own extension entries are not loaded. |
-| `--version` | | Print the version and exit. |
+| `--version` | | Print the version and exit. The version printed is that of the package you installed — the PyPI wheel, the npm package, or the crates.io binary. |
 | `--help` | | Print usage and exit. |
 
 ### Defaults
