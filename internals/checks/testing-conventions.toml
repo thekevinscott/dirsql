@@ -10,10 +10,10 @@
 # fnmatches changed-file *path strings* (see changelog_gate/decide.py), so its e2e
 # output is independent of packages/rust/src's contents. detect.py applies the
 # global `[e2e]` block to every caller that reads the config, so without this file
-# internals/checks inherits the core scope and every rust-core PR spuriously stales
-# internals/checks/e2e-attestation.json (#550). Scoping this package to its own
-# config drops that phantom freshness root; a change to decide.py's path list still
-# stales the attestation through the normal --scope internals/checks/src walk.
+# internals/checks inherits the core scope and every rust-core PR spuriously demands
+# a receipt under internals/checks/e2e-attestations/ (#550). Scoping this package to
+# its own config drops that phantom root; a change to decide.py's path list still
+# demands a receipt through the normal --scope internals/checks/src walk.
 [python.coverage]
 fail_under = 100
 branch = true
