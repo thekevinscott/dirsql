@@ -55,12 +55,12 @@ pipeline, same flags, same output. See that section for config discovery,
 dirsql
 # dirsql 0.2.7 — this directory is a database.
 #
-#   SELECT basename, size FROM './' ORDER BY size DESC LIMIT 5
-#   SELECT path FROM './**/*.md' WHERE content LIKE '%TODO%'
+#   SELECT basename, size FROM './' ORDER BY size DESC LIMIT 5;
+#   SELECT path FROM './**/*.md' WHERE content LIKE '%TODO%';
 #
 # `exit`, `quit`, or Ctrl-D to leave.
 #
-# dirsql> SELECT count(*) AS files FROM './'
+# dirsql> SELECT count(*) AS files FROM './';
 # [{"files":128}]
 # dirsql>
 ```
@@ -79,10 +79,52 @@ rather than re-walking the directory each time, and the live watcher keeps it
 fresh between them. Files the scan had to skip are named on stderr once, up
 front.
 
+### Where a statement ends
+
+At its semicolon — the same rule `sqlite3` uses, and **SQLite's own tokenizer**
+decides where that semicolon is. So a statement can be laid out over as many
+lines as it needs, and a `;` inside a string literal, a comment, or a
+`BEGIN … END` body is not mistaken for the end of one:
+
+```
+dirsql> SELECT basename, size
+   ...> FROM './'
+   ...> ORDER BY size DESC
+   ...> LIMIT 5;
+```
+
+The `...>` prompt says the statement is still open. `exit`, `quit`, and a blank
+line are not SQL, so they are taken as typed rather than waiting for a
+terminator.
+
+### Editing and history
+
+The prompt is a full line editor ([reedline](https://github.com/nushell/reedline)),
+with the emacs bindings a shell prompt has:
+
+| Key | Does |
+|---|---|
+| ↑ / ↓ | Walk back and forth through history. |
+| Ctrl-R | Reverse-search history; type to narrow, Enter to accept. |
+| Ctrl-A / Ctrl-E | Jump to the start / end of the line. |
+| Alt-B / Alt-F | Move back / forward a word. |
+| Ctrl-W, Ctrl-K, Ctrl-Y | Kill the previous word, kill to end of line, yank it back. |
+| Ctrl-C | Abandon the line and return to a fresh prompt. **Does not exit.** |
+| Ctrl-D | Leave. |
+
+History is kept in one file for every directory — a query worked out in one
+project is worth recalling in the next, the same way `sqlite3` keeps a single
+`~/.sqlite_history`. It holds the last 1000 statements, at
+`$XDG_DATA_HOME/dirsql/history`, falling back to
+`~/.local/share/dirsql/history` (`%APPDATA%\dirsql\history` on Windows). If
+none of those resolve, history is kept in memory for the session only.
+
 ### Terminal vs. pipe
 
-The prompt and banner appear only when **stdin is a terminal**. From a pipe or
-a redirect there is neither, so results arrive alone:
+The prompt, banner, editor, and history exist only when **stdin is a terminal**.
+From a pipe or a redirect there is none of that, and the terminator rule does
+not apply either: a redirected script is not being typed, so there is no
+continuation prompt to hang it off. **One statement per line, no `;` needed:**
 
 ```bash
 printf "SELECT 1 AS n\nSELECT 2 AS n\n" | dirsql
@@ -92,7 +134,7 @@ printf "SELECT 1 AS n\nSELECT 2 AS n\n" | dirsql
 dirsql < queries.sql > rows.jsonl
 ```
 
-One statement per line, in both modes. Blank lines do nothing.
+Blank lines do nothing in either mode.
 
 ### Leaving
 
@@ -112,9 +154,9 @@ the one behavioral difference from `dirsql query`, which exits `1` on the first
 failure:
 
 ```
-dirsql> SELECT nope FROM missing
+dirsql> SELECT nope FROM missing;
 dirsql: SQLite error: no such table: missing
-dirsql> SELECT 1 AS n
+dirsql> SELECT 1 AS n;
 [{"n":1}]
 ```
 
