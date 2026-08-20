@@ -1,8 +1,9 @@
 name: Internals distcheck CI
 
 # Verification for the internals/distcheck uv package (the dirsql-distcheck
-# publishability flows). src/** also fans out to the SDK workflows, whose
-# distcheck jobs execute those flows; tests/** is this lane's alone.
+# publishability flows). Consumers -- the SDK workflows' distcheck jobs -- are
+# deliberately not fanned out to: a change here runs the flows in this lane,
+# not the whole Python and TypeScript matrices.
 on:
   pull_request:
     paths:
@@ -30,3 +31,80 @@ jobs:
       source: internals/distcheck/src
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       gates: '["colocated-test", "unit-lint", "integration-lint", "unit-coverage", "mutation"]'
+
+  # The gates above never execute a flow, and tests/integration/ self-skips
+  # without a built binary, so these two jobs are the only thing that runs the
+  # code this package ships. They build the SDK artifacts the flows consume for
+  # the same reason the SDK workflows' distcheck jobs do -- the flows build,
+  # pack, install and run them.
+  python-flow:
+    name: dirsql-distcheck python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies (maturin)
+        run: uv sync
+        working-directory: packages/python
+
+      - name: Put maturin on PATH
+        run: echo "$PWD/packages/python/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Build dirsql CLI binary
+        run: cargo build -p dirsql --features cli
+
+      - name: Run the python flow (build -> pack -> install -> run)
+        run: uv run --project internals/distcheck dirsql-distcheck python
+
+  node-flow:
+    name: dirsql-distcheck node
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies
+        working-directory: packages/ts
+        run: pnpm install
+
+      # No `build` job to pull an artifact from, unlike dirsql-typescript-ci:
+      # the flow needs the staged host CLI under packages/ts/build/.
+      - name: Build native module + stage platform
+        working-directory: packages/ts
+        run: pnpm build
+
+      - name: Run the node flow (build -> pack -> install -> run)
+        run: uv run --project internals/distcheck dirsql-distcheck node

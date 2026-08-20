@@ -51,7 +51,7 @@ Each flow follows the same shape (mirroring `internals/checks`):
   and calls `gate.run`, turning a `DistcheckError` into a non-zero exit.
 
 Every module (except empty `__init__.py`s) carries a colocated `*_test.py`,
-gated by `conventions.yml`'s `internals-distcheck` job: `colocated-test`,
+gated by `internals-distcheck-ci.yml`'s `internals-distcheck` job: `colocated-test`,
 `unit-lint`, `integration-lint`, `unit-coverage`, and `mutation`.
 
 ## Test tiers
@@ -64,7 +64,11 @@ gated by `conventions.yml`'s `internals-distcheck` job: `colocated-test`,
   execution is the `dirsql-distcheck <flow>` job, which builds them first.
 
 No e2e tier / attestation: `tests/integration/` is the outermost tier, and the
-CI `distcheck` jobs (`python-test.yml` / `ts-test.yml`) run the real flows directly.
+`python-flow` / `node-flow` jobs in `internals-distcheck-ci.yml` run the real
+flows directly. They are this package's only CI execution of its own code -- the
+gates above never invoke a flow. The SDK workflows run the same flows against
+their own package, but they do not watch this directory, so a change here must
+be verified in this lane.
 
 ```bash
 uv run --project internals/distcheck python -m pytest internals/distcheck/src internals/distcheck/tests -q
