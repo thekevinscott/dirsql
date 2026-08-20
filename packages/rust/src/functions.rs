@@ -113,17 +113,43 @@ pub(crate) struct CallReporter {
     state: Mutex<CallState>,
 }
 
+/// What [`CallReporter`] needs from a reporter. A trait rather than a concrete
+/// [`Progress`] so the unit tier can inject a double: `unit lint`'s isolation
+/// rule keeps a unit test inside its own module, and `Progress` lives in
+/// another one.
+pub(crate) trait CallProgress: Send {
+    /// Report `done` round trips so far. There is no total — SQLite does not
+    /// say up front how many rows the query will call the function on.
+    fn update(&mut self, done: u64);
+    fn finish(&mut self, done: u64);
+    fn restart(&mut self);
+}
+
+impl CallProgress for Progress {
+    fn update(&mut self, done: u64) {
+        Progress::update(self, done, None);
+    }
+
+    fn finish(&mut self, done: u64) {
+        Progress::finish(self, done);
+    }
+
+    fn restart(&mut self) {
+        Progress::restart(self);
+    }
+}
+
 struct CallState {
     count: u64,
-    progress: Progress,
+    progress: Box<dyn CallProgress>,
 }
 
 impl CallReporter {
     pub(crate) fn new() -> Arc<Self> {
-        Arc::new(Self::with_progress(Progress::worker_calls()))
+        Arc::new(Self::with_progress(Box::new(Progress::worker_calls())))
     }
 
-    fn with_progress(progress: Progress) -> Self {
+    fn with_progress(progress: Box<dyn CallProgress>) -> Self {
         Self {
             state: Mutex::new(CallState { count: 0, progress }),
         }
@@ -146,7 +172,7 @@ impl CallReporter {
         if let Ok(mut state) = self.state.lock() {
             state.count += 1;
             let count = state.count;
-            state.progress.update(count, None);
+            state.progress.update(count);
         }
     }
 
@@ -520,62 +546,59 @@ mod tests {
 
     // --- call reporting ----------------------------------------------------
 
-    /// A `Write` the test can read back, so what the reporter drew is
-    /// assertable without a terminal.
+    /// A [`CallProgress`] double recording what it was asked to do, so the
+    /// orchestration is assertable in-module. What the reporter *draws* is
+    /// `progress.rs`'s business and is unit-tested there.
     #[derive(Clone, Default)]
-    struct Sink(Arc<Mutex<Vec<u8>>>);
+    struct Recorder(Arc<Mutex<Vec<String>>>);
 
-    impl Sink {
-        fn text(&self) -> String {
-            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    impl Recorder {
+        fn events(&self) -> Vec<String> {
+            self.0.lock().unwrap().clone()
+        }
+
+        fn push(&self, event: String) {
+            self.0.lock().unwrap().push(event);
         }
     }
 
-    impl std::io::Write for Sink {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
+    struct RecordingProgress(Recorder);
+
+    impl CallProgress for RecordingProgress {
+        fn update(&mut self, done: u64) {
+            self.0.push(format!("update {done}"));
         }
 
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
+        fn finish(&mut self, done: u64) {
+            self.0.push(format!("finish {done}"));
+        }
+
+        fn restart(&mut self) {
+            self.0.push("restart".to_string());
         }
     }
 
-    /// A reporter drawing into a readable sink, forced on so the test does not
-    /// depend on a terminal.
-    fn reporter() -> (CallReporter, Sink) {
-        let sink = Sink::default();
-        let progress = crate::progress::Progress::new(
-            "running",
-            "ran",
-            "worker calls",
-            Box::new(sink.clone()),
-            Box::new(crate::progress::SystemClock),
-            crate::progress::Mode::Always,
-            false,
-        );
-        (CallReporter::with_progress(progress), sink)
+    fn reporter() -> (CallReporter, Recorder) {
+        let recorder = Recorder::default();
+        let reporter = CallReporter::with_progress(Box::new(RecordingProgress(recorder.clone())));
+        (reporter, recorder)
     }
 
     #[test]
-    fn a_recorded_round_trip_is_drawn_as_a_running_count() {
-        let (reporter, sink) = reporter();
+    fn a_recorded_round_trip_is_reported_as_a_running_count() {
+        let (reporter, recorder) = reporter();
 
         reporter.record();
+        reporter.record();
 
-        assert!(
-            sink.text().contains("dirsql: running 1 worker calls"),
-            "the first round trip is drawn: {:?}",
-            sink.text()
-        );
+        assert_eq!(recorder.events(), ["update 1", "update 2"]);
     }
 
     /// The phase is what the count belongs to: a second query must not carry
-    /// the first one's total.
+    /// the first one's total, and the reporter has to be told to start over.
     #[test]
-    fn opening_a_phase_starts_the_count_over() {
-        let (reporter, _sink) = reporter();
+    fn opening_a_phase_restarts_the_reporter_and_the_count() {
+        let (reporter, recorder) = reporter();
         reporter.record();
         reporter.record();
 
@@ -584,54 +607,52 @@ mod tests {
             reporter.record();
         }
 
-        assert_eq!(reporter.state.lock().unwrap().count, 1);
-    }
-
-    /// Dropping the guard is what ends the phase — that is the whole reason it
-    /// is a guard, since a query can leave by an error path.
-    #[test]
-    fn the_phase_guard_summarizes_when_it_drops() {
-        let sink = Sink::default();
-        let reporter = {
-            let progress = crate::progress::Progress::new(
-                "running",
-                "ran",
-                "worker calls",
-                Box::new(sink.clone()),
-                Box::new(crate::progress::SystemClock),
-                crate::progress::Mode::Always,
-                false,
-            );
-            CallReporter::with_progress(progress)
-        };
-
-        {
-            let _phase = reporter.phase();
-            reporter.record();
-            reporter.record();
-            assert!(
-                !sink.text().contains("dirsql: ran"),
-                "nothing is summarized while the phase is open: {:?}",
-                sink.text()
-            );
-        }
-
-        assert!(
-            sink.text().contains("dirsql: ran 2 worker calls in "),
-            "the closed phase names what it cost: {:?}",
-            sink.text()
+        assert_eq!(
+            recorder.events(),
+            ["update 1", "update 2", "restart", "update 1", "finish 1"],
+            "the new phase counts from one, not from three"
         );
     }
 
-    /// The production constructor wires the worker-call wording, which is what
-    /// tells this line apart from the scan's.
+    /// Dropping the guard is what ends the phase — the whole reason it is a
+    /// guard, since a query can leave by an error path.
     #[test]
-    fn the_production_reporter_counts_worker_calls() {
+    fn the_phase_guard_finishes_when_it_drops() {
+        let (reporter, recorder) = reporter();
+
+        {
+            let _phase = reporter.phase();
+            reporter.record();
+            reporter.record();
+            assert_eq!(
+                recorder.events(),
+                ["restart", "update 1", "update 2"],
+                "nothing is finished while the phase is open"
+            );
+        }
+
+        assert_eq!(
+            recorder.events(),
+            ["restart", "update 1", "update 2", "finish 2"],
+            "the closed phase reports the count it accumulated"
+        );
+    }
+
+    /// The production constructor wires a real [`Progress`] through the same
+    /// trait, so a whole phase runs against it here — the double proves the
+    /// orchestration, this proves the wiring is connected to something real.
+    /// It draws nothing: the reporter is disabled unless stderr is a terminal.
+    #[test]
+    fn the_production_reporter_counts_round_trips() {
         let reporter = CallReporter::new();
 
-        reporter.record();
+        {
+            let _phase = reporter.phase();
+            reporter.record();
+            reporter.record();
+        }
 
-        assert_eq!(reporter.state.lock().unwrap().count, 1);
+        assert_eq!(reporter.state.lock().unwrap().count, 2);
     }
 
     // --- wire encoding -----------------------------------------------------
