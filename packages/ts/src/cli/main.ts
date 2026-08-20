@@ -26,12 +26,14 @@ type RunCli = (argv: readonly string[], version?: string) => number;
 export function packageVersion(
   requirer: (specifier: string) => unknown = createRequire(import.meta.url),
 ): string | undefined {
+  let manifest: unknown;
   try {
-    const { version } = requirer("../../package.json") as { version?: unknown };
-    return typeof version === "string" ? version : undefined;
+    manifest = requirer("../../package.json");
   } catch {
     return undefined;
   }
+  const { version } = manifest as { version?: unknown };
+  return typeof version === "string" ? version : undefined;
 }
 
 /**
