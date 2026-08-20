@@ -14,6 +14,7 @@ from distcheck.node_flow.gate import (
     _require_zero,
     run,
     select_tarball,
+    staged_addon_path,
 )
 
 
@@ -143,10 +144,17 @@ def test_run_success_executes_the_full_sequence():
     ]
 
 
+def test_staged_addon_path_builds_the_pnpm_build_output_path():
+    assert staged_addon_path("/ts", _HOST) == _STAGED
+
+
 def test_run_missing_staged_binary_raises_prereq():
     fs = _fs(exists=lambda p: False)
     with pytest.raises(DistcheckError, match="prerequisite missing"):
         run("/ts", _HOST, runner=mock.Mock(), fs=fs)
+    # The prerequisite `run` demands IS `staged_addon_path`'s output -- the
+    # contract other callers guard on.
+    fs.exists.assert_called_once_with(staged_addon_path("/ts", _HOST))
     fs.copy.assert_not_called()
 
 
