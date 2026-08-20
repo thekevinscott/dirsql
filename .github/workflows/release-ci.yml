@@ -20,6 +20,10 @@ name: Release CI
 # plans only dirsql-py). putitoutthere's build.yml exposes no package filter,
 # and the release cascade (rust -> py -> npm) is cross-package by design, so
 # this stays one workflow rather than splitting per package.
+#
+# The exclusions must stay a SUBSET of what putitoutthere.toml's globs carve
+# out, or a merge releases what this never built (#944). `dirsql-checks
+# release-globs` fails the PR when they diverge.
 on:
   pull_request:
     branches: [main]
@@ -27,23 +31,29 @@ on:
       - 'packages/rust/**'
       - '!packages/rust/changelog.d/**'
       - '!packages/rust/migrations.d/**'
+      - '!packages/rust/e2e-attestations/**'
+      - '!packages/rust/testing-conventions.toml'
       - 'packages/python/**'
       - '!packages/python/changelog.d/**'
       - '!packages/python/migrations.d/**'
       - '!packages/python/e2e-attestations/**'
+      - '!packages/python/testing-conventions.toml'
       - 'packages/ts/**'
       - '!packages/ts/changelog.d/**'
       - '!packages/ts/migrations.d/**'
       - '!packages/ts/e2e-attestations/**'
+      - '!packages/ts/testing-conventions.toml'
       # putitoutthere's plugin globs are plugins/dirsql-plugin-embeddings/**;
       # README stays in scope here (hatchling embeds it as the PyPI
       # long-description, so it is a build input), fragments and receipts
-      # do not ship.
+      # do not ship. `tests/` is NOT excluded: hatchling drops only
+      # `**/*_test.py`, so `tests/conftest.py` and the package inits land in
+      # the sdist and a change there is a real build input.
       - 'plugins/dirsql-plugin-embeddings/**'
       - '!plugins/dirsql-plugin-embeddings/changelog.d/**'
       - '!plugins/dirsql-plugin-embeddings/migrations.d/**'
       - '!plugins/dirsql-plugin-embeddings/e2e-attestations/**'
-      - '!plugins/dirsql-plugin-embeddings/tests/**'
+      - '!plugins/dirsql-plugin-embeddings/testing-conventions.toml'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'putitoutthere.toml'
