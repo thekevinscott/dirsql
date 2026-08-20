@@ -13,6 +13,12 @@
 use std::process::Command;
 
 /// Every path `cargo package` would write into the `.crate` archive.
+///
+/// `--allow-dirty` because the question is what the *working tree* would
+/// ship: without it cargo refuses outright the moment a packaged file is
+/// uncommitted, so editing `exclude` and re-running would abort before
+/// listing anything -- failing for a reason that has nothing to do with the
+/// assertions below.
 fn packaged_paths() -> Vec<String> {
     let output = Command::new(env!("CARGO"))
         .args([
@@ -20,6 +26,7 @@ fn packaged_paths() -> Vec<String> {
             "--manifest-path",
             concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"),
             "--list",
+            "--allow-dirty",
         ])
         .output()
         .expect("cargo package --list should run");
