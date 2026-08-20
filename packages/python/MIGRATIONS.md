@@ -7,5 +7,4 @@ Migration entries for this package live as one file per breaking change under
 Nothing is assembled back into this file.
 
 Pre-fragment history (all packages) is frozen in the repository-root
-[`MIGRATIONS.md`](../../MIGRATIONS.md), surfaced on the docs site at
-[`/migrations`](https://thekevinscott.github.io/dirsql/migrations).
+[`MIGRATIONS.md`](../../MIGRATIONS.md).

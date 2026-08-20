@@ -60,15 +60,13 @@ migrated -- a page survives only if a slot wants its content):
   protocol, exit codes, timeouts); the columns model (named tables get their
   hook's output; path-tables get stat columns); the
   HTTP API; the SDK page (`reference/sdk.md`, one page with
-  Python/TypeScript/Rust code-groups -- the sole SDK home); plus the
-  Migrations include (`migrations.md`).
+  Python/TypeScript/Rust code-groups -- the sole SDK home).
 - **Explanation** (`explanation.md`) -- one page: how `dirsql` thinks (the
   filesystem is the source of truth; the database is a derived, ephemeral,
   read-only view; reconcile and diffing). Its canonical home is the root
-  `ARCHITECTURE.md`;
-  #374 surfaces it via an include page, the same mechanism
-  `docs/migrations.md` uses for `MIGRATIONS.md`. Edit the root file, never
-  a rendered include.
+  `ARCHITECTURE.md`; #374 surfaces it via a VitePress include
+  (`<!--@include: ../ARCHITECTURE.md-->`). Edit the root file, never a
+  rendered include.
 
 Working rules:
 
