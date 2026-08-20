@@ -729,7 +729,15 @@ impl DirSQL {
             None
         };
 
-        let scanned = scan(&root, &matcher);
+        // Zero tables means an empty `TableMatcher`, and `match_all` filters
+        // its entries -- so the walk is guaranteed to return nothing. That is
+        // the configless case (path-tables run their own per-statement scan),
+        // where the walk was the bulk of startup.
+        let scanned = if table_names.is_empty() {
+            Vec::new()
+        } else {
+            scan(&root, &matcher)
+        };
 
         // When persist is enabled, files whose stat tuple matches the cache
         // (and that pass the racy-window check) are trusted instead of
@@ -748,8 +756,6 @@ impl DirSQL {
             }
             Some(ctx) => reconcile_scan(&root, scanned, ctx, &RealFs)?,
         };
-
-        let _ = table_names;
 
         Ok(PreparedBuild {
             root,
