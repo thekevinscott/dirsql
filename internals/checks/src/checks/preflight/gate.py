@@ -1,7 +1,7 @@
 """Run every (root, language, gate) pair CI declares, and report real exit codes (#781).
 
 Two failure modes this exists to remove: a hand-maintained pair list that drifts
-from `conventions.yml`, and hand-transcribed shell one-liners whose non-zero exit
+from what CI declares, and hand-transcribed shell one-liners whose non-zero exit
 gets masked (`... ; echo ok`). Here the argv is derived and the exit code is the
 return value.
 
@@ -153,7 +153,7 @@ def prepare(roots: list[Root], exists: Callable[[str], bool]) -> list[tuple[str,
 
 
 def run(
-    conventions: str,
+    workflows: Sequence[str],
     base: str,
     *,
     runner: Callable[[Sequence[str], str], int],
@@ -163,8 +163,12 @@ def run(
     only: Sequence[str] = (),
     dry_run: bool = False,
 ) -> int:
-    """Run the whole matrix; return 0 only when every pair passed."""
-    roots = parse_gate_matrix(conventions)
+    """Run the whole matrix; return 0 only when every pair passed.
+
+    `workflows` is the text of each workflow holding callers -- six of them post
+    #834, so the roots are the concatenation rather than one file's (#973).
+    """
+    roots = [root for text in workflows for root in parse_gate_matrix(text)]
     failures = []
     skipped = []
 
