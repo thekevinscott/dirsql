@@ -6,16 +6,21 @@
 //!   `docs/reference/cli.md`.
 //! - `server`: the HTTP server documented in `docs/reference/cli.md`.
 //! - `init`: writes a fixed starter `.dirsql.toml`; see `docs/reference/cli.md`.
-//! - No subcommand and no SQL: a usage error pointing at `dirsql server`.
+//! - No subcommand and no SQL (bare `dirsql`): an interactive REPL over the
+//!   current directory; see [`repl`](super::repl).
 //!
 //! Only compiled with `--features cli`.
 //!
 //! The `dirsql` binary is a shim over [`run_cli`], so `cargo install dirsql
 //! --features cli` and every other entry path run the same code.
 
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
-use super::{AppState, ServerConfig, execute::execute_query, init::InitOptions, serve_with_state};
+use super::{
+    AppState, ServerConfig, execute::execute_query, init::InitOptions, repl::run_repl,
+    serve_with_state,
+};
 use crate::{DirSQL, Extension, Row, Table};
 use clap::{Args, Parser, Subcommand};
 
@@ -24,10 +29,14 @@ use clap::{Args, Parser, Subcommand};
     name = "dirsql",
     version,
     about = "Query a local directory as SQL. `dirsql \"<sql>\"` runs one query; \
-             `dirsql server` starts the HTTP server.",
+             bare `dirsql` opens a REPL; `dirsql server` starts the HTTP \
+             server.",
     long_about = "Runs one SQL query over a local directory and prints the \
                   result rows as JSON. `dirsql \"SELECT * FROM './'\"` is the \
                   default; `dirsql query \"<sql>\"` is an explicit synonym. \
+                  With no subcommand and no SQL, dirsql reads statements until \
+                  EOF instead: a prompted REPL on a terminal, one statement \
+                  per line from a pipe. \
                   Tables are defined by a `.dirsql.toml` config file passed \
                   with `-c`; with no `-c` there are no named tables and \
                   filesystem queries go through path-tables \
@@ -46,8 +55,8 @@ struct Cli {
     command: Option<Command>,
 
     /// The SQL to run in the default (query) mode: `dirsql "<sql>"`. With no
-    /// subcommand and no SQL, dirsql prints a usage error pointing at
-    /// `dirsql server`. Identical to `dirsql query "<sql>"`.
+    /// subcommand and no SQL, dirsql opens a REPL over the current directory
+    /// instead. Identical to `dirsql query "<sql>"`.
     sql: Option<String>,
 
     /// Attach a parser to every path-table in the default-mode query — the
@@ -277,11 +286,14 @@ pub fn run_cli(argv: Vec<String>) -> i32 {
     i32::from(code)
 }
 
-/// The default (no-subcommand) behavior: run the positional SQL as a one-shot
-/// query, exactly as `dirsql query "<sql>"` does. With no SQL there is nothing
-/// to run and no mode selected, so print a usage error pointing at
-/// `dirsql server` — silently starting the server here would re-invert the
-/// default this design deliberately fixed (#662).
+/// The default (no-subcommand) behavior. With SQL, run it as a one-shot query,
+/// exactly as `dirsql query "<sql>"` does. With no SQL, read statements until
+/// EOF instead: bare `dirsql` is a REPL over the current directory, prompted
+/// on a terminal and silent from a pipe (#987).
+///
+/// The index is built **once**, before the loop, rather than per statement:
+/// no directory re-scan between statements, and the live watcher keeps it
+/// fresh across them.
 async fn run_default(cli: Cli) -> u8 {
     match cli.sql {
         Some(sql) => {
@@ -293,11 +305,28 @@ async fn run_default(cli: Cli) -> u8 {
             .await
         }
         None => {
-            eprintln!(
-                "dirsql: no query given. Run a query with `dirsql \"SELECT * FROM './'\"`, \
-                 or start the HTTP server with `dirsql server`. See `dirsql --help`."
-            );
-            2
+            let parser = match resolve_on_file(&cli.on_file) {
+                Ok(parser) => parser,
+                Err(message) => {
+                    eprintln!("dirsql: {message}");
+                    return 1;
+                }
+            };
+            let state = load_state(&cli.common, parser);
+            // Skipped files are named once here rather than per statement, and
+            // `PARTIAL_SCAN_EXIT` has no REPL meaning: the session's exit code
+            // describes the session, not one scan.
+            report_scan_failures(&state);
+            run_repl(
+                &state,
+                // `StdinLock` is not `Send`, so it cannot cross into the
+                // blocking read; `BufReader<Stdin>` locks per call and can.
+                std::io::BufReader::new(std::io::stdin()),
+                &mut std::io::stdout(),
+                &mut std::io::stderr(),
+                std::io::stdin().is_terminal(),
+            )
+            .await
         }
     }
 }
@@ -371,8 +400,9 @@ fn report_scan_failures(state: &AppState) -> bool {
 
 /// Synthesize the exact `POST /query` body for a positional SQL argument,
 /// so the shared pipeline's intake validation sees byte-for-byte what an
-/// HTTP client would send.
-fn query_body(sql: &str) -> String {
+/// HTTP client would send. Shared with the REPL, whose statements must reach
+/// the pipeline through the same intake as a one-shot query.
+pub(super) fn query_body(sql: &str) -> String {
     serde_json::json!({ "sql": sql }).to_string()
 }
 
@@ -668,7 +698,7 @@ mod tests {
     #[test]
     fn no_subcommand_and_no_sql_selects_neither() {
         // #662: bare `dirsql` with nothing else parses cleanly (no command, no
-        // SQL); `run_default` turns that into the usage error at runtime.
+        // SQL); `run_default` turns that into the REPL at runtime (#987).
         let cli = Cli::parse_from(["dirsql"]);
         assert!(cli.command.is_none());
         assert!(cli.sql.is_none());

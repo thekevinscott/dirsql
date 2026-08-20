@@ -9,9 +9,9 @@ The `dirsql` binary has these modes:
 | `dirsql query "<sql>"` | Explicit synonym for the default one-shot query. |
 | `dirsql server` | Start a long-lived HTTP server exposing a SQL view of a directory. See [HTTP API](./http-api.md). |
 | `dirsql init` | Generate a `.dirsql.toml`. |
+| `dirsql` (bare) | Open a [REPL](#the-repl) over the current directory, reading statements until EOF. |
 
-Bare `dirsql` with no SQL is a usage error pointing at `dirsql server` — it
-does **not** start the server.
+Bare `dirsql` does **not** start the server — that is `dirsql server`.
 
 ## Installation
 
@@ -46,6 +46,91 @@ dirsql "SELECT basename, size FROM './' ORDER BY size DESC LIMIT 5"
 `dirsql "<sql>"` is exactly [`dirsql query "<sql>"`](#dirsql-query) — same
 pipeline, same flags, same output. See that section for config discovery,
 `--persist`, `--on-file`, hooks, and exit codes.
+
+## The REPL
+
+`dirsql` with no subcommand and no SQL reads statements until EOF:
+
+```bash
+dirsql
+# dirsql 0.2.7 — this directory is a database.
+#
+#   SELECT basename, size FROM './' ORDER BY size DESC LIMIT 5
+#   SELECT path FROM './**/*.md' WHERE content LIKE '%TODO%'
+#
+# `exit`, `quit`, or Ctrl-D to leave.
+#
+# dirsql> SELECT count(*) AS files FROM './'
+# [{"files":128}]
+# dirsql>
+```
+
+Statements go through the same pipeline as [`dirsql query`](#dirsql-query) and
+`POST /query`, so a statement typed at the prompt and one passed on the command
+line return identical rows. Every config flag the default mode takes — `-c`,
+`--persist`, `--no-ignore`, `--on-file` — applies unchanged:
+
+```bash
+dirsql -c .dirsql.toml --persist
+```
+
+The index is built **once**, before the first prompt: statements share one scan
+rather than re-walking the directory each time, and the live watcher keeps it
+fresh between them. Files the scan had to skip are named on stderr once, up
+front.
+
+### Terminal vs. pipe
+
+The prompt and banner appear only when **stdin is a terminal**. From a pipe or
+a redirect there is neither, so results arrive alone:
+
+```bash
+printf "SELECT 1 AS n\nSELECT 2 AS n\n" | dirsql
+# [{"n":1}]
+# [{"n":2}]
+
+dirsql < queries.sql > rows.jsonl
+```
+
+One statement per line, in both modes. Blank lines do nothing.
+
+### Leaving
+
+`exit`, `quit` (either case), or Ctrl-D. There are no dot-commands: the `.`
+prefix exists in `sqlite3` to namespace meta-commands against SQL, and with no
+meta-commands there is nothing to namespace. Schema questions are ordinary SQL:
+
+```sql
+SELECT name FROM sqlite_master WHERE type = 'table';
+```
+
+### Errors
+
+A statement that fails prints its diagnostic — the same string the HTTP
+`{"error": …}` body carries — to stderr, and **the session continues**. This is
+the one behavioral difference from `dirsql query`, which exits `1` on the first
+failure:
+
+```
+dirsql> SELECT nope FROM missing
+dirsql: SQLite error: no such table: missing
+dirsql> SELECT 1 AS n
+[{"n":1}]
+```
+
+A config that cannot be loaded is different in kind: it fails identically for
+every statement, so it is reported once and exits `1` before the first prompt.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Clean EOF (Ctrl-D, `exit`, `quit`, or the end of a piped script) — **including when statements failed**. Matches interactive `sqlite3`; use [`dirsql query`](#dirsql-query) when a script needs a statement's exit status. |
+| `1` | The index could not be built (a bad `-c`, an unresolvable `--on-file`), or stdin could not be read. Nothing was executed. |
+
+`23` (partial scan) is not produced here: skipped files are reported before the
+first prompt, and a session's exit code describes the session rather than one
+scan.
 
 ## `dirsql server`
 
