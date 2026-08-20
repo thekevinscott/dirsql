@@ -885,7 +885,8 @@ impl DirSQL {
         // Register declared functions after extensions so both are available
         // to queries. Registration is inert: no worker process exists until a
         // query's first call to the function.
-        functions::register_all(db.conn(), &functions).map_err(DirSqlError::sqlite)?;
+        functions::register_all(db.conn(), &functions, db.call_reporter())
+            .map_err(DirSqlError::sqlite)?;
 
         // Sweep a cache the reconcile rejected. It happens *here*, after the
         // extensions and functions are on the connection, rather than where

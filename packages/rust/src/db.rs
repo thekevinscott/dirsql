@@ -1,8 +1,10 @@
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use thiserror::Error;
 
+use crate::functions::CallReporter;
 use crate::parsed_vtab;
 use crate::path_table::{self, PathTable, Resolution};
 use crate::scanner;
@@ -264,6 +266,10 @@ pub struct Db {
     /// The persistent cache a parsed path-table reuses across runs. `None` for
     /// an ephemeral index, which has nowhere to cache to.
     path_table_cache: Option<PathBuf>,
+    /// Counts the worker round trips a query pays for. Shared with every
+    /// declared function registered on `conn`; inert until a function is both
+    /// declared and called.
+    calls: Arc<CallReporter>,
 }
 
 /// The skip rules a fresh `Db` starts with.
@@ -299,6 +305,7 @@ impl Db {
             path_table_gitignore: true,
             path_table_parser: None,
             path_table_cache: None,
+            calls: CallReporter::new(),
         })
     }
 
@@ -321,6 +328,7 @@ impl Db {
             path_table_gitignore: true,
             path_table_parser: None,
             path_table_cache: None,
+            calls: CallReporter::new(),
         })
     }
 
@@ -368,6 +376,12 @@ impl Db {
     /// Borrow the underlying SQLite connection. Internal use only — exposed
     /// to the `persist` module so it can manage the sidecar tables.
     #[doc(hidden)]
+    /// The reporter every declared function increments. Handed to
+    /// [`functions::register_all`] at build time.
+    pub(crate) fn call_reporter(&self) -> &Arc<CallReporter> {
+        &self.calls
+    }
+
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
@@ -687,6 +701,12 @@ impl Db {
     /// internal writes (`insert_row`, delete-by-file, persist), which never go
     /// through `query()`, are unaffected.
     pub fn query(&self, sql: &str) -> Result<Vec<HashMap<String, Value>>> {
+        // Bracket the whole statement, prepare included: a worker-backed
+        // function called on every row makes this the slowest thing dirsql
+        // does, and the guard is what erases the counter before the caller
+        // prints the rows.
+        let _calls = self.calls.phase();
+
         // Each iteration must register a table no earlier iteration did; a
         // repeat means the fallback is not making progress, so the SQLite
         // error stands. That is what bounds the loop.

@@ -37,6 +37,7 @@ use rusqlite::Connection;
 use rusqlite::functions::FunctionFlags;
 
 use crate::db::Value;
+use crate::progress::Progress;
 
 /// The per-call timeout when a `[[dirsql.function]]` entry declares no
 /// `timeout` of its own. A round-trip on a persistent worker cannot be
@@ -60,14 +61,20 @@ pub struct ResolvedFunction {
 
 /// Register every resolved function on `conn`, once per accepted arity.
 /// Purely registration — no worker is spawned here.
+///
+/// Every function shares one `calls` reporter: what a user waiting on a query
+/// wants to know is how many round trips it is paying for, not which function
+/// made them.
 pub(crate) fn register_all(
     conn: &Connection,
     functions: &[ResolvedFunction],
+    calls: &Arc<CallReporter>,
 ) -> rusqlite::Result<()> {
     for function in functions {
         let worker = Arc::new(Worker::for_process(function));
         for &arity in &function.args {
             let worker = Arc::clone(&worker);
+            let calls = Arc::clone(calls);
             conn.create_scalar_function(
                 &function.name,
                 i32::from(arity),
@@ -77,6 +84,7 @@ pub(crate) fn register_all(
                     for i in 0..ctx.len() {
                         args.push(Value::from(rusqlite::types::Value::from(ctx.get_raw(i))));
                     }
+                    calls.record();
                     worker
                         .call(&args)
                         .map_err(|message| rusqlite::Error::UserFunctionError(message.into()))
@@ -85,6 +93,78 @@ pub(crate) fn register_all(
         }
     }
     Ok(())
+}
+
+/// Counts the worker round trips a query pays for, and reports them.
+///
+/// A query that calls a declared function on every row spends one round trip
+/// per row -- `dirsql-plugin-embeddings` runs `embed(content)` over the whole
+/// corpus that way -- so the wall time of a single `query()` can be minutes
+/// with nothing on the terminal (dirsql#957).
+///
+/// The count has to be drawn *and erased* by the process that owns stdout, or
+/// the query result lands on top of a leftover line. A worker cannot do that:
+/// it is SIGKILLed on teardown, and teardown happens after the result is
+/// printed anyway (dirsql#1001).
+///
+/// Behind a mutex because SQLite invokes a scalar function on whatever thread
+/// is running the query.
+pub(crate) struct CallReporter {
+    state: Mutex<CallState>,
+}
+
+struct CallState {
+    count: u64,
+    progress: Progress,
+}
+
+impl CallReporter {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self::with_progress(Progress::worker_calls()))
+    }
+
+    fn with_progress(progress: Progress) -> Self {
+        Self {
+            state: Mutex::new(CallState { count: 0, progress }),
+        }
+    }
+
+    /// Open a phase and return the guard that closes it. A guard rather than
+    /// a paired call so an error mid-query still ends the phase, and so the
+    /// live line is gone before the caller prints anything.
+    pub(crate) fn phase(&self) -> CallPhase<'_> {
+        if let Ok(mut state) = self.state.lock() {
+            state.count = 0;
+            state.progress.restart();
+        }
+        CallPhase(self)
+    }
+
+    /// Record one round trip. A poisoned mutex costs the counter, never the
+    /// call: reporting is not worth failing a query over.
+    fn record(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.count += 1;
+            let count = state.count;
+            state.progress.update(count, None);
+        }
+    }
+
+    fn end(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            let count = state.count;
+            state.progress.finish(count);
+        }
+    }
+}
+
+/// The open phase. Ends when it drops.
+pub(crate) struct CallPhase<'a>(&'a CallReporter);
+
+impl Drop for CallPhase<'_> {
+    fn drop(&mut self) {
+        self.0.end();
+    }
 }
 
 /// The registration flags for a declared function: UTF-8 always, plus
@@ -436,6 +516,122 @@ mod tests {
 
     fn text(s: &str) -> Value {
         Value::Text(s.to_string())
+    }
+
+    // --- call reporting ----------------------------------------------------
+
+    /// A `Write` the test can read back, so what the reporter drew is
+    /// assertable without a terminal.
+    #[derive(Clone, Default)]
+    struct Sink(Arc<Mutex<Vec<u8>>>);
+
+    impl Sink {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    impl std::io::Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A reporter drawing into a readable sink, forced on so the test does not
+    /// depend on a terminal.
+    fn reporter() -> (CallReporter, Sink) {
+        let sink = Sink::default();
+        let progress = crate::progress::Progress::new(
+            "running",
+            "ran",
+            "worker calls",
+            Box::new(sink.clone()),
+            Box::new(crate::progress::SystemClock),
+            crate::progress::Mode::Always,
+            false,
+        );
+        (CallReporter::with_progress(progress), sink)
+    }
+
+    #[test]
+    fn a_recorded_round_trip_is_drawn_as_a_running_count() {
+        let (reporter, sink) = reporter();
+
+        reporter.record();
+
+        assert!(
+            sink.text().contains("dirsql: running 1 worker calls"),
+            "the first round trip is drawn: {:?}",
+            sink.text()
+        );
+    }
+
+    /// The phase is what the count belongs to: a second query must not carry
+    /// the first one's total.
+    #[test]
+    fn opening_a_phase_starts_the_count_over() {
+        let (reporter, _sink) = reporter();
+        reporter.record();
+        reporter.record();
+
+        {
+            let _phase = reporter.phase();
+            reporter.record();
+        }
+
+        assert_eq!(reporter.state.lock().unwrap().count, 1);
+    }
+
+    /// Dropping the guard is what ends the phase — that is the whole reason it
+    /// is a guard, since a query can leave by an error path.
+    #[test]
+    fn the_phase_guard_summarizes_when_it_drops() {
+        let sink = Sink::default();
+        let reporter = {
+            let progress = crate::progress::Progress::new(
+                "running",
+                "ran",
+                "worker calls",
+                Box::new(sink.clone()),
+                Box::new(crate::progress::SystemClock),
+                crate::progress::Mode::Always,
+                false,
+            );
+            CallReporter::with_progress(progress)
+        };
+
+        {
+            let _phase = reporter.phase();
+            reporter.record();
+            reporter.record();
+            assert!(
+                !sink.text().contains("dirsql: ran"),
+                "nothing is summarized while the phase is open: {:?}",
+                sink.text()
+            );
+        }
+
+        assert!(
+            sink.text().contains("dirsql: ran 2 worker calls in "),
+            "the closed phase names what it cost: {:?}",
+            sink.text()
+        );
+    }
+
+    /// The production constructor wires the worker-call wording, which is what
+    /// tells this line apart from the scan's.
+    #[test]
+    fn the_production_reporter_counts_worker_calls() {
+        let reporter = CallReporter::new();
+
+        reporter.record();
+
+        assert_eq!(reporter.state.lock().unwrap().count, 1);
     }
 
     // --- wire encoding -----------------------------------------------------
