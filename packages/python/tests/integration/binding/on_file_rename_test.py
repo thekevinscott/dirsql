@@ -31,6 +31,7 @@ def describe_table_on_file():
             jsonl_dir,
             tables=[
                 Table(
+                    name="comments",
                     ddl="CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
                     glob="comments/**/index.jsonl",
                     on_file=_rows,
@@ -44,6 +45,7 @@ def describe_table_on_file():
     def it_rejects_the_old_extract_keyword():
         with pytest.raises(TypeError):
             Table(
+                name="t",
                 ddl="CREATE TABLE t (n INTEGER)",
                 glob="**/*.json",
                 extract=lambda path: [],

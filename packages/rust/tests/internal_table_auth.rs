@@ -14,7 +14,7 @@ use std::path::Path;
 use tempfile::TempDir;
 
 fn user_table() -> Table {
-    Table::new("CREATE TABLE items (name TEXT)", "*.txt", |path| {
+    Table::new("items", "CREATE TABLE items (name TEXT)", "*.txt", |path| {
         let content = std::fs::read_to_string(path).unwrap();
         vec![HashMap::from([(
             "name".into(),

@@ -43,7 +43,7 @@ pub mod cli;
 
 use crate::command::Placeholder;
 use crate::config::Source;
-use crate::db::{Db, parse_table_name};
+use crate::db::Db;
 use crate::functions::ResolvedFunction;
 use crate::matcher::TableMatcher;
 use crate::persist::{
@@ -126,6 +126,12 @@ pub enum DirSqlError {
 
     #[error("table DDL could not be parsed: {0}")]
     Ddl(String),
+
+    #[error(
+        "table '{name}': its `ddl` ran but created no table called '{name}'. \
+         Set `name` to the table the `ddl` creates."
+    )]
+    TableNotCreated { name: String },
 
     #[error("failed to load extension '{}': {source}", .path.display())]
     Extension {
@@ -211,8 +217,13 @@ pub type Result<T> = std::result::Result<T, DirSqlError>;
 /// callback can itself fail (bad file content, IO errors inside the callback,
 /// etc.). [`Table::strict`] rejects rows that don't match the DDL columns
 /// exactly.
+///
+/// `name` is the table's SQL name, declared rather than derived from `ddl`.
+/// The `ddl` must create a table by that name; the mismatch is caught against
+/// SQLite's catalog at load time.
 #[derive(Clone)]
 pub struct Table {
+    pub name: String,
     pub ddl: String,
     pub glob: String,
     pub strict: bool,
@@ -220,29 +231,45 @@ pub struct Table {
 }
 
 impl Table {
-    pub fn new<F>(ddl: impl Into<String>, glob: impl Into<String>, on_file: F) -> Self
+    pub fn new<F>(
+        name: impl Into<String>,
+        ddl: impl Into<String>,
+        glob: impl Into<String>,
+        on_file: F,
+    ) -> Self
     where
         F: Fn(&str) -> Vec<Row> + Send + Sync + 'static,
     {
-        Self::try_new(ddl, glob, move |path| {
+        Self::try_new(name, ddl, glob, move |path| {
             Ok::<Vec<Row>, BoxError>(on_file(path))
         })
     }
 
-    pub fn strict<F>(ddl: impl Into<String>, glob: impl Into<String>, on_file: F) -> Self
+    pub fn strict<F>(
+        name: impl Into<String>,
+        ddl: impl Into<String>,
+        glob: impl Into<String>,
+        on_file: F,
+    ) -> Self
     where
         F: Fn(&str) -> Vec<Row> + Send + Sync + 'static,
     {
-        let mut table = Self::new(ddl, glob, on_file);
+        let mut table = Self::new(name, ddl, glob, on_file);
         table.strict = true;
         table
     }
 
-    pub fn try_new<F>(ddl: impl Into<String>, glob: impl Into<String>, on_file: F) -> Self
+    pub fn try_new<F>(
+        name: impl Into<String>,
+        ddl: impl Into<String>,
+        glob: impl Into<String>,
+        on_file: F,
+    ) -> Self
     where
         F: Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static,
     {
         Self {
+            name: name.into(),
             ddl: ddl.into(),
             glob: glob.into(),
             on_file: Arc::new(on_file),
@@ -820,13 +847,19 @@ impl DirSQL {
         let mut ddl_map: HashMap<String, String> = HashMap::new();
 
         for table in tables {
-            let table_name =
-                parse_table_name(&table.ddl).ok_or_else(|| DirSqlError::Ddl(table.ddl.clone()))?;
+            let table_name = table.name.clone();
             // When the cache already holds this table from a prior run,
             // skip CREATE TABLE: the schema is preserved verbatim across
             // runs (the glob_config_hash captures the DDL).
             if !table_exists(&db, &table_name)? {
-                db.create_table(&table.ddl)?;
+                db.create_table(&table_name, &table.ddl)?;
+                // Ask SQLite whether the DDL actually produced this name
+                // rather than reading the DDL text. No row means the declared
+                // `name` names nothing -- a load-time failure, before any file
+                // is ingested.
+                if !table_exists(&db, &table_name)? {
+                    return Err(DirSqlError::TableNotCreated { name: table_name });
+                }
             }
             // Reject a `{name}` glob placeholder whose name is also a declared
             // column: captures no longer populate columns, so it would read
@@ -996,7 +1029,7 @@ impl DirSQL {
 /// use dirsql::{DirSQL, Table};
 /// let db = DirSQL::builder()
 ///     .root("./data")
-///     .table(Table::new("CREATE TABLE t (x TEXT)", "*.json", |_, _| vec![]))
+///     .table(Table::new("t", "CREATE TABLE t (x TEXT)", "*.json", |_, _| vec![]))
 ///     .ignore(["target/**"])
 ///     .build()?;
 /// ```
@@ -1379,10 +1412,9 @@ fn compile_matcher(
     let mut mappings: Vec<(String, String)> = Vec::with_capacity(tables.len());
     let mut names = Vec::with_capacity(tables.len());
     for table in tables {
-        let table_name =
-            parse_table_name(&table.ddl).ok_or_else(|| DirSqlError::Ddl(table.ddl.clone()))?;
+        let table_name = table.name.clone();
         // Validate up front so a poisoned name from a stored cache or a
-        // would-be-injection DDL can't propagate into `on_file_map`,
+        // declared `name` carrying SQL can't propagate into `on_file_map`,
         // `strict_map`, or any format!()-built SQL down the line.
         crate::db::validate_identifier(&table_name).map_err(map_db_error)?;
         if seen.insert(table_name.clone(), ()).is_some() {
@@ -1532,11 +1564,15 @@ fn reconcile_scan(
     Ok((to_parse, trusted, deleted))
 }
 
+/// Whether `main` holds a table called `name`, asked of SQLite's own catalog.
+/// `pragma_table_list` is the catalog API for exactly this question, so no
+/// part of dirsql has to interpret DDL text to answer it.
 fn table_exists(db: &Db, name: &str) -> Result<bool> {
     let count: i64 = db
         .conn()
         .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            "SELECT COUNT(*) FROM pragma_table_list \
+             WHERE schema = 'main' AND type = 'table' AND name = ?1",
             rusqlite::params![name],
             |row| row.get(0),
         )
@@ -1656,6 +1692,7 @@ fn build_tables_from_config(
         // `Table::try_new`: a hook failure is the scan's to record, not this
         // closure's to hide. The scan skips the file and reports it.
         let mut table = Table::try_new(
+            table_cfg.name.clone(),
             table_cfg.ddl.clone(),
             table_cfg.glob.clone(),
             move |abs_path: &str| run_on_file(&command, abs_path, &config_dir, &root),
@@ -2216,6 +2253,7 @@ mod internal_tests {
         let db = DirSQL::with_ignore_and_fs(
             dir.path(),
             vec![Table::new(
+                "items",
                 "CREATE TABLE items (name TEXT)",
                 "**/*.txt",
                 |_| {
@@ -2246,7 +2284,12 @@ mod internal_tests {
         let fake = FakeFs::default().with_canonical_root(".", "/ws/canonical");
         let db = DirSQL::with_ignore_and_fs(
             ".",
-            vec![Table::new("CREATE TABLE t (x TEXT)", "*.txt", |_| vec![])],
+            vec![Table::new(
+                "t",
+                "CREATE TABLE t (x TEXT)",
+                "*.txt",
+                |_| vec![],
+            )],
             Vec::<String>::new(),
             Arc::new(fake),
         )
@@ -2271,6 +2314,7 @@ mod internal_tests {
         let db = DirSQL::with_ignore_and_fs(
             &root,
             vec![Table::new(
+                "items",
                 "CREATE TABLE items (name TEXT)",
                 "**/*.txt",
                 |_| {
@@ -2308,6 +2352,7 @@ mod internal_tests {
         let mut db = DirSQL::with_ignore_and_fs(
             &root,
             vec![Table::new(
+                "items",
                 "CREATE TABLE items (name TEXT)",
                 "**/*.txt",
                 |_| {
@@ -2347,6 +2392,7 @@ mod internal_tests {
         let db = DirSQL::with_ignore_and_fs(
             &root,
             vec![Table::new(
+                "items",
                 "CREATE TABLE items (name TEXT)",
                 "*.txt",
                 |_| {
@@ -2521,6 +2567,7 @@ mod internal_tests {
         let db = DirSQL::with_ignore_and_fs(
             dir.path(),
             vec![Table::new(
+                "items",
                 "CREATE TABLE items (name TEXT)",
                 "**/*.txt",
                 |_| {
@@ -2657,12 +2704,17 @@ mod internal_tests {
         let fake = FakeFs::default().with_dir(subdir.clone());
         let db = DirSQL::with_ignore_and_fs(
             dir.path(),
-            vec![Table::new("CREATE TABLE files (name TEXT)", "**/*", |_| {
-                vec![Row::from_iter([(
-                    "name".to_string(),
-                    Value::Text("x".into()),
-                )])]
-            })],
+            vec![Table::new(
+                "files",
+                "CREATE TABLE files (name TEXT)",
+                "**/*",
+                |_| {
+                    vec![Row::from_iter([(
+                        "name".to_string(),
+                        Value::Text("x".into()),
+                    )])]
+                },
+            )],
             Vec::<String>::new(),
             Arc::new(fake),
         )
@@ -2701,6 +2753,7 @@ mod internal_tests {
         let db = DirSQL::with_ignore_and_fs(
             dir.path(),
             vec![Table::strict(
+                "items",
                 "CREATE TABLE items (name TEXT)",
                 "**/*.txt",
                 |_| {
@@ -2746,7 +2799,7 @@ mod internal_tests {
     fn is_configless_only_when_config_and_tables_are_both_empty() {
         // Pure truth table (no I/O): the missing-`files` hint is armed only
         // when neither a config path nor a programmatic table was supplied.
-        let table = Table::new("CREATE TABLE x (a TEXT)", "*", |_| vec![Row::new()]);
+        let table = Table::new("x", "CREATE TABLE x (a TEXT)", "*", |_| vec![Row::new()]);
         assert!(is_configless(&[], &[]));
         assert!(!is_configless(&[PathBuf::from("c.toml")], &[]));
         assert!(!is_configless(&[], std::slice::from_ref(&table)));
@@ -2793,7 +2846,7 @@ mod internal_tests {
     fn resolve_with_a_programmatic_table_disarms_the_hint() {
         let with_table = DirSQL::builder()
             .root("/tmp/x")
-            .table(Table::new("CREATE TABLE t (a TEXT)", "*.t", |_| {
+            .table(Table::new("t", "CREATE TABLE t (a TEXT)", "*.t", |_| {
                 vec![Row::new()]
             }))
             .resolve()
@@ -2840,8 +2893,8 @@ mod internal_tests {
         let err = match DirSQL::new(
             dir.path(),
             vec![
-                Table::new("CREATE TABLE t (a TEXT)", "*.a", |_| vec![]),
-                Table::new("CREATE TABLE t (b TEXT)", "*.b", |_| vec![]),
+                Table::new("t", "CREATE TABLE t (a TEXT)", "*.a", |_| vec![]),
+                Table::new("t", "CREATE TABLE t (b TEXT)", "*.b", |_| vec![]),
             ],
         ) {
             Ok(_) => panic!("expected a duplicate-table error"),
@@ -2940,6 +2993,7 @@ mod internal_tests {
         let db = DirSQL::with_ignore_and_fs(
             dir.path(),
             vec![Table::try_new(
+                "items",
                 "CREATE TABLE items (name TEXT)",
                 "**/*.txt",
                 |_| Err("boom".into()),
@@ -2962,11 +3016,17 @@ mod internal_tests {
         let db = DirSQL::builder()
             .root(dir.path())
             .tables(vec![Table::new(
+                "b",
                 "CREATE TABLE b (y TEXT)",
                 "*.b",
                 |_| vec![],
             )])
-            .table(Table::new("CREATE TABLE a (x TEXT)", "*.a", |_| vec![]))
+            .table(Table::new(
+                "a",
+                "CREATE TABLE a (x TEXT)",
+                "*.a",
+                |_| vec![],
+            ))
             .ignore(["skip/**"])
             .extensions(Vec::<Extension>::new())
             .suppress_config_extensions(true)
@@ -3072,6 +3132,7 @@ mod internal_tests {
         let first = DirSQL::builder()
             .root(dir.path())
             .tables(vec![Table::new(
+                "t",
                 "CREATE TABLE t (x TEXT)",
                 "*.txt",
                 |_| vec![],
@@ -3083,6 +3144,7 @@ mod internal_tests {
         let second = DirSQL::builder()
             .root(dir.path())
             .tables(vec![Table::new(
+                "t",
                 "CREATE TABLE t (x TEXT)",
                 "*.txt",
                 |_| vec![],
@@ -3096,7 +3158,12 @@ mod internal_tests {
     #[test]
     fn prepare_persist_cold_start_reports_rebuild() {
         let dir = TempDir::new().unwrap();
-        let tables = vec![Table::new("CREATE TABLE t (x TEXT)", "*.txt", |_| vec![])];
+        let tables = vec![Table::new(
+            "t",
+            "CREATE TABLE t (x TEXT)",
+            "*.txt",
+            |_| vec![],
+        )];
         let ctx = prepare_persist(dir.path(), &tables, &[], None).unwrap();
         assert!(ctx.cached.is_empty());
         assert!(!ctx.expected_meta.is_empty());
@@ -3265,10 +3332,12 @@ mod internal_tests {
     fn build_tables_from_config_creates_on_file_tables() {
         let cfg = config::load_config_str(concat!(
             "[[table]]\n",
+            "name = \"a\"\n",
             "ddl = \"CREATE TABLE a (x TEXT)\"\n",
             "glob = \"*.a\"\n",
             "on-file = \"printf '[{\\\"x\\\":1}]'\"\n\n",
             "[[table]]\n",
+            "name = \"b\"\n",
             "ddl = \"CREATE TABLE b (y TEXT)\"\n",
             "glob = \"*.b\"\n",
             "on-file = \"echo hi\"\n",

@@ -42,6 +42,7 @@ def describe_capture_column_collision():
             cfg = root / ".dirsql.toml"
             cfg.write_text(
                 "[[table]]\n"
+                'name = "comments"\n'
                 'ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"\n'
                 'glob = "_comments/{thread_id}/*.txt"\n'
                 'on-file = "cat {path}"\n'

@@ -99,7 +99,7 @@ def describe_query_contract():
         (root / "a.txt").write_text("hello")
         cfg = root / ".dirsql.toml"
         cfg.write_text(
-            '[[table]]\nddl = "CREATE TABLE files (path TEXT)"\nglob = "*.txt"\n'
+            '[[table]]\nname = "files"\nddl = "CREATE TABLE files (path TEXT)"\nglob = "*.txt"\n'
             f"{_HOOK_PATH}\n"
         )
 

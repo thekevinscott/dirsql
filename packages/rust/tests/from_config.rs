@@ -15,6 +15,7 @@ fn from_config_produces_one_row_per_matched_file() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "files"
 ddl = "CREATE TABLE files (path TEXT, basename TEXT)"
 glob = "data/*.csv"
 on-file = '''sh -c 'rel=${1#"$2"/}; base=${1##*/}; printf "[{\"path\":\"%s\",\"basename\":\"%s\"}]" "$rel" "$base"' sh {path} {root}'''
@@ -53,6 +54,7 @@ fn from_config_honors_ignore_patterns() {
 ignore = ["ignored/**"]
 
 [[table]]
+name = "files"
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "**/*.csv"
 on-file = '''sh -c 'rel=${1#"$2"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''
@@ -87,6 +89,7 @@ fn from_config_capture_column_collision_errors() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "comments"
 ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
 glob = "_comments/{thread_id}/*.txt"
 on-file = "cat {path}"
@@ -137,6 +140,7 @@ fn from_config_capture_placeholder_without_column_still_matches() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "comments"
 ddl = "CREATE TABLE comments (path TEXT, basename TEXT)"
 glob = "_comments/{thread_id}/*.txt"
 on-file = '''sh -c 'rel=${1#"$2"/}; base=${1##*/}; printf "[{\"path\":\"%s\",\"basename\":\"%s\"}]" "$rel" "$base"' sh {path} {root}'''
@@ -189,6 +193,7 @@ fn from_config_exposes_stat_virtuals() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "files"
 ddl = "CREATE TABLE files (path TEXT, basename TEXT, dir TEXT, ext TEXT, size INTEGER, mtime INTEGER)"
 glob = "docs/*.md"
 on-file = '''sh -c 'rel=${1#"$2"/}; base=${1##*/}; case "$rel" in */*) dir=${rel%/*};; *) dir="";; esac; ext=${base##*.}; [ "$ext" = "$base" ] && ext=""; size=$(wc -c < "$1" | tr -d " "); mtime=$(stat -c %Y "$1"); printf "[{\"path\":\"%s\",\"basename\":\"%s\",\"dir\":\"%s\",\"ext\":\"%s\",\"size\":%s,\"mtime\":%s}]" "$rel" "$base" "$dir" "$ext" "$size" "$mtime"' sh {path} {root}'''
@@ -235,6 +240,7 @@ fn from_config_undeclared_stat_columns_are_silently_dropped() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "minimal"
 ddl = "CREATE TABLE minimal (path TEXT)"
 glob = "*.txt"
 on-file = '''sh -c 'rel=${1#"$2"/}; base=${1##*/}; printf "[{\"path\":\"%s\",\"basename\":\"%s\"}]" "$rel" "$base"' sh {path} {root}'''
@@ -274,6 +280,7 @@ fn from_config_hookless_table_errors() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "files"
 ddl = "CREATE TABLE files (path TEXT, size INTEGER)"
 glob = "**/*.md"
 "#,
@@ -303,6 +310,7 @@ fn from_config_with_no_matching_files_yields_empty_table() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "empty_t"
 ddl = "CREATE TABLE empty_t (path TEXT)"
 glob = "nothing_here/*.txt"
 on-file = "cat {path}"
@@ -335,6 +343,7 @@ fn from_config_rejects_removed_persist_keys() {
 persist = true
 
 [[table]]
+name = "files"
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.csv"
 on-file = "cat {path}"
@@ -364,6 +373,7 @@ fn from_config_strict_table_builds() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "files"
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.csv"
 strict = true
@@ -390,6 +400,7 @@ async fn async_from_config_works() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "files"
 ddl = "CREATE TABLE files (path TEXT, basename TEXT)"
 glob = "*.csv"
 on-file = '''sh -c 'rel=${1#"$2"/}; base=${1##*/}; printf "[{\"path\":\"%s\",\"basename\":\"%s\"}]" "$rel" "$base"' sh {path} {root}'''

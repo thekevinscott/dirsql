@@ -57,6 +57,7 @@ fn config_without_root_indexes_process_cwd_not_config_parent() {
         &cfg_path,
         r#"
 [[table]]
+name = "files"
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.txt"
 on-file = '''sh -c 'rel=${1#"$2"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''
@@ -86,6 +87,7 @@ fn explicit_root_wins_over_cwd() {
         &cfg_path,
         r#"
 [[table]]
+name = "files"
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.txt"
 on-file = '''sh -c 'rel=${1#"$2"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''

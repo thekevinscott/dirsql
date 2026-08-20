@@ -14,6 +14,7 @@ prints each file's basename:
 ```toml
 # .dirsql.toml
 [[table]]
+name = "files"
 ddl     = "CREATE TABLE files (basename TEXT)"
 glob    = "**/*"
 on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''

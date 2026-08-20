@@ -29,6 +29,7 @@ fn write_table_config(dir: &Path, table: &str, glob: &str) -> std::path::PathBuf
         format!(
             r#"
 [[table]]
+name = "{table}"
 ddl = "CREATE TABLE {table} (basename TEXT)"
 glob = "{glob}"
 on-file = "printf '[{{}}]'"

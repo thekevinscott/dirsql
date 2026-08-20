@@ -7,6 +7,5 @@ export type {
   RowEvent,
   ScanFailure,
 } from "./dirsql.js";
-export { parseTableName } from "./parse-table-name.js";
 export { Table } from "./table.js";
 export type { TableDef } from "./table.js";

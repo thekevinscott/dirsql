@@ -18,6 +18,7 @@ stdout works. With [`jq`](https://jqlang.org/):
 
 ```toml
 [[table]]
+name = "books"
 ddl     = "CREATE TABLE books (title TEXT, author TEXT, year INTEGER)"
 glob    = "books/*.json"
 on-file = "jq -c '[{title, author, year}]' {path}"
@@ -53,6 +54,7 @@ row per line, slurp it:
 
 ```toml
 [[table]]
+name = "events"
 ddl     = "CREATE TABLE events (event TEXT, user TEXT)"
 glob    = "logs/*.jsonl"
 on-file = "jq -c -s '.' {path}"

@@ -32,6 +32,7 @@ describe("the onFile table seam against the real core", () => {
       root: dir,
       tables: [
         {
+          name: "users",
           ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
           glob: "data/users.json",
           onFile: (filePath: string) =>

@@ -25,6 +25,7 @@ def describe_constructor_extensions():
             tmp_dir,
             tables=[
                 Table(
+                    name="items",
                     ddl="CREATE TABLE items (name TEXT)",
                     glob="*.json",
                     on_file=_noop_extract,
@@ -56,6 +57,7 @@ def describe_constructor_extensions():
             tmp_dir,
             tables=[
                 Table(
+                    name="items",
                     ddl="CREATE TABLE items (name TEXT)",
                     glob="*.json",
                     on_file=lambda _path: [{"name": "x"}],

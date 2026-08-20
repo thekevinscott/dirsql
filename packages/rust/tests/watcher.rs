@@ -136,11 +136,13 @@ fn watch_create_and_delete_fan_out_to_both_tables() {
     fs::create_dir_all(dir.path().join("data").join("2401.00001")).unwrap();
 
     let ta = Table::new(
+        "ta",
         "CREATE TABLE ta (col_a TEXT)",
         "data/*/metadata.json",
         |_| vec![HashMap::from([("col_a".into(), Value::Text("A".into()))])],
     );
     let tb = Table::new(
+        "tb",
         "CREATE TABLE tb (col_b TEXT)",
         "data/**/metadata.json",
         |_| vec![HashMap::from([("col_b".into(), Value::Text("B".into()))])],

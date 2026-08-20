@@ -39,6 +39,7 @@ fn tables_accumulate_across_config_entries() {
         cfg_a.path(),
         r#"
 [[table]]
+name = "alpha"
 ddl = "CREATE TABLE alpha (basename TEXT)"
 glob = "a.json"
 on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
@@ -49,6 +50,7 @@ on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
         cfg_b.path(),
         r#"
 [[table]]
+name = "beta"
 ddl = "CREATE TABLE beta (basename TEXT)"
 glob = "b.json"
 on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
@@ -93,6 +95,7 @@ fn each_on_file_runs_from_its_declaring_config_dir() {
         cfg_a.path(),
         r#"
 [[table]]
+name = "alpha"
 ddl = "CREATE TABLE alpha (v TEXT)"
 glob = "a.json"
 on-file = "sh ./emit.sh {path}"
@@ -109,6 +112,7 @@ on-file = "sh ./emit.sh {path}"
         cfg_b.path(),
         r#"
 [[table]]
+name = "beta"
 ddl = "CREATE TABLE beta (v TEXT)"
 glob = "b.json"
 on-file = "sh ./emit.sh {path}"
@@ -152,6 +156,7 @@ fn a_timeout_wrapped_hook_in_one_config_leaves_the_other_untouched() {
         cfg_a.path(),
         r#"
 [[table]]
+name = "slow"
 ddl = "CREATE TABLE slow (v TEXT)"
 glob = "a.json"
 on-file = "timeout 0.5 sh ./slow.sh {path}"
@@ -168,6 +173,7 @@ on-file = "timeout 0.5 sh ./slow.sh {path}"
         cfg_b.path(),
         r#"
 [[table]]
+name = "fast"
 ddl = "CREATE TABLE fast (v TEXT)"
 glob = "b.json"
 on-file = "sh ./fast.sh {path}"
@@ -215,6 +221,7 @@ fn ignore_patterns_accumulate_across_config_entries() {
 ignore = ["**/skip_a/**"]
 
 [[table]]
+name = "files"
 ddl = "CREATE TABLE files (basename TEXT)"
 glob = "**/*.json"
 on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
@@ -256,6 +263,7 @@ fn duplicate_table_names_across_config_entries_error() {
         cfg_a.path(),
         r#"
 [[table]]
+name = "dup"
 ddl = "CREATE TABLE dup (basename TEXT)"
 glob = "*.json"
 on-file = "cat {path}"
@@ -266,6 +274,7 @@ on-file = "cat {path}"
         cfg_b.path(),
         r#"
 [[table]]
+name = "dup"
 ddl = "CREATE TABLE dup (basename TEXT)"
 glob = "*.json"
 on-file = "cat {path}"

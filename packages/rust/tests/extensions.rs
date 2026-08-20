@@ -76,6 +76,7 @@ fn missing_extension_path_fails_construction() {
 path = "/nonexistent/dirsql-no-such-extension.so"
 
 [[table]]
+name = "files"
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.txt"
 on-file = "cat {path}"
@@ -166,6 +167,7 @@ path = "{}"
 entrypoint = "sqlite3_extension_init"
 
 [[table]]
+name = "files"
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.txt"
 on-file = "cat {{path}}"
@@ -216,6 +218,7 @@ fn suppress_config_extensions_ignores_config_entries_and_uses_overrides() {
 path = "does/not/exist.so"
 
 [[table]]
+name = "files"
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.txt"
 on-file = "cat {path}"

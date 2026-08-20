@@ -12,7 +12,7 @@
 
 #[cfg(feature = "extension-module")]
 mod python {
-    use ::dirsql::{DirSQL, Extension, Row, RowEvent, Table, Value, db::parse_table_name};
+    use ::dirsql::{DirSQL, Extension, Row, RowEvent, Table, Value};
     use pyo3::exceptions::{PyOverflowError, PyRuntimeError};
     use pyo3::prelude::*;
     use pyo3::types::{PyBool, PyByteArray, PyBytes, PyDict, PyInt, PyList};
@@ -24,6 +24,9 @@ mod python {
     /// callable for `on_file`.
     #[pyclass(name = "Table", frozen)]
     struct PyTable {
+        /// The table's SQL name, declared rather than derived from `ddl`.
+        #[pyo3(get)]
+        name: String,
         #[pyo3(get)]
         ddl: String,
         #[pyo3(get)]
@@ -32,27 +35,19 @@ mod python {
         on_file: Py<PyAny>,
         #[pyo3(get)]
         strict: bool,
-        /// Parsed table name (from `ddl`) via `dirsql::db::parse_table_name`,
-        /// or `None` if the DDL doesn't match `CREATE TABLE <name> (...)`.
-        /// `None` rather than a construction error so `DirSQL.ready()` keeps
-        /// surfacing malformed DDLs as the loud failure path (the core's
-        /// `DirSqlError::Ddl`).
-        #[pyo3(get)]
-        name: Option<String>,
     }
 
     #[pymethods]
     impl PyTable {
         #[new]
-        #[pyo3(signature = (*, ddl, glob, on_file, strict=false))]
-        fn new(ddl: String, glob: String, on_file: Py<PyAny>, strict: bool) -> Self {
-            let name = parse_table_name(&ddl);
+        #[pyo3(signature = (*, name, ddl, glob, on_file, strict=false))]
+        fn new(name: String, ddl: String, glob: String, on_file: Py<PyAny>, strict: bool) -> Self {
             PyTable {
+                name,
                 ddl,
                 glob,
                 on_file,
                 strict,
-                name,
             }
         }
     }
@@ -235,6 +230,7 @@ mod python {
     fn build_table(py: Python<'_>, t: &PyTable) -> Table {
         let on_file_ref = t.on_file.clone_ref(py);
         let mut table = Table::try_new(
+            t.name.clone(),
             t.ddl.clone(),
             t.glob.clone(),
             make_on_file_closure(on_file_ref),

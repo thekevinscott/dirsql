@@ -49,6 +49,7 @@ describe("new DirSQL(configPath)", () => {
       configPath,
       `
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (path TEXT, basename TEXT)"
 glob = "items/*.csv"
 ${pathBasenameHook}
@@ -73,6 +74,7 @@ ${pathBasenameHook}
       configPath,
       `
 [[table]]
+name = "comments"
 ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
 glob = "comments/{thread_id}/*.txt"
 ${pathBasenameHook}
@@ -90,6 +92,7 @@ ${pathBasenameHook}
       configPath,
       `
 [[table]]
+name = "comments"
 ddl = "CREATE TABLE comments (path TEXT, basename TEXT)"
 glob = "comments/{thread_id}/*.txt"
 ${pathBasenameHook}
@@ -114,6 +117,7 @@ ${pathBasenameHook}
       configPath,
       `
 [[table]]
+name = "files"
 ddl = "CREATE TABLE files (path TEXT, basename TEXT, dir TEXT, ext TEXT, size INTEGER, mtime INTEGER)"
 glob = "docs/*.md"
 ${statHook}
@@ -146,6 +150,7 @@ ${statHook}
 ignore = ["**/node_modules/**"]
 
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (path TEXT)"
 glob = "data/**/*.json"
 ${pathHook}
@@ -166,11 +171,13 @@ ${pathHook}
       configPath,
       `
 [[table]]
+name = "posts"
 ddl = "CREATE TABLE posts (basename TEXT)"
 glob = "posts/*.txt"
 ${basenameHook}
 
 [[table]]
+name = "authors"
 ddl = "CREATE TABLE authors (basename TEXT)"
 glob = "authors/*.txt"
 ${basenameHook}
@@ -204,6 +211,7 @@ ${basenameHook}
       configPath,
       `
 [[table]]
+name = "files"
 ddl = "CREATE TABLE files (path TEXT, size INTEGER)"
 glob = "**/*.md"
 `,
@@ -217,6 +225,7 @@ glob = "**/*.md"
       configPath,
       `
 [[table]]
+name = "t"
 glob = "*.json"
 `,
     );

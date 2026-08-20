@@ -95,6 +95,7 @@ fn on_file_rows_are_served_over_http() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "papers"
 ddl = "CREATE TABLE papers (paper_id TEXT, title TEXT)"
 glob = "**/meta.json"
 on-file = "cat {path}"
@@ -146,6 +147,7 @@ fn on_file_receives_absolute_path_over_http() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "papers"
 ddl = "CREATE TABLE papers (paper_id TEXT)"
 glob = "**/meta.json"
 on-file = "sh abscheck.sh {path}"
@@ -192,6 +194,7 @@ fn on_file_absolute_path_resolves_when_config_dir_differs_from_root() {
         configdir.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "papers"
 ddl = "CREATE TABLE papers (paper_id TEXT)"
 glob = "**/meta.json"
 on-file = "sh abscheck.sh {path}"
@@ -235,6 +238,7 @@ fn on_file_abspath_token_is_no_longer_substituted() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (q TEXT)"
 glob = "*.json"
 on-file = "sh echo_args.sh {path} {abspath}"
@@ -268,6 +272,7 @@ fn on_file_omitting_path_yields_no_rows() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.json"
 on-file = "cat"
@@ -306,6 +311,7 @@ fn a_file_whose_command_errors_is_skipped_while_the_rest_succeed() {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
 on-file = "sh extract.sh {path}"

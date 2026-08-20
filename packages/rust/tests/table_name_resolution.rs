@@ -1,10 +1,10 @@
-//! Integration tests for robust table-name resolution.
+//! Integration tests for a quoted-identifier DDL.
 //!
-//! dirsql keeps `ddl` as the schema input (bring-your-own DDL, hand-written
-//! or emitted by any ORM / schema tool) and needs only the table *name* from
-//! it. A **quoted identifier** -- the canonical form emitted by Drizzle /
-//! SQLAlchemy / Diesel / sea-query -- must register and be queryable under
-//! the bare name.
+//! A table's name is declared, but its `ddl` is bring-your-own -- hand-written
+//! or emitted by any ORM / schema tool. A **quoted identifier** (the canonical
+//! form emitted by Drizzle / SQLAlchemy / Diesel / sea-query) carries SQL
+//! *delimiters*, not part of the name, so SQLite records the bare identifier
+//! and the declared `name` matches it.
 
 use dirsql::{DirSQL, Row, Table, Value};
 use std::collections::HashMap;
@@ -12,10 +12,11 @@ use std::fs;
 use tempfile::TempDir;
 
 /// The `comments` fixture from `sdk.rs::comments_table`, differing only in
-/// the **quoted** table identifier -- anything that breaks is the name
-/// resolution, not the surrounding plumbing.
+/// the **quoted** table identifier -- anything that breaks is the delimiter
+/// handling, not the surrounding plumbing.
 fn quoted_comments_table() -> Table {
     Table::new(
+        "comments",
         r#"CREATE TABLE "comments" (id TEXT, body TEXT, author TEXT)"#,
         "comments/**/index.txt",
         |path| {

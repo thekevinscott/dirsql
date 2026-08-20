@@ -8,6 +8,7 @@ use tempfile::TempDir;
 
 fn comments_table() -> Table {
     Table::new(
+        "comments",
         "CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
         "comments/**/index.txt",
         |path| {
@@ -37,13 +38,18 @@ fn comments_table() -> Table {
 }
 
 fn items_table() -> Table {
-    Table::new("CREATE TABLE items (name TEXT)", "**/*.txt", |path| {
-        let content = std::fs::read_to_string(path).unwrap();
-        vec![HashMap::from([(
-            "name".into(),
-            Value::Text(content.trim().to_string()),
-        )])]
-    })
+    Table::new(
+        "items",
+        "CREATE TABLE items (name TEXT)",
+        "**/*.txt",
+        |path| {
+            let content = std::fs::read_to_string(path).unwrap();
+            vec![HashMap::from([(
+                "name".into(),
+                Value::Text(content.trim().to_string()),
+            )])]
+        },
+    )
 }
 
 #[test]
@@ -96,6 +102,7 @@ fn it_supports_multiple_tables_and_joins() {
     fs::write(root.path().join("authors").join("alice.txt"), "1|Alice").unwrap();
 
     let posts = Table::new(
+        "posts",
         "CREATE TABLE posts (title TEXT, author_id TEXT)",
         "posts/*.txt",
         |path| {
@@ -119,6 +126,7 @@ fn it_supports_multiple_tables_and_joins() {
         },
     );
     let authors = Table::new(
+        "authors",
         "CREATE TABLE authors (id TEXT, name TEXT)",
         "authors/*.txt",
         |path| {
@@ -179,6 +187,7 @@ fn it_ignores_extra_keys_by_default() {
     let db = DirSQL::new(
         root.path(),
         vec![Table::new(
+            "items",
             "CREATE TABLE items (name TEXT)",
             "*.txt",
             |path| {
@@ -211,6 +220,7 @@ fn it_fills_missing_keys_with_null() {
     let db = DirSQL::new(
         root.path(),
         vec![Table::new(
+            "items",
             "CREATE TABLE items (name TEXT, color TEXT, count INTEGER)",
             "*.txt",
             |path| {
@@ -239,6 +249,7 @@ fn it_does_not_inject_stat_columns_the_hook_omits() {
     let db = DirSQL::new(
         root.path(),
         vec![Table::new(
+            "items",
             "CREATE TABLE items (path TEXT, size INTEGER)",
             "*.txt",
             |_path| vec![HashMap::from([("size".into(), Value::Integer(42))])],
@@ -260,6 +271,7 @@ fn it_raises_on_extra_keys_in_strict_mode() {
     let result = DirSQL::new(
         root.path(),
         vec![Table::strict(
+            "items",
             "CREATE TABLE items (name TEXT)",
             "*.txt",
             |path| {
@@ -290,6 +302,7 @@ fn it_reports_missing_keys_in_strict_mode() {
     let result = DirSQL::new(
         root.path(),
         vec![Table::strict(
+            "items",
             "CREATE TABLE items (name TEXT, color TEXT)",
             "*.txt",
             |path| {
@@ -315,6 +328,7 @@ fn it_allows_exact_match_in_strict_mode() {
     let db = DirSQL::new(
         root.path(),
         vec![Table::strict(
+            "items",
             "CREATE TABLE items (name TEXT, color TEXT)",
             "*.txt",
             |path| {
@@ -348,6 +362,7 @@ fn it_round_trips_blob_values_through_the_sdk() {
     let db = DirSQL::new(
         root.path(),
         vec![Table::new(
+            "blobs",
             "CREATE TABLE blobs (name TEXT, data BLOB)",
             "*.json",
             move |_path| {
@@ -428,6 +443,7 @@ fn it_streams_watch_error_events() {
     let db = DirSQL::new(
         root.path(),
         vec![Table::try_new(
+            "items",
             "CREATE TABLE items (name TEXT)",
             "**/*.txt",
             |_| Err("intentional parse failure".into()),
@@ -513,14 +529,19 @@ fn it_splits_scan_and_build_for_async_bindings() {
     // `finish_build` should call it, once per scanned file.
     let extract_calls = Arc::new(AtomicUsize::new(0));
     let counter = extract_calls.clone();
-    let table = Table::new("CREATE TABLE items (name TEXT)", "**/*.txt", move |path| {
-        let content = std::fs::read_to_string(path).unwrap();
-        counter.fetch_add(1, Ordering::SeqCst);
-        vec![HashMap::from([(
-            "name".into(),
-            Value::Text(content.trim().to_string()),
-        )])]
-    });
+    let table = Table::new(
+        "items",
+        "CREATE TABLE items (name TEXT)",
+        "**/*.txt",
+        move |path| {
+            let content = std::fs::read_to_string(path).unwrap();
+            counter.fetch_add(1, Ordering::SeqCst);
+            vec![HashMap::from([(
+                "name".into(),
+                Value::Text(content.trim().to_string()),
+            )])]
+        },
+    );
 
     let prepared = DirSQL::builder()
         .root(root.path().to_path_buf())
@@ -592,6 +613,7 @@ fn builder_config_loads_tables_with_explicit_root() {
         &cfg_path,
         r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.json"
 on-file = "printf '[{}]'"
@@ -628,6 +650,7 @@ fn builder_explicit_root_wins_over_config_directory() {
         &cfg_path,
         r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (basename TEXT)"
 glob = "*.json"
 on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
@@ -657,6 +680,7 @@ fn builder_appends_programmatic_tables_to_config_tables() {
         &cfg_path,
         r#"
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.json"
 on-file = "printf '[{}]'"
@@ -664,13 +688,18 @@ on-file = "printf '[{}]'"
     )
     .unwrap();
 
-    let notes_table = Table::new("CREATE TABLE notes (body TEXT)", "notes/*.txt", |path| {
-        let content = std::fs::read_to_string(path).unwrap();
-        vec![HashMap::from([(
-            "body".into(),
-            Value::Text(content.trim().to_string()),
-        )])]
-    });
+    let notes_table = Table::new(
+        "notes",
+        "CREATE TABLE notes (body TEXT)",
+        "notes/*.txt",
+        |path| {
+            let content = std::fs::read_to_string(path).unwrap();
+            vec![HashMap::from([(
+                "body".into(),
+                Value::Text(content.trim().to_string()),
+            )])]
+        },
+    );
 
     let db = DirSQL::builder()
         .root(root.path())
@@ -754,17 +783,35 @@ fn wait_file_events_after_watch_errors() {
 }
 
 #[test]
-fn unparseable_ddl_errors() {
+fn ddl_sqlite_rejects_errors() {
     let root = TempDir::new().unwrap();
-    let table = Table::new("THIS IS NOT A CREATE TABLE", "*.txt", |_| vec![]);
+    let table = Table::new("t", "THIS IS NOT A CREATE TABLE", "*.txt", |_| vec![]);
     let result = DirSQL::new(root.path(), vec![table]);
-    assert!(matches!(result, Err(dirsql::DirSqlError::Ddl(_))));
+    assert!(matches!(result, Err(dirsql::DirSqlError::Core(_))));
+}
+
+/// A `ddl` that runs but creates something else is caught against SQLite's
+/// catalog, before any file is ingested.
+#[test]
+fn declared_name_absent_from_the_catalog_errors() {
+    let root = TempDir::new().unwrap();
+    let table = Table::new(
+        "messages",
+        "CREATE TABLE notes (x TEXT)",
+        "*.txt",
+        |_| vec![],
+    );
+    let result = DirSQL::new(root.path(), vec![table]);
+    assert!(matches!(
+        result,
+        Err(dirsql::DirSqlError::TableNotCreated { ref name }) if name == "messages"
+    ));
 }
 
 #[test]
 fn invalid_glob_errors() {
     let root = TempDir::new().unwrap();
-    let table = Table::new("CREATE TABLE t (x TEXT)", "a[b", |_| vec![]);
+    let table = Table::new("t", "CREATE TABLE t (x TEXT)", "a[b", |_| vec![]);
     let result = DirSQL::new(root.path(), vec![table]);
     assert!(matches!(result, Err(dirsql::DirSqlError::Matcher { .. })));
 }
@@ -777,6 +824,7 @@ fn undeclared_capture_is_dropped() {
     fs::create_dir_all(root.path().join("logs")).unwrap();
     fs::write(root.path().join("logs").join("a.txt"), "x").unwrap();
     let table = Table::new(
+        "entries",
         "CREATE TABLE entries (path TEXT)",
         "logs/{kind}.txt",
         |_| vec![Row::new()],
@@ -791,8 +839,8 @@ fn undeclared_capture_is_dropped() {
 #[test]
 fn duplicate_table_name_errors() {
     let root = TempDir::new().unwrap();
-    let t1 = Table::new("CREATE TABLE dup (a TEXT)", "*.a", |_| vec![]);
-    let t2 = Table::new("CREATE TABLE dup (b TEXT)", "*.b", |_| vec![]);
+    let t1 = Table::new("dup", "CREATE TABLE dup (a TEXT)", "*.a", |_| vec![]);
+    let t2 = Table::new("dup", "CREATE TABLE dup (b TEXT)", "*.b", |_| vec![]);
     let result = DirSQL::new(root.path(), vec![t1, t2]);
     assert!(matches!(result, Err(dirsql::DirSqlError::DuplicateTable(name)) if name == "dup"));
 }
@@ -804,7 +852,7 @@ fn on_file_error_surfaces_as_a_reported_skip() {
     // can tell *why* rather than only *that*.
     let root = TempDir::new().unwrap();
     fs::write(root.path().join("boom.txt"), "data").unwrap();
-    let table = Table::try_new("CREATE TABLE items (name TEXT)", "*.txt", |_| {
+    let table = Table::try_new("items", "CREATE TABLE items (name TEXT)", "*.txt", |_| {
         Err("kaboom".into())
     });
 
@@ -832,6 +880,7 @@ fn fanout_root() -> TempDir {
 
 fn table_returning(name: &str, glob: &str, col: &'static str, val: &'static str) -> Table {
     Table::new(
+        name,
         &format!("CREATE TABLE {name} ({col} TEXT)"),
         glob,
         move |_path| vec![HashMap::from([(col.into(), Value::Text(val.into()))])],
@@ -877,6 +926,7 @@ fn fanout_overlapping_distinct_globs_populate_both_tables() {
 fn capture_column_collision_errors_on_construction() {
     let root = fanout_root();
     let a = Table::new(
+        "a",
         "CREATE TABLE a (id TEXT, col_a TEXT)",
         "data/{id}/metadata.json",
         |_path| vec![HashMap::from([("col_a".into(), Value::Text("A".into()))])],
@@ -905,6 +955,7 @@ fn binary_file_under_glob_does_not_break_build() {
     .unwrap();
 
     let table = Table::new(
+        "assets",
         "CREATE TABLE assets (path TEXT, basename TEXT)",
         "*.png",
         |path| {

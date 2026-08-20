@@ -33,6 +33,7 @@ Point a table at it in `.dirsql.toml`:
 
 ```toml
 [[table]]
+name = "photos"
 ddl     = "CREATE TABLE photos (year TEXT, month TEXT, basename TEXT)"
 glob    = "photos/*/*/*.jpg"
 on-file = "python3 pathcols.py {path}"

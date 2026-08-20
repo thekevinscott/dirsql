@@ -45,6 +45,7 @@ def describe_DirSQL_from_config():
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (path TEXT, basename TEXT)"
 glob = "items/*.csv"
 """
@@ -74,6 +75,7 @@ glob = "items/*.csv"
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
+name = "comments"
 ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
 glob = "comments/{thread_id}/*.txt"
 """
@@ -101,6 +103,7 @@ glob = "comments/{thread_id}/*.txt"
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
+name = "comments"
 ddl = "CREATE TABLE comments (path TEXT, basename TEXT)"
 glob = "comments/{thread_id}/*.txt"
 """
@@ -127,6 +130,7 @@ glob = "comments/{thread_id}/*.txt"
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
+name = "files"
 ddl = "CREATE TABLE files (path TEXT, basename TEXT, dir TEXT, ext TEXT, size INTEGER, mtime INTEGER)"
 glob = "docs/*.md"
 """
@@ -166,6 +170,7 @@ glob = "docs/*.md"
 ignore = ["**/node_modules/**"]
 
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (path TEXT)"
 glob = "data/**/*.json"
 """
@@ -190,6 +195,7 @@ glob = "data/**/*.json"
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
+name = "posts"
 ddl = "CREATE TABLE posts (basename TEXT)"
 glob = "posts/*.txt"
 """
@@ -197,6 +203,7 @@ glob = "posts/*.txt"
                 + """
 
 [[table]]
+name = "authors"
 ddl = "CREATE TABLE authors (basename TEXT)"
 glob = "authors/*.txt"
 """
@@ -238,6 +245,7 @@ glob = "authors/*.txt"
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
+name = "files"
 ddl = "CREATE TABLE files (path TEXT, size INTEGER)"
 glob = "**/*.md"
 """,
@@ -252,6 +260,7 @@ glob = "**/*.md"
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
+name = "t"
 glob = "*.json"
 """,
             )
@@ -267,6 +276,7 @@ glob = "*.json"
                 os.path.join(config_dir, ".dirsql.toml"),
                 """\
 [[table]]
+name = "items"
 ddl = "CREATE TABLE items (basename TEXT, size INTEGER)"
 glob = "items/*.json"
 """

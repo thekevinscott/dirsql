@@ -20,7 +20,7 @@ afterEach(async () => {
 function mkdb(onFile: () => Array<Record<string, unknown>>): DirSQL {
   return new DirSQL({
     root: dir,
-    tables: [{ ddl: "CREATE TABLE t (v)", glob: "*.json", onFile }],
+    tables: [{ name: "t", ddl: "CREATE TABLE t (v)", glob: "*.json", onFile }],
   });
 }
 
@@ -89,6 +89,7 @@ describe("DirSQL Buffer -> BLOB", () => {
       root: dir,
       tables: [
         {
+          name: "blobs",
           ddl: "CREATE TABLE blobs (name TEXT, data BLOB)",
           glob: "*.json",
           onFile: () => [{ name: "bin", data }],

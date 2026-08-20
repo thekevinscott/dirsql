@@ -12,7 +12,6 @@ describe("getCore", () => {
   it("lazily loads the native core on first access and caches it", () => {
     const fake = {
       DirSQL: {},
-      parseTableName: () => null,
     } as ReturnType<typeof loadNativeCore>;
     vi.mocked(loadNativeCore).mockReturnValue(fake);
 

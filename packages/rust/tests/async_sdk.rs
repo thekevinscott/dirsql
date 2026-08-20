@@ -7,6 +7,7 @@ use tempfile::TempDir;
 
 fn comments_table() -> Table {
     Table::new(
+        "comments",
         "CREATE TABLE comments (id TEXT, body TEXT, author TEXT)",
         "comments/**/index.txt",
         |path| {
@@ -36,13 +37,18 @@ fn comments_table() -> Table {
 }
 
 fn items_table() -> Table {
-    Table::new("CREATE TABLE items (name TEXT)", "**/*.txt", |path| {
-        let content = std::fs::read_to_string(path).unwrap();
-        vec![HashMap::from([(
-            "name".into(),
-            Value::Text(content.trim().to_string()),
-        )])]
-    })
+    Table::new(
+        "items",
+        "CREATE TABLE items (name TEXT)",
+        "**/*.txt",
+        |path| {
+            let content = std::fs::read_to_string(path).unwrap();
+            vec![HashMap::from([(
+                "name".into(),
+                Value::Text(content.trim().to_string()),
+            )])]
+        },
+    )
 }
 
 #[tokio::test]
@@ -156,6 +162,7 @@ async fn from_config_path_loads_config_with_explicit_root() {
         &cfg_path,
         r#"
 [[table]]
+name = "files"
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.csv"
 on-file = "printf '[{}]'"
@@ -206,13 +213,18 @@ async fn sync_backed_methods_before_ready_error() {
     // complete during the assertion window.
     let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
     let gate_in_extract = gate.clone();
-    let gated_table = Table::new("CREATE TABLE items (name TEXT)", "**/*.txt", move |_| {
-        gate_in_extract.wait();
-        vec![HashMap::from([(
-            "name".into(),
-            Value::Text("apple".into()),
-        )])]
-    });
+    let gated_table = Table::new(
+        "items",
+        "CREATE TABLE items (name TEXT)",
+        "**/*.txt",
+        move |_| {
+            gate_in_extract.wait();
+            vec![HashMap::from([(
+                "name".into(),
+                Value::Text("apple".into()),
+            )])]
+        },
+    );
 
     let db = AsyncDirSQL::new(root.path(), vec![gated_table]).unwrap();
     // Every sync-backed method threads `self.sync()?` first, so all surface
@@ -257,8 +269,8 @@ async fn sync_backed_methods_before_ready_error() {
 #[tokio::test]
 async fn init_failure_surfaces_through_ready_and_sync() {
     let root = TempDir::new().unwrap();
-    let t1 = Table::new("CREATE TABLE dup (a TEXT)", "*.a", |_| vec![]);
-    let t2 = Table::new("CREATE TABLE dup (b TEXT)", "*.b", |_| vec![]);
+    let t1 = Table::new("dup", "CREATE TABLE dup (a TEXT)", "*.a", |_| vec![]);
+    let t2 = Table::new("dup", "CREATE TABLE dup (b TEXT)", "*.b", |_| vec![]);
     let db = AsyncDirSQL::new(root.path(), vec![t1, t2]).unwrap();
 
     let ready = db.ready().await;

@@ -24,6 +24,7 @@ def _items_table(call_count_box):
         return [json.loads(open(path, encoding="utf-8").read())]
 
     return Table(
+        name="items",
         ddl="CREATE TABLE items (name TEXT, price REAL)",
         glob="items/*.json",
         on_file=on_file,
@@ -189,6 +190,7 @@ def describe_persist():
                 persist_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT, price REAL, sku TEXT)",
                         glob="items/*.json",
                         on_file=lambda path: (
@@ -227,6 +229,7 @@ def describe_persist():
                 persist_dir,
                 tables=[
                     Table(
+                        name="items",
                         ddl="CREATE TABLE items (name TEXT, price REAL)",
                         glob="**/*.json",
                         on_file=lambda path: [

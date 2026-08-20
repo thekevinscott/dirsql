@@ -108,6 +108,7 @@ path       = "sqlite_vec"
 entrypoint = "sqlite3_vec_init"
 
 [[table]]
+name = "notes"
 ddl     = "CREATE TABLE notes (path TEXT, text TEXT, embedding TEXT)"
 glob    = "notes/*.md"
 on-file = "uv run --with model2vec python embed.py {path} {root}"

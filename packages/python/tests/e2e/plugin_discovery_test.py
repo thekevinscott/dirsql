@@ -147,6 +147,7 @@ def describe_plugin_discovery():
         cfg = data / "user.toml"
         cfg.write_text(
             "[[table]]\n"
+            'name = "posts"\n'
             'ddl = "CREATE TABLE posts (path TEXT, basename TEXT)"\n'
             'glob = "*.md"\n'
             f"{_HOOK_PATH_BASENAME}\n"
@@ -166,7 +167,7 @@ def describe_plugin_discovery():
         site_dir, data = staged
         cfg = data / "dup.toml"
         cfg.write_text(
-            '[[table]]\nddl = "CREATE TABLE notes (path TEXT)"\nglob = "*.md"\n'
+            '[[table]]\nname = "notes"\nddl = "CREATE TABLE notes (path TEXT)"\nglob = "*.md"\n'
             'on-file = "cat {path}"\n'
         )
         out = _run(site_dir, ["query", "SELECT 1", "-c", "dup.toml"], data)

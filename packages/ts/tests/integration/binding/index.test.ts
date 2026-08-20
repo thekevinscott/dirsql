@@ -38,6 +38,7 @@ describe("DirSQL", () => {
       root: dir,
       tables: [
         {
+          name: "users",
           ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
           glob: "data/users.json",
           onFile: (filePath: string) =>
@@ -59,12 +60,14 @@ describe("DirSQL", () => {
       root: dir,
       tables: [
         {
+          name: "users",
           ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
           glob: "data/users.json",
           onFile: (filePath: string) =>
             JSON.parse(readFileSync(filePath, "utf8")),
         },
         {
+          name: "products",
           ddl: "CREATE TABLE products (name TEXT, price REAL)",
           glob: "data/products.json",
           onFile: (filePath: string) =>
@@ -91,6 +94,7 @@ describe("DirSQL", () => {
       root: dir,
       tables: [
         {
+          name: "orders",
           ddl: 'CREATE TABLE orders (name TEXT, "order" INTEGER)',
           glob: "data/orders.json",
           onFile: (filePath: string) =>
@@ -110,6 +114,7 @@ describe("DirSQL", () => {
       root: dir,
       tables: [
         {
+          name: "items",
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "data/*.json",
           onFile: (filePath: string) =>
@@ -131,6 +136,7 @@ describe("DirSQL", () => {
       root: dir,
       tables: [
         {
+          name: "items",
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "data/*.json",
           onFile: (filePath: string) =>
@@ -153,6 +159,7 @@ describe("DirSQL", () => {
       root: dir,
       tables: [
         {
+          name: "users",
           ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
           glob: "data/users.json",
           onFile: (filePath: string) =>
@@ -173,6 +180,7 @@ describe("DirSQL", () => {
         root: emptyDir,
         tables: [
           {
+            name: "items",
             ddl: "CREATE TABLE items (name TEXT)",
             glob: "**/*.json",
             onFile: (filePath: string) =>
@@ -193,6 +201,7 @@ describe("DirSQL", () => {
       root: dir,
       tables: [
         {
+          name: "users",
           ddl: "CREATE TABLE users (name TEXT)",
           glob: "data/users.json",
           onFile: (filePath: string) =>
@@ -213,6 +222,7 @@ describe("DirSQL", () => {
       root: dir,
       tables: [
         {
+          name: "items",
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "items/*.json",
           onFile: (filePath: string) => [
@@ -248,6 +258,7 @@ describe("DirSQL", () => {
       root: dir,
       tables: [
         {
+          name: "items",
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "items/*.json",
           onFile: (filePath: string) => [
@@ -275,6 +286,7 @@ describe("DirSQL", () => {
       root: dir,
       tables: [
         {
+          name: "t",
           ddl: "NOT VALID SQL",
           glob: "**/*.json",
           onFile: () => [],
@@ -308,6 +320,7 @@ describe("DirSQL strict mode", () => {
       root: dir,
       tables: [
         {
+          name: "items",
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "items/*.json",
           onFile: (filePath: string) => [
@@ -334,6 +347,7 @@ describe("DirSQL strict mode", () => {
       root: dir,
       tables: [
         {
+          name: "items",
           ddl: "CREATE TABLE items (name TEXT, color TEXT)",
           glob: "items/*.json",
           onFile: (filePath: string) => [
@@ -360,6 +374,7 @@ describe("DirSQL strict mode", () => {
       root: dir,
       tables: [
         {
+          name: "items",
           ddl: "CREATE TABLE items (name TEXT, color TEXT)",
           glob: "items/*.json",
           onFile: (filePath: string) => [
@@ -402,6 +417,7 @@ describe("DirSQL relaxed schema (default)", () => {
       root: dir,
       tables: [
         {
+          name: "items",
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "*.json",
           onFile: readJson,
@@ -420,6 +436,7 @@ describe("DirSQL relaxed schema (default)", () => {
       root: dir,
       tables: [
         {
+          name: "items",
           ddl: "CREATE TABLE items (name TEXT, color TEXT)",
           glob: "*.json",
           onFile: readJson,
@@ -451,6 +468,7 @@ describe("DirSQL onFile path argument", () => {
       root: dir,
       tables: [
         {
+          name: "items",
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "*.json",
           onFile: (filePath: string) => {
@@ -487,6 +505,7 @@ describe("DirSQL watch events", () => {
       root: dir,
       tables: [
         {
+          name: "items",
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "**/*.json",
           onFile: (filePath: string) => [
@@ -520,6 +539,7 @@ describe("DirSQL watch events", () => {
       root: dir,
       tables: [
         {
+          name: "items",
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "**/*.json",
           onFile: (filePath: string) => [
@@ -552,6 +572,7 @@ describe("DirSQL watch events", () => {
       root: dir,
       tables: [
         {
+          name: "items",
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "**/*.json",
           onFile: (filePath: string) => [
@@ -585,6 +606,7 @@ describe("DirSQL watch events", () => {
       root: dir,
       tables: [
         {
+          name: "items",
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "items/*.json",
           onFile: (filePath: string) => [
@@ -614,6 +636,7 @@ describe("DirSQL watch events", () => {
       root: dir,
       tables: [
         {
+          name: "items",
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "*.json",
           onFile: (filePath: string) => [
@@ -650,6 +673,7 @@ describe("Table class", () => {
 
   it("is importable as a constructable class", () => {
     const t = new Table({
+      name: "users",
       ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
       glob: "data/users.json",
       onFile: (filePath: string) => JSON.parse(readFileSync(filePath, "utf8")),
@@ -662,6 +686,7 @@ describe("Table class", () => {
 
   it("instances are assignable to TableDef and accepted by DirSQL", async () => {
     const tableInstance: TableDef = new Table({
+      name: "users",
       ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
       glob: "data/users.json",
       onFile: (filePath: string) => JSON.parse(readFileSync(filePath, "utf8")),
@@ -681,16 +706,17 @@ describe("Table class", () => {
   it("plain object and Table instance produce identical query behavior", async () => {
     const onFile = (filePath: string) =>
       JSON.parse(readFileSync(filePath, "utf8"));
+    const name = "users";
     const ddl = "CREATE TABLE users (name TEXT, age INTEGER)";
     const glob = "data/users.json";
 
     const dbFromLiteral = new DirSQL({
       root: dir,
-      tables: [{ ddl, glob, onFile }],
+      tables: [{ name, ddl, glob, onFile }],
     });
     const dbFromClass = new DirSQL({
       root: dir,
-      tables: [new Table({ ddl, glob, onFile })],
+      tables: [new Table({ name, ddl, glob, onFile })],
     });
 
     const literalRows = await dbFromLiteral.query(
@@ -704,6 +730,7 @@ describe("Table class", () => {
 
   it("has the same enumerable keys as the equivalent plain object literal", () => {
     const def = {
+      name: "users",
       ddl: "CREATE TABLE users (name TEXT)",
       glob: "data/users.json",
       onFile: (filePath: string) => JSON.parse(readFileSync(filePath, "utf8")),
@@ -718,6 +745,7 @@ describe("Table class", () => {
       JSON.stringify([{ name: "Alice", age: 30, extra: "nope" }]),
     );
     const t = new Table({
+      name: "users",
       ddl: "CREATE TABLE users (name TEXT, age INTEGER)",
       glob: "data/users.json",
       onFile: (filePath: string) => JSON.parse(readFileSync(filePath, "utf8")),

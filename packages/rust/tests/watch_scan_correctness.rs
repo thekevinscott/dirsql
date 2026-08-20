@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 fn files_table(root: &std::path::Path) -> Table {
     let root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     Table::new(
+        "files",
         "CREATE TABLE files (name TEXT, path TEXT)",
         "**/*",
         move |path| {

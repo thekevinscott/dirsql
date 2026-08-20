@@ -84,6 +84,7 @@ command in verbatim:
 
 ```toml
 [[table]]
+name = "posts"
 ddl     = "CREATE TABLE posts (title TEXT, author TEXT)"
 glob    = "posts/*.md"
 on-file = "python3 extract.py {path}"

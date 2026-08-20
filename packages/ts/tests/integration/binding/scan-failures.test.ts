@@ -37,6 +37,7 @@ describe("DirSQL scanFailures", () => {
       root: dir,
       tables: [
         {
+          name: "items",
           ddl: "CREATE TABLE items (name TEXT)",
           glob: "*.json",
           onFile,

@@ -73,6 +73,7 @@ describe("DirSQL persist", () => {
 
   function makeTable(box: { count: number }) {
     return {
+      name: "items",
       ddl: "CREATE TABLE items (name TEXT, price REAL)",
       glob: "items/*.json",
       onFile: (filePath: string) => {
@@ -241,6 +242,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [
         {
+          name: "items",
           ddl: "CREATE TABLE items (name TEXT, price REAL, sku TEXT)",
           glob: "items/*.json",
           onFile: (filePath: string) => {
@@ -270,6 +272,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [
         {
+          name: "items",
           ddl: "CREATE TABLE items (name TEXT, price REAL)",
           glob: "**/*.json",
           onFile: (filePath: string) => [

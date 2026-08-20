@@ -40,6 +40,7 @@ fn blog_fixture() -> (TempDir, DirSQL) {
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
+name = "posts"
 ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
 glob = "posts/*/*.json"
 on-file = '''sh -c 'base=${1##*/}; size=$(wc -c < "$1" | tr -d " "); printf "[{\"basename\":\"%s\",\"size\":%s}]" "$base" "$size"' sh {path}'''
@@ -293,6 +294,7 @@ async fn get_events_surfaces_parse_errors_as_error_events_not_fatal() {
     fs::write(root.path().join("posts/second.json"), r#"{"ok":2}"#).unwrap();
 
     let table = dirsql::Table::try_new(
+        "posts",
         "CREATE TABLE posts (ok INTEGER, basename TEXT)",
         "posts/*.json",
         |path| {

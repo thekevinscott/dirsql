@@ -176,7 +176,7 @@ beforeAll(async () => {
   const pathHook = `on-file = '''sh -c 'rel=\${1#"$2"/}; printf "[{\\"path\\":\\"%s\\"}]" "$rel"' sh {path} {root}'''`;
   await writeFile(
     cfg,
-    `[[table]]\nddl = "CREATE TABLE files (path TEXT)"\nglob = "*.txt"\n${pathHook}\n`,
+    `[[table]]\nname = "files"\nddl = "CREATE TABLE files (path TEXT)"\nglob = "*.txt"\n${pathHook}\n`,
   );
 
   serverPort = await freePort();

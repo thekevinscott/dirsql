@@ -22,6 +22,7 @@ Exclude the noise in `.dirsql.toml`:
 ignore = ["notes/drafts/**", "**/*.tmp"]
 
 [[table]]
+name = "notes"
 ddl     = "CREATE TABLE notes (basename TEXT)"
 glob    = "notes/**/*"
 on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''

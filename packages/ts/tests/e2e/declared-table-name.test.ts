@@ -89,9 +89,10 @@ on-file = "cat {path}"
     );
 
     expect(code, `expected a clean run, stderr: ${stderr}`).toBe(0);
-    expect(
-      (JSON.parse(stdout) as { id: string }[]).map((r) => r.id),
-    ).toEqual(["one", "two"]);
+    expect((JSON.parse(stdout) as { id: string }[]).map((r) => r.id)).toEqual([
+      "one",
+      "two",
+    ]);
   }, 30_000);
 
   it("exits non-zero when a [[table]] entry has no name", async () => {

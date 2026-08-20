@@ -166,7 +166,8 @@ what its required `on-file` command emits — dirsql injects nothing (see
 
 | Key | Required | Description |
 |---|---|---|
-| `ddl` | yes | A SQLite `CREATE TABLE` statement. The table name is parsed from it. Only the columns declared here are kept; keys the `on-file` command emits that are not declared are dropped. |
+| `name` | yes | The table's SQL name — the name you query it by. Declared, never derived from `ddl`: dirsql does not read the DDL text. The `ddl` must create a table by this name; if it doesn't, loading fails. |
+| `ddl` | yes | A SQLite `CREATE TABLE` statement, run verbatim. Only the columns declared here are kept; keys the `on-file` command emits that are not declared are dropped. |
 | `glob` | yes | Glob pattern matched against root-relative paths. Every table whose glob matches a file receives that file's rows — a file can populate multiple tables. A `{name}` segment is rewritten to `*` (it matches one path segment but captures nothing). |
 | `on-file` | **yes** | A command run once per matched file; its stdout (a JSON array of row objects) becomes the file's rows. Must be non-empty. A `[[table]]` with no `on-file` is a load error (see [parse errors](#parse-errors)). See [Command hooks](./hooks.md#on-file). |
 | `strict` | no (default `false`) | When `true`, rows whose keys do not exactly match the declared columns are rejected with an error: extra keys error, and every declared column must be supplied by the `on-file` output. When `false`, extra keys are dropped and missing columns become `NULL`. |
@@ -180,11 +181,13 @@ instead of declaring a table.
 
 ```toml
 [[table]]
+name = "comments"
 ddl     = "CREATE TABLE comments (path TEXT, author TEXT, body TEXT)"
 glob    = "_comments/*/*.jsonl"
 on-file = "jq -c -s '.' {path}"
 
 [[table]]
+name = "papers"
 ddl     = "CREATE TABLE papers (paper_id TEXT, title TEXT)"
 glob    = "**/meta.json"
 on-file = "uv run python extract_papers.py {path}"
@@ -241,7 +244,16 @@ SDKs raise/reject) when:
 - The TOML is malformed.
 - Any table contains an unknown key (top level, `[dirsql]`, `[[table]]`, or
   `[[dirsql.extension]]`). The error names the offending key.
-- A `[[table]]` entry omits `ddl` or `glob`.
+- A `[[table]]` entry omits `name`, `ddl`, or `glob` (or `name` is
+  empty/whitespace).
+- A `[[table]]` entry's `ddl` runs but creates no table by its `name`. The
+  error carries the entry's name and points at the fix:
+
+  > `table 'messages': its `ddl` ran but created no table called 'messages'. Set `name` to the table the `ddl` creates.`
+
+  dirsql asks SQLite's catalog rather than interpreting the DDL, so quoted
+  (`CREATE TABLE "messages"`), schema-qualified (`main.messages`) and
+  `IF NOT EXISTS` forms all match a plain `name = "messages"`.
 - A `[[table]]` entry omits `on-file` (or it is empty/whitespace). The error
   names the offending glob and points at the fix:
 
@@ -275,11 +287,13 @@ deterministic = true
 timeout       = "600s"
 
 [[table]]
+name = "comments"
 ddl     = "CREATE TABLE comments (author TEXT, body TEXT)"
 glob    = "_comments/*/*.jsonl"
 on-file = "jq -c -s '.' {path}"
 
 [[table]]
+name = "documents"
 ddl     = "CREATE TABLE documents (title TEXT, summary TEXT)"
 glob    = "**/index.md"
 on-file = "uv run python extract_doc.py {path}"

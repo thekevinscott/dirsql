@@ -26,6 +26,7 @@ Then declare the table in `.dirsql.toml`:
 
 ```toml
 [[table]]
+name = "posts"
 ddl     = "CREATE TABLE posts (title TEXT, slug TEXT)"
 glob    = "posts/**/*.md"
 on-file = "python3 extract.py {path}"

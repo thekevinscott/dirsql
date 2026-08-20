@@ -50,6 +50,7 @@ impl Drop for CwdGuard {
 
 fn items_table() -> Table {
     Table::new(
+        "items",
         "CREATE TABLE items (name TEXT, path TEXT)",
         "**/*.txt",
         |path| {

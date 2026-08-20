@@ -17,6 +17,7 @@ fn items_db(root: &Path) -> DirSQL {
     DirSQL::new(
         root,
         vec![Table::new(
+            "items",
             "CREATE TABLE items (name TEXT)",
             "*.txt",
             |path| {

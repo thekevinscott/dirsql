@@ -6,7 +6,7 @@ API surface comparison across the three language SDKs.
 
 | Concept     | Python                  | Rust                     | TypeScript               |
 |-------------|-------------------------|--------------------------|--------------------------|
-| Table def   | `Table(ddl, glob, on_file, strict)` | `Table::new(ddl, glob, on_file)` / `Table::strict(...)` / `Table::try_new(...)` | `new Table({...})` or `{ ddl, glob, onFile, strict? }` (plain object) |
+| Table def   | `Table(name, ddl, glob, on_file, strict)` | `Table::new(name, ddl, glob, on_file)` / `Table::strict(...)` / `Table::try_new(...)` | `new Table({...})` or `{ name, ddl, glob, onFile, strict? }` (plain object) |
 | on-file callback | `(path) -> list[dict]` | `Fn(&str) -> Vec<Row>` | `(path) => Record<string, unknown>[]` |
 | Row event   | `RowEvent` (class, frozen attrs; `file_path` on all variants) | `RowEvent` (enum: Insert/Update/Delete/Error; `file_path` on all variants) | `RowEvent` (plain object with action string; `filePath` on all variants) |
 | Row type    | `dict[str, Any]`        | `HashMap<String, Value>` | `Record<string, unknown>` |
@@ -339,7 +339,7 @@ public-API binding, so no drift.
 ### TypeScript
 - Uses `camelCase` for method names.
 - `RowEvent` field names use `camelCase` (`oldRow`, `filePath`), not `snake_case`.
-- Table definitions may be written as `new Table({...})` or as a plain object literal (`{ ddl, glob, onFile, strict? }`); `Table` is a thin identity wrapper that exists for parity with the Python/Rust `Table` constructors. Both forms are interchangeable at every call site that takes `TableDef[]`.
+- Table definitions may be written as `new Table({...})` or as a plain object literal (`{ name, ddl, glob, onFile, strict? }`); `Table` is a thin identity wrapper that exists for parity with the Python/Rust `Table` constructors. Both forms are interchangeable at every call site that takes `TableDef[]`.
 - The constructor is overloaded: `new DirSQL(configPath: string)` or `new DirSQL(options: { root?, tables?, ignore?, config? })`. There is no separate `fromConfig` factory.
 - No separate `AsyncDirSQL` — JS is async by default, so `DirSQL` has `ready: Promise<void>`, `query(): Promise<Record[]>`, and `watch(): AsyncIterable<RowEvent>` built in.
 - `query()`, `startWatcher()`, and `pollEvents()` all return `Promise`s and run on the libuv threadpool so the JS event loop stays responsive (even for long poll timeouts).
@@ -371,7 +371,8 @@ Real-core file map:
 | Config file | `from_config_test.py` | `from_config.rs`, `config.rs` | `from-config.test.ts` |
 | Persistence | `persist_test.py` | `persist.rs`, `persist_parsed_path_table.rs` | `persist.test.ts` |
 | Extensions | `extensions_test.py`, `extension_package_test.py`, `config_extension_package_test.py` | `extensions.rs` | `extensions.test.ts`, `extension-package.test.ts`, `config-extension-package.test.ts` |
-| Table-name resolution (#204) | `table_name_resolution_test.py` | `table_name_resolution.rs` | `table-name-resolution.test.ts` |
+| Quoted-identifier DDL (#204) | `table_name_resolution_test.py` | `table_name_resolution.rs` | (covered by `declared-table-name.test.ts`) |
+| Declared table `name` (#962) | `declared_table_name_test.py` | `declared_table_name.rs`, `declared_table_name_e2e.rs` | `declared-table-name.test.ts` |
 | Docs examples | `docs_examples_test.py` | `docs_examples.rs` | `docs-examples.test.ts` |
 | Docs gap-fills | `docs_gaps_test.py` | `docs_gaps.rs` | `docs-gaps.test.ts` |
 | Path-tables (#627/#628/#629) | `path_table_test.py` | `path_table_query.rs`, `path_table_globs.rs`, `vtab.rs` | `path-table.test.ts` |
@@ -412,7 +413,7 @@ incl. #313).
 | Strict mode (extra keys)   | Y      | Y    | Y          |
 | Strict mode (missing keys) | Y      | Y    | Y          |
 | Strict mode (exact match)  | Y      | Y    | Y          |
-| `Table` construction + `ddl`/`glob` attributes | Y | Y | Y (`Table` class + plain-object interchangeability) |
+| `Table` construction + `name`/`ddl`/`glob` attributes | Y | Y | Y (`Table` class + plain-object interchangeability) |
 | Quoted-identifier DDL registers/queries by bare name (#204) | Y | Y | Y |
 | Path-table query (`FROM './'`, glob scoping, zero-match rows, live re-scan, JOIN vs named) | Y (#629) | Y | Y (#629) |
 | Path-table hidden `content` (excluded from `*`, selectable by name, non-UTF-8 → NULL) | Y (#629) | Y | Y (#629) |
@@ -461,6 +462,8 @@ incl. #313).
 | Missing config file errors | Y | Y | Y |
 | Invalid TOML errors        | Y | core | Y |
 | `[[table]]` missing `ddl` errors | Y | core | Y |
+| `[[table]]` missing `name` errors | Y | Y | Y |
+| `[[table]]` `name` absent from the catalog after `ddl` errors | Y | Y | Y |
 | Config `persist` / `persist_path` resolution | core | Y (`from_config.rs`) | core |
 
 ### Persistence

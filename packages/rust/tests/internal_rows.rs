@@ -51,7 +51,7 @@ fn assert_mapping_consistent(db: &Db, table: &str, expected: i64) {
 #[test]
 fn mapping_tracks_create_modify_delete() {
     let db = Db::new().unwrap();
-    db.create_table("CREATE TABLE t (id TEXT)").unwrap();
+    db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
 
     for (i, r) in ["a0", "a1"].iter().enumerate() {
         db.insert_row("t", &row(r), "a.jsonl", i).unwrap();
@@ -125,7 +125,7 @@ fn table_exists(conn: &Connection, name: &str) -> bool {
 }
 
 fn csv_table() -> Table {
-    Table::new("CREATE TABLE rows (col TEXT)", "**/*.csv", |path| {
+    Table::new("rows", "CREATE TABLE rows (col TEXT)", "**/*.csv", |path| {
         let content = fs::read_to_string(path).unwrap();
         content
             .lines()

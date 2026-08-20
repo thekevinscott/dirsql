@@ -20,7 +20,7 @@
 
 use dirsql::{
     DirSQL as CoreDirSQL, Extension, PreparedBuild, RawFileEvent, Row, RowEvent as CoreRowEvent,
-    Table, Value, db::parse_table_name as core_parse_table_name,
+    Table, Value,
 };
 use napi::Task;
 use napi::bindgen_prelude::*;
@@ -30,14 +30,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-
-/// Parse the table name out of a `CREATE TABLE <name> (...)` DDL.
-/// Returns `null` if the DDL doesn't match (e.g. empty, missing
-/// `CREATE TABLE`, or the identifier slot is empty).
-#[napi(js_name = "parseTableName")]
-pub fn parse_table_name(ddl: String) -> Option<String> {
-    core_parse_table_name(&ddl)
-}
 
 /// Run the `dirsql` CLI in this process and return its exit code.
 ///
@@ -404,13 +396,14 @@ fn parse_tables_from_js(env: Env, tables: Array<'_>) -> Result<Vec<Table>> {
         })?;
         let raw_obj = table_element.raw();
 
+        let name = unsafe { get_string_property(raw_env, raw_obj, "name")? };
         let ddl = unsafe { get_string_property(raw_env, raw_obj, "ddl")? };
         let glob = unsafe { get_string_property(raw_env, raw_obj, "glob")? };
         let on_file_val = unsafe { get_function_property(raw_env, raw_obj, "onFile")? };
         let strict = unsafe { get_bool_property(raw_env, raw_obj, "strict", false) };
 
         let fn_ref = unsafe { Arc::new(FnRef::new(raw_env, on_file_val)?) };
-        let mut table = Table::try_new(ddl, glob, make_on_file_closure(fn_ref));
+        let mut table = Table::try_new(name, ddl, glob, make_on_file_closure(fn_ref));
         table.strict = strict;
         rust_tables.push(table);
     }

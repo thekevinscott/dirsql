@@ -20,8 +20,11 @@ fn bench_create_table(c: &mut Criterion) {
     c.bench_function("db/create_table", |b| {
         b.iter(|| {
             let db = Db::new().unwrap();
-            db.create_table("CREATE TABLE items (id INTEGER, name TEXT, score REAL)")
-                .unwrap();
+            db.create_table(
+                "items",
+                "CREATE TABLE items (id INTEGER, name TEXT, score REAL)",
+            )
+            .unwrap();
         });
     });
 }
@@ -32,8 +35,11 @@ fn bench_insert_rows(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, &n| {
             b.iter(|| {
                 let db = Db::new().unwrap();
-                db.create_table("CREATE TABLE items (id INTEGER, name TEXT, score REAL)")
-                    .unwrap();
+                db.create_table(
+                    "items",
+                    "CREATE TABLE items (id INTEGER, name TEXT, score REAL)",
+                )
+                .unwrap();
                 for i in 0..n {
                     db.insert_row("items", &make_row(i), "data.jsonl", i)
                         .unwrap();
@@ -49,8 +55,11 @@ fn bench_query(c: &mut Criterion) {
     for count in [100, 1000] {
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, &n| {
             let db = Db::new().unwrap();
-            db.create_table("CREATE TABLE items (id INTEGER, name TEXT, score REAL)")
-                .unwrap();
+            db.create_table(
+                "items",
+                "CREATE TABLE items (id INTEGER, name TEXT, score REAL)",
+            )
+            .unwrap();
             for i in 0..n {
                 db.insert_row("items", &make_row(i), "data.jsonl", i)
                     .unwrap();
@@ -69,8 +78,11 @@ fn bench_delete_by_file(c: &mut Criterion) {
         b.iter_with_setup(
             || {
                 let db = Db::new().unwrap();
-                db.create_table("CREATE TABLE items (id INTEGER, name TEXT, score REAL)")
-                    .unwrap();
+                db.create_table(
+                    "items",
+                    "CREATE TABLE items (id INTEGER, name TEXT, score REAL)",
+                )
+                .unwrap();
                 for i in 0..500 {
                     let file = if i % 2 == 0 { "a.jsonl" } else { "b.jsonl" };
                     db.insert_row("items", &make_row(i), file, i).unwrap();
