@@ -30,6 +30,8 @@ pub mod path_table;
 #[doc(hidden)]
 pub mod persist;
 #[doc(hidden)]
+pub mod progress;
+#[doc(hidden)]
 pub mod scanner;
 #[doc(hidden)]
 pub mod sql_literal;
@@ -52,7 +54,8 @@ use crate::persist::{
     hash_file, is_trusted, meta_is_compatible, now_ns, read_cached_files, read_meta,
     resolve_persist_path, upsert_file, write_meta,
 };
-use crate::scanner::scan_directory;
+use crate::progress::Progress;
+use crate::scanner::scan_directory_reporting;
 use crate::watcher::{FileEvent, Watcher};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use std::collections::HashMap;
@@ -328,8 +331,9 @@ pub struct DirSQL {
 /// Internal scan seam: the startup directory walk, injectable so unit tests
 /// can observe whether it ran. The walk has no result a caller can tell apart
 /// from not walking, so *whether* it ran takes a seam. Production always
-/// passes [`scan_directory`].
-type ScanFn<'a> = &'a dyn Fn(&Path, &TableMatcher) -> Vec<(PathBuf, String)>;
+/// passes [`scan_directory_reporting`]; the third argument is the walk's
+/// running file count, which drives the progress line.
+type ScanFn<'a> = &'a dyn Fn(&Path, &TableMatcher, &mut dyn FnMut(u64)) -> Vec<(PathBuf, String)>;
 
 impl DirSQL {
     /// Start building a `DirSQL`. See [`DirSQLBuilder`] for the available
@@ -711,7 +715,7 @@ impl DirSQL {
     /// JS main thread for the napi-rs TypeScript binding).
     #[doc(hidden)]
     pub fn prepare_resolved(resolved: ResolvedBuild) -> Result<PreparedBuild> {
-        Self::prepare_resolved_with(resolved, &scan_directory)
+        Self::prepare_resolved_with(resolved, &scan_directory_reporting)
     }
 
     fn prepare_resolved_with(resolved: ResolvedBuild, scan: ScanFn<'_>) -> Result<PreparedBuild> {
@@ -751,7 +755,16 @@ impl DirSQL {
         let scanned = if table_names.is_empty() {
             Vec::new()
         } else {
-            scan(&root, &matcher)
+            // The walk reports a running count rather than a fraction: it does
+            // not know how many files there are until it has found them all.
+            let mut progress = Progress::scanning();
+            let mut seen = 0;
+            let scanned = scan(&root, &matcher, &mut |count| {
+                seen = count;
+                progress.update(count, None);
+            });
+            progress.finish(seen);
+            scanned
         };
 
         // When persist is enabled, files whose stat tuple matches the cache
@@ -953,12 +966,21 @@ impl DirSQL {
 
         let snapshot_ns = now_ns();
         let mut on_file_failures: Vec<OnFileFailure> = Vec::new();
-        for ScannedFile {
-            rel_path,
-            table_name,
-            stat,
-        } in scanned_files
+        // The phase a user actually waits on: one `on_file` round trip per
+        // file, plus whatever the table's DDL triggers on insert. The count is
+        // known up front, so this one reports a fraction.
+        let total_files = scanned_files.len() as u64;
+        let mut progress = Progress::indexing();
+        for (
+            done,
+            ScannedFile {
+                rel_path,
+                table_name,
+                stat,
+            },
+        ) in scanned_files.into_iter().enumerate()
         {
+            progress.update(done as u64, Some(total_files));
             let on_file = on_file_map.get(&table_name).ok_or_else(|| {
                 DirSqlError::Ddl(format!("missing on-file function for table {table_name}"))
             })?;
@@ -1027,6 +1049,8 @@ impl DirSQL {
                 .map_err(DirSqlError::sqlite)?;
             }
         }
+
+        progress.finish(total_files);
 
         // Write the meta block last; ingest and meta commit atomically in the
         // single transaction opened above. A crash mid-build leaves the cache
@@ -2268,8 +2292,18 @@ mod internal_tests {
             }
         }
 
-        fn scan(&self, _root: &Path, _matcher: &TableMatcher) -> Vec<(PathBuf, String)> {
+        /// Mirrors the real walk closely enough for the seam: it reports a
+        /// running file count as it goes, then returns what it found.
+        fn scan(
+            &self,
+            _root: &Path,
+            _matcher: &TableMatcher,
+            on_file: &mut dyn FnMut(u64),
+        ) -> Vec<(PathBuf, String)> {
             self.calls.set(self.calls.get() + 1);
+            for (index, _) in self.found.iter().enumerate() {
+                on_file(index as u64 + 1);
+            }
             self.found.clone()
         }
     }
@@ -2308,7 +2342,7 @@ mod internal_tests {
 
         let prepared = DirSQL::prepare_resolved_with(
             resolved_over(dir.path(), Vec::new(), false),
-            &|root, matcher| scan.scan(root, matcher),
+            &|root, matcher, on_file| scan.scan(root, matcher, on_file),
         )
         .unwrap();
 
@@ -2329,7 +2363,7 @@ mod internal_tests {
 
         let prepared = DirSQL::prepare_resolved_with(
             resolved_over(dir.path(), vec![txt_table()], false),
-            &|root, matcher| scan.scan(root, matcher),
+            &|root, matcher, on_file| scan.scan(root, matcher, on_file),
         )
         .unwrap();
 
@@ -2351,7 +2385,7 @@ mod internal_tests {
 
         let prepared = DirSQL::prepare_resolved_with(
             resolved_over(dir.path(), Vec::new(), true),
-            &|root, matcher| scan.scan(root, matcher),
+            &|root, matcher, on_file| scan.scan(root, matcher, on_file),
         )
         .unwrap();
 

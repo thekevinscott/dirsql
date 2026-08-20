@@ -120,8 +120,8 @@ fn forced_progress_never_touches_stdout() {
     let out = run(root.path(), Some("always"));
 
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let value: serde_json::Value =
-        serde_json::from_str(stdout.trim()).unwrap_or_else(|e| panic!("stdout is JSON: {e}: {stdout:?}"));
+    let value: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout is JSON: {e}: {stdout:?}"));
     assert_eq!(value[0]["n"], 3, "the query still returns its rows");
 }
 
@@ -147,5 +147,8 @@ fn progress_is_silent_when_explicitly_disabled() {
     let out = run(root.path(), Some("never"));
 
     let err = stderr(&out);
-    assert_eq!(err, "", "an opted-out run writes nothing to stderr: {err:?}");
+    assert_eq!(
+        err, "",
+        "an opted-out run writes nothing to stderr: {err:?}"
+    );
 }
