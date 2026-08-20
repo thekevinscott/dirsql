@@ -14,6 +14,7 @@ from checks.declared_deps.cli import cli as declared_deps
 from checks.npm_binary_extension_load.cli import cli as npm_binary_extension_load
 from checks.preflight.cli import cli as preflight
 from checks.pytest_gate.cli import cli as pytest_gate
+from checks.release_globs.cli import cli as release_globs
 from checks.wheel_extension_load.cli import cli as wheel_extension_load
 
 
@@ -28,4 +29,5 @@ main.add_command(declared_deps, name="declared-deps")
 main.add_command(npm_binary_extension_load, name="npm-binary-extension-load")
 main.add_command(preflight, name="preflight")
 main.add_command(pytest_gate, name="pytest-gate")
+main.add_command(release_globs, name="release-globs")
 main.add_command(wheel_extension_load, name="wheel-extension-load")

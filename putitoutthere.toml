@@ -12,6 +12,26 @@
 # The fourth, `dirsql-plugin-embeddings`, is an independently-versioned
 # pure-Python plugin published as its own PyPI project. It is deliberately
 # outside the cascade -- it releases only when its own path changes.
+#
+# Every package subtree is globbed as a PAIR of extglob patterns rather than a
+# bare `<root>/**`, because merging to `main` publishes and a bare glob cascades
+# on files that never reach the artifact -- fragment dirs, e2e attestation
+# receipts, the package's testing-conventions gate config. Run 371 republished
+# `dirsql-py` and `dirsql-npm` byte-identical off two new gate configs (#944).
+#
+# The extglob is load-bearing and a leading `!` is NOT a substitute. Verified at
+# the pinned `@v0` sha 8f5876751f679ee3450617957c97495205002499: `globs` is a
+# plain `string[]` on a `.strict()` schema (no exclusion key is representable),
+# and both consumers go through `glob.ts`'s `matchesAny`, an OR that returns on
+# the first hit. Under minimatch a `!`-prefixed pattern matches every path
+# OUTSIDE its subtree, so `!packages/rust/changelog.d/**` would not subtract the
+# fragment -- it would make `README.md` match and cascade on every commit.
+# `dirsql-checks release-globs` fails the PR if these drift back.
+#
+# Two patterns per root because one extglob cannot span both depths: the first
+# covers files sitting directly in the package root, the second everything under
+# its subdirectories. It stays a carve-out, not an allowlist -- a subdirectory or
+# root file added later is matched automatically.
 
 [putitoutthere]
 version = 1
@@ -25,7 +45,8 @@ crate = "dirsql"
 kind  = "crates"
 path  = "packages/rust"
 globs = [
-  "packages/rust/**",
+  "packages/rust/!(testing-conventions.toml)",
+  "packages/rust/!(changelog.d|migrations.d|e2e-attestations)/**",
   "Cargo.toml",
   "Cargo.lock",
 ]
@@ -48,8 +69,10 @@ build = "maturin"
 manylinux = "2_28"
 path  = "packages/python"
 globs = [
-  "packages/python/**",
-  "packages/rust/**",
+  "packages/python/!(testing-conventions.toml)",
+  "packages/python/!(changelog.d|migrations.d|e2e-attestations)/**",
+  "packages/rust/!(testing-conventions.toml)",
+  "packages/rust/!(changelog.d|migrations.d|e2e-attestations)/**",
   "Cargo.toml",
   "Cargo.lock",
 ]
@@ -91,8 +114,10 @@ npm   = "dirsql"
 kind  = "npm"
 path  = "packages/ts"
 globs = [
-  "packages/ts/**",
-  "packages/rust/**",
+  "packages/ts/!(testing-conventions.toml)",
+  "packages/ts/!(changelog.d|migrations.d|e2e-attestations)/**",
+  "packages/rust/!(testing-conventions.toml)",
+  "packages/rust/!(changelog.d|migrations.d|e2e-attestations)/**",
   "Cargo.toml",
   "Cargo.lock",
 ]
@@ -131,6 +156,7 @@ kind  = "pypi"
 build = "hatch"
 path  = "plugins/dirsql-plugin-embeddings"
 globs = [
-  "plugins/dirsql-plugin-embeddings/**",
+  "plugins/dirsql-plugin-embeddings/!(testing-conventions.toml)",
+  "plugins/dirsql-plugin-embeddings/!(changelog.d|migrations.d|e2e-attestations)/**",
 ]
 first_version = "0.1.0"

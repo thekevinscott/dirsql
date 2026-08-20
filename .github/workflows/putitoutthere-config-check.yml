@@ -17,6 +17,8 @@ on:
     branches: [main]
     paths:
       - 'putitoutthere.toml'
+      - '.github/workflows/release-ci.yml'
+      - 'internals/checks/src/checks/release_globs/**'
       - '.github/workflows/putitoutthere-config-check.yml'
 
 concurrency:
@@ -29,3 +31,23 @@ permissions:
 jobs:
   check:
     uses: thekevinscott/putitoutthere/.github/workflows/check.yml@v0
+
+  # Upstream's `check` validates the config against its own schema; it has no
+  # opinion about which paths *should* cascade. This one asserts the repo-side
+  # policy the two files encode together: every path the publish globs match,
+  # release-ci.yml also builds, and neither reaches a path that never ships
+  # (fragments, attestation receipts, testing-conventions.toml). Without it a
+  # markdown-only merge releases all three packages byte-identical (#944).
+  release-globs:
+    name: Release globs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Assert publishing and the precheck agree on what ships
+        run: uv run --project internals/checks dirsql-checks release-globs

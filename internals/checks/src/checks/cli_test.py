@@ -32,3 +32,7 @@ def test_declared_deps_is_registered():
 
 def test_preflight_is_registered():
     assert "preflight" in main.commands
+
+
+def test_release_globs_is_registered():
+    assert "release-globs" in main.commands
