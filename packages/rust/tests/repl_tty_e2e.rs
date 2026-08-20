@@ -365,6 +365,26 @@ fn exit_words_still_leave_without_a_terminator() {
 }
 
 #[test]
+fn ctrl_d_leaves_the_session() {
+    // The editor reports `Ctrl+D` distinctly from every other signal, and
+    // confusing the two would turn the standard way out of a shell into a
+    // keystroke that clears the line and does nothing else.
+    let session = Terminal::new().type_in("SELECT 1 AS n;\n\u{4}");
+
+    assert!(
+        session.shows(r#"[{"n":1}]"#),
+        "the statement ran first, got:\n{}",
+        session.screen
+    );
+    assert_eq!(
+        session.code,
+        Some(0),
+        "Ctrl-D ends the session cleanly, got:\n{}",
+        session.screen
+    );
+}
+
+#[test]
 fn a_failed_statement_still_leaves_the_session_running() {
     // Slice 1's continue-on-error survives multi-line entry.
     let session = Terminal::new().type_in("SELECT nope\nFROM missing;\nSELECT 1 AS n;\nquit\n");
