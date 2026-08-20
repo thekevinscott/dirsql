@@ -3,11 +3,9 @@ name: dirsql Python CI
 # packages/rust/** fans in: the core compiles into the binding, and
 # [e2e].extra_scope means a core change stales this package's attestation.
 #
-# The gate config is packages/python/testing-conventions.toml, not the root
-# file: [e2e] is global to whichever config a caller reads, so this lane's own
-# freshness scope (core + PyO3 glue, #933) needs a config of its own. The
-# packages/python/** glob already triggers on it, so the root file -- which no
-# job in this lane now reads -- is not a path trigger here.
+# The gate config is packages/python/testing-conventions.toml, not the root file:
+# [e2e] is per-config, so this lane's freshness scope (core + PyO3 glue) lives
+# with the package. No job here reads the root file, so it is not a trigger.
 on:
   push:
     branches: [main]

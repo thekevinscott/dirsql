@@ -3,10 +3,8 @@
 # The repo-wide DEFAULT config: the CLI reads this file when a caller names no
 # other, which today means the rust core lane (dirsql-rust-ci.yml) and
 # internals/distcheck. Lanes carrying their own `testing-conventions.toml`
-# (packages/python and packages/ts since #933, internals/checks since #550, the
-# embeddings plugin) do not read it -- each restates the tables its own gates
-# need, because the `[e2e]` table is global to whichever config a caller reads
-# and a per-package freshness scope has nowhere else to live.
+# (packages/python, packages/ts, internals/checks, the embeddings plugin) do not
+# read it, and restate the tables their gates need.
 #
 # The `[[<lang>.exempt]]` array lists files waived from a rule (the colocation
 # gate fails on any source file lacking a colocated unit test that is not
@@ -72,24 +70,18 @@
 # suites exercise just as any other core change does. Every `packages/rust/src`
 # change stales both bindings' attestations.
 #
-# Since #933 neither binding reads this block: `[e2e]` is global to whichever
-# config a caller reads, and each binding needs the core PLUS its own glue
-# (`packages/python/src`, `packages/ts/napi`) -- a pair that is only per-package
-# in a per-package file. Both SDK lanes therefore pass their own
-# `packages/<pkg>/testing-conventions.toml`, each restating this core root and
-# adding its binding. The block stays as the repo-wide default: a caller that
-# declares no config of its own and compiles the core inherits the right
-# freshness root rather than silently losing it. No lane running `e2e-verify`
-# reads it today (internals/checks and the embeddings plugin carry their own
-# config precisely to opt OUT of it -- #550).
+# Neither binding reads this block since #933: each needs the core PLUS its own
+# glue, which only a per-package config can express, so both SDK lanes pass
+# their own `packages/<pkg>/testing-conventions.toml`. It stays as the default,
+# so a caller that declares no config still inherits the core root.
 [e2e]
 extra_scope = ["packages/rust/src"]
 
 # --- Python (scanned: packages/python/dirsql) ------------------------------
 
 # Unit-only coverage floor (branch coverage on, matching the prior --cov-branch).
-# The packages/python lane reads the identical floor from its own config; this
-# copy is the default a config-less python caller (internals/distcheck) gets.
+# The default for a config-less python caller (internals/distcheck); the
+# packages/python lane holds the identical floor in its own config.
 [python.coverage]
 fail_under = 100
 branch = true

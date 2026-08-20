@@ -1,41 +1,15 @@
-# Dedicated testing-conventions config for packages/python.
+# Per-package config so `[e2e]` can be per-package: it is one global table
+# applied to every caller reading a given config, so "the core plus MY binding"
+# has nowhere else to live. Folded back into the root file, a napi change would
+# start staling this package.
 #
-# It exists because `[e2e]` is a single global table that detect.py applies to
-# every caller reading the config, so a per-package freshness scope is only
-# expressible as a per-package config file -- the pattern
-# internals/checks/testing-conventions.toml (#550) and the embeddings plugin
-# already use, there to DROP a phantom root, here to add a real one. Everything
-# else mirrors the root file for this package's gates.
-
-# --- e2e freshness scope (#933) --------------------------------------------
-#
-# `e2e verify --scope` is packages/python/dirsql, which reaches neither the
-# shared Rust core nor this package's PyO3 glue; both are declared here as
-# extra freshness roots.
-#
-#   packages/rust/src   the core compiles into the extension (#337). No `cli/`
-#                       carve-out -- the CLI is not gated out of what the e2e
-#                       suites run.
-#   packages/python/src the PyO3 glue. Since #721 the console script does not
-#                       spawn a bundled binary: it calls `_dirsql.run_cli`
-#                       in-process (argv framing, `py.detach` for the GIL), so
-#                       that code runs in every e2e case and can change what
-#                       the suites exercise with no core change at all. Before
-#                       #933 nothing scoped it, and a binding-only diff left
-#                       this attestation looking fresh.
-#
-# Per-package, not shared: packages/ts/napi has no bearing on this suite and is
-# absent here, exactly as packages/python/src is absent from
-# packages/ts/testing-conventions.toml.
-#
-# Not listed, deliberately: the PyO3 crate's manifest, packages/python/Cargo.toml.
-# `extra_scope` takes directories, and the only directory holding it is the
-# package root -- scoping there would re-stale on the docs / tests / pyproject
-# edits the `--scope` narrowing exists to ignore.
+# The PyO3 glue is in scope because the console script runs the CLI in-process
+# through it (#721), so every e2e case crosses it. packages/ts/napi is not: it
+# cannot reach this suite.
 [e2e]
 extra_scope = ["packages/rust/src", "packages/python/src"]
 
-# Unit-only coverage floor, identical to the root file's `[python.coverage]`.
+# Same floor as the root file, which this lane no longer reads.
 [python.coverage]
 fail_under = 100
 branch = true
