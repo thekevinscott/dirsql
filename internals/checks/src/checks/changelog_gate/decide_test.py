@@ -167,8 +167,6 @@ def describe_code_touched():
         )
 
     def true_for_a_gate_config_that_is_not_at_the_package_root():
-        # Package-root only: a config nested deeper is not the CI-only file
-        # class, and a longer filename that merely ends in it is another file.
         assert code_touched(
             ["packages/python/dirsql/testing-conventions.toml"], "packages/python"
         )

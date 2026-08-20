@@ -55,13 +55,10 @@ def _is_exempt(path: str, pkg: str) -> bool:
     The package ``CHANGELOG.md`` / ``MIGRATIONS.md`` are pointer stubs; the
     ``changelog.d/`` / ``migrations.d/`` folders are the entries themselves;
     the ``e2e-attestations/`` folder holds CI freshness receipts, not source;
-    a package-root ``testing-conventions.toml`` is gate config that reaches no
-    user (the maturin wheel carries only the ``dirsql`` package, and
-    ``.npmignore`` keeps the npm tarball to built output), so no changelog
-    entry can ever follow from editing one -- package root only, since a config
-    nested deeper is not that file class; dirsql colocates Python unit tests as
-    ``*_test.py`` and TS as ``*.test.*`` / ``*.spec.*``; and anything under a
-    ``tests/`` directory is a test tier.
+    a package-root ``testing-conventions.toml`` is gate config that ships in no
+    published artifact, so nothing user-facing can follow from editing one;
+    dirsql colocates Python unit tests as ``*_test.py`` and TS as ``*.test.*``
+    / ``*.spec.*``; and anything under a ``tests/`` directory is a test tier.
     """
     p = re.escape(pkg)
     return bool(
