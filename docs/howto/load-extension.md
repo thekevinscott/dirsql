@@ -76,9 +76,11 @@ interpreter to resolve package names with
 
 ## Notes
 
-- Extensions add **functions**. An extension-backed virtual table cannot be
-  declared as a `[[table]]` — `dirsql` tables are per-file row tables
-  ([reference](../reference/config.md#dirsql-extension)).
+- Extensions add **functions**, and virtual tables a table's `ddl` batch can
+  create. A `[[table]]`'s own `name` may not be a virtual table — that one is
+  the per-file row table `dirsql` inserts into — so declare the virtual table
+  alongside it in the same batch
+  ([reference](../reference/config.md#batch-ddl)).
 - Loading happens before any table DDL runs, and the SQL
   `load_extension()` function is never exposed to queries
   ([reference](../reference/config.md#dirsql-extension)).

@@ -140,6 +140,15 @@ This lives entirely in the shared Rust core (`create_table` runs DDL verbatim;
 `query` returns vanilla rows), so `PRAGMA table_info` and `SELECT *` report the
 same user-only columns across all three SDKs.
 
+**Multi-statement `ddl` batch (#956) — parity by construction, no drift.** A
+`[[table]]`'s `ddl` runs as a whole SQL batch (`execute_batch`, one
+transaction), so indexes, FTS5/vec0 virtual tables and triggers are declarable
+in config; what the batch produced is settled against SQLite's catalog
+(`pragma_table_list`), not by reading DDL text. The `ddl` value is an opaque
+string every SDK already forwards unchanged, so no binding signature moves and
+all three gain the batch, the catalog validation and the new load errors
+together.
+
 **Internal tables unreachable through `query()` (#378, epic #358) — parity by
 construction, no drift.** The internal bookkeeping tables (`_dirsql_internal_rows`,
 `_dirsql_files`, `_dirsql_meta`) are denied on the `query()` path by a SQLite
@@ -411,6 +420,9 @@ incl. #313).
 | `bytes`/`Vec<u8>`/`Buffer` → BLOB (list/array of ints does NOT) | Y (#465) | Y | Y (#343: `Buffer`/`Uint8Array` in, `Buffer` out) |
 | Invalid SQL raises         | Y      | Y    | Y          |
 | Invalid DDL raises         | Y      | Y    | Y          |
+| Multi-statement `ddl` batch (index / FTS5 vtab / triggers) runs whole (#956) | core | Y (`ddl_batch.rs`, `ddl_batch_e2e.rs`) | core |
+| `ddl` batch SQLite rejects: rolled back, error prefixed with the entry (#956) | core | Y (`ddl_batch.rs`, `sdk.rs`) | core |
+| Declared `name` resolving to a virtual table errors (#956) | core | Y (`ddl_batch.rs`) | core |
 | Query rejects writes       | Y      | Y    | Y          |
 | Write-rejection edge matrix (leading comments, mixed case, CTE/whitespace allowed) | core | Y (`readonly_query.rs`) | core |
 | Internal `_dirsql_*` columns hidden from `SELECT *` | Y | Y | Y |
@@ -473,6 +485,7 @@ incl. #313).
 | `[[table]]` missing `ddl` errors | Y | core | Y |
 | `[[table]]` missing `name` errors | Y | Y | Y |
 | `[[table]]` `name` absent from the catalog after `ddl` errors | Y | Y | Y |
+| `[[table]]` `ddl` batch: whole batch runs, catalog settles the result (#956) | core | Y | core |
 | Config `persist` / `persist_path` resolution | core | Y (`from_config.rs`) | core |
 
 ### Persistence
