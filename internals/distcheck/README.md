@@ -31,9 +31,10 @@ tooling, so one tested home matters more than language purity of the harness.
   `import dirsql`. Nothing is staged: since #738 the wheel's extension module
   carries the CLI and the console script calls it in-process.
 - **`node`** -- packs the main `dirsql` package and a reconstructed host
-  `@dirsql/cli-<slug>` sub-package, `npm install`s both into a fresh dir, and
+  `@dirsql/lib-<slug>` sub-package, `npm install`s both into a fresh dir, and
   runs `node_modules/.bin/dirsql --version`, cross-checking the installed
-  sub-package layout.
+  sub-package layout. Nothing separate is staged for the CLI: since #739 the
+  napi addon carries it and the launcher calls it in-process.
 
 **Caveat (host triple only):** each flow tests the host triple/interpreter.
 Cross-target coverage lives in the release pipeline's install matrix (one runner
