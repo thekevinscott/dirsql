@@ -233,6 +233,12 @@ def describe_sources():
 
         assert found == [("wf/ci.yml", CONVENTIONS)]
 
+    def it_takes_its_seams_by_keyword_only():
+        # `*` (not `/`) before the injected seams: a third positional argument
+        # would otherwise land silently on `listdir`.
+        with pytest.raises(TypeError):
+            sources((), "wf", lambda _directory: ["ci.yml"], reader({"wf/ci.yml": CONVENTIONS}))
+
     def it_discovers_from_the_workflows_directory_by_default():
         # The default is the whole point: #834 deleted the workflow the command
         # used to name, and nothing pinned where it looks instead.
