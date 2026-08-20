@@ -87,10 +87,11 @@ name you installed:
   `path = "sqlite-vec-linux-x64"` (matching your platform), not
   `path = "sqlite-vec"`, whose meta-package ships no loadable.
 
-Extensions add **functions** callable in queries and in a table's DDL. An
-extension-backed **virtual table** cannot be declared as a `[[table]]` —
-`dirsql` tables are per-file row tables, so a `CREATE VIRTUAL TABLE` DDL is
-rejected; call the extension's functions in queries instead.
+Extensions add **functions** callable in queries and in a table's DDL, and
+**virtual tables** a table's [`ddl` batch](#batch-ddl) can create. What a
+`[[table]]`'s own `name` may not be is a virtual table: that one is the
+per-file row table `dirsql` inserts into. Create the virtual table alongside
+it, under its own name.
 
 ## `[[dirsql.function]]`
 
@@ -167,7 +168,7 @@ what its required `on-file` command emits — dirsql injects nothing (see
 | Key | Required | Description |
 |---|---|---|
 | `name` | yes | The table's SQL name — the name you query it by. Declared, never derived from `ddl`: dirsql does not read the DDL text. The `ddl` must create a table by this name; if it doesn't, loading fails. |
-| `ddl` | yes | A SQLite `CREATE TABLE` statement, run verbatim. Only the columns declared here are kept; keys the `on-file` command emits that are not declared are dropped. |
+| `ddl` | yes | A SQL batch, run verbatim — any number of statements. It must create a table called `name`; that table holds the file rows, and only the columns it declares are kept (keys the `on-file` command emits that are not declared are dropped). The rest of the batch is yours: indexes, virtual tables, triggers. See [Batch `ddl`](#batch-ddl). |
 | `glob` | yes | Glob pattern matched against root-relative paths. Every table whose glob matches a file receives that file's rows — a file can populate multiple tables. A `{name}` segment is rewritten to `*` (it matches one path segment but captures nothing). |
 | `on-file` | **yes** | A command run once per matched file; its stdout (a JSON array of row objects) becomes the file's rows. Must be non-empty. A `[[table]]` with no `on-file` is a load error (see [parse errors](#parse-errors)). See [Command hooks](./hooks.md#on-file). |
 | `strict` | no (default `false`) | When `true`, rows whose keys do not exactly match the declared columns are rejected with an error: extra keys error, and every declared column must be supplied by the `on-file` output. When `false`, extra keys are dropped and missing columns become `NULL`. |
@@ -193,6 +194,72 @@ glob    = "**/meta.json"
 on-file = "uv run python extract_papers.py {path}"
 strict  = true
 ```
+
+### Batch `ddl`
+
+`ddl` is handed to SQLite whole, so a table declaration is not limited to one
+statement:
+
+```toml
+[[table]]
+name    = "messages"
+glob    = "sessions/*/messages/*.json"
+on-file = "jq -c '.' {path}"
+ddl     = '''
+CREATE TABLE messages (session TEXT, idx INT, role TEXT, text TEXT);
+CREATE INDEX messages_session ON messages(session);
+
+CREATE VIRTUAL TABLE messages_fts
+  USING fts5(text, content='messages', content_rowid='rowid');
+CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
+  INSERT INTO messages_fts(rowid, text) VALUES (new.rowid, new.text);
+END;
+CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
+  INSERT INTO messages_fts(messages_fts, rowid, text)
+    VALUES ('delete', old.rowid, old.text);
+END;
+'''
+```
+
+```bash
+dirsql query "SELECT text FROM messages_fts WHERE messages_fts MATCH 'deploy'" \
+  -c ./.dirsql.toml
+```
+
+Those two triggers are all a keyword index needs. dirsql writes file rows with
+plain `INSERT` and `DELETE` — an update is a delete and an insert in one
+transaction, and there is no `UPDATE` path on user rows — so triggers you
+declare here stay current through the initial load and every
+[watcher](../howto/react-to-changes.md) event. The same shape with a `vec0`
+virtual table and an [`embed()`](#dirsql-function) call in the trigger gives
+you stored vectors.
+
+**dirsql never reads the batch.** After it runs, SQLite's own catalog
+(`pragma_table_list`) settles what it produced:
+
+- No table called `name` → a load error that lists what the batch *did*
+  create, so a typo is obvious.
+- `name` is a **virtual** table → a load error. The declared table is the one
+  dirsql inserts file rows into, so it has to be a real row table. Create the
+  virtual table alongside it, under its own name.
+- `name` is **`WITHOUT ROWID`** → a warning. Internal row bookkeeping is keyed
+  on rowid, so these will be rejected in a future release.
+
+The whole batch runs in one transaction: if any statement fails, none of them
+took effect, and the error is SQLite's own, prefixed with the config entry —
+`table 'messages': SQLite error: near "(": syntax error`. Context, never
+interpretation.
+
+Two consequences of `ddl` running **once, when the table is created**:
+
+- **Rows the batch inserts itself are not file-tracked.** No file owns them, so
+  they survive file deletions — and they vanish on any rebuild.
+- **Editing `ddl` at all rebuilds a
+  [persistent cache](../howto/persist.md).** The config hash covers the entire
+  batch, so a new index, a different FTS5
+  tokenizer or a changed embedding model id forces a full sweep and re-ingest.
+  That is the only invalidation lane: dirsql tracks no ownership of what the
+  batch made.
 
 ### `on-file` row mapping
 
@@ -247,13 +314,24 @@ SDKs raise/reject) when:
 - A `[[table]]` entry omits `name`, `ddl`, or `glob` (or `name` is
   empty/whitespace).
 - A `[[table]]` entry's `ddl` runs but creates no table by its `name`. The
-  error carries the entry's name and points at the fix:
+  error carries the entry's name, lists what the batch did create, and points
+  at the fix:
 
-  > `table 'messages': its `ddl` ran but created no table called 'messages'. Set `name` to the table the `ddl` creates.`
+  > `table 'messages': its `ddl` ran but created no table called 'messages' (it created: mesages, mesages_fts). Set `name` to the table the `ddl` creates.`
 
   dirsql asks SQLite's catalog rather than interpreting the DDL, so quoted
   (`CREATE TABLE "messages"`), schema-qualified (`main.messages`) and
   `IF NOT EXISTS` forms all match a plain `name = "messages"`.
+- A `[[table]]` entry's `name` names a **virtual** table. The declared table
+  holds the file rows, so it must be a real row table:
+
+  > `table 'messages': its `ddl` created a virtual table called 'messages'. The declared table holds the file rows, so it must be a real row table; create the virtual table alongside it, under its own name.`
+
+- A `[[table]]` entry's `ddl` is rejected by SQLite. Nothing the batch did
+  takes effect, and SQLite's own message is passed through under the entry's
+  name:
+
+  > `table 'messages': SQLite error: near "(": syntax error`
 - A `[[table]]` entry omits `on-file` (or it is empty/whitespace). The error
   names the offending glob and points at the fix:
 

@@ -95,10 +95,12 @@ LIMIT 10
 
 ::: tip Top-k is `LIMIT k`
 If you know `sqlite-vec` you may reach for its `MATCH … AND k = 10` idiom.
-That syntax belongs to `sqlite-vec`'s `vec0` virtual table, which `dirsql`
-does not use — `dirsql` tables are per-file row tables. For plain
-expressions, `sqlite-vec`'s own documented pattern is exactly what this
-guide uses: `ORDER BY vec_distance_cosine(...) LIMIT k`.
+That syntax belongs to `sqlite-vec`'s `vec0` virtual table, which the table
+above does not use: a `[[table]]`'s own `name` is always a per-file row table.
+For plain expressions, `sqlite-vec`'s own documented pattern is exactly what
+this guide uses: `ORDER BY vec_distance_cosine(...) LIMIT k`. To get the `vec0`
+idiom instead, declare the `vec0` table alongside the row table in the same
+[`ddl` batch](../reference/config.md#batch-ddl) and fill it from a trigger.
 :::
 
 ## Repeat runs are cheap

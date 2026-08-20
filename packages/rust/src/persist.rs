@@ -414,15 +414,14 @@ pub fn delete_file(conn: &Connection, rel_path: &str, table_name: &str) -> rusql
 /// Drop every user-defined table from a cache database. Used when the
 /// reconcile detects an incompatible meta state and we need to wipe the
 /// cache before re-ingesting from scratch.
+///
+/// A table's `ddl` is a whole SQL batch, so the cache may hold virtual tables
+/// and the shadow tables behind them. `db::user_table_names` orders the drops
+/// virtuals-first (and leaves shadows to the virtual table that owns them),
+/// which is what keeps a vec0 vtab droppable; indexes and triggers go with
+/// their table.
 pub fn drop_user_tables(conn: &Connection) -> rusqlite::Result<()> {
-    let mut stmt =
-        conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '_dirsql_%' AND name NOT LIKE 'sqlite_%'")?;
-    let names: Vec<String> = stmt
-        .query_map([], |row| row.get::<_, String>(0))?
-        .filter_map(|r| r.ok())
-        .collect();
-    drop(stmt);
-    for name in names {
+    for name in crate::db::user_table_names(conn)? {
         conn.execute(&format!("DROP TABLE IF EXISTS \"{name}\""), [])?;
     }
     conn.execute("DELETE FROM _dirsql_files", [])?;
@@ -605,6 +604,45 @@ mod tests {
         upsert_file(&conn, "a.csv", "t", &stat, None, 1).unwrap();
         delete_file(&conn, "a.csv", "t").unwrap();
         assert!(read_cached_files(&conn).unwrap().is_empty());
+    }
+
+    /// A `ddl` batch may leave a virtual table and its shadow tables in the
+    /// cache. The sweep must clear all of it: the shadows go with the virtual
+    /// table, and dropping one out from under the other is what poisons the
+    /// vtab's own drop.
+    #[test]
+    fn drop_user_tables_clears_virtual_tables_and_their_shadows() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_sidecar_tables(&conn).unwrap();
+        conn.execute(
+            "CREATE TABLE _dirsql_internal_rows (
+                table_name TEXT NOT NULL, file_path TEXT NOT NULL,
+                row_index INTEGER NOT NULL, rowid_ref INTEGER NOT NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch(
+            "CREATE TABLE notes (body TEXT);\n\
+             CREATE VIRTUAL TABLE notes_fts USING fts5(body, content='notes');",
+        )
+        .unwrap();
+
+        drop_user_tables(&conn).unwrap();
+
+        let left: Vec<String> = conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table' \
+                 AND name NOT LIKE '_dirsql_%' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+            )
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<String>>>()
+            .unwrap();
+        assert!(
+            left.is_empty(),
+            "the sweep must leave no user table or shadow table behind, got {left:?}"
+        );
     }
 
     #[test]

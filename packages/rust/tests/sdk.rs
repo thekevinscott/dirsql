@@ -786,8 +786,20 @@ fn wait_file_events_after_watch_errors() {
 fn ddl_sqlite_rejects_errors() {
     let root = TempDir::new().unwrap();
     let table = Table::new("t", "THIS IS NOT A CREATE TABLE", "*.txt", |_| vec![]);
-    let result = DirSQL::new(root.path(), vec![table]);
-    assert!(matches!(result, Err(dirsql::DirSqlError::Core(_))));
+    let message = match DirSQL::new(root.path(), vec![table]) {
+        Ok(_) => panic!("a `ddl` SQLite rejects must fail the build"),
+        Err(err) => {
+            assert!(
+                matches!(err, dirsql::DirSqlError::TableDdl { .. }),
+                "got: {err}"
+            );
+            err.to_string()
+        }
+    };
+    assert!(
+        message.starts_with("table 't': "),
+        "SQLite's error must carry the config entry that caused it, got {message:?}"
+    );
 }
 
 /// A `ddl` that runs but creates something else is caught against SQLite's
@@ -804,7 +816,7 @@ fn declared_name_absent_from_the_catalog_errors() {
     let result = DirSQL::new(root.path(), vec![table]);
     assert!(matches!(
         result,
-        Err(dirsql::DirSqlError::TableNotCreated { ref name }) if name == "messages"
+        Err(dirsql::DirSqlError::TableNotCreated { ref name, .. }) if name == "messages"
     ));
 }
 

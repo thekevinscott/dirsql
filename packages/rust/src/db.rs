@@ -24,9 +24,6 @@ pub enum DbError {
     #[error("Schema mismatch: {0}")]
     SchemaMismatch(String),
 
-    #[error("DDL parse error: {0}")]
-    DdlParse(String),
-
     #[error("invalid identifier: {0:?} (must match [A-Za-z_][A-Za-z0-9_]*)")]
     InvalidIdentifier(String),
 
@@ -400,41 +397,26 @@ impl Db {
         Ok(())
     }
 
-    /// Create a table from a user-provided DDL statement, executed
-    /// **verbatim**: dirsql injects no tracking columns — row ownership lives
-    /// entirely in `_dirsql_internal_rows`, so a table's schema is exactly
-    /// the DDL the user wrote.
+    /// Run a table's user-provided DDL **batch**, executed **verbatim**:
+    /// dirsql injects no tracking columns — row ownership lives entirely in
+    /// `_dirsql_internal_rows`, so a table's schema is exactly the DDL the
+    /// user wrote.
+    ///
+    /// The batch may hold any number of statements, of any kind: the row table
+    /// plus whatever indexes, virtual tables and triggers go with it. It runs
+    /// inside one transaction, so a statement SQLite rejects leaves nothing
+    /// behind, and SQLite's own error is returned untouched.
     ///
     /// `name` is the table's declared name, validated as a safe unquoted SQL
-    /// identifier before the DDL reaches SQLite: it is spliced into
+    /// identifier before the batch reaches SQLite: it is spliced into
     /// `format!()`-built INSERT/DELETE SQL downstream, so a poisoned name must
-    /// never get that far. Whether the DDL actually creates a table by that
-    /// name is settled afterwards against SQLite's catalog, not by reading the
-    /// DDL text.
+    /// never get that far. What the batch actually created is settled
+    /// afterwards against SQLite's catalog, not by reading the DDL text.
     pub fn create_table(&self, name: &str, ddl: &str) -> Result<()> {
-        // A dirsql table is a per-file row table; an extension-backed virtual
-        // table is not one, so reject `CREATE VIRTUAL TABLE` with a clear
-        // message. Load the extension and use its functions in queries instead.
-        if is_virtual_table_ddl(ddl) {
-            return Err(DbError::DdlParse(
-                "CREATE VIRTUAL TABLE is not supported as a dirsql table \
-                 (dirsql tables are per-file row tables); load the extension \
-                 and call its functions in queries instead"
-                    .to_string(),
-            ));
-        }
         validate_identifier(name)?;
-        // A `WITHOUT ROWID` table has no rowid, so `last_insert_rowid()` cannot
-        // identify the inserted row and the `_dirsql_internal_rows.rowid_ref`
-        // mapping would be meaningless. Warn; the table is still created.
-        if is_without_rowid_ddl(ddl) {
-            eprintln!(
-                "dirsql: table `{name}` is declared WITHOUT ROWID; internal row \
-                 bookkeeping relies on rowid and WITHOUT ROWID tables will be \
-                 rejected in a future release"
-            );
-        }
-        self.conn.execute(ddl, [])?;
+        let tx = self.conn.unchecked_transaction()?;
+        self.conn.execute_batch(ddl)?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -900,21 +882,58 @@ impl rusqlite::types::ToSql for Value {
     }
 }
 
-/// True if `ddl` is a `CREATE VIRTUAL TABLE` statement. dirsql tables are
-/// per-file row tables, structurally incompatible with an extension-backed
-/// virtual table, so those are rejected with a clear error.
-fn is_virtual_table_ddl(ddl: &str) -> bool {
-    let normalized = ddl.split_whitespace().collect::<Vec<_>>().join(" ");
-    normalized.to_uppercase().contains("CREATE VIRTUAL TABLE")
+/// What SQLite's catalog says about one table in `main`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CatalogEntry {
+    /// `pragma_table_list`'s `type`: `table`, `virtual`, `view` or `shadow`.
+    pub kind: String,
+    /// Whether the table is declared `WITHOUT ROWID`.
+    pub without_rowid: bool,
 }
 
-/// True if `ddl` declares a `WITHOUT ROWID` table. Such tables have no rowid,
-/// so `last_insert_rowid()` cannot identify an inserted row and the
-/// `_dirsql_internal_rows.rowid_ref` mapping is meaningless. Whitespace is
-/// normalized so `WITHOUT   ROWID` and newline-separated forms are detected.
-fn is_without_rowid_ddl(ddl: &str) -> bool {
-    let normalized = ddl.split_whitespace().collect::<Vec<_>>().join(" ");
-    normalized.to_uppercase().contains("WITHOUT ROWID")
+/// The catalog rows a table's `ddl` batch could be responsible for: real and
+/// virtual tables in `main`, never the shadow tables a virtual table keeps
+/// behind it, SQLite's own `sqlite_*` tables, or dirsql's `_dirsql_*`
+/// bookkeeping.
+///
+/// Virtual tables come first, and that order is load-bearing for the cache
+/// sweep: dropping a shadow table before its virtual table poisons the virtual
+/// table's own drop even with `IF EXISTS` (probed against sqlite-vec 0.1.9).
+/// `sqlite_master`'s creation order happens to get this right today; asking
+/// the catalog for the type makes it guaranteed.
+const USER_TABLES_SQL: &str = "SELECT name FROM pragma_table_list \
+     WHERE schema = 'main' AND type IN ('table', 'virtual') \
+     AND name NOT LIKE '_dirsql_%' AND name NOT LIKE 'sqlite_%' \
+     ORDER BY type = 'virtual' DESC, name";
+
+/// Every user table on `conn`, in an order that is safe to drop in.
+pub(crate) fn user_table_names(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(USER_TABLES_SQL)?;
+    let names = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(names)
+}
+
+/// What `conn`'s catalog holds under `name`, or `None` if it holds nothing.
+/// `pragma_table_list` is the catalog API for exactly this question, so no
+/// part of dirsql has to interpret DDL text to answer it.
+pub(crate) fn table_catalog_entry(
+    conn: &Connection,
+    name: &str,
+) -> rusqlite::Result<Option<CatalogEntry>> {
+    use rusqlite::OptionalExtension;
+    conn.query_row(
+        "SELECT type, wr FROM pragma_table_list WHERE schema = 'main' AND name = ?1",
+        rusqlite::params![name],
+        |row| {
+            Ok(CatalogEntry {
+                kind: row.get(0)?,
+                without_rowid: row.get::<_, i64>(1)? != 0,
+            })
+        },
+    )
+    .optional()
 }
 
 impl From<rusqlite::types::Value> for Value {
@@ -1351,8 +1370,8 @@ mod tests {
         let err = DbError::SchemaMismatch("test error".to_string());
         assert!(err.to_string().contains("Schema mismatch"));
 
-        let err = DbError::DdlParse("bad ddl".to_string());
-        assert!(err.to_string().contains("DDL parse error"));
+        let err = DbError::InvalidIdentifier("a b".to_string());
+        assert!(err.to_string().contains("invalid identifier"));
     }
 
     #[test]
@@ -1552,25 +1571,6 @@ mod tests {
     }
 
     #[test]
-    fn create_table_rejects_virtual_table_with_clear_error() {
-        let db = Db::new().unwrap();
-        let err = db
-            .create_table(
-                "vss",
-                "CREATE VIRTUAL TABLE vss USING vec0(embedding float[4])",
-            )
-            .unwrap_err();
-        // Must be a clear "not supported" message, NOT the generic `DdlParse`
-        // echo (which trivially contains "virtual table" because it echoes
-        // the DDL back).
-        let msg = err.to_string().to_lowercase();
-        assert!(
-            msg.contains("virtual table") && msg.contains("not supported"),
-            "expected a clear 'virtual table not supported' error, not a generic DDL-parse echo, got: {err}"
-        );
-    }
-
-    #[test]
     fn open_sets_wal_journal_mode_and_normal_synchronous() {
         let dir = tempfile::TempDir::new().unwrap();
         let db = Db::open(&dir.path().join("cache.db")).unwrap();
@@ -1586,18 +1586,6 @@ mod tests {
             .query_row("PRAGMA synchronous", [], |row| row.get(0))
             .unwrap();
         assert_eq!(synchronous, 1, "Db::open must set synchronous=NORMAL (1)");
-    }
-
-    #[test]
-    fn is_virtual_table_ddl_detects_variants() {
-        assert!(is_virtual_table_ddl("CREATE VIRTUAL TABLE x USING vec0(a)"));
-        assert!(is_virtual_table_ddl(
-            "create   virtual   table x using fts5(a)"
-        ));
-        assert!(!is_virtual_table_ddl("CREATE TABLE x (a TEXT)"));
-        assert!(!is_virtual_table_ddl(
-            "CREATE TABLE IF NOT EXISTS x (a TEXT)"
-        ));
     }
 
     /// Read the raw mapping rows for a table, ordered for stable assertions.
@@ -1821,7 +1809,65 @@ mod tests {
     }
 
     #[test]
-    fn create_table_allows_without_rowid_and_warns() {
+    fn create_table_runs_every_statement_in_the_batch() {
+        let db = Db::new().unwrap();
+        db.create_table(
+            "notes",
+            "CREATE TABLE notes (path TEXT);\n\
+             CREATE INDEX notes_path ON notes(path);\n\
+             CREATE VIRTUAL TABLE notes_fts USING fts5(path);",
+        )
+        .unwrap();
+
+        assert_eq!(user_table_names(&db.conn).unwrap(), ["notes_fts", "notes"]);
+        let index: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_index_list('notes') WHERE name = 'notes_path'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index, 1, "the batch's CREATE INDEX must have run");
+    }
+
+    #[test]
+    fn create_table_rolls_back_a_batch_sqlite_rejects() {
+        let db = Db::new().unwrap();
+        let err = db
+            .create_table(
+                "notes",
+                "CREATE TABLE notes (path TEXT); CREATE TABLE oops (",
+            )
+            .unwrap_err();
+
+        assert!(matches!(err, DbError::Sqlite(_)), "got: {err}");
+        assert!(
+            err.to_string().contains("incomplete input"),
+            "SQLite's own error must come through untouched, got: {err}"
+        );
+        assert!(
+            user_table_names(&db.conn).unwrap().is_empty(),
+            "a rejected batch must leave none of its earlier statements behind"
+        );
+    }
+
+    #[test]
+    fn create_table_validates_the_name_before_running_the_batch() {
+        let db = Db::new().unwrap();
+        let err = db
+            .create_table("a b", "CREATE TABLE \"a b\" (path TEXT)")
+            .unwrap_err();
+
+        assert!(matches!(err, DbError::InvalidIdentifier(_)), "got: {err}");
+        assert!(
+            user_table_names(&db.conn).unwrap().is_empty(),
+            "a poisoned name must be rejected before SQLite sees the batch"
+        );
+    }
+
+    #[test]
+    fn create_table_still_runs_a_without_rowid_ddl() {
         let db = Db::new().unwrap();
         db.create_table("t", "CREATE TABLE t (id TEXT PRIMARY KEY) WITHOUT ROWID")
             .unwrap();
@@ -1830,14 +1876,62 @@ mod tests {
     }
 
     #[test]
-    fn is_without_rowid_ddl_detects_variants() {
-        assert!(is_without_rowid_ddl(
-            "CREATE TABLE t (id TEXT PRIMARY KEY) WITHOUT ROWID"
-        ));
-        assert!(is_without_rowid_ddl(
-            "create table t (id text primary key)\n  without   rowid"
-        ));
-        assert!(!is_without_rowid_ddl("CREATE TABLE t (id TEXT)"));
+    fn user_table_names_lists_virtual_tables_before_real_ones() {
+        let db = Db::new().unwrap();
+        // Created real-table-first, so `sqlite_master`'s creation order would
+        // put `notes` ahead of the virtual table it belongs to.
+        db.conn
+            .execute_batch(
+                "CREATE TABLE notes (body TEXT);\n\
+                 CREATE VIRTUAL TABLE notes_fts USING fts5(body);\n\
+                 CREATE TABLE archive (body TEXT);",
+            )
+            .unwrap();
+
+        assert_eq!(
+            user_table_names(&db.conn).unwrap(),
+            ["notes_fts", "archive", "notes"]
+        );
+    }
+
+    #[test]
+    fn user_table_names_omits_shadow_and_bookkeeping_tables() {
+        let db = Db::new().unwrap();
+        db.conn
+            .execute_batch("CREATE VIRTUAL TABLE notes_fts USING fts5(body);")
+            .unwrap();
+
+        let names = user_table_names(&db.conn).unwrap();
+        assert_eq!(
+            names,
+            ["notes_fts"],
+            "FTS5's shadow tables and `_dirsql_internal_rows` must not be listed"
+        );
+    }
+
+    #[test]
+    fn table_catalog_entry_reports_kind_and_without_rowid() {
+        let db = Db::new().unwrap();
+        db.conn
+            .execute_batch(
+                "CREATE TABLE plain (id TEXT);\n\
+                 CREATE TABLE keyed (id TEXT PRIMARY KEY) WITHOUT ROWID;\n\
+                 CREATE VIRTUAL TABLE virt USING fts5(body);",
+            )
+            .unwrap();
+
+        let plain = table_catalog_entry(&db.conn, "plain").unwrap().unwrap();
+        assert_eq!(plain.kind, "table");
+        assert!(!plain.without_rowid);
+
+        let keyed = table_catalog_entry(&db.conn, "keyed").unwrap().unwrap();
+        assert_eq!(keyed.kind, "table");
+        assert!(keyed.without_rowid);
+
+        let virt = table_catalog_entry(&db.conn, "virt").unwrap().unwrap();
+        assert_eq!(virt.kind, "virtual");
+
+        assert_eq!(table_catalog_entry(&db.conn, "absent").unwrap(), None);
     }
 
     #[test]

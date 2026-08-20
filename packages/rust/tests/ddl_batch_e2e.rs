@@ -73,10 +73,7 @@ fn a_multi_statement_batch_indexes_and_queries_through_the_cli() {
 
     let out = query(&root, "SELECT id FROM records ORDER BY id");
     let parsed = rows(&out);
-    let ids: Vec<&str> = parsed
-        .iter()
-        .map(|r| r["id"].as_str().unwrap())
-        .collect();
+    let ids: Vec<&str> = parsed.iter().map(|r| r["id"].as_str().unwrap()).collect();
     assert_eq!(ids, ["one", "two"]);
 
     let out = query(&root, "SELECT name FROM pragma_index_list('records')");
@@ -100,12 +97,10 @@ fn keyword_search_over_an_fts5_index_declared_in_ddl() {
         "SELECT body FROM records_fts WHERE records_fts MATCH 'hello'",
     );
     let parsed = rows(&out);
-    let bodies: Vec<&str> = parsed
-        .iter()
-        .map(|r| r["body"].as_str().unwrap())
-        .collect();
+    let bodies: Vec<&str> = parsed.iter().map(|r| r["body"].as_str().unwrap()).collect();
     assert_eq!(
-        bodies, ["hello world"],
+        bodies,
+        ["hello world"],
         "the insert trigger must have filled the FTS5 index"
     );
 }

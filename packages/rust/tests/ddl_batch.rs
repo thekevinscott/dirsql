@@ -112,7 +112,11 @@ fn an_fts5_index_declared_in_ddl_tracks_inserts_and_deletes() {
     let hits = db
         .query("SELECT body FROM notes_fts WHERE notes_fts MATCH 'hello'")
         .unwrap();
-    assert_eq!(hits.len(), 1, "the insert trigger must have indexed the row");
+    assert_eq!(
+        hits.len(),
+        1,
+        "the insert trigger must have indexed the row"
+    );
     assert_eq!(hits[0]["body"], Value::Text("hello world".into()));
     drop(db);
 
@@ -167,7 +171,10 @@ fn a_declared_name_that_is_a_virtual_table_is_a_load_error() {
     seed(root.path());
 
     let message = build_error(
-        build(root.path(), "CREATE VIRTUAL TABLE notes USING fts5(path, body)"),
+        build(
+            root.path(),
+            "CREATE VIRTUAL TABLE notes USING fts5(path, body)",
+        ),
         "a dirsql table must be a real per-file row table",
     );
     assert!(

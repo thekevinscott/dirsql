@@ -65,6 +65,50 @@ Add one `[[table]]` entry per table — each with its own `glob`, `ddl`, and
 table — each table is an independent view. See
 [`[[table]]`](../reference/config.md#table) for the remaining key, `strict`.
 
+## Add indexes and full-text search
+
+`ddl` is a SQL batch, not a single statement — SQLite runs the whole thing. So
+a table can arrive with its own index, and with an FTS5 index kept current by
+two triggers:
+
+```toml
+[[table]]
+name    = "posts"
+glob    = "posts/**/*.md"
+on-file = "python3 extract.py {path}"
+ddl     = '''
+CREATE TABLE posts (title TEXT, slug TEXT, body TEXT);
+CREATE INDEX posts_slug ON posts(slug);
+
+CREATE VIRTUAL TABLE posts_fts
+  USING fts5(body, content='posts', content_rowid='rowid');
+CREATE TRIGGER posts_ai AFTER INSERT ON posts BEGIN
+  INSERT INTO posts_fts(rowid, body) VALUES (new.rowid, new.body);
+END;
+CREATE TRIGGER posts_ad AFTER DELETE ON posts BEGIN
+  INSERT INTO posts_fts(posts_fts, rowid, body)
+    VALUES ('delete', old.rowid, old.body);
+END;
+'''
+```
+
+```bash
+dirsql query "SELECT slug FROM posts JOIN posts_fts ON posts.rowid = posts_fts.rowid
+              WHERE posts_fts MATCH 'recursion'" -c ./.dirsql.toml
+```
+
+```json
+[{"slug":"again"}]
+```
+
+dirsql writes rows with plain `INSERT` and `DELETE`, so those triggers hold
+through the initial load and every [watcher](./react-to-changes.md) event — you
+maintain nothing. `name` still has to be the row table (`posts`); the virtual
+table lives beside it under its own name. The batch runs once, when the table
+is created, and editing any part of it rebuilds a
+[persistent cache](./persist.md) from scratch. Full rules:
+[Batch `ddl`](../reference/config.md#batch-ddl).
+
 ## Going further
 
 - The parser mechanics — placeholders, stdout protocol, per-file failure

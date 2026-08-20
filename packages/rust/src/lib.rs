@@ -128,10 +128,25 @@ pub enum DirSqlError {
     Ddl(String),
 
     #[error(
-        "table '{name}': its `ddl` ran but created no table called '{name}'. \
-         Set `name` to the table the `ddl` creates."
+        "table '{name}': its `ddl` ran but created no table called '{name}' \
+         (it created: {}). Set `name` to the table the `ddl` creates.",
+        if .created.is_empty() { "nothing".to_string() } else { .created.join(", ") }
     )]
-    TableNotCreated { name: String },
+    TableNotCreated { name: String, created: Vec<String> },
+
+    #[error(
+        "table '{name}': its `ddl` created a virtual table called '{name}'. \
+         The declared table holds the file rows, so it must be a real row \
+         table; create the virtual table alongside it, under its own name."
+    )]
+    TableIsVirtual { name: String },
+
+    #[error("table '{name}': {source}")]
+    TableDdl {
+        name: String,
+        #[source]
+        source: DbError,
+    },
 
     #[error("failed to load extension '{}': {source}", .path.display())]
     Extension {
@@ -848,17 +863,28 @@ impl DirSQL {
 
         for table in tables {
             let table_name = table.name.clone();
-            // When the cache already holds this table from a prior run,
-            // skip CREATE TABLE: the schema is preserved verbatim across
-            // runs (the glob_config_hash captures the DDL).
-            if !table_exists(&db, &table_name)? {
-                db.create_table(&table_name, &table.ddl)?;
-                // Ask SQLite whether the DDL actually produced this name
-                // rather than reading the DDL text. No row means the declared
-                // `name` names nothing -- a load-time failure, before any file
-                // is ingested.
-                if !table_exists(&db, &table_name)? {
-                    return Err(DirSqlError::TableNotCreated { name: table_name });
+            // A real table under this name is the cache already holding it
+            // from a prior run: skip the batch, since the schema is preserved
+            // verbatim across runs (the glob_config_hash captures the whole
+            // `ddl`). Anything else under the name is not a warm cache — run
+            // the batch and let SQLite object to the collision itself.
+            let warm = catalog_entry(&db, &table_name)?.is_some_and(|entry| entry.kind == "table");
+            if !warm {
+                let before = db::user_table_names(db.conn()).map_err(DirSqlError::sqlite)?;
+                db.create_table(&table_name, &table.ddl).map_err(|source| {
+                    DirSqlError::TableDdl {
+                        name: table_name.clone(),
+                        source,
+                    }
+                })?;
+                let created = db::user_table_names(db.conn())
+                    .map_err(DirSqlError::sqlite)?
+                    .into_iter()
+                    .filter(|name| !before.contains(name))
+                    .collect();
+                let entry = catalog_entry(&db, &table_name)?;
+                if let Some(warning) = classify_declared_table(&table_name, entry, created)? {
+                    eprintln!("{warning}");
                 }
             }
             // Reject a `{name}` glob placeholder whose name is also a declared
@@ -1564,20 +1590,52 @@ fn reconcile_scan(
     Ok((to_parse, trusted, deleted))
 }
 
-/// Whether `main` holds a table called `name`, asked of SQLite's own catalog.
-/// `pragma_table_list` is the catalog API for exactly this question, so no
-/// part of dirsql has to interpret DDL text to answer it.
-fn table_exists(db: &Db, name: &str) -> Result<bool> {
-    let count: i64 = db
-        .conn()
-        .query_row(
-            "SELECT COUNT(*) FROM pragma_table_list \
-             WHERE schema = 'main' AND type = 'table' AND name = ?1",
-            rusqlite::params![name],
-            |row| row.get(0),
-        )
-        .map_err(DirSqlError::sqlite)?;
-    Ok(count > 0)
+/// What SQLite's catalog holds under `name`, if anything.
+fn catalog_entry(db: &Db, name: &str) -> Result<Option<db::CatalogEntry>> {
+    db::table_catalog_entry(db.conn(), name).map_err(DirSqlError::sqlite)
+}
+
+/// Settle what a table's `ddl` batch produced for its declared `name`, given
+/// SQLite's catalog and the tables the batch added. `created` is a before/after
+/// catalog diff, so a `name` that never appeared can say what did.
+///
+/// `Ok(None)` accepts the table, `Ok(Some(warning))` accepts it with a line for
+/// stderr, and `Err` fails the load before any file is ingested. Pure: the
+/// caller reads the catalog and prints the warning.
+fn classify_declared_table(
+    name: &str,
+    entry: Option<db::CatalogEntry>,
+    mut created: Vec<String>,
+) -> Result<Option<String>> {
+    let Some(entry) = entry else {
+        // The catalog hands these back in drop-safe order (virtuals first);
+        // sort so the message reads as a list rather than as an artifact of
+        // how the sweep needs them.
+        created.sort();
+        return Err(DirSqlError::TableNotCreated {
+            name: name.to_string(),
+            created,
+        });
+    };
+    // A dirsql table is the per-file row table rows are inserted into; an
+    // extension-backed virtual table is not one. The batch may still create as
+    // many as it likes alongside it.
+    if entry.kind == "virtual" {
+        return Err(DirSqlError::TableIsVirtual {
+            name: name.to_string(),
+        });
+    }
+    // A `WITHOUT ROWID` table has no rowid, so `last_insert_rowid()` cannot
+    // identify the inserted row and the `_dirsql_internal_rows.rowid_ref`
+    // mapping would be meaningless. Warn; the table is still usable.
+    if entry.without_rowid {
+        return Ok(Some(format!(
+            "dirsql: table `{name}` is declared WITHOUT ROWID; internal row \
+             bookkeeping relies on rowid and WITHOUT ROWID tables will be \
+             rejected in a future release"
+        )));
+    }
+    Ok(None)
 }
 
 fn map_db_error(e: DbError) -> DirSqlError {
@@ -3326,6 +3384,98 @@ mod internal_tests {
         assert!(msg.contains("thread_id"));
         assert!(msg.contains("collides"));
         assert!(msg.contains("on-file"));
+    }
+
+    /// A `name` the batch never created: the error has to say what it *did*
+    /// create, or a typo gives the reader nothing to compare against.
+    #[test]
+    fn classify_declared_table_rejects_a_name_the_batch_never_created() {
+        let err = classify_declared_table(
+            "messages",
+            None,
+            vec!["mesages_fts".to_string(), "mesages".to_string()],
+        )
+        .expect_err("a missing catalog entry must fail the load");
+
+        let msg = err.to_string();
+        assert!(
+            matches!(err, DirSqlError::TableNotCreated { .. }),
+            "got: {msg}"
+        );
+        assert!(msg.contains("table 'messages'"), "got: {msg}");
+        assert!(
+            msg.contains("it created: mesages, mesages_fts"),
+            "the list must read sorted, not in the catalog's drop order, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn table_not_created_says_nothing_when_the_batch_created_nothing() {
+        let err = DirSqlError::TableNotCreated {
+            name: "messages".to_string(),
+            created: Vec::new(),
+        };
+        assert!(
+            err.to_string().contains("it created: nothing"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn classify_declared_table_rejects_a_virtual_declared_table() {
+        let entry = db::CatalogEntry {
+            kind: "virtual".to_string(),
+            without_rowid: false,
+        };
+        let err = classify_declared_table("messages", Some(entry), Vec::new())
+            .expect_err("a virtual declared table must fail the load");
+
+        let msg = err.to_string();
+        assert!(
+            matches!(err, DirSqlError::TableIsVirtual { .. }),
+            "got: {msg}"
+        );
+        assert!(
+            msg.contains("table 'messages'") && msg.contains("virtual"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn classify_declared_table_warns_about_without_rowid() {
+        let entry = db::CatalogEntry {
+            kind: "table".to_string(),
+            without_rowid: true,
+        };
+        let warning = classify_declared_table("messages", Some(entry), Vec::new())
+            .expect("a WITHOUT ROWID table is a warning, not a failure")
+            .expect("it must produce a warning");
+
+        assert!(warning.contains("messages"), "got: {warning}");
+        assert!(warning.contains("WITHOUT ROWID"), "got: {warning}");
+    }
+
+    #[test]
+    fn classify_declared_table_accepts_a_plain_row_table() {
+        let entry = db::CatalogEntry {
+            kind: "table".to_string(),
+            without_rowid: false,
+        };
+        assert_eq!(
+            classify_declared_table("messages", Some(entry), Vec::new()).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn table_ddl_error_prefixes_sqlites_own_message_with_the_entry() {
+        let err = DirSqlError::TableDdl {
+            name: "messages".to_string(),
+            source: DbError::SchemaMismatch("near \"(\": syntax error".to_string()),
+        };
+        let msg = err.to_string();
+        assert!(msg.starts_with("table 'messages': "), "got: {msg}");
+        assert!(msg.contains("near \"(\": syntax error"), "got: {msg}");
     }
 
     #[test]
