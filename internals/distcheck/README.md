@@ -65,10 +65,7 @@ gated by `internals-distcheck-ci.yml`'s `internals-distcheck` job: `colocated-te
 
 No e2e tier / attestation: `tests/integration/` is the outermost tier, and the
 `python-flow` / `node-flow` jobs in `internals-distcheck-ci.yml` run the real
-flows directly. They are this package's only CI execution of its own code -- the
-gates above never invoke a flow. The SDK workflows run the same flows against
-their own package, but they do not watch this directory, so a change here must
-be verified in this lane.
+flows directly.
 
 ```bash
 uv run --project internals/distcheck python -m pytest internals/distcheck/src internals/distcheck/tests -q

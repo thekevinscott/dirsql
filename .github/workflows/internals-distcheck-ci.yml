@@ -1,9 +1,8 @@
 name: Internals distcheck CI
 
 # Verification for the internals/distcheck uv package (the dirsql-distcheck
-# publishability flows). Consumers -- the SDK workflows' distcheck jobs -- are
-# deliberately not fanned out to: a change here runs the flows in this lane,
-# not the whole Python and TypeScript matrices.
+# publishability flows). Consumers (the SDK workflows' distcheck jobs) are
+# deliberately not fanned out to; this lane runs the flows itself.
 on:
   pull_request:
     paths:
@@ -32,11 +31,6 @@ jobs:
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       gates: '["colocated-test", "unit-lint", "integration-lint", "unit-coverage", "mutation"]'
 
-  # The gates above never execute a flow, and tests/integration/ self-skips
-  # without a built binary, so these two jobs are the only thing that runs the
-  # code this package ships. They build the SDK artifacts the flows consume for
-  # the same reason the SDK workflows' distcheck jobs do -- the flows build,
-  # pack, install and run them.
   python-flow:
     name: dirsql-distcheck python
     runs-on: ubuntu-latest
@@ -62,9 +56,6 @@ jobs:
 
       - name: Put maturin on PATH
         run: echo "$PWD/packages/python/.venv/bin" >> "$GITHUB_PATH"
-
-      - name: Build dirsql CLI binary
-        run: cargo build -p dirsql --features cli
 
       - name: Run the python flow (build -> pack -> install -> run)
         run: uv run --project internals/distcheck dirsql-distcheck python
@@ -100,8 +91,6 @@ jobs:
         working-directory: packages/ts
         run: pnpm install
 
-      # No `build` job to pull an artifact from, unlike dirsql-typescript-ci:
-      # the flow needs the staged host CLI under packages/ts/build/.
       - name: Build native module + stage platform
         working-directory: packages/ts
         run: pnpm build
