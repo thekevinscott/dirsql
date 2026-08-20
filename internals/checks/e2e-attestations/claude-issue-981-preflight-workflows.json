@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1787252976,
+  "exit_code": 0,
+  "commit": "f388f328670f9d1634926c00c2319de470f9b1d1",
+  "branch": "claude/issue-981-preflight-workflows"
+}
