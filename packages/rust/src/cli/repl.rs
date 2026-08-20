@@ -31,8 +31,8 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 use reedline::{
-    FileBackedHistory, Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus,
-    Reedline, Signal, ValidationResult, Validator,
+    DefaultPrompt, DefaultPromptSegment, FileBackedHistory, Prompt, PromptEditMode,
+    PromptHistorySearch, Reedline, Signal, ValidationResult, Validator,
 };
 use serde_json::Value;
 
@@ -43,7 +43,6 @@ use super::run::query_body;
 /// The interactive prompt, split as reedline renders it: the left half, then
 /// the indicator that follows it.
 const PROMPT_LEFT: &str = "dirsql";
-const PROMPT_INDICATOR: &str = "> ";
 
 /// Shown instead of the indicator while a statement is still being typed.
 const PROMPT_CONTINUATION: &str = "   ...> ";
@@ -243,7 +242,7 @@ impl Lines for EditorLines {
             return Ok(Entry::Ended);
         };
         let (editor, entry) = tokio::task::spawn_blocking(move || {
-            let signal = editor.read_line(&ReplPrompt);
+            let signal = editor.read_line(&ReplPrompt::new());
             (editor, signal)
         })
         .await
@@ -327,20 +326,35 @@ fn history_path(var: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
     non_empty("APPDATA").map(|appdata| PathBuf::from(appdata).join("dirsql").join("history"))
 }
 
-/// How the interactive prompt is drawn.
-struct ReplPrompt;
+/// How the interactive prompt is drawn: `dirsql> `, with `sqlite3`'s
+/// continuation marker.
+///
+/// reedline's own prompt supplies the segments, the `> ` indicator and the
+/// history-search line. Only the continuation marker is ours: a SQL shell's
+/// users already know `...>` from `sqlite3`, and reedline's `::: ` would be
+/// the one piece of the prompt they had to learn.
+struct ReplPrompt(DefaultPrompt);
+
+impl ReplPrompt {
+    fn new() -> Self {
+        Self(DefaultPrompt::new(
+            DefaultPromptSegment::Basic(PROMPT_LEFT.to_string()),
+            DefaultPromptSegment::Empty,
+        ))
+    }
+}
 
 impl Prompt for ReplPrompt {
     fn render_prompt_left(&self) -> Cow<'_, str> {
-        PROMPT_LEFT.into()
+        self.0.render_prompt_left()
     }
 
     fn render_prompt_right(&self) -> Cow<'_, str> {
-        "".into()
+        self.0.render_prompt_right()
     }
 
-    fn render_prompt_indicator(&self, _edit_mode: PromptEditMode) -> Cow<'_, str> {
-        PROMPT_INDICATOR.into()
+    fn render_prompt_indicator(&self, edit_mode: PromptEditMode) -> Cow<'_, str> {
+        self.0.render_prompt_indicator(edit_mode)
     }
 
     fn render_prompt_multiline_indicator(&self) -> Cow<'_, str> {
@@ -348,11 +362,7 @@ impl Prompt for ReplPrompt {
     }
 
     fn render_prompt_history_search_indicator(&self, search: PromptHistorySearch) -> Cow<'_, str> {
-        let failing = match search.status {
-            PromptHistorySearchStatus::Passing => "",
-            PromptHistorySearchStatus::Failing => "failing ",
-        };
-        format!("({failing}reverse-search: {}) ", search.term).into()
+        self.0.render_prompt_history_search_indicator(search)
     }
 }
 
@@ -975,37 +985,59 @@ mod tests {
 
     #[test]
     fn the_prompt_renders_as_the_documented_string() {
-        // `docs/reference/cli.md` shows `dirsql> `, which reedline draws as
-        // the left half plus the indicator.
+        // `docs/reference/cli.md` shows `dirsql> `, which the editor draws as
+        // the left segment followed by the indicator.
+        let prompt = ReplPrompt::new();
+
         assert_eq!(
             format!(
                 "{}{}",
-                ReplPrompt.render_prompt_left(),
-                ReplPrompt.render_prompt_indicator(PromptEditMode::Default)
+                prompt.render_prompt_left(),
+                prompt.render_prompt_indicator(PromptEditMode::Default)
             ),
             "dirsql> "
         );
     }
 
     #[test]
-    fn the_continuation_prompt_differs_from_the_fresh_one() {
-        // A user mid-statement must be able to see that enter will not run it.
-        assert_ne!(
-            ReplPrompt.render_prompt_multiline_indicator(),
-            ReplPrompt.render_prompt_indicator(PromptEditMode::Default)
-        );
-        assert_eq!(ReplPrompt.render_prompt_multiline_indicator(), "   ...> ");
+    fn the_prompt_forwards_the_segments_it_was_built_from() {
+        // The wrapper exists to change the continuation marker and nothing
+        // else. One that answered from its own constants would drift from
+        // what the editor actually draws the moment either side changed.
+        let prompt = ReplPrompt(DefaultPrompt::new(
+            DefaultPromptSegment::Basic("left".to_string()),
+            DefaultPromptSegment::Basic("right".to_string()),
+        ));
+
+        assert_eq!(prompt.render_prompt_left(), "left");
+        assert_eq!(prompt.render_prompt_right(), "right");
     }
 
     #[test]
-    fn the_right_prompt_is_empty() {
-        assert_eq!(ReplPrompt.render_prompt_right(), "");
+    fn nothing_is_drawn_at_the_right() {
+        // Nothing here is worth the width: the directory is already the
+        // user's shell prompt, and the session is bound to one.
+        assert_eq!(ReplPrompt::new().render_prompt_right(), "");
+    }
+
+    #[test]
+    fn the_continuation_prompt_differs_from_the_fresh_one() {
+        // A user mid-statement must be able to see that enter will not run it.
+        let prompt = ReplPrompt::new();
+
+        assert_ne!(
+            prompt.render_prompt_multiline_indicator(),
+            prompt.render_prompt_indicator(PromptEditMode::Default)
+        );
+        assert_eq!(prompt.render_prompt_multiline_indicator(), "   ...> ");
     }
 
     #[test]
     fn the_history_search_indicator_names_the_term() {
-        let indicator = ReplPrompt.render_prompt_history_search_indicator(PromptHistorySearch {
-            status: PromptHistorySearchStatus::Passing,
+        let prompt = ReplPrompt::new();
+
+        let indicator = prompt.render_prompt_history_search_indicator(PromptHistorySearch {
+            status: reedline::PromptHistorySearchStatus::Passing,
             term: "basename".to_string(),
         });
 
@@ -1015,8 +1047,10 @@ mod tests {
     #[test]
     fn the_history_search_indicator_marks_a_miss() {
         // Without this the user cannot tell a stale match from no match.
-        let indicator = ReplPrompt.render_prompt_history_search_indicator(PromptHistorySearch {
-            status: PromptHistorySearchStatus::Failing,
+        let prompt = ReplPrompt::new();
+
+        let indicator = prompt.render_prompt_history_search_indicator(PromptHistorySearch {
+            status: reedline::PromptHistorySearchStatus::Failing,
             term: "nope".to_string(),
         });
 
