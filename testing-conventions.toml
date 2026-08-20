@@ -114,7 +114,7 @@ features = ["cli"]
 # Unit-only coverage floor: measured by `cargo llvm-cov --lib --features cli`
 # (the `--lib` scoping keeps the integration tier under packages/rust/tests/ out
 # of the number -- testing-conventions #269). `branch` runs under `--branch`,
-# which needs the nightly toolchain pinned in rust-test.yml's coverage job.
+# which needs the nightly toolchain pinned in dirsql-rust-ci.yml's coverage job.
 #
 # The floors are BELOW the bindings' 100% because the effectful paths in
 # lib.rs / cli/*.rs / watcher.rs are exercised at the integration/e2e tier by

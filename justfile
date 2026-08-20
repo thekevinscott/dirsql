@@ -36,13 +36,13 @@ test-e2e:
 
 # Run the Python packaging distcheck flow (build the wheel, install into a fresh
 # venv, run the installed CLI) from the internals/distcheck package (#520). Runs in
-# CI (python-test.yml `distcheck` job). Needs `cargo build -p dirsql --features cli`
+# CI (dirsql-python-ci.yml `distcheck` job). Needs `cargo build -p dirsql --features cli`
 # and `maturin` on PATH (uv sync in packages/python) first.
 test-distcheck-python:
     uv run --project internals/distcheck dirsql-distcheck python
 
 # Run the node packaging distcheck flow (pack -> npm install -> run) from the
-# internals/distcheck package. Runs in CI (ts-test.yml `distcheck` job). Needs
+# internals/distcheck package. Runs in CI (dirsql-typescript-ci.yml `distcheck` job). Needs
 # `pnpm build` in packages/ts first.
 test-distcheck-node:
     uv run --project internals/distcheck dirsql-distcheck node
@@ -61,7 +61,7 @@ e2e-attest-internals-checks:
 
 # Refresh packages/python/e2e-attestation.json: runs the python e2e suite and
 # commits the attestation. The CI gate runs inside the reusable workflow
-# (conventions.yml, python-sdk `e2e-verify`) on PRs that touch the python SDK
+# (dirsql-python-ci.yml, python-sdk `e2e-verify`) on PRs that touch the python SDK
 # source. Install testing-conventions first (CI always uses the latest release):
 #   pip install testing-conventions
 e2e-attest-python:
@@ -92,7 +92,7 @@ preflight *ARGS:
     uv run --project internals/checks dirsql-checks preflight {{ARGS}}
 
 # Packaging gate: assert no test files ship in the built .whl / .tgz / .crate.
-# Mirrors the testing-conventions `packaging` gate run in conventions.yml;
+# Mirrors the testing-conventions `packaging` gate the per-domain CI workflows run;
 # requires uv, pnpm, cargo, and `pip install testing-conventions`.
 test-packaging:
     #!/usr/bin/env bash
