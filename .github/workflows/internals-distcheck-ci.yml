@@ -1,8 +1,8 @@
 name: Internals distcheck CI
 
 # Verification for the internals/distcheck uv package (the dirsql-distcheck
-# publishability flows). Consumers (the SDK test workflows' distcheck jobs)
-# are deliberately not fanned out to; this lane's own gates are the guard.
+# publishability flows). src/** also fans out to the SDK workflows, whose
+# distcheck jobs execute those flows; tests/** is this lane's alone.
 on:
   pull_request:
     paths:

@@ -2,12 +2,16 @@ name: dirsql TypeScript CI
 
 # packages/rust/** fans in: the core compiles into the binding, and
 # [e2e].extra_scope means a core change stales this package's attestation.
+# internals/distcheck/** fans in: the `distcheck` job below is the only
+# executor of those flows; its own tests stay with internals-distcheck-ci.
 on:
   push:
     branches: [main]
     paths:
       - 'packages/ts/**'
       - 'packages/rust/**'
+      - 'internals/distcheck/src/**'
+      - 'internals/distcheck/pyproject.toml'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'testing-conventions.toml'
@@ -22,6 +26,8 @@ on:
       - '!packages/rust/changelog.d/**'
       - '!packages/rust/migrations.d/**'
       - '!packages/rust/README.md'
+      - 'internals/distcheck/src/**'
+      - 'internals/distcheck/pyproject.toml'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'testing-conventions.toml'
