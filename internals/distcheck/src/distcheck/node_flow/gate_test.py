@@ -34,13 +34,17 @@ _MAIN_TGZ = "dirsql-0.0.1.tgz"
 _STAGED = "/ts/build/linux-x64-gnu/dirsql.linux-x64-gnu.node"
 _BIN = "/inst/node_modules/.bin/dirsql"
 _CLI_PKG = "/inst/node_modules/@dirsql/lib-linux-x64-gnu"
+_MAIN_PKG_JSON = "/inst/node_modules/dirsql/package.json"
+# The version npm installed -- `_MAIN_TGZ`'s, since that is the tarball
+# installed above.
+_INSTALLED = "0.0.1"
 
 
 def _res(rc=0, stdout="", stderr=""):
     return mock.Mock(returncode=rc, stdout=stdout, stderr=stderr)
 
 
-def _fs(exists=True, read_name="@dirsql/lib-linux-x64-gnu"):
+def _fs(exists=True, read_name="@dirsql/lib-linux-x64-gnu", installed=_INSTALLED):
     fs = mock.Mock()
     fs.mkdtemp.side_effect = ["/stg", "/inst"]
     fs.listdir.side_effect = [[_CLI_TGZ], [_CLI_TGZ, _MAIN_TGZ]]
@@ -51,12 +55,18 @@ def _fs(exists=True, read_name="@dirsql/lib-linux-x64-gnu"):
         # package is installed, which the gate now treats as a failure; the
         # happy path is "everything present EXCEPT that".
         fs.exists.side_effect = lambda p: exists and "@dirsql/cli-" not in p
-    fs.read_text.return_value = json.dumps({"name": read_name})
+    # Two installed manifests are read: the main package (for the version the
+    # CLI must report) and the addon sub-package (for its name).
+    fs.read_text.side_effect = lambda p: json.dumps(
+        {"version": installed} if p == _MAIN_PKG_JSON else {"name": read_name}
+    )
     return fs
 
 
 def _ok_sequence():
-    return [_res(), _res(), _res(), _res(stdout="dirsql 1.0")]
+    # The version stdout carries the trailing newline a real process emits, so
+    # the gate's `.strip()` is load-bearing rather than incidental.
+    return [_res(), _res(), _res(), _res(stdout=f"dirsql {_INSTALLED}\n")]
 
 
 def test_select_tarball_finds_the_cli_tarball():
@@ -185,10 +195,33 @@ def test_run_version_nonzero_exit():
         run("/ts", _HOST, runner=runner, fs=fs)
 
 
+def test_run_version_disagrees_with_the_installed_package():
+    # dirsql#958: the CLI printed the core crate's literal, not the version
+    # npm installed. A "does it say dirsql" check passes that; this must not.
+    fs = _fs()
+    runner = mock.Mock(
+        side_effect=[_res(), _res(), _res(), _res(stdout="dirsql 0.2.7\n")]
+    )
+    with pytest.raises(DistcheckError, match="expected 'dirsql 0.0.1'"):
+        run("/ts", _HOST, runner=runner, fs=fs)
+
+
+def test_run_version_older_than_the_installed_package():
+    # A stale version can sort either side of the installed one; both are a
+    # mismatch, and only testing one direction leaves an ordering comparison
+    # indistinguishable from the equality this asserts.
+    fs = _fs()
+    runner = mock.Mock(
+        side_effect=[_res(), _res(), _res(), _res(stdout="dirsql 0.0.0\n")]
+    )
+    with pytest.raises(DistcheckError, match="expected 'dirsql 0.0.1'"):
+        run("/ts", _HOST, runner=runner, fs=fs)
+
+
 def test_run_version_missing_marker():
     fs = _fs()
     runner = mock.Mock(side_effect=[_res(), _res(), _res(), _res(stdout="nope")])
-    with pytest.raises(DistcheckError, match="--version` failed"):
+    with pytest.raises(DistcheckError, match="expected 'dirsql 0.0.1'"):
         run("/ts", _HOST, runner=runner, fs=fs)
 
 

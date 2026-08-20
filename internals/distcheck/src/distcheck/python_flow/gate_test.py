@@ -16,6 +16,7 @@ from distcheck.python_flow.gate import (
     check_wheel_tag,
     run,
     sole_wheel,
+    wheel_version,
 )
 
 _WHEEL = "dirsql-1.0-cp311-abi3-linux_x86_64.whl"
@@ -37,11 +38,13 @@ def _fs(staging="/stg", listdir=None, exists=True):
 
 
 def _ok_sequence():
+    # Both version stdouts carry the trailing newline a real process emits, so
+    # the gate's `.strip()` is load-bearing rather than incidental.
     return [
         _res(),  # maturin build
         _res(),  # venv
         _res(),  # pip install
-        _res(stdout="dirsql 1.0"),  # --version
+        _res(stdout="dirsql 1.0\n"),  # --version, matching _WHEEL's version
         _res(stdout="1.0\n"),  # import dirsql
     ]
 
@@ -77,6 +80,10 @@ def test_sole_wheel_rejects_none():
 def test_sole_wheel_rejects_many():
     with pytest.raises(DistcheckError, match="exactly one wheel"):
         sole_wheel(["a.whl", "b.whl"])
+
+
+def test_wheel_version_reads_the_version_segment():
+    assert wheel_version(_WHEEL) == "1.0"
 
 
 def test_check_wheel_tag_accepts_abi3_cpython():
@@ -172,17 +179,30 @@ def test_run_version_nonzero_exit():
         run("/pkg", "/repo", runner=runner, fs=fs)
 
 
+def test_run_version_disagrees_with_the_installed_wheel():
+    # dirsql#958: the CLI printed the core crate's literal, not the version pip
+    # installed. A "does it say dirsql" check passes that; this must not. Both
+    # orderings, so an ordering comparison cannot pass for the equality.
+    fs = _fs()
+    for printed in ("dirsql 0.2.7\n", "dirsql 2.0\n"):
+        runner = mock.Mock(
+            side_effect=[_res(), _res(), _res(), _res(stdout=printed)]
+        )
+        with pytest.raises(DistcheckError, match="expected 'dirsql 1.0'"):
+            run("/pkg", "/repo", runner=runner, fs=_fs())
+
+
 def test_run_version_missing_marker():
     fs = _fs()
     runner = mock.Mock(side_effect=[_res(), _res(), _res(), _res(stdout="nope")])
-    with pytest.raises(DistcheckError, match="--version` failed"):
+    with pytest.raises(DistcheckError, match="expected 'dirsql 1.0'"):
         run("/pkg", "/repo", runner=runner, fs=fs)
 
 
 def test_run_import_nonzero_exit():
     fs = _fs()
     runner = mock.Mock(
-        side_effect=[_res(), _res(), _res(), _res(stdout="dirsql 1.0"), _res(rc=1)]
+        side_effect=[_res(), _res(), _res(), _res(stdout="dirsql 1.0\n"), _res(rc=1)]
     )
     with pytest.raises(DistcheckError, match="import dirsql` failed"):
         run("/pkg", "/repo", runner=runner, fs=fs)
@@ -195,7 +215,7 @@ def test_run_import_empty_stdout():
             _res(),
             _res(),
             _res(),
-            _res(stdout="dirsql 1.0"),
+            _res(stdout="dirsql 1.0\n"),
             _res(stdout="   \n"),
         ]
     )

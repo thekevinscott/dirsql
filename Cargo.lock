@@ -499,7 +499,7 @@ dependencies = [
 
 [[package]]
 name = "dirsql-py-ext"
-version = "0.2.7"
+version = "0.0.1"
 dependencies = [
  "dirsql",
  "pyo3",

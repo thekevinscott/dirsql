@@ -145,8 +145,22 @@ def run(
         f"stdout={version.stdout!r}, stderr={version.stderr!r}"
     )
     _require_zero(version, version_err)
-    if "dirsql" not in version.stdout:
-        raise DistcheckError(version_err)
+
+    # Matching on the word "dirsql" alone let dirsql#958 ship: packages
+    # published at 0.4.x printed the embedded core crate's literal (0.2.7).
+    installed_main = json.loads(
+        fs.read_text(
+            os.path.join(install_root, "node_modules", "dirsql", "package.json")
+        )
+    )
+    installed_version = installed_main.get("version")
+    if version.stdout.strip() != f"dirsql {installed_version}":
+        raise DistcheckError(
+            f"`dirsql --version` printed {version.stdout.strip()!r}, expected "
+            f"'dirsql {installed_version}' -- the version npm installed. The "
+            "launcher (packages/ts/src/cli/main.ts) must read it from its own "
+            "package.json and pass it to the addon's `runCli`."
+        )
 
     # 5. Cross-check the published layout: the launcher resolves to a real
     #    addon inside the installed `@dirsql/lib-<slug>` sub-package, and no

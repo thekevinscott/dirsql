@@ -50,6 +50,15 @@ def sole_wheel(names) -> str:
     return wheel
 
 
+def wheel_version(wheel: str) -> str:
+    """The version segment of a wheel filename (`dirsql-<ver>-<interp>-...`).
+
+    What pip actually installed -- the anchor the CLI and the SDK must both
+    agree with.
+    """
+    return wheel.split("-")[1]
+
+
 def check_wheel_tag(wheel: str) -> None:
     """Assert the stable-ABI (abi3) tag (#487): one `cp3x-abi3` wheel per
     platform, not a version-locked `cpXY-cpXY` that re-inflates the release
@@ -101,6 +110,8 @@ def run(
         )
         _require_zero(install, f"pip install failed:\n{install.stderr}")
 
+        installed = wheel_version(wheel_name)
+
         cli = os.path.join(venv_bin, "dirsql")
         if not fs.exists(cli):
             raise DistcheckError(f"console script missing at {cli}")
@@ -115,8 +126,15 @@ def run(
             f"stdout={version.stdout!r}, stderr={version.stderr!r}"
         )
         _require_zero(version, version_err)
-        if "dirsql" not in version.stdout:
-            raise DistcheckError(version_err)
+        # Matching on the word "dirsql" alone let dirsql#958 ship: wheels
+        # published at 0.4.x printed the embedded core crate's literal (0.2.7).
+        if version.stdout.strip() != f"dirsql {installed}":
+            raise DistcheckError(
+                f"`dirsql --version` printed {version.stdout.strip()!r}, expected "
+                f"'dirsql {installed}' -- the version pip installed. Have "
+                "`run_cli` in packages/python/src/lib.rs pass this crate's "
+                "`CARGO_PKG_VERSION` to `dirsql::cli::run_cli_with_version`."
+            )
 
         # cwd is the scratch staging dir so `import dirsql` resolves the
         # installed wheel, never the source tree.

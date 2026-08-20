@@ -2,9 +2,12 @@
 name = "dirsql-py-ext"
 # Explicit literal (not `version.workspace = true`) so putitoutthere's
 # pypi/maturin handler can rewrite it via `write-version` before
-# `maturin build`. `pyproject.toml` declares `dynamic = ["version"]`
-# and maturin reads this field. Mirrors `packages/rust/Cargo.toml`.
-version = "0.2.7"
+# `maturin build`. `pyproject.toml` declares `dynamic = ["version"]` and
+# maturin reads this field, so it is the wheel's version -- and, since #958,
+# the version the CLI prints. It must NOT equal `packages/rust/Cargo.toml`'s
+# literal: with the two equal, `dirsql-distcheck python` passes even when the
+# CLI is reading the core crate's version, which is how #958 shipped.
+version = "0.0.1"
 # abi3 note: the `abi3-py310` pyo3 feature (below) builds ONE stable-ABI
 # `cp310-abi3` wheel per platform that loads on every CPython >= 3.10
 # (matching `pyproject.toml`'s `requires-python = ">=3.10"`), instead of
