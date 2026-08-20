@@ -35,7 +35,7 @@ Every module (except empty `__init__.py`s) carries a colocated `*_test.py`, gate
   `internals-checks-integration` job -- the tier reads real repo state, so a rename that a colocated
   fixture cannot see fails here instead (#973).
 - `tests/e2e/` -- spawns the real `dirsql-checks` CLI as a subprocess with nothing mocked. Not run
-  in CI; gated only via `e2e-attestation.json` freshness (see AGENTS.md, "E2E Attestation").
+  in CI; gated only via a per-branch receipt under `e2e-attestations/` (see AGENTS.md, "E2E Attestation").
 
 Run locally:
 

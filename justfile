@@ -55,20 +55,21 @@ test-integration-internals-checks:
 test-e2e-internals-checks:
     cd internals/checks && uv run python -m pytest tests/e2e -x -q
 
-# Refresh internals/checks/e2e-attestation.json
+# Write this branch's receipt at internals/checks/e2e-attestations/<branch>.json
 e2e-attest-internals-checks:
     cd internals/checks && uvx testing-conventions e2e attest 'uv run python -m pytest tests/e2e -x -q'
 
-# Refresh packages/python/e2e-attestation.json: runs the python e2e suite and
-# commits the attestation. The CI gate runs inside the reusable workflow
-# (dirsql-python-ci.yml, python-sdk `e2e-verify`) on PRs that touch the python SDK
-# source. Install testing-conventions first (CI always uses the latest release):
+# Write this branch's receipt at packages/python/e2e-attestations/<branch>.json:
+# runs the python e2e suite and commits the receipt. The CI gate runs inside the
+# reusable workflow (dirsql-python-ci.yml, python-sdk `e2e-verify`) on PRs that
+# touch the python SDK source. Install testing-conventions first (CI always uses
+# the latest release):
 #   pip install testing-conventions
 e2e-attest-python:
     cd packages/python && testing-conventions e2e attest 'just test-e2e'
 
-# Refresh packages/ts/e2e-attestation.json: runs the TS pack-install e2e suite
-# and commits the attestation.
+# Write this branch's receipt at packages/ts/e2e-attestations/<branch>.json: runs
+# the TS pack-install e2e suite and commits the receipt.
 e2e-attest-ts:
     cd packages/ts && testing-conventions e2e attest 'pnpm test:e2e'
 
