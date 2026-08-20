@@ -1,7 +1,7 @@
 {
   "command": "pnpm test:e2e",
-  "ran_at": 1787249809,
+  "ran_at": 1787250219,
   "exit_code": 0,
-  "commit": "3bde36cca535d9e7e1f3b85e0e5785cb41954d63",
+  "commit": "8529e98dc9e36066fa8ba473f916d6662c385557",
   "branch": "claude/issue-958-q2loh3"
 }
