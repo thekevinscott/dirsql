@@ -2,6 +2,10 @@ name: dirsql TypeScript CI
 
 # packages/rust/** fans in: the core compiles into the binding, and
 # [e2e].extra_scope means a core change stales this package's attestation.
+#
+# The gate config is packages/ts/testing-conventions.toml, not the root file:
+# [e2e] is per-config, so this lane's freshness scope (core + napi binding) lives
+# with the package. No job here reads the root file, so it is not a trigger.
 on:
   push:
     branches: [main]
@@ -10,7 +14,6 @@ on:
       - 'packages/rust/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - 'testing-conventions.toml'
       - '.github/workflows/dirsql-typescript-ci.yml'
   pull_request:
     paths:
@@ -24,7 +27,6 @@ on:
       - '!packages/rust/README.md'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - 'testing-conventions.toml'
       - '.github/workflows/dirsql-typescript-ci.yml'
 
 concurrency:
@@ -40,7 +42,7 @@ jobs:
     with:
       languages: '["typescript"]'
       source: packages/ts/src
-      config: testing-conventions.toml
+      config: packages/ts/testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       rust_toolchain: true
 
@@ -49,7 +51,7 @@ jobs:
     with:
       languages: '["rust"]'
       source: packages/ts/napi
-      config: testing-conventions.toml
+      config: packages/ts/testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       gates: '["colocated-test", "unit-lint"]'
 

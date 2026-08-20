@@ -1,10 +1,10 @@
 # testing-conventions CLI config (https://github.com/thekevinscott/testing-conventions).
 #
-# Drives the testing-conventions gates wired up in the reusable-workflow calls
-# in .github/workflows/conventions.yml (colocated-test + unit lint +
-# integration-lint), the per-package `unit coverage` jobs in python-test.yml /
-# ts-test.yml / rust-test.yml, and the per-language `unit mutation` jobs in
-# {python,ts,rust}-mutation.yml. The CLI reads this file by default.
+# The repo-wide DEFAULT config: the CLI reads this file when a caller names no
+# other, which today means the rust core lane (dirsql-rust-ci.yml) and
+# internals/distcheck. Lanes carrying their own `testing-conventions.toml`
+# (packages/python, packages/ts, internals/checks, the embeddings plugin) do not
+# read it, and restate the tables their gates need.
 #
 # The `[[<lang>.exempt]]` array lists files waived from a rule (the colocation
 # gate fails on any source file lacking a colocated unit test that is not
@@ -64,17 +64,24 @@
 # shipped as #333). Proven locally: over a `packages/rust/src`-only diff,
 # `e2e verify` is exit 0 without `--extra-scope` and exit 1 with it.
 #
-# `cli`-only core (`src/cli`, `src/bin`) is feature-gated out of the binding
-# *libraries*, but the language packages SHIP the compiled `dirsql` binary and
-# their e2e suites spawn it -- so a CLI change alters what those suites
-# exercise just as a core change does. No carve-out: every
-# `packages/rust/src` change stales both bindings' attestations.
+# `cli`-only core (`src/cli`, `src/bin`) is NOT carved out. It is feature-gated
+# out of the binding *libraries*, but since #721 each launcher calls the core's
+# `run_cli` in-process through its binding, so a CLI change alters what those
+# suites exercise just as any other core change does. Every `packages/rust/src`
+# change stales both bindings' attestations.
+#
+# Neither binding reads this block since #933: each needs the core PLUS its own
+# glue, which only a per-package config can express, so both SDK lanes pass
+# their own `packages/<pkg>/testing-conventions.toml`. It stays as the default,
+# so a caller that declares no config still inherits the core root.
 [e2e]
 extra_scope = ["packages/rust/src"]
 
 # --- Python (scanned: packages/python/dirsql) ------------------------------
 
 # Unit-only coverage floor (branch coverage on, matching the prior --cov-branch).
+# The default for a config-less python caller (internals/distcheck); the
+# packages/python lane holds the identical floor in its own config.
 [python.coverage]
 fail_under = 100
 branch = true

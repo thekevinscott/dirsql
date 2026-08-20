@@ -1,0 +1,15 @@
+# Per-package config so `[e2e]` can be per-package: it is one global table
+# applied to every caller reading a given config, so "the core plus MY binding"
+# has nowhere else to live. Folded back into the root file, a napi change would
+# start staling this package.
+#
+# The PyO3 glue is in scope because the console script runs the CLI in-process
+# through it (#721), so every e2e case crosses it. packages/ts/napi is not: it
+# cannot reach this suite.
+[e2e]
+extra_scope = ["packages/rust/src", "packages/python/src"]
+
+# Same floor as the root file, which this lane no longer reads.
+[python.coverage]
+fail_under = 100
+branch = true
