@@ -1,7 +1,7 @@
 {
   "command": "pnpm test:e2e",
-  "ran_at": 1787262819,
+  "ran_at": 1787263810,
   "exit_code": 0,
-  "commit": "26a2258103fbd0216a30c742c5b662228b951445",
+  "commit": "0f63d6b6d7a536149a9a727873bbffd46525c68d",
   "branch": "claude/tackle-957-lrm0z6-worker-calls"
 }
