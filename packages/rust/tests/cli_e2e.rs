@@ -714,23 +714,28 @@ fn bare_dirsql_default_query_honors_config_flag() {
 }
 
 #[test]
-fn no_subcommand_and_no_sql_errors_pointing_at_dirsql_server() {
-    // #662: bare `dirsql` with no SQL must NOT silently start the server (that
-    // would re-invert the default). It errors and points at `dirsql server`.
+fn no_subcommand_and_no_sql_reads_stdin_instead_of_serving() {
+    // #662 established that bare `dirsql` must NOT silently start the server
+    // (that would re-invert the default); #987 replaced the usage error it
+    // used to print with a REPL. The invariant that survives both: bare
+    // `dirsql` binds no port and returns on its own once stdin is exhausted.
+    // `output()` hands the child an empty stdin, so the session sees EOF at
+    // once -- if it were serving, this would block until killed.
     let dir = TempDir::new().unwrap();
     let out = std::process::Command::cargo_bin("dirsql")
         .expect("binary must exist")
         .current_dir(dir.path())
         .output()
         .expect("spawning bare `dirsql` failed");
-    assert!(
-        !out.status.success(),
-        "bare `dirsql` with no query must be a non-zero exit, got {out:?}"
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "an immediate EOF is a clean session, got {out:?}"
     );
-    let stderr = String::from_utf8(out.stderr).unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(
-        stderr.contains("dirsql server"),
-        "the no-args error must point at `dirsql server`, got {stderr:?}"
+        !stdout.contains("Running at"),
+        "bare `dirsql` must not start the server, got {stdout:?}"
     );
 }
 

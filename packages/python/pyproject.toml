@@ -44,6 +44,11 @@ dev = [
     "maturin>=1.0",
     # ty is pre-1.0 -- pin tightly. Re-pin in lockstep with CI.
     "ty==0.0.42",
+    # Real PTY + VT100 for the REPL's interactive e2e cases, which need a
+    # screen rather than an output stream. Marked because curtaincall declares
+    # `requires-python >=3.12` against this package's >=3.10 floor; the suite
+    # skips itself below that (thekevinscott/curtaincall#26).
+    'curtaincall>=0.3; python_version >= "3.12"',
 ]
 
 [project.scripts]

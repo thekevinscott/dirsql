@@ -1,0 +1,3 @@
+**Changed**
+
+- Added [curtaincall](https://github.com/thekevinscott/curtaincall) to the dev dependency group, for the REPL's interactive e2e cases: they need a real PTY behind a VT100 emulator, since the line editor repaints by moving the cursor and its behavior cannot be read off an output stream. **Nothing about the published package changes** — the dev group is excluded from the wheel, so no installed dependency, import, or runtime behavior is affected. It carries a `python_version >= "3.12"` marker against this package's `>=3.10` floor (curtaincall declares `requires-python >=3.12`), and the suite skips itself below that. (#988)

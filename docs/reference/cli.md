@@ -9,9 +9,9 @@ The `dirsql` binary has these modes:
 | `dirsql query "<sql>"` | Explicit synonym for the default one-shot query. |
 | `dirsql server` | Start a long-lived HTTP server exposing a SQL view of a directory. See [HTTP API](./http-api.md). |
 | `dirsql init` | Generate a `.dirsql.toml`. |
+| `dirsql` (bare) | Open a [REPL](#the-repl) over the current directory, reading statements until EOF. |
 
-Bare `dirsql` with no SQL is a usage error pointing at `dirsql server` — it
-does **not** start the server.
+Bare `dirsql` does **not** start the server — that is `dirsql server`.
 
 ## Installation
 
@@ -46,6 +46,186 @@ dirsql "SELECT basename, size FROM './' ORDER BY size DESC LIMIT 5"
 `dirsql "<sql>"` is exactly [`dirsql query "<sql>"`](#dirsql-query) — same
 pipeline, same flags, same output. See that section for config discovery,
 `--persist`, `--on-file`, hooks, and exit codes.
+
+## The REPL
+
+`dirsql` with no subcommand and no SQL reads statements until EOF:
+
+```bash
+dirsql
+# dirsql 0.2.7 — this directory is a database.
+#
+#   SELECT basename, size FROM './' ORDER BY size DESC LIMIT 5;
+#   SELECT path FROM './**/*.md' WHERE content LIKE '%TODO%';
+#
+# `exit`, `quit`, or Ctrl-D to leave.
+#
+# dirsql> SELECT count(*) AS files FROM './';
+# files
+# -----
+# 128
+#
+# 1 row
+# dirsql>
+```
+
+Statements go through the same pipeline as [`dirsql query`](#dirsql-query) and
+`POST /query`, so a statement typed at the prompt and one passed on the command
+line return identical rows. Every config flag the default mode takes — `-c`,
+`--persist`, `--no-ignore`, `--on-file` — applies unchanged:
+
+```bash
+dirsql -c .dirsql.toml --persist
+```
+
+The index is built **once**, before the first prompt: statements share one scan
+rather than re-walking the directory each time, and the live watcher keeps it
+fresh between them. Files the scan had to skip are named on stderr once, up
+front.
+
+### Output format
+
+Rows go where they are useful: a **table** when stdout is a terminal, the
+**JSON array** when it is piped or redirected. `SELECT * FROM './'` in a
+5000-file tree should not put a 5000-element JSON array in front of a person,
+and `dirsql "…" | jq` should not have to parse a table.
+
+`--format` overrides that, in both directions, and is valid in the REPL and in
+[`dirsql query`](#dirsql-query) alike:
+
+| Value | Renders |
+|---|---|
+| `auto` (default) | Table if stdout is a terminal, JSON otherwise. |
+| `table` | Always a table — including into a pipe or a file. |
+| `json` | Always the JSON array — including at a terminal. |
+
+```bash
+dirsql "SELECT basename, size FROM './' ORDER BY basename" --format table
+# basename  size
+# --------  ----
+# a.md      6
+# bb.md     10
+#
+# 2 rows
+```
+
+There is no `.mode`: dirsql has no dot-commands to extend (see
+[Leaving](#leaving)), and a flag serves the one-shot query too. `dirsql server`
+does not take `--format` — its transport is JSON over HTTP.
+
+**`auto` keys on stdout, not stdin.** `dirsql > rows.json` typed at a terminal
+is still headed for a file, and the file gets JSON.
+
+Table rendering is deliberately plain: aligned columns, a rule under the
+header, a row count, and `NULL` spelled out so it cannot be confused with an
+empty string. Two things happen to a value on its way into a cell, both
+because a `content` column holds a whole file: **newlines, tabs and other
+control characters are escaped** (`\n`, `\t`, `\u{…}`) so one row cannot span
+several lines, and **anything longer than 60 characters is truncated with
+`…`** so one column cannot set the width of every row. `--format json`
+returns the values unaltered.
+
+Laying the table out to the terminal's width, and paging a long result, are
+both out of scope; pipe to `less` for the latter.
+
+### Where a statement ends
+
+At its semicolon — the same rule `sqlite3` uses, and **SQLite's own tokenizer**
+decides where that semicolon is. So a statement can be laid out over as many
+lines as it needs, and a `;` inside a string literal, a comment, or a
+`BEGIN … END` body is not mistaken for the end of one:
+
+```
+dirsql> SELECT basename, size
+   ...> FROM './'
+   ...> ORDER BY size DESC
+   ...> LIMIT 5;
+```
+
+The `...>` prompt says the statement is still open. `exit`, `quit`, and a blank
+line are not SQL, so they are taken as typed rather than waiting for a
+terminator.
+
+### Editing and history
+
+The prompt is a full line editor ([reedline](https://github.com/nushell/reedline)),
+with the emacs bindings a shell prompt has:
+
+| Key | Does |
+|---|---|
+| ↑ / ↓ | Walk back and forth through history. |
+| Ctrl-R | Reverse-search history; type to narrow, Enter to accept. |
+| Ctrl-A / Ctrl-E | Jump to the start / end of the line. |
+| Alt-B / Alt-F | Move back / forward a word. |
+| Ctrl-W, Ctrl-K, Ctrl-Y | Kill the previous word, kill to end of line, yank it back. |
+| Ctrl-C | Abandon the line and return to a fresh prompt. **Does not exit.** |
+| Ctrl-D | Leave. |
+
+History is kept in one file for every directory — a query worked out in one
+project is worth recalling in the next, the same way `sqlite3` keeps a single
+`~/.sqlite_history`. It holds the last 1000 statements, at
+`$XDG_DATA_HOME/dirsql/history`, falling back to
+`~/.local/share/dirsql/history` (`%APPDATA%\dirsql\history` on Windows). If
+none of those resolve, history is kept in memory for the session only.
+
+### Terminal vs. pipe
+
+The prompt, banner, editor, and history exist only when **stdin is a terminal**.
+From a pipe or a redirect there is none of that, and the terminator rule does
+not apply either: a redirected script is not being typed, so there is no
+continuation prompt to hang it off. **One statement per line, no `;` needed:**
+
+```bash
+printf "SELECT 1 AS n\nSELECT 2 AS n\n" | dirsql
+# [{"n":1}]
+# [{"n":2}]
+
+dirsql < queries.sql > rows.jsonl
+```
+
+Blank lines do nothing in either mode.
+
+### Leaving
+
+`exit`, `quit` (either case), or Ctrl-D. There are no dot-commands: the `.`
+prefix exists in `sqlite3` to namespace meta-commands against SQL, and with no
+meta-commands there is nothing to namespace. Schema questions are ordinary SQL:
+
+```sql
+SELECT name FROM sqlite_master WHERE type = 'table';
+```
+
+### Errors
+
+A statement that fails prints its diagnostic — the same string the HTTP
+`{"error": …}` body carries — to stderr, and **the session continues**. This is
+the one behavioral difference from `dirsql query`, which exits `1` on the first
+failure:
+
+```
+dirsql> SELECT nope FROM missing;
+dirsql: SQLite error: no such table: missing
+dirsql> SELECT 1 AS n;
+n
+-
+1
+
+1 row
+```
+
+A config that cannot be loaded is different in kind: it fails identically for
+every statement, so it is reported once and exits `1` before the first prompt.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Clean EOF (Ctrl-D, `exit`, `quit`, or the end of a piped script) — **including when statements failed**. Matches interactive `sqlite3`; use [`dirsql query`](#dirsql-query) when a script needs a statement's exit status. |
+| `1` | The index could not be built (a bad `-c`, an unresolvable `--on-file`), or stdin could not be read. Nothing was executed. |
+
+`23` (partial scan) is not produced here: skipped files are reported before the
+first prompt, and a session's exit code describes the session rather than one
+scan.
 
 ## `dirsql server`
 
@@ -203,6 +383,12 @@ argument. The command string is copy-paste identical to a `[[table]]`
 Errors print the same diagnostic the HTTP `{"error": …}` body carries —
 config failures, SQL errors, rejected reads, hook failures, timeouts — to
 stderr, with exit code `1`.
+
+#### `--format {auto,table,json}`
+
+How to render the result rows — the same flag [the REPL](#output-format)
+takes, with the same `auto` default. A one-shot query is usually piped, so
+`auto` usually means JSON; `--format table` is there for the times it is not.
 
 ### Exit codes
 

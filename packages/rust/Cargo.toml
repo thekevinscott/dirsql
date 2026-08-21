@@ -46,6 +46,7 @@ cli = [
     "dep:axum",
     "dep:clap",
     "dep:futures",
+    "dep:reedline",
     "dep:tokio-stream",
     "tokio/rt-multi-thread",
     "tokio/macros",
@@ -64,6 +65,9 @@ globset = "0.4"
 # semantics), without adopting its walker: the scan keeps `walkdir`.
 ignore = "0.4"
 notify = "7"
+# The REPL's interactive line editor (history, Ctrl+R, multi-line entry).
+# CLI-only: a library consumer never pulls crossterm.
+reedline = { version = "0.49", optional = true }
 rusqlite = { version = "0.34", features = ["bundled", "load_extension", "hooks", "vtab", "functions"] }
 serde.workspace = true
 serde_json.workspace = true
