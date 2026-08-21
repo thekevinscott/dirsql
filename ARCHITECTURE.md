@@ -31,6 +31,55 @@ prior `[table.columns]` source-dispatch and the `format` / `each` config
 keys were ripped out; the per-format parser zoo (`Format::Json`, `Csv`,
 `Yaml`, `Toml`, `Frontmatter`, …) is gone.
 
+## Two table kinds, opposite trade-offs
+
+The two kinds above are not a general mechanism and a limited one. They are a
+choice the user makes per table, and each buys what the other gives up.
+
+A **path-table** costs nothing to reach for. `FROM './**/*.json'` needs no
+config file, no DDL and no hook; the table is minted in `temp` when the
+statement runs, so it lives and dies with the connection. Nothing is stored:
+the filesystem is walked during the query and `content` is read only if a
+column names it. What you get for that is freshness with no machinery — a file
+written a second ago is in the next statement's results, because there is no
+copy of the tree to go stale.
+
+A **declared table** costs a `[[table]]` entry and an `on-file` hook. In
+exchange it is an ordinary SQLite table: rows are inserted during the build,
+the watcher keeps them current as files change, `--persist` carries them
+across restarts, and its `ddl` batch can create anything SQLite can — a
+`CREATE INDEX`, an FTS5 vtab, a `vec0` vtab, and the triggers that keep them
+current.
+
+The asymmetry is structural, not an unfinished path-table. Indexes,
+persistence and the watcher all need rows that outlive the statement that
+asked for them, and a path-table deliberately has none — it stores nothing,
+which is exactly why it is always current and needs no setup. A table cannot
+both hold no state and index its state.
+
+So the trade reads:
+
+|  | Path-table | Declared table |
+| --- | --- | --- |
+| Setup | none | `[[table]]` entry + `on-file` hook |
+| Cost per query | walks the matched tree | reads rows from SQLite |
+| Freshness | always current | watcher-maintained |
+| Survives restart | no | with `--persist` |
+| Indexes (B-tree, FTS5, vector) | no | in the `ddl` batch |
+
+Reach for a path-table when the question is ad hoc, or the tree is small
+enough that walking it is not worth avoiding. Declare a table when the same
+tree is queried repeatedly, is large, or wants keyword or vector search. The
+two are ordinary SQLite tables once resolved, so a query is free to join one
+against the other.
+
+The user-facing versions of both sides are
+[Query files without a config](https://thekevinscott.github.io/dirsql/howto/query-without-config)
+and
+[Define tables for your files](https://thekevinscott.github.io/dirsql/howto/define-tables);
+the index templates are in
+[Add a search index to a table](https://thekevinscott.github.io/dirsql/howto/search-indexes).
+
 ## Read-only by design
 
 **dirsql never modifies the directory it indexes.** It opens files for reading
@@ -165,7 +214,7 @@ reinvent what SQLite expresses natively*. `validate_identifier` remains: `name`
 is spliced into `format!()`-built INSERT/DELETE SQL, so it is still the
 injection guard.
 
-**Named tables are real; path-tables are virtual.** A declared `[[table]]` (or programmatic `Table`) is a real SQLite table whose rows are inserted on build and maintained by the watcher — the `db` module above. A [path-table](../docs/reference/path-tables.md) (`SELECT * FROM './'`, epic path-as-table) is a `dirsql_path` **virtual table** (`vtab.rs` / `path_table.rs`, rusqlite's `vtab` feature): no rows are stored, no reconcile or watcher runs, and the filesystem is walked live at query time (`xFilter`/`xNext` enumerate matched files; `xColumn` supplies stat values and lazily reads `content`). SQLite stays the entire query engine either way; the vtab only enumerates rows and supplies column values. Path-tables are registered on demand — see *Query execution* below.
+**Named tables are real; path-tables are virtual.** A declared `[[table]]` (or programmatic `Table`) is a real SQLite table whose rows are inserted on build and maintained by the watcher — the `db` module above. A [path-table](https://thekevinscott.github.io/dirsql/reference/path-tables) (`SELECT * FROM './'`, epic path-as-table) is a `dirsql_path` **virtual table** (`vtab.rs` / `path_table.rs`, rusqlite's `vtab` feature): no rows are stored, no reconcile or watcher runs, and the filesystem is walked live at query time (`xFilter`/`xNext` enumerate matched files; `xColumn` supplies stat values and lazily reads `content`). SQLite stays the entire query engine either way; the vtab only enumerates rows and supplies column values. Path-tables are registered on demand — see *Query execution* below.
 
 ### `scanner` -- Directory traversal
 
