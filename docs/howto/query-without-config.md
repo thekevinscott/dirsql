@@ -55,7 +55,9 @@ question over a few hundred files, wasteful for a large tree you query
 repeatedly. When that day comes, [declare a table](./define-tables.md): it is
 indexed once, kept fresh by the watcher, and can persist across restarts. The
 zero-config query is the floor; a named table is the escalation path — nothing
-you write here has to be thrown away to get there.
+you write here has to be thrown away to get there. The two sides in full, and
+why indexes belong to only one of them, are in
+[how `dirsql` thinks](../explanation.md#two-table-kinds-opposite-trade-offs).
 
 ## Notes
 

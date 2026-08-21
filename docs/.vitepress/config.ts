@@ -56,6 +56,7 @@ export default defineConfig({
             { text: 'Parse your files into columns', link: '/howto/parse-files-into-columns' },
             { text: 'Query JSON file contents', link: '/howto/query-json' },
             { text: 'Search documents by meaning', link: '/howto/search-by-meaning' },
+            { text: 'Add a search index to a table', link: '/howto/search-indexes' },
             { text: "Skip files you don't want indexed", link: '/howto/skip-files' },
             { text: 'Load a SQLite extension', link: '/howto/load-extension' },
             { text: 'Keep the index across restarts', link: '/howto/persist' },

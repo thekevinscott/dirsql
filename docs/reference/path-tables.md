@@ -190,7 +190,13 @@ That is the right trade for a hundreds-of-files, run-it-once question. When the
 same tree is queried repeatedly, or is large, declare a
 [table](/reference/config) for it instead — a declared table is indexed on
 build, kept fresh by the watcher, and (with `--persist`) survives restarts, so
-its rows are read from SQLite rather than re-walked each time.
+its rows are read from SQLite rather than re-walked each time. It is also the
+only place a keyword or vector index can live
+([templates](/howto/search-indexes)).
+
+Neither kind is the better one: each buys what the other gives up, and the
+choice is stated as one trade in
+[how `dirsql` thinks](/explanation#two-table-kinds-opposite-trade-offs).
 
 ## Skip rules
 

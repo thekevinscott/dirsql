@@ -107,7 +107,9 @@ maintain nothing. `name` still has to be the row table (`posts`); the virtual
 table lives beside it under its own name. The batch runs once, when the table
 is created, and editing any part of it rebuilds a
 [persistent cache](./persist.md) from scratch. Full rules:
-[Batch `ddl`](../reference/config.md#batch-ddl).
+[Batch `ddl`](../reference/config.md#batch-ddl); pasteable FTS5 and vector
+templates, with the trigger mistakes that fail silently, are in
+[Add a search index to a table](./search-indexes.md).
 
 ## Going further
 
