@@ -53,7 +53,12 @@ def describe_python_table():
         source = PYTHON.replace("PLATFORMS: tuple[Platform, ...] =", "PLATFORMS =")
         assert len(python_table(source)[1]) == 2
 
-    def it_rejects_a_module_with_no_platform_class():
+    @pytest.mark.parametrize("name", ["Machine", "Target"])
+    def it_rejects_a_module_whose_only_class_is_named_otherwise(name):
+        with pytest.raises(ParseError, match="no `class Platform`"):
+            python_table(f"class {name}:\n    slug: str\n\n\nPLATFORMS = ()\n")
+
+    def it_rejects_a_module_with_no_class_at_all():
         with pytest.raises(ParseError, match="no `class Platform`"):
             python_table("PLATFORMS = ()\n")
 
@@ -61,18 +66,32 @@ def describe_python_table():
         with pytest.raises(ParseError, match="declares no annotated fields"):
             python_table("class Platform:\n    pass\n\n\nPLATFORMS = ()\n")
 
+    @pytest.mark.parametrize("name", ["OTHERS", "TARGETS"])
+    def it_rejects_a_table_bound_under_another_name(name):
+        with pytest.raises(ParseError, match="no module-level"):
+            python_table(f"class Platform:\n    slug: str\n\n\n{name} = ()\n")
+
     def it_rejects_a_module_with_no_table():
         with pytest.raises(ParseError, match="no module-level"):
             python_table("class Platform:\n    slug: str\n")
+
+    def it_reads_a_table_bound_alongside_another_name():
+        source = "class Platform:\n    slug: str\n\n\nOTHERS = PLATFORMS = (Platform('a'),)\n"
+        assert python_table(source)[1] == [{"slug": "a"}]
 
     def it_rejects_a_computed_table():
         source = PYTHON.replace("PLATFORMS: tuple[Platform, ...] = (", "PLATFORMS = tuple(")
         with pytest.raises(ParseError, match="not a tuple or list literal"):
             python_table(source.replace(")\n", ")\n", 1))
 
-    def it_rejects_a_row_that_is_not_a_platform_call():
+    @pytest.mark.parametrize("row", ["1", "Machine('a')", "Target('a')"])
+    def it_rejects_a_row_that_is_not_a_platform_call(row):
         with pytest.raises(ParseError, match="literal `Platform"):
-            python_table("class Platform:\n    slug: str\n\n\nPLATFORMS = (1,)\n")
+            python_table(f"class Platform:\n    slug: str\n\n\nPLATFORMS = ({row},)\n")
+
+    def it_accepts_a_row_that_fills_every_field_positionally():
+        source = "class Platform:\n    slug: str\n\n\nPLATFORMS = (Platform('a'),)\n"
+        assert python_table(source)[1] == [{"slug": "a"}]
 
     def it_rejects_a_row_with_more_positionals_than_fields():
         with pytest.raises(ParseError, match="positional arguments"):
@@ -100,6 +119,19 @@ def describe_typescript_table():
     def it_normalizes_single_quoted_strings():
         assert typescript_table("const PLATFORMS = [{ os: ['linux'] }];") == [{"os": ["linux"]}]
 
+    def it_unwraps_a_single_quoted_string_without_trimming_its_contents():
+        assert typescript_table("const PLATFORMS = [{ os: ['aba'] }];") == [{"os": ["aba"]}]
+
+    def it_unwraps_a_template_literal():
+        assert typescript_table("const PLATFORMS = [{ os: [`aba`] }];") == [{"os": ["aba"]}]
+
+    def it_keeps_a_double_quoted_string_verbatim():
+        assert typescript_table('const PLATFORMS = [{ os: ["aba"] }];') == [{"os": ["aba"]}]
+
+    def it_finds_the_array_when_a_comment_mentions_a_bracket():
+        source = "// see PLATFORMS = [ elsewhere\nconst PLATFORMS = [{ os: ['a'] }];"
+        assert typescript_table(source) == [{"os": ["a"]}]
+
     def it_keeps_an_escape_sequence_inside_a_string():
         assert typescript_table(r'const PLATFORMS = [{ os: "a\"b" }];') == [{"os": 'a"b'}]
 
@@ -107,25 +139,20 @@ def describe_typescript_table():
         with pytest.raises(ParseError, match="no `PLATFORMS"):
             typescript_table("export const OTHER = [];\n")
 
-    def it_rejects_an_unbalanced_array():
-        with pytest.raises(ParseError, match="unbalanced"):
-            typescript_table("const PLATFORMS = [{ os: [] }\n")
-
-    def it_rejects_an_unterminated_block_comment():
-        with pytest.raises(ParseError, match="unterminated block comment"):
-            typescript_table("const PLATFORMS = [ /* open\n")
-
-    def it_rejects_an_unterminated_string():
-        with pytest.raises(ParseError, match="unterminated string"):
-            typescript_table('const PLATFORMS = [{ os: "open\n')
-
-    def it_rejects_an_unterminated_string_ending_in_a_backslash():
-        with pytest.raises(ParseError, match="unterminated string"):
-            typescript_table('const PLATFORMS = [{ os: "open\\')
-
-    def it_rejects_a_line_comment_that_runs_to_the_end_of_the_file():
-        with pytest.raises(ParseError, match="unbalanced"):
-            typescript_table("const PLATFORMS = [ // open")
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "const PLATFORMS = [{ os: [] }\n",
+            "const PLATFORMS = [ /* open\n",
+            'const PLATFORMS = [{ os: "open\n',
+            'const PLATFORMS = [{ os: "open\\',
+            "const PLATFORMS = [ // open",
+        ],
+        ids=["unclosed-array", "unclosed-block-comment", "unclosed-string", "trailing-backslash", "comment-to-eof"],
+    )
+    def it_rejects_a_table_it_cannot_read_to_the_end(source):
+        with pytest.raises(ParseError, match="not a plain array"):
+            typescript_table(source)
 
     def it_rejects_an_entry_that_is_not_an_object_literal():
         with pytest.raises(ParseError, match="object literal"):

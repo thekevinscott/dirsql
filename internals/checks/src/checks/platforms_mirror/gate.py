@@ -21,7 +21,6 @@ def read(path: str) -> str:
 def run(
     python_path: str,
     typescript_path: str,
-    *,
     source: Callable[[str], str] = read,
     echo: Callable[[str], None] = print,
 ) -> int:

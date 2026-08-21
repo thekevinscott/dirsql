@@ -32,6 +32,16 @@ SHARED = {
 LIB_PREFIX = "@dirsql/lib-"
 
 
+def _slug(lib_name: str) -> str:
+    return lib_name.removeprefix(LIB_PREFIX)
+
+
+# Python field -> how its TypeScript value is derived, for the fields that are
+# not a straight read. Keyed rather than branched so the field name is never
+# compared, only looked up.
+DERIVE = {"slug": _slug}
+
+
 def key(node_platform: str, node_arch: str) -> str:
     return f"{node_platform}-{node_arch}"
 
@@ -51,9 +61,10 @@ def unmirrored_fields(fields) -> list[str]:
 def typescript_value(field: str, row: dict):
     """``row``'s value for a Python field name."""
     value = row.get(SHARED[field])
-    if field == "slug" and isinstance(value, str):
-        return value.removeprefix(LIB_PREFIX)
-    return value
+    derive = DERIVE.get(field)
+    if derive is None or not isinstance(value, str):
+        return value
+    return derive(value)
 
 
 def prefix_problems(rows) -> list[str]:
@@ -74,7 +85,7 @@ def missing_rows(python_keys, typescript_rows) -> list[str]:
         f"{key(row['nodePlatform'], row['nodeArch'])} is published by platforms.ts "
         f"but has no row in platforms.py. Add "
         f"Platform({row['nodePlatform']!r}, {row['nodeArch']!r}, "
-        f"{str(row.get('libName', '')).removeprefix(LIB_PREFIX)!r}, {row.get('os')!r}, "
+        f"{_slug(str(row.get('libName', '')))!r}, {row.get('os')!r}, "
         f"{row.get('cpu')!r}) to PLATFORMS in {PYTHON_FILE}, or the node distcheck "
         f"flow cannot resolve the new target on that host."
         for row in typescript_rows

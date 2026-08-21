@@ -3,7 +3,9 @@ dicts in, messages out).
 """
 
 from checks.platforms_mirror.decide import (
+    DERIVE,
     SHARED,
+    _slug,
     field_problems,
     missing_rows,
     prefix_problems,
@@ -71,6 +73,14 @@ def describe_typescript_value():
     def it_leaves_a_lib_name_without_the_prefix_alone():
         assert typescript_value("slug", {"libName": "@dirsql/nope"}) == "@dirsql/nope"
 
+    def it_derives_only_the_fields_that_need_it():
+        assert set(DERIVE) == {"slug"}
+        assert _slug("@dirsql/lib-darwin-arm64") == "darwin-arm64"
+
+    def it_does_not_strip_a_prefix_off_a_straight_read_field():
+        row = {"nodePlatform": "@dirsql/lib-linux"}
+        assert typescript_value("node_platform", row) == "@dirsql/lib-linux"
+
     def it_returns_none_for_a_missing_property():
         assert typescript_value("slug", {}) is None
 
@@ -123,6 +133,12 @@ def describe_field_problems():
     def it_reports_every_disagreeing_field():
         drifted = {**PY_LINUX, "cpu": ["arm64"], "slug": "nope"}
         assert len(field_problems(drifted, TS_LINUX)) == 2
+
+    def it_reports_a_value_that_sorts_after_the_typescript_one():
+        # The pair above drifts *below* platforms.ts; this one drifts above, so
+        # neither ordering can stand in for the inequality.
+        (message,) = field_problems({**PY_LINUX, "slug": "zzz"}, TS_LINUX)
+        assert message.startswith("linux-x64: slug is 'zzz' in platforms.py")
 
 
 def describe_problems():
