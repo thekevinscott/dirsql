@@ -134,6 +134,16 @@ fn touch_into_the_future(path: &Path) {
     fs::File::open(path).unwrap().set_modified(future).unwrap();
 }
 
+/// Pin a file's mtime far enough ahead that every cache written during the
+/// test predates it. That is the racy window: the cache write does not postdate
+/// the file's mtime, so the stat tuple alone cannot settle whether the file
+/// changed and the reuse decision falls through to the content hash.
+fn pin_inside_the_racy_window(path: &Path) -> SystemTime {
+    let pinned = SystemTime::now() + Duration::from_secs(3600);
+    fs::File::open(path).unwrap().set_modified(pinned).unwrap();
+    pinned
+}
+
 #[test]
 fn unchanged_second_run_reuses_the_cache_instead_of_reparsing() {
     let fx = Fixture::with_corpus(CORPUS);
@@ -260,5 +270,87 @@ fn a_changed_parser_command_invalidates_the_cached_rows() {
     assert!(
         rows.iter().all(|r| r.ends_with("Text(\"other\")")),
         "the new parser's rows are served, not the cached ones: {rows:?}",
+    );
+}
+
+#[test]
+fn files_inside_the_racy_window_are_hash_confirmed_rather_than_reparsed() {
+    // Every file is pinned into the window, so no reuse decision here can be
+    // settled by the stat tuple: each one is reused only if its content hash
+    // confirms it. A hash that cannot be computed cannot confirm, and the whole
+    // corpus goes back to the parser.
+    let fx = Fixture::with_corpus(8);
+    let parser = fx.parser("parse.sh", ECHO_FILE);
+    let pinned: Vec<SystemTime> = (0..8)
+        .map(|i| pin_inside_the_racy_window(&fx.file(i)))
+        .collect();
+
+    let (cold_rows, _) = fx.run(&parser, true);
+
+    assert_eq!(fx.parses(), 8, "the cold run parses every file once");
+    let now = SystemTime::now();
+    assert!(
+        pinned.iter().all(|mtime| *mtime > now),
+        "the cold run must finish before the pinned mtimes, or the corpus is \
+         not in the racy window and this test proves nothing",
+    );
+    fx.reset_counter();
+
+    let (warm_rows, _) = fx.run(&parser, true);
+
+    assert_eq!(
+        fx.parses(),
+        0,
+        "a hash-confirmed file must not reach the parser",
+    );
+    assert_eq!(warm_rows, cold_rows, "the warm run returns the same rows");
+}
+
+#[test]
+fn content_that_leaves_the_stat_tuple_untouched_is_caught_by_the_hash() {
+    // The one edit the stat tuple cannot see: same size, same mtime, same
+    // inode, different bytes. Inside the racy window the content hash is the
+    // only thing standing between the query and a stale cached payload.
+    let fx = Fixture::with_corpus(8);
+    let parser = fx.parser("parse.sh", ECHO_FILE);
+    let edited = fx.file(3);
+    let pinned = pin_inside_the_racy_window(&edited);
+
+    let (cold_rows, _) = fx.run(&parser, true);
+    assert!(cold_rows.contains(&"Integer(3)|Text(\"v1\")".to_string()));
+    let before = fs::metadata(&edited).unwrap();
+    fx.reset_counter();
+
+    // `payload` is the same length for either tag, so rewriting in place leaves
+    // size, inode and device alone; restoring the mtime leaves the rest.
+    fs::write(&edited, payload(3, "v2")).unwrap();
+    fs::File::open(&edited)
+        .unwrap()
+        .set_modified(pinned)
+        .unwrap();
+
+    let after = fs::metadata(&edited).unwrap();
+    assert_eq!(
+        after.len(),
+        before.len(),
+        "the edit must not change the size"
+    );
+    assert_eq!(
+        after.modified().unwrap(),
+        before.modified().unwrap(),
+        "the edit must not change the mtime",
+    );
+    assert_eq!(
+        after.created().ok(),
+        before.created().ok(),
+        "the edit must not change the creation time",
+    );
+
+    let (rows, _) = fx.run(&parser, true);
+
+    assert_eq!(fx.parses(), 1, "the edited file, and only it, is re-parsed");
+    assert!(
+        rows.contains(&"Integer(3)|Text(\"v2\")".to_string()),
+        "the edited file's new rows are returned, not its cached ones: {rows:?}",
     );
 }
