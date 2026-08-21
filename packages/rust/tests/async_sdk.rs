@@ -202,6 +202,19 @@ async fn start_watching_and_poll_events_forward() {
     );
 }
 
+/// Deadlock backstop for the parked-init handshake below. Generous: nothing
+/// here is a timing assertion, it is the bound that turns a scan which never
+/// reaches the extract closure into a failure instead of a wedged test binary.
+const PARK_PATIENCE: Duration = Duration::from_secs(30);
+
+/// The parked-init handshake: `parked` is raised by the extract closure on
+/// arrival, `released` by the test once its assertions are done.
+#[derive(Default)]
+struct Gate {
+    parked: bool,
+    released: bool,
+}
+
 #[tokio::test]
 async fn sync_backed_methods_before_ready_error() {
     let root = TempDir::new().unwrap();
@@ -209,16 +222,25 @@ async fn sync_backed_methods_before_ready_error() {
 
     // Background init runs eagerly, so merely "not awaiting ready()" races
     // it. Instead, park init deterministically: the extract closure blocks
-    // on a barrier released only after the assertions, so init cannot
-    // complete during the assertion window.
-    let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
+    // until the assertions release it, so init cannot complete during the
+    // assertion window.
+    let gate = std::sync::Arc::new((
+        std::sync::Mutex::new(Gate::default()),
+        std::sync::Condvar::new(),
+    ));
     let gate_in_extract = gate.clone();
     let gated_table = Table::new(
         "items",
         "CREATE TABLE items (name TEXT)",
         "**/*.txt",
         move |_| {
-            gate_in_extract.wait();
+            let (lock, cvar) = &*gate_in_extract;
+            let mut state = lock.lock().unwrap();
+            state.parked = true;
+            cvar.notify_all();
+            let _ = cvar
+                .wait_timeout_while(state, PARK_PATIENCE, |s| !s.released)
+                .unwrap();
             vec![HashMap::from([(
                 "name".into(),
                 Value::Text("apple".into()),
@@ -260,9 +282,21 @@ async fn sync_backed_methods_before_ready_error() {
         "got: {watch_err}"
     );
 
-    // Release init and let it finish so the background thread does not
-    // outlive the TempDir.
-    gate.wait();
+    // Init parks in the extract closure, which is reached only if the scan
+    // matched `gate.txt`. Prove it arrived, then release it and let it finish
+    // so the background thread does not outlive the TempDir.
+    let (lock, cvar) = &*gate;
+    let (mut state, wait) = cvar
+        .wait_timeout_while(lock.lock().unwrap(), PARK_PATIENCE, |s| !s.parked)
+        .unwrap();
+    assert!(
+        !wait.timed_out(),
+        "init never reached the extract closure: the scan matched no file, so \
+         this test never exercised a parked init",
+    );
+    state.released = true;
+    cvar.notify_all();
+    drop(state);
     db.ready().await.unwrap();
 }
 
