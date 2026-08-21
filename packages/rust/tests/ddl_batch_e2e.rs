@@ -9,10 +9,13 @@
 
 #![cfg(all(feature = "cli", unix))]
 
+mod common;
+
 use std::fs;
 use std::process::Output;
 
 use assert_cmd::prelude::*;
+use common::build_fixture_extension;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -39,6 +42,21 @@ fn query(root: &TempDir, sql: &str) -> Output {
         .current_dir(root.path())
         .output()
         .expect("spawning `dirsql query` failed")
+}
+
+/// Like [`query`], but keeps the on-disk cache across runs (`--persist`), so a
+/// second invocation reuses — or, on an edited `ddl`, sweeps — the first's.
+fn query_persist(root: &TempDir, sql: &str) -> Output {
+    std::process::Command::cargo_bin("dirsql")
+        .expect("`dirsql` binary must be built with --features cli")
+        .arg("query")
+        .arg(sql)
+        .arg("--config")
+        .arg(root.path().join(".dirsql.toml"))
+        .arg("--persist")
+        .current_dir(root.path())
+        .output()
+        .expect("spawning `dirsql query --persist` failed")
 }
 
 fn rows(out: &Output) -> Vec<Value> {
@@ -153,5 +171,65 @@ ddl = "CREATE VIRTUAL TABLE records USING fts5(id, body)"
     assert!(
         stderr.contains("table 'records'") && stderr.contains("virtual"),
         "stderr must name the entry and say the table is virtual, got {stderr:?}"
+    );
+}
+
+/// Editing the `ddl` of a `--persist` cache that holds a virtual table from a
+/// loaded extension must rebuild it, not wedge it. The sweep that precedes the
+/// rebuild issues `DROP TABLE records_ext`, which only a connection carrying
+/// the extension's module can execute — and once it fails, every later run
+/// repeats the failure until the cache is deleted by hand.
+#[test]
+fn a_persisted_cache_holding_an_extension_virtual_table_survives_a_ddl_edit() {
+    let ext = build_fixture_extension();
+    let config = |extra: &str| {
+        format!(
+            r#"
+[[dirsql.extension]]
+path = "{}"
+entrypoint = "sqlite3_extension_init"
+
+[[table]]
+name = "records"
+glob = "data/*.json"
+on-file = "cat {{path}}"
+ddl = '''
+CREATE TABLE records (id TEXT, body TEXT);
+CREATE VIRTUAL TABLE records_ext USING dirsql_testext_vtab();{extra}
+'''
+"#,
+            ext.display(),
+        )
+    };
+
+    let root = fixture(&config(""));
+    let first = query_persist(&root, "SELECT n FROM records_ext");
+    assert_eq!(
+        rows(&first)[0]["n"],
+        Value::from(42),
+        "the extension's virtual table must be queryable on a cold build"
+    );
+
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        config("\nCREATE INDEX records_id ON records(id);"),
+    )
+    .unwrap();
+
+    let second = query_persist(&root, "SELECT n FROM records_ext");
+    assert!(
+        second.status.success(),
+        "an edited ddl must sweep and rebuild the cache, stderr: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert_eq!(rows(&second)[0]["n"], Value::from(42));
+
+    // The wedge the issue describes is permanent: assert the *next* run is
+    // clean too, not merely that one rebuild squeaked through.
+    let third = query_persist(&root, "SELECT n FROM records_ext");
+    assert!(
+        third.status.success(),
+        "the rebuilt cache must stay openable, stderr: {}",
+        String::from_utf8_lossy(&third.stderr)
     );
 }

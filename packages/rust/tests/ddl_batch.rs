@@ -5,7 +5,10 @@
 //! settled afterwards against SQLite's own catalog. That is what makes
 //! indexes, FTS5 virtual tables and triggers expressible in config.
 
-use dirsql::{DirSQL, Row, Table, Value};
+mod common;
+
+use common::build_fixture_extension;
+use dirsql::{DirSQL, Extension, Row, Table, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -24,6 +27,12 @@ END;
 CREATE TRIGGER notes_ad AFTER DELETE ON notes BEGIN
   INSERT INTO notes_fts(notes_fts, rowid, body) VALUES ('delete', old.rowid, old.body);
 END;";
+
+/// The same shape as [`FTS_DDL`], but the virtual table's module arrives with
+/// a loaded extension instead of being compiled into SQLite.
+const EXT_VTAB_DDL: &str = "\
+CREATE TABLE notes (path TEXT, body TEXT);
+CREATE VIRTUAL TABLE notes_ext USING dirsql_testext_vtab();";
 
 /// A `notes` table whose rows are each markdown file's name and contents.
 fn notes_table(ddl: &str) -> Table {
@@ -57,6 +66,18 @@ fn build_persist(root: &Path, ddl: &str) -> dirsql::Result<DirSQL> {
     DirSQL::builder()
         .root(root)
         .table(notes_table(ddl))
+        .persist(None::<&Path>)
+        .build()
+}
+
+fn build_persist_with_extension(root: &Path, ddl: &str, ext: &Path) -> dirsql::Result<DirSQL> {
+    DirSQL::builder()
+        .root(root)
+        .table(notes_table(ddl))
+        .extension(Extension {
+            path: ext.to_path_buf(),
+            entrypoint: Some("sqlite3_extension_init".into()),
+        })
         .persist(None::<&Path>)
         .build()
 }
@@ -252,4 +273,33 @@ fn a_rebuild_sweeps_a_cache_holding_virtual_tables() {
         1,
         "the rebuilt index must hold the re-ingested row, got {hits:?}"
     );
+}
+
+/// The sibling [`a_rebuild_sweeps_a_cache_holding_virtual_tables`] cannot be:
+/// FTS5's module is compiled into SQLite, so it is registered on every
+/// connection whether or not dirsql configured anything. A module that arrives
+/// with a `[[dirsql.extension]]` is registered only where that extension was
+/// loaded — so the sweep must run somewhere that loaded it, or `DROP TABLE`
+/// answers `no such module` and the cache is wedged for every later run.
+#[test]
+fn a_rebuild_sweeps_a_cache_holding_an_extension_backed_virtual_table() {
+    let ext = build_fixture_extension();
+    let root = TempDir::new().unwrap();
+    seed(root.path());
+    drop(build_persist_with_extension(root.path(), EXT_VTAB_DDL, &ext).expect("first build"));
+
+    let db = build_persist_with_extension(
+        root.path(),
+        &format!("{EXT_VTAB_DDL}\nCREATE INDEX notes_path ON notes(path);"),
+        &ext,
+    )
+    .expect("sweeping a cache holding an extension-provided virtual table must succeed");
+
+    let rows = db.query("SELECT n FROM notes_ext").unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "the rebuilt batch must have re-created the extension's virtual table, got {rows:?}"
+    );
+    assert_eq!(rows[0]["n"], Value::Integer(42));
 }

@@ -787,6 +787,7 @@ impl DirSQL {
                 deleted,
                 meta: ctx.expected_meta,
                 meta_current: ctx.meta_current,
+                needs_sweep: ctx.needs_sweep,
             }),
             poll_interval,
             path_table_parser,
@@ -841,13 +842,13 @@ impl DirSQL {
             no_ignore,
         } = prepared;
 
-        let (mut db, persist_ready) = match persist {
+        let (mut db, persist_ready, needs_sweep) = match persist {
             Some(p) => {
                 let mut db = p.db;
                 db.set_path_table_cache(p.path);
-                (db, Some((p.deleted, p.meta, p.meta_current)))
+                (db, Some((p.deleted, p.meta, p.meta_current)), p.needs_sweep)
             }
-            None => (Db::new()?, None),
+            None => (Db::new()?, None, false),
         };
         db.set_path_table_root(root.clone());
         db.set_hint_legacy_files_table(hint_legacy_files_table);
@@ -872,6 +873,17 @@ impl DirSQL {
         // to queries. Registration is inert: no worker process exists until a
         // query's first call to the function.
         functions::register_all(db.conn(), &functions).map_err(DirSqlError::sqlite)?;
+
+        // Sweep a cache the reconcile rejected. It happens *here*, after the
+        // extensions and functions are on the connection, rather than where
+        // the cache was opened: the drop has to see the same modules the batch
+        // that created these tables saw. A virtual table from a
+        // `[[dirsql.extension]]` is undroppable otherwise -- `DROP TABLE`
+        // answers `no such module`, and the cache stays wedged on every later
+        // run until it is deleted by hand (#1008).
+        if needs_sweep {
+            drop_user_tables(db.conn()).map_err(DirSqlError::sqlite)?;
+        }
 
         let mut on_file_map: HashMap<String, Arc<OnFileFn>> = HashMap::new();
         let mut strict_map: HashMap<String, bool> = HashMap::new();
@@ -1423,6 +1435,10 @@ pub struct PreparedPersist {
     /// write is skipped, so a run that changed nothing leaves the cache file
     /// byte-for-byte alone.
     meta_current: bool,
+    /// Whether the stale cache still has to be swept. Carried across the split
+    /// so the drop runs on a fully configured connection — see
+    /// [`PersistContext::needs_sweep`].
+    needs_sweep: bool,
 }
 
 /// A file the reconcile decided to trust: its cached rows are kept as-is and
@@ -1444,6 +1460,13 @@ struct PersistContext {
     expected_meta: HashMap<String, String>,
     /// Whether the on-disk meta already equals `expected_meta`.
     meta_current: bool,
+    /// Whether the cache holds tables from an incompatible prior run that must
+    /// be dropped before the DDL batch re-creates them. The drop itself is
+    /// deferred to `finish_build`, which runs it once the connection carries
+    /// the configured extensions and functions: dropping a virtual table needs
+    /// its module registered, and an extension-provided module exists only on
+    /// a connection that loaded that extension (#1008).
+    needs_sweep: bool,
 }
 
 fn compile_matcher(
@@ -1476,9 +1499,9 @@ fn compile_matcher(
 }
 
 /// Open (or create) the persistent SQLite cache and read its meta. If the
-/// meta is missing or incompatible with the current build, the cache is
-/// wiped and the resulting [`PersistContext`] carries an empty file index,
-/// so the rest of the pipeline treats every file as new.
+/// meta is missing or incompatible with the current build, the resulting
+/// [`PersistContext`] carries an empty file index and asks for a sweep, so
+/// the rest of the pipeline treats every file as new.
 fn prepare_persist(
     root: &Path,
     tables: &[Table],
@@ -1501,7 +1524,6 @@ fn prepare_persist(
     let cached = if compatible {
         read_cached_files(db.conn()).map_err(DirSqlError::sqlite)?
     } else {
-        drop_user_tables(db.conn()).map_err(DirSqlError::sqlite)?;
         HashMap::new()
     };
 
@@ -1513,6 +1535,7 @@ fn prepare_persist(
         // equality, which is what lets the write be skipped outright.
         meta_current: compatible && cached_meta.len() == expected_meta.len(),
         expected_meta,
+        needs_sweep: !compatible,
     })
 }
 
@@ -2629,6 +2652,7 @@ mod internal_tests {
             cached,
             expected_meta: HashMap::new(),
             meta_current: false,
+            needs_sweep: false,
         };
         let scanned = vec![(abs.clone(), "t".to_string())];
         let (to_parse, trusted, deleted) =
@@ -2666,6 +2690,7 @@ mod internal_tests {
             cached,
             expected_meta: HashMap::new(),
             meta_current: false,
+            needs_sweep: false,
         };
         let scanned = vec![(abs.clone(), "t".to_string())];
         let (to_parse, trusted, _deleted) =
@@ -2683,6 +2708,7 @@ mod internal_tests {
             cached: HashMap::new(),
             expected_meta: HashMap::new(),
             meta_current: false,
+            needs_sweep: false,
         };
         let missing = dir.path().join("ghost.txt");
         let scanned = vec![(missing, "t".to_string())];
@@ -3350,6 +3376,57 @@ mod internal_tests {
         let ctx = prepare_persist(dir.path(), &tables, &[], None).unwrap();
         assert!(ctx.cached.is_empty());
         assert!(!ctx.expected_meta.is_empty());
+        assert!(
+            ctx.needs_sweep,
+            "an incompatible cache must be handed on for sweeping"
+        );
+    }
+
+    /// The counterpart: a cache whose meta matches keeps its tables, so no
+    /// sweep is requested and the warm rows survive.
+    #[test]
+    fn prepare_persist_warm_cache_asks_for_no_sweep() {
+        let dir = TempDir::new().unwrap();
+        let cache = dir.path().join("cache.db");
+        let tables = vec![Table::new(
+            "t",
+            "CREATE TABLE t (x TEXT)",
+            "*.txt",
+            |_| vec![],
+        )];
+        drop(
+            DirSQL::builder()
+                .root(dir.path())
+                .tables(tables.clone())
+                .persist(Some(&cache))
+                .build()
+                .unwrap(),
+        );
+        let ctx = prepare_persist(dir.path(), &tables, &[], Some(&cache)).unwrap();
+        assert!(!ctx.needs_sweep, "a compatible cache must not be swept");
+    }
+
+    /// The sweep itself, from the build side: an edited `ddl` invalidates the
+    /// cache, and only a sweep lets the batch re-run — an un-dropped `t` reads
+    /// as a warm table and the new column never appears.
+    #[test]
+    fn an_edited_ddl_sweeps_the_cache_before_rebuilding() {
+        let dir = TempDir::new().unwrap();
+        let cache = dir.path().join("cache.db");
+        let build = |ddl: &'static str| {
+            DirSQL::builder()
+                .root(dir.path())
+                .tables(vec![Table::new("t", ddl, "*.txt", |_| vec![])])
+                .persist(Some(&cache))
+                .build()
+        };
+        drop(build("CREATE TABLE t (x TEXT)").unwrap());
+
+        let second = build("CREATE TABLE t (x TEXT, y TEXT)").unwrap();
+        assert!(
+            second.query("SELECT y FROM t").is_ok(),
+            "the rebuilt table must carry the edited batch's new column"
+        );
     }
 
     /// `snapshot_ns > mtime_ns`: the file is outside the racy window, so a
@@ -3377,6 +3454,7 @@ mod internal_tests {
             cached,
             expected_meta: HashMap::new(),
             meta_current: false,
+            needs_sweep: false,
         };
         let scanned = vec![(abs, "t".to_string())];
         let (to_parse, trusted, deleted) =
@@ -3411,6 +3489,7 @@ mod internal_tests {
             cached,
             expected_meta: HashMap::new(),
             meta_current: false,
+            needs_sweep: false,
         };
         let scanned = vec![(abs, "t".to_string())];
         let (to_parse, trusted, _deleted) =
@@ -3439,6 +3518,7 @@ mod internal_tests {
             cached,
             expected_meta: HashMap::new(),
             meta_current: false,
+            needs_sweep: false,
         };
         let fake = FakeFs::default();
         let (to_parse, trusted, deleted) =
