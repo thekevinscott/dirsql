@@ -1,0 +1,44 @@
+name: Platforms Mirror Check
+
+# `packages/ts/src/platforms.ts` is the release source of truth for the published
+# `@dirsql/lib-*` sub-packages; the node distcheck flow keeps a hand-maintained
+# Python subset of it. Nothing checked the correspondence, so it drifted in both
+# directions -- a field on the Python side justified as mirroring a TypeScript
+# property that never existed, and TypeScript-only fields with no counterpart.
+# This holds the two tables to the subset on every change to either, so a new
+# published target cannot be half-added.
+#
+# Deliberately its own workflow rather than a job in internals-distcheck-ci.yml:
+# that lane's path filter does not watch packages/ts, which is exactly where the
+# half-added-target case starts.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/ts/src/platforms.ts'
+      - 'internals/distcheck/src/distcheck/node_flow/platforms.py'
+      - 'internals/checks/src/checks/platforms_mirror/**'
+      - '.github/workflows/platforms-mirror-check.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  platforms-mirror:
+    name: Platforms mirror
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Assert the two platform tables agree on the fields they share
+        run: uv run --project internals/checks dirsql-checks platforms-mirror

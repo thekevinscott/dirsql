@@ -18,7 +18,6 @@ class Platform:
     slug: str
     os: list[str]
     cpu: list[str]
-    exe: bool
 
     @property
     def name(self) -> str:
@@ -35,15 +34,16 @@ class Platform:
         return f"dirsql.{self.slug}.node"
 
 
-# Mirror of PLATFORMS in packages/ts/src/platforms.ts (the fields the node distcheck
-# flow needs). Keep in lockstep with that file -- it is the release source of
-# truth for the published sub-packages.
+# The subset of PLATFORMS in packages/ts/src/platforms.ts this flow needs -- that
+# file is the release source of truth for the published sub-packages, and its
+# `triple` and `libc` reconstruct nothing here. `dirsql-checks platforms-mirror`
+# holds the two tables to that subset, in both directions.
 PLATFORMS: tuple[Platform, ...] = (
-    Platform("linux", "x64", "linux-x64-gnu", ["linux"], ["x64"], False),
-    Platform("linux", "arm64", "linux-arm64-gnu", ["linux"], ["arm64"], False),
-    Platform("darwin", "x64", "darwin-x64", ["darwin"], ["x64"], False),
-    Platform("darwin", "arm64", "darwin-arm64", ["darwin"], ["arm64"], False),
-    Platform("win32", "x64", "win32-x64-msvc", ["win32"], ["x64"], True),
+    Platform("linux", "x64", "linux-x64-gnu", ["linux"], ["x64"]),
+    Platform("linux", "arm64", "linux-arm64-gnu", ["linux"], ["arm64"]),
+    Platform("darwin", "x64", "darwin-x64", ["darwin"], ["x64"]),
+    Platform("darwin", "arm64", "darwin-arm64", ["darwin"], ["arm64"]),
+    Platform("win32", "x64", "win32-x64-msvc", ["win32"], ["x64"]),
 )
 
 _ARCH = {

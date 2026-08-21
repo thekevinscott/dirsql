@@ -30,6 +30,10 @@ def test_declared_deps_is_registered():
     assert "declared-deps" in main.commands
 
 
+def test_platforms_mirror_is_registered():
+    assert "platforms-mirror" in main.commands
+
+
 def test_preflight_is_registered():
     assert "preflight" in main.commands
 
