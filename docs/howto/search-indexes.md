@@ -155,8 +155,10 @@ ddl     = '''
 CREATE TABLE notes (slug TEXT, title TEXT, body TEXT);
 
 -- Width must equal what the probe printed for the model id named below.
-CREATE VIRTUAL TABLE notes_vec USING vec0(embedding float[512]);
-CREATE TRIGGER notes_vi AFTER INSERT ON notes BEGIN
+CREATE VIRTUAL TABLE notes_vec
+  USING vec0(embedding float[512] distance_metric=cosine);
+CREATE TRIGGER notes_vi AFTER INSERT ON notes
+WHEN new.body IS NOT NULL BEGIN
   INSERT INTO notes_vec(rowid, embedding)
     VALUES (new.rowid, embed(new.body, 'minishlab/potion-retrieval-32M'));
 END;
@@ -168,6 +170,29 @@ END;
 
 The delete side is an ordinary `DELETE`, not FTS5's `'delete'` command row —
 `vec0` is a normal-looking table that way.
+
+Two clauses in there are load-bearing:
+
+- **`distance_metric=cosine`.** `vec0` defaults to L2, which is not the metric
+  the rest of dirsql's semantic search uses — `vec_distance_cosine()` backs
+  both the plugin's one-liner and
+  [Search documents by meaning](./search-by-meaning.md). The two agree only for
+  vectors of equal length, so as soon as documents embed to vectors of
+  different magnitude they rank differently: against three notes, L2 returned
+  `a, c, b` where cosine returned `a, b, c`. Declaring the metric makes
+  `distance` the number `vec_distance_cosine()` would compute.
+- **`WHEN new.body IS NOT NULL`.** `embed(NULL)` is `NULL`, and `vec0` rejects
+  a NULL vector outright — so without the guard a single row whose text is
+  missing fails the **whole** table load, not just its own insert:
+
+  ```
+  dirsql query: failed to load config: SQLite error: Inserted vector for the
+  "embedding" column is invalid: Input must have type BLOB (compact format) or
+  TEXT (JSON), found NULL
+  ```
+
+  With it, that row still lands in `notes`; only its vector is skipped. FTS5
+  needs no such guard — it indexes a NULL happily.
 
 Query it with `sqlite-vec`'s KNN form, joined back on `rowid`:
 

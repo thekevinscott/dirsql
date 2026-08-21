@@ -27,7 +27,6 @@ def test_find_host_platform_linux_x64():
     assert p.addon_name == "dirsql.linux-x64-gnu.node"
     assert p.os == ["linux"]
     assert p.cpu == ["x64"]
-    assert p.exe is False
 
 
 def test_find_host_platform_arch_is_significant():
@@ -36,10 +35,9 @@ def test_find_host_platform_arch_is_significant():
 
 
 def test_find_host_platform_windows_addon_has_no_exe_suffix():
-    # The `.exe` suffix belonged to the standalone binary, which is no longer
-    # published (#739); an addon is a `.node` on every platform.
+    # An addon is a `.node` on every platform; the `.exe` suffix belonged to the
+    # standalone binary, which is no longer published (#739).
     p = find_host_platform("win32", "x64")
-    assert p.exe is True
     assert p.addon_name == "dirsql.win32-x64-msvc.node"
 
 
@@ -56,13 +54,6 @@ def test_every_platform_addon_name_matches_slug():
     for p in PLATFORMS:
         assert p.name == f"@dirsql/lib-{p.slug}"
         assert p.addon_name == f"dirsql.{p.slug}.node"
-
-
-def test_only_windows_rows_flag_exe():
-    # `exe` still marks the Windows row (it mirrors packages/ts/src/platforms.ts),
-    # but nothing derives a filename from it now that no binary is published.
-    for p in PLATFORMS:
-        assert p.exe is (p.node_platform == "win32")
 
 
 def test_platform_is_immutable():

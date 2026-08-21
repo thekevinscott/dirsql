@@ -3,10 +3,10 @@
 Ask a question in plain language and get the closest documents back — even
 when they share no keywords with it. Install
 [`dirsql-plugin-embeddings`](../plugins.md#dirsql-plugin-embeddings) and
-semantic search becomes plain SQL: the plugin's `embed()` function turns
-text into vectors, [`sqlite-vec`](https://github.com/asg017/sqlite-vec)'s
-`vec_distance_cosine()` measures distance, and `ORDER BY … LIMIT` does the
-ranking. No config, no API keys, no services — the model runs locally.
+semantic search becomes plain SQL: the plugin's `embed()` function turns text
+into vectors and loads [`sqlite-vec`](https://github.com/asg017/sqlite-vec),
+which does the distance math. No API keys, no services — the model runs
+locally.
 
 Suppose short notes live in `notes/*.md`:
 
@@ -40,7 +40,32 @@ The first-ever run downloads the model (on the order of a hundred megabytes,
 with progress on stderr); after that it loads from the local cache. Results
 print one `path<TAB>distance` line per match, closest first.
 
-## The SQL behind it
+## Which shape
+
+The one-liner embeds every matched file on every run. That is the right trade
+for a question you ask once, and the wrong one for a corpus you search
+repeatedly — where a stored [`vec0` index](./search-indexes.md#vector-search-vec0)
+embeds each file once, at ingest, and a query embeds only the question:
+
+| | This page: path-table | [Vector index](./search-indexes.md#vector-search-vec0) |
+|---|---|---|
+| Setup | none | a `[[table]]` with a `ddl` batch |
+| Freshness | always current — the walk is the read | watcher-maintained; survives restarts under [`--persist`](./persist.md) |
+| Per query | one `embed()` round trip **per matched file**, plus a walk that reads every file's content | one `embed()` round trip **total**, plus an in-process KNN scan |
+| Top-k | `ORDER BY … LIMIT k` | `MATCH … AND k = …` |
+| Good for | a one-off question, a small corpus, an ad-hoc glob | a corpus you query repeatedly |
+
+The index only pays off when the table outlives the query — under `--persist`,
+or inside a long-running [`dirsql server`](../reference/cli.md). A one-shot
+`dirsql query` against an ephemeral index rebuilds the table, and therefore
+re-embeds the corpus, before it answers; that is strictly more work than the
+subquery below. The full recipe — the width probe, the `ddl` batch, both
+triggers, and what a model-id edit costs — is
+[Add a search index to a table](./search-indexes.md#vector-search-vec0).
+
+The rest of this page is the zero-setup shape.
+
+## The SQL behind the one-liner
 
 The one-liner generates and runs ordinary `dirsql` SQL, and you can write it
 yourself when you want more than ranked paths — a different projection, a
@@ -79,7 +104,9 @@ Reading the query inside-out:
    and its distance are NULL too — and SQLite sorts NULLs *first* ascending,
    so without this line the unrankable files take the top-k slots.
 4. `vec_distance_cosine(...)` computes cosine distance between the two
-   vectors; `ORDER BY distance LIMIT 3` keeps the three nearest.
+   vectors; `ORDER BY distance LIMIT 3` keeps the three nearest. There is no
+   `vec0` table here, so `sqlite-vec`'s `MATCH … AND k = …` does not apply —
+   for a plain expression, `ORDER BY … LIMIT k` *is* its documented top-k.
 
 Structured files compose with SQL's JSON operators — embed one field instead
 of the whole file:
@@ -93,24 +120,19 @@ ORDER BY vec_distance_cosine(emb, embed('local private models'))
 LIMIT 10
 ```
 
-::: tip Top-k is `LIMIT k`
-If you know `sqlite-vec` you may reach for its `MATCH … AND k = 10` idiom.
-That syntax belongs to `sqlite-vec`'s `vec0` virtual table, which the table
-above does not use: a `[[table]]`'s own `name` is always a per-file row table.
-For plain expressions, `sqlite-vec`'s own documented pattern is exactly what
-this guide uses: `ORDER BY vec_distance_cosine(...) LIMIT k`. To get the `vec0`
-idiom instead, declare the `vec0` table alongside the row table in the same
-[`ddl` batch](../reference/config.md#batch-ddl) and fill it from a trigger.
-:::
+The same projection works as an `on-file` hook feeding the indexed shape:
+parse the field in the hook, store it as a column, and the trigger embeds it
+once instead of on every query.
 
 ## Repeat runs are cheap
 
 Computed vectors are cached on disk, keyed on content and model
 ([vector cache](../plugins.md#vector-cache)) — re-running a search over
-unchanged files skips the model entirely and re-embeds only what changed.
-And the plugin costs nothing when idle: a query that never calls `embed()`
-spawns no worker and loads no model
-([zero cost when unused](../plugins.md#zero-cost-when-unused)).
+unchanged files skips the model entirely and re-embeds only what changed. That
+takes the *inference* out of the shape above, but not the walk or the per-file
+round trip; only a stored index removes those. And the plugin costs nothing
+when idle: a query that never calls `embed()` spawns no worker and loads no
+model ([zero cost when unused](../plugins.md#zero-cost-when-unused)).
 
 ## How `embed()` gets into SQL
 
