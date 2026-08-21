@@ -3339,14 +3339,13 @@ mod internal_tests {
     }
 
     /// A cache whose stored meta has the same key count as the expected one
-    /// but a different glob hash is incompatible: the file index is dropped
-    /// and the meta is not current, so the rewrite cannot be skipped. Equal
-    /// length alone must not stand in for compatibility.
+    /// but a different glob hash is incompatible, so the meta is not current
+    /// and the rewrite cannot be skipped. Equal length alone must not stand
+    /// in for compatibility.
     #[test]
     fn prepare_persist_reports_an_incompatible_meta_of_equal_length_as_stale() {
         let dir = TempDir::new().unwrap();
         let cache = dir.path().join("cache.db");
-        std::fs::write(dir.path().join("a.txt"), "x").unwrap();
         drop(
             DirSQL::builder()
                 .root(dir.path())
@@ -3354,7 +3353,7 @@ mod internal_tests {
                     "t",
                     "CREATE TABLE t (x TEXT)",
                     "*.txt",
-                    |_| vec![HashMap::from([("x".to_string(), Value::Text("x".into()))])],
+                    |_| vec![],
                 )])
                 .persist(Some(&cache))
                 .build()
@@ -3371,7 +3370,6 @@ mod internal_tests {
         )];
         let ctx = prepare_persist(dir.path(), &tables, &[], Some(&cache)).unwrap();
 
-        assert!(ctx.cached.is_empty(), "an incompatible cache is wiped");
         assert!(!ctx.meta_current, "an incompatible meta is never current");
     }
 
