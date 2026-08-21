@@ -20,4 +20,4 @@ crate-type = ["cdylib"]
 # `loadable_extension` (not `bundled`): the host SQLite provides the symbols at
 # load time, so this links against whatever SQLite loads it — including the
 # bundled SQLite inside dirsql, since both resolve the same libsqlite3-sys.
-rusqlite = { version = "0.34", features = ["loadable_extension", "functions"] }
+rusqlite = { version = "0.34", features = ["loadable_extension", "functions", "vtab"] }
