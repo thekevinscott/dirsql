@@ -3338,6 +3338,43 @@ mod internal_tests {
         assert!(second.query("SELECT * FROM t").is_ok());
     }
 
+    /// A cache whose stored meta has the same key count as the expected one
+    /// but a different glob hash is incompatible: the file index is dropped
+    /// and the meta is not current, so the rewrite cannot be skipped. Equal
+    /// length alone must not stand in for compatibility.
+    #[test]
+    fn prepare_persist_reports_an_incompatible_meta_of_equal_length_as_stale() {
+        let dir = TempDir::new().unwrap();
+        let cache = dir.path().join("cache.db");
+        std::fs::write(dir.path().join("a.txt"), "x").unwrap();
+        drop(
+            DirSQL::builder()
+                .root(dir.path())
+                .tables(vec![Table::new(
+                    "t",
+                    "CREATE TABLE t (x TEXT)",
+                    "*.txt",
+                    |_| vec![HashMap::from([("x".to_string(), Value::Text("x".into()))])],
+                )])
+                .persist(Some(&cache))
+                .build()
+                .unwrap(),
+        );
+
+        // `build_meta` always mints the same keys, so the stored and expected
+        // blocks are the same length; only the glob hash differs.
+        let tables = vec![Table::new(
+            "t",
+            "CREATE TABLE t (x TEXT)",
+            "*.csv",
+            |_| vec![],
+        )];
+        let ctx = prepare_persist(dir.path(), &tables, &[], Some(&cache)).unwrap();
+
+        assert!(ctx.cached.is_empty(), "an incompatible cache is wiped");
+        assert!(!ctx.meta_current, "an incompatible meta is never current");
+    }
+
     #[test]
     fn prepare_persist_cold_start_reports_rebuild() {
         let dir = TempDir::new().unwrap();

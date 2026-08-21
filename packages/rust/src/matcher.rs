@@ -332,4 +332,52 @@ mod tests {
     fn placeholder_names_empty_when_none() {
         assert!(placeholder_names("data/*/metadata.json").is_empty());
     }
+
+    #[test]
+    fn placeholder_names_rejects_everything_outside_the_grammar() {
+        // The grammar is exactly `{` `[a-zA-Z_][a-zA-Z0-9_]*` `}`. Each of these
+        // fails it at a different point -- empty name, a leading digit, a
+        // disallowed interior byte, and a brace that runs off the end of the
+        // pattern -- and all are left alone rather than read as a placeholder.
+        for pattern in ["{}", "{1a}", "{a-b}", "{a b}", "{", "a{", "{a", "{_"] {
+            assert!(
+                placeholder_names(pattern).is_empty(),
+                "`{pattern}` is outside the grammar, so it is not a placeholder"
+            );
+            assert_eq!(
+                glob_with_placeholders_as_star(pattern),
+                pattern,
+                "`{pattern}` is not a placeholder, so the glob is unrewritten"
+            );
+        }
+    }
+
+    #[test]
+    fn placeholder_names_accepts_the_whole_grammar() {
+        // A name starts with a letter or `_` and continues with those plus
+        // digits.
+        assert_eq!(placeholder_names("{a}"), vec!["a".to_string()]);
+        assert_eq!(placeholder_names("{_}"), vec!["_".to_string()]);
+        assert_eq!(placeholder_names("{_a1}"), vec!["_a1".to_string()]);
+        assert_eq!(placeholder_names("{A_1z}"), vec!["A_1z".to_string()]);
+    }
+
+    #[test]
+    fn the_scan_resumes_at_the_byte_after_a_closing_brace() {
+        // Leftmost-first and non-overlapping: back-to-back placeholders both
+        // register, and every byte outside a span survives the rewrite.
+        assert_eq!(
+            placeholder_names("{a}{b}"),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        assert_eq!(glob_with_placeholders_as_star("x{a}y{b}z"), "x*y*z");
+    }
+
+    #[test]
+    fn an_unclosed_brace_leaves_a_later_placeholder_intact() {
+        // The `{` at 0 fails the grammar, so the scan advances one byte at a
+        // time and still finds the real placeholder behind it.
+        assert_eq!(placeholder_names("{a{b}"), vec!["b".to_string()]);
+        assert_eq!(glob_with_placeholders_as_star("{a{b}"), "{a*");
+    }
 }
