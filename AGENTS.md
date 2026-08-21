@@ -125,7 +125,7 @@ The colocation rule is a blocking CI gate ([`testing-conventions`](https://githu
 
 ### Mutation (testing-conventions)
 
-The `unit mutation` gate mutates PR-changed source lines and fails on any mutant no unit test kills (engines: cosmic-ray / Stryker / cargo-mutants, all self-provisioned; PR-only, diff-scoped via `--base`). All three SDKs run it inside their own CI workflow. Fix a survivor with a **new assertion**, never by weakening a test; only a genuinely equivalent mutant gets a reason-required `mutation` exemption (none today). Local run commands and per-language details: `agents/reference/testing-gates.md`.
+The `unit mutation` gate mutates PR-changed source lines and fails on any mutant no unit test kills (engines: cosmic-ray / Stryker / cargo-mutants, all self-provisioned; PR-only, diff-scoped via `--base`). All three SDKs run it inside their own CI workflow. The rust arm is the exception to *unit*: the CLI hands cargo-mutants no target scoping, so the whole `cargo test` suite judges each mutant and an integration test counts as killing one (#975). Fix a survivor with a **new assertion**, never by weakening a test; only a genuinely equivalent mutant gets a reason-required `mutation` exemption (none today). Local run commands and per-language details: `agents/reference/testing-gates.md`.
 
 ### Test Boundaries -- What to Mock, What Not To
 
