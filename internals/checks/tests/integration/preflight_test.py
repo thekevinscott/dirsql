@@ -85,6 +85,15 @@ def describe_preflight_over_the_real_workflows():
         assert "==> python-sdk [python] one-function-per-file" in output
         assert "==> typescript-sdk [typescript] one-function-per-file" in output
 
+    def it_derives_the_one_function_per_file_gate_for_every_lane_naming_it(repo_root):
+        # An explicit `gates` array is an allowlist: a lane that omits the gate
+        # does not run it, however the reusable workflow defaults.
+        output = dry_run().output
+
+        assert "==> internals-checks [python] one-function-per-file" in output
+        assert "==> internals-distcheck [python] one-function-per-file" in output
+        assert "==> plugins-embeddings [python] one-function-per-file" in output
+
     def it_names_a_missing_workflow_and_the_fix_instead_of_raising(repo_root):
         result = dry_run("--conventions", ".github/workflows/conventions.yml")
 
