@@ -76,6 +76,15 @@ def describe_preflight_over_the_real_workflows():
 
         assert {file for job, file in jobs.items() if f"==> {job} [" in output} == set(jobs.values())
 
+    def it_derives_the_one_function_per_file_gate_for_a_lane_naming_no_gates(repo_root):
+        # `@v0` runs `unit one-function-per-file` in the static job, so a lane
+        # that names no `gates:` is held to it in CI. A matrix omitting it is a
+        # locally-green run that says nothing about the gate.
+        output = dry_run().output
+
+        assert "==> python-sdk [python] one-function-per-file" in output
+        assert "==> typescript-sdk [typescript] one-function-per-file" in output
+
     def it_names_a_missing_workflow_and_the_fix_instead_of_raising(repo_root):
         result = dry_run("--conventions", ".github/workflows/conventions.yml")
 
