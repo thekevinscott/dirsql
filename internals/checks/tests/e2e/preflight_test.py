@@ -44,6 +44,13 @@ def describe_dirsql_checks_preflight():
         assert "==> rust [rust] unit-lint" in proc.stdout
         assert "==> internals-checks [python] unit-lint" in proc.stdout
 
+    def it_prints_the_one_function_per_file_gate_for_a_lane_naming_no_gates():
+        proc = preflight()
+
+        assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        assert "==> python-sdk [python] one-function-per-file" in proc.stdout
+        assert "==> typescript-sdk [typescript] one-function-per-file" in proc.stdout
+
     def it_exits_with_an_actionable_message_when_a_named_workflow_is_missing():
         proc = preflight("--conventions", ".github/workflows/conventions.yml")
 

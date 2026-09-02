@@ -78,10 +78,10 @@ def describe_e2e_flags():
 
 
 def describe_invocation():
-    def it_runs_an_ordinary_gate_through_uvx_from_the_repo_root():
+    def it_runs_an_ordinary_gate_through_the_npm_cli_from_the_repo_root():
         assert call(PY, "python", "unit-lint") == Invocation(
             [
-                *["uvx", "testing-conventions", "unit", "lint"],
+                *["npx", "-y", "testing-conventions@latest", "unit", "lint"],
                 *["--language", "python"],
                 *["--config", "testing-conventions.toml", "packages/python/dirsql"],
             ],
@@ -89,10 +89,10 @@ def describe_invocation():
         )
 
     def it_takes_the_ordinary_path_for_a_gate_name_sorting_below_e2e_verify():
-        # Both paths start `uvx testing-conventions`, so `--scope` is what tells
+        # Both paths start with the same CLI prefix, so `--scope` is what tells
         # them apart -- an `<=` here would route colocated-test into e2e's branch.
         assert call(PY, "python", "colocated-test").argv == [
-            *["uvx", "testing-conventions", "unit", "colocated-test"],
+            *["npx", "-y", "testing-conventions@latest", "unit", "colocated-test"],
             *["--language", "python", "--base", "origin/main"],
             *["--config", "testing-conventions.toml", "packages/python/dirsql"],
         ]
@@ -117,7 +117,7 @@ def describe_invocation():
     def it_targets_the_package_root_for_e2e_verify_scoped_to_the_source():
         assert call(PY, "python", "e2e-verify", {"extra_scope": ["packages/rust/src"]}) == Invocation(
             [
-                *["uvx", "testing-conventions", "e2e", "verify"],
+                *["npx", "-y", "testing-conventions@latest", "e2e", "verify"],
                 *["--base", "origin/main"],
                 *["--scope", "packages/python/dirsql"],
                 *["--extra-scope", "packages/rust/src", "packages/python"],
@@ -131,8 +131,9 @@ def describe_invocation():
     def it_runs_python_mutation_through_the_packages_own_venv():
         mutation = call(PY, "python", "mutation")
         assert mutation.cwd == "packages/python"
-        assert mutation.argv[:5] == [
-            *["uv", "run", "--with", "testing-conventions", "testing-conventions"]
+        assert mutation.argv[:7] == [
+            *["uv", "run", "--with", "testing-conventions"],
+            *["npx", "-y", "testing-conventions@latest"],
         ]
 
     def it_rewrites_the_config_and_source_paths_relative_to_that_cwd():
@@ -154,10 +155,10 @@ def describe_invocation():
     def it_runs_a_typescript_suite_gate_through_npx_from_the_package_root():
         root = Root(job="ts", source="packages/ts/src", languages=["typescript"], gates=["mutation"])
         mutation = call(root, "typescript", "mutation")
-        assert mutation.argv[:3] == ["npx", "-y", "testing-conventions"]
+        assert mutation.argv[:3] == ["npx", "-y", "testing-conventions@latest"]
         assert (mutation.cwd, mutation.argv[-1]) == (".", "packages/ts/src")
 
-    def it_keeps_a_rust_mutation_gate_on_uvx():
+    def it_keeps_a_rust_mutation_gate_on_the_default_cli():
         assert call(RUST, "rust", "mutation").cwd == "."
 
 
@@ -228,7 +229,7 @@ def describe_run():
         assert drive(runner=lambda argv, cwd: calls.append((argv, cwd)) or 0) == 0
         assert [argv[:2] for argv, _cwd in calls] == [
             *[["uv", "sync"], ["uv", "run"]],
-            *[["uvx", "testing-conventions"], ["uv", "run"]],
+            *[["npx", "-y"], ["uv", "run"]],
         ]
         assert [cwd for _argv, cwd in calls] == [".", ".", ".", "packages/python"]
 
@@ -283,7 +284,7 @@ def describe_run():
         lines = []
         drive(only=["unit-lint"], echo=lines.append)
         assert lines[0] == (
-            "==> python-sdk [python] unit-lint: uvx testing-conventions unit lint "
+            "==> python-sdk [python] unit-lint: npx -y testing-conventions@latest unit lint "
             "--language python packages/python/dirsql"
         )
 
@@ -292,7 +293,8 @@ def describe_run():
         drive(only=["mutation"], runner=lambda _argv, _cwd: 0, echo=lines.append)
         assert [line for line in lines if line.startswith("==>")] == [
             "==> python-sdk [python] mutation: uv run --with testing-conventions "
-            "testing-conventions unit mutation --language python --base origin/main dirsql"
+            "npx -y testing-conventions@latest unit mutation --language python "
+            "--base origin/main dirsql"
         ]
 
     def it_prints_every_pair_without_running_any_when_dry_run():

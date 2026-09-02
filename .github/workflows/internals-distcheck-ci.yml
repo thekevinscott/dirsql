@@ -29,4 +29,4 @@ jobs:
       languages: '["python"]'
       source: internals/distcheck/src
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint", "integration-lint", "unit-coverage", "mutation"]'
+      gates: '["colocated-test", "one-function-per-file", "unit-lint", "integration-lint", "unit-coverage", "mutation"]'
