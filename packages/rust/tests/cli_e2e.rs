@@ -1541,3 +1541,75 @@ fn persist_flag_with_path_writes_the_cache_there() {
         "the default cache must not be written when a path is given"
     );
 }
+
+/// Send `sig` to a live child. Mirrors [`kill_and_wait`]'s signalling, which is
+/// the only way to ask a `dirsql server` to stop.
+#[cfg(unix)]
+fn signal_child(child: &Child, sig: i32) {
+    #[expect(
+        unsafe_code,
+        reason = "no safe std API sends a signal to another process"
+    )]
+    unsafe {
+        libc::kill(i32::try_from(child.id()).unwrap(), sig);
+    }
+}
+
+/// The child's exit code, or `None` if it outlives `patience`.
+#[cfg(unix)]
+fn exit_code_within(child: &mut Child, patience: Duration) -> Option<i32> {
+    let deadline = Instant::now() + patience;
+    while Instant::now() < deadline {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status.code();
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    None
+}
+
+/// `docs/reference/cli.md`: the server "runs until it receives `SIGINT`
+/// (Ctrl-C) or `SIGTERM`", and that shutdown is exit code `0`.
+///
+/// Both halves are load-bearing and neither is visible from a request. A
+/// server that never waited would announce its port, serve whatever raced in,
+/// and exit 0 — which reads as a clean run from the outside.
+#[cfg(unix)]
+#[test]
+fn the_server_runs_until_signalled_and_then_exits_zero() {
+    let root = blog_fixture();
+    let port = free_port();
+    let mut child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
+
+    // Wait on the banner rather than on a request: it is printed the moment
+    // the listener is bound, so a server that leaves straight afterwards is
+    // still observed here instead of timing out as never-ready.
+    let stdout = child.stdout.take().expect("stdout piped");
+    let mut line = String::new();
+    BufReader::new(stdout)
+        .read_line(&mut line)
+        .expect("expected a startup line");
+    assert!(
+        line.contains(&format!("localhost:{port}")),
+        "banner: {line:?}"
+    );
+
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "the server must stay up until it is signalled",
+    );
+
+    signal_child(&child, libc::SIGTERM);
+    let code = exit_code_within(&mut child, Duration::from_secs(10));
+    if code.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    assert_eq!(
+        code,
+        Some(0),
+        "a signalled server drains and exits 0, never 143",
+    );
+}
