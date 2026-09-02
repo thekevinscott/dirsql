@@ -59,7 +59,7 @@ def mock_core():
 @pytest.fixture
 def mock_cwd():
     """Pin the cwd the SDK resolves programmatic entries against."""
-    with patch.object(async_mod.os, "getcwd", return_value="/cwd") as m:
+    with patch.object(os, "getcwd", return_value="/cwd") as m:
         yield m
 
 
