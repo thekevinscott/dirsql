@@ -258,6 +258,31 @@ impl Drop for Progress {
     }
 }
 
+/// The narrow view of a reporter that the worker-call counter needs: a running
+/// count with no total, and a phase it can restart. A trait so the counter's
+/// unit tests can inject a double without reaching across modules.
+pub(crate) trait CallProgress: Send {
+    /// Report `done` round trips so far. There is no total — SQLite does not
+    /// say up front how many rows the query will call the function on.
+    fn update(&mut self, done: u64);
+    fn finish(&mut self, done: u64);
+    fn restart(&mut self);
+}
+
+impl CallProgress for Progress {
+    fn update(&mut self, done: u64) {
+        Progress::update(self, done, None);
+    }
+
+    fn finish(&mut self, done: u64) {
+        Progress::finish(self, done);
+    }
+
+    fn restart(&mut self) {
+        Progress::restart(self);
+    }
+}
+
 /// The live line's text. With a total it carries a percentage; the walk has no
 /// total to divide by until it is over, so it reports a running count.
 fn render(label: &str, noun: &str, done: u64, total: Option<u64>) -> String {
@@ -618,6 +643,28 @@ mod tests {
             sink.text().ends_with("\rdirsql: indexing 2/10 files (20%)"),
             "and it draws again once the new phase is old enough: {:?}",
             sink.text()
+        );
+    }
+
+    /// The `CallProgress` impl is a delegation, and a delegation that quietly
+    /// does nothing looks identical to a working one -- until a second query
+    /// inherits the first one's line.
+    #[test]
+    fn restarting_through_call_progress_erases_the_live_line() {
+        let (mut progress, sink, clock) = reporter(Mode::Auto, true);
+
+        clock.advance(WARMUP);
+        CallProgress::update(&mut progress, 1);
+        let line = "dirsql: indexing 1 files";
+        assert_eq!(sink.text(), format!("\r{line}"), "the phase drew");
+
+        CallProgress::restart(&mut progress);
+
+        let blanks = " ".repeat(line.len());
+        assert_eq!(
+            sink.text(),
+            format!("\r{line}\r{blanks}\r"),
+            "restarting through the trait erased what it drew"
         );
     }
 
