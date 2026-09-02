@@ -131,7 +131,10 @@ def describe_invocation():
     def it_runs_python_mutation_through_the_packages_own_venv():
         mutation = call(PY, "python", "mutation")
         assert mutation.cwd == "packages/python"
-        assert mutation.argv[:5] == ["uv", "run", "npx", "-y", "testing-conventions@latest"]
+        assert mutation.argv[:7] == [
+            *["uv", "run", "--with", "testing-conventions"],
+            *["npx", "-y", "testing-conventions@latest"],
+        ]
 
     def it_rewrites_the_config_and_source_paths_relative_to_that_cwd():
         assert call(PY, "python", "mutation").argv[-3:] == [
@@ -289,8 +292,9 @@ def describe_run():
         lines = []
         drive(only=["mutation"], runner=lambda _argv, _cwd: 0, echo=lines.append)
         assert [line for line in lines if line.startswith("==>")] == [
-            "==> python-sdk [python] mutation: uv run npx -y testing-conventions@latest "
-            "unit mutation --language python --base origin/main dirsql"
+            "==> python-sdk [python] mutation: uv run --with testing-conventions "
+            "npx -y testing-conventions@latest unit mutation --language python "
+            "--base origin/main dirsql"
         ]
 
     def it_prints_every_pair_without_running_any_when_dry_run():

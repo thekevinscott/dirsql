@@ -12,10 +12,10 @@ than any real install, and no amount of running more gates catches that.
 
 Three pairs cannot be run the naive way, and each is encoded rather than skipped:
 
-  * python `mutation` / `unit-coverage` -- a throwaway environment supplies its
-    own interpreter, so the suite's `python3 -m pytest` resolves to one with no
-    pytest (#706 saw it as a cosmic-ray baseline failure naming no cause). Both
-    run via the package's own venv instead.
+  * python `mutation` / `unit-coverage` -- these execute the suite, whose
+    `python3 -m pytest` must resolve to the package's own venv rather than an
+    ambient interpreter with no pytest (#706 saw it as a cosmic-ray baseline
+    failure naming no cause). Both run under `uv run` from the package root.
   * rust `colocated-test` -- the co-change variant rides only the
     python/typescript language set (rust units are inline, so no sibling can go
     stale), and the CLI rejects `--base` for it.
@@ -36,26 +36,24 @@ from .matrix import GATES, Root, pairs, parse_gate_matrix
 
 MANIFESTS = ("pyproject.toml", "package.json", "Cargo.toml")
 
-# The CLI, resolved the way CI resolves it: npm, newest release. Two distinct
-# drifts made the local run enforce a different ruleset than CI, and `@latest`
-# closes both. The PyPI wheel `uvx` fetched is a laggier distribution of the same
-# tool (0.0.104 against npm's 0.0.111 when this was written), and it has no
-# `one-function-per-file` subcommand at all. A BARE `npx testing-conventions` is
-# worse: npm resolves an unversioned name engine-aware, `engines.node` rose to
-# `>=24` at 0.0.87, and a launcher shim running an older node therefore silently
-# picks 0.0.86 -- dozens of releases of rule changes behind, and exiting 0 with
-# no version banner to say so. CI dodges that by provisioning node 24 in every
-# job; naming the tag dodges it wherever the local node lands.
+# The CLI, resolved the way CI resolves it. Two silent drifts made the local run
+# enforce a different ruleset, and naming the tag closes both: the PyPI wheel
+# `uvx` fetches lags npm by several releases, and a BARE `npx testing-conventions`
+# resolves engine-aware, so a shim on node older than `engines.node` picks the
+# last release below that floor -- and exits 0 with no banner to say so.
 CLI = ["npx", "-y", "testing-conventions@latest"]
 
 # How to launch a suite-executing gate, per language. Both run from the package
-# root: python so `python3 -m pytest` resolves to that package's venv (which is
-# why that one arm keeps the wheel, and stays subject to the PyPI lag above),
-# typescript because only the npm CLI appends `--ts-mutation-adapter`, which the
-# rule needs. Rust is absent -- it has no suite environment to enter, so it stays
-# on `CLI`.
+# root: python so the suite's `python3 -m pytest` resolves to that package's
+# venv, typescript because only the npm CLI appends `--ts-mutation-adapter`,
+# which the rule needs. Rust is absent -- it has no suite environment to enter.
+#
+# The python arm needs BOTH distributions. `--with` is not how the CLI is
+# resolved; it puts the wheel's `testing_conventions` package on the interpreter
+# the gate hands to `python3 -m`, which is the only form the mutation adapter
+# ships in.
 LAUNCHERS = {
-    "python": ["uv", "run", "--with", "testing-conventions", "testing-conventions"],
+    "python": ["uv", "run", "--with", "testing-conventions", *CLI],
     "typescript": CLI,
 }
 
