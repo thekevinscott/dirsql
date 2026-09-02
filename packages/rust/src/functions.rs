@@ -539,6 +539,7 @@ impl Drop for ProcessTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::progress::{Mode, SystemClock};
 
     fn text(s: &str) -> Value {
         Value::Text(s.to_string())
@@ -653,6 +654,59 @@ mod tests {
         }
 
         assert_eq!(reporter.state.lock().unwrap().count, 2);
+    }
+
+    /// A `Write` the test reads back, so a real `Progress` can be driven
+    /// without a terminal.
+    #[derive(Clone, Default)]
+    struct Sink(Arc<Mutex<Vec<u8>>>);
+
+    impl Sink {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    impl std::io::Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The trait impl is a delegation, and a delegation that quietly does
+    /// nothing looks identical to a working one until a second query inherits
+    /// the first one's line. Drive a real `Progress` through the trait and
+    /// watch the line actually go.
+    #[test]
+    fn restarting_through_the_trait_erases_the_live_line() {
+        let sink = Sink::default();
+        let mut progress = Progress::new(
+            "running",
+            "ran",
+            "worker calls",
+            Box::new(sink.clone()),
+            Box::new(SystemClock),
+            Mode::Always,
+            true,
+        );
+
+        CallProgress::update(&mut progress, 1);
+        let line = "dirsql: running 1 worker calls";
+        assert_eq!(sink.text(), format!("\r{line}"), "the phase drew");
+
+        CallProgress::restart(&mut progress);
+
+        let blanks = " ".repeat(line.len());
+        assert_eq!(
+            sink.text(),
+            format!("\r{line}\r{blanks}\r"),
+            "restarting through the trait erased what it drew"
+        );
     }
 
     // --- wire encoding -----------------------------------------------------
