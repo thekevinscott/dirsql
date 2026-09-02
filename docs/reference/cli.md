@@ -460,3 +460,47 @@ Turn discovery off with either:
 
 A plugin that declares itself but is missing its module or its `dirsql.toml`
 fragment is a launcher error naming the package — never a silent skip.
+
+## Progress reporting
+
+Building the index over a large tree is not instant: the walk visits every
+file, then each matched file costs one `on-file` round trip plus whatever the
+table's `ddl` fires on insert. On a big corpus that is minutes. dirsql reports
+the two phases on **stderr** while they run:
+
+```
+dirsql: scanning 128413 files
+dirsql: indexing 9204/41231 files (22%)
+```
+
+Each line is rewritten in place. When a phase ends its line is erased and
+replaced by one summary of what it cost:
+
+```
+dirsql: scanned 128413 files in 4.2s
+dirsql: indexed 41231 files in 3m12s
+```
+
+stdout is untouched — it carries the query result and nothing else.
+
+By default this is **terminal-only, and only for work slow enough to wonder
+about**: a phase that finishes in under half a second prints nothing at all,
+and a run whose stderr is a pipe or a file prints nothing regardless of how
+long it takes. `dirsql "…" 2>run.log` and `dirsql "…" | jq` are byte-for-byte
+what they were before.
+
+Override with `DIRSQL_PROGRESS`:
+
+| Value | Effect |
+|---|---|
+| unset, or `auto` | Report only on a terminal, and only once a phase has run for half a second. The default. |
+| `always`, `1`, `true` | Report from the first update, terminal or not. Use it to watch a scan whose stderr is redirected. |
+| `never`, `0`, `false` | Report nothing, ever. |
+
+Values are case-insensitive and surrounding whitespace is ignored; anything
+unrecognized reads as `auto`, so a typo cannot stop a scan from running.
+
+The setting is read by the **core**, not the CLI, so it governs an index built
+from any SDK as well — a Python or TypeScript program that builds a `DirSQL`
+with a terminal attached gets the same two phases on stderr, and the same
+silence when piped.

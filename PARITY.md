@@ -43,6 +43,19 @@ on any SDK: the root-joining Rust `DirSQL::from_config(root)` /
 TypeScript never had a root-joiner — only the explicit `config=` — so nothing
 was removed there. This **restores parity** with the CLI's no-`-c` behavior (#602).
 
+**Progress on construction — at parity across all three SDKs (#957), no drift.**
+Building an index reports the walk and the ingest pass on stderr while they
+run, then erases the live line and leaves one summary of what each cost. The
+reporter lives in the shared core (`progress`, driven from
+`DirSQL::prepare_resolved` and `finish_build`), so all three SDKs got it in the
+same commit and no SDK carries its own copy. It is terminal-only and
+slow-work-only by default (nothing on a pipe, nothing under half a second);
+`DIRSQL_PROGRESS=always` / `=never` overrides it, and the variable is read by
+the core rather than by any launcher, so it behaves identically from the CLI,
+Python, Rust and TypeScript. No SDK exposes a knob for it: an SDK-level
+`progress=` argument would be exactly the kind of per-SDK surface this table
+exists to prevent.
+
 | API                        | Python                                         | Rust                                                 | TypeScript                                              |
 |----------------------------|------------------------------------------------|------------------------------------------------------|---------------------------------------------------------|
 | Constructor                | `DirSQL(root=None, *, tables=None, ignore=None, no_ignore=False, config=None, persist=False, persist_path=None, extensions=None)` | `DirSQL::builder().root(..).tables(..).ignore(..).config(..).persist(Option<path>).extensions(..).build()` (also `DirSQL::new`/`with_ignore` shortcuts) | `new DirSQL(configPath)` or `new DirSQL({ root?, tables?, ignore?, config?, persist?, persistPath?, extensions?, noIgnore? })` + `await db.ready` |

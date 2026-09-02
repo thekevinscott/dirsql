@@ -15,7 +15,28 @@ pub const RESERVED_DIR: &str = ".dirsql";
 ///
 /// The top-level `.dirsql/` directory is unconditionally excluded.
 pub fn scan_directory(root: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, String)> {
+    scan_directory_reporting(root, matcher, &mut |_| {})
+}
+
+/// [`scan_directory`], calling `on_file` with the running count of files the
+/// walk has reached.
+///
+/// The walk is the one phase of a startup scan with no total to measure
+/// against — it does not know how many files there are until it has found them
+/// all — so what it can report is a count, not a fraction. See
+/// [`crate::progress`], which turns that count into the line a user watching a
+/// cold scan sees.
+///
+/// The count is files *visited*, not the pairs returned: a file matching two
+/// tables' globs is one file the walk paid for, and two rows of work for the
+/// phase after it.
+pub fn scan_directory_reporting(
+    root: &Path,
+    matcher: &TableMatcher,
+    on_file: &mut dyn FnMut(u64),
+) -> Vec<(PathBuf, String)> {
     let mut results = Vec::new();
+    let mut seen: u64 = 0;
 
     for entry in walk(root, matcher, Path::new(""), false) {
         let path = entry.path();
@@ -31,6 +52,9 @@ pub fn scan_directory(root: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, Stri
         if !entry.file_type().is_file() {
             continue;
         }
+
+        seen += 1;
+        on_file(seen);
 
         // Fan-out: a file matching N tables' globs yields N (path, table)
         // pairs, one per matching table, in declaration order.

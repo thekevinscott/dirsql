@@ -396,3 +396,22 @@ not fit that range is a hard error, not a lossy conversion: Python raises
 A TypeScript `bigint` **within** `i64` range maps to `INTEGER`. Only a real
 `bytes`/`bytearray` (Python) or `Buffer`/`Uint8Array` (TypeScript) maps to
 `BLOB` — a list/array of integers does not.
+
+## Progress on construction
+
+Constructing a `DirSQL` walks the tree and ingests every matched file, which
+on a large corpus is the slowest thing your program does. The core reports
+both phases on **stderr** while they run, then erases the live line and leaves
+one summary of what each cost:
+
+```
+dirsql: indexed 41231 files in 3m12s
+```
+
+This is terminal-only by default, and only for a phase that runs longer than
+half a second — a program whose stderr is a pipe, a file, or a log collector
+sees nothing, whatever the scan costs. Set `DIRSQL_PROGRESS=never` to
+guarantee silence even on a terminal, or `DIRSQL_PROGRESS=always` to report
+regardless. The full table is in the
+[CLI reference](cli.md#progress-reporting); the setting lives in the shared
+core, so it behaves identically from all three SDKs.
