@@ -373,15 +373,15 @@ impl Db {
         self.path_table_cache = Some(path);
     }
 
-    /// Borrow the underlying SQLite connection. Internal use only — exposed
-    /// to the `persist` module so it can manage the sidecar tables.
-    #[doc(hidden)]
     /// The reporter every declared function increments. Handed to
-    /// [`functions::register_all`] at build time.
+    /// `functions::register_all` at build time.
     pub(crate) fn call_reporter(&self) -> &Arc<CallReporter> {
         &self.calls
     }
 
+    /// Borrow the underlying SQLite connection. Internal use only — exposed
+    /// to the `persist` module so it can manage the sidecar tables.
+    #[doc(hidden)]
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
