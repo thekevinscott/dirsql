@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1788368285,
+  "exit_code": 0,
+  "commit": "9e91dc78f8ea24be2501f165a77fce98f40710ab",
+  "branch": "claude/1018-preflight-one-function-gate"
+}
