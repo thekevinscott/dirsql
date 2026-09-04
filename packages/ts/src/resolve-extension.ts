@@ -15,21 +15,11 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
+import { type PackageResolver, packageDir } from "./package-dir.js";
 
 // Suffixes that mark a value as "already a file path" (so package resolution is
 // never attempted).
 const LOADABLE_SUFFIXES = [".so", ".dylib", ".dll", ".node"];
-
-/**
- * `require.resolve`-shaped seam. Injectable so unit tests can fake module
- * resolution without a real `node_modules` layout.
- */
-export interface PackageResolver {
-  /** Resolve a specifier to an on-disk path (`require.resolve`). */
-  resolve(specifier: string): string;
-  /** Candidate `node_modules` dirs for a specifier (`require.resolve.paths`). */
-  paths(specifier: string): string[] | null;
-}
 
 function defaultResolver(): PackageResolver {
   const req = createRequire(import.meta.url);
@@ -56,28 +46,6 @@ export function isBareName(path: string): boolean {
     return false;
   }
   return !LOADABLE_SUFFIXES.some((s) => path.endsWith(s));
-}
-
-/** Locate the on-disk package directory for a bare name. */
-function packageDir(name: string, resolver: PackageResolver): string {
-  // The package.json's directory is the package root. Preferred because it is
-  // unaffected by an `exports` map that hides the main entry.
-  try {
-    const pkgJson = resolver.resolve(`${name}/package.json`);
-    return pkgJson.slice(0, pkgJson.length - "/package.json".length);
-  } catch {
-    // `exports` may forbid resolving package.json; fall back to scanning the
-    // candidate node_modules dirs for `<dir>/<name>`.
-  }
-  for (const dir of resolver.paths(name) ?? []) {
-    const candidate = join(dir, name);
-    if (existsSync(candidate) && statSync(candidate).isDirectory()) {
-      return candidate;
-    }
-  }
-  throw new Error(
-    `could not resolve extension package '${name}': not installed`,
-  );
 }
 
 /** Glob the platform loadable inside a bare name's package dir. */
