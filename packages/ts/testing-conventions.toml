@@ -11,7 +11,7 @@
 extra_scope = ["packages/rust/src", "packages/ts/napi"]
 
 [typescript]
-one_function_per_file = { max_lines = 16 }
+one_function_per_file = { max_lines = 15 }
 
 # Same floors as the root file, which this lane no longer reads.
 [typescript.coverage]
