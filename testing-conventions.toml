@@ -99,7 +99,7 @@ branch = true
 # build_command field), with `rust_toolchain: true` on the caller supplying cargo.
 
 [typescript]
-one_function_per_file = { max_lines = 24 }
+one_function_per_file = { max_lines = 16 }
 
 # Unit-only coverage floor, per vitest metric.
 [typescript.coverage]

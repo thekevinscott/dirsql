@@ -7,45 +7,16 @@
 // resolved literal paths to the binary via repeatable `--extension` flags;
 // the binary then loads those and ignores the configs' own extension entries.
 //
-// The `-c`/`--config` flag is repeatable, so the scan collects every
-// occurrence, in argv order.
-//
 // Native-language configs (`.py`/`.js`/`.mjs`/`.cjs`) are untouched: the binary
 // dispatches those to `dirsql interpret`, whose handshake already carries
 // resolved paths.
 
 import { existsSync } from "node:fs";
+import { configPathsFromArgv } from "./config-paths-from-argv.js";
 
 // Config extensions the binary dispatches to `dirsql interpret`; never
 // pre-resolved here (that path resolves via the handshake).
 const NATIVE_CONFIG_SUFFIXES = [".py", ".js", ".mjs", ".cjs"];
-
-/**
- * Every config value in argv, in order (`--config X`, `--config=X`, `-c X`,
- * `-c=X`, `-cX`), or the default when none are given.
- */
-function configPathsFromArgv(argv: string[]): string[] {
-  const paths: string[] = [];
-  let expectValue = false;
-  for (const a of argv) {
-    if (expectValue) {
-      paths.push(a);
-      expectValue = false;
-    } else if (a === "--config" || a === "-c") {
-      expectValue = true;
-    } else if (a.startsWith("--config=")) {
-      paths.push(a.slice("--config=".length));
-    } else if (a.startsWith("-c")) {
-      const value = a.slice("-c".length);
-      paths.push(value.startsWith("=") ? value.slice("=".length) : value);
-    }
-  }
-  if (expectValue) {
-    // A bare trailing flag (no following value) yields "".
-    paths.push("");
-  }
-  return paths.length > 0 ? paths : ["./.dirsql.toml"];
-}
 
 /**
  * Return `argv` augmented with `--extension <path>[::entrypoint]` flags when a
