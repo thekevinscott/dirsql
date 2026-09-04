@@ -27,7 +27,9 @@ the CI workflows rather than restating them, reading every `.github/workflows/*.
 and folding together each job that calls the reusable workflow -- so a caller added
 in a new per-domain file is a pair it runs. It replaced four hand-written recipes
 that between them named 6 pairs across 3 of the 8 scan roots -- so a locally-green
-run said nothing about the other 34 pairs, which is how the #777 failures reached CI. It also encodes the invocations
+run said nothing about the rest of the matrix, which is how the #777 failures
+reached CI. For today's size, count it rather than trusting a number written
+down here: `just preflight --dry-run | grep -c '^==>'`. It also encodes the invocations
 that differ from the naive one, each of which was a silent false pass before:
 python `mutation` / `unit-coverage` run through the package's own venv (#706),
 typescript through `npx` (only the npm CLI appends `--ts-mutation-adapter`), rust
