@@ -15,7 +15,7 @@
 # its own config drops that phantom root; a change to decide.py's path list still
 # demands a receipt through the normal --scope internals/checks/src walk.
 [python]
-one_function_per_file = { max_lines = 100 }
+one_function_per_file = { max_lines = 24 }
 
 [python.coverage]
 fail_under = 100

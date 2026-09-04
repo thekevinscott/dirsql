@@ -3,7 +3,7 @@
 # exemptions, and deliberately no `[e2e] extra_scope` -- this package compiles
 # none of packages/rust/src, so a core change never stales its attestation.
 [python]
-one_function_per_file = { max_lines = 100 }
+one_function_per_file = { max_lines = 24 }
 
 [python.coverage]
 fail_under = 100
