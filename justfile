@@ -75,11 +75,14 @@ e2e-attest-ts:
 
 # Every testing-conventions gate CI declares, derived from the (source, gates)
 # pairs of every workflow in .github/workflows that calls the reusable workflow
-# -- 40 pairs across 8 scan roots in 6 workflows today (#781, #973). Supersedes
-# the hand-restated `test-conventions` / `unit-coverage` / `mutation` /
-# `e2e-verify` recipes, which named 6 pairs across 3 roots and drifted from the
-# workflow. `--conventions` narrows it to named workflows (repeatable), `--gate`
-# to named gates; `--dry-run` prints the matrix without running it. Needs the
+# -- 50 steps across 8 scan roots in 6 workflows today (#781, #973): 42 gate
+# invocations plus the 8 python drift guards below, with 3 further `packaging`
+# pairs listed as SKIP. That count drifts; read it off the tool instead --
+# `just preflight --dry-run | grep -c '^==>'`. Supersedes the hand-restated
+# `test-conventions` / `unit-coverage` / `mutation` / `e2e-verify` recipes,
+# which named 6 pairs across 3 roots and drifted from the workflow.
+# `--conventions` narrows it to named workflows (repeatable), `--gate` to named
+# gates; `--dry-run` prints the matrix without running it. Needs the
 # native build first for the suite-executing gates (maturin / napi); run
 # `just build` if missing.
 #
