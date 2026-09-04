@@ -4,14 +4,13 @@ from unittest import mock
 
 import pytest
 
+from checks.wheel_extension_load.diagnose import STATIC_MARKER
 from checks.wheel_extension_load.gate import (
     CONFIG,
     PROBE_SQL,
-    STATIC_MARKER,
     ProbeError,
     _require_zero,
     bin_subdir,
-    diagnose,
     list_names,
     run,
     wheel_names,
@@ -69,20 +68,6 @@ def describe_write_text():
         write_text(path, "content")
         with open(path, encoding="utf-8") as handle:
             assert handle.read() == "content"
-
-
-def describe_diagnose():
-    def static_binary_gets_the_dlopen_diagnosis():
-        message = diagnose(_result(1, stdout="", stderr=f"boom: {STATIC_MARKER}"))
-        assert "statically linked" in message
-        assert "dirsql#755" in message
-        assert STATIC_MARKER in message
-
-    def other_failures_get_a_generic_message():
-        message = diagnose(_result(1, stdout="out", stderr="config missing"))
-        assert message.startswith("`dirsql query` against the installed wheel failed.")
-        assert "'config missing'" in message
-        assert "'out'" in message
 
 
 def describe_run():

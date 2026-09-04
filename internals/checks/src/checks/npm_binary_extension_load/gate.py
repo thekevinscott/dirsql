@@ -35,9 +35,10 @@ from checks.wheel_extension_load.gate import (
     write_text,
 )
 
+from .diagnose import diagnose
+
 PROBE_SQL = "SELECT vec_version() AS v"
 ENTRYPOINT = "sqlite3_vec_init"
-STATIC_MARKER = "Dynamic loading not supported"
 BIN_NAME = "dirsql"
 
 
@@ -55,24 +56,6 @@ def find_binaries(dist_dir: str, walker=os.walk) -> list[str]:
         for name in names
         if name == BIN_NAME
     )
-
-
-def diagnose(result) -> str:
-    output = f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
-    if STATIC_MARKER in result.stderr:
-        return (
-            f"the npm bundled-cli `dirsql` binary cannot load SQLite "
-            f"extensions ({STATIC_MARKER!r}): it is statically linked "
-            "(static-pie), and a static binary cannot dlopen. The release "
-            "pipeline (putitoutthere `_matrix.yml`) compiles npm bundle_cli "
-            "Linux binaries via cargo-zigbuild against the declared gnu "
-            "triple at a pinned glibc floor since putitoutthere#605; a "
-            "static binary here means that lane regressed (or the `@v0` "
-            "tag resolves to a pre-#605 revision). Fix the pipeline, not "
-            "this probe. See dirsql#762.\n"
-            f"{output}"
-        )
-    return f"`dirsql query` against the bundled binary failed.\n{output}"
 
 
 def run(

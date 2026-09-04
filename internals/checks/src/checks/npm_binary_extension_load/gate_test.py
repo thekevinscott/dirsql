@@ -4,14 +4,13 @@ from unittest import mock
 
 import pytest
 
+from checks.npm_binary_extension_load.diagnose import STATIC_MARKER
 from checks.npm_binary_extension_load.gate import (
     BIN_NAME,
     ENTRYPOINT,
     PROBE_SQL,
-    STATIC_MARKER,
     ProbeError,
     config_for,
-    diagnose,
     find_binaries,
     run,
 )
@@ -61,21 +60,6 @@ def describe_config_for():
             '[[dirsql.extension]]\npath = "/v/vec0"\n'
             f'entrypoint = "{ENTRYPOINT}"\n'
         )
-
-
-def describe_diagnose():
-    def static_binary_gets_the_dlopen_diagnosis():
-        message = diagnose(_result(1, stdout="", stderr=f"boom: {STATIC_MARKER}"))
-        assert "statically linked" in message
-        assert "dirsql#762" in message
-        assert "putitoutthere#605" in message
-        assert STATIC_MARKER in message
-
-    def other_failures_get_a_generic_message():
-        message = diagnose(_result(1, stdout="out", stderr="bad flag"))
-        assert message.startswith("`dirsql query` against the bundled binary failed.")
-        assert "'bad flag'" in message
-        assert "'out'" in message
 
 
 def describe_run():
