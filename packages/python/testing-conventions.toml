@@ -16,3 +16,19 @@ one_function_per_file = { max_lines = 100 }
 [python.coverage]
 fail_under = 100
 branch = true
+
+# The hermetic integration tier is defined by patching the first-party core
+# boundary: `dirsql._async._RustDirSQL` is the PyO3 class, and replacing it is
+# what lets these tests run SQLite-free and native-build-free. There is no
+# third-party target to re-root onto, so `no-first-party-patch` has nothing to
+# say about this seam. Every other patch in both files targets stdlib and stays
+# gated.
+[[python.exempt]]
+path = "tests/integration/hermetic/dirsql_test.py"
+rules = ["no-first-party-patch"]
+reason = "the hermetic tier IS the _RustDirSQL core-boundary patch; no third-party target exists to move it to"
+
+[[python.exempt]]
+path = "tests/integration/hermetic/extensions_test.py"
+rules = ["no-first-party-patch"]
+reason = "the hermetic tier IS the _RustDirSQL core-boundary patch; no third-party target exists to move it to"
