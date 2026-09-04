@@ -109,3 +109,47 @@ def describe_default_model():
         explicit = worker.request("hello", tiny_model)
         assert by_default == explicit == {"ok": [1.0, 0.0]}
         assert entries(cache_home) == 1
+
+
+def describe_cache_reporting():
+    """The worker tells dirsql which answers cost nothing (#1034).
+
+    ``cachetta``'s wrapper returns a hit and a miss identically, so the worker
+    has to recover the signal itself; these pin that it recovers the right one.
+    """
+
+    def it_flags_a_recomputed_value_as_not_cached(spawn_worker, tiny_model):
+        worker = spawn_worker()
+        response = worker.request("hello", tiny_model)
+        assert response["meta"] == {"cached": False}
+
+    def it_flags_a_repeat_as_served_from_cache(spawn_worker, tiny_model):
+        worker = spawn_worker()
+        worker.request("hello", tiny_model)
+        response = worker.request("hello", tiny_model)
+        assert response["meta"] == {"cached": True}
+
+    def it_flags_a_hit_from_a_fresh_process(spawn_worker, tiny_model):
+        first = spawn_worker()
+        first.request("hello", tiny_model)
+        first.close()
+        response = spawn_worker().request("hello", tiny_model)
+        assert response["meta"] == {"cached": True}
+
+    def it_flags_each_distinct_value_as_computed(spawn_worker, tiny_model):
+        worker = spawn_worker()
+        first = worker.request("hello", tiny_model)
+        second = worker.request("world", tiny_model)
+        assert first["meta"] == second["meta"] == {"cached": False}
+
+    def it_flags_a_new_model_for_a_seen_value_as_computed(
+        spawn_worker, tiny_model, other_model
+    ):
+        worker = spawn_worker()
+        worker.request("hello", tiny_model)
+        response = worker.request("hello", other_model)
+        assert response["meta"] == {"cached": False}
+
+    def it_reports_no_cache_state_for_a_null_value(spawn_worker, tiny_model):
+        worker = spawn_worker()
+        assert worker.request(None, tiny_model) == {"ok": None}
