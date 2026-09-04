@@ -24,37 +24,18 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from typing import Optional
 
 from distcheck.filesystem import FileSystem
 from distcheck.node_flow.platforms import Platform
 
-
-class DistcheckError(RuntimeError):
-    """A distcheck stage failed -- carries a human-readable diagnostic."""
+from .errors import DistcheckError
+from .tarball import select_tarball
 
 
 def _require_zero(result, message: str) -> None:
     """Raise `DistcheckError(message)` unless `result` exited 0."""
     if result.returncode != 0:
         raise DistcheckError(message)
-
-
-def select_tarball(names, prefix: str, exclude: Optional[str] = None) -> str:
-    """The single `.tgz` in `names` matching `prefix` (and not `exclude`)."""
-    matches = [
-        name
-        for name in names
-        if name.startswith(prefix)
-        and name.endswith(".tgz")
-        and (exclude is None or not name.startswith(exclude))
-    ]
-    if len(matches) != 1:
-        raise DistcheckError(
-            f"expected exactly one {prefix!r} tarball, saw {matches} in {list(names)}"
-        )
-    (only,) = matches
-    return only
 
 
 def staged_addon_path(ts_pkg: str, host: Platform) -> str:

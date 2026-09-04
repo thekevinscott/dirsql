@@ -13,7 +13,6 @@ from distcheck.node_flow.gate import (
     DistcheckError,
     _require_zero,
     run,
-    select_tarball,
     staged_addon_path,
 )
 
@@ -58,32 +57,6 @@ def _fs(exists=True, read_name="@dirsql/lib-linux-x64-gnu"):
 
 def _ok_sequence():
     return [_res(), _res(), _res(), _res(stdout="dirsql 1.0")]
-
-
-def test_select_tarball_finds_the_cli_tarball():
-    assert select_tarball([_CLI_TGZ, _MAIN_TGZ], "dirsql-lib-") == _CLI_TGZ
-
-
-def test_select_tarball_excludes_the_cli_tarball_for_the_main_prefix():
-    assert (
-        select_tarball([_CLI_TGZ, _MAIN_TGZ], "dirsql-", exclude="dirsql-lib-")
-        == _MAIN_TGZ
-    )
-
-
-def test_select_tarball_rejects_none():
-    with pytest.raises(DistcheckError, match="exactly one"):
-        select_tarball(["other.tgz"], "dirsql-lib-")
-
-
-def test_select_tarball_rejects_many():
-    with pytest.raises(DistcheckError, match="exactly one"):
-        select_tarball(["dirsql-lib-a.tgz", "dirsql-lib-b.tgz"], "dirsql-lib-")
-
-
-def test_select_tarball_ignores_non_tgz():
-    with pytest.raises(DistcheckError, match="exactly one"):
-        select_tarball(["dirsql-lib-a.txt"], "dirsql-lib-")
 
 
 def test_run_success_executes_the_full_sequence():
