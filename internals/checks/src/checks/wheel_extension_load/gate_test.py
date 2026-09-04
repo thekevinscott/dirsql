@@ -4,7 +4,6 @@ from unittest import mock
 
 import pytest
 
-from checks.wheel_extension_load.diagnose import STATIC_MARKER
 from checks.wheel_extension_load.gate import (
     CONFIG,
     PROBE_SQL,
@@ -16,6 +15,8 @@ from checks.wheel_extension_load.gate import (
     wheel_names,
     write_text,
 )
+
+DIAGNOSE = "checks.wheel_extension_load.gate.diagnose"
 
 
 def _result(returncode=0, stdout="", stderr=""):
@@ -167,27 +168,20 @@ def describe_run():
 
     def failing_probe_raises_the_diagnosis():
         runner = mock.Mock(
-            side_effect=[
-                _result(0),
-                _result(0),
-                _result(1, stderr=f"failed to load extension: {STATIC_MARKER}"),
-            ]
+            side_effect=[_result(0), _result(0), _result(1, stderr="load failed")]
         )
-        with pytest.raises(ProbeError) as exc_info:
-            _run_with(runner)
-        assert "statically linked" in str(exc_info.value)
+        with mock.patch(DIAGNOSE, return_value="the diagnosis") as diagnose:
+            with pytest.raises(ProbeError, match="the diagnosis"):
+                _run_with(runner)
+        assert diagnose.call_args.args[0].stderr == "load failed"
 
     def signal_killed_probe_raises_the_diagnosis():
         runner = mock.Mock(
-            side_effect=[
-                _result(0),
-                _result(0),
-                _result(-6, stderr=f"failed to load extension: {STATIC_MARKER}"),
-            ]
+            side_effect=[_result(0), _result(0), _result(-6, stderr="load failed")]
         )
-        with pytest.raises(ProbeError) as exc_info:
-            _run_with(runner)
-        assert "statically linked" in str(exc_info.value)
+        with mock.patch(DIAGNOSE, return_value="the diagnosis"):
+            with pytest.raises(ProbeError, match="the diagnosis"):
+                _run_with(runner)
 
     def rowless_probe_output_raises():
         runner = mock.Mock(side_effect=[_result(0), _result(0), _result(0, stdout="[]")])
