@@ -1,7 +1,0 @@
-{
-  "command": "pnpm test:e2e",
-  "ran_at": 1787263694,
-  "exit_code": 0,
-  "commit": "0cf253b15a6d227db592373e5860801e637a1831",
-  "branch": "claude/epic-953-slice2-reedline"
-}

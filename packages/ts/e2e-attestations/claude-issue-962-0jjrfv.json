@@ -1,7 +1,0 @@
-{
-  "command": "pnpm test:e2e",
-  "ran_at": 1787251654,
-  "exit_code": 0,
-  "commit": "e235584fe642aa2561d6b06c6212ebdeb1d3ca5a",
-  "branch": "claude/issue-962-0jjrfv"
-}
