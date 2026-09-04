@@ -90,6 +90,7 @@ def describe_GATES():
         }
         assert shape == {
             "colocated-test": (True, True, True, False, False),
+            "one-function-per-file": (True, True, False, False, False),
             "unit-lint": (True, True, False, False, False),
             "integration-lint": (True, True, False, False, False),
             "unit-coverage": (True, True, True, True, False),
@@ -101,6 +102,7 @@ def describe_GATES():
     def it_maps_each_gate_to_its_cli_subcommand():
         assert {name: g.command for name, g in GATES.items()} == {
             "colocated-test": ("unit", "colocated-test"),
+            "one-function-per-file": ("unit", "one-function-per-file"),
             "unit-lint": ("unit", "lint"),
             "integration-lint": ("integration", "lint"),
             "unit-coverage": ("unit", "coverage"),
