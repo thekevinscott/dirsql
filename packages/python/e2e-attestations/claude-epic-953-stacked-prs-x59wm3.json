@@ -1,7 +1,0 @@
-{
-  "command": "uv run python -m pytest tests/e2e/ -x -q",
-  "ran_at": 1787258883,
-  "exit_code": 0,
-  "commit": "5eea7dd799ad6dc8ec81e2895baa86aad3f78006",
-  "branch": "claude/epic-953-stacked-prs-x59wm3"
-}
