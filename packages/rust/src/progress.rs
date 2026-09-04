@@ -71,7 +71,10 @@ impl Mode {
 
 /// The clock [`Progress`] throttles against. A seam so the unit tier can drive
 /// the warmup and redraw thresholds from both sides instead of sleeping.
-pub trait Clock {
+///
+/// `Send` because a reporter is shared with the worker-call counter, which
+/// SQLite invokes from whatever thread is running the query.
+pub trait Clock: Send {
     fn now(&self) -> Instant;
 }
 
@@ -96,8 +99,10 @@ pub struct Progress {
     label: &'static str,
     /// Past participle for the summary ("indexed 9 files in 4.2s").
     summary_label: &'static str,
-    out: Box<dyn Write>,
-    clock: Box<dyn Clock>,
+    /// What is being counted: "files", "worker calls".
+    noun: &'static str,
+    out: Box<dyn Write + Send>,
+    clock: Box<dyn Clock + Send>,
     mode: Mode,
     /// Whether the sink is a terminal. Only consulted under [`Mode::Auto`].
     terminal: bool,
@@ -114,19 +119,27 @@ pub struct Progress {
 impl Progress {
     /// Reporter for the directory walk, which counts files as it finds them.
     pub fn scanning() -> Self {
-        Self::to_stderr("scanning", "scanned")
+        Self::to_stderr("scanning", "scanned", "files")
     }
 
     /// Reporter for the ingest pass, which counts files against a known total.
     pub fn indexing() -> Self {
-        Self::to_stderr("indexing", "indexed")
+        Self::to_stderr("indexing", "indexed", "files")
     }
 
-    fn to_stderr(label: &'static str, summary_label: &'static str) -> Self {
+    /// Reporter for a query's worker round trips. No total: the query decides
+    /// how many rows it calls the function on, and SQLite does not say up
+    /// front.
+    pub fn worker_calls() -> Self {
+        Self::to_stderr("running", "ran", "worker calls")
+    }
+
+    fn to_stderr(label: &'static str, summary_label: &'static str, noun: &'static str) -> Self {
         let terminal = std::io::stderr().is_terminal();
         Self::new(
             label,
             summary_label,
+            noun,
             Box::new(std::io::stderr()),
             Box::new(SystemClock),
             Mode::parse(std::env::var(PROGRESS_ENV).ok().as_deref()),
@@ -139,8 +152,9 @@ impl Progress {
     pub fn new(
         label: &'static str,
         summary_label: &'static str,
-        out: Box<dyn Write>,
-        clock: Box<dyn Clock>,
+        noun: &'static str,
+        out: Box<dyn Write + Send>,
+        clock: Box<dyn Clock + Send>,
         mode: Mode,
         terminal: bool,
     ) -> Self {
@@ -148,6 +162,7 @@ impl Progress {
         Self {
             label,
             summary_label,
+            noun,
             out,
             clock,
             mode,
@@ -182,8 +197,19 @@ impl Progress {
             _ => {}
         }
         self.last_draw = Some(now);
-        let line = render(self.label, done, total);
+        let line = render(self.label, self.noun, done, total);
         self.draw(&line);
+    }
+
+    /// Reuse this reporter for a fresh phase: erase whatever is on screen and
+    /// reset the clock and the throttle, keeping the sink, the mode and the
+    /// wording. One reporter therefore serves every query on a connection --
+    /// and, unlike constructing a new one per phase, it keeps whatever sink it
+    /// was given instead of silently reverting to stderr.
+    pub fn restart(&mut self) {
+        self.erase();
+        self.started = self.clock.now();
+        self.last_draw = None;
     }
 
     /// End the phase: erase the live line and leave one summary line behind.
@@ -196,8 +222,9 @@ impl Progress {
         let elapsed = self.clock.now().duration_since(self.started);
         let _ = writeln!(
             self.out,
-            "dirsql: {} {done} files in {}",
+            "dirsql: {} {done} {} in {}",
             self.summary_label,
+            self.noun,
             format_duration(elapsed)
         );
         let _ = self.out.flush();
@@ -231,15 +258,40 @@ impl Drop for Progress {
     }
 }
 
+/// The narrow view of a reporter that the worker-call counter needs: a running
+/// count with no total, and a phase it can restart. A trait so the counter's
+/// unit tests can inject a double without reaching across modules.
+pub(crate) trait CallProgress: Send {
+    /// Report `done` round trips so far. There is no total — SQLite does not
+    /// say up front how many rows the query will call the function on.
+    fn update(&mut self, done: u64);
+    fn finish(&mut self, done: u64);
+    fn restart(&mut self);
+}
+
+impl CallProgress for Progress {
+    fn update(&mut self, done: u64) {
+        Progress::update(self, done, None);
+    }
+
+    fn finish(&mut self, done: u64) {
+        Progress::finish(self, done);
+    }
+
+    fn restart(&mut self) {
+        Progress::restart(self);
+    }
+}
+
 /// The live line's text. With a total it carries a percentage; the walk has no
 /// total to divide by until it is over, so it reports a running count.
-fn render(label: &str, done: u64, total: Option<u64>) -> String {
+fn render(label: &str, noun: &str, done: u64, total: Option<u64>) -> String {
     match total {
         Some(total) => format!(
-            "dirsql: {label} {done}/{total} files ({}%)",
+            "dirsql: {label} {done}/{total} {noun} ({}%)",
             percent(done, total)
         ),
-        None => format!("dirsql: {label} {done} files"),
+        None => format!("dirsql: {label} {done} {noun}"),
     }
 }
 
@@ -266,23 +318,23 @@ fn format_duration(elapsed: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::{Cell, RefCell};
-    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
 
     /// A `Write` the test can read back. Shares one buffer with the `Progress`
-    /// that owns its clone.
+    /// that owns its clone. `Arc`/`Mutex` rather than `Rc`/`RefCell` because
+    /// the sink has to satisfy the reporter's `Send` bound.
     #[derive(Clone, Default)]
-    struct Sink(Rc<RefCell<Vec<u8>>>);
+    struct Sink(Arc<Mutex<Vec<u8>>>);
 
     impl Sink {
         fn text(&self) -> String {
-            String::from_utf8(self.0.borrow().clone()).unwrap()
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
         }
     }
 
     impl Write for Sink {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.borrow_mut().extend_from_slice(buf);
+            self.0.lock().unwrap().extend_from_slice(buf);
             Ok(buf.len())
         }
 
@@ -296,25 +348,26 @@ mod tests {
     #[derive(Clone)]
     struct FakeClock {
         base: Instant,
-        offset: Rc<Cell<Duration>>,
+        offset: Arc<Mutex<Duration>>,
     }
 
     impl FakeClock {
         fn new() -> Self {
             Self {
                 base: Instant::now(),
-                offset: Rc::new(Cell::new(Duration::ZERO)),
+                offset: Arc::new(Mutex::new(Duration::ZERO)),
             }
         }
 
         fn advance(&self, delta: Duration) {
-            self.offset.set(self.offset.get() + delta);
+            let mut offset = self.offset.lock().unwrap();
+            *offset += delta;
         }
     }
 
     impl Clock for FakeClock {
         fn now(&self) -> Instant {
-            self.base + self.offset.get()
+            self.base + *self.offset.lock().unwrap()
         }
     }
 
@@ -324,6 +377,7 @@ mod tests {
         let progress = Progress::new(
             "indexing",
             "indexed",
+            "files",
             Box::new(sink.clone()),
             Box::new(clock.clone()),
             mode,
@@ -501,14 +555,27 @@ mod tests {
 
     #[test]
     fn a_phase_with_no_known_total_reports_a_running_count() {
-        assert_eq!(render("scanning", 42, None), "dirsql: scanning 42 files");
+        assert_eq!(
+            render("scanning", "files", 42, None),
+            "dirsql: scanning 42 files"
+        );
     }
 
     #[test]
     fn a_phase_with_a_known_total_reports_a_percentage() {
         assert_eq!(
-            render("indexing", 3, Some(8)),
+            render("indexing", "files", 3, Some(8)),
             "dirsql: indexing 3/8 files (37%)"
+        );
+    }
+
+    /// The noun travels with the phase: worker round trips are not files, and
+    /// a line that called them files would be lying about what it counted.
+    #[test]
+    fn the_counted_thing_is_named_by_the_phase() {
+        assert_eq!(
+            render("running", "worker calls", 9204, None),
+            "dirsql: running 9204 worker calls"
         );
     }
 
@@ -547,6 +614,60 @@ mod tests {
         assert_eq!(format_duration(Duration::from_secs(3725)), "62m05s");
     }
 
+    /// A reporter serves more than one phase, so restarting must forget the
+    /// previous phase's clock and throttle -- otherwise the second phase
+    /// inherits the first one's elapsed time and draws immediately.
+    #[test]
+    fn restarting_clears_the_line_and_the_clock() {
+        let (mut progress, sink, clock) = reporter(Mode::Auto, true);
+
+        clock.advance(WARMUP);
+        progress.update(1, Some(10));
+        let drawn = sink.text();
+        assert!(!drawn.is_empty(), "the first phase drew");
+
+        progress.restart();
+        progress.update(1, Some(10));
+
+        let line = "dirsql: indexing 1/10 files (10%)";
+        let blanks = " ".repeat(line.len());
+        assert_eq!(
+            sink.text(),
+            format!("\r{line}\r{blanks}\r"),
+            "restart erased the line, and the fresh phase is back under its warmup"
+        );
+
+        clock.advance(WARMUP);
+        progress.update(2, Some(10));
+        assert!(
+            sink.text().ends_with("\rdirsql: indexing 2/10 files (20%)"),
+            "and it draws again once the new phase is old enough: {:?}",
+            sink.text()
+        );
+    }
+
+    /// The `CallProgress` impl is a delegation, and a delegation that quietly
+    /// does nothing looks identical to a working one -- until a second query
+    /// inherits the first one's line.
+    #[test]
+    fn restarting_through_call_progress_erases_the_live_line() {
+        let (mut progress, sink, clock) = reporter(Mode::Auto, true);
+
+        clock.advance(WARMUP);
+        CallProgress::update(&mut progress, 1);
+        let line = "dirsql: indexing 1 files";
+        assert_eq!(sink.text(), format!("\r{line}"), "the phase drew");
+
+        CallProgress::restart(&mut progress);
+
+        let blanks = " ".repeat(line.len());
+        assert_eq!(
+            sink.text(),
+            format!("\r{line}\r{blanks}\r"),
+            "restarting through the trait erased what it drew"
+        );
+    }
+
     /// An error mid-phase must not leave a half-drawn counter behind for the
     /// error message to land on top of.
     #[test]
@@ -582,9 +703,16 @@ mod tests {
         let scanning = Progress::scanning();
         assert_eq!(scanning.label, "scanning");
         assert_eq!(scanning.summary_label, "scanned");
+        assert_eq!(scanning.noun, "files");
 
         let indexing = Progress::indexing();
         assert_eq!(indexing.label, "indexing");
         assert_eq!(indexing.summary_label, "indexed");
+        assert_eq!(indexing.noun, "files");
+
+        let calls = Progress::worker_calls();
+        assert_eq!(calls.label, "running");
+        assert_eq!(calls.summary_label, "ran");
+        assert_eq!(calls.noun, "worker calls");
     }
 }

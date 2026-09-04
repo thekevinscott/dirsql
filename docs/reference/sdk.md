@@ -408,6 +408,10 @@ one summary of what each cost:
 dirsql: indexed 41231 files in 3m12s
 ```
 
+A `query` that calls a worker-backed function is reported the same way, as a
+running count of round trips (`dirsql: running 9204 worker calls`) — the shape
+`dirsql-plugin-embeddings` produces when it embeds a corpus one row at a time.
+
 This is terminal-only by default, and only for a phase that runs longer than
 half a second — a program whose stderr is a pipe, a file, or a log collector
 sees nothing, whatever the scan costs. Set `DIRSQL_PROGRESS=never` to
