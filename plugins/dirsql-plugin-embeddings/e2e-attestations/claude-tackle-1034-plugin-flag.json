@@ -1,0 +1,7 @@
+{
+  "command": "uv run --with-editable ../../packages/python python -m pytest tests/e2e/ -x -q",
+  "ran_at": 1788558384,
+  "exit_code": 0,
+  "commit": "fc3ee82adb022a9b6da85687695ca752dd178f03",
+  "branch": "claude/tackle-1034-plugin-flag"
+}
