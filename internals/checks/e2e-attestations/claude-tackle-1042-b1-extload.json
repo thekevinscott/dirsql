@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1788565082,
+  "exit_code": 0,
+  "commit": "4be6d991b581c4940685c9a5009037fd36e6f93f",
+  "branch": "claude/tackle-1042-b1-extload"
+}
