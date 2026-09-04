@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1786474919,
+  "exit_code": 0,
+  "commit": "6583bf7cda0b3442164bf0fdd775361e3468c36e",
+  "branch": "claude/819-oneshot-timeout"
+}

@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/ -x -q",
+  "ran_at": 1787265623,
+  "exit_code": 0,
+  "commit": "060576f12a666b12e3256dccfbc17257870ae52e",
+  "branch": "claude/epic-953-slice3-format"
+}
