@@ -11,7 +11,6 @@ impossible: a caller added to `.github/workflows/` is a pair `preflight` runs.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from dataclasses import dataclass
 
 import yaml
@@ -113,24 +112,6 @@ def parse_gate_matrix(text: str) -> list[Root]:
 def read_text(path: str) -> str:
     with open(path, encoding="utf-8") as handle:
         return handle.read()
-
-
-def named(path: str, read: Callable[[str], str]) -> str:
-    """The text of an explicitly named workflow, or a NoGateMatrix carrying the fix."""
-    try:
-        text = read(path)
-    except OSError as err:
-        raise NoGateMatrix(
-            f"--conventions {path}: no such workflow. Name one that calls {REUSABLE}, "
-            f"or drop the flag to derive the matrix from every caller in {WORKFLOWS}."
-        ) from err
-    if not parse_gate_matrix(text):
-        raise NoGateMatrix(
-            f"--conventions {path}: no job in it calls {REUSABLE}, so it declares no "
-            f"gates. Name a workflow that does, or drop the flag to derive the matrix "
-            f"from every caller in {WORKFLOWS}."
-        )
-    return text
 
 
 def pairs(roots: list[Root]) -> list[tuple[Root, str, str]]:

@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from checks.platforms_mirror.decide import problems
-from checks.platforms_mirror.parse import ParseError, python_table, typescript_table
+from .decide import problems
+from .parse import ParseError
+from .python_table import python_table
+from .typescript_table import typescript_table
 
 
 def read(path: str) -> str:
