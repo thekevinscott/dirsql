@@ -42,11 +42,16 @@ jobs:
   # reusable workflow — so a TP registered against `thekevinscott/dirsql`
   # only matches in this workflow's context, not inside the reusable
   # workflow at thekevinscott/putitoutthere. See pypi/warehouse#11096.
-  # The reusable workflow does plan + build + version-rewrite + tag;
-  # this job uploads the built artifacts.
+  # The reusable workflow does plan + build + version-rewrite; this job
+  # uploads the built artifacts, and `pypi-tag` below cuts the tag.
+  #
+  # `pypi_pending` is publish-time ("the engine reached our PyPI package
+  # and handed over its upload"), where `has_pypi` was plan-time; with
+  # `!cancelled()` the upload proceeds even when the release job failed
+  # on an unrelated registry.
   pypi-publish:
     needs: release
-    if: needs.release.outputs.has_pypi == 'true'
+    if: ${{ !cancelled() && needs.release.outputs.pypi_pending == 'true' }}
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -63,3 +68,12 @@ jobs:
           path: dist/
           merge-multiple: true
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # Cuts the git tag for what the job above just uploaded. The release
+  # job deliberately does not tag a PyPI package: a tag records what
+  # shipped, and until this upload lands, nothing has.
+  pypi-tag:
+    needs: pypi-publish
+    uses: thekevinscott/putitoutthere/.github/workflows/pypi-tag.yml@v0
+    permissions:
+      contents: write
