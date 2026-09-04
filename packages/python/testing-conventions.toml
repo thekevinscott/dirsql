@@ -9,6 +9,9 @@
 [e2e]
 extra_scope = ["packages/rust/src", "packages/python/src"]
 
+[python]
+one_function_per_file = { max_lines = 100 }
+
 # Same floor as the root file, which this lane no longer reads.
 [python.coverage]
 fail_under = 100
