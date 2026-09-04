@@ -29,6 +29,7 @@ WORKFLOWS = ".github/workflows"
 # omits `gates:` gets all of them.
 ROOT_GATES = [
     "colocated-test",
+    "one-function-per-file",
     "unit-lint",
     "integration-lint",
     "unit-coverage",
@@ -58,7 +59,7 @@ class Gate:
     config: bool = True
     base: bool = False
     # Executes the package's test suite, so it needs that package's own venv on
-    # `python3`, not the throwaway one `uvx` supplies.
+    # `python3`, not the throwaway one a standalone launcher supplies.
     runs_suite: bool = False
     # Takes the root of a BUILT artifact, not a source dir. CI builds it from
     # the manifest first; preflight has no equivalent and reports these skipped.
@@ -67,6 +68,7 @@ class Gate:
 
 GATES = {
     "colocated-test": Gate(("unit", "colocated-test"), base=True),
+    "one-function-per-file": Gate(("unit", "one-function-per-file")),
     "unit-lint": Gate(("unit", "lint")),
     "integration-lint": Gate(("integration", "lint")),
     "unit-coverage": Gate(("unit", "coverage"), base=True, runs_suite=True),

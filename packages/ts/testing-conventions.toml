@@ -10,6 +10,9 @@
 [e2e]
 extra_scope = ["packages/rust/src", "packages/ts/napi"]
 
+[typescript]
+one_function_per_file = { max_lines = 100 }
+
 # Same floors as the root file, which this lane no longer reads.
 [typescript.coverage]
 lines = 100

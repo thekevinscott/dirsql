@@ -104,7 +104,7 @@ def to_thread_spy():
         calls.append(getattr(func, "__name__", repr(func)))
         return await real_to_thread(func, *args, **kwargs)
 
-    with patch.object(async_mod.asyncio, "to_thread", spy):
+    with patch.object(asyncio, "to_thread", spy):
         yield calls
 
 
