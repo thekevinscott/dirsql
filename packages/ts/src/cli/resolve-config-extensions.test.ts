@@ -5,7 +5,10 @@ import { configPathsFromArgv } from "./config-paths-from-argv.js";
 import { withResolvedExtensions } from "./resolve-config-extensions.js";
 
 vi.mock("node:fs");
-vi.mock("./config-paths-from-argv.js", () => ({
+vi.mock("./config-paths-from-argv.js", async () => ({
+  ...(await vi.importActual<typeof import("./config-paths-from-argv.js")>(
+    "./config-paths-from-argv.js",
+  )),
   configPathsFromArgv: vi.fn(),
 }));
 vi.mock("../resolve-config-extensions.js", async () => ({
