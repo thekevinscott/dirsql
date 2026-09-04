@@ -1,3 +1,9 @@
+# The attest CLI, self-provisioned at a floor rather than taken from PATH.
+# `e2e attest` before 0.0.91 pruned every other branch's receipt and committed
+# the deletions beside its own add; the diff-based `e2e-verify` gate only ever
+# reads a branch's own receipt, so that mass deletion merges green (#1041).
+attest := "uvx --from 'testing-conventions>=0.0.91' testing-conventions"
+
 # Run all lints
 lint:
     ruff check packages/python/
@@ -57,21 +63,20 @@ test-e2e-internals-checks:
 
 # Write this branch's receipt at internals/checks/e2e-attestations/<branch>.json
 e2e-attest-internals-checks:
-    cd internals/checks && uvx testing-conventions e2e attest 'uv run python -m pytest tests/e2e -x -q'
+    cd internals/checks && {{attest}} e2e attest 'uv run python -m pytest tests/e2e -x -q'
 
 # Write this branch's receipt at packages/python/e2e-attestations/<branch>.json:
 # runs the python e2e suite and commits the receipt. The CI gate runs inside the
 # reusable workflow (dirsql-python-ci.yml, python-sdk `e2e-verify`) on PRs that
-# touch the python SDK source. Install testing-conventions first (CI always uses
-# the latest release):
-#   pip install testing-conventions
+# touch the python SDK source. Needs no local install -- `attest` above fetches
+# the tool.
 e2e-attest-python:
-    cd packages/python && testing-conventions e2e attest 'just test-e2e'
+    cd packages/python && {{attest}} e2e attest 'just test-e2e'
 
 # Write this branch's receipt at packages/ts/e2e-attestations/<branch>.json: runs
 # the TS pack-install e2e suite and commits the receipt.
 e2e-attest-ts:
-    cd packages/ts && testing-conventions e2e attest 'pnpm test:e2e'
+    cd packages/ts && {{attest}} e2e attest 'pnpm test:e2e'
 
 # Every testing-conventions gate CI declares, derived from the (source, gates)
 # pairs of every workflow in .github/workflows that calls the reusable workflow

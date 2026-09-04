@@ -14,8 +14,8 @@ The `--scope` + `--base` diff-scoping makes the gate per-SDK by construction: a 
 **Write a receipt for each package you changed** before you push. From the repo root:
 
 ```bash
-just e2e-attest-python   # cd packages/python && testing-conventions e2e attest 'just test-e2e'
-just e2e-attest-ts       # cd packages/ts && testing-conventions e2e attest 'pnpm test:e2e'
+just e2e-attest-python   # cd packages/python && <attest> e2e attest 'just test-e2e'
+just e2e-attest-ts       # cd packages/ts && <attest> e2e attest 'pnpm test:e2e'
 ```
 
 `attest` runs the command, writes `<package>/e2e-attestations/<slug>.json` for the checked-out branch, and commits it for you. It exits with the command's own code and only records a receipt when the command passes -- the command is the judgment being recorded, so a full suite, a targeted subset, or a deliberate no-op are all valid things to attest.
@@ -35,4 +35,23 @@ Receipts are append-only in practice -- a merged branch's receipt stays in the d
 
 Proven over synthetic single-root diffs (`e2e verify packages/<pkg> --scope <src> --base main`): a `packages/ts/napi`-only diff is exit 0 with the core root alone and exit 1 once `--extra-scope packages/ts/napi` is added, while the python lane's flags stay exit 0 over that same diff; the mirror holds for `packages/python/src`.
 
-CI installs the latest `testing-conventions` release (unpinned); install it locally before attesting: `pip install testing-conventions`. In the hosted sandbox that build fails -- use `uvx testing-conventions e2e attest '<cmd>'` instead (`agents/build/environment.md`).
+## The tool is self-provisioned at a version floor
+
+The recipes do not call whatever `testing-conventions` sits on `PATH`. The justfile's `attest` variable is the single definition of the invocation:
+
+```
+attest := "uvx --from 'testing-conventions>=0.0.91' testing-conventions"
+```
+
+So attesting needs **no local install** -- `uvx` fetches and caches the tool -- and a stale global install cannot be picked up. CI's reusable workflow is versioned separately (the moving `@v0` tag) and this floor does not constrain it; the two only have to agree on the receipt format, which they do, since `verify` reads a receipt's *presence in the diff* and never its contents.
+
+**The floor is the fix for #1041, not decoration.** Through 0.0.90, `e2e attest` pruned every other branch's receipt from `e2e-attestations/` and committed those deletions in the same commit as its own add. The `e2e-verify` gate is diff-based and asserts only that a branch adds or updates *its own* receipt, so a 28-file deletion of unrelated branches' receipts merges completely green -- which is how #1036 landed one (restored in `4c0c1c7`) and #1039 nearly did. Upstream removed the prune in `2bb445e6` ("`e2e attest` only ever adds"), first released in **0.0.91**; the paired delete was also a rename/rename conflict generator for stacked branches. Reproduced and verified against both sides of the floor:
+
+```
+0.0.90        D old-branch-one.json  D old-branch-two.json  A probe-branch.json
+>=0.0.91                                                    A probe-branch.json
+```
+
+Never lower the floor, and never substitute a bare `testing-conventions` / `uvx testing-conventions` for `{{attest}}`. If a receipt deletion does appear in `git status` after attesting, it did not come from the tool -- do not stage it.
+
+In the hosted sandbox `pip install testing-conventions` cannot build, so the sandbox runs the same `uvx --from` form by hand (`agents/environments/remote.md`).

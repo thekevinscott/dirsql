@@ -47,7 +47,7 @@ uv run --project internals/checks python -m pytest internals/checks/tests/e2e -q
 Refresh the attestation after changing `internals/checks`:
 
 ```bash
-cd internals/checks && uvx testing-conventions e2e attest 'uv run python -m pytest tests/e2e -q'
+cd internals/checks && uvx --from 'testing-conventions>=0.0.91' testing-conventions e2e attest 'uv run python -m pytest tests/e2e -q'
 ```
 
 ## Adding a check
