@@ -31,7 +31,7 @@ jobs:
       source: internals/checks/src
       config: internals/checks/testing-conventions.toml
       base: ${{ github.event.pull_request.base.sha || 'origin/main' }}
-      gates: '["colocated-test", "unit-lint", "integration-lint", "unit-coverage", "mutation", "e2e-verify"]'
+      gates: '["colocated-test", "one-function-per-file", "unit-lint", "integration-lint", "unit-coverage", "mutation", "e2e-verify"]'
 
   internals-checks-integration:
     # The conventions job runs this package's colocated unit tier and checks its
