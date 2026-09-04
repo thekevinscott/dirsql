@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1788565415,
+  "exit_code": 0,
+  "commit": "3f7bfd620f6a1fe58d750a543692ae9d1ae28355",
+  "branch": "claude/1042-b2-parse-matrix"
+}
