@@ -79,8 +79,9 @@ def describe_the_interactive_repl():
         def _open():
             workdir = tmp_path / "tree"
             workdir.mkdir(exist_ok=True)
+            # A tty gets a table; JSON keeps these cases on rows, not layout.
             term = terminal(
-                f"sh -c 'cd {workdir} && exec {_cli()}'",
+                f"sh -c 'cd {workdir} && exec {_cli()} --format json'",
                 env={
                     **os.environ,
                     "XDG_DATA_HOME": str(home),
