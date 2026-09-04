@@ -498,6 +498,24 @@ and, when the query ends:
 dirsql: ran 41231 worker calls in 2m41s
 ```
 
+A worker that keeps a cache of its own can say so per response
+(`{"meta": {"cached": true}}` — see [Worker
+protocol](./config.md#worker-protocol)), and those round trips are then split
+out, because the number that answers *"will this be fast next time"* is not
+the total:
+
+```
+dirsql: running 9204 worker calls (8811 cached)
+dirsql: ran 41231 worker calls in 2m41s (38104 cached)
+```
+
+Both figures count **worker round trips, not rows**. A function declared
+`deterministic = true` lets SQLite reuse one answer for identical arguments
+within a query, so repeated content never reaches the worker at all and both
+numbers sit below the row count on a corpus with duplicates. The split covers
+only what the worker itself reports serving from cache. A worker that sends no
+`meta` gets the unsplit line above, not a `(0 cached)`.
+
 A query that calls no worker prints nothing, whatever the setting — the
 reporting only ever speaks when there is something to report.
 

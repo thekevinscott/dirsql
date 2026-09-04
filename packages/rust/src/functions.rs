@@ -17,7 +17,12 @@
 //!   `{"$bytes": "<base64>"}`.
 //! - Response: `{"ok": <value>}` (same scalar encodings; a JSON array or any
 //!   other object is bound as TEXT, its JSON text) or `{"err": "message"}`,
-//!   which fails the query with that message.
+//!   which fails the query with that message. An `{"ok": ...}` response may
+//!   carry an optional `"meta"` object alongside it; the one key read today is
+//!   `{"meta": {"cached": true}}`, which says the worker answered from its own
+//!   cache and feeds the progress line's cache split. `meta` is advisory —
+//!   every other key, and a `meta` of a shape this parser does not recognize,
+//!   is ignored rather than failing the query.
 //! - The worker's stderr is inherited, passing straight through to dirsql's
 //!   stderr.
 //!
@@ -85,9 +90,13 @@ pub(crate) fn register_all(
                         args.push(Value::from(rusqlite::types::Value::from(ctx.get_raw(i))));
                     }
                     calls.record();
-                    worker
+                    let reply = worker
                         .call(&args)
-                        .map_err(|message| rusqlite::Error::UserFunctionError(message.into()))
+                        .map_err(|message| rusqlite::Error::UserFunctionError(message.into()))?;
+                    if reply.cached {
+                        calls.mark_cached();
+                    }
+                    Ok(reply.value)
                 },
             )?;
         }
@@ -115,6 +124,10 @@ pub(crate) struct CallReporter {
 
 struct CallState {
     count: u64,
+    /// How many of those round trips the worker flagged as cache hits. Core
+    /// cannot derive this: a cache hit *is* a round trip, so only the worker
+    /// knows which of its answers cost anything.
+    cached: u64,
     progress: Box<dyn CallProgress>,
 }
 
@@ -125,7 +138,11 @@ impl CallReporter {
 
     fn with_progress(progress: Box<dyn CallProgress>) -> Self {
         Self {
-            state: Mutex::new(CallState { count: 0, progress }),
+            state: Mutex::new(CallState {
+                count: 0,
+                cached: 0,
+                progress,
+            }),
         }
     }
 
@@ -135,26 +152,45 @@ impl CallReporter {
     pub(crate) fn phase(&self) -> CallPhase<'_> {
         if let Ok(mut state) = self.state.lock() {
             state.count = 0;
+            state.cached = 0;
             state.progress.restart();
         }
         CallPhase(self)
     }
 
-    /// Record one round trip. A poisoned mutex costs the counter, never the
-    /// call: reporting is not worth failing a query over.
+    /// Record one round trip, before it is made — a slow worker's first call
+    /// is exactly when a user most wants the line to appear. A poisoned mutex
+    /// costs the counter, never the call: reporting is not worth failing a
+    /// query over.
     fn record(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.count += 1;
-            let count = state.count;
-            state.progress.update(count);
+            state.report();
+        }
+    }
+
+    /// Mark a round trip that has come back as one the worker served from its
+    /// own cache. Separate from [`record`](Self::record) because cachedness is
+    /// only knowable once the response is in hand.
+    fn mark_cached(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.cached += 1;
+            state.report();
         }
     }
 
     fn end(&self) {
         if let Ok(mut state) = self.state.lock() {
-            let count = state.count;
-            state.progress.finish(count);
+            let (count, cached) = (state.count, state.cached);
+            state.progress.finish(count, cached);
         }
+    }
+}
+
+impl CallState {
+    fn report(&mut self) {
+        let (count, cached) = (self.count, self.cached);
+        self.progress.update(count, cached);
     }
 }
 
@@ -241,7 +277,7 @@ impl Worker {
     /// with. A transport failure (spawn error, crash, timeout) drops the
     /// worker so the next call starts fresh; a protocol-level `{"err": ...}`
     /// leaves the healthy worker running.
-    fn call(&self, args: &[Value]) -> Result<Value, String> {
+    fn call(&self, args: &[Value]) -> Result<Reply, String> {
         let mut inner = self
             .inner
             .lock()
@@ -291,9 +327,9 @@ impl Worker {
     }
 
     /// Decode one response line: `{"ok": <value>}` or `{"err": "message"}`.
-    fn decode(&self, line: &str) -> Result<Value, String> {
+    fn decode(&self, line: &str) -> Result<Reply, String> {
         match parse_response(line) {
-            Ok(Response::Ok(value)) => Ok(value),
+            Ok(Response::Ok { value, cached }) => Ok(Reply { value, cached }),
             Ok(Response::Err(message)) => Err(message),
             Err(defect) => Err(format!(
                 "function `{}` worker sent an invalid response ({defect}): {line}",
@@ -325,9 +361,17 @@ fn value_to_json(value: &Value) -> serde_json::Value {
     }
 }
 
+/// A completed round trip: the value to bind, plus whatever the response said
+/// about how it was produced.
+#[derive(Debug)]
+pub(crate) struct Reply {
+    value: Value,
+    cached: bool,
+}
+
 #[derive(Debug)]
 enum Response {
-    Ok(Value),
+    Ok { value: Value, cached: bool },
     Err(String),
 }
 
@@ -348,7 +392,22 @@ fn parse_response(line: &str) -> Result<Response, String> {
     let value = object
         .get("ok")
         .ok_or_else(|| "expected an \"ok\" or \"err\" key".to_string())?;
-    Ok(Response::Ok(json_to_sql_value(value)?))
+    Ok(Response::Ok {
+        value: json_to_sql_value(value)?,
+        cached: cached_flag(object),
+    })
+}
+
+/// Whether the response flagged itself as served from the worker's own cache:
+/// `{"meta": {"cached": true}}`. Optional and advisory — it feeds the progress
+/// line and nothing else, so an absent, misshapen or non-boolean value reads as
+/// "not cached" rather than failing a query over a counter.
+fn cached_flag(object: &serde_json::Map<String, serde_json::Value>) -> bool {
+    object
+        .get("meta")
+        .and_then(|meta| meta.get("cached"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// Wire JSON → SQL value: string → TEXT, integral number → INTEGER, other
@@ -539,12 +598,12 @@ mod tests {
     struct RecordingProgress(Recorder);
 
     impl CallProgress for RecordingProgress {
-        fn update(&mut self, done: u64) {
-            self.0.push(format!("update {done}"));
+        fn update(&mut self, done: u64, cached: u64) {
+            self.0.push(format!("update {done}/{cached}"));
         }
 
-        fn finish(&mut self, done: u64) {
-            self.0.push(format!("finish {done}"));
+        fn finish(&mut self, done: u64, cached: u64) {
+            self.0.push(format!("finish {done}/{cached}"));
         }
 
         fn restart(&mut self) {
@@ -565,7 +624,7 @@ mod tests {
         reporter.record();
         reporter.record();
 
-        assert_eq!(recorder.events(), ["update 1", "update 2"]);
+        assert_eq!(recorder.events(), ["update 1/0", "update 2/0"]);
     }
 
     /// The phase is what the count belongs to: a second query must not carry
@@ -583,7 +642,13 @@ mod tests {
 
         assert_eq!(
             recorder.events(),
-            ["update 1", "update 2", "restart", "update 1", "finish 1"],
+            [
+                "update 1/0",
+                "update 2/0",
+                "restart",
+                "update 1/0",
+                "finish 1/0"
+            ],
             "the new phase counts from one, not from three"
         );
     }
@@ -600,15 +665,73 @@ mod tests {
             reporter.record();
             assert_eq!(
                 recorder.events(),
-                ["restart", "update 1", "update 2"],
+                ["restart", "update 1/0", "update 2/0"],
                 "nothing is finished while the phase is open"
             );
         }
 
         assert_eq!(
             recorder.events(),
-            ["restart", "update 1", "update 2", "finish 2"],
+            ["restart", "update 1/0", "update 2/0", "finish 2/0"],
             "the closed phase reports the count it accumulated"
+        );
+    }
+
+    /// A cache hit is a round trip like any other, so it counts twice over:
+    /// once in the total and once in the split.
+    #[test]
+    fn a_cached_round_trip_counts_in_both_the_total_and_the_split() {
+        let (reporter, recorder) = reporter();
+
+        reporter.record();
+        reporter.mark_cached();
+
+        assert_eq!(recorder.events(), ["update 1/0", "update 1/1"]);
+    }
+
+    /// The split counts only what the worker flagged. A run that computes
+    /// everything must not read as a run that cached everything.
+    #[test]
+    fn an_uncached_round_trip_leaves_the_split_at_zero() {
+        let (reporter, recorder) = reporter();
+
+        {
+            let _phase = reporter.phase();
+            reporter.record();
+            reporter.record();
+            reporter.mark_cached();
+        }
+
+        assert_eq!(
+            recorder.events(),
+            [
+                "restart",
+                "update 1/0",
+                "update 2/0",
+                "update 2/1",
+                "finish 2/1"
+            ],
+            "one of the two round trips was flagged, not both"
+        );
+    }
+
+    /// A phase owns its split as well as its count: a warm second query must
+    /// not inherit the first query's cache hits.
+    #[test]
+    fn opening_a_phase_restarts_the_cache_split_too() {
+        let (reporter, recorder) = reporter();
+        reporter.record();
+        reporter.mark_cached();
+
+        {
+            let _phase = reporter.phase();
+            reporter.record();
+        }
+
+        assert_eq!(
+            recorder.events().last().unwrap(),
+            "finish 1/0",
+            "the new phase starts with no cache hits"
         );
     }
 
@@ -624,9 +747,12 @@ mod tests {
             let _phase = reporter.phase();
             reporter.record();
             reporter.record();
+            reporter.mark_cached();
         }
 
-        assert_eq!(reporter.state.lock().unwrap().count, 2);
+        let state = reporter.state.lock().unwrap();
+        assert_eq!(state.count, 2);
+        assert_eq!(state.cached, 1);
     }
 
     // --- wire encoding -----------------------------------------------------
@@ -659,8 +785,16 @@ mod tests {
     // --- response decoding -------------------------------------------------
 
     fn ok_value(line: &str) -> Value {
+        ok_response(line).0
+    }
+
+    fn ok_cached(line: &str) -> bool {
+        ok_response(line).1
+    }
+
+    fn ok_response(line: &str) -> (Value, bool) {
         match parse_response(line).unwrap() {
-            Response::Ok(v) => v,
+            Response::Ok { value, cached } => (value, cached),
             Response::Err(m) => panic!("expected ok, got err {m:?}"),
         }
     }
@@ -688,8 +822,46 @@ mod tests {
     fn response_err_carries_the_message() {
         match parse_response(r#"{"err": "boom"}"#).unwrap() {
             Response::Err(m) => assert_eq!(m, "boom"),
-            Response::Ok(v) => panic!("expected err, got ok {v:?}"),
+            Response::Ok { value, .. } => panic!("expected err, got ok {value:?}"),
         }
+    }
+
+    /// The signal core cannot derive for itself: a cache hit and a computed
+    /// answer are the same round trip on the wire, so the worker has to say.
+    #[test]
+    fn a_response_flagged_cached_is_read_as_a_cache_hit() {
+        assert!(ok_cached(r#"{"ok": 1, "meta": {"cached": true}}"#));
+    }
+
+    #[test]
+    fn a_response_without_meta_is_not_a_cache_hit() {
+        assert!(!ok_cached(r#"{"ok": 1}"#));
+    }
+
+    #[test]
+    fn a_response_flagged_uncached_is_not_a_cache_hit() {
+        assert!(!ok_cached(r#"{"ok": 1, "meta": {"cached": false}}"#));
+    }
+
+    /// `meta` is advisory: it drives a progress counter, so no shape of it is
+    /// worth failing a query over. Anything unreadable means "not cached".
+    #[test]
+    fn an_unreadable_meta_reads_as_uncached_rather_than_failing() {
+        assert!(!ok_cached(r#"{"ok": 1, "meta": "not-an-object"}"#));
+        assert!(!ok_cached(r#"{"ok": 1, "meta": {}}"#));
+        assert!(!ok_cached(r#"{"ok": 1, "meta": {"cached": "yes"}}"#));
+        assert!(!ok_cached(r#"{"ok": 1, "meta": null}"#));
+        assert!(!ok_cached(r#"{"ok": 1, "meta": [{"cached": true}]}"#));
+    }
+
+    /// The value is the `ok` field and nothing else — `meta` never leaks into
+    /// what the query binds.
+    #[test]
+    fn meta_does_not_change_the_decoded_value() {
+        assert_eq!(
+            ok_value(r#"{"ok": "hi", "meta": {"cached": true}}"#),
+            text("hi")
+        );
     }
 
     #[test]
@@ -842,8 +1014,8 @@ mod tests {
             ]],
             false,
         );
-        assert_eq!(worker.call(&[text("a")]).unwrap(), text("A"));
-        assert_eq!(worker.call(&[text("b")]).unwrap(), text("B"));
+        assert_eq!(worker.call(&[text("a")]).unwrap().value, text("A"));
+        assert_eq!(worker.call(&[text("b")]).unwrap().value, text("B"));
         assert_eq!(*spawns.lock().unwrap(), 1);
     }
 
@@ -879,7 +1051,7 @@ mod tests {
             false,
         );
         assert_eq!(worker.call(&[]).unwrap_err(), "boom");
-        assert_eq!(worker.call(&[]).unwrap(), Value::Integer(1));
+        assert_eq!(worker.call(&[]).unwrap().value, Value::Integer(1));
         assert_eq!(*spawns.lock().unwrap(), 1, "err response must not respawn");
     }
 
@@ -897,7 +1069,7 @@ mod tests {
         assert!(err.contains("`embed`"), "got: {err}");
         assert!(err.contains("`timeout`"), "got: {err}");
         // The next call starts a fresh worker.
-        assert_eq!(worker.call(&[]).unwrap(), Value::Integer(1));
+        assert_eq!(worker.call(&[]).unwrap().value, Value::Integer(1));
         assert_eq!(*spawns.lock().unwrap(), 2);
     }
 
@@ -913,7 +1085,7 @@ mod tests {
         let err = worker.call(&[]).unwrap_err();
         assert!(err.contains("exited before replying"), "got: {err}");
         assert!(err.contains("stderr"), "got: {err}");
-        assert_eq!(worker.call(&[]).unwrap(), Value::Integer(1));
+        assert_eq!(worker.call(&[]).unwrap().value, Value::Integer(1));
         assert_eq!(*spawns.lock().unwrap(), 2);
     }
 
@@ -955,7 +1127,7 @@ mod tests {
             Box::new(|| Ok(Box::new(EchoTransport))),
         );
         assert_eq!(
-            worker.call(&[text("x"), Value::Integer(3)]).unwrap(),
+            worker.call(&[text("x"), Value::Integer(3)]).unwrap().value,
             Value::Null
         );
     }
