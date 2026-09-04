@@ -10,7 +10,7 @@
 extra_scope = ["packages/rust/src", "packages/python/src"]
 
 [python]
-one_function_per_file = { max_lines = 100 }
+one_function_per_file = { max_lines = 24 }
 
 # Same floor as the root file, which this lane no longer reads.
 [python.coverage]
