@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1788557591,
+  "exit_code": 0,
+  "commit": "222ec0de080ccb6c963595b2dd1ce2ba1af72108",
+  "branch": "claude/tackle-1034-cachesplit"
+}

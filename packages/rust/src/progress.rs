@@ -101,6 +101,11 @@ pub struct Progress {
     summary_label: &'static str,
     /// What is being counted: "files", "worker calls".
     noun: &'static str,
+    /// A parenthetical appended to the live line and the summary when the
+    /// phase has something to add to its bare count. Deliberately a free
+    /// string: the worker-call phase fills it with the cache split, and core
+    /// stays ignorant of what any particular worker caches.
+    note: Option<String>,
     out: Box<dyn Write + Send>,
     clock: Box<dyn Clock + Send>,
     mode: Mode,
@@ -163,6 +168,7 @@ impl Progress {
             label,
             summary_label,
             noun,
+            note: None,
             out,
             clock,
             mode,
@@ -171,6 +177,11 @@ impl Progress {
             last_draw: None,
             drawn_width: 0,
         }
+    }
+
+    /// Set (or clear) the parenthetical the next draw carries.
+    pub(crate) fn set_note(&mut self, note: Option<String>) {
+        self.note = note;
     }
 
     /// Whether this reporter draws at all. [`Mode::Auto`] defers to the sink.
@@ -197,7 +208,7 @@ impl Progress {
             _ => {}
         }
         self.last_draw = Some(now);
-        let line = render(self.label, self.noun, done, total);
+        let line = render(self.label, self.noun, done, total, self.note.as_deref());
         self.draw(&line);
     }
 
@@ -208,6 +219,7 @@ impl Progress {
     /// was given instead of silently reverting to stderr.
     pub fn restart(&mut self) {
         self.erase();
+        self.note = None;
         self.started = self.clock.now();
         self.last_draw = None;
     }
@@ -222,10 +234,11 @@ impl Progress {
         let elapsed = self.clock.now().duration_since(self.started);
         let _ = writeln!(
             self.out,
-            "dirsql: {} {done} {} in {}",
+            "dirsql: {} {done} {} in {}{}",
             self.summary_label,
             self.noun,
-            format_duration(elapsed)
+            format_duration(elapsed),
+            parenthetical(self.note.as_deref())
         );
         let _ = self.out.flush();
     }
@@ -262,19 +275,22 @@ impl Drop for Progress {
 /// count with no total, and a phase it can restart. A trait so the counter's
 /// unit tests can inject a double without reaching across modules.
 pub(crate) trait CallProgress: Send {
-    /// Report `done` round trips so far. There is no total — SQLite does not
-    /// say up front how many rows the query will call the function on.
-    fn update(&mut self, done: u64);
-    fn finish(&mut self, done: u64);
+    /// Report `done` round trips so far, `cached` of which the worker said it
+    /// served from its own cache. There is no total — SQLite does not say up
+    /// front how many rows the query will call the function on.
+    fn update(&mut self, done: u64, cached: u64);
+    fn finish(&mut self, done: u64, cached: u64);
     fn restart(&mut self);
 }
 
 impl CallProgress for Progress {
-    fn update(&mut self, done: u64) {
+    fn update(&mut self, done: u64, cached: u64) {
+        self.set_note(cached_note(cached));
         Progress::update(self, done, None);
     }
 
-    fn finish(&mut self, done: u64) {
+    fn finish(&mut self, done: u64, cached: u64) {
+        self.set_note(cached_note(cached));
         Progress::finish(self, done);
     }
 
@@ -283,16 +299,26 @@ impl CallProgress for Progress {
     }
 }
 
+/// The cache split, shown only once there is one. A run that hit no cache
+/// reads exactly as it did before the split existed, rather than carrying a
+/// `(0 cached)` that answers a question nobody asked.
+fn cached_note(cached: u64) -> Option<String> {
+    (cached > 0).then(|| format!("{cached} cached"))
+}
+
 /// The live line's text. With a total it carries a percentage; the walk has no
 /// total to divide by until it is over, so it reports a running count.
-fn render(label: &str, noun: &str, done: u64, total: Option<u64>) -> String {
-    match total {
-        Some(total) => format!(
-            "dirsql: {label} {done}/{total} {noun} ({}%)",
-            percent(done, total)
-        ),
-        None => format!("dirsql: {label} {done} {noun}"),
-    }
+fn render(label: &str, noun: &str, done: u64, total: Option<u64>, note: Option<&str>) -> String {
+    let counted = match total {
+        Some(total) => format!("{done}/{total} {noun} ({}%)", percent(done, total)),
+        None => format!("{done} {noun}"),
+    };
+    format!("dirsql: {label} {counted}{}", parenthetical(note))
+}
+
+/// A note as it appears on a line — ` (8811 cached)` — or nothing at all.
+fn parenthetical(note: Option<&str>) -> String {
+    note.map(|note| format!(" ({note})")).unwrap_or_default()
 }
 
 /// `done` as a percentage of `total`, floored. An empty total is complete by
@@ -556,7 +582,7 @@ mod tests {
     #[test]
     fn a_phase_with_no_known_total_reports_a_running_count() {
         assert_eq!(
-            render("scanning", "files", 42, None),
+            render("scanning", "files", 42, None, None),
             "dirsql: scanning 42 files"
         );
     }
@@ -564,7 +590,7 @@ mod tests {
     #[test]
     fn a_phase_with_a_known_total_reports_a_percentage() {
         assert_eq!(
-            render("indexing", "files", 3, Some(8)),
+            render("indexing", "files", 3, Some(8), None),
             "dirsql: indexing 3/8 files (37%)"
         );
     }
@@ -574,7 +600,7 @@ mod tests {
     #[test]
     fn the_counted_thing_is_named_by_the_phase() {
         assert_eq!(
-            render("running", "worker calls", 9204, None),
+            render("running", "worker calls", 9204, None, None),
             "dirsql: running 9204 worker calls"
         );
     }
@@ -654,7 +680,7 @@ mod tests {
         let (mut progress, sink, clock) = reporter(Mode::Auto, true);
 
         clock.advance(WARMUP);
-        CallProgress::update(&mut progress, 1);
+        CallProgress::update(&mut progress, 1, 0);
         let line = "dirsql: indexing 1 files";
         assert_eq!(sink.text(), format!("\r{line}"), "the phase drew");
 
@@ -694,6 +720,105 @@ mod tests {
         drop(progress);
 
         assert_eq!(sink.text(), after_finish);
+    }
+
+    /// The cache split rides on the same line as the count it qualifies, so a
+    /// user reads "how much work" and "how much of it was free" at once.
+    #[test]
+    fn a_note_is_appended_to_the_live_line_in_parentheses() {
+        assert_eq!(
+            render("running", "worker calls", 9204, None, Some("8811 cached")),
+            "dirsql: running 9204 worker calls (8811 cached)"
+        );
+    }
+
+    /// A phase with a total keeps its percentage and gains the note after it.
+    #[test]
+    fn a_note_follows_the_percentage_when_there_is_a_total() {
+        assert_eq!(
+            render("indexing", "files", 3, Some(8), Some("2 skipped")),
+            "dirsql: indexing 3/8 files (37%) (2 skipped)"
+        );
+    }
+
+    #[test]
+    fn no_note_means_no_parentheses() {
+        assert_eq!(parenthetical(None), "");
+        assert_eq!(parenthetical(Some("8811 cached")), " (8811 cached)");
+    }
+
+    /// The summary is the line that survives the phase, so the split has to
+    /// reach it -- and it goes after the elapsed time, which is what the
+    /// sentence is about.
+    #[test]
+    fn the_summary_carries_the_note_after_the_elapsed_time() {
+        let (mut progress, sink, clock) = reporter(Mode::Always, false);
+
+        progress.update(1, Some(10));
+        progress.set_note(Some("3 cached".to_string()));
+        clock.advance(Duration::from_millis(4500));
+        progress.finish(10);
+
+        assert!(
+            sink.text()
+                .ends_with("dirsql: indexed 10 files in 4.5s (3 cached)\n"),
+            "got: {:?}",
+            sink.text()
+        );
+    }
+
+    /// A note belongs to the phase that set it. A second query must not inherit
+    /// the first one's cache split.
+    #[test]
+    fn restarting_clears_the_note() {
+        let (mut progress, sink, clock) = reporter(Mode::Always, false);
+
+        progress.set_note(Some("3 cached".to_string()));
+        progress.update(1, None);
+        progress.restart();
+        clock.advance(REDRAW_INTERVAL);
+        progress.update(1, None);
+
+        assert!(
+            sink.text().ends_with("dirsql: indexing 1 files"),
+            "the fresh phase draws no note: {:?}",
+            sink.text()
+        );
+    }
+
+    /// The worker-call adapter is what turns a cache count into words, and
+    /// zero hits must read exactly as it did before the split existed.
+    #[test]
+    fn no_cache_hits_produce_no_note() {
+        assert_eq!(cached_note(0), None);
+        assert_eq!(cached_note(8811), Some("8811 cached".to_string()));
+    }
+
+    #[test]
+    fn call_progress_updates_carry_the_cache_split() {
+        let (mut progress, sink, _clock) = reporter(Mode::Always, false);
+
+        CallProgress::update(&mut progress, 9204, 8811);
+
+        assert_eq!(sink.text(), "\rdirsql: indexing 9204 files (8811 cached)");
+    }
+
+    /// ...and so does the summary, which is where dirsql#1034's headline line
+    /// actually lands.
+    #[test]
+    fn call_progress_finishes_with_the_cache_split() {
+        let (mut progress, sink, clock) = reporter(Mode::Always, false);
+
+        CallProgress::update(&mut progress, 4, 0);
+        clock.advance(Duration::from_millis(2000));
+        CallProgress::finish(&mut progress, 9204, 8811);
+
+        assert!(
+            sink.text()
+                .ends_with("dirsql: indexed 9204 files in 2.0s (8811 cached)\n"),
+            "got: {:?}",
+            sink.text()
+        );
     }
 
     /// The two production reporters differ only in wording, and the wording is

@@ -34,10 +34,12 @@ import pytest
 _FRAGMENT = str(resources.files("dirsql_plugin_embeddings").joinpath("dirsql.toml"))
 
 
-def _run(query, cwd, cache_home, path=None):
+def _run(query, cwd, cache_home, path=None, progress=None):
     env = {**os.environ, "XDG_CACHE_HOME": str(cache_home)}
     if path is not None:
         env["PATH"] = path
+    if progress is not None:
+        env["DIRSQL_PROGRESS"] = progress
     return subprocess.run(
         [
             sys.executable,
@@ -175,3 +177,47 @@ def describe_zero_cost_when_unused():
             f"stdout={result.stdout!r} stderr={result.stderr!r}"
         )
         assert spawn_log.read_text(encoding="utf-8") == "spawned\n"
+
+
+def describe_cache_reporting():
+    """The progress line's cache split, end to end (#1034).
+
+    The disk cache is what makes a re-run cheap, and a bare round-trip count
+    cannot say so: 2 worker calls reads identically whether both ran a model or
+    both were dictionary lookups. A cold run and the warm run after it must
+    read differently.
+    """
+
+    @pytest.fixture
+    def tree(tmp_path):
+        notes = tmp_path / "notes"
+        notes.mkdir()
+        (notes / "a.txt").write_text("hello", encoding="utf-8")
+        (notes / "b.txt").write_text("world", encoding="utf-8")
+        return tmp_path
+
+    def _query(model):
+        return (
+            "SELECT embed(content, '" + model + "') AS emb FROM './notes/*.txt'"
+        )
+
+    def it_reports_no_cache_hits_on_a_cold_run(tree, tiny_model, cache_home):
+        result = _run(
+            _query(tiny_model), tree, cache_home, progress="always"
+        )
+        assert result.returncode == 0, (
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert "ran 2 worker calls" in result.stderr
+        assert "cached" not in result.stderr
+
+    def it_reports_the_warm_run_as_entirely_cache_served(
+        tree, tiny_model, cache_home
+    ):
+        _run(_query(tiny_model), tree, cache_home, progress="always")
+        warm = _run(_query(tiny_model), tree, cache_home, progress="always")
+        assert warm.returncode == 0, (
+            f"stdout={warm.stdout!r} stderr={warm.stderr!r}"
+        )
+        assert "ran 2 worker calls" in warm.stderr
+        assert "(2 cached)" in warm.stderr

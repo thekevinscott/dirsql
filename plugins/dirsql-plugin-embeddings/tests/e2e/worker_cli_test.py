@@ -28,7 +28,7 @@ def worker_argv():
 def describe_worker_cli():
     def it_serves_an_embed_request_over_real_pipes(spawn_worker, tiny_model):
         worker = spawn_worker(argv=worker_argv())
-        assert worker.request("hello", tiny_model) == {"ok": [1.0, 0.0]}
+        assert worker.request("hello", tiny_model)["ok"] == [1.0, 0.0]
 
     def it_survives_a_malformed_request_and_keeps_serving(
         spawn_worker, tiny_model
@@ -36,7 +36,10 @@ def describe_worker_cli():
         worker = spawn_worker(argv=worker_argv())
         response = worker.send_line("{definitely not json")
         assert "err" in response
-        assert worker.request("hello world", tiny_model) == {"ok": [0.5, 0.5]}
+        assert worker.request("hello world", tiny_model)["ok"] == [
+            0.5,
+            0.5,
+        ]
 
     def it_stays_silent_on_stderr_when_stderr_is_not_a_tty(
         spawn_worker, tiny_model

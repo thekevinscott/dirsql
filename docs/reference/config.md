@@ -161,6 +161,15 @@ request line in, one response line out, per call:
   JSON-text vectors) — or `{"err": "message"}`, which **fails the query**
   with that message. An `{"err": ...}` response leaves the healthy worker
   running; only transport failures (timeout, crash) recycle it.
+- **Optional `"meta"`**, alongside `"ok"`: a second top-level object carrying
+  facts about how the answer was produced rather than what it is. One key is
+  read today — `{"ok": [...], "meta": {"cached": true}}` says the worker
+  answered from a cache of its own, which dirsql reports as the `(N cached)`
+  split on its [worker-call progress line](./cli.md#progress-reporting). The
+  field is **optional and advisory**: a worker that omits it is a worker that
+  reports no cache hits, keys dirsql does not recognize are ignored (they
+  always have been), and a `meta` of an unexpected shape is ignored too rather
+  than failing a query over a progress counter.
 - **stderr passes through** to `dirsql`'s stderr, so a worker's progress
   bars and download logs reach the terminal.
 

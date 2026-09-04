@@ -507,3 +507,56 @@ args = [1]
     assert!(msg.contains("command"), "got: {msg}");
     assert!(msg.contains("[[dirsql.function]]"), "got: {msg}");
 }
+
+/// `meta` is progress metadata, not payload (dirsql#1034): the value bound into
+/// the query is the `ok` field alone, whatever else rode along the line.
+#[test]
+fn a_response_carrying_cache_metadata_binds_only_its_ok_value() {
+    let root = TempDir::new().unwrap();
+    write_worker(
+        root.path(),
+        "worker.py",
+        r#"resp = {"ok": args[0].upper(), "meta": {"cached": True}}"#,
+    );
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[dirsql.function]]
+name = "up"
+args = [1]
+command = "python3 worker.py"
+"#,
+    )
+    .unwrap();
+
+    let db = build(&root).unwrap();
+    let rows = db.query("SELECT up('hello') AS v").unwrap();
+    assert_eq!(rows[0].get("v"), Some(&Value::Text("HELLO".to_string())));
+}
+
+/// A worker is free to send whatever `meta` it likes and the query must not
+/// care: the field is advisory, so a shape core does not understand is ignored
+/// rather than failing a query over a progress counter.
+#[test]
+fn an_unrecognized_meta_shape_does_not_fail_the_query() {
+    let root = TempDir::new().unwrap();
+    write_worker(
+        root.path(),
+        "worker.py",
+        r#"resp = {"ok": args[0].upper(), "meta": "not-an-object"}"#,
+    );
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[dirsql.function]]
+name = "up"
+args = [1]
+command = "python3 worker.py"
+"#,
+    )
+    .unwrap();
+
+    let db = build(&root).unwrap();
+    let rows = db.query("SELECT up('hello') AS v").unwrap();
+    assert_eq!(rows[0].get("v"), Some(&Value::Text("HELLO".to_string())));
+}

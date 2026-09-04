@@ -65,6 +65,13 @@ for its `embed(content)`-per-row search: the plugin drives the Python SDK,
 which drives the same `Db::query`, so no plugin-side reporting exists or is
 needed.
 
+That line splits out cache hits (#1034): a worker may flag a response it served
+from a cache of its own with `{"meta": {"cached": true}}`, and the count reports
+those separately (`dirsql: ran 41231 worker calls in 2m41s (38104 cached)`). The
+flag is part of the **worker protocol**, not any SDK's API surface — no SDK
+gained or lost a symbol, and the parsing and the line both live in the shared
+core, so all three SDKs change at once. **No drift.**
+
 | API                        | Python                                         | Rust                                                 | TypeScript                                              |
 |----------------------------|------------------------------------------------|------------------------------------------------------|---------------------------------------------------------|
 | Constructor                | `DirSQL(root=None, *, tables=None, ignore=None, no_ignore=False, config=None, persist=False, persist_path=None, extensions=None)` | `DirSQL::builder().root(..).tables(..).ignore(..).config(..).persist(Option<path>).extensions(..).build()` (also `DirSQL::new`/`with_ignore` shortcuts) | `new DirSQL(configPath)` or `new DirSQL({ root?, tables?, ignore?, config?, persist?, persistPath?, extensions?, noIgnore? })` + `await db.ready` |

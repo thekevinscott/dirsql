@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1788557530,
+  "exit_code": 0,
+  "commit": "97fdc1dfbdf490f71bd2067d8be66a50dce22bcb",
+  "branch": "claude/tackle-1034-cachesplit"
+}
