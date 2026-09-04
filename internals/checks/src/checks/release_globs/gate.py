@@ -16,7 +16,8 @@ from collections.abc import Callable
 
 import yaml
 
-from checks.release_globs.decide import glob_problems, unprechecked
+from .decide import glob_problems
+from .precheck import unprechecked
 
 
 def read_config(path: str) -> dict:
