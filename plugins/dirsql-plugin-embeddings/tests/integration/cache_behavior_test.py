@@ -57,7 +57,7 @@ def describe_cache_hits():
         worker = spawn_worker()
         first = worker.request("hello", tiny_model)
         second = worker.request("hello", tiny_model)
-        assert first == second == {"ok": [1.0, 0.0]}
+        assert first["ok"] == second["ok"] == [1.0, 0.0]
         assert entries(cache_home) == 1
 
     def it_survives_the_process_a_fresh_worker_hits_the_same_entry(
@@ -68,7 +68,7 @@ def describe_cache_hits():
         first_worker.close()
         second_worker = spawn_worker()
         second = second_worker.request("hello", tiny_model)
-        assert first == second == {"ok": [1.0, 0.0]}
+        assert first["ok"] == second["ok"] == [1.0, 0.0]
         assert entries(cache_home) == 1
 
     def it_treats_text_and_blob_of_the_same_bytes_as_one_value(
@@ -94,8 +94,8 @@ def describe_cache_misses():
         spawn_worker, cache_home, tiny_model, other_model
     ):
         worker = spawn_worker()
-        assert worker.request("hello", tiny_model) == {"ok": [1.0, 0.0]}
-        assert worker.request("hello", other_model) == {"ok": [0.0, 2.0]}
+        assert worker.request("hello", tiny_model)["ok"] == [1.0, 0.0]
+        assert worker.request("hello", other_model)["ok"] == [0.0, 2.0]
         assert entries(cache_home) == 2
 
 
@@ -107,7 +107,7 @@ def describe_default_model():
         worker = spawn_worker(argv=argv)
         by_default = worker.send_line('{"call": ["hello"]}')
         explicit = worker.request("hello", tiny_model)
-        assert by_default == explicit == {"ok": [1.0, 0.0]}
+        assert by_default["ok"] == explicit["ok"] == [1.0, 0.0]
         assert entries(cache_home) == 1
 
 

@@ -18,6 +18,7 @@ class Worker:
         self._cache = make_cache()
         self._compute_cached = self._cache.wrap(self._compute)
         self._pending = None
+        self._computed = False
 
     def _model(self, model_id):
         if model_id not in self._models:
@@ -25,6 +26,10 @@ class Worker:
         return self._models[model_id]
 
     def _compute(self, digest, identifier):
+        # cachetta's wrapper returns a hit and a miss identically, so the only
+        # place a miss is observable is here: _compute runs on a miss and never
+        # on a hit. embed() clears the flag and reads it back afterwards.
+        self._computed = True
         text, loaded = self._pending
         # No progress bar: the protocol embeds one value per round trip, so a
         # per-call bar can only ever say 1/1. The model *download* bar, which
@@ -33,11 +38,21 @@ class Worker:
         return [float(component) for component in vector]
 
     def embed(self, text, model_id):
+        """Return the vector for ``text``, and whether the cache served it."""
         loaded = self._model(model_id)
         identifier = model.model_identifier(model_id, loaded)
         digest = sha256(text.encode("utf-8")).hexdigest()
         self._pending = (text, loaded)
-        return self._compute_cached(digest, identifier)
+        self._computed = False
+        vector = self._compute_cached(digest, identifier)
+        return vector, not self._computed
+
+    def _embed_response(self, text, model_id):
+        try:
+            vector, cached = self.embed(text, model_id)
+        except Exception as error:
+            return {"err": f"embed({model_id!r}) failed: {error}"}
+        return {"ok": vector, "meta": {"cached": cached}}
 
     def handle(self, line):
         try:
@@ -59,10 +74,7 @@ class Worker:
         (model_id,) = rest or [model.DEFAULT_MODEL_ID]
         if not isinstance(model_id, str):
             return {"err": MALFORMED_MODEL_ID}
-        try:
-            return {"ok": self.embed(text, model_id)}
-        except Exception as error:
-            return {"err": f"embed({model_id!r}) failed: {error}"}
+        return self._embed_response(text, model_id)
 
     def serve(self, stdin, stdout):
         for line in stdin:

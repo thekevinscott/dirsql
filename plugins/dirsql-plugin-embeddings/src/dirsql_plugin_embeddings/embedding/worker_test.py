@@ -23,6 +23,7 @@ def describe_init():
         built, _ = make_worker()
         assert built._models == {}
         assert built._pending is None
+        assert built._computed is False
 
 
 def describe_model_loading():
@@ -43,6 +44,17 @@ def describe_model_loading():
 
 
 def describe_compute():
+    def it_records_that_it_ran_so_a_miss_is_distinguishable_from_a_hit():
+        # _compute runs only on a cache miss, so it is the one place a miss is
+        # observable -- cachetta's wrapper returns both cases identically.
+        built, _ = make_worker()
+        loaded = MagicMock()
+        loaded.encode.return_value = [[1.0]]
+        built._pending = ("hello", loaded)
+        built._computed = False
+        built._compute(HELLO_DIGEST, "m1")
+        assert built._computed is True
+
     def it_encodes_the_pending_text_and_returns_plain_floats():
         built, _ = make_worker()
         loaded = MagicMock()
@@ -77,7 +89,36 @@ def describe_embed():
             "m1", model.load_model.return_value
         )
         built._compute_cached.assert_called_once_with(HELLO_DIGEST, "m1@9.9")
-        assert result == [1.0]
+        assert result == ([1.0], True)
+
+    def it_reports_a_hit_when_compute_never_ran():
+        built, _ = make_worker()
+        built._compute_cached = MagicMock(return_value=[1.0])
+        with patch.object(worker, "model"):
+            _, cached = built.embed("hello", "m1")
+        assert cached is True
+
+    def it_reports_a_miss_when_compute_ran():
+        built, _ = make_worker()
+
+        def compute(digest, identifier):
+            built._computed = True
+            return [1.0]
+
+        built._compute_cached = MagicMock(side_effect=compute)
+        with patch.object(worker, "model"):
+            _, cached = built.embed("hello", "m1")
+        assert cached is False
+
+    def it_clears_a_previous_calls_miss_before_consulting_the_cache():
+        # Without the reset, one miss would make every later hit read as a
+        # miss for the rest of the process.
+        built, _ = make_worker()
+        built._computed = True
+        built._compute_cached = MagicMock(return_value=[1.0])
+        with patch.object(worker, "model"):
+            _, cached = built.embed("hello", "m1")
+        assert cached is True
 
     def it_stages_the_text_and_model_for_compute():
         built, _ = make_worker()
@@ -99,19 +140,27 @@ def describe_embed():
 def describe_handle():
     def it_answers_ok_with_the_embedding():
         built, _ = make_worker()
-        with patch.object(built, "embed", return_value=[1.0, 0.0]) as embed:
+        with patch.object(
+            built, "embed", return_value=([1.0, 0.0], False)
+        ) as embed:
             response = built.handle('{"call": ["hello", "m1"]}')
         embed.assert_called_once_with("hello", "m1")
-        assert response == {"ok": [1.0, 0.0]}
+        assert response == {"ok": [1.0, 0.0], "meta": {"cached": False}}
+
+    def it_reports_a_cache_hit_in_the_response_metadata():
+        built, _ = make_worker()
+        with patch.object(built, "embed", return_value=([1.0], True)):
+            response = built.handle('{"call": ["hello", "m1"]}')
+        assert response == {"ok": [1.0], "meta": {"cached": True}}
 
     def it_uses_the_default_model_for_a_single_argument_call():
         built, _ = make_worker()
-        with patch.object(built, "embed", return_value=[1.0]) as embed:
+        with patch.object(built, "embed", return_value=([1.0], False)) as embed:
             with patch.object(worker, "model") as model:
                 model.DEFAULT_MODEL_ID = "default/model"
                 response = built.handle('{"call": ["hello"]}')
         embed.assert_called_once_with("hello", "default/model")
-        assert response == {"ok": [1.0]}
+        assert response == {"ok": [1.0], "meta": {"cached": False}}
 
     def it_answers_err_on_invalid_json():
         built, _ = make_worker()
