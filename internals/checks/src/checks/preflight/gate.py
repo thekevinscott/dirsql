@@ -7,21 +7,7 @@ return value.
 
 Before the gates, each python root gets two drift guards (#782): `uv sync`, which
 reconciles the venv with the manifest, and `declared-deps`, which asserts every
-import is declared. A `uv pip install` leaves the local venv strictly more capable
-than any real install, and no amount of running more gates catches that.
-
-Three pairs cannot be run the naive way, and each is encoded rather than skipped:
-
-  * python `mutation` / `unit-coverage` -- these execute the suite, whose
-    `python3 -m pytest` must resolve to the package's own venv rather than an
-    ambient interpreter with no pytest (#706 saw it as a cosmic-ray baseline
-    failure naming no cause). Both run under `uv run` from the package root.
-  * rust `colocated-test` -- the co-change variant rides only the
-    python/typescript language set (rust units are inline, so no sibling can go
-    stale), and the CLI rejects `--base` for it.
-  * `e2e-verify` -- its PATH is the package root holding `e2e-attestations/`,
-    with the source dir as `--scope`; the `[e2e]` config table it needs is
-    passed as `--extra-scope` / `--exclude` flags, since it takes no `--config`.
+import is declared.
 """
 
 from __future__ import annotations
@@ -30,96 +16,10 @@ import os.path
 import subprocess
 import tomllib
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 
-from .matrix import GATES, Root, pairs, parse_gate_matrix
-
-MANIFESTS = ("pyproject.toml", "package.json", "Cargo.toml")
-
-# The CLI, resolved the way CI resolves it. Two silent drifts made the local run
-# enforce a different ruleset, and naming the tag closes both: the PyPI wheel
-# `uvx` fetches lags npm by several releases, and a BARE `npx testing-conventions`
-# resolves engine-aware, so a shim on node older than `engines.node` picks the
-# last release below that floor -- and exits 0 with no banner to say so.
-CLI = ["npx", "-y", "testing-conventions@latest"]
-
-# How to launch a suite-executing gate, per language. Both run from the package
-# root: python so the suite's `python3 -m pytest` resolves to that package's
-# venv, typescript because only the npm CLI appends `--ts-mutation-adapter`,
-# which the rule needs. Rust is absent -- it has no suite environment to enter.
-#
-# The python arm needs BOTH distributions. `--with` is not how the CLI is
-# resolved; it puts the wheel's `testing_conventions` package on the interpreter
-# the gate hands to `python3 -m`, which is the only form the mutation adapter
-# ships in.
-LAUNCHERS = {
-    "python": ["uv", "run", "--with", "testing-conventions", *CLI],
-    "typescript": CLI,
-}
-
-
-@dataclass
-class Invocation:
-    argv: list[str]
-    # "." rather than None for the repo root: `subprocess.run(cwd=".")` is the
-    # same call, and it keeps every path in this module a plain str.
-    cwd: str
-
-
-def package_root(source: str, exists: Callable[[str], bool]) -> str:
-    """Nearest ancestor of `source` (inclusive) holding a package manifest."""
-    parts = source.split("/")
-    while parts:
-        candidate = "/".join(parts)
-        if any(exists(f"{candidate}/{name}") for name in MANIFESTS):
-            return candidate
-        parts.pop()
-    return "."
-
-
-def e2e_flags(e2e: dict) -> list[str]:
-    flags = []
-    for scope in e2e.get("extra_scope", []):
-        flags += ["--extra-scope", scope]
-    for path in e2e.get("exclude", []):
-        flags += ["--exclude", path]
-    return flags
-
-
-def invocation(
-    root: Root,
-    language: str,
-    gate_name: str,
-    base: str,
-    exists: Callable[[str], bool],
-    e2e: dict,
-) -> Invocation:
-    gate = GATES[gate_name]
-    options = []
-    if gate.language:
-        options += ["--language", language]
-    if gate.base and (gate_name, language) != ("colocated-test", "rust"):
-        options += ["--base", base]
-    if gate.config and root.config:
-        options += ["--config", root.config]
-
-    if gate_name == "e2e-verify":
-        home = package_root(root.source, exists)
-        return Invocation(
-            [
-                *[*CLI, *gate.command, *options],
-                *["--scope", root.source, *e2e_flags(e2e), home],
-            ],
-            ".",
-        )
-    if gate.runs_suite and language in LAUNCHERS:
-        # Paths become relative to the package root we run from, not the repo.
-        cwd = package_root(root.source, exists)
-        if gate.config and root.config:
-            options[-1] = os.path.relpath(root.config, cwd)
-        source = os.path.relpath(root.source, cwd)
-        return Invocation([*LAUNCHERS[language], *gate.command, *options, source], cwd)
-    return Invocation([*CLI, *gate.command, *options, root.source], ".")
+from .invocation import Invocation, invocation
+from .matrix import GATES, pairs, parse_gate_matrix
+from .prepare import prepare
 
 
 def default_runner(argv: Sequence[str], cwd: str) -> int:
@@ -132,36 +32,6 @@ def read_e2e(config: str) -> dict:
         return {}
     with open(config, "rb") as handle:
         return tomllib.load(handle).get("e2e", {})
-
-
-def prepare(roots: list[Root], exists: Callable[[str], bool]) -> list[tuple[str, str, Invocation]]:
-    """Per-python-root steps that guard against venv drift (#782).
-
-    `uv sync` reconciles the venv with the manifest, *removing* anything a
-    `uv pip install` left behind, so an undeclared dependency stops resolving
-    locally the way it never resolved in CI. `declared-deps` is the direct
-    assertion, independent of whatever the venv happens to hold.
-    """
-    steps = []
-    for root in roots:
-        if "python" not in root.languages:
-            continue
-        home = package_root(root.source, exists)
-        steps.append((root.job, "uv-sync", Invocation(["uv", "sync", "--project", home], ".")))
-        steps.append(
-            (
-                root.job,
-                "declared-deps",
-                Invocation(
-                    [
-                        *["uv", "run", "--project", "internals/checks", "dirsql-checks"],
-                        *["declared-deps", root.source],
-                    ],
-                    ".",
-                ),
-            )
-        )
-    return steps
 
 
 def run(

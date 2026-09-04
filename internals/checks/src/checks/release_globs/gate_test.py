@@ -100,6 +100,7 @@ def describe_run():
         workflow = {True: {"pull_request": {"paths": ["packages/rust/**", "!packages/rust/tests/**"]}}}
         assert drive(CLEAN, workflow, lines) == 1
         assert "release-ci.yml excludes" in lines[0]
+        assert lines[1].startswith("release-globs: 1 problem(s).")
 
     def it_accepts_a_config_declaring_no_packages():
         lines: list[str] = []

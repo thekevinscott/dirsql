@@ -1,6 +1,7 @@
 """Colocated unit tests for the preflight command (isolation -- no `CliRunner`).
 
-Driven through `.callback`; `sources` and `run` are mocked at their import site.
+Driven through `.callback`; `sources` (from `.discovery`) and `run` (from `.gate`)
+are mocked at their import site.
 """
 
 from unittest import mock
