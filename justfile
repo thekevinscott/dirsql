@@ -118,7 +118,7 @@ test-packaging:
 # `packages/python` venv (which has dirsql + its test deps), not internals/checks'
 # own venv (which has neither).
 test-ci:
-    PYTHONPATH=internals/checks/src uv run python -c "import sys; from checks.pytest_gate.gate import run; sys.exit(run(sys.argv[1:]))" packages/python/dirsql/ packages/python/tests/integration/ -x -q --tb=short
+    PYTHONPATH=internals/checks/src uv run python -c "import sys; from checks.pytest_gate.run import run; sys.exit(run(sys.argv[1:]))" packages/python/dirsql/ packages/python/tests/integration/ -x -q --tb=short
 
 # Run Rust tests
 test-rust:

@@ -1,13 +1,13 @@
 """Integration tests for the pytest-gate check against a real pytest subprocess.
 
-Exercises `gate.run` with its default collaborators (`subprocess.run`,
+Exercises `run.run` with its default collaborators (`subprocess.run`,
 `find_test_files`) -- a real pytest invocation over a real scratch directory,
 never the packaged `dirsql-checks` CLI (that's the e2e tier).
 """
 
 from __future__ import annotations
 
-from checks.pytest_gate.gate import run
+from checks.pytest_gate.run import run
 
 
 def describe_run_against_a_real_directory():

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import click
 
-from checks.pytest_gate.gate import run
+from checks.pytest_gate.run import run
 
 
 @click.command(context_settings={"ignore_unknown_options": True})
