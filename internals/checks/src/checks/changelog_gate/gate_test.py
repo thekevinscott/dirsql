@@ -1,3 +1,4 @@
+import inspect
 from unittest import mock
 
 from checks.changelog_gate.gate import run
@@ -138,3 +139,15 @@ def describe_run():
         )
         assert rc == 1
         assert "packages/ts has code changes" in capsys.readouterr().out
+
+
+def describe_default_git_seams():
+    def it_defaults_each_seam_to_its_own_module():
+        params = inspect.signature(run).parameters
+        assert params["changed_files"].default.__module__ == (
+            "checks.changelog_gate.changed_files"
+        )
+        assert params["added_files"].default.__module__ == "checks.changelog_gate.added_files"
+        assert params["commit_messages"].default.__module__ == (
+            "checks.changelog_gate.commit_messages"
+        )
