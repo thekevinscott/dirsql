@@ -4,7 +4,7 @@ import asyncio
 import os
 
 from dirsql._dirsql import DirSQL as _RustDirSQL
-from dirsql.resolve_config_extensions import resolve_configs_extension_specs
+from dirsql.resolve_configs_extension_specs import resolve_configs_extension_specs
 from dirsql.resolve_extension import resolve_extension_path
 
 

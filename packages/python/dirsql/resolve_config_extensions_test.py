@@ -1,8 +1,8 @@
 """Unit tests for `resolve_config_extension_specs`.
 
-Real `.dirsql.toml` files are parsed; the only mocked collaborator is
-`resolve_extension_path` (the effectful file-vs-package resolver). The pure
-`is_bare_name` stays real.
+Real `.dirsql.toml` files are parsed; `_resolve_entries` (which owns the
+effectful per-entry resolution) is mocked, returning a `base:path` sentinel
+per entry. The pure `is_bare_name` stays real.
 """
 
 import os
@@ -29,8 +29,8 @@ def _write(path, body):
 def _patch():
     return mock.patch.object(
         rce,
-        "resolve_extension_path",
-        side_effect=lambda path, base, resolve_relative: f"R:{path}",
+        "_resolve_entries",
+        side_effect=lambda entries, base: [f"{base}:{e['path']}" for e in entries],
     )
 
 
@@ -93,9 +93,9 @@ def describe_resolve_config_extension_specs():
     def it_returns_none_when_all_paths_are_literal(cfg_dir):
         path = os.path.join(cfg_dir, ".dirsql.toml")
         _write(path, '[[dirsql.extension]]\npath = "ext/a.so"\n')
-        with _patch() as resolver:
+        with _patch() as resolve_entries:
             assert rce.resolve_config_extension_specs(path) is None
-            resolver.assert_not_called()
+            resolve_entries.assert_not_called()
 
     def it_resolves_every_entry_when_a_path_is_a_bare_package_name(cfg_dir):
         path = os.path.join(cfg_dir, ".dirsql.toml")
@@ -107,24 +107,16 @@ def describe_resolve_config_extension_specs():
             "[[dirsql.extension]]\n"
             'path = "ext/local.so"\n',
         )
-        with _patch() as resolver:
+        with _patch() as resolve_entries:
             specs = rce.resolve_config_extension_specs(path)
-        assert specs == [
-            {"path": "R:sqlite_vec", "entrypoint": "sqlite3_vec_init"},
-            {"path": "R:ext/local.so", "entrypoint": None},
-        ]
-        resolver.assert_any_call("sqlite_vec", base=cfg_dir, resolve_relative=True)
-        resolver.assert_any_call("ext/local.so", base=cfg_dir, resolve_relative=True)
-
-    def it_normalizes_a_non_string_entrypoint_to_none(cfg_dir):
-        path = os.path.join(cfg_dir, ".dirsql.toml")
-        _write(
-            path,
-            '[[dirsql.extension]]\npath = "sqlite_vec"\nentrypoint = 42\n',
+        assert specs == [f"{cfg_dir}:sqlite_vec", f"{cfg_dir}:ext/local.so"]
+        resolve_entries.assert_called_once_with(
+            [
+                {"path": "sqlite_vec", "entrypoint": "sqlite3_vec_init"},
+                {"path": "ext/local.so"},
+            ],
+            cfg_dir,
         )
-        with _patch():
-            specs = rce.resolve_config_extension_specs(path)
-        assert specs == [{"path": "R:sqlite_vec", "entrypoint": None}]
 
     def it_skips_a_non_string_path_in_the_package_name_probe(cfg_dir):
         # A dict entry whose `path` isn't a string is not treated as a package
@@ -137,63 +129,4 @@ def describe_resolve_config_extension_specs():
         )
         with _patch():
             specs = rce.resolve_config_extension_specs(path)
-        assert specs == [
-            {"path": "R:42", "entrypoint": None},
-            {"path": "R:sqlite_vec", "entrypoint": None},
-        ]
-
-
-def describe_resolve_configs_extension_specs():
-    def it_returns_none_when_no_config_uses_a_bare_name(cfg_dir):
-        a = os.path.join(cfg_dir, "a.toml")
-        b = os.path.join(cfg_dir, "b.toml")
-        _write(a, '[[dirsql.extension]]\npath = "ext/a.so"\n')
-        _write(
-            b, '[[table]]\nname = "t"\nddl = "CREATE TABLE t (x TEXT)"\nglob = "*"\n'
-        )
-        with _patch() as resolver:
-            assert rce.resolve_configs_extension_specs([a, b]) is None
-            resolver.assert_not_called()
-
-    def it_returns_none_for_an_empty_list():
-        assert rce.resolve_configs_extension_specs([]) is None
-
-    def it_resolves_every_config_in_order_when_one_uses_a_bare_name(cfg_dir):
-        a = os.path.join(cfg_dir, "a.toml")
-        b = os.path.join(cfg_dir, "b.toml")
-        # a: only a literal; b: a bare package name -> intervene for both.
-        _write(a, '[[dirsql.extension]]\npath = "ext/a.so"\n')
-        _write(b, '[[dirsql.extension]]\npath = "sqlite_vec"\n')
-        with _patch():
-            specs = rce.resolve_configs_extension_specs([a, b])
-        assert specs == [
-            {"path": "R:ext/a.so", "entrypoint": None},
-            {"path": "R:sqlite_vec", "entrypoint": None},
-        ]
-
-    def it_skips_a_missing_config_but_resolves_the_rest(cfg_dir):
-        missing = os.path.join(cfg_dir, "nope.toml")
-        b = os.path.join(cfg_dir, "b.toml")
-        _write(b, '[[dirsql.extension]]\npath = "sqlite_vec"\n')
-        with _patch():
-            specs = rce.resolve_configs_extension_specs([missing, b])
-        assert specs == [{"path": "R:sqlite_vec", "entrypoint": None}]
-
-    def it_resolves_each_config_against_its_own_directory(cfg_dir):
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as other:
-            a = os.path.join(cfg_dir, "a.toml")
-            b = os.path.join(other, "b.toml")
-            _write(a, '[[dirsql.extension]]\npath = "sqlite_vec"\n')
-            _write(b, '[[dirsql.extension]]\npath = "ext/b.so"\n')
-            with mock.patch.object(
-                rce,
-                "resolve_extension_path",
-                side_effect=lambda path, base, resolve_relative: base,
-            ):
-                specs = rce.resolve_configs_extension_specs([a, b])
-            assert specs == [
-                {"path": cfg_dir, "entrypoint": None},
-                {"path": other, "entrypoint": None},
-            ]
+        assert specs == [f"{cfg_dir}:42", f"{cfg_dir}:sqlite_vec"]
