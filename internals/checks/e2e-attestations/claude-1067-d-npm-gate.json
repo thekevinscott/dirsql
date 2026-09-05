@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1788574045,
+  "exit_code": 0,
+  "commit": "aa8b928b9266aac916530de32f6ab981362070d7",
+  "branch": "claude/1067-d-npm-gate"
+}
