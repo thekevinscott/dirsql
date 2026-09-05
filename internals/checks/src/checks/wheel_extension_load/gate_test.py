@@ -8,9 +8,9 @@ from checks.wheel_extension_load.gate import (
     CONFIG,
     PROBE_SQL,
     ProbeError,
-    _require_zero,
     bin_subdir,
     list_names,
+    require_zero,
     run,
     wheel_names,
     write_text,
@@ -23,36 +23,21 @@ def _result(returncode=0, stdout="", stderr=""):
     return mock.Mock(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
-def describe_require_zero():
-    def zero_passes():
-        assert _require_zero(_result(0), "boom") is None
+def describe_collaborators():
+    def it_resolves_the_probe_error_from_the_shared_probe_package():
+        assert ProbeError.__module__ == "checks.probe.probe_error"
 
-    def positive_code_raises():
-        with pytest.raises(ProbeError, match="boom"):
-            _require_zero(_result(1), "boom")
+    def it_resolves_require_zero_from_the_shared_probe_package():
+        assert require_zero.__module__ == "checks.probe.require_zero"
 
-    def negative_signal_code_raises():
-        with pytest.raises(ProbeError, match="boom"):
-            _require_zero(_result(-9), "boom")
+    def it_resolves_bin_subdir_from_the_shared_probe_package():
+        assert bin_subdir.__module__ == "checks.probe.bin_subdir"
 
+    def it_resolves_write_text_from_the_shared_probe_package():
+        assert write_text.__module__ == "checks.probe.write_text"
 
-def describe_bin_subdir():
-    def windows_uses_scripts():
-        assert bin_subdir("nt") == "Scripts"
-
-    def posix_uses_bin():
-        assert bin_subdir("posix") == "bin"
-
-
-def describe_list_names():
-    def returns_directory_entries():
-        listdir = mock.Mock(return_value=["a.whl", "b.txt"])
-        assert list_names("dist", listdir) == ["a.whl", "b.txt"]
-        listdir.assert_called_once_with("dist")
-
-    def missing_directory_is_empty():
-        listdir = mock.Mock(side_effect=FileNotFoundError)
-        assert list_names("dist", listdir) == []
+    def it_resolves_list_names_from_its_own_module():
+        assert list_names.__module__ == "checks.wheel_extension_load.list_names"
 
 
 def describe_wheel_names():
@@ -61,14 +46,6 @@ def describe_wheel_names():
 
     def empty_when_no_wheels():
         assert wheel_names(["a.tar.gz", "notes.txt"]) == []
-
-
-def describe_write_text():
-    def writes_the_content(tmp_path):
-        path = str(tmp_path / "ext.toml")
-        write_text(path, "content")
-        with open(path, encoding="utf-8") as handle:
-            assert handle.read() == "content"
 
 
 def describe_run():

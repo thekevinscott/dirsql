@@ -9,13 +9,29 @@ from checks.npm_binary_extension_load.gate import (
     ENTRYPOINT,
     PROBE_SQL,
     ProbeError,
+    bin_subdir,
     config_for,
     find_binaries,
+    require_zero,
     run,
+    write_text,
 )
-from checks.wheel_extension_load.gate import bin_subdir
 
 DIAGNOSE = "checks.npm_binary_extension_load.gate.diagnose"
+
+
+def describe_collaborators():
+    def it_resolves_the_probe_error_from_the_shared_probe_package():
+        assert ProbeError.__module__ == "checks.probe.probe_error"
+
+    def it_resolves_require_zero_from_the_shared_probe_package():
+        assert require_zero.__module__ == "checks.probe.require_zero"
+
+    def it_resolves_bin_subdir_from_the_shared_probe_package():
+        assert bin_subdir.__module__ == "checks.probe.bin_subdir"
+
+    def it_resolves_write_text_from_the_shared_probe_package():
+        assert write_text.__module__ == "checks.probe.write_text"
 
 
 def _result(returncode=0, stdout="", stderr=""):

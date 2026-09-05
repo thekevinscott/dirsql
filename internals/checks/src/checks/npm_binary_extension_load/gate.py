@@ -28,12 +28,10 @@ import subprocess
 import sys
 import tempfile
 
-from checks.wheel_extension_load.gate import (
-    ProbeError,
-    _require_zero,
-    bin_subdir,
-    write_text,
-)
+from checks.probe.bin_subdir import bin_subdir
+from checks.probe.probe_error import ProbeError
+from checks.probe.require_zero import require_zero
+from checks.probe.write_text import write_text
 
 from .diagnose import diagnose
 
@@ -98,7 +96,7 @@ def run(
         capture_output=True,
         text=True,
     )
-    _require_zero(made, f"venv creation failed:\n{made.stderr}")
+    require_zero(made, f"venv creation failed:\n{made.stderr}")
     venv_bin = os.path.join(venv_dir, bin_subdir())
 
     install = runner(
@@ -106,7 +104,7 @@ def run(
         capture_output=True,
         text=True,
     )
-    _require_zero(install, f"pip install failed:\n{install.stderr}")
+    require_zero(install, f"pip install failed:\n{install.stderr}")
 
     located = runner(
         [
@@ -117,7 +115,7 @@ def run(
         capture_output=True,
         text=True,
     )
-    _require_zero(located, f"locating sqlite-vec's loadable library failed:\n{located.stderr}")
+    require_zero(located, f"locating sqlite-vec's loadable library failed:\n{located.stderr}")
     vec_path = located.stdout.strip()
 
     scratch = os.path.join(staging, "data")
