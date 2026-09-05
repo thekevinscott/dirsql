@@ -10,23 +10,22 @@ is injected so the orchestration unit-tests without a real repo.
 
 from __future__ import annotations
 
-from checks.changelog_gate import git_ops
-from checks.changelog_gate.decide import (
-    added_fragments,
-    changed_packages,
-    code_touched,
-    has_skip_trailer,
-    malformed_fragments,
-)
+from checks.changelog_gate.added_files import added_files as _added_files
+from checks.changelog_gate.changed_files import changed_files as _changed_files
+from checks.changelog_gate.commit_messages import commit_messages as _commit_messages
+from checks.changelog_gate.added_fragments import added_fragments
+from checks.changelog_gate.code_touched import code_touched
+from checks.changelog_gate.decide import changed_packages, has_skip_trailer
+from checks.changelog_gate.malformed_fragments import malformed_fragments
 
 
 def run(
     base_sha: str,
     head_sha: str,
     *,
-    changed_files=git_ops.changed_files,
-    added_files=git_ops.added_files,
-    commit_messages=git_ops.commit_messages,
+    changed_files=_changed_files,
+    added_files=_added_files,
+    commit_messages=_commit_messages,
 ) -> int:
     if has_skip_trailer(commit_messages(base_sha, head_sha)):
         print("skip-changelog line present; bypassing changelog enforcement.")
