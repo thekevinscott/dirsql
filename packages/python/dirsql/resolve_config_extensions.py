@@ -14,59 +14,9 @@ reach it through :mod:`dirsql.resolve_configs_extension_specs`.
 
 from __future__ import annotations
 
-import os
-import sys
-from importlib import import_module
-
+from .has_bare_name import _has_bare_name
+from .load_extension_entries import _load_extension_entries
 from .resolve_entries import _resolve_entries
-from .resolve_extension import is_bare_name
-
-
-def _load_toml_module():
-    """Return the TOML parser module for the running interpreter.
-
-    ``tomllib`` is stdlib only on 3.11+; on 3.10 the ``tomli`` backport it was
-    derived from (a version-gated dependency) provides the same surface.
-    Imported by name so a unit test can exercise both arms on any
-    interpreter -- a literal ``import tomllib`` is unreachable on 3.10 no
-    matter what ``sys.version_info`` claims.
-    """
-    if sys.version_info >= (3, 11):
-        return import_module("tomllib")
-    return import_module("tomli")
-
-
-_toml = _load_toml_module()
-
-
-def _load_extension_entries(config_path):
-    """Return ``(entries, base_dir)`` for a config's ``[[dirsql.extension]]``.
-
-    ``None`` when the config is missing, unreadable/malformed, or declares no
-    extension array -- the caller should leave such configs to the core.
-    """
-    if not os.path.isfile(config_path):
-        return None
-    try:
-        with open(config_path, "rb") as f:
-            doc = _toml.load(f)
-    except (OSError, _toml.TOMLDecodeError):
-        # Leave a malformed / unreadable config for the core to report.
-        return None
-
-    entries = (doc.get("dirsql") or {}).get("extension")
-    if not isinstance(entries, list):
-        return None
-    return entries, os.path.dirname(os.path.abspath(config_path))
-
-
-def _has_bare_name(entries):
-    return any(
-        isinstance(e, dict)
-        and isinstance(e.get("path"), str)
-        and is_bare_name(e["path"])
-        for e in entries
-    )
 
 
 def resolve_config_extension_specs(config_path):

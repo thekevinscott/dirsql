@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1788573708,
+  "exit_code": 0,
+  "commit": "fb7bf9e800f9d682e3b8e4b83f3d69cc8642fe69",
+  "branch": "claude/1079-p2-resolve-config-extensions"
+}
