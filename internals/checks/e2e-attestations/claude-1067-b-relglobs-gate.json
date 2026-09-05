@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1788573410,
+  "exit_code": 0,
+  "commit": "6d4057b5b4389bd3ec12b30fa1e9eb0177ddace3",
+  "branch": "claude/1067-b-relglobs-gate"
+}
