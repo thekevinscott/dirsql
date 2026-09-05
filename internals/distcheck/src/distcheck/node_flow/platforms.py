@@ -1,16 +1,21 @@
 """Host-platform detection for the node distcheck flow (#520).
 
-A Python port of the host-row lookup in `packages/ts/src/platforms.ts`: enough
-of each published target to reconstruct the host's `@dirsql/lib-<slug>`
-sub-package (name, os/cpu constraints, addon filename) and locate its staged
-addon. Pure -- callers pass the detected `sys.platform` / `platform.machine()`,
-so the lookup is unit-testable.
+Reads the published-target table from `packages/ts/src/platforms.json`, the one
+declarative copy shared with the TypeScript SDK, and keeps the fields this flow
+needs to reconstruct the host's `@dirsql/lib-<slug>` sub-package (name, os/cpu
+constraints, addon filename) and locate its staged addon. The lookup is pure --
+callers pass the detected `sys.platform` / `platform.machine()`.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
 from .arch import to_node_arch
+
+_LIB_PREFIX = "@dirsql/lib-"
+_TABLE = Path(__file__).parents[5] / "packages" / "ts" / "src" / "platforms.json"
 
 
 @dataclass(frozen=True)
@@ -36,16 +41,15 @@ class Platform:
         return f"dirsql.{self.slug}.node"
 
 
-# The subset of PLATFORMS in packages/ts/src/platforms.ts this flow needs -- that
-# file is the release source of truth for the published sub-packages, and its
-# `triple` and `libc` reconstruct nothing here. `dirsql-checks platforms-mirror`
-# holds the two tables to that subset, in both directions.
-PLATFORMS: tuple[Platform, ...] = (
-    Platform("linux", "x64", "linux-x64-gnu", ["linux"], ["x64"]),
-    Platform("linux", "arm64", "linux-arm64-gnu", ["linux"], ["arm64"]),
-    Platform("darwin", "x64", "darwin-x64", ["darwin"], ["x64"]),
-    Platform("darwin", "arm64", "darwin-arm64", ["darwin"], ["arm64"]),
-    Platform("win32", "x64", "win32-x64-msvc", ["win32"], ["x64"]),
+PLATFORMS: tuple[Platform, ...] = tuple(
+    Platform(
+        row["nodePlatform"],
+        row["nodeArch"],
+        row["libName"].removeprefix(_LIB_PREFIX),
+        row["os"],
+        row["cpu"],
+    )
+    for row in json.loads(_TABLE.read_text(encoding="utf-8"))
 )
 
 _BY_KEY = {(p.node_platform, p.node_arch): p for p in PLATFORMS}
@@ -56,7 +60,7 @@ def find_host_platform(node_platform: str, node_arch: str) -> Platform:
     if platform is None:
         raise ValueError(
             f"unsupported host {node_platform}-{node_arch}; "
-            "add a row to PLATFORMS in packages/ts/src/platforms.ts (and here)"
+            "add a row to packages/ts/src/platforms.json"
         )
     return platform
 

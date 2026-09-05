@@ -43,3 +43,15 @@ def test_platform_is_immutable():
     p = find_host_platform("linux", "x64")
     with pytest.raises(AttributeError):
         p.slug = "mutated"
+
+
+def test_platforms_covers_every_published_target():
+    # PLATFORMS is read from packages/ts/src/platforms.json and `slug` is the
+    # one field derived rather than carried; pin the whole set.
+    assert sorted(p.slug for p in PLATFORMS) == [
+        "darwin-arm64",
+        "darwin-x64",
+        "linux-arm64-gnu",
+        "linux-x64-gnu",
+        "win32-x64-msvc",
+    ]

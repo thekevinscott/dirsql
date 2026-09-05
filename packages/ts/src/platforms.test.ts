@@ -44,6 +44,21 @@ describe("PLATFORMS", () => {
     });
   });
 
+  describe("the node vocabulary the JSON cast cannot type", () => {
+    it("pairs a real `process.platform` with a real `process.arch` on every row", () => {
+      // `PLATFORMS` is a cast over platforms.json, so nothing at the type
+      // level stops a hand-edited row carrying a value node never reports.
+      const keys = PLATFORMS.map((p) => `${p.nodePlatform}-${p.nodeArch}`);
+      expect(keys.sort()).toEqual([
+        "darwin-arm64",
+        "darwin-x64",
+        "linux-arm64",
+        "linux-x64",
+        "win32-x64",
+      ]);
+    });
+  });
+
   describe("libTriples()", () => {
     it("maps every `${platform}-${arch}` key to its lib-* sub-package", () => {
       const map = libTriples();

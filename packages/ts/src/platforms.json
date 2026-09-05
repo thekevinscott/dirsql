@@ -1,0 +1,44 @@
+[
+  {
+    "triple": "x86_64-unknown-linux-gnu",
+    "nodePlatform": "linux",
+    "nodeArch": "x64",
+    "libName": "@dirsql/lib-linux-x64-gnu",
+    "os": ["linux"],
+    "cpu": ["x64"],
+    "libc": ["glibc"]
+  },
+  {
+    "triple": "aarch64-unknown-linux-gnu",
+    "nodePlatform": "linux",
+    "nodeArch": "arm64",
+    "libName": "@dirsql/lib-linux-arm64-gnu",
+    "os": ["linux"],
+    "cpu": ["arm64"],
+    "libc": ["glibc"]
+  },
+  {
+    "triple": "x86_64-apple-darwin",
+    "nodePlatform": "darwin",
+    "nodeArch": "x64",
+    "libName": "@dirsql/lib-darwin-x64",
+    "os": ["darwin"],
+    "cpu": ["x64"]
+  },
+  {
+    "triple": "aarch64-apple-darwin",
+    "nodePlatform": "darwin",
+    "nodeArch": "arm64",
+    "libName": "@dirsql/lib-darwin-arm64",
+    "os": ["darwin"],
+    "cpu": ["arm64"]
+  },
+  {
+    "triple": "x86_64-pc-windows-msvc",
+    "nodePlatform": "win32",
+    "nodeArch": "x64",
+    "libName": "@dirsql/lib-win32-x64-msvc",
+    "os": ["win32"],
+    "cpu": ["x64"]
+  }
+]

@@ -1,7 +1,11 @@
-// Single source of truth for the target platforms `dirsql` publishes.
+// The target platforms `dirsql` publishes. The rows live in `platforms.json`,
+// the one declarative copy of the table: this module types it, and the node
+// distcheck flow (`internals/distcheck/.../node_flow/platforms.py`) reads the
+// same file. The JSON sits under `src/` so `tsc` emits it into `dist/` and it
+// ships with the package -- `loadNativeCore()` needs the map at runtime.
 //
 // Every target triple generates ONE npm sub-package: `@dirsql/lib-<slug>`,
-// holding the napi-rs `.node` addon. It backs both layers — the TypeScript
+// holding the napi-rs `.node` addon. It backs both layers -- the TypeScript
 // SDK loads it via `loadNativeCore()`, and since #739 the `dirsql` CLI runs
 // in-process through its `runCli` export rather than spawning a binary. The
 // second family, `@dirsql/cli-<slug>`, shipped a redundant copy of the same
@@ -12,6 +16,8 @@
 //
 // `libTriples()` returns a `${process.platform}-${process.arch}` →
 // sub-package-name map.
+
+import rows from "./platforms.json" with { type: "json" };
 
 export interface Platform {
   /** Rust target triple — the name cargo-dist uses for archives. */
@@ -30,50 +36,10 @@ export interface Platform {
   libc?: string[];
 }
 
-export const PLATFORMS: readonly Platform[] = [
-  {
-    triple: "x86_64-unknown-linux-gnu",
-    nodePlatform: "linux",
-    nodeArch: "x64",
-    libName: "@dirsql/lib-linux-x64-gnu",
-    os: ["linux"],
-    cpu: ["x64"],
-    libc: ["glibc"],
-  },
-  {
-    triple: "aarch64-unknown-linux-gnu",
-    nodePlatform: "linux",
-    nodeArch: "arm64",
-    libName: "@dirsql/lib-linux-arm64-gnu",
-    os: ["linux"],
-    cpu: ["arm64"],
-    libc: ["glibc"],
-  },
-  {
-    triple: "x86_64-apple-darwin",
-    nodePlatform: "darwin",
-    nodeArch: "x64",
-    libName: "@dirsql/lib-darwin-x64",
-    os: ["darwin"],
-    cpu: ["x64"],
-  },
-  {
-    triple: "aarch64-apple-darwin",
-    nodePlatform: "darwin",
-    nodeArch: "arm64",
-    libName: "@dirsql/lib-darwin-arm64",
-    os: ["darwin"],
-    cpu: ["arm64"],
-  },
-  {
-    triple: "x86_64-pc-windows-msvc",
-    nodePlatform: "win32",
-    nodeArch: "x64",
-    libName: "@dirsql/lib-win32-x64-msvc",
-    os: ["win32"],
-    cpu: ["x64"],
-  },
-];
+// JSON widens `nodePlatform` / `nodeArch` to `string`, which no data file can
+// carry as `NodeJS.Platform` / `NodeJS.Architecture`. The cast is the only
+// place the two vocabularies meet.
+export const PLATFORMS = rows as readonly Platform[];
 
 /** Node `${platform}-${arch}` → `@dirsql/lib-*` napi sub-package name. */
 export function libTriples(): Record<string, string> {

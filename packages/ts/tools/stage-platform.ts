@@ -37,7 +37,7 @@ export function findHostPlatform(
   );
   if (!p) {
     throw new Error(
-      `unsupported host ${key}; add a row to PLATFORMS in src/platforms.ts`,
+      `unsupported host ${key}; add a row to src/platforms.json`,
     );
   }
   return p;

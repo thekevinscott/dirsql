@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1788609669,
+  "exit_code": 0,
+  "commit": "c92fd606e9cbc936828378f5481e0c0dbdda98c0",
+  "branch": "claude/1074-platform-table-single-source"
+}
