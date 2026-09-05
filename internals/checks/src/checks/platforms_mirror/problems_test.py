@@ -51,6 +51,10 @@ def describe_problems():
         assert found[0].startswith("Platform.exe")
         assert found[-1].startswith("win32-x64: cpu")
 
+    def it_reports_a_lib_name_no_slug_can_be_derived_from():
+        found = problems(FIELDS, [PY_LINUX], [{**TS_LINUX, "libName": "@dirsql/linux-x64-gnu"}])
+        assert found[0].startswith("linux-x64: libName '@dirsql/linux-x64-gnu'")
+
     def it_compares_only_the_rows_present_on_both_sides():
         found = problems(FIELDS, [PY_LINUX, PY_WIN], [TS_LINUX])
         assert len(found) == 1

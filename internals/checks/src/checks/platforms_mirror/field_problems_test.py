@@ -34,6 +34,10 @@ def describe_field_problems():
             "internals/distcheck/src/distcheck/node_flow/platforms.py to match."
         )
 
+    def it_derives_the_slug_before_comparing_it():
+        (message,) = field_problems(PY_LINUX, {**TS_LINUX, "libName": "@dirsql/lib-other"})
+        assert message.startswith("linux-x64: slug is 'linux-x64-gnu' in platforms.py, 'other'")
+
     def it_reports_every_disagreeing_field():
         drifted = {**PY_LINUX, "cpu": ["arm64"], "slug": "nope"}
         assert len(field_problems(drifted, TS_LINUX)) == 2

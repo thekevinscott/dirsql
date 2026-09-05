@@ -6,7 +6,7 @@ from unittest import mock
 
 import pytest
 
-from checks.platforms_mirror.cli import cli
+from checks.platforms_mirror.cli import PYTHON_FILE, TYPESCRIPT_FILE, cli
 
 
 def invoke(**kwargs):
@@ -28,5 +28,7 @@ def test_propagates_a_drifted_mirror_as_exit_one():
 
 def test_defaults_to_the_two_committed_platform_tables():
     python_path, typescript_path = cli.params
-    assert python_path.default == "internals/distcheck/src/distcheck/node_flow/platforms.py"
-    assert typescript_path.default == "packages/ts/src/platforms.ts"
+    assert python_path.default == PYTHON_FILE
+    assert typescript_path.default == TYPESCRIPT_FILE
+    assert PYTHON_FILE == "internals/distcheck/src/distcheck/node_flow/platforms.py"
+    assert TYPESCRIPT_FILE == "packages/ts/src/platforms.ts"
