@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1788609138,
+  "exit_code": 0,
+  "commit": "0be6c697e064ee919380e60fc3efa37a8bdc00a5",
+  "branch": "claude/1073-drop-npm-ext-probe"
+}
