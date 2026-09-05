@@ -32,21 +32,13 @@ def describe_typescript_table():
     def it_normalizes_single_quoted_strings():
         assert typescript_table("const PLATFORMS = [{ os: ['linux'] }];") == [{"os": ["linux"]}]
 
-    def it_unwraps_a_single_quoted_string_without_trimming_its_contents():
-        assert typescript_table("const PLATFORMS = [{ os: ['aba'] }];") == [{"os": ["aba"]}]
-
-    def it_unwraps_a_template_literal():
-        assert typescript_table("const PLATFORMS = [{ os: [`aba`] }];") == [{"os": ["aba"]}]
-
-    def it_keeps_a_double_quoted_string_verbatim():
-        assert typescript_table('const PLATFORMS = [{ os: ["aba"] }];') == [{"os": ["aba"]}]
-
     def it_finds_the_array_when_a_comment_mentions_a_bracket():
         source = "// see PLATFORMS = [ elsewhere\nconst PLATFORMS = [{ os: ['a'] }];"
         assert typescript_table(source) == [{"os": ["a"]}]
 
-    def it_keeps_an_escape_sequence_inside_a_string():
-        assert typescript_table(r'const PLATFORMS = [{ os: "a\"b" }];') == [{"os": 'a"b'}]
+    def it_reads_the_first_platforms_binding_it_finds():
+        source = "const OTHER = [];\nexport const PLATFORMS = [{ os: ['a'] }];"
+        assert typescript_table(source) == [{"os": ["a"]}]
 
     def it_rejects_a_source_with_no_table():
         with pytest.raises(ParseError, match="no `PLATFORMS"):

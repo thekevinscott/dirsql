@@ -12,12 +12,8 @@ from collections.abc import Callable
 from .parse import ParseError
 from .problems import problems
 from .python_table import python_table
+from .read import read
 from .typescript_table import typescript_table
-
-
-def read(path: str) -> str:
-    with open(path, encoding="utf-8") as handle:
-        return handle.read()
 
 
 def run(

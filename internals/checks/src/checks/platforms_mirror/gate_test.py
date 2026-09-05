@@ -1,12 +1,12 @@
 """Colocated unit tests for the platforms-mirror gate (#1004).
 
 Isolation: the reader is injected, so nothing here touches the repo's real
-platforms.py / platforms.ts. The reader itself is exercised against a scratch
-file. The table readers and the verdict in `problems.py` run for real, since
-they are pure text-in / messages-out.
+platforms.py / platforms.ts; `read.py` carries its own scratch-file test. The
+table readers and the verdict in `problems.py` run for real, since they are
+pure text-in / messages-out.
 """
 
-from checks.platforms_mirror.gate import read, run
+from checks.platforms_mirror.gate import run
 
 PYTHON = '''\
 from dataclasses import dataclass
@@ -55,13 +55,6 @@ def invoke(**kwargs):
     return code, "\n".join(lines)
 
 
-def describe_read():
-    def it_reads_a_file_as_utf8_text(tmp_path):
-        path = tmp_path / "platforms.ts"
-        path.write_text("// caffè\n", encoding="utf-8")
-        assert read(str(path)) == "// caffè\n"
-
-
 def describe_run():
     def it_reports_the_target_count_when_the_subset_agrees():
         code, out = invoke()
@@ -94,6 +87,17 @@ def describe_run():
         assert code == 1
         assert "::error::platforms-mirror could not read a platform table:" in out
         assert "no `class Platform`" in out
+
+    def it_reads_both_paths_through_the_injected_reader():
+        seen = []
+        text = sources()
+
+        def source(path):
+            seen.append(path)
+            return text(path)
+
+        run("p.py", "t.ts", source=source, echo=lambda line: None)
+        assert seen == ["p.py", "t.ts"]
 
     def it_fails_when_the_typescript_table_cannot_be_read():
         code, out = invoke(typescript="export const OTHER = [];\n")
