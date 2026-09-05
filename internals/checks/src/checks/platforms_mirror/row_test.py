@@ -32,6 +32,11 @@ def describe_row():
             "slug": "win32-x64-msvc",
         }
 
+    def it_reads_a_list_valued_keyword():
+        assert row(entry('Platform(os=["linux", "android"])'), ["os"]) == {
+            "os": ["linux", "android"]
+        }
+
     def it_reads_a_row_that_fills_fewer_fields_than_the_class_declares():
         assert row(entry('Platform("linux")'), FIELDS) == {"node_platform": "linux"}
 
