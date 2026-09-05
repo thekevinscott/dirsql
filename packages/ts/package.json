@@ -49,7 +49,12 @@
     },
     "tsc": {
       "command": "tsc -p tsconfig.build.json",
-      "files": ["src/**/*.ts", "tsconfig.json", "tsconfig.build.json"],
+      "files": [
+        "src/**/*.ts",
+        "src/**/*.json",
+        "tsconfig.json",
+        "tsconfig.build.json"
+      ],
       "output": ["dist/**"]
     },
     "stage:platform": {
@@ -58,6 +63,7 @@
       "files": [
         "tools/stage-platform.ts",
         "src/platforms.ts",
+        "src/platforms.json",
         "napi/src/**/*.rs",
         "napi/build.rs",
         "napi/Cargo.toml",
@@ -77,6 +83,7 @@
         "napi/Cargo.toml",
         "../rust/src/**/*.rs",
         "src/**/*.ts",
+        "src/**/*.json",
         "tsconfig.json",
         "tsconfig.build.json"
       ],
@@ -87,6 +94,7 @@
       "dependencies": ["napi:build", "tsc"],
       "files": [
         "src/**/*.ts",
+        "src/**/*.json",
         "tools/**/*.ts",
         "tests/**/*.ts",
         "vitest.config.ts"
@@ -96,13 +104,14 @@
     "test:unit": {
       "command": "vitest run --dir src",
       "dependencies": ["napi:build"],
-      "files": ["src/**/*.ts", "vitest.config.ts"],
+      "files": ["src/**/*.ts", "src/**/*.json", "vitest.config.ts"],
       "output": []
     },
     "test:integration": {
       "command": "vitest run --dir tests/integration/hermetic --passWithNoTests",
       "files": [
         "src/**/*.ts",
+        "src/**/*.json",
         "tests/integration/hermetic/**/*.ts",
         "vitest.config.ts"
       ],
@@ -113,6 +122,7 @@
       "dependencies": ["napi:build", "tsc"],
       "files": [
         "src/**/*.ts",
+        "src/**/*.json",
         "tools/**/*.ts",
         "tests/integration/binding/**/*.ts",
         "tests/exists.ts",
@@ -125,6 +135,7 @@
       "dependencies": ["build"],
       "files": [
         "src/**/*.ts",
+        "src/**/*.json",
         "tools/**/*.ts",
         "tests/e2e/**/*.ts",
         "vitest.config.ts",
@@ -138,6 +149,7 @@
       "dependencies": ["napi:build"],
       "files": [
         "src/**/*.ts",
+        "src/**/*.json",
         "tools/**/*.ts",
         "tests/integration/**/*.ts",
         "tests/exists.ts",

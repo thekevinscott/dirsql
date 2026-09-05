@@ -9,6 +9,8 @@ on:
       - 'internals/distcheck/src/**'
       - 'internals/distcheck/tests/**'
       - 'internals/distcheck/pyproject.toml'
+      # The published-target table this lane's platform lookup reads.
+      - 'packages/ts/src/platforms.json'
       # This lane passes no `config:`, so the reusable workflow's default
       # applies and the ROOT testing-conventions.toml governs it -- an unknown
       # key there fails this lane too.
