@@ -4,6 +4,7 @@ in, data out; nothing here touches the repo's real platforms.ts).
 
 import pytest
 
+from checks.platforms_mirror import typescript_table as module
 from checks.platforms_mirror.typescript_table import ParseError, typescript_table
 
 TYPESCRIPT = """\
@@ -74,3 +75,9 @@ def describe_typescript_table():
     def it_rejects_a_table_it_cannot_read_as_data():
         with pytest.raises(ParseError, match="not a plain array"):
             typescript_table("const PLATFORMS = [{ ...spread }];")
+
+    def it_reads_the_source_through_the_helpers_in_their_own_modules():
+        assert module.without_comments.__module__ == (
+            "checks.platforms_mirror.without_comments"
+        )
+        assert module.as_json.__module__ == "checks.platforms_mirror.as_json"

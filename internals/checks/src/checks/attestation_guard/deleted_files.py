@@ -1,6 +1,6 @@
-"""Thin git subprocess wrappers for the attestation-guard check (#1043).
+"""The paths a range deletes, for the attestation-guard check (#1043).
 
-Each shells out for exactly one piece of data, so the decision logic in
+Shells out for exactly this one piece of data, so the decision logic in
 `decide.py` stays subprocess-free and unit-testable.
 """
 
@@ -21,15 +21,3 @@ def deleted_files(base_sha: str, head_sha: str, runner=subprocess.run) -> list[s
         check=True,
     )
     return [line for line in result.stdout.splitlines() if line]
-
-
-def commit_messages(base_sha: str, head_sha: str, runner=subprocess.run) -> str:
-    # Raw bodies (`%B`), scanned for the bypass line without git's trailer
-    # parser, so the bypass works from any line of any commit in the range.
-    result = runner(
-        ["git", "log", "--format=%B", f"{base_sha}..{head_sha}"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return result.stdout

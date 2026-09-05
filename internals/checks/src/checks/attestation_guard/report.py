@@ -8,6 +8,9 @@ misspelled.
 
 from __future__ import annotations
 
+from checks.attestation_guard.deletion_annotation import deletion_annotation
+from checks.attestation_guard.near_miss_annotation import near_miss_annotation
+
 _ADVICE = (
     "::error::A receipt records that another branch's e2e suite ran, and "
     "nothing can regenerate a merged branch's. Restore them and re-attest only "
@@ -19,22 +22,6 @@ _ADVICE = (
 def restore_command(deleted, base_sha: str) -> str:
     """The exact `git checkout` that puts every deleted receipt back."""
     return f"git checkout {base_sha} -- {' '.join(deleted)}"
-
-
-def deletion_annotation(path: str) -> str:
-    """The per-file annotation naming one wrongly-deleted receipt."""
-    return (
-        f"::error file={path}::{path} is an e2e attestation receipt. "
-        "Receipts are append-only; this PR deletes it."
-    )
-
-
-def near_miss_annotation(line: str) -> str:
-    """The annotation naming a bypass line that was attempted but misspelled."""
-    return (
-        f"::error::{line!r} is not the bypass line. The exact form is "
-        "'allow-receipt-deletion: <reason>', reason required."
-    )
 
 
 def report(deleted, near_misses, base_sha: str) -> None:
