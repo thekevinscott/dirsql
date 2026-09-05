@@ -12,10 +12,11 @@
 //      matches and multiple matches are both hard errors -- disambiguate
 //      with a literal path.
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
-import { isAbsolute, join, resolve as resolvePath } from "node:path";
-import { type PackageResolver, packageDir } from "./package-dir.js";
+import { isAbsolute, resolve as resolvePath } from "node:path";
+import type { PackageResolver } from "./package-dir.js";
+import { resolvePackage } from "./resolve-package.js";
 
 // Suffixes that mark a value as "already a file path" (so package resolution is
 // never attempted).
@@ -29,46 +30,12 @@ function defaultResolver(): PackageResolver {
   };
 }
 
-/** Loadable-file glob suffix(es) for the current platform. */
-function platformSuffixes(): string[] {
-  if (process.platform === "darwin") {
-    return [".dylib", ".node"];
-  }
-  if (process.platform === "win32") {
-    return [".dll", ".node"];
-  }
-  return [".so", ".node"];
-}
-
 /** True when `path` is a bare package name rather than a file path. */
 export function isBareName(path: string): boolean {
   if (path.includes("/") || path.includes("\\")) {
     return false;
   }
   return !LOADABLE_SUFFIXES.some((s) => path.endsWith(s));
-}
-
-/** Glob the platform loadable inside a bare name's package dir. */
-function resolvePackage(name: string, resolver: PackageResolver): string {
-  const dir = packageDir(name, resolver);
-  const suffixes = platformSuffixes();
-  const matches = (readdirSync(dir, { recursive: true }) as string[])
-    .filter((entry) => suffixes.some((s) => entry.endsWith(s)))
-    .map((entry) => join(dir, entry))
-    .sort();
-
-  const desc = suffixes.join(" / ");
-  if (matches.length === 0) {
-    throw new Error(
-      `no loadable extension file (${desc}) found in package '${name}' (searched ${dir})`,
-    );
-  }
-  if (matches.length > 1) {
-    throw new Error(
-      `multiple loadable extension files found in package '${name}': ${matches.join(", ")}; disambiguate with a literal path`,
-    );
-  }
-  return matches[0] as string;
 }
 
 /**
