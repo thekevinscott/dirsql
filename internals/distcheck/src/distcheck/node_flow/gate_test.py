@@ -9,12 +9,7 @@ from unittest import mock
 
 import pytest
 
-from distcheck.node_flow.gate import (
-    DistcheckError,
-    _require_zero,
-    run,
-    staged_addon_path,
-)
+from distcheck.node_flow.gate import DistcheckError, run, staged_addon_path
 
 
 @dataclass
@@ -194,13 +189,6 @@ def test_run_cli_subpkg_name_mismatch_lesser():
     runner = mock.Mock(side_effect=_ok_sequence())
     with pytest.raises(DistcheckError, match="name mismatch"):
         run("/ts", _HOST, runner=runner, fs=fs)
-
-
-def test_require_zero_passes_on_success_and_raises_otherwise():
-    _require_zero(_res(rc=0), "boom")  # no raise
-    for rc in (1, -1):  # positive and signal-style negative exit codes
-        with pytest.raises(DistcheckError, match="boom"):
-            _require_zero(_res(rc=rc), "boom")
 
 
 def test_run_rejects_positional_runner():

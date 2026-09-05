@@ -9,14 +9,7 @@ from unittest import mock
 
 import pytest
 
-from distcheck.python_flow.gate import (
-    DistcheckError,
-    _require_zero,
-    bin_subdir,
-    check_wheel_tag,
-    run,
-    sole_wheel,
-)
+from distcheck.python_flow.gate import DistcheckError, bin_subdir, run
 
 _WHEEL = "dirsql-1.0-cp311-abi3-linux_x86_64.whl"
 
@@ -51,46 +44,11 @@ def test_bin_subdir_is_scripts_on_windows_else_bin():
     assert bin_subdir("posix") == "bin"
 
 
-def test_require_zero_passes_on_success_and_raises_otherwise():
-    _require_zero(_res(rc=0), "boom")  # no raise
-    for rc in (1, -1):  # positive and signal-style negative exit codes
-        with pytest.raises(DistcheckError, match="boom"):
-            _require_zero(_res(rc=rc), "boom")
-
-
 def test_run_rejects_positional_maturin():
     # `maturin`/`runner`/`fs` are keyword-only; a positional third arg must be
     # rejected (guards the `*` marker against a `/` positional-only mutation).
     with pytest.raises(TypeError):
         run("/pkg", "/repo", "maturin")
-
-
-def test_sole_wheel_returns_the_single_wheel():
-    assert sole_wheel(["notes.txt", _WHEEL]) == _WHEEL
-
-
-def test_sole_wheel_rejects_none():
-    with pytest.raises(DistcheckError, match="exactly one wheel"):
-        sole_wheel(["notes.txt"])
-
-
-def test_sole_wheel_rejects_many():
-    with pytest.raises(DistcheckError, match="exactly one wheel"):
-        sole_wheel(["a.whl", "b.whl"])
-
-
-def test_check_wheel_tag_accepts_abi3_cpython():
-    check_wheel_tag(_WHEEL)  # no raise
-
-
-def test_check_wheel_tag_rejects_non_abi3():
-    with pytest.raises(DistcheckError, match="abi3 wheel tag"):
-        check_wheel_tag("dirsql-1.0-cp311-cp311-linux_x86_64.whl")
-
-
-def test_check_wheel_tag_rejects_non_cpython_interpreter():
-    with pytest.raises(DistcheckError, match="interpreter tag"):
-        check_wheel_tag("dirsql-1.0-xy-abi3-linux_x86_64.whl")
 
 
 def test_run_success_executes_the_full_sequence():

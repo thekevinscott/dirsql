@@ -3,12 +3,14 @@
 A Python port of the host-row lookup in `packages/ts/src/platforms.ts`: enough
 of each published target to reconstruct the host's `@dirsql/lib-<slug>`
 sub-package (name, os/cpu constraints, addon filename) and locate its staged
-addon. Pure -- callers pass the detected `sys.platform` / `platform.machine()`
-so both the mapping and the lookup are unit-testable.
+addon. Pure -- callers pass the detected `sys.platform` / `platform.machine()`,
+so the lookup is unit-testable.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from .arch import to_node_arch
 
 
 @dataclass(frozen=True)
@@ -46,21 +48,7 @@ PLATFORMS: tuple[Platform, ...] = (
     Platform("win32", "x64", "win32-x64-msvc", ["win32"], ["x64"]),
 )
 
-_ARCH = {
-    "x86_64": "x64",
-    "amd64": "x64",
-    "arm64": "arm64",
-    "aarch64": "arm64",
-}
-
 _BY_KEY = {(p.node_platform, p.node_arch): p for p in PLATFORMS}
-
-
-def to_node_arch(machine: str) -> str:
-    key = machine.lower()
-    if key not in _ARCH:
-        raise ValueError(f"unsupported machine {machine!r}; extend platforms.py")
-    return _ARCH[key]
 
 
 def find_host_platform(node_platform: str, node_arch: str) -> Platform:

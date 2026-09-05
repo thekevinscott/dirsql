@@ -29,13 +29,8 @@ from distcheck.filesystem import FileSystem
 from distcheck.node_flow.platforms import Platform
 
 from .errors import DistcheckError
+from .require_zero import require_zero
 from .tarball import select_tarball
-
-
-def _require_zero(result, message: str) -> None:
-    """Raise `DistcheckError(message)` unless `result` exited 0."""
-    if result.returncode != 0:
-        raise DistcheckError(message)
 
 
 def staged_addon_path(ts_pkg: str, host: Platform) -> str:
@@ -92,7 +87,7 @@ def run(
         capture_output=True,
         text=True,
     )
-    _require_zero(cli_pack, f"addon npm pack failed:\n{cli_pack.stdout}\n{cli_pack.stderr}")
+    require_zero(cli_pack, f"addon npm pack failed:\n{cli_pack.stdout}\n{cli_pack.stderr}")
     cli_tarball = os.path.join(
         staging, select_tarball(fs.listdir(staging), "dirsql-lib-")
     )
@@ -104,7 +99,7 @@ def run(
         capture_output=True,
         text=True,
     )
-    _require_zero(
+    require_zero(
         main_pack, f"main pnpm pack failed:\n{main_pack.stdout}\n{main_pack.stderr}"
     )
     main_tarball = os.path.join(
@@ -123,7 +118,7 @@ def run(
         capture_output=True,
         text=True,
     )
-    _require_zero(npm_install, f"npm install failed:\n{npm_install.stderr}")
+    require_zero(npm_install, f"npm install failed:\n{npm_install.stderr}")
 
     # 4. The `dirsql` bin should exist and run the CLI in-process via the addon.
     bin_path = os.path.join(install_root, "node_modules", ".bin", "dirsql")
@@ -134,7 +129,7 @@ def run(
         f"`dirsql --version` failed; "
         f"stdout={version.stdout!r}, stderr={version.stderr!r}"
     )
-    _require_zero(version, version_err)
+    require_zero(version, version_err)
     if "dirsql" not in version.stdout:
         raise DistcheckError(version_err)
 
