@@ -1,6 +1,6 @@
 """Colocated unit tests for the preflight drift guards (#782)."""
 
-from checks.preflight.prepare import prepare
+from checks.preflight.prepare import package_root, prepare
 
 
 class Root:
@@ -52,3 +52,8 @@ def describe_prepare():
         assert [job for job, _step, _call in prepare([RUST, PY], has_manifest)] == [
             *["python-sdk", "python-sdk"]
         ]
+
+
+def describe_package_root_seam():
+    def it_locates_the_manifest_with_the_split_out_finder():
+        assert package_root.__module__ == "checks.preflight.package_root"

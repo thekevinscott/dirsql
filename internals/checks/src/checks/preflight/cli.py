@@ -11,9 +11,10 @@ import os.path
 
 import click
 
-from .discovery import sources
-from .gate import default_runner, read_e2e, run
+from .gate import default_runner, read_e2e
 from .matrix import NoGateMatrix, WORKFLOWS
+from .run import run
+from .sources import sources
 
 
 @click.command()

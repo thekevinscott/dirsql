@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1788574269,
+  "exit_code": 0,
+  "commit": "2787df7650636dfc9344cf8772e3aa93ba73d142",
+  "branch": "claude/ofpf1-preflight-split-k4x9"
+}

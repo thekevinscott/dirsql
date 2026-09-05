@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from .invocation import Invocation, package_root
+from .invocation import Invocation
 from .matrix import Root
+from .package_root import package_root
 
 
 def prepare(roots: list[Root], exists: Callable[[str], bool]) -> list[tuple[str, str, Invocation]]:

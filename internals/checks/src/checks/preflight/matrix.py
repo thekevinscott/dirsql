@@ -109,11 +109,6 @@ def parse_gate_matrix(text: str) -> list[Root]:
     return roots
 
 
-def read_text(path: str) -> str:
-    with open(path, encoding="utf-8") as handle:
-        return handle.read()
-
-
 def pairs(roots: list[Root]) -> list[tuple[Root, str, str]]:
     """Flatten the matrix into the (root, language, gate) triples to run."""
     return [(root, lang, gate) for root in roots for lang in root.languages for gate in root.gates]

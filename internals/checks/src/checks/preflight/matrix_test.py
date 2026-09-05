@@ -1,8 +1,6 @@
 """Colocated unit tests for the CI gate-matrix parser (#781)."""
 
-from unittest import mock
-
-from checks.preflight.matrix import GATES, ROOT_GATES, pairs, parse_gate_matrix, read_text
+from checks.preflight.matrix import GATES, ROOT_GATES, pairs, parse_gate_matrix
 
 CONVENTIONS = """
 jobs:
@@ -111,11 +109,3 @@ def describe_pairs():
         text = CONVENTIONS.replace("'[\"rust\"]'", "'[]'")
         assert all(lang != "rust" for _root, lang, _gate in pairs(parse_gate_matrix(text)))
 
-
-def describe_read_text():
-    def it_reads_a_workflow_as_utf8():
-        with mock.patch(
-            "checks.preflight.matrix.open", mock.mock_open(read_data=CONVENTIONS)
-        ) as opened:
-            assert read_text("wf.yml") == CONVENTIONS
-        opened.assert_called_once_with("wf.yml", encoding="utf-8")

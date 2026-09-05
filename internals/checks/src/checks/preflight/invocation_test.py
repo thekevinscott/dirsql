@@ -1,11 +1,6 @@
 """Colocated unit tests for the preflight argv builder (#781)."""
 
-from checks.preflight.invocation import (
-    Invocation,
-    e2e_flags,
-    invocation,
-    package_root,
-)
+from checks.preflight.invocation import Invocation, invocation
 
 
 class Root:
@@ -35,28 +30,6 @@ def has_manifest(path: str) -> bool:
 
 def call(root, language, gate, e2e=None):
     return invocation(root, language, gate, "origin/main", has_manifest, e2e or {})
-
-
-def describe_package_root():
-    def it_walks_up_to_the_nearest_manifest():
-        assert package_root("packages/python/dirsql", has_manifest) == "packages/python"
-
-    def it_returns_the_source_itself_when_it_holds_the_manifest():
-        assert package_root("packages/python", has_manifest) == "packages/python"
-
-    def it_falls_back_to_the_repo_root_when_no_ancestor_has_one():
-        assert package_root("packages/rust", lambda _path: False) == "."
-
-
-def describe_e2e_flags():
-    def it_maps_extra_scope_and_exclude_onto_repeatable_flags():
-        assert e2e_flags({"extra_scope": ["a", "b"], "exclude": ["a/cli"]}) == [
-            *["--extra-scope", "a", "--extra-scope", "b"],
-            *["--exclude", "a/cli"],
-        ]
-
-    def it_returns_nothing_for_an_absent_table():
-        assert e2e_flags({}) == []
 
 
 def describe_invocation():

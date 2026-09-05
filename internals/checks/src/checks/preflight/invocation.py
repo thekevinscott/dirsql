@@ -20,9 +20,9 @@ import os.path
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from .e2e_flags import e2e_flags
 from .matrix import GATES, Root
-
-MANIFESTS = ("pyproject.toml", "package.json", "Cargo.toml")
+from .package_root import package_root
 
 # The CLI, resolved the way CI resolves it. Two silent drifts made the local run
 # enforce a different ruleset, and naming the tag closes both: the PyPI wheel
@@ -52,26 +52,6 @@ class Invocation:
     # "." rather than None for the repo root: `subprocess.run(cwd=".")` is the
     # same call, and it keeps every path in this module a plain str.
     cwd: str
-
-
-def package_root(source: str, exists: Callable[[str], bool]) -> str:
-    """Nearest ancestor of `source` (inclusive) holding a package manifest."""
-    parts = source.split("/")
-    while parts:
-        candidate = "/".join(parts)
-        if any(exists(f"{candidate}/{name}") for name in MANIFESTS):
-            return candidate
-        parts.pop()
-    return "."
-
-
-def e2e_flags(e2e: dict) -> list[str]:
-    flags = []
-    for scope in e2e.get("extra_scope", []):
-        flags += ["--extra-scope", scope]
-    for path in e2e.get("exclude", []):
-        flags += ["--exclude", path]
-    return flags
 
 
 def invocation(
