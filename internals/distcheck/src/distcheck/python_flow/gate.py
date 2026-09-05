@@ -25,40 +25,15 @@ import sys
 
 from distcheck.filesystem import FileSystem
 
-
-class DistcheckError(RuntimeError):
-    """A distcheck stage failed -- carries a human-readable diagnostic."""
-
-
-def _require_zero(result, message: str) -> None:
-    """Raise `DistcheckError(message)` unless `result` exited 0."""
-    if result.returncode != 0:
-        raise DistcheckError(message)
+from .errors import DistcheckError
+from .require_zero import require_zero
+from .sole_wheel import sole_wheel
+from .wheel_tag import check_wheel_tag
 
 
 def bin_subdir(os_name: str = os.name) -> str:
     """venv scripts directory name -- `Scripts` on Windows, `bin` elsewhere."""
     return {"nt": "Scripts"}.get(os_name, "bin")
-
-
-def sole_wheel(names) -> str:
-    """The single `.whl` among `names`, or raise -- the build must emit one."""
-    wheels = [name for name in names if name.endswith(".whl")]
-    if len(wheels) != 1:
-        raise DistcheckError(f"expected exactly one wheel, saw {wheels}")
-    (wheel,) = wheels
-    return wheel
-
-
-def check_wheel_tag(wheel: str) -> None:
-    """Assert the stable-ABI (abi3) tag (#487): one `cp3x-abi3` wheel per
-    platform, not a version-locked `cpXY-cpXY` that re-inflates the release
-    matrix 4x."""
-    if "-abi3-" not in wheel:
-        raise DistcheckError(f"expected an abi3 wheel tag, saw {wheel!r}")
-    interp = wheel.split("-")[2]  # dirsql-<ver>-<interp>-<abi>-<plat>.whl
-    if not interp.startswith("cp3"):
-        raise DistcheckError(f"unexpected interpreter tag in {wheel!r}")
 
 
 def run(
@@ -79,7 +54,7 @@ def run(
             capture_output=True,
             text=True,
         )
-        _require_zero(build, f"maturin build failed:\n{build.stdout}\n{build.stderr}")
+        require_zero(build, f"maturin build failed:\n{build.stdout}\n{build.stderr}")
 
         wheel_name = sole_wheel(fs.listdir(wheel_dir))
         check_wheel_tag(wheel_name)
@@ -91,7 +66,7 @@ def run(
             capture_output=True,
             text=True,
         )
-        _require_zero(made, f"venv creation failed:\n{made.stderr}")
+        require_zero(made, f"venv creation failed:\n{made.stderr}")
         venv_bin = os.path.join(venv_dir, bin_subdir())
 
         install = runner(
@@ -99,7 +74,7 @@ def run(
             capture_output=True,
             text=True,
         )
-        _require_zero(install, f"pip install failed:\n{install.stderr}")
+        require_zero(install, f"pip install failed:\n{install.stderr}")
 
         cli = os.path.join(venv_bin, "dirsql")
         if not fs.exists(cli):
@@ -114,7 +89,7 @@ def run(
             f"`dirsql --version` failed; "
             f"stdout={version.stdout!r}, stderr={version.stderr!r}"
         )
-        _require_zero(version, version_err)
+        require_zero(version, version_err)
         if "dirsql" not in version.stdout:
             raise DistcheckError(version_err)
 
@@ -131,7 +106,7 @@ def run(
             f"`import dirsql` failed; "
             f"stdout={imported.stdout!r}, stderr={imported.stderr!r}"
         )
-        _require_zero(imported, imported_err)
+        require_zero(imported, imported_err)
         if not imported.stdout.strip():
             raise DistcheckError(imported_err)
     finally:

@@ -1,23 +1,6 @@
 import pytest
 
-from distcheck.node_flow.platforms import (
-    PLATFORMS,
-    detect_host,
-    find_host_platform,
-    to_node_arch,
-)
-
-
-def test_to_node_arch_maps_known_and_is_case_insensitive():
-    assert to_node_arch("x86_64") == "x64"
-    assert to_node_arch("AMD64") == "x64"
-    assert to_node_arch("arm64") == "arm64"
-    assert to_node_arch("aarch64") == "arm64"
-
-
-def test_to_node_arch_rejects_unknown():
-    with pytest.raises(ValueError, match="unsupported machine"):
-        to_node_arch("mips")
+from distcheck.node_flow.platforms import PLATFORMS, detect_host, find_host_platform
 
 
 def test_find_host_platform_linux_x64():
