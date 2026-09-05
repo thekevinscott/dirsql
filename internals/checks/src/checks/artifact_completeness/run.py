@@ -9,14 +9,10 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Iterable
 
-from .gate import (
-    built_packages,
-    declared_targets,
-    missing,
-    read_config,
-    subdirectories,
-    warn,
-)
+from .gate import declared_targets, warn
+from .missing import built_packages, missing
+from .read_config import read_config
+from .subdirectories import subdirectories
 
 
 def run(
