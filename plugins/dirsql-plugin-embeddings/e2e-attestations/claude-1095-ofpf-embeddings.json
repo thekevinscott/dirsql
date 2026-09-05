@@ -1,0 +1,7 @@
+{
+  "command": "uv run --with-editable ../../packages/python python -m pytest tests/e2e/ -x -q",
+  "ran_at": 1788575701,
+  "exit_code": 0,
+  "commit": "8f07e97547e3c145e6e6635e89839b6318d25b7c",
+  "branch": "claude/1095-ofpf-embeddings"
+}
