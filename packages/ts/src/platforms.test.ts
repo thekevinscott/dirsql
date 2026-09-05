@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  PLATFORMS,
-  type Platform,
-  libTriples,
-  librarySlug,
-} from "./platforms.js";
+import { PLATFORMS, libTriples } from "./platforms.js";
 
 describe("PLATFORMS", () => {
   describe("shape invariants", () => {
@@ -56,25 +51,6 @@ describe("PLATFORMS", () => {
       for (const p of PLATFORMS) {
         expect(map[`${p.nodePlatform}-${p.nodeArch}`]).toBe(p.libName);
       }
-    });
-  });
-
-  describe("librarySlug()", () => {
-    it("returns the slug after the `@dirsql/lib-` prefix for every platform", () => {
-      for (const p of PLATFORMS) {
-        expect(librarySlug(p)).toBe(p.libName.slice("@dirsql/lib-".length));
-      }
-      expect(librarySlug(PLATFORMS[0] as Platform)).toBe("linux-x64-gnu");
-    });
-
-    it("throws when libName does not start with the `@dirsql/lib-` prefix", () => {
-      const bad = {
-        ...PLATFORMS[0],
-        libName: "@dirsql/cli-linux-x64-gnu",
-      } as Platform;
-      expect(() => librarySlug(bad)).toThrow(
-        "libName @dirsql/cli-linux-x64-gnu missing @dirsql/lib- prefix",
-      );
     });
   });
 });

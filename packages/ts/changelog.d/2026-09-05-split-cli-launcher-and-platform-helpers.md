@@ -1,0 +1,3 @@
+**Changed**
+
+- **Four internal helpers moved to their own modules.** The napi `runCli` lookup (`resolveRunCli`, with the `RunCli` alias) now lives in `src/cli/resolve-run-cli.ts` and the signal registration (`keepSignalsFatal`) in `src/cli/keep-signals-fatal.ts`, leaving `main` alone in `src/cli/main.ts`; the sub-package slug (`librarySlug`) moved to `src/library-slug.ts` and the loadable-suffix table (`platformSuffixes`) to `src/platform-suffixes.ts`. `PLATFORMS`, `libTriples` and `resolvePackage` stay where they were. Internal reorganisation with no change to the published API or CLI behavior. (#1065)

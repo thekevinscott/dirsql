@@ -1,13 +1,15 @@
 import { mainInProcess } from "bin-shim";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadNativeCore } from "../load-native-core.js";
 import { die } from "./die.js";
+import { keepSignalsFatal } from "./keep-signals-fatal.js";
 import { main } from "./main.js";
 import { withResolvedExtensions } from "./resolve-config-extensions.js";
+import { resolveRunCli } from "./resolve-run-cli.js";
 
 vi.mock("bin-shim");
-vi.mock("../load-native-core.js");
 vi.mock("./die.js");
+vi.mock("./keep-signals-fatal.js");
+vi.mock("./resolve-run-cli.js");
 vi.mock("./resolve-config-extensions.js", async () => ({
   ...(await vi.importActual<typeof import("./resolve-config-extensions.js")>(
     "./resolve-config-extensions.js",
@@ -17,11 +19,10 @@ vi.mock("./resolve-config-extensions.js", async () => ({
 
 describe("main", () => {
   let exit: ReturnType<typeof vi.fn>;
-  let on: ReturnType<typeof vi.fn>;
   const runCli = vi.fn(() => 0);
 
   beforeEach(() => {
-    vi.mocked(loadNativeCore).mockReturnValue({ runCli } as never);
+    vi.mocked(resolveRunCli).mockReturnValue(runCli);
     vi.mocked(withResolvedExtensions).mockImplementation(async (argv) => argv);
     vi.mocked(mainInProcess).mockResolvedValue(0);
     vi.mocked(die).mockImplementation(((msg: string) => {
@@ -30,8 +31,7 @@ describe("main", () => {
     exit = vi.fn().mockImplementation((code: number) => {
       throw new Error(`EXIT_${code}`);
     });
-    on = vi.fn();
-    vi.stubGlobal("process", { ...process, exit, on });
+    vi.stubGlobal("process", { ...process, exit });
   });
 
   afterEach(() => {
@@ -74,59 +74,36 @@ describe("main", () => {
       ...process,
       argv: ["node", "dirsql", "--version"],
       exit,
-      on,
     });
 
     await expect(main()).rejects.toThrow("EXIT_0");
     expect(withResolvedExtensions).toHaveBeenCalledWith(["--version"]);
   });
 
-  it("installs the signal listeners before running the CLI", async () => {
+  it("makes the signals fatal before running the CLI", async () => {
     // Ordering is the whole fix: signal-hook chains to the handler installed
     // BEFORE it, and bare Node leaves SIG_DFL, which it does not emulate. A
     // listener registered after the core's would not keep Ctrl-C fatal.
     const order: string[] = [];
-    on.mockImplementation((signal: string) => order.push(`on:${signal}`));
+    vi.mocked(keepSignalsFatal).mockImplementation(() => {
+      order.push("keepSignalsFatal");
+    });
     vi.mocked(mainInProcess).mockImplementation(async () => {
       order.push("runCli");
       return 0;
     });
 
     await expect(main([])).rejects.toThrow("EXIT_0");
-    expect(order).toEqual(["on:SIGINT", "on:SIGTERM", "runCli"]);
+    expect(order).toEqual(["keepSignalsFatal", "runCli"]);
   });
 
-  it("exits 130 on SIGINT and 143 on SIGTERM", async () => {
-    const handlers: Record<string, () => void> = {};
-    on.mockImplementation((signal: string, handler: () => void) => {
-      handlers[signal] = handler;
-    });
-
-    await expect(main([])).rejects.toThrow("EXIT_0");
-    expect(() => handlers.SIGINT?.()).toThrow("EXIT_130");
-    expect(() => handlers.SIGTERM?.()).toThrow("EXIT_143");
-  });
-
-  it("dies with the message when the addon cannot be loaded", async () => {
-    vi.mocked(loadNativeCore).mockImplementation(() => {
+  it("dies with the message when runCli cannot be resolved", async () => {
+    vi.mocked(resolveRunCli).mockImplementation(() => {
       throw new Error("no prebuilt addon for linux-x64");
     });
 
     await expect(main([])).rejects.toThrow("DIE: no prebuilt addon");
     expect(mainInProcess).not.toHaveBeenCalled();
-  });
-
-  it("dies when the addon carries no callable runCli", async () => {
-    // A `@dirsql/lib-*` built without the `cli` feature loads fine but has no
-    // CLI; say so rather than throwing a bare TypeError.
-    vi.mocked(loadNativeCore).mockReturnValue({} as never);
-
-    // The whole message matters: naming the missing `cli` feature is the
-    // half that tells someone how to fix their build.
-    await expect(main([])).rejects.toThrow(
-      "dirsql: the native addon has no callable `runCli` export; " +
-        "it was built without the `cli` feature.",
-    );
   });
 
   it("stringifies a non-Error rejection", async () => {
