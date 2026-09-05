@@ -10,6 +10,10 @@ def test_artifact_completeness_is_registered():
     assert "artifact-completeness" in main.commands
 
 
+def test_attestation_guard_is_registered():
+    assert "attestation-guard" in main.commands
+
+
 def test_changelog_gate_is_registered():
     assert "changelog-gate" in main.commands
 

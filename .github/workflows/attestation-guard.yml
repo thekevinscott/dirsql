@@ -1,0 +1,53 @@
+name: Attestation Guard
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+# E2E attestation receipts are append-only: each one records that a branch's
+# e2e suite ran, and nothing can regenerate a merged branch's receipt. The
+# `e2e-verify` gate only asks whether a branch adds or updates ITS OWN receipt,
+# so a diff that deletes fifteen other branches' receipts passes it green
+# (#1036 merged exactly that, 28 receipts, fully green). This lane closes that
+# hole (#1041, #1043).
+#
+# Deliberately its own workflow rather than a job in an existing lane: receipts
+# live under packages/, plugins/ and internals/, so no single package lane sees
+# them all, and changelog-check.yml explicitly filters e2e-attestations out.
+# The `**` path filter is the point -- a deletion can ride in any diff, and the
+# only reliable trigger is the receipt path itself.
+on:
+  pull_request:
+    paths:
+      - '**/e2e-attestations/**'
+      - 'internals/checks/src/checks/attestation_guard/**'
+      - '.github/workflows/attestation-guard.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  attestation-guard:
+    name: Attestation guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      # Logic (receipt-path detection, bypass-line scanning, the restore
+      # instructions) lives in internals/checks' attestation_guard check,
+      # colocated-tested at 100% coverage, per AGENTS.md "CI Workflows".
+      - name: Fail on any deleted e2e attestation receipt
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: uv run --project internals/checks dirsql-checks attestation-guard
