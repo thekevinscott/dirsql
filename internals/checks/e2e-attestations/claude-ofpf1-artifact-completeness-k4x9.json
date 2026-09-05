@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1788573039,
+  "exit_code": 0,
+  "commit": "1401d7ec80548efcb8ec34be3dfd5d0f0d0a6bf7",
+  "branch": "claude/ofpf1-artifact-completeness-k4x9"
+}
