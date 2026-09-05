@@ -21,11 +21,9 @@ hand-kept table that would drift. The installed environment supplies only the
 from __future__ import annotations
 
 import ast
-import os
 import os.path
 import sys
-import tomllib
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 
 
 def normalize(name: str) -> str:
@@ -64,32 +62,6 @@ def providers(module: str, distributions: dict[str, list[str]]) -> set[str]:
     return {normalize(name) for name in distributions.get(module, [module])}
 
 
-def source_files(source: str, walk: Callable[[str], Iterable] = os.walk) -> list[str]:
-    found = []
-    for directory, _subdirs, names in walk(source):
-        found += [os.path.join(directory, n) for n in sorted(names) if n.endswith(".py")]
-    return sorted(found)
-
-
-def package_root(source: str, exists: Callable[[str], bool] = os.path.exists) -> str:
-    """Nearest ancestor of `source` (inclusive) holding a pyproject.toml."""
-    parts = source.split("/")
-    while parts:
-        candidate = "/".join(parts)
-        if exists(f"{candidate}/pyproject.toml"):
-            return candidate
-        parts.pop()
-    return "."
-
-
-def first_party(source: str, listdir: Callable[[str], Iterable[str]] = os.listdir) -> set[str]:
-    """Top-level names the scanned tree itself defines -- never a dependency."""
-    names = {os.path.basename(source.rstrip("/"))}
-    for entry in listdir(source):
-        names.add(entry[:-3] if entry.endswith(".py") else entry)
-    return names
-
-
 def undeclared(
     source: str,
     manifest: dict,
@@ -109,16 +81,6 @@ def undeclared(
             if not providers(module, distributions) & allowed:
                 problems.append(f"{path}: {module}")
     return problems
-
-
-def read_text(path: str) -> str:
-    with open(path, encoding="utf-8") as handle:
-        return handle.read()
-
-
-def read_manifest(path: str) -> dict:
-    with open(path, "rb") as handle:
-        return tomllib.load(handle)
 
 
 def warn(line: str) -> None:

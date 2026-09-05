@@ -9,15 +9,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from importlib.metadata import packages_distributions
 
-from .gate import (
-    first_party,
-    package_root,
-    read_manifest,
-    read_text,
-    source_files,
-    undeclared,
-    warn,
-)
+from .first_party import first_party
+from .gate import undeclared, warn
+from .package_root import package_root
+from .read_manifest import read_manifest
+from .read_text import read_text
+from .source_files import source_files
 
 
 def run(

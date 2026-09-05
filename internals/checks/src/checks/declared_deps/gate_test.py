@@ -2,14 +2,9 @@
 
 from checks.declared_deps.gate import (
     declared,
-    first_party,
     normalize,
-    package_root,
     providers,
-    read_manifest,
-    read_text,
     requirement_name,
-    source_files,
     top_level_imports,
     undeclared,
     warn,
@@ -66,30 +61,6 @@ def describe_providers():
         assert providers("bin_shim", {}) == {"bin-shim"}
 
 
-def describe_source_files():
-    def it_collects_python_files_recursively_and_sorted():
-        walk = lambda _root: [("src", [], ["b.py", "a.py", "notes.md"]), ("src/sub", [], ["c.py"])]  # noqa: E731
-        assert source_files("src", walk) == ["src/a.py", "src/b.py", "src/sub/c.py"]
-
-
-def describe_package_root():
-    def it_walks_up_to_the_nearest_pyproject():
-        assert package_root("a/b/c", lambda p: p == "a/pyproject.toml") == "a"
-
-    def it_falls_back_to_the_repo_root_when_no_ancestor_has_one():
-        assert package_root("a/b", lambda _p: False) == "."
-
-
-def describe_first_party():
-    def it_names_the_scanned_dir_and_everything_directly_inside_it():
-        assert first_party("src/checks", lambda _d: ["changelog.py", "preflight"]) == {
-            *["checks", "changelog", "preflight"]
-        }
-
-    def it_ignores_a_trailing_slash_on_the_scanned_dir():
-        assert "checks" in first_party("src/checks/", lambda _d: [])
-
-
 def check(sources, manifest=MANIFEST, distributions=None, ours=frozenset()):
     return undeclared(
         "src",
@@ -143,20 +114,6 @@ def describe_undeclared():
         assert check({"src/b.py": "import zz\nimport aa\n", "src/a.py": "import q\n"}) == [
             *["src/b.py: aa", "src/b.py: zz", "src/a.py: q"]
         ]
-
-
-def describe_read_text():
-    def it_reads_a_file_as_utf8(tmp_path):
-        path = tmp_path / "s.py"
-        path.write_text("# héllo\n", encoding="utf-8")
-        assert read_text(str(path)) == "# héllo\n"
-
-
-def describe_read_manifest():
-    def it_parses_a_toml_manifest(tmp_path):
-        path = tmp_path / "pyproject.toml"
-        path.write_text('[project]\nname = "x"\n')
-        assert read_manifest(str(path)) == {"project": {"name": "x"}}
 
 
 def describe_warn():
