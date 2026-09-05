@@ -2,7 +2,7 @@
 
 Isolation: the two readers are injected, so nothing here touches the repo's real
 `putitoutthere.toml` or `release-ci.yml`. The readers themselves are exercised
-against scratch files.
+in their own modules' tests.
 """
 
 from checks.release_globs.gate import (
@@ -31,42 +31,14 @@ def describe_collaborators():
     def it_resolves_unprechecked_from_the_precheck_module():
         assert unprechecked.__module__ == "checks.release_globs.precheck"
 
+    def it_defaults_the_config_reader_to_the_toml_reader_module():
+        assert read_config.__module__ == "checks.release_globs.read_config"
 
-def describe_read_config():
-    def it_parses_a_toml_release_config(tmp_path):
-        path = tmp_path / "putitoutthere.toml"
-        path.write_text('[[package]]\nname = "x"\nglobs = ["a/**"]\n')
-        assert read_config(str(path)) == {"package": [{"name": "x", "globs": ["a/**"]}]}
+    def it_defaults_the_workflow_reader_to_the_yaml_reader_module():
+        assert read_workflow.__module__ == "checks.release_globs.read_workflow"
 
-
-def describe_read_workflow():
-    def it_parses_a_workflow_whose_on_key_yaml_resolves_to_a_boolean(tmp_path):
-        path = tmp_path / "w.yml"
-        path.write_text("on:\n  pull_request:\n    paths:\n      - 'a/**'\n")
-        assert read_workflow(str(path))[True] == {"pull_request": {"paths": ["a/**"]}}
-
-
-def describe_pull_request_paths():
-    def it_reads_the_filter_off_the_boolean_on_key():
-        assert pull_request_paths({True: {"pull_request": {"paths": ["a/**"]}}}) == ["a/**"]
-
-    def it_reads_the_filter_off_a_quoted_string_on_key():
-        assert pull_request_paths({"on": {"pull_request": {"paths": ["a/**"]}}}) == ["a/**"]
-
-    def it_is_empty_when_the_workflow_declares_no_triggers():
-        assert pull_request_paths({}) == []
-
-    def it_is_empty_when_the_on_block_is_null():
-        assert pull_request_paths({True: None}) == []
-
-    def it_is_empty_when_the_workflow_has_no_pull_request_trigger():
-        assert pull_request_paths({True: {"push": {"branches": ["main"]}}}) == []
-
-    def it_is_empty_when_the_pull_request_trigger_is_null():
-        assert pull_request_paths({True: {"pull_request": None}}) == []
-
-    def it_is_empty_when_the_pull_request_trigger_filters_no_paths():
-        assert pull_request_paths({True: {"pull_request": {"branches": ["main"]}}}) == []
+    def it_resolves_the_path_filter_reader_from_its_own_module():
+        assert pull_request_paths.__module__ == "checks.release_globs.pull_request_paths"
 
 
 def describe_exclusions():
