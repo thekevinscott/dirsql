@@ -2,6 +2,8 @@
 in, data out; nothing here touches the repo's real platforms.ts).
 """
 
+from unittest import mock
+
 import pytest
 
 from checks.platforms_mirror.typescript_table import ParseError, typescript_table
@@ -74,3 +76,19 @@ def describe_typescript_table():
     def it_rejects_a_table_it_cannot_read_as_data():
         with pytest.raises(ParseError, match="not a plain array"):
             typescript_table("const PLATFORMS = [{ ...spread }];")
+
+    def it_strips_comments_through_the_helper_in_its_own_module():
+        with mock.patch(
+            "checks.platforms_mirror.typescript_table.without_comments",
+            return_value='PLATFORMS = [{"os": ["a"]}]',
+        ) as stripper:
+            assert typescript_table("// only the stripper sees this") == [{"os": ["a"]}]
+        stripper.assert_called_once_with("// only the stripper sees this")
+
+    def it_normalizes_to_json_through_the_helper_in_its_own_module():
+        with mock.patch(
+            "checks.platforms_mirror.typescript_table.as_json",
+            return_value='[{"os": ["a"]}]',
+        ) as normalizer:
+            assert typescript_table("const PLATFORMS = [{ os: ['b'] }];") == [{"os": ["a"]}]
+        normalizer.assert_called_once_with("""[{ os: ["b"] }];""")

@@ -1,8 +1,9 @@
 """Integration tests for the attestation-guard check against a real git repo.
 
-Exercises `gate.run` with its default collaborators (the real `git_ops`
-functions, real `git` subprocess calls) over a scratch repo fixture -- never
-the packaged `dirsql-checks` CLI (that's the e2e tier).
+Exercises `gate.run` with its default collaborators (the real
+`deleted_files` / `commit_messages` wrappers, real `git` subprocess calls)
+over a scratch repo fixture -- never the packaged `dirsql-checks` CLI (that's
+the e2e tier).
 """
 
 from __future__ import annotations

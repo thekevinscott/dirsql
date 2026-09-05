@@ -10,47 +10,21 @@ from __future__ import annotations
 import json
 import re
 
+from .as_json import as_json
 from .parse import ParseError, TABLE_NAME
-
-# One alternation of "things a naive scan would cut in half": the three string
-# forms first, so a `//` inside a string is matched as string rather than as the
-# comment that follows it.
-_TOKENS = re.compile(
-    r'"(?:\\.|[^"\\])*"' r"|'(?:\\.|[^'\\])*'" r"|`(?:\\.|[^`\\])*`" r"|//[^\n]*" r"|/\*.*?\*/",
-    re.S,
-)
-
-
-def _requoted(text: str) -> str:
-    """A TypeScript string literal as a JSON one."""
-    if text.startswith('"'):
-        return text
-    return json.dumps(text[1:-1].replace('\\"', '"').replace("\\'", "'"))
-
-
-def _without_comments(source: str) -> str:
-    def keep(match: re.Match) -> str:
-        text = match.group(0)
-        return "" if text.startswith(("//", "/*")) else _requoted(text)
-
-    return _TOKENS.sub(keep, source)
-
-
-def _as_json(text: str) -> str:
-    keyed = re.sub(r"([{,]\s*)([A-Za-z_$][\w$]*)\s*:", r'\1"\2":', text)
-    return re.sub(r",(\s*[}\]])", r"\1", keyed)
+from .without_comments import without_comments
 
 
 def typescript_table(source: str) -> list[dict]:
     """Rows of the `PLATFORMS` array in a `platforms.ts`-shaped module."""
-    cleaned = _without_comments(source)
+    cleaned = without_comments(source)
     marker = re.search(rf"\b{TABLE_NAME}\b[^=;]*=\s*(\[)", cleaned)
     if marker is None:
         raise ParseError(f"no `{TABLE_NAME} = [...]` assignment in the TypeScript source.")
     try:
         # `raw_decode` stops at the end of the array, so nothing here has to find
         # the closing bracket or care what follows it.
-        rows, _ = json.JSONDecoder().raw_decode(_as_json(cleaned[marker.start(1) :]))
+        rows, _ = json.JSONDecoder().raw_decode(as_json(cleaned[marker.start(1) :]))
     except json.JSONDecodeError as error:
         raise ParseError(
             f"`{TABLE_NAME}` is not a plain array of object literals ({error}); this check "

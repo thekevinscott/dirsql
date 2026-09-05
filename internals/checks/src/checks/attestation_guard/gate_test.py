@@ -1,8 +1,9 @@
+import inspect
 from unittest import mock
 
 import pytest
 
-from checks.attestation_guard.gate import run, verdict
+from checks.attestation_guard.gate import run
 
 
 def _run(deleted, *, messages="fix: a thing\n"):
@@ -80,15 +81,11 @@ def describe_run():
         messages.assert_called_once_with("b1", "h1")
 
 
-def describe_verdict():
-    def reports_every_deleted_receipt(capsys):
-        rc = verdict(
-            ["a/e2e-attestations/x.json", "b/e2e-attestations/y.json"], "fix: x", "sha"
+    def defaults_to_the_git_wrappers_each_in_its_own_module():
+        defaults = inspect.signature(run).parameters
+        assert defaults["deleted_files"].default.__module__ == (
+            "checks.attestation_guard.deleted_files"
         )
-        assert rc == 1
-        assert capsys.readouterr().out.count("::error file=") == 2
-
-    def does_not_report_when_bypassed(capsys):
-        rc = verdict(["a/e2e-attestations/x.json"], "allow-receipt-deletion: why", "sha")
-        assert rc == 0
-        assert "::error file=" not in capsys.readouterr().out
+        assert defaults["commit_messages"].default.__module__ == (
+            "checks.attestation_guard.commit_messages"
+        )

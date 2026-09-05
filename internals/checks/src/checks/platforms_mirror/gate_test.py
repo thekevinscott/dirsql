@@ -1,12 +1,13 @@
 """Colocated unit tests for the platforms-mirror gate (#1004).
 
 Isolation: the reader is injected, so nothing here touches the repo's real
-platforms.py / platforms.ts. The reader itself is exercised against a scratch
-file. The table readers and the verdict in `problems.py` run for real, since
-they are pure text-in / messages-out.
+platforms.py / platforms.ts. The table readers and the verdict in
+`problems.py` run for real, since they are pure text-in / messages-out.
 """
 
-from checks.platforms_mirror.gate import read, run
+import inspect
+
+from checks.platforms_mirror.gate import run
 
 PYTHON = '''\
 from dataclasses import dataclass
@@ -55,13 +56,6 @@ def invoke(**kwargs):
     return code, "\n".join(lines)
 
 
-def describe_read():
-    def it_reads_a_file_as_utf8_text(tmp_path):
-        path = tmp_path / "platforms.ts"
-        path.write_text("// caffè\n", encoding="utf-8")
-        assert read(str(path)) == "// caffè\n"
-
-
 def describe_run():
     def it_reports_the_target_count_when_the_subset_agrees():
         code, out = invoke()
@@ -100,3 +94,7 @@ def describe_run():
         assert code == 1
         assert "could not read a platform table:" in out
         assert "no `PLATFORMS" in out
+
+    def it_defaults_to_the_reader_in_its_own_module():
+        default = inspect.signature(run).parameters["source"].default
+        assert default.__module__ == "checks.platforms_mirror.read"

@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1788607604,
+  "exit_code": 0,
+  "commit": "827aa4770e160cb96d1bf4864d61c14f8abc31ba",
+  "branch": "claude/ofpf-attestation-guard-split-r7m2"
+}

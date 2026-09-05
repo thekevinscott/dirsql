@@ -1,6 +1,6 @@
 from unittest import mock
 
-from checks.attestation_guard.git_ops import commit_messages, deleted_files
+from checks.attestation_guard.deleted_files import deleted_files
 
 
 def describe_deleted_files():
@@ -22,15 +22,3 @@ def describe_deleted_files():
     def drops_blank_lines():
         runner = mock.Mock(return_value=mock.Mock(stdout="a.json\n\n"))
         assert deleted_files("base", "head", runner=runner) == ["a.json"]
-
-
-def describe_commit_messages():
-    def returns_raw_bodies_via_the_two_dot_range():
-        runner = mock.Mock(return_value=mock.Mock(stdout="fix: x\n"))
-        assert commit_messages("base", "head", runner=runner) == "fix: x\n"
-        runner.assert_called_once_with(
-            ["git", "log", "--format=%B", "base..head"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
