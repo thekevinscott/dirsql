@@ -1,6 +1,6 @@
 """Colocated unit tests for the declared-deps orchestration (#782)."""
 
-from checks.declared_deps.run import run
+from checks.declared_deps.run import run, undeclared
 
 
 def drive(sources, dependencies=(), echo=None):
@@ -66,3 +66,6 @@ def describe_run():
             "ours": "checks.declared_deps.first_party",
             "echo": "checks.declared_deps.gate",
         }
+
+    def it_reaches_the_verdict_through_its_own_module():
+        assert undeclared.__module__ == "checks.declared_deps.undeclared"
