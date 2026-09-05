@@ -1,10 +1,20 @@
 import json
+from contextlib import contextmanager
 from hashlib import sha256
 from unittest.mock import MagicMock, call, patch
 
 from . import worker
 
 HELLO_DIGEST = sha256(b"hello").hexdigest()
+
+
+@contextmanager
+def loading(identifier="m1"):
+    with patch.object(worker, "model") as model:
+        with patch.object(
+            worker, "model_identifier", return_value=identifier
+        ) as identify:
+            yield model, identify
 
 
 def make_worker():
@@ -81,20 +91,17 @@ def describe_embed():
     def it_keys_the_cache_on_the_sha256_of_the_text_and_the_identifier():
         built, _ = make_worker()
         built._compute_cached = MagicMock(return_value=[1.0])
-        with patch.object(worker, "model") as model:
-            model.model_identifier.return_value = "m1@9.9"
+        with loading("m1@9.9") as (model, identify):
             result = built.embed("hello", "m1")
         model.load_model.assert_called_once_with("m1")
-        model.model_identifier.assert_called_once_with(
-            "m1", model.load_model.return_value
-        )
+        identify.assert_called_once_with("m1", model.load_model.return_value)
         built._compute_cached.assert_called_once_with(HELLO_DIGEST, "m1@9.9")
         assert result == ([1.0], True)
 
     def it_reports_a_hit_when_compute_never_ran():
         built, _ = make_worker()
         built._compute_cached = MagicMock(return_value=[1.0])
-        with patch.object(worker, "model"):
+        with loading():
             _, cached = built.embed("hello", "m1")
         assert cached is True
 
@@ -106,7 +113,7 @@ def describe_embed():
             return [1.0]
 
         built._compute_cached = MagicMock(side_effect=compute)
-        with patch.object(worker, "model"):
+        with loading():
             _, cached = built.embed("hello", "m1")
         assert cached is False
 
@@ -116,22 +123,21 @@ def describe_embed():
         built, _ = make_worker()
         built._computed = True
         built._compute_cached = MagicMock(return_value=[1.0])
-        with patch.object(worker, "model"):
+        with loading():
             _, cached = built.embed("hello", "m1")
         assert cached is True
 
     def it_stages_the_text_and_model_for_compute():
         built, _ = make_worker()
         built._compute_cached = MagicMock(return_value=[1.0])
-        with patch.object(worker, "model") as model:
+        with loading() as (model, _):
             built.embed("hello", "m1")
         assert built._pending == ("hello", model.load_model.return_value)
 
     def it_hashes_the_utf8_bytes_of_the_text():
         built, _ = make_worker()
         built._compute_cached = MagicMock(return_value=[1.0])
-        with patch.object(worker, "model") as model:
-            model.model_identifier.return_value = "m1"
+        with loading("m1"):
             built.embed("héllo", "m1")
         expected = sha256("héllo".encode("utf-8")).hexdigest()
         assert built._compute_cached.call_args == call(expected, "m1")
