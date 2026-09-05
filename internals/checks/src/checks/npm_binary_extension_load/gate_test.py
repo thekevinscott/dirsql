@@ -6,7 +6,6 @@ import pytest
 
 from checks.npm_binary_extension_load.gate import (
     BIN_NAME,
-    ENTRYPOINT,
     PROBE_SQL,
     ProbeError,
     bin_subdir,
@@ -33,50 +32,18 @@ def describe_collaborators():
     def it_resolves_write_text_from_the_shared_probe_package():
         assert write_text.__module__ == "checks.probe.write_text"
 
+    def it_resolves_config_for_from_its_own_module():
+        assert config_for.__module__ == "checks.npm_binary_extension_load.config_for"
+
+    def it_resolves_find_binaries_from_its_own_module():
+        assert (
+            find_binaries.__module__
+            == "checks.npm_binary_extension_load.find_binaries"
+        )
+
 
 def _result(returncode=0, stdout="", stderr=""):
     return mock.Mock(returncode=returncode, stdout=stdout, stderr=stderr)
-
-
-def describe_find_binaries():
-    def collects_matching_basenames_sorted():
-        walker = mock.Mock(
-            return_value=[
-                ("dist/b", [], [BIN_NAME, "README.md"]),
-                ("dist/a", [], [BIN_NAME]),
-            ]
-        )
-        assert find_binaries("dist", walker) == [
-            os.path.join("dist/a", BIN_NAME),
-            os.path.join("dist/b", BIN_NAME),
-        ]
-        walker.assert_called_once_with("dist")
-
-    def matches_by_value_not_identity():
-        # A name `os.walk` hands back is a fresh string object, never the
-        # interned BIN_NAME literal -- an identity comparison would find
-        # nothing in the real artifact tree.
-        name = "".join(["dir", "sql"])
-        assert name == BIN_NAME
-        assert name is not BIN_NAME
-        walker = mock.Mock(return_value=[("dist", [], [name])])
-        assert find_binaries("dist", walker) == [os.path.join("dist", BIN_NAME)]
-
-    def ignores_other_names():
-        walker = mock.Mock(return_value=[("dist", [], ["dirsql.exe", "notes.txt"])])
-        assert find_binaries("dist", walker) == []
-
-    def empty_walk_is_empty():
-        walker = mock.Mock(return_value=[])
-        assert find_binaries("dist", walker) == []
-
-
-def describe_config_for():
-    def declares_the_library_and_entrypoint():
-        assert config_for("/v/vec0") == (
-            '[[dirsql.extension]]\npath = "/v/vec0"\n'
-            f'entrypoint = "{ENTRYPOINT}"\n'
-        )
 
 
 def describe_run():
