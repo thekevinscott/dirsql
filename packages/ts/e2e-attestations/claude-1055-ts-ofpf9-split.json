@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1788571241,
+  "exit_code": 0,
+  "commit": "4b29f5f7ac1f1284c2af4fde5e80aa7bca91d390",
+  "branch": "claude/1055-ts-ofpf9-split"
+}

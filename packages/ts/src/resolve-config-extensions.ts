@@ -8,50 +8,9 @@
 //
 // Shared by the `DirSQL` constructor (`config` option) and the CLI launcher.
 
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve as resolvePath } from "node:path";
-import { parse as parseToml } from "smol-toml";
 import type { ExtensionSpec } from "./dirsql.js";
+import { type Toml, loadExtensionEntries } from "./load-extension-entries.js";
 import { isBareName, resolveExtensionPath } from "./resolve-extension.js";
-
-// biome-ignore lint/suspicious/noExplicitAny: TOML root has a dynamic shape.
-type Toml = Record<string, any>;
-
-/**
- * Resolve a TOML config's `[[dirsql.extension]]` entries to literal paths.
- *
- * Returns the resolved specs — every entry resolved via
- * `resolveExtensionPath` against the config file's parent directory — when at
- * least one entry's `path` is a bare package name. Returns `null` when the
- * caller should not intervene: the config is missing, malformed, declares no
- * extensions, or uses only literal paths — leaving the core's own loading
- * (and error reporting) untouched. Throws if a package name cannot be
- * resolved.
- */
-/** Load a config's `[[dirsql.extension]]` entries with its base directory.
- *
- * `null` when the config is missing, unreadable/malformed, or declares no
- * extension array — the caller leaves such configs to the core.
- */
-function loadExtensionEntries(
-  configPath: string,
-): { entries: Toml[]; base: string } | null {
-  if (!existsSync(configPath)) {
-    return null;
-  }
-  let doc: Toml;
-  try {
-    doc = parseToml(readFileSync(configPath, "utf8")) as Toml;
-  } catch {
-    // Leave a malformed config for the core to report.
-    return null;
-  }
-  const dirsql = (doc.dirsql ?? {}) as Toml;
-  if (!Array.isArray(dirsql.extension)) {
-    return null;
-  }
-  return { entries: dirsql.extension, base: dirname(resolvePath(configPath)) };
-}
 
 function hasBareName(entries: Toml[]): boolean {
   return entries.some((e) => typeof e.path === "string" && isBareName(e.path));
@@ -64,6 +23,17 @@ function resolveEntries(entries: Toml[], base: string): ExtensionSpec[] {
   }));
 }
 
+/**
+ * Resolve a TOML config's `[[dirsql.extension]]` entries to literal paths.
+ *
+ * Returns the resolved specs — every entry resolved via
+ * `resolveExtensionPath` against the config file's parent directory — when at
+ * least one entry's `path` is a bare package name. Returns `null` when the
+ * caller should not intervene: the config is missing, malformed, declares no
+ * extensions, or uses only literal paths — leaving the core's own loading
+ * (and error reporting) untouched. Throws if a package name cannot be
+ * resolved.
+ */
 export function resolveConfigExtensionSpecs(
   configPath: string,
 ): ExtensionSpec[] | null {
