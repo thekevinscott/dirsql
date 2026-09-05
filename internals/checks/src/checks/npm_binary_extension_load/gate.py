@@ -33,27 +33,11 @@ from checks.probe.probe_error import ProbeError
 from checks.probe.require_zero import require_zero
 from checks.probe.write_text import write_text
 
+from .config_for import config_for
 from .diagnose import diagnose
+from .find_binaries import BIN_NAME, find_binaries
 
 PROBE_SQL = "SELECT vec_version() AS v"
-ENTRYPOINT = "sqlite3_vec_init"
-BIN_NAME = "dirsql"
-
-
-def config_for(library_path: str) -> str:
-    return (
-        f'[[dirsql.extension]]\npath = "{library_path}"\n'
-        f'entrypoint = "{ENTRYPOINT}"\n'
-    )
-
-
-def find_binaries(dist_dir: str, walker=os.walk) -> list[str]:
-    return sorted(
-        os.path.join(parent, name)
-        for parent, _dirs, names in walker(dist_dir)
-        for name in names
-        if name == BIN_NAME
-    )
 
 
 def run(
