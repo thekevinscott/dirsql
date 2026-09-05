@@ -39,28 +39,6 @@ PUBLISHED_ROOTS = ("packages", "plugins")
 _GLOB_META = "*?[]{}!"
 
 
-def carve_out(root: str) -> list[str]:
-    """The canonical publish globs for the package subtree at ``root``.
-
-    Two patterns, because a single extglob cannot cover both depths: the first
-    matches files sitting directly in the package root, the second everything
-    under its subdirectories.
-    """
-    return [
-        f"{root}/!({'|'.join(NON_SHIPPING_FILES)})",
-        f"{root}/!({'|'.join(NON_SHIPPING_DIRS)})/**",
-    ]
-
-
-def subtree_root(glob: str):
-    """``<root>/<package>`` when ``glob`` reaches into a published package tree,
-    else ``None``."""
-    parts = glob.split("/")
-    if len(parts) < 3 or parts[0] not in PUBLISHED_ROOTS:
-        return None
-    return f"{parts[0]}/{parts[1]}"
-
-
 def is_wildcard(glob: str) -> bool:
     """True when the entry is a pattern rather than a literal path."""
     return any(character in glob for character in _GLOB_META)
@@ -69,54 +47,3 @@ def is_wildcard(glob: str) -> bool:
 def negations(globs) -> list[str]:
     """Entries written as minimatch leading-``!`` negations."""
     return [glob for glob in globs if glob.startswith("!")]
-
-
-def subtree_globs(globs, root: str) -> list[str]:
-    """Sorted wildcard entries that reach into ``root``, negations excluded."""
-    return sorted(
-        glob
-        for glob in globs
-        if not glob.startswith("!") and is_wildcard(glob) and subtree_root(glob) == root
-    )
-
-
-def subtree_roots(globs) -> list[str]:
-    """Sorted package subtrees the non-negated wildcard entries reach into."""
-    roots = {
-        root
-        for glob in globs
-        if not glob.startswith("!")
-        and is_wildcard(glob)
-        and (root := subtree_root(glob)) is not None
-    }
-    return sorted(roots)
-
-
-def glob_problems(packages) -> list[str]:
-    """One message per `[[package]]` glob entry that would republish a no-op."""
-    problems = []
-    for package in packages:
-        name = package.get("name", "<unnamed>")
-        globs = package.get("globs", [])
-        for glob in negations(globs):
-            problems.append(
-                f'{name}: glob "{glob}" is a leading-`!` negation, which '
-                f"putitoutthere does not support -- its matcher ORs the globs "
-                f"together, so the negation subtracts nothing and instead "
-                f"matches every path outside its own subtree. Write the "
-                f"exclusion as an extglob inside a positive pattern: "
-                f'"{carve_out("<root>")[1]}".'
-            )
-        for root in subtree_roots(globs):
-            found = subtree_globs(globs, root)
-            expected = carve_out(root)
-            if found != sorted(expected):
-                problems.append(
-                    f"{name}: publish globs for {root} are "
-                    f"{', '.join(found)} -- expected {', '.join(expected)}. "
-                    f"A subtree glob that does not carve out "
-                    f"{', '.join((*NON_SHIPPING_DIRS, *NON_SHIPPING_FILES))} "
-                    f"republishes the package for changes that never reach its "
-                    f"artifact. Replace the entries above in putitoutthere.toml."
-                )
-    return problems

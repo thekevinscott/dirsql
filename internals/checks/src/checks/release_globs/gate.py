@@ -11,34 +11,13 @@ carries no second copy of putitoutthere's glob semantics to drift against.
 
 from __future__ import annotations
 
-import tomllib
 from collections.abc import Callable
 
-import yaml
-
-from .decide import glob_problems
+from .glob_problems import glob_problems
 from .precheck import unprechecked
-
-
-def read_config(path: str) -> dict:
-    with open(path, "rb") as handle:
-        return tomllib.load(handle)
-
-
-def read_workflow(path: str) -> dict:
-    with open(path, encoding="utf-8") as handle:
-        return yaml.safe_load(handle)
-
-
-def pull_request_paths(workflow: dict) -> list[str]:
-    """The `on.pull_request.paths` filter, or empty when the workflow has none.
-
-    YAML 1.1 resolves a bare ``on`` key to the boolean ``True``, which is how
-    PyYAML hands back every GitHub workflow; the string key is accepted too so a
-    quoted ``"on":`` reads the same.
-    """
-    triggers = workflow.get(True, workflow.get("on")) or {}
-    return (triggers.get("pull_request") or {}).get("paths") or []
+from .pull_request_paths import pull_request_paths
+from .read_config import read_config
+from .read_workflow import read_workflow
 
 
 def exclusions(paths) -> list[str]:
