@@ -1,16 +1,20 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  type PackageResolver,
-  isBareName,
-  resolveExtensionPath,
-} from "./resolve-extension.js";
+import { type PackageResolver, packageDir } from "./package-dir.js";
+import { isBareName, resolveExtensionPath } from "./resolve-extension.js";
 
 vi.mock("node:fs", async () => ({
   ...(await vi.importActual<typeof import("node:fs")>("node:fs")),
   existsSync: vi.fn(),
   statSync: vi.fn(),
   readdirSync: vi.fn(),
+}));
+
+vi.mock("./package-dir.js", async () => ({
+  ...(await vi.importActual<typeof import("./package-dir.js")>(
+    "./package-dir.js",
+  )),
+  packageDir: vi.fn(),
 }));
 
 function pinPlatform(value: NodeJS.Platform) {
@@ -77,49 +81,25 @@ describe("resolveExtensionPath", () => {
         typeof statSync
       >);
       expect(resolveExtensionPath("vec", "/cfg", true)).toBe("/cfg/vec");
+      expect(packageDir).not.toHaveBeenCalled();
     });
   });
 
   describe("bare-name package resolution", () => {
-    it("globs the platform loadable inside the package dir (via package.json)", () => {
+    it("globs the platform loadable inside the package dir", () => {
       const restore = pinPlatform("linux");
       vi.mocked(existsSync).mockReturnValue(false);
+      vi.mocked(packageDir).mockReturnValue("/nm/sqlite-vec");
       vi.mocked(readdirSync).mockReturnValue([
         "README.md",
         "vec0.so",
       ] as unknown as ReturnType<typeof readdirSync>);
-      const resolver = fakeResolver({
-        resolve: vi.fn(() => "/nm/sqlite-vec/package.json"),
-      });
+      const resolver = fakeResolver();
       try {
         expect(resolveExtensionPath("sqlite-vec", "/cfg", true, resolver)).toBe(
           "/nm/sqlite-vec/vec0.so",
         );
-        expect(resolver.resolve).toHaveBeenCalledWith(
-          "sqlite-vec/package.json",
-        );
-      } finally {
-        restore();
-      }
-    });
-
-    it("falls back to require.resolve.paths when package.json is hidden", () => {
-      const restore = pinPlatform("linux");
-      // First existsSync (shadow probe) false; then the node_modules candidate
-      // exists and is a directory.
-      vi.mocked(existsSync).mockReturnValueOnce(false).mockReturnValue(true);
-      vi.mocked(statSync).mockReturnValue({
-        isFile: () => false,
-        isDirectory: () => true,
-      } as ReturnType<typeof statSync>);
-      vi.mocked(readdirSync).mockReturnValue([
-        "vec0.so",
-      ] as unknown as ReturnType<typeof readdirSync>);
-      const resolver = fakeResolver({ paths: vi.fn(() => ["/nm"]) });
-      try {
-        expect(resolveExtensionPath("sqlite-vec", "/cfg", true, resolver)).toBe(
-          "/nm/sqlite-vec/vec0.so",
-        );
+        expect(packageDir).toHaveBeenCalledWith("sqlite-vec", resolver);
       } finally {
         restore();
       }
@@ -128,14 +108,12 @@ describe("resolveExtensionPath", () => {
     it("globs dylib on macOS", () => {
       const restore = pinPlatform("darwin");
       vi.mocked(existsSync).mockReturnValue(false);
+      vi.mocked(packageDir).mockReturnValue("/p/x");
       vi.mocked(readdirSync).mockReturnValue([
         "y.dylib",
       ] as unknown as ReturnType<typeof readdirSync>);
-      const resolver = fakeResolver({
-        resolve: vi.fn(() => "/p/x/package.json"),
-      });
       try {
-        expect(resolveExtensionPath("x", "/c", true, resolver)).toBe(
+        expect(resolveExtensionPath("x", "/c", true, fakeResolver())).toBe(
           "/p/x/y.dylib",
         );
       } finally {
@@ -146,14 +124,12 @@ describe("resolveExtensionPath", () => {
     it("globs dll on windows", () => {
       const restore = pinPlatform("win32");
       vi.mocked(existsSync).mockReturnValue(false);
+      vi.mocked(packageDir).mockReturnValue("/p/x");
       vi.mocked(readdirSync).mockReturnValue(["y.dll"] as unknown as ReturnType<
         typeof readdirSync
       >);
-      const resolver = fakeResolver({
-        resolve: vi.fn(() => "/p/x/package.json"),
-      });
       try {
-        expect(resolveExtensionPath("x", "/c", true, resolver)).toBe(
+        expect(resolveExtensionPath("x", "/c", true, fakeResolver())).toBe(
           "/p/x/y.dll",
         );
       } finally {
@@ -161,38 +137,37 @@ describe("resolveExtensionPath", () => {
       }
     });
 
-    it("errors when the package is not installed (null resolve paths)", () => {
+    it("hands a require-backed resolver to packageDir when none is injected", () => {
+      const restore = pinPlatform("linux");
       vi.mocked(existsSync).mockReturnValue(false);
-      // `require.resolve.paths` can return null; the resolver must treat that
-      // as "no candidate dirs" rather than throwing.
-      const resolver = fakeResolver({ paths: vi.fn(() => null) });
-      expect(() => resolveExtensionPath("nope", "/c", true, resolver)).toThrow(
-        /not installed/,
-      );
-    });
-
-    it("uses the default require-based resolver when none is injected", () => {
-      // The real `createRequire`-backed resolver runs; the uninstalled package
-      // falls through to the "not installed" error, and with fs mocked no real
-      // disk is touched.
-      vi.mocked(existsSync).mockReturnValue(false);
-      expect(() =>
-        resolveExtensionPath("dirsql-nonexistent-pkg-xyz", "/c", true),
-      ).toThrow(/not installed/);
+      vi.mocked(packageDir).mockReturnValue("/p/x");
+      vi.mocked(readdirSync).mockReturnValue(["y.so"] as unknown as ReturnType<
+        typeof readdirSync
+      >);
+      try {
+        expect(resolveExtensionPath("x", "/c", true)).toBe("/p/x/y.so");
+        const resolver = vi.mocked(packageDir).mock.calls[0]?.[1];
+        expect(resolver?.paths("vitest")).toEqual(expect.any(Array));
+        expect(() => resolver?.resolve("dirsql-nonexistent-pkg-xyz")).toThrow(
+          /Cannot find module/,
+        );
+      } finally {
+        restore();
+      }
     });
 
     it("errors when no loadable file is found", () => {
       const restore = pinPlatform("linux");
       vi.mocked(existsSync).mockReturnValue(false);
+      vi.mocked(packageDir).mockReturnValue("/p/x");
       vi.mocked(readdirSync).mockReturnValue([
         "README.md",
       ] as unknown as ReturnType<typeof readdirSync>);
-      const resolver = fakeResolver({
-        resolve: vi.fn(() => "/p/x/package.json"),
-      });
       try {
-        expect(() => resolveExtensionPath("x", "/c", true, resolver)).toThrow(
-          /no loadable extension file/,
+        expect(() =>
+          resolveExtensionPath("x", "/c", true, fakeResolver()),
+        ).toThrow(
+          "no loadable extension file (.so / .node) found in package 'x' (searched /p/x)",
         );
       } finally {
         restore();
@@ -202,16 +177,16 @@ describe("resolveExtensionPath", () => {
     it("errors when multiple loadable files are found", () => {
       const restore = pinPlatform("linux");
       vi.mocked(existsSync).mockReturnValue(false);
+      vi.mocked(packageDir).mockReturnValue("/p/x");
       vi.mocked(readdirSync).mockReturnValue([
-        "a.so",
         "b.so",
+        "a.so",
       ] as unknown as ReturnType<typeof readdirSync>);
-      const resolver = fakeResolver({
-        resolve: vi.fn(() => "/p/x/package.json"),
-      });
       try {
-        expect(() => resolveExtensionPath("x", "/c", true, resolver)).toThrow(
-          /multiple loadable extension files/,
+        expect(() =>
+          resolveExtensionPath("x", "/c", true, fakeResolver()),
+        ).toThrow(
+          "multiple loadable extension files found in package 'x': /p/x/a.so, /p/x/b.so; disambiguate with a literal path",
         );
       } finally {
         restore();
