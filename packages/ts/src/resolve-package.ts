@@ -3,17 +3,7 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { type PackageResolver, packageDir } from "./package-dir.js";
-
-/** Loadable-file glob suffix(es) for the current platform. */
-function platformSuffixes(): string[] {
-  if (process.platform === "darwin") {
-    return [".dylib", ".node"];
-  }
-  if (process.platform === "win32") {
-    return [".dll", ".node"];
-  }
-  return [".so", ".node"];
-}
+import { platformSuffixes } from "./platform-suffixes.js";
 
 /** Glob the platform loadable inside a bare name's package dir. */
 export function resolvePackage(

@@ -26,7 +26,8 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type Platform, PLATFORMS, librarySlug } from "../src/platforms.js";
+import { librarySlug } from "../src/library-slug.js";
+import { type Platform, PLATFORMS } from "../src/platforms.js";
 
 export function findHostPlatform(
   key = `${process.platform}-${process.arch}`,

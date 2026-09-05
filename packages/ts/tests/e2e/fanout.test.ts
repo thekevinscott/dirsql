@@ -16,7 +16,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { PLATFORMS, librarySlug } from "../../src/platforms.js";
+import { librarySlug } from "../../src/library-slug.js";
+import { PLATFORMS } from "../../src/platforms.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = join(__dirname, "..", "..");
