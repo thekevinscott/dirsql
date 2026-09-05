@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from checks.release_globs.decide import carve_out
+from checks.release_globs.carve_out import carve_out
 from checks.release_globs.gate import run
 
 WORKFLOW = """\

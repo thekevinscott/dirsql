@@ -16,7 +16,7 @@ from collections.abc import Callable
 
 import yaml
 
-from .decide import glob_problems
+from .glob_problems import glob_problems
 from .precheck import unprechecked
 
 

@@ -1,6 +1,11 @@
 """Colocated unit tests for the precheck half of the release-globs invariant (#944)."""
 
-from checks.release_globs.precheck import unprechecked
+from checks.release_globs.precheck import subtree_root, unprechecked
+
+
+def describe_collaborators():
+    def it_resolves_subtree_root_from_its_own_module():
+        assert subtree_root.__module__ == "checks.release_globs.subtree_root"
 
 
 def describe_unprechecked():

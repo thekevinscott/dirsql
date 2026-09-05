@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from .decide import NON_SHIPPING_DIRS, NON_SHIPPING_FILES, subtree_root
+from .decide import NON_SHIPPING_DIRS, NON_SHIPPING_FILES
+from .subtree_root import subtree_root
 
 
 def unprechecked(exclusions) -> list[str]:

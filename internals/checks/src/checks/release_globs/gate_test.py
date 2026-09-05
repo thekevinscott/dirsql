@@ -7,10 +7,12 @@ against scratch files.
 
 from checks.release_globs.gate import (
     exclusions,
+    glob_problems,
     pull_request_paths,
     read_config,
     read_workflow,
     run,
+    unprechecked,
 )
 
 CARVED = [
@@ -20,6 +22,14 @@ CARVED = [
 CLEAN = {"package": [{"name": "dirsql-rust", "globs": CARVED}]}
 DIRTY = {"package": [{"name": "dirsql-rust", "globs": ["packages/rust/**"]}]}
 NO_PATHS: dict = {}
+
+
+def describe_collaborators():
+    def it_resolves_glob_problems_from_its_own_module():
+        assert glob_problems.__module__ == "checks.release_globs.glob_problems"
+
+    def it_resolves_unprechecked_from_the_precheck_module():
+        assert unprechecked.__module__ == "checks.release_globs.precheck"
 
 
 def describe_read_config():
