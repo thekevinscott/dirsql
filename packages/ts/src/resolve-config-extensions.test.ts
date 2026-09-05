@@ -1,93 +1,33 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { hasBareName } from "./has-bare-name.js";
 import { type Toml, loadExtensionEntries } from "./load-extension-entries.js";
-import {
-  resolveConfigExtensionSpecs,
-  resolveConfigsExtensionSpecs,
-} from "./resolve-config-extensions.js";
-import { resolveExtensionPath } from "./resolve-extension.js";
+import { resolveConfigsExtensionSpecs } from "./resolve-config-extensions.js";
+import { resolveEntries } from "./resolve-entries.js";
 
+vi.mock("./has-bare-name.js", async () => ({
+  ...(await vi.importActual<typeof import("./has-bare-name.js")>(
+    "./has-bare-name.js",
+  )),
+  hasBareName: vi.fn(),
+}));
 vi.mock("./load-extension-entries.js", async () => ({
   ...(await vi.importActual<typeof import("./load-extension-entries.js")>(
     "./load-extension-entries.js",
   )),
   loadExtensionEntries: vi.fn(),
 }));
-vi.mock("./resolve-extension.js", async () => ({
-  ...(await vi.importActual<typeof import("./resolve-extension.js")>(
-    "./resolve-extension.js",
+vi.mock("./resolve-entries.js", async () => ({
+  ...(await vi.importActual<typeof import("./resolve-entries.js")>(
+    "./resolve-entries.js",
   )),
-  resolveExtensionPath: vi.fn((path: string) => `R:${path}`),
+  resolveEntries: vi.fn(() => []),
 }));
 
 function loaded(base: string, entries: Toml[]) {
   return { entries, base };
 }
 
-afterEach(() => {
-  vi.mocked(loadExtensionEntries).mockReset();
-  vi.mocked(resolveExtensionPath).mockClear();
-});
-
-describe("resolveConfigExtensionSpecs", () => {
-  it("returns null when the config yields no entries", () => {
-    vi.mocked(loadExtensionEntries).mockReturnValue(null);
-    expect(resolveConfigExtensionSpecs("/nope/.dirsql.toml")).toBeNull();
-    expect(loadExtensionEntries).toHaveBeenCalledWith("/nope/.dirsql.toml");
-    expect(resolveExtensionPath).not.toHaveBeenCalled();
-  });
-
-  it("returns null when all extension paths are literal (no package name)", () => {
-    vi.mocked(loadExtensionEntries).mockReturnValue(
-      loaded("/x", [{ path: "ext/a.so" }]),
-    );
-    expect(resolveConfigExtensionSpecs("/x/.dirsql.toml")).toBeNull();
-    expect(resolveExtensionPath).not.toHaveBeenCalled();
-  });
-
-  it("resolves every entry when a path is a bare package name", () => {
-    vi.mocked(loadExtensionEntries).mockReturnValue(
-      loaded("/cfg", [
-        { path: "sqlite_vec", entrypoint: "sqlite3_vec_init" },
-        { path: "ext/local.so" },
-      ]),
-    );
-    expect(resolveConfigExtensionSpecs("/cfg/.dirsql.toml")).toEqual([
-      { path: "R:sqlite_vec", entrypoint: "sqlite3_vec_init" },
-      { path: "R:ext/local.so", entrypoint: undefined },
-    ]);
-    expect(resolveExtensionPath).toHaveBeenCalledWith(
-      "sqlite_vec",
-      "/cfg",
-      true,
-    );
-    expect(resolveExtensionPath).toHaveBeenCalledWith(
-      "ext/local.so",
-      "/cfg",
-      true,
-    );
-  });
-
-  it("normalizes a non-string entrypoint to undefined", () => {
-    vi.mocked(loadExtensionEntries).mockReturnValue(
-      loaded("/cfg", [{ path: "sqlite_vec", entrypoint: 42 }]),
-    );
-    expect(resolveConfigExtensionSpecs("/cfg/.dirsql.toml")).toEqual([
-      { path: "R:sqlite_vec", entrypoint: undefined },
-    ]);
-  });
-
-  it("skips a non-string path in the package-name probe", () => {
-    // An entry whose `path` isn't a string is not treated as a package name;
-    // a sibling bare name still triggers resolution of every entry.
-    vi.mocked(loadExtensionEntries).mockReturnValue(
-      loaded("/cfg", [{ path: 42 }, { path: "sqlite_vec" }]),
-    );
-    expect(resolveConfigExtensionSpecs("/cfg/.dirsql.toml")).toEqual([
-      { path: "R:42", entrypoint: undefined },
-      { path: "R:sqlite_vec", entrypoint: undefined },
-    ]);
-  });
-});
+afterEach(() => vi.resetAllMocks());
 
 describe("resolveConfigsExtensionSpecs", () => {
   it("returns null for an empty list", () => {
@@ -99,28 +39,48 @@ describe("resolveConfigsExtensionSpecs", () => {
     vi.mocked(loadExtensionEntries)
       .mockReturnValueOnce(loaded("/a", [{ path: "ext/a.so" }]))
       .mockReturnValueOnce(null);
+    vi.mocked(hasBareName).mockReturnValue(false);
+
     expect(resolveConfigsExtensionSpecs(["/a.toml", "/b.toml"])).toBeNull();
-    expect(resolveExtensionPath).not.toHaveBeenCalled();
+    expect(resolveEntries).not.toHaveBeenCalled();
   });
 
   it("resolves every config in order when one uses a bare package name", () => {
     vi.mocked(loadExtensionEntries)
       .mockReturnValueOnce(loaded("/a", [{ path: "ext/a.so" }]))
       .mockReturnValueOnce(loaded("/b", [{ path: "sqlite_vec" }]));
+    vi.mocked(hasBareName).mockImplementation(
+      (entries) => entries[0]?.path === "sqlite_vec",
+    );
+    vi.mocked(resolveEntries).mockImplementation((entries, base) =>
+      entries.map((e) => ({
+        path: `${base}/${e.path}`,
+        entrypoint: undefined,
+      })),
+    );
+
     expect(resolveConfigsExtensionSpecs(["/a.toml", "/b.toml"])).toEqual([
-      { path: "R:ext/a.so", entrypoint: undefined },
-      { path: "R:sqlite_vec", entrypoint: undefined },
+      { path: "/a/ext/a.so", entrypoint: undefined },
+      { path: "/b/sqlite_vec", entrypoint: undefined },
     ]);
-    expect(resolveExtensionPath).toHaveBeenCalledWith("ext/a.so", "/a", true);
-    expect(resolveExtensionPath).toHaveBeenCalledWith("sqlite_vec", "/b", true);
+    expect(vi.mocked(resolveEntries).mock.calls).toEqual([
+      [[{ path: "ext/a.so" }], "/a"],
+      [[{ path: "sqlite_vec" }], "/b"],
+    ]);
   });
 
   it("skips a missing config but resolves the rest", () => {
     vi.mocked(loadExtensionEntries)
       .mockReturnValueOnce(null)
       .mockReturnValueOnce(loaded("/b", [{ path: "sqlite_vec" }]));
-    expect(resolveConfigsExtensionSpecs(["/missing.toml", "/b.toml"])).toEqual([
-      { path: "R:sqlite_vec", entrypoint: undefined },
+    vi.mocked(hasBareName).mockReturnValue(true);
+    vi.mocked(resolveEntries).mockReturnValue([
+      { path: "/nm/vec0.so", entrypoint: undefined },
     ]);
+
+    expect(resolveConfigsExtensionSpecs(["/missing.toml", "/b.toml"])).toEqual([
+      { path: "/nm/vec0.so", entrypoint: undefined },
+    ]);
+    expect(resolveEntries).toHaveBeenCalledTimes(1);
   });
 });

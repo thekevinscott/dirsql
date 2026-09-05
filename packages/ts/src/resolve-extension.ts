@@ -13,30 +13,11 @@
 //      with a literal path.
 
 import { existsSync, statSync } from "node:fs";
-import { createRequire } from "node:module";
 import { isAbsolute, resolve as resolvePath } from "node:path";
+import { defaultResolver } from "./default-resolver.js";
+import { isBareName } from "./is-bare-name.js";
 import type { PackageResolver } from "./package-dir.js";
 import { resolvePackage } from "./resolve-package.js";
-
-// Suffixes that mark a value as "already a file path" (so package resolution is
-// never attempted).
-const LOADABLE_SUFFIXES = [".so", ".dylib", ".dll", ".node"];
-
-function defaultResolver(): PackageResolver {
-  const req = createRequire(import.meta.url);
-  return {
-    resolve: (s) => req.resolve(s),
-    paths: (s) => req.resolve.paths(s),
-  };
-}
-
-/** True when `path` is a bare package name rather than a file path. */
-export function isBareName(path: string): boolean {
-  if (path.includes("/") || path.includes("\\")) {
-    return false;
-  }
-  return !LOADABLE_SUFFIXES.some((s) => path.endsWith(s));
-}
 
 /**
  * Resolve an extension `path` to a concrete file. `base` is the directory a

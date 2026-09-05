@@ -1,0 +1,3 @@
+**Changed**
+
+- **Five extension-resolution helpers moved to their own modules.** The bare-name predicate (`isBareName`, with the loadable-suffix table it consumes) now lives in `src/is-bare-name.ts` and the `require.resolve`-backed fallback (`defaultResolver`) in `src/default-resolver.ts`, leaving `resolveExtensionPath` alone in `src/resolve-extension.ts`; the entry-list helpers moved to `src/has-bare-name.ts` and `src/resolve-entries.ts`, and the single-config resolver (`resolveConfigExtensionSpecs`) to `src/resolve-config-extension-specs.ts`, leaving `resolveConfigsExtensionSpecs` alone in `src/resolve-config-extensions.ts`. Internal reorganisation with no change to the published API or extension-resolution behavior. (#1065)
