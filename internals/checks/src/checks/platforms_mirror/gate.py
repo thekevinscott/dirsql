@@ -1,8 +1,8 @@
 """Orchestration for the platforms-mirror check (#1004).
 
 Reads both platform tables off disk and holds them to the subset invariant in
-`decide.py`. A table this cannot parse fails the check rather than passing on an
-empty read: the whole point is that nothing silently stops comparing.
+`vocabulary.py`. A table this cannot parse fails the check rather than passing
+on an empty read: the whole point is that nothing silently stops comparing.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ def run(
             f"platforms-mirror: {len(found)} problem(s). platforms.ts is the release "
             f"source of truth for the published sub-packages; platforms.py mirrors the "
             f"subset named in "
-            f"internals/checks/src/checks/platforms_mirror/decide.py's SHARED."
+            f"internals/checks/src/checks/platforms_mirror/vocabulary.py's SHARED."
         )
         return 1
     echo(

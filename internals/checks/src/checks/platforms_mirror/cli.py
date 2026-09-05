@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import click
 
-from checks.platforms_mirror.decide import PYTHON_FILE, TYPESCRIPT_FILE
+from checks.platforms_mirror.vocabulary import PYTHON_FILE, TYPESCRIPT_FILE
 from checks.platforms_mirror.gate import run
 
 

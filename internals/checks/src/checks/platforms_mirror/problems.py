@@ -7,8 +7,12 @@ tables carry.
 
 from __future__ import annotations
 
-from .decide import key, missing_rows, prefix_problems, stray_rows, unmirrored_fields
+from .decide import unmirrored_fields
 from .field_problems import field_problems
+from .missing_rows import missing_rows
+from .prefix_problems import prefix_problems
+from .stray_rows import stray_rows
+from .vocabulary import key
 
 
 def problems(fields, python_rows, typescript_rows) -> list[str]:

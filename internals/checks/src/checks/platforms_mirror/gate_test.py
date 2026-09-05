@@ -77,10 +77,10 @@ def describe_run():
         assert "::error::Platform.exe has no counterpart" in out
         assert "platforms-mirror: 1 problem(s)." in out
 
-    def it_names_decide_py_so_the_shared_subset_can_be_found():
+    def it_names_vocabulary_py_so_the_shared_subset_can_be_found():
         code, out = invoke(python=PYTHON.format(extra="    exe: bool\n", value=", False"))
         assert code == 1
-        assert "platforms_mirror/decide.py's SHARED" in out
+        assert "platforms_mirror/vocabulary.py's SHARED" in out
 
     def it_counts_every_problem_it_found():
         code, out = invoke(

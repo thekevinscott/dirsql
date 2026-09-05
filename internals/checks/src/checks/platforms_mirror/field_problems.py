@@ -1,12 +1,13 @@
 """Per-row field comparison for the platforms-mirror check (#1004).
 
-Every field in `decide.py`'s SHARED must hold the same value on both sides of a
-target that exists in both tables.
+Every field in `vocabulary.py`'s SHARED must hold the same value on both sides
+of a target that exists in both tables.
 """
 
 from __future__ import annotations
 
-from .decide import PYTHON_FILE, SHARED, key, typescript_value
+from .typescript_value import typescript_value
+from .vocabulary import PYTHON_FILE, SHARED, key
 
 
 def field_problems(python_row: dict, typescript_row: dict) -> list[str]:
