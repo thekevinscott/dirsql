@@ -75,3 +75,17 @@ def describe_resolve_configs_extension_specs():
             with _patch():
                 specs = mod.resolve_configs_extension_specs([a, b])
             assert specs == [f"{cfg_dir}:sqlite_vec", f"{other}:ext/b.so"]
+
+
+def describe_module_wiring():
+    # The helpers live in their own modules; these pin where this module binds
+    # them from, so a mis-pointed import is a failure rather than a silent
+    # re-export.
+    def it_reads_each_config_through_the_shared_loader():
+        assert mod._load_extension_entries.__module__ == "dirsql.load_extension_entries"
+
+    def it_probes_for_bare_names_through_the_shared_helper():
+        assert mod._has_bare_name.__module__ == "dirsql.has_bare_name"
+
+    def it_resolves_entries_through_the_shared_resolver():
+        assert mod._resolve_entries.__module__ == "dirsql.resolve_entries"

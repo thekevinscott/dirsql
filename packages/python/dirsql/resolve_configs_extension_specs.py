@@ -7,7 +7,8 @@ launcher when argv carries more than one ``--config``.
 
 from __future__ import annotations
 
-from .resolve_config_extensions import _has_bare_name, _load_extension_entries
+from .has_bare_name import _has_bare_name
+from .load_extension_entries import _load_extension_entries
 from .resolve_entries import _resolve_entries
 
 
