@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1788573349,
+  "exit_code": 0,
+  "commit": "48dfad23837e19b15deef84ca1e5c44854389042",
+  "branch": "claude/ofpf1-changelog-git-ops-k4x9"
+}
