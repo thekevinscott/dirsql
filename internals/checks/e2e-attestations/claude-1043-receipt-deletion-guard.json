@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1788570542,
+  "exit_code": 0,
+  "commit": "4e22dbe0a374458ef28c6165579000cd551bce63",
+  "branch": "claude/1043-receipt-deletion-guard"
+}
