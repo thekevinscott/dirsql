@@ -104,32 +104,3 @@ def stray_rows(typescript_keys, python_rows) -> list[str]:
         if key(row["node_platform"], row["node_arch"]) not in typescript_keys
     ]
 
-
-def field_problems(python_row: dict, typescript_row: dict) -> list[str]:
-    """One message per shared field whose two values disagree."""
-    problems = []
-    for field in SHARED:
-        found = python_row.get(field)
-        expected = typescript_value(field, typescript_row)
-        if found != expected:
-            problems.append(
-                f"{key(python_row['node_platform'], python_row['node_arch'])}: "
-                f"{field} is {found!r} in platforms.py, {expected!r} in "
-                f"platforms.ts. platforms.ts is the release source of truth -- "
-                f"change {PYTHON_FILE} to match."
-            )
-    return problems
-
-
-def problems(fields, python_rows, typescript_rows) -> list[str]:
-    """Every way the two tables disagree, most structural first."""
-    found = unmirrored_fields(fields) + prefix_problems(typescript_rows)
-    by_key = {key(row["nodePlatform"], row["nodeArch"]): row for row in typescript_rows}
-    python_keys = {key(row["node_platform"], row["node_arch"]) for row in python_rows}
-    found += missing_rows(python_keys, typescript_rows)
-    found += stray_rows(set(by_key), python_rows)
-    for row in python_rows:
-        counterpart = by_key.get(key(row["node_platform"], row["node_arch"]))
-        if counterpart is not None:
-            found += field_problems(row, counterpart)
-    return found

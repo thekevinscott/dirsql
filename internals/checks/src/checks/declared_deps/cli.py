@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import click
 
-from .gate import run
+from .run import run
 
 
 @click.command()

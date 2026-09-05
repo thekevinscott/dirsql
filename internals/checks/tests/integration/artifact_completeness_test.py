@@ -12,7 +12,7 @@ failure surfaced after merge, at publish, as `missing artifact directory`.
 
 from __future__ import annotations
 
-from checks.artifact_completeness.gate import run
+from checks.artifact_completeness.run import run
 
 CONFIG = """
 [[package]]
