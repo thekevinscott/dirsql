@@ -1,10 +1,32 @@
-from checks.attestation_guard.report import report, restore_command
+from checks.attestation_guard.report import (
+    deletion_annotation,
+    near_miss_annotation,
+    report,
+    restore_command,
+)
 
 
 def describe_restore_command():
     def names_the_base_sha_and_every_path():
         assert restore_command(["a.json", "b.json"], "abc123") == (
             "git checkout abc123 -- a.json b.json"
+        )
+
+
+def describe_deletion_annotation():
+    def names_the_file_and_the_append_only_rule():
+        line = deletion_annotation("packages/ts/e2e-attestations/a.json")
+        assert line.startswith("::error file=packages/ts/e2e-attestations/a.json::")
+        assert "packages/ts/e2e-attestations/a.json is an e2e attestation receipt" in line
+        assert "Receipts are append-only; this PR deletes it." in line
+
+
+def describe_near_miss_annotation():
+    def quotes_the_line_and_gives_the_exact_form():
+        line = near_miss_annotation("skip-receipt-deletion: y")
+        assert line == (
+            "::error::'skip-receipt-deletion: y' is not the bypass line. "
+            "The exact form is 'allow-receipt-deletion: <reason>', reason required."
         )
 
 
