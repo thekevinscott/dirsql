@@ -3,6 +3,7 @@ from hashlib import sha256
 
 from . import model
 from .cache import make_cache
+from .model_identifier import model_identifier
 from .values import ProtocolError, decode_value
 
 MALFORMED_SHAPE = (
@@ -40,7 +41,7 @@ class Worker:
     def embed(self, text, model_id):
         """Return the vector for ``text``, and whether the cache served it."""
         loaded = self._model(model_id)
-        identifier = model.model_identifier(model_id, loaded)
+        identifier = model_identifier(model_id, loaded)
         digest = sha256(text.encode("utf-8")).hexdigest()
         self._pending = (text, loaded)
         self._computed = False
