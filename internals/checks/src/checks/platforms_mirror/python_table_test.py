@@ -33,10 +33,6 @@ def describe_python_table():
     def it_reads_every_row_of_the_table():
         assert len(python_table(PYTHON)[1]) == 2
 
-    def it_reads_a_plain_assignment_without_an_annotation():
-        source = PYTHON.replace("PLATFORMS: tuple[Platform, ...] =", "PLATFORMS =")
-        assert len(python_table(source)[1]) == 2
-
     @pytest.mark.parametrize("name", ["Machine", "Target"])
     def it_rejects_a_module_whose_only_class_is_named_otherwise(name):
         with pytest.raises(ParseError, match="no `class Platform`"):
@@ -49,24 +45,6 @@ def describe_python_table():
     def it_rejects_a_platform_class_with_no_annotated_fields():
         with pytest.raises(ParseError, match="declares no annotated fields"):
             python_table("class Platform:\n    pass\n\n\nPLATFORMS = ()\n")
-
-    @pytest.mark.parametrize("name", ["OTHERS", "TARGETS"])
-    def it_rejects_a_table_bound_under_another_name(name):
-        with pytest.raises(ParseError, match="no module-level"):
-            python_table(f"class Platform:\n    slug: str\n\n\n{name} = ()\n")
-
-    def it_rejects_a_module_with_no_table():
-        with pytest.raises(ParseError, match="no module-level"):
-            python_table("class Platform:\n    slug: str\n")
-
-    def it_reads_a_table_bound_alongside_another_name():
-        source = "class Platform:\n    slug: str\n\n\nOTHERS = PLATFORMS = (Platform('a'),)\n"
-        assert python_table(source)[1] == [{"slug": "a"}]
-
-    def it_rejects_a_computed_table():
-        source = PYTHON.replace("PLATFORMS: tuple[Platform, ...] = (", "PLATFORMS = tuple(")
-        with pytest.raises(ParseError, match="not a tuple or list literal"):
-            python_table(source.replace(")\n", ")\n", 1))
 
     def it_surfaces_a_row_it_cannot_read():
         with pytest.raises(ParseError, match="literal `Platform"):

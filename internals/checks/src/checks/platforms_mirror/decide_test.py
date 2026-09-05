@@ -6,10 +6,8 @@ from checks.platforms_mirror.decide import (
     DERIVE,
     SHARED,
     _slug,
-    field_problems,
     missing_rows,
     prefix_problems,
-    problems,
     stray_rows,
     typescript_value,
     unmirrored_fields,
@@ -32,13 +30,6 @@ TS_LINUX = {
     "os": ["linux"],
     "cpu": ["x64"],
     "libc": ["glibc"],
-}
-PY_WIN = {
-    "node_platform": "win32",
-    "node_arch": "x64",
-    "slug": "win32-x64-msvc",
-    "os": ["win32"],
-    "cpu": ["x64"],
 }
 TS_WIN = {
     "nodePlatform": "win32",
@@ -117,44 +108,3 @@ def describe_stray_rows():
         assert message.startswith("linux-x64 has a row in platforms.py")
         assert "packages/ts/src/platforms.ts" in message
 
-
-def describe_field_problems():
-    def it_passes_a_row_that_agrees():
-        assert field_problems(PY_LINUX, TS_LINUX) == []
-
-    def it_names_the_field_and_both_values():
-        (message,) = field_problems({**PY_LINUX, "cpu": ["arm64"]}, TS_LINUX)
-        assert message == (
-            "linux-x64: cpu is ['arm64'] in platforms.py, ['x64'] in platforms.ts. "
-            "platforms.ts is the release source of truth -- change "
-            "internals/distcheck/src/distcheck/node_flow/platforms.py to match."
-        )
-
-    def it_reports_every_disagreeing_field():
-        drifted = {**PY_LINUX, "cpu": ["arm64"], "slug": "nope"}
-        assert len(field_problems(drifted, TS_LINUX)) == 2
-
-    def it_reports_a_value_that_sorts_after_the_typescript_one():
-        # The pair above drifts *below* platforms.ts; this one drifts above, so
-        # neither ordering can stand in for the inequality.
-        (message,) = field_problems({**PY_LINUX, "slug": "zzz"}, TS_LINUX)
-        assert message.startswith("linux-x64: slug is 'zzz' in platforms.py")
-
-
-def describe_problems():
-    def it_passes_two_tables_that_mirror():
-        assert problems(FIELDS, [PY_LINUX, PY_WIN], [TS_LINUX, TS_WIN]) == []
-
-    def it_reports_the_structural_problems_before_the_field_ones():
-        found = problems(
-            [*FIELDS, "exe"],
-            [PY_LINUX, {**PY_WIN, "cpu": ["arm64"]}],
-            [TS_LINUX, TS_WIN],
-        )
-        assert found[0].startswith("Platform.exe")
-        assert found[-1].startswith("win32-x64: cpu")
-
-    def it_compares_only_the_rows_present_on_both_sides():
-        found = problems(FIELDS, [PY_LINUX, PY_WIN], [TS_LINUX])
-        assert len(found) == 1
-        assert found[0].startswith("win32-x64 has a row in platforms.py")

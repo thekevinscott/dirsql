@@ -12,7 +12,7 @@ jobs went red on `error[unresolved-import]: Cannot resolve imported module`.
 
 from __future__ import annotations
 
-from checks.declared_deps.gate import run
+from checks.declared_deps.run import run
 
 
 def write_package(root, dependencies, dev=(), sources=None):
