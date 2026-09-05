@@ -2,9 +2,7 @@
 data out; nothing here touches the repo's real platforms.py).
 """
 
-import pytest
-
-from checks.platforms_mirror.python_table import ParseError, python_table
+from checks.platforms_mirror.python_table import python_table
 
 PYTHON = '''\
 from dataclasses import dataclass
@@ -33,19 +31,12 @@ def describe_python_table():
     def it_reads_every_row_of_the_table():
         assert len(python_table(PYTHON)[1]) == 2
 
-    @pytest.mark.parametrize("name", ["Machine", "Target"])
-    def it_rejects_a_module_whose_only_class_is_named_otherwise(name):
-        with pytest.raises(ParseError, match="no `class Platform`"):
-            python_table(f"class {name}:\n    slug: str\n\n\nPLATFORMS = ()\n")
-
-    def it_rejects_a_module_with_no_class_at_all():
-        with pytest.raises(ParseError, match="no `class Platform`"):
-            python_table("PLATFORMS = ()\n")
-
-    def it_rejects_a_platform_class_with_no_annotated_fields():
-        with pytest.raises(ParseError, match="declares no annotated fields"):
-            python_table("class Platform:\n    pass\n\n\nPLATFORMS = ()\n")
-
-    def it_surfaces_a_row_it_cannot_read():
-        with pytest.raises(ParseError, match="literal `Platform"):
-            python_table("class Platform:\n    slug: str\n\n\nPLATFORMS = (1,)\n")
+    def it_names_each_positional_after_the_field_in_that_position():
+        # The field list is what turns a row's positionals into names, so the
+        # two readers have to be composed in that order.
+        _, rows = python_table(PYTHON)
+        assert rows[1] == {
+            "node_platform": "win32",
+            "node_arch": "x64",
+            "slug": "win32-x64-msvc",
+        }

@@ -26,18 +26,18 @@ def describe_table_elements():
     def it_reads_a_table_bound_alongside_another_name():
         assert len(elements("OTHERS = PLATFORMS = (Platform('a'),)\n")) == 1
 
+    def it_hands_back_the_row_expressions_themselves():
+        (element,) = elements("PLATFORMS = (Platform('a'),)\n")
+        assert isinstance(element, ast.Call)
+
     @pytest.mark.parametrize("name", ["OTHERS", "TARGETS"])
     def it_rejects_a_table_bound_under_another_name(name):
         with pytest.raises(ParseError, match="no module-level"):
             elements(f"{name} = ()\n")
 
-    def it_ignores_statements_that_bind_nothing():
+    def it_rejects_a_module_that_binds_no_names_at_all():
         with pytest.raises(ParseError, match="no module-level"):
-            elements("import os\n\n\ndef f():\n    pass\n")
-
-    def it_ignores_a_binding_that_is_not_a_plain_name():
-        with pytest.raises(ParseError, match="no module-level"):
-            elements("holder.PLATFORMS = ()\n")
+            elements("import os\n")
 
     def it_rejects_a_computed_table():
         with pytest.raises(ParseError, match="not a tuple or list literal"):

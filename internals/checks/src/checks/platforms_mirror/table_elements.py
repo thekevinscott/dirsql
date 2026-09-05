@@ -8,22 +8,12 @@ from __future__ import annotations
 
 import ast
 
+from .assigned_names import assigned_names
 from .parse import ParseError, TABLE_NAME
 
 
-def _assigned_names(node: ast.stmt) -> list[str]:
-    """The module-level names ``node`` binds, empty when it binds none."""
-    if isinstance(node, ast.AnnAssign):
-        targets = [node.target]
-    elif isinstance(node, ast.Assign):
-        targets = node.targets
-    else:
-        return []
-    return [target.id for target in targets if isinstance(target, ast.Name)]
-
-
 def table_elements(tree: ast.Module) -> list[ast.expr]:
-    bindings = {name: node for node in tree.body for name in _assigned_names(node)}
+    bindings = {name: node for node in tree.body for name in assigned_names(node)}
     assignment = bindings.get(TABLE_NAME)
     if assignment is None:
         raise ParseError(f"no module-level `{TABLE_NAME} = (...)` assignment.")
