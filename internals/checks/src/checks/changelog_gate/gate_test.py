@@ -1,7 +1,13 @@
 import inspect
 from unittest import mock
 
-from checks.changelog_gate.gate import run
+from checks.changelog_gate.gate import (
+    added_fragments,
+    changed_packages,
+    code_touched,
+    malformed_fragments,
+    run,
+)
 
 
 def _run(changed, added=None, *, messages="feat: a change\n"):
@@ -151,3 +157,13 @@ def describe_default_git_seams():
         assert params["commit_messages"].default.__module__ == (
             "checks.changelog_gate.commit_messages"
         )
+
+
+def describe_decision_helpers():
+    def it_reaches_each_helper_in_its_own_module():
+        assert code_touched.__module__ == "checks.changelog_gate.code_touched"
+        assert added_fragments.__module__ == "checks.changelog_gate.added_fragments"
+        assert malformed_fragments.__module__ == (
+            "checks.changelog_gate.malformed_fragments"
+        )
+        assert changed_packages.__module__ == "checks.changelog_gate.decide"

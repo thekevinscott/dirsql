@@ -13,13 +13,10 @@ from __future__ import annotations
 from checks.changelog_gate.added_files import added_files as _added_files
 from checks.changelog_gate.changed_files import changed_files as _changed_files
 from checks.changelog_gate.commit_messages import commit_messages as _commit_messages
-from checks.changelog_gate.decide import (
-    added_fragments,
-    changed_packages,
-    code_touched,
-    has_skip_trailer,
-    malformed_fragments,
-)
+from checks.changelog_gate.added_fragments import added_fragments
+from checks.changelog_gate.code_touched import code_touched
+from checks.changelog_gate.decide import changed_packages, has_skip_trailer
+from checks.changelog_gate.malformed_fragments import malformed_fragments
 
 
 def run(
