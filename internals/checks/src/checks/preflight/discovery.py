@@ -12,7 +12,8 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Sequence
 
-from .matrix import NoGateMatrix, REUSABLE, WORKFLOWS, named, parse_gate_matrix, read_text
+from .matrix import NoGateMatrix, REUSABLE, WORKFLOWS, parse_gate_matrix, read_text
+from .named_workflow import named
 
 
 def discovered(

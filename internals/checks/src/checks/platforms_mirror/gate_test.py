@@ -81,6 +81,13 @@ def describe_run():
         assert code == 1
         assert "platforms_mirror/decide.py's SHARED" in out
 
+    def it_counts_every_problem_it_found():
+        code, out = invoke(
+            python=PYTHON.format(extra="    exe: bool\n    dev: bool\n", value=", False, True")
+        )
+        assert code == 1
+        assert "platforms-mirror: 2 problem(s)." in out
+
     def it_fails_when_the_python_table_cannot_be_read():
         code, out = invoke(python="x = 1\n")
         assert code == 1

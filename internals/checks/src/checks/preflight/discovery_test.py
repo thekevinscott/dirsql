@@ -80,6 +80,12 @@ def describe_sources():
             ("a.yml", CONVENTIONS),
         ]
 
+    def it_surfaces_the_fix_when_a_named_workflow_declares_no_caller():
+        with pytest.raises(NoGateMatrix) as caught:
+            sources(["docs.yml"], read=reader({"docs.yml": NOT_A_CALLER}))
+
+        assert "--conventions docs.yml: no job in it calls" in str(caught.value)
+
     def it_discovers_the_callers_when_no_workflow_is_named():
         found = sources(
             (),
