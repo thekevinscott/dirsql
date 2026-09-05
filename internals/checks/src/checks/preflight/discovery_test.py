@@ -2,7 +2,7 @@
 
 import pytest
 
-from checks.preflight.discovery import NoGateMatrix, discovered, sources
+from checks.preflight.discovery import NoGateMatrix, discovered
 
 CONVENTIONS = """
 jobs:
@@ -69,48 +69,3 @@ def describe_discovered():
         assert "no workflow in .github/workflows calls" in message
         # The fix names where REUSABLE lives, which is matrix.py, not this module.
         assert "preflight/matrix.py" in message
-
-
-def describe_sources():
-    def it_reads_each_named_workflow_in_the_order_given():
-        files = {"b.yml": CONVENTIONS, "a.yml": CONVENTIONS}
-
-        assert sources(["b.yml", "a.yml"], read=reader(files)) == [
-            ("b.yml", CONVENTIONS),
-            ("a.yml", CONVENTIONS),
-        ]
-
-    def it_surfaces_the_fix_when_a_named_workflow_declares_no_caller():
-        with pytest.raises(NoGateMatrix) as caught:
-            sources(["docs.yml"], read=reader({"docs.yml": NOT_A_CALLER}))
-
-        assert "--conventions docs.yml: no job in it calls" in str(caught.value)
-
-    def it_discovers_the_callers_when_no_workflow_is_named():
-        found = sources(
-            (),
-            directory="wf",
-            listdir=lambda _directory: ["ci.yml"],
-            read=reader({"wf/ci.yml": CONVENTIONS}),
-        )
-
-        assert found == [("wf/ci.yml", CONVENTIONS)]
-
-    def it_takes_its_seams_by_keyword_only():
-        # `*` (not `/`) before the injected seams: a third positional argument
-        # would otherwise land silently on `listdir`.
-        with pytest.raises(TypeError):
-            sources((), "wf", lambda _directory: ["ci.yml"], reader({"wf/ci.yml": CONVENTIONS}))
-
-    def it_discovers_from_the_workflows_directory_by_default():
-        # The default is the whole point: #834 deleted the workflow the command
-        # used to name, and nothing pinned where it looks instead.
-        looked = []
-
-        sources(
-            (),
-            listdir=lambda directory: looked.append(directory) or ["ci.yml"],
-            read=reader({".github/workflows/ci.yml": CONVENTIONS}),
-        )
-
-        assert looked == [".github/workflows"]

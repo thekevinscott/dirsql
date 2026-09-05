@@ -1,14 +1,13 @@
 """Colocated unit tests for the preflight command (isolation -- no `CliRunner`).
 
-Driven through `.callback`; `sources` (from `.discovery`) and `run` (from `.gate`)
-are mocked at their import site.
+Driven through `.callback`; `sources` and `run` are mocked at their import site.
 """
 
 from unittest import mock
 
 import pytest
 
-from checks.preflight.cli import cli
+from checks.preflight.cli import cli, run, sources
 
 WORKFLOWS = [(".github/workflows/a-ci.yml", "jobs: {}"), (".github/workflows/b-ci.yml", "jobs: {}")]
 
@@ -89,3 +88,10 @@ def test_defaults_to_discovering_the_workflows_and_main():
             "gates": (),
             "dry_run": False,
         }
+
+
+def test_binds_the_resolver_and_the_runner_from_their_own_modules():
+    assert (sources.__module__, run.__module__) == (
+        "checks.preflight.sources",
+        "checks.preflight.run",
+    )
