@@ -79,9 +79,6 @@ extra_scope = ["packages/rust/src"]
 
 # --- Python (scanned: packages/python/dirsql) ------------------------------
 
-[python]
-one_function_per_file = { max_lines = 12 }
-
 # Unit-only coverage floor (branch coverage on, matching the prior --cov-branch).
 # The default for a config-less python caller (internals/distcheck); the
 # packages/python lane holds the identical floor in its own config.
@@ -97,9 +94,6 @@ branch = true
 # `dirsql.node`; post-#289 that build is provisioned automatically because
 # `packages/ts/napi` declares a napi build (auto-provisioning without a
 # build_command field), with `rust_toolchain: true` on the caller supplying cargo.
-
-[typescript]
-one_function_per_file = { max_lines = 12 }
 
 # Unit-only coverage floor, per vitest metric.
 [typescript.coverage]
