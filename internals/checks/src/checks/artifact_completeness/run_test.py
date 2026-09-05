@@ -1,5 +1,7 @@
 """Colocated unit tests for the artifact-completeness orchestration (#790)."""
 
+import inspect
+
 from checks.artifact_completeness.run import run
 
 CONFIG = {
@@ -61,3 +63,11 @@ def describe_run():
             walk=full,
             echo=lambda _line: None,
         ) == 0
+
+
+def describe_default_seams():
+    def it_defaults_to_the_split_out_config_reader_and_lister():
+        params = inspect.signature(run).parameters
+        assert params["config"].default.__module__ == "checks.artifact_completeness.read_config"
+        assert params["entries"].default.__module__ == "checks.artifact_completeness.subdirectories"
+        assert params["echo"].default.__module__ == "checks.artifact_completeness.gate"
