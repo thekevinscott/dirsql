@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1788565282,
+  "exit_code": 0,
+  "commit": "9257c5204b6cf9b491cf5487aedbf026c5255338",
+  "branch": "claude/tackle-1042-py12"
+}
