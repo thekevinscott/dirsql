@@ -1,5 +1,6 @@
 """Colocated unit tests for the artifact-completeness command (isolation --
-no `CliRunner`). Driven through `.callback`; `run` is mocked at its import site.
+no `CliRunner`). Driven through `.callback`; `run` (from `.run`) is
+mocked at its import site.
 """
 
 from unittest import mock

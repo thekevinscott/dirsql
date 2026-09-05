@@ -2,7 +2,8 @@
 
 Isolation: the reader is injected, so nothing here touches the repo's real
 platforms.py / platforms.ts. The reader itself is exercised against a scratch
-file.
+file. The table readers and the verdict in `problems.py` run for real, since
+they are pure text-in / messages-out.
 """
 
 from checks.platforms_mirror.gate import read, run
