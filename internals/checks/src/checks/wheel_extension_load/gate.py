@@ -20,39 +20,20 @@ import subprocess
 import sys
 import tempfile
 
+from checks.probe.bin_subdir import bin_subdir
+from checks.probe.probe_error import ProbeError
+from checks.probe.require_zero import require_zero
+from checks.probe.write_text import write_text
+
 from .diagnose import diagnose
+from .list_names import list_names
 
 PROBE_SQL = "SELECT vec_version() AS v"
 CONFIG = '[[dirsql.extension]]\npath = "sqlite_vec"\nentrypoint = "sqlite3_vec_init"\n'
 
 
-class ProbeError(RuntimeError):
-    """A probe stage failed -- carries a human-readable diagnostic."""
-
-
-def _require_zero(result, message: str) -> None:
-    if result.returncode != 0:
-        raise ProbeError(message)
-
-
-def bin_subdir(os_name: str = os.name) -> str:
-    return {"nt": "Scripts"}.get(os_name, "bin")
-
-
-def list_names(dist_dir: str, listdir=os.listdir) -> list[str]:
-    try:
-        return list(listdir(dist_dir))
-    except FileNotFoundError:
-        return []
-
-
 def wheel_names(names) -> list[str]:
     return sorted(name for name in names if name.endswith(".whl"))
-
-
-def write_text(path: str, content: str) -> None:
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(content)
 
 
 def run(
@@ -86,7 +67,7 @@ def run(
         capture_output=True,
         text=True,
     )
-    _require_zero(made, f"venv creation failed:\n{made.stderr}")
+    require_zero(made, f"venv creation failed:\n{made.stderr}")
     venv_bin = os.path.join(venv_dir, bin_subdir())
 
     install = runner(
@@ -94,7 +75,7 @@ def run(
         capture_output=True,
         text=True,
     )
-    _require_zero(install, f"pip install failed:\n{install.stderr}")
+    require_zero(install, f"pip install failed:\n{install.stderr}")
 
     scratch = os.path.join(staging, "data")
     makedirs(scratch)

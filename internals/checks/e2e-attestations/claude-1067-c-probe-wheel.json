@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1788573834,
+  "exit_code": 0,
+  "commit": "be31fb46a3c73d7a70907399e461abf2628e8b8b",
+  "branch": "claude/1067-c-probe-wheel"
+}
