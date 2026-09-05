@@ -1,6 +1,6 @@
 """Colocated unit tests for the declared-deps orchestration (#782)."""
 
-from checks.declared_deps.run import run
+from checks.declared_deps.run import run, undeclared
 
 
 def drive(sources, dependencies=(), echo=None):
@@ -56,3 +56,16 @@ def describe_run():
             echo=lambda _line: None,
         )
         assert seen == ["./pyproject.toml"]
+
+    def it_binds_each_default_collaborator_from_its_own_module():
+        assert {name: f.__module__ for name, f in run.__kwdefaults__.items()} == {
+            "manifest": "checks.declared_deps.read_manifest",
+            "distributions": "importlib.metadata",
+            "read": "checks.declared_deps.read_text",
+            "files": "checks.declared_deps.source_files",
+            "ours": "checks.declared_deps.first_party",
+            "echo": "checks.declared_deps.gate",
+        }
+
+    def it_reaches_the_verdict_through_its_own_module():
+        assert undeclared.__module__ == "checks.declared_deps.undeclared"

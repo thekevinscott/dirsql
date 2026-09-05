@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1788573584,
+  "exit_code": 0,
+  "commit": "1b90b2b28a8fd37f13578f1b30d176df6b02c086",
+  "branch": "claude/1060-b1-declared-deps-io"
+}
