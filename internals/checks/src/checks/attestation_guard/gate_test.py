@@ -1,5 +1,7 @@
 from unittest import mock
 
+import pytest
+
 from checks.attestation_guard.gate import run, verdict
 
 
@@ -55,6 +57,12 @@ def describe_run():
         )
         assert rc == 1
         assert "is not the bypass line" in capsys.readouterr().out
+
+    def keeps_the_injected_collaborators_keyword_only():
+        # The `*` in the signature is the seam's contract: a positional third
+        # argument must not silently bind to `deleted_files`.
+        with pytest.raises(TypeError):
+            run("base", "head", mock.Mock(return_value=[]), mock.Mock())
 
     def queries_git_with_the_supplied_shas():
         deleted = mock.Mock(return_value=[])
