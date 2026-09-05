@@ -8,14 +8,14 @@ from checks.npm_binary_extension_load.gate import (
     BIN_NAME,
     ENTRYPOINT,
     PROBE_SQL,
-    STATIC_MARKER,
     ProbeError,
     config_for,
-    diagnose,
     find_binaries,
     run,
 )
 from checks.wheel_extension_load.gate import bin_subdir
+
+DIAGNOSE = "checks.npm_binary_extension_load.gate.diagnose"
 
 
 def _result(returncode=0, stdout="", stderr=""):
@@ -61,21 +61,6 @@ def describe_config_for():
             '[[dirsql.extension]]\npath = "/v/vec0"\n'
             f'entrypoint = "{ENTRYPOINT}"\n'
         )
-
-
-def describe_diagnose():
-    def static_binary_gets_the_dlopen_diagnosis():
-        message = diagnose(_result(1, stdout="", stderr=f"boom: {STATIC_MARKER}"))
-        assert "statically linked" in message
-        assert "dirsql#762" in message
-        assert "putitoutthere#605" in message
-        assert STATIC_MARKER in message
-
-    def other_failures_get_a_generic_message():
-        message = diagnose(_result(1, stdout="out", stderr="bad flag"))
-        assert message.startswith("`dirsql query` against the bundled binary failed.")
-        assert "'bad flag'" in message
-        assert "'out'" in message
 
 
 def describe_run():
@@ -204,12 +189,13 @@ def describe_run():
                 _result(0),
                 _result(0),
                 _result(0, stdout="/v/vec0\n"),
-                _result(1, stderr=f"failed to load extension: {STATIC_MARKER}"),
+                _result(1, stderr="load failed"),
             ]
         )
-        with pytest.raises(ProbeError) as exc_info:
-            _run_with(runner)
-        assert "statically linked" in str(exc_info.value)
+        with mock.patch(DIAGNOSE, return_value="the diagnosis") as diagnose:
+            with pytest.raises(ProbeError, match="the diagnosis"):
+                _run_with(runner)
+        assert diagnose.call_args.args[0].stderr == "load failed"
 
     def signal_killed_probe_raises_the_diagnosis():
         runner = mock.Mock(
@@ -217,12 +203,12 @@ def describe_run():
                 _result(0),
                 _result(0),
                 _result(0, stdout="/v/vec0\n"),
-                _result(-6, stderr=f"failed to load extension: {STATIC_MARKER}"),
+                _result(-6, stderr="load failed"),
             ]
         )
-        with pytest.raises(ProbeError) as exc_info:
-            _run_with(runner)
-        assert "statically linked" in str(exc_info.value)
+        with mock.patch(DIAGNOSE, return_value="the diagnosis"):
+            with pytest.raises(ProbeError, match="the diagnosis"):
+                _run_with(runner)
 
     def rowless_probe_output_raises():
         runner = mock.Mock(
