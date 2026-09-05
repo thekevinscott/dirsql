@@ -159,6 +159,12 @@ def describe_DirSQL_async():
                 resolver.assert_not_called()
 
     def describe_config_file_extensions():
+        def it_imports_the_config_resolver_from_the_plural_module():
+            assert (
+                async_mod.resolve_configs_extension_specs.__module__
+                == "dirsql.resolve_configs_extension_specs"
+            )
+
         @pytest.mark.asyncio
         async def it_appends_resolved_config_extensions_and_suppresses_the_core():
             with (

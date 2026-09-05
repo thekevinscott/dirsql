@@ -26,6 +26,12 @@ def _patch(specs, paths=("/x/.dirsql.toml",)):
 
 
 def describe_with_resolved_extensions():
+    def it_imports_the_shared_resolver_from_the_plural_module():
+        assert (
+            rce.resolve_configs_extension_specs.__module__
+            == "dirsql.resolve_configs_extension_specs"
+        )
+
     def it_passes_init_through_untouched():
         argv = ["init", "--root", "."]
         with _patch([{"path": "R:pkg", "entrypoint": None}]) as (scan, resolver):

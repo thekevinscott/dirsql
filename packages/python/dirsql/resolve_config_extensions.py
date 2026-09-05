@@ -8,7 +8,8 @@ the core's own config-extension loading (``suppress_config_extensions``) so
 the config's entries are not loaded a second time.
 
 Shared by the ``DirSQL`` constructor (``config=`` path) and the CLI launcher
-(which converts the resolved specs into ``--extension`` flags).
+(which converts the resolved specs into ``--extension`` flags), both of which
+reach it through :mod:`dirsql.resolve_configs_extension_specs`.
 """
 
 from __future__ import annotations
@@ -17,7 +18,8 @@ import os
 import sys
 from importlib import import_module
 
-from .resolve_extension import is_bare_name, resolve_extension_path
+from .resolve_entries import _resolve_entries
+from .resolve_extension import is_bare_name
 
 
 def _load_toml_module():
@@ -67,21 +69,6 @@ def _has_bare_name(entries):
     )
 
 
-def _resolve_entries(entries, base):
-    specs = []
-    for e in entries:
-        entrypoint = e.get("entrypoint")
-        specs.append(
-            {
-                "path": resolve_extension_path(
-                    e["path"], base=base, resolve_relative=True
-                ),
-                "entrypoint": entrypoint if isinstance(entrypoint, str) else None,
-            }
-        )
-    return specs
-
-
 def resolve_config_extension_specs(config_path):
     """Resolve a TOML config's ``[[dirsql.extension]]`` entries to literal paths.
 
@@ -100,27 +87,3 @@ def resolve_config_extension_specs(config_path):
     if not _has_bare_name(entries):
         return None
     return _resolve_entries(entries, base)
-
-
-def resolve_configs_extension_specs(config_paths):
-    """Resolve the ``[[dirsql.extension]]`` entries of several configs, in order.
-
-    The SDK intervenes for the whole set only when **some** config names an
-    extension by bare package name (the core can resolve neither package names
-    nor -- once globally suppressed -- the literal entries of the other
-    configs). When it intervenes it resolves **every** config's entries, each
-    against that config's own parent directory, concatenated in ``config_paths``
-    order; the caller suppresses the core's config-extension loading and passes
-    the resolved list. Returns ``None`` when no config uses a package name,
-    leaving every config's loading to the core.
-    """
-    loaded = [_load_extension_entries(p) for p in config_paths]
-    if not any(item is not None and _has_bare_name(item[0]) for item in loaded):
-        return None
-    specs = []
-    for item in loaded:
-        if item is None:
-            continue
-        entries, base = item
-        specs.extend(_resolve_entries(entries, base))
-    return specs
