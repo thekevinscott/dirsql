@@ -162,6 +162,13 @@ shared Rust core (`start_watching` / `process_file_event`), so all three SDKs
 gain it at once with no binding changes; the user-supplied `root` is unchanged
 across all three.
 
+**Directory moved into the root (#1096) — parity maintained, no drift.** The
+watcher walks a directory that appears whole (a rename into the tree, or a
+`mkdir`) and indexes the files already inside it, which the OS never reports
+individually. The fix is entirely in the shared Rust core (`translate_event` /
+`process_file_event` / `scanner::scan_subtree`), so all three SDKs gain it at
+once with no binding changes and no public-surface change.
+
 **Verbatim table columns (#361, epic #358) — parity by construction, no drift.**
 User tables carry exactly the columns declared in their DDL (row ownership is
 tracked in the internal `_dirsql_internal_rows` table, not injected columns).
