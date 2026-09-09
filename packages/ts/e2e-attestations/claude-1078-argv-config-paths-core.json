@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1788979666,
+  "exit_code": 0,
+  "commit": "8db47b0cdedb76fee4f120d7fe18bc39bbb405ab",
+  "branch": "claude/1078-argv-config-paths-core"
+}
