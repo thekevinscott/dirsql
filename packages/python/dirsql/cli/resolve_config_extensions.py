@@ -15,8 +15,8 @@ carries resolved paths.
 
 from __future__ import annotations
 
+from .._dirsql import config_paths_from_argv
 from ..resolve_configs_extension_specs import resolve_configs_extension_specs
-from .config_paths_from_argv import config_paths_from_argv
 
 # Config extensions the binary dispatches to `dirsql interpret`; never
 # pre-resolved here (that path resolves via the handshake).

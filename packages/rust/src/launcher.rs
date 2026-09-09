@@ -17,8 +17,22 @@ const DEFAULT_CONFIG_PATH: &str = "./.dirsql.toml";
 /// only to find files to read extensions out of, so a bare trailing `-c`
 /// yields an empty string rather than an error. A malformed invocation is
 /// clap's to reject once the launcher hands argv over.
-pub fn config_paths_from_argv(_argv: &[String]) -> Vec<String> {
-    vec![DEFAULT_CONFIG_PATH.to_string()]
+pub fn config_paths_from_argv(argv: &[String]) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut args = argv.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--config" || arg == "-c" {
+            paths.push(args.next().cloned().unwrap_or_default());
+        } else if let Some(value) = arg.strip_prefix("--config=") {
+            paths.push(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("-c") {
+            paths.push(value.strip_prefix('=').unwrap_or(value).to_string());
+        }
+    }
+    if paths.is_empty() {
+        paths.push(DEFAULT_CONFIG_PATH.to_string());
+    }
+    paths
 }
 
 #[cfg(test)]

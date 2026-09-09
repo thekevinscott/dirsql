@@ -1,16 +1,11 @@
 import { existsSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getCore } from "../core.js";
 import { resolveConfigsExtensionSpecs } from "../resolve-config-extensions.js";
-import { configPathsFromArgv } from "./config-paths-from-argv.js";
 import { withResolvedExtensions } from "./resolve-config-extensions.js";
 
 vi.mock("node:fs");
-vi.mock("./config-paths-from-argv.js", async () => ({
-  ...(await vi.importActual<typeof import("./config-paths-from-argv.js")>(
-    "./config-paths-from-argv.js",
-  )),
-  configPathsFromArgv: vi.fn(),
-}));
+vi.mock("../core.js");
 vi.mock("../resolve-config-extensions.js", async () => ({
   ...(await vi.importActual<typeof import("../resolve-config-extensions.js")>(
     "../resolve-config-extensions.js",
@@ -19,10 +14,13 @@ vi.mock("../resolve-config-extensions.js", async () => ({
 }));
 
 describe("withResolvedExtensions", () => {
+  const configPathsFromArgv = vi.fn<(argv: string[]) => string[]>();
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(existsSync).mockReturnValue(true);
-    vi.mocked(configPathsFromArgv).mockReturnValue(["/x/.dirsql.toml"]);
+    vi.mocked(getCore).mockReturnValue({ configPathsFromArgv } as never);
+    configPathsFromArgv.mockReturnValue(["/x/.dirsql.toml"]);
   });
 
   it("passes `init` through untouched without scanning or resolving", async () => {
@@ -40,7 +38,7 @@ describe("withResolvedExtensions", () => {
   });
 
   it("passes native configs through untouched (interpret resolves them)", async () => {
-    vi.mocked(configPathsFromArgv).mockReturnValue([
+    configPathsFromArgv.mockReturnValue([
       "cfg.py",
       "cfg.js",
       "cfg.mjs",
@@ -53,7 +51,7 @@ describe("withResolvedExtensions", () => {
   });
 
   it("drops native configs but resolves the TOML ones", async () => {
-    vi.mocked(configPathsFromArgv).mockReturnValue([
+    configPathsFromArgv.mockReturnValue([
       "cfg.py",
       "/frag/dirsql.toml",
       "other.cjs",
@@ -67,7 +65,7 @@ describe("withResolvedExtensions", () => {
 
   it("passes through without loading the parser when no config file exists", async () => {
     vi.mocked(existsSync).mockReturnValue(false);
-    vi.mocked(configPathsFromArgv).mockReturnValue(["/gone/.dirsql.toml"]);
+    configPathsFromArgv.mockReturnValue(["/gone/.dirsql.toml"]);
     const argv = ["--config", "/gone/.dirsql.toml"];
     expect(await withResolvedExtensions(argv)).toBe(argv);
     expect(existsSync).toHaveBeenCalledWith("/gone/.dirsql.toml");
@@ -78,7 +76,7 @@ describe("withResolvedExtensions", () => {
     // The resolver skips missing configs itself; the existsSync guard only
     // keeps the TOML parser off the launch path when NO config exists.
     vi.mocked(existsSync).mockImplementation((p) => p === "/b/.dirsql.toml");
-    vi.mocked(configPathsFromArgv).mockReturnValue([
+    configPathsFromArgv.mockReturnValue([
       "/a/.dirsql.toml",
       "/b/.dirsql.toml",
     ]);
