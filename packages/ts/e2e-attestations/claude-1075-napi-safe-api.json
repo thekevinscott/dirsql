@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1788980011,
+  "exit_code": 0,
+  "commit": "d8de69a786d4cbc45c6628b7b8d50a70057a19bd",
+  "branch": "claude/1075-napi-safe-api"
+}
