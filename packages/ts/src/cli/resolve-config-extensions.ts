@@ -12,7 +12,7 @@
 // resolved paths.
 
 import { existsSync } from "node:fs";
-import { configPathsFromArgv } from "./config-paths-from-argv.js";
+import { getCore } from "../core.js";
 
 // Config extensions the binary dispatches to `dirsql interpret`; never
 // pre-resolved here (that path resolves via the handshake).
@@ -30,9 +30,9 @@ export async function withResolvedExtensions(
   if (argv[0] === "init") {
     return argv;
   }
-  const configPaths = configPathsFromArgv(argv).filter(
-    (p) => !NATIVE_CONFIG_SUFFIXES.some((s) => p.endsWith(s)),
-  );
+  const configPaths = getCore()
+    .configPathsFromArgv(argv)
+    .filter((p) => !NATIVE_CONFIG_SUFFIXES.some((s) => p.endsWith(s)));
   // The shared resolver pulls in smol-toml, which only a TOML config on disk
   // can need. Guarding on the same `existsSync` the resolver itself starts
   // with keeps the parser off the common launch path entirely (#720); the

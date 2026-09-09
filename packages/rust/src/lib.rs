@@ -20,6 +20,8 @@ pub mod functions;
 #[doc(hidden)]
 pub mod infer;
 #[doc(hidden)]
+pub mod launcher;
+#[doc(hidden)]
 pub mod matcher;
 #[doc(hidden)]
 pub mod parsed_cache;

@@ -145,7 +145,13 @@ argv order and resolve the whole set via the plural shared resolver
 (`resolve_configs_extension_specs` / `resolveConfigsExtensionSpecs`) — the
 Python fix landed in [#756](https://github.com/thekevinscott/dirsql/pull/756),
 the Node fix in [#758](https://github.com/thekevinscott/dirsql/pull/758)
-(restoring parity). Python additionally feeds discovery-injected plugin
+(restoring parity). Since
+[#1078](https://github.com/thekevinscott/dirsql/issues/1078) the scan itself
+is one core function, `dirsql::launcher::config_paths_from_argv`
+(`#[doc(hidden)]`, not a public Rust API), reached through each binding
+(`dirsql._dirsql.config_paths_from_argv` / the addon's `configPathsFromArgv`),
+so the two launchers agree on flag spellings and the `./.dirsql.toml` default
+by construction. Python additionally feeds discovery-injected plugin
 fragments through this path; Node has no plugin discovery (intentional drift,
 [#529](https://github.com/thekevinscott/dirsql/issues/529)), so its scan
 covers user-passed flags only.

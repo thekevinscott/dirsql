@@ -1,0 +1,3 @@
+**Added**
+
+- **The core now owns the argv scan that finds a launcher's config paths.** `dirsql::launcher::config_paths_from_argv` returns every `--config` / `-c` value an invocation names (all five spellings: `--config X`, `--config=X`, `-c X`, `-c=X`, `-cX`), or `./.dirsql.toml` when argv names none. The pip and npm launchers need those paths *before* the core parses argv, because a config's `[[dirsql.extension]]` entry may name an extension by bare package name and only the interpreter can resolve that — but locating the config files is language-neutral, so all three copies of the scan collapse into one. The module is `#[doc(hidden)]`: it exists for the bindings, not as a stable Rust API. (#1078, #1072)
