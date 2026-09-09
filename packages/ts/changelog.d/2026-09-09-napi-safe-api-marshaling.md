@@ -1,0 +1,3 @@
+**Changed** The napi binding marshals `onFile` rows and table definitions through napi-rs's safe API instead of hand-rolled raw `napi_sys` FFI. Value mapping is unchanged: `null`/`undefined` to NULL, booleans to 0/1, integral doubles to INTEGER and fractional ones to REAL, BigInt to INTEGER or an out-of-range error, `Buffer`/`Uint8Array`/`Uint8ClampedArray` to BLOB, everything else coerced to TEXT.
+
+**Fixed** An `onFile` row that is not an object (a number, a string, `null`) now skips that file and lands on `scanFailures()` with `on-file must return an array of objects`, instead of inserting an all-NULL row or, for `null`, aborting the process on an uncleared V8 exception.
