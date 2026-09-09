@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1788980595,
+  "exit_code": 0,
+  "commit": "d44790acfbbcc31cd6e499ea61535abbd0f3d275",
+  "branch": "claude/1080-share-vtab-scaffolding"
+}
