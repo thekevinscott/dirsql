@@ -538,6 +538,18 @@ impl DirSQL {
             return Vec::new();
         }
 
+        // A directory that appears whole (`mkdir`, or a populated directory
+        // renamed into the tree) arrives as one event naming the directory and
+        // none for the files already inside it, so the subtree is walked here.
+        // Only on creation: a metadata change on a directory says nothing
+        // about its files, and walking on every one would re-run `on_file`
+        // across the subtree for a `chmod`.
+        if matches!(event, FileEvent::Created(_))
+            && self.inner.fs.is_dir(&abs_path).unwrap_or(false)
+        {
+            return self.index_subtree(&abs_path);
+        }
+
         // Fan-out: dispatch the event to every table whose glob matches, and
         // concatenate the resulting row events. Cross-table event order is
         // unspecified. An `on_file` failure produces an error event for that
@@ -558,6 +570,27 @@ impl DirSQL {
                     events.extend(self.handle_upsert(&m.table_name, &abs_path, &rel_path));
                 }
             }
+        }
+        events
+    }
+
+    /// Index every file beneath `dir` as if each had its own create event,
+    /// using the scanner's walk so the watch path and the initial scan share
+    /// one definition of what counts as a row.
+    fn index_subtree(&self, dir: &Path) -> Vec<RowEvent> {
+        let base = if dir.starts_with(&self.inner.watch_root) {
+            &self.inner.watch_root
+        } else {
+            &self.inner.root
+        };
+        let mut events = Vec::new();
+        for (path, table) in self.inner.fs.scan_subtree(base, dir, &self.inner.matcher) {
+            let rel_path = path
+                .strip_prefix(base)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .to_string();
+            events.extend(self.handle_upsert(&table, &path, &rel_path));
         }
         events
     }
@@ -1571,6 +1604,15 @@ trait FileSystem: Send + Sync {
     fn stat(&self, path: &Path) -> std::io::Result<FileStat>;
     /// Whether `path` is a regular file. `Err(NotFound)` when it doesn't exist.
     fn is_file(&self, path: &Path) -> std::io::Result<bool>;
+    /// Whether `path` is a directory. `Err(NotFound)` when it doesn't exist.
+    fn is_dir(&self, path: &Path) -> std::io::Result<bool>;
+    /// The scanner's walk over the subtree at `dir`, matched relative to `root`.
+    fn scan_subtree(
+        &self,
+        root: &Path,
+        dir: &Path,
+        matcher: &TableMatcher,
+    ) -> Vec<(PathBuf, String)>;
     /// BLAKE3-hash a file's contents.
     fn hash(&self, path: &Path) -> std::io::Result<[u8; 32]>;
     /// Canonicalize the watch root, falling back to the literal path.
@@ -1586,6 +1628,19 @@ impl FileSystem for RealFs {
 
     fn is_file(&self, path: &Path) -> std::io::Result<bool> {
         std::fs::metadata(path).map(|m| m.is_file())
+    }
+
+    fn is_dir(&self, path: &Path) -> std::io::Result<bool> {
+        std::fs::metadata(path).map(|m| m.is_dir())
+    }
+
+    fn scan_subtree(
+        &self,
+        root: &Path,
+        dir: &Path,
+        matcher: &TableMatcher,
+    ) -> Vec<(PathBuf, String)> {
+        scanner::scan_subtree(root, dir, matcher)
     }
 
     fn hash(&self, path: &Path) -> std::io::Result<[u8; 32]> {
@@ -2213,6 +2268,8 @@ mod internal_tests {
         hashes: StdHashMap<PathBuf, [u8; 32]>,
         canonical_roots: StdHashMap<PathBuf, String>,
         dirs: StdHashSet<PathBuf>,
+        subtrees: StdHashMap<PathBuf, Vec<(PathBuf, String)>>,
+        subtree_walks: Mutex<Vec<PathBuf>>,
     }
 
     impl FakeFs {
@@ -2226,6 +2283,22 @@ mod internal_tests {
         fn with_dir(mut self, path: impl Into<PathBuf>) -> Self {
             self.dirs.insert(path.into());
             self
+        }
+
+        /// Register a directory together with what the scanner's walk of it
+        /// would return; each file is also stat-able as a regular file.
+        fn with_subtree(mut self, dir: impl Into<PathBuf>, found: Vec<(PathBuf, String)>) -> Self {
+            let dir = dir.into();
+            self.dirs.insert(dir.clone());
+            for (path, _) in &found {
+                self.stats.insert(path.clone(), fake_stat());
+            }
+            self.subtrees.insert(dir, found);
+            self
+        }
+
+        fn subtree_walks(&self) -> Vec<PathBuf> {
+            self.subtree_walks.lock().unwrap().clone()
         }
 
         fn set_hash(&mut self, path: impl Into<PathBuf>, hash: [u8; 32]) {
@@ -2261,6 +2334,29 @@ mod internal_tests {
                 std::io::ErrorKind::NotFound,
                 "fake: no such file",
             ))
+        }
+
+        fn is_dir(&self, path: &Path) -> std::io::Result<bool> {
+            if self.dirs.contains(path) {
+                return Ok(true);
+            }
+            if self.stats.contains_key(path) {
+                return Ok(false);
+            }
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "fake: no such file",
+            ))
+        }
+
+        fn scan_subtree(
+            &self,
+            _root: &Path,
+            dir: &Path,
+            _matcher: &TableMatcher,
+        ) -> Vec<(PathBuf, String)> {
+            self.subtree_walks.lock().unwrap().push(dir.to_path_buf());
+            self.subtrees.get(dir).cloned().unwrap_or_default()
         }
 
         fn hash(&self, path: &Path) -> std::io::Result<[u8; 32]> {
@@ -2515,6 +2611,144 @@ mod internal_tests {
 
         let events = db.process_file_event(FileEvent::Created(kept));
         assert_eq!(events.len(), 1, "non-ignored path must produce one event");
+    }
+
+    fn subtree_db(fake: FakeFs, root: &Path, ignore: Vec<&str>) -> DirSQL {
+        DirSQL::with_ignore_and_fs(
+            root,
+            vec![Table::new(
+                "items",
+                "CREATE TABLE items (name TEXT)",
+                "**/*.txt",
+                |path| {
+                    vec![Row::from_iter([(
+                        "name".to_string(),
+                        Value::Text(path.to_string()),
+                    )])]
+                },
+            )],
+            ignore,
+            Arc::new(fake),
+        )
+        .unwrap()
+    }
+
+    /// A created directory is indexed by walking it: every file the scanner
+    /// reports beneath it becomes rows, as if each had its own create event.
+    #[test]
+    fn process_file_event_indexes_the_files_beneath_a_created_directory() {
+        let dir = TempDir::new().unwrap();
+        let moved = dir.path().join("moved");
+        let a = moved.join("a.txt");
+        let deep = moved.join("one").join("deep.txt");
+        let fake = FakeFs::default().with_subtree(
+            moved.clone(),
+            vec![(a.clone(), "items".into()), (deep.clone(), "items".into())],
+        );
+        let db = subtree_db(fake, dir.path(), Vec::new());
+
+        let events = db.process_file_event(FileEvent::Created(moved));
+
+        assert_eq!(events.len(), 2, "one insert per file found: {events:?}");
+        assert!(
+            events.iter().all(|e| matches!(e, RowEvent::Insert { .. })),
+            "got: {events:?}"
+        );
+        let paths: Vec<String> = events
+            .iter()
+            .filter_map(|e| match e {
+                RowEvent::Insert { file_path, .. } => Some(file_path.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            paths,
+            vec!["moved/a.txt".to_string(), "moved/one/deep.txt".to_string()],
+            "file paths are root-relative"
+        );
+    }
+
+    /// The walk is matched against the root the event was stripped with, so
+    /// the rows it writes carry the same relative paths a create event would.
+    #[test]
+    fn process_file_event_walks_a_created_directory_under_the_watch_root() {
+        let root = PathBuf::from("/ws");
+        let moved = root.join("moved");
+        let fake = FakeFs::default()
+            .with_canonical_root(&root, "/ws")
+            .with_subtree(moved.clone(), vec![(moved.join("a.txt"), "items".into())]);
+        let db = subtree_db(fake, &root, Vec::new());
+
+        let events = db.process_file_event(FileEvent::Created(moved.clone()));
+
+        assert!(
+            matches!(&events[..], [RowEvent::Insert { file_path, .. }] if file_path == "moved/a.txt"),
+            "got: {events:?}"
+        );
+    }
+
+    /// Only a *created* directory is walked. A metadata change on one says
+    /// nothing about its files, and walking on every such event would re-run
+    /// `on_file` across the whole subtree for a `chmod`.
+    #[test]
+    fn process_file_event_does_not_walk_a_modified_directory() {
+        let dir = TempDir::new().unwrap();
+        let sub = dir.path().join("sub");
+        let fake =
+            FakeFs::default().with_subtree(sub.clone(), vec![(sub.join("a.txt"), "items".into())]);
+        let fake = Arc::new(fake);
+        let db = DirSQL::with_ignore_and_fs(
+            dir.path(),
+            vec![Table::new(
+                "items",
+                "CREATE TABLE items (name TEXT)",
+                "**/*.txt",
+                |_| vec![],
+            )],
+            Vec::<String>::new(),
+            fake.clone(),
+        )
+        .unwrap();
+
+        let events = db.process_file_event(FileEvent::Modified(sub.clone()));
+
+        assert!(events.is_empty(), "got: {events:?}");
+        assert!(
+            fake.subtree_walks().is_empty(),
+            "a modified directory must not be walked; walked: {:?}",
+            fake.subtree_walks()
+        );
+    }
+
+    /// An ignored directory is never walked, matching the initial scan.
+    #[test]
+    fn process_file_event_does_not_walk_an_ignored_created_directory() {
+        let dir = TempDir::new().unwrap();
+        let skip = dir.path().join("skip");
+        let fake = Arc::new(
+            FakeFs::default()
+                .with_subtree(skip.clone(), vec![(skip.join("a.txt"), "items".into())]),
+        );
+        let db = DirSQL::with_ignore_and_fs(
+            dir.path(),
+            vec![Table::new(
+                "items",
+                "CREATE TABLE items (name TEXT)",
+                "**/*.txt",
+                |_| vec![],
+            )],
+            vec!["skip"],
+            fake.clone(),
+        )
+        .unwrap();
+
+        let events = db.process_file_event(FileEvent::Created(skip));
+
+        assert!(events.is_empty(), "got: {events:?}");
+        assert!(
+            fake.subtree_walks().is_empty(),
+            "ignored directory was walked"
+        );
     }
 
     /// Building with a **relative** root canonicalizes `watch_root` to an
@@ -2772,6 +3006,19 @@ mod internal_tests {
         assert!(
             fs.is_file(&missing).is_err(),
             "is_file of a missing path must error"
+        );
+        assert!(
+            fs.is_dir(dir.path()).unwrap(),
+            "a directory must report is_dir=true"
+        );
+        assert!(
+            fs.is_dir(&missing).is_err(),
+            "is_dir of a missing path must error"
+        );
+        let matcher = TableMatcher::new(&[("**/*", "files")], &[]).unwrap();
+        assert!(
+            fs.scan_subtree(dir.path(), dir.path(), &matcher).is_empty(),
+            "an empty directory walks to nothing"
         );
         // A nonexistent path can't canonicalize, so the literal fallback runs.
         assert_eq!(

@@ -5,7 +5,7 @@
 use std::fs;
 
 use dirsql::matcher::TableMatcher;
-use dirsql::scanner::scan_directory;
+use dirsql::scanner::{scan_directory, scan_subtree};
 use tempfile::TempDir;
 
 #[test]
@@ -140,4 +140,40 @@ fn scan_excludes_top_level_dirsql_directory() {
 
     assert_eq!(results.len(), 1);
     assert!(results[0].0.ends_with("real.csv"));
+}
+
+#[test]
+fn scan_subtree_matches_relative_to_the_root_not_the_subtree() {
+    let dir = TempDir::new().unwrap();
+    let moved = dir.path().join("moved");
+    fs::create_dir_all(moved.join("one")).unwrap();
+    fs::write(moved.join("top.jsonl"), "{}").unwrap();
+    fs::write(moved.join("one").join("deep.jsonl"), "{}").unwrap();
+    fs::write(dir.path().join("outside.jsonl"), "{}").unwrap();
+
+    let matcher = TableMatcher::new(&[("moved/**/*.jsonl", "events")], &[]).unwrap();
+    let mut results = scan_subtree(dir.path(), &moved, &matcher);
+    results.sort();
+
+    assert_eq!(
+        results,
+        vec![
+            (moved.join("one").join("deep.jsonl"), "events".to_string()),
+            (moved.join("top.jsonl"), "events".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn scan_subtree_prunes_ignored_directories() {
+    let dir = TempDir::new().unwrap();
+    let moved = dir.path().join("moved");
+    fs::create_dir_all(moved.join("node_modules")).unwrap();
+    fs::write(moved.join("keep.csv"), "a").unwrap();
+    fs::write(moved.join("node_modules").join("drop.csv"), "b").unwrap();
+
+    let matcher = TableMatcher::new(&[("**/*.csv", "t")], &["**/node_modules/**"]).unwrap();
+    let results = scan_subtree(dir.path(), &moved, &matcher);
+
+    assert_eq!(results, vec![(moved.join("keep.csv"), "t".to_string())]);
 }
