@@ -37,6 +37,7 @@ pub mod scanner;
 pub mod sql_literal;
 #[doc(hidden)]
 pub mod vtab;
+mod vtab_scaffold;
 #[doc(hidden)]
 pub mod watcher;
 

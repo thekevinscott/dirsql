@@ -3,17 +3,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use globset::GlobSet;
-use rusqlite::vtab::{
-    Context, CreateVTab, IndexInfo, VTab, VTabConnection, VTabCursor, VTabKind, Values,
-    read_only_module,
-};
-use rusqlite::{Connection, Error, Result, ffi};
+use rusqlite::vtab::Context;
+use rusqlite::{Connection, Result};
 
 use crate::compute_stat_virtuals;
 use crate::matcher::TableMatcher;
 use crate::path_table;
-use crate::scanner::{self, scan_glob};
-use crate::sql_literal::unquote;
+use crate::scanner::scan_glob;
+use crate::vtab_scaffold::{self, TableSource};
 use crate::{Row, Value};
 
 /// SQL module name a path-table is created with:
@@ -53,12 +50,6 @@ fn column_type(column: &str) -> &'static str {
     }
 }
 
-/// Compile a path-table's glob, surfacing a bad pattern as a module error so
-/// SQLite reports it against the `CREATE VIRTUAL TABLE` statement.
-fn compile_glob(pattern: &str) -> Result<GlobSet> {
-    scanner::compile_glob(pattern).map_err(|e| Error::ModuleError(e.to_string()))
-}
-
 /// Read `path` as text, yielding `None` when it is unreadable or not valid
 /// UTF-8. A file that cannot be read is a NULL cell, never a failed row: the
 /// filesystem is allowed to be messy and a query over it should still return.
@@ -84,10 +75,11 @@ struct ScanSpec {
     gitignore: bool,
 }
 
-/// Compile the ignore patterns a path-table scan applies.
-fn compile_ignore(patterns: &[String]) -> Result<TableMatcher> {
-    let refs: Vec<&str> = patterns.iter().map(String::as_str).collect();
-    TableMatcher::new(&[], &refs).map_err(|e| Error::ModuleError(e.to_string()))
+/// One matched file: its absolute path, kept for the lazy content read, and
+/// its already-computed stat columns.
+struct FileRow {
+    abs_path: PathBuf,
+    stats: Row,
 }
 
 /// Parse a path-table's own `CREATE VIRTUAL TABLE` arguments into its scan
@@ -95,27 +87,24 @@ fn compile_ignore(patterns: &[String]) -> Result<TableMatcher> {
 /// own arguments follow — root, glob, path prefix, the gitignore switch, then
 /// any ignore patterns.
 fn parse_module_args(args: &[&[u8]]) -> Result<ScanSpec> {
-    let user_args: Vec<String> = args
-        .iter()
-        .skip(3)
-        .map(|a| unquote(&String::from_utf8_lossy(a)).to_string())
-        .collect();
+    let user_args = vtab_scaffold::user_args(args);
 
     let [root, pattern, path_prefix, gitignore, ignore @ ..] = user_args.as_slice() else {
-        return Err(Error::ModuleError(format!(
-            "{MODULE_NAME} takes at least {FIXED_ARGS} arguments \
-             (root, glob, path prefix, gitignore switch), got {}",
-            user_args.len()
-        )));
+        return Err(vtab_scaffold::arity_error(
+            MODULE_NAME,
+            FIXED_ARGS,
+            "root, glob, path prefix, gitignore switch",
+            user_args.len(),
+        ));
     };
 
     Ok(ScanSpec {
         root: PathBuf::from(root),
-        glob: compile_glob(pattern)?,
+        glob: vtab_scaffold::compile_glob(pattern)?,
         path_prefix: PathBuf::from(path_prefix),
-        ignore: compile_ignore(ignore)?,
+        ignore: vtab_scaffold::compile_ignore(ignore)?,
         ignore_base: path_table::ignore_base(pattern),
-        gitignore: scanner::parse_gitignore_arg(gitignore).map_err(Error::ModuleError)?,
+        gitignore: vtab_scaffold::parse_gitignore(gitignore)?,
     })
 }
 
@@ -143,17 +132,6 @@ fn stat_cell(stats: &Row, column: usize) -> Value {
         .unwrap_or(Value::Null)
 }
 
-/// Whether the cursor has run past the last row.
-fn at_eof(index: usize, row_count: usize) -> bool {
-    index >= row_count
-}
-
-/// Rowid for a cursor position, saturating rather than wrapping on a row count
-/// no filesystem will produce.
-fn rowid_of(index: usize) -> i64 {
-    i64::try_from(index).unwrap_or(i64::MAX)
-}
-
 /// Build the row set for a scan. `stat` is injected so unit tests can supply
 /// deterministic facts without touching the filesystem; production passes
 /// [`compute_stat_virtuals`].
@@ -173,118 +151,34 @@ fn build_rows(
         .collect()
 }
 
-/// Register the path-table module on `conn`.
-pub fn load_module(conn: &Connection) -> Result<()> {
-    let aux: Option<()> = None;
-    conn.create_module(MODULE_NAME, read_only_module::<PathTab>(), aux)
-}
+impl TableSource for ScanSpec {
+    type Row = FileRow;
 
-#[repr(C)]
-struct PathTab {
-    /// Base class. Must be first.
-    base: ffi::sqlite3_vtab,
-    spec: Arc<ScanSpec>,
-}
+    const NAME: &'static str = MODULE_NAME;
 
-#[expect(unsafe_code, reason = "rusqlite requires VTab to be an unsafe trait")]
-unsafe impl<'vtab> VTab<'vtab> for PathTab {
-    type Aux = ();
-    type Cursor = PathTabCursor;
-
-    fn connect(
-        _db: &mut VTabConnection,
-        _aux: Option<&()>,
-        args: &[&[u8]],
-    ) -> Result<(String, Self)> {
-        let vtab = Self {
-            base: ffi::sqlite3_vtab::default(),
-            spec: Arc::new(parse_module_args(args)?),
-        };
-        Ok((declared_schema(), vtab))
+    fn connect(args: &[&[u8]]) -> Result<(String, Self)> {
+        Ok((declared_schema(), parse_module_args(args)?))
     }
 
-    fn best_index(&self, info: &mut IndexInfo) -> Result<()> {
-        info.set_estimated_cost(1000.);
-        Ok(())
-    }
-
-    fn open(&'vtab mut self) -> Result<PathTabCursor> {
-        Ok(PathTabCursor {
-            base: ffi::sqlite3_vtab_cursor::default(),
-            spec: Arc::clone(&self.spec),
-            rows: Vec::new(),
-            index: 0,
-        })
-    }
-}
-
-impl<'vtab> CreateVTab<'vtab> for PathTab {
-    const KIND: VTabKind = VTabKind::Default;
-}
-
-/// One matched file: its absolute path, kept for the lazy content read, and
-/// its already-computed stat columns.
-struct FileRow {
-    abs_path: PathBuf,
-    stats: Row,
-}
-
-#[repr(C)]
-struct PathTabCursor {
-    /// Base class. Must be first: `rust_open` hands this pointer straight to
-    /// SQLite as a `sqlite3_vtab_cursor`, so anything ahead of it gets
-    /// overwritten.
-    base: ffi::sqlite3_vtab_cursor,
-    spec: Arc<ScanSpec>,
-    rows: Vec<FileRow>,
-    index: usize,
-}
-
-#[expect(
-    unsafe_code,
-    reason = "rusqlite requires VTabCursor to be an unsafe trait"
-)]
-unsafe impl VTabCursor for PathTabCursor {
-    fn filter(
-        &mut self,
-        _idx_num: c_int,
-        _idx_str: Option<&str>,
-        _args: &Values<'_>,
-    ) -> Result<()> {
-        // The scan runs here rather than at CREATE, which is what makes reads
-        // live: each statement sees the filesystem as it is now.
-        let spec = &self.spec;
+    fn rows(&self) -> Arc<Vec<FileRow>> {
+        // The scan runs per statement rather than at CREATE, which is what
+        // makes reads live: each statement sees the filesystem as it is now.
         let rel_paths = scan_glob(
-            &spec.root,
-            &spec.glob,
-            &spec.ignore,
-            &spec.ignore_base,
-            spec.gitignore,
+            &self.root,
+            &self.glob,
+            &self.ignore,
+            &self.ignore_base,
+            self.gitignore,
         );
-        self.rows = build_rows(
-            &spec.root,
-            &spec.path_prefix,
+        Arc::new(build_rows(
+            &self.root,
+            &self.path_prefix,
             rel_paths,
             &compute_stat_virtuals,
-        );
-        self.index = 0;
-        Ok(())
+        ))
     }
 
-    fn next(&mut self) -> Result<()> {
-        self.index += 1;
-        Ok(())
-    }
-
-    fn eof(&self) -> bool {
-        at_eof(self.index, self.rows.len())
-    }
-
-    fn column(&self, ctx: &mut Context, i: c_int) -> Result<()> {
-        let Some(row) = self.rows.get(self.index) else {
-            return ctx.set_result(&Value::Null);
-        };
-
+    fn column(&self, row: &FileRow, ctx: &mut Context, i: c_int) -> Result<()> {
         let column = usize::try_from(i).unwrap_or(usize::MAX);
 
         if is_content_column(column) {
@@ -298,10 +192,11 @@ unsafe impl VTabCursor for PathTabCursor {
 
         ctx.set_result(&stat_cell(&row.stats, column))
     }
+}
 
-    fn rowid(&self) -> Result<i64> {
-        Ok(rowid_of(self.index))
-    }
+/// Register the path-table module on `conn`.
+pub fn load_module(conn: &Connection) -> Result<()> {
+    vtab_scaffold::load_module::<ScanSpec>(conn)
 }
 
 #[cfg(test)]
@@ -363,20 +258,6 @@ mod tests {
     #[test]
     fn module_name_is_stable() {
         assert_eq!(MODULE_NAME, "dirsql_path");
-    }
-
-    #[test]
-    fn compile_glob_accepts_a_valid_pattern() {
-        assert!(compile_glob("**/*.md").is_ok());
-    }
-
-    #[test]
-    fn compile_glob_rejects_an_invalid_pattern() {
-        let err = compile_glob("[").unwrap_err();
-        assert!(
-            matches!(err, Error::ModuleError(_)),
-            "invalid globs surface as module errors, got {err:?}"
-        );
     }
 
     /// The three fixed arguments SQLite prepends before the module's own.
@@ -492,19 +373,6 @@ mod tests {
     }
 
     #[test]
-    fn compile_ignore_accepts_an_empty_pattern_list() {
-        assert!(compile_ignore(&[]).is_ok());
-    }
-
-    #[test]
-    fn compile_ignore_rejects_an_invalid_pattern() {
-        let err = compile_ignore(&["[".to_string()])
-            .err()
-            .expect("an invalid pattern must be rejected");
-        assert!(matches!(err, Error::ModuleError(_)), "got {err:?}");
-    }
-
-    #[test]
     fn reported_path_is_the_relative_path_without_a_prefix() {
         assert_eq!(
             reported_path(Path::new(""), Path::new("docs/a.md")),
@@ -550,34 +418,6 @@ mod tests {
     fn stat_cell_is_null_for_an_out_of_range_column() {
         let stats = stats_with("path", Value::Text("a.md".into()));
         assert_eq!(stat_cell(&stats, 99), Value::Null);
-    }
-
-    #[test]
-    fn at_eof_is_false_while_rows_remain() {
-        assert!(!at_eof(0, 2));
-        assert!(!at_eof(1, 2));
-    }
-
-    #[test]
-    fn at_eof_is_true_once_past_the_last_row() {
-        assert!(at_eof(2, 2));
-        assert!(at_eof(3, 2));
-    }
-
-    #[test]
-    fn at_eof_is_true_for_an_empty_scan() {
-        assert!(at_eof(0, 0));
-    }
-
-    #[test]
-    fn rowid_of_tracks_the_cursor_position() {
-        assert_eq!(rowid_of(0), 0);
-        assert_eq!(rowid_of(7), 7);
-    }
-
-    #[test]
-    fn rowid_of_saturates_rather_than_wrapping() {
-        assert_eq!(rowid_of(usize::MAX), i64::MAX);
     }
 
     #[test]
