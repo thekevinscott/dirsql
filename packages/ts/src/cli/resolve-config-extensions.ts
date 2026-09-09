@@ -32,9 +32,7 @@ export async function withResolvedExtensions(
   }
   const configPaths = getCore()
     .configPathsFromArgv(argv)
-    .filter(
-    (p) => !NATIVE_CONFIG_SUFFIXES.some((s) => p.endsWith(s)),
-  );
+    .filter((p) => !NATIVE_CONFIG_SUFFIXES.some((s) => p.endsWith(s)));
   // The shared resolver pulls in smol-toml, which only a TOML config on disk
   // can need. Guarding on the same `existsSync` the resolver itself starts
   // with keeps the parser off the common launch path entirely (#720); the

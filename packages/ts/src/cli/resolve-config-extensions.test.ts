@@ -76,10 +76,7 @@ describe("withResolvedExtensions", () => {
     // The resolver skips missing configs itself; the existsSync guard only
     // keeps the TOML parser off the launch path when NO config exists.
     vi.mocked(existsSync).mockImplementation((p) => p === "/b/.dirsql.toml");
-    configPathsFromArgv.mockReturnValue([
-      "/a/.dirsql.toml",
-      "/b/.dirsql.toml",
-    ]);
+    configPathsFromArgv.mockReturnValue(["/a/.dirsql.toml", "/b/.dirsql.toml"]);
     vi.mocked(resolveConfigsExtensionSpecs).mockReturnValue(null);
     await withResolvedExtensions([
       "-c",
