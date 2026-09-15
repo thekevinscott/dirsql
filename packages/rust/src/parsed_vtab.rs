@@ -23,13 +23,11 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_int;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use globset::GlobSet;
-use rusqlite::vtab::{
-    Context, CreateVTab, IndexInfo, VTab, VTabConnection, VTabCursor, VTabKind, Values,
-    read_only_module,
-};
-use rusqlite::{Connection, Error, Result, ffi};
+use rusqlite::vtab::Context;
+use rusqlite::{Connection, Error, Result};
 
 use crate::Value;
 use crate::command::{Placeholder, run_command};
@@ -38,16 +36,15 @@ use crate::matcher::TableMatcher;
 use crate::parsed_cache::{self, CachedParse, Entry, RowCache, SqliteRowCache};
 use crate::path_table;
 use crate::persist::{FileStat, hash_file, now_ns};
-use crate::scanner::{self, scan_glob};
-use crate::sql_literal::unquote;
+use crate::scanner::scan_glob;
+use crate::vtab_scaffold::{self, TableSource};
 
 /// SQL module name a parsed path-table is created with.
 pub const MODULE_NAME: &str = "dirsql_parsed";
 
 /// Register the parsed path-table module on `conn`.
 pub fn load_module(conn: &Connection) -> Result<()> {
-    let aux: Option<()> = None;
-    conn.create_module(MODULE_NAME, read_only_module::<ParsedTab>(), aux)
+    vtab_scaffold::load_module::<ParsedTable>(conn)
 }
 
 /// Number of module arguments that are not ignore patterns.
@@ -67,43 +64,32 @@ struct ModuleArgs {
     ignore: TableMatcher,
 }
 
-/// Compile the ignore patterns a parsed path-table scan applies.
-fn compile_ignore(patterns: &[String]) -> Result<TableMatcher> {
-    let refs: Vec<&str> = patterns.iter().map(String::as_str).collect();
-    TableMatcher::new(&[], &refs).map_err(|e| Error::ModuleError(e.to_string()))
-}
-
 /// Parse a parsed path-table's `CREATE VIRTUAL TABLE` arguments. `args[0..3]`
 /// are the module, database and table names; the module's own follow — root,
 /// glob, parser, the gitignore switch, the cache path, then any ignore
 /// patterns.
 fn parse_module_args(args: &[&[u8]]) -> Result<ModuleArgs> {
-    let user_args: Vec<String> = args
-        .iter()
-        .skip(3)
-        .map(|a| unquote(&String::from_utf8_lossy(a)).to_string())
-        .collect();
+    let user_args = vtab_scaffold::user_args(args);
 
     let [root, pattern, command, gitignore, cache, ignore @ ..] = user_args.as_slice() else {
-        return Err(Error::ModuleError(format!(
-            "{MODULE_NAME} takes at least {FIXED_ARGS} arguments \
-             (root, glob, parser, gitignore switch, cache path), got {}",
-            user_args.len()
-        )));
+        return Err(vtab_scaffold::arity_error(
+            MODULE_NAME,
+            FIXED_ARGS,
+            "root, glob, parser, gitignore switch, cache path",
+            user_args.len(),
+        ));
     };
-
-    let glob = scanner::compile_glob(pattern).map_err(|e| Error::ModuleError(e.to_string()))?;
 
     Ok(ModuleArgs {
         root: PathBuf::from(root),
         pattern: pattern.clone(),
-        glob,
+        glob: vtab_scaffold::compile_glob(pattern)?,
         command: command.clone(),
-        gitignore: scanner::parse_gitignore_arg(gitignore).map_err(Error::ModuleError)?,
+        gitignore: vtab_scaffold::parse_gitignore(gitignore)?,
         // The empty string is how "no cache" is spelled: a module argument
         // cannot be absent without shifting every argument after it.
         cache: Some(PathBuf::from(cache)).filter(|p| !p.as_os_str().is_empty()),
-        ignore: compile_ignore(ignore)?,
+        ignore: vtab_scaffold::compile_ignore(ignore)?,
     })
 }
 
@@ -321,37 +307,21 @@ fn column_name(names: &[String], i: c_int) -> Option<&str> {
     names.get(index).map(String::as_str)
 }
 
-/// Whether the cursor has run past the last row.
-fn at_eof(index: usize, row_count: usize) -> bool {
-    index >= row_count
-}
-
-/// Rowid for a cursor position, saturating rather than wrapping on a row count
-/// no filesystem will produce.
-fn rowid_of(index: usize) -> i64 {
-    i64::try_from(index).unwrap_or(i64::MAX)
-}
-
-#[repr(C)]
-struct ParsedTab {
-    /// Base class. Must be first.
-    base: ffi::sqlite3_vtab,
+/// The table a `CREATE` produced: the inferred column names and the rows the
+/// parsers emitted, both fixed for the life of the table.
+struct ParsedTable {
     /// Only the names survive registration: the types live in the schema
     /// SQLite already holds, and a cursor addresses columns by index.
     column_names: Vec<String>,
-    rows: Vec<JsonRow>,
+    rows: Arc<Vec<JsonRow>>,
 }
 
-#[expect(unsafe_code, reason = "rusqlite requires VTab to be an unsafe trait")]
-unsafe impl<'vtab> VTab<'vtab> for ParsedTab {
-    type Aux = ();
-    type Cursor = ParsedTabCursor;
+impl TableSource for ParsedTable {
+    type Row = JsonRow;
 
-    fn connect(
-        _db: &mut VTabConnection,
-        _aux: Option<&()>,
-        args: &[&[u8]],
-    ) -> Result<(String, Self)> {
+    const NAME: &'static str = MODULE_NAME;
+
+    fn connect(args: &[&[u8]]) -> Result<(String, Self)> {
         let ModuleArgs {
             root,
             pattern,
@@ -384,80 +354,24 @@ unsafe impl<'vtab> VTab<'vtab> for ParsedTab {
         }
 
         let schema = declared_schema(&columns);
-        let vtab = Self {
-            base: ffi::sqlite3_vtab::default(),
+        let table = Self {
             column_names: columns.into_iter().map(|c| c.name).collect(),
-            rows,
+            rows: Arc::new(rows),
         };
-        Ok((schema, vtab))
+        Ok((schema, table))
     }
 
-    fn best_index(&self, info: &mut IndexInfo) -> Result<()> {
-        info.set_estimated_cost(1000.);
-        Ok(())
+    fn rows(&self) -> Arc<Vec<JsonRow>> {
+        // Materialized once at CREATE, so every statement reads the same rows
+        // rather than re-spawning a parser per file.
+        Arc::clone(&self.rows)
     }
 
-    fn open(&'vtab mut self) -> Result<ParsedTabCursor> {
-        Ok(ParsedTabCursor {
-            base: ffi::sqlite3_vtab_cursor::default(),
-            column_names: self.column_names.clone(),
-            rows: self.rows.clone(),
-            index: 0,
-        })
-    }
-}
-
-impl<'vtab> CreateVTab<'vtab> for ParsedTab {
-    const KIND: VTabKind = VTabKind::Default;
-}
-
-#[repr(C)]
-struct ParsedTabCursor {
-    /// Base class. Must be first: `rust_open` hands this pointer straight to
-    /// SQLite as a `sqlite3_vtab_cursor`, so anything ahead of it gets
-    /// overwritten.
-    base: ffi::sqlite3_vtab_cursor,
-    column_names: Vec<String>,
-    rows: Vec<JsonRow>,
-    index: usize,
-}
-
-#[expect(
-    unsafe_code,
-    reason = "rusqlite requires VTabCursor to be an unsafe trait"
-)]
-unsafe impl VTabCursor for ParsedTabCursor {
-    fn filter(
-        &mut self,
-        _idx_num: c_int,
-        _idx_str: Option<&str>,
-        _args: &Values<'_>,
-    ) -> Result<()> {
-        self.index = 0;
-        Ok(())
-    }
-
-    fn next(&mut self) -> Result<()> {
-        self.index += 1;
-        Ok(())
-    }
-
-    fn eof(&self) -> bool {
-        at_eof(self.index, self.rows.len())
-    }
-
-    fn column(&self, ctx: &mut Context, i: c_int) -> Result<()> {
-        let value = self
-            .rows
-            .get(self.index)
-            .zip(column_name(&self.column_names, i))
-            .map(|(row, name)| cell(row, name))
+    fn column(&self, row: &JsonRow, ctx: &mut Context, i: c_int) -> Result<()> {
+        let value = column_name(&self.column_names, i)
+            .map(|name| cell(row, name))
             .unwrap_or(Value::Null);
         ctx.set_result(&value)
-    }
-
-    fn rowid(&self) -> Result<i64> {
-        Ok(rowid_of(self.index))
     }
 }
 
@@ -727,34 +641,6 @@ mod tests {
     #[test]
     fn column_name_is_none_for_a_negative_index() {
         assert_eq!(column_name(&names(), -1), None);
-    }
-
-    #[test]
-    fn at_eof_is_false_while_rows_remain() {
-        assert!(!at_eof(0, 2));
-        assert!(!at_eof(1, 2));
-    }
-
-    #[test]
-    fn at_eof_is_true_once_past_the_last_row() {
-        assert!(at_eof(2, 2));
-        assert!(at_eof(3, 2));
-    }
-
-    #[test]
-    fn at_eof_is_true_for_an_empty_row_set() {
-        assert!(at_eof(0, 0));
-    }
-
-    #[test]
-    fn rowid_of_tracks_the_cursor_position() {
-        assert_eq!(rowid_of(0), 0);
-        assert_eq!(rowid_of(7), 7);
-    }
-
-    #[test]
-    fn rowid_of_saturates_rather_than_wrapping() {
-        assert_eq!(rowid_of(usize::MAX), i64::MAX);
     }
 
     // The run_parser tests spawn a real `sh`. Their test code statically
