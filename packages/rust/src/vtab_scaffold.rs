@@ -328,4 +328,51 @@ mod tests {
     fn rowid_of_saturates_rather_than_wrapping() {
         assert_eq!(rowid_of(usize::MAX), i64::MAX);
     }
+
+    struct FakeSource;
+
+    impl TableSource for FakeSource {
+        type Row = ();
+        const NAME: &'static str = "fake";
+
+        fn connect(_args: &[&[u8]]) -> Result<(String, Self)> {
+            unreachable!()
+        }
+
+        fn rows(&self) -> Arc<Vec<()>> {
+            unreachable!()
+        }
+
+        fn column(&self, _row: &(), _ctx: &mut Context, _i: c_int) -> Result<()> {
+            unreachable!()
+        }
+    }
+
+    fn cursor_over(rows: Vec<()>) -> ScaffoldCursor<FakeSource> {
+        ScaffoldCursor {
+            base: ffi::sqlite3_vtab_cursor::default(),
+            source: Arc::new(FakeSource),
+            rows: Arc::new(rows),
+            index: 0,
+        }
+    }
+
+    #[test]
+    fn cursor_steps_each_row_then_reaches_eof() {
+        let mut cursor = cursor_over(vec![(), ()]);
+
+        assert!(!cursor.eof());
+        assert_eq!(cursor.rowid().unwrap(), 0);
+        cursor.next().unwrap();
+        assert!(!cursor.eof());
+        assert_eq!(cursor.rowid().unwrap(), 1);
+        cursor.next().unwrap();
+        assert!(cursor.eof());
+        assert_eq!(cursor.rowid().unwrap(), 2);
+    }
+
+    #[test]
+    fn cursor_is_at_eof_over_no_rows() {
+        assert!(cursor_over(Vec::new()).eof());
+    }
 }

@@ -3290,7 +3290,7 @@ mod internal_tests {
         let db = DirSQL::builder().root(dir.path()).build().unwrap();
 
         assert!(
-            db.query("SELECT path FROM './'").is_ok(),
+            db.query("SELECT path FROM './' LIMIT 1").is_ok(),
             "the path-table fallback must be armed on an ephemeral db"
         );
     }
@@ -3331,7 +3331,7 @@ mod internal_tests {
             .unwrap();
 
         assert!(
-            db.query("SELECT path FROM './'").is_ok(),
+            db.query("SELECT path FROM './' LIMIT 1").is_ok(),
             "the persist branch must arm the fallback too"
         );
     }

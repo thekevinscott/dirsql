@@ -2340,7 +2340,7 @@ mod tests {
         let mut db = Db::new().unwrap();
         db.set_path_table_root(PathBuf::from("/nonexistent-dirsql-root"));
 
-        let rows = db.query("SELECT path FROM './'").unwrap();
+        let rows = db.query("SELECT path FROM './' LIMIT 1").unwrap();
 
         assert!(rows.is_empty(), "an empty root yields no rows: {rows:?}");
     }
@@ -2361,7 +2361,7 @@ mod tests {
         db.set_path_table_root(PathBuf::from("/nonexistent-dirsql-root"));
 
         let rows = db
-            .query("SELECT path FROM '/nonexistent-dirsql-dir/*.log'")
+            .query("SELECT path FROM '/nonexistent-dirsql-dir/*.log' LIMIT 1")
             .unwrap();
 
         assert!(
