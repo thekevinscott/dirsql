@@ -645,6 +645,19 @@ impl Db {
         Ok(out)
     }
 
+    /// Every distinct `(table_name, file_path)` whose file sits beneath the
+    /// directory `dir`, ordered by table then path.
+    pub fn files_under(&self, dir: &str) -> Result<Vec<(String, String)>> {
+        let prefix = format!("{dir}{}", std::path::MAIN_SEPARATOR);
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT table_name, file_path FROM _dirsql_internal_rows \
+             WHERE substr(file_path, 1, length(?1)) = ?1 \
+             ORDER BY table_name, file_path",
+        )?;
+        let rows = stmt.query_map([prefix], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     /// Helper to execute delete_rows_by_file statements on any connection.
     /// Called from delete_rows_by_file() either inside a caller-supplied
     /// transaction or inside a transaction opened by delete_rows_by_file().
@@ -1698,6 +1711,45 @@ mod tests {
         let rows = mapping_rows(&db, "t");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].2, 42, "rowid_ref must be the user-declared rowid");
+    }
+
+    #[test]
+    fn files_under_lists_each_file_beneath_the_directory_once_across_tables() {
+        let db = Db::new().unwrap();
+        db.create_table("t1", "CREATE TABLE t1 (id TEXT)").unwrap();
+        db.create_table("t2", "CREATE TABLE t2 (id TEXT)").unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("x".into()))]);
+        for (table, file, idx) in [
+            ("t1", "dir/a.jsonl", 0),
+            ("t1", "dir/a.jsonl", 1),
+            ("t1", "dir/sub/b.jsonl", 0),
+            ("t2", "dir/c.jsonl", 0),
+            ("t1", "dir2/x.jsonl", 0),
+            ("t1", "other.jsonl", 0),
+        ] {
+            db.insert_row(table, &row, file, idx).unwrap();
+        }
+
+        assert_eq!(
+            db.files_under("dir").unwrap(),
+            vec![
+                ("t1".to_string(), "dir/a.jsonl".to_string()),
+                ("t1".to_string(), "dir/sub/b.jsonl".to_string()),
+                ("t2".to_string(), "dir/c.jsonl".to_string()),
+            ],
+            "a multi-row file is listed once; `dir2/` is not beneath `dir`"
+        );
+        assert!(db.files_under("nothing").unwrap().is_empty());
+    }
+
+    #[test]
+    fn files_under_surfaces_sql_failure() {
+        let db = Db::new().unwrap();
+        db.conn
+            .execute("DROP TABLE _dirsql_internal_rows", [])
+            .unwrap();
+        let err = db.files_under("dir").unwrap_err();
+        assert!(matches!(err, DbError::Sqlite(_)), "got: {err:?}");
     }
 
     #[test]

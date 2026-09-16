@@ -557,9 +557,6 @@ impl DirSQL {
         // unspecified. An `on_file` failure produces an error event for that
         // table only; the other matching tables still process the event.
         let matches = self.inner.matcher.match_all(&rel_path_buf);
-        if matches.is_empty() {
-            return Vec::new();
-        }
         let rel_path = rel_path_buf.to_string_lossy().to_string();
 
         let mut events = Vec::new();
@@ -572,6 +569,33 @@ impl DirSQL {
                     events.extend(self.handle_upsert(&m.table_name, &abs_path, &rel_path));
                 }
             }
+        }
+        // The mirror of the walk above: a directory that leaves the tree
+        // (`rm -r`, or a rename out of or within the root) arrives as one
+        // event naming the directory and none for the files beneath it. It is
+        // already gone, so the rows are the only record of what it held.
+        if matches!(event, FileEvent::Deleted(_)) {
+            events.extend(self.delete_subtree(&rel_path));
+        }
+        events
+    }
+
+    /// Delete the rows of every file recorded beneath `rel_dir`, in every
+    /// table, as if each file had its own delete event.
+    fn delete_subtree(&self, rel_dir: &str) -> Vec<RowEvent> {
+        let files = {
+            let db = match self.inner.db.lock() {
+                Ok(db) => db,
+                Err(e) => return vec![error_event(None, rel_dir, e.to_string())],
+            };
+            match db.files_under(rel_dir) {
+                Ok(files) => files,
+                Err(e) => return vec![error_event(None, rel_dir, e.to_string())],
+            }
+        };
+        let mut events = Vec::new();
+        for (table, file_path) in files {
+            events.extend(self.handle_delete(&table, &file_path));
         }
         events
     }
@@ -2750,6 +2774,153 @@ mod internal_tests {
         assert!(
             fake.subtree_walks().is_empty(),
             "ignored directory was walked"
+        );
+    }
+
+    /// A one-table db whose fake fs stats every file in `files`, each already
+    /// upserted so the db holds a row per file.
+    fn populated_db(root: &Path, glob: &str, files: &[&str]) -> DirSQL {
+        let mut fake = FakeFs::default();
+        for f in files {
+            fake.stats.insert(root.join(f), fake_stat());
+        }
+        let db = DirSQL::with_ignore_and_fs(
+            root,
+            vec![Table::new(
+                "items",
+                "CREATE TABLE items (name TEXT)",
+                glob,
+                |path| {
+                    vec![Row::from_iter([(
+                        "name".to_string(),
+                        Value::Text(path.to_string()),
+                    )])]
+                },
+            )],
+            Vec::<String>::new(),
+            Arc::new(fake),
+        )
+        .unwrap();
+        for f in files {
+            let events = db.handle_upsert("items", &root.join(f), f);
+            assert!(
+                matches!(&events[..], [RowEvent::Insert { .. }]),
+                "got: {events:?}"
+            );
+        }
+        db
+    }
+
+    fn row_names(db: &DirSQL) -> Vec<String> {
+        let mut names: Vec<String> = db
+            .query("SELECT name FROM items")
+            .unwrap()
+            .into_iter()
+            .filter_map(|r| match r.get("name") {
+                Some(Value::Text(n)) => Some(n.clone()),
+                _ => None,
+            })
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn deleted_paths(events: &[RowEvent]) -> Vec<String> {
+        assert!(
+            events.iter().all(|e| matches!(e, RowEvent::Delete { .. })),
+            "expected only Delete events: {events:?}"
+        );
+        let mut paths: Vec<String> = events
+            .iter()
+            .filter_map(|e| match e {
+                RowEvent::Delete { file_path, .. } => Some(file_path.clone()),
+                _ => None,
+            })
+            .collect();
+        paths.sort();
+        paths
+    }
+
+    /// A deleted directory matches no file glob, yet every row recorded
+    /// beneath it goes, with one Delete per file. A sibling whose name merely
+    /// starts with the directory's (`moved2/`) is untouched.
+    #[test]
+    fn process_file_event_deleted_directory_removes_the_rows_beneath_it() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let files = ["moved/a.txt", "moved/one/deep.txt", "moved2/x.txt"];
+        let db = populated_db(&root, "**/*.txt", &files);
+
+        let events = db.process_file_event(FileEvent::Deleted(root.join("moved")));
+
+        assert_eq!(
+            deleted_paths(&events),
+            vec!["moved/a.txt".to_string(), "moved/one/deep.txt".to_string()]
+        );
+        assert_eq!(
+            row_names(&db),
+            vec![root.join("moved2/x.txt").to_string_lossy().to_string()]
+        );
+    }
+
+    /// With a glob that also matches the directory itself (`**/*`), the
+    /// exact-path delete finds no row and the subtree delete still runs.
+    #[test]
+    fn process_file_event_deleted_directory_matching_a_glob_removes_the_rows_beneath_it() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let db = populated_db(&root, "**/*", &["moved/a.txt", "keep.txt"]);
+
+        let events = db.process_file_event(FileEvent::Deleted(root.join("moved")));
+
+        assert_eq!(deleted_paths(&events), vec!["moved/a.txt".to_string()]);
+        assert_eq!(
+            row_names(&db),
+            vec![root.join("keep.txt").to_string_lossy().to_string()]
+        );
+    }
+
+    /// Only a *deleted* directory empties its subtree; a metadata change on
+    /// one says nothing about its files.
+    #[test]
+    fn process_file_event_keeps_the_rows_beneath_a_modified_directory() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let db = populated_db(&root, "**/*.txt", &["moved/a.txt"]);
+
+        let events = db.process_file_event(FileEvent::Modified(root.join("moved")));
+
+        assert!(events.is_empty(), "got: {events:?}");
+        assert_eq!(
+            row_names(&db),
+            vec![root.join("moved/a.txt").to_string_lossy().to_string()]
+        );
+    }
+
+    #[test]
+    fn delete_subtree_surfaces_db_poison() {
+        let (_dir, db, _abs, _rel) = upsert_fixture();
+        poison(&db.inner.db);
+        let events = db.delete_subtree("moved");
+        assert_single_lock_error(&events);
+    }
+
+    #[test]
+    fn delete_subtree_surfaces_db_failure() {
+        let (_dir, db, _abs, _rel) = upsert_fixture();
+        db.inner
+            .db
+            .lock()
+            .unwrap()
+            .conn()
+            .execute("DROP TABLE _dirsql_internal_rows", [])
+            .unwrap();
+        let events = db.delete_subtree("moved");
+        assert_eq!(events.len(), 1, "expected one error event: {events:?}");
+        assert!(
+            matches!(&events[0], RowEvent::Error { table: None, file_path, error }
+                if file_path == Path::new("moved") && error.contains("no such table")),
+            "got: {events:?}"
         );
     }
 
