@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1789596015,
+  "exit_code": 0,
+  "commit": "29d6ce890b0ce3eca1f8cea07f6503b13bc02f24",
+  "branch": "claude/1109-watch-moved-out"
+}
