@@ -462,6 +462,13 @@ mod python {
         py.detach(|| dirsql::cli::run_cli(full))
     }
 
+    /// The config paths a launcher must inspect for package-name extensions;
+    /// see [`dirsql::launcher::config_paths_from_argv`].
+    #[pyfunction]
+    fn config_paths_from_argv(argv: Vec<String>) -> Vec<String> {
+        dirsql::launcher::config_paths_from_argv(&argv)
+    }
+
     #[pymodule]
     #[pyo3(name = "_dirsql")]
     fn py_dirsql_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -471,6 +478,7 @@ mod python {
         m.add_class::<PyRowEvent>()?;
         m.add_class::<PyScanFailure>()?;
         m.add_function(wrap_pyfunction!(run_cli, m)?)?;
+        m.add_function(wrap_pyfunction!(config_paths_from_argv, m)?)?;
         Ok(())
     }
 
@@ -551,6 +559,14 @@ mod python {
         #[test]
         fn on_file_error_displays_inner() {
             assert_eq!(OnFileError("bad".to_string()).to_string(), "bad");
+        }
+
+        #[test]
+        fn config_paths_from_argv_forwards_to_the_core_scan() {
+            assert_eq!(
+                config_paths_from_argv(vec!["-c".into(), "a.toml".into()]),
+                ["a.toml"]
+            );
         }
 
         #[test]

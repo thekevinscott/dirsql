@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1788979577,
+  "exit_code": 0,
+  "commit": "ae4f94c0b871cd766d45be67204c8a523a58c707",
+  "branch": "claude/1078-argv-config-paths-core"
+}

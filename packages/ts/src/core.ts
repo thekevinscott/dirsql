@@ -34,6 +34,7 @@ export interface NativeDirSQLConstructor {
 // native binary (`dirsql.node`); tests may substitute a fake.
 export interface CoreModule {
   DirSQL: NativeDirSQLConstructor;
+  configPathsFromArgv(argv: string[]): string[];
 }
 
 // Unit tests `vi.mock("./core.js")` to fake `getCore` directly, so

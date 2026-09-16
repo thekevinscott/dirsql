@@ -47,6 +47,13 @@ pub fn run_cli(argv: Vec<String>) -> i32 {
     dirsql::cli::run_cli(full)
 }
 
+/// The config paths the npm launcher must inspect for package-name
+/// extensions; see [`dirsql::launcher::config_paths_from_argv`].
+#[napi(js_name = "configPathsFromArgv")]
+pub fn config_paths_from_argv(argv: Vec<String>) -> Vec<String> {
+    dirsql::launcher::config_paths_from_argv(&argv)
+}
+
 /// A row-level event emitted by the file watcher.
 ///
 /// `table` is nullable because error events may occur before a file has
@@ -1122,6 +1129,14 @@ mod tests {
         assert!(out.table.is_none());
         assert!(out.row.is_none());
         assert_eq!(out.error.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn config_paths_from_argv_forwards_to_the_core_scan() {
+        assert_eq!(
+            config_paths_from_argv(vec!["-c".into(), "a.toml".into()]),
+            ["a.toml"]
+        );
     }
 
     #[test]

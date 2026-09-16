@@ -32,6 +32,9 @@ def describe_with_resolved_extensions():
             == "dirsql.resolve_configs_extension_specs"
         )
 
+    def it_reaches_the_argv_scan_through_the_core_binding():
+        assert rce.config_paths_from_argv.__module__ == "dirsql._dirsql"
+
     def it_passes_init_through_untouched():
         argv = ["init", "--root", "."]
         with _patch([{"path": "R:pkg", "entrypoint": None}]) as (scan, resolver):

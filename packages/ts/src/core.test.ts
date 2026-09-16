@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  type CoreModule,
   type NativeDirSQL,
   type NativeDirSQLConstructor,
   getCore,
@@ -18,6 +19,24 @@ describe("getCore", () => {
     expect(getCore()).toBe(fake);
     expect(getCore()).toBe(fake);
     expect(loadNativeCore).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("CoreModule contract", () => {
+  it("carries the core's argv config-path scan beside the DirSQL class", () => {
+    const configPathsFromArgv = vi.fn((argv: string[]) => argv);
+    // Typed against the real interface, not cast: dropping the scan from
+    // `CoreModule` would make this literal fail to compile, which pins the
+    // member the npm launcher reaches for before the core parses argv.
+    const core: CoreModule = {
+      DirSQL: {} as NativeDirSQLConstructor,
+      configPathsFromArgv,
+    };
+    expect(core.configPathsFromArgv(["-c", "a.toml"])).toEqual([
+      "-c",
+      "a.toml",
+    ]);
+    expect(configPathsFromArgv).toHaveBeenCalledWith(["-c", "a.toml"]);
   });
 });
 
