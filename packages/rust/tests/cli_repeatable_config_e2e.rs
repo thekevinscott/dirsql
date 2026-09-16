@@ -8,10 +8,13 @@
 //! Gated behind `--features cli` like the sibling `cli_e2e.rs`.
 #![cfg(feature = "cli")]
 
+#[path = "common/server.rs"]
+mod server;
+
 use std::fs;
 use std::net::TcpListener;
 use std::path::Path;
-use std::process::{Child, Command as StdCommand, Stdio};
+use std::process::{Child, Command as StdCommand};
 use std::time::{Duration, Instant};
 
 use assert_cmd::prelude::*;
@@ -83,22 +86,16 @@ fn server_serves_tables_from_two_config_flags() {
     let cfg_b_path = write_table_config(cfg_b.path(), "beta", "b.json");
 
     let port = free_port();
-    let mut cmd: StdCommand = std::process::Command::cargo_bin("dirsql")
-        .expect("`dirsql` binary must be built by `cargo test` with --features cli");
-    // #662: server flags live under the `server` subcommand now.
-    cmd.arg("server")
-        .arg("--port")
-        .arg(port.to_string())
-        .arg("--host")
-        .arg("localhost")
-        .arg("-c")
-        .arg(&cfg_a_path)
-        .arg("-c")
-        .arg(&cfg_b_path)
-        .current_dir(data.path())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
-    let mut child = cmd.spawn().expect("spawning dirsql failed");
+    let mut child = server::spawn_server(
+        data.path(),
+        port,
+        &[
+            "-c".as_ref(),
+            cfg_a_path.as_os_str(),
+            "-c".as_ref(),
+            cfg_b_path.as_os_str(),
+        ],
+    );
 
     wait_until_ready_or_exit(&mut child, port, Duration::from_secs(10));
 
@@ -118,8 +115,7 @@ fn server_serves_tables_from_two_config_flags() {
         assert_eq!(body, vec![json!({"n": 1})], "table {table} must be indexed");
     }
 
-    let _ = child.kill();
-    let _ = child.wait();
+    drop(child);
 }
 
 #[test]
