@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 
-def mem_total_kb(meminfo: str) -> int | None:
+def mem_total_kb(meminfo: str) -> int:
     for line in meminfo.splitlines():
         if line.startswith("MemTotal:"):
             return int(line.split()[1])
-    return None
+    raise ValueError("no MemTotal line in meminfo")

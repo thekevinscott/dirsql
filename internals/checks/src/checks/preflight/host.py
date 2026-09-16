@@ -21,6 +21,6 @@ def detect_host() -> Host:
     try:
         with open(MEMINFO, encoding="utf-8") as handle:
             total = mem_total_kb(handle.read())
-    except OSError:
+    except (OSError, ValueError):
         total = None
     return Host(systemd_run=shutil.which("systemd-run") is not None, mem_total_kb=total)

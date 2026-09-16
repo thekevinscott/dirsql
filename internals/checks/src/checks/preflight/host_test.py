@@ -7,11 +7,11 @@ from checks.preflight.host import Host, detect_host
 MEMINFO = "MemTotal:       48369800 kB\n"
 
 
-def probe(which="/usr/bin/systemd-run", opened=None, parsed=48369800):
+def probe(which="/usr/bin/systemd-run", opened=None, parse=None):
     with (
         mock.patch("checks.preflight.host.shutil.which", return_value=which) as which_mock,
         mock.patch("checks.preflight.host.open", opened or mock.mock_open(read_data=MEMINFO)) as open_mock,
-        mock.patch("checks.preflight.host.mem_total_kb", return_value=parsed) as parse_mock,
+        mock.patch("checks.preflight.host.mem_total_kb", parse or mock.Mock(return_value=48369800)) as parse_mock,
     ):
         host = detect_host()
     return host, which_mock, open_mock, parse_mock
@@ -34,5 +34,6 @@ def describe_detect_host():
         assert host.mem_total_kb is None
         assert not parsed.called
 
-    def it_passes_a_parser_verdict_of_none_through():
-        assert probe(parsed=None)[0].mem_total_kb is None
+    def it_reports_mem_total_unknown_when_meminfo_names_no_mem_total():
+        host, _which, _opened, _parsed = probe(parse=mock.Mock(side_effect=ValueError))
+        assert host.mem_total_kb is None

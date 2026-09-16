@@ -140,6 +140,16 @@ def describe_run():
         drive(only=["unit-lint"], runner=lambda argv, _cwd: calls.append(argv) or 0)
         assert [argv[0] for argv in calls] == ["npx"]
 
+    def it_leaves_a_gate_sorting_below_mutation_uncapped_too():
+        # An ordering comparison in place of equality would sweep these in.
+        calls = []
+        drive(
+            workflows=[CONVENTIONS.replace('"unit-lint"', '"colocated-test"')],
+            only=["colocated-test"],
+            runner=lambda argv, _cwd: calls.append(argv) or 0,
+        )
+        assert [argv[0] for argv in calls] == ["npx"]
+
     def it_runs_mutation_bare_when_the_cap_is_skipped():
         calls = []
         drive(only=["mutation"], cap=UNCAPPED, runner=lambda argv, _cwd: calls.append(argv) or 0)
