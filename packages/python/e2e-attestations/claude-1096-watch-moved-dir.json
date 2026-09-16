@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1788980718,
+  "exit_code": 0,
+  "commit": "f1d452531516e25204fbc4a2bdc3233d036a00f5",
+  "branch": "claude/1096-watch-moved-dir"
+}

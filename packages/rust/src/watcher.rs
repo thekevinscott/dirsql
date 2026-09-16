@@ -79,6 +79,13 @@ fn translate_event(event: &Event) -> Vec<FileEvent> {
             EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
                 Some(FileEvent::Deleted(path.clone()))
             }
+            // inotify follows a matched `From`/`To` pair with a `Both` naming
+            // the same two paths; both sides were already translated above.
+            EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => None,
+            // A rename INTO the tree puts a path here that did not exist a
+            // moment ago — a creation, and for a directory one the watcher must
+            // walk, since the OS reports nothing for the files already inside.
+            EventKind::Modify(ModifyKind::Name(_)) => Some(FileEvent::Created(path.clone())),
             EventKind::Modify(_) => Some(FileEvent::Modified(path.clone())),
             EventKind::Remove(_) => Some(FileEvent::Deleted(path.clone())),
             _ => None,
@@ -129,6 +136,39 @@ fn rename_from_event(paths: Vec<PathBuf>) -> Event {
     Event {
         kind: EventKind::Modify(notify::event::ModifyKind::Name(
             notify::event::RenameMode::From,
+        )),
+        paths,
+        attrs: Default::default(),
+    }
+}
+
+#[cfg(test)]
+fn rename_to_event(paths: Vec<PathBuf>) -> Event {
+    Event {
+        kind: EventKind::Modify(notify::event::ModifyKind::Name(
+            notify::event::RenameMode::To,
+        )),
+        paths,
+        attrs: Default::default(),
+    }
+}
+
+#[cfg(test)]
+fn rename_any_event(paths: Vec<PathBuf>) -> Event {
+    Event {
+        kind: EventKind::Modify(notify::event::ModifyKind::Name(
+            notify::event::RenameMode::Any,
+        )),
+        paths,
+        attrs: Default::default(),
+    }
+}
+
+#[cfg(test)]
+fn rename_both_event(paths: Vec<PathBuf>) -> Event {
+    Event {
+        kind: EventKind::Modify(notify::event::ModifyKind::Name(
+            notify::event::RenameMode::Both,
         )),
         paths,
         attrs: Default::default(),
@@ -194,6 +234,39 @@ mod tests {
             results,
             vec![FileEvent::Deleted(PathBuf::from("/tmp/moved.txt"))]
         );
+    }
+
+    #[test]
+    fn translate_event_maps_rename_to_as_create() {
+        // inotify emits `Modify(Name(To))` when a path is renamed INTO the
+        // watched tree; it is a creation so a moved-in directory gets walked.
+        let results = translate_event(&rename_to_event(vec![PathBuf::from("/tmp/arrived")]));
+        assert_eq!(
+            results,
+            vec![FileEvent::Created(PathBuf::from("/tmp/arrived"))]
+        );
+    }
+
+    #[test]
+    fn translate_event_maps_rename_any_as_create() {
+        // kqueue / FSEvents cannot tell which side of a rename they saw; a
+        // creation of a path that turns out not to exist is a harmless no-op.
+        let results = translate_event(&rename_any_event(vec![PathBuf::from("/tmp/either")]));
+        assert_eq!(
+            results,
+            vec![FileEvent::Created(PathBuf::from("/tmp/either"))]
+        );
+    }
+
+    #[test]
+    fn translate_event_ignores_rename_both() {
+        // `Both` restates a `From`/`To` pair inotify already delivered; acting
+        // on it would index the destination twice.
+        let results = translate_event(&rename_both_event(vec![
+            PathBuf::from("/tmp/old"),
+            PathBuf::from("/tmp/new"),
+        ]));
+        assert!(results.is_empty());
     }
 
     #[test]

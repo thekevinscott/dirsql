@@ -35,10 +35,30 @@ pub fn scan_directory_reporting(
     matcher: &TableMatcher,
     on_file: &mut dyn FnMut(u64),
 ) -> Vec<(PathBuf, String)> {
+    scan_below(root, root, matcher, on_file)
+}
+
+/// [`scan_directory`] restricted to the subtree at `dir`, a directory beneath
+/// `root`. Paths are still matched and ignored relative to `root`, so the
+/// result is exactly the slice of a full scan that falls under `dir`.
+///
+/// This is how the live watcher indexes a directory that appears whole — a
+/// `mkdir` or a rename into the tree — since the OS reports one event for the
+/// directory and none for the files already inside it.
+pub fn scan_subtree(root: &Path, dir: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, String)> {
+    scan_below(root, dir, matcher, &mut |_| {})
+}
+
+fn scan_below(
+    root: &Path,
+    start: &Path,
+    matcher: &TableMatcher,
+    on_file: &mut dyn FnMut(u64),
+) -> Vec<(PathBuf, String)> {
     let mut results = Vec::new();
     let mut seen: u64 = 0;
 
-    for entry in walk(root, matcher, Path::new(""), false) {
+    for entry in walk(root, start, matcher, Path::new(""), false) {
         let path = entry.path();
 
         // Match against relative path so globs like "comments/**/*.jsonl" work
@@ -92,7 +112,7 @@ pub fn scan_glob(
 ) -> Vec<PathBuf> {
     let mut results = Vec::new();
 
-    for entry in walk(root, ignore, ignore_base, gitignore) {
+    for entry in walk(root, root, ignore, ignore_base, gitignore) {
         if !entry.file_type().is_file() {
             continue;
         }
@@ -145,6 +165,7 @@ pub(crate) fn parse_gitignore_arg(arg: &str) -> Result<bool, String> {
 /// entries a `.gitignore` in force ignores are pruned/skipped too.
 fn walk<'a>(
     root: &Path,
+    start: &Path,
     ignore: &'a TableMatcher,
     ignore_base: &'a Path,
     gitignore: bool,
@@ -154,13 +175,16 @@ fn walk<'a>(
     // first. `filter_entry` visits a directory before its children and the
     // children before the next sibling, so a depth-keyed stack tracks scope.
     let mut frames: Vec<GitignoreFrame> = Vec::new();
-    WalkDir::new(&root)
+    WalkDir::new(start)
         .into_iter()
         .filter_entry(move |entry| {
             let rel_path = entry.path().strip_prefix(&root).unwrap_or(entry.path());
+            // Depth below `root`, not below `start`: the reserved-directory
+            // rule is about the tree's top level wherever the walk begins.
+            let depth = rel_path.components().count();
             let is_dir = entry.file_type().is_dir();
             if !should_descend(
-                entry.depth(),
+                depth,
                 is_dir,
                 entry.file_name(),
                 rel_path,
@@ -172,7 +196,7 @@ fn walk<'a>(
             if !gitignore {
                 return true;
             }
-            while frames.last().is_some_and(|f| f.depth >= entry.depth()) {
+            while frames.last().is_some_and(|f| f.depth >= depth) {
                 frames.pop();
             }
             if is_gitignored(&frames, entry.path(), rel_path, is_dir, ignore_base) {
@@ -180,7 +204,7 @@ fn walk<'a>(
             }
             if is_dir && let Some(matcher) = load_gitignore(entry.path()) {
                 frames.push(GitignoreFrame {
-                    depth: entry.depth(),
+                    depth,
                     dir: rel_path.to_path_buf(),
                     matcher,
                 });

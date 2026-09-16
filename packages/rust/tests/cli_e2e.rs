@@ -344,6 +344,58 @@ fn get_events_emits_insert_event_when_file_created() {
     kill_and_wait(child);
 }
 
+/// Staging a directory outside the root and renaming it into place is the
+/// standard atomic-publish pattern. inotify reports the move as a single
+/// event naming the directory, with no per-child events, so a live server has
+/// to walk the arriving subtree or its files never become rows.
+#[test]
+fn server_indexes_a_directory_moved_into_the_root() {
+    let root = blog_fixture();
+    let stage = TempDir::new().unwrap();
+    fs::create_dir(stage.path().join("carol")).unwrap();
+    fs::write(stage.path().join("carol/Third-Post.json"), "{}").unwrap();
+
+    let port = free_port();
+    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
+    wait_until_ready(port, Duration::from_secs(10));
+    // Let notify finish installing its recursive inotify watches before the
+    // rename; otherwise the move can land before the root is watched at all.
+    std::thread::sleep(Duration::from_millis(300));
+
+    fs::rename(stage.path().join("carol"), root.path().join("posts/carol")).unwrap();
+
+    let client = Client::new();
+    let url = format!("http://localhost:{port}/query");
+    let basenames = |client: &Client| -> Vec<String> {
+        let body: Value = client
+            .post(&url)
+            .json(&json!({"sql": "SELECT basename FROM posts ORDER BY basename"}))
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        body.as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r.get("basename").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect()
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline && !basenames(&client).iter().any(|b| b == "Third-Post.json") {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let rows = basenames(&client);
+    assert!(
+        rows.iter().any(|b| b == "Third-Post.json"),
+        "a directory moved into the root must index the files it brought; rows: {rows:?}"
+    );
+
+    kill_and_wait(child);
+}
+
 #[test]
 fn sigint_triggers_graceful_exit_zero() {
     let root = blog_fixture();

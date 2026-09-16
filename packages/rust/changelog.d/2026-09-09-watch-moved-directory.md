@@ -1,0 +1,3 @@
+**Fixed**
+
+- **A directory moved into the watched root now indexes the files it brought.** Staging a directory elsewhere and renaming it into place is the standard atomic-publish pattern, and the live watcher missed it entirely: the OS reports the move as one event naming the directory and none for the files already inside, so those files never became rows until a cold rescan. The watcher now walks a newly created directory (a rename-in or a `mkdir`) with the same scan the startup uses, so the rows appear as they would have on restart. The same walk closes the `mkdir`-then-write race where a file landed before the new directory was being watched. (#1096)
