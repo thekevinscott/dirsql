@@ -50,7 +50,7 @@ def describe_run():
         assert drive(runner=lambda argv, cwd: calls.append((argv, cwd)) or 0) == 0
         assert [argv[:2] for argv, _cwd in calls] == [
             *[["uv", "sync"], ["uv", "run"]],
-            *[["npx", "-y"], ["uv", "run"]],
+            *[["npx", "-y"], ["systemd-run", "--user"]],
         ]
         assert [cwd for _argv, cwd in calls] == [".", ".", ".", "packages/python"]
 
@@ -163,12 +163,12 @@ def describe_run():
     def it_says_nothing_about_the_cap_when_it_applies():
         lines = []
         drive(only=["mutation"], echo=lines.append)
-        assert UNCAPPED_NOTE not in lines
+        assert [line for line in lines if line.startswith("preflight: mutation")] == []
 
     def it_says_nothing_about_the_cap_when_no_mutation_pair_runs():
         lines = []
         drive(only=["unit-lint"], cap=UNCAPPED, echo=lines.append)
-        assert UNCAPPED_NOTE not in lines
+        assert [line for line in lines if line.startswith("preflight: mutation")] == []
 
     def it_prints_every_pair_without_running_any_when_dry_run():
         calls, lines = [], []

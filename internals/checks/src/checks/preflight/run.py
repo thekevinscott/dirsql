@@ -16,6 +16,7 @@ from collections.abc import Callable, Sequence
 
 from .invocation import Invocation, invocation
 from .matrix import GATES, pairs, parse_gate_matrix
+from .memory_cap import MemoryCap
 from .prepare import prepare
 
 
@@ -27,6 +28,7 @@ def run(
     exists: Callable[[str], bool],
     e2e_config: Callable[[str], dict],
     echo: Callable[[str], None],
+    cap: MemoryCap,
     only: Sequence[str] = (),
     dry_run: bool = False,
 ) -> int:
@@ -38,6 +40,7 @@ def run(
     roots = [root for text in workflows for root in parse_gate_matrix(text)]
     failures = []
     skipped = []
+    uncapped_noted = False
 
     def attempt(label: str, call: Invocation) -> None:
         echo(f"==> {label}: {' '.join(call.argv)}")
@@ -56,7 +59,13 @@ def run(
             skipped.append(label)
             echo(f"SKIP {label}: needs a built artifact, which CI builds from the manifest")
             continue
-        attempt(label, invocation(root, language, gate, base, exists, e2e_config(root.config)))
+        call = invocation(root, language, gate, base, exists, e2e_config(root.config))
+        if gate == "mutation":
+            if cap.skipped and not uncapped_noted:
+                echo(f"preflight: mutation runs uncapped: {cap.skipped}")
+                uncapped_noted = True
+            call = Invocation([*cap.prefix, *call.argv], call.cwd)
+        attempt(label, call)
     for label in failures:
         echo(f"FAIL {label}")
     echo(f"preflight: {len(failures)} failing pair(s), {len(skipped)} skipped")

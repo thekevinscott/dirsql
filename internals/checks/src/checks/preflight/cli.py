@@ -12,7 +12,9 @@ import os.path
 import click
 
 from .gate import default_runner, read_e2e
+from .host import detect_host
 from .matrix import NoGateMatrix, WORKFLOWS
+from .memory_cap import memory_cap
 from .run import run
 from .sources import sources
 
@@ -50,6 +52,7 @@ def cli(conventions: tuple[str, ...], base: str, gates: tuple[str, ...], dry_run
             exists=os.path.exists,
             e2e_config=read_e2e,
             echo=click.echo,
+            cap=memory_cap(detect_host()),
             only=gates,
             dry_run=dry_run,
         )
