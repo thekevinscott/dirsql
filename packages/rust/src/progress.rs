@@ -536,19 +536,25 @@ mod tests {
     }
 
     /// A shorter line must cover the tail of the longer one it replaces, or
-    /// the terminal keeps showing digits from the previous count.
+    /// the terminal keeps showing digits from the previous count. Clearing to
+    /// the full line width rather than to the previous draw's width also
+    /// covers whatever else shares the line -- a shell prompt, an editor's
+    /// status line -- instead of only what this reporter itself wrote.
     #[test]
-    fn a_shorter_line_is_padded_over_the_one_it_replaces() {
+    fn a_shorter_line_is_padded_to_the_full_line_width() {
         let (mut progress, sink, clock) = reporter(Mode::Always, false);
 
         progress.update(1000, Some(1000));
         clock.advance(REDRAW_INTERVAL);
         progress.update(1, None);
 
-        let long = "dirsql: indexing 1000/1000 files (100%)";
         let short = "dirsql: indexing 1 files";
-        let pad = " ".repeat(long.len() - short.len());
-        assert_eq!(sink.text(), format!("\r{long}\r{short}{pad}"));
+        let padded = format!("{short}{}", " ".repeat(80 - short.len()));
+        assert!(
+            sink.text().ends_with(&padded),
+            "the redraw clears the whole line, not just the previous draw's tail: {:?}",
+            sink.text()
+        );
     }
 
     /// A phase that never drew leaves no trace -- no erase, no summary.
