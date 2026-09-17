@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1789594907,
+  "exit_code": 0,
+  "commit": "c344049d9ce4cfba2b6125102342ca88d7a37fca",
+  "branch": "claude/1113-mutation-memory-cap"
+}

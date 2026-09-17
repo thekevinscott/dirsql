@@ -20,12 +20,26 @@ def has_manifest(path: str) -> bool:
     return path == "packages/python/pyproject.toml"
 
 
+class MemoryCap:
+    """Stand-in for `memory_cap.MemoryCap` -- a value record, faked rather than imported."""
+
+    def __init__(self, prefix, skipped=""):
+        self.prefix = prefix
+        self.skipped = skipped
+
+
+CAPPED = MemoryCap(["systemd-run", "--user", "--scope", "-p", "MemoryMax=1M", "-p", "MemorySwapMax=0"])
+UNCAPPED = MemoryCap([], "systemd-run is not on PATH")
+UNCAPPED_NOTE = "preflight: mutation runs uncapped: systemd-run is not on PATH"
+
+
 def drive(workflows=None, **kwargs):
     defaults = {
         "runner": lambda _argv, _cwd: 0,
         "exists": has_manifest,
         "e2e_config": lambda _config: {},
         "echo": lambda _line: None,
+        "cap": CAPPED,
     }
     return run(workflows or [CONVENTIONS], "origin/main", **{**defaults, **kwargs})
 
@@ -36,7 +50,7 @@ def describe_run():
         assert drive(runner=lambda argv, cwd: calls.append((argv, cwd)) or 0) == 0
         assert [argv[:2] for argv, _cwd in calls] == [
             *[["uv", "sync"], ["uv", "run"]],
-            *[["npx", "-y"], ["uv", "run"]],
+            *[["npx", "-y"], ["systemd-run", "--user"]],
         ]
         assert [cwd for _argv, cwd in calls] == [".", ".", ".", "packages/python"]
 
@@ -99,10 +113,72 @@ def describe_run():
         lines = []
         drive(only=["mutation"], runner=lambda _argv, _cwd: 0, echo=lines.append)
         assert [line for line in lines if line.startswith("==>")] == [
-            "==> python-sdk [python] mutation: uv run --with testing-conventions "
+            "==> python-sdk [python] mutation: "
+            "systemd-run --user --scope -p MemoryMax=1M -p MemorySwapMax=0 "
+            "uv run --with testing-conventions "
             "npx -y testing-conventions@latest unit mutation --language python "
             "--base origin/main dirsql"
         ]
+
+    def it_wraps_a_mutation_pair_in_the_capped_scope_keeping_its_cwd():
+        calls = []
+        drive(only=["mutation"], runner=lambda argv, cwd: calls.append((argv, cwd)) or 0)
+        assert calls == [
+            (
+                [
+                    *CAPPED.prefix,
+                    *["uv", "run", "--with", "testing-conventions"],
+                    *["npx", "-y", "testing-conventions@latest", "unit", "mutation"],
+                    *["--language", "python", "--base", "origin/main", "dirsql"],
+                ],
+                "packages/python",
+            )
+        ]
+
+    def it_leaves_every_other_gate_uncapped():
+        calls = []
+        drive(only=["unit-lint"], runner=lambda argv, _cwd: calls.append(argv) or 0)
+        assert [argv[0] for argv in calls] == ["npx"]
+
+    def it_leaves_a_gate_sorting_below_mutation_uncapped_too():
+        # An ordering comparison in place of equality would sweep these in.
+        calls = []
+        drive(
+            workflows=[CONVENTIONS.replace('"unit-lint"', '"colocated-test"')],
+            only=["colocated-test"],
+            runner=lambda argv, _cwd: calls.append(argv) or 0,
+        )
+        assert [argv[0] for argv in calls] == ["npx"]
+
+    def it_runs_mutation_bare_when_the_cap_is_skipped():
+        calls = []
+        drive(only=["mutation"], cap=UNCAPPED, runner=lambda argv, _cwd: calls.append(argv) or 0)
+        assert [argv[0] for argv in calls] == ["uv"]
+
+    def it_says_once_why_mutation_runs_uncapped_before_the_first_such_pair():
+        lines = []
+        drive(
+            workflows=[CONVENTIONS, CONVENTIONS.replace("python-sdk", "internals-checks")],
+            only=["mutation"],
+            cap=UNCAPPED,
+            echo=lines.append,
+        )
+        assert lines.count(UNCAPPED_NOTE) == 1
+        assert [line.split(": ")[0] for line in lines[:3]] == [
+            "preflight",
+            "==> python-sdk [python] mutation",
+            "==> internals-checks [python] mutation",
+        ]
+
+    def it_says_nothing_about_the_cap_when_it_applies():
+        lines = []
+        drive(only=["mutation"], echo=lines.append)
+        assert [line for line in lines if line.startswith("preflight: mutation")] == []
+
+    def it_says_nothing_about_the_cap_when_no_mutation_pair_runs():
+        lines = []
+        drive(only=["unit-lint"], cap=UNCAPPED, echo=lines.append)
+        assert [line for line in lines if line.startswith("preflight: mutation")] == []
 
     def it_prints_every_pair_without_running_any_when_dry_run():
         calls, lines = [], []
@@ -143,4 +219,5 @@ def describe_run():
             exists=has_manifest,
             e2e_config=lambda _config: {},
             echo=lambda _line: None,
+            cap=CAPPED,
         ) == 0

@@ -36,7 +36,8 @@ typescript through `npx` (only the npm CLI appends `--ts-mutation-adapter`), rus
 `colocated-test` takes no `--base`, `packaging` takes no `--config`, `e2e verify`
 takes neither and wants the package root with `--scope` plus the `[e2e]` table as
 flags. `packaging` is reported **SKIP**: it inspects a built artifact, so use
-`just test-packaging`.
+`just test-packaging`. Every `mutation` pair runs inside a memory-capped cgroup
+scope (see *Mutation* below).
 
 **Exemptions.** The goal is **zero** exemptions, and barrels are no longer an excuse for one. A re-export barrel gets a **colocated test that asserts its public surface** (TS `src/index.ts` ↔ `index.test.ts`, python `dirsql/__init__.py` ↔ `__init___test.py`), exactly as any module would -- it is *tested*, not exempted, so a broken re-export is caught. An `__init__.py` carrying no executable logic is made **truly empty** (0 bytes), which the tool auto-skips with no config entry. A package shell left dead by a feature removal is **deleted**, not parked behind an exemption. When a "barrel" actually holds logic, the fix remains to **extract that logic into colocated-tested modules** (#239). The npm `bin` shim `src/cli/dirsql.ts` is likewise *not* exempt: its error-handling lives in the unit-tested `cli/run-cli.ts`, leaving a trivial `runCli()` shim covered by a mocked distcheck-test.
 
@@ -59,6 +60,14 @@ npx -y testing-conventions unit mutation --language typescript --base origin/mai
 # from repo root (the tool provisions cargo-mutants itself)
 npx -y testing-conventions unit mutation --language rust --base origin/main packages/rust
 ```
+
+**Preflight boxes the gate in; the by-hand commands above do not.** A mutant that allocates without bound is ordinary engine output (an infinite cursor turns a bounded row collection into an unbounded one), and the engines cap wall time, not memory -- left alone, the global OOM killer picks the biggest process on the box and takes the filesystem, the tailnet and `systemd-oomd` down with it. So `just preflight` wraps every `mutation` pair (python, typescript, rust and the repo-tooling lanes alike) in its own cgroup scope:
+
+```bash
+systemd-run --user --scope -p MemoryMax=<half of MemTotal> -p MemorySwapMax=0 <invocation>
+```
+
+The kernel kills only that scope, the engine records the killed mutant as caught, and `MemorySwapMax=0` stops a runaway from paging out everyone else's working set on the way to the limit. The cap is read off `/proc/meminfo` at run time, half of MemTotal (about 23 GiB on a 48 GiB host -- 8 GiB is too small to clear the unmutated baseline build plus `rust-lld`); there is no knob. `just preflight --dry-run --gate mutation` prints the wrapped commands. Without `systemd-run` on PATH (macOS, non-systemd Linux) the gate runs uncapped and preflight prints one line saying so (`preflight: mutation runs uncapped: systemd-run is not on PATH`); running the hand commands above uncapped on a shared machine is the failure the wrap exists to prevent, so prefix them the same way. `--user` needs the memory controller delegated to the user slice (`cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.subtree_control` lists `memory`), which is the default on current systemd.
 
 **The python arm must run inside the package venv, and fails confusingly when it does not** (#706). cosmic-ray's test-command is a bare `python3 -m pytest`, resolved off `PATH`. Run the gate through a wrapper that does not put `packages/python/.venv/bin` first -- `uvx testing-conventions ...`, or any shell without the venv activated -- and that `python3` is the tool's own interpreter, which answers `No module named pytest` (and, where pytest does exist, still lacks `pytest-describe` and the built extension). cosmic-ray judges the *unmutated* baseline as failing and the adapter aborts:
 

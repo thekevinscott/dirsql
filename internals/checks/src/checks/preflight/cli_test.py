@@ -1,13 +1,14 @@
 """Colocated unit tests for the preflight command (isolation -- no `CliRunner`).
 
-Driven through `.callback`; `sources` and `run` are mocked at their import site.
+Driven through `.callback`; `sources`, `run` and the memory-cap seams are mocked
+at their import site.
 """
 
 from unittest import mock
 
 import pytest
 
-from checks.preflight.cli import cli, run, sources
+from checks.preflight.cli import cli, detect_host, memory_cap, run, sources
 
 WORKFLOWS = [(".github/workflows/a-ci.yml", "jobs: {}"), (".github/workflows/b-ci.yml", "jobs: {}")]
 
@@ -20,9 +21,15 @@ class NoGateMatrix(Exception):
     """
 
 
+HOST = mock.sentinel.host
+CAP = mock.sentinel.cap
+
+
 def invoke(conventions=(), gates=(), dry_run=False, resolve=None, **kwargs):
     with (
         mock.patch("checks.preflight.cli.NoGateMatrix", NoGateMatrix),
+        mock.patch("checks.preflight.cli.detect_host", return_value=HOST),
+        mock.patch("checks.preflight.cli.memory_cap", return_value=CAP) as memory_cap,
         mock.patch(
             "checks.preflight.cli.sources", resolve or mock.Mock(return_value=WORKFLOWS)
         ) as sources,
@@ -36,6 +43,7 @@ def invoke(conventions=(), gates=(), dry_run=False, resolve=None, **kwargs):
                 gates=gates,
                 dry_run=dry_run,
             )
+    run.memory_cap = memory_cap
     return sources, run, echo, exc_info.value.code
 
 
@@ -77,6 +85,12 @@ def test_forwards_the_gate_filter_and_dry_run_flag():
     assert run.call_args.kwargs["dry_run"] is True
 
 
+def test_hands_run_the_memory_cap_decided_from_the_probed_host():
+    _sources, run, _echo, _code = invoke(return_value=0)
+    run.memory_cap.assert_called_once_with(HOST)
+    assert run.call_args.kwargs["cap"] is CAP
+
+
 def test_defaults_to_discovering_the_workflows_and_main():
     # Parsed rather than read off the params: the effective default for
     # `--conventions` is what #973 turned into a crash, and an empty one is what
@@ -94,4 +108,11 @@ def test_binds_the_resolver_and_the_runner_from_their_own_modules():
     assert (sources.__module__, run.__module__) == (
         "checks.preflight.sources",
         "checks.preflight.run",
+    )
+
+
+def test_binds_the_host_probe_and_the_cap_from_their_own_modules():
+    assert (detect_host.__module__, memory_cap.__module__) == (
+        "checks.preflight.host",
+        "checks.preflight.memory_cap",
     )
