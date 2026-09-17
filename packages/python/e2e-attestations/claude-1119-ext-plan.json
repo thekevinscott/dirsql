@@ -1,7 +1,7 @@
 {
   "command": "just test-e2e",
-  "ran_at": 1789671704,
+  "ran_at": 1789672718,
   "exit_code": 0,
-  "commit": "c44a62e32fbd592a9e6491de989f9f337f9fadaa",
+  "commit": "9f049fb0a4012807ce2b31c220df75b0b33e88e1",
   "branch": "claude/1119-ext-plan"
 }
