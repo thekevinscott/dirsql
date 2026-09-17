@@ -215,6 +215,26 @@ function httpQuery(port: number, sql: string): Promise<unknown[]> {
   });
 }
 
+interface LauncherResult {
+  code: number | null;
+  stderr: string;
+}
+
+function runLauncher(args: string[]): Promise<LauncherResult> {
+  return new Promise((resolve) => {
+    const proc = spawn(process.execPath, [LAUNCHER, ...args], {
+      stdio: "pipe",
+      env: { ...process.env, PATH: `${SHIM_DIR}:${process.env.PATH ?? ""}` },
+    });
+    let stderr = "";
+    proc.stderr?.setEncoding("utf8");
+    proc.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    proc.on("close", (code) => resolve({ code, stderr }));
+  });
+}
+
 async function runServerAndQuery(configPath: string): Promise<unknown[]> {
   const port = await freePort();
   // Drive the real Node launcher (not the binary directly): the launcher is
@@ -271,5 +291,47 @@ describe("dirsql CLI --config: extension by package name (#299)", () => {
     );
     const rows = await runServerAndQuery(join(dir, ".dirsql.toml"));
     expect(rows).toEqual([{ a: 42 }]);
+  }, 30_000);
+});
+
+describe("dirsql CLI --config: extension package with no loadable file", () => {
+  const emptyPkg = "dirsql-testext-empty-pkg";
+  const emptyPkgDir = join(PKG_ROOT, "node_modules", emptyPkg);
+
+  beforeAll(async () => {
+    await mkdir(emptyPkgDir, { recursive: true });
+    await writeFile(
+      join(emptyPkgDir, "package.json"),
+      JSON.stringify({ name: emptyPkg, version: "0.0.0" }),
+    );
+    await writeFile(join(emptyPkgDir, "README.md"), "no loadable here\n");
+  });
+
+  afterAll(async () => {
+    await rm(emptyPkgDir, { recursive: true, force: true });
+  });
+
+  it("reports the searched suffixes as glob patterns", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dirsql-ext-empty-"));
+    await writeFile(join(dir, "a.txt"), "x");
+    const configPath = join(dir, ".dirsql.toml");
+    await writeFile(
+      configPath,
+      `[[dirsql.extension]]\npath = "${emptyPkg}"\n\n[[table]]\nname = "files"\nddl = "CREATE TABLE files (path TEXT)"\nglob = "*.txt"\non-file = "cat {path}"\n`,
+    );
+
+    const { code, stderr } = await runLauncher([
+      "query",
+      "SELECT 1",
+      "--config",
+      configPath,
+    ]);
+
+    expect(code).not.toBe(0);
+    expect(stderr).toMatch(
+      new RegExp(
+        `no loadable extension file \\(\\*\\.[a-z]+( / \\*\\.[a-z]+)*\\) found in package '${emptyPkg}'`,
+      ),
+    );
   }, 30_000);
 });
