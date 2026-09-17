@@ -12,12 +12,13 @@
 
 #[cfg(feature = "extension-module")]
 mod python {
+    use ::dirsql::extension_resolution::{self, ConfigSource, PlanEntry};
     use ::dirsql::{DirSQL, Extension, Row, RowEvent, Table, Value};
-    use pyo3::exceptions::{PyOverflowError, PyRuntimeError};
+    use pyo3::exceptions::{PyOverflowError, PyRuntimeError, PyValueError};
     use pyo3::prelude::*;
     use pyo3::types::{PyBool, PyByteArray, PyBytes, PyDict, PyInt, PyList};
     use std::collections::HashMap;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
 
     /// A table definition. Mirrors `dirsql::Table` but holds a Python
@@ -469,6 +470,115 @@ mod python {
         dirsql::launcher::config_paths_from_argv(&argv)
     }
 
+    /// The loadable-file suffixes a CPython host recognizes.
+    const PY_SUFFIXES: &[&str] = &[".so", ".dylib", ".dll", ".pyd"];
+
+    /// The subset this platform actually builds, used when picking a
+    /// package's loadable out of everything installed beside it.
+    #[cfg(target_os = "macos")]
+    const PLATFORM_SUFFIXES: &[&str] = &[".dylib"];
+    #[cfg(target_os = "windows")]
+    const PLATFORM_SUFFIXES: &[&str] = &[".dll", ".pyd"];
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    const PLATFORM_SUFFIXES: &[&str] = &[".so"];
+
+    /// One planned `[[dirsql.extension]]` entry.
+    ///
+    /// Exactly one of `path` and `package` is set: a `path` is ready to load,
+    /// a `package` must be located with `importlib` first — unless `shadow`
+    /// names an existing file, which takes precedence over the package.
+    #[pyclass(name = "ExtensionPlanEntry", frozen)]
+    struct PyExtensionPlanEntry {
+        #[pyo3(get)]
+        path: Option<String>,
+        #[pyo3(get)]
+        package: Option<String>,
+        #[pyo3(get)]
+        shadow: Option<String>,
+        #[pyo3(get)]
+        entrypoint: Option<String>,
+    }
+
+    #[pymethods]
+    impl PyExtensionPlanEntry {
+        fn __repr__(&self) -> String {
+            format!(
+                "ExtensionPlanEntry(path={:?}, package={:?}, shadow={:?}, entrypoint={:?})",
+                self.path, self.package, self.shadow, self.entrypoint
+            )
+        }
+    }
+
+    fn plan_entry_to_py(entry: PlanEntry) -> PyExtensionPlanEntry {
+        match entry {
+            PlanEntry::Literal { path, entrypoint } => PyExtensionPlanEntry {
+                path: Some(display(&path)),
+                package: None,
+                shadow: None,
+                entrypoint,
+            },
+            PlanEntry::Package {
+                name,
+                shadow,
+                entrypoint,
+            } => PyExtensionPlanEntry {
+                path: None,
+                package: Some(name),
+                shadow: Some(display(&shadow)),
+                entrypoint,
+            },
+        }
+    }
+
+    fn display(path: &Path) -> String {
+        path.to_string_lossy().into_owned()
+    }
+
+    /// Plan several configs' `[[dirsql.extension]]` entries.
+    ///
+    /// `configs` pairs each config's absolute path with its contents, or
+    /// `None` when the launcher could not read it. `None` back means no entry
+    /// names a package, so the core's own config loading handles them all.
+    #[pyfunction]
+    fn plan_config_extensions(
+        configs: Vec<(String, Option<String>)>,
+    ) -> Option<Vec<PyExtensionPlanEntry>> {
+        let sources: Vec<ConfigSource<'_>> = configs
+            .iter()
+            .map(|(path, contents)| ConfigSource {
+                path: Path::new(path),
+                contents: contents.as_deref(),
+            })
+            .collect();
+        let plan = extension_resolution::plan_config_extensions(&sources, PY_SUFFIXES)?;
+        Some(plan.into_iter().map(plan_entry_to_py).collect())
+    }
+
+    /// Pick package `name`'s single loadable file out of `candidates`.
+    #[pyfunction]
+    fn select_loadable(name: &str, dirs: Vec<String>, candidates: Vec<String>) -> PyResult<String> {
+        selected_loadable(name, dirs, candidates).map_err(PyValueError::new_err)
+    }
+
+    /// The interpreter-free half of [`select_loadable`], so it stays unit-testable.
+    fn selected_loadable(
+        name: &str,
+        dirs: Vec<String>,
+        candidates: Vec<String>,
+    ) -> Result<String, String> {
+        let dirs: Vec<PathBuf> = dirs.into_iter().map(PathBuf::from).collect();
+        let candidates: Vec<PathBuf> = candidates.into_iter().map(PathBuf::from).collect();
+        extension_resolution::select_loadable(name, &dirs, &candidates, PLATFORM_SUFFIXES)
+            .map(|path| display(&path))
+            .map_err(|err| err.to_string())
+    }
+
+    /// Whether an extension entry names a package rather than a file.
+    #[pyfunction]
+    fn is_bare_name(path: &str) -> bool {
+        extension_resolution::is_bare_name(path, PY_SUFFIXES)
+    }
+
     #[pymodule]
     #[pyo3(name = "_dirsql")]
     fn py_dirsql_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -479,6 +589,10 @@ mod python {
         m.add_class::<PyScanFailure>()?;
         m.add_function(wrap_pyfunction!(run_cli, m)?)?;
         m.add_function(wrap_pyfunction!(config_paths_from_argv, m)?)?;
+        m.add_function(wrap_pyfunction!(plan_config_extensions, m)?)?;
+        m.add_function(wrap_pyfunction!(select_loadable, m)?)?;
+        m.add_function(wrap_pyfunction!(is_bare_name, m)?)?;
+        m.add_class::<PyExtensionPlanEntry>()?;
         Ok(())
     }
 
@@ -559,6 +673,101 @@ mod python {
         #[test]
         fn on_file_error_displays_inner() {
             assert_eq!(OnFileError("bad".to_string()).to_string(), "bad");
+        }
+
+        #[test]
+        fn planning_returns_none_when_no_entry_names_a_package() {
+            let plan = plan_config_extensions(vec![(
+                "/cfg/.dirsql.toml".into(),
+                Some("[[dirsql.extension]]\npath = \"vec0.so\"\n".into()),
+            )]);
+            assert!(plan.is_none());
+        }
+
+        #[test]
+        fn planning_marshals_a_literal_against_its_own_config_directory() {
+            let plan = plan_config_extensions(vec![(
+                "/cfg/.dirsql.toml".into(),
+                Some(
+                    "[[dirsql.extension]]\npath = \"ext/vec0.so\"\nentrypoint = \"init\"\n\n[[dirsql.extension]]\npath = \"sqlite_vec\"\n"
+                        .into(),
+                ),
+            )])
+            .expect("a bare name makes the SDK intervene");
+
+            assert_eq!(plan[0].path.as_deref(), Some("/cfg/ext/vec0.so"));
+            assert_eq!(plan[0].package, None);
+            assert_eq!(plan[0].shadow, None);
+            assert_eq!(plan[0].entrypoint.as_deref(), Some("init"));
+        }
+
+        #[test]
+        fn planning_marshals_a_package_with_its_shadow_probe() {
+            let plan = plan_config_extensions(vec![(
+                "/cfg/.dirsql.toml".into(),
+                Some("[[dirsql.extension]]\npath = \"sqlite_vec\"\n".into()),
+            )])
+            .expect("a bare name makes the SDK intervene");
+
+            assert_eq!(plan[0].path, None);
+            assert_eq!(plan[0].package.as_deref(), Some("sqlite_vec"));
+            assert_eq!(plan[0].shadow.as_deref(), Some("/cfg/sqlite_vec"));
+            assert_eq!(plan[0].entrypoint, None);
+        }
+
+        #[test]
+        fn an_unreadable_config_is_skipped_rather_than_reported() {
+            assert!(plan_config_extensions(vec![("/cfg/.dirsql.toml".into(), None)]).is_none());
+        }
+
+        #[test]
+        fn plan_entry_repr_names_every_field() {
+            let entry = plan_entry_to_py(PlanEntry::Package {
+                name: "vec".into(),
+                shadow: "/cfg/vec".into(),
+                entrypoint: Some("init".into()),
+            });
+            assert_eq!(
+                entry.__repr__(),
+                "ExtensionPlanEntry(path=None, package=Some(\"vec\"), shadow=Some(\"/cfg/vec\"), entrypoint=Some(\"init\"))"
+            );
+        }
+
+        #[cfg(target_os = "macos")]
+        const EXPECTED_PATTERNS: &str = "*.dylib";
+        #[cfg(target_os = "windows")]
+        const EXPECTED_PATTERNS: &str = "*.dll / *.pyd";
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        const EXPECTED_PATTERNS: &str = "*.so";
+
+        #[test]
+        fn select_loadable_returns_the_single_match() {
+            let found = selected_loadable(
+                "vec",
+                vec!["/pkg".into()],
+                vec!["/pkg/__init__.py".into(), "/pkg/vec0.so".into()],
+            );
+            assert_eq!(found, Ok("/pkg/vec0.so".to_string()));
+        }
+
+        #[test]
+        fn select_loadable_carries_the_cores_message_verbatim() {
+            let err = selected_loadable("vec", vec!["/pkg".into()], vec![])
+                .expect_err("no loadable file");
+            assert_eq!(
+                err,
+                format!(
+                    "no loadable extension file ({EXPECTED_PATTERNS}) found in package 'vec' (searched /pkg)"
+                )
+            );
+        }
+
+        #[test]
+        fn is_bare_name_applies_the_cpython_suffix_list() {
+            assert!(is_bare_name("sqlite_vec"));
+            assert!(!is_bare_name("vec0.pyd"));
+            assert!(is_bare_name("vec0.node"));
+            assert!(!is_bare_name("ext/vec0"));
         }
 
         #[test]

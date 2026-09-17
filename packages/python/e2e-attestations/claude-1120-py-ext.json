@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1789678578,
+  "exit_code": 0,
+  "commit": "98c2126ee5ab39e608a0ad9805b223f96f576a65",
+  "branch": "claude/1120-py-ext"
+}

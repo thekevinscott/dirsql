@@ -1,8 +1,8 @@
 """Unit tests for `_resolve_package`.
 
-Every collaborator -- `importlib.util.find_spec`, the loadable glob
-(`glob.glob`) and the platform pattern table -- is mocked, so these isolate the
-package-location logic from any installed package or disk.
+Every collaborator -- `importlib.util.find_spec`, the candidate walk
+(`glob.glob`) and the core's `select_loadable` -- is mocked, so these isolate
+the package-location logic from any installed package or disk.
 """
 
 import types
@@ -17,7 +17,7 @@ def _spec(*, locations=None, origin=None):
     return types.SimpleNamespace(submodule_search_locations=locations, origin=origin)
 
 
-def _resolving(*, spec=None, find_spec_error=None, patterns=("*.so",), glob=None):
+def _resolving(*, spec=None, find_spec_error=None, glob=None, selected="/site/x/y.so"):
     find_spec = (
         mock.patch.object(mod.importlib.util, "find_spec", side_effect=find_spec_error)
         if find_spec_error
@@ -25,152 +25,93 @@ def _resolving(*, spec=None, find_spec_error=None, patterns=("*.so",), glob=None
     )
     return (
         find_spec,
-        mock.patch.object(mod, "_platform_patterns", return_value=patterns),
-        mock.patch.object(mod._glob, "glob", **(glob or {})),
+        mock.patch.object(mod, "select_loadable", return_value=selected),
+        mock.patch.object(mod._glob, "glob", **(glob or {"return_value": []})),
     )
 
 
 def describe_locating_the_package_directory():
-    def it_globs_the_platform_loadable_inside_the_package_dir():
-        find_spec, patterns, globbing = _resolving(
+    def it_hands_the_core_every_file_under_the_package_dir():
+        find_spec, selecting, globbing = _resolving(
             spec=_spec(locations=["/site/sqlite_vec"]),
-            glob={"return_value": ["/site/sqlite_vec/vec0.so"]},
+            glob={
+                "return_value": [
+                    "/site/sqlite_vec/__init__.py",
+                    "/site/sqlite_vec/vec0.so",
+                ]
+            },
+            selected="/site/sqlite_vec/vec0.so",
         )
-        with find_spec, patterns, globbing as glob:
+        with find_spec, selecting as select, globbing as glob:
             assert mod._resolve_package("sqlite_vec") == "/site/sqlite_vec/vec0.so"
-        glob.assert_called_once_with("/site/sqlite_vec/**/*.so", recursive=True)
+        glob.assert_called_once_with("/site/sqlite_vec/**/*", recursive=True)
+        select.assert_called_once_with(
+            "sqlite_vec",
+            ["/site/sqlite_vec"],
+            ["/site/sqlite_vec/__init__.py", "/site/sqlite_vec/vec0.so"],
+        )
 
     def it_falls_back_to_origin_dir_for_a_single_file_module():
-        find_spec, patterns, globbing = _resolving(
+        find_spec, selecting, globbing = _resolving(
             spec=_spec(origin="/site/sqlite_vec/__init__.py"),
             glob={"return_value": ["/site/sqlite_vec/vec0.so"]},
+            selected="/site/sqlite_vec/vec0.so",
         )
-        with find_spec, patterns, globbing as glob:
+        with find_spec, selecting as select, globbing:
             assert mod._resolve_package("sqlite_vec") == "/site/sqlite_vec/vec0.so"
-        glob.assert_called_once_with("/site/sqlite_vec/**/*.so", recursive=True)
+        assert select.call_args.args[1] == ["/site/sqlite_vec"]
 
-    def it_globs_every_pattern_the_platform_declares():
-        find_spec, patterns, globbing = _resolving(
-            spec=_spec(locations=["/site/x"]),
-            patterns=("*.dll", "*.pyd"),
-            glob={"side_effect": [["/site/x/y.dll"], []]},
-        )
-        with find_spec, patterns, globbing as glob:
-            assert mod._resolve_package("x") == "/site/x/y.dll"
-        assert [c.args[0] for c in glob.call_args_list] == [
-            "/site/x/**/*.dll",
-            "/site/x/**/*.pyd",
-        ]
-
-    def it_globs_every_declared_package_directory():
-        find_spec, patterns, globbing = _resolving(
+    def it_accumulates_candidates_across_every_package_dir():
+        find_spec, selecting, globbing = _resolving(
             spec=_spec(locations=["/site/a", "/site/b"]),
-            glob={"side_effect": [[], ["/site/b/y.so"]]},
+            glob={"side_effect": [["/site/a/x.py"], ["/site/b/y.so"]]},
+            selected="/site/b/y.so",
         )
-        with find_spec, patterns, globbing as glob:
+        with find_spec, selecting as select, globbing:
             assert mod._resolve_package("x") == "/site/b/y.so"
-        assert [c.args[0] for c in glob.call_args_list] == [
-            "/site/a/**/*.so",
-            "/site/b/**/*.so",
-        ]
+        select.assert_called_once_with(
+            "x", ["/site/a", "/site/b"], ["/site/a/x.py", "/site/b/y.so"]
+        )
 
 
-def describe_unresolvable_packages():
-    def it_errors_when_the_package_is_not_installed():
-        find_spec, patterns, globbing = _resolving(spec=None)
-        with (
-            find_spec,
-            patterns,
-            globbing,
-            pytest.raises(
-                ValueError,
-                match=r"could not resolve extension package 'nope': not installed",
-            ),
-        ):
+def describe_rejecting_an_unresolvable_package():
+    def it_wraps_a_find_spec_import_error():
+        find_spec, selecting, globbing = _resolving(find_spec_error=ImportError("boom"))
+        with find_spec, selecting, globbing, pytest.raises(ValueError) as excinfo:
             mod._resolve_package("nope")
-
-    def it_wraps_a_find_spec_error():
-        find_spec, patterns, globbing = _resolving(find_spec_error=ImportError("boom"))
-        with (
-            find_spec,
-            patterns,
-            globbing,
-            pytest.raises(
-                ValueError, match=r"could not resolve extension package 'nope': boom"
-            ),
-        ):
-            mod._resolve_package("nope")
+        assert "could not resolve extension package 'nope': boom" in str(excinfo.value)
 
     def it_wraps_a_find_spec_value_error():
-        find_spec, patterns, globbing = _resolving(find_spec_error=ValueError("bad"))
-        with (
-            find_spec,
-            patterns,
-            globbing,
-            pytest.raises(
-                ValueError, match=r"could not resolve extension package 'nope': bad"
-            ),
-        ):
+        find_spec, selecting, globbing = _resolving(find_spec_error=ValueError("bad"))
+        with find_spec, selecting, globbing, pytest.raises(ValueError) as excinfo:
             mod._resolve_package("nope")
+        assert "could not resolve extension package 'nope': bad" in str(excinfo.value)
 
-    def it_errors_when_the_spec_has_no_package_directory():
-        # A namespace-less builtin/frozen module, and one with no origin at
-        # all, are equally unresolvable -- neither names a directory to glob.
-        for origin in ("built-in", "frozen", None):
-            find_spec, patterns, globbing = _resolving(spec=_spec(origin=origin))
-            with (
-                find_spec,
-                patterns,
-                globbing,
-                pytest.raises(
-                    ValueError,
-                    match=(
-                        r"could not resolve extension package 'nope': "
-                        r"no package directory"
-                    ),
-                ),
-            ):
-                mod._resolve_package("nope")
+    def it_reports_a_package_that_is_not_installed():
+        find_spec, selecting, globbing = _resolving(spec=None)
+        with find_spec, selecting, globbing, pytest.raises(ValueError) as excinfo:
+            mod._resolve_package("nope")
+        assert "not installed" in str(excinfo.value)
+
+    def it_reports_a_spec_with_no_package_directory():
+        find_spec, selecting, globbing = _resolving(spec=_spec(origin="built-in"))
+        with find_spec, selecting, globbing, pytest.raises(ValueError) as excinfo:
+            mod._resolve_package("nope")
+        assert "no package directory" in str(excinfo.value)
+
+    def it_reports_a_spec_with_a_frozen_origin():
+        find_spec, selecting, globbing = _resolving(spec=_spec(origin="frozen"))
+        with find_spec, selecting, globbing, pytest.raises(ValueError) as excinfo:
+            mod._resolve_package("nope")
+        assert "no package directory" in str(excinfo.value)
+
+    def it_reports_a_spec_with_no_origin_at_all():
+        find_spec, selecting, globbing = _resolving(spec=_spec())
+        with find_spec, selecting, globbing, pytest.raises(ValueError) as excinfo:
+            mod._resolve_package("nope")
+        assert "no package directory" in str(excinfo.value)
 
 
-def describe_ambiguous_matches():
-    def it_errors_when_no_loadable_file_is_found():
-        find_spec, patterns, globbing = _resolving(
-            spec=_spec(locations=["/site/x"]),
-            patterns=("*.dll", "*.pyd"),
-            glob={"return_value": []},
-        )
-        with (
-            find_spec,
-            patterns,
-            globbing,
-            pytest.raises(
-                ValueError,
-                match=(
-                    r"no loadable extension file \(\*\.dll / \*\.pyd\) found in "
-                    r"package 'x' \(searched /site/x\)"
-                ),
-            ),
-        ):
-            mod._resolve_package("x")
-
-    def it_errors_when_multiple_loadable_files_are_found():
-        # The listing is sorted, so the message is stable whatever order the
-        # globs returned the matches in.
-        find_spec, patterns, globbing = _resolving(
-            spec=_spec(locations=["/site/x"]),
-            glob={"return_value": ["/site/x/b.so", "/site/x/a.so"]},
-        )
-        with (
-            find_spec,
-            patterns,
-            globbing,
-            pytest.raises(
-                ValueError,
-                match=(
-                    r"multiple loadable extension files found in package 'x': "
-                    r"/site/x/a\.so, /site/x/b\.so; disambiguate with a literal path"
-                ),
-            ),
-        ):
-            mod._resolve_package("x")
+def describe_module_wiring():
+    def it_selects_through_the_native_core():
+        assert mod.select_loadable.__module__ in (None, "dirsql._dirsql")
