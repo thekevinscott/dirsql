@@ -13,15 +13,20 @@
 
 #![cfg(feature = "cli")]
 
+#[path = "common/server.rs"]
+mod server;
+
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
-use std::process::{Child, Command as StdCommand, Stdio};
+use std::process::Child;
 use std::time::{Duration, Instant};
 
 use assert_cmd::prelude::*;
 use reqwest::{StatusCode, blocking::Client};
 use serde_json::{Value, json};
+use server::ServerGuard;
 use tempfile::TempDir;
 
 /// Write a two-post blog fixture into a fresh tempdir and return it.
@@ -80,41 +85,19 @@ fn free_port() -> u16 {
         .port()
 }
 
-/// Spawn `dirsql` as a subprocess bound to `--port <port>` in `dir`.
-/// The child inherits stderr so failures surface in test output.
-fn spawn_dirsql(dir: &std::path::Path, port: u16) -> Child {
-    let mut cmd: StdCommand = std::process::Command::cargo_bin("dirsql")
-        .expect("`dirsql` binary must be built by `cargo test` with --features cli");
-    // #662: the HTTP server moved behind the `server` subcommand; `--host` /
-    // `--port` are now server-local flags.
-    cmd.arg("server")
-        .arg("--port")
-        .arg(port.to_string())
-        .arg("--host")
-        .arg("localhost")
-        .current_dir(dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
-    cmd.spawn().expect("spawning dirsql failed")
+/// Spawn `dirsql server` bound to `--port <port>` in `dir`.
+fn spawn_dirsql(dir: &std::path::Path, port: u16) -> ServerGuard {
+    spawn_dirsql_with_args::<&str>(dir, port, &[])
 }
 
 /// Spawn `dirsql server` bound to `--port <port>` in `dir` with `extra` args
-/// appended (e.g. `--persist`). Mirrors [`spawn_dirsql`] otherwise.
-fn spawn_dirsql_with_args(dir: &std::path::Path, port: u16, extra: &[&str]) -> Child {
-    let mut cmd: StdCommand = std::process::Command::cargo_bin("dirsql")
-        .expect("`dirsql` binary must be built by `cargo test` with --features cli");
-    cmd.arg("server")
-        .arg("--port")
-        .arg(port.to_string())
-        .arg("--host")
-        .arg("localhost");
-    for a in extra {
-        cmd.arg(a);
-    }
-    cmd.current_dir(dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
-    cmd.spawn().expect("spawning dirsql failed")
+/// appended (e.g. `--persist`).
+fn spawn_dirsql_with_args<S: AsRef<OsStr>>(
+    dir: &std::path::Path,
+    port: u16,
+    extra: &[S],
+) -> ServerGuard {
+    server::spawn_server(dir, port, extra)
 }
 
 /// Block until the server answers `GET /query` (or times out).
@@ -135,7 +118,7 @@ fn wait_until_ready(port: u16, timeout: Duration) {
     panic!("dirsql server did not become ready on port {port} within {timeout:?}");
 }
 
-fn kill_and_wait(mut child: Child) {
+fn kill_and_wait(mut child: ServerGuard) {
     // Prefer polite shutdown; fall back to kill if the child hangs.
     #[cfg(unix)]
     {
@@ -1382,19 +1365,9 @@ on-file = "printf '[{}]'"
     .unwrap();
 
     let port = free_port();
-    let mut cmd: StdCommand =
-        std::process::Command::cargo_bin("dirsql").expect("binary must exist");
-    cmd.arg("server")
-        .arg("--port")
-        .arg(port.to_string())
-        .arg("--host")
-        .arg("localhost")
-        .arg("--config")
-        .arg(elsewhere.path().join(".dirsql.toml"))
-        .current_dir(cwd.path())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
-    let child = cmd.spawn().expect("spawn");
+    let config = elsewhere.path().join(".dirsql.toml");
+    let child =
+        spawn_dirsql_with_args(cwd.path(), port, &["--config".as_ref(), config.as_os_str()]);
     wait_until_ready(port, Duration::from_secs(10));
 
     let resp = Client::new()
@@ -1421,19 +1394,12 @@ fn explicit_config_flag_loads_the_named_config() {
     let elsewhere = TempDir::new().unwrap();
 
     let port = free_port();
-    let mut cmd: StdCommand =
-        std::process::Command::cargo_bin("dirsql").expect("binary must exist");
-    cmd.arg("server")
-        .arg("--port")
-        .arg(port.to_string())
-        .arg("--host")
-        .arg("localhost")
-        .arg("--config")
-        .arg(fixture.path().join(".dirsql.toml"))
-        .current_dir(elsewhere.path())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
-    let child = cmd.spawn().expect("spawn");
+    let config = fixture.path().join(".dirsql.toml");
+    let child = spawn_dirsql_with_args(
+        elsewhere.path(),
+        port,
+        &["--config".as_ref(), config.as_os_str()],
+    );
     wait_until_ready(port, Duration::from_secs(10));
 
     let resp = Client::new()
@@ -1453,19 +1419,9 @@ fn short_config_flag_loads_the_named_config() {
     let elsewhere = TempDir::new().unwrap();
 
     let port = free_port();
-    let mut cmd: StdCommand =
-        std::process::Command::cargo_bin("dirsql").expect("binary must exist");
-    cmd.arg("server")
-        .arg("--port")
-        .arg(port.to_string())
-        .arg("--host")
-        .arg("localhost")
-        .arg("-c")
-        .arg(fixture.path().join(".dirsql.toml"))
-        .current_dir(elsewhere.path())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
-    let child = cmd.spawn().expect("spawn");
+    let config = fixture.path().join(".dirsql.toml");
+    let child =
+        spawn_dirsql_with_args(elsewhere.path(), port, &["-c".as_ref(), config.as_os_str()]);
     wait_until_ready(port, Duration::from_secs(10));
 
     let resp = Client::new()

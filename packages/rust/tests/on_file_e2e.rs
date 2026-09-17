@@ -10,14 +10,16 @@
 
 #![cfg(all(feature = "cli", unix))]
 
+#[path = "common/server.rs"]
+mod server;
+
 use std::fs;
 use std::net::TcpListener;
-use std::process::{Child, Command as StdCommand, Stdio};
 use std::time::{Duration, Instant};
 
-use assert_cmd::prelude::*;
 use reqwest::{StatusCode, blocking::Client};
 use serde_json::{Value, json};
+use server::ServerGuard;
 use tempfile::TempDir;
 
 fn free_port() -> u16 {
@@ -28,7 +30,7 @@ fn free_port() -> u16 {
         .port()
 }
 
-fn spawn_dirsql(dir: &std::path::Path, port: u16) -> Child {
+fn spawn_dirsql(dir: &std::path::Path, port: u16) -> ServerGuard {
     // Bare `dirsql` no longer auto-loads a cwd `.dirsql.toml` (#602); these
     // fixtures place their config at the index root, so pass it explicitly.
     let config = dir.join(".dirsql.toml");
@@ -37,22 +39,15 @@ fn spawn_dirsql(dir: &std::path::Path, port: u16) -> Child {
 
 /// Spawn `dirsql` from working directory `cwd`, optionally pointing `--config`
 /// at a config file elsewhere (so the config dir can differ from the cwd).
-fn spawn_dirsql_with(cwd: &std::path::Path, config: Option<&std::path::Path>, port: u16) -> Child {
-    let mut cmd: StdCommand = std::process::Command::cargo_bin("dirsql")
-        .expect("`dirsql` binary must be built with --features cli");
-    // #662: the HTTP server is behind the `server` subcommand now.
-    cmd.arg("server")
-        .arg("--port")
-        .arg(port.to_string())
-        .arg("--host")
-        .arg("localhost");
-    if let Some(config) = config {
-        cmd.arg("--config").arg(config);
+fn spawn_dirsql_with(
+    cwd: &std::path::Path,
+    config: Option<&std::path::Path>,
+    port: u16,
+) -> ServerGuard {
+    match config {
+        Some(config) => server::spawn_server(cwd, port, &["--config".as_ref(), config.as_os_str()]),
+        None => server::spawn_server::<&str>(cwd, port, &[]),
     }
-    cmd.current_dir(cwd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
-    cmd.spawn().expect("spawning dirsql failed")
 }
 
 fn wait_until_ready(port: u16, timeout: Duration) {
@@ -71,21 +66,8 @@ fn wait_until_ready(port: u16, timeout: Duration) {
     panic!("dirsql server did not become ready on port {port} within {timeout:?}");
 }
 
-fn kill_and_wait(mut child: Child) {
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-/// Kills the spawned server on drop, so a panicking test never leaks a process
-/// that keeps the inherited stderr pipe open (which would stall the CI step
-/// waiting for EOF).
-struct ServerGuard(Child);
-
-impl Drop for ServerGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
+fn kill_and_wait(child: ServerGuard) {
+    drop(child);
 }
 
 #[test]
@@ -162,7 +144,7 @@ on-file = "sh abscheck.sh {path}"
     .unwrap();
 
     let port = free_port();
-    let _server = ServerGuard(spawn_dirsql(root.path(), port));
+    let _server = spawn_dirsql(root.path(), port);
     wait_until_ready(port, Duration::from_secs(10));
 
     let resp = Client::new()
@@ -209,11 +191,11 @@ on-file = "sh abscheck.sh {path}"
     .unwrap();
 
     let port = free_port();
-    let _server = ServerGuard(spawn_dirsql_with(
+    let _server = spawn_dirsql_with(
         project.path(),
         Some(&configdir.path().join(".dirsql.toml")),
         port,
-    ));
+    );
     wait_until_ready(port, Duration::from_secs(10));
 
     let resp = Client::new()
