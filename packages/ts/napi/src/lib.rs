@@ -917,7 +917,10 @@ mod tests {
         let found = selected_loadable(
             "vec",
             vec!["/pkg".into()],
-            vec!["/pkg/README.md".into(), format!("/pkg/vec0{}", PLATFORM_SUFFIXES[0])],
+            vec![
+                "/pkg/README.md".into(),
+                format!("/pkg/vec0{}", PLATFORM_SUFFIXES[0]),
+            ],
         )
         .expect("one loadable file");
         assert_eq!(found, format!("/pkg/vec0{}", PLATFORM_SUFFIXES[0]));
@@ -925,10 +928,13 @@ mod tests {
 
     #[test]
     fn select_loadable_carries_the_cores_message_verbatim() {
-        let err = selected_loadable("vec", vec!["/pkg".into()], vec![])
-            .expect_err("no loadable file");
+        let err =
+            selected_loadable("vec", vec!["/pkg".into()], vec![]).expect_err("no loadable file");
         assert!(err.starts_with("no loadable extension file (*"), "{err}");
-        assert!(err.ends_with("found in package 'vec' (searched /pkg)"), "{err}");
+        assert!(
+            err.ends_with("found in package 'vec' (searched /pkg)"),
+            "{err}"
+        );
     }
 
     #[test]
