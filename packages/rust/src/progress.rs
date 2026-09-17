@@ -224,7 +224,10 @@ pub struct Progress {
     terminal: bool,
     started: Instant,
     /// The live bar, built on the first draw. `None` until then, which is also
-    /// what says whether a summary is owed.
+    /// what says whether a summary is owed. Dropping it clears the line, so a
+    /// phase that ends early -- a SQLite error mid-ingest, a hook that could
+    /// not be found -- leaves no half-drawn counter under the error message
+    /// the caller is about to print.
     bar: Option<ProgressBar>,
 }
 
@@ -382,17 +385,6 @@ impl Progress {
     }
 }
 
-/// A phase that ends early -- a SQLite error mid-ingest, a hook that could not
-/// be found -- must not leave a half-drawn counter under the error message the
-/// caller is about to print. [`Progress::finish`] has already erased by the
-/// time this runs, so on the normal path it does nothing.
-impl Drop for Progress {
-    fn drop(&mut self) {
-        self.erase();
-        let _ = self.sink.lock().unwrap().flush();
-    }
-}
-
 /// The narrow view of a reporter that the worker-call counter needs: a running
 /// count with no total, and a phase it can restart. A trait so the counter's
 /// unit tests can inject a double without reaching across modules.
@@ -472,11 +464,15 @@ mod tests {
     /// that owns its clone. `Arc`/`Mutex` rather than `Rc`/`RefCell` because
     /// the sink has to satisfy the reporter's `Send` bound.
     #[derive(Clone, Default)]
-    struct Buffer(Arc<Mutex<Vec<u8>>>);
+    struct Buffer(Arc<Mutex<Vec<u8>>>, Arc<Mutex<usize>>);
 
     impl Buffer {
         fn text(&self) -> String {
             String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+
+        fn flushes(&self) -> usize {
+            *self.1.lock().unwrap()
         }
     }
 
@@ -486,7 +482,10 @@ mod tests {
             Ok(buf.len())
         }
 
+        /// Recorded, not discarded: a sink that never reaches the terminal
+        /// draws a line nobody sees until the next write happens to push it.
         fn flush(&mut self) -> std::io::Result<()> {
+            *self.1.lock().unwrap() += 1;
             Ok(())
         }
     }
@@ -1000,9 +999,13 @@ mod tests {
 
         term.write_str("bare").unwrap();
         term.write_line("whole").unwrap();
-        term.flush().unwrap();
 
         assert_eq!(sink.text(), "barewhole\n");
+        assert_eq!(sink.flushes(), 0, "writing alone does not flush");
+
+        term.flush().unwrap();
+
+        assert_eq!(sink.flushes(), 1, "flushing reaches the sink");
     }
 
     /// Clearing blanks the whole width with spaces rather than an erase
