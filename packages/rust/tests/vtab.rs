@@ -356,3 +356,56 @@ fn a_pattern_naming_an_ignored_directory_still_scans_it() {
         .unwrap();
     assert_eq!(count, 1, "skip rules apply below the path you name");
 }
+
+#[test]
+fn rowids_count_up_from_zero_in_scan_order() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("a.md"), "x").unwrap();
+    fs::write(dir.path().join("b.md"), "x").unwrap();
+    fs::write(dir.path().join("c.md"), "x").unwrap();
+    let conn = open_over(&dir, "**/*");
+
+    let mut stmt = conn
+        .prepare("SELECT rowid FROM t ORDER BY basename")
+        .unwrap();
+    let rowids: Vec<i64> = stmt
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(rowids, vec![0, 1, 2]);
+}
+
+/// The declared scan cost is what keeps SQLite from treating the table as
+/// near-infinitely expensive. Left at the default, every join path costs the
+/// same and the planner falls back to building an automatic index over the
+/// small ordinary table instead of a plain nested loop.
+#[test]
+fn a_join_against_a_small_table_plans_as_a_plain_scan() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("a.md"), "x").unwrap();
+    fs::write(dir.path().join("b.md"), "x").unwrap();
+    let conn = open_over(&dir, "**/*");
+    conn.execute_batch(
+        "CREATE TABLE tags(name TEXT, tag TEXT);
+         INSERT INTO tags VALUES ('a.md', 'keep');",
+    )
+    .unwrap();
+
+    let mut stmt = conn
+        .prepare("EXPLAIN QUERY PLAN SELECT tags.tag FROM t JOIN tags ON tags.name = t.basename")
+        .unwrap();
+    let plan: Vec<String> = stmt
+        .query_map([], |r| r.get(3))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert!(
+        plan.iter().any(|step| step == "SCAN tags"),
+        "expected a plain scan of the ordinary table, got {plan:?}"
+    );
+    assert!(
+        !plan.iter().any(|step| step.contains("AUTOMATIC")),
+        "the declared cost must keep SQLite from building an automatic index, got {plan:?}"
+    );
+}
