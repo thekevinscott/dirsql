@@ -78,4 +78,23 @@ class DirSQL:
     def _start_watcher(self) -> None: ...
     def _poll_events(self, timeout_ms: int) -> list[RowEvent]: ...
 
+class ExtensionPlanEntry:
+    """One planned ``[[dirsql.extension]]`` entry. Exactly one of ``path`` and
+    ``package`` is set: a ``path`` is ready to load, a ``package`` must be
+    located with ``importlib`` -- unless ``shadow`` names an existing file,
+    which takes precedence over the package."""
+
+    path: str | None
+    package: str | None
+    shadow: str | None
+    entrypoint: str | None
+
+    @override
+    def __repr__(self) -> str: ...
+
 def config_paths_from_argv(argv: list[str]) -> list[str]: ...
+def plan_config_extensions(
+    configs: list[tuple[str, str | None]],
+) -> list[ExtensionPlanEntry] | None: ...
+def select_loadable(name: str, dirs: list[str], candidates: list[str]) -> str: ...
+def is_bare_name(path: str) -> bool: ...

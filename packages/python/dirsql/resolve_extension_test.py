@@ -2,7 +2,7 @@
 
 The effectful collaborators -- the filesystem probe (`os.path.isfile`) and the
 package resolver -- are mocked, so these isolate the ordered probe from any
-real package or disk. The pure `is_bare_name` stays real.
+real package or disk. The core's pure `is_bare_name` stays real.
 """
 
 from unittest import mock

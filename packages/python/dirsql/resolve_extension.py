@@ -10,12 +10,12 @@ package name reaches the package machinery:
 2. **Bare name** -- a same-named local file under ``base`` *shadows* the
    package; otherwise the package dir is located via
    :func:`importlib.util.find_spec` and the current platform's loadable is
-   globbed from inside it.
+   picked from inside it.
 """
 
 import os
 
-from .is_bare_name import is_bare_name
+from ._dirsql import is_bare_name
 from .resolve_package import _resolve_package
 
 

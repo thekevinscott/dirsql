@@ -87,7 +87,7 @@ def mock_glob():
 @pytest.fixture
 def mock_config_file():
     """Fake a ``.dirsql.toml`` whose ``[[dirsql.extension]]`` names a package."""
-    data = b'[[dirsql.extension]]\npath = "sqlite_vec"\n'
+    data = '[[dirsql.extension]]\npath = "sqlite_vec"\n'
     with patch("builtins.open", mock_open(read_data=data)) as m:
         yield m
 

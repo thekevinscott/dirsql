@@ -126,7 +126,7 @@ The `.dirsql.toml` package-name form is resolved by the **SDK/launcher**, not
 the compiled engine. Both the CLI launchers and (since
 [#313](https://github.com/thekevinscott/dirsql/issues/313)) the SDK `config=`
 construction path share one per-language helper
-(`resolve_config_extension_specs` / `resolveConfigExtensionSpecs`): when a
+(`resolve_configs_extension_specs` / `resolveConfigsExtensionSpecs`): when a
 config entry names a package, it parses the config, resolves each extension
 (`importlib` / `require.resolve`), and hands the core resolved literal paths
 while the core's `suppress_config_extensions` toggle stops the config's own
@@ -135,6 +135,21 @@ SDKs via the binding's `extensions` + `suppress_config_extensions` /
 `suppressConfigExtensions` parameters). Configs with only literal paths are
 still loaded by the core directly. Parity restored across Python and
 TypeScript; Rust stays file-path-only by design (epic #227 carve-out).
+
+**Where the planning lives — temporary drift
+([#1111](https://github.com/thekevinscott/dirsql/issues/1111)).** The decisions
+inside that helper — does any entry name a package, what does each literal path
+resolve to against its own config's directory, which installed file is *the*
+loadable — are language-neutral, and since
+[#1119](https://github.com/thekevinscott/dirsql/issues/1119) they live once in
+`dirsql::extension_resolution` (`#[doc(hidden)]`, not a public Rust API).
+Python reached through the binding in
+[#1120](https://github.com/thekevinscott/dirsql/issues/1120)
+(`dirsql._dirsql.plan_config_extensions` / `select_loadable` / `is_bare_name`);
+TypeScript still carries its own port and is tracked by
+[#1121](https://github.com/thekevinscott/dirsql/issues/1121). Each host keeps
+only what it alone can do: reading the config files, and locating an installed
+package (`importlib.util.find_spec` / `require.resolve`).
 
 **Config-flag scanning breadth
 ([#754](https://github.com/thekevinscott/dirsql/issues/754) /

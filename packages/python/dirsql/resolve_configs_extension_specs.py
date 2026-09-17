@@ -1,15 +1,19 @@
 """Resolution of several TOML configs' ``[[dirsql.extension]]`` entries, in order.
 
-The plural counterpart to :func:`dirsql.resolve_config_extensions
-.resolve_config_extension_specs`, used by the SDK constructor and the CLI
-launcher when argv carries more than one ``--config``.
+The planning -- which configs parse, whether any entry names a package rather
+than a file, and what each literal path resolves to against its own config's
+directory -- lives in the Rust core (``_dirsql.plan_config_extensions``). This
+module supplies the two host-specific halves the core cannot have: reading the
+files, and locating an installed package with ``importlib``.
 """
 
 from __future__ import annotations
 
-from .has_bare_name import _has_bare_name
-from .load_extension_entries import _load_extension_entries
-from .resolve_entries import _resolve_entries
+import os
+
+from ._dirsql import plan_config_extensions
+from .plan_entry_path import _plan_entry_path
+from .read_config import _read_config
 
 
 def resolve_configs_extension_specs(config_paths):
@@ -24,13 +28,11 @@ def resolve_configs_extension_specs(config_paths):
     the resolved list. Returns ``None`` when no config uses a package name,
     leaving every config's loading to the core.
     """
-    loaded = [_load_extension_entries(p) for p in config_paths]
-    if not any(item is not None and _has_bare_name(item[0]) for item in loaded):
+    sources = [(os.path.abspath(p), _read_config(p)) for p in config_paths]
+    plan = plan_config_extensions(sources)
+    if plan is None:
         return None
-    specs = []
-    for item in loaded:
-        if item is None:
-            continue
-        entries, base = item
-        specs.extend(_resolve_entries(entries, base))
-    return specs
+    return [
+        {"path": _plan_entry_path(entry), "entrypoint": entry.entrypoint}
+        for entry in plan
+    ]
