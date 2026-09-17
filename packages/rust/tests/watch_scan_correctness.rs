@@ -1,8 +1,9 @@
 //! Watch/scan correctness: a live `mkdir` under the root must not insert a
 //! directory row, renaming a matching file *out* of the tree must delete its
-//! rows, and a populated directory renamed *into* the tree must index every
-//! file it brought. All drive a **real** `notify` watcher over real temp
-//! directories through the SDK public API — the core's integration tier.
+//! rows, a populated directory renamed *into* the tree must index every
+//! file it brought, and one renamed *out* must delete every row it held. All
+//! drive a **real** `notify` watcher over real temp directories through the
+//! SDK public API — the core's integration tier.
 
 use dirsql::{DirSQL, RowEvent, Table, Value};
 use std::collections::HashMap;
@@ -181,5 +182,114 @@ fn dir_moved_into_root_indexes_nested_files() {
         has_all(&db),
         "every file beneath a moved-in directory must be indexed; want {want:?}, rows: {:?}",
         paths(&db)
+    );
+}
+
+/// The mirror of a move-in. A directory renamed out of the root arrives as
+/// one event naming the directory and none for the files beneath it. The
+/// directory is gone by then, so the rows are the only record of what it
+/// held, and each must go with a Delete event.
+#[test]
+fn dir_moved_out_of_root_deletes_its_rows() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let outside = tempfile::TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join("leaving/one")).unwrap();
+    fs::write(dir.path().join("leaving/a.txt"), "alpha").unwrap();
+    fs::write(dir.path().join("leaving/one/deep.txt"), "deep").unwrap();
+    fs::write(dir.path().join("keep.txt"), "keep").unwrap();
+
+    let db = DirSQL::new(dir.path(), vec![files_table(dir.path())]).unwrap();
+    let under_leaving = |db: &DirSQL| -> Vec<String> {
+        let mut rows: Vec<String> = paths(db)
+            .into_iter()
+            .filter(|p| p.starts_with("leaving/"))
+            .collect();
+        rows.sort();
+        rows
+    };
+    assert_eq!(
+        under_leaving(&db),
+        vec![
+            "leaving/a.txt".to_string(),
+            "leaving/one/deep.txt".to_string()
+        ],
+        "initial scan should index both files under leaving/"
+    );
+
+    db.start_watching().unwrap();
+    std::thread::sleep(Duration::from_millis(250));
+
+    fs::rename(dir.path().join("leaving"), outside.path().join("leaving")).unwrap();
+
+    let mut deleted = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && !under_leaving(&db).is_empty() {
+        for e in db.poll_events(Duration::from_millis(200)).unwrap() {
+            if let RowEvent::Delete { file_path, .. } = e {
+                deleted.push(file_path);
+            }
+        }
+    }
+
+    assert!(
+        under_leaving(&db).is_empty(),
+        "a directory moved out of the root must delete the rows its files produced; rows: {:?}",
+        paths(&db)
+    );
+    assert!(
+        paths(&db).iter().any(|p| p == "keep.txt"),
+        "a file outside the moved directory must keep its row; rows: {:?}",
+        paths(&db)
+    );
+    deleted.sort();
+    assert_eq!(
+        deleted,
+        vec![
+            "leaving/a.txt".to_string(),
+            "leaving/one/deep.txt".to_string()
+        ],
+        "one Delete event per file the directory held"
+    );
+}
+
+/// A rename within the root is a move-out of the old name. Only the
+/// disappearing side is asserted here; the new name is indexed by the
+/// move-in walk (#1096).
+#[test]
+fn dir_renamed_within_root_deletes_rows_under_old_name() {
+    let dir = tempfile::TempDir::new().unwrap();
+    fs::create_dir(dir.path().join("a")).unwrap();
+    fs::write(dir.path().join("a/x.txt"), "x").unwrap();
+
+    let db = DirSQL::new(dir.path(), vec![files_table(dir.path())]).unwrap();
+    assert!(
+        paths(&db).iter().any(|p| p == "a/x.txt"),
+        "initial scan should index a/x.txt; rows: {:?}",
+        paths(&db)
+    );
+
+    db.start_watching().unwrap();
+    std::thread::sleep(Duration::from_millis(250));
+
+    fs::rename(dir.path().join("a"), dir.path().join("b")).unwrap();
+
+    let mut saw_delete = false;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && paths(&db).iter().any(|p| p.starts_with("a/")) {
+        for e in db.poll_events(Duration::from_millis(200)).unwrap() {
+            if matches!(&e, RowEvent::Delete { file_path, .. } if file_path == "a/x.txt") {
+                saw_delete = true;
+            }
+        }
+    }
+
+    assert!(
+        !paths(&db).iter().any(|p| p.starts_with("a/")),
+        "renaming a directory within the root must delete the rows under its old name; rows: {:?}",
+        paths(&db)
+    );
+    assert!(
+        saw_delete,
+        "renaming a directory within the root must emit a Delete event for each file under the old name"
     );
 }

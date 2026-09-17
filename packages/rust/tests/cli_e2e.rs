@@ -379,6 +379,65 @@ fn server_indexes_a_directory_moved_into_the_root() {
     kill_and_wait(child);
 }
 
+/// The mirror of the move-in above. inotify reports a directory renamed out
+/// of the root as a single event naming the directory, with no per-child
+/// events, so a live server has to drop the rows of every file that was
+/// beneath it or they linger until a cold rescan.
+#[test]
+fn server_drops_the_rows_of_a_directory_moved_out_of_the_root() {
+    let root = blog_fixture();
+    let outside = TempDir::new().unwrap();
+
+    let port = free_port();
+    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml"]);
+    wait_until_ready(port, Duration::from_secs(10));
+    // Let notify finish installing its recursive inotify watches before the
+    // rename; otherwise the move can land before the root is watched at all.
+    std::thread::sleep(Duration::from_millis(300));
+
+    let client = Client::new();
+    let url = format!("http://localhost:{port}/query");
+    let basenames = |client: &Client| -> Vec<String> {
+        let body: Value = client
+            .post(&url)
+            .json(&json!({"sql": "SELECT basename FROM posts ORDER BY basename"}))
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        body.as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r.get("basename").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect()
+    };
+    assert_eq!(
+        basenames(&client),
+        vec![
+            "Hello-World.json".to_string(),
+            "Second-Post.json".to_string()
+        ],
+        "the initial scan must index both posts"
+    );
+
+    fs::rename(root.path().join("posts/bob"), outside.path().join("bob")).unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline && basenames(&client).iter().any(|b| b == "Second-Post.json") {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let rows = basenames(&client);
+    assert_eq!(
+        rows,
+        vec!["Hello-World.json".to_string()],
+        "a directory moved out of the root must drop the rows its files produced; rows: {rows:?}"
+    );
+
+    kill_and_wait(child);
+}
+
 #[test]
 fn sigint_triggers_graceful_exit_zero() {
     let root = blog_fixture();

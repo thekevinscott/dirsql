@@ -175,6 +175,13 @@ individually. The fix is entirely in the shared Rust core (`translate_event` /
 `process_file_event` / `scanner::scan_subtree`), so all three SDKs gain it at
 once with no binding changes and no public-surface change.
 
+**Directory moved out of the root (#1109) — parity maintained, no drift.** The
+watcher deletes every row whose file sat beneath a directory that leaves the
+tree (a rename out of or within the root), which the OS reports as one event
+naming the directory and none for its files. The fix is entirely in the shared
+Rust core (`process_file_event` / `Db::files_under`), so all three SDKs gain it
+at once with no binding changes and no public-surface change.
+
 **Verbatim table columns (#361, epic #358) — parity by construction, no drift.**
 User tables carry exactly the columns declared in their DDL (row ownership is
 tracked in the internal `_dirsql_internal_rows` table, not injected columns).
