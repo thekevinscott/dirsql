@@ -16,6 +16,8 @@ pub mod db;
 #[doc(hidden)]
 pub mod differ;
 #[doc(hidden)]
+pub mod extension_resolution;
+#[doc(hidden)]
 pub mod functions;
 #[doc(hidden)]
 pub mod infer;
