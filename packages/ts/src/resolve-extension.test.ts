@@ -1,7 +1,7 @@
 import { existsSync, statSync } from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getCore } from "./core.js";
 import { defaultResolver } from "./default-resolver.js";
-import { isBareName } from "./is-bare-name.js";
 import type { PackageResolver } from "./package-dir.js";
 import { resolveExtensionPath } from "./resolve-extension.js";
 import { resolvePackage } from "./resolve-package.js";
@@ -19,12 +19,7 @@ vi.mock("./default-resolver.js", async () => ({
   defaultResolver: vi.fn(),
 }));
 
-vi.mock("./is-bare-name.js", async () => ({
-  ...(await vi.importActual<typeof import("./is-bare-name.js")>(
-    "./is-bare-name.js",
-  )),
-  isBareName: vi.fn(),
-}));
+vi.mock("./core.js");
 
 vi.mock("./resolve-package.js", async () => ({
   ...(await vi.importActual<typeof import("./resolve-package.js")>(
@@ -32,6 +27,8 @@ vi.mock("./resolve-package.js", async () => ({
   )),
   resolvePackage: vi.fn(),
 }));
+
+const isBareName = vi.fn<(path: string) => boolean>();
 
 function fakeResolver(): PackageResolver {
   return {
@@ -43,11 +40,15 @@ function fakeResolver(): PackageResolver {
 }
 
 describe("resolveExtensionPath", () => {
+  beforeEach(() => {
+    vi.mocked(getCore).mockReturnValue({ isBareName } as never);
+  });
+
   afterEach(() => vi.resetAllMocks());
 
   describe("path-looking values", () => {
     it("makes a relative path absolute when resolveRelative", () => {
-      vi.mocked(isBareName).mockReturnValue(false);
+      isBareName.mockReturnValue(false);
       expect(resolveExtensionPath("ext/a.so", "/cfg", true)).toBe(
         "/cfg/ext/a.so",
       );
@@ -55,19 +56,19 @@ describe("resolveExtensionPath", () => {
     });
 
     it("preserves an absolute path when resolveRelative", () => {
-      vi.mocked(isBareName).mockReturnValue(false);
+      isBareName.mockReturnValue(false);
       expect(resolveExtensionPath("/abs/a.so", "/cfg", true)).toBe("/abs/a.so");
     });
 
     it("returns a path verbatim when not resolveRelative", () => {
-      vi.mocked(isBareName).mockReturnValue(false);
+      isBareName.mockReturnValue(false);
       expect(resolveExtensionPath("rel/a.so", "/cfg", false)).toBe("rel/a.so");
     });
   });
 
   describe("bare-name shadowing", () => {
     it("uses a same-named local file when present", () => {
-      vi.mocked(isBareName).mockReturnValue(true);
+      isBareName.mockReturnValue(true);
       vi.mocked(existsSync).mockReturnValue(true);
       vi.mocked(statSync).mockReturnValue({ isFile: () => true } as ReturnType<
         typeof statSync
@@ -77,7 +78,7 @@ describe("resolveExtensionPath", () => {
     });
 
     it("falls through when the same-named local entry is not a file", () => {
-      vi.mocked(isBareName).mockReturnValue(true);
+      isBareName.mockReturnValue(true);
       vi.mocked(resolvePackage).mockReturnValue("/nm/pkg/vec0.so");
       vi.mocked(existsSync).mockReturnValue(true);
       vi.mocked(statSync).mockReturnValue({ isFile: () => false } as ReturnType<
@@ -91,7 +92,7 @@ describe("resolveExtensionPath", () => {
 
   describe("bare-name package resolution", () => {
     it("delegates to resolvePackage with the injected resolver", () => {
-      vi.mocked(isBareName).mockReturnValue(true);
+      isBareName.mockReturnValue(true);
       vi.mocked(resolvePackage).mockReturnValue("/nm/pkg/vec0.so");
       vi.mocked(existsSync).mockReturnValue(false);
       const resolver = fakeResolver();
@@ -104,7 +105,7 @@ describe("resolveExtensionPath", () => {
 
     it("hands defaultResolver() to resolvePackage when none is injected", () => {
       const fallback = fakeResolver();
-      vi.mocked(isBareName).mockReturnValue(true);
+      isBareName.mockReturnValue(true);
       vi.mocked(defaultResolver).mockReturnValue(fallback);
       vi.mocked(resolvePackage).mockReturnValue("/nm/pkg/vec0.so");
       vi.mocked(existsSync).mockReturnValue(false);

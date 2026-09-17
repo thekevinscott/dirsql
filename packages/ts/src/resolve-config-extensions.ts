@@ -1,17 +1,18 @@
-// SDK-side resolution of a TOML config's `[[dirsql.extension]]` entries.
+// SDK-side resolution of the TOML configs' `[[dirsql.extension]]` entries.
 //
-// The Rust core loads config extensions literally — it has no
-// `require.resolve`, so it cannot resolve a bare **package name**. When a
-// config names an extension by package name, the SDK resolves every entry
-// here, hands the core the resolved literal paths, and suppresses the core's
-// own config-extension loading so the entries are not loaded twice.
+// The planning — which configs parse, whether any entry names a package rather
+// than a file, and what each literal path resolves to against its own config's
+// directory — lives in the Rust core (`planConfigExtensions`). This module
+// supplies the two host-specific halves the core cannot have: reading the
+// files, and locating an installed package with `require.resolve`.
 //
 // Shared by the `DirSQL` constructor (`config` option) and the CLI launcher.
 
+import { resolve as resolvePath } from "node:path";
+import { getCore } from "./core.js";
 import type { ExtensionSpec } from "./dirsql.js";
-import { hasBareName } from "./has-bare-name.js";
-import { loadExtensionEntries } from "./load-extension-entries.js";
-import { resolveEntries } from "./resolve-entries.js";
+import { planEntryPath } from "./plan-entry-path.js";
+import { readConfig } from "./read-config.js";
 
 /**
  * Resolve the `[[dirsql.extension]]` entries of several configs, in order.
@@ -27,15 +28,17 @@ import { resolveEntries } from "./resolve-entries.js";
 export function resolveConfigsExtensionSpecs(
   configPaths: string[],
 ): ExtensionSpec[] | null {
-  const loaded = configPaths.map(loadExtensionEntries);
-  if (!loaded.some((item) => item !== null && hasBareName(item.entries))) {
+  const plan = getCore().planConfigExtensions(
+    configPaths.map((path) => ({
+      path: resolvePath(path),
+      contents: readConfig(path),
+    })),
+  );
+  if (plan === null) {
     return null;
   }
-  const specs: ExtensionSpec[] = [];
-  for (const item of loaded) {
-    if (item !== null) {
-      specs.push(...resolveEntries(item.entries, item.base));
-    }
-  }
-  return specs;
+  return plan.map((entry) => ({
+    path: planEntryPath(entry),
+    entrypoint: entry.entrypoint,
+  }));
 }

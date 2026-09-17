@@ -1,86 +1,83 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { hasBareName } from "./has-bare-name.js";
-import { type Toml, loadExtensionEntries } from "./load-extension-entries.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExtensionPlanEntry } from "./core.js";
+import { getCore } from "./core.js";
+import { planEntryPath } from "./plan-entry-path.js";
+import { readConfig } from "./read-config.js";
 import { resolveConfigsExtensionSpecs } from "./resolve-config-extensions.js";
-import { resolveEntries } from "./resolve-entries.js";
 
-vi.mock("./has-bare-name.js", async () => ({
-  ...(await vi.importActual<typeof import("./has-bare-name.js")>(
-    "./has-bare-name.js",
+vi.mock("./core.js");
+vi.mock("./plan-entry-path.js", async () => ({
+  ...(await vi.importActual<typeof import("./plan-entry-path.js")>(
+    "./plan-entry-path.js",
   )),
-  hasBareName: vi.fn(),
+  planEntryPath: vi.fn(),
 }));
-vi.mock("./load-extension-entries.js", async () => ({
-  ...(await vi.importActual<typeof import("./load-extension-entries.js")>(
-    "./load-extension-entries.js",
+vi.mock("./read-config.js", async () => ({
+  ...(await vi.importActual<typeof import("./read-config.js")>(
+    "./read-config.js",
   )),
-  loadExtensionEntries: vi.fn(),
-}));
-vi.mock("./resolve-entries.js", async () => ({
-  ...(await vi.importActual<typeof import("./resolve-entries.js")>(
-    "./resolve-entries.js",
-  )),
-  resolveEntries: vi.fn(() => []),
+  readConfig: vi.fn(),
 }));
 
-function loaded(base: string, entries: Toml[]) {
-  return { entries, base };
+const planConfigExtensions =
+  vi.fn<(configs: unknown[]) => ExtensionPlanEntry[] | null>();
+
+function packageEntry(name: string, entrypoint?: string): ExtensionPlanEntry {
+  return { package: name, shadow: `/cfg/${name}`, entrypoint };
 }
+
+beforeEach(() => {
+  vi.mocked(getCore).mockReturnValue({ planConfigExtensions } as never);
+});
 
 afterEach(() => vi.resetAllMocks());
 
 describe("resolveConfigsExtensionSpecs", () => {
-  it("returns null for an empty list", () => {
-    expect(resolveConfigsExtensionSpecs([])).toBeNull();
-    expect(loadExtensionEntries).not.toHaveBeenCalled();
+  it("hands the core each config's absolute path and contents", () => {
+    vi.mocked(readConfig).mockReturnValue('[[dirsql.extension]]\npath = "x"\n');
+    planConfigExtensions.mockReturnValue(null);
+
+    resolveConfigsExtensionSpecs(["/a/.dirsql.toml"]);
+
+    expect(planConfigExtensions).toHaveBeenCalledWith([
+      {
+        path: "/a/.dirsql.toml",
+        contents: '[[dirsql.extension]]\npath = "x"\n',
+      },
+    ]);
   });
 
-  it("returns null when no config uses a bare package name", () => {
-    vi.mocked(loadExtensionEntries)
-      .mockReturnValueOnce(loaded("/a", [{ path: "ext/a.so" }]))
-      .mockReturnValueOnce(null);
-    vi.mocked(hasBareName).mockReturnValue(false);
+  it("leaves an unreadable config's contents undefined", () => {
+    vi.mocked(readConfig).mockReturnValue(undefined);
+    planConfigExtensions.mockReturnValue(null);
 
-    expect(resolveConfigsExtensionSpecs(["/a.toml", "/b.toml"])).toBeNull();
-    expect(resolveEntries).not.toHaveBeenCalled();
+    resolveConfigsExtensionSpecs(["/gone/.dirsql.toml"]);
+
+    expect(planConfigExtensions).toHaveBeenCalledWith([
+      { path: "/gone/.dirsql.toml", contents: undefined },
+    ]);
   });
 
-  it("resolves every config in order when one uses a bare package name", () => {
-    vi.mocked(loadExtensionEntries)
-      .mockReturnValueOnce(loaded("/a", [{ path: "ext/a.so" }]))
-      .mockReturnValueOnce(loaded("/b", [{ path: "sqlite_vec" }]));
-    vi.mocked(hasBareName).mockImplementation(
-      (entries) => entries[0]?.path === "sqlite_vec",
+  it("returns null when the core does not plan anything", () => {
+    planConfigExtensions.mockReturnValue(null);
+    expect(resolveConfigsExtensionSpecs(["/a/.dirsql.toml"])).toBeNull();
+    expect(planEntryPath).not.toHaveBeenCalled();
+  });
+
+  it("resolves every planned entry, in order", () => {
+    planConfigExtensions.mockReturnValue([
+      packageEntry("sqlite_vec", "sqlite3_vec_init"),
+      packageEntry("spellfix"),
+    ]);
+    vi.mocked(planEntryPath).mockImplementation(
+      (entry) => `/nm/${entry.package}.so`,
     );
-    vi.mocked(resolveEntries).mockImplementation((entries, base) =>
-      entries.map((e) => ({
-        path: `${base}/${e.path}`,
-        entrypoint: undefined,
-      })),
-    );
 
-    expect(resolveConfigsExtensionSpecs(["/a.toml", "/b.toml"])).toEqual([
-      { path: "/a/ext/a.so", entrypoint: undefined },
-      { path: "/b/sqlite_vec", entrypoint: undefined },
+    expect(
+      resolveConfigsExtensionSpecs(["/a/.dirsql.toml", "/b/.dirsql.toml"]),
+    ).toEqual([
+      { path: "/nm/sqlite_vec.so", entrypoint: "sqlite3_vec_init" },
+      { path: "/nm/spellfix.so", entrypoint: undefined },
     ]);
-    expect(vi.mocked(resolveEntries).mock.calls).toEqual([
-      [[{ path: "ext/a.so" }], "/a"],
-      [[{ path: "sqlite_vec" }], "/b"],
-    ]);
-  });
-
-  it("skips a missing config but resolves the rest", () => {
-    vi.mocked(loadExtensionEntries)
-      .mockReturnValueOnce(null)
-      .mockReturnValueOnce(loaded("/b", [{ path: "sqlite_vec" }]));
-    vi.mocked(hasBareName).mockReturnValue(true);
-    vi.mocked(resolveEntries).mockReturnValue([
-      { path: "/nm/vec0.so", entrypoint: undefined },
-    ]);
-
-    expect(resolveConfigsExtensionSpecs(["/missing.toml", "/b.toml"])).toEqual([
-      { path: "/nm/vec0.so", entrypoint: undefined },
-    ]);
-    expect(resolveEntries).toHaveBeenCalledTimes(1);
   });
 });

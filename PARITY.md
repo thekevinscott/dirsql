@@ -136,20 +136,18 @@ SDKs via the binding's `extensions` + `suppress_config_extensions` /
 still loaded by the core directly. Parity restored across Python and
 TypeScript; Rust stays file-path-only by design (epic #227 carve-out).
 
-**Where the planning lives — temporary drift
-([#1111](https://github.com/thekevinscott/dirsql/issues/1111)).** The decisions
-inside that helper — does any entry name a package, what does each literal path
-resolve to against its own config's directory, which installed file is *the*
-loadable — are language-neutral, and since
-[#1119](https://github.com/thekevinscott/dirsql/issues/1119) they live once in
-`dirsql::extension_resolution` (`#[doc(hidden)]`, not a public Rust API).
-Python reached through the binding in
-[#1120](https://github.com/thekevinscott/dirsql/issues/1120)
-(`dirsql._dirsql.plan_config_extensions` / `select_loadable` / `is_bare_name`);
-TypeScript still carries its own port and is tracked by
-[#1121](https://github.com/thekevinscott/dirsql/issues/1121). Each host keeps
-only what it alone can do: reading the config files, and locating an installed
-package (`importlib.util.find_spec` / `require.resolve`).
+**Where the planning lives.** The decisions inside that helper — does any entry
+name a package, what does each literal path resolve to against its own config's
+directory, which installed file is *the* loadable — are language-neutral, and
+since [#1119](https://github.com/thekevinscott/dirsql/issues/1119) they live
+once in `dirsql::extension_resolution` (`#[doc(hidden)]`, not a public Rust
+API). Both SDKs reach it through their binding —
+[#1120](https://github.com/thekevinscott/dirsql/issues/1120) for Python
+(`dirsql._dirsql.plan_config_extensions` / `select_loadable` / `is_bare_name`),
+[#1121](https://github.com/thekevinscott/dirsql/issues/1121) for TypeScript
+(the addon's `planConfigExtensions` / `selectLoadable` / `isBareName`). Each
+host keeps only what it alone can do: reading the config files, and locating an
+installed package (`importlib.util.find_spec` / `require.resolve`).
 
 **Config-flag scanning breadth
 ([#754](https://github.com/thekevinscott/dirsql/issues/754) /

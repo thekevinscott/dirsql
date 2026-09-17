@@ -30,11 +30,40 @@ export interface NativeDirSQLConstructor {
   ): Promise<NativeDirSQL>;
 }
 
+/// One config file handed to the core's extension planner: its absolute path,
+/// and its contents, omitted when it could not be read.
+export interface ConfigSource {
+  path: string;
+  contents?: string;
+}
+
+/** One planned `[[dirsql.extension]]` entry, as the core plans it.
+ *
+ * Exactly one of `path` and `package` is set: a `path` is ready to load, a
+ * `package` must be located with `require.resolve` first — unless `shadow`
+ * names an existing file, which takes precedence over the package.
+ */
+// napi omits a `None` field rather than emitting `null`, so the absent side
+// of each variant is `undefined`.
+export type ExtensionPlanEntry =
+  | {
+      path: string;
+      package?: undefined;
+      shadow?: undefined;
+      entrypoint?: string;
+    }
+  | { path?: undefined; package: string; shadow: string; entrypoint?: string };
+
 // Core module shape. The real implementation comes from the napi-rs
 // native binary (`dirsql.node`); tests may substitute a fake.
 export interface CoreModule {
   DirSQL: NativeDirSQLConstructor;
   configPathsFromArgv(argv: string[]): string[];
+  // `null` when no config names an extension by package name: the core loads
+  // every config's entries itself.
+  planConfigExtensions(configs: ConfigSource[]): ExtensionPlanEntry[] | null;
+  selectLoadable(name: string, dirs: string[], candidates: string[]): string;
+  isBareName(path: string): boolean;
 }
 
 // Unit tests `vi.mock("./core.js")` to fake `getCore` directly, so

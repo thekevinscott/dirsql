@@ -14,8 +14,8 @@
 
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute, resolve as resolvePath } from "node:path";
+import { getCore } from "./core.js";
 import { defaultResolver } from "./default-resolver.js";
-import { isBareName } from "./is-bare-name.js";
 import type { PackageResolver } from "./package-dir.js";
 import { resolvePackage } from "./resolve-package.js";
 
@@ -32,7 +32,7 @@ export function resolveExtensionPath(
   resolveRelative: boolean,
   resolver: PackageResolver = defaultResolver(),
 ): string {
-  if (!isBareName(path)) {
+  if (!getCore().isBareName(path)) {
     if (resolveRelative && !isAbsolute(path)) {
       return resolvePath(base, path);
     }
