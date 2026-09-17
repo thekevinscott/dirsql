@@ -13,7 +13,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::config::load_config_str;
+use crate::config::{ExtensionSpec, load_config_str};
 
 /// One config file's contents, or `None` when it is missing or unreadable.
 ///
@@ -100,7 +100,10 @@ impl std::error::Error for SelectError {}
 /// Both separators count regardless of host, so a Windows-style path is a path
 /// everywhere.
 pub fn is_bare_name(path: &str, suffixes: &[&str]) -> bool {
-    todo!()
+    if path.contains('/') || path.contains('\\') {
+        return false;
+    }
+    !suffixes.iter().any(|s| path.ends_with(s))
 }
 
 /// Plan the extension entries of several configs, in order.
@@ -118,7 +121,52 @@ pub fn plan_config_extensions(
     configs: &[ConfigSource<'_>],
     suffixes: &[&str],
 ) -> Option<Vec<PlanEntry>> {
-    todo!()
+    let loaded: Vec<(PathBuf, Vec<ExtensionSpec>)> = configs
+        .iter()
+        .filter_map(|source| {
+            let config = load_config_str(source.contents?).ok()?;
+            Some((source.path.parent()?.to_path_buf(), config.extensions))
+        })
+        .collect();
+
+    if !loaded
+        .iter()
+        .flat_map(|(_, extensions)| extensions)
+        .any(|extension| spec_is_bare_name(extension, suffixes))
+    {
+        return None;
+    }
+
+    Some(
+        loaded
+            .into_iter()
+            .flat_map(|(base, extensions)| {
+                extensions.into_iter().map(move |extension| {
+                    let name = extension.path.to_string_lossy().into_owned();
+                    if is_bare_name(&name, suffixes) {
+                        PlanEntry::Package {
+                            shadow: base.join(&name),
+                            name,
+                            entrypoint: extension.entrypoint,
+                        }
+                    } else {
+                        // `join` already yields an absolute path verbatim.
+                        PlanEntry::Literal {
+                            path: base.join(&extension.path),
+                            entrypoint: extension.entrypoint,
+                        }
+                    }
+                })
+            })
+            .collect(),
+    )
+}
+
+fn spec_is_bare_name(extension: &ExtensionSpec, suffixes: &[&str]) -> bool {
+    extension
+        .path
+        .to_str()
+        .is_some_and(|path| is_bare_name(path, suffixes))
 }
 
 /// Pick the single loadable file for package `name` out of a host's listing.
@@ -132,12 +180,37 @@ pub fn select_loadable(
     candidates: &[PathBuf],
     suffixes: &[&str],
 ) -> Result<PathBuf, SelectError> {
-    todo!()
+    let mut matches: Vec<PathBuf> = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate
+                .to_str()
+                .is_some_and(|path| suffixes.iter().any(|suffix| path.ends_with(suffix)))
+        })
+        .cloned()
+        .collect();
+    matches.sort();
+    matches.dedup();
+
+    match matches.len() {
+        0 => Err(SelectError::NotFound {
+            name: name.to_owned(),
+            suffixes: suffixes.iter().map(|s| (*s).to_owned()).collect(),
+            dirs: dirs.to_vec(),
+        }),
+        1 => Ok(matches.remove(0)),
+        _ => Err(SelectError::Ambiguous {
+            name: name.to_owned(),
+            matches,
+        }),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfigSource, PlanEntry, SelectError, is_bare_name, plan_config_extensions, select_loadable};
+    use super::{
+        ConfigSource, PlanEntry, SelectError, is_bare_name, plan_config_extensions, select_loadable,
+    };
     use std::path::{Path, PathBuf};
 
     const PY: &[&str] = &[".so", ".dylib", ".dll", ".pyd"];
@@ -213,7 +286,10 @@ mod tests {
     fn a_bare_name_plans_a_package_lookup_shadowed_by_the_configs_own_directory() {
         let path = Path::new("/project/conf/.dirsql.toml");
         let plan = plan_config_extensions(
-            &[source(path, "[[dirsql.extension]]\npath = \"sqlite_vec\"\n")],
+            &[source(
+                path,
+                "[[dirsql.extension]]\npath = \"sqlite_vec\"\n",
+            )],
             PY,
         )
         .expect("a bare name makes the SDK intervene");
@@ -286,7 +362,7 @@ mod tests {
         let dir = PathBuf::from("/site-packages/sqlite_vec");
         let found = select_loadable(
             "sqlite_vec",
-            &[dir.clone()],
+            std::slice::from_ref(&dir),
             &[
                 dir.join("__init__.py"),
                 dir.join("vec0.so"),
@@ -302,7 +378,7 @@ mod tests {
         let dir = PathBuf::from("/pkg");
         let found = select_loadable(
             "vec",
-            &[dir.clone()],
+            std::slice::from_ref(&dir),
             &[dir.join("vec0.so"), dir.join("vec0.so")],
             PY,
         );
@@ -325,7 +401,7 @@ mod tests {
         let dir = PathBuf::from("/pkg");
         let err = select_loadable(
             "vec",
-            &[dir.clone()],
+            std::slice::from_ref(&dir),
             &[dir.join("z.so"), dir.join("a.so")],
             PY,
         )
