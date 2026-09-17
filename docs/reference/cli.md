@@ -536,6 +536,11 @@ Override with `DIRSQL_PROGRESS`:
 Values are case-insensitive and surrounding whitespace is ignored; anything
 unrecognized reads as `auto`, so a typo cannot stop a scan from running.
 
+Each redraw clears the line and pads the new one out to the full width (the
+terminal's, or 80 columns when there is none), so a capture of an `always` run
+carries trailing spaces. It carries no escape sequences, and the summary that
+survives the phase is a whole, newline-terminated line.
+
 The setting is read by the **core**, not the CLI, so it governs an index built
 from any SDK as well — a Python or TypeScript program that builds a `DirSQL`
 with a terminal attached gets the same two phases on stderr, and the same

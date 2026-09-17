@@ -6,23 +6,34 @@
 //! had a hung-looking terminal and no way to tell a slow scan from a wedged
 //! one.
 //!
-//! Two rules shape everything here:
+//! **A pipe stays silent.** stdout carries query results and stderr carries
+//! diagnostics; a progress line is neither. Under the default the reporter
+//! writes nothing at all unless stderr is a terminal, so `| jq` pipelines,
+//! `2>` redirects and CI logs are byte-for-byte unchanged. That gate is
+//! [`Progress::enabled`] and it runs before any bar exists, so it holds
+//! whatever the drawing library underneath would do on its own.
 //!
-//! - **A pipe stays silent.** stdout carries query results and stderr carries
-//!   diagnostics; a progress line is neither. Under the default the reporter
-//!   writes nothing at all unless stderr is a terminal, so `| jq` pipelines,
-//!   `2>` redirects and CI logs are byte-for-byte unchanged.
-//! - **No new dependencies.** The line is a `\r`-rewritten counter, not a
-//!   drawn bar: a bar wants the terminal width, and every portable way to ask
-//!   for it is a crate. A counter reads the same at any width.
+//! The drawing and the redraw throttle are [`indicatif`]'s (dirsql#1081; the
+//! "no new dependencies" rule this module used to carry is reversed -- a
+//! redrawn counter is exactly the infrastructure a real crate covers). What
+//! stays ours is the policy indicatif has no opinion about: the
+//! `DIRSQL_PROGRESS` modes, the warmup before the first draw, the floored
+//! percentage, and the summary line. indicatif refuses to draw to a
+//! non-terminal and offers no override, so [`Mode::Always`] -- which exists to
+//! make the output assertable without a pty -- is served by handing it a
+//! [`TermLike`] over the reporter's own sink.
 //!
 //! [`Mode`] is the user's knob, read from `DIRSQL_PROGRESS`. [`Progress`] is
 //! one phase's reporter: [`update`](Progress::update) while it runs and
 //! [`finish`](Progress::finish) when it ends, which erases the live line and
 //! leaves a single summary of what the phase cost -- the point of showing it.
 
-use std::io::{IsTerminal, Write};
+use std::fmt;
+use std::io::{self, IsTerminal, Write};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle, TermLike};
 
 /// The environment variable deciding whether progress is drawn.
 pub const PROGRESS_ENV: &str = "DIRSQL_PROGRESS";
@@ -30,12 +41,17 @@ pub const PROGRESS_ENV: &str = "DIRSQL_PROGRESS";
 /// Redraw at most this often. The live line exists to prove the scan is
 /// moving, which ten frames a second says as well as a thousand -- and a
 /// thousand is a measurable cost of its own on a slow terminal.
-const REDRAW_INTERVAL: Duration = Duration::from_millis(100);
+const REDRAW_HZ: u8 = 10;
 
 /// Under [`Mode::Auto`], draw nothing until the phase has run this long. A
 /// scan that finishes in a blink should leave the terminal exactly as it found
 /// it; only work long enough to wonder about is worth reporting.
 const WARMUP: Duration = Duration::from_millis(500);
+
+/// Line width assumed when the sink is not a terminal, which is every sink
+/// [`Mode::Always`] draws to. A pipe has no width, and the drawn line has to
+/// be padded to *some* number for a redraw to cover what it replaces.
+const PIPE_WIDTH: u16 = 80;
 
 /// Whether progress is drawn, and on what evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,8 +85,9 @@ impl Mode {
     }
 }
 
-/// The clock [`Progress`] throttles against. A seam so the unit tier can drive
-/// the warmup and redraw thresholds from both sides instead of sleeping.
+/// The clock [`Progress`] times the warmup and the summary against. A seam so
+/// the unit tier can drive the warmup threshold from both sides instead of
+/// sleeping.
 ///
 /// `Send` because a reporter is shared with the worker-call counter, which
 /// SQLite invokes from whatever thread is running the query.
@@ -84,6 +101,99 @@ pub struct SystemClock;
 impl Clock for SystemClock {
     fn now(&self) -> Instant {
         Instant::now()
+    }
+}
+
+/// The reporter's sink, shared with the [`TermLike`] indicatif draws through.
+/// `Mutex` rather than a plain `Box` because [`TermLike`] is `Sync` and takes
+/// `&self`.
+type Sink = Arc<Mutex<Box<dyn Write + Send>>>;
+
+/// The terminal indicatif draws to: the reporter's own sink, at a fixed width.
+///
+/// Going through [`TermLike`] rather than `ProgressDrawTarget::stderr` is what
+/// keeps [`Mode::Always`] working. indicatif checks `isatty` when it builds a
+/// terminal target and silently hides the bar otherwise, with no override
+/// ([indicatif#87], open since 2019), so a forced-on run with redirected
+/// stderr would draw nothing.
+///
+/// The cursor never leaves the one live line, so the moves below are only ever
+/// called with `n == 0` in this crate; they are spelled out anyway because the
+/// trait is indicatif's to call. Clearing writes spaces rather than an erase
+/// escape: `always` draws to redirected stderr, where an escape sequence is
+/// noise in a file a human reads.
+///
+/// [indicatif#87]: https://github.com/console-rs/indicatif/issues/87
+struct SinkTerm {
+    sink: Sink,
+    width: u16,
+}
+
+impl fmt::Debug for SinkTerm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SinkTerm")
+            .field("width", &self.width)
+            .finish()
+    }
+}
+
+impl SinkTerm {
+    fn put(&self, text: &str) -> io::Result<()> {
+        self.sink.lock().unwrap().write_all(text.as_bytes())
+    }
+
+    fn seek(&self, n: usize, code: char) -> io::Result<()> {
+        if n == 0 {
+            return Ok(());
+        }
+        self.put(&format!("\x1b[{n}{code}"))
+    }
+}
+
+impl TermLike for SinkTerm {
+    fn width(&self) -> u16 {
+        self.width
+    }
+
+    fn move_cursor_up(&self, n: usize) -> io::Result<()> {
+        self.seek(n, 'A')
+    }
+
+    fn move_cursor_down(&self, n: usize) -> io::Result<()> {
+        self.seek(n, 'B')
+    }
+
+    fn move_cursor_right(&self, n: usize) -> io::Result<()> {
+        self.seek(n, 'C')
+    }
+
+    fn move_cursor_left(&self, n: usize) -> io::Result<()> {
+        self.seek(n, 'D')
+    }
+
+    fn write_line(&self, line: &str) -> io::Result<()> {
+        self.put(&format!("{line}\n"))
+    }
+
+    fn write_str(&self, text: &str) -> io::Result<()> {
+        self.put(text)
+    }
+
+    fn clear_line(&self) -> io::Result<()> {
+        self.put(&format!("\r{:width$}\r", "", width = self.width as usize))
+    }
+
+    fn flush(&self) -> io::Result<()> {
+        self.sink.lock().unwrap().flush()
+    }
+}
+
+/// The width a drawn line is padded to. A terminal knows its own; anything
+/// else gets [`PIPE_WIDTH`].
+fn line_width(terminal: bool) -> u16 {
+    match terminal {
+        true => console::Term::stderr().size().1,
+        false => PIPE_WIDTH,
     }
 }
 
@@ -106,19 +216,16 @@ pub struct Progress {
     /// string: the worker-call phase fills it with the cache split, and core
     /// stays ignorant of what any particular worker caches.
     note: Option<String>,
-    out: Box<dyn Write + Send>,
+    sink: Sink,
+    width: u16,
     clock: Box<dyn Clock + Send>,
     mode: Mode,
     /// Whether the sink is a terminal. Only consulted under [`Mode::Auto`].
     terminal: bool,
     started: Instant,
-    /// When the live line was last redrawn; `None` until the first draw, which
-    /// is also what says whether a summary is owed.
-    last_draw: Option<Instant>,
-    /// Width of the line currently on screen, so the next one can overwrite
-    /// its tail rather than leaving the trailing characters of a longer line
-    /// behind.
-    drawn_width: usize,
+    /// The live bar, built on the first draw. `None` until then, which is also
+    /// what says whether a summary is owed.
+    bar: Option<ProgressBar>,
 }
 
 impl Progress {
@@ -169,13 +276,13 @@ impl Progress {
             summary_label,
             noun,
             note: None,
-            out,
+            sink: Arc::new(Mutex::new(out)),
+            width: line_width(terminal),
             clock,
             mode,
             terminal,
             started,
-            last_draw: None,
-            drawn_width: 0,
+            bar: None,
         }
     }
 
@@ -193,70 +300,85 @@ impl Progress {
         }
     }
 
+    /// The live bar: one line of our own text, redrawn at [`REDRAW_HZ`].
+    fn bar(&self) -> ProgressBar {
+        let term = SinkTerm {
+            sink: Arc::clone(&self.sink),
+            width: self.width,
+        };
+        let bar = ProgressBar::with_draw_target(
+            None,
+            ProgressDrawTarget::term_like_with_hz(Box::new(term), REDRAW_HZ),
+        );
+        bar.set_style(
+            ProgressStyle::with_template("{msg}").expect("a literal template always parses"),
+        );
+        bar
+    }
+
     /// Report `done` items complete, out of `total` when a total is known.
     /// Throttled, and under [`Mode::Auto`] silent until [`WARMUP`] has passed.
     pub fn update(&mut self, done: u64, total: Option<u64>) {
         if !self.enabled() {
             return;
         }
-        let now = self.clock.now();
-        match self.last_draw {
-            Some(last) if now.duration_since(last) < REDRAW_INTERVAL => return,
+        if self.bar.is_none() {
             // The warmup gates only the FIRST draw: once a phase has proven
             // itself slow, it keeps reporting.
-            None if self.mode == Mode::Auto && now.duration_since(self.started) < WARMUP => return,
-            _ => {}
+            if self.mode == Mode::Auto && self.clock.now().duration_since(self.started) < WARMUP {
+                return;
+            }
+            self.bar = Some(self.bar());
         }
-        self.last_draw = Some(now);
         let line = render(self.label, self.noun, done, total, self.note.as_deref());
-        self.draw(&line);
+        if let Some(bar) = &self.bar {
+            bar.set_message(line);
+        }
     }
 
     /// Reuse this reporter for a fresh phase: erase whatever is on screen and
-    /// reset the clock and the throttle, keeping the sink, the mode and the
-    /// wording. One reporter therefore serves every query on a connection --
-    /// and, unlike constructing a new one per phase, it keeps whatever sink it
-    /// was given instead of silently reverting to stderr.
+    /// reset the clock, keeping the sink, the mode and the wording. One
+    /// reporter therefore serves every query on a connection -- and, unlike
+    /// constructing a new one per phase, it keeps whatever sink it was given
+    /// instead of silently reverting to stderr.
     pub fn restart(&mut self) {
         self.erase();
         self.note = None;
         self.started = self.clock.now();
-        self.last_draw = None;
     }
 
     /// End the phase: erase the live line and leave one summary line behind.
     /// Silent when nothing was ever drawn, so a fast phase leaves no trace.
+    ///
+    /// The summary goes to the sink directly rather than through the bar:
+    /// indicatif's own `println` leaves the line unterminated once the bar is
+    /// cleared, and what survives the phase has to be a whole line.
     pub fn finish(&mut self, done: u64) {
-        if self.last_draw.is_none() {
+        if !self.erase() {
             return;
         }
-        self.erase();
         let elapsed = self.clock.now().duration_since(self.started);
+        let mut sink = self.sink.lock().unwrap();
         let _ = writeln!(
-            self.out,
+            sink,
             "dirsql: {} {done} {} in {}{}",
             self.summary_label,
             self.noun,
             format_duration(elapsed),
             parenthetical(self.note.as_deref())
         );
-        let _ = self.out.flush();
+        let _ = sink.flush();
     }
 
-    fn draw(&mut self, line: &str) {
-        let width = line.chars().count();
-        let pad = self.drawn_width.saturating_sub(width);
-        let _ = write!(self.out, "\r{line}{:pad$}", "");
-        let _ = self.out.flush();
-        self.drawn_width = width;
-    }
-
-    fn erase(&mut self) {
-        if self.drawn_width == 0 {
-            return;
+    /// Clear the live line, reporting whether there was one.
+    fn erase(&mut self) -> bool {
+        match self.bar.take() {
+            Some(bar) => {
+                bar.finish_and_clear();
+                true
+            }
+            None => false,
         }
-        let _ = write!(self.out, "\r{:width$}\r", "", width = self.drawn_width);
-        self.drawn_width = 0;
     }
 }
 
@@ -267,7 +389,7 @@ impl Progress {
 impl Drop for Progress {
     fn drop(&mut self) {
         self.erase();
-        let _ = self.out.flush();
+        let _ = self.sink.lock().unwrap().flush();
     }
 }
 
@@ -350,15 +472,15 @@ mod tests {
     /// that owns its clone. `Arc`/`Mutex` rather than `Rc`/`RefCell` because
     /// the sink has to satisfy the reporter's `Send` bound.
     #[derive(Clone, Default)]
-    struct Sink(Arc<Mutex<Vec<u8>>>);
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
 
-    impl Sink {
+    impl Buffer {
         fn text(&self) -> String {
             String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
         }
     }
 
-    impl Write for Sink {
+    impl Write for Buffer {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
             self.0.lock().unwrap().extend_from_slice(buf);
             Ok(buf.len())
@@ -397,8 +519,8 @@ mod tests {
         }
     }
 
-    fn reporter(mode: Mode, terminal: bool) -> (Progress, Sink, FakeClock) {
-        let sink = Sink::default();
+    fn reporter(mode: Mode, terminal: bool) -> (Progress, Buffer, FakeClock) {
+        let sink = Buffer::default();
         let clock = FakeClock::new();
         let progress = Progress::new(
             "indexing",
@@ -410,6 +532,23 @@ mod tests {
             terminal,
         );
         (progress, sink, clock)
+    }
+
+    /// The sink's width, which is what a redraw clears and pads to. Every
+    /// byte-exact test below drives a non-terminal sink, so the number is
+    /// fixed rather than the host terminal's.
+    const WIDTH: usize = PIPE_WIDTH as usize;
+
+    /// A cleared line: the width blanked, cursor back at the start.
+    fn blank() -> String {
+        format!("\r{:WIDTH$}\r", "")
+    }
+
+    /// One drawn line as it reaches the sink, padded out to the full width so
+    /// it covers whatever shared the row. A *re*draw is preceded by
+    /// [`blank`]; the first draw of a phase has nothing to clear.
+    fn drawn(line: &str) -> String {
+        format!("{line}{:pad$}", "", pad = WIDTH - line.chars().count())
     }
 
     #[test]
@@ -496,7 +635,13 @@ mod tests {
         clock.advance(Duration::from_millis(1));
         progress.update(3, Some(10));
 
-        assert_eq!(sink.text(), "\rdirsql: indexing 3/10 files (30%)");
+        assert!(
+            sink.text()
+                .trim_end()
+                .ends_with("dirsql: indexing 3/10 files (30%)"),
+            "got: {:?}",
+            sink.text()
+        );
     }
 
     /// `always` is the explicit ask, so it skips the warmup entirely -- and it
@@ -507,32 +652,7 @@ mod tests {
 
         progress.update(3, Some(10));
 
-        assert_eq!(sink.text(), "\rdirsql: indexing 3/10 files (30%)");
-    }
-
-    /// The live line proves the scan is moving; redrawing it faster than the
-    /// eye reads costs the terminal and says nothing new.
-    #[test]
-    fn updates_inside_the_redraw_interval_are_dropped() {
-        let (mut progress, sink, clock) = reporter(Mode::Always, false);
-
-        progress.update(1, Some(10));
-        clock.advance(REDRAW_INTERVAL - Duration::from_millis(1));
-        progress.update(2, Some(10));
-
-        assert_eq!(
-            sink.text(),
-            "\rdirsql: indexing 1/10 files (10%)",
-            "the second update is throttled away"
-        );
-
-        clock.advance(Duration::from_millis(1));
-        progress.update(2, Some(10));
-
-        assert_eq!(
-            sink.text(),
-            "\rdirsql: indexing 1/10 files (10%)\rdirsql: indexing 2/10 files (20%)"
-        );
+        assert_eq!(sink.text(), drawn("dirsql: indexing 3/10 files (30%)"));
     }
 
     /// A shorter line must cover the tail of the longer one it replaces, or
@@ -542,10 +662,9 @@ mod tests {
     /// status line -- instead of only what this reporter itself wrote.
     #[test]
     fn a_shorter_line_is_padded_to_the_full_line_width() {
-        let (mut progress, sink, clock) = reporter(Mode::Always, false);
+        let (mut progress, sink, _clock) = reporter(Mode::Always, false);
 
         progress.update(1000, Some(1000));
-        clock.advance(REDRAW_INTERVAL);
         progress.update(1, None);
 
         let short = "dirsql: indexing 1 files";
@@ -579,9 +698,11 @@ mod tests {
 
         assert_eq!(
             sink.text(),
-            "\rdirsql: indexing 1/10 files (10%)\
-             \r                                 \r\
-             dirsql: indexed 10 files in 4.5s\n"
+            format!(
+                "{}{}dirsql: indexed 10 files in 4.5s\n",
+                drawn("dirsql: indexing 1/10 files (10%)"),
+                blank()
+            )
         );
     }
 
@@ -661,18 +782,19 @@ mod tests {
         progress.restart();
         progress.update(1, Some(10));
 
-        let line = "dirsql: indexing 1/10 files (10%)";
-        let blanks = " ".repeat(line.len());
-        assert_eq!(
-            sink.text(),
-            format!("\r{line}\r{blanks}\r"),
-            "restart erased the line, and the fresh phase is back under its warmup"
+        assert!(
+            sink.text().ends_with('\r')
+                && sink.text().trim_end_matches([' ', '\r']).ends_with("(10%)"),
+            "restart erased the line, and the fresh phase is back under its warmup: {:?}",
+            sink.text()
         );
 
         clock.advance(WARMUP);
         progress.update(2, Some(10));
         assert!(
-            sink.text().ends_with("\rdirsql: indexing 2/10 files (20%)"),
+            sink.text()
+                .trim_end()
+                .ends_with("dirsql: indexing 2/10 files (20%)"),
             "and it draws again once the new phase is old enough: {:?}",
             sink.text()
         );
@@ -687,16 +809,18 @@ mod tests {
 
         clock.advance(WARMUP);
         CallProgress::update(&mut progress, 1, 0);
-        let line = "dirsql: indexing 1 files";
-        assert_eq!(sink.text(), format!("\r{line}"), "the phase drew");
+        assert!(
+            sink.text().trim_end().ends_with("dirsql: indexing 1 files"),
+            "the phase drew: {:?}",
+            sink.text()
+        );
 
         CallProgress::restart(&mut progress);
 
-        let blanks = " ".repeat(line.len());
-        assert_eq!(
-            sink.text(),
-            format!("\r{line}\r{blanks}\r"),
-            "restarting through the trait erased what it drew"
+        assert!(
+            sink.text().ends_with('\r'),
+            "restarting through the trait erased what it drew: {:?}",
+            sink.text()
         );
     }
 
@@ -709,9 +833,10 @@ mod tests {
         progress.update(1, Some(10));
         drop(progress);
 
-        let line = "dirsql: indexing 1/10 files (10%)";
-        let blanks = " ".repeat(line.len());
-        assert_eq!(sink.text(), format!("\r{line}\r{blanks}\r"));
+        assert_eq!(
+            sink.text(),
+            format!("{}{}", drawn("dirsql: indexing 1/10 files (10%)"), blank())
+        );
     }
 
     /// ...and a phase that already finished has nothing left to erase, so the
@@ -777,16 +902,15 @@ mod tests {
     /// the first one's cache split.
     #[test]
     fn restarting_clears_the_note() {
-        let (mut progress, sink, clock) = reporter(Mode::Always, false);
+        let (mut progress, sink, _clock) = reporter(Mode::Always, false);
 
         progress.set_note(Some("3 cached".to_string()));
         progress.update(1, None);
         progress.restart();
-        clock.advance(REDRAW_INTERVAL);
         progress.update(1, None);
 
         assert!(
-            sink.text().ends_with("dirsql: indexing 1 files"),
+            sink.text().trim_end().ends_with("dirsql: indexing 1 files"),
             "the fresh phase draws no note: {:?}",
             sink.text()
         );
@@ -806,7 +930,10 @@ mod tests {
 
         CallProgress::update(&mut progress, 9204, 8811);
 
-        assert_eq!(sink.text(), "\rdirsql: indexing 9204 files (8811 cached)");
+        assert_eq!(
+            sink.text(),
+            drawn("dirsql: indexing 9204 files (8811 cached)")
+        );
     }
 
     /// ...and so does the summary, which is where dirsql#1034's headline line
@@ -829,6 +956,83 @@ mod tests {
 
     /// The two production reporters differ only in wording, and the wording is
     /// what a user reads to tell the walk from the ingest.
+    fn sink_term(sink: &Buffer) -> SinkTerm {
+        SinkTerm {
+            sink: Arc::new(Mutex::new(Box::new(sink.clone()) as Box<dyn Write + Send>)),
+            width: 12,
+        }
+    }
+
+    /// The reporter never leaves its one live line, so indicatif asks for a
+    /// move of zero -- which has to cost no bytes, or every frame of a piped
+    /// `always` run carries an escape sequence nobody can read.
+    #[test]
+    fn a_cursor_move_of_zero_writes_nothing() {
+        let sink = Buffer::default();
+        let term = sink_term(&sink);
+
+        term.move_cursor_up(0).unwrap();
+        term.move_cursor_down(0).unwrap();
+        term.move_cursor_right(0).unwrap();
+        term.move_cursor_left(0).unwrap();
+
+        assert_eq!(sink.text(), "");
+    }
+
+    /// A real move is still a real move: indicatif owns when it asks.
+    #[test]
+    fn a_cursor_move_writes_the_escape_for_its_direction() {
+        let sink = Buffer::default();
+        let term = sink_term(&sink);
+
+        term.move_cursor_up(1).unwrap();
+        term.move_cursor_down(2).unwrap();
+        term.move_cursor_right(3).unwrap();
+        term.move_cursor_left(4).unwrap();
+
+        assert_eq!(sink.text(), "\x1b[1A\x1b[2B\x1b[3C\x1b[4D");
+    }
+
+    #[test]
+    fn writing_a_line_terminates_it() {
+        let sink = Buffer::default();
+        let term = sink_term(&sink);
+
+        term.write_str("bare").unwrap();
+        term.write_line("whole").unwrap();
+        term.flush().unwrap();
+
+        assert_eq!(sink.text(), "barewhole\n");
+    }
+
+    /// Clearing blanks the whole width with spaces rather than an erase
+    /// escape, because `always` draws to redirected stderr.
+    #[test]
+    fn clearing_blanks_the_width_without_an_escape() {
+        let sink = Buffer::default();
+        let term = sink_term(&sink);
+
+        term.clear_line().unwrap();
+
+        assert_eq!(sink.text(), "\r            \r");
+        assert_eq!(term.width(), 12);
+    }
+
+    #[test]
+    fn the_terminal_debugs_as_its_width() {
+        let sink = Buffer::default();
+
+        assert_eq!(format!("{:?}", sink_term(&sink)), "SinkTerm { width: 12 }");
+    }
+
+    /// A pipe has no width, so it gets the fixed one; a terminal reports its
+    /// own, which is only ever positive.
+    #[test]
+    fn a_pipe_gets_the_fixed_width() {
+        assert_eq!(line_width(false), PIPE_WIDTH);
+        assert!(line_width(true) > 0);
+    }
+
     #[test]
     fn the_production_reporters_carry_the_phase_wording() {
         let scanning = Progress::scanning();
