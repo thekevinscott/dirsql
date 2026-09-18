@@ -1,10 +1,11 @@
 //! `Row` / `RowEvent` → JSON serialization for the HTTP API.
 
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::Row;
 use crate::db::Value as CellValue;
 use crate::differ::RowEvent;
+use crate::row_event_flat::flatten_row_event;
 
 pub(super) fn rows_to_json(rows: &[Row]) -> Vec<Value> {
     rows.iter().map(row_to_json).collect()
@@ -35,52 +36,27 @@ pub(super) fn event_to_json(event: &RowEvent) -> String {
 }
 
 fn event_to_value(event: &RowEvent) -> Value {
-    match event {
-        RowEvent::Insert {
-            table,
-            row,
-            file_path,
-        } => json!({
-            "action": "insert",
-            "table": table,
-            "file_path": file_path,
-            "row": row_to_json(row),
-            "old_row": Value::Null,
-        }),
-        RowEvent::Update {
-            table,
-            old_row,
-            new_row,
-            file_path,
-        } => json!({
-            "action": "update",
-            "table": table,
-            "file_path": file_path,
-            "row": row_to_json(new_row),
-            "old_row": row_to_json(old_row),
-        }),
-        RowEvent::Delete {
-            table,
-            row,
-            file_path,
-        } => json!({
-            "action": "delete",
-            "table": table,
-            "file_path": file_path,
-            "row": row_to_json(row),
-            "old_row": Value::Null,
-        }),
-        RowEvent::Error {
-            table,
-            file_path,
-            error,
-        } => json!({
-            "action": "error",
-            "table": table,
-            "file_path": file_path.to_string_lossy(),
-            "error": error,
-        }),
+    let flat = flatten_row_event(event);
+    let mut map = Map::new();
+    map.insert("action".into(), Value::from(flat.action));
+    map.insert(
+        "table".into(),
+        flat.table.map_or(Value::Null, Value::String),
+    );
+    map.insert("file_path".into(), Value::String(flat.file_path));
+    match flat.error {
+        Some(error) => {
+            map.insert("error".into(), Value::String(error));
+        }
+        None => {
+            map.insert("row".into(), flat.row.map_or(Value::Null, row_to_json));
+            map.insert(
+                "old_row".into(),
+                flat.old_row.map_or(Value::Null, row_to_json),
+            );
+        }
     }
+    Value::Object(map)
 }
 
 #[cfg(test)]
@@ -116,6 +92,7 @@ mod tests {
             Some("posts/a.json"),
         );
         assert!(parsed.get("old_row").unwrap().is_null());
+        assert!(parsed.get("error").is_none());
         assert_eq!(event_to_json(&event), parsed.to_string());
     }
 
@@ -155,6 +132,19 @@ mod tests {
             parsed.get("error").and_then(Value::as_str),
             Some("parse failed")
         );
+    }
+
+    #[test]
+    fn error_event_omits_the_row_keys() {
+        let event = RowEvent::Error {
+            table: None,
+            file_path: PathBuf::from("bad.json"),
+            error: "parse failed".into(),
+        };
+        let parsed = event_to_value(&event);
+        assert!(parsed.get("table").unwrap().is_null());
+        assert!(parsed.get("row").is_none());
+        assert!(parsed.get("old_row").is_none());
     }
 
     #[test]

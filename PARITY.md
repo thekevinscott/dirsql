@@ -18,8 +18,10 @@ lowercase `action` names — are language-neutral. Since
 [#1131](https://github.com/thekevinscott/dirsql/issues/1131) they live once in
 `dirsql::flatten_row_event` (`#[doc(hidden)]`, not a public Rust API); each
 binding keeps only the marshaling of the borrowed rows into host values
-(`value_row_to_py_dict` / `value_row_to_js`) and its own event struct. No
-SDK-visible shape changed — this restores parity rather than introducing drift.
+(`value_row_to_py_dict` / `value_row_to_js`) and its own event struct. The
+CLI's HTTP `/events` serializer shares that same source, so the SSE payload and
+the two SDK event objects cannot drift apart. No SDK-visible shape changed —
+this restores parity rather than introducing drift.
 
 The `on_file` callback receives a single argument: the absolute filesystem
 path of the matched file. `dirsql` does not read file contents — a callback
