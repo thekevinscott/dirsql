@@ -286,17 +286,18 @@ async fn sync_backed_methods_before_ready_error() {
     // matched `gate.txt`. Prove it arrived, then release it and let it finish
     // so the background thread does not outlive the TempDir.
     let (lock, cvar) = &*gate;
-    let (mut state, wait) = cvar
-        .wait_timeout_while(lock.lock().unwrap(), PARK_PATIENCE, |s| !s.parked)
-        .unwrap();
-    assert!(
-        !wait.timed_out(),
-        "init never reached the extract closure: the scan matched no file, so \
-         this test never exercised a parked init",
-    );
-    state.released = true;
-    cvar.notify_all();
-    drop(state);
+    {
+        let (mut state, wait) = cvar
+            .wait_timeout_while(lock.lock().unwrap(), PARK_PATIENCE, |s| !s.parked)
+            .unwrap();
+        assert!(
+            !wait.timed_out(),
+            "init never reached the extract closure: the scan matched no file, so \
+             this test never exercised a parked init",
+        );
+        state.released = true;
+        cvar.notify_all();
+    }
     db.ready().await.unwrap();
 }
 

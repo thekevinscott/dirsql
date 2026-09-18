@@ -121,11 +121,11 @@ fn drain_row_events(
     seen
 }
 
-fn tables_with_action<'a>(
-    events: &'a [RowEvent],
+fn tables_with_action(
+    events: &[RowEvent],
     is_action: impl Fn(&RowEvent) -> Option<&str>,
-) -> std::collections::HashSet<&'a str> {
-    events.iter().filter_map(|e| is_action(e)).collect()
+) -> std::collections::HashSet<&str> {
+    events.iter().filter_map(is_action).collect()
 }
 
 #[test]

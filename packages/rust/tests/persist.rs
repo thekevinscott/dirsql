@@ -6,7 +6,6 @@
 //! for files whose filesystem metadata matches the cache.
 
 use dirsql::{DirSQL, DirSqlError, Row, Table, Value};
-use rusqlite;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -370,7 +369,7 @@ fn dirsql_directory_excluded_when_persist_disabled() {
 fn counting_named_table(name: &'static str, col: &'static str, counter: Arc<AtomicUsize>) -> Table {
     Table::new(
         name,
-        &format!("CREATE TABLE {name} ({col} TEXT)"),
+        format!("CREATE TABLE {name} ({col} TEXT)"),
         "**/*.csv",
         move |path| {
             let content = std::fs::read_to_string(path).unwrap();

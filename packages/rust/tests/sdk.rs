@@ -893,7 +893,7 @@ fn fanout_root() -> TempDir {
 fn table_returning(name: &str, glob: &str, col: &'static str, val: &'static str) -> Table {
     Table::new(
         name,
-        &format!("CREATE TABLE {name} ({col} TEXT)"),
+        format!("CREATE TABLE {name} ({col} TEXT)"),
         glob,
         move |_path| vec![HashMap::from([(col.into(), Value::Text(val.into()))])],
     )

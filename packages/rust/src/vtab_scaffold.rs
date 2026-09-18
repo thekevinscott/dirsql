@@ -289,9 +289,7 @@ mod tests {
 
     #[test]
     fn parse_gitignore_rejects_an_unknown_switch() {
-        let err = parse_gitignore("sometimes")
-            .err()
-            .expect("an unknown switch must be rejected");
+        let err = parse_gitignore("sometimes").expect_err("an unknown switch must be rejected");
         assert!(matches!(err, Error::ModuleError(_)), "got {err:?}");
         assert!(err.to_string().contains("no-gitignore"), "got: {err}");
     }
