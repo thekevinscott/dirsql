@@ -88,9 +88,7 @@ fail_under = 100
 branch = true
 
 # --- TypeScript ------------------------------------------------------------
-#
-# No `[typescript]` table here: no lane reading this file scans TypeScript. The
-# TS floors live in packages/ts/testing-conventions.toml.
+# No table here: the TS floors live in packages/ts/testing-conventions.toml.
 
 # --- Rust (scanned: packages/rust/src) -------------------------------------
 
