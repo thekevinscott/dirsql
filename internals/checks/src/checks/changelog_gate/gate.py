@@ -39,7 +39,7 @@ def run(
         print(
             f"::error file={path}::fragment filenames must match "
             f"YYYY-MM-DD-<slug>.md (UTC merge date; lowercase letters, digits, "
-            f"hyphens). See AGENTS.md, 'Changelog and Migrations'."
+            f"hyphens). See agents/reference/changelog-migrations.md."
         )
         fail = 1
 
@@ -58,7 +58,7 @@ def run(
             f"was added. Add {pkg}/changelog.d/YYYY-MM-DD-<slug>.md (plus "
             f"a {pkg}/migrations.d/ fragment if the change is breaking), "
             f"or add a 'skip-changelog: <reason>' line to any commit for a "
-            f"genuinely internal refactor. See AGENTS.md, 'Changelog and Migrations'."
+            f"genuinely internal refactor. See agents/reference/changelog-migrations.md."
         )
         fail = 1
     return fail
