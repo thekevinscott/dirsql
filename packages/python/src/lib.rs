@@ -13,7 +13,7 @@
 #[cfg(feature = "extension-module")]
 mod python {
     use ::dirsql::extension_resolution::{self, ConfigSource, PlanEntry};
-    use ::dirsql::{DirSQL, Extension, Row, RowEvent, Table, Value};
+    use ::dirsql::{DirSQL, Extension, Row, RowEvent, Table, Value, flatten_row_event};
     use pyo3::exceptions::{PyOverflowError, PyRuntimeError, PyValueError};
     use pyo3::prelude::*;
     use pyo3::types::{PyBool, PyByteArray, PyBytes, PyDict, PyInt, PyList};
@@ -279,90 +279,18 @@ mod python {
         PyRuntimeError::new_err(e.to_string())
     }
 
-    /// Pure, GIL-free intermediate for a row event. [`row_event_to_plain`]
-    /// builds it from a core [`RowEvent`] (unit-testable without a Python
-    /// interpreter); [`row_event_to_py`] then marshals it into the
-    /// Python-facing [`PyRowEvent`] (the GIL step).
-    struct PlainRowEvent {
-        table: Option<String>,
-        action: &'static str,
-        row: Option<Row>,
-        old_row: Option<Row>,
-        error: Option<String>,
-        file_path: String,
-    }
-
-    fn row_event_to_plain(event: &RowEvent) -> PlainRowEvent {
-        match event {
-            RowEvent::Insert {
-                table,
-                row,
-                file_path,
-            } => PlainRowEvent {
-                table: Some(table.clone()),
-                action: "insert",
-                row: Some(row.clone()),
-                old_row: None,
-                error: None,
-                file_path: file_path.clone(),
-            },
-            RowEvent::Update {
-                table,
-                old_row,
-                new_row,
-                file_path,
-            } => PlainRowEvent {
-                table: Some(table.clone()),
-                action: "update",
-                row: Some(new_row.clone()),
-                old_row: Some(old_row.clone()),
-                error: None,
-                file_path: file_path.clone(),
-            },
-            RowEvent::Delete {
-                table,
-                row,
-                file_path,
-            } => PlainRowEvent {
-                table: Some(table.clone()),
-                action: "delete",
-                row: Some(row.clone()),
-                old_row: None,
-                error: None,
-                file_path: file_path.clone(),
-            },
-            RowEvent::Error {
-                table,
-                file_path,
-                error,
-            } => PlainRowEvent {
-                table: table.clone(),
-                action: "error",
-                row: None,
-                old_row: None,
-                error: Some(error.clone()),
-                file_path: file_path.to_string_lossy().to_string(),
-            },
-        }
-    }
-
     fn row_event_to_py(py: Python<'_>, event: &RowEvent) -> PyResult<PyRowEvent> {
-        let plain = row_event_to_plain(event);
+        let flat = flatten_row_event(event);
         Ok(PyRowEvent {
-            table: plain.table,
-            action: plain.action.to_string(),
-            row: plain
-                .row
-                .as_ref()
-                .map(|r| value_row_to_py_dict(py, r))
-                .transpose()?,
-            old_row: plain
+            table: flat.table,
+            action: flat.action.to_string(),
+            row: flat.row.map(|r| value_row_to_py_dict(py, r)).transpose()?,
+            old_row: flat
                 .old_row
-                .as_ref()
                 .map(|r| value_row_to_py_dict(py, r))
                 .transpose()?,
-            error: plain.error,
-            file_path: Some(plain.file_path),
+            error: flat.error,
+            file_path: Some(flat.file_path),
         })
     }
 
@@ -608,76 +536,6 @@ mod python {
     #[cfg(test)]
     mod tests {
         use super::*;
-
-        fn one_row() -> HashMap<String, Value> {
-            HashMap::from([("k".to_string(), Value::Integer(7))])
-        }
-
-        #[test]
-        fn plain_insert_maps_row_and_action() {
-            let p = row_event_to_plain(&RowEvent::Insert {
-                table: "t".into(),
-                row: one_row(),
-                file_path: "/f".into(),
-            });
-            assert_eq!(p.action, "insert");
-            assert_eq!(p.table.as_deref(), Some("t"));
-            assert_eq!(
-                p.row.as_ref().and_then(|r| r.get("k")),
-                Some(&Value::Integer(7))
-            );
-            assert!(p.old_row.is_none());
-            assert!(p.error.is_none());
-            assert_eq!(p.file_path, "/f");
-        }
-
-        #[test]
-        fn plain_update_carries_old_and_new() {
-            let mut new = one_row();
-            new.insert("k".to_string(), Value::Integer(9));
-            let p = row_event_to_plain(&RowEvent::Update {
-                table: "t".into(),
-                old_row: one_row(),
-                new_row: new,
-                file_path: "/f".into(),
-            });
-            assert_eq!(p.action, "update");
-            assert_eq!(
-                p.row.as_ref().and_then(|r| r.get("k")),
-                Some(&Value::Integer(9))
-            );
-            assert_eq!(
-                p.old_row.as_ref().and_then(|r| r.get("k")),
-                Some(&Value::Integer(7))
-            );
-        }
-
-        #[test]
-        fn plain_delete_has_row_no_old() {
-            let p = row_event_to_plain(&RowEvent::Delete {
-                table: "t".into(),
-                row: one_row(),
-                file_path: "/f".into(),
-            });
-            assert_eq!(p.action, "delete");
-            assert!(p.row.is_some());
-            assert!(p.old_row.is_none());
-        }
-
-        #[test]
-        fn plain_error_has_no_row_and_optional_table() {
-            let p = row_event_to_plain(&RowEvent::Error {
-                table: None,
-                file_path: std::path::PathBuf::from("/f"),
-                error: "boom".into(),
-            });
-            assert_eq!(p.action, "error");
-            assert!(p.table.is_none());
-            assert!(p.row.is_none());
-            assert!(p.old_row.is_none());
-            assert_eq!(p.error.as_deref(), Some("boom"));
-            assert_eq!(p.file_path, "/f");
-        }
 
         #[test]
         fn on_file_error_displays_inner() {
