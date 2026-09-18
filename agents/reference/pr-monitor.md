@@ -1,7 +1,5 @@
 # Merge gating (pr-monitor): semantics & debugging
 
-Extracted from AGENTS.md (see "PR Monitoring" there for the summary). This is the full operational reference.
-
 The gate is `.github/workflows/pr-monitor.yml`, whose single job is named **`CI Gate`** — the only context branch protection requires. It runs [thekevinscott/pr-monitor](https://github.com/thekevinscott/pr-monitor) at `@v1`, a rolling tag tracking that repo's `main`.
 
 ## How the verdict is computed

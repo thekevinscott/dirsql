@@ -1,7 +1,5 @@
 # E2E Attestation — full mechanics
 
-Extracted from AGENTS.md (see "E2E Attestation" there for the summary).
-
 
 CI does not run the e2e suites -- they need real binaries, and some need live LLM calls -- but it enforces, **per package**, that a branch touching that package's source carries a **receipt** saying they were run. Receipts are **one JSON file per branch** in the package's `e2e-attestations/` directory -- `packages/python/e2e-attestations/<slug>.json`, `packages/ts/e2e-attestations/<slug>.json` -- each recording (via [`testing-conventions`](https://github.com/thekevinscott/testing-conventions)) the e2e command, its exit code, the commit it ran against, and the branch. `internals/checks` and `plugins/dirsql-plugin-embeddings` carry the same directory.
 
@@ -22,7 +20,7 @@ just e2e-attest-ts       # cd packages/ts && testing-conventions e2e attest 'pnp
 
 **Order does not matter.** The gate reads the branch diff, not commit ancestry, so a later source commit under the package does not invalidate an earlier receipt, and a multi-package PR can attest both packages at the end. That also makes it **indifferent to rebases and squash merges** -- the receipt's `commit` field is recorded for the record, not compared against `HEAD`. The retired "the attestation must be the last commit touching that package" rule described the single-file `e2e-attestation.json` layout that per-branch receipts replaced; it no longer holds.
 
-**One receipt path per branch is why branch names are never reused** (AGENTS.md, "PR Sizing and Issues"): two PRs sharing a branch name write the same `<slug>.json` and collide.
+**One receipt path per branch is why branch names are never reused** (`pr-workflow.md`, "PR Sizing and Issues"): two PRs sharing a branch name write the same `<slug>.json` and collide.
 
 Receipts are append-only in practice -- a merged branch's receipt stays in the directory as the record that its suite ran. They are not source: the `changelog-gate` exempts `e2e-attestations/`, `release-ci.yml` excludes it from the publish globs, and `putitoutthere.toml` keeps it out of every shipped artifact.
 
@@ -36,3 +34,40 @@ Receipts are append-only in practice -- a merged branch's receipt stays in the d
 Proven over synthetic single-root diffs (`e2e verify packages/<pkg> --scope <src> --base main`): a `packages/ts/napi`-only diff is exit 0 with the core root alone and exit 1 once `--extra-scope packages/ts/napi` is added, while the python lane's flags stay exit 0 over that same diff; the mirror holds for `packages/python/src`.
 
 CI installs the latest `testing-conventions` release (unpinned); install it locally before attesting: `pip install testing-conventions`. In the hosted sandbox that build fails -- use `uvx testing-conventions e2e attest '<cmd>'` instead (`agents/build/environment.md`).
+
+## E2E Before Push
+
+Agents must run the full e2e suite locally before any `git push` that includes a **substantial code change**, and report the outcome in the PR body. The commands to run differ per environment -- see the active environment file for specifics.
+
+**"Substantial" means any change touching:**
+- `packages/rust/**` (Rust core)
+- `packages/ts/napi/**` (napi-rs binding crate)
+- `packages/python/src/**` (excluding files matching `*_test.py`)
+- `packages/ts/src/**` (excluding files matching `*.test.ts` / `*.spec.ts`)
+- Any shared SDK runtime code reachable from the above
+
+**Not substantial** (e2e is optional, note "N/A - docs/lint/typo only" in the PR body):
+- Docs (`*.md`, `docs/**`, `README*`)
+- Lint/format-only changes
+- Typo fixes with no behavior change
+- Test-only changes (test files themselves)
+- CI/workflow config
+
+**PR body requirement:** PRs that include substantial changes must contain this section verbatim (checkboxes filled in):
+
+```markdown
+
+## E2E Verification
+
+- [ ] Ran e2e suites locally for every affected SDK
+- [ ] Python SDK e2e: pass / fail / N/A
+- [ ] TypeScript SDK e2e: pass / fail / N/A
+- [ ] Rust core e2e (if applicable): pass / fail / N/A
+- [ ] `packages/python/e2e-attestations/<branch>.json` receipt written if `packages/python` changed (`just e2e-attest-python`)
+- [ ] `packages/ts/e2e-attestations/<branch>.json` receipt written if `packages/ts` changed (`just e2e-attest-ts`)
+- Command(s) run:
+- Result summary:
+```
+
+For docs/lint/typo-only PRs, include the section with a single line: `N/A - docs/lint/typo only`.
+
