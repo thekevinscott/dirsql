@@ -61,3 +61,6 @@ actionlint
 # run's directory to `.old` on every re-run, so both forms need ignoring.
 mutants.out/
 mutants.out.old/
+
+# Stryker writes a fresh setup file per mutation run (`just preflight`).
+packages/ts/stryker-setup-*.js
