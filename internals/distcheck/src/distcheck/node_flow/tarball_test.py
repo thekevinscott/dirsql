@@ -42,3 +42,7 @@ def test_select_tarball_reports_the_matches_and_the_candidates():
     assert "'dirsql-lib-'" in message
     assert "['dirsql-lib-a.tgz', 'dirsql-lib-b.tgz']" in message
     assert "['a.tgz', 'dirsql-lib-a.tgz', 'dirsql-lib-b.tgz']" in message
+
+
+def test_error_type_resolves_to_the_shared_module():
+    assert DistcheckError.__module__ == "distcheck.errors"

@@ -24,3 +24,7 @@ def test_sole_wheel_reports_the_candidates_it_saw():
     with pytest.raises(DistcheckError) as raised:
         sole_wheel(["a.whl", "b.whl"])
     assert "['a.whl', 'b.whl']" in str(raised.value)
+
+
+def test_error_type_resolves_to_the_shared_module():
+    assert DistcheckError.__module__ == "distcheck.errors"

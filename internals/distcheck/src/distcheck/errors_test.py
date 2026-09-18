@@ -1,7 +1,7 @@
-"""Colocated unit tests for the python distcheck error type (no collaborators)."""
+"""Colocated unit tests for the shared distcheck error type (no collaborators)."""
 import pytest
 
-from distcheck.python_flow.errors import DistcheckError
+from distcheck.errors import DistcheckError
 
 
 def test_distcheck_error_is_a_runtime_error():

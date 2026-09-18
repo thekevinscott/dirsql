@@ -9,7 +9,12 @@ from unittest import mock
 
 import pytest
 
-from distcheck.node_flow.gate import DistcheckError, run, staged_addon_path
+from distcheck.node_flow.gate import (
+    DistcheckError,
+    require_zero,
+    run,
+    staged_addon_path,
+)
 
 
 @dataclass
@@ -208,3 +213,8 @@ def test_run_rejects_a_still_published_standalone_cli_subpkg():
 
     with pytest.raises(DistcheckError, match="standalone-CLI sub-package"):
         run("/ts", _HOST, runner=runner, fs=fs)
+
+
+def test_error_type_and_exit_guard_resolve_to_the_shared_modules():
+    assert DistcheckError.__module__ == "distcheck.errors"
+    assert require_zero.__module__ == "distcheck.require_zero"

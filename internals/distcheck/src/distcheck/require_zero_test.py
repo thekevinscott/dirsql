@@ -1,9 +1,9 @@
-"""Colocated unit tests for the node flow's exit-code guard (a pure check)."""
+"""Colocated unit tests for the shared exit-code guard (a pure check)."""
 from unittest import mock
 
 import pytest
 
-from distcheck.node_flow.require_zero import DistcheckError, require_zero
+from distcheck.require_zero import DistcheckError, require_zero
 
 
 def test_require_zero_passes_on_success():
