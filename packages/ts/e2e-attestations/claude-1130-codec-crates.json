@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1789748508,
+  "exit_code": 0,
+  "commit": "3b9d98d44a30dcce107b15037fa9b7ef5fcb088a",
+  "branch": "claude/1130-codec-crates"
+}

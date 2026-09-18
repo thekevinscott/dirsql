@@ -46,6 +46,7 @@ cli = [
     "dep:axum",
     "dep:clap",
     "dep:futures",
+    "dep:hex",
     "dep:reedline",
     "dep:tokio-stream",
     "tokio/rt-multi-thread",
@@ -56,12 +57,16 @@ cli = [
 
 [dependencies]
 axum = { version = "0.8", optional = true }
+base64 = "0.22"
 blake3 = "1"
 clap = { version = "4", features = ["derive"], optional = true }
 console = "0.16.6"
 futures = { version = "0.3", optional = true }
 futures-channel.workspace = true
 globset = "0.4"
+# Hex rendering of BLOB cells in the CLI's JSON output. CLI-only, so a
+# library consumer never pulls it.
+hex = { version = "0.4", optional = true }
 # Hierarchical `.gitignore` matching for path-table scans (the fd/ripgrep
 # semantics), without adopting its walker: the scan keeps `walkdir`.
 ignore = "0.4"

@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1789748436,
+  "exit_code": 0,
+  "commit": "9468882ee26238c102d59814a212d6c7f9c6be92",
+  "branch": "claude/1130-codec-crates"
+}
