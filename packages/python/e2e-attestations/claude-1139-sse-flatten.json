@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1789750671,
+  "exit_code": 0,
+  "commit": "5c33ad533545ff8791f462f42b2c3869b871ec7a",
+  "branch": "claude/1139-sse-flatten"
+}
