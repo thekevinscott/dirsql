@@ -33,6 +33,7 @@ class Table:
     name: str
     ddl: str
     glob: str
+    on_file: Callable[[str], list[Row]]
     strict: bool
 
     def __init__(
@@ -58,6 +59,15 @@ class RowEvent:
     @override
     def __repr__(self) -> str: ...
 
+class ScanFailure:
+    """One file the initial scan could not index, with the hook's own error."""
+
+    path: str
+    message: str
+
+    @override
+    def __repr__(self) -> str: ...
+
 class DirSQL:
     """Synchronous binding class. ``dirsql._async.DirSQL`` wraps it."""
 
@@ -75,6 +85,7 @@ class DirSQL:
         suppress_config_extensions: bool = False,
     ) -> None: ...
     def query(self, sql: str) -> list[Row]: ...
+    def scan_failures(self) -> list[ScanFailure]: ...
     def _start_watcher(self) -> None: ...
     def _poll_events(self, timeout_ms: int) -> list[RowEvent]: ...
 
@@ -92,6 +103,7 @@ class ExtensionPlanEntry:
     @override
     def __repr__(self) -> str: ...
 
+def run_cli(argv: list[str]) -> int: ...
 def config_paths_from_argv(argv: list[str]) -> list[str]: ...
 def plan_config_extensions(
     configs: list[tuple[str, str | None]],
