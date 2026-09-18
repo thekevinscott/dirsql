@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1789742374,
+  "exit_code": 0,
+  "commit": "c05317742ecadafeabc1f5de5ccffa75fa983756",
+  "branch": "claude/1122-ext-cleanup"
+}
