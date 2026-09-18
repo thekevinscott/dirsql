@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1789748553,
+  "exit_code": 0,
+  "commit": "d106fd4917b9dc93978646f6cb6d8f94374af617",
+  "branch": "claude/1131-flatten-row-event"
+}

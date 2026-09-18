@@ -21,7 +21,7 @@
 use dirsql::extension_resolution::{self, ConfigSource as CoreConfigSource, PlanEntry};
 use dirsql::{
     DirSQL as CoreDirSQL, Extension, PreparedBuild, RawFileEvent, Row, RowEvent as CoreRowEvent,
-    Table, Value,
+    Table, Value, flatten_row_event,
 };
 use napi::Task;
 use napi::bindgen_prelude::*;
@@ -821,56 +821,14 @@ fn value_row_to_js(row: &HashMap<String, Value>) -> Result<HashMap<String, JsRow
 }
 
 fn row_event_to_js(event: &CoreRowEvent) -> Result<RowEvent> {
-    Ok(match event {
-        CoreRowEvent::Insert {
-            table,
-            row,
-            file_path,
-        } => RowEvent {
-            table: Some(table.clone()),
-            action: "insert".to_string(),
-            row: Some(value_row_to_js(row)?),
-            old_row: None,
-            error: None,
-            file_path: Some(file_path.clone()),
-        },
-        CoreRowEvent::Update {
-            table,
-            old_row,
-            new_row,
-            file_path,
-        } => RowEvent {
-            table: Some(table.clone()),
-            action: "update".to_string(),
-            row: Some(value_row_to_js(new_row)?),
-            old_row: Some(value_row_to_js(old_row)?),
-            error: None,
-            file_path: Some(file_path.clone()),
-        },
-        CoreRowEvent::Delete {
-            table,
-            row,
-            file_path,
-        } => RowEvent {
-            table: Some(table.clone()),
-            action: "delete".to_string(),
-            row: Some(value_row_to_js(row)?),
-            old_row: None,
-            error: None,
-            file_path: Some(file_path.clone()),
-        },
-        CoreRowEvent::Error {
-            table,
-            file_path,
-            error,
-        } => RowEvent {
-            table: table.clone(),
-            action: "error".to_string(),
-            row: None,
-            old_row: None,
-            error: Some(error.clone()),
-            file_path: Some(file_path.to_string_lossy().to_string()),
-        },
+    let flat = flatten_row_event(event);
+    Ok(RowEvent {
+        table: flat.table,
+        action: flat.action.to_string(),
+        row: flat.row.map(value_row_to_js).transpose()?,
+        old_row: flat.old_row.map(value_row_to_js).transpose()?,
+        error: flat.error,
+        file_path: Some(flat.file_path),
     })
 }
 

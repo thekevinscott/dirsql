@@ -36,6 +36,8 @@ pub mod persist;
 #[doc(hidden)]
 pub mod progress;
 #[doc(hidden)]
+pub mod row_event_flat;
+#[doc(hidden)]
 pub mod scanner;
 #[doc(hidden)]
 pub mod sql_literal;
@@ -77,6 +79,8 @@ use thiserror::Error;
 pub use crate::config::ExtensionSpec as Extension;
 pub use crate::db::{DbError, Value};
 pub use crate::differ::RowEvent;
+#[doc(hidden)]
+pub use crate::row_event_flat::{FlatRowEvent, flatten_row_event};
 #[doc(hidden)]
 pub use crate::watcher::FileEvent as RawFileEvent;
 

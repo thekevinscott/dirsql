@@ -11,6 +11,16 @@ API surface comparison across the three language SDKs.
 | Row event   | `RowEvent` (class, frozen attrs; `file_path` on all variants) | `RowEvent` (enum: Insert/Update/Delete/Error; `file_path` on all variants) | `RowEvent` (plain object with action string; `filePath` on all variants) |
 | Row type    | `dict[str, Any]`        | `HashMap<String, Value>` | `Record<string, unknown>` |
 
+**Where the row-event flattening lives.** Both bindings publish the same flat
+`{table, action, row, old_row, error, file_path}` record, and the decisions
+behind it — which variant carries an old row, which one may have no table, the
+lowercase `action` names — are language-neutral. Since
+[#1131](https://github.com/thekevinscott/dirsql/issues/1131) they live once in
+`dirsql::flatten_row_event` (`#[doc(hidden)]`, not a public Rust API); each
+binding keeps only the marshaling of the borrowed rows into host values
+(`value_row_to_py_dict` / `value_row_to_js`) and its own event struct. No
+SDK-visible shape changed — this restores parity rather than introducing drift.
+
 The `on_file` callback receives a single argument: the absolute filesystem
 path of the matched file. `dirsql` does not read file contents — a callback
 that needs the file body reads it itself. This is consistent across all three
