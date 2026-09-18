@@ -183,8 +183,22 @@ pub fn plan_extension_path(
     resolve_relative: bool,
     suffixes: &[&str],
 ) -> PlanEntry {
-    let _ = (path, base, resolve_relative, suffixes);
-    unimplemented!("plan_extension_path")
+    if is_bare_name(path, suffixes) {
+        return PlanEntry::Package {
+            name: path.to_owned(),
+            shadow: base.join(path),
+            entrypoint: None,
+        };
+    }
+    PlanEntry::Literal {
+        // `join` yields an absolute path verbatim.
+        path: if resolve_relative {
+            base.join(path)
+        } else {
+            PathBuf::from(path)
+        },
+        entrypoint: None,
+    }
 }
 
 /// Pick the single loadable file for package `name` out of a host's listing.

@@ -63,7 +63,11 @@ export interface CoreModule {
   // every config's entries itself.
   planConfigExtensions(configs: ConfigSource[]): ExtensionPlanEntry[] | null;
   selectLoadable(name: string, dirs: string[], candidates: string[]): string;
-  isBareName(path: string): boolean;
+  planExtensionPath(
+    path: string,
+    base: string,
+    resolveRelative: boolean,
+  ): ExtensionPlanEntry;
 }
 
 // Unit tests `vi.mock("./core.js")` to fake `getCore` directly, so

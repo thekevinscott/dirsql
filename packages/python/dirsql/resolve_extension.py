@@ -1,7 +1,8 @@
 """Resolve an extension entry's ``path`` to a concrete loadable file.
 
-Resolution is an ordered probe (file-first, then package), so only a bare
-package name reaches the package machinery:
+Resolution is an ordered probe (file-first, then package), planned by the core
+(``_dirsql.plan_extension_path``) and carried out here: only locating an
+installed package is host-specific.
 
 1. **Path-looking** (contains a separator, or ends in ``.so`` / ``.dylib`` /
    ``.dll`` / ``.pyd``) -- returned as a file path: made absolute against
@@ -13,10 +14,8 @@ package name reaches the package machinery:
    picked from inside it.
 """
 
-import os
-
-from ._dirsql import is_bare_name
-from .resolve_package import _resolve_package
+from ._dirsql import plan_extension_path
+from .plan_entry_path import _plan_entry_path
 
 
 def resolve_extension_path(path, base, resolve_relative):
@@ -28,11 +27,4 @@ def resolve_extension_path(path, base, resolve_relative):
     against ``base`` (config-file semantics); when false it is returned verbatim
     (programmatic semantics).
     """
-    if not is_bare_name(path):
-        if resolve_relative and not os.path.isabs(path):
-            return os.path.join(base, path)
-        return path
-    local = os.path.join(base, path)
-    if os.path.isfile(local):
-        return local
-    return _resolve_package(path)
+    return _plan_entry_path(plan_extension_path(path, base, resolve_relative))

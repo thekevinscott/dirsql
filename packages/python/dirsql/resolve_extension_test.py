@@ -1,8 +1,7 @@
 """Unit tests for `resolve_extension_path`.
 
-The effectful collaborators -- the filesystem probe (`os.path.isfile`) and the
-package resolver -- are mocked, so these isolate the ordered probe from any
-real package or disk. The core's pure `is_bare_name` stays real.
+Both collaborators are mocked: the core's planner and the entry-to-path step
+that owns the filesystem probe and the package lookup.
 """
 
 from unittest import mock
@@ -10,51 +9,26 @@ from unittest import mock
 import dirsql.resolve_extension as mod
 
 
-def describe_path_looking_values():
-    def it_makes_a_relative_path_absolute_when_resolve_relative():
-        out = mod.resolve_extension_path("ext/a.so", base="/cfg", resolve_relative=True)
-        assert out == "/cfg/ext/a.so"
-
-    def it_preserves_an_absolute_path_when_resolve_relative():
-        out = mod.resolve_extension_path(
-            "/abs/a.so", base="/cfg", resolve_relative=True
-        )
-        assert out == "/abs/a.so"
-
-    def it_returns_a_path_verbatim_when_not_resolve_relative():
-        out = mod.resolve_extension_path(
-            "relative/a.so", base="/cfg", resolve_relative=False
-        )
-        assert out == "relative/a.so"
-
-
-def describe_bare_names():
-    def it_uses_a_same_named_local_file_when_present():
+def describe_resolve_extension_path():
+    def it_plans_through_the_core_and_resolves_the_planned_entry():
+        entry = object()
         with (
-            mock.patch.object(mod.os.path, "isfile", return_value=True) as isfile,
-            mock.patch.object(mod, "_resolve_package") as resolve_package,
-        ):
-            out = mod.resolve_extension_path("vec", base="/cfg", resolve_relative=True)
-        assert out == "/cfg/vec"
-        isfile.assert_called_once_with("/cfg/vec")
-        resolve_package.assert_not_called()
-
-    def it_resolves_the_package_when_no_local_file_shadows_it():
-        with (
-            mock.patch.object(mod.os.path, "isfile", return_value=False),
+            mock.patch.object(mod, "plan_extension_path", return_value=entry) as plan,
             mock.patch.object(
-                mod, "_resolve_package", return_value="/site/vec/vec0.so"
-            ) as resolve_package,
-        ):
-            out = mod.resolve_extension_path("vec", base="/cfg", resolve_relative=True)
-        assert out == "/site/vec/vec0.so"
-        resolve_package.assert_called_once_with("vec")
-
-    def it_probes_the_shadow_file_even_when_not_resolve_relative():
-        with (
-            mock.patch.object(mod.os.path, "isfile", return_value=True) as isfile,
-            mock.patch.object(mod, "_resolve_package"),
+                mod, "_plan_entry_path", return_value="/site/vec/vec0.so"
+            ) as entry_path,
         ):
             out = mod.resolve_extension_path("vec", base="/cfg", resolve_relative=False)
-        assert out == "/cfg/vec"
-        isfile.assert_called_once_with("/cfg/vec")
+
+        assert out == "/site/vec/vec0.so"
+        plan.assert_called_once_with("vec", "/cfg", False)
+        entry_path.assert_called_once_with(entry)
+
+    def it_passes_resolve_relative_through_to_the_planner():
+        with (
+            mock.patch.object(mod, "plan_extension_path") as plan,
+            mock.patch.object(mod, "_plan_entry_path"),
+        ):
+            mod.resolve_extension_path("ext/a.so", base="/cfg", resolve_relative=True)
+
+        plan.assert_called_once_with("ext/a.so", "/cfg", True)

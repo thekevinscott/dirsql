@@ -143,11 +143,16 @@ since [#1119](https://github.com/thekevinscott/dirsql/issues/1119) they live
 once in `dirsql::extension_resolution` (`#[doc(hidden)]`, not a public Rust
 API). Both SDKs reach it through their binding —
 [#1120](https://github.com/thekevinscott/dirsql/issues/1120) for Python
-(`dirsql._dirsql.plan_config_extensions` / `select_loadable` / `is_bare_name`),
+(`dirsql._dirsql.plan_config_extensions` / `plan_extension_path` /
+`select_loadable`),
 [#1121](https://github.com/thekevinscott/dirsql/issues/1121) for TypeScript
-(the addon's `planConfigExtensions` / `selectLoadable` / `isBareName`). Each
-host keeps only what it alone can do: reading the config files, and locating an
-installed package (`importlib.util.find_spec` / `require.resolve`).
+(the addon's `planConfigExtensions` / `planExtensionPath` / `selectLoadable`).
+The same probe covers a *programmatic* `extensions=[{path}]` entry, planned by
+`plan_extension_path` since
+[#1122](https://github.com/thekevinscott/dirsql/issues/1122); the `is_bare_name`
+/ `isBareName` export it replaced is gone. Each host keeps only what it alone
+can do: reading the config files, and locating an installed package
+(`importlib.util.find_spec` / `require.resolve`).
 
 **Config-flag scanning breadth
 ([#754](https://github.com/thekevinscott/dirsql/issues/754) /
