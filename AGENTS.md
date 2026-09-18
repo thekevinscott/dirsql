@@ -10,7 +10,7 @@ All architectural decisions and constraints (including cross-language parity rul
 
 ## Reference Docs
 
-Deep operational references live in `agents/reference/` and are NOT auto-loaded (this file must stay under Claude Code's 40k-char instruction limit). Each summarized section below names its reference file -- **read it before working in that area**: reusable-workflow gate debugging (`testing-conventions-ci.md`), colocation/mutation/coverage gates (`testing-gates.md`), e2e attestation (`e2e-attestation.md`), changelog/migration fragments (`changelog-migrations.md`), merge gating (`pr-monitor.md`).
+Deep operational references live in `agents/reference/` and are NOT auto-loaded (this file must stay under Claude Code's 40k-char instruction limit). Each summarized section below names its reference file -- **read it before working in that area**: reusable-workflow gate debugging (`testing-conventions-ci.md`), colocation/mutation/coverage gates (`testing-gates.md`), e2e attestation (`e2e-attestation.md`), changelog/migration fragments (`changelog-migrations.md`), merge gating (`pr-monitor.md`), judging a change that claims to shrink the codebase (`source-size.md`).
 
 ## Scratch Files
 
