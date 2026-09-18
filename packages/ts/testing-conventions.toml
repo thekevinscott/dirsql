@@ -10,7 +10,7 @@
 [e2e]
 extra_scope = ["packages/rust/src", "packages/ts/napi"]
 
-# Same floors as the root file, which this lane no longer reads.
+# The live TypeScript floors; the root file carries no `[typescript]` table.
 [typescript.coverage]
 lines = 100
 functions = 100
