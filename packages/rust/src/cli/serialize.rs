@@ -26,17 +26,8 @@ fn cell_to_json(value: &CellValue) -> Value {
             .map(Value::Number)
             .unwrap_or(Value::Null),
         CellValue::Text(s) => Value::String(s.clone()),
-        CellValue::Blob(bytes) => Value::String(hex_encode(bytes)),
+        CellValue::Blob(bytes) => Value::String(hex::encode(bytes)),
     }
-}
-
-/// Hex-encode a byte slice, for `BLOB` SQLite values in JSON output.
-fn hex_encode(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push_str(&format!("{b:02x}"));
-    }
-    out
 }
 
 pub(super) fn event_to_json(event: &RowEvent) -> String {
@@ -198,16 +189,13 @@ mod tests {
     fn blob_cell_becomes_hex_string() {
         let json = cell_to_json(&CellValue::Blob(vec![0xde, 0xad, 0xbe, 0xef]));
         assert_eq!(json.as_str(), Some("deadbeef"));
+        let padded = cell_to_json(&CellValue::Blob(vec![0x00, 0x0f, 0xff]));
+        assert_eq!(padded.as_str(), Some("000fff"));
     }
 
     #[test]
     fn non_finite_real_becomes_json_null() {
         assert!(cell_to_json(&CellValue::Real(f64::NAN)).is_null());
         assert!(cell_to_json(&CellValue::Real(f64::INFINITY)).is_null());
-    }
-
-    #[test]
-    fn hex_encode_matches_lowercase_spec() {
-        assert_eq!(hex_encode(&[0x00, 0x0f, 0xff, 0xde, 0xad]), "000fffdead");
     }
 }

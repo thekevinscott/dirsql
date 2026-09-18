@@ -38,6 +38,8 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use rusqlite::Connection;
 use rusqlite::functions::FunctionFlags;
 
@@ -357,7 +359,7 @@ fn value_to_json(value: &Value) -> serde_json::Value {
             .map(serde_json::Value::Number)
             .unwrap_or(serde_json::Value::Null),
         Value::Text(s) => serde_json::Value::from(s.as_str()),
-        Value::Blob(bytes) => serde_json::json!({ "$bytes": base64_encode(bytes) }),
+        Value::Blob(bytes) => serde_json::json!({ "$bytes": STANDARD.encode(bytes) }),
     }
 }
 
@@ -428,75 +430,13 @@ fn json_to_sql_value(value: &serde_json::Value) -> Result<Value, String> {
             let encoded = map["$bytes"]
                 .as_str()
                 .ok_or_else(|| "\"$bytes\" must be a base64 string".to_string())?;
-            let bytes = base64_decode(encoded)
-                .ok_or_else(|| "\"$bytes\" is not valid base64".to_string())?;
+            let bytes = STANDARD
+                .decode(encoded)
+                .map_err(|_| "\"$bytes\" is not valid base64".to_string())?;
             Ok(Value::Blob(bytes))
         }
         other => Ok(Value::Text(other.to_string())),
     }
-}
-
-const BASE64_ALPHABET: &[u8; 64] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-/// Standard base64 with padding. Hand-rolled (~20 lines) rather than a new
-/// dependency for one wire field.
-fn base64_encode(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b0 = u32::from(chunk[0]);
-        let b1 = chunk.get(1).map(|b| u32::from(*b));
-        let b2 = chunk.get(2).map(|b| u32::from(*b));
-        let triple = (b0 << 16) | (b1.unwrap_or(0) << 8) | b2.unwrap_or(0);
-        let index = |shift: u32| BASE64_ALPHABET[(triple >> shift & 0x3f) as usize] as char;
-        out.push(index(18));
-        out.push(index(12));
-        out.push(if b1.is_some() { index(6) } else { '=' });
-        out.push(if b2.is_some() { index(0) } else { '=' });
-    }
-    out
-}
-
-/// Decode standard base64 (padding required). `None` on any malformed input.
-fn base64_decode(text: &str) -> Option<Vec<u8>> {
-    let bytes = text.as_bytes();
-    if !bytes.len().is_multiple_of(4) {
-        return None;
-    }
-    let value_of = |b: u8| -> Option<u32> {
-        BASE64_ALPHABET
-            .iter()
-            .position(|c| *c == b)
-            .map(|i| u32::try_from(i).expect("index < 64"))
-    };
-    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-    for (i, chunk) in bytes.chunks(4).enumerate() {
-        let last = (i + 1) * 4 == bytes.len();
-        let pad = chunk.iter().filter(|b| **b == b'=').count();
-        // Padding may only close the final chunk, as its last one or two chars.
-        if pad > 0 && (!last || pad > 2 || chunk[..4 - pad].contains(&b'=')) {
-            return None;
-        }
-        let mut triple: u32 = 0;
-        for b in &chunk[..4 - pad] {
-            triple = (triple << 6) | value_of(*b)?;
-        }
-        triple <<= 6 * u32::try_from(pad).expect("pad <= 2");
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "each shift isolates one byte"
-        )]
-        {
-            out.push((triple >> 16) as u8);
-            if pad < 2 {
-                out.push((triple >> 8) as u8);
-            }
-            if pad < 1 {
-                out.push(triple as u8);
-            }
-        }
-    }
-    Some(out)
 }
 
 /// The production transport: the spawned worker process, its piped stdin,
@@ -900,40 +840,6 @@ mod tests {
             ok_value(r#"{"ok": {"$bytes": "AQI=", "x": 1}}"#),
             text(r#"{"$bytes":"AQI=","x":1}"#)
         );
-    }
-
-    // --- base64 ------------------------------------------------------------
-
-    #[test]
-    fn base64_round_trips_every_padding_length() {
-        for bytes in [
-            &b""[..],
-            &b"f"[..],
-            &b"fo"[..],
-            &b"foo"[..],
-            &b"foob"[..],
-            &[0u8, 255, 16, 3][..],
-        ] {
-            let encoded = base64_encode(bytes);
-            assert_eq!(base64_decode(&encoded).as_deref(), Some(bytes), "{encoded}");
-        }
-    }
-
-    #[test]
-    fn base64_known_vectors() {
-        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
-        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
-        assert_eq!(base64_encode(&[1, 2]), "AQI=");
-        assert_eq!(base64_decode("Zm9vYmFy").as_deref(), Some(&b"foobar"[..]));
-    }
-
-    #[test]
-    fn base64_decode_rejects_malformed_input() {
-        assert_eq!(base64_decode("abc"), None); // not a multiple of 4
-        assert_eq!(base64_decode("a!=="), None); // bad alphabet
-        assert_eq!(base64_decode("ab=c"), None); // padding inside a chunk
-        assert_eq!(base64_decode("ab==cd=="), None); // padding before the last chunk
-        assert_eq!(base64_decode("a==="), None); // over-padding
     }
 
     // --- defaults -----------------------------------------------------------
