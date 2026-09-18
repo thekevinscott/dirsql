@@ -1,7 +1,8 @@
 // Hermetic: first-party code runs for real; the mocked boundaries are
 // `node:fs` probes and `node:module`'s `createRequire` (behind which both
-// the napi binary and package resolution sit). Real extension *loading* is
-// covered by `tests/binding/`.
+// the napi binary and package resolution sit). The bare-name test and the
+// config planner now live in the core, so the fake core answers for them
+// here; the real ones are covered by `tests/integration/binding/`.
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { DirSQL } from "dirsql";
@@ -10,7 +11,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // Fake native core module, delivered through the mocked `createRequire` so
 // the real `loadNativeCore()` / `getCore()` chain runs unmodified.
 const { fakeCore } = vi.hoisted(() => ({
-  fakeCore: { DirSQL: { openAsync: vi.fn() } },
+  fakeCore: {
+    DirSQL: { openAsync: vi.fn() },
+    isBareName: vi.fn(),
+    selectLoadable: vi.fn(),
+    planConfigExtensions: vi.fn(),
+  },
 }));
 
 vi.mock("node:fs", async (importOriginal) => ({
@@ -40,10 +46,13 @@ vi.mock("node:module", async (importOriginal) => {
 });
 
 const openAsync = fakeCore.DirSQL.openAsync;
+const { isBareName, selectLoadable, planConfigExtensions } = fakeCore;
 
 beforeEach(() => {
   // Reset (not just clear) so per-test fs implementations never leak.
   vi.resetAllMocks();
+  isBareName.mockReturnValue(false);
+  planConfigExtensions.mockReturnValue(null);
   openAsync.mockResolvedValue({
     query: vi.fn().mockResolvedValue([]),
     startWatcher: vi.fn().mockResolvedValue(undefined),
@@ -75,12 +84,14 @@ describe("extensions option (hermetic, #230/#299)", () => {
   });
 
   it("resolves a bare package name to the installed loadable", async () => {
+    isBareName.mockReturnValue(true);
     // No same-named local file shadows the package...
     vi.mocked(existsSync).mockReturnValue(false);
-    // ...and the resolved package dir contains exactly one platform loadable.
+    // ...and the core picks the one loadable in the resolved package dir.
     vi.mocked(readdirSync).mockReturnValue([
       "libtestext.so",
     ] as unknown as ReturnType<typeof readdirSync>);
+    selectLoadable.mockReturnValue("/nm/dirsql-testext-pkg/libtestext.so");
 
     const db = new DirSQL({
       root: "/data",
@@ -93,6 +104,7 @@ describe("extensions option (hermetic, #230/#299)", () => {
   });
 
   it("prefers a same-named local file over the installed package", async () => {
+    isBareName.mockReturnValue(true);
     const cwd = vi.spyOn(process, "cwd").mockReturnValue("/cwd");
     vi.mocked(existsSync).mockReturnValue(true);
     vi.mocked(statSync).mockReturnValue({
@@ -117,9 +129,13 @@ describe("extensions option (hermetic, #230/#299)", () => {
     vi.mocked(readFileSync).mockReturnValue(
       '[[dirsql.extension]]\npath = "dirsql-testext-pkg"\n',
     );
+    planConfigExtensions.mockReturnValue([
+      { package: "dirsql-testext-pkg", shadow: "/cfg/dirsql-testext-pkg" },
+    ]);
     vi.mocked(readdirSync).mockReturnValue([
       "libtestext.so",
     ] as unknown as ReturnType<typeof readdirSync>);
+    selectLoadable.mockReturnValue("/nm/dirsql-testext-pkg/libtestext.so");
 
     const db = new DirSQL({ root: "/data", config: "/cfg/.dirsql.toml" });
     await db.ready;
@@ -131,6 +147,7 @@ describe("extensions option (hermetic, #230/#299)", () => {
   });
 
   it("rejects ready when a bare package name is not installed", async () => {
+    isBareName.mockReturnValue(true);
     vi.mocked(existsSync).mockReturnValue(false);
 
     const db = new DirSQL({

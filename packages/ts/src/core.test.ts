@@ -25,18 +25,27 @@ describe("getCore", () => {
 describe("CoreModule contract", () => {
   it("carries the core's argv config-path scan beside the DirSQL class", () => {
     const configPathsFromArgv = vi.fn((argv: string[]) => argv);
-    // Typed against the real interface, not cast: dropping the scan from
+    const planConfigExtensions = vi.fn(() => null);
+    const selectLoadable = vi.fn(() => "/d/ext.so");
+    const isBareName = vi.fn(() => true);
+    // Typed against the real interface, not cast: dropping a member from
     // `CoreModule` would make this literal fail to compile, which pins the
-    // member the npm launcher reaches for before the core parses argv.
+    // surface the SDK reaches for before the core parses argv.
     const core: CoreModule = {
       DirSQL: {} as NativeDirSQLConstructor,
       configPathsFromArgv,
+      planConfigExtensions,
+      selectLoadable,
+      isBareName,
     };
     expect(core.configPathsFromArgv(["-c", "a.toml"])).toEqual([
       "-c",
       "a.toml",
     ]);
     expect(configPathsFromArgv).toHaveBeenCalledWith(["-c", "a.toml"]);
+    expect(core.planConfigExtensions([{ path: "a.toml" }])).toBeNull();
+    expect(core.selectLoadable("ext", ["/d"], ["/d/ext.so"])).toBe("/d/ext.so");
+    expect(core.isBareName("ext")).toBe(true);
   });
 });
 

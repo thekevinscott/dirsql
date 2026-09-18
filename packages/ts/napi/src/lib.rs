@@ -18,6 +18,7 @@
 //! the TS wrapper exposes a matching overloaded constructor so callers can
 //! write either `new DirSQL(configPath)` or `new DirSQL({ root, tables, ... })`.
 
+use dirsql::extension_resolution::{self, ConfigSource as CoreConfigSource, PlanEntry};
 use dirsql::{
     DirSQL as CoreDirSQL, Extension, PreparedBuild, RawFileEvent, Row, RowEvent as CoreRowEvent,
     Table, Value,
@@ -27,7 +28,7 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -52,6 +53,106 @@ pub fn run_cli(argv: Vec<String>) -> i32 {
 #[napi(js_name = "configPathsFromArgv")]
 pub fn config_paths_from_argv(argv: Vec<String>) -> Vec<String> {
     dirsql::launcher::config_paths_from_argv(&argv)
+}
+
+/// The loadable-file suffixes a Node host recognizes.
+const NODE_SUFFIXES: &[&str] = &[".so", ".dylib", ".dll", ".node"];
+
+/// The subset this platform actually builds, used when picking a package's
+/// loadable out of everything installed beside it.
+#[cfg(target_os = "macos")]
+const PLATFORM_SUFFIXES: &[&str] = &[".dylib", ".node"];
+#[cfg(target_os = "windows")]
+const PLATFORM_SUFFIXES: &[&str] = &[".dll", ".node"];
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const PLATFORM_SUFFIXES: &[&str] = &[".so", ".node"];
+
+/// One config file for the extension planner: its absolute path, and its
+/// contents or `null` when the launcher could not read it.
+#[napi(object)]
+pub struct ConfigSource {
+    pub path: String,
+    pub contents: Option<String>,
+}
+
+/// One planned `[[dirsql.extension]]` entry.
+///
+/// Exactly one of `path` and `package` is set: a `path` is ready to load, a
+/// `package` must be located with `require.resolve` first — unless `shadow`
+/// names an existing file, which takes precedence over the package.
+#[napi(object, object_from_js = false)]
+pub struct ExtensionPlanEntry {
+    pub path: Option<String>,
+    pub package: Option<String>,
+    pub shadow: Option<String>,
+    pub entrypoint: Option<String>,
+}
+
+fn plan_entry_to_js(entry: PlanEntry) -> ExtensionPlanEntry {
+    match entry {
+        PlanEntry::Literal { path, entrypoint } => ExtensionPlanEntry {
+            path: Some(display(&path)),
+            package: None,
+            shadow: None,
+            entrypoint,
+        },
+        PlanEntry::Package {
+            name,
+            shadow,
+            entrypoint,
+        } => ExtensionPlanEntry {
+            path: None,
+            package: Some(name),
+            shadow: Some(display(&shadow)),
+            entrypoint,
+        },
+    }
+}
+
+fn display(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+/// Plan several configs' `[[dirsql.extension]]` entries.
+///
+/// `null` back means no entry names a package, so the core's own config
+/// loading handles them all.
+#[napi(js_name = "planConfigExtensions")]
+pub fn plan_config_extensions(configs: Vec<ConfigSource>) -> Option<Vec<ExtensionPlanEntry>> {
+    let sources: Vec<CoreConfigSource<'_>> = configs
+        .iter()
+        .map(|source| CoreConfigSource {
+            path: Path::new(&source.path),
+            contents: source.contents.as_deref(),
+        })
+        .collect();
+    let plan = extension_resolution::plan_config_extensions(&sources, NODE_SUFFIXES)?;
+    Some(plan.into_iter().map(plan_entry_to_js).collect())
+}
+
+/// Pick package `name`'s single loadable file out of `candidates`.
+#[napi(js_name = "selectLoadable")]
+pub fn select_loadable(name: String, dirs: Vec<String>, candidates: Vec<String>) -> Result<String> {
+    selected_loadable(&name, dirs, candidates).map_err(Error::from_reason)
+}
+
+/// The JS-free half of [`select_loadable`], so it stays unit-testable.
+fn selected_loadable(
+    name: &str,
+    dirs: Vec<String>,
+    candidates: Vec<String>,
+) -> std::result::Result<String, String> {
+    let dirs: Vec<PathBuf> = dirs.into_iter().map(PathBuf::from).collect();
+    let candidates: Vec<PathBuf> = candidates.into_iter().map(PathBuf::from).collect();
+    extension_resolution::select_loadable(name, &dirs, &candidates, PLATFORM_SUFFIXES)
+        .map(|path| display(&path))
+        .map_err(|err| err.to_string())
+}
+
+/// Whether an extension entry names a package rather than a file.
+#[napi(js_name = "isBareName")]
+pub fn is_bare_name(path: String) -> bool {
+    extension_resolution::is_bare_name(&path, NODE_SUFFIXES)
 }
 
 /// A row-level event emitted by the file watcher.
@@ -763,6 +864,87 @@ fn row_event_to_js(event: &CoreRowEvent) -> Result<RowEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn config(path: &str, contents: Option<&str>) -> ConfigSource {
+        ConfigSource {
+            path: path.to_string(),
+            contents: contents.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn plan_config_extensions_is_none_without_a_package_name() {
+        assert!(
+            plan_config_extensions(vec![config(
+                "/cfg/.dirsql.toml",
+                Some("[[dirsql.extension]]\npath = \"./vec0.so\"\n"),
+            )])
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn plan_config_extensions_resolves_literals_against_their_config_dir() {
+        let plan = plan_config_extensions(vec![config(
+            "/cfg/.dirsql.toml",
+            Some(
+                "[[dirsql.extension]]\npath = \"./vec0.so\"\n\n[[dirsql.extension]]\npath = \"sqlite_vec\"\n",
+            ),
+        )])
+        .expect("a package name forces a plan");
+        assert_eq!(plan[0].path.as_deref(), Some("/cfg/./vec0.so"));
+        assert_eq!(plan[1].package.as_deref(), Some("sqlite_vec"));
+        assert_eq!(plan[1].shadow.as_deref(), Some("/cfg/sqlite_vec"));
+    }
+
+    #[test]
+    fn plan_config_extensions_skips_an_unreadable_config() {
+        assert!(plan_config_extensions(vec![config("/cfg/.dirsql.toml", None)]).is_none());
+    }
+
+    #[test]
+    fn plan_config_extensions_carries_the_entrypoint() {
+        let plan = plan_config_extensions(vec![config(
+            "/cfg/.dirsql.toml",
+            Some("[[dirsql.extension]]\npath = \"sqlite_vec\"\nentrypoint = \"init\"\n"),
+        )])
+        .expect("a package name forces a plan");
+        assert_eq!(plan[0].entrypoint.as_deref(), Some("init"));
+    }
+
+    #[test]
+    fn select_loadable_returns_the_single_match() {
+        let found = selected_loadable(
+            "vec",
+            vec!["/pkg".into()],
+            vec![
+                "/pkg/README.md".into(),
+                format!("/pkg/vec0{}", PLATFORM_SUFFIXES[0]),
+            ],
+        )
+        .expect("one loadable file");
+        assert_eq!(found, format!("/pkg/vec0{}", PLATFORM_SUFFIXES[0]));
+    }
+
+    #[test]
+    fn select_loadable_carries_the_cores_message_verbatim() {
+        let err =
+            selected_loadable("vec", vec!["/pkg".into()], vec![]).expect_err("no loadable file");
+        assert!(err.starts_with("no loadable extension file (*"), "{err}");
+        assert!(
+            err.ends_with("found in package 'vec' (searched /pkg)"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn is_bare_name_applies_the_node_suffix_list() {
+        assert!(is_bare_name("sqlite-vec".into()));
+        assert!(!is_bare_name("vec0.node".into()));
+        assert!(!is_bare_name("vec0.so".into()));
+        assert!(is_bare_name("vec0.pyd".into()));
+        assert!(!is_bare_name("ext/vec0".into()));
+    }
 
     fn one_row() -> HashMap<String, Value> {
         HashMap::from([("k".to_string(), Value::Integer(7))])

@@ -12,6 +12,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { fakeCore } = vi.hoisted(() => ({
   fakeCore: {
     DirSQL: { openAsync: vi.fn() },
+    // The config planner lives in the core; hermetic tests never exercise a
+    // config's extension entries, so it plans nothing.
+    planConfigExtensions: vi.fn(() => null),
   },
 }));
 
