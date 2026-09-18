@@ -14,4 +14,4 @@ Each PR that touches this package's public-facing source adds one file here:
 Fragments are **permanent and append-only** — nothing is ever assembled back
 into a single `CHANGELOG.md`, and the release↔entry mapping comes from
 `git log --tags`. This README is not a fragment and never satisfies the
-changelog gate. See AGENTS.md, "Changelog and Migrations".
+changelog gate. See `agents/reference/changelog-migrations.md`.

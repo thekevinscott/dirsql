@@ -1,7 +1,5 @@
 # Changelog and Migrations — full mechanics
 
-Extracted from AGENTS.md (see "Changelog and Migrations" there for the summary).
-
 
 **Every PR that touches public-facing SDK code must add a changelog fragment.** This is enforced in CI by the `changelog-gate` check (`internals/checks`), whose implementation mirrors [template-lib](https://github.com/thekevinbot/template-lib)'s reference gate (#566); an unmet gate blocks merge.
 
@@ -54,6 +52,15 @@ The frozen root `MIGRATIONS.md` is not published on the docs site: it holds only
 **PR body requirement:** PRs that touch SDK code must contain the following block (checkboxes filled in):
 
 ```markdown
+## Changelog / Migrations
+
+- [ ] Changelog fragment added under `<root>/<pkg>/changelog.d/` for each changed package (or: `skip-changelog` trailer on a commit with reason)
+- [ ] Migration fragment added under `<root>/<pkg>/migrations.d/` (or: not required -- additive/bugfix only)
+```
+
+Orchestrators must block merges of SDK-touching PRs that miss either file when required.
+
+
 ## Changelog / Migrations
 
 - [ ] Changelog fragment added under `<root>/<pkg>/changelog.d/` for each changed package (or: `skip-changelog` trailer on a commit with reason)

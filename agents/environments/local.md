@@ -2,7 +2,7 @@
 
 This file provides the workflow rules that apply when developing **locally** on a maintainer machine. It is loaded via the `agents/build/environment.md` symlink, which is (re)created on every session start by `.claude/hooks/select-environment.sh`.
 
-Universal rules (architecture, scratch files, shell command style, testing philosophy) live in `AGENTS.md`. This file covers only the **local-specific overrides**.
+Universal rules live in `AGENTS.md` and the reference files it points at. This file covers only the **local-specific overrides**.
 
 ## Workflow
 
@@ -90,13 +90,13 @@ The orchestrator (main Claude session) must proactively:
 
 ## E2E Before Push -- Local Commands
 
-The "substantial change" definition and PR body template live in `AGENTS.md`. In the local environment, run e2e via:
+The "substantial change" definition and PR body template live in `agents/reference/e2e-attestation.md`. In the local environment, run e2e via:
 
 - Python SDK: `just test-e2e`
 - TypeScript SDK: no standalone e2e suite (the bespoke pack-install smoke test was retired in favor of the `packaging` gate; the npm artifact's functional install is verified by the release matrix)
 - Rust core: covered by `cargo test --workspace --features cli` (the CLI e2e tests are gated on the `cli` feature; plain `cargo test --workspace` skips them); run `cargo bench -p dirsql` after Rust-heavy changes
 
-Then write an e2e receipt for each package you changed so the CI `e2e-verify` gate stays green (see AGENTS.md, "E2E Attestation"): `just e2e-attest-python` and/or `just e2e-attest-ts` run that package's suite and commit that branch's receipt at `packages/<pkg>/e2e-attestations/<branch>.json`.
+Then write an e2e receipt for each package you changed so the CI `e2e-verify` gate stays green (see `agents/reference/e2e-attestation.md`): `just e2e-attest-python` and/or `just e2e-attest-ts` run that package's suite and commit that branch's receipt at `packages/<pkg>/e2e-attestations/<branch>.json`.
 
 Record the exact commands run and their outcomes in the PR body.
 
