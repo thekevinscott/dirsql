@@ -190,9 +190,14 @@ features = ["cli"]
 # those branches hidden, which is a flattering number rather than a stronger
 # gate.
 #
-# Actuals at the time of writing: lines 92.46, regions 91.95, functions 91.72,
-# branch 72.24.
-lines = 92
-functions = 91
-regions = 91
-branch = 72
+# All four ratchet UP for the first time (lines 92->94, regions 91->93,
+# functions 91->93, branch 72->79): recent refactors moved pure logic out of
+# the effectful modules the unit tier cannot reach and into wholly
+# unit-testable ones.
+#
+# Actuals at the time of writing: lines 94.54, regions 93.67, functions 93.16,
+# branch 79.49.
+lines = 94
+functions = 93
+regions = 93
+branch = 79
