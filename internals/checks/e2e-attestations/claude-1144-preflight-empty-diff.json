@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1789750944,
+  "exit_code": 0,
+  "commit": "49813fa0340670fd68f8fcc77e8e7201040f8dda",
+  "branch": "claude/1144-preflight-empty-diff"
+}

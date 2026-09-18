@@ -17,6 +17,7 @@ from .matrix import NoGateMatrix, WORKFLOWS
 from .memory_cap import memory_cap
 from .run import run
 from .sources import sources
+from .tree import detect_tree
 
 
 @click.command()
@@ -53,6 +54,7 @@ def cli(conventions: tuple[str, ...], base: str, gates: tuple[str, ...], dry_run
             e2e_config=read_e2e,
             echo=click.echo,
             cap=memory_cap(detect_host()),
+            tree=detect_tree(base),
             only=gates,
             dry_run=dry_run,
         )
