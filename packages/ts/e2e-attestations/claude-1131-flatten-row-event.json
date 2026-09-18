@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1789748596,
+  "exit_code": 0,
+  "commit": "6821ef4c95e1c652bdba657af6d55d8ecfd547dd",
+  "branch": "claude/1131-flatten-row-event"
+}
