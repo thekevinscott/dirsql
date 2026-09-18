@@ -46,10 +46,10 @@
 # because effectful code (filesystem / subprocess / HTTP / `notify`) lives in
 # the integration tier by design (#233), so the unit tier cannot reach it.
 # In #354 pure unit tests were added to close the reachable unit-tier gaps and
-# the floors were then pulled up as high as they robustly go (lines 94 /
-# regions 93 / functions 91 / branch 75); `branch` keeps a documented sub-90
-# floor as an accepted exception -- see the `[rust.coverage]` block below for
-# the rationale and a fragility warning about the near-zero slack.
+# the floors were then pulled up as high as they robustly go; `branch` keeps a
+# documented sub-90 floor as an accepted exception -- see the `[rust.coverage]`
+# block below for the rationale and a fragility warning about the near-zero
+# slack.
 
 # --- Shared-core e2e freshness (#337, via upstream #333) --------------------
 #
@@ -112,7 +112,7 @@ features = ["cli"]
 # (cli/router.rs `parse_sql_body`, cli/mod.rs `with_query_timeout` /
 # `From<String>`, cli/init.rs error `Display` arms), lifting the measured
 # unit-only coverage to lines 94.1% / regions 93.2% / functions 91.6% /
-# branch 75.6%. The floors below are then set as HIGH as they robustly go --
+# branch 75.6%. The floors were then set as HIGH as they robustly go --
 # the highest integer under each actual:
 #   - lines: 94 (actual 94.1%).
 #   - regions: 93 (actual 93.2%).
