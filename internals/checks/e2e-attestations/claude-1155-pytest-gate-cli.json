@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1789754832,
+  "exit_code": 0,
+  "commit": "b1237d3c4418fbf34ee371002d4b3f9e802ae3ce",
+  "branch": "claude/1155-pytest-gate-cli"
+}
