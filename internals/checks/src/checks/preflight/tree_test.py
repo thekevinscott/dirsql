@@ -31,9 +31,20 @@ def describe_detect_tree():
         tree, _run = probe(diff="", code=128)
         assert tree.committed is True
 
+    def it_reports_committed_when_the_range_command_is_killed_by_a_signal():
+        # A negative return code is still a failed probe; `> 0` would read it as
+        # a clean run that found nothing.
+        tree, _run = probe(diff="", code=-9)
+        assert tree.committed is True
+
     def it_asks_git_for_the_porcelain_status_and_the_three_dot_range():
         _tree, run = probe()
-        assert [call.args[0] for call in run.call_args_list] == [
-            ["git", "status", "--porcelain"],
-            ["git", "diff", "--name-only", "origin/main...HEAD"],
+        assert run.call_args_list == [
+            mock.call(["git", "status", "--porcelain"], capture_output=True, text=True, check=False),
+            mock.call(
+                ["git", "diff", "--name-only", "origin/main...HEAD"],
+                capture_output=True,
+                text=True,
+                check=False,
+            ),
         ]
