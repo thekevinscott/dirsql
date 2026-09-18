@@ -161,7 +161,7 @@ jobs:
           key: ${{ runner.os }}-cargo-stable-${{ hashFiles('Cargo.lock') }}
 
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets --features cli -- -D warnings
 
       - name: Format check
         run: cargo fmt --all -- --check

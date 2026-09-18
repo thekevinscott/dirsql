@@ -140,12 +140,10 @@ fn a_key_null_in_one_row_takes_its_type_from_another() {
 
     let values: Vec<Option<i64>> = {
         let mut stmt = conn.prepare("SELECT n FROM t").unwrap();
-        let v = stmt
-            .query_map([], |r| r.get(0))
+        stmt.query_map([], |r| r.get(0))
             .unwrap()
             .map(Result::unwrap)
-            .collect();
-        v
+            .collect()
     };
     assert_eq!(values, vec![None, Some(7)]);
 }

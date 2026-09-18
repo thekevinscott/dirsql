@@ -2259,7 +2259,7 @@ mod readonly_tests {
         );
         // `watch`, `config`, `matcher` wrap a typed StdError to preserve a
         // `source()` chain.
-        let io = || std::io::Error::new(std::io::ErrorKind::Other, "x");
+        let io = || std::io::Error::other("x");
         let watch_err = DirSqlError::watch(io());
         assert_eq!(watch_err.to_string(), "watcher error: x");
         assert!(StdError::source(&watch_err).is_some());
@@ -4273,8 +4273,7 @@ mod internal_tests {
             &mut sources,
             &mut out,
         )
-        .err()
-        .expect("duplicate function name must error");
+        .expect_err("duplicate function name must error");
         let msg = err.to_string();
         assert!(msg.contains("'dup'"), "got: {msg}");
         assert!(msg.contains("/a/frag.toml"), "got: {msg}");
@@ -4293,8 +4292,7 @@ mod internal_tests {
             &mut sources,
             &mut out,
         )
-        .err()
-        .expect("intra-config duplicate must error");
+        .expect_err("intra-config duplicate must error");
         assert!(err.to_string().contains("'dup'"), "got: {err}");
     }
 

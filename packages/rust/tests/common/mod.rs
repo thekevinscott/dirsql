@@ -41,12 +41,12 @@ pub fn build_fixture_extension() -> PathBuf {
         let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        if msg["reason"] == "compiler-artifact" {
-            if let Some(files) = msg["filenames"].as_array() {
-                for f in files.iter().filter_map(|f| f.as_str()) {
-                    if f.ends_with(".so") || f.ends_with(".dylib") || f.ends_with(".dll") {
-                        artifact = Some(PathBuf::from(f));
-                    }
+        if msg["reason"] == "compiler-artifact"
+            && let Some(files) = msg["filenames"].as_array()
+        {
+            for f in files.iter().filter_map(|f| f.as_str()) {
+                if f.ends_with(".so") || f.ends_with(".dylib") || f.ends_with(".dll") {
+                    artifact = Some(PathBuf::from(f));
                 }
             }
         }
