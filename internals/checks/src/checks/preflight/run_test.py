@@ -221,3 +221,47 @@ def describe_run():
             echo=lambda _line: None,
             cap=CAPPED,
         ) == 0
+
+
+class Tree:
+    """Stand-in for `tree.Tree` -- a value record, faked rather than imported."""
+
+    def __init__(self, dirty, committed):
+        self.base = "origin/main"
+        self.dirty = dirty
+        self.committed = committed
+
+
+NOTHING_COMMITTED = Tree(dirty=True, committed=False)
+
+
+def describe_run_diff_scope_warning():
+    def it_warns_before_the_first_pair_when_the_gates_will_examine_nothing():
+        lines = []
+        drive(
+            workflows=[CONVENTIONS.replace('"unit-lint", "mutation"', '"mutation"')],
+            tree=NOTHING_COMMITTED,
+            echo=lines.append,
+        )
+        assert lines[:4] == [
+            "preflight: the working tree is dirty but nothing is committed against origin/main.",
+            "preflight: these gates read the committed range, so they will examine nothing:",
+            "preflight:   mutation",
+            "preflight: commit first, then re-run.",
+        ]
+
+    def it_repeats_the_warning_after_the_summary_where_the_verdict_is_read():
+        lines = []
+        drive(tree=NOTHING_COMMITTED, echo=lines.append)
+        assert lines[-5] == "preflight: 0 failing pair(s), 0 skipped"
+        assert lines[-4:] == lines[:4]
+
+    def it_warns_about_only_the_gates_the_filter_lets_run():
+        lines = []
+        drive(tree=NOTHING_COMMITTED, only=["unit-lint"], echo=lines.append)
+        assert [line for line in lines if line.startswith("preflight: the working tree")] == []
+
+    def it_says_nothing_for_a_clean_tree():
+        lines = []
+        drive(tree=Tree(dirty=False, committed=True), echo=lines.append)
+        assert [line for line in lines if line.startswith("preflight: the working tree")] == []
