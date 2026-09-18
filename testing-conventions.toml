@@ -190,30 +190,10 @@ features = ["cli"]
 # those branches hidden, which is a flattering number rather than a stronger
 # gate.
 #
-# Every dimension ratchets UP for the first time (lines 92->94, regions
-# 91->93, functions 91->93, branch 72->79), re-pinned against a fresh
-# measurement on 59474c3 (#1136). The numbers moved up because the floors were
-# never re-measured after the two downward nudges above, while the tree kept
-# gaining unit-reachable code. The refactors of the last stretch pulled pure
-# logic OUT of the effectful modules the unit tier structurally cannot reach
-# and into modules that are wholly unit-testable -- extension resolution into
-# extension_resolution.rs (99.8% regions / 100% branch), RowEvent flattening
-# into row_event_flat.rs (100% across the board, #1146), the path vtab's
-# arithmetic into path_table.rs (98.8%) -- each landing with its own inline
-# tests. That both raises the covered numerator and, for `branch`, adds
-# fully-covered branch regions to the denominator, which is why `branch` gains
-# the most (7pt) despite reason (2) above still applying.
-#
-# Nothing here reconsiders the sub-90 `branch` exception: 79 is still short of
-# the >=90 ideal for exactly the two reasons documented above, and raising the
-# floor to the actual only stops leaving the gap between 72 and 79 unguarded.
-# A floor that far under actual does not ratchet against regression, which is
-# the whole purpose of the table.
-#
-# The header's fragility warning applies again in full: slack is back under a
-# point on every dimension (0.5 / 0.7 / 0.2 / 0.5), so a PR that merely adds
-# well-formed unit tests can lower `branch` and trip the floor. The fix then is
-# to nudge the affected floor DOWN to the new actual, not to chase the dip.
+# All four ratchet UP for the first time (lines 92->94, regions 91->93,
+# functions 91->93, branch 72->79): recent refactors moved pure logic out of
+# the effectful modules the unit tier cannot reach and into wholly
+# unit-testable ones.
 #
 # Actuals at the time of writing: lines 94.54, regions 93.67, functions 93.16,
 # branch 79.49.
