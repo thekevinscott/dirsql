@@ -12,10 +12,10 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Sequence
 
+from ..files.read_text import read_text
 from .discovery import discovered
 from .matrix import WORKFLOWS
 from .named_workflow import named
-from .read_text import read_text
 
 
 def sources(

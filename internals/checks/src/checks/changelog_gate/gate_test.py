@@ -151,11 +151,11 @@ def describe_default_git_seams():
     def it_defaults_each_seam_to_its_own_module():
         params = inspect.signature(run).parameters
         assert params["changed_files"].default.__module__ == (
-            "checks.changelog_gate.changed_files"
+            "checks.git.diff_names"
         )
         assert params["added_files"].default.__module__ == "checks.changelog_gate.added_files"
         assert params["commit_messages"].default.__module__ == (
-            "checks.changelog_gate.commit_messages"
+            "checks.git.commit_messages"
         )
 
 

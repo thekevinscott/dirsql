@@ -1,6 +1,6 @@
 from unittest import mock
 
-from checks.changelog_gate.commit_messages import commit_messages
+from checks.git.commit_messages import commit_messages
 
 
 def describe_commit_messages():

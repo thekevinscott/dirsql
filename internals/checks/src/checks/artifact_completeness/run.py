@@ -9,9 +9,9 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Iterable
 
+from ..files.read_config import read_config
 from .gate import declared_targets, warn
 from .missing import built_packages, missing
-from .read_config import read_config
 from .subdirectories import subdirectories
 
 

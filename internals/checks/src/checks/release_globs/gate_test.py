@@ -32,7 +32,7 @@ def describe_collaborators():
         assert unprechecked.__module__ == "checks.release_globs.precheck"
 
     def it_defaults_the_config_reader_to_the_toml_reader_module():
-        assert read_config.__module__ == "checks.release_globs.read_config"
+        assert read_config.__module__ == "checks.files.read_config"
 
     def it_defaults_the_workflow_reader_to_the_yaml_reader_module():
         assert read_workflow.__module__ == "checks.release_globs.read_workflow"
