@@ -167,3 +167,17 @@ def describe_decision_helpers():
             "checks.changelog_gate.malformed_fragments"
         )
         assert changed_packages.__module__ == "checks.changelog_gate.decide"
+
+
+def describe_fix_instruction_pointers():
+    def the_malformed_fragment_error_names_the_reference_doc(capsys):
+        _run(["packages/rust/changelog.d/notes.md"])
+        out = capsys.readouterr().out
+        assert "agents/reference/changelog-migrations.md" in out
+        assert "AGENTS.md" not in out
+
+    def the_missing_fragment_error_names_the_reference_doc(capsys):
+        _run(["packages/rust/src/lib.rs"])
+        out = capsys.readouterr().out
+        assert "agents/reference/changelog-migrations.md" in out
+        assert "AGENTS.md" not in out
