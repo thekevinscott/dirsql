@@ -9,7 +9,12 @@ from unittest import mock
 
 import pytest
 
-from distcheck.python_flow.gate import DistcheckError, bin_subdir, run
+from distcheck.python_flow.gate import (
+    DistcheckError,
+    bin_subdir,
+    require_zero,
+    run,
+)
 
 _WHEEL = "dirsql-1.0-cp311-abi3-linux_x86_64.whl"
 
@@ -159,3 +164,8 @@ def test_run_import_empty_stdout():
     )
     with pytest.raises(DistcheckError, match="import dirsql` failed"):
         run("/pkg", "/repo", runner=runner, fs=fs)
+
+
+def test_error_type_and_exit_guard_resolve_to_the_shared_modules():
+    assert DistcheckError.__module__ == "distcheck.errors"
+    assert require_zero.__module__ == "distcheck.require_zero"

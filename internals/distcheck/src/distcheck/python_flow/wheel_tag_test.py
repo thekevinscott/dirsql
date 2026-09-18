@@ -24,3 +24,7 @@ def test_check_wheel_tag_reads_the_interpreter_from_the_third_field():
     # A `cp3`-looking string anywhere else must not satisfy the check.
     with pytest.raises(DistcheckError, match="interpreter tag"):
         check_wheel_tag("cp311-1.0-py2-abi3-linux_x86_64.whl")
+
+
+def test_error_type_resolves_to_the_shared_module():
+    assert DistcheckError.__module__ == "distcheck.errors"
