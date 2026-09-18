@@ -10,6 +10,8 @@
 //! already paid.
 
 use crate::Row;
+#[cfg(test)]
+use crate::db::Value;
 use crate::differ::RowEvent;
 
 /// A [`RowEvent`] reduced to the flat record the bindings publish.
@@ -82,7 +84,6 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::db::Value;
 
     fn one_row(v: i64) -> Row {
         Row::from([("k".to_string(), Value::Integer(v))])
