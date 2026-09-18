@@ -1,4 +1,4 @@
-"""Source reading for the declared-deps check (#782)."""
+"""Read a file as UTF-8 text."""
 
 from __future__ import annotations
 

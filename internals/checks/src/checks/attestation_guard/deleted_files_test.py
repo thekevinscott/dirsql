@@ -22,3 +22,12 @@ def describe_deleted_files():
     def drops_blank_lines():
         runner = mock.Mock(return_value=mock.Mock(stdout="a.json\n\n"))
         assert deleted_files("base", "head", runner=runner) == ["a.json"]
+
+    def delegates_to_the_shared_diff_query_with_deletion_filters():
+        with mock.patch(
+            "checks.attestation_guard.deleted_files.diff_names", return_value=["a.json"]
+        ) as diff_names:
+            assert deleted_files("base", "head", runner="r") == ["a.json"]
+        diff_names.assert_called_once_with(
+            "base", "head", ("--diff-filter=D", "--no-renames"), "r"
+        )

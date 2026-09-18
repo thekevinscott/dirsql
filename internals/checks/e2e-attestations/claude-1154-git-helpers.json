@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e -x -q",
+  "ran_at": 1789754230,
+  "exit_code": 0,
+  "commit": "500f0553d8cd963916cd74b1f4e71b25f25343b0",
+  "branch": "claude/1154-git-helpers"
+}

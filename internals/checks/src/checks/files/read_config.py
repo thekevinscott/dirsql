@@ -1,4 +1,4 @@
-"""Reading the release config that declares each package's publish globs (#944)."""
+"""Parse a TOML config file."""
 
 from __future__ import annotations
 

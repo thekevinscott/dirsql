@@ -68,6 +68,6 @@ def describe_run():
 def describe_default_seams():
     def it_defaults_to_the_split_out_config_reader_and_lister():
         params = inspect.signature(run).parameters
-        assert params["config"].default.__module__ == "checks.artifact_completeness.read_config"
+        assert params["config"].default.__module__ == "checks.files.read_config"
         assert params["entries"].default.__module__ == "checks.artifact_completeness.subdirectories"
         assert params["echo"].default.__module__ == "checks.artifact_completeness.gate"

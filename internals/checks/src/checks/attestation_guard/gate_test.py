@@ -87,5 +87,5 @@ def describe_run():
             "checks.attestation_guard.deleted_files"
         )
         assert defaults["commit_messages"].default.__module__ == (
-            "checks.attestation_guard.commit_messages"
+            "checks.git.commit_messages"
         )

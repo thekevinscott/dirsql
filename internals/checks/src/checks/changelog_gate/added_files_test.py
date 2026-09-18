@@ -17,3 +17,10 @@ def describe_added_files():
     def drops_blank_lines():
         runner = mock.Mock(return_value=mock.Mock(stdout="new.md\n\n"))
         assert added_files("base", "head", runner=runner) == ["new.md"]
+
+    def delegates_to_the_shared_diff_query_with_the_added_only_filter():
+        with mock.patch(
+            "checks.changelog_gate.added_files.diff_names", return_value=["new.md"]
+        ) as diff_names:
+            assert added_files("base", "head", runner="r") == ["new.md"]
+        diff_names.assert_called_once_with("base", "head", ("--diff-filter=A",), "r")

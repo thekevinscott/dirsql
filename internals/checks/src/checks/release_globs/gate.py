@@ -13,10 +13,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from ..files.read_config import read_config
 from .glob_problems import glob_problems
 from .precheck import unprechecked
 from .pull_request_paths import pull_request_paths
-from .read_config import read_config
 from .read_workflow import read_workflow
 
 

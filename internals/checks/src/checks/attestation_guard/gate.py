@@ -6,10 +6,10 @@ git plumbing is injected so the orchestration unit-tests without a real repo.
 
 from __future__ import annotations
 
-from checks.attestation_guard.commit_messages import commit_messages
 from checks.attestation_guard.decide import deleted_receipts
 from checks.attestation_guard.deleted_files import deleted_files
 from checks.attestation_guard.verdict import verdict
+from checks.git.commit_messages import commit_messages
 
 
 def run(

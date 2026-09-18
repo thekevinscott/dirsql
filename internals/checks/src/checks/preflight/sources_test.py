@@ -69,4 +69,4 @@ def describe_default_seams():
         params = inspect.signature(sources).parameters
 
         assert params["listdir"].default is os.listdir
-        assert params["read"].default.__module__ == "checks.preflight.read_text"
+        assert params["read"].default.__module__ == "checks.files.read_text"
