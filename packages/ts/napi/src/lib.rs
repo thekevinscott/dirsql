@@ -149,10 +149,23 @@ fn selected_loadable(
         .map_err(|err| err.to_string())
 }
 
-/// Whether an extension entry names a package rather than a file.
-#[napi(js_name = "isBareName")]
-pub fn is_bare_name(path: String) -> bool {
-    extension_resolution::is_bare_name(&path, NODE_SUFFIXES)
+/// Plan one extension path given outside a config file.
+///
+/// `base` is the directory a relative path and the bare-name shadow probe
+/// resolve against; `resolveRelative` makes a relative path-looking value
+/// absolute against it (config semantics) rather than verbatim.
+#[napi(js_name = "planExtensionPath")]
+pub fn plan_extension_path(
+    path: String,
+    base: String,
+    resolve_relative: bool,
+) -> ExtensionPlanEntry {
+    plan_entry_to_js(extension_resolution::plan_extension_path(
+        &path,
+        Path::new(&base),
+        resolve_relative,
+        NODE_SUFFIXES,
+    ))
 }
 
 /// A row-level event emitted by the file watcher.
@@ -938,12 +951,23 @@ mod tests {
     }
 
     #[test]
-    fn is_bare_name_applies_the_node_suffix_list() {
-        assert!(is_bare_name("sqlite-vec".into()));
-        assert!(!is_bare_name("vec0.node".into()));
-        assert!(!is_bare_name("vec0.so".into()));
-        assert!(is_bare_name("vec0.pyd".into()));
-        assert!(!is_bare_name("ext/vec0".into()));
+    fn a_programmatic_path_marshals_as_a_literal_entry() {
+        let entry = plan_extension_path("ext/vec0.so".into(), "/cwd".into(), false);
+        assert_eq!(entry.path.as_deref(), Some("ext/vec0.so"));
+        assert_eq!(entry.package, None);
+        let resolved = plan_extension_path("ext/vec0.so".into(), "/cwd".into(), true);
+        assert_eq!(resolved.path.as_deref(), Some("/cwd/ext/vec0.so"));
+    }
+
+    #[test]
+    fn a_programmatic_entry_applies_the_node_suffix_list() {
+        let entry = plan_extension_path("vec0.pyd".into(), "/cwd".into(), false);
+        assert_eq!(entry.package.as_deref(), Some("vec0.pyd"));
+        assert_eq!(entry.shadow.as_deref(), Some("/cwd/vec0.pyd"));
+        assert_eq!(
+            plan_extension_path("vec0.node".into(), "/cwd".into(), false).package,
+            None
+        );
     }
 
     fn one_row() -> HashMap<String, Value> {

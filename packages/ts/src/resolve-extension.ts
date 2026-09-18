@@ -1,6 +1,8 @@
 // Resolve an extension entry's `path` to a concrete loadable file.
 //
-// Resolution is an ordered probe (file-first, then package):
+// Resolution is an ordered probe (file-first, then package), planned by the
+// core (`planExtensionPath`) and carried out here: only locating an installed
+// package is host-specific.
 //
 //   1. Path-looking (contains a separator, or ends in `.so` / `.dylib` /
 //      `.dll` / `.node`) -> returned as a file path: made absolute against
@@ -8,16 +10,12 @@
 //      verbatim (programmatic entries).
 //   2. Bare package name -> a same-named local file under `base` shadows the
 //      package; otherwise the package dir is located via `require.resolve`
-//      and the current platform's loadable is globbed from inside it. Zero
-//      matches and multiple matches are both hard errors -- disambiguate
-//      with a literal path.
+//      and the current platform's loadable is picked from inside it.
 
-import { existsSync, statSync } from "node:fs";
-import { isAbsolute, resolve as resolvePath } from "node:path";
 import { getCore } from "./core.js";
 import { defaultResolver } from "./default-resolver.js";
 import type { PackageResolver } from "./package-dir.js";
-import { resolvePackage } from "./resolve-package.js";
+import { planEntryPath } from "./plan-entry-path.js";
 
 /**
  * Resolve an extension `path` to a concrete file. `base` is the directory a
@@ -32,15 +30,8 @@ export function resolveExtensionPath(
   resolveRelative: boolean,
   resolver: PackageResolver = defaultResolver(),
 ): string {
-  if (!getCore().isBareName(path)) {
-    if (resolveRelative && !isAbsolute(path)) {
-      return resolvePath(base, path);
-    }
-    return path;
-  }
-  const local = resolvePath(base, path);
-  if (existsSync(local) && statSync(local).isFile()) {
-    return local;
-  }
-  return resolvePackage(path, resolver);
+  return planEntryPath(
+    getCore().planExtensionPath(path, base, resolveRelative),
+    resolver,
+  );
 }

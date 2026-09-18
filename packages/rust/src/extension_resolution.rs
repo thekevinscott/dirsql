@@ -169,6 +169,38 @@ fn spec_is_bare_name(extension: &ExtensionSpec, suffixes: &[&str]) -> bool {
         .is_some_and(|path| is_bare_name(path, suffixes))
 }
 
+/// Plan one extension path given outside a config file.
+///
+/// A constructor's `extensions=[{path}]` entry takes the same ordered probe as
+/// a config entry: a path-looking value is literal, made absolute against
+/// `base` only when `resolve_relative` is set (config semantics; programmatic
+/// entries keep a relative path verbatim), and a bare name is a package whose
+/// shadow probe sits under `base`. The entry's `entrypoint` travels with the
+/// caller, so the returned entry carries none.
+pub fn plan_extension_path(
+    path: &str,
+    base: &Path,
+    resolve_relative: bool,
+    suffixes: &[&str],
+) -> PlanEntry {
+    if is_bare_name(path, suffixes) {
+        return PlanEntry::Package {
+            name: path.to_owned(),
+            shadow: base.join(path),
+            entrypoint: None,
+        };
+    }
+    PlanEntry::Literal {
+        // `join` yields an absolute path verbatim.
+        path: if resolve_relative {
+            base.join(path)
+        } else {
+            PathBuf::from(path)
+        },
+        entrypoint: None,
+    }
+}
+
 /// Pick the single loadable file for package `name` out of a host's listing.
 ///
 /// `dirs` are the package's directories (used only for the not-found message);
@@ -209,7 +241,8 @@ pub fn select_loadable(
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfigSource, PlanEntry, SelectError, is_bare_name, plan_config_extensions, select_loadable,
+        ConfigSource, PlanEntry, SelectError, is_bare_name, plan_config_extensions,
+        plan_extension_path, select_loadable,
     };
     use std::path::{Path, PathBuf};
 
@@ -352,6 +385,70 @@ mod tests {
             plan[0],
             PlanEntry::Literal {
                 path: PathBuf::from("/opt/vec0.so"),
+                entrypoint: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_programmatic_relative_path_is_made_absolute_only_when_asked() {
+        let base = Path::new("/cwd");
+        assert_eq!(
+            plan_extension_path("ext/vec0.so", base, true, PY),
+            PlanEntry::Literal {
+                path: PathBuf::from("/cwd/ext/vec0.so"),
+                entrypoint: None,
+            }
+        );
+        assert_eq!(
+            plan_extension_path("ext/vec0.so", base, false, PY),
+            PlanEntry::Literal {
+                path: PathBuf::from("ext/vec0.so"),
+                entrypoint: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_programmatic_absolute_path_is_left_alone() {
+        assert_eq!(
+            plan_extension_path("/opt/vec0.so", Path::new("/cwd"), true, PY),
+            PlanEntry::Literal {
+                path: PathBuf::from("/opt/vec0.so"),
+                entrypoint: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_programmatic_bare_name_plans_a_package_shadowed_by_base() {
+        for resolve_relative in [true, false] {
+            assert_eq!(
+                plan_extension_path("sqlite_vec", Path::new("/cwd"), resolve_relative, PY),
+                PlanEntry::Package {
+                    name: "sqlite_vec".into(),
+                    shadow: PathBuf::from("/cwd/sqlite_vec"),
+                    entrypoint: None,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn a_programmatic_entry_uses_the_hosts_own_suffix_list() {
+        let base = Path::new("/cwd");
+        assert_eq!(
+            plan_extension_path("vec0.node", base, true, PY),
+            PlanEntry::Package {
+                name: "vec0.node".into(),
+                shadow: PathBuf::from("/cwd/vec0.node"),
+                entrypoint: None,
+            }
+        );
+        assert_eq!(
+            plan_extension_path("vec0.node", base, true, NODE),
+            PlanEntry::Literal {
+                path: PathBuf::from("/cwd/vec0.node"),
                 entrypoint: None,
             }
         );

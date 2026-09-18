@@ -27,7 +27,7 @@ describe("CoreModule contract", () => {
     const configPathsFromArgv = vi.fn((argv: string[]) => argv);
     const planConfigExtensions = vi.fn(() => null);
     const selectLoadable = vi.fn(() => "/d/ext.so");
-    const isBareName = vi.fn(() => true);
+    const planExtensionPath = vi.fn(() => ({ path: "/d/ext.so" }));
     // Typed against the real interface, not cast: dropping a member from
     // `CoreModule` would make this literal fail to compile, which pins the
     // surface the SDK reaches for before the core parses argv.
@@ -36,7 +36,7 @@ describe("CoreModule contract", () => {
       configPathsFromArgv,
       planConfigExtensions,
       selectLoadable,
-      isBareName,
+      planExtensionPath,
     };
     expect(core.configPathsFromArgv(["-c", "a.toml"])).toEqual([
       "-c",
@@ -45,7 +45,9 @@ describe("CoreModule contract", () => {
     expect(configPathsFromArgv).toHaveBeenCalledWith(["-c", "a.toml"]);
     expect(core.planConfigExtensions([{ path: "a.toml" }])).toBeNull();
     expect(core.selectLoadable("ext", ["/d"], ["/d/ext.so"])).toBe("/d/ext.so");
-    expect(core.isBareName("ext")).toBe(true);
+    expect(core.planExtensionPath("ext.so", "/d", true)).toEqual({
+      path: "/d/ext.so",
+    });
   });
 });
 

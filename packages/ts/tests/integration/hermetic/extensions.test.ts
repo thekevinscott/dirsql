@@ -1,8 +1,8 @@
 // Hermetic: first-party code runs for real; the mocked boundaries are
 // `node:fs` probes and `node:module`'s `createRequire` (behind which both
-// the napi binary and package resolution sit). The bare-name test and the
-// config planner now live in the core, so the fake core answers for them
-// here; the real ones are covered by `tests/integration/binding/`.
+// the napi binary and package resolution sit). Extension planning now lives
+// in the core, so the fake core answers for it here; the real planner is
+// covered by `tests/integration/binding/`.
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { DirSQL } from "dirsql";
@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { fakeCore } = vi.hoisted(() => ({
   fakeCore: {
     DirSQL: { openAsync: vi.fn() },
-    isBareName: vi.fn(),
+    planExtensionPath: vi.fn(),
     selectLoadable: vi.fn(),
     planConfigExtensions: vi.fn(),
   },
@@ -46,12 +46,13 @@ vi.mock("node:module", async (importOriginal) => {
 });
 
 const openAsync = fakeCore.DirSQL.openAsync;
-const { isBareName, selectLoadable, planConfigExtensions } = fakeCore;
+const { planExtensionPath, selectLoadable, planConfigExtensions } = fakeCore;
 
 beforeEach(() => {
   // Reset (not just clear) so per-test fs implementations never leak.
   vi.resetAllMocks();
-  isBareName.mockReturnValue(false);
+  // The core plans a path-looking entry as a literal, verbatim.
+  planExtensionPath.mockImplementation((path: string) => ({ path }));
   planConfigExtensions.mockReturnValue(null);
   openAsync.mockResolvedValue({
     query: vi.fn().mockResolvedValue([]),
@@ -84,7 +85,10 @@ describe("extensions option (hermetic, #230/#299)", () => {
   });
 
   it("resolves a bare package name to the installed loadable", async () => {
-    isBareName.mockReturnValue(true);
+    planExtensionPath.mockReturnValue({
+      package: "dirsql-testext-pkg",
+      shadow: "/cwd/dirsql-testext-pkg",
+    });
     // No same-named local file shadows the package...
     vi.mocked(existsSync).mockReturnValue(false);
     // ...and the core picks the one loadable in the resolved package dir.
@@ -104,8 +108,10 @@ describe("extensions option (hermetic, #230/#299)", () => {
   });
 
   it("prefers a same-named local file over the installed package", async () => {
-    isBareName.mockReturnValue(true);
-    const cwd = vi.spyOn(process, "cwd").mockReturnValue("/cwd");
+    planExtensionPath.mockReturnValue({
+      package: "dirsql-testext-pkg",
+      shadow: "/cwd/dirsql-testext-pkg",
+    });
     vi.mocked(existsSync).mockReturnValue(true);
     vi.mocked(statSync).mockReturnValue({
       isFile: () => true,
@@ -119,7 +125,6 @@ describe("extensions option (hermetic, #230/#299)", () => {
     expect(openAsync.mock.calls[0]?.[6]).toEqual([
       { path: "/cwd/dirsql-testext-pkg", entrypoint: undefined },
     ]);
-    cwd.mockRestore();
   });
 
   it("resolves config [[dirsql.extension]] package names and suppresses the core's own loading (#313)", async () => {
@@ -147,7 +152,10 @@ describe("extensions option (hermetic, #230/#299)", () => {
   });
 
   it("rejects ready when a bare package name is not installed", async () => {
-    isBareName.mockReturnValue(true);
+    planExtensionPath.mockReturnValue({
+      package: "not-installed-pkg",
+      shadow: "/cwd/not-installed-pkg",
+    });
     vi.mocked(existsSync).mockReturnValue(false);
 
     const db = new DirSQL({

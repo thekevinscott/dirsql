@@ -573,10 +573,19 @@ mod python {
             .map_err(|err| err.to_string())
     }
 
-    /// Whether an extension entry names a package rather than a file.
+    /// Plan one extension path given outside a config file.
+    ///
+    /// `base` is the directory a relative path and the bare-name shadow probe
+    /// resolve against; `resolve_relative` makes a relative path-looking value
+    /// absolute against it (config semantics) rather than verbatim.
     #[pyfunction]
-    fn is_bare_name(path: &str) -> bool {
-        extension_resolution::is_bare_name(path, PY_SUFFIXES)
+    fn plan_extension_path(path: &str, base: &str, resolve_relative: bool) -> PyExtensionPlanEntry {
+        plan_entry_to_py(extension_resolution::plan_extension_path(
+            path,
+            Path::new(base),
+            resolve_relative,
+            PY_SUFFIXES,
+        ))
     }
 
     #[pymodule]
@@ -591,7 +600,7 @@ mod python {
         m.add_function(wrap_pyfunction!(config_paths_from_argv, m)?)?;
         m.add_function(wrap_pyfunction!(plan_config_extensions, m)?)?;
         m.add_function(wrap_pyfunction!(select_loadable, m)?)?;
-        m.add_function(wrap_pyfunction!(is_bare_name, m)?)?;
+        m.add_function(wrap_pyfunction!(plan_extension_path, m)?)?;
         m.add_class::<PyExtensionPlanEntry>()?;
         Ok(())
     }
@@ -763,11 +772,24 @@ mod python {
         }
 
         #[test]
-        fn is_bare_name_applies_the_cpython_suffix_list() {
-            assert!(is_bare_name("sqlite_vec"));
-            assert!(!is_bare_name("vec0.pyd"));
-            assert!(is_bare_name("vec0.node"));
-            assert!(!is_bare_name("ext/vec0"));
+        fn a_programmatic_path_marshals_as_a_literal_entry() {
+            let entry = plan_extension_path("ext/vec0.so", "/cwd", false);
+            assert_eq!(entry.path.as_deref(), Some("ext/vec0.so"));
+            assert_eq!(entry.package, None);
+            assert_eq!(
+                plan_extension_path("ext/vec0.so", "/cwd", true)
+                    .path
+                    .as_deref(),
+                Some("/cwd/ext/vec0.so")
+            );
+        }
+
+        #[test]
+        fn a_programmatic_entry_applies_the_cpython_suffix_list() {
+            let entry = plan_extension_path("vec0.node", "/cwd", false);
+            assert_eq!(entry.package.as_deref(), Some("vec0.node"));
+            assert_eq!(entry.shadow.as_deref(), Some("/cwd/vec0.node"));
+            assert_eq!(plan_extension_path("vec0.pyd", "/cwd", false).package, None);
         }
 
         #[test]
