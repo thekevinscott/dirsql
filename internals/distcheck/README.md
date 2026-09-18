@@ -51,6 +51,9 @@ Each flow follows the same shape (mirroring `internals/checks`):
 - `<flow>/cli.py` -- a thin `@click.command()` that resolves the checkout paths
   and calls `gate.run`, turning a `DistcheckError` into a non-zero exit.
 
+Both flows share `src/distcheck/errors.py` (`DistcheckError`) and
+`src/distcheck/require_zero.py` (the subprocess exit-code guard).
+
 Every module (except empty `__init__.py`s) carries a colocated `*_test.py`,
 gated by `internals-distcheck-ci.yml`'s `internals-distcheck` job: `colocated-test`,
 `unit-lint`, `integration-lint`, `unit-coverage`, and `mutation`.

@@ -1,7 +1,7 @@
 """Asserts the built wheel carries the stable-ABI tag the release matrix assumes."""
 from __future__ import annotations
 
-from .errors import DistcheckError
+from ..errors import DistcheckError
 
 
 def check_wheel_tag(wheel: str) -> None:

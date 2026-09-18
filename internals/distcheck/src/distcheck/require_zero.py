@@ -1,4 +1,4 @@
-"""The exit-code guard every node distcheck stage runs its subprocess through."""
+"""The exit-code guard every distcheck stage runs its subprocess through."""
 from __future__ import annotations
 
 from .errors import DistcheckError

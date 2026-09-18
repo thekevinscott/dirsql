@@ -1,7 +1,7 @@
 """Picks the one `.whl` the build was supposed to emit."""
 from __future__ import annotations
 
-from .errors import DistcheckError
+from ..errors import DistcheckError
 
 
 def sole_wheel(names) -> str:

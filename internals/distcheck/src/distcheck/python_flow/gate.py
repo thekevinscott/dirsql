@@ -25,8 +25,8 @@ import sys
 
 from distcheck.filesystem import FileSystem
 
-from .errors import DistcheckError
-from .require_zero import require_zero
+from ..errors import DistcheckError
+from ..require_zero import require_zero
 from .sole_wheel import sole_wheel
 from .wheel_tag import check_wheel_tag
 

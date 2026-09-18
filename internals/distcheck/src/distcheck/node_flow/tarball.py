@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .errors import DistcheckError
+from ..errors import DistcheckError
 
 
 def select_tarball(names, prefix: str, exclude: Optional[str] = None) -> str:

@@ -28,8 +28,8 @@ import subprocess
 from distcheck.filesystem import FileSystem
 from distcheck.node_flow.platforms import Platform
 
-from .errors import DistcheckError
-from .require_zero import require_zero
+from ..errors import DistcheckError
+from ..require_zero import require_zero
 from .tarball import select_tarball
 
 
