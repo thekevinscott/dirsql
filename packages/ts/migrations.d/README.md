@@ -15,5 +15,5 @@ the API adds one file here:
   `_None._` where a subsection does not apply.
 
 Fragments are **permanent and append-only** — nothing is assembled back into a
-single `MIGRATIONS.md`. This README is not a fragment. See AGENTS.md,
-"Changelog and Migrations".
+single `MIGRATIONS.md`. This README is not a fragment. See
+`agents/reference/changelog-migrations.md`.

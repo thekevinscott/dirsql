@@ -1,7 +1,5 @@
 # Reusable-workflow gates (testing-conventions): adoption & debugging
 
-Extracted from AGENTS.md (see "CI Workflows" there for the summary). This is the full operational reference.
-
 
 Six per-domain workflows call the `testing-conventions` reusable workflow at the **moving tag `@v0`** (see #240 and its sub-issues). #861 split the single `conventions.yml` into them so GitHub's workflow-scoped `paths:` filters could triage per lane:
 

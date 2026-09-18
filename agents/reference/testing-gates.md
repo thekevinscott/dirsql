@@ -1,6 +1,6 @@
 # Colocation, Mutation, and Coverage gates (testing-conventions)
 
-Extracted from AGENTS.md (see "Testing" there for the summary). Full reference for the colocated-test, unit-lint, mutation, and coverage gates.
+Full reference for the colocated-test, unit-lint, mutation, and coverage gates.
 
 ## Enforcing Colocation
 
