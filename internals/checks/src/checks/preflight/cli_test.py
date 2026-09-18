@@ -8,7 +8,7 @@ from unittest import mock
 
 import pytest
 
-from checks.preflight.cli import cli, detect_host, memory_cap, run, sources
+from checks.preflight.cli import cli, detect_host, detect_tree, memory_cap, run, sources
 
 WORKFLOWS = [(".github/workflows/a-ci.yml", "jobs: {}"), (".github/workflows/b-ci.yml", "jobs: {}")]
 
@@ -23,6 +23,7 @@ class NoGateMatrix(Exception):
 
 HOST = mock.sentinel.host
 CAP = mock.sentinel.cap
+TREE = mock.sentinel.tree
 
 
 def invoke(conventions=(), gates=(), dry_run=False, resolve=None, **kwargs):
@@ -30,6 +31,7 @@ def invoke(conventions=(), gates=(), dry_run=False, resolve=None, **kwargs):
         mock.patch("checks.preflight.cli.NoGateMatrix", NoGateMatrix),
         mock.patch("checks.preflight.cli.detect_host", return_value=HOST),
         mock.patch("checks.preflight.cli.memory_cap", return_value=CAP) as memory_cap,
+        mock.patch("checks.preflight.cli.detect_tree", return_value=TREE) as detect_tree,
         mock.patch(
             "checks.preflight.cli.sources", resolve or mock.Mock(return_value=WORKFLOWS)
         ) as sources,
@@ -44,6 +46,7 @@ def invoke(conventions=(), gates=(), dry_run=False, resolve=None, **kwargs):
                 dry_run=dry_run,
             )
     run.memory_cap = memory_cap
+    run.detect_tree = detect_tree
     return sources, run, echo, exc_info.value.code
 
 
@@ -116,3 +119,13 @@ def test_binds_the_host_probe_and_the_cap_from_their_own_modules():
         "checks.preflight.host",
         "checks.preflight.memory_cap",
     )
+
+
+def test_hands_run_the_working_tree_probed_against_the_base():
+    _sources, run, _echo, _code = invoke(return_value=0)
+    run.detect_tree.assert_called_once_with("origin/x")
+    assert run.call_args.kwargs["tree"] is TREE
+
+
+def test_binds_the_tree_probe_from_its_own_module():
+    assert detect_tree.__module__ == "checks.preflight.tree"

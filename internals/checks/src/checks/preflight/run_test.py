@@ -28,6 +28,18 @@ class MemoryCap:
         self.skipped = skipped
 
 
+class Tree:
+    """Stand-in for `tree.Tree` -- a value record, faked rather than imported."""
+
+    def __init__(self, dirty, committed):
+        self.base = "origin/main"
+        self.dirty = dirty
+        self.committed = committed
+
+
+CLEAN = Tree(dirty=False, committed=True)
+NOTHING_COMMITTED = Tree(dirty=True, committed=False)
+
 CAPPED = MemoryCap(["systemd-run", "--user", "--scope", "-p", "MemoryMax=1M", "-p", "MemorySwapMax=0"])
 UNCAPPED = MemoryCap([], "systemd-run is not on PATH")
 UNCAPPED_NOTE = "preflight: mutation runs uncapped: systemd-run is not on PATH"
@@ -40,6 +52,7 @@ def drive(workflows=None, **kwargs):
         "e2e_config": lambda _config: {},
         "echo": lambda _line: None,
         "cap": CAPPED,
+        "tree": CLEAN,
     }
     return run(workflows or [CONVENTIONS], "origin/main", **{**defaults, **kwargs})
 
@@ -220,19 +233,8 @@ def describe_run():
             e2e_config=lambda _config: {},
             echo=lambda _line: None,
             cap=CAPPED,
+            tree=CLEAN,
         ) == 0
-
-
-class Tree:
-    """Stand-in for `tree.Tree` -- a value record, faked rather than imported."""
-
-    def __init__(self, dirty, committed):
-        self.base = "origin/main"
-        self.dirty = dirty
-        self.committed = committed
-
-
-NOTHING_COMMITTED = Tree(dirty=True, committed=False)
 
 
 def describe_run_diff_scope_warning():

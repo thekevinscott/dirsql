@@ -14,10 +14,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
+from .diff_scope import diff_scope_warning
 from .invocation import Invocation, invocation
 from .matrix import GATES, pairs, parse_gate_matrix
 from .memory_cap import MemoryCap
 from .prepare import prepare
+from .tree import Tree
 
 
 def run(
@@ -29,6 +31,7 @@ def run(
     e2e_config: Callable[[str], dict],
     echo: Callable[[str], None],
     cap: MemoryCap,
+    tree: Tree,
     only: Sequence[str] = (),
     dry_run: bool = False,
 ) -> int:
@@ -38,6 +41,11 @@ def run(
     #834, so the roots are the concatenation rather than one file's (#973).
     """
     roots = [root for text in workflows for root in parse_gate_matrix(text)]
+    warning = diff_scope_warning(
+        tree, [gate for _root, _language, gate in pairs(roots) if not only or gate in only]
+    )
+    for line in warning:
+        echo(line)
     failures = []
     skipped = []
     uncapped_noted = False
@@ -69,4 +77,6 @@ def run(
     for label in failures:
         echo(f"FAIL {label}")
     echo(f"preflight: {len(failures)} failing pair(s), {len(skipped)} skipped")
+    for line in warning:
+        echo(line)
     return 1 if failures else 0
