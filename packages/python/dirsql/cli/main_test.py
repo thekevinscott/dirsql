@@ -5,11 +5,11 @@ import sys
 from unittest.mock import patch
 
 from . import main as main_module
-from .main import _absorb_interrupt, main, with_core_owned_signals
+from .main import main, with_core_owned_signals
 
 
 def describe_with_core_owned_signals():
-    def it_installs_the_absorbing_handler_and_returns_the_previous_one():
+    def it_installs_the_default_disposition_and_returns_the_previous_handler():
         recorded = {}
 
         def fake_signal(signum, new):
@@ -19,12 +19,7 @@ def describe_with_core_owned_signals():
 
         assert with_core_owned_signals(fake_signal) == "prior-handler"
         assert recorded["signum"] == main_module.signal.SIGINT
-        assert recorded["new"] is _absorb_interrupt
-
-    def it_absorbs_the_interrupt_without_raising():
-        # The whole point: it must NOT raise KeyboardInterrupt, or a graceful
-        # `dirsql server` shutdown (the core returns 0) surfaces as 130.
-        assert _absorb_interrupt(main_module.signal.SIGINT, None) is None
+        assert recorded["new"] is main_module.signal.SIG_DFL
 
 
 def describe_main():
