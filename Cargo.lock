@@ -592,6 +592,7 @@ name = "dirsql-napi"
 version = "0.1.0"
 dependencies = [
  "dirsql",
+ "libc",
  "napi",
  "napi-build",
  "napi-derive",

@@ -45,7 +45,41 @@ pub fn run_cli(argv: Vec<String>) -> i32 {
     let mut full = Vec::with_capacity(argv.len() + 1);
     full.push("dirsql".to_string());
     full.extend(argv);
-    dirsql::cli::run_cli(full)
+    with_default_signal_disposition(|| dirsql::cli::run_cli(full))
+}
+
+const FATAL_SIGNALS: [i32; 2] = [libc::SIGINT, libc::SIGTERM];
+
+/// Run `f` with SIGINT/SIGTERM at `SIG_DFL`, restoring the prior disposition
+/// after.
+///
+/// The launcher's JS listeners cannot fire while this call blocks the event
+/// loop, so without this the signal is absorbed and a scan becomes
+/// SIGKILL-only. `server` still exits gracefully: the core registers its own
+/// handler over `SIG_DFL` once it starts.
+#[cfg(unix)]
+fn with_default_signal_disposition<T>(f: impl FnOnce() -> T) -> T {
+    #[expect(
+        unsafe_code,
+        reason = "no safe API reaches a signal disposition; the raw call is the whole point"
+    )]
+    let saved: Vec<_> = FATAL_SIGNALS
+        .iter()
+        .map(|&sig| (sig, unsafe { libc::signal(sig, libc::SIG_DFL) }))
+        .collect();
+    let out = f();
+    for (sig, prev) in saved {
+        #[expect(unsafe_code, reason = "restores what the call above saved")]
+        unsafe {
+            libc::signal(sig, prev);
+        }
+    }
+    out
+}
+
+#[cfg(not(unix))]
+fn with_default_signal_disposition<T>(f: impl FnOnce() -> T) -> T {
+    f()
 }
 
 /// The config paths the npm launcher must inspect for package-name
