@@ -18,27 +18,21 @@ from .discover_plugins.with_discovered_plugins import with_discovered_plugins
 from .resolve_config_extensions import with_resolved_extensions
 
 
-def _absorb_interrupt(*_args: object) -> None:
-    """Let the core's own shutdown decide the exit code on SIGINT.
+def keep_sigint_fatal(handler=signal.signal):
+    """Give SIGINT its default disposition for the core's run, returning the prior one.
 
-    signal-hook (which tokio uses) *chains*: it runs tokio's handler — which
-    drives `dirsql server`'s graceful shutdown, after which `run_cli` returns
-    0 — and then whatever handler was installed before it. CPython's default
-    is `default_int_handler`, which raises `KeyboardInterrupt`; that lands
-    after `run_cli` has already returned 0 and turns a clean shutdown into a
-    130. This handler occupies that slot without raising, so the core's exit
-    code is the one that survives, exactly as it does when the CLI is its own
-    process.
+    No Python-level handler can end a run in progress: `run_cli` detaches the
+    GIL for its whole duration, so nothing reaches the eval loop until the
+    core has already finished — CPython's `default_int_handler` included. Only
+    a disposition the kernel acts on by itself works, which is `SIG_DFL`, and
+    it is what the standalone binary runs with.
 
-    A signal arriving when the core is NOT handling signals still terminates:
-    `run_cli` is only reached with this installed, and it returns promptly for
-    every non-server command.
+    `dirsql server` keeps its exit code: signal-hook (which tokio uses)
+    replaces the disposition when the server registers its handlers, and does
+    not re-raise `SIG_DFL` afterwards, so the core's graceful shutdown is the
+    only thing that acts and its 0 survives.
     """
-
-
-def with_core_owned_signals(handler=signal.signal):
-    """Install `_absorb_interrupt` for SIGINT and return the prior handler."""
-    return handler(signal.SIGINT, _absorb_interrupt)
+    return handler(signal.SIGINT, signal.SIG_DFL)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -56,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"dirsql: {exc}", file=sys.stderr)
         return 1
 
-    previous = with_core_owned_signals()
+    previous = keep_sigint_fatal()
     try:
         return run_in_process(argv=argv, module="dirsql._dirsql")
     except Exception as exc:

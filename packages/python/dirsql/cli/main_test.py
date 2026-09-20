@@ -5,10 +5,10 @@ import sys
 from unittest.mock import patch
 
 from . import main as main_module
-from .main import main, with_core_owned_signals
+from .main import keep_sigint_fatal, main
 
 
-def describe_with_core_owned_signals():
+def describe_keep_sigint_fatal():
     def it_installs_the_default_disposition_and_returns_the_previous_handler():
         recorded = {}
 
@@ -17,7 +17,7 @@ def describe_with_core_owned_signals():
             recorded["new"] = new
             return "prior-handler"
 
-        assert with_core_owned_signals(fake_signal) == "prior-handler"
+        assert keep_sigint_fatal(fake_signal) == "prior-handler"
         assert recorded["signum"] == main_module.signal.SIGINT
         assert recorded["new"] is main_module.signal.SIG_DFL
 
@@ -42,9 +42,7 @@ def describe_main():
             with (
                 patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(main_module, "with_resolved_extensions", lambda a: a),
-                patch.object(
-                    main_module, "with_core_owned_signals", return_value="prior"
-                ),
+                patch.object(main_module, "keep_sigint_fatal", return_value="prior"),
                 patch.object(main_module.signal, "signal"),
                 patch.object(
                     main_module, "run_in_process", return_value=23
@@ -67,9 +65,7 @@ def describe_main():
                     "with_resolved_extensions",
                     lambda a: [*a, "--extension", "/r/vec0"],
                 ),
-                patch.object(
-                    main_module, "with_core_owned_signals", return_value="prior"
-                ),
+                patch.object(main_module, "keep_sigint_fatal", return_value="prior"),
                 patch.object(main_module.signal, "signal"),
                 patch.object(
                     main_module, "run_in_process", return_value=0
@@ -89,9 +85,7 @@ def describe_main():
                 patch.object(sys, "argv", ["dirsql", "--version"]),
                 patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(main_module, "with_resolved_extensions", lambda a: a),
-                patch.object(
-                    main_module, "with_core_owned_signals", return_value="prior"
-                ),
+                patch.object(main_module, "keep_sigint_fatal", return_value="prior"),
                 patch.object(main_module.signal, "signal"),
                 patch.object(
                     main_module, "run_in_process", return_value=0
@@ -106,9 +100,7 @@ def describe_main():
             with (
                 patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(main_module, "with_resolved_extensions", lambda a: a),
-                patch.object(
-                    main_module, "with_core_owned_signals", return_value="prior"
-                ),
+                patch.object(main_module, "keep_sigint_fatal", return_value="prior"),
                 patch.object(main_module.signal, "signal"),
                 patch.object(
                     main_module,
@@ -126,9 +118,7 @@ def describe_main():
             with (
                 patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(main_module, "with_resolved_extensions", lambda a: a),
-                patch.object(
-                    main_module, "with_core_owned_signals", return_value="prior"
-                ),
+                patch.object(main_module, "keep_sigint_fatal", return_value="prior"),
                 patch.object(
                     main_module.signal,
                     "signal",
@@ -144,9 +134,7 @@ def describe_main():
             with (
                 patch.object(main_module, "with_discovered_plugins", lambda a: a),
                 patch.object(main_module, "with_resolved_extensions", lambda a: a),
-                patch.object(
-                    main_module, "with_core_owned_signals", return_value="prior"
-                ),
+                patch.object(main_module, "keep_sigint_fatal", return_value="prior"),
                 patch.object(
                     main_module.signal,
                     "signal",
