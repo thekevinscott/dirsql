@@ -2,13 +2,29 @@
 
 use serde_json::{Map, Value};
 
-use crate::Row;
 use crate::db::Value as CellValue;
 use crate::differ::RowEvent;
 use crate::row_event_flat::flatten_row_event;
+use crate::{QueryResult, Row};
 
-pub(super) fn rows_to_json(rows: &[Row]) -> Vec<Value> {
-    rows.iter().map(row_to_json).collect()
+/// Serialize a query result, each object keyed in projection order. Row events
+/// carry no projection, so they keep going through [`row_to_json`].
+pub(super) fn result_to_json(result: &QueryResult) -> Vec<Value> {
+    result
+        .rows
+        .iter()
+        .map(|row| ordered_row_to_json(&result.columns, row))
+        .collect()
+}
+
+fn ordered_row_to_json(columns: &[String], row: &Row) -> Value {
+    let mut map = Map::with_capacity(columns.len());
+    for column in columns {
+        if let Some(value) = row.get(column) {
+            map.insert(column.clone(), cell_to_json(value));
+        }
+    }
+    Value::Object(map)
 }
 
 pub(super) fn row_to_json(row: &Row) -> Value {
@@ -73,6 +89,35 @@ mod tests {
         let json = row_to_json(&row);
         assert_eq!(json.get("title").and_then(Value::as_str), Some("Hello"));
         assert_eq!(json.get("count").and_then(Value::as_i64), Some(3));
+    }
+
+    #[test]
+    fn a_result_serializes_its_rows_in_projection_order() {
+        let mut row: Row = HashMap::new();
+        row.insert("title".into(), CellValue::Text("Hello".into()));
+        row.insert("count".into(), CellValue::Integer(3));
+        let result = QueryResult {
+            columns: vec!["count".into(), "title".into()],
+            rows: vec![row],
+        };
+
+        let json = result_to_json(&result);
+
+        assert_eq!(json[0].to_string(), r#"{"count":3,"title":"Hello"}"#);
+    }
+
+    #[test]
+    fn a_column_no_row_key_matches_is_left_out() {
+        let mut row: Row = HashMap::new();
+        row.insert("title".into(), CellValue::Text("Hello".into()));
+        let result = QueryResult {
+            columns: vec!["title".into(), "title".into()],
+            rows: vec![row],
+        };
+
+        let json = result_to_json(&result);
+
+        assert_eq!(json[0].to_string(), r#"{"title":"Hello"}"#);
     }
 
     #[test]

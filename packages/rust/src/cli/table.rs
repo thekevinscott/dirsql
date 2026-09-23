@@ -11,7 +11,7 @@
 //! swallowing the table; laying the table out to the terminal's width, and
 //! paging a long result, are both out of scope.
 
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 
 use serde_json::Value;
 
@@ -53,16 +53,22 @@ pub(super) fn render(rows: &[Value]) -> String {
     out
 }
 
-/// Every column any row carries. Rows are JSON objects, so the keys arrive
-/// sorted and stay in step with the JSON rendering of the same result.
+/// Every column any row carries, first seen first. Rows are JSON objects
+/// serialized in projection order, so that is the order the SELECT list asked
+/// for -- and the same order the JSON rendering of this result prints.
 fn columns(rows: &[Value]) -> Vec<String> {
-    let mut names = BTreeSet::new();
+    let mut seen = HashSet::new();
+    let mut names = Vec::new();
     for row in rows {
         if let Value::Object(map) = row {
-            names.extend(map.keys().cloned());
+            for key in map.keys() {
+                if seen.insert(key.clone()) {
+                    names.push(key.clone());
+                }
+            }
         }
     }
-    names.into_iter().collect()
+    names
 }
 
 /// One row's cells, in column order. A row missing a column renders it as
@@ -240,6 +246,25 @@ mod tests {
         for line in table.lines() {
             assert_eq!(line, line.trim_end(), "{line:?} has trailing whitespace");
         }
+    }
+
+    #[test]
+    fn the_header_keeps_the_order_the_row_carries() {
+        // Rows arrive serialized in projection order; re-sorting them here is
+        // what made `SELECT size, basename` print `basename  size`.
+        let table = rendered([row([
+            ("size", Value::from(6)),
+            ("basename", Value::from("a.md")),
+        ])]);
+
+        assert!(table.starts_with("size  basename\n"), "{table:?}");
+    }
+
+    #[test]
+    fn a_later_rows_new_columns_come_after_the_earlier_ones() {
+        let table = rendered([row([("b", Value::from(1))]), row([("a", Value::from(2))])]);
+
+        assert!(table.starts_with("b     a\n"), "{table:?}");
     }
 
     #[test]

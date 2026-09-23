@@ -15,7 +15,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::AppState;
-use super::serialize::rows_to_json;
+use super::serialize::result_to_json;
 use crate::{DirSQL, DirSqlError};
 
 /// Why a query failed, classified independently of transport. The HTTP
@@ -66,10 +66,14 @@ pub async fn execute_query(
 
     let db = require_ready(state)?;
 
-    let join = run_bounded(timeout, tokio::task::spawn_blocking(move || db.query(&sql))).await?;
+    let join = run_bounded(
+        timeout,
+        tokio::task::spawn_blocking(move || db.query_ordered(&sql)),
+    )
+    .await?;
 
     match join {
-        Ok(Ok(rows)) => Ok(Value::Array(rows_to_json(&rows))),
+        Ok(Ok(result)) => Ok(Value::Array(result_to_json(&result))),
         Ok(Err(err)) => Err(classify_query_error(err)),
         Err(join_err) => Err(QueryFailure::Internal(join_err.to_string())),
     }
