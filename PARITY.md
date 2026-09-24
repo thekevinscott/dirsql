@@ -88,7 +88,7 @@ core, so all three SDKs change at once. **No drift.**
 |----------------------------|------------------------------------------------|------------------------------------------------------|---------------------------------------------------------|
 | Constructor                | `DirSQL(root=None, *, tables=None, ignore=None, no_ignore=False, config=None, persist=False, persist_path=None, extensions=None)` | `DirSQL::builder().root(..).tables(..).ignore(..).config(..).persist(Option<path>).extensions(..).build()` (also `DirSQL::new`/`with_ignore` shortcuts) | `new DirSQL(configPath)` or `new DirSQL({ root?, tables?, ignore?, config?, persist?, persistPath?, extensions?, noIgnore? })` + `await db.ready` |
 | Query (read-only; rejects non-SELECT) | `db.query(sql) -> list[dict]`        | `db.query(sql) -> Result<Vec<Row>>`                  | `await db.query(sql) -> Record[]` (runs on libuv threadpool) |
-| Query carrying the projection order | — (drift, #1173)                | `db.query_ordered(sql) -> Result<QueryResult>` (`columns` + `rows`)    | — (drift, #1174)                                          |
+| Query carrying the projection order | — (drift, #1173)                | `db.query_ordered(sql) -> Result<QueryResult>` (`columns` + `rows`)    | `await db.queryOrdered(sql) -> QueryResult` (`columns` + `rows`) |
 | Start watcher              | `db._start_watcher()`                          | `db.start_watching()`                                | `await db.startWatcher()` (runs on libuv threadpool)    |
 | Poll events                | `db._poll_events(ms)`                          | `db.poll_events(duration)`                           | `await db.pollEvents(ms)` (runs on libuv threadpool)    |
 | Watch (channel/stream)     | `async for event in db.watch()` (via `_async.py`) | `db.watch() -> WatchStream` (channel)                | `for await (const ev of db.watch())`                    |
@@ -504,6 +504,7 @@ incl. #313).
 | `ddl` batch SQLite rejects: rolled back, error prefixed with the entry (#956) | core | Y (`ddl_batch.rs`, `sdk.rs`) | core |
 | Declared `name` resolving to a virtual table errors (#956) | core | Y (`ddl_batch.rs`) | core |
 | Query rejects writes       | Y      | Y    | Y          |
+| Query reports the projection order | N (#1173) | Y (`column_order.rs`) | Y (`query-ordered.test.ts`) |
 | Write-rejection edge matrix (leading comments, mixed case, CTE/whitespace allowed) | core | Y (`readonly_query.rs`) | core |
 | Internal `_dirsql_*` columns hidden from `SELECT *` | Y | Y | Y |
 | `_dirsql_*` filter robustness (comment/string-literal bypass) | core | Y (`code_review_findings.rs`) | core |

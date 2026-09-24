@@ -20,8 +20,8 @@
 
 use dirsql::extension_resolution::{self, ConfigSource as CoreConfigSource, PlanEntry};
 use dirsql::{
-    DirSQL as CoreDirSQL, Extension, PreparedBuild, RawFileEvent, Row, RowEvent as CoreRowEvent,
-    Table, Value, flatten_row_event,
+    DirSQL as CoreDirSQL, Extension, PreparedBuild, QueryResult as CoreQueryResult, RawFileEvent,
+    Row, RowEvent as CoreRowEvent, Table, Value, flatten_row_event,
 };
 use napi::Task;
 use napi::bindgen_prelude::*;
@@ -327,6 +327,13 @@ impl DirSQL {
         AsyncTask::new(QueryTask { inner, sql })
     }
 
+    /// [`query`](Self::query), plus the column order the SELECT list names.
+    #[napi(js_name = "queryOrdered", ts_return_type = "Promise<QueryResult>")]
+    pub fn query_ordered(&self, sql: String) -> AsyncTask<QueryOrderedTask> {
+        let inner = self.inner.borrow().as_ref().cloned();
+        AsyncTask::new(QueryOrderedTask { inner, sql })
+    }
+
     /// Start the file watcher. Must be called before pollEvents.
     ///
     /// Runs on the libuv threadpool so the JS event loop stays responsive
@@ -462,6 +469,53 @@ impl Task for QueryTask {
             .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
         let rows = inner.query(&self.sql).map_err(to_napi_err)?;
         rows.iter().map(value_row_to_js).collect()
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        Ok(output)
+    }
+}
+
+/// One query's rows plus the column order the SELECT list names. A row is a
+/// JS object, which cannot carry that order: integer-like keys enumerate
+/// first, in ascending order, whatever order they were inserted in.
+///
+/// Output-only (`object_from_js = false`): JS never constructs one.
+#[napi(object, object_from_js = false)]
+pub struct QueryResult {
+    pub columns: Vec<String>,
+    #[napi(ts_type = "Record<string, unknown>[]")]
+    pub rows: Vec<HashMap<String, JsRowValue>>,
+}
+
+fn query_result_to_js(result: &CoreQueryResult) -> Result<QueryResult> {
+    Ok(QueryResult {
+        columns: result.columns.clone(),
+        rows: result
+            .rows
+            .iter()
+            .map(value_row_to_js)
+            .collect::<Result<_>>()?,
+    })
+}
+
+/// [`QueryTask`], for `DirSQL::query_ordered`.
+pub struct QueryOrderedTask {
+    inner: Option<CoreDirSQL>,
+    sql: String,
+}
+
+impl Task for QueryOrderedTask {
+    type Output = QueryResult;
+    type JsValue = QueryResult;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let inner = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| Error::new(Status::GenericFailure, "DirSQL instance closed"))?;
+        let result = inner.query_ordered(&self.sql).map_err(to_napi_err)?;
+        query_result_to_js(&result)
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -1025,6 +1079,29 @@ mod tests {
     fn value_row_to_js_propagates_unsafe_integer() {
         let row = HashMap::from([("k".to_string(), Value::Integer(JS_MAX_SAFE_INTEGER + 1))]);
         assert!(value_row_to_js(&row).is_err());
+    }
+
+    #[test]
+    fn query_result_to_js_keeps_the_column_order_and_rows() {
+        let js = query_result_to_js(&CoreQueryResult {
+            columns: vec!["z".into(), "k".into()],
+            rows: vec![one_row()],
+        })
+        .unwrap();
+        assert_eq!(js.columns, vec!["z".to_string(), "k".to_string()]);
+        assert!(matches!(js.rows[0].get("k"), Some(JsRowValue::Integer(7))));
+    }
+
+    #[test]
+    fn query_result_to_js_propagates_unsafe_integer() {
+        let row = HashMap::from([("k".to_string(), Value::Integer(JS_MAX_SAFE_INTEGER + 1))]);
+        assert!(
+            query_result_to_js(&CoreQueryResult {
+                columns: vec!["k".into()],
+                rows: vec![row],
+            })
+            .is_err()
+        );
     }
 
     #[test]

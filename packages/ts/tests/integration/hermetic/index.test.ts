@@ -36,6 +36,7 @@ vi.mock("node:module", async (importOriginal) => {
 
 type FakeInner = {
   query: ReturnType<typeof vi.fn>;
+  queryOrdered: ReturnType<typeof vi.fn>;
   startWatcher: ReturnType<typeof vi.fn>;
   pollEvents: ReturnType<typeof vi.fn>;
 };
@@ -43,6 +44,7 @@ type FakeInner = {
 function makeInner(overrides: Partial<FakeInner> = {}): FakeInner {
   return {
     query: vi.fn().mockResolvedValue([]),
+    queryOrdered: vi.fn().mockResolvedValue({ columns: [], rows: [] }),
     startWatcher: vi.fn().mockResolvedValue(undefined),
     pollEvents: vi.fn().mockResolvedValue([]),
     ...overrides,
@@ -172,6 +174,21 @@ describe("DirSQL delegation", () => {
     const sql = "SELECT name FROM users WHERE age > 30 -- comment";
     expect(await db.query(sql)).toEqual([{ name: "ada" }]);
     expect(inner.query).toHaveBeenCalledWith(sql);
+  });
+
+  it("queryOrdered awaits ready then forwards the SQL untouched", async () => {
+    const result = {
+      columns: ["name", "age"],
+      rows: [{ name: "ada", age: 1 }],
+    };
+    const inner = makeInner({
+      queryOrdered: vi.fn().mockResolvedValue(result),
+    });
+    openAsync.mockResolvedValue(inner);
+    const db = new DirSQL({ root: "/data" });
+    const sql = "SELECT name, age FROM users";
+    expect(await db.queryOrdered(sql)).toEqual(result);
+    expect(inner.queryOrdered).toHaveBeenCalledWith(sql);
   });
 
   it("forwards a path-table name without rewriting it", async () => {
