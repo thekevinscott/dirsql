@@ -3,7 +3,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'dirsql',
   description: 'Ephemeral SQL index over a local directory. Watches a filesystem, ingests structured files into an ephemeral SQLite database, and exposes a SQL query interface.',
-  base: '/dirsql/',
+  base: '/',
 
   // Vite blocks dev-server requests whose Host header isn't allowlisted, so
   // `pnpm dev --host` reached by a network hostname (e.g. a Tailscale

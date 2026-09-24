@@ -14,7 +14,7 @@ pnpm install
 pnpm dev
 ```
 
-This starts a local dev server (default: `http://localhost:5173/dirsql/`). The site hot-reloads on file changes.
+This starts a local dev server (default: `http://localhost:5173/`). The site hot-reloads on file changes.
 
 ## Building
 
@@ -94,4 +94,4 @@ Working rules:
 - Use VitePress [code group](https://vitepress.dev/guide/markdown#code-groups) syntax (`::: code-group`) for multi-language examples with `Python`, `Rust`, and `TypeScript` tabs
 - Internal links use relative paths (e.g., `./howto/define-tables.md`)
 - The VitePress config is at `docs/.vitepress/config.ts`
-- The site is deployed under the `/dirsql/` base path
+- The site is deployed at the root of `dirsql.dev`
