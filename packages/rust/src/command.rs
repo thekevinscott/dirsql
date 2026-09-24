@@ -26,7 +26,7 @@
 //! - **Errors.** A non-zero exit is a failure carrying the tail of stderr.
 
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// A named placeholder substituted into a command's argv.
@@ -66,12 +66,20 @@ pub enum CommandError {
     #[error("invalid command template: {0:?}")]
     InvalidCommand(String),
 
-    /// The child could not be spawned (e.g. the program was not found).
-    #[error("failed to spawn `{command}`: {source}")]
+    /// The child could not be spawned.
+    #[error("failed to spawn `{program}`: {source}")]
     Spawn {
-        command: String,
+        program: String,
         #[source]
         source: std::io::Error,
+    },
+
+    /// A program named without a `/` was not found on `$PATH`. `local` is the
+    /// file of that name in the child's cwd, which a bare name never reaches.
+    #[error("failed to spawn `{program}`: not found on $PATH{}", local_hint(.program, .local.as_deref()))]
+    NotOnPath {
+        program: String,
+        local: Option<PathBuf>,
     },
 
     /// The child exited with a non-zero status. `code` is the exit code, or
@@ -121,10 +129,9 @@ pub fn run_command(
             Stdio::null()
         });
 
-    let mut child = cmd.spawn().map_err(|source| CommandError::Spawn {
-        command: command.to_string(),
-        source,
-    })?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|source| spawn_error(&argv[0], source, cwd))?;
 
     // Feed stdin and drain stdout/stderr on their own threads. Draining the
     // output pipes concurrently is required: a child that writes more than a
@@ -183,6 +190,37 @@ pub fn run_command(
         None => Err(CommandError::EmptyOutput {
             command: command.to_string(),
         }),
+    }
+}
+
+fn spawn_error(program: &str, source: std::io::Error, cwd: &Path) -> CommandError {
+    // A missing cwd fails the child's chdir with `NotFound` too.
+    if !searched_path(program, source.kind()) || !cwd.is_dir() {
+        return CommandError::Spawn {
+            program: program.to_string(),
+            source,
+        };
+    }
+    let candidate = cwd.join(program);
+    CommandError::NotOnPath {
+        program: program.to_string(),
+        local: candidate.is_file().then_some(candidate),
+    }
+}
+
+/// A `NotFound` for a name without a `/` means the `$PATH` search came up
+/// empty (`execvp` semantics); with a `/` the name was a path.
+fn searched_path(program: &str, kind: std::io::ErrorKind) -> bool {
+    kind == std::io::ErrorKind::NotFound && !program.contains('/')
+}
+
+fn local_hint(program: &str, local: Option<&Path>) -> String {
+    match local {
+        Some(path) => format!(
+            ". Names without a `/` are resolved against $PATH; use `./{program}` to run `{}`",
+            path.display()
+        ),
+        None => String::new(),
     }
 }
 
@@ -444,8 +482,65 @@ mod tests {
     }
 
     #[test]
-    fn run_command_reports_spawn_failure_for_a_missing_program() {
+    fn run_command_reports_a_bare_missing_program_as_not_on_path() {
         let err = run_command("definitely-not-a-real-binary-xyzzy", &[], &cwd(), None).unwrap_err();
+        assert!(
+            matches!(err, CommandError::NotOnPath { local: None, .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn run_command_reports_a_missing_path_as_a_plain_spawn_error() {
+        let err =
+            run_command("./definitely-not-a-real-binary-xyzzy", &[], &cwd(), None).unwrap_err();
         assert!(matches!(err, CommandError::Spawn { .. }), "got: {err:?}");
+    }
+
+    #[test]
+    fn a_bare_not_found_name_searched_path() {
+        assert!(searched_path("extract.py", std::io::ErrorKind::NotFound));
+    }
+
+    #[test]
+    fn a_name_with_a_slash_did_not_search_path() {
+        assert!(!searched_path("./extract.py", std::io::ErrorKind::NotFound));
+        assert!(!searched_path(
+            "bin/extract.py",
+            std::io::ErrorKind::NotFound
+        ));
+    }
+
+    #[test]
+    fn a_non_not_found_error_did_not_search_path() {
+        assert!(!searched_path(
+            "extract.py",
+            std::io::ErrorKind::PermissionDenied
+        ));
+    }
+
+    #[test]
+    fn not_on_path_without_a_local_file_offers_no_hint() {
+        let err = CommandError::NotOnPath {
+            program: "extract.py".to_string(),
+            local: None,
+        };
+        assert_eq!(
+            err.to_string(),
+            "failed to spawn `extract.py`: not found on $PATH"
+        );
+    }
+
+    #[test]
+    fn not_on_path_with_a_local_file_offers_the_dot_slash_form() {
+        let err = CommandError::NotOnPath {
+            program: "extract.py".to_string(),
+            local: Some(PathBuf::from("/notes/extract.py")),
+        };
+        assert_eq!(
+            err.to_string(),
+            "failed to spawn `extract.py`: not found on $PATH. Names without a `/` are \
+             resolved against $PATH; use `./extract.py` to run `/notes/extract.py`"
+        );
     }
 }

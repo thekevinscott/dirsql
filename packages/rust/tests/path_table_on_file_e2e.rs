@@ -190,3 +190,28 @@ fn a_parsed_scan_honors_the_default_ignore_rules() {
     );
     assert_eq!(titles(&out), vec!["alpha title", "bravo title"]);
 }
+
+#[test]
+fn a_bare_parser_name_says_it_searched_path_and_offers_the_dot_slash_form() {
+    let dir = fixture();
+    let out = std::process::Command::cargo_bin("dirsql")
+        .expect("binary must exist")
+        .arg("query")
+        .arg("SELECT title FROM './**/*.md'")
+        .arg("--on-file")
+        .arg("parse.sh {path}")
+        .env("PATH", "/usr/bin:/bin")
+        .current_dir(dir.path())
+        .output()
+        .expect("spawning `dirsql query` failed");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("failed to spawn `parse.sh`: not found on $PATH"),
+        "the error must name the program and the $PATH search, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("use `./parse.sh`"),
+        "the error must offer the `./` form for a file in the scan root, got: {stderr}"
+    );
+}

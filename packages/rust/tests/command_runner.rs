@@ -136,13 +136,61 @@ fn a_timeout_wrapped_command_that_overruns_reports_nonzero_exit() {
 }
 
 #[test]
-fn a_missing_program_is_a_spawn_error() {
+fn a_missing_program_path_is_a_spawn_error_naming_the_program() {
     let dir = TempDir::new().unwrap();
-    let err = run_command("dirsql-no-such-program-xyzzy --nope", &[], dir.path(), None)
-        .expect_err("spawn fails");
+    let err = run_command(
+        "./dirsql-no-such-program-xyzzy --nope",
+        &[],
+        dir.path(),
+        None,
+    )
+    .expect_err("spawn fails");
     assert!(
-        matches!(err, CommandError::Spawn { .. }),
+        matches!(&err, CommandError::Spawn { program, .. } if program == "./dirsql-no-such-program-xyzzy"),
         "expected Spawn, got {err:?}"
+    );
+}
+
+#[test]
+fn a_bare_name_missing_from_path_names_the_program_and_the_path_search() {
+    let dir = TempDir::new().unwrap();
+    let err = run_command(
+        "dirsql-no-such-program-xyzzy {path}",
+        &[Placeholder::new("path", "a.md")],
+        dir.path(),
+        None,
+    )
+    .expect_err("spawn fails");
+    let message = err.to_string();
+    assert!(
+        message.contains("failed to spawn `dirsql-no-such-program-xyzzy`: not found on $PATH"),
+        "got: {message}"
+    );
+    assert!(
+        !message.contains("./"),
+        "no local file to point at: {message}"
+    );
+}
+
+#[test]
+fn a_bare_name_present_in_the_cwd_suggests_the_dot_slash_form() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    let script = dir.path().join("dirsql-local-extract.sh");
+    std::fs::write(&script, "#!/bin/sh\necho '[]'\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let err = run_command("dirsql-local-extract.sh {path}", &[], dir.path(), None)
+        .expect_err("a bare name is never resolved against the cwd");
+    let message = err.to_string();
+    assert!(
+        message.contains("failed to spawn `dirsql-local-extract.sh`: not found on $PATH"),
+        "got: {message}"
+    );
+    assert!(
+        message.contains("use `./dirsql-local-extract.sh`"),
+        "got: {message}"
     );
 }
 
