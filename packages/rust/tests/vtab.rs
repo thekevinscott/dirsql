@@ -5,7 +5,6 @@
 
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use dirsql::vtab::load_module;
@@ -16,9 +15,16 @@ use tempfile::TempDir;
 /// enforces the result. A privileged process -- root, or anything holding
 /// `CAP_DAC_OVERRIDE` -- reads the file regardless, so the unreadable
 /// precondition cannot hold there and the caller has nothing to assert.
+#[cfg(unix)]
 fn make_unreadable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(0o000)).unwrap();
     fs::read(path).is_err()
+}
+
+#[cfg(not(unix))]
+fn make_unreadable(_path: &Path) -> bool {
+    false
 }
 
 /// A connection with the path-table module registered and one vtab named `t`
