@@ -239,6 +239,25 @@ than `Number.MAX_SAFE_INTEGER`, 2^53 − 1) cannot be represented as a JS
 than return a rounded value. Python's `int` is unbounded, so it always
 round-trips.
 
+### `queryOrdered`
+
+::: code-group
+
+```typescript [TypeScript]
+await db.queryOrdered(sql: string) -> { columns: string[]; rows: Record<string, unknown>[] }
+```
+
+```rust [Rust]
+db.query_ordered(sql: &str) -> Result<QueryResult>   // QueryResult { columns, rows }
+```
+
+:::
+
+Runs `query` and also returns the column names in the order the SELECT list
+names them. Use it to render columns in the order the caller asked for: a
+row's keys do not carry that order. In TypeScript, object keys that look like
+integers always enumerate first.
+
 ### `watch`
 
 ::: code-group

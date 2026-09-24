@@ -89,6 +89,17 @@ export interface RowEvent {
   filePath?: string | null;
 }
 
+/** The result of {@link DirSQL.queryOrdered}. */
+export interface QueryResult {
+  /**
+   * Column names in the order the SELECT list names them. Iterate this, not
+   * a row's keys: object keys that look like integers enumerate first.
+   */
+  columns: string[];
+  /** The rows, exactly as {@link DirSQL.query} returns them. */
+  rows: Record<string, unknown>[];
+}
+
 /**
  * One file the initial scan could not index.
  *
@@ -221,6 +232,20 @@ export class DirSQL {
   async query(sql: string): Promise<Record<string, unknown>[]> {
     await this.ready;
     return this._inner.query(sql);
+  }
+
+  /**
+   * {@link query}, plus the column order the SELECT list names. Use it to
+   * render columns in the order the caller asked for.
+   *
+   * ```ts
+   * const { columns, rows } = await db.queryOrdered("SELECT path, size FROM './'");
+   * // columns: ["path", "size"]
+   * ```
+   */
+  async queryOrdered(sql: string): Promise<QueryResult> {
+    await this.ready;
+    return this._inner.queryOrdered(sql);
   }
 
   /**

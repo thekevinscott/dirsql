@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as api from "./index.js";
-import type { ScanFailure } from "./index.js";
+import type { QueryResult, ScanFailure } from "./index.js";
 
 describe("public barrel", () => {
   it("re-exports the runtime values", () => {
@@ -15,6 +15,12 @@ describe("public barrel", () => {
     const failure: ScanFailure = { path: "bad.json", message: "boom" };
     expect(failure.path).toBe("bad.json");
     expect(failure.message).toBe("boom");
+  });
+
+  it("re-exports the QueryResult type with its documented shape", () => {
+    const result: QueryResult = { columns: ["a"], rows: [{ a: 1 }] };
+    expect(result.columns).toEqual(["a"]);
+    expect(result.rows).toEqual([{ a: 1 }]);
   });
 
   it("exposes exactly the public runtime exports", () => {

@@ -20,6 +20,7 @@ vi.mock("./resolve-config-extensions.js", async () => ({
 
 type FakeInner = {
   query: ReturnType<typeof vi.fn>;
+  queryOrdered: ReturnType<typeof vi.fn>;
   startWatcher: ReturnType<typeof vi.fn>;
   pollEvents: ReturnType<typeof vi.fn>;
   scanFailures: ReturnType<typeof vi.fn>;
@@ -37,6 +38,7 @@ function installFakeCore(inner: FakeInner) {
 function makeInner(overrides: Partial<FakeInner> = {}): FakeInner {
   return {
     query: vi.fn().mockResolvedValue([]),
+    queryOrdered: vi.fn().mockResolvedValue({ columns: [], rows: [] }),
     startWatcher: vi.fn().mockResolvedValue(undefined),
     pollEvents: vi.fn().mockResolvedValue([]),
     scanFailures: vi.fn(() => []),
@@ -315,6 +317,14 @@ describe("DirSQL", () => {
       const db = new DirSQL({ root: "/d" });
       expect(await db.query("SELECT 1")).toEqual([{ ok: 1 }]);
       expect(inner.query).toHaveBeenCalledWith("SELECT 1");
+    });
+
+    it("queryOrdered awaits ready then forwards to the inner instance", async () => {
+      const result = { columns: ["b", "a"], rows: [{ a: 1, b: 2 }] };
+      inner.queryOrdered.mockResolvedValue(result);
+      const db = new DirSQL({ root: "/d" });
+      expect(await db.queryOrdered("SELECT b, a")).toEqual(result);
+      expect(inner.queryOrdered).toHaveBeenCalledWith("SELECT b, a");
     });
 
     it("scanFailures awaits ready then forwards to the inner instance", async () => {
