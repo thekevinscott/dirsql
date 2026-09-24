@@ -193,11 +193,13 @@ mod python {
 
         fn query(&self, py: Python<'_>, sql: String) -> PyResult<Py<PyList>> {
             let db = self.inner.clone();
-            let rows = py.detach(move || db.query(&sql)).map_err(to_py_err)?;
+            let result = py
+                .detach(move || db.query_ordered(&sql))
+                .map_err(to_py_err)?;
 
             let list = PyList::empty(py);
-            for row in rows {
-                list.append(value_row_to_py_dict(py, &row)?)?;
+            for row in &result.rows {
+                list.append(ordered_row_to_py_dict(py, &result.columns, row)?)?;
             }
             Ok(list.unbind())
         }
@@ -298,6 +300,18 @@ mod python {
         let dict = PyDict::new(py);
         for (key, value) in row {
             dict.set_item(key, value_to_py(py, value))?;
+        }
+        Ok(dict.unbind())
+    }
+
+    fn ordered_row_to_py_dict(
+        py: Python<'_>,
+        columns: &[String],
+        row: &Row,
+    ) -> PyResult<Py<PyDict>> {
+        let dict = PyDict::new(py);
+        for column in columns {
+            dict.set_item(column, value_to_py(py, &row[column]))?;
         }
         Ok(dict.unbind())
     }

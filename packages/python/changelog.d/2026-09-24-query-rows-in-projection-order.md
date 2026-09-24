@@ -1,0 +1,1 @@
+**Fixed** `db.query()` rows are now dicts keyed in the order the SELECT list names the columns, so `list(row)` gives the projection order (`SELECT *` follows the table's declared column order). Keys previously came out in the core's hash-map order, which varied from run to run, so a caller rendering columns had no order to follow.
