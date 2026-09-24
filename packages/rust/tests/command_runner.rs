@@ -136,12 +136,17 @@ fn a_timeout_wrapped_command_that_overruns_reports_nonzero_exit() {
 }
 
 #[test]
-fn a_missing_program_is_a_spawn_error() {
+fn a_missing_program_path_is_a_spawn_error_naming_the_program() {
     let dir = TempDir::new().unwrap();
-    let err = run_command("dirsql-no-such-program-xyzzy --nope", &[], dir.path(), None)
-        .expect_err("spawn fails");
+    let err = run_command(
+        "./dirsql-no-such-program-xyzzy --nope",
+        &[],
+        dir.path(),
+        None,
+    )
+    .expect_err("spawn fails");
     assert!(
-        matches!(err, CommandError::Spawn { .. }),
+        matches!(&err, CommandError::Spawn { program, .. } if program == "./dirsql-no-such-program-xyzzy"),
         "expected Spawn, got {err:?}"
     );
 }
@@ -161,7 +166,10 @@ fn a_bare_name_missing_from_path_names_the_program_and_the_path_search() {
         message.contains("failed to spawn `dirsql-no-such-program-xyzzy`: not found on $PATH"),
         "got: {message}"
     );
-    assert!(!message.contains("./"), "no local file to point at: {message}");
+    assert!(
+        !message.contains("./"),
+        "no local file to point at: {message}"
+    );
 }
 
 #[test]
