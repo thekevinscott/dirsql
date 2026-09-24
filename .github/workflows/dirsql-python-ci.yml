@@ -126,7 +126,7 @@ jobs:
       # target-dir override), so a single Cargo.lock-keyed cache serves both
       # legs of this matrix and every other python-test job.
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -169,7 +169,7 @@ jobs:
         uses: extractions/setup-just@v2
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -212,7 +212,7 @@ jobs:
         uses: extractions/setup-just@v2
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
