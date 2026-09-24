@@ -2,7 +2,7 @@
 //! directory, a real parser script, nothing mocked. Pins the surface a user
 //! actually types: `dirsql query "<sql>" --on-file '<command>'`.
 
-#![cfg(feature = "cli")]
+#![cfg(all(feature = "cli", unix))]
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
