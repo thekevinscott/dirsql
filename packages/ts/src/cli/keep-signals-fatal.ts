@@ -16,9 +16,10 @@
  * is the whole remedy — no `unsafe`, no `sigaction`.
  */
 export function keepSignalsFatal(): void {
-  // While the core is running, its own handler drives shutdown and this
-  // listener is the tail of the chain; it matters for signals arriving
-  // outside that window, where exiting is exactly right.
+  // This listener cannot fire while the core runs — the napi call blocks the
+  // event loop — so the addon drops to `SIG_DFL` for that window.
+  // Registering here is still what gives signal-hook a disposition to chain
+  // to, and it handles signals arriving outside that window.
   process.on("SIGINT", () => process.exit(130));
   process.on("SIGTERM", () => process.exit(143));
 }
