@@ -244,6 +244,13 @@ pub fn ensure_internal_rows_table(conn: &Connection) -> rusqlite::Result<()> {
     )
 }
 
+/// One query's rows plus the column order the SELECT list asked for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueryResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<HashMap<String, Value>>,
+}
+
 pub struct Db {
     conn: Connection,
     /// The directory a path-table's glob is resolved against. `None` disables
@@ -714,6 +721,14 @@ impl Db {
     /// internal writes (`insert_row`, delete-by-file, persist), which never go
     /// through `query()`, are unaffected.
     pub fn query(&self, sql: &str) -> Result<Vec<HashMap<String, Value>>> {
+        self.query_ordered(sql).map(|result| result.rows)
+    }
+
+    /// [`query`](Self::query), plus the projection order. A row is a
+    /// `HashMap`, so the order the SELECT list asked for survives only in
+    /// [`QueryResult::columns`]; a renderer that re-derives its columns from
+    /// row keys prints them alphabetically instead.
+    pub fn query_ordered(&self, sql: &str) -> Result<QueryResult> {
         // Bracket the whole statement, prepare included: a worker-backed
         // function called on every row makes this the slowest thing dirsql
         // does, and the guard is what erases the counter before the caller
@@ -757,7 +772,10 @@ impl Db {
         for row in rows {
             results.push(row?);
         }
-        Ok(results)
+        Ok(QueryResult {
+            columns: column_names,
+            rows: results,
+        })
     }
 
     /// Prepare `sql` with the internal-table / ATTACH authorizer installed for
@@ -1024,6 +1042,40 @@ mod tests {
         assert!(rows[0].contains_key("id"));
         assert!(!rows[0].contains_key("_dirsql_file_path"));
         assert!(!rows[0].contains_key("_dirsql_row_index"));
+    }
+
+    #[test]
+    fn query_ordered_reports_the_select_list_order() {
+        let db = Db::new().unwrap();
+        db.create_table("docs", "CREATE TABLE docs (title TEXT, draft INTEGER)")
+            .unwrap();
+
+        let result = db.query_ordered("SELECT draft, title FROM docs").unwrap();
+
+        assert_eq!(
+            result.columns,
+            vec!["draft".to_string(), "title".to_string()]
+        );
+    }
+
+    #[test]
+    fn query_ordered_carries_the_same_rows_query_returns() {
+        let db = Db::new().unwrap();
+        db.create_table("docs", "CREATE TABLE docs (title TEXT, draft INTEGER)")
+            .unwrap();
+        let row = HashMap::from([
+            ("title".into(), Value::Text("Hello".into())),
+            ("draft".into(), Value::Integer(0)),
+        ]);
+        db.insert_row("docs", &row, "docs/hello.md", 0).unwrap();
+
+        let result = db.query_ordered("SELECT title, draft FROM docs").unwrap();
+
+        assert_eq!(
+            result.rows,
+            db.query("SELECT title, draft FROM docs").unwrap()
+        );
+        assert_eq!(result.rows[0]["title"], Value::Text("Hello".into()));
     }
 
     #[test]

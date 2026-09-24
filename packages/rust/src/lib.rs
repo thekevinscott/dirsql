@@ -77,7 +77,7 @@ use std::time::Duration;
 use thiserror::Error;
 
 pub use crate::config::ExtensionSpec as Extension;
-pub use crate::db::{DbError, Value};
+pub use crate::db::{DbError, QueryResult, Value};
 pub use crate::differ::RowEvent;
 #[doc(hidden)]
 pub use crate::row_event_flat::{FlatRowEvent, flatten_row_event};
@@ -404,8 +404,15 @@ impl DirSQL {
     /// keeps the ephemeral index consistent with the on-disk files that back
     /// it: mutations only happen through the watcher/indexer pipeline.
     pub fn query(&self, sql: &str) -> Result<Vec<Row>> {
+        self.query_ordered(sql).map(|result| result.rows)
+    }
+
+    /// [`query`](Self::query), plus the projection order in
+    /// [`QueryResult::columns`]. A [`Row`] is a `HashMap`, so a caller that
+    /// renders columns in the order the user asked for needs this instead.
+    pub fn query_ordered(&self, sql: &str) -> Result<QueryResult> {
         let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
-        db.query(sql).map_err(map_db_error)
+        db.query_ordered(sql).map_err(map_db_error)
     }
 
     /// Lazily create the filesystem watcher. Idempotent; subsequent calls are

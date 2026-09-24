@@ -16,7 +16,9 @@ repository = "https://github.com/thekevinscott/dirsql"
 [workspace.dependencies]
 dirsql = { path = "packages/rust" }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `preserve_order`: a serialized row must keep the projection order the SELECT
+# list asked for, which the default BTreeMap-backed object discards.
+serde_json = { version = "1", features = ["preserve_order"] }
 regex = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "sync"] }
