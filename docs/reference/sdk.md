@@ -223,6 +223,9 @@ Executes a SQL query and returns rows keyed by column name.
   [Read-only by design](../explanation#read-only-by-design).
 - Internal tracking columns (`_dirsql_file_path`, `_dirsql_row_index`) are
   excluded from `SELECT *` results; name them explicitly to see them.
+- **Column order.** Python row dicts are keyed in the order the SELECT list
+  names the columns. Rust and TypeScript rows do not carry that order; use
+  [`queryOrdered`](#queryordered).
 - SQLite values map back to language types:
 
 | SQLite | Python | TypeScript | Rust |

@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1790283783,
+  "exit_code": 0,
+  "commit": "2fb22b61a9db9022d3c3adbdf7b7373530de091c",
+  "branch": "claude/1173-py-projection-order"
+}
