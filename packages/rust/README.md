@@ -1,6 +1,6 @@
 # `dirsql` (Rust SDK)
 
-Ephemeral SQL index over a local directory. `dirsql` watches a filesystem, ingests structured files into an in-memory SQLite database, and exposes a SQL query interface -- the filesystem is always the source of truth.
+An ephemeral SQL index over a local directory. `dirsql` watches a filesystem, ingests structured files into an in-memory SQLite database, and exposes a SQL query interface -- the filesystem is always the source of truth.
 
 [Documentation](https://thekevinscott.github.io/dirsql/?lang=rust)
 
