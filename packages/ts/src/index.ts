@@ -1,4 +1,4 @@
-// dirsql TypeScript SDK — public API barrel.
+// dirsql TypeScript SDK: public API barrel.
 
 export { DirSQL } from "./dirsql.js";
 export type {
