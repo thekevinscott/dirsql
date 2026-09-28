@@ -12,7 +12,7 @@ pub const RESERVED_DIR: &str = ".dirsql";
 
 /// A root-relative path as dirsql stores and reports it: `/`-separated on
 /// every platform, so globs, `file_path` keys and `path` columns agree.
-pub fn to_slash(path: &Path) -> String {
+pub(crate) fn to_slash(path: &Path) -> String {
     with_slashes(&path.to_string_lossy(), std::path::MAIN_SEPARATOR)
 }
 
