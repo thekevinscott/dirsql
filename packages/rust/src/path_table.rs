@@ -685,7 +685,12 @@ mod tests {
     #[test]
     fn a_backslash_after_a_tilde_is_not_a_unix_path() {
         assert_eq!(
-            resolve_with(r"~\notes", &nothing_is_a_dir),
+            resolve_as::<Utf8UnixEncoding>(
+                r"~\notes",
+                Path::new(ROOT),
+                Some(Path::new("/home/u")),
+                &nothing_is_a_dir
+            ),
             Resolution::NotAPath
         );
     }
