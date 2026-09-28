@@ -1,0 +1,1 @@
+**Fixed** On Windows, a path-table named by a drive letter (`C:\logs\*.log`, `C:/logs/*.log`), a UNC share, or `~\` now resolves instead of failing with `no such table`. Absolute path-tables report `path` with `/` separators on every platform.

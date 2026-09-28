@@ -96,6 +96,12 @@ SELECT path FROM '/var/log/*.log';
 -- /var/log/syslog
 ```
 
+On Windows, the absolute forms also include a drive letter
+(`'C:\logs\*.log'` or `'C:/logs/*.log'`), a UNC share
+(`'\\server\share\*.md'`) and `'~\notes'`. `\` and `/` both separate there,
+and the `path` these report uses `/` throughout (`C:/logs/app.log`), matching
+the `/`-separated relative paths.
+
 On a system with no home directory, a `~/` path-table reports that it cannot
 resolve rather than guessing.
 

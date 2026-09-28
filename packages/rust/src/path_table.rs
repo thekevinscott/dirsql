@@ -4,9 +4,15 @@
 //!
 //! Every decision here is a pure function of the written string plus one
 //! filesystem question (*is this a directory?*), which is injected so the
-//! rules can be tested without a filesystem.
+//! rules can be tested without a filesystem. The path syntax is a type
+//! parameter, so the Windows rules are testable on any host.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
+
+use typed_path::{
+    Utf8Component, Utf8Encoding, Utf8NativeEncoding, Utf8Path, Utf8PathBuf, Utf8UnixEncoding,
+    Utf8WindowsComponent, Utf8WindowsEncoding, Utf8WindowsPath,
+};
 
 /// Directories a path-table scan skips, at any depth. They are skipped only
 /// *beneath* the literal part of the path you write, so naming one explicitly
@@ -43,6 +49,50 @@ pub enum Resolution {
     NotAPath,
 }
 
+/// The per-platform rules for which written names are absolute and how a
+/// resolved scan root is reported.
+trait Syntax: Utf8Encoding + Sized {
+    const HOME_PREFIXES: &'static [&'static str];
+
+    fn is_rooted(name: &str) -> bool;
+
+    fn reported(path: &Utf8Path<Self>) -> String;
+}
+
+impl Syntax for Utf8UnixEncoding {
+    const HOME_PREFIXES: &'static [&'static str] = &["~/"];
+
+    fn is_rooted(name: &str) -> bool {
+        name.starts_with('/')
+    }
+
+    fn reported(path: &Utf8Path<Self>) -> String {
+        path.as_str().to_string()
+    }
+}
+
+impl Syntax for Utf8WindowsEncoding {
+    const HOME_PREFIXES: &'static [&'static str] = &["~/", "~\\"];
+
+    fn is_rooted(name: &str) -> bool {
+        Utf8WindowsPath::new(name).has_root()
+    }
+
+    /// Reported with `/`, matching the index-root-relative paths. A verbatim
+    /// (`\\?\`) path is the exception: there `/` is not a separator.
+    fn reported(path: &Utf8Path<Self>) -> String {
+        let verbatim = matches!(
+            path.components().next(),
+            Some(Utf8WindowsComponent::Prefix(prefix)) if prefix.kind().is_verbatim()
+        );
+        if verbatim {
+            path.as_str().to_string()
+        } else {
+            path.as_str().replace('\\', "/")
+        }
+    }
+}
+
 /// Whether `name` contains a character that makes it a glob rather than a
 /// literal path.
 fn has_glob_metacharacter(name: &str) -> bool {
@@ -59,6 +109,15 @@ pub fn resolve(
     home: Option<&Path>,
     is_dir: &dyn Fn(&Path) -> bool,
 ) -> Resolution {
+    resolve_as::<Utf8NativeEncoding>(name, index_root, home, is_dir)
+}
+
+fn resolve_as<S: Syntax>(
+    name: &str,
+    index_root: &Path,
+    home: Option<&Path>,
+    is_dir: &dyn Fn(&Path) -> bool,
+) -> Resolution {
     if let Some(rest) = name.strip_prefix("./") {
         return Resolution::Table(PathTable {
             root: index_root.to_path_buf(),
@@ -67,7 +126,7 @@ pub fn resolve(
         });
     }
 
-    match absolute_target(name, index_root, home) {
+    match absolute_target::<S>(name, index_root, home) {
         Some(Some(target)) => Resolution::Table(split_absolute(&target, is_dir)),
         Some(None) => Resolution::NoHome,
         None if has_glob_metacharacter(name) => Resolution::Hint,
@@ -91,19 +150,27 @@ fn relative_glob(rest: &str, is_dir: &dyn Fn(&Path) -> bool) -> String {
     trimmed.to_string()
 }
 
+fn typed<S: Syntax>(path: &Path) -> Utf8PathBuf<S> {
+    Utf8PathBuf::from(path.to_string_lossy().into_owned())
+}
+
 /// The absolute path a non-`./` path-table names, with `.` and `..` folded out.
 ///
 /// `None` means the name is not a path at all. `Some(None)` means it is a `~/`
 /// path but no home directory could be found.
-fn absolute_target(name: &str, index_root: &Path, home: Option<&Path>) -> Option<Option<PathBuf>> {
-    if let Some(rest) = name.strip_prefix("~/") {
-        return Some(home.map(|h| normalize(&h.join(rest))));
+fn absolute_target<S: Syntax>(
+    name: &str,
+    index_root: &Path,
+    home: Option<&Path>,
+) -> Option<Option<Utf8PathBuf<S>>> {
+    if let Some(rest) = S::HOME_PREFIXES.iter().find_map(|p| name.strip_prefix(p)) {
+        return Some(home.map(|h| normalize(&typed::<S>(h).join(rest))));
     }
     if name.starts_with("../") {
-        return Some(Some(normalize(&index_root.join(name))));
+        return Some(Some(normalize(&typed::<S>(index_root).join(name))));
     }
-    if name.starts_with('/') {
-        return Some(Some(normalize(Path::new(name))));
+    if S::is_rooted(name) {
+        return Some(Some(normalize(Utf8Path::new(name))));
     }
     None
 }
@@ -111,21 +178,37 @@ fn absolute_target(name: &str, index_root: &Path, home: Option<&Path>) -> Option
 /// Fold `.` and `..` out of `path` lexically. Purely textual: a `..` is not
 /// resolved through a symlink, which keeps the answer a function of the string
 /// the user wrote.
-fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
+fn normalize<S: Syntax>(path: &Utf8Path<S>) -> Utf8PathBuf<S> {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut normal = 0;
+    let mut rooted = false;
     for component in path.components() {
-        match component {
-            Component::CurDir => {}
+        if component.is_current() {
+            continue;
+        }
+        if component.is_parent() {
             // A `..` that cannot pop is kept on a relative path (it still
             // means something) but dropped at the filesystem root, which has
             // no parent to climb to.
-            Component::ParentDir => {
-                if !out.pop() && !out.has_root() {
-                    out.push(component);
-                }
+            if normal > 0 {
+                kept.pop();
+                normal -= 1;
+            } else if !rooted {
+                kept.push(component.as_str());
             }
-            other => out.push(other),
+            continue;
         }
+        if component.is_normal() {
+            normal += 1;
+        } else if component.is_root() {
+            rooted = true;
+        }
+        kept.push(component.as_str());
+    }
+
+    let mut out = Utf8PathBuf::new();
+    for component in kept {
+        out.push(component);
     }
     out
 }
@@ -133,43 +216,44 @@ fn normalize(path: &Path) -> PathBuf {
 /// Split an absolute path-table target into the directory to walk and the glob
 /// to match beneath it. A wholly literal target is a directory (scan it
 /// recursively) or a single file (match exactly that name).
-fn split_absolute(target: &Path, is_dir: &dyn Fn(&Path) -> bool) -> PathTable {
+fn split_absolute<S: Syntax>(target: &Utf8Path<S>, is_dir: &dyn Fn(&Path) -> bool) -> PathTable {
     let (literal, rest) = split_at_first_glob(target);
 
     if !rest.is_empty() {
-        return table_at(literal, rest);
+        return table_at(&literal, rest);
     }
-    if is_dir(&literal) {
-        return table_at(literal, RECURSIVE_GLOB.to_string());
+    if is_dir(Path::new(literal.as_str())) {
+        return table_at(&literal, RECURSIVE_GLOB.to_string());
     }
 
     let name = literal
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
+        .map(str::to_string)
         .unwrap_or_else(|| RECURSIVE_GLOB.to_string());
-    let parent = literal.parent().unwrap_or(&literal).to_path_buf();
+    let parent = literal.parent().unwrap_or(&literal);
     table_at(parent, name)
 }
 
 /// A path-table rooted at `root`, reporting absolute paths.
-fn table_at(root: PathBuf, glob: String) -> PathTable {
+fn table_at<S: Syntax>(root: &Utf8Path<S>, glob: String) -> PathTable {
     PathTable {
-        path_prefix: root.to_string_lossy().into_owned(),
-        root,
+        path_prefix: S::reported(root),
+        root: PathBuf::from(root.as_str()),
         glob,
     }
 }
 
 /// Split `target` at its first glob-bearing component: the literal directory
 /// chain ahead of it, and the rest as a `/`-joined glob.
-fn split_at_first_glob(target: &Path) -> (PathBuf, String) {
-    let mut literal = PathBuf::new();
-    let mut rest: Vec<String> = Vec::new();
+fn split_at_first_glob<S: Syntax>(target: &Utf8Path<S>) -> (Utf8PathBuf<S>, String) {
+    let mut literal = Utf8PathBuf::new();
+    let mut rest: Vec<&str> = Vec::new();
 
     for component in target.components() {
-        let text = component.as_os_str().to_string_lossy().into_owned();
-        if rest.is_empty() && !has_glob_metacharacter(&text) {
-            literal.push(component);
+        let text = component.as_str();
+        let is_glob = component.is_normal() && has_glob_metacharacter(text);
+        if rest.is_empty() && !is_glob {
+            literal.push(text);
         } else {
             rest.push(text);
         }
@@ -388,12 +472,23 @@ mod tests {
 
     #[test]
     fn normalize_drops_current_directory_components() {
-        assert_eq!(normalize(Path::new("/a/./b")), PathBuf::from("/a/b"));
+        assert_eq!(unix_normalize("/a/./b"), "/a/b");
     }
 
     #[test]
     fn normalize_keeps_a_leading_parent_it_cannot_pop() {
-        assert_eq!(normalize(Path::new("../a")), PathBuf::from("../a"));
+        assert_eq!(unix_normalize("../a"), "../a");
+    }
+
+    #[test]
+    fn normalize_does_not_pop_a_parent_it_kept() {
+        assert_eq!(unix_normalize("../../a"), "../../a");
+    }
+
+    fn unix_normalize(path: &str) -> String {
+        normalize(Utf8Path::<Utf8UnixEncoding>::new(path))
+            .as_str()
+            .to_string()
     }
 
     #[test]
@@ -412,5 +507,186 @@ mod tests {
     #[test]
     fn ignore_base_is_the_whole_of_a_literal_glob() {
         assert_eq!(ignore_base("docs/a.md"), PathBuf::from("docs/a.md"));
+    }
+
+    mod windows {
+        use super::*;
+
+        const ROOT: &str = r"C:\index";
+
+        fn resolve_with(name: &str, is_dir: &dyn Fn(&Path) -> bool) -> Resolution {
+            resolve_as::<Utf8WindowsEncoding>(
+                name,
+                Path::new(ROOT),
+                Some(Path::new(r"C:\Users\u")),
+                is_dir,
+            )
+        }
+
+        fn table(name: &str, is_dir: &dyn Fn(&Path) -> bool) -> PathTable {
+            match resolve_with(name, is_dir) {
+                Resolution::Table(t) => t,
+                other => panic!("expected a path-table, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn a_drive_letter_glob_roots_at_its_literal_prefix() {
+            let t = table(r"C:\var\log\*.log", &nothing_is_a_dir);
+            assert_eq!(t.root, Path::new(r"C:\var\log"));
+            assert_eq!(t.glob, "*.log");
+            assert_eq!(t.path_prefix, "C:/var/log");
+        }
+
+        #[test]
+        fn a_drive_letter_path_may_use_forward_slashes() {
+            let t = table("C:/var/log/*.log", &nothing_is_a_dir);
+            assert_eq!(t.root, Path::new(r"C:\var\log"));
+            assert_eq!(t.path_prefix, "C:/var/log");
+        }
+
+        #[test]
+        fn a_mixed_separator_path_splits_on_both() {
+            let t = table(r"C:\Users\u\Temp/docs/*.md", &nothing_is_a_dir);
+            assert_eq!(t.root, Path::new(r"C:\Users\u\Temp\docs"));
+            assert_eq!(t.glob, "*.md");
+            assert_eq!(t.path_prefix, "C:/Users/u/Temp/docs");
+        }
+
+        #[test]
+        fn a_drive_letter_directory_expands_recursively() {
+            let t = table(r"C:\var\log", &everything_is_a_dir);
+            assert_eq!(t.root, Path::new(r"C:\var\log"));
+            assert_eq!(t.glob, "**/*");
+        }
+
+        #[test]
+        fn a_drive_letter_single_file_roots_at_its_parent() {
+            let t = table(r"C:\var\log\syslog", &nothing_is_a_dir);
+            assert_eq!(t.root, Path::new(r"C:\var\log"));
+            assert_eq!(t.glob, "syslog");
+        }
+
+        #[test]
+        fn a_drive_root_scans_everything() {
+            let t = table(r"C:\", &everything_is_a_dir);
+            assert_eq!(t.root, Path::new(r"C:\"));
+            assert_eq!(t.glob, "**/*");
+            assert_eq!(t.path_prefix, "C:/");
+        }
+
+        #[test]
+        fn a_drive_relative_name_is_not_a_path() {
+            assert_eq!(
+                resolve_with("C:notes", &nothing_is_a_dir),
+                Resolution::NotAPath
+            );
+        }
+
+        #[test]
+        fn a_rooted_path_without_a_drive_is_still_absolute() {
+            let t = table("/var/log/*.log", &nothing_is_a_dir);
+            assert_eq!(t.root, Path::new(r"\var\log"));
+            assert_eq!(t.path_prefix, "/var/log");
+        }
+
+        #[test]
+        fn a_unc_path_roots_at_its_share() {
+            let t = table(r"\\server\share\docs\*.md", &nothing_is_a_dir);
+            assert_eq!(t.root, Path::new(r"\\server\share\docs"));
+            assert_eq!(t.glob, "*.md");
+            assert_eq!(t.path_prefix, "//server/share/docs");
+        }
+
+        #[test]
+        fn a_verbatim_path_keeps_its_backslashes() {
+            let t = table(r"\\?\C:\var\log\*.log", &nothing_is_a_dir);
+            assert_eq!(t.path_prefix, r"\\?\C:\var\log");
+        }
+
+        #[test]
+        fn a_parent_relative_path_resolves_against_the_index_root() {
+            let t = resolve_as::<Utf8WindowsEncoding>(
+                "../../a/*.md",
+                Path::new(r"C:\x\y\z"),
+                None,
+                &nothing_is_a_dir,
+            );
+            assert_eq!(
+                t,
+                Resolution::Table(PathTable {
+                    root: PathBuf::from(r"C:\x\a"),
+                    glob: "*.md".to_string(),
+                    path_prefix: "C:/x/a".to_string(),
+                })
+            );
+        }
+
+        #[test]
+        fn a_parent_relative_path_past_the_drive_root_stops_there() {
+            let t = resolve_as::<Utf8WindowsEncoding>(
+                "../../*.md",
+                Path::new(r"C:\x"),
+                None,
+                &nothing_is_a_dir,
+            );
+            assert_eq!(
+                t,
+                Resolution::Table(PathTable {
+                    root: PathBuf::from(r"C:\"),
+                    glob: "*.md".to_string(),
+                    path_prefix: "C:/".to_string(),
+                })
+            );
+        }
+
+        #[test]
+        fn a_home_relative_path_resolves_against_the_home_directory() {
+            let t = table("~/notes/*.md", &nothing_is_a_dir);
+            assert_eq!(t.root, Path::new(r"C:\Users\u\notes"));
+            assert_eq!(t.glob, "*.md");
+            assert_eq!(t.path_prefix, "C:/Users/u/notes");
+        }
+
+        #[test]
+        fn a_backslash_home_relative_path_resolves_against_the_home_directory() {
+            let t = table(r"~\notes\*.md", &nothing_is_a_dir);
+            assert_eq!(t.root, Path::new(r"C:\Users\u\notes"));
+            assert_eq!(t.glob, "*.md");
+        }
+
+        #[test]
+        fn a_home_relative_path_without_a_home_directory_is_unresolvable() {
+            assert_eq!(
+                resolve_as::<Utf8WindowsEncoding>(
+                    r"~\notes",
+                    Path::new(ROOT),
+                    None,
+                    &everything_is_a_dir
+                ),
+                Resolution::NoHome
+            );
+        }
+
+        #[test]
+        fn a_bare_glob_asks_for_the_dot_slash_form() {
+            assert_eq!(resolve_with("**/*.md", &nothing_is_a_dir), Resolution::Hint);
+        }
+
+        #[test]
+        fn a_plain_identifier_is_not_a_path() {
+            assert_eq!(
+                resolve_with("users", &nothing_is_a_dir),
+                Resolution::NotAPath
+            );
+        }
+    }
+
+    #[test]
+    fn a_backslash_after_a_tilde_is_not_a_unix_path() {
+        assert_eq!(
+            resolve_with(r"~\notes", &nothing_is_a_dir),
+            Resolution::NotAPath
+        );
     }
 }

@@ -3,9 +3,15 @@
 //! real SQLite, SDK public API.
 
 use std::fs;
+use std::path::Path;
 
 use dirsql::{DirSQL, Row, Value};
 use tempfile::TempDir;
+
+/// How an absolute path-table reports `path`: always `/`-separated.
+fn reported(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
 
 /// A tree with a nested doc directory, a top-level file, a dotfile, and the
 /// two directories a zero-config scan must not drown in.
@@ -226,7 +232,7 @@ fn an_absolute_path_table_resolves_and_reports_absolute_paths() {
     let root = fixture();
     let db = open(&root);
 
-    let dir = root.path().display().to_string();
+    let dir = reported(root.path());
     let found = paths(&db, &format!("SELECT path FROM '{dir}/docs/*.md'"));
 
     assert_eq!(
@@ -241,7 +247,7 @@ fn an_absolute_directory_path_scans_it_recursively() {
     let root = fixture();
     let db = open(&root);
 
-    let dir = root.path().display().to_string();
+    let dir = reported(root.path());
     let found = paths(&db, &format!("SELECT path FROM '{dir}/docs'"));
 
     assert_eq!(
@@ -259,7 +265,7 @@ fn an_absolute_single_file_path_is_exactly_one_row() {
     let root = fixture();
     let db = open(&root);
 
-    let dir = root.path().display().to_string();
+    let dir = reported(root.path());
     let rows = db
         .query(&format!("SELECT path FROM '{dir}/docs/a.md'"))
         .unwrap();
@@ -277,7 +283,7 @@ fn a_parent_relative_path_table_resolves_against_the_index_root() {
     let inner = root.path().join("docs/nested");
     let db = DirSQL::new(&inner, vec![]).unwrap();
 
-    let dir = root.path().display().to_string();
+    let dir = reported(root.path());
     let found = paths(&db, "SELECT path FROM '../*.md'");
 
     assert_eq!(
@@ -292,7 +298,7 @@ fn an_absolute_path_table_reads_content_from_the_right_file() {
     let root = fixture();
     let db = open(&root);
 
-    let dir = root.path().display().to_string();
+    let dir = reported(root.path());
     let rows = db
         .query(&format!(
             "SELECT path FROM '{dir}/docs/*.md' WHERE content = 'alpha'"

@@ -85,6 +85,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-stream = { version = "0.1", features = ["sync"], optional = true }
 toml = "0.8"
+typed-path = "0.12"
 walkdir = "2"
 
 [lints.rust]
