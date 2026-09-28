@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1790603647,
+  "exit_code": 0,
+  "commit": "2e97244b40e34b1ef4d353e29bbdc21f7d5c80dd",
+  "branch": "claude/1184-win-rel-paths"
+}
