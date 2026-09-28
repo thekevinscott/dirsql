@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1790604797,
+  "exit_code": 0,
+  "commit": "ddc34c98416eb819a5d2adf7eba04540bba04e43",
+  "branch": "claude/1185-win-abs-table-names"
+}
