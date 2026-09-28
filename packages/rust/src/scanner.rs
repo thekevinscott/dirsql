@@ -10,6 +10,16 @@ use walkdir::WalkDir;
 /// whether persistence is enabled.
 pub const RESERVED_DIR: &str = ".dirsql";
 
+/// A root-relative path as dirsql stores and reports it: `/`-separated on
+/// every platform, so globs, `file_path` keys and `path` columns agree.
+pub fn to_slash(path: &Path) -> String {
+    with_slashes(&path.to_string_lossy(), std::path::MAIN_SEPARATOR)
+}
+
+fn with_slashes(path: &str, _native: char) -> String {
+    path.to_owned()
+}
+
 /// Walk a directory tree and return all file paths paired with their matching table name.
 /// Ignored paths and directories are skipped. Only files (not directories) are returned.
 ///
@@ -352,6 +362,26 @@ mod tests {
     fn is_glob_match_is_scoped_to_the_pattern_prefix() {
         let set = compile_glob("docs/**/*.md").unwrap();
         assert!(!is_glob_match(&set, Path::new("a.md")));
+    }
+
+    #[test]
+    fn with_slashes_rewrites_a_backslash_native_separator() {
+        assert_eq!(with_slashes(r"moved\one\mid.txt", '\\'), "moved/one/mid.txt");
+    }
+
+    #[test]
+    fn with_slashes_keeps_a_mixed_path_slash_separated() {
+        assert_eq!(with_slashes(r"a/b\c.txt", '\\'), "a/b/c.txt");
+    }
+
+    #[test]
+    fn with_slashes_leaves_a_backslash_in_a_unix_file_name() {
+        assert_eq!(with_slashes(r"dir/a\b.txt", '/'), r"dir/a\b.txt");
+    }
+
+    #[test]
+    fn to_slash_keeps_a_native_unix_path() {
+        assert_eq!(to_slash(Path::new("docs/nested/a.md")), "docs/nested/a.md");
     }
 
     #[test]
