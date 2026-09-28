@@ -1,0 +1,9 @@
+name: probe-stack-branch-366
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  stack-branch-main-366:
+    runs-on: ubuntu-latest
+    steps:
+      - run: 'true'
