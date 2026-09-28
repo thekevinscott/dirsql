@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1790603978,
+  "exit_code": 0,
+  "commit": "3aa71ff81e229fd7f5da6536659b45fc7c54e559",
+  "branch": "claude/1186-win-test-harness"
+}
