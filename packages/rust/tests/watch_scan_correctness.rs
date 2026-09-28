@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 /// A table matching *every* path (like the default `files` table's `**/*`),
 /// so a newly created subdirectory is a matcher candidate on the watch path.
 fn files_table(root: &std::path::Path) -> Table {
-    let root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let canonical = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let root = root.to_path_buf();
     Table::new(
         "files",
         "CREATE TABLE files (name TEXT, path TEXT)",
@@ -22,10 +23,13 @@ fn files_table(root: &std::path::Path) -> Table {
             let content = fs::read_to_string(path).unwrap_or_default();
             let abs = std::path::Path::new(path);
             let rel = abs
-                .strip_prefix(&root)
+                .strip_prefix(&canonical)
+                .or_else(|_| abs.strip_prefix(&root))
                 .unwrap_or(abs)
-                .to_string_lossy()
-                .into_owned();
+                .iter()
+                .map(|part| part.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
             vec![HashMap::from([
                 ("name".to_string(), Value::Text(content.trim().to_string())),
                 ("path".to_string(), Value::Text(rel)),

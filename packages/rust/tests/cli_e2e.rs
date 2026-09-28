@@ -47,7 +47,7 @@ fn blog_fixture() -> TempDir {
 name = "posts"
 ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
 glob = "posts/*/*.json"
-on-file = '''sh -c 'base=${1##*/}; size=$(wc -c < "$1" | tr -d " "); printf "[{\"basename\":\"%s\",\"size\":%s}]" "$base" "$size"' sh {path}'''
+on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); base=${p##*/}; size=$(wc -c < "$1" | tr -d " "); printf "[{\"basename\":\"%s\",\"size\":%s}]" "$base" "$size"' sh {path}'''
 "#,
     )
     .unwrap();
@@ -69,7 +69,7 @@ fn quoted_blog_fixture() -> TempDir {
 name = "posts"
 ddl = 'CREATE TABLE "posts" (basename TEXT)'
 glob = "posts/*/*.json"
-on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
+on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); printf "[{\"basename\":\"%s\"}]" "${p##*/}"' sh {path}'''
 "#,
     )
     .unwrap();
@@ -973,13 +973,13 @@ fn query_subcommand_fans_out_file_to_overlapping_tables() {
 name = "ta"
 ddl = "CREATE TABLE ta (path TEXT)"
 glob = "data/*/metadata.json"
-on-file = '''sh -c 'rel=${1#"$2"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''
+on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); r=$(printf %s "$2" | tr "\\\\" /); rel=${p#"$r"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''
 
 [[table]]
 name = "tb"
 ddl = "CREATE TABLE tb (path TEXT)"
 glob = "data/**/metadata.json"
-on-file = '''sh -c 'rel=${1#"$2"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''
+on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); r=$(printf %s "$2" | tr "\\\\" /); rel=${p#"$r"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''
 "#,
     )
     .unwrap();

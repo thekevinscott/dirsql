@@ -660,9 +660,12 @@ mod tests {
 
     #[test]
     fn run_parser_substitutes_the_absolute_path_and_the_root() {
-        let payload =
-            run_parser("echo {path} {root}", Path::new("/tmp"), Path::new("a.json")).unwrap();
-        assert_eq!(payload, "/tmp/a.json /tmp");
+        let root = std::env::temp_dir();
+        let payload = run_parser("echo {path} {root}", &root, Path::new("a.json")).unwrap();
+        assert_eq!(
+            payload,
+            format!("{} {}", root.join("a.json").display(), root.display())
+        );
     }
 
     #[test]

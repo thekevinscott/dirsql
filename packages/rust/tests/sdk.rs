@@ -653,7 +653,7 @@ fn builder_explicit_root_wins_over_config_directory() {
 name = "items"
 ddl = "CREATE TABLE items (basename TEXT)"
 glob = "*.json"
-on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
+on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); printf "[{\"basename\":\"%s\"}]" "${p##*/}"' sh {path}'''
 "#,
     )
     .unwrap();
