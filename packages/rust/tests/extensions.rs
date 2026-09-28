@@ -113,7 +113,7 @@ fn loads_real_extension_and_calls_registered_function() {
         format!(
             r#"
 [[dirsql.extension]]
-path = "{}"
+path = {}
 entrypoint = "sqlite3_extension_init"
 
 [[table]]
@@ -122,7 +122,7 @@ ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.txt"
 on-file = "cat {{path}}"
 "#,
-            ext.display(),
+            toml::Value::String(ext.display().to_string()),
         ),
     )
     .unwrap();

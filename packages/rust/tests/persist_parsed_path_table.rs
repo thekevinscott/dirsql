@@ -73,8 +73,8 @@ impl Fixture {
         fs::write(&script, format!("printf x >> \"$2\"\n{body}\n")).unwrap();
         format!(
             "sh {} {{path}} {}",
-            script.display(),
-            self.counter.display()
+            shell_word(&script),
+            shell_word(&self.counter)
         )
     }
 
@@ -120,6 +120,12 @@ impl Fixture {
     }
 }
 
+fn shell_word(path: &Path) -> String {
+    shlex::try_quote(&path.to_string_lossy())
+        .unwrap()
+        .into_owned()
+}
+
 fn payload(i: usize, tag: &str) -> String {
     format!(
         "[{{\"id\":{i},\"tag\":\"{tag}\",\"body\":\"{}\"}}]",
@@ -127,11 +133,16 @@ fn payload(i: usize, tag: &str) -> String {
     )
 }
 
+/// Windows refuses `set_modified` on a handle opened read-only.
+fn writable(path: &Path) -> fs::File {
+    fs::OpenOptions::new().write(true).open(path).unwrap()
+}
+
 /// Push a file's mtime clear of the racy window so the stat tuple alone
 /// decides whether it changed.
 fn touch_into_the_future(path: &Path) {
     let future = SystemTime::now() + Duration::from_secs(5);
-    fs::File::open(path).unwrap().set_modified(future).unwrap();
+    writable(path).set_modified(future).unwrap();
 }
 
 /// Pin a file's mtime far enough ahead that every cache written during the
@@ -140,7 +151,7 @@ fn touch_into_the_future(path: &Path) {
 /// changed and the reuse decision falls through to the content hash.
 fn pin_inside_the_racy_window(path: &Path) -> SystemTime {
     let pinned = SystemTime::now() + Duration::from_secs(3600);
-    fs::File::open(path).unwrap().set_modified(pinned).unwrap();
+    writable(path).set_modified(pinned).unwrap();
     pinned
 }
 
@@ -319,10 +330,7 @@ fn content_that_leaves_the_stat_tuple_untouched_is_caught_by_the_hash() {
     // `payload` is the same length for either tag, so rewriting in place leaves
     // size, inode and device alone; restoring the mtime leaves the rest.
     fs::write(&edited, payload(3, "v2")).unwrap();
-    fs::File::open(&edited)
-        .unwrap()
-        .set_modified(pinned)
-        .unwrap();
+    writable(&edited).set_modified(pinned).unwrap();
 
     let after = fs::metadata(&edited).unwrap();
     assert_eq!(
