@@ -571,7 +571,7 @@ impl DirSQL {
         // unspecified. An `on_file` failure produces an error event for that
         // table only; the other matching tables still process the event.
         let matches = self.inner.matcher.match_all(&rel_path_buf);
-        let rel_path = rel_path_buf.to_string_lossy().to_string();
+        let rel_path = scanner::to_slash(&rel_path_buf);
 
         let mut events = Vec::new();
         for m in matches {
@@ -625,11 +625,7 @@ impl DirSQL {
         };
         let mut events = Vec::new();
         for (path, table) in self.inner.fs.scan_subtree(base, dir, &self.inner.matcher) {
-            let rel_path = path
-                .strip_prefix(base)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .to_string();
+            let rel_path = scanner::to_slash(path.strip_prefix(base).unwrap_or(&path));
             events.extend(self.handle_upsert(&table, &path, &rel_path));
         }
         events
@@ -1836,10 +1832,7 @@ fn run_channel_loop(db: DirSQL, tx: UnboundedSender<RowEvent>) {
 }
 
 fn relative_path(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .to_string()
+    scanner::to_slash(path.strip_prefix(root).unwrap_or(path))
 }
 
 /// Build [`Table`] objects from a parsed config.

@@ -1,0 +1,1 @@
+**Fixed** Root-relative paths are `/`-separated on Windows too. The scanner, the watcher, `file_path`, the `path` column and path-table results no longer report `docs\a.md`, and a path-table under a prefix no longer joins with a mixed separator.

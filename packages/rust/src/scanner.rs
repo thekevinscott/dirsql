@@ -16,8 +16,11 @@ pub fn to_slash(path: &Path) -> String {
     with_slashes(&path.to_string_lossy(), std::path::MAIN_SEPARATOR)
 }
 
-fn with_slashes(path: &str, _native: char) -> String {
-    path.to_owned()
+fn with_slashes(path: &str, native: char) -> String {
+    if native == '/' {
+        return path.to_owned();
+    }
+    path.replace(native, "/")
 }
 
 /// Walk a directory tree and return all file paths paired with their matching table name.
@@ -366,7 +369,10 @@ mod tests {
 
     #[test]
     fn with_slashes_rewrites_a_backslash_native_separator() {
-        assert_eq!(with_slashes(r"moved\one\mid.txt", '\\'), "moved/one/mid.txt");
+        assert_eq!(
+            with_slashes(r"moved\one\mid.txt", '\\'),
+            "moved/one/mid.txt"
+        );
     }
 
     #[test]
