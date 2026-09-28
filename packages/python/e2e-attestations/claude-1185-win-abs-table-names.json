@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1790604714,
+  "exit_code": 0,
+  "commit": "f719e49b96e8610e5692f76ebfb564ae3188d04e",
+  "branch": "claude/1185-win-abs-table-names"
+}
