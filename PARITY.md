@@ -296,6 +296,14 @@ per-binding surface. The one signature change is Rust-only: `vtab::load_module`
 and `parsed_vtab::load_module` take the `Arc<StatementScope>` their tables
 cache under, a surface neither binding exposes.
 
+**Content read ahead in parallel (#1241) — Rust-crate-only surface, no SDK
+drift.** A statement that names a path table's `content` has the column read
+for every row it selects at once, eight files at a time, before SQLite steps
+the first row; a statement that does not name it reads no file, as before. The
+read-ahead and the planner cost that keeps a content-bearing table on the
+scanned side of a join live in the shared core, so all three SDKs and the CLI
+inherit it with no per-binding surface and no signature changes.
+
 ## AsyncDirSQL
 
 | API                        | Python                                | Rust                                   |
