@@ -36,7 +36,7 @@ use crate::matcher::TableMatcher;
 use crate::parsed_cache::{self, CachedParse, Entry, RowCache, SqliteRowCache};
 use crate::path_table;
 use crate::persist::{FileStat, hash_file, now_ns};
-use crate::scanner::scan_glob;
+use crate::scanner::{scan_glob, to_slash};
 use crate::vtab_scaffold::{self, TableSource};
 
 /// SQL module name a parsed path-table is created with.
@@ -161,7 +161,7 @@ fn collect_rows_cached(
 
     let mut seen: Vec<(String, Parsed)> = Vec::with_capacity(rel_paths.len());
     for rel_path in rel_paths {
-        let key = rel_path.to_string_lossy().into_owned();
+        let key = to_slash(rel_path);
         let Some(live) = fs.stat(rel_path) else {
             // The file vanished between the scan and the stat. Nothing to
             // parse and nothing to cache; the next run decides afresh.
@@ -268,7 +268,7 @@ impl ParsedFs for RootedFs<'_> {
 fn command_skip_message(rel_path: &Path, error: &str) -> String {
     format!(
         "dirsql: skipping `{}`: on-file command failed: {error}",
-        rel_path.display()
+        to_slash(rel_path)
     )
 }
 
@@ -276,7 +276,7 @@ fn command_skip_message(rel_path: &Path, error: &str) -> String {
 fn parse_skip_message(rel_path: &Path, message: &str) -> String {
     format!(
         "dirsql: skipping `{}`: on-file output was not a JSON array of rows: {message}",
-        rel_path.display()
+        to_slash(rel_path)
     )
 }
 

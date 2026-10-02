@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1790605513,
+  "exit_code": 0,
+  "commit": "1bd09b2f31221125606dc5383fb8122038d1e14f",
+  "branch": "claude/1184-win-rel-paths"
+}

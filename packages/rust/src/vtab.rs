@@ -9,7 +9,7 @@ use rusqlite::{Connection, Result};
 use crate::compute_stat_virtuals;
 use crate::matcher::TableMatcher;
 use crate::path_table;
-use crate::scanner::scan_glob;
+use crate::scanner::{scan_glob, to_slash};
 use crate::vtab_scaffold::{self, TableSource};
 use crate::{Row, Value};
 
@@ -111,10 +111,15 @@ fn parse_module_args(args: &[&[u8]]) -> Result<ScanSpec> {
 /// The string a matched file is reported under: the relative path as scanned,
 /// under the table's path prefix when it has one.
 fn reported_path(path_prefix: &Path, rel_path: &Path) -> String {
-    if path_prefix.as_os_str().is_empty() {
-        return rel_path.to_string_lossy().into_owned();
+    let rel_path = to_slash(rel_path);
+    let prefix = path_prefix.to_string_lossy();
+    if prefix.is_empty() {
+        return rel_path;
     }
-    path_prefix.join(rel_path).to_string_lossy().into_owned()
+    if prefix.ends_with(['/', std::path::MAIN_SEPARATOR]) {
+        return format!("{prefix}{rel_path}");
+    }
+    format!("{prefix}/{rel_path}")
 }
 
 /// Whether `column` addresses the hidden `content` column.
@@ -386,6 +391,11 @@ mod tests {
             reported_path(Path::new("/var/log"), Path::new("a.log")),
             "/var/log/a.log"
         );
+    }
+
+    #[test]
+    fn reported_path_under_the_filesystem_root_has_one_separator() {
+        assert_eq!(reported_path(Path::new("/"), Path::new("a.log")), "/a.log");
     }
 
     #[test]

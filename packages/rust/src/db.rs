@@ -655,7 +655,7 @@ impl Db {
     /// Every distinct `(table_name, file_path)` whose file sits beneath the
     /// directory `dir`, ordered by table then path.
     pub fn files_under(&self, dir: &str) -> Result<Vec<(String, String)>> {
-        let prefix = format!("{dir}{}", std::path::MAIN_SEPARATOR);
+        let prefix = format!("{dir}/");
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT table_name, file_path FROM _dirsql_internal_rows \
              WHERE substr(file_path, 1, length(?1)) = ?1 \
