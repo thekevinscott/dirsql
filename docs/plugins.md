@@ -93,9 +93,10 @@ scope.
 ### Vector cache
 
 Computed vectors are cached at `~/.cache/dirsql/embeddings/` (respecting
-`XDG_CACHE_HOME`), keyed on the SHA-256 of the value bytes plus the model
-identifier. Changing either recomputes — switching models never serves stale
-vectors — and re-running a query over unchanged files is cache hits all the
-way. There is no eviction: the directory is **safe to wipe at any time**; the
-only cost is re-embedding. The cache never lives inside a queried tree — the
-worker writes nothing into the directories you query.
+`XDG_CACHE_HOME`): one SQLite database per model identifier, each row keyed
+on the SHA-256 of the value bytes. Changing the value or the model recomputes
+— switching models never serves stale vectors — and re-running a query over
+unchanged files is cache hits all the way, a whole batch answered by one
+query. There is no eviction: the directory is **safe to wipe at any time**;
+the only cost is re-embedding. The cache never lives inside a queried tree —
+the worker writes nothing into the directories you query.

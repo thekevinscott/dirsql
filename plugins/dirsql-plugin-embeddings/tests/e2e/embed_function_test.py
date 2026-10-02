@@ -24,9 +24,11 @@ Run under an environment that has this plugin and dirsql installed, e.g.:
 import json
 import os
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
+from contextlib import closing
 from importlib import resources
 
 import pytest
@@ -63,7 +65,12 @@ def _cache_entries(cache_home):
     embeddings = cache_home / "dirsql" / "embeddings"
     if not embeddings.is_dir():
         return 0
-    return sum(1 for path in embeddings.iterdir() if path.is_file())
+    total = 0
+    for path in embeddings.glob("*.db"):
+        with closing(sqlite3.connect(path)) as connection:
+            (count,) = connection.execute("SELECT count(*) FROM vectors").fetchone()
+        total += count
+    return total
 
 
 def describe_glob_scoping():

@@ -1,0 +1,7 @@
+{
+  "command": "uv run --with-editable ../../packages/python python -m pytest tests/e2e/ -x -q",
+  "ran_at": 1790960575,
+  "exit_code": 0,
+  "commit": "64524926303ffd11d9f107fd843b6c2f21648bbd",
+  "branch": "claude/1204-embed-plugin-batch"
+}

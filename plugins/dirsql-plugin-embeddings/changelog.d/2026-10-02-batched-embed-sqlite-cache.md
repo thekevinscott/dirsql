@@ -1,0 +1,4 @@
+**Changed**
+
+- **`embed()` now encodes a statement's values in batches.** The packaged fragment sets `batch = 4096`, so dirsql hands the worker up to 4096 values per request and the worker answers them with one `model.encode()` call per model instead of one per value. Embedding every abstract in a corpus, startup excluded, went from 4.5x the time of a bare batch encode (32768 abstracts) to 0.83x of it (65536 abstracts). The worker still answers single `{"call": [...]}` requests. (#1204)
+- **The vector cache is one SQLite database per model.** `~/.cache/dirsql/embeddings/` now holds `<sha256 of model identifier>.db` files, each a `vectors(digest, vector)` table; a batch is looked up in one query and its misses stored in one transaction. The `cachetta` dependency is gone. Vectors written by earlier releases (one file per value) are ignored, never read; wipe the directory to reclaim their space. (#1204)

@@ -83,10 +83,6 @@ def describe_embeddings_speed_of_light():
         finally:
             shutil.rmtree(tree, ignore_errors=True)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="embed() makes one worker round trip per value instead of a batch",
-    )
     def it_matches_the_batch_encode_within_the_bar(root, tiny_model, tmp_path):
         startup = startup_seconds([*LAUNCHER, "--help"], cwd=tmp_path)
 

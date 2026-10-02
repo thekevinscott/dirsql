@@ -53,9 +53,10 @@ Results print one `path<TAB>distance` line per match, closest first.
 `embed()` is inert until a query calls it: no worker process is spawned and
 no model is loaded for queries that never use it. On the first call, dirsql
 spawns the plugin's worker process (`dirsql-plugin-embeddings worker`), which
-serves every call of the invocation over stdin/stdout. Only the values the
-query actually selects are embedded — the worker receives values, not paths,
-and never opens files itself.
+serves every call of the invocation over stdin/stdout. A statement's values
+reach the worker in batches of up to 4096, each encoded in one model call.
+Only the values the query actually selects are embedded — the worker receives
+values, not paths, and never opens files itself.
 
 ## Model
 
@@ -79,12 +80,14 @@ The one-liner's `--model` flag templates the same second argument.
 ## Vector cache
 
 Computed vectors are cached at `~/.cache/dirsql/embeddings/` (or
-`$XDG_CACHE_HOME/dirsql/embeddings/` when `XDG_CACHE_HOME` is set), keyed by
-the SHA-256 of the value bytes plus the model identifier — changing either
-recomputes; switching models never serves stale vectors. There is no
-eviction: **the directory is safe to wipe at any time**; the only cost is
-re-embedding. The cache never lives inside a queried tree — the worker
-receives values, not paths, and writes nothing anywhere else.
+`$XDG_CACHE_HOME/dirsql/embeddings/` when `XDG_CACHE_HOME` is set): one
+SQLite database per model identifier, each row keyed by the SHA-256 of the
+value bytes. Changing the value or the model recomputes; switching models
+never serves stale vectors. A batch is looked up in one query and its misses
+written in one transaction. There is no eviction: **the directory is safe to
+wipe at any time**; the only cost is re-embedding. The cache never lives
+inside a queried tree — the worker receives values, not paths, and writes
+nothing anywhere else.
 
 ## Docs
 

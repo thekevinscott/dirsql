@@ -1,11 +1,11 @@
-import json
 from contextlib import contextmanager
 from hashlib import sha256
 from unittest.mock import MagicMock, call, patch
 
 from . import worker
 
-HELLO_DIGEST = sha256(b"hello").hexdigest()
+HELLO = sha256(b"hello").hexdigest()
+WORLD = sha256(b"world").hexdigest()
 
 
 @contextmanager
@@ -17,28 +17,34 @@ def loading(identifier="m1"):
             yield model, identify
 
 
-def make_worker():
-    with patch.object(worker, "make_cache") as make_cache:
-        built = worker.Worker()
-    return built, make_cache.return_value
+def make_worker(found=None):
+    with patch.object(worker, "VectorStore") as store_class:
+        with patch.object(worker, "cache_dir") as cache_dir:
+            built = worker.Worker()
+    store = store_class.return_value
+    store.lookup.return_value = {} if found is None else found
+    return built, store, store_class, cache_dir
+
+
+def encoding(loaded, vectors):
+    loaded.encode.return_value.tolist.return_value = vectors
 
 
 def describe_init():
-    def it_wraps_compute_with_the_cache():
-        built, cache = make_worker()
-        cache.wrap.assert_called_once_with(built._compute)
-        assert built._compute_cached is cache.wrap.return_value
+    def it_opens_the_vector_store_at_the_cache_dir():
+        built, store, store_class, cache_dir = make_worker()
+        cache_dir.assert_called_once_with()
+        store_class.assert_called_once_with(cache_dir.return_value)
+        assert built._store is store
 
-    def it_starts_with_no_loaded_models_and_nothing_pending():
-        built, _ = make_worker()
+    def it_starts_with_no_loaded_models():
+        built, *_ = make_worker()
         assert built._models == {}
-        assert built._pending is None
-        assert built._computed is False
 
 
 def describe_model_loading():
     def it_loads_a_model_once_and_memoizes_it():
-        built, _ = make_worker()
+        built, *_ = make_worker()
         with patch.object(worker, "model") as model:
             first = built._model("m1")
             second = built._model("m1")
@@ -46,160 +52,133 @@ def describe_model_loading():
         assert first is second is model.load_model.return_value
 
     def it_loads_each_distinct_model_id():
-        built, _ = make_worker()
+        built, *_ = make_worker()
         with patch.object(worker, "model") as model:
             built._model("m1")
             built._model("m2")
         assert model.load_model.call_args_list == [call("m1"), call("m2")]
 
 
-def describe_compute():
-    def it_records_that_it_ran_so_a_miss_is_distinguishable_from_a_hit():
-        # _compute runs only on a cache miss, so it is the one place a miss is
-        # observable -- cachetta's wrapper returns both cases identically.
-        built, _ = make_worker()
-        loaded = MagicMock()
-        loaded.encode.return_value = [[1.0]]
-        built._pending = ("hello", loaded)
-        built._computed = False
-        built._compute(HELLO_DIGEST, "m1")
-        assert built._computed is True
-
-    def it_encodes_the_pending_text_and_returns_plain_floats():
-        built, _ = make_worker()
-        loaded = MagicMock()
-        loaded.encode.return_value = [[1, 2.5]]
-        built._pending = ("hello", loaded)
-        vector = built._compute(HELLO_DIGEST, "m1")
-        loaded.encode.assert_called_once_with(["hello"], show_progress_bar=False)
-        assert vector == [1.0, 2.5]
-        assert all(isinstance(component, float) for component in vector)
-
-    def it_never_shows_a_per_call_progress_bar_even_on_a_tty():
-        # The protocol embeds exactly one value per round trip, so a per-call
-        # bar can only ever say 1/1 -- one meaningless bar per embedded value.
-        built, _ = make_worker()
-        loaded = MagicMock()
-        loaded.encode.return_value = [[0.0]]
-        built._pending = ("hello", loaded)
-        with patch("sys.stderr.isatty", return_value=True):
-            built._compute(HELLO_DIGEST, "m1")
-        loaded.encode.assert_called_once_with(["hello"], show_progress_bar=False)
-
-
 def describe_embed():
-    def it_keys_the_cache_on_the_sha256_of_the_text_and_the_identifier():
-        built, _ = make_worker()
-        built._compute_cached = MagicMock(return_value=[1.0])
+    def it_looks_the_whole_batch_up_under_the_model_identifier():
+        built, store, *_ = make_worker()
         with loading("m1@9.9") as (model, identify):
-            result = built.embed("hello", "m1")
+            encoding(model.load_model.return_value, [[1.0], [2.0]])
+            built.embed(["hello", "world"], "m1")
         model.load_model.assert_called_once_with("m1")
         identify.assert_called_once_with("m1", model.load_model.return_value)
-        built._compute_cached.assert_called_once_with(HELLO_DIGEST, "m1@9.9")
-        assert result == ([1.0], True)
+        store.lookup.assert_called_once_with("m1@9.9", [HELLO, WORLD])
 
-    def it_reports_a_hit_when_compute_never_ran():
-        built, _ = make_worker()
-        built._compute_cached = MagicMock(return_value=[1.0])
-        with loading():
-            _, cached = built.embed("hello", "m1")
-        assert cached is True
-
-    def it_reports_a_miss_when_compute_ran():
-        built, _ = make_worker()
-
-        def compute(digest, identifier):
-            built._computed = True
-            return [1.0]
-
-        built._compute_cached = MagicMock(side_effect=compute)
-        with loading():
-            _, cached = built.embed("hello", "m1")
-        assert cached is False
-
-    def it_clears_a_previous_calls_miss_before_consulting_the_cache():
-        # Without the reset, one miss would make every later hit read as a
-        # miss for the rest of the process.
-        built, _ = make_worker()
-        built._computed = True
-        built._compute_cached = MagicMock(return_value=[1.0])
-        with loading():
-            _, cached = built.embed("hello", "m1")
-        assert cached is True
-
-    def it_stages_the_text_and_model_for_compute():
-        built, _ = make_worker()
-        built._compute_cached = MagicMock(return_value=[1.0])
+    def it_hashes_the_utf8_bytes_of_each_text():
+        built, store, *_ = make_worker()
         with loading() as (model, _):
-            built.embed("hello", "m1")
-        assert built._pending == ("hello", model.load_model.return_value)
-
-    def it_hashes_the_utf8_bytes_of_the_text():
-        built, _ = make_worker()
-        built._compute_cached = MagicMock(return_value=[1.0])
-        with loading("m1"):
-            built.embed("héllo", "m1")
+            encoding(model.load_model.return_value, [[1.0]])
+            built.embed(["héllo"], "m1")
         expected = sha256("héllo".encode("utf-8")).hexdigest()
-        assert built._compute_cached.call_args == call(expected, "m1")
+        store.lookup.assert_called_once_with("m1", [expected])
+
+    def it_encodes_only_the_misses_in_one_call_and_stores_them():
+        built, store, *_ = make_worker(found={HELLO: [1.0, 0.0]})
+        with loading() as (model, _):
+            loaded = model.load_model.return_value
+            encoding(loaded, [[0.0, 1.0]])
+            result = built.embed(["hello", "world"], "m1")
+        loaded.encode.assert_called_once_with(["world"], show_progress_bar=False)
+        store.insert.assert_called_once_with("m1", {WORLD: [0.0, 1.0]})
+        assert result == [([1.0, 0.0], True), ([0.0, 1.0], False)]
+
+    def it_reports_a_cold_batch_as_computed_in_request_order():
+        built, store, *_ = make_worker()
+        with loading() as (model, _):
+            encoding(model.load_model.return_value, [[1.0], [2.0], [3.0]])
+            result = built.embed(["a", "b", "c"], "m1")
+        assert result == [([1.0], False), ([2.0], False), ([3.0], False)]
+
+    def it_never_encodes_when_every_text_is_cached():
+        built, store, *_ = make_worker(found={HELLO: [1.0], WORLD: [2.0]})
+        with loading() as (model, _):
+            loaded = model.load_model.return_value
+            result = built.embed(["world", "hello"], "m1")
+        loaded.encode.assert_not_called()
+        store.insert.assert_not_called()
+        assert result == [([2.0], True), ([1.0], True)]
+
+    def it_encodes_a_repeated_miss_once():
+        built, store, *_ = make_worker()
+        with loading() as (model, _):
+            loaded = model.load_model.return_value
+            encoding(loaded, [[1.0]])
+            result = built.embed(["hello", "hello"], "m1")
+        loaded.encode.assert_called_once_with(["hello"], show_progress_bar=False)
+        assert result == [([1.0], False), ([1.0], False)]
+
+    def it_returns_the_vectors_as_plain_lists():
+        built, *_ = make_worker()
+        with loading() as (model, _):
+            loaded = model.load_model.return_value
+            encoding(loaded, [[1.0, 2.5]])
+            ((vector, _),) = built.embed(["hello"], "m1")
+        loaded.encode.return_value.tolist.assert_called_once_with()
+        assert vector == [1.0, 2.5]
 
 
 def describe_handle():
     def it_answers_ok_with_the_embedding():
-        built, _ = make_worker()
+        built, *_ = make_worker()
         with patch.object(
-            built, "embed", return_value=([1.0, 0.0], False)
+            built, "embed", return_value=[([1.0, 0.0], False)]
         ) as embed:
             response = built.handle('{"call": ["hello", "m1"]}')
-        embed.assert_called_once_with("hello", "m1")
+        embed.assert_called_once_with(["hello"], "m1")
         assert response == {"ok": [1.0, 0.0], "meta": {"cached": False}}
 
     def it_reports_a_cache_hit_in_the_response_metadata():
-        built, _ = make_worker()
-        with patch.object(built, "embed", return_value=([1.0], True)):
+        built, *_ = make_worker()
+        with patch.object(built, "embed", return_value=[([1.0], True)]):
             response = built.handle('{"call": ["hello", "m1"]}')
         assert response == {"ok": [1.0], "meta": {"cached": True}}
 
     def it_uses_the_default_model_for_a_single_argument_call():
-        built, _ = make_worker()
-        with patch.object(built, "embed", return_value=([1.0], False)) as embed:
+        built, *_ = make_worker()
+        with patch.object(built, "embed", return_value=[([1.0], False)]) as embed:
             with patch.object(worker, "model") as model:
                 model.DEFAULT_MODEL_ID = "default/model"
                 response = built.handle('{"call": ["hello"]}')
-        embed.assert_called_once_with("hello", "default/model")
+        embed.assert_called_once_with(["hello"], "default/model")
         assert response == {"ok": [1.0], "meta": {"cached": False}}
 
     def it_answers_err_on_invalid_json():
-        built, _ = make_worker()
+        built, *_ = make_worker()
         response = built.handle("{not json")
         assert set(response) == {"err"}
         assert response["err"].startswith("malformed request: invalid JSON:")
 
     def it_answers_err_on_a_non_object_request():
-        built, _ = make_worker()
+        built, *_ = make_worker()
         assert built.handle("[1, 2]") == {"err": worker.MALFORMED_SHAPE}
 
     def it_answers_err_when_call_is_missing():
-        built, _ = make_worker()
+        built, *_ = make_worker()
         assert built.handle('{"other": []}') == {"err": worker.MALFORMED_SHAPE}
 
     def it_answers_err_when_call_is_not_a_list():
-        built, _ = make_worker()
+        built, *_ = make_worker()
         assert built.handle('{"call": "hello"}') == {
             "err": worker.MALFORMED_ARITY
         }
 
     def it_answers_err_on_an_empty_call():
-        built, _ = make_worker()
+        built, *_ = make_worker()
         assert built.handle('{"call": []}') == {"err": worker.MALFORMED_ARITY}
 
     def it_answers_err_on_three_arguments():
-        built, _ = make_worker()
+        built, *_ = make_worker()
         assert built.handle('{"call": ["a", "b", "c"]}') == {
             "err": worker.MALFORMED_ARITY
         }
 
     def it_answers_err_with_the_protocol_message_for_a_bad_value():
-        built, _ = make_worker()
+        built, *_ = make_worker()
         with patch.object(
             worker,
             "decode_value",
@@ -210,21 +189,21 @@ def describe_handle():
         assert response == {"err": "bad value"}
 
     def it_answers_ok_null_for_a_null_value():
-        built, _ = make_worker()
+        built, *_ = make_worker()
         with patch.object(built, "embed") as embed:
             response = built.handle('{"call": [null]}')
         embed.assert_not_called()
         assert response == {"ok": None}
 
     def it_answers_err_for_a_non_text_model_id():
-        built, _ = make_worker()
+        built, *_ = make_worker()
         with patch.object(built, "embed") as embed:
             response = built.handle('{"call": ["hello", 42]}')
         embed.assert_not_called()
         assert response == {"err": worker.MALFORMED_MODEL_ID}
 
     def it_answers_err_naming_the_model_when_embedding_fails():
-        built, _ = make_worker()
+        built, *_ = make_worker()
         with patch.object(
             built, "embed", side_effect=RuntimeError("model exploded")
         ):
@@ -234,9 +213,107 @@ def describe_handle():
         }
 
 
+def describe_handle_batched():
+    def it_answers_results_in_request_order():
+        built, *_ = make_worker()
+        with patch.object(
+            built, "embed", return_value=[([1.0], False), ([2.0], True)]
+        ) as embed:
+            response = built.handle(
+                '{"calls": [["hello", "m1"], ["world", "m1"]]}'
+            )
+        embed.assert_called_once_with(["hello", "world"], "m1")
+        assert response == {
+            "results": [
+                {"ok": [1.0], "meta": {"cached": False}},
+                {"ok": [2.0], "meta": {"cached": True}},
+            ]
+        }
+
+    def it_embeds_once_per_model_and_restores_the_request_order():
+        built, *_ = make_worker()
+        by_model = {
+            "m1": [([1.0], False), ([3.0], False)],
+            "m2": [([2.0], False)],
+        }
+        with patch.object(
+            built, "embed", side_effect=lambda texts, model_id: by_model[model_id]
+        ) as embed:
+            response = built.handle(
+                '{"calls": [["a", "m1"], ["b", "m2"], ["c", "m1"]]}'
+            )
+        assert embed.call_args_list == [
+            call(["a", "c"], "m1"),
+            call(["b"], "m2"),
+        ]
+        assert [result["ok"] for result in response["results"]] == [
+            [1.0],
+            [2.0],
+            [3.0],
+        ]
+
+    def it_answers_each_malformed_call_in_place_and_embeds_the_rest():
+        built, *_ = make_worker()
+        with patch.object(
+            built, "embed", return_value=[([1.0], False)]
+        ) as embed:
+            response = built.handle(
+                '{"calls": [[null, "m1"], ["a", "b", "c"], ["hello", 42],'
+                ' ["hello", "m1"]]}'
+            )
+        embed.assert_called_once_with(["hello"], "m1")
+        assert response == {
+            "results": [
+                {"ok": None},
+                {"err": worker.MALFORMED_ARITY},
+                {"err": worker.MALFORMED_MODEL_ID},
+                {"ok": [1.0], "meta": {"cached": False}},
+            ]
+        }
+
+    def it_fails_every_call_of_a_model_that_fails_and_keeps_serving_the_others():
+        built, *_ = make_worker()
+
+        def embed(texts, model_id):
+            if model_id == "bad":
+                raise RuntimeError("model exploded")
+            return [([1.0], False)] * len(texts)
+
+        with patch.object(built, "embed", side_effect=embed):
+            response = built.handle(
+                '{"calls": [["a", "bad"], ["b", "good"], ["c", "bad"]]}'
+            )
+        failure = {"err": "embed('bad') failed: model exploded"}
+        assert response == {
+            "results": [failure, {"ok": [1.0], "meta": {"cached": False}}, failure]
+        }
+
+    def it_uses_the_default_model_for_single_argument_calls():
+        built, *_ = make_worker()
+        with patch.object(built, "embed", return_value=[([1.0], False)]) as embed:
+            with patch.object(worker, "model") as model:
+                model.DEFAULT_MODEL_ID = "default/model"
+                built.handle('{"calls": [["hello"]]}')
+        embed.assert_called_once_with(["hello"], "default/model")
+
+    def it_answers_no_results_for_an_empty_batch():
+        built, *_ = make_worker()
+        with patch.object(built, "embed") as embed:
+            response = built.handle('{"calls": []}')
+        embed.assert_not_called()
+        assert response == {"results": []}
+
+    def it_answers_err_when_calls_is_not_a_list():
+        built, *_ = make_worker()
+        with patch.object(built, "embed") as embed:
+            response = built.handle('{"calls": "hello"}')
+        embed.assert_not_called()
+        assert response == {"err": worker.MALFORMED_CALLS}
+
+
 def describe_serve():
     def it_writes_one_compact_json_line_per_request_and_flushes():
-        built, _ = make_worker()
+        built, *_ = make_worker()
         stdout = MagicMock()
         with patch.object(
             built, "handle", side_effect=[{"ok": [1.0]}, {"err": "x"}]
@@ -253,7 +330,7 @@ def describe_serve():
         assert stdout.flush.call_count == 2
 
     def it_flushes_after_each_line_not_only_at_the_end():
-        built, _ = make_worker()
+        built, *_ = make_worker()
         stdout = MagicMock()
         events = []
         stdout.write.side_effect = lambda line: events.append(("write", line))
@@ -268,7 +345,7 @@ def describe_serve():
         ]
 
     def it_skips_blank_lines_and_keeps_serving_later_requests():
-        built, _ = make_worker()
+        built, *_ = make_worker()
         stdout = MagicMock()
         with patch.object(built, "handle", return_value={"ok": None}) as handle:
             built.serve(["\n", "   \n", '{"call": ["a"]}\n'], stdout)

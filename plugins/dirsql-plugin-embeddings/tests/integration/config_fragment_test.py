@@ -2,8 +2,8 @@
 
 Reads the packaged ``dirsql.toml`` exactly as the launcher does and pins the
 whole surface it declares: the sqlite-vec ``[[dirsql.extension]]`` entry
-(unchanged) plus the ``[[dirsql.function]]`` entry for ``embed``, exactly as
-specified in #801.
+(unchanged) plus the ``[[dirsql.function]]`` entry for ``embed``, batched so
+a statement's values reach the worker in bulk.
 """
 
 import sys
@@ -45,6 +45,7 @@ def describe_config_fragment():
             "command": "dirsql-plugin-embeddings worker",
             "deterministic": True,
             "timeout": "600s",
+            "batch": 4096,
         }
 
 
