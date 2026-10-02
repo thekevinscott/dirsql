@@ -10,7 +10,7 @@ external command under the execution contract below.
 
 The command string is split into an argv with shell-like quoting: whitespace
 separates arguments, and single or double quotes group them (so
-`sh -c 'grep foo {path} | sort'` keeps the quoted script as a single
+`sh -c 'grep foo "$@" | sort' sh` keeps the quoted script as a single
 argument). **No shell is invoked** — there is no globbing, piping, `$VAR`
 expansion, or `&&`/`;` chaining. To get shell features, ask for a shell
 explicitly with `sh -c '…'`.
@@ -65,7 +65,7 @@ bound a hook, make the bound part of the command by wrapping it in
 `timeout(1)`:
 
 ```toml
-on-file = "timeout 30 my-extractor {path}"
+on-file = "timeout 30 my-extractor"
 ```
 
 When the wrapper kills an overrunning command, the run exits non-zero and
@@ -117,9 +117,14 @@ flag is the inline form, the config key the declared form (see
 [Parse your files into columns](../howto/parse-files-into-columns.md)). In both
 spellings the table's columns are exactly what the command emits, narrowed to
 the DDL — `dirsql` injects no filesystem facts either way. A command that wants
-the path or stat metadata emits it (it has `{path}`).
+the path or stat metadata emits it (it has the paths).
 
 | Placeholder | Value |
 |---|---|
-| `{path}` | The matched file's **absolute** path. `on-file = "extract.py {path}"` — self-sufficient from any working directory, so the command resolves it even when the config lives outside the index. |
-| `{root}` | The index root directory. Derive a root-relative path with `relpath({path}, {root})`. |
+| `{root}` | The index root directory. Derive a root-relative path with `relpath(path, {root})`. |
+
+The matched files' **absolute** paths are not placeholders: they are appended
+to the command as trailing arguments, after everything written in the
+command, so `on-file = "extract.py"` receives them as `sys.argv[1:]` — one run
+per table, self-sufficient from any working directory. A command that still
+spells `{path}` is rejected at startup.

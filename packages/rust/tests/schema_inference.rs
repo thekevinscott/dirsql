@@ -13,25 +13,30 @@ use dirsql::vtab::StatementScope;
 use rusqlite::Connection;
 use tempfile::TempDir;
 
-/// A parser command that echoes each file's body verbatim. The on-file
-/// contract's payload is the last non-empty line of stdout, so a file whose
-/// content is one line of JSON is its own parser output.
-const CAT_PARSER: &str = "cat {path}";
+/// A parser that hands back the files' bodies combined into one array: each
+/// file is a one-line JSON array of row objects, so stripping its brackets and
+/// joining the bodies with commas is the table's output.
+const COMBINE_SCRIPT: &str = "#!/bin/sh\nprintf '['\nsep=''\nfor f; do\n  body=$(cat \"$f\")\n  body=${body#'['}\n  body=${body%']'}\n  if [ -n \"$body\" ]; then printf '%s%s' \"$sep\" \"$body\"; sep=','; fi\ndone\nprintf ']'\n";
 
-/// A connection with the parsed path-table module registered and one vtab
-/// named `t` over `glob` under `dir`, parsed by `command`.
-fn open_over(dir: &TempDir, glob: &str, command: &str) -> Connection {
-    let conn = Connection::open_in_memory().unwrap();
-    load_module(&conn, StatementScope::new()).unwrap();
-    // The trailing empty argument is the cache path: this vtab is ephemeral,
-    // so there is nowhere to reuse rows from.
-    conn.execute_batch(&format!(
-        "CREATE VIRTUAL TABLE t USING dirsql_parsed('{}', '{}', '{}', 'gitignore', '')",
+/// The SQL that declares a vtab named `t` over `glob` under `dir`, parsed by
+/// the combining script written into `dir`. The parser runs from `dir`, so
+/// the script is named relative to it. The trailing empty argument is the
+/// cache path: this vtab is ephemeral, so there is nowhere to reuse rows from.
+fn declare(dir: &TempDir, glob: &str) -> String {
+    fs::write(dir.path().join("combine.sh"), COMBINE_SCRIPT).unwrap();
+    format!(
+        "CREATE VIRTUAL TABLE t USING dirsql_parsed('{}', '{}', 'sh combine.sh', 'gitignore', '')",
         dir.path().display(),
         glob,
-        command
-    ))
-    .unwrap();
+    )
+}
+
+/// A connection with the parsed path-table module registered and one vtab
+/// named `t` over `glob` under `dir`.
+fn open_over(dir: &TempDir, glob: &str) -> Connection {
+    let conn = Connection::open_in_memory().unwrap();
+    load_module(&conn, StatementScope::new()).unwrap();
+    conn.execute_batch(&declare(dir, glob)).unwrap();
     conn
 }
 
@@ -58,7 +63,7 @@ fn declared_types(conn: &Connection) -> Vec<(String, String)> {
 fn columns_are_inferred_from_row_objects_and_rows_are_queryable() {
     let dir = TempDir::new().unwrap();
     write(&dir, "a.json", r#"[{"title":"one","n":1}]"#);
-    let conn = open_over(&dir, "**/*.json", CAT_PARSER);
+    let conn = open_over(&dir, "**/*.json");
 
     assert_eq!(column_names(&conn, "SELECT * FROM t"), vec!["title", "n"]);
 
@@ -74,7 +79,7 @@ fn columns_are_the_union_of_keys_across_every_row() {
     let dir = TempDir::new().unwrap();
     write(&dir, "a.json", r#"[{"a":1},{"b":2}]"#);
     write(&dir, "b.json", r#"[{"c":3}]"#);
-    let conn = open_over(&dir, "**/*.json", CAT_PARSER);
+    let conn = open_over(&dir, "**/*.json");
 
     let mut cols = column_names(&conn, "SELECT * FROM t");
     cols.sort();
@@ -85,7 +90,7 @@ fn columns_are_the_union_of_keys_across_every_row() {
 fn column_order_is_first_seen_so_select_star_is_stable() {
     let dir = TempDir::new().unwrap();
     write(&dir, "a.json", r#"[{"zeta":1,"alpha":2},{"middle":3}]"#);
-    let conn = open_over(&dir, "**/*.json", CAT_PARSER);
+    let conn = open_over(&dir, "**/*.json");
 
     assert_eq!(
         column_names(&conn, "SELECT * FROM t"),
@@ -102,7 +107,7 @@ fn json_types_map_to_sqlite_types() {
         "a.json",
         r#"[{"s":"x","i":1,"f":1.5,"b":true,"nested":{"k":"v"}}]"#,
     );
-    let conn = open_over(&dir, "**/*.json", CAT_PARSER);
+    let conn = open_over(&dir, "**/*.json");
 
     assert_eq!(
         declared_types(&conn),
@@ -120,7 +125,7 @@ fn json_types_map_to_sqlite_types() {
 fn a_key_that_is_never_non_null_is_text() {
     let dir = TempDir::new().unwrap();
     write(&dir, "a.json", r#"[{"maybe":null},{"maybe":null}]"#);
-    let conn = open_over(&dir, "**/*.json", CAT_PARSER);
+    let conn = open_over(&dir, "**/*.json");
 
     assert_eq!(
         declared_types(&conn),
@@ -132,7 +137,7 @@ fn a_key_that_is_never_non_null_is_text() {
 fn a_key_null_in_one_row_takes_its_type_from_another() {
     let dir = TempDir::new().unwrap();
     write(&dir, "a.json", r#"[{"n":null},{"n":7}]"#);
-    let conn = open_over(&dir, "**/*.json", CAT_PARSER);
+    let conn = open_over(&dir, "**/*.json");
 
     assert_eq!(
         declared_types(&conn),
@@ -153,7 +158,7 @@ fn a_key_null_in_one_row_takes_its_type_from_another() {
 fn a_key_missing_from_one_row_is_null_there() {
     let dir = TempDir::new().unwrap();
     write(&dir, "a.json", r#"[{"a":1,"b":"x"},{"a":2}]"#);
-    let conn = open_over(&dir, "**/*.json", CAT_PARSER);
+    let conn = open_over(&dir, "**/*.json");
 
     let bs: Vec<Option<String>> = {
         let mut stmt = conn.prepare("SELECT b FROM t").unwrap();
@@ -169,7 +174,7 @@ fn a_key_missing_from_one_row_is_null_there() {
 fn conflicting_types_across_rows_fall_back_to_text() {
     let dir = TempDir::new().unwrap();
     write(&dir, "a.json", r#"[{"mixed":1},{"mixed":"two"}]"#);
-    let conn = open_over(&dir, "**/*.json", CAT_PARSER);
+    let conn = open_over(&dir, "**/*.json");
 
     assert_eq!(
         declared_types(&conn),
@@ -181,7 +186,7 @@ fn conflicting_types_across_rows_fall_back_to_text() {
 fn nested_objects_and_arrays_are_stored_as_json_text() {
     let dir = TempDir::new().unwrap();
     write(&dir, "a.json", r#"[{"obj":{"k":"v"},"arr":[1,2]}]"#);
-    let conn = open_over(&dir, "**/*.json", CAT_PARSER);
+    let conn = open_over(&dir, "**/*.json");
 
     let (obj, arr): (String, String) = conn
         .query_row("SELECT obj, arr FROM t", [], |r| Ok((r.get(0)?, r.get(1)?)))
@@ -195,7 +200,7 @@ fn rows_from_every_matched_file_are_present() {
     let dir = TempDir::new().unwrap();
     write(&dir, "a.json", r#"[{"id":"a1"},{"id":"a2"}]"#);
     write(&dir, "b.json", r#"[{"id":"b1"}]"#);
-    let conn = open_over(&dir, "**/*.json", CAT_PARSER);
+    let conn = open_over(&dir, "**/*.json");
 
     let mut stmt = conn.prepare("SELECT id FROM t ORDER BY id").unwrap();
     let ids: Vec<String> = stmt
@@ -211,7 +216,7 @@ fn the_glob_scopes_which_files_the_parser_sees() {
     let dir = TempDir::new().unwrap();
     write(&dir, "a.json", r#"[{"id":"kept"}]"#);
     write(&dir, "b.txt", r#"[{"id":"skipped"}]"#);
-    let conn = open_over(&dir, "**/*.json", CAT_PARSER);
+    let conn = open_over(&dir, "**/*.json");
 
     let mut stmt = conn.prepare("SELECT id FROM t").unwrap();
     let ids: Vec<String> = stmt
@@ -229,13 +234,7 @@ fn a_parser_producing_no_rows_is_an_error_at_registration() {
     let conn = Connection::open_in_memory().unwrap();
     load_module(&conn, StatementScope::new()).unwrap();
 
-    let err = conn
-        .execute_batch(&format!(
-            "CREATE VIRTUAL TABLE t USING dirsql_parsed('{}', '**/*.json', '{CAT_PARSER}', \
-             'gitignore', '')",
-            dir.path().display()
-        ))
-        .unwrap_err();
+    let err = conn.execute_batch(&declare(&dir, "**/*.json")).unwrap_err();
 
     assert!(
         err.to_string().contains("no rows"),
@@ -244,45 +243,21 @@ fn a_parser_producing_no_rows_is_an_error_at_registration() {
 }
 
 #[test]
-fn a_failing_file_is_skipped_and_the_good_files_survive() {
-    // Per-file isolation (the `on-file` hook contract #631 finalizes): a file
-    // whose parser output does not parse contributes no rows, and the scan
-    // continues. Registration succeeds; the good file's rows are queryable and
-    // the schema is inferred from what did parse.
+fn a_file_the_parser_cannot_handle_fails_the_table_at_registration() {
+    // The parser's output is the table's output: one file it cannot turn into
+    // rows leaves nothing to infer a schema from, so registration fails and
+    // names the problem.
     let dir = TempDir::new().unwrap();
     write(&dir, "a.json", r#"[{"id":"kept"}]"#);
-    write(&dir, "bad.json", "not valid json");
-    let conn = open_over(&dir, "**/*.json", CAT_PARSER);
-
-    let mut stmt = conn.prepare("SELECT id FROM t").unwrap();
-    let ids: Vec<String> = stmt
-        .query_map([], |r| r.get(0))
-        .unwrap()
-        .map(Result::unwrap)
-        .collect();
-    assert_eq!(ids, vec!["kept"]);
-}
-
-#[test]
-fn a_scan_where_every_file_fails_cannot_infer_a_schema() {
-    // With no file parsing, there is no sample to infer from — the same
-    // no-rows error an empty sample raises.
-    let dir = TempDir::new().unwrap();
     write(&dir, "bad.json", "not valid json");
     let conn = Connection::open_in_memory().unwrap();
     load_module(&conn, StatementScope::new()).unwrap();
 
-    let err = conn
-        .execute_batch(&format!(
-            "CREATE VIRTUAL TABLE t USING dirsql_parsed('{}', '**/*.json', '{CAT_PARSER}', \
-             'gitignore', '')",
-            dir.path().display()
-        ))
-        .unwrap_err();
+    let err = conn.execute_batch(&declare(&dir, "**/*.json")).unwrap_err();
 
     assert!(
-        err.to_string().contains("no rows"),
-        "an all-skipped scan yields no schema; got: {err}"
+        err.to_string().contains("not a JSON array of rows"),
+        "a parser failure is the table's failure; got: {err}"
     );
 }
 
@@ -290,7 +265,7 @@ fn a_scan_where_every_file_fails_cannot_infer_a_schema() {
 fn writes_are_rejected() {
     let dir = TempDir::new().unwrap();
     write(&dir, "a.json", r#"[{"id":"a"}]"#);
-    let conn = open_over(&dir, "**/*.json", CAT_PARSER);
+    let conn = open_over(&dir, "**/*.json");
 
     let err = conn.execute("DELETE FROM t", []).unwrap_err();
     assert!(

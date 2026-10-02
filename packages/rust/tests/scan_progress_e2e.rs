@@ -28,7 +28,7 @@ const CONFIG: &str = r#"
 name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
-on-file = '''sh -c 'printf "[{\"name\":\"%s\"}]" "${1##*/}"' sh {path}'''
+on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{\"name\":\"%s\"}" "$sep" "${p##*/}"; sep=","; done; printf "]"' sh'''
 "#;
 
 /// A root with `count` matching files and a config that indexes them.

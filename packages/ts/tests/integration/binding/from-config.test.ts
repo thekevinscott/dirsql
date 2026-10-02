@@ -22,12 +22,13 @@ async function seedFile(path: string, content: string): Promise<void> {
 // Each fixture emits its own filesystem-fact columns via an `on-file` hook
 // rather than relying on the core injecting them. Hook output overrides
 // injection, so results are identical while injection remains and stay green
-// once it is removed. `{path}` is the absolute path, `{root}` the index root;
-// the relative path is `{path}` with the `{root}/` prefix stripped.
-const pathHook = `on-file = '''sh -c 'rel=\${1#"$2"/}; printf "[{\\"path\\":\\"%s\\"}]" "$rel"' sh {path} {root}'''`;
-const pathBasenameHook = `on-file = '''sh -c 'rel=\${1#"$2"/}; base=\${1##*/}; printf "[{\\"path\\":\\"%s\\",\\"basename\\":\\"%s\\"}]" "$rel" "$base"' sh {path} {root}'''`;
-const basenameHook = `on-file = '''sh -c 'printf "[{\\"basename\\":\\"%s\\"}]" "\${1##*/}"' sh {path}'''`;
-const statHook = `on-file = '''sh -c 'rel=\${1#"$2"/}; base=\${1##*/}; case "$rel" in */*) dir=\${rel%/*};; *) dir="";; esac; ext=\${base##*.}; [ "$ext" = "$base" ] && ext=""; size=$(wc -c < "$1" | tr -d " "); mtime=$(stat -c %Y "$1"); printf "[{\\"path\\":\\"%s\\",\\"basename\\":\\"%s\\",\\"dir\\":\\"%s\\",\\"ext\\":\\"%s\\",\\"size\\":%s,\\"mtime\\":%s}]" "$rel" "$base" "$dir" "$ext" "$size" "$mtime"' sh {path} {root}'''`;
+// once it is removed. The matched absolute paths arrive as trailing arguments
+// and `{root}` is the index root; the relative path is each argument with the
+// `{root}/` prefix stripped.
+const pathHook = `on-file = '''sh -c 'r=$1; shift; printf "["; sep=""; for p; do rel=\${p#"$r"/}; printf "%s{\\"path\\":\\"%s\\"}" "$sep" "$rel"; sep=","; done; printf "]"' sh {root}'''`;
+const pathBasenameHook = `on-file = '''sh -c 'r=$1; shift; printf "["; sep=""; for p; do rel=\${p#"$r"/}; base=\${p##*/}; printf "%s{\\"path\\":\\"%s\\",\\"basename\\":\\"%s\\"}" "$sep" "$rel" "$base"; sep=","; done; printf "]"' sh {root}'''`;
+const basenameHook = `on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{\\"basename\\":\\"%s\\"}" "$sep" "\${p##*/}"; sep=","; done; printf "]"' sh'''`;
+const statHook = `on-file = '''sh -c 'r=$1; shift; printf "["; sep=""; for p; do rel=\${p#"$r"/}; base=\${p##*/}; case "$rel" in */*) dir=\${rel%/*};; *) dir="";; esac; ext=\${base##*.}; [ "$ext" = "$base" ] && ext=""; size=$(wc -c < "$p" | tr -d " "); mtime=$(stat -c %Y "$p"); printf "%s{\\"path\\":\\"%s\\",\\"basename\\":\\"%s\\",\\"dir\\":\\"%s\\",\\"ext\\":\\"%s\\",\\"size\\":%s,\\"mtime\\":%s}" "$sep" "$rel" "$base" "$dir" "$ext" "$size" "$mtime"; sep=","; done; printf "]"' sh {root}'''`;
 
 describe("new DirSQL(configPath)", () => {
   let dir: string;

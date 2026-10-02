@@ -79,7 +79,7 @@ describe("declared [[table]] name (CLI)", () => {
 name = "records"
 ddl = "CREATE TABLE records (id TEXT)"
 glob = "data/*.json"
-on-file = "cat {path}"
+on-file = "cat"
 `,
     );
 
@@ -102,7 +102,7 @@ on-file = "cat {path}"
 [[table]]
 ddl = "CREATE TABLE records (id TEXT)"
 glob = "data/*.json"
-on-file = "cat {path}"
+on-file = "cat"
 `,
     );
 
@@ -124,7 +124,7 @@ on-file = "cat {path}"
 name = "messages"
 ddl = "CREATE TABLE records (id TEXT)"
 glob = "data/*.json"
-on-file = "cat {path}"
+on-file = "cat"
 `,
     );
 

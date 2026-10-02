@@ -3,9 +3,10 @@ bundled binary (docs/reference/path-tables.md#parsing-rows-with-on-file).
 
 Runs the Python launcher (`dirsql.cli.main:main`) as a subprocess over a real
 temp tree with a real parser script. Asserts the documented behavior end to
-end: the parser supplies the rows and schema, a failing file is isolated with a
-stderr warning while the good files still return, and a repeated flag errors.
-No mocks: real launcher, real binary, real process, real filesystem.
+end: the parser runs once over every matched path and supplies the rows and
+schema, a parser failure fails the whole table with the parser's stderr
+surfaced, and a repeated flag errors. No mocks: real launcher, real binary,
+real process, real filesystem.
 """
 
 import json
@@ -26,10 +27,15 @@ import dirsql as _dirsql_pkg
 _BINARY_STAGE_DIR = os.path.join(os.path.dirname(_dirsql_pkg.__file__), "_binary")
 
 _PARSER = """#!/bin/sh
-f="$1"
-if grep -q POISON "$f"; then echo "poison in $f" >&2; exit 7; fi
-title=$(head -n1 "$f" | sed 's/^# //')
-printf '[{"title":"%s"}]\\n' "$title"
+printf '['
+sep=""
+for f; do
+  if grep -q POISON "$f"; then echo "poison in $f" >&2; exit 7; fi
+  title=$(head -n1 "$f" | sed 's/^# //')
+  printf '%s{"title":"%s"}' "$sep" "$title"
+  sep=","
+done
+printf ']\\n'
 """
 
 
@@ -78,25 +84,24 @@ def describe_on_file_query():
             "query",
             "SELECT title FROM './docs/*.md'",
             "--on-file",
-            "./parse.sh {path}",
+            "./parse.sh",
         )
         assert proc.returncode == 0, proc.stderr
         rows = json.loads(proc.stdout)
         titles = sorted(r["title"] for r in rows)
         assert titles == ["Alpha", "Bravo"]
 
-    def it_isolates_a_failing_file_and_warns(tree):
+    def it_fails_the_whole_table_when_the_parser_fails(tree):
         (tree / "docs" / "bad.md").write_text("POISON\n")
         proc = _run(
             tree,
             "query",
             "SELECT title FROM './docs/*.md'",
             "--on-file",
-            "./parse.sh {path}",
+            "./parse.sh",
         )
-        assert proc.returncode == 0, proc.stderr
-        titles = sorted(r["title"] for r in json.loads(proc.stdout))
-        assert titles == ["Alpha", "Bravo"]
+        assert proc.returncode != 0, proc.stdout
+        assert "Alpha" not in proc.stdout and "Bravo" not in proc.stdout
         assert "bad.md" in proc.stderr
 
     def it_rejects_a_repeated_flag_pointing_at_config_files(tree):
@@ -105,9 +110,9 @@ def describe_on_file_query():
             "query",
             "SELECT title FROM './docs/*.md'",
             "--on-file",
-            "./parse.sh {path}",
+            "./parse.sh",
             "--on-file",
-            "cat {path}",
+            "cat",
         )
         assert proc.returncode != 0
         assert "config file" in proc.stderr

@@ -158,8 +158,8 @@ beforeAll(async () => {
   await writeFile(join(dataDir, "data", "2401.00001", "metadata.json"), "{}");
   const cfg = join(dataDir, ".dirsql.toml");
   // Each table emits its own `path` column via an `on-file` hook (the core no
-  // longer injects filesystem facts): strip the root prefix and print it.
-  const pathHook = `on-file = '''sh -c 'rel=\${1#"$2"/}; printf "[{\\"path\\":\\"%s\\"}]" "$rel"' sh {path} {root}'''`;
+  // longer injects filesystem facts): strip the root prefix from each path.
+  const pathHook = `on-file = '''sh -c 'r=$1; shift; printf "["; sep=""; for p; do rel=\${p#"$r"/}; printf "%s{\\"path\\":\\"%s\\"}" "$sep" "$rel"; sep=","; done; printf "]"' sh {root}'''`;
   await writeFile(
     cfg,
     `[[table]]\nname = "ta"\nddl = "CREATE TABLE ta (path TEXT)"\nglob = "data/*/metadata.json"\n${pathHook}\n\n[[table]]\nname = "tb"\nddl = "CREATE TABLE tb (path TEXT)"\nglob = "data/**/metadata.json"\n${pathHook}\n`,

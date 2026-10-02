@@ -221,12 +221,12 @@ what its required `on-file` command emits — dirsql injects nothing (see
 | `name` | yes | The table's SQL name — the name you query it by. Declared, never derived from `ddl`: dirsql does not read the DDL text. The `ddl` must create a table by this name; if it doesn't, loading fails. |
 | `ddl` | yes | A SQL batch, run verbatim — any number of statements. It must create a table called `name`; that table holds the file rows, and only the columns it declares are kept (keys the `on-file` command emits that are not declared are dropped). The rest of the batch is yours: indexes, virtual tables, triggers. See [Batch `ddl`](#batch-ddl). |
 | `glob` | yes | Glob pattern matched against root-relative paths. Every table whose glob matches a file receives that file's rows — a file can populate multiple tables. A `{name}` segment is rewritten to `*` (it matches one path segment but captures nothing). |
-| `on-file` | **yes** | A command run once per matched file; its stdout (a JSON array of row objects) becomes the file's rows. Must be non-empty. A `[[table]]` with no `on-file` is a load error (see [parse errors](#parse-errors)). See [Command hooks](./hooks.md#on-file). |
+| `on-file` | **yes** | A command run once per table, with every matched file's absolute path appended as a trailing argument; its stdout (one JSON array of row objects) is the table's rows. Must be non-empty. A `[[table]]` with no `on-file` is a load error (see [parse errors](#parse-errors)). See [Command hooks](./hooks.md#on-file). |
 | `strict` | no (default `false`) | When `true`, rows whose keys do not exactly match the declared columns are rejected with an error: extra keys error, and every declared column must be supplied by the `on-file` output. When `false`, extra keys are dropped and missing columns become `NULL`. |
 
 `on-file` is required because a table's rows come from nowhere else. dirsql
 does not read file contents or merge filesystem facts on your behalf: the
-command reads the file (it receives `{path}`) and prints the rows, and those
+command reads the files (it receives their paths as arguments) and prints the rows, and those
 rows — filtered to the DDL — are the table. For plain stat columns with no
 command, query the path directly with a [path-table](./path-tables.md)
 instead of declaring a table.
@@ -236,13 +236,13 @@ instead of declaring a table.
 name = "comments"
 ddl     = "CREATE TABLE comments (path TEXT, author TEXT, body TEXT)"
 glob    = "_comments/*/*.jsonl"
-on-file = "jq -c -s '.' {path}"
+on-file = "jq -c -s '.'"
 
 [[table]]
 name = "papers"
 ddl     = "CREATE TABLE papers (paper_id TEXT, title TEXT)"
 glob    = "**/meta.json"
-on-file = "uv run python extract_papers.py {path}"
+on-file = "uv run python extract_papers.py"
 strict  = true
 ```
 
@@ -255,7 +255,7 @@ statement:
 [[table]]
 name    = "messages"
 glob    = "sessions/*/messages/*.json"
-on-file = "jq -c '.' {path}"
+on-file = "jq -c -s add"
 ddl     = '''
 CREATE TABLE messages (session TEXT, idx INT, role TEXT, text TEXT);
 CREATE INDEX messages_session ON messages(session);
@@ -419,11 +419,11 @@ timeout       = "600s"
 name = "comments"
 ddl     = "CREATE TABLE comments (author TEXT, body TEXT)"
 glob    = "_comments/*/*.jsonl"
-on-file = "jq -c -s '.' {path}"
+on-file = "jq -c -s '.'"
 
 [[table]]
 name = "documents"
 ddl     = "CREATE TABLE documents (title TEXT, summary TEXT)"
 glob    = "**/index.md"
-on-file = "uv run python extract_doc.py {path}"
+on-file = "uv run python extract_doc.py"
 ```

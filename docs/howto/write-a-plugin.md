@@ -73,11 +73,11 @@ Both hook command styles from the [hook contract](../reference/hooks.md) work
 in a plugin fragment:
 
 - **Console scripts** — a `bin`-style entry point your package installs on
-  `PATH` (`embed-file {path} {root}`). Recommended for published plugins: the command
+  `PATH` (`embed-file {root}`). Recommended for published plugins: the command
   is bound to your package's interpreter and dependencies, and it is
   language-neutral (the fragment names a command, not a Python file).
 - **Relative scripts** — a path resolved against the fragment's own directory
-  (`uv run python embed.py {path}`). Convenient while developing the plugin
+  (`uv run python embed.py {root}`). Convenient while developing the plugin
   in-tree.
 
 Two facts from the [execution contract](../reference/hooks.md#execution-contract)
@@ -85,12 +85,12 @@ matter most for a published plugin:
 
 - **A hook runs in its declaring config's directory.** For a plugin that is
   the installed fragment's directory — inside **site-packages**. That is a
-  read-only, shared location: **run from it, never write to it.** Use the
-  absolute [`{path}`](../reference/hooks.md#on-file) placeholder to read the
-  matched file, and [`{root}`](../reference/hooks.md#on-file) to reach the
-  user's project directory. Write any cache to `{root}` or a real cache dir,
+  read-only, shared location: **run from it, never write to it.** Read the
+  matched files from the absolute paths the hook appends as arguments, and use
+  [`{root}`](../reference/hooks.md#on-file) to reach the user's project
+  directory. Write any cache to `{root}` or a real cache dir,
   never next to the fragment.
-- **`{path}` is absolute and `{root}` is the index root**, so a command is
+- **The paths are absolute and `{root}` is the index root**, so a command is
   self-sufficient from any working directory — it works whether the plugin
   lives in the project or in site-packages.
 
@@ -112,28 +112,30 @@ entrypoint = "sqlite3_vec_init"
 name = "notes"
 ddl     = "CREATE TABLE notes (path TEXT, text TEXT, embedding TEXT)"
 glob    = "notes/*.md"
-on-file = "uv run --with model2vec python embed.py {path} {root}"
+on-file = "uv run --with model2vec python embed.py {root}"
 ```
 
-`embed.py` turns one file into one row carrying its path, text, and embedding.
-dirsql injects no columns, so the script emits the path itself, from the
-`{path}`/`{root}` the hook passes in:
+`embed.py` turns each file into one row carrying its path, text, and
+embedding. dirsql injects no columns, so the script emits the path itself,
+from the `{root}` the hook passes in and the paths it appends:
 
 ```python
-"""Embed one file's text; print a dirsql row array on stdout."""
+"""Embed each file's text; print one dirsql row array on stdout."""
 import json
 import os
 import sys
 
 from model2vec import StaticModel
 
-path, root = sys.argv[1], sys.argv[2]
-text = open(path, encoding="utf-8").read()
+root, paths = sys.argv[1], sys.argv[2:]
+texts = [open(path, encoding="utf-8").read() for path in paths]
 model = StaticModel.from_pretrained("minishlab/potion-base-8M")
-vector = model.encode([text])[0]
-row = {"path": os.path.relpath(path, root), "text": text,
-       "embedding": json.dumps([round(float(x), 6) for x in vector])}
-print(json.dumps([row]))
+rows = [
+    {"path": os.path.relpath(path, root), "text": text,
+     "embedding": json.dumps([round(float(x), 6) for x in vector])}
+    for path, text, vector in zip(paths, texts, model.encode(texts))
+]
+print(json.dumps(rows))
 ```
 
 The relative `embed.py` above resolves against the fragment directory, which

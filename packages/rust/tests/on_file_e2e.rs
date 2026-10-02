@@ -80,7 +80,7 @@ fn on_file_rows_are_served_over_http() {
 name = "papers"
 ddl = "CREATE TABLE papers (paper_id TEXT, title TEXT)"
 glob = "**/meta.json"
-on-file = "cat {path}"
+on-file = "cat"
 "#,
     )
     .unwrap();
@@ -113,10 +113,10 @@ on-file = "cat {path}"
     kill_and_wait(child);
 }
 
-/// `{path}` is the matched file's **absolute** path. The `on-file` script
-/// exits non-zero unless its argument is absolute (`case $1 in /*)`) and then
-/// `cat`s it; rows arriving over HTTP prove the script received an absolute
-/// path.
+/// Each appended path is the matched file's **absolute** path. The `on-file`
+/// script exits non-zero unless its argument is absolute (`case $1 in /*)`)
+/// and then `cat`s it; rows arriving over HTTP prove the script received an
+/// absolute path.
 #[test]
 fn on_file_receives_absolute_path_over_http() {
     let root = TempDir::new().unwrap();
@@ -132,7 +132,7 @@ fn on_file_receives_absolute_path_over_http() {
 name = "papers"
 ddl = "CREATE TABLE papers (paper_id TEXT)"
 glob = "**/meta.json"
-on-file = "sh abscheck.sh {path}"
+on-file = "sh abscheck.sh"
 "#,
     )
     .unwrap();
@@ -157,11 +157,11 @@ on-file = "sh abscheck.sh {path}"
     assert_eq!(body, vec![json!({"paper_id": "a"})]);
 }
 
-/// The absolute `{path}` resolves even when the hook's working directory (the
+/// The absolute path resolves even when the hook's working directory (the
 /// config dir) is not the index root. Since #540 the index root is the
 /// invocation cwd, so `dirsql` is launched from the data dir while its config
 /// lives elsewhere, reached via an absolute `--config`. The hook (cwd = config
-/// dir) `cat`s the file only because `{path}` is absolute — a root-relative
+/// dir) `cat`s the file only because the path is absolute — a root-relative
 /// path would not resolve from the config dir.
 #[test]
 fn on_file_absolute_path_resolves_when_config_dir_differs_from_root() {
@@ -179,7 +179,7 @@ fn on_file_absolute_path_resolves_when_config_dir_differs_from_root() {
 name = "papers"
 ddl = "CREATE TABLE papers (paper_id TEXT)"
 glob = "**/meta.json"
-on-file = "sh abscheck.sh {path}"
+on-file = "sh abscheck.sh"
 "#,
     )
     .unwrap();
@@ -209,11 +209,11 @@ on-file = "sh abscheck.sh {path}"
 }
 
 #[test]
-fn on_file_abspath_token_is_no_longer_substituted() {
+fn on_file_abspath_token_is_not_substituted() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("echo_args.sh"),
-        "#!/bin/sh\nprintf '[{\"q\":\"%s\"}]' \"$2\"\n",
+        "#!/bin/sh\nprintf '[{\"q\":\"%s\"}]' \"$1\"\n",
     )
     .unwrap();
     fs::write(
@@ -223,7 +223,7 @@ fn on_file_abspath_token_is_no_longer_substituted() {
 name = "items"
 ddl = "CREATE TABLE items (q TEXT)"
 glob = "*.json"
-on-file = "sh echo_args.sh {path} {abspath}"
+on-file = "sh echo_args.sh {abspath}"
 "#,
     )
     .unwrap();
@@ -233,8 +233,8 @@ on-file = "sh echo_args.sh {path} {abspath}"
     let child = spawn_dirsql(root.path(), port);
     wait_until_ready(port, Duration::from_secs(10));
 
-    // The helper echoes its second arg (the `{abspath}` slot) into `q`. Since
-    // `{abspath}` is no longer substituted, it arrives as the literal string.
+    // The helper echoes its first arg (the `{abspath}` slot) into `q`. Since
+    // `{abspath}` is not substituted, it arrives as the literal string.
     let resp = Client::new()
         .post(format!("http://localhost:{port}/query"))
         .json(&json!({"sql": "SELECT q FROM items"}))
@@ -248,45 +248,49 @@ on-file = "sh echo_args.sh {path} {abspath}"
 }
 
 #[test]
-fn on_file_omitting_path_yields_no_rows() {
+fn on_file_runs_once_with_every_matched_path_appended() {
     let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("count.sh"),
+        "#!/bin/sh\nprintf '[{\"n\":%s}]' \"$#\"\n",
+    )
+    .unwrap();
     fs::write(
         root.path().join(".dirsql.toml"),
         r#"
 [[table]]
 name = "items"
-ddl = "CREATE TABLE items (name TEXT)"
+ddl = "CREATE TABLE items (n INTEGER)"
 glob = "*.json"
-on-file = "cat"
+on-file = "sh count.sh"
 "#,
     )
     .unwrap();
-    fs::write(root.path().join("a.json"), r#"[{"name":"widget"}]"#).unwrap();
+    fs::write(root.path().join("a.json"), "x").unwrap();
+    fs::write(root.path().join("b.json"), "y").unwrap();
 
     let port = free_port();
     let child = spawn_dirsql(root.path(), port);
     wait_until_ready(port, Duration::from_secs(10));
 
-    // The server stays healthy; the `{path}`-less command simply contributes no
-    // rows (its output is empty), so the query succeeds with an empty result.
     let resp = Client::new()
         .post(format!("http://localhost:{port}/query"))
-        .json(&json!({"sql": "SELECT name FROM items"}))
+        .json(&json!({"sql": "SELECT n FROM items"}))
         .send()
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Vec<Value> = resp.json().unwrap();
-    assert!(body.is_empty(), "got: {body:?}");
+    assert_eq!(body, vec![json!({"n": 2})]);
 
     kill_and_wait(child);
 }
 
 #[test]
-fn a_file_whose_command_errors_is_skipped_while_the_rest_succeed() {
+fn a_table_whose_command_errors_is_empty_while_the_server_stays_up() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("extract.sh"),
-        "#!/bin/sh\nif grep -q BOOM \"$1\"; then exit 1; fi\nprintf '[{\"name\":\"ok\"}]'\n",
+        "#!/bin/sh\nif grep -q BOOM \"$@\"; then exit 1; fi\nprintf '[{\"name\":\"ok\"}]'\n",
     )
     .unwrap();
     fs::write(
@@ -296,7 +300,7 @@ fn a_file_whose_command_errors_is_skipped_while_the_rest_succeed() {
 name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
-on-file = "sh extract.sh {path}"
+on-file = "sh extract.sh"
 "#,
     )
     .unwrap();
@@ -314,7 +318,7 @@ on-file = "sh extract.sh {path}"
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Vec<Value> = resp.json().unwrap();
-    assert_eq!(body, vec![json!({"name": "ok"})]);
+    assert!(body.is_empty(), "a failed table has no rows: {body:?}");
 
     kill_and_wait(child);
 }

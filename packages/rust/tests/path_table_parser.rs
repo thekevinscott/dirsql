@@ -8,13 +8,14 @@ use std::fs;
 use dirsql::{DirSQL, Row, Value};
 use tempfile::TempDir;
 
-/// A parser that echoes each file verbatim: the file's body is a one-line JSON
-/// array of row objects, so `cat {path}` is its own parser output (the on-file
-/// payload is the last non-empty stdout line).
-const CAT_PARSER: &str = "cat {path}";
+/// A parser that hands back the files' bodies combined into one array: each
+/// file is a one-line JSON array of row objects, so stripping its brackets and
+/// joining the bodies with commas is the table's output.
+const COMBINE_SCRIPT: &str = "#!/bin/sh\nprintf '['\nsep=''\nfor f; do\n  body=$(cat \"$f\")\n  body=${body#'['}\n  body=${body%']'}\n  if [ -n \"$body\" ]; then printf '%s%s' \"$sep\" \"$body\"; sep=','; fi\ndone\nprintf ']'\n";
 
 fn fixture() -> TempDir {
     let root = TempDir::new().unwrap();
+    fs::write(root.path().join("combine.sh"), COMBINE_SCRIPT).unwrap();
     fs::create_dir_all(root.path().join("docs")).unwrap();
     fs::write(
         root.path().join("docs/a.md"),
@@ -29,10 +30,14 @@ fn fixture() -> TempDir {
     root
 }
 
-fn open_with_parser(root: &TempDir, parser: &str) -> DirSQL {
+fn open_with_parser(root: &TempDir) -> DirSQL {
+    let parser = format!(
+        "sh {}",
+        shlex::try_quote(&root.path().join("combine.sh").to_string_lossy()).unwrap()
+    );
     DirSQL::builder()
         .root(root.path())
-        .path_table_parser(parser)
+        .path_table_parser(&parser)
         .build()
         .unwrap()
 }
@@ -52,7 +57,7 @@ fn texts(rows: &[Row], column: &str) -> Vec<String> {
 #[test]
 fn a_parsed_path_table_serves_the_parser_rows_and_schema() {
     let root = fixture();
-    let db = open_with_parser(&root, CAT_PARSER);
+    let db = open_with_parser(&root);
 
     let rows = db.query("SELECT title, n FROM './docs/*.md'").unwrap();
 
@@ -68,7 +73,7 @@ fn a_parsed_path_table_serves_the_parser_rows_and_schema() {
 #[test]
 fn stat_columns_are_not_reachable_on_a_parsed_path_table() {
     let root = fixture();
-    let db = open_with_parser(&root, CAT_PARSER);
+    let db = open_with_parser(&root);
 
     // `size` is a stat column; a parsed table's schema is the parser's output
     // alone, so selecting it is a plain missing-column error.
@@ -93,7 +98,7 @@ fn a_parsed_scan_honors_the_default_ignore_rules() {
     )
     .unwrap();
 
-    let db = open_with_parser(&root, CAT_PARSER);
+    let db = open_with_parser(&root);
     let rows = db.query("SELECT title FROM './**/*.md'").unwrap();
 
     assert_eq!(
@@ -104,16 +109,18 @@ fn a_parsed_scan_honors_the_default_ignore_rules() {
 }
 
 #[test]
-fn a_failing_file_is_isolated_and_the_good_files_survive() {
+fn a_file_the_parser_cannot_handle_fails_the_whole_table() {
     let root = fixture();
     fs::write(root.path().join("docs/bad.md"), "not valid json").unwrap();
 
-    let db = open_with_parser(&root, CAT_PARSER);
-    let rows = db.query("SELECT title FROM './docs/*.md'").unwrap();
+    let db = open_with_parser(&root);
+    let err = db
+        .query("SELECT title FROM './docs/*.md'")
+        .unwrap_err()
+        .to_string();
 
-    assert_eq!(
-        texts(&rows, "title"),
-        vec!["alpha", "bravo"],
-        "the unparseable file is skipped; the good files still return"
+    assert!(
+        err.contains("not a JSON array of rows"),
+        "the parser's output is the table's output, so one bad file fails it: {err}"
     );
 }

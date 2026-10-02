@@ -42,7 +42,7 @@ fn tables_accumulate_across_config_entries() {
 name = "alpha"
 ddl = "CREATE TABLE alpha (basename TEXT)"
 glob = "a.json"
-on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
+on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{\"basename\":\"%s\"}" "$sep" "${p##*/}"; sep=","; done; printf "]"' sh'''
 "#,
     );
     let cfg_b = TempDir::new().unwrap();
@@ -53,7 +53,7 @@ on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
 name = "beta"
 ddl = "CREATE TABLE beta (basename TEXT)"
 glob = "b.json"
-on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
+on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{\"basename\":\"%s\"}" "$sep" "${p##*/}"; sep=","; done; printf "]"' sh'''
 "#,
     );
 
@@ -98,7 +98,7 @@ fn each_on_file_runs_from_its_declaring_config_dir() {
 name = "alpha"
 ddl = "CREATE TABLE alpha (v TEXT)"
 glob = "a.json"
-on-file = "sh ./emit.sh {path}"
+on-file = "sh ./emit.sh"
 "#,
     );
 
@@ -115,7 +115,7 @@ on-file = "sh ./emit.sh {path}"
 name = "beta"
 ddl = "CREATE TABLE beta (v TEXT)"
 glob = "b.json"
-on-file = "sh ./emit.sh {path}"
+on-file = "sh ./emit.sh"
 "#,
     );
 
@@ -140,8 +140,8 @@ on-file = "sh ./emit.sh {path}"
 #[test]
 fn a_timeout_wrapped_hook_in_one_config_leaves_the_other_untouched() {
     // Distinct globs (one-file-one-table). Config A wraps ITS slow hook in
-    // timeout(1): its rows are skipped (per-file failure isolation). Config B's
-    // unwrapped fast hook is unaffected.
+    // timeout(1): its table fails and stays empty. Config B's unwrapped fast
+    // hook is unaffected.
     let data = TempDir::new().unwrap();
     fs::write(data.path().join("a.json"), "{}").unwrap();
     fs::write(data.path().join("b.json"), "{}").unwrap();
@@ -159,7 +159,7 @@ fn a_timeout_wrapped_hook_in_one_config_leaves_the_other_untouched() {
 name = "slow"
 ddl = "CREATE TABLE slow (v TEXT)"
 glob = "a.json"
-on-file = "timeout 0.5 sh ./slow.sh {path}"
+on-file = "timeout 0.5 sh ./slow.sh"
 "#,
     );
 
@@ -176,7 +176,7 @@ on-file = "timeout 0.5 sh ./slow.sh {path}"
 name = "fast"
 ddl = "CREATE TABLE fast (v TEXT)"
 glob = "b.json"
-on-file = "sh ./fast.sh {path}"
+on-file = "sh ./fast.sh"
 "#,
     );
 
@@ -193,7 +193,7 @@ on-file = "sh ./fast.sh {path}"
     assert_eq!(
         slow.len(),
         0,
-        "a hook killed by its timeout(1) wrapper skips rows"
+        "a hook killed by its timeout(1) wrapper leaves its table empty"
     );
 
     let fast = db
@@ -224,7 +224,7 @@ ignore = ["**/skip_a/**"]
 name = "files"
 ddl = "CREATE TABLE files (basename TEXT)"
 glob = "**/*.json"
-on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
+on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{\"basename\":\"%s\"}" "$sep" "${p##*/}"; sep=","; done; printf "]"' sh'''
 "#,
     );
     let cfg_b = TempDir::new().unwrap();
@@ -266,7 +266,7 @@ fn duplicate_table_names_across_config_entries_error() {
 name = "dup"
 ddl = "CREATE TABLE dup (basename TEXT)"
 glob = "*.json"
-on-file = "cat {path}"
+on-file = "cat"
 "#,
     );
     let cfg_b = TempDir::new().unwrap();
@@ -277,7 +277,7 @@ on-file = "cat {path}"
 name = "dup"
 ddl = "CREATE TABLE dup (basename TEXT)"
 glob = "*.json"
-on-file = "cat {path}"
+on-file = "cat"
 "#,
     );
 

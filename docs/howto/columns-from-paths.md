@@ -15,18 +15,21 @@ photos/2024/11/hike.jpg
 photos/2025/01/snow.jpg
 ```
 
-Write a small parser, `pathcols.py`, that turns the path into a row. It
-receives the file's absolute path as its argument and prints a JSON array of
-row objects:
+Write a small parser, `pathcols.py`, that turns each path into a row. It
+receives the matched files' absolute paths as its arguments and prints one
+JSON array of row objects:
 
 ```python
 #!/usr/bin/env python3
 import json, os, sys
 
-parts = sys.argv[1].split(os.sep)
-# .../photos/<year>/<month>/<file>
-print(json.dumps([{"year": parts[-3], "month": parts[-2],
-                   "basename": os.path.basename(sys.argv[1])}]))
+rows = []
+for path in sys.argv[1:]:
+    parts = path.split(os.sep)
+    # .../photos/<year>/<month>/<file>
+    rows.append({"year": parts[-3], "month": parts[-2],
+                 "basename": os.path.basename(path)})
+print(json.dumps(rows))
 ```
 
 Point a table at it in `.dirsql.toml`:
@@ -36,12 +39,12 @@ Point a table at it in `.dirsql.toml`:
 name = "photos"
 ddl     = "CREATE TABLE photos (year TEXT, month TEXT, basename TEXT)"
 glob    = "photos/*/*/*.jpg"
-on-file = "python3 pathcols.py {path}"
+on-file = "python3 pathcols.py"
 ```
 
-The hook emits every column the table has — dirsql injects nothing. `{path}`
-is the matched file's absolute path, one of the placeholders in the
-[command hook contract](../reference/hooks.md#on-file). A column appears only
+The hook emits every column the table has — dirsql injects nothing. The
+matched files' absolute paths arrive as the command's trailing arguments, per
+the [command hook contract](../reference/hooks.md#on-file). A column appears only
 because the DDL declares it *and* the hook emits it.
 
 ## 2. Query the derived columns

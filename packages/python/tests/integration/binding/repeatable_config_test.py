@@ -12,9 +12,8 @@ import pytest
 
 from dirsql import DirSQL
 
-# An `on-file` hook that emits `basename`, derived from the file path
-# (`{path}`) relative to the scan root (`{root}`).
-_HOOK_BASENAME = r"""on-file = '''sh -c 'base=${1##*/}; printf "[{\"basename\":\"%s\"}]" "$base"' sh {path} {root}'''"""
+# An `on-file` hook emitting `basename` for every path it is handed.
+_HOOK_BASENAME = r"""on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{\"basename\":\"%s\"}" "$sep" "${p##*/}"; sep=","; done; printf "]"' sh'''"""
 
 
 @pytest.fixture

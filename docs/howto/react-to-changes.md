@@ -17,7 +17,7 @@ prints each file's basename:
 name = "files"
 ddl     = "CREATE TABLE files (basename TEXT)"
 glob    = "**/*"
-on-file = '''sh -c 'printf "[{\"basename\":\"%s\"}]" "${1##*/}"' sh {path}'''
+on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{\"basename\":\"%s\"}" "$sep" "${p##*/}"; sep=","; done; printf "]"' sh'''
 ```
 
 ## 1. Open the stream

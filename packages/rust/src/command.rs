@@ -174,6 +174,17 @@ pub fn run_command(
     stdin_payload: Option<&[u8]>,
 ) -> Result<CommandOutput, CommandError> {
     let argv = build_argv(command, placeholders)?;
+    run_argv(command, &argv, cwd, stdin_payload)
+}
+
+/// Run an already-built `argv` to completion. `command` is the template the
+/// argv came from, used only to name the command in errors.
+pub(crate) fn run_argv(
+    command: &str,
+    argv: &[String],
+    cwd: &Path,
+    stdin_payload: Option<&[u8]>,
+) -> Result<CommandOutput, CommandError> {
     // `build_argv` guarantees a non-empty argv.
     let mut cmd = Command::new(&argv[0]);
     push_args(&mut cmd, &argv[1..]);

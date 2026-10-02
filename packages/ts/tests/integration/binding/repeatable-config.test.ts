@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // The `on-file` hook emits `basename` itself rather than relying on the core
 // injecting it, so the fixture stays green once stat-fact injection is removed;
 // hook output overrides injection, keeping results identical meanwhile.
-const basenameHook = `on-file = '''sh -c 'printf "[{\\"basename\\":\\"%s\\"}]" "\${1##*/}"' sh {path}'''`;
+const basenameHook = `on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{\\"basename\\":\\"%s\\"}" "$sep" "\${p##*/}"; sep=","; done; printf "]"' sh'''`;
 
 function tableConfig(name: string, glob: string): string {
   return `[[table]]\nname = "${name}"\nddl = "CREATE TABLE ${name} (basename TEXT)"\nglob = "${glob}"\n${basenameHook}\n`;

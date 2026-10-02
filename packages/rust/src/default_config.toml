@@ -28,10 +28,11 @@ glob = "**/*.json"
 # these fields.
 ddl = "CREATE TABLE records (id TEXT, name TEXT)"
 
-# on-file runs once per matched file, receives its absolute {path}, and
-# prints a JSON array of row objects. Each *.json file here is already such
-# an array, so `cat` is enough. For any other format, point this at your own
-# parser instead -- it just has to read {path} and print the same JSON shape:
+# on-file runs once per table, with the absolute path of every matched file
+# appended as trailing arguments, and prints one JSON array of row objects.
+# Each *.json file here is already such an array, so merging them with jq is
+# enough. For any other format, point this at your own parser instead -- it
+# just has to read the paths from its arguments and print the same JSON shape:
 #
-#     on-file = "./parse.py {path}"
-on-file = "cat {path}"
+#     on-file = "./parse.py"
+on-file = "jq -sc add"

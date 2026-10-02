@@ -327,7 +327,11 @@ async fn it_streams_watch_events() {
     let mut stream = db.watch().unwrap();
 
     tokio::time::sleep(Duration::from_millis(250)).await;
-    fs::write(root.path().join("new_item.txt"), "apple").unwrap();
+    // Written outside the glob and renamed into place: Windows reports the
+    // creation before the bytes land, and the watcher would read an empty file.
+    let staged = root.path().join("new_item.tmp");
+    fs::write(&staged, "apple").unwrap();
+    fs::rename(&staged, root.path().join("new_item.txt")).unwrap();
 
     let event = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await

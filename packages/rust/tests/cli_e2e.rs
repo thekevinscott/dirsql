@@ -47,7 +47,7 @@ fn blog_fixture() -> TempDir {
 name = "posts"
 ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
 glob = "posts/*/*.json"
-on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); base=${p##*/}; size=$(wc -c < "$1" | tr -d " "); printf "[{\"basename\":\"%s\",\"size\":%s}]" "$base" "$size"' sh {path}'''
+on-file = '''sh -c 'printf "["; sep=""; for f; do p=$(printf %s "$f" | tr "\\\\" /); size=$(wc -c < "$f" | tr -d " "); printf "%s{\"basename\":\"%s\",\"size\":%s}" "$sep" "${p##*/}" "$size"; sep=","; done; printf "]"' sh'''
 "#,
     )
     .unwrap();
@@ -69,7 +69,7 @@ fn quoted_blog_fixture() -> TempDir {
 name = "posts"
 ddl = 'CREATE TABLE "posts" (basename TEXT)'
 glob = "posts/*/*.json"
-on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); printf "[{\"basename\":\"%s\"}]" "${p##*/}"' sh {path}'''
+on-file = '''sh -c 'printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); printf "%s{\"basename\":\"%s\"}" "$sep" "${p##*/}"; sep=","; done; printf "]"' sh'''
 "#,
     )
     .unwrap();
@@ -924,7 +924,7 @@ fn query_subcommand_rejects_capture_column_collision() {
 name = "comments"
 ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
 glob = "_comments/{thread_id}/*.txt"
-on-file = "cat {path}"
+on-file = "cat"
 "#,
     )
     .unwrap();
@@ -973,13 +973,13 @@ fn query_subcommand_fans_out_file_to_overlapping_tables() {
 name = "ta"
 ddl = "CREATE TABLE ta (path TEXT)"
 glob = "data/*/metadata.json"
-on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); r=$(printf %s "$2" | tr "\\\\" /); rel=${p#"$r"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''
+on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "%s{\"path\":\"%s\"}" "$sep" "$rel"; sep=","; done; printf "]"' sh {root}'''
 
 [[table]]
 name = "tb"
 ddl = "CREATE TABLE tb (path TEXT)"
 glob = "data/**/metadata.json"
-on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); r=$(printf %s "$2" | tr "\\\\" /); rel=${p#"$r"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''
+on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "%s{\"path\":\"%s\"}" "$sep" "$rel"; sep=","; done; printf "]"' sh {root}'''
 "#,
     )
     .unwrap();
@@ -1217,7 +1217,7 @@ fn include_default_conflicting_records_table_exits_nonzero_naming_records() {
 name = "records"
 ddl = "CREATE TABLE records (x TEXT)"
 glob = "**/*"
-on-file = "cat {path}"
+on-file = "cat"
 "#,
     )
     .unwrap();
@@ -1283,9 +1283,9 @@ fn include_default_is_hidden_from_help() {
 fn init_output_loads_when_passed_explicitly_with_config_flag() {
     // #602/#637: `dirsql init` writes an escalation scaffold that no longer
     // auto-loads — you pass it explicitly with `-c`. The scaffold must WORK as
-    // written: its `records` table globs `**/*.json` and pipes each match
-    // through `on-file = "cat {path}"`, so a `.json` file that is already a JSON
-    // array of rows lands in the table verbatim.
+    // written: its `records` table globs `**/*.json` and merges the matches
+    // through `on-file = "jq -sc add"`, so a `.json` file that is already a
+    // JSON array of rows lands in the table verbatim.
     let dir = TempDir::new().unwrap();
     fs::write(
         dir.path().join("data.json"),
@@ -1418,7 +1418,7 @@ fn config_elsewhere_indexes_invocation_cwd_not_config_parent() {
 name = "posts"
 ddl = "CREATE TABLE posts (basename TEXT)"
 glob = "posts/*/*.json"
-on-file = "printf '[{}]'"
+on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{}" "$sep"; sep=","; done; printf "]"' sh'''
 "#,
     )
     .unwrap();

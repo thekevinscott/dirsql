@@ -21,11 +21,11 @@ stdout works. With [`jq`](https://jqlang.org/):
 name = "books"
 ddl     = "CREATE TABLE books (title TEXT, author TEXT, year INTEGER)"
 glob    = "books/*.json"
-on-file = "jq -c '[{title, author, year}]' {path}"
+on-file = "jq -c -n '[inputs | {title, author, year}]'"
 ```
 
-`{path}` is the matched file's absolute path — one of the
-placeholders defined by the
+The command runs once for the table, with every matched file's absolute path
+appended as an argument, and prints one array for all of them — the
 [command hook contract](../reference/hooks.md#on-file), which also covers
 the argv splitting, working directory, stdout protocol, and timeout shared
 by every hook.
@@ -45,7 +45,7 @@ dirsql query "SELECT title, author, year FROM books ORDER BY year" -c ./.dirsql.
 
 The table's columns are exactly what the command emits, narrowed to the DDL —
 `dirsql` adds nothing. To include the file's `path`, have the command emit it
-(it has `{path}`); dirsql will not merge it in for you.
+(it has the path); dirsql will not merge it in for you.
 
 ## Multiple rows per file
 
@@ -57,7 +57,7 @@ row per line, slurp it:
 name = "events"
 ddl     = "CREATE TABLE events (event TEXT, user TEXT)"
 glob    = "logs/*.jsonl"
-on-file = "jq -c -s '.' {path}"
+on-file = "jq -c -s '.'"
 ```
 
 ```bash

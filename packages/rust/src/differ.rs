@@ -77,6 +77,76 @@ pub fn diff(
     }
 }
 
+/// Diff two whole-table row sets whose order carries no identity: a row is
+/// the same row wherever it lands, so a reorder is no event at all. Rows left
+/// unmatched on both sides are paired in order as updates, the way a changed
+/// file's row replaces its old one; whatever remains is a delete on the old
+/// side or an insert on the new. Deletes come first so a consumer replaying
+/// the events never holds more rows than the table does.
+pub fn diff_unordered(
+    table: &str,
+    old: &[HashMap<String, Value>],
+    new: &[HashMap<String, Value>],
+    file_path: &str,
+) -> Vec<RowEvent> {
+    let mut pool: HashMap<String, usize> = HashMap::new();
+    for row in old {
+        *pool.entry(row_key(row)).or_default() += 1;
+    }
+    let mut unmatched_new: Vec<&HashMap<String, Value>> = Vec::new();
+    for row in new {
+        match pool.get_mut(&row_key(row)) {
+            Some(count) if *count > 0 => *count -= 1,
+            _ => unmatched_new.push(row),
+        }
+    }
+    let mut unmatched_old: Vec<&HashMap<String, Value>> = Vec::new();
+    for row in old {
+        let left = pool
+            .get_mut(&row_key(row))
+            .expect("every old row was keyed");
+        if *left > 0 {
+            *left -= 1;
+            unmatched_old.push(row);
+        }
+    }
+
+    let paired = unmatched_old.len().min(unmatched_new.len());
+    let mut events: Vec<RowEvent> = unmatched_old[paired..]
+        .iter()
+        .map(|row| RowEvent::Delete {
+            table: table.to_string(),
+            row: (*row).clone(),
+            file_path: file_path.to_string(),
+        })
+        .collect();
+    events.extend(
+        unmatched_old
+            .iter()
+            .zip(&unmatched_new)
+            .map(|(old_row, new_row)| RowEvent::Update {
+                table: table.to_string(),
+                old_row: (*old_row).clone(),
+                new_row: (*new_row).clone(),
+                file_path: file_path.to_string(),
+            }),
+    );
+    events.extend(unmatched_new[paired..].iter().map(|row| RowEvent::Insert {
+        table: table.to_string(),
+        row: (*row).clone(),
+        file_path: file_path.to_string(),
+    }));
+    events
+}
+
+/// A row's identity for [`diff_unordered`]: its columns in name order, so two
+/// rows that compare equal share a key regardless of map iteration order.
+fn row_key(row: &HashMap<String, Value>) -> String {
+    let mut columns: Vec<(&String, &Value)> = row.iter().collect();
+    columns.sort_by(|a, b| a.0.cmp(b.0));
+    format!("{columns:?}")
+}
+
 /// Compare old and new row slices and produce minimal events.
 fn diff_rows(
     table: &str,
@@ -153,6 +223,126 @@ fn full_replace(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diff_unordered_reports_nothing_for_the_same_rows_in_another_order() {
+        let a = row(&[("id", Value::Integer(1))]);
+        let b = row(&[("id", Value::Integer(2))]);
+
+        let events = diff_unordered("t", &[a.clone(), b.clone()], &[b, a], "trigger");
+
+        assert!(events.is_empty(), "{events:?}");
+    }
+
+    #[test]
+    fn diff_unordered_deletes_a_row_that_is_gone() {
+        let kept = row(&[("id", Value::Integer(1))]);
+        let gone = row(&[("id", Value::Integer(2))]);
+
+        let events = diff_unordered(
+            "t",
+            &[gone.clone(), kept.clone()],
+            std::slice::from_ref(&kept),
+            "trigger",
+        );
+
+        assert_eq!(
+            events,
+            vec![RowEvent::Delete {
+                table: "t".into(),
+                row: gone,
+                file_path: "trigger".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn diff_unordered_inserts_a_row_that_is_new() {
+        let kept = row(&[("id", Value::Integer(1))]);
+        let added = row(&[("id", Value::Integer(3))]);
+
+        let events = diff_unordered(
+            "t",
+            std::slice::from_ref(&kept),
+            &[added.clone(), kept.clone()],
+            "trigger",
+        );
+
+        assert_eq!(
+            events,
+            vec![RowEvent::Insert {
+                table: "t".into(),
+                row: added,
+                file_path: "trigger".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn diff_unordered_counts_duplicate_rows() {
+        let dup = row(&[("id", Value::Integer(1))]);
+
+        let events = diff_unordered(
+            "t",
+            std::slice::from_ref(&dup),
+            &[dup.clone(), dup.clone()],
+            "trigger",
+        );
+
+        assert_eq!(
+            events,
+            vec![RowEvent::Insert {
+                table: "t".into(),
+                row: dup,
+                file_path: "trigger".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn diff_unordered_deletes_only_the_copies_of_a_duplicate_that_are_gone() {
+        let dup = row(&[("id", Value::Integer(1))]);
+
+        let events = diff_unordered(
+            "t",
+            &[dup.clone(), dup.clone()],
+            std::slice::from_ref(&dup),
+            "trigger",
+        );
+
+        assert_eq!(
+            events,
+            vec![RowEvent::Delete {
+                table: "t".into(),
+                row: dup,
+                file_path: "trigger".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn diff_unordered_pairs_a_changed_row_as_an_update() {
+        let kept = row(&[("id", Value::Integer(1))]);
+        let before = row(&[("id", Value::Integer(2)), ("size", Value::Integer(5))]);
+        let after = row(&[("id", Value::Integer(2)), ("size", Value::Integer(9))]);
+
+        let events = diff_unordered(
+            "t",
+            &[before.clone(), kept.clone()],
+            &[kept, after.clone()],
+            "trigger",
+        );
+
+        assert_eq!(
+            events,
+            vec![RowEvent::Update {
+                table: "t".into(),
+                old_row: before,
+                new_row: after,
+                file_path: "trigger".into(),
+            }]
+        );
+    }
 
     fn row(pairs: &[(&str, Value)]) -> HashMap<String, Value> {
         pairs

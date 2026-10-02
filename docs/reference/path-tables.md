@@ -139,18 +139,18 @@ the `dirsql query` flag [`--on-file`](/reference/cli):
 
 ```sh
 dirsql query "SELECT title, author FROM './posts/*.md'" \
-  --on-file 'extract.py {path}'
+  --on-file 'extract.py'
 ```
 
-The command runs once per matched file and prints a JSON array of row objects,
-exactly like a declared table's [`on-file` hook](/reference/hooks) — same argv
-splitting, same `{path}`/`{root}` placeholders, same timeout. Its output *is*
-the table:
+The command runs once, with every matched file's absolute path appended as an
+argument, and prints one JSON array of row objects, exactly like a declared
+table's [`on-file` hook](/reference/hooks) — same argv splitting, same `{root}`
+placeholder, same timeout. Its output *is* the table:
 
 - **The parser supplies the whole schema.** Columns are inferred from the keys
   across the emitted rows. The stat columns (`path`, `size`, …) are **not**
   reachable on a parsed path-table — a parser that wants the path emits it (it
-  has `{path}`). The two modes stay cleanly separate.
+  has the paths). The two modes stay cleanly separate.
 - **Failures are isolated per file.** A file whose parser fails (spawn, non-zero
   exit, timeout, or no output) or whose output is not a JSON array of rows
   contributes no rows; a one-line warning naming the file goes to stderr and the

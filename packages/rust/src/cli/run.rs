@@ -197,10 +197,11 @@ struct QueryArgs {
 
     /// Attach a parser to every path-table in the query. The command follows
     /// the `on-file` hook contract (`docs/reference/hooks.md`): argv splitting,
-    /// `{path}`/`{root}` placeholders, a JSON array of row objects on stdout,
-    /// and per-file failure isolation. With it set, a
-    /// path-table's rows and schema come from the parser instead of the stat
-    /// columns. One `--on-file` max; for multiple tables use a config file.
+    /// a `{root}` placeholder, one run per table with every matched absolute
+    /// path appended as trailing arguments, and one JSON array of row objects
+    /// on stdout. With it set, a path-table's rows and schema come from the
+    /// parser instead of the stat columns. One `--on-file` max; for multiple
+    /// tables use a config file.
     #[arg(long = "on-file")]
     on_file: Vec<String>,
 

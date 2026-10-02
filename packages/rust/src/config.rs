@@ -61,7 +61,7 @@ pub enum ConfigError {
     #[error(
         "'hook-timeout' has been removed: `on-file` hooks run unbounded. Delete the \
          key from [dirsql]; to bound a hook, wrap its command in timeout(1) \
-         (on-file = \"timeout 30 my-extractor {{path}}\"). A [[dirsql.function]] \
+         (on-file = \"timeout 30 my-extractor\"). A [[dirsql.function]] \
          entry bounds each worker call with its own `timeout` key (default 30s)."
     )]
     RemovedHookTimeout,
@@ -1158,7 +1158,7 @@ hook-timeout = 120
         );
         let msg = err.to_string();
         assert!(msg.contains("hook-timeout"), "got: {msg}");
-        assert!(msg.contains("timeout 30 my-extractor {path}"), "got: {msg}");
+        assert!(msg.contains("timeout 30 my-extractor"), "got: {msg}");
         assert!(msg.contains("timeout(1)"), "got: {msg}");
         assert!(msg.contains("[[dirsql.function]]"), "got: {msg}");
         assert!(msg.contains("default 30s"), "got: {msg}");

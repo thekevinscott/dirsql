@@ -370,12 +370,12 @@ array of row objects) instead of the stat columns:
 
 ```sh
 dirsql query "SELECT title, author FROM './posts/*.md'" \
-  --on-file 'extract.py {path}'
+  --on-file 'extract.py'
 ```
 
 The command follows the [`on-file` hook contract](./hooks.md#on-file) — argv
-splitting, `{path}`/`{root}` placeholders, per-file failure isolation, and the
-timeout. The parser's output is the whole schema; the stat columns are not
+splitting, the `{root}` placeholder, every matched path as a trailing
+argument, the failure semantics, and the timeout. The parser's output is the whole schema; the stat columns are not
 reachable on a parsed path-table. `--on-file` may be given **at most once** (a
 repeat is an error pointing at config files) and never touches config-declared
 tables. It is a `query`-only flag — server mode rejects it as an unknown

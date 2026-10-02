@@ -12,23 +12,28 @@ use assert_cmd::prelude::*;
 use serde_json::Value;
 use tempfile::TempDir;
 
-/// A real parser: reads the file `$1`, fails loudly on a poisoned file, and
-/// otherwise prints a one-line JSON array of row objects derived from the
-/// content (the on-file contract's payload is the last non-empty stdout line).
+/// A real parser: reads every file it is handed, fails loudly on a poisoned
+/// one, and otherwise prints one JSON array with a row object per file derived
+/// from its content.
 const PARSER_SCRIPT: &str = r#"#!/bin/sh
-f="$1"
-if grep -q POISON "$f"; then
-  echo "poison detected in $f" >&2
-  exit 1
-fi
-title=$(head -n1 "$f")
-words=$(wc -w < "$f" | tr -d ' ')
-printf '[{"title":"%s","words":%s}]\n' "$title" "$words"
+printf '['
+sep=''
+for f; do
+  if grep -q POISON "$f"; then
+    echo "poison detected in $f" >&2
+    exit 1
+  fi
+  title=$(head -n1 "$f")
+  words=$(wc -w < "$f" | tr -d ' ')
+  printf '%s{"title":"%s","words":%s}' "$sep" "$title" "$words"
+  sep=','
+done
+printf ']\n'
 "#;
 
 /// A temp tree of markdown-like files plus an executable `parse.sh` at the
-/// root. The parser is invoked as `./parse.sh {path}`, resolved against the
-/// scan root (the invocation cwd for a `./` path-table).
+/// root. The parser is invoked as `./parse.sh`, resolved against the scan root
+/// (the invocation cwd for a `./` path-table).
 fn fixture() -> TempDir {
     let root = TempDir::new().unwrap();
     fs::create_dir_all(root.path().join("docs")).unwrap();
@@ -76,11 +81,7 @@ fn titles(out: &Output) -> Vec<String> {
 #[test]
 fn a_parser_supplies_the_rows_and_the_schema() {
     let dir = fixture();
-    let out = run_on_file(
-        &dir,
-        "SELECT title, words FROM './**/*.md'",
-        "./parse.sh {path}",
-    );
+    let out = run_on_file(&dir, "SELECT title, words FROM './**/*.md'", "./parse.sh");
 
     assert_eq!(titles(&out), vec!["alpha title", "bravo title"]);
     // The schema is the parser's output: `words` came from the parser, not a
@@ -101,7 +102,7 @@ fn a_parser_command_containing_a_quote_runs_as_written() {
     let out = run_on_file(
         &dir,
         "SELECT title FROM './**/*.md'",
-        r#"sh -c './parse.sh "$1"' sh {path}"#,
+        r#"sh -c './parse.sh "$@"' sh"#,
     );
 
     assert_eq!(titles(&out), vec!["alpha title", "bravo title"]);
@@ -112,7 +113,7 @@ fn stat_columns_are_not_reachable_on_a_parsed_table() {
     let dir = fixture();
     // `size` is a stat column; a parsed path-table's schema is the parser's
     // output alone, so it is gone.
-    let out = run_on_file(&dir, "SELECT size FROM './**/*.md'", "./parse.sh {path}");
+    let out = run_on_file(&dir, "SELECT size FROM './**/*.md'", "./parse.sh");
 
     assert!(
         !out.status.success(),
@@ -126,22 +127,20 @@ fn stat_columns_are_not_reachable_on_a_parsed_table() {
 }
 
 #[test]
-fn a_failing_file_is_skipped_with_a_warning_and_the_scan_continues() {
+fn a_failing_parser_fails_the_query_and_its_stderr_is_carried() {
     let dir = fixture();
-    fs::write(
-        dir.path().join("docs/bad.md"),
-        "POISON should abort only this file",
-    )
-    .unwrap();
+    fs::write(dir.path().join("docs/bad.md"), "POISON aborts the table").unwrap();
 
-    let out = run_on_file(&dir, "SELECT title FROM './**/*.md'", "./parse.sh {path}");
+    let out = run_on_file(&dir, "SELECT title FROM './**/*.md'", "./parse.sh");
 
-    // Per-file isolation: the good files still return.
-    assert_eq!(titles(&out), vec!["alpha title", "bravo title"]);
+    assert!(
+        !out.status.success(),
+        "the parser's failure is the table's failure: {out:?}"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("bad.md"),
-        "the skipped file must be named on stderr, got: {stderr}"
+        "the parser's own stderr names the file, and must be carried: {stderr}"
     );
 }
 
@@ -153,9 +152,9 @@ fn a_repeated_on_file_flag_is_an_error_pointing_at_config_files() {
         .arg("query")
         .arg("SELECT title FROM './**/*.md'")
         .arg("--on-file")
-        .arg("./parse.sh {path}")
+        .arg("./parse.sh")
         .arg("--on-file")
-        .arg("cat {path}")
+        .arg("cat")
         .current_dir(dir.path())
         .output()
         .expect("spawning `dirsql query` failed");
@@ -181,7 +180,7 @@ fn a_parsed_scan_honors_the_default_ignore_rules() {
     )
     .unwrap();
 
-    let out = run_on_file(&dir, "SELECT title FROM './**/*.md'", "./parse.sh {path}");
+    let out = run_on_file(&dir, "SELECT title FROM './**/*.md'", "./parse.sh");
 
     assert!(
         !titles(&out).contains(&"dependency title".to_string()),
@@ -199,7 +198,7 @@ fn a_bare_parser_name_says_it_searched_path_and_offers_the_dot_slash_form() {
         .arg("query")
         .arg("SELECT title FROM './**/*.md'")
         .arg("--on-file")
-        .arg("parse.sh {path}")
+        .arg("parse.sh")
         .env("PATH", "/usr/bin:/bin")
         .current_dir(dir.path())
         .output()

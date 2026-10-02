@@ -12,8 +12,8 @@ A named [`[[table]]`](./config.md#table) — or an SDK
 [`on-file` hook](./hooks.md#on-file) emits, narrowed to the columns the DDL
 declares. dirsql adds nothing on top: no `path`, no `size`, no value derived
 from the filename. A hook that wants any of those computes them itself. The
-hook receives the file's `{path}` (an SDK `on_file` callback receives the same
-path as its argument) and may stat or read the file however it likes.
+hook receives every matched file's path as an argument (an SDK `on_file`
+callback receives one path) and may stat or read the files however it likes.
 
 The hook is **required**. A `[[table]]` with no `on-file` is a
 [config-load error](./config.md#parse-errors): with nothing supplying columns,
@@ -58,12 +58,12 @@ ORDER BY mtime DESC;
 [Attaching a parser](./path-tables.md#parsing-rows-with-on-file) to a
 path-table with `--on-file` **replaces** these stat columns with the parser's
 own output — the two modes stay cleanly separate, exactly as for a named
-table. A parser that wants the path emits it; it has `{path}`.
+table. A parser that wants the path emits it; it has the paths.
 
 ## Deriving columns from the path
 
 To turn path segments (an author, a year, a thread id) into columns, a hook
-splits `{path}` and emits the pieces — the same as any other column it
+splits the path and emits the pieces — the same as any other column it
 produces. dirsql does not do this for you: a `{name}` segment in a glob is
 rewritten to `*` and matches a single path segment, but captures no value.
 [Derive columns from file paths](../howto/columns-from-paths.md) walks a

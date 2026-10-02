@@ -616,7 +616,7 @@ fn builder_config_loads_tables_with_explicit_root() {
 name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.json"
-on-file = "printf '[{}]'"
+on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{}" "$sep"; sep=","; done; printf "]"' sh'''
 "#,
     )
     .unwrap();
@@ -653,7 +653,7 @@ fn builder_explicit_root_wins_over_config_directory() {
 name = "items"
 ddl = "CREATE TABLE items (basename TEXT)"
 glob = "*.json"
-on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); printf "[{\"basename\":\"%s\"}]" "${p##*/}"' sh {path}'''
+on-file = '''sh -c 'printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); printf "%s{\"basename\":\"%s\"}" "$sep" "${p##*/}"; sep=","; done; printf "]"' sh'''
 "#,
     )
     .unwrap();

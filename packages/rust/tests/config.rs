@@ -19,7 +19,7 @@ fn load_config_from_file() {
 name = "t"
 ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.csv"
-on-file = "cat {path}"
+on-file = "cat"
 "#,
     )
     .unwrap();
@@ -41,7 +41,7 @@ fn unknown_key_at_each_schema_level_errors() {
         ),
         (
             "[[table]]",
-            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (path TEXT)\"\nglob = \"*.json\"\non-file = \"cat {path}\"\nformat = \"json\"\n",
+            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (path TEXT)\"\nglob = \"*.json\"\non-file = \"cat\"\nformat = \"json\"\n",
             "format",
         ),
         (

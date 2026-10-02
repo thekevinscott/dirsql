@@ -10,7 +10,7 @@ use std::fs;
 use tempfile::TempDir;
 
 /// An `on-file` hook emitting the file's root-relative `path`.
-const HOOK: &str = r#"on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); r=$(printf %s "$2" | tr "\\\\" /); rel=${p#"$r"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''"#;
+const HOOK: &str = r#"on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "%s{\"path\":\"%s\"}" "$sep" "$rel"; sep=","; done; printf "]"' sh {root}'''"#;
 
 /// A tempdir with one matched file and a `.dirsql.toml` holding `config`.
 fn fixture(config: &str) -> TempDir {
