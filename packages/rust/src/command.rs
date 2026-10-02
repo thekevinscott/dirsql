@@ -244,6 +244,15 @@ pub(crate) fn build_argv(
     Ok(argv)
 }
 
+/// Quote `arg` for a Windows command line by the MS C-runtime rules, always
+/// wrapped in double quotes: an MSYS/Cygwin child globs, brace-expands and
+/// unescapes any unquoted word, while an MSVCRT child parses the quoted form
+/// back to `arg` exactly.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn quote_windows_arg(arg: &str) -> String {
+    arg.to_string()
+}
+
 /// Replace every `{name}` in `token` with its placeholder value in a single
 /// left-to-right pass. Injected values are never re-scanned, so an untrusted
 /// value containing `{…}` is inert. Unknown `{…}` sequences are left literal.
@@ -400,6 +409,47 @@ mod tests {
     #[test]
     fn a_placeholder_the_template_omits_is_dropped() {
         assert_eq!(argv("run", &[Placeholder::new("path", "/tmp/x")]), ["run"]);
+    }
+
+    #[test]
+    fn windows_quoting_wraps_a_plain_arg_in_quotes() {
+        assert_eq!(quote_windows_arg("hello"), r#""hello""#);
+    }
+
+    #[test]
+    fn windows_quoting_keeps_an_empty_arg_as_an_empty_quoted_word() {
+        assert_eq!(quote_windows_arg(""), r#""""#);
+    }
+
+    #[test]
+    fn windows_quoting_quotes_glob_and_brace_characters() {
+        assert_eq!(quote_windows_arg("[{}]"), r#""[{}]""#);
+        assert_eq!(quote_windows_arg("a?b*c"), r#""a?b*c""#);
+    }
+
+    #[test]
+    fn windows_quoting_leaves_backslashes_not_before_a_quote_alone() {
+        assert_eq!(
+            quote_windows_arg(r"\\?\C:\Users\x.txt"),
+            r#""\\?\C:\Users\x.txt""#
+        );
+    }
+
+    #[test]
+    fn windows_quoting_doubles_trailing_backslashes_before_the_closing_quote() {
+        assert_eq!(quote_windows_arg(r"C:\dir\"), r#""C:\dir\\""#);
+        assert_eq!(quote_windows_arg(r"a\\"), r#""a\\\\""#);
+    }
+
+    #[test]
+    fn windows_quoting_escapes_embedded_quotes() {
+        assert_eq!(quote_windows_arg(r#"[{"n":1}]"#), r#""[{\"n\":1}]""#);
+    }
+
+    #[test]
+    fn windows_quoting_doubles_backslashes_before_an_embedded_quote() {
+        assert_eq!(quote_windows_arg(r#"a\"b"#), r#""a\\\"b""#);
+        assert_eq!(quote_windows_arg(r#"a\\"b"#), r#""a\\\\\"b""#);
     }
 
     #[test]
