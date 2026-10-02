@@ -1,7 +1,7 @@
 {
   "command": "just test-e2e",
-  "ran_at": 1790967982,
+  "ran_at": 1790974761,
   "exit_code": 0,
-  "commit": "b3ddd553008637b41a658c9e155a461548e04201",
+  "commit": "80332ac7891d42541409c3544f1bf1b41644b17c",
   "branch": "claude/1199-glob-prefix"
 }
