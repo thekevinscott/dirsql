@@ -2,7 +2,7 @@
 
 Ephemeral SQL index over a local directory. `dirsql` watches a filesystem, ingests structured files into an in-memory SQLite database, and exposes a SQL query interface -- the filesystem is always the source of truth. Built on the Rust core via napi-rs bindings.
 
-[Documentation](https://thekevinscott.github.io/dirsql/?lang=typescript)
+[Documentation](https://dirsql.dev/?lang=typescript)
 
 Also available as [`dirsql` on crates.io](https://crates.io/crates/dirsql) and [`dirsql` on PyPI](https://pypi.org/project/dirsql/).
 
@@ -89,7 +89,7 @@ Each event has `.action` (`'insert'` | `'update'` | `'delete'` | `'error'`), `.t
 
 ## CLI
 
-`npx dirsql "<sql>"` runs one query and prints the rows as JSON — the default. `npx dirsql server` starts an HTTP server exposing the SDK over HTTP: `POST /query` for SQL and `GET /events` for a Server-Sent Events change stream. Requires **Node >= 20.11**. See the [CLI reference](https://thekevinscott.github.io/dirsql/reference/cli).
+`npx dirsql "<sql>"` runs one query and prints the rows as JSON — the default. `npx dirsql server` starts an HTTP server exposing the SDK over HTTP: `POST /query` for SQL and `GET /events` for a Server-Sent Events change stream. Requires **Node >= 20.11**. See the [CLI reference](https://dirsql.dev/reference/cli).
 
 ## License
 
