@@ -2,7 +2,7 @@ use crate::matcher::TableMatcher;
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, DirEntry};
 use std::path::{Path, PathBuf};
 
@@ -131,12 +131,18 @@ pub fn scan_glob(
         ignore_base,
         gitignore,
         &mut |rel_path, _| {
-            if is_glob_match(glob, &rel_path) && !is_ignored_below(ignore, ignore_base, &rel_path) {
+            if is_wanted(glob, ignore, ignore_base, &rel_path) {
                 results.push(rel_path);
             }
         },
     );
     results
+}
+
+/// Whether a walked file is a row of the table: it matches the glob and no
+/// skip rule ignores it below the base.
+fn is_wanted(glob: &GlobSet, ignore: &TableMatcher, ignore_base: &Path, rel_path: &Path) -> bool {
+    is_glob_match(glob, rel_path) && !is_ignored_below(ignore, ignore_base, rel_path)
 }
 
 /// Compile a single glob pattern into the set [`scan_glob`] expects.
@@ -222,35 +228,18 @@ impl Walk<'_> {
             });
             pushed = true;
         }
+        let below = depth + 1;
         for (name, entry) in sorted_entries(dir) {
             let Ok(file_type) = entry.file_type() else {
                 continue;
             };
             let is_dir = file_type.is_dir();
             let child = rel.join(&name);
-            if !should_descend(
-                depth + 1,
-                is_dir,
-                &name,
-                &child,
-                self.ignore,
-                self.ignore_base,
-            ) {
-                continue;
-            }
-            if !self.frames.is_empty()
-                && is_gitignored(
-                    &self.frames,
-                    &entry.path(),
-                    &child,
-                    is_dir,
-                    self.ignore_base,
-                )
-            {
+            if !self.admits(below, is_dir, &name, &entry.path(), &child) {
                 continue;
             }
             if is_dir {
-                self.descend(&entry.path(), &child, depth + 1, visit);
+                self.descend(&entry.path(), &child, below, visit);
             } else if file_type.is_file() {
                 visit(child, &entry);
             }
@@ -258,6 +247,14 @@ impl Walk<'_> {
         if pushed {
             self.frames.pop();
         }
+    }
+
+    /// Whether the walk takes an entry at `depth`: the skip rules and the
+    /// reserved-directory rule first, then the `.gitignore` files in force.
+    fn admits(&self, depth: usize, is_dir: bool, name: &OsStr, path: &Path, rel: &Path) -> bool {
+        should_descend(depth, is_dir, name, rel, self.ignore, self.ignore_base)
+            && (self.frames.is_empty()
+                || !is_gitignored(&self.frames, path, rel, is_dir, self.ignore_base))
     }
 }
 
@@ -609,6 +606,91 @@ mod tests {
             dir: PathBuf::from(dir),
             matcher: builder.build().unwrap(),
         }
+    }
+
+    #[test]
+    fn is_wanted_takes_a_glob_match_no_skip_rule_ignores() {
+        let glob = compile_glob("**/*.md").unwrap();
+        let ignore = TableMatcher::new(&[], &["drafts/**"]).unwrap();
+        assert!(is_wanted(
+            &glob,
+            &ignore,
+            Path::new(""),
+            Path::new("docs/a.md")
+        ));
+    }
+
+    #[test]
+    fn is_wanted_rejects_a_glob_miss_and_an_ignored_match() {
+        let glob = compile_glob("**/*.md").unwrap();
+        let ignore = TableMatcher::new(&[], &["drafts/**"]).unwrap();
+        assert!(!is_wanted(
+            &glob,
+            &ignore,
+            Path::new(""),
+            Path::new("docs/a.csv")
+        ));
+        assert!(!is_wanted(
+            &glob,
+            &ignore,
+            Path::new(""),
+            Path::new("drafts/a.md")
+        ));
+    }
+
+    fn walk_with<'a>(ignore: &'a TableMatcher, frames: Vec<GitignoreFrame>) -> Walk<'a> {
+        Walk {
+            ignore,
+            ignore_base: Path::new(""),
+            gitignore: !frames.is_empty(),
+            frames,
+        }
+    }
+
+    #[test]
+    fn admits_an_ordinary_file_under_no_gitignore() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let walk = walk_with(&ignore, Vec::new());
+        assert!(walk.admits(
+            1,
+            false,
+            OsStr::new("a.md"),
+            Path::new("/r/a.md"),
+            Path::new("a.md")
+        ));
+    }
+
+    #[test]
+    fn admits_nothing_the_skip_rules_prune() {
+        let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
+        let walk = walk_with(&ignore, vec![frame("", &["*.log"])]);
+        assert!(!walk.admits(
+            2,
+            true,
+            OsStr::new("node_modules"),
+            Path::new("/r/apps/node_modules"),
+            Path::new("apps/node_modules")
+        ));
+    }
+
+    #[test]
+    fn admits_nothing_a_gitignore_in_force_ignores() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let walk = walk_with(&ignore, vec![frame("", &["*.log"])]);
+        assert!(!walk.admits(
+            1,
+            false,
+            OsStr::new("debug.log"),
+            Path::new("/r/debug.log"),
+            Path::new("debug.log")
+        ));
+        assert!(walk.admits(
+            1,
+            false,
+            OsStr::new("app.js"),
+            Path::new("/r/app.js"),
+            Path::new("app.js")
+        ));
     }
 
     #[test]

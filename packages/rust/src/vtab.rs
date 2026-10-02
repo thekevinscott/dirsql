@@ -1,12 +1,12 @@
 use std::ffi::c_int;
-use std::fs::{self, Metadata};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use globset::GlobSet;
-use rusqlite::types::Null;
+use rusqlite::types::{ToSqlOutput, ValueRef};
 use rusqlite::vtab::Context;
 use rusqlite::{Connection, Result};
 
@@ -96,23 +96,18 @@ struct FileRow {
     /// The path as reported, under the table's prefix when it has one.
     path: String,
     spans: PathSpans,
-    size: Option<i64>,
-    mtime: Option<i64>,
-    ctime: Option<i64>,
+    facts: StatFacts,
 }
 
 impl FileRow {
-    fn new(path_prefix: &Path, rel: PathBuf, metadata: Option<&Metadata>) -> Self {
+    fn new(path_prefix: &Path, rel: PathBuf, facts: StatFacts) -> Self {
         let path = reported_path(path_prefix, &rel);
         let spans = PathSpans::of(&path);
-        let (size, mtime, ctime) = stat_facts(metadata);
         Self {
             rel,
             path,
             spans,
-            size,
-            mtime,
-            ctime,
+            facts,
         }
     }
 
@@ -155,15 +150,21 @@ impl PathSpans {
 
 /// The stat-derived columns, each `None` when the file could not be stat'ed
 /// or the platform cannot supply the fact (or it predates the epoch).
-fn stat_facts(metadata: Option<&Metadata>) -> (Option<i64>, Option<i64>, Option<i64>) {
-    let Some(metadata) = metadata else {
-        return (None, None, None);
-    };
-    (
-        i64::try_from(metadata.len()).ok(),
-        epoch_secs(metadata.modified().ok()),
-        epoch_secs(metadata.created().ok()),
-    )
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct StatFacts {
+    size: Option<i64>,
+    mtime: Option<i64>,
+    ctime: Option<i64>,
+}
+
+impl StatFacts {
+    fn from_parts(len: u64, modified: Option<SystemTime>, created: Option<SystemTime>) -> Self {
+        Self {
+            size: i64::try_from(len).ok(),
+            mtime: epoch_secs(modified),
+            ctime: epoch_secs(created),
+        }
+    }
 }
 
 fn epoch_secs(time: Option<SystemTime>) -> Option<i64> {
@@ -175,25 +176,20 @@ fn epoch_secs(time: Option<SystemTime>) -> Option<i64> {
 /// row is a syscall the kernel answers independently of the last, so the
 /// files are shared out across every core: one stat per file is the floor
 /// `find` pays too, and spreading them is how a walk comes in under it.
-fn build_rows(root: &Path, path_prefix: &Path, rel_paths: Vec<PathBuf>) -> Vec<FileRow> {
+/// `stat` is injected so the row building is testable without a filesystem.
+fn build_rows(
+    path_prefix: &Path,
+    rel_paths: Vec<PathBuf>,
+    stat: &(dyn Fn(&Path) -> StatFacts + Sync),
+) -> Vec<FileRow> {
     let workers = thread::available_parallelism().map_or(1, usize::from);
     let per_worker = rel_paths.len().div_ceil(workers).max(1);
     let row = |rel: PathBuf| {
-        let metadata = fs::metadata(root.join(&rel)).ok();
-        FileRow::new(path_prefix, rel, metadata.as_ref())
+        let facts = stat(&rel);
+        FileRow::new(path_prefix, rel, facts)
     };
-    if rel_paths.len() <= per_worker {
-        return rel_paths.into_iter().map(row).collect();
-    }
     thread::scope(|scope| {
-        let mut chunks: Vec<Vec<PathBuf>> = Vec::with_capacity(workers);
-        let mut rest = rel_paths;
-        while rest.len() > per_worker {
-            let tail = rest.split_off(per_worker);
-            chunks.push(std::mem::replace(&mut rest, tail));
-        }
-        chunks.push(rest);
-        let handles: Vec<_> = chunks
+        let handles: Vec<_> = chunks(rel_paths, per_worker)
             .into_iter()
             .map(|chunk| scope.spawn(move || chunk.into_iter().map(row).collect::<Vec<_>>()))
             .collect();
@@ -201,6 +197,39 @@ fn build_rows(root: &Path, path_prefix: &Path, rel_paths: Vec<PathBuf>) -> Vec<F
             .into_iter()
             .flat_map(|handle| handle.join().expect("a stat worker only stats"))
             .collect()
+    })
+}
+
+/// `items` cut into runs of `size` in order, the last run holding whatever
+/// remains; one (possibly empty) run when there is less than a full one.
+fn chunks<T>(items: Vec<T>, size: usize) -> Vec<Vec<T>> {
+    let mut runs = Vec::with_capacity(items.len().div_ceil(size.max(1)));
+    let mut rest = items;
+    while rest.len() > size {
+        let tail = rest.split_off(size);
+        runs.push(std::mem::replace(&mut rest, tail));
+    }
+    runs.push(rest);
+    runs
+}
+
+fn integer(n: Option<i64>) -> ValueRef<'static> {
+    n.map_or(ValueRef::Null, ValueRef::Integer)
+}
+
+/// The cell a row holds for column `i`, `None` for the one it does not hold:
+/// `content` is read from the file when asked for, never stored.
+fn cell(row: &FileRow, i: c_int) -> Option<ValueRef<'_>> {
+    Some(match usize::try_from(i).unwrap_or(usize::MAX) {
+        PATH_COLUMN => ValueRef::from(row.path.as_str()),
+        BASENAME_COLUMN => ValueRef::from(row.basename()),
+        DIR_COLUMN => ValueRef::from(row.dir()),
+        EXT_COLUMN => ValueRef::from(row.ext()),
+        SIZE_COLUMN => integer(row.facts.size),
+        MTIME_COLUMN => integer(row.facts.mtime),
+        CTIME_COLUMN => integer(row.facts.ctime),
+        CONTENT_COLUMN => return None,
+        _ => ValueRef::Null,
     })
 }
 
@@ -263,22 +292,21 @@ impl TableSource for ScanSpec {
             &self.ignore_base,
             self.gitignore,
         );
-        Arc::new(build_rows(&self.root, &self.path_prefix, rel_paths))
+        let stat = |rel: &Path| {
+            fs::metadata(self.root.join(rel)).map_or_else(
+                |_| StatFacts::default(),
+                |m| StatFacts::from_parts(m.len(), m.modified().ok(), m.created().ok()),
+            )
+        };
+        Arc::new(build_rows(&self.path_prefix, rel_paths, &stat))
     }
 
     fn column(&self, row: &FileRow, ctx: &mut Context, i: c_int) -> Result<()> {
-        match usize::try_from(i).unwrap_or(usize::MAX) {
-            PATH_COLUMN => ctx.set_result(&row.path.as_str()),
-            BASENAME_COLUMN => ctx.set_result(&row.basename()),
-            DIR_COLUMN => ctx.set_result(&row.dir()),
-            EXT_COLUMN => ctx.set_result(&row.ext()),
-            SIZE_COLUMN => ctx.set_result(&row.size),
-            MTIME_COLUMN => ctx.set_result(&row.mtime),
-            CTIME_COLUMN => ctx.set_result(&row.ctime),
+        match cell(row, i) {
+            Some(value) => ctx.set_result(&ToSqlOutput::Borrowed(value)),
             // The one effectful read, reached only when a query names the
             // column: this is where laziness actually lives.
-            CONTENT_COLUMN => ctx.set_result(&read_text(&self.root.join(&row.rel))),
-            _ => ctx.set_result(&Null),
+            None => ctx.set_result(&read_text(&self.root.join(&row.rel))),
         }
     }
 }
@@ -495,7 +523,92 @@ mod tests {
     }
 
     fn row_for(prefix: &str, rel: &str) -> FileRow {
-        FileRow::new(Path::new(prefix), PathBuf::from(rel), None)
+        FileRow::new(Path::new(prefix), PathBuf::from(rel), StatFacts::default())
+    }
+
+    fn facts(size: i64) -> StatFacts {
+        StatFacts {
+            size: Some(size),
+            mtime: Some(size * 10),
+            ctime: Some(size * 100),
+        }
+    }
+
+    fn text(s: &str) -> Option<ValueRef<'_>> {
+        Some(ValueRef::Text(s.as_bytes()))
+    }
+
+    #[test]
+    fn each_stat_column_reads_its_own_cell() {
+        let mut row = row_for("", "docs/a.md");
+        row.facts = facts(7);
+        assert_eq!(cell(&row, 0), text("docs/a.md"));
+        assert_eq!(cell(&row, 1), text("a.md"));
+        assert_eq!(cell(&row, 2), text("docs"));
+        assert_eq!(cell(&row, 3), text("md"));
+        assert_eq!(cell(&row, 4), Some(ValueRef::Integer(7)));
+        assert_eq!(cell(&row, 5), Some(ValueRef::Integer(70)));
+        assert_eq!(cell(&row, 6), Some(ValueRef::Integer(700)));
+    }
+
+    #[test]
+    fn the_content_column_is_not_a_stored_cell() {
+        let row = row_for("", "a.md");
+        assert_eq!(cell(&row, 7), None);
+    }
+
+    #[test]
+    fn an_absent_fact_is_a_null_cell() {
+        let row = row_for("", "Makefile");
+        assert_eq!(cell(&row, 3), Some(ValueRef::Null), "no ext");
+        assert_eq!(cell(&row, 4), Some(ValueRef::Null), "no size");
+    }
+
+    #[test]
+    fn a_column_past_the_schema_is_null() {
+        let row = row_for("", "a.md");
+        assert_eq!(cell(&row, 8), Some(ValueRef::Null));
+        assert_eq!(cell(&row, -1), Some(ValueRef::Null));
+    }
+
+    #[test]
+    fn chunks_cut_in_order_with_the_remainder_last() {
+        assert_eq!(
+            chunks(vec![1, 2, 3, 4, 5], 2),
+            vec![vec![1, 2], vec![3, 4], vec![5]]
+        );
+    }
+
+    #[test]
+    fn a_full_run_is_one_chunk() {
+        assert_eq!(chunks(vec![1, 2, 3], 3), vec![vec![1, 2, 3]]);
+    }
+
+    #[test]
+    fn nothing_is_one_empty_chunk() {
+        assert_eq!(chunks(Vec::<u8>::new(), 4), vec![Vec::<u8>::new()]);
+    }
+
+    #[test]
+    fn build_rows_keeps_scan_order_and_stats_each_path() {
+        let rel_paths: Vec<PathBuf> = (0..100)
+            .map(|n| PathBuf::from(format!("f{n:03}.md")))
+            .collect();
+        let rows = build_rows(Path::new("/root"), rel_paths, &|rel| {
+            facts(rel.to_str().unwrap()[1..4].parse().unwrap())
+        });
+        assert_eq!(rows.len(), 100);
+        for (n, row) in rows.iter().enumerate() {
+            assert_eq!(row.path, format!("/root/f{n:03}.md"));
+            assert_eq!(row.rel, PathBuf::from(format!("f{n:03}.md")));
+            assert_eq!(row.facts, facts(i64::try_from(n).unwrap()));
+        }
+    }
+
+    #[test]
+    fn build_rows_yields_nothing_for_an_empty_scan() {
+        let rows = build_rows(Path::new(""), Vec::new(), &|_| StatFacts::default());
+        assert!(rows.is_empty());
     }
 
     #[test]
@@ -564,12 +677,20 @@ mod tests {
     fn an_unstattable_file_has_null_facts_but_is_still_a_row() {
         let row = row_for("", "bare");
         assert_eq!(row.basename(), Some("bare"));
-        assert_eq!((row.size, row.mtime, row.ctime), (None, None, None));
+        assert_eq!(row.facts, StatFacts::default());
     }
 
     #[test]
-    fn stat_facts_are_absent_without_metadata() {
-        assert_eq!(stat_facts(None), (None, None, None));
+    fn stat_facts_come_from_the_length_and_the_two_times() {
+        let t = UNIX_EPOCH + std::time::Duration::from_secs(5);
+        assert_eq!(
+            StatFacts::from_parts(3, Some(t), None),
+            StatFacts {
+                size: Some(3),
+                mtime: Some(5),
+                ctime: None,
+            }
+        );
     }
 
     #[test]
