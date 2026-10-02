@@ -33,7 +33,7 @@ on-file = "cat"
 "#,
     )
     .unwrap();
-    fs::write(root.path().join("a.txt"), "x").unwrap();
+    fs::write(root.path().join("a.txt"), r#"[{"path":"a.txt"}]"#).unwrap();
 
     let result = DirSQL::builder()
         .root(root.path())
@@ -126,7 +126,7 @@ on-file = "cat"
         ),
     )
     .unwrap();
-    fs::write(root.path().join("a.txt"), "x").unwrap();
+    fs::write(root.path().join("a.txt"), r#"[{"path":"a.txt"}]"#).unwrap();
 
     let db = DirSQL::builder()
         .root(root.path())
@@ -175,7 +175,7 @@ on-file = "cat"
 "#,
     )
     .unwrap();
-    fs::write(root.path().join("a.txt"), "x").unwrap();
+    fs::write(root.path().join("a.txt"), r#"[{"path":"a.txt"}]"#).unwrap();
 
     let db = DirSQL::builder()
         .root(root.path())

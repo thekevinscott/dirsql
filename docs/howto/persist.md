@@ -4,8 +4,8 @@ By default the database is ephemeral: rebuilt from your files on every
 startup and discarded on exit. The [`--persist [PATH]`](../reference/cli.md#dirsql-server)
 flag keeps the SQLite index on disk instead, so a restart only re-parses
 files that actually changed — the difference between seconds and
-milliseconds on large trees, and between re-running and skipping expensive
-[`on-file`](./extract-from-contents.md) commands.
+milliseconds on large trees, and between re-running and skipping an expensive
+declared-table [`on-file`](./extract-from-contents.md) command.
 
 Whether and where to cache is a machine-local operational choice — it
 belongs to the command you run, not to the shared `.dirsql.toml`. That is
@@ -58,15 +58,11 @@ exactly what a non-persistent startup does.
 A run that changes nothing writes nothing: the cache file is read and left
 exactly as it was.
 
-This covers both kinds of table. Declared tables keep their indexed rows, and
-a [path-table](../reference/path-tables.md) parsed with `--on-file` keeps each
-file's parser output — so the second run over an unchanged tree spawns no
-parser process at all. A path-table's cached rows are keyed by the tree, the
-glob, the parser command and the `dirsql` version together, so changing any of
-them parses afresh rather than serving rows the current command never
-produced. A *stat* path-table caches nothing, because there is nothing to
-save: its columns are the metadata the scan already collected, and `content`
-is read live by design.
+This covers declared tables, which keep their indexed rows. A
+[path-table](../reference/path-tables.md) is not cached: a *stat* path-table
+has nothing to save, since its columns are the metadata the scan already
+collected and `content` is read live by design, and a path-table parsed with
+`--on-file` runs its parser on every start.
 
 Persistence is a startup-time optimization, not a change in meaning: the
 database remains a derived view of your files, and queries return the same

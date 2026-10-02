@@ -116,8 +116,8 @@ templates, with the trigger mistakes that fail silently, are in
 
 ## Going further
 
-- The parser mechanics — placeholders, stdout protocol, per-file failure
-  isolation — are the [`on-file` hook contract](../reference/hooks.md#on-file);
+- The parser mechanics — placeholders, stdout protocol, failure semantics —
+  are the [`on-file` hook contract](../reference/hooks.md#on-file);
   [Extract rows from file contents](./extract-from-contents.md) is the fuller
   recipe.
 - Your directory layout encodes data (authors, dates, IDs)? Split the path in
