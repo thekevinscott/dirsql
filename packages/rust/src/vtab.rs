@@ -289,8 +289,8 @@ impl TableSource for ScanSpec {
     }
 
     fn rows(&self) -> Arc<Vec<FileRow>> {
-        // The scan runs per cursor rather than at CREATE, which is what makes
-        // reads live: each statement sees the filesystem as it is now.
+        // The scan runs per statement rather than at CREATE, which is what
+        // makes reads live: each statement sees the filesystem as it is now.
         let rel_paths = scan_glob(
             &self.root,
             &self.glob,
