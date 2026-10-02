@@ -4390,12 +4390,12 @@ mod internal_tests {
             r#"sh -c 'printf "%s|%s" "$1" "$2" > seen; echo "[]"' sh {path} {root}"#,
             r"\\?\C:\r\f.txt",
             dir.path(),
-            Path::new(r"\\?\UNC\server\share\r"),
+            Path::new(r"\\?\D:\r"),
         )
         .expect("a well-formed payload parses");
         assert_eq!(
             std::fs::read_to_string(dir.path().join("seen")).unwrap(),
-            r"C:\r\f.txt|\\server\share\r"
+            r"C:\r\f.txt|D:\r"
         );
     }
 
