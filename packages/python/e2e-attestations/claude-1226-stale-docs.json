@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1790960011,
+  "exit_code": 0,
+  "commit": "b36c8055c086002c81314daa2d7e34cded58b561",
+  "branch": "claude/1226-stale-docs"
+}

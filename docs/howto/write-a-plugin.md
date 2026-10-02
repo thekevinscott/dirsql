@@ -60,11 +60,12 @@ its `embed()` SQL function),
 and [`ignore`](../reference/config.md#dirsql-keys).
 
 There are **no plugin-specific keys and no plugin-specific restrictions**. The
-config schema is content-only: the index `root` and `--persist` are
-[runner-owned flags](../reference/config.md#dirsql-keys) (`--root`, `--persist
-[PATH]`), decided by whoever runs `dirsql`, never by a config file — so a
-plugin has nothing to say about them. Whatever you can put in your own
-`.dirsql.toml`, a plugin can put in its fragment, and vice-versa.
+config schema is content-only: the index root and persistence are
+[runner-owned](../reference/config.md#dirsql-keys) — the root is the directory
+`dirsql` is run from (or an SDK's explicit `root`), persistence is the
+`--persist [PATH]` flag — decided by whoever runs `dirsql`, never by a config
+file, so a plugin has nothing to say about them. Whatever you can put in your
+own `.dirsql.toml`, a plugin can put in its fragment, and vice-versa.
 
 ## Hook commands
 

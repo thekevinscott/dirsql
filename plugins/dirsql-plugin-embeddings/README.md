@@ -88,7 +88,7 @@ receives values, not paths, and writes nothing anywhere else.
 
 ## Docs
 
-- [Search documents by meaning](https://thekevinscott.github.io/dirsql/howto/search-by-meaning)
+- [Search documents by meaning](https://dirsql.dev/howto/search-by-meaning)
   — the guide to both invocation styles.
-- [`[[dirsql.function]]`](https://thekevinscott.github.io/dirsql/reference/config#dirsql-function)
+- [`[[dirsql.function]]`](https://dirsql.dev/reference/config#dirsql-function)
   — the core mechanism `embed()` is built on.

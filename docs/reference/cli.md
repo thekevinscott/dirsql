@@ -1,11 +1,13 @@
 # CLI
 
-Query is the default: `dirsql "<sql>"` runs one query and prints JSON rows.
+Query is the default: `dirsql "<sql>"` runs one query and prints the rows —
+a table at a terminal, a JSON array when piped (see
+[Output format](#output-format)).
 The `dirsql` binary has these modes:
 
 | Invocation | Behavior |
 |---|---|
-| `dirsql "<sql>"` | Run one query over the directory and print the rows as JSON. The default; identical to `dirsql query "<sql>"`. |
+| `dirsql "<sql>"` | Run one query over the directory and print the rows. The default; identical to `dirsql query "<sql>"`. |
 | `dirsql query "<sql>"` | Explicit synonym for the default one-shot query. |
 | `dirsql server` | Start a long-lived HTTP server exposing a SQL view of a directory. See [HTTP API](./http-api.md). |
 | `dirsql init` | Generate a `.dirsql.toml`. |
@@ -53,7 +55,7 @@ pipeline, same flags, same output. See that section for config discovery,
 
 ```bash
 dirsql
-# dirsql 0.2.7 — this directory is a database.
+# dirsql <version> — this directory is a database.
 #
 #   SELECT basename, size FROM './' ORDER BY size DESC LIMIT 5;
 #   SELECT path FROM './**/*.md' WHERE content LIKE '%TODO%';
@@ -331,9 +333,10 @@ is a hard error — `error: the subcommand 'query' cannot be used with
 for the server they follow the subcommand: `dirsql server -c <cfg>`.)
 :::
 
-The subcommand builds the index, runs the SQL, prints the result rows as a
-JSON array on stdout (byte-identical to the [`POST /query`](./http-api.md)
-response body), and exits `0`.
+The subcommand builds the index, runs the SQL, prints the result rows on
+stdout — a table at a terminal, otherwise a JSON array byte-identical to the
+[`POST /query`](./http-api.md) response body (see
+[Output format](#output-format)) — and exits `0`.
 
 `dirsql query` is a thin adapter over the **same query pipeline the server
 uses**, so behavior is identical to `POST /query` by construction:
@@ -413,7 +416,7 @@ The output does **not** auto-load. Once you've tweaked it, pass it explicitly
 to run against it:
 
 ```bash
-dirsql "SELECT * FROM files" -c ./.dirsql.toml
+dirsql "SELECT * FROM records" -c ./.dirsql.toml
 ```
 
 ### Flags

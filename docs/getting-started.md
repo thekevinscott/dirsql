@@ -81,11 +81,15 @@ The first run downloads the package (`npx` asks for confirmation — answer
 `y`; `uvx` prints download progress), then prints the result:
 
 ```
-[{"files":3}]
+files
+-----
+3
+
+1 row
 ```
 
 Three files, three rows. That one command scanned the directory, handed
-SQLite one row per file, ran your SQL, and printed the answer as JSON.
+SQLite one row per file, ran your SQL, and printed the answer.
 
 There is no named table here — you never declared one. `'./'` is a
 [path-table](./reference/path-tables.md): a quoted path written where a table
@@ -94,8 +98,9 @@ in. The path *is* the query.
 
 ## 3. Select some columns
 
-The response is always a JSON array of row objects, so from here on we pipe
-it through `jq` to pretty-print. Ask for two columns instead of a count:
+At a terminal `dirsql` prints a table; when its output is piped, it prints a
+JSON array of row objects instead. From here on we pipe it through `jq` to
+pretty-print. Ask for two columns instead of a count:
 
 ::: code-group
 
