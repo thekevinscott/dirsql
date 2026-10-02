@@ -4716,6 +4716,37 @@ mod internal_tests {
         assert!(db.scan_failures().is_empty(), "{:?}", db.scan_failures());
     }
 
+    #[test]
+    fn finish_build_owns_a_per_table_hooks_rows_as_one_range_not_a_mapping_row_each() {
+        let dir = TempDir::new().unwrap();
+        let (items, _) = recording_per_table("items", "*.txt");
+        let scanned = vec![
+            scanned("a.txt", "items", false),
+            scanned("b.txt", "items", false),
+            scanned("c.txt", "items", false),
+        ];
+
+        let db = build(prepared_build(dir.path(), vec![items], scanned, None));
+
+        assert_eq!(row_names(&db), vec!["a.txt", "b.txt", "c.txt"]);
+        let mapped: i64 = db
+            .inner
+            .db
+            .lock()
+            .unwrap()
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM _dirsql_internal_rows WHERE table_name = 'items'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            mapped, 0,
+            "a per-table hook's rows are owned by one rowid range, not a mapping row each"
+        );
+    }
+
     /// A `Write` the test reads back, standing in for stderr.
     #[derive(Clone, Default)]
     struct Captured(Arc<Mutex<Vec<u8>>>);
