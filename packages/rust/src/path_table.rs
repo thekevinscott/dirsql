@@ -31,8 +31,8 @@ pub struct PathTable {
     /// Glob matched against paths relative to [`root`](Self::root).
     pub glob: String,
     /// Prepended to each matched relative path before the stat columns are
-    /// computed. Empty for index-root-relative tables, which report relative
-    /// paths; the scan root for the rest, which report absolute ones.
+    /// computed: the directories a `./` table named ahead of its glob, so its
+    /// paths read as index-root-relative; the absolute scan root for the rest.
     pub path_prefix: String,
 }
 
@@ -96,7 +96,7 @@ impl Syntax for Utf8WindowsEncoding {
 /// Whether `name` contains a character that makes it a glob rather than a
 /// literal path.
 fn has_glob_metacharacter(name: &str) -> bool {
-    name.contains(['*', '?', '['])
+    name.contains(['*', '?', '[', '{'])
 }
 
 /// Resolve `name` against the index root, reporting what kind of thing it is.
@@ -119,11 +119,7 @@ fn resolve_as<S: Syntax>(
     is_dir: &dyn Fn(&Path) -> bool,
 ) -> Resolution {
     if let Some(rest) = name.strip_prefix("./") {
-        return Resolution::Table(PathTable {
-            root: index_root.to_path_buf(),
-            glob: relative_glob(rest, &|rel| is_dir(&index_root.join(rel))),
-            path_prefix: String::new(),
-        });
+        return Resolution::Table(split_relative(index_root, rest, is_dir));
     }
 
     match absolute_target::<S>(name, index_root, home) {
@@ -134,20 +130,23 @@ fn resolve_as<S: Syntax>(
     }
 }
 
-/// The glob a `./`-relative path expands to, relative to the index root.
-fn relative_glob(rest: &str, is_dir: &dyn Fn(&Path) -> bool) -> String {
-    let trimmed = rest.trim_end_matches('/');
-
-    if trimmed.is_empty() {
-        return RECURSIVE_GLOB.to_string();
+/// Split a `./`-relative target into the directory to walk beneath the index
+/// root and the glob to match there. The walk starts at the literal prefix
+/// and `path` is reported under it, so the rows read as if the index root
+/// had been walked whole.
+fn split_relative(index_root: &Path, rest: &str, is_dir: &dyn Fn(&Path) -> bool) -> PathTable {
+    let target = Utf8Path::<Utf8UnixEncoding>::new(rest.trim_end_matches('/'));
+    let (literal, glob) = split_target(target, &|rel| is_dir(&index_root.join(rel)));
+    let root = if literal.as_str().is_empty() {
+        index_root.to_path_buf()
+    } else {
+        index_root.join(literal.as_str())
+    };
+    PathTable {
+        root,
+        glob,
+        path_prefix: literal.into_string(),
     }
-    if has_glob_metacharacter(trimmed) {
-        return trimmed.to_string();
-    }
-    if is_dir(Path::new(trimmed)) {
-        return format!("{trimmed}/{RECURSIVE_GLOB}");
-    }
-    trimmed.to_string()
 }
 
 fn typed<S: Syntax>(path: &Path) -> Utf8PathBuf<S> {
@@ -214,24 +213,34 @@ fn normalize<S: Syntax>(path: &Utf8Path<S>) -> Utf8PathBuf<S> {
 }
 
 /// Split an absolute path-table target into the directory to walk and the glob
-/// to match beneath it. A wholly literal target is a directory (scan it
-/// recursively) or a single file (match exactly that name).
+/// to match beneath it.
 fn split_absolute<S: Syntax>(target: &Utf8Path<S>, is_dir: &dyn Fn(&Path) -> bool) -> PathTable {
+    let (literal, glob) = split_target(target, is_dir);
+    table_at(&literal, glob)
+}
+
+/// The directory to walk and the glob to match beneath it. A wholly literal
+/// target is a directory (scan it recursively) or a single file (match exactly
+/// that name beneath its parent).
+fn split_target<S: Syntax>(
+    target: &Utf8Path<S>,
+    is_dir: &dyn Fn(&Path) -> bool,
+) -> (Utf8PathBuf<S>, String) {
     let (literal, rest) = split_at_first_glob(target);
 
     if !rest.is_empty() {
-        return table_at(&literal, rest);
+        return (literal, rest);
     }
     if is_dir(Path::new(literal.as_str())) {
-        return table_at(&literal, RECURSIVE_GLOB.to_string());
+        return (literal, RECURSIVE_GLOB.to_string());
     }
 
     let name = literal
         .file_name()
         .map(str::to_string)
         .unwrap_or_else(|| RECURSIVE_GLOB.to_string());
-    let parent = literal.parent().unwrap_or(&literal);
-    table_at(parent, name)
+    let parent = literal.parent().unwrap_or(&literal).to_path_buf();
+    (parent, name)
 }
 
 /// A path-table rooted at `root`, reporting absolute paths.
@@ -260,22 +269,6 @@ fn split_at_first_glob<S: Syntax>(target: &Utf8Path<S>) -> (Utf8PathBuf<S>, Stri
     }
 
     (literal, rest.join("/"))
-}
-
-/// The leading literal directories of `glob` — the part the user named
-/// outright. Skip rules are evaluated below this, so writing
-/// `'./node_modules'` scans a directory the defaults would otherwise skip.
-pub fn ignore_base(glob: &str) -> PathBuf {
-    let mut base = PathBuf::new();
-    for segment in glob.split('/') {
-        if has_glob_metacharacter(segment) {
-            break;
-        }
-        base.push(segment);
-    }
-    // A wholly literal glob names one file; its own directory chain is the
-    // named part, so nothing is left to check.
-    base
 }
 
 #[cfg(test)]
@@ -313,6 +306,7 @@ mod tests {
         assert!(has_glob_metacharacter("a*"));
         assert!(has_glob_metacharacter("a?"));
         assert!(has_glob_metacharacter("a[bc]"));
+        assert!(has_glob_metacharacter("{a,b}"));
     }
 
     #[test]
@@ -330,22 +324,59 @@ mod tests {
 
     #[test]
     fn a_relative_directory_expands_recursively() {
-        assert_eq!(table("./docs", &everything_is_a_dir).glob, "docs/**/*");
+        let t = table("./docs", &everything_is_a_dir);
+        assert_eq!(t.root, Path::new("/index/docs"));
+        assert_eq!(t.glob, "**/*");
+        assert_eq!(t.path_prefix, "docs");
     }
 
     #[test]
     fn a_relative_directory_with_a_trailing_slash_expands_recursively() {
-        assert_eq!(table("./docs/", &everything_is_a_dir).glob, "docs/**/*");
+        let t = table("./docs/", &everything_is_a_dir);
+        assert_eq!(t.root, Path::new("/index/docs"));
+        assert_eq!(t.glob, "**/*");
     }
 
     #[test]
-    fn a_relative_single_file_matches_only_itself() {
-        assert_eq!(table("./docs/a.md", &nothing_is_a_dir).glob, "docs/a.md");
+    fn a_relative_single_file_roots_at_its_parent() {
+        let t = table("./docs/a.md", &nothing_is_a_dir);
+        assert_eq!(t.root, Path::new("/index/docs"));
+        assert_eq!(t.glob, "a.md");
+        assert_eq!(t.path_prefix, "docs");
     }
 
     #[test]
-    fn a_relative_glob_is_used_as_written() {
-        assert_eq!(table("./docs/*.md", &everything_is_a_dir).glob, "docs/*.md");
+    fn a_relative_top_level_file_roots_at_the_index_root() {
+        let t = table("./a.md", &nothing_is_a_dir);
+        assert_eq!(t.root, Path::new(ROOT));
+        assert_eq!(t.glob, "a.md");
+        assert_eq!(t.path_prefix, "");
+    }
+
+    #[test]
+    fn a_relative_glob_keeps_every_component_after_the_first() {
+        let t = table("./src/*/tests/*.rs", &nothing_is_a_dir);
+        assert_eq!(t.root, Path::new("/index/src"));
+        assert_eq!(t.glob, "*/tests/*.rs");
+        assert_eq!(t.path_prefix, "src");
+    }
+
+    #[test]
+    fn a_relative_alternation_is_a_glob_not_a_directory() {
+        let t = table("./{docs,notes}/*.md", &nothing_is_a_dir);
+        assert_eq!(t.root, Path::new(ROOT));
+        assert_eq!(t.glob, "{docs,notes}/*.md");
+    }
+
+    #[test]
+    fn the_directory_question_is_asked_of_the_absolute_path() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let is_dir = |p: &Path| {
+            asked.borrow_mut().push(p.to_path_buf());
+            true
+        };
+        table("./docs/nested", &is_dir);
+        assert_eq!(asked.into_inner(), [PathBuf::from("/index/docs/nested")]);
     }
 
     #[test]
@@ -354,8 +385,11 @@ mod tests {
     }
 
     #[test]
-    fn a_relative_table_reports_relative_paths() {
-        assert_eq!(table("./docs/*.md", &nothing_is_a_dir).path_prefix, "");
+    fn a_relative_table_reports_under_its_literal_prefix() {
+        assert_eq!(
+            table("./docs/nested/*.md", &nothing_is_a_dir).path_prefix,
+            "docs/nested"
+        );
     }
 
     #[test]
@@ -497,24 +531,6 @@ mod tests {
         normalize(Utf8Path::<Utf8UnixEncoding>::new(path))
             .as_str()
             .to_string()
-    }
-
-    #[test]
-    fn ignore_base_is_empty_for_a_leading_glob() {
-        assert_eq!(ignore_base("**/*"), PathBuf::new());
-    }
-
-    #[test]
-    fn ignore_base_is_the_literal_prefix_of_a_glob() {
-        assert_eq!(
-            ignore_base("node_modules/**/*"),
-            PathBuf::from("node_modules")
-        );
-    }
-
-    #[test]
-    fn ignore_base_is_the_whole_of_a_literal_glob() {
-        assert_eq!(ignore_base("docs/a.md"), PathBuf::from("docs/a.md"));
     }
 
     mod windows {

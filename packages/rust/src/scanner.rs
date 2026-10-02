@@ -74,27 +74,20 @@ fn scan_below(
 
     // Match against relative path so globs like "comments/**/*.jsonl" work
     // regardless of the absolute root directory.
-    walk(
-        root,
-        start,
-        matcher,
-        Path::new(""),
-        false,
-        &mut |rel_path, entry| {
-            if matcher.is_ignored(&rel_path) {
-                return;
-            }
+    walk(root, start, matcher, false, &mut |rel_path, entry| {
+        if matcher.is_ignored(&rel_path) {
+            return;
+        }
 
-            seen += 1;
-            on_file(seen);
+        seen += 1;
+        on_file(seen);
 
-            // Fan-out: a file matching N tables' globs yields N (path, table)
-            // pairs, one per matching table, in declaration order.
-            for m in matcher.match_all(&rel_path) {
-                results.push((entry.path(), m.table_name));
-            }
-        },
-    );
+        // Fan-out: a file matching N tables' globs yields N (path, table)
+        // pairs, one per matching table, in declaration order.
+        for m in matcher.match_all(&rel_path) {
+            results.push((entry.path(), m.table_name));
+        }
+    });
 
     results
 }
@@ -107,42 +100,32 @@ fn scan_below(
 /// the walker, and with it the reserved-directory rule, and the same
 /// [`TableMatcher`] ignore handling declared tables get.
 ///
-/// Skip rules are evaluated against the path *below* `ignore_base` — the
-/// literal directories the pattern named outright — so a path that reaches
-/// into an ignored directory on purpose still scans it.
+/// Skip rules are judged on paths relative to `root`, so a table rooted at a
+/// directory the rules would otherwise skip still scans it.
 ///
 /// With `gitignore` set, `.gitignore` files apply hierarchically (each one
 /// below its own directory) and prune traversal, like fd/ripgrep — except
 /// that hidden files are still scanned, and no `.git` directory is required.
-/// Rules from `.gitignore` files *above* `ignore_base` are exempt beneath it,
-/// mirroring the skip-rule exemption.
+/// Only files at or below `root` are read; one above it has no say.
 pub fn scan_glob(
     root: &Path,
     glob: &GlobSet,
     ignore: &TableMatcher,
-    ignore_base: &Path,
     gitignore: bool,
 ) -> Vec<PathBuf> {
     let mut results = Vec::new();
-    walk(
-        root,
-        root,
-        ignore,
-        ignore_base,
-        gitignore,
-        &mut |rel_path, _| {
-            if is_wanted(glob, ignore, ignore_base, &rel_path) {
-                results.push(rel_path);
-            }
-        },
-    );
+    walk(root, root, ignore, gitignore, &mut |rel_path, _| {
+        if is_wanted(glob, ignore, &rel_path) {
+            results.push(rel_path);
+        }
+    });
     results
 }
 
 /// Whether a walked file is a row of the table: it matches the glob and no
-/// skip rule ignores it below the base.
-fn is_wanted(glob: &GlobSet, ignore: &TableMatcher, ignore_base: &Path, rel_path: &Path) -> bool {
-    is_glob_match(glob, rel_path) && !is_ignored_below(ignore, ignore_base, rel_path)
+/// skip rule ignores it.
+fn is_wanted(glob: &GlobSet, ignore: &TableMatcher, rel_path: &Path) -> bool {
+    is_glob_match(glob, rel_path) && !ignore.is_ignored(rel_path)
 }
 
 /// Compile a single glob pattern into the set [`scan_glob`] expects.
@@ -184,7 +167,6 @@ fn walk(
     root: &Path,
     start: &Path,
     ignore: &TableMatcher,
-    ignore_base: &Path,
     gitignore: bool,
     visit: &mut dyn FnMut(PathBuf, &DirEntry),
 ) {
@@ -194,7 +176,6 @@ fn walk(
     let depth = rel.components().count();
     let mut walk = Walk {
         ignore,
-        ignore_base,
         gitignore,
         frames: Vec::new(),
     };
@@ -203,11 +184,10 @@ fn walk(
 
 struct Walk<'a> {
     ignore: &'a TableMatcher,
-    ignore_base: &'a Path,
     gitignore: bool,
     /// The `.gitignore` files in force at the walk's current position, root
     /// first; a directory's own file is pushed on entry and popped on exit.
-    frames: Vec<GitignoreFrame>,
+    frames: Vec<Gitignore>,
 }
 
 impl Walk<'_> {
@@ -222,10 +202,7 @@ impl Walk<'_> {
         if self.gitignore
             && let Some(matcher) = load_gitignore(dir)
         {
-            self.frames.push(GitignoreFrame {
-                dir: rel.to_path_buf(),
-                matcher,
-            });
+            self.frames.push(matcher);
             pushed = true;
         }
         let below = depth + 1;
@@ -251,9 +228,8 @@ impl Walk<'_> {
     /// Whether the walk takes an entry at `depth`: the skip rules and the
     /// reserved-directory rule first, then the `.gitignore` files in force.
     fn admits(&self, depth: usize, is_dir: bool, name: &OsStr, path: &Path, rel: &Path) -> bool {
-        should_descend(depth, is_dir, name, rel, self.ignore, self.ignore_base)
-            && (self.frames.is_empty()
-                || !is_gitignored(&self.frames, path, rel, is_dir, self.ignore_base))
+        should_descend(depth, is_dir, name, rel, self.ignore)
+            && (self.frames.is_empty() || !is_gitignored(&self.frames, path, is_dir))
     }
 }
 
@@ -267,13 +243,6 @@ fn sorted_entries(dir: &Path) -> Vec<(OsString, DirEntry)> {
         .collect();
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     entries
-}
-
-/// One `.gitignore` in force over the walk: its compiled matcher and the
-/// root-relative directory it sits in.
-struct GitignoreFrame {
-    dir: PathBuf,
-    matcher: Gitignore,
 }
 
 /// Compile the `.gitignore` in `dir`, if one exists. An unparsable file
@@ -290,24 +259,9 @@ fn load_gitignore(dir: &Path) -> Option<Gitignore> {
 
 /// Whether the `.gitignore` files in force mark `path` ignored. Deeper files
 /// take precedence (git's rule), and a whitelisting `!pattern` un-ignores.
-/// The literal chain the scan's pattern named outright is exempt, as are
-/// rules from files *above* [`ignore_base`] for entries beneath it — naming a
-/// gitignored directory on purpose still scans it.
-fn is_gitignored(
-    frames: &[GitignoreFrame],
-    path: &Path,
-    rel_path: &Path,
-    is_dir: bool,
-    ignore_base: &Path,
-) -> bool {
-    if ignore_base.starts_with(rel_path) {
-        return false;
-    }
+fn is_gitignored(frames: &[Gitignore], path: &Path, is_dir: bool) -> bool {
     for frame in frames.iter().rev() {
-        if !frame_applies(&frame.dir, rel_path, ignore_base) {
-            continue;
-        }
-        match frame.matcher.matched(path, is_dir) {
+        match frame.matched(path, is_dir) {
             Match::Ignore(_) => return true,
             Match::Whitelist(_) => return false,
             Match::None => {}
@@ -316,48 +270,25 @@ fn is_gitignored(
     false
 }
 
-/// Whether a `.gitignore` living at `frame_dir` gets a say over `rel_path`.
-/// False exactly when the entry sits inside `ignore_base` and the file sits
-/// strictly above it: the base was named outright, so ancestors' rules do not
-/// reach past it, while a `.gitignore` at or below the base still applies.
-fn frame_applies(frame_dir: &Path, rel_path: &Path, ignore_base: &Path) -> bool {
-    let entry_inside_base =
-        !ignore_base.as_os_str().is_empty() && rel_path.starts_with(ignore_base);
-    let frame_above_base = frame_dir != ignore_base && ignore_base.starts_with(frame_dir);
-    !(entry_inside_base && frame_above_base)
-}
-
 /// Whether the walk keeps `rel_path`. False prunes the reserved top-level
 /// `.dirsql/` directory and any directory whose whole subtree the skip rules
-/// ignore — unless the literal base the pattern named runs through it, which
-/// keeps a scan pointed *into* an ignored directory working.
+/// ignore.
 fn should_descend(
     depth: usize,
     is_dir: bool,
     file_name: &std::ffi::OsStr,
     rel_path: &Path,
     ignore: &TableMatcher,
-    ignore_base: &Path,
 ) -> bool {
     if is_reserved_dir(depth, is_dir, file_name) {
         return false;
     }
-    if !is_dir || ignore_base.starts_with(rel_path) {
-        return true;
-    }
-    let below = rel_path.strip_prefix(ignore_base).unwrap_or(rel_path);
-    !ignore.is_ignored_dir(below)
+    !is_dir || !ignore.is_ignored_dir(rel_path)
 }
 
 /// Whether `rel_path` matches `glob`.
 fn is_glob_match(glob: &GlobSet, rel_path: &Path) -> bool {
     glob.is_match(rel_path)
-}
-
-/// Whether `rel_path` is ignored, judged on the part of it beneath `base`.
-fn is_ignored_below(ignore: &TableMatcher, base: &Path, rel_path: &Path) -> bool {
-    let below = rel_path.strip_prefix(base).unwrap_or(rel_path);
-    ignore.is_ignored(below)
 }
 
 /// True for the reserved top-level `.dirsql/` directory (`depth == 1`), which
@@ -451,46 +382,6 @@ mod tests {
     }
 
     #[test]
-    fn is_ignored_below_matches_an_ignored_path_at_the_top() {
-        let ignore = TableMatcher::new(&[], &["node_modules/**"]).unwrap();
-        assert!(is_ignored_below(
-            &ignore,
-            Path::new(""),
-            Path::new("node_modules/pkg/index.js")
-        ));
-    }
-
-    #[test]
-    fn is_ignored_below_exempts_the_base_the_pattern_named() {
-        let ignore = TableMatcher::new(&[], &["node_modules/**"]).unwrap();
-        assert!(!is_ignored_below(
-            &ignore,
-            Path::new("node_modules"),
-            Path::new("node_modules/pkg/index.js")
-        ));
-    }
-
-    #[test]
-    fn is_ignored_below_judges_the_whole_path_when_the_base_does_not_apply() {
-        let ignore = TableMatcher::new(&[], &["other/**"]).unwrap();
-        assert!(is_ignored_below(
-            &ignore,
-            Path::new("docs"),
-            Path::new("other/a.tmp")
-        ));
-    }
-
-    #[test]
-    fn is_ignored_below_passes_an_unignored_path() {
-        let ignore = TableMatcher::new(&[], &["node_modules/**"]).unwrap();
-        assert!(!is_ignored_below(
-            &ignore,
-            Path::new(""),
-            Path::new("docs/a.md")
-        ));
-    }
-
-    #[test]
     fn should_descend_prunes_a_directory_the_skip_rules_fully_ignore() {
         let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
         assert!(!should_descend(
@@ -498,8 +389,7 @@ mod tests {
             true,
             OsStr::new("node_modules"),
             Path::new("apps/node_modules"),
-            &ignore,
-            Path::new("")
+            &ignore
         ));
     }
 
@@ -511,8 +401,7 @@ mod tests {
             true,
             OsStr::new("docs"),
             Path::new("docs"),
-            &ignore,
-            Path::new("")
+            &ignore
         ));
     }
 
@@ -524,47 +413,7 @@ mod tests {
             false,
             OsStr::new("node_modules"),
             Path::new("apps/node_modules"),
-            &ignore,
-            Path::new("")
-        ));
-    }
-
-    #[test]
-    fn should_descend_keeps_the_directory_the_base_names() {
-        let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
-        assert!(should_descend(
-            1,
-            true,
-            OsStr::new("node_modules"),
-            Path::new("node_modules"),
-            &ignore,
-            Path::new("node_modules")
-        ));
-    }
-
-    #[test]
-    fn should_descend_keeps_an_ancestor_of_the_named_base() {
-        let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
-        assert!(should_descend(
-            2,
-            true,
-            OsStr::new("node_modules"),
-            Path::new("apps/node_modules"),
-            &ignore,
-            Path::new("apps/node_modules/pkg")
-        ));
-    }
-
-    #[test]
-    fn should_descend_judges_the_part_below_the_named_base() {
-        let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
-        assert!(!should_descend(
-            3,
-            true,
-            OsStr::new("node_modules"),
-            Path::new("apps/pkg/node_modules"),
-            &ignore,
-            Path::new("apps")
+            &ignore
         ));
     }
 
@@ -576,8 +425,7 @@ mod tests {
             true,
             OsStr::new(RESERVED_DIR),
             Path::new(RESERVED_DIR),
-            &ignore,
-            Path::new("")
+            &ignore
         ));
     }
 
@@ -596,51 +444,32 @@ mod tests {
     }
 
     /// A gitignore frame compiled from in-memory lines; no filesystem.
-    fn frame(dir: &str, lines: &[&str]) -> GitignoreFrame {
+    fn frame(dir: &str, lines: &[&str]) -> Gitignore {
         let mut builder = GitignoreBuilder::new(Path::new(dir));
         for line in lines {
             builder.add_line(None, line).unwrap();
         }
-        GitignoreFrame {
-            dir: PathBuf::from(dir),
-            matcher: builder.build().unwrap(),
-        }
+        builder.build().unwrap()
     }
 
     #[test]
     fn is_wanted_takes_a_glob_match_no_skip_rule_ignores() {
         let glob = compile_glob("**/*.md").unwrap();
         let ignore = TableMatcher::new(&[], &["drafts/**"]).unwrap();
-        assert!(is_wanted(
-            &glob,
-            &ignore,
-            Path::new(""),
-            Path::new("docs/a.md")
-        ));
+        assert!(is_wanted(&glob, &ignore, Path::new("docs/a.md")));
     }
 
     #[test]
     fn is_wanted_rejects_a_glob_miss_and_an_ignored_match() {
         let glob = compile_glob("**/*.md").unwrap();
         let ignore = TableMatcher::new(&[], &["drafts/**"]).unwrap();
-        assert!(!is_wanted(
-            &glob,
-            &ignore,
-            Path::new(""),
-            Path::new("docs/a.csv")
-        ));
-        assert!(!is_wanted(
-            &glob,
-            &ignore,
-            Path::new(""),
-            Path::new("drafts/a.md")
-        ));
+        assert!(!is_wanted(&glob, &ignore, Path::new("docs/a.csv")));
+        assert!(!is_wanted(&glob, &ignore, Path::new("drafts/a.md")));
     }
 
-    fn walk_with<'a>(ignore: &'a TableMatcher, frames: Vec<GitignoreFrame>) -> Walk<'a> {
+    fn walk_with<'a>(ignore: &'a TableMatcher, frames: Vec<Gitignore>) -> Walk<'a> {
         Walk {
             ignore,
-            ignore_base: Path::new(""),
             gitignore: !frames.is_empty(),
             frames,
         }
@@ -695,124 +524,25 @@ mod tests {
     #[test]
     fn is_gitignored_matches_a_rule_from_the_root_gitignore() {
         let frames = [frame("", &["*.log"])];
-        assert!(is_gitignored(
-            &frames,
-            Path::new("debug.log"),
-            Path::new("debug.log"),
-            false,
-            Path::new("")
-        ));
-        assert!(!is_gitignored(
-            &frames,
-            Path::new("app.js"),
-            Path::new("app.js"),
-            false,
-            Path::new("")
-        ));
+        assert!(is_gitignored(&frames, Path::new("debug.log"), false));
+        assert!(!is_gitignored(&frames, Path::new("app.js"), false));
     }
 
     #[test]
     fn is_gitignored_marks_a_directory_rule_for_pruning() {
         let frames = [frame("", &["dist/"])];
-        assert!(is_gitignored(
-            &frames,
-            Path::new("dist"),
-            Path::new("dist"),
-            true,
-            Path::new("")
-        ));
+        assert!(is_gitignored(&frames, Path::new("dist"), true));
     }
 
     #[test]
     fn is_gitignored_lets_a_deeper_whitelist_override_a_shallower_rule() {
         let frames = [frame("", &["*.log"]), frame("sub", &["!keep.log"])];
-        assert!(!is_gitignored(
-            &frames,
-            Path::new("sub/keep.log"),
-            Path::new("sub/keep.log"),
-            false,
-            Path::new("")
-        ));
+        assert!(!is_gitignored(&frames, Path::new("sub/keep.log"), false));
     }
 
     #[test]
-    fn is_gitignored_exempts_the_literal_chain_the_pattern_named() {
-        let frames = [frame("", &["dist/"])];
-        assert!(!is_gitignored(
-            &frames,
-            Path::new("dist"),
-            Path::new("dist"),
-            true,
-            Path::new("dist")
-        ));
-    }
-
-    #[test]
-    fn is_gitignored_exempts_ancestor_rules_beneath_the_named_base() {
-        let frames = [frame("", &["dist/pkg/"])];
-        assert!(!is_gitignored(
-            &frames,
-            Path::new("dist/pkg"),
-            Path::new("dist/pkg"),
-            true,
-            Path::new("dist")
-        ));
-    }
-
-    #[test]
-    fn is_gitignored_honors_a_rule_at_the_named_base_itself() {
-        let frames = [frame("dist", &["*.map"])];
-        assert!(is_gitignored(
-            &frames,
-            Path::new("dist/a.map"),
-            Path::new("dist/a.map"),
-            false,
-            Path::new("dist")
-        ));
-    }
-
-    #[test]
-    fn frame_applies_everywhere_with_no_named_base() {
-        assert!(frame_applies(
-            Path::new(""),
-            Path::new("a.md"),
-            Path::new("")
-        ));
-    }
-
-    #[test]
-    fn frame_applies_to_entries_outside_the_named_base() {
-        assert!(frame_applies(
-            Path::new(""),
-            Path::new("other/a.md"),
-            Path::new("dist")
-        ));
-    }
-
-    #[test]
-    fn frame_above_the_base_does_not_apply_beneath_it() {
-        assert!(!frame_applies(
-            Path::new(""),
-            Path::new("dist/a.js"),
-            Path::new("dist")
-        ));
-    }
-
-    #[test]
-    fn frame_at_the_base_still_applies_beneath_it() {
-        assert!(frame_applies(
-            Path::new("dist"),
-            Path::new("dist/a.js"),
-            Path::new("dist")
-        ));
-    }
-
-    #[test]
-    fn frame_below_the_base_still_applies_beneath_it() {
-        assert!(frame_applies(
-            Path::new("dist/sub"),
-            Path::new("dist/sub/a.js"),
-            Path::new("dist")
-        ));
+    fn is_gitignored_lets_a_deeper_rule_override_a_shallower_whitelist() {
+        let frames = [frame("", &["!keep.log"]), frame("sub", &["*.log"])];
+        assert!(is_gitignored(&frames, Path::new("sub/keep.log"), false));
     }
 }

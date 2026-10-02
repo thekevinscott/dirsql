@@ -34,7 +34,6 @@ use crate::infer::{JsonRow, cell, declared_schema, infer_schema, parse_rows};
 use crate::matcher::TableMatcher;
 use crate::on_file;
 use crate::parsed_cache::{self, CachedParse, Entry, RowCache, SqliteRowCache};
-use crate::path_table;
 use crate::persist::{FileStat, hash_file, now_ns};
 use crate::scanner::{scan_glob, to_slash};
 use crate::vtab_scaffold::{self, StatementScope, TableSource};
@@ -293,8 +292,7 @@ impl TableSource for ParsedTable {
         // A parsed path-table honors the same skip rules a stat path-table does
         // (node_modules/.git, gitignore, plus any configured ignore), so a
         // parsed `SELECT * FROM './'` doesn't drown in dependency trees.
-        let ignore_base = path_table::ignore_base(&pattern);
-        let rel_paths = scan_glob(&root, &glob, &ignore, &ignore_base, gitignore);
+        let rel_paths = scan_glob(&root, &glob, &ignore, gitignore);
         let run = |rel: &[PathBuf]| run_parser(&command, &root, rel);
         let warn = |message: &str| eprintln!("{message}");
         let rows = match &cache {
