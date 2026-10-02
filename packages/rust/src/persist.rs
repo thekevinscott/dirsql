@@ -607,6 +607,16 @@ mod tests {
         assert!(read_cached_files(&conn).unwrap().is_empty());
     }
 
+    /// `_dirsql_internal_rows` and `_dirsql_internal_ranges` are created by
+    /// `Db::open` in production; declared inline since these tests use a raw
+    /// connection.
+    const INTERNAL_ROWS_DDL: &str = "CREATE TABLE _dirsql_internal_rows (
+            table_name TEXT NOT NULL, file_path TEXT NOT NULL,
+            row_index INTEGER NOT NULL, rowid_ref INTEGER NOT NULL);
+         CREATE TABLE _dirsql_internal_ranges (
+            table_name TEXT NOT NULL, file_path TEXT NOT NULL,
+            first_rowid INTEGER NOT NULL, last_rowid INTEGER NOT NULL);";
+
     /// A `ddl` batch may leave a virtual table and its shadow tables in the
     /// cache. The sweep must clear all of it: the shadows go with the virtual
     /// table, and dropping one out from under the other is what poisons the
@@ -615,7 +625,7 @@ mod tests {
     fn drop_user_tables_clears_virtual_tables_and_their_shadows() {
         let conn = Connection::open_in_memory().unwrap();
         create_sidecar_tables(&conn).unwrap();
-        crate::db::ensure_internal_rows_table(&conn).unwrap();
+        conn.execute_batch(INTERNAL_ROWS_DDL).unwrap();
         conn.execute_batch(
             "CREATE TABLE notes (body TEXT);\n\
              CREATE VIRTUAL TABLE notes_fts USING fts5(body, content='notes');",
@@ -644,7 +654,7 @@ mod tests {
     fn drop_user_tables_clears_user_data_and_files_index() {
         let conn = Connection::open_in_memory().unwrap();
         create_sidecar_tables(&conn).unwrap();
-        crate::db::ensure_internal_rows_table(&conn).unwrap();
+        conn.execute_batch(INTERNAL_ROWS_DDL).unwrap();
         conn.execute("CREATE TABLE rows (x TEXT)", []).unwrap();
         conn.execute("INSERT INTO rows (x) VALUES ('a'), ('b')", [])
             .unwrap();

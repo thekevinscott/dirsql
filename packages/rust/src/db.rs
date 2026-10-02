@@ -5,6 +5,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::functions::{self, CallReporter, ResolvedFunction, Worker};
+use crate::infer::JsonRow;
 use crate::parsed_vtab;
 use crate::path_table::{self, PathTable, Resolution};
 use crate::scanner;
@@ -277,14 +278,6 @@ pub struct ShapedRows {
 }
 
 impl ShapedRows {
-    pub fn len(&self) -> usize {
-        self.cells.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.cells.is_empty()
-    }
-
     /// The rows as column-name maps, for callers that compare rows by name.
     pub fn to_maps(&self) -> Vec<HashMap<String, Value>> {
         self.cells
@@ -667,12 +660,7 @@ impl Db {
     /// malformed key reports as [`DbError::InvalidIdentifier`] rather than as
     /// a less-actionable "extra columns" mismatch. Every row is shaped before
     /// any is returned, so a hook that got one row wrong fails as a unit.
-    pub fn shape_rows(
-        &self,
-        table: &str,
-        rows: Vec<crate::infer::JsonRow>,
-        strict: bool,
-    ) -> Result<ShapedRows> {
+    pub fn shape_rows(&self, table: &str, rows: Vec<JsonRow>, strict: bool) -> Result<ShapedRows> {
         let columns = self.get_table_columns(table)?;
         let mut cells = Vec::with_capacity(rows.len());
         for row in rows {
@@ -2582,11 +2570,22 @@ mod tests {
             .collect()
     }
 
-    fn json_rows(payload: &str) -> Vec<crate::infer::JsonRow> {
-        crate::infer::parse_rows(payload).unwrap()
+    /// Rows the way a parsed on-file payload carries them, key order kept.
+    fn json_rows(payload: serde_json::Value) -> Vec<JsonRow> {
+        let serde_json::Value::Array(rows) = payload else {
+            panic!("payload must be an array");
+        };
+        rows.into_iter()
+            .map(|row| {
+                let serde_json::Value::Object(map) = row else {
+                    panic!("row must be an object");
+                };
+                JsonRow(map.into_iter().collect())
+            })
+            .collect()
     }
 
-    fn shaped(db: &Db, table: &str, payload: &str) -> ShapedRows {
+    fn shaped(db: &Db, table: &str, payload: serde_json::Value) -> ShapedRows {
         db.shape_rows(table, json_rows(payload), false).unwrap()
     }
 
@@ -2595,7 +2594,11 @@ mod tests {
         let db = Db::new().unwrap();
         db.create_table("t", "CREATE TABLE t (id TEXT, n INTEGER)")
             .unwrap();
-        let out = shaped(&db, "t", r#"[{"id":"a","n":1},{"n":2,"id":"b"}]"#);
+        let out = shaped(
+            &db,
+            "t",
+            serde_json::json!([{"id":"a","n":1},{"n":2,"id":"b"}]),
+        );
         assert_eq!(out.columns, vec!["id", "n"]);
         assert_eq!(
             out.cells,
@@ -2604,8 +2607,6 @@ mod tests {
                 vec![Value::Text("b".into()), Value::Integer(2)],
             ]
         );
-        assert_eq!(out.len(), 2);
-        assert!(!out.is_empty());
     }
 
     #[test]
@@ -2613,7 +2614,7 @@ mod tests {
         let db = Db::new().unwrap();
         db.create_table("t", "CREATE TABLE t (name TEXT, n INTEGER)")
             .unwrap();
-        let out = shaped(&db, "t", r#"[{"name":"a"},{"n":1,"x":null}]"#).to_maps();
+        let out = shaped(&db, "t", serde_json::json!([{"name":"a"},{"n":1,"x":null}])).to_maps();
         assert_eq!(out[0]["name"], Value::Text("a".into()));
         assert_eq!(out[0]["n"], Value::Null);
         assert_eq!(out[1]["name"], Value::Null);
@@ -2627,7 +2628,7 @@ mod tests {
         db.create_table("t", "CREATE TABLE t (id TEXT, n INTEGER)")
             .unwrap();
         let out = db
-            .shape_rows("t", json_rows(r#"[{"n":1,"id":"a"}]"#), true)
+            .shape_rows("t", json_rows(serde_json::json!([{"n":1,"id":"a"}])), true)
             .unwrap();
         assert_eq!(
             out.cells,
@@ -2642,7 +2643,7 @@ mod tests {
         let err = db
             .shape_rows(
                 "t",
-                json_rows(r#"[{"name":"ok"},{"name":"x","color":"red"}]"#),
+                json_rows(serde_json::json!([{"name":"ok"},{"name":"x","color":"red"}])),
                 true,
             )
             .unwrap_err();
@@ -2658,7 +2659,7 @@ mod tests {
         db.create_table("t", "CREATE TABLE t (name TEXT, n INTEGER)")
             .unwrap();
         let err = db
-            .shape_rows("t", json_rows(r#"[{"name":"ok"}]"#), true)
+            .shape_rows("t", json_rows(serde_json::json!([{"name":"ok"}])), true)
             .unwrap_err();
         assert!(
             matches!(&err, DbError::SchemaMismatch(m) if m == "missing columns for table t: n"),
@@ -2671,13 +2672,17 @@ mod tests {
         let db = Db::new().unwrap();
         db.create_table("t", "CREATE TABLE t (name TEXT)").unwrap();
         let err = db
-            .shape_rows("t", json_rows(r#"[{"name); DROP TABLE t; --":"x"}]"#), true)
+            .shape_rows(
+                "t",
+                json_rows(serde_json::json!([{"name); DROP TABLE t; --":"x"}])),
+                true,
+            )
             .unwrap_err();
         assert!(matches!(err, DbError::InvalidIdentifier(_)), "got: {err}");
         let relaxed = db
             .shape_rows(
                 "t",
-                json_rows(r#"[{"name); DROP TABLE t; --":"x"}]"#),
+                json_rows(serde_json::json!([{"name); DROP TABLE t; --":"x"}])),
                 false,
             )
             .unwrap();
@@ -2689,7 +2694,11 @@ mod tests {
         let db = Db::new().unwrap();
         db.create_table("t", "CREATE TABLE t (id TEXT, n INTEGER)")
             .unwrap();
-        let rows = shaped(&db, "t", r#"[{"id":"a"},{"id":"b","n":2,"extra":9}]"#);
+        let rows = shaped(
+            &db,
+            "t",
+            serde_json::json!([{"id":"a"},{"id":"b","n":2,"extra":9}]),
+        );
         db.insert_rows("t", &rows, "x.json").unwrap();
 
         let read = db.get_rows_by_file("t", "x.json").unwrap();
@@ -2706,7 +2715,7 @@ mod tests {
     fn insert_rows_records_no_range_for_an_empty_batch() {
         let db = Db::new().unwrap();
         db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
-        db.insert_rows("t", &shaped(&db, "t", "[]"), "x.json")
+        db.insert_rows("t", &shaped(&db, "t", serde_json::json!([])), "x.json")
             .unwrap();
         assert!(range_rows(&db, "t").is_empty());
         assert!(db.get_rows_by_file("t", "x.json").unwrap().is_empty());
@@ -2717,7 +2726,11 @@ mod tests {
         let db = Db::new().unwrap();
         db.create_table("t", "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
             .unwrap();
-        let rows = shaped(&db, "t", r#"[{"id":7,"name":"g"},{"id":3,"name":"c"}]"#);
+        let rows = shaped(
+            &db,
+            "t",
+            serde_json::json!([{"id":7,"name":"g"},{"id":3,"name":"c"}]),
+        );
         db.insert_rows("t", &rows, "x.json").unwrap();
 
         assert_eq!(range_rows(&db, "t"), vec![("x.json".to_string(), 3, 7)]);
@@ -2752,7 +2765,7 @@ mod tests {
         db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         db.insert_rows(
             "t",
-            &shaped(&db, "t", r#"[{"id":"r1"},{"id":"r2"}]"#),
+            &shaped(&db, "t", serde_json::json!([{"id":"r1"},{"id":"r2"}])),
             "x.json",
         )
         .unwrap();
@@ -2763,8 +2776,12 @@ mod tests {
             0,
         )
         .unwrap();
-        db.insert_rows("t", &shaped(&db, "t", r#"[{"id":"other"}]"#), "y.json")
-            .unwrap();
+        db.insert_rows(
+            "t",
+            &shaped(&db, "t", serde_json::json!([{"id":"other"}])),
+            "y.json",
+        )
+        .unwrap();
 
         let ids: Vec<Value> = db
             .get_rows_by_file("t", "x.json")
@@ -2788,12 +2805,16 @@ mod tests {
         db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
         db.insert_rows(
             "t",
-            &shaped(&db, "t", r#"[{"id":"a"},{"id":"b"}]"#),
+            &shaped(&db, "t", serde_json::json!([{"id":"a"},{"id":"b"}])),
             "x.json",
         )
         .unwrap();
-        db.insert_rows("t", &shaped(&db, "t", r#"[{"id":"c"}]"#), "y.json")
-            .unwrap();
+        db.insert_rows(
+            "t",
+            &shaped(&db, "t", serde_json::json!([{"id":"c"}])),
+            "y.json",
+        )
+        .unwrap();
         db.insert_row(
             "t",
             &HashMap::from([("id".into(), Value::Text("m".into()))]),
@@ -2818,11 +2839,19 @@ mod tests {
     fn files_under_lists_range_owners_too() {
         let db = Db::new().unwrap();
         db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
-        db.insert_rows("t", &shaped(&db, "t", r#"[{"id":"a"}]"#), "dir/a.json")
-            .unwrap();
-        db.insert_rows("t", &shaped(&db, "t", r#"[{"id":"b"}]"#), "dir/a.json")
-            .unwrap();
-        db.insert_rows("t", &shaped(&db, "t", r#"[{"id":"c"}]"#), "")
+        db.insert_rows(
+            "t",
+            &shaped(&db, "t", serde_json::json!([{"id":"a"}])),
+            "dir/a.json",
+        )
+        .unwrap();
+        db.insert_rows(
+            "t",
+            &shaped(&db, "t", serde_json::json!([{"id":"b"}])),
+            "dir/a.json",
+        )
+        .unwrap();
+        db.insert_rows("t", &shaped(&db, "t", serde_json::json!([{"id":"c"}])), "")
             .unwrap();
         db.insert_row(
             "t",
@@ -2845,7 +2874,7 @@ mod tests {
     fn insert_rows_joins_callers_open_transaction() {
         let db = Db::new().unwrap();
         db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
-        let rows = shaped(&db, "t", r#"[{"id":"a"}]"#);
+        let rows = shaped(&db, "t", serde_json::json!([{"id":"a"}]));
 
         let tx = db.conn.unchecked_transaction().unwrap();
         db.insert_rows("t", &rows, "a.json").unwrap();

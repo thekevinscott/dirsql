@@ -38,8 +38,8 @@ ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
 on-file = "sh -c 'printf \"[\"; sep=\"\"; for f in \"$@\"; do printf \"%s{\\\"name\\\":\\\"%s\\\"}\" \"$sep\" \"$(basename \"$f\")\"; sep=\",\"; done; printf \"]\\n\"' sh"
 TOML
-dirsql query "SELECT name FROM items ORDER BY name"
+dirsql query "SELECT name FROM items ORDER BY name" -c .dirsql.toml
 # expected: [{"name":"a.txt"},{"name":"b.txt"}]
-dirsql query "SELECT * FROM _dirsql_internal_ranges"; echo "exit: $?"
+dirsql query "SELECT * FROM _dirsql_internal_ranges" -c .dirsql.toml; echo "exit: $?"
 # expected: a "not authorized" error and a non-zero exit
 ```

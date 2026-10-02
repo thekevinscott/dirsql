@@ -4670,7 +4670,7 @@ mod internal_tests {
     }
 
     fn name_json_row(name: &str) -> infer::JsonRow {
-        infer::JsonRow(vec![("name".to_string(), serde_json::Value::from(name))])
+        infer::JsonRow(vec![("name".to_string(), serde_json::json!(name))])
     }
 
     type Calls = Arc<Mutex<Vec<Vec<PathBuf>>>>;
