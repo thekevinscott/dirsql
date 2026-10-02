@@ -292,8 +292,8 @@ fn no_rows_message(pattern: &str) -> String {
 fn run_parser(command: &str, root: &Path, rel_path: &Path) -> std::result::Result<String, String> {
     let abs_path = root.join(rel_path);
     let placeholders = [
-        Placeholder::new("path", abs_path.to_string_lossy().into_owned()),
-        Placeholder::new("root", root.to_string_lossy().into_owned()),
+        Placeholder::path("path", &abs_path.to_string_lossy()),
+        Placeholder::path("root", &root.to_string_lossy()),
     ];
 
     run_command(command, &placeholders, root, None)

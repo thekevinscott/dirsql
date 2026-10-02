@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1790939958,
+  "exit_code": 0,
+  "commit": "64a48bb1eff07865a52fc25e1ad50722aced9e45",
+  "branch": "claude/1208-win-nonverbatim-paths"
+}

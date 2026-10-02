@@ -90,6 +90,27 @@ jobs:
       - name: Run integration tests
         run: cargo test --manifest-path packages/rust/Cargo.toml --features cli --tests
 
+  windows:
+    name: Windows tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-stable-${{ hashFiles('Cargo.lock') }}
+
+      - name: Run unit and integration tests
+        run: cargo test --manifest-path packages/rust/Cargo.toml --features cli --tests --no-fail-fast
+
   coverage:
     name: Rust unit coverage floor
     runs-on: ubuntu-latest

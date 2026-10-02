@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1790940093,
+  "exit_code": 0,
+  "commit": "b44665ee97a12c56691723ae9d5c3812f110d90c",
+  "branch": "claude/1208-win-nonverbatim-paths"
+}
