@@ -560,3 +560,187 @@ command = "python3 worker.py"
     let rows = db.query("SELECT up('hello') AS v").unwrap();
     assert_eq!(rows[0].get("v"), Some(&Value::Text("HELLO".to_string())));
 }
+
+/// Write a worker that speaks both protocol shapes: a `{"call": [...]}`
+/// line is answered with one response, a `{"calls": [[...], ...]}` line with
+/// `{"results": [<response>, ...]}`. `body` computes `resp` for one `args`
+/// list and sees `batched` (whether it arrived in a batched request). Every
+/// request line is appended verbatim to `log`.
+fn write_batch_worker(dir: &Path, filename: &str, log: &Path, body: &str) {
+    let indented: String = body
+        .lines()
+        .map(|l| format!("    {l}\n"))
+        .collect::<String>();
+    let script = format!(
+        r#"
+import json
+import sys
+
+def one(args, batched):
+{indented}
+    return resp
+
+for line in sys.stdin:
+    with open({log:?}, "a") as f:
+        f.write(line)
+    req = json.loads(line)
+    if "calls" in req:
+        resp = {{"results": [one(args, True) for args in req["calls"]]}}
+    else:
+        resp = one(req["call"], False)
+    sys.stdout.write(json.dumps(resp, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+"#,
+        log = log.to_str().unwrap()
+    );
+    fs::write(dir.join(filename), script).unwrap();
+}
+
+/// Every request the worker received, decoded, in order.
+fn requests(log: &Path) -> Vec<serde_json::Value> {
+    fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+fn write_batched_config(root: &Path, batch: &str) {
+    fs::write(
+        root.join(".dirsql.toml"),
+        format!(
+            r#"
+[[dirsql.function]]
+name = "up"
+args = [1]
+command = "python3 worker.py"
+batch = {batch}
+"#
+        ),
+    )
+    .unwrap();
+}
+
+fn write_txt_files(root: &Path, names: &[&str]) {
+    for name in names {
+        fs::write(root.join(name), name).unwrap();
+    }
+}
+
+/// With `batch` set, a statement that calls the function on every row pays
+/// one round trip for the first value and then one batched request for the
+/// rest, instead of one round trip per row. The rows come back exactly as
+/// they would one call at a time.
+#[test]
+fn a_batched_function_collects_a_statements_values_into_one_request() {
+    let root = TempDir::new().unwrap();
+    let log = root.path().join("requests.log");
+    write_batch_worker(
+        root.path(),
+        "worker.py",
+        &log,
+        r#"resp = {"ok": args[0].upper()}"#,
+    );
+    write_batched_config(root.path(), "8");
+    write_txt_files(root.path(), &["a.txt", "b.txt", "c.txt"]);
+
+    let db = build(&root).unwrap();
+    let rows = db
+        .query("SELECT up(basename) AS v FROM './*.txt' ORDER BY v")
+        .unwrap();
+
+    let values: Vec<&Value> = rows.iter().map(|r| &r["v"]).collect();
+    assert_eq!(
+        values,
+        vec![
+            &Value::Text("A.TXT".into()),
+            &Value::Text("B.TXT".into()),
+            &Value::Text("C.TXT".into())
+        ]
+    );
+    let sent = requests(&log);
+    assert_eq!(sent.len(), 2, "one call then one batch, got: {sent:?}");
+    assert_eq!(sent[0]["call"].as_array().unwrap().len(), 1);
+    let batched = sent[1]["calls"].as_array().unwrap();
+    assert_eq!(batched.len(), 2, "the two other values ride one request");
+    let mut seen: Vec<&str> = std::iter::once(&sent[0]["call"][0])
+        .chain(batched.iter().map(|call| &call[0]))
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    seen.sort_unstable();
+    assert_eq!(seen, ["a.txt", "b.txt", "c.txt"]);
+}
+
+/// `batch` caps the values per batched request: a corpus larger than the cap
+/// is sent in consecutive full requests.
+#[test]
+fn batched_requests_are_split_at_the_batch_size() {
+    let root = TempDir::new().unwrap();
+    let log = root.path().join("requests.log");
+    write_batch_worker(
+        root.path(),
+        "worker.py",
+        &log,
+        r#"resp = {"ok": args[0].upper()}"#,
+    );
+    write_batched_config(root.path(), "2");
+    write_txt_files(root.path(), &["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"]);
+
+    let db = build(&root).unwrap();
+    let rows = db
+        .query("SELECT up(basename) AS v FROM './*.txt' ORDER BY v")
+        .unwrap();
+
+    assert_eq!(rows.len(), 5);
+    assert_eq!(rows[4]["v"], Value::Text("E.TXT".into()));
+    let sent = requests(&log);
+    let sizes: Vec<usize> = sent
+        .iter()
+        .map(|req| match req.get("calls") {
+            Some(calls) => calls.as_array().unwrap().len(),
+            None => req["call"].as_array().unwrap().len(),
+        })
+        .collect();
+    assert_eq!(sizes, [1, 2, 2], "got: {sent:?}");
+}
+
+/// A per-entry `{"err": ...}` inside a batched response fails the query
+/// with that message, exactly as the single-call protocol does.
+#[test]
+fn a_failed_entry_in_a_batched_response_fails_the_query() {
+    let root = TempDir::new().unwrap();
+    let log = root.path().join("requests.log");
+    write_batch_worker(
+        root.path(),
+        "worker.py",
+        &log,
+        r#"resp = {"err": "boom: cannot upcase that"} if batched else {"ok": args[0]}"#,
+    );
+    write_batched_config(root.path(), "8");
+    write_txt_files(root.path(), &["a.txt", "b.txt"]);
+
+    let db = build(&root).unwrap();
+    let err = db
+        .query("SELECT up(basename) AS v FROM './*.txt' ORDER BY v")
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("boom: cannot upcase that"), "got: {msg}");
+}
+
+#[test]
+fn batch_must_be_a_positive_integer() {
+    for raw in ["0", "-4", "\"many\""] {
+        let root = TempDir::new().unwrap();
+        write_batched_config(root.path(), raw);
+        let err = build(&root)
+            .err()
+            .unwrap_or_else(|| panic!("batch = {raw} must fail the build"));
+        let msg = err.to_string();
+        assert!(msg.contains("'batch'"), "batch = {raw}: {msg}");
+        assert!(msg.contains("positive"), "batch = {raw}: {msg}");
+        assert!(
+            msg.contains("[[dirsql.function]] 'up'"),
+            "batch = {raw}: {msg}"
+        );
+    }
+}
