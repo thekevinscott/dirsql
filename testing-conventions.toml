@@ -8,12 +8,14 @@
 #
 # The `[[<lang>.exempt]]` array lists files waived from a rule (the colocation
 # gate fails on any source file lacking a colocated unit test that is not
-# listed; `rules = ["mutation"]` waives an equivalent/defensive surviving mutant
-# -- none today, since mutation is diff-scoped to a PR's own changed lines). The
+# listed; `rules = ["mutation"]` waives a surviving mutant, line-scoped, and
+# since testing-conventions scoped the Rust arm to `--lib` the survivors it
+# lifts are the branch-free effectful bodies only the integration tier can
+# reach -- each entry names the test that kills it there). The
 # `[<lang>.coverage]` table sets the unit-only coverage floor the `unit
 # coverage` job enforces.
 #
-# There are ZERO exemptions below. The three-tier conformance work (#517) is
+# The only exemptions below are those Rust mutation entries. The three-tier conformance work (#517) is
 # complete: the binding suites moved into the recognized tier
 # `tests/integration/binding/` (#519) and the packaging distcheck flows moved to the
 # `internals/distcheck` package (#520), so nothing trips `unknown-tier` anymore.
@@ -98,6 +100,39 @@ branch = true
 # is silently unmeasured.
 [rust]
 features = ["cli"]
+
+# The walkers: a body that reads directories has no unit-tier contract, and
+# the decisions it makes are lifted into pure functions the unit suite judges
+# (`is_wanted`, `Walk::admits`, `should_descend`, `is_gitignored`).
+[[rust.exempt]]
+path = "src/scanner.rs"
+rules = ["mutation"]
+lines = [72, 126, 191, 221, 261]
+reason = "scan_below, scan_glob, walk, descend and sorted_entries read the filesystem; tests/scanner.rs (scan_finds_matching_files, scan_recurses_into_subdirectories) and tests/vtab.rs (glob_scopes_the_walk, rowids_count_up_from_zero_in_scan_order) assert what they return"
+
+[[rust.exempt]]
+path = "src/scanner.rs"
+rules = ["mutation"]
+lines = [88]
+reason = "the walk's running file count is observable only through the CLI's progress line; tests/scan_progress_e2e.rs forced_progress_reports_the_walk_phase_on_stderr asserts the number"
+
+[[rust.exempt]]
+path = "src/scanner.rs"
+rules = ["mutation"]
+lines = [231]
+reason = "a child's depth decides the reserved top-level .dirsql rule for a real tree; tests/scanner.rs scan_excludes_top_level_dirsql_directory and tests/vtab.rs reserved_dirsql_directory_is_skipped assert it"
+
+[[rust.exempt]]
+path = "src/vtab.rs"
+rules = ["mutation"]
+lines = [288, 305]
+reason = "rows walks and stats a real tree and column hands a cell to SQLite; the cell choice is unit-tested in `cell`, and tests/vtab.rs stat_columns_carry_real_values and content_is_excluded_from_star_but_selectable_by_name assert both through a real connection"
+
+[[rust.exempt]]
+path = "src/vtab_scaffold.rs"
+rules = ["mutation"]
+lines = [270]
+reason = "filter is the SQLite cursor hook that fills the row cache; tests/vtab.rs a_statement_walks_the_tree_once_however_often_it_reads_the_table and reads_are_live_across_statements assert it through a real connection"
 
 # Unit-only coverage floor: measured by `cargo llvm-cov --lib --features cli`
 # (the `--lib` scoping keeps the integration tier under packages/rust/tests/ out

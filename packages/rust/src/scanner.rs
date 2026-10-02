@@ -235,13 +235,12 @@ impl Walk<'_> {
             };
             let is_dir = file_type.is_dir();
             let child = rel.join(&name);
-            if !self.admits(below, is_dir, &name, &entry.path(), &child) {
-                continue;
-            }
-            if is_dir {
-                self.descend(&entry.path(), &child, below, visit);
-            } else if file_type.is_file() {
-                visit(child, &entry);
+            if self.admits(below, is_dir, &name, &entry.path(), &child) {
+                if is_dir {
+                    self.descend(&entry.path(), &child, below, visit);
+                } else if file_type.is_file() {
+                    visit(child, &entry);
+                }
             }
         }
         if pushed {
