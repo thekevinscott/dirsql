@@ -111,6 +111,7 @@ its `embed()` function exactly this way.
 | `command` | yes (non-empty) | The worker command. Argv-split with the same no-shell quoting rules as [command hooks](./hooks.md#argv-not-a-shell); runs in the config file's directory. |
 | `deterministic` | no (default `false`) | When `true`, the function is registered with `SQLITE_DETERMINISTIC`, letting SQLite cache and reuse results for identical arguments within a query. Only set it when the worker really is a pure function of its arguments. |
 | `timeout` | no | Per-**call** time bound: a positive integer is whole seconds (`timeout = 600`), a string is an integer suffixed `s` or `ms` (`"600s"`, `"250ms"`). When absent, the function mechanism's own 30-second default applies. |
+| `batch` | no | A positive integer: the most calls one **batched request** carries. When set, a statement's values are gathered and sent to the worker in bulk (see [Batching](#batching)); the worker must then speak the batched protocol shape as well as the single-call one. When absent, the worker only ever sees single calls. |
 
 ```toml
 [[dirsql.function]]
@@ -172,6 +173,42 @@ request line in, one response line out, per call:
   than failing a query over a progress counter.
 - **stderr passes through** to `dirsql`'s stderr, so a worker's progress
   bars and download logs reach the terminal.
+
+### Batching
+
+One round trip per row is the wrong shape for a worker whose cost is
+per-request rather than per-value — an embedding model encodes a list of
+texts in little more time than one. A function declaring `batch = N` is sent
+values in bulk instead:
+
+- **Request:** `{"calls": [[<arg>, ...], ...]}` — up to `N` calls, each
+  encoded exactly as a single call's argument list.
+- **Response:** `{"results": [<response>, ...]}` — one single-call response
+  (`{"ok": ...}` with its optional `"meta"`, or `{"err": ...}`) per call, in
+  order. A per-call `{"err": ...}` fails the query the way it would on a
+  single call. A top-level `{"err": "message"}` instead fails every call in
+  the request.
+- The round trip is bounded by the per-call `timeout` **times the number of
+  calls** in the request.
+
+A batching worker must still answer `{"call": [...]}`: `dirsql` gathers a
+statement's values by running it twice. The first run makes one ordinary
+round trip for the function's first value, binds that reply in place of every
+later distinct argument tuple, and queues those tuples into batched requests
+of at most `N`; the second run is served from the replies. A statement that
+never calls a batched function runs once, exactly as before. Values are
+deduplicated along the way, so the [progress line](./cli.md#progress-reporting)
+counts distinct calls, whichever request shape carried them.
+
+```toml
+[[dirsql.function]]
+name          = "embed"
+args          = [1, 2]
+command       = "dirsql-plugin-embeddings worker"
+deterministic = true
+timeout       = "600s"
+batch         = 256
+```
 
 ## `[[table]]`
 

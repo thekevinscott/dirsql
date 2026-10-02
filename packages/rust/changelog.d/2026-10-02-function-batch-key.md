@@ -1,0 +1,1 @@
+**Added** `batch = N` on `[[dirsql.function]]`: a statement's values are gathered and sent to the worker in batched `{"calls": [...]}` requests of at most `N`, answered with `{"results": [...]}`, instead of one round trip per row. The single-call protocol is unchanged and still required; a function without `batch` behaves exactly as before.

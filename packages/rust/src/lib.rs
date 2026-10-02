@@ -954,7 +954,7 @@ impl DirSQL {
         // Register declared functions after extensions so both are available
         // to queries. Registration is inert: no worker process exists until a
         // query's first call to the function.
-        functions::register_all(db.conn(), &functions, db.call_reporter())
+        db.register_functions(&functions)
             .map_err(DirSqlError::sqlite)?;
 
         // Sweep a cache the reconcile rejected. It happens *here*, after the
@@ -1882,6 +1882,7 @@ fn resolve_functions(
             command: spec.command,
             deterministic: spec.deterministic,
             timeout: spec.timeout.unwrap_or(functions::DEFAULT_FUNCTION_TIMEOUT),
+            batch: spec.batch,
             cwd: cfg_dir.to_path_buf(),
         });
     }
@@ -4220,6 +4221,7 @@ mod internal_tests {
             command: "worker cmd".to_string(),
             deterministic: true,
             timeout,
+            batch: None,
         }
     }
 
@@ -4241,7 +4243,25 @@ mod internal_tests {
         assert_eq!(out[0].command, "worker cmd");
         assert!(out[0].deterministic);
         assert_eq!(out[0].timeout, Duration::from_secs(600));
+        assert_eq!(out[0].batch, None);
         assert_eq!(out[0].cwd, PathBuf::from("/proj"));
+    }
+
+    #[test]
+    fn resolve_functions_carries_the_batch_size() {
+        let mut sources = HashMap::new();
+        let mut out = Vec::new();
+        let mut spec = function_spec("embed", None);
+        spec.batch = Some(8);
+        resolve_functions(
+            vec![spec],
+            Path::new("/proj/.dirsql.toml"),
+            Path::new("/proj"),
+            &mut sources,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(out[0].batch, Some(8));
     }
 
     #[test]

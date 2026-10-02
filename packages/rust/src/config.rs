@@ -45,6 +45,9 @@ pub enum ConfigError {
     )]
     InvalidFunctionTimeout { name: String, value: String },
 
+    #[error("[[dirsql.function]] '{name}': 'batch' must be a positive integer, got {value}")]
+    InvalidFunctionBatch { name: String, value: String },
+
     #[error("Field '{0}' must not be empty")]
     EmptyField(&'static str),
 
@@ -212,6 +215,11 @@ pub struct FunctionSpec {
     /// Optional per-round-trip-call timeout, overriding the function
     /// mechanism's own 30-second default.
     pub timeout: Option<Duration>,
+    /// Optional cap on the calls one batched request carries. When set, a
+    /// statement's values are sent to the worker in bulk (see
+    /// `dirsql::functions`); when absent the worker only ever sees single
+    /// calls.
+    pub batch: Option<usize>,
 }
 
 /// Configuration for a single table.
@@ -267,6 +275,9 @@ struct RawFunction {
     command: Option<String>,
     deterministic: Option<bool>,
     timeout: Option<RawFunctionTimeout>,
+    // Any shape, so a non-integer hits the same actionable error as a
+    // non-positive one.
+    batch: Option<toml::Value>,
 }
 
 /// The `timeout` key accepts positive whole seconds (`timeout = 600`) or a
@@ -417,12 +428,27 @@ fn parse_function(raw: RawFunction) -> Result<FunctionSpec> {
         Some(raw_timeout) => Some(parse_function_timeout(&name, &raw_timeout)?),
     };
 
+    let batch = match raw.batch {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_integer()
+                .and_then(|n| usize::try_from(n).ok())
+                .filter(|n| *n > 0)
+                .ok_or_else(|| ConfigError::InvalidFunctionBatch {
+                    name: name.clone(),
+                    value: value.to_string(),
+                })?,
+        ),
+    };
+
     Ok(FunctionSpec {
         name,
         args,
         command,
         deterministic: raw.deterministic.unwrap_or(false),
         timeout,
+        batch,
     })
 }
 
@@ -1162,6 +1188,7 @@ args = [1, 2]
 command = "dirsql-plugin-embeddings worker"
 deterministic = true
 timeout = "600s"
+batch = 64
 "#;
         let config = load_config_str(toml).unwrap();
         assert_eq!(
@@ -1172,6 +1199,7 @@ timeout = "600s"
                 command: "dirsql-plugin-embeddings worker".to_string(),
                 deterministic: true,
                 timeout: Some(Duration::from_secs(600)),
+                batch: Some(64),
             }]
         );
     }
@@ -1187,6 +1215,36 @@ command = "worker"
         let config = load_config_str(toml).unwrap();
         assert!(!config.functions[0].deterministic);
         assert!(config.functions[0].timeout.is_none());
+        assert!(config.functions[0].batch.is_none());
+    }
+
+    /// `batch = 0` would send empty requests, a negative cap means nothing,
+    /// and a string is not a count; each is the one actionable error.
+    #[test]
+    fn function_batch_rejects_anything_but_a_positive_integer() {
+        for value in ["0", "-4", "\"many\"", "2.5"] {
+            let toml = format!(
+                r#"
+[[dirsql.function]]
+name = "f"
+args = [1]
+command = "worker"
+batch = {value}
+"#
+            );
+            let err = load_config_str(&toml).unwrap_err();
+            match &err {
+                ConfigError::InvalidFunctionBatch { name, value: got } => {
+                    assert_eq!(name, "f");
+                    assert_eq!(got, value);
+                }
+                other => panic!("batch = {value}: expected InvalidFunctionBatch, got {other:?}"),
+            }
+            assert_eq!(
+                err.to_string(),
+                format!("[[dirsql.function]] 'f': 'batch' must be a positive integer, got {value}")
+            );
+        }
     }
 
     #[test]

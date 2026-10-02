@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1790942168,
+  "exit_code": 0,
+  "commit": "8adf5a5b6b25a3591ef056fb730423f268c2160a",
+  "branch": "claude/1204-embed-batch"
+}
