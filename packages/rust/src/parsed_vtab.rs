@@ -564,19 +564,30 @@ mod tests {
         assert_eq!(ids(&rows), vec![1]);
     }
 
+    /// `{root}` and every absolute path reach the command as arguments, in
+    /// order. The command writes them to a side file rather than into the
+    /// JSON payload, where a Windows path's `\` would need escaping.
     #[test]
     fn run_parser_appends_every_absolute_path_after_the_root() {
-        let root = std::env::temp_dir();
-        let rows = run_parser(
-            r#"sh -c 'printf "[{\"root\":\"%s\",\"a\":\"%s\",\"b\":\"%s\"}]" "$1" "$2" "$3"' sh {root}"#,
+        let root = std::env::temp_dir().join(format!("dirsql-run-parser-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        run_parser(
+            r#"sh -c 'printf "%s\n%s\n%s\n" "$1" "$2" "$3" > seen; echo "[]"' sh {root}"#,
             &root,
             &[PathBuf::from("a.json"), PathBuf::from("b.json")],
         )
         .unwrap();
-        let text = |key: &str| rows[0].get(key).unwrap().as_str().unwrap().to_string();
-        assert_eq!(text("root"), root.display().to_string());
-        assert_eq!(text("a"), root.join("a.json").display().to_string());
-        assert_eq!(text("b"), root.join("b.json").display().to_string());
+        let seen = std::fs::read_to_string(root.join("seen")).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(
+            seen,
+            format!(
+                "{}\n{}\n{}\n",
+                root.display(),
+                root.join("a.json").display(),
+                root.join("b.json").display()
+            )
+        );
     }
 
     #[test]

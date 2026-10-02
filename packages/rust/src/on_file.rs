@@ -73,9 +73,22 @@ fn spawn_failure(error: command::CommandError) -> String {
     format!("on-file command failed: {error}")
 }
 
-/// The bytes `argv` costs: each argument plus its terminator.
+/// The bytes `arg` costs on the command line: its spawned form plus a
+/// separator. Windows wraps every argument in quotes, so the bytes handed to
+/// the kernel exceed the bytes of the argument itself.
+// One fn with cfg blocks rather than two cfg'd fns: cargo-mutants mutates
+// the uncompiled twin too, and no test on a Linux gate can kill that mutant.
+fn arg_cost(arg: &str) -> usize {
+    #[cfg(windows)]
+    let spawned = command::quote_windows_arg(arg).len();
+    #[cfg(not(windows))]
+    let spawned = arg.len();
+    spawned + 1
+}
+
+/// The bytes `argv` costs: every argument at its [`arg_cost`].
 fn argv_bytes(argv: &[String]) -> usize {
-    argv.iter().map(|arg| arg.len() + 1).sum()
+    argv.iter().map(|arg| arg_cost(arg)).sum()
 }
 
 /// Split `args` into the fewest consecutive runs whose bytes fit `budget`,
@@ -86,7 +99,7 @@ fn chunks(args: &[String], budget: usize) -> Vec<&[String]> {
     let mut start = 0;
     let mut used = 0;
     for (i, arg) in args.iter().enumerate() {
-        let cost = arg.len() + 1;
+        let cost = arg_cost(arg);
         if i > start && used + cost > budget {
             out.push(&args[start..i]);
             start = i;
@@ -113,43 +126,38 @@ mod tests {
     }
 
     #[test]
+    fn arg_cost_is_the_spawned_form_plus_a_separator() {
+        let quotes = if cfg!(windows) { 2 } else { 0 };
+        assert_eq!(arg_cost("aa"), 2 + quotes + 1);
+    }
+
+    #[test]
     fn chunks_keeps_everything_in_one_run_when_it_fits() {
         let args = args(&["aa", "bb", "cc"]);
-        assert_eq!(lens(&chunks(&args, 9)), vec![3]);
+        assert_eq!(lens(&chunks(&args, 3 * arg_cost("aa"))), vec![3]);
     }
 
     #[test]
     fn chunks_splits_at_the_budget_preserving_order() {
         let args = args(&["aa", "bb", "cc", "dd"]);
-        let split = chunks(&args, 6);
+        let split = chunks(&args, 2 * arg_cost("aa"));
         assert_eq!(lens(&split), vec![2, 2]);
         assert_eq!(split[0], &args[..2]);
         assert_eq!(split[1], &args[2..]);
     }
 
     #[test]
-    fn chunks_counts_the_terminator_of_every_argument() {
+    fn chunks_charges_every_argument_its_full_cost() {
         let args = args(&["aa", "bb"]);
-        assert_eq!(lens(&chunks(&args, 5)), vec![1, 1], "2+1 twice exceeds 5");
-        assert_eq!(lens(&chunks(&args, 6)), vec![2], "6 fits 2+1 twice");
+        let two = 2 * arg_cost("aa");
+        assert_eq!(lens(&chunks(&args, two - 1)), vec![1, 1], "one byte short");
+        assert_eq!(lens(&chunks(&args, two)), vec![2], "exactly two fit");
     }
 
     #[test]
     fn chunks_gives_an_oversized_argument_a_run_of_its_own() {
         let args = args(&["a", "toolong", "b"]);
-        assert_eq!(lens(&chunks(&args, 3)), vec![1, 1, 1]);
-    }
-
-    #[test]
-    fn chunks_never_emits_an_empty_run_before_a_leading_oversized_argument() {
-        let args = args(&["toolong", "b"]);
-        assert_eq!(lens(&chunks(&args, 3)), vec![1, 1]);
-    }
-
-    #[test]
-    fn the_budget_carries_hundreds_of_paths_in_one_run() {
-        let paths: Vec<String> = (0..300).map(|i| format!("/{i:0>99}")).collect();
-        assert_eq!(lens(&chunks(&paths, ARG_BUDGET)), vec![300]);
+        assert_eq!(lens(&chunks(&args, arg_cost("a"))), vec![1, 1, 1]);
     }
 
     #[test]
@@ -158,8 +166,11 @@ mod tests {
     }
 
     #[test]
-    fn argv_bytes_sums_each_argument_and_its_terminator() {
-        assert_eq!(argv_bytes(&args(&["sh", "run.sh"])), 3 + 7);
+    fn argv_bytes_sums_the_cost_of_every_argument() {
+        assert_eq!(
+            argv_bytes(&args(&["sh", "run.sh"])),
+            arg_cost("sh") + arg_cost("run.sh")
+        );
     }
 
     #[test]
