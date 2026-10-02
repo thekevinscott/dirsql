@@ -188,7 +188,6 @@ impl TableSource for ParsedTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infer::parse_rows;
 
     // Real vtab behavior over a real directory and a real parser process is
     // covered by `tests/schema_inference.rs` (unit-lint isolation); only the
@@ -317,7 +316,10 @@ mod tests {
         let seen = std::cell::RefCell::new(Vec::new());
         let rows = collect_rows(&paths, &|rel| {
             seen.borrow_mut().push(rel.to_vec());
-            parse_rows(r#"[{"i":1},{"i":2}]"#)
+            Ok(vec![
+                JsonRow(vec![("i".into(), serde_json::json!(1))]),
+                JsonRow(vec![("i".into(), serde_json::json!(2))]),
+            ])
         })
         .unwrap();
 
