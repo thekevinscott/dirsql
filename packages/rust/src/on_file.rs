@@ -161,6 +161,14 @@ mod tests {
     }
 
     #[test]
+    fn chunks_never_emits_an_empty_run_before_an_oversized_first_argument() {
+        let args = args(&["toolong", "a"]);
+        let split = chunks(&args, arg_cost("a"));
+        assert_eq!(lens(&split), vec![1, 1]);
+        assert_eq!(split[0], &args[..1]);
+    }
+
+    #[test]
     fn chunks_over_nothing_is_no_runs() {
         assert!(chunks(&[], 10).is_empty());
     }
@@ -194,6 +202,25 @@ mod tests {
     fn a_command_without_the_placeholder_is_accepted() {
         assert_eq!(path_placeholder_rejection("python3 extract.py"), None);
         assert_eq!(path_placeholder_rejection("sh run.sh {root}"), None);
+    }
+
+    /// The budget carries a real table's worth of paths in one spawn: a
+    /// few hundred paths totalling well over ten kilobytes reach the command
+    /// as one argument list.
+    #[test]
+    fn run_hands_a_large_table_to_one_spawn() {
+        let paths: Vec<PathBuf> = (0..300)
+            .map(|i| PathBuf::from(format!("/some/long/directory/name/file-{i:04}.json")))
+            .collect();
+        let rows = run(
+            r#"sh -c 'echo "[{\"n\":$#}]"' sh"#,
+            Path::new("."),
+            Path::new("."),
+            &paths,
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1, "one spawn, one array");
+        assert_eq!(rows[0].get("n").unwrap().as_i64().unwrap(), 300);
     }
 
     #[test]
