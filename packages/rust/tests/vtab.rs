@@ -465,10 +465,15 @@ fn a_statement_walks_the_tree_once_however_often_it_reads_the_table() {
 }
 
 /// A connection with two path-tables, `a` over `glob_a` and `b` over
-/// `glob_b`, both under `dir`.
-fn open_pair(dir: &TempDir, glob_a: &str, glob_b: &str) -> Connection {
+/// `glob_b`, both under `dir`, plus the scope that ends a statement over them.
+fn open_pair_scoped(
+    dir: &TempDir,
+    glob_a: &str,
+    glob_b: &str,
+) -> (Connection, Arc<StatementScope>) {
     let conn = Connection::open_in_memory().unwrap();
-    load_module(&conn, StatementScope::new()).unwrap();
+    let scope = StatementScope::new();
+    load_module(&conn, Arc::clone(&scope)).unwrap();
     for (name, glob) in [("a", glob_a), ("b", glob_b)] {
         conn.execute_batch(&format!(
             "CREATE VIRTUAL TABLE {name} USING dirsql_path('{}', '{glob}', '', 'gitignore')",
@@ -476,7 +481,12 @@ fn open_pair(dir: &TempDir, glob_a: &str, glob_b: &str) -> Connection {
         ))
         .unwrap();
     }
-    conn
+    (conn, scope)
+}
+
+/// [`open_pair_scoped`] for tests that run one statement.
+fn open_pair(dir: &TempDir, glob_a: &str, glob_b: &str) -> Connection {
+    open_pair_scoped(dir, glob_a, glob_b).0
 }
 
 fn query_plan(conn: &Connection, sql: &str) -> Vec<String> {
@@ -506,4 +516,109 @@ fn a_join_of_two_path_tables_looks_the_inner_side_up_by_dir() {
             .any(|step| step.contains("VIRTUAL TABLE INDEX") && !step.contains("INDEX 0:")),
         "expected the inner path-table to use an equality lookup, got {plan:?}"
     );
+}
+
+fn texts(conn: &Connection, sql: &str) -> Vec<String> {
+    let mut stmt = conn.prepare(sql).unwrap();
+    stmt.query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+fn open_papers_scoped(dir: &TempDir) -> (Connection, Arc<StatementScope>) {
+    for paper in ["p1", "p2", "p3"] {
+        fs::create_dir(dir.path().join(paper)).unwrap();
+        fs::write(dir.path().join(paper).join("abstract.md"), "x").unwrap();
+    }
+    fs::write(dir.path().join("p1").join("title.md"), "one").unwrap();
+    fs::write(dir.path().join("p3").join("title.md"), "three").unwrap();
+    open_pair_scoped(dir, "*/abstract.md", "*/title.md")
+}
+
+/// [`open_papers_scoped`] for tests that run one statement.
+fn open_papers(dir: &TempDir) -> Connection {
+    open_papers_scoped(dir).0
+}
+
+#[test]
+fn a_lookup_join_on_dir_returns_exactly_the_matching_pairs() {
+    let dir = TempDir::new().unwrap();
+    let conn = open_papers(&dir);
+
+    let titles = texts(
+        &conn,
+        "SELECT b.content FROM a JOIN b ON b.dir = a.dir ORDER BY a.dir",
+    );
+    assert_eq!(titles, vec!["one", "three"]);
+}
+
+#[test]
+fn equality_on_each_lookup_column_finds_the_row() {
+    let dir = TempDir::new().unwrap();
+    let conn = open_papers(&dir);
+
+    assert_eq!(
+        texts(&conn, "SELECT path FROM b WHERE path = 'p3/title.md'"),
+        vec!["p3/title.md"]
+    );
+    assert_eq!(
+        texts(
+            &conn,
+            "SELECT path FROM b WHERE basename = 'title.md' ORDER BY path"
+        ),
+        vec!["p1/title.md", "p3/title.md"]
+    );
+    assert_eq!(
+        texts(&conn, "SELECT path FROM b WHERE dir = 'p1'"),
+        vec!["p1/title.md"]
+    );
+}
+
+#[test]
+fn a_lookup_with_no_match_yields_no_rows() {
+    let dir = TempDir::new().unwrap();
+    let conn = open_papers(&dir);
+
+    assert!(texts(&conn, "SELECT path FROM b WHERE dir = 'p2'").is_empty());
+}
+
+#[test]
+fn a_non_text_or_null_lookup_key_matches_nothing() {
+    let dir = TempDir::new().unwrap();
+    let conn = open_papers(&dir);
+
+    assert!(texts(&conn, "SELECT path FROM b WHERE basename = 5").is_empty());
+    assert!(texts(&conn, "SELECT path FROM b WHERE dir = NULL").is_empty());
+}
+
+#[test]
+fn rowids_are_the_same_under_lookup_as_under_a_scan() {
+    let dir = TempDir::new().unwrap();
+    let conn = open_papers(&dir);
+
+    let scanned = texts(&conn, "SELECT rowid || ':' || path FROM b ORDER BY rowid");
+    let looked_up = texts(&conn, "SELECT rowid || ':' || path FROM b WHERE dir = 'p3'");
+    assert_eq!(scanned, vec!["0:p1/title.md", "1:p3/title.md"]);
+    assert_eq!(looked_up, vec!["1:p3/title.md"]);
+}
+
+#[test]
+fn a_lookup_join_sees_files_created_after_the_previous_statement() {
+    let dir = TempDir::new().unwrap();
+    let (conn, scope) = open_papers_scoped(&dir);
+    let before = texts(
+        &conn,
+        "SELECT a.dir FROM a JOIN b ON b.dir = a.dir ORDER BY a.dir",
+    );
+
+    fs::write(dir.path().join("p2").join("title.md"), "two").unwrap();
+    scope.reset();
+
+    let after = texts(
+        &conn,
+        "SELECT a.dir FROM a JOIN b ON b.dir = a.dir ORDER BY a.dir",
+    );
+    assert_eq!(before, vec!["p1", "p3"]);
+    assert_eq!(after, vec!["p1", "p2", "p3"]);
 }

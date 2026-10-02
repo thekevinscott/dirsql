@@ -1,0 +1,1 @@
+**Changed** A join between two path-tables on `path`, `basename` or `dir` is answered from an in-memory lookup built on the inner table's first scan, instead of rescanning its glob for every outer row. Equality filters on those columns use the same lookup.
