@@ -54,6 +54,7 @@ DirSQL(
     *,
     tables: list[Table] | None = None,
     ignore: list[str] | None = None,
+    no_ignore: bool = False,
     config: str | list[str] | None = None,
     persist: bool = False,
     persist_path: str | None = None,
@@ -68,6 +69,7 @@ new DirSQL({
     root?: string,
     tables?: TableDef[],
     ignore?: string[],
+    noIgnore?: boolean,
     config?: string | string[],
     persist?: boolean,
     persistPath?: string,
@@ -80,6 +82,7 @@ DirSQL::builder()
     .root(root)                     // optional
     .tables(tables)                 // optional; append one with .table(t)
     .ignore(patterns)               // optional
+    .no_ignore(true)                // optional; default false
     .config(config_toml_path)       // optional; repeatable — call again to
                                     //   merge another config in call order
     .persist(cache_path)            // optional; Some(path), or None for the
@@ -115,6 +118,10 @@ shortcut was removed in #603 — use
 - `tables` — Programmatic [`Table`](#table) definitions.
 - `ignore` — Glob patterns matched against root-relative paths; matched
   files are skipped entirely (scan and watch).
+- `no_ignore` / `noIgnore` — Scan files a `.gitignore` would hide.
+  [Path-tables](./path-tables.md#skip-rules) respect `.gitignore` files by
+  default; the built-in `node_modules`/`.git` skips and any `ignore` patterns
+  still apply. The CLI's [`--no-ignore`](./cli.md#flags).
 - `config` — Path to a [`.dirsql.toml`](./config.md). Its `[[table]]`
   entries are appended after any programmatic `tables`; its `ignore`
   patterns and `[[dirsql.extension]]` entries are appended likewise. The

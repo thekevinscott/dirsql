@@ -33,7 +33,8 @@ use serde_json::Value;
              bare `dirsql` opens a REPL; `dirsql server` starts the HTTP \
              server.",
     long_about = "Runs one SQL query over a local directory and prints the \
-                  result rows as JSON. `dirsql \"SELECT * FROM './'\"` is the \
+                  result rows: a table on a terminal, a JSON array when \
+                  piped. `dirsql \"SELECT * FROM './'\"` is the \
                   default; `dirsql query \"<sql>\"` is an explicit synonym. \
                   With no subcommand and no SQL, dirsql reads statements until \
                   EOF instead: a prompted REPL on a terminal, one statement \
@@ -47,8 +48,9 @@ use serde_json::Value;
                   subcommand-local: for `query`/`server` pass them AFTER the \
                   subcommand (`dirsql query <sql> -c <cfg>`); a flag before a \
                   subcommand is a hard error. The `init` subcommand writes a \
-                  starter `.dirsql.toml` defining a `files` table — no \
-                  target-directory inspection, no network, deterministic.",
+                  starter `.dirsql.toml` defining a `records` table over \
+                  `**/*.json` — no target-directory inspection, no network, \
+                  deterministic.",
     args_conflicts_with_subcommands = true
 )]
 struct Cli {
@@ -151,14 +153,15 @@ impl ConfigArgs {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Write the fixed starter `.dirsql.toml` — a `files` table over every
-    /// file in the directory. The output does not auto-load; pass it with
-    /// `dirsql query <sql> -c ./.dirsql.toml`. No target-directory
-    /// inspection.
+    /// Write the fixed starter `.dirsql.toml` — a `records` table over
+    /// `**/*.json`, parsed by an `on-file` hook. The output does not
+    /// auto-load; pass it with `dirsql query <sql> -c ./.dirsql.toml`. No
+    /// target-directory inspection.
     Init(InitArgs),
 
     /// Run one SQL query against the indexed directory, print the result
-    /// rows as JSON on stdout, and exit. No server, no watch. This is the
+    /// rows on stdout (a table on a terminal, a JSON array when piped), and
+    /// exit. No server, no watch. This is the
     /// explicit synonym for the default `dirsql "<sql>"`. Shares the
     /// server's query pipeline, so config loading, hooks, the read-only
     /// rule, and error classification are identical to `POST /query`.

@@ -1,0 +1,1 @@
+**Fixed** `dirsql --help` now says `init` writes a `records` table over `**/*.json` (it never wrote a `files` table) and that a query prints a table on a terminal and a JSON array when piped, matching the `--format auto` default.
