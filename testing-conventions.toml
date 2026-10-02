@@ -125,8 +125,20 @@ reason = "a child's depth decides the reserved top-level .dirsql rule for a real
 [[rust.exempt]]
 path = "src/vtab.rs"
 rules = ["mutation"]
-lines = [294, 311]
+lines = [365, 382]
 reason = "rows walks and stats a real tree and column hands a cell to SQLite; the cell choice is unit-tested in `cell`, and tests/vtab.rs stat_columns_carry_real_values and content_is_excluded_from_star_but_selectable_by_name assert both through a real connection"
+
+[[rust.exempt]]
+path = "src/vtab.rs"
+rules = ["mutation"]
+lines = [82, 333, 393]
+reason = "read_text and ScanSpec::read open a real file and prefetch reads a real tree ahead of the cursor; the buffer logic is unit-tested in `read_all` and `presize`, tests/vtab.rs content_is_excluded_from_star_but_selectable_by_name, content_is_null_for_non_utf8_files and unreadable_file_yields_null_content_without_erroring_the_row assert the cell, and tests/path_table_content_prefetch.rs content_is_read_for_every_row_before_the_first_is_delivered and a_join_has_the_content_it_names_read_ahead assert the read-ahead"
+
+[[rust.exempt]]
+path = "src/vtab_scaffold.rs"
+rules = ["mutation"]
+lines = [280]
+reason = "`|` -> `^` is equivalent: the lookup idx_num is a column index plus one, and SQLite caps a table at 32767 columns, so it never carries the PREFETCH_IDX bit and the two operators agree on every input"
 
 # Unit-only coverage floor: measured by `cargo llvm-cov --lib --features cli`
 # (the `--lib` scoping keeps the integration tier under packages/rust/tests/ out
