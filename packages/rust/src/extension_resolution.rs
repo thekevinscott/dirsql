@@ -512,7 +512,11 @@ mod tests {
         );
         assert_eq!(
             err.to_string(),
-            "multiple loadable extension files found in package 'vec': /pkg/a.so, /pkg/z.so; disambiguate with a literal path"
+            format!(
+                "multiple loadable extension files found in package 'vec': {}, {}; disambiguate with a literal path",
+                dir.join("a.so").display(),
+                dir.join("z.so").display()
+            )
         );
     }
 }

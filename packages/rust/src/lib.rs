@@ -2936,7 +2936,12 @@ mod internal_tests {
     /// so `notify` never sees `.`.
     #[test]
     fn relative_root_canonicalizes_watch_root_only() {
-        let fake = FakeFs::default().with_canonical_root(".", "/ws/canonical");
+        let canonical = if cfg!(windows) {
+            r"C:\ws\canonical"
+        } else {
+            "/ws/canonical"
+        };
+        let fake = FakeFs::default().with_canonical_root(".", canonical);
         let db = DirSQL::with_ignore_and_fs(
             ".",
             vec![Table::new(
@@ -2956,7 +2961,7 @@ mod internal_tests {
             "watch_root must be absolute, got {:?}",
             db.inner.watch_root
         );
-        assert_eq!(db.inner.watch_root, PathBuf::from("/ws/canonical"));
+        assert_eq!(db.inner.watch_root, PathBuf::from(canonical));
     }
 
     /// With an absolute root, `process_file_event` strips the `watch_root`
