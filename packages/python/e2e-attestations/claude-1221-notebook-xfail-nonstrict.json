@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1790954117,
+  "exit_code": 0,
+  "commit": "01584efd421785ae68f0fe3b9e92e80a164404a2",
+  "branch": "claude/1221-notebook-xfail-nonstrict"
+}
