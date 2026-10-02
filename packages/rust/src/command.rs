@@ -193,16 +193,17 @@ pub fn run_command(
     }
 }
 
-#[cfg(windows)]
+// One fn with cfg blocks rather than two cfg'd fns: cargo-mutants mutates
+// the uncompiled twin too, and no test on a Linux gate can kill that mutant.
 fn push_args(cmd: &mut Command, args: &[String]) {
-    use std::os::windows::process::CommandExt;
-    for arg in args {
-        cmd.raw_arg(quote_windows_arg(arg));
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        for arg in args {
+            cmd.raw_arg(quote_windows_arg(arg));
+        }
     }
-}
-
-#[cfg(not(windows))]
-fn push_args(cmd: &mut Command, args: &[String]) {
+    #[cfg(not(windows))]
     cmd.args(args);
 }
 
