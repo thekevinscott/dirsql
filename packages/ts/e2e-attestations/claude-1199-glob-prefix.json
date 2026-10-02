@@ -1,7 +1,7 @@
 {
   "command": "pnpm test:e2e",
-  "ran_at": 1790968035,
+  "ran_at": 1790974768,
   "exit_code": 0,
-  "commit": "8d21fa29a599e8af4a132f1f5e422777e3f5c265",
+  "commit": "f8ccb07e9a7c1aec92c043eb7b3ed49d3d23f41e",
   "branch": "claude/1199-glob-prefix"
 }
