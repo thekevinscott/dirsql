@@ -62,7 +62,50 @@ impl Placeholder {
 /// verbatim path whose plain spelling would name a different file, is returned
 /// unchanged.
 pub(crate) fn non_verbatim(path: &str) -> String {
-    path.to_string()
+    plain_form(path).unwrap_or_else(|| path.to_string())
+}
+
+fn plain_form(path: &str) -> Option<String> {
+    let rest = path.strip_prefix(r"\\?\")?;
+    let (plain, tail) = if let Some(unc) = rest.strip_prefix(r"UNC\") {
+        if unc.split('\\').count() < 2 {
+            return None;
+        }
+        (format!(r"\\{unc}"), unc)
+    } else {
+        let drive = rest.as_bytes();
+        let is_drive = drive.len() >= 3
+            && drive[0].is_ascii_alphabetic()
+            && drive[1] == b':'
+            && drive[2] == b'\\';
+        if !is_drive {
+            return None;
+        }
+        (rest.to_string(), &rest[3..])
+    };
+    // Win32 rejects or rewrites these, so the plain spelling would not name
+    // the same file; MAX_PATH counts UTF-16 units including the terminator.
+    let same_file = (tail.is_empty() || tail.split('\\').all(is_plain_component))
+        && plain.encode_utf16().count() < 260;
+    same_file.then_some(plain)
+}
+
+fn is_plain_component(name: &str) -> bool {
+    let invalid_char = |c: char| c < ' ' || r#"/<>:"|?*"#.contains(c);
+    let stem = name
+        .split_once('.')
+        .map_or(name, |(stem, _)| stem)
+        .trim_end_matches(' ');
+    let reserved = matches!(
+        stem.to_ascii_uppercase().as_bytes(),
+        b"CON"
+            | b"PRN"
+            | b"AUX"
+            | b"NUL"
+            | [b'C', b'O', b'M', b'1'..=b'9']
+            | [b'L', b'P', b'T', b'1'..=b'9']
+    );
+    !name.is_empty() && !name.ends_with(['.', ' ']) && !name.contains(invalid_char) && !reserved
 }
 
 /// A successful command run.
@@ -340,6 +383,7 @@ mod tests {
             r"C:\Users\runner\in_cwd.txt"
         );
         assert_eq!(non_verbatim(r"\\?\d:\x"), r"d:\x");
+        assert_eq!(non_verbatim(r"\\?\C:\my file.txt"), r"C:\my file.txt");
     }
 
     #[test]
@@ -353,6 +397,7 @@ mod tests {
             non_verbatim(r"\\?\UNC\server\share\dir\f.txt"),
             r"\\server\share\dir\f.txt"
         );
+        assert_eq!(non_verbatim(r"\\?\UNC\server\share"), r"\\server\share");
     }
 
     #[test]
@@ -413,7 +458,9 @@ mod tests {
 
     #[test]
     fn non_verbatim_strips_names_that_only_resemble_device_names() {
-        for name in ["CONSOLE", "NULL.txt", "COM0", "COM10", "LPT", "xCON", "AUXa"] {
+        for name in [
+            "CONSOLE", "NULL.txt", "COM0", "COM10", "LPT", "xCON", "AUXa",
+        ] {
             assert_eq!(
                 non_verbatim(&format!(r"\\?\C:\dir\{name}")),
                 format!(r"C:\dir\{name}")
