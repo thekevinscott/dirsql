@@ -4957,9 +4957,6 @@ mod internal_tests {
 mod command_rows_tests {
     use super::*;
 
-    /// Parse `payload` and shape it against a table declaring exactly the
-    /// first row's keys, the way a configured `on-file` command's rows reach
-    /// the database.
     fn rows(payload: &str) -> Vec<Row> {
         let parsed = infer::parse_rows(payload).unwrap();
         let columns: Vec<String> = parsed

@@ -2555,7 +2555,6 @@ mod tests {
         assert_eq!(rows[0].get("id").unwrap(), &Value::Text("a".into()));
     }
 
-    /// The raw ranges for a table, ordered for stable assertions.
     fn range_rows(db: &Db, table: &str) -> Vec<(String, i64, i64)> {
         let mut stmt = db
             .conn
@@ -2570,7 +2569,6 @@ mod tests {
             .collect()
     }
 
-    /// Rows the way a parsed on-file payload carries them, key order kept.
     fn json_rows(payload: serde_json::Value) -> Vec<JsonRow> {
         let serde_json::Value::Array(rows) = payload else {
             panic!("payload must be an array");

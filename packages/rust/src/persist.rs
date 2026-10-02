@@ -607,9 +607,7 @@ mod tests {
         assert!(read_cached_files(&conn).unwrap().is_empty());
     }
 
-    /// `_dirsql_internal_rows` and `_dirsql_internal_ranges` are created by
-    /// `Db::open` in production; declared inline since these tests use a raw
-    /// connection.
+    /// These tests drive a raw connection, so `Db::open` never creates these.
     const INTERNAL_ROWS_DDL: &str = "CREATE TABLE _dirsql_internal_rows (
             table_name TEXT NOT NULL, file_path TEXT NOT NULL,
             row_index INTEGER NOT NULL, rowid_ref INTEGER NOT NULL);
