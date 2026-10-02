@@ -1,0 +1,1 @@
+**Fixed** On Windows, `on-file` hooks and `parsed()` parsers receive `{path}` and `{root}` in plain form (`C:\data\a.txt`, `\\server\share\a.txt`) instead of the verbatim `\\?\C:\...` / `\\?\UNC\...` form, which MSYS tools mangle and many Windows tools reject. Verbatim paths with no plain equivalent are passed through unchanged.

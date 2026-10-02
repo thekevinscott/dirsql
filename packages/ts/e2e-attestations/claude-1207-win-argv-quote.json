@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1790939689,
+  "exit_code": 0,
+  "commit": "d2e6cb09a48afa50f165ca6466233e0446dc7de7",
+  "branch": "claude/1207-win-argv-quote"
+}

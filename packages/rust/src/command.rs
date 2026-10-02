@@ -49,6 +49,63 @@ impl Placeholder {
             value: value.into(),
         }
     }
+
+    /// A placeholder whose value is a filesystem path, handed to the child in
+    /// its plain (non-verbatim) form; see [`non_verbatim`].
+    pub fn path(name: impl Into<String>, path: &str) -> Self {
+        Self::new(name, non_verbatim(path))
+    }
+}
+
+/// The plain form of a Windows verbatim path: `\\?\C:\x` becomes `C:\x` and
+/// `\\?\UNC\server\share\x` becomes `\\server\share\x`. Anything else, and any
+/// verbatim path whose plain spelling would name a different file, is returned
+/// unchanged.
+pub(crate) fn non_verbatim(path: &str) -> String {
+    plain_form(path).unwrap_or_else(|| path.to_string())
+}
+
+fn plain_form(path: &str) -> Option<String> {
+    let rest = path.strip_prefix(r"\\?\")?;
+    let (plain, tail) = if let Some(unc) = rest.strip_prefix(r"UNC\") {
+        if unc.split('\\').count() < 2 {
+            return None;
+        }
+        (format!(r"\\{unc}"), unc)
+    } else {
+        let drive = rest.as_bytes();
+        let is_drive = drive.len() >= 3
+            && drive[0].is_ascii_alphabetic()
+            && drive[1] == b':'
+            && drive[2] == b'\\';
+        if !is_drive {
+            return None;
+        }
+        (rest.to_string(), &rest[3..])
+    };
+    // Win32 rejects or rewrites these, so the plain spelling would not name
+    // the same file; MAX_PATH counts UTF-16 units including the terminator.
+    let same_file = (tail.is_empty() || tail.split('\\').all(is_plain_component))
+        && plain.encode_utf16().count() < 260;
+    same_file.then_some(plain)
+}
+
+fn is_plain_component(name: &str) -> bool {
+    let invalid_char = |c: char| c < ' ' || r#"/<>:"|?*"#.contains(c);
+    let stem = name
+        .split_once('.')
+        .map_or(name, |(stem, _)| stem)
+        .trim_end_matches(' ');
+    let reserved = matches!(
+        stem.to_ascii_uppercase().as_bytes(),
+        b"CON"
+            | b"PRN"
+            | b"AUX"
+            | b"NUL"
+            | [b'C', b'O', b'M', b'1'..=b'9']
+            | [b'L', b'P', b'T', b'1'..=b'9']
+    );
+    !name.is_empty() && !name.ends_with(['.', ' ']) && !name.contains(invalid_char) && !reserved
 }
 
 /// A successful command run.
@@ -119,8 +176,8 @@ pub fn run_command(
     let argv = build_argv(command, placeholders)?;
     // `build_argv` guarantees a non-empty argv.
     let mut cmd = Command::new(&argv[0]);
-    cmd.args(&argv[1..])
-        .current_dir(cwd)
+    push_args(&mut cmd, &argv[1..]);
+    cmd.current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(if stdin_payload.is_some() {
@@ -193,6 +250,20 @@ pub fn run_command(
     }
 }
 
+// One fn with cfg blocks rather than two cfg'd fns: cargo-mutants mutates
+// the uncompiled twin too, and no test on a Linux gate can kill that mutant.
+fn push_args(cmd: &mut Command, args: &[String]) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        for arg in args {
+            cmd.raw_arg(quote_windows_arg(arg));
+        }
+    }
+    #[cfg(not(windows))]
+    cmd.args(args);
+}
+
 fn spawn_error(program: &str, source: std::io::Error, cwd: &Path) -> CommandError {
     // A missing cwd fails the child's chdir with `NotFound` too.
     if !searched_path(program, source.kind()) || !cwd.is_dir() {
@@ -242,6 +313,35 @@ pub(crate) fn build_argv(
         .collect();
 
     Ok(argv)
+}
+
+/// Quote `arg` for a Windows command line by the MS C-runtime rules, always
+/// wrapped in double quotes: an MSYS/Cygwin child globs, brace-expands and
+/// unescapes any unquoted word, while an MSVCRT child parses the quoted form
+/// back to `arg` exactly.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn quote_windows_arg(arg: &str) -> String {
+    let mut out = String::with_capacity(arg.len() + 2);
+    out.push('"');
+    let mut backslashes = 0;
+    for ch in arg.chars() {
+        match ch {
+            '\\' => backslashes += 1,
+            '"' => {
+                out.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+                out.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                out.extend(std::iter::repeat_n('\\', backslashes));
+                out.push(ch);
+                backslashes = 0;
+            }
+        }
+    }
+    out.extend(std::iter::repeat_n('\\', backslashes * 2));
+    out.push('"');
+    out
 }
 
 /// Replace every `{name}` in `token` with its placeholder value in a single
@@ -313,6 +413,117 @@ mod tests {
 
     fn argv(command: &str, placeholders: &[Placeholder]) -> Vec<String> {
         build_argv(command, placeholders).expect("valid command")
+    }
+
+    fn unchanged(path: &str) {
+        assert_eq!(non_verbatim(path), path);
+    }
+
+    #[test]
+    fn non_verbatim_strips_a_verbatim_drive_path() {
+        assert_eq!(
+            non_verbatim(r"\\?\C:\Users\runner\in_cwd.txt"),
+            r"C:\Users\runner\in_cwd.txt"
+        );
+        assert_eq!(non_verbatim(r"\\?\d:\x"), r"d:\x");
+        assert_eq!(non_verbatim(r"\\?\C:\my file.txt"), r"C:\my file.txt");
+    }
+
+    #[test]
+    fn non_verbatim_strips_a_verbatim_drive_root() {
+        assert_eq!(non_verbatim(r"\\?\C:\"), r"C:\");
+    }
+
+    #[test]
+    fn non_verbatim_rewrites_a_verbatim_unc_path() {
+        assert_eq!(
+            non_verbatim(r"\\?\UNC\server\share\dir\f.txt"),
+            r"\\server\share\dir\f.txt"
+        );
+        assert_eq!(non_verbatim(r"\\?\UNC\server\share"), r"\\server\share");
+    }
+
+    #[test]
+    fn non_verbatim_leaves_plain_paths_unchanged() {
+        unchanged(r"C:\Users\runner\f.txt");
+        unchanged(r"\\server\share\f.txt");
+        unchanged("/tmp/root/f.txt");
+        unchanged("relative/f.txt");
+        unchanged("");
+    }
+
+    #[test]
+    fn non_verbatim_leaves_verbatim_forms_without_a_drive_or_unc_unchanged() {
+        unchanged(r"\\?\GLOBALROOT\Device\HarddiskVolume1\f.txt");
+        unchanged(r"\\?\Volume{0b1c2d3e-0000-0000-0000-100000000000}\f.txt");
+        unchanged(r"\\?\C:");
+        unchanged(r"\\?\C:x");
+        unchanged(r"\\?\1:\x");
+        unchanged(r"\\?\");
+    }
+
+    #[test]
+    fn non_verbatim_leaves_an_incomplete_unc_unchanged() {
+        unchanged(r"\\?\UNC\");
+        unchanged(r"\\?\UNC\server");
+        unchanged(r"\\?\UNC\server\");
+    }
+
+    #[test]
+    fn non_verbatim_leaves_components_win32_would_reinterpret_unchanged() {
+        unchanged(r"\\?\C:\a\..\b");
+        unchanged(r"\\?\C:\a\.\b");
+        unchanged(r"\\?\C:\a\\b");
+        unchanged(r"\\?\C:\a\");
+        unchanged(r"\\?\C:\trailing.");
+        unchanged(r"\\?\C:\trailing ");
+        unchanged(r"\\?\C:\a/b");
+        unchanged(r"\\?\C:\a?b");
+        unchanged(r"\\?\C:\a*b");
+        unchanged(r"\\?\C:\a:b");
+        unchanged(r#"\\?\C:\a"b"#);
+        unchanged(r"\\?\C:\a<b");
+        unchanged(r"\\?\C:\a>b");
+        unchanged(r"\\?\C:\a|b");
+        unchanged("\\\\?\\C:\\a\u{1}b");
+        unchanged(r"\\?\UNC\server\share\..\x");
+    }
+
+    #[test]
+    fn non_verbatim_leaves_reserved_device_names_unchanged() {
+        for name in [
+            "CON", "con", "PRN", "AUX", "NUL", "nul.txt", "NUL .txt", "COM1", "COM9", "LPT1",
+            "lpt9.log",
+        ] {
+            unchanged(&format!(r"\\?\C:\dir\{name}"));
+        }
+    }
+
+    #[test]
+    fn non_verbatim_strips_names_that_only_resemble_device_names() {
+        for name in [
+            "CONSOLE", "NULL.txt", "COM0", "COM10", "LPT", "xCON", "AUXa",
+        ] {
+            assert_eq!(
+                non_verbatim(&format!(r"\\?\C:\dir\{name}")),
+                format!(r"C:\dir\{name}")
+            );
+        }
+    }
+
+    #[test]
+    fn non_verbatim_strips_up_to_max_path_and_no_further() {
+        let fits = format!(r"C:\{}", "a".repeat(256));
+        assert_eq!(fits.encode_utf16().count(), 259);
+        assert_eq!(non_verbatim(&format!(r"\\?\{fits}")), fits);
+        unchanged(&format!(r"\\?\C:\{}", "a".repeat(257)));
+    }
+
+    #[test]
+    fn path_placeholder_carries_the_non_verbatim_value() {
+        let placeholder = Placeholder::path("path", r"\\?\C:\a\f.txt");
+        assert_eq!(placeholder.name, "path");
+        assert_eq!(placeholder.value, r"C:\a\f.txt");
     }
 
     #[test]
@@ -400,6 +611,47 @@ mod tests {
     #[test]
     fn a_placeholder_the_template_omits_is_dropped() {
         assert_eq!(argv("run", &[Placeholder::new("path", "/tmp/x")]), ["run"]);
+    }
+
+    #[test]
+    fn windows_quoting_wraps_a_plain_arg_in_quotes() {
+        assert_eq!(quote_windows_arg("hello"), r#""hello""#);
+    }
+
+    #[test]
+    fn windows_quoting_keeps_an_empty_arg_as_an_empty_quoted_word() {
+        assert_eq!(quote_windows_arg(""), r#""""#);
+    }
+
+    #[test]
+    fn windows_quoting_quotes_glob_and_brace_characters() {
+        assert_eq!(quote_windows_arg("[{}]"), r#""[{}]""#);
+        assert_eq!(quote_windows_arg("a?b*c"), r#""a?b*c""#);
+    }
+
+    #[test]
+    fn windows_quoting_leaves_backslashes_not_before_a_quote_alone() {
+        assert_eq!(
+            quote_windows_arg(r"\\?\C:\Users\x.txt"),
+            r#""\\?\C:\Users\x.txt""#
+        );
+    }
+
+    #[test]
+    fn windows_quoting_doubles_trailing_backslashes_before_the_closing_quote() {
+        assert_eq!(quote_windows_arg(r"C:\dir\"), r#""C:\dir\\""#);
+        assert_eq!(quote_windows_arg(r"a\\"), r#""a\\\\""#);
+    }
+
+    #[test]
+    fn windows_quoting_escapes_embedded_quotes() {
+        assert_eq!(quote_windows_arg(r#"[{"n":1}]"#), r#""[{\"n\":1}]""#);
+    }
+
+    #[test]
+    fn windows_quoting_doubles_backslashes_before_an_embedded_quote() {
+        assert_eq!(quote_windows_arg(r#"a\"b"#), r#""a\\\"b""#);
+        assert_eq!(quote_windows_arg(r#"a\\"b"#), r#""a\\\\\"b""#);
     }
 
     #[test]
