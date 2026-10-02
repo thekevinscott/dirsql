@@ -2,7 +2,7 @@
 
 Ephemeral SQL index over a local directory. `dirsql` watches a filesystem, ingests structured files into an in-memory SQLite database, and exposes a SQL query interface -- the filesystem is always the source of truth.
 
-[Documentation](https://thekevinscott.github.io/dirsql/?lang=rust)
+[Documentation](https://dirsql.dev/?lang=rust)
 
 Also available as [`dirsql` on PyPI](https://pypi.org/project/dirsql/) and [`dirsql` on npm](https://www.npmjs.com/package/dirsql).
 
@@ -124,7 +124,7 @@ cargo install dirsql --features cli
 dirsql "SELECT * FROM './'"
 ```
 
-`dirsql "<sql>"` runs one query and prints the rows as JSON — the default. `dirsql server` starts an HTTP server bound to `localhost:7117` that exposes the SDK over HTTP: `POST /query` for SQL and `GET /events` for a Server-Sent Events change stream. Override the bind with `dirsql server --host`, `--port`, `--config`. See the [CLI reference](https://thekevinscott.github.io/dirsql/reference/cli).
+`dirsql "<sql>"` runs one query and prints the rows as JSON — the default. `dirsql server` starts an HTTP server bound to `localhost:7117` that exposes the SDK over HTTP: `POST /query` for SQL and `GET /events` for a Server-Sent Events change stream. Override the bind with `dirsql server --host`, `--port`, `--config`. See the [CLI reference](https://dirsql.dev/reference/cli).
 
 The `cli` feature is **opt-in** -- `cargo add dirsql` pulls no CLI dependencies. `cargo install dirsql` without `--features cli` silently installs nothing (`required-features` skips the bin target with no warning); always include the flag, or use `npx dirsql` / `uvx dirsql` for prebuilt binaries.
 
