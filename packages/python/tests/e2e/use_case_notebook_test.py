@@ -94,10 +94,6 @@ def describe_notebook_speed_of_light():
         finally:
             shutil.rmtree(tree, ignore_errors=True)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="ingesting the parser's JSON rows is slower than a second interpreter's json.load and sort",
-    )
     def it_matches_native_rows_within_the_bar(root):
         startup = startup_seconds()
 

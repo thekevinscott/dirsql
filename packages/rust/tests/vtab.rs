@@ -6,8 +6,9 @@
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+use std::sync::Arc;
 
-use dirsql::vtab::load_module;
+use dirsql::vtab::{StatementScope, load_module};
 use rusqlite::Connection;
 use tempfile::TempDir;
 
@@ -28,23 +29,29 @@ fn make_unreadable(_path: &Path) -> bool {
 }
 
 /// A connection with the path-table module registered and one vtab named `t`
-/// spanning `glob` under `dir`.
-fn open_over(dir: &TempDir, glob: &str) -> Connection {
+/// spanning `glob` under `dir`, plus the scope that ends a statement over it.
+fn open_scoped(dir: &TempDir, glob: &str) -> (Connection, Arc<StatementScope>) {
     let conn = Connection::open_in_memory().unwrap();
-    load_module(&conn).unwrap();
+    let scope = StatementScope::new();
+    load_module(&conn, Arc::clone(&scope)).unwrap();
     conn.execute_batch(&format!(
         "CREATE VIRTUAL TABLE t USING dirsql_path('{}', '{}', '', 'gitignore')",
         dir.path().display(),
         glob
     ))
     .unwrap();
-    conn
+    (conn, scope)
+}
+
+/// [`open_scoped`] for tests that run one statement.
+fn open_over(dir: &TempDir, glob: &str) -> Connection {
+    open_scoped(dir, glob).0
 }
 
 /// A connection whose vtab reports paths under `prefix` and skips `ignore`.
 fn open_over_with(dir: &TempDir, glob: &str, prefix: &str, ignore: &[&str]) -> Connection {
     let conn = Connection::open_in_memory().unwrap();
-    load_module(&conn).unwrap();
+    load_module(&conn, StatementScope::new()).unwrap();
     let mut args = format!(
         "'{}', '{}', '{}', 'gitignore'",
         dir.path().display(),
@@ -305,7 +312,7 @@ fn reads_are_live_across_statements() {
     let dir = TempDir::new().unwrap();
     fs::write(dir.path().join("a.md"), "x").unwrap();
     fs::write(dir.path().join("b.md"), "x").unwrap();
-    let conn = open_over(&dir, "**/*");
+    let (conn, scope) = open_scoped(&dir, "**/*");
 
     let before: i64 = conn
         .query_row("SELECT count(*) FROM t", [], |r| r.get(0))
@@ -313,6 +320,7 @@ fn reads_are_live_across_statements() {
     assert_eq!(before, 2);
 
     fs::remove_file(dir.path().join("b.md")).unwrap();
+    scope.reset();
 
     let after: i64 = conn
         .query_row("SELECT count(*) FROM t", [], |r| r.get(0))
@@ -413,5 +421,45 @@ fn a_join_against_a_small_table_plans_as_a_plain_scan() {
     assert!(
         !plan.iter().any(|step| step.contains("AUTOMATIC")),
         "the declared cost must keep SQLite from building an automatic index, got {plan:?}"
+    );
+}
+
+/// Three references to one path table in a statement must not cost three
+/// walks. A function that deletes a file while the first arm scans would, with
+/// one walk per arm, make the second arm's count come up short.
+#[test]
+fn a_statement_walks_the_tree_once_however_often_it_reads_the_table() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("a.md"), "x").unwrap();
+    fs::write(dir.path().join("b.md"), "x").unwrap();
+    let conn = open_over(&dir, "**/*");
+    let doomed = dir.path().join("b.md");
+    conn.create_scalar_function(
+        "unlink_b",
+        0,
+        rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+        move |_| {
+            let _ = fs::remove_file(&doomed);
+            Ok(0i64)
+        },
+    )
+    .unwrap();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT count(*) FROM t WHERE unlink_b() = 0
+             UNION ALL SELECT count(*) FROM t
+             UNION ALL SELECT count(*) FROM t",
+        )
+        .unwrap();
+    let counts: Vec<i64> = stmt
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        counts,
+        vec![2, 2, 2],
+        "every read of the table within one statement sees the one walk's rows"
     );
 }

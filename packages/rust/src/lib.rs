@@ -1994,90 +1994,6 @@ pub(crate) fn json_to_value(value: &serde_json::Value) -> Value {
     }
 }
 
-/// Reserved column names for filesystem-derived virtual columns. These are
-/// always available on every row when declared in the table DDL; if not
-/// declared, they are silently dropped during normalization.
-const STAT_PATH: &str = "path";
-const STAT_BASENAME: &str = "basename";
-const STAT_DIR: &str = "dir";
-const STAT_EXT: &str = "ext";
-const STAT_SIZE: &str = "size";
-const STAT_MTIME: &str = "mtime";
-const STAT_CTIME: &str = "ctime";
-
-/// Compute the filesystem-fact columns for a given file: path-derived
-/// (`path`, `basename`, `dir`, `ext`) and stat-derived (`size`,
-/// `mtime`, `ctime`).
-pub(crate) fn compute_stat_virtuals(rel_path: &str, abs_path: &Path) -> Row {
-    // A missing/unreadable file yields all-`None` (absent columns);
-    // `mtime`/`ctime` are `None` when the platform can't supply them or the
-    // value predates the epoch.
-    let (size, mtime_secs, ctime_secs) = match std::fs::metadata(abs_path) {
-        Ok(metadata) => {
-            let to_secs = |t: std::io::Result<std::time::SystemTime>| {
-                t.ok()
-                    .and_then(|st| st.duration_since(std::time::UNIX_EPOCH).ok())
-                    .and_then(|d| i64::try_from(d.as_secs()).ok())
-            };
-            (
-                i64::try_from(metadata.len()).ok(),
-                to_secs(metadata.modified()),
-                to_secs(metadata.created()),
-            )
-        }
-        Err(_) => (None, None, None),
-    };
-    stat_virtuals(rel_path, size, mtime_secs, ctime_secs)
-}
-
-/// Pure core of [`compute_stat_virtuals`]: build the filesystem-fact columns
-/// from the relative path plus already-read stat values (each `None` when the
-/// corresponding fact is unavailable).
-fn stat_virtuals(
-    rel_path: &str,
-    size: Option<i64>,
-    mtime_secs: Option<i64>,
-    ctime_secs: Option<i64>,
-) -> Row {
-    let mut out = Row::new();
-
-    out.insert(STAT_PATH.into(), Value::Text(rel_path.to_string()));
-
-    let pb = Path::new(rel_path);
-    if let Some(name) = pb.file_name() {
-        out.insert(
-            STAT_BASENAME.into(),
-            Value::Text(name.to_string_lossy().to_string()),
-        );
-    }
-    if let Some(parent) = pb.parent() {
-        out.insert(
-            STAT_DIR.into(),
-            Value::Text(parent.to_string_lossy().to_string()),
-        );
-    }
-    if let Some(ext) = pb.extension() {
-        // Preserve the original case: on case-sensitive filesystems
-        // `Photo.JPG` and `photo.jpg` are distinct files.
-        out.insert(
-            STAT_EXT.into(),
-            Value::Text(ext.to_string_lossy().into_owned()),
-        );
-    }
-
-    if let Some(size) = size {
-        out.insert(STAT_SIZE.into(), Value::Integer(size));
-    }
-    if let Some(mtime) = mtime_secs {
-        out.insert(STAT_MTIME.into(), Value::Integer(mtime));
-    }
-    if let Some(ctime) = ctime_secs {
-        out.insert(STAT_CTIME.into(), Value::Integer(ctime));
-    }
-
-    out
-}
-
 /// Returns the first `{name}` placeholder in `glob` whose name is also one of
 /// `declared_columns`. `None` when the glob has no placeholders or none of
 /// them names a declared column. Pure: the sole input is the glob string and
@@ -2550,43 +2466,6 @@ mod internal_tests {
             .resolve()
             .unwrap();
         assert!(resolved.no_ignore);
-    }
-
-    #[test]
-    fn stat_virtuals_populates_all_fields() {
-        let stat = stat_virtuals("nested/sub.txt", Some(5), Some(100), Some(50));
-        assert_eq!(stat[STAT_PATH], Value::Text("nested/sub.txt".into()));
-        assert_eq!(stat[STAT_BASENAME], Value::Text("sub.txt".into()));
-        assert_eq!(stat[STAT_DIR], Value::Text("nested".into()));
-        assert_eq!(stat[STAT_EXT], Value::Text("txt".into()));
-        assert!(matches!(stat.get(STAT_SIZE), Some(Value::Integer(5))));
-        assert!(matches!(stat.get(STAT_MTIME), Some(Value::Integer(100))));
-        assert!(matches!(stat.get(STAT_CTIME), Some(Value::Integer(50))));
-    }
-
-    #[test]
-    fn compute_stat_virtuals_skips_absent_fields() {
-        let stat = compute_stat_virtuals("bare", Path::new("/nonexistent-xyz/bare"));
-        assert_eq!(stat[STAT_PATH], Value::Text("bare".into()));
-        assert_eq!(stat[STAT_BASENAME], Value::Text("bare".into()));
-        // `Path::new("bare").parent()` is `Some("")`, so `dir` is an empty
-        // string rather than absent; there is no extension and no metadata.
-        assert!(!stat.contains_key(STAT_EXT));
-        assert!(!stat.contains_key(STAT_SIZE));
-        assert!(!stat.contains_key(STAT_MTIME));
-        assert!(!stat.contains_key(STAT_CTIME));
-    }
-
-    #[test]
-    fn compute_stat_virtuals_handles_empty_path() {
-        let stat = compute_stat_virtuals("", Path::new("/nonexistent-xyz/none"));
-        assert_eq!(stat[STAT_PATH], Value::Text(String::new()));
-        assert!(
-            !stat.contains_key(STAT_BASENAME),
-            "empty path has no basename"
-        );
-        assert!(!stat.contains_key(STAT_DIR), "empty path has no parent dir");
-        assert!(!stat.contains_key(STAT_EXT));
     }
 
     /// A `ScannedFile` whose table has no registered on_file function must
@@ -4029,21 +3908,6 @@ mod internal_tests {
         assert!(to_parse.is_empty());
         assert!(trusted.is_empty());
         assert_eq!(deleted, vec![("gone.txt".to_string(), "t".to_string())]);
-    }
-
-    #[test]
-    fn compute_stat_virtuals_reads_real_metadata() {
-        let dir = TempDir::new().unwrap();
-        let stat = compute_stat_virtuals("d", dir.path());
-        assert_eq!(stat[STAT_PATH], Value::Text("d".into()));
-        assert!(
-            matches!(stat.get(STAT_SIZE), Some(Value::Integer(_))),
-            "size present"
-        );
-        assert!(
-            matches!(stat.get(STAT_MTIME), Some(Value::Integer(_))),
-            "mtime present"
-        );
     }
 
     #[test]

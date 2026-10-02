@@ -37,14 +37,14 @@ use crate::parsed_cache::{self, CachedParse, Entry, RowCache, SqliteRowCache};
 use crate::path_table;
 use crate::persist::{FileStat, hash_file, now_ns};
 use crate::scanner::{scan_glob, to_slash};
-use crate::vtab_scaffold::{self, TableSource};
+use crate::vtab_scaffold::{self, StatementScope, TableSource};
 
 /// SQL module name a parsed path-table is created with.
 pub const MODULE_NAME: &str = "dirsql_parsed";
 
 /// Register the parsed path-table module on `conn`.
-pub fn load_module(conn: &Connection) -> Result<()> {
-    vtab_scaffold::load_module::<ParsedTable>(conn)
+pub fn load_module(conn: &Connection, scope: Arc<StatementScope>) -> Result<()> {
+    vtab_scaffold::load_module::<ParsedTable>(conn, scope)
 }
 
 /// Number of module arguments that are not ignore patterns.

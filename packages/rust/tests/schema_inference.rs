@@ -9,6 +9,7 @@
 use std::fs;
 
 use dirsql::parsed_vtab::load_module;
+use dirsql::vtab::StatementScope;
 use rusqlite::Connection;
 use tempfile::TempDir;
 
@@ -21,7 +22,7 @@ const CAT_PARSER: &str = "cat {path}";
 /// named `t` over `glob` under `dir`, parsed by `command`.
 fn open_over(dir: &TempDir, glob: &str, command: &str) -> Connection {
     let conn = Connection::open_in_memory().unwrap();
-    load_module(&conn).unwrap();
+    load_module(&conn, StatementScope::new()).unwrap();
     // The trailing empty argument is the cache path: this vtab is ephemeral,
     // so there is nowhere to reuse rows from.
     conn.execute_batch(&format!(
@@ -226,7 +227,7 @@ fn a_parser_producing_no_rows_is_an_error_at_registration() {
     let dir = TempDir::new().unwrap();
     write(&dir, "a.json", "[]");
     let conn = Connection::open_in_memory().unwrap();
-    load_module(&conn).unwrap();
+    load_module(&conn, StatementScope::new()).unwrap();
 
     let err = conn
         .execute_batch(&format!(
@@ -269,7 +270,7 @@ fn a_scan_where_every_file_fails_cannot_infer_a_schema() {
     let dir = TempDir::new().unwrap();
     write(&dir, "bad.json", "not valid json");
     let conn = Connection::open_in_memory().unwrap();
-    load_module(&conn).unwrap();
+    load_module(&conn, StatementScope::new()).unwrap();
 
     let err = conn
         .execute_batch(&format!(

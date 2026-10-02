@@ -287,6 +287,15 @@ and appends `hint: paths used as table names must be quoted; did you mean
 diagnostic this lives in the shared core, so all three SDKs and the CLI get the
 identical message with no per-binding surface and no SDK signature changes.
 
+**One walk per path table per statement (#1201) — Rust-crate-only surface, no
+SDK drift.** A statement that references the same path table more than once
+walks the tree once; the next statement scans afresh. The cache and the clock
+that ends a statement (`vtab::StatementScope`, bracketed by `Db::query_ordered`)
+live in the shared core, so all three SDKs and the CLI inherit it with no
+per-binding surface. The one signature change is Rust-only: `vtab::load_module`
+and `parsed_vtab::load_module` take the `Arc<StatementScope>` their tables
+cache under, a surface neither binding exposes.
+
 ## AsyncDirSQL
 
 | API                        | Python                                | Rust                                   |
