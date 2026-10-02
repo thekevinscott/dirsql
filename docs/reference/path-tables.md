@@ -47,8 +47,13 @@ beneath it; the non-recursive form is spelled explicitly with `*`.
 | `'./docs/**/*.md'` | markdown files at any depth under `docs/` |
 | `'./notes/today.md'` | exactly that one file — one file is one row |
 
-A path containing `*`, `?` or `[` is a glob and is used exactly as written: `*`
-matches within a single directory, `**` crosses directories.
+A path containing `*`, `?`, `[` or `{` is a glob and is used exactly as
+written: `*` matches within a single directory, `**` crosses directories.
+
+The scan starts at the last directory named outright before the first glob
+component -- `'./small/*.md'` walks `small/` and nothing else -- so a query
+over one directory costs what `find ./small` costs, however large the
+directories beside it.
 
 A path naming a single file yields exactly one row. dirsql never splits a file
 into rows on its own — that is what a table's `on_file` hook is for.
@@ -186,8 +191,9 @@ bug to design around.
 The table itself is per-connection: it lives in `temp`, so it cannot leak into
 `sqlite_master` or survive a restart. Under `--persist` a *parsed* table's rows
 outlive the connection in the cache (above), but the table is still minted
-fresh each run and the scan still decides what exists. The reserved top-level
-`.dirsql/` directory is excluded from the scan, as everywhere else.
+fresh each run and the scan still decides what exists. A `.dirsql/` directory
+at the top of the directory the scan starts in is reserved and excluded, as
+everywhere else.
 
 ### When to promote to a declared table
 
@@ -234,8 +240,8 @@ defaults and configured `ignore` patterns still apply.
 
 ### Naming a skipped directory
 
-Skip rules are judged on the part of the path *below* what you named outright,
-so pointing at a skipped directory — built-in or gitignored — still scans it:
+Skip rules are judged from the directory the scan starts in, so pointing at a
+skipped directory — built-in or gitignored — still scans it:
 
 ```sql
 SELECT path FROM './';                     -- no node_modules rows
@@ -243,8 +249,8 @@ SELECT path FROM './node_modules/*/package.json';  -- scans it anyway
 SELECT path FROM './dist';                 -- scans dist/ even when gitignored
 ```
 
-A `.gitignore` at or below the directory you named still filters beneath it;
-only rules inherited from above it are set aside.
+A `.gitignore` at or below the directory the scan starts in still filters
+beneath it; one above it is never read.
 
 ### Hidden files
 

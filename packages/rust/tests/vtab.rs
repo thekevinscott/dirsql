@@ -359,16 +359,30 @@ fn ignore_patterns_skip_matching_files() {
 }
 
 #[test]
-fn a_pattern_naming_an_ignored_directory_still_scans_it() {
+fn a_table_rooted_in_an_ignored_directory_still_scans_it() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join("node_modules")).unwrap();
     fs::write(dir.path().join("node_modules/x.js"), "x").unwrap();
-    let conn = open_over_with(&dir, "node_modules/**/*", "", &["node_modules/**"]);
+    let conn = Connection::open_in_memory().unwrap();
+    load_module(&conn, StatementScope::new()).unwrap();
+    conn.execute_batch(&format!(
+        "CREATE VIRTUAL TABLE t USING dirsql_path('{}', '**/*', 'node_modules', 'gitignore', '**/node_modules/**')",
+        dir.path().join("node_modules").display()
+    ))
+    .unwrap();
 
-    let count: i64 = conn
-        .query_row("SELECT count(*) FROM t", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(count, 1, "skip rules apply below the path you name");
+    let paths: Vec<String> = conn
+        .prepare("SELECT path FROM t")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        paths,
+        vec!["node_modules/x.js"],
+        "skip rules are judged relative to the scan root, not the reported path"
+    );
 }
 
 #[test]

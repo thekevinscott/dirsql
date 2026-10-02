@@ -145,8 +145,9 @@ fn no_home_path_table(name: &str) -> String {
 ///
 /// A parsed table also carries `cache` — the persistent cache path when the
 /// index has one — so it can serve an unchanged file's rows without re-running
-/// the parser. The stat module takes no such argument: its columns are the
-/// stat tuple the scan already has, so there is nothing to save.
+/// the parser, and `index_root`, where the parser is spawned. The stat module
+/// takes neither: its columns are the stat tuple the scan already has, so
+/// there is nothing to save and no process to place.
 fn path_table_ddl(
     name: &str,
     table: &PathTable,
@@ -154,6 +155,7 @@ fn path_table_ddl(
     gitignore: bool,
     parser: Option<&str>,
     cache: Option<&Path>,
+    index_root: &Path,
 ) -> String {
     let (module, mut args) = match parser {
         Some(command) => (
@@ -184,6 +186,7 @@ fn path_table_ddl(
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default(),
         ));
+        args.push(quote_literal(&index_root.to_string_lossy()));
     }
     args.extend(ignore.iter().map(|p| quote_literal(p)));
 
@@ -1027,6 +1030,10 @@ impl Db {
     /// straight on the connection rather than through [`query`](Self::query),
     /// which classifies `CREATE VIRTUAL TABLE` as a write and would reject it.
     fn create_path_table(&self, name: &str, table: &PathTable) -> Result<()> {
+        let index_root = self
+            .path_table_root
+            .as_deref()
+            .expect("a path-table resolves only under an index root");
         self.conn.execute_batch(&path_table_ddl(
             name,
             table,
@@ -1034,6 +1041,7 @@ impl Db {
             self.path_table_gitignore,
             self.path_table_parser.as_deref(),
             self.path_table_cache.as_deref(),
+            index_root,
         ))?;
         Ok(())
     }
@@ -2639,7 +2647,15 @@ mod tests {
 
     #[test]
     fn path_table_ddl_creates_in_temp_if_not_exists() {
-        let ddl = path_table_ddl("./docs/*.md", &docs_path_table(), &[], true, None, None);
+        let ddl = path_table_ddl(
+            "./docs/*.md",
+            &docs_path_table(),
+            &[],
+            true,
+            None,
+            None,
+            Path::new("/root"),
+        );
         assert_eq!(
             ddl,
             "CREATE VIRTUAL TABLE IF NOT EXISTS temp.\"./docs/*.md\" \
@@ -2655,16 +2671,40 @@ mod tests {
             path_prefix: "/var/log".to_string(),
         };
         assert!(
-            path_table_ddl("/var/log/*.log", &table, &[], true, None, None)
-                .contains("'/var/log', '*.log', '/var/log', 'gitignore')"),
+            path_table_ddl(
+                "/var/log/*.log",
+                &table,
+                &[],
+                true,
+                None,
+                None,
+                Path::new("/root"),
+            )
+            .contains("'/var/log', '*.log', '/var/log', 'gitignore')"),
             "got: {}",
-            path_table_ddl("/var/log/*.log", &table, &[], true, None, None)
+            path_table_ddl(
+                "/var/log/*.log",
+                &table,
+                &[],
+                true,
+                None,
+                None,
+                Path::new("/root"),
+            )
         );
     }
 
     #[test]
     fn path_table_ddl_carries_the_no_gitignore_switch() {
-        let ddl = path_table_ddl("./", &docs_path_table(), &[], false, None, None);
+        let ddl = path_table_ddl(
+            "./",
+            &docs_path_table(),
+            &[],
+            false,
+            None,
+            None,
+            Path::new("/root"),
+        );
         assert!(
             ddl.ends_with("'', 'no-gitignore')"),
             "gitignore off must emit the no-gitignore switch, got: {ddl}"
@@ -2680,6 +2720,7 @@ mod tests {
             true,
             None,
             None,
+            Path::new("/root"),
         );
         assert!(
             ddl.ends_with("'', 'gitignore', 'node_modules/**', '*.tmp')"),
@@ -2696,11 +2737,12 @@ mod tests {
             true,
             Some("cat {path}"),
             None,
+            Path::new("/root"),
         );
         assert_eq!(
             ddl,
             "CREATE VIRTUAL TABLE IF NOT EXISTS temp.\"./docs/*.md\" \
-             USING dirsql_parsed('/root', 'docs/*.md', 'cat {path}', 'gitignore', '')"
+             USING dirsql_parsed('/root', 'docs/*.md', 'cat {path}', 'gitignore', '', '/root')"
         );
     }
 
@@ -2713,9 +2755,10 @@ mod tests {
             true,
             Some("cat {path}"),
             Some(Path::new("/cache/dirsql.db")),
+            Path::new("/root"),
         );
         assert!(
-            ddl.ends_with("'cat {path}', 'gitignore', '/cache/dirsql.db')"),
+            ddl.ends_with("'cat {path}', 'gitignore', '/cache/dirsql.db', '/root')"),
             "a persisted index points the parsed module at its cache, got: {ddl}"
         );
     }
@@ -2729,6 +2772,7 @@ mod tests {
             true,
             None,
             Some(Path::new("/cache/dirsql.db")),
+            Path::new("/root"),
         );
         assert!(
             ddl.ends_with("'', 'gitignore')"),
@@ -2750,13 +2794,15 @@ mod tests {
             true,
             Some("parse.py {path}"),
             None,
+            Path::new("/index"),
         );
         assert!(
             ddl.ends_with(
                 "USING dirsql_parsed('/var/log', '*.log', 'parse.py {path}', 'gitignore', \
-                 '', 'node_modules/**')"
+                 '', '/index', 'node_modules/**')"
             ),
-            "the parser form drops the path prefix and keeps ignore rules, got: {ddl}"
+            "the parser form drops the path prefix, names the index root and keeps \
+             ignore rules, got: {ddl}"
         );
     }
 
@@ -2769,6 +2815,7 @@ mod tests {
             true,
             Some("sh -c 'echo hi'"),
             None,
+            Path::new("/root"),
         );
         assert!(
             ddl.contains("'sh -c ''echo hi'''"),
