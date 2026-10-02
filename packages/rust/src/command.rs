@@ -119,8 +119,8 @@ pub fn run_command(
     let argv = build_argv(command, placeholders)?;
     // `build_argv` guarantees a non-empty argv.
     let mut cmd = Command::new(&argv[0]);
-    cmd.args(&argv[1..])
-        .current_dir(cwd)
+    push_args(&mut cmd, &argv[1..]);
+    cmd.current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(if stdin_payload.is_some() {
@@ -193,6 +193,19 @@ pub fn run_command(
     }
 }
 
+#[cfg(windows)]
+fn push_args(cmd: &mut Command, args: &[String]) {
+    use std::os::windows::process::CommandExt;
+    for arg in args {
+        cmd.raw_arg(quote_windows_arg(arg));
+    }
+}
+
+#[cfg(not(windows))]
+fn push_args(cmd: &mut Command, args: &[String]) {
+    cmd.args(args);
+}
+
 fn spawn_error(program: &str, source: std::io::Error, cwd: &Path) -> CommandError {
     // A missing cwd fails the child's chdir with `NotFound` too.
     if !searched_path(program, source.kind()) || !cwd.is_dir() {
@@ -250,7 +263,27 @@ pub(crate) fn build_argv(
 /// back to `arg` exactly.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn quote_windows_arg(arg: &str) -> String {
-    arg.to_string()
+    let mut out = String::with_capacity(arg.len() + 2);
+    out.push('"');
+    let mut backslashes = 0;
+    for ch in arg.chars() {
+        match ch {
+            '\\' => backslashes += 1,
+            '"' => {
+                out.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+                out.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                out.extend(std::iter::repeat_n('\\', backslashes));
+                out.push(ch);
+                backslashes = 0;
+            }
+        }
+    }
+    out.extend(std::iter::repeat_n('\\', backslashes * 2));
+    out.push('"');
+    out
 }
 
 /// Replace every `{name}` in `token` with its placeholder value in a single

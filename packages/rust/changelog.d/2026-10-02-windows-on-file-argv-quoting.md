@@ -1,0 +1,1 @@
+**Fixed** On Windows, every argument of an `on-file` command is now passed double-quoted by the MS C-runtime rules, so an MSYS/Cygwin child (Git for Windows' `sh`, `printf`, `cat`) no longer glob- or brace-expands it. `on-file = "printf '[{}]'"` now yields its rows instead of none.
