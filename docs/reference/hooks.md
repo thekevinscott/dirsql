@@ -69,8 +69,8 @@ on-file = "timeout 30 my-extractor"
 ```
 
 When the wrapper kills an overrunning command, the run exits non-zero and
-the ordinary [failure semantics](#failure-semantics) apply — the file is
-skipped, the scan continues.
+the ordinary [failure semantics](#failure-semantics) apply — the table's
+command failed, so the build fails.
 
 ::: warning Windows
 Windows's built-in `timeout` command is a *sleep*, not a bound — it cannot
@@ -94,18 +94,17 @@ A hook run fails when the command:
 - exits zero but prints no non-empty stdout line,
 - or prints output that does not parse as a JSON array of row objects.
 
-What a failure *means*: **per-file isolation.** The file contributes no rows
-and is reported as skipped; the scan indexes every other file and commits.
-The CLI names up to ten skipped files on stderr, then `... and N more`, and
-exits `23` — distinct from `0` (clean) and `1` (the run failed), so a caller
-can tell a partial index from a complete one. A row the table rejects under
-`strict` counts as the same kind of failure.
+What a failure *means*: the command ran once for the whole table, so its
+failure is the table's, and a table that cannot be filled fails the build.
+The error names the table and carries the command's exit status and stderr
+tail; the CLI prints it and exits `1`. A row the table rejects under `strict`
+counts as the same kind of failure.
 
 ## `on-file` contract
 
-Runs once per file matched by the table's `glob`, at initial scan and on
-every watched change. The command reads the file itself and prints a JSON
-array of row objects; see [`[[table]]`](./config.md#table) for the
+Runs once per table, over every file matched by the table's `glob`, at
+initial scan and on every watched change. The command reads the files itself
+and prints a JSON array of row objects; see [`[[table]]`](./config.md#table) for the
 row-mapping rules.
 
 The same command is attachable two ways, over the same contract: the

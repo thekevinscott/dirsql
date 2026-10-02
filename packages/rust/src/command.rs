@@ -8,8 +8,8 @@
 //!   single argument — but no shell is ever invoked: there is no globbing,
 //!   piping, or variable expansion. To get a real shell, ask for one
 //!   explicitly (`sh -c '…'`).
-//! - **Placeholders.** `{path}`, `{args}`, `{root}` (and any
-//!   others a caller supplies) are substituted into whole argv tokens, every
+//! - **Placeholders.** `{args}`, `{root}` (and any others a caller
+//!   supplies) are substituted into whole argv tokens, every
 //!   occurrence. Substitution is single-pass and left-to-right per token, so a
 //!   value that itself contains `{…}` is never re-scanned — a substituted value
 //!   is always exactly one argv element, keeping values with spaces (and
@@ -31,8 +31,8 @@ use std::process::{Command, Stdio};
 
 /// A named placeholder substituted into a command's argv.
 ///
-/// `name` is the bare identifier (no braces): a `name` of `path` matches the
-/// template token `{path}`. Substitution only — a placeholder whose `{name}`
+/// `name` is the bare identifier (no braces): a `name` of `root` matches the
+/// template token `{root}`. Substitution only — a placeholder whose `{name}`
 /// never appears in the template is a no-op.
 #[derive(Debug, Clone)]
 pub struct Placeholder {
@@ -573,7 +573,7 @@ mod tests {
     #[test]
     fn substitutes_a_single_placeholder() {
         assert_eq!(
-            argv("cat {path}", &[Placeholder::new("path", "a/b.json")]),
+            argv("cat {file}", &[Placeholder::new("file", "a/b.json")]),
             ["cat", "a/b.json"]
         );
     }
@@ -582,8 +582,8 @@ mod tests {
     fn substitutes_all_occurrences_across_and_within_tokens() {
         assert_eq!(
             argv(
-                "cp {path} {path}.bak --label={path}",
-                &[Placeholder::new("path", "x")]
+                "cp {file} {file}.bak --label={file}",
+                &[Placeholder::new("file", "x")]
             ),
             ["cp", "x", "x.bak", "--label=x"]
         );
@@ -592,7 +592,7 @@ mod tests {
     #[test]
     fn a_substituted_value_with_spaces_stays_a_single_arg() {
         assert_eq!(
-            argv("read {path}", &[Placeholder::new("path", "my file.json")]),
+            argv("read {file}", &[Placeholder::new("file", "my file.json")]),
             ["read", "my file.json"]
         );
     }
@@ -601,27 +601,27 @@ mod tests {
     fn substitution_is_single_pass_so_injected_braces_are_not_rescanned() {
         assert_eq!(
             argv(
-                "run {args} {path}",
+                "run {args} {file}",
                 &[
-                    Placeholder::new("args", "hello {path}"),
-                    Placeholder::new("path", "REAL"),
+                    Placeholder::new("args", "hello {file}"),
+                    Placeholder::new("file", "REAL"),
                 ]
             ),
-            ["run", "hello {path}", "REAL"]
+            ["run", "hello {file}", "REAL"]
         );
     }
 
     #[test]
     fn unknown_placeholder_is_left_literal() {
         assert_eq!(
-            argv("echo {unknown} {path}", &[Placeholder::new("path", "p")]),
+            argv("echo {unknown} {file}", &[Placeholder::new("file", "p")]),
             ["echo", "{unknown}", "p"]
         );
     }
 
     #[test]
     fn a_placeholder_the_template_omits_is_dropped() {
-        assert_eq!(argv("run", &[Placeholder::new("path", "/tmp/x")]), ["run"]);
+        assert_eq!(argv("run", &[Placeholder::new("file", "/tmp/x")]), ["run"]);
     }
 
     #[test]

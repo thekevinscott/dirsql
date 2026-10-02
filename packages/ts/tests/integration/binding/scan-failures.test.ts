@@ -1,10 +1,7 @@
-// Binding-tier tests for the scan's record of files it skipped (#715).
-//
-// Since #714 a file whose `onFile` hook throws, or whose row the table
-// rejects, is skipped rather than failing the scan. The CLI reports those
-// skips on stderr and exits 23; a TypeScript caller had no equivalent, so an
-// incomplete index was indistinguishable from a complete one -- the
-// regression this closes.
+// Binding-tier tests for the scan's record of files a per-file `onFile` hook
+// skipped: one whose hook throws, or whose row the table rejects, is skipped
+// rather than failing the scan, and the caller can tell an incomplete index
+// from a complete one.
 import { writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

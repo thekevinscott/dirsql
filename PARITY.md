@@ -390,12 +390,13 @@ to the Rust-core-public `functions::DEFAULT_FUNCTION_TIMEOUT` (30s, #820) —
 config-schema surface shared by every install, with **no** Python/TypeScript
 public-API binding, so no drift.
 
-- **`on-file` (B2 #327).** A **required** `[[table]]` key naming a per-file
-  command whose JSON-array stdout becomes the table's rows (interpolation-only
-  placeholders `{path}` (the file's **absolute** path, #542) / `{root}` — a
-  template that omits one receives no value, no append-if-absent, #538/#539;
-  per-file error isolation; unbounded since #820 — bound a hook by wrapping
-  its command in `timeout(1)`). A `[[table]]` without
+- **`on-file` (B2 #327).** A **required** `[[table]]` key naming a per-table
+  command whose JSON-array stdout becomes the table's rows (every matched
+  file's **absolute** path appended as a trailing argument; the
+  interpolation-only placeholder `{root}` — a template that omits it receives
+  no value, no append-if-absent, #538/#539; a failed command fails the build;
+  unbounded since #820 — bound a hook by wrapping its command in
+  `timeout(1)`). A `[[table]]` without
   it is a load error since #634 (after fact-injection removal a hook-less table
   would emit only all-NULL rows), so `config::TableConfig::on_file` is `String`,
   not `Option<String>`. Parsed and executed in the shared Rust core
@@ -414,8 +415,8 @@ public-API binding, so no drift.
 
 - **`--on-file` (path-table parser, #631).** A `dirsql query` flag naming a
   command that supplies every path-table's rows and schema (a JSON array of row
-  objects; the `on-file` hook contract — argv splitting, `{path}`/`{root}`,
-  per-file failure isolation). The stat columns are not
+  objects; the `on-file` hook contract — argv splitting, `{root}`, trailing
+  paths, a failed command fails the query). The stat columns are not
   reachable on a parsed path-table; parsed scans honor the same skip rules stat
   scans do. Threaded through the shared Rust core (`db::Db::set_path_table_parser`
   → the `dirsql_parsed` module) via a **doc-hidden** `DirSQLBuilder::path_table_parser`
@@ -442,7 +443,7 @@ public-API binding, so no drift.
 - `AsyncDirSQL` uses tokio and `OnceCell` internally.
 - Watch returns `futures_channel::mpsc::UnboundedReceiver<RowEvent>` implementing `Stream`.
 - All fallible operations return `Result<T, DirSqlError>`. Statements classified as writes by SQLite's `sqlite3_stmt_readonly` surface as the unit variant `DirSqlError::WriteForbidden`; in the Python/TS bindings the same condition is a `RuntimeError` / `Error` with a "read-only" message.
-- **Parity restored (dirsql#715).** All three SDKs expose the files a scan could not index: Rust `DirSQL::scan_failures() -> &[OnFileFailure]`, Python `await db.scan_failures()` (a list of `ScanFailure` with `.path` / `.message`, importable as `from dirsql import ScanFailure`), TypeScript `await db.scanFailures()` (`ScanFailure[]` with `path` / `message`, exported from the package barrel). A hook that fails, or a row the table rejects, skips that file rather than the scan; the list is how a caller learns the index is incomplete and which files are missing. Empty after a clean scan. The CLI additionally reports skips on stderr (capped at ten, then `... and N more`) and exits `23` — CLI-only by nature, since a library has no exit code. `--allow-skipped` remains unbuilt and is tracked in #715.
+- **Parity restored (dirsql#715).** All three SDKs expose the files a scan could not index: Rust `DirSQL::scan_failures() -> &[OnFileFailure]`, Python `await db.scan_failures()` (a list of `ScanFailure` with `.path` / `.message`, importable as `from dirsql import ScanFailure`), TypeScript `await db.scanFailures()` (`ScanFailure[]` with `path` / `message`, exported from the package barrel). A programmatic per-file hook that fails, or a row the table rejects, skips that file rather than the scan; the list is how a caller learns the index is incomplete and which files are missing. Empty after a clean scan. A config-declared `on-file` command runs once per table, so its failure is a build error, not a skip; the CLI prints it and exits `1`. `--allow-skipped` remains unbuilt and is tracked in #715.
 
 ### TypeScript
 - Uses `camelCase` for method names.

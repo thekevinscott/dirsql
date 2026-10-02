@@ -27,7 +27,6 @@ pub mod launcher;
 pub mod matcher;
 mod on_file;
 #[doc(hidden)]
-pub mod parsed_cache;
 #[doc(hidden)]
 pub mod parsed_vtab;
 #[doc(hidden)]
@@ -118,8 +117,7 @@ const BATCH_OWNER: &str = "";
 /// failure rather than only whichever came first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OnFileFailure {
-    /// Path relative to the scan root, or the table's name when its command
-    /// failed over the whole table.
+    /// Path relative to the scan root.
     pub path: String,
     /// The hook's error, as rendered by its `Display`.
     pub message: String,
@@ -209,6 +207,9 @@ pub enum DirSqlError {
 
     #[error("{0}")]
     PathPlaceholder(String),
+
+    #[error("table `{name}`: {message}")]
+    TableCommand { name: String, message: String },
 }
 
 impl DirSqlError {
@@ -992,7 +993,6 @@ impl DirSQL {
             hint_legacy_files_table,
             persist: persist_ctx.map(|ctx| PreparedPersist {
                 db: ctx.db,
-                path: ctx.path,
                 deleted,
                 meta: ctx.expected_meta,
                 meta_current: ctx.meta_current,
@@ -1054,11 +1054,11 @@ impl DirSQL {
         } = prepared;
 
         let (mut db, persist_ready, needs_sweep) = match persist {
-            Some(p) => {
-                let mut db = p.db;
-                db.set_path_table_cache(p.path);
-                (db, Some((p.deleted, p.meta, p.meta_current)), p.needs_sweep)
-            }
+            Some(p) => (
+                p.db,
+                Some((p.deleted, p.meta, p.meta_current)),
+                p.needs_sweep,
+            ),
             None => (Db::new()?, None, false),
         };
         db.set_path_table_root(root.clone());
@@ -1311,10 +1311,8 @@ impl DirSQL {
                         }
                     }
                     Err(message) => {
-                        db.delete_rows_by_file(&table_name, BATCH_OWNER)
-                            .map_err(map_db_error)?;
-                        on_file_failures.push(OnFileFailure {
-                            path: table_name.clone(),
+                        return Err(DirSqlError::TableCommand {
+                            name: table_name,
                             message,
                         });
                     }
@@ -1734,7 +1732,6 @@ pub struct PreparedBuild {
 #[doc(hidden)]
 pub struct PreparedPersist {
     db: Db,
-    path: PathBuf,
     deleted: Vec<(String, String)>,
     meta: HashMap<String, String>,
     /// Whether the cache already holds exactly `meta`. When it does the meta
@@ -1749,9 +1746,6 @@ pub struct PreparedPersist {
 
 struct PersistContext {
     db: Db,
-    /// Where the cache lives, carried through so parsed path-tables can reuse
-    /// their rows from the same file.
-    path: PathBuf,
     /// Cached file bookkeeping keyed by `(rel_path, table_name)` — a file may
     /// be cached under several tables under fan-out.
     cached: HashMap<(String, String), CachedFile>,
@@ -1827,7 +1821,6 @@ fn prepare_persist(
 
     Ok(PersistContext {
         db,
-        path,
         cached,
         // Compatible means every expected key matches; equal length makes it
         // equality, which is what lets the write be skipped outright.
@@ -2152,8 +2145,8 @@ fn build_tables_from_config(
 
 /// Run a table's `on-file` command once over every matched file and parse its
 /// output into rows. The absolute paths are appended to the command's argv in
-/// scan order; `{root}` is the index root. Any failure is the table's: the
-/// scan records it and the table stays empty.
+/// scan order; `{root}` is the index root. Any failure is the table's and
+/// fails the build.
 fn run_on_files(
     command: &str,
     paths: &[PathBuf],
@@ -3183,7 +3176,6 @@ mod internal_tests {
         );
         let ctx = PersistContext {
             db: Db::new().unwrap(),
-            path: PathBuf::from("/unused/cache.db"),
             cached,
             expected_meta: HashMap::new(),
             meta_current: false,
@@ -3220,7 +3212,6 @@ mod internal_tests {
         );
         let ctx = PersistContext {
             db: Db::new().unwrap(),
-            path: PathBuf::from("/unused/cache.db"),
             cached,
             expected_meta: HashMap::new(),
             meta_current: false,
@@ -3237,7 +3228,6 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let ctx = PersistContext {
             db: Db::new().unwrap(),
-            path: PathBuf::from("/unused/cache.db"),
             cached: HashMap::new(),
             expected_meta: HashMap::new(),
             meta_current: false,
@@ -4044,7 +4034,6 @@ mod internal_tests {
         );
         let ctx = PersistContext {
             db: Db::new().unwrap(),
-            path: PathBuf::from("/unused/cache.db"),
             cached,
             expected_meta: HashMap::new(),
             meta_current: false,
@@ -4078,7 +4067,6 @@ mod internal_tests {
         );
         let ctx = PersistContext {
             db: Db::new().unwrap(),
-            path: PathBuf::from("/unused/cache.db"),
             cached,
             expected_meta: HashMap::new(),
             meta_current: false,
@@ -4106,7 +4094,6 @@ mod internal_tests {
         );
         let ctx = PersistContext {
             db: Db::new().unwrap(),
-            path: PathBuf::from("/unused/cache.db"),
             cached,
             expected_meta: HashMap::new(),
             meta_current: false,
@@ -4652,7 +4639,6 @@ mod internal_tests {
         create_sidecar_tables(db.conn()).unwrap();
         PreparedPersist {
             db,
-            path: PathBuf::from("/unused/cache.db"),
             deleted: deleted
                 .iter()
                 .map(|(path, table)| (path.to_string(), table.to_string()))

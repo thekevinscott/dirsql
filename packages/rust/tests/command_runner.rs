@@ -27,8 +27,8 @@ fn substitutes_a_placeholder_and_reads_the_named_file() {
     let dir = TempDir::new().unwrap();
     std::fs::write(dir.path().join("data.txt"), "row-a\nrow-b\n").unwrap();
     let out = run_command(
-        "cat {path}",
-        &[Placeholder::new("path", "data.txt")],
+        "cat {file}",
+        &[Placeholder::new("file", "data.txt")],
         dir.path(),
         None,
     )
@@ -40,11 +40,11 @@ fn substitutes_a_placeholder_and_reads_the_named_file() {
 fn a_placeholder_the_template_omits_is_not_appended() {
     let dir = TempDir::new().unwrap();
     std::fs::write(dir.path().join("data.txt"), "only-line\n").unwrap();
-    // `cat` with no argument reads its (null) stdin: an omitted `{path}` is not
+    // `cat` with no argument reads its (null) stdin: an omitted `{file}` is not
     // appended, so there is no file to read and the run produces no payload.
     let err = run_command(
         "cat",
-        &[Placeholder::new("path", "data.txt")],
+        &[Placeholder::new("file", "data.txt")],
         dir.path(),
         None,
     )
@@ -155,7 +155,7 @@ fn a_missing_program_path_is_a_spawn_error_naming_the_program() {
 fn a_bare_name_missing_from_path_names_the_program_and_the_path_search() {
     let dir = TempDir::new().unwrap();
     let err = run_command(
-        "dirsql-no-such-program-xyzzy {path}",
+        "dirsql-no-such-program-xyzzy {file}",
         &[Placeholder::new("path", "a.md")],
         dir.path(),
         None,
@@ -181,7 +181,7 @@ fn a_bare_name_present_in_the_cwd_suggests_the_dot_slash_form() {
     std::fs::write(&script, "#!/bin/sh\necho '[]'\n").unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let err = run_command("dirsql-local-extract.sh {path}", &[], dir.path(), None)
+    let err = run_command("dirsql-local-extract.sh {file}", &[], dir.path(), None)
         .expect_err("a bare name is never resolved against the cwd");
     let message = err.to_string();
     assert!(

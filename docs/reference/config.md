@@ -320,9 +320,9 @@ integral number → `INTEGER`, any other number → `REAL`; a string → `TEXT`;
 nested array or object → its JSON text as `TEXT`.
 
 A row's columns are exactly the keys the command emits, narrowed to the DDL;
-dirsql merges nothing else in. Output that is not a JSON array of objects is a
-per-file failure: the file is skipped with a stderr warning and the scan
-continues (see [failure semantics](./hooks.md#failure-semantics)).
+dirsql merges nothing else in. Output that is not a JSON array of objects fails
+the table, and a failed table fails the build (see
+[failure semantics](./hooks.md#failure-semantics)).
 
 ## Composing multiple configs
 

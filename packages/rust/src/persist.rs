@@ -229,8 +229,7 @@ pub fn create_sidecar_tables(conn: &Connection) -> rusqlite::Result<()> {
             snapshot_ns  INTEGER NOT NULL,
             PRIMARY KEY (rel_path, table_name)
          );",
-    )?;
-    crate::parsed_cache::create_table(conn)
+    )
 }
 
 /// Read all `_dirsql_meta` key/value pairs.
@@ -428,10 +427,6 @@ pub fn drop_user_tables(conn: &Connection) -> rusqlite::Result<()> {
     // Wipe the row mapping too: a cold rebuild re-ingests every file and
     // `insert_row` repopulates it; stale rows would duplicate/orphan state.
     conn.execute("DELETE FROM _dirsql_internal_rows", [])?;
-    // The parsed path-table rows are keyed by their own identity hash, not by
-    // the meta the caller just rejected, but they are cached data in a cache
-    // being discarded: keep the file one thing, wholly stale or wholly warm.
-    crate::parsed_cache::clear(conn)?;
     Ok(())
 }
 
