@@ -28,6 +28,8 @@ cargo install dirsql --features cli
 ```
 
 > The npm CLI requires **Node ≥ 20.11**.
+>
+> Supported on Linux, macOS, and Windows (x64). CI runs the Rust test suite on Linux and Windows; the macOS artifacts are built but not tested in CI.
 
 ## Quick start
 
