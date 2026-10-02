@@ -141,6 +141,18 @@ mod tests {
     }
 
     #[test]
+    fn chunks_never_emits_an_empty_run_before_a_leading_oversized_argument() {
+        let args = args(&["toolong", "b"]);
+        assert_eq!(lens(&chunks(&args, 3)), vec![1, 1]);
+    }
+
+    #[test]
+    fn the_budget_carries_hundreds_of_paths_in_one_run() {
+        let paths: Vec<String> = (0..300).map(|i| format!("/{i:0>99}")).collect();
+        assert_eq!(lens(&chunks(&paths, ARG_BUDGET)), vec![300]);
+    }
+
+    #[test]
     fn chunks_over_nothing_is_no_runs() {
         assert!(chunks(&[], 10).is_empty());
     }

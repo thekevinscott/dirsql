@@ -896,7 +896,7 @@ impl DirSQL {
             no_ignore: false,
         };
         let prepared = Self::prepare_resolved(resolved)?;
-        Self::finish_build_with_fs(prepared, fs)
+        Self::finish_build_with_fs(prepared, fs, Progress::indexing())
     }
 
     /// Split-phase construction — part 1. Performs all I/O that is safe to run
@@ -1026,15 +1026,17 @@ impl DirSQL {
     /// run. For the napi-rs binding that is the JS main thread.
     #[doc(hidden)]
     pub fn finish_build(prepared: PreparedBuild) -> Result<Self> {
-        Self::finish_build_with_fs(prepared, Arc::new(RealFs))
+        Self::finish_build_with_fs(prepared, Arc::new(RealFs), Progress::indexing())
     }
 
     /// Variant of [`finish_build`] taking the [`FileSystem`] to store on the
-    /// instance. Production always passes `Arc::new(RealFs)`; unit tests
-    /// inject a fake.
+    /// instance and the ingest phase's [`Progress`] reporter. Production
+    /// always passes `Arc::new(RealFs)` and a stderr reporter; unit tests
+    /// inject fakes.
     pub(crate) fn finish_build_with_fs(
         prepared: PreparedBuild,
         fs: Arc<dyn FileSystem>,
+        mut progress: Progress,
     ) -> Result<Self> {
         let PreparedBuild {
             root,
@@ -1204,7 +1206,6 @@ impl DirSQL {
                 .iter()
                 .map(|(_, _, files)| files.len())
                 .sum::<usize>()) as u64;
-        let mut progress = Progress::indexing();
         let mut done: u64 = 0;
         for (
             ScannedFile {
@@ -4611,6 +4612,307 @@ mod internal_tests {
             Err(e) => e,
         };
         assert!(serr.to_string().contains("init failed"), "got: {serr}");
+    }
+
+    fn prepared_build(
+        root: &Path,
+        tables: Vec<Table>,
+        scanned_files: Vec<ScannedFile>,
+        persist: Option<PreparedPersist>,
+    ) -> PreparedBuild {
+        PreparedBuild {
+            ignore: Vec::new(),
+            root: root.to_path_buf(),
+            tables,
+            extensions: Vec::new(),
+            functions: Vec::new(),
+            matcher: TableMatcher::new(&[], &[]).unwrap(),
+            scanned_files,
+            poll_interval: DEFAULT_POLL_INTERVAL,
+            persist,
+            hint_legacy_files_table: false,
+            path_table_parser: None,
+            no_ignore: false,
+        }
+    }
+
+    fn scanned(rel_path: &str, table: &str, trusted: bool) -> ScannedFile {
+        ScannedFile {
+            rel_path: rel_path.into(),
+            table_name: table.into(),
+            stat: None,
+            trusted,
+        }
+    }
+
+    /// A warm cache that reports `deleted` as the files gone since its last
+    /// write and whose meta is already current.
+    fn warm_cache(deleted: &[(&str, &str)]) -> PreparedPersist {
+        let db = Db::new().unwrap();
+        create_sidecar_tables(db.conn()).unwrap();
+        PreparedPersist {
+            db,
+            path: PathBuf::from("/unused/cache.db"),
+            deleted: deleted
+                .iter()
+                .map(|(path, table)| (path.to_string(), table.to_string()))
+                .collect(),
+            meta: HashMap::new(),
+            meta_current: true,
+            needs_sweep: false,
+        }
+    }
+
+    fn name_row(name: &str) -> Row {
+        Row::from_iter([("name".to_string(), Value::Text(name.into()))])
+    }
+
+    type Calls = Arc<Mutex<Vec<Vec<PathBuf>>>>;
+
+    /// A per-table hook that records every argument list it is handed and
+    /// answers one `name` row per path, holding the file's basename.
+    fn recording_per_table(name: &str, glob: &str) -> (Table, Calls) {
+        let calls: Calls = Arc::default();
+        let seen = Arc::clone(&calls);
+        let table = Table::per_table(
+            name,
+            format!("CREATE TABLE {name} (name TEXT)"),
+            glob,
+            move |paths: &[PathBuf]| {
+                seen.lock().unwrap().push(paths.to_vec());
+                Ok(paths
+                    .iter()
+                    .map(|p| name_row(&p.file_name().unwrap().to_string_lossy()))
+                    .collect())
+            },
+        );
+        (table, calls)
+    }
+
+    fn build(prepared: PreparedBuild) -> DirSQL {
+        DirSQL::finish_build_with_fs(prepared, Arc::new(FakeFs::default()), Progress::indexing())
+            .unwrap()
+    }
+
+    #[test]
+    fn finish_build_runs_a_per_table_hook_once_over_its_files_in_scan_order() {
+        let dir = TempDir::new().unwrap();
+        let (items, calls) = recording_per_table("items", "*.txt");
+        let scanned = vec![
+            scanned("b.txt", "items", false),
+            scanned("a.txt", "items", false),
+        ];
+
+        let db = build(prepared_build(dir.path(), vec![items], scanned, None));
+
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![vec![dir.path().join("b.txt"), dir.path().join("a.txt")]]
+        );
+        assert_eq!(
+            db.query("SELECT name FROM items ORDER BY rowid").unwrap(),
+            vec![name_row("b.txt"), name_row("a.txt")]
+        );
+        assert!(db.scan_failures().is_empty(), "{:?}", db.scan_failures());
+    }
+
+    /// A `Write` the test reads back, standing in for stderr.
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+
+    impl Captured {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn finish_build_counts_per_file_and_per_table_files_toward_one_ingest_total() {
+        let dir = TempDir::new().unwrap();
+        let out = Captured::default();
+        let progress = Progress::new(
+            "indexing",
+            "indexed",
+            "files",
+            Box::new(out.clone()),
+            Box::new(progress::SystemClock),
+            progress::Mode::Always,
+            false,
+        );
+        let notes = Table::new("notes", "CREATE TABLE notes (name TEXT)", "*.md", |_| {
+            Vec::new()
+        });
+        let (items, _) = recording_per_table("items", "*.txt");
+        let (tags, _) = recording_per_table("tags", "*.tag");
+        let scanned = vec![
+            scanned("n.md", "notes", false),
+            scanned("a.txt", "items", false),
+            scanned("b.txt", "items", false),
+            scanned("t.tag", "tags", false),
+        ];
+        let prepared = prepared_build(dir.path(), vec![notes, items, tags], scanned, None);
+
+        DirSQL::finish_build_with_fs(prepared, Arc::new(FakeFs::default()), progress).unwrap();
+
+        let text = out.text();
+        for line in [
+            "dirsql: indexing 0/4 files (0%)",
+            "dirsql: indexing 1/4 files (25%)",
+            "dirsql: indexing 3/4 files (75%)",
+            "dirsql: indexed 4 files in",
+        ] {
+            assert!(text.contains(line), "missing {line:?} in {text:?}");
+        }
+    }
+
+    #[test]
+    fn finish_build_skips_a_per_file_hook_for_a_file_the_cache_holds() {
+        let dir = TempDir::new().unwrap();
+        let calls: Arc<Mutex<Vec<String>>> = Arc::default();
+        let seen = Arc::clone(&calls);
+        let notes = Table::new(
+            "notes",
+            "CREATE TABLE notes (name TEXT)",
+            "*.md",
+            move |path| {
+                seen.lock().unwrap().push(path.to_string());
+                Vec::new()
+            },
+        );
+        let scanned = vec![
+            scanned("cached.md", "notes", true),
+            scanned("fresh.md", "notes", false),
+        ];
+
+        build(prepared_build(
+            dir.path(),
+            vec![notes],
+            scanned,
+            Some(warm_cache(&[])),
+        ));
+
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![dir.path().join("fresh.md").to_string_lossy().into_owned()]
+        );
+    }
+
+    #[test]
+    fn finish_build_keeps_a_per_table_hooks_cached_rows_while_every_file_is_current() {
+        let dir = TempDir::new().unwrap();
+        let notes = Table::new("notes", "CREATE TABLE notes (name TEXT)", "*.md", |_| {
+            Vec::new()
+        });
+        let (items, calls) = recording_per_table("items", "*.txt");
+        let scanned = vec![
+            scanned("a.txt", "items", true),
+            scanned("b.txt", "items", true),
+        ];
+
+        build(prepared_build(
+            dir.path(),
+            vec![notes, items],
+            scanned,
+            Some(warm_cache(&[("gone.md", "notes")])),
+        ));
+
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "{:?}",
+            calls.lock().unwrap()
+        );
+    }
+
+    #[test]
+    fn finish_build_reruns_a_per_table_hook_when_one_of_its_files_is_stale() {
+        let dir = TempDir::new().unwrap();
+        let (items, calls) = recording_per_table("items", "*.txt");
+        let scanned = vec![
+            scanned("a.txt", "items", true),
+            scanned("b.txt", "items", false),
+        ];
+
+        build(prepared_build(
+            dir.path(),
+            vec![items],
+            scanned,
+            Some(warm_cache(&[])),
+        ));
+
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![vec![dir.path().join("a.txt"), dir.path().join("b.txt")]]
+        );
+    }
+
+    #[test]
+    fn finish_build_reruns_a_per_table_hook_when_one_of_its_files_is_gone() {
+        let dir = TempDir::new().unwrap();
+        let (items, calls) = recording_per_table("items", "*.txt");
+        let scanned = vec![scanned("a.txt", "items", true)];
+
+        build(prepared_build(
+            dir.path(),
+            vec![items],
+            scanned,
+            Some(warm_cache(&[("gone.txt", "items")])),
+        ));
+
+        assert_eq!(*calls.lock().unwrap(), vec![vec![dir.path().join("a.txt")]]);
+    }
+
+    #[test]
+    fn apply_file_events_reruns_a_per_table_hook_once_for_a_burst_of_its_files() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let a = root.join("a.txt");
+        let b = root.join("b.txt");
+        let fake = FakeFs::default().with_subtree(
+            root.clone(),
+            vec![(a.clone(), "items".into()), (b.clone(), "items".into())],
+        );
+        let (items, calls) = recording_per_table("items", "**/*.txt");
+        let db =
+            DirSQL::with_ignore_and_fs(&root, vec![items], Vec::<String>::new(), Arc::new(fake))
+                .unwrap();
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "a table with no files spawns nothing"
+        );
+
+        let events = db.apply_file_events(vec![
+            FileEvent::Created(a.clone()),
+            FileEvent::Modified(b.clone()),
+        ]);
+
+        assert_eq!(*calls.lock().unwrap(), vec![vec![a, b]]);
+        assert_eq!(
+            events,
+            vec![
+                RowEvent::Insert {
+                    table: "items".into(),
+                    row: name_row("a.txt"),
+                    file_path: "a.txt".into(),
+                },
+                RowEvent::Insert {
+                    table: "items".into(),
+                    row: name_row("b.txt"),
+                    file_path: "a.txt".into(),
+                },
+            ]
+        );
+        assert_eq!(row_names(&db), vec!["a.txt", "b.txt"]);
     }
 }
 

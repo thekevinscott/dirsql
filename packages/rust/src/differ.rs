@@ -300,6 +300,27 @@ mod tests {
     }
 
     #[test]
+    fn diff_unordered_deletes_only_the_copies_of_a_duplicate_that_are_gone() {
+        let dup = row(&[("id", Value::Integer(1))]);
+
+        let events = diff_unordered(
+            "t",
+            &[dup.clone(), dup.clone()],
+            std::slice::from_ref(&dup),
+            "trigger",
+        );
+
+        assert_eq!(
+            events,
+            vec![RowEvent::Delete {
+                table: "t".into(),
+                row: dup,
+                file_path: "trigger".into(),
+            }]
+        );
+    }
+
+    #[test]
     fn diff_unordered_pairs_a_changed_row_as_an_update() {
         let kept = row(&[("id", Value::Integer(1))]);
         let before = row(&[("id", Value::Integer(2)), ("size", Value::Integer(5))]);
