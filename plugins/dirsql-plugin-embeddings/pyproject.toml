@@ -17,7 +17,8 @@ requires-python = ">=3.10"
 #
 # model2vec (NOT sentence-transformers/torch) is the inference stack: static
 # embeddings whose runtime deps are numpy + tokenizers, viable in uvx
-# ephemeral envs. cachetta is the vector cache; tqdm the stderr progress UI.
+# ephemeral envs. The vector cache is stdlib sqlite3; tqdm the stderr
+# progress UI.
 #
 # dirsql is the SDK the one-liner search command runs its generated SQL
 # through. Functionally it needs >= 0.4.17 (the first release with the core
@@ -30,7 +31,6 @@ dependencies = [
     "dirsql",
     "sqlite-vec>=0.1",
     "model2vec>=0.6",
-    "cachetta>=0.7",
     "tqdm>=4",
     "click>=8",
 ]

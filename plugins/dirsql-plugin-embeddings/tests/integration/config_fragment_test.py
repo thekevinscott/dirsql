@@ -39,14 +39,13 @@ def describe_config_fragment():
 
     def it_declares_the_embed_function_exactly_per_spec():
         (function,) = _fragment()["dirsql"]["function"]
-        batch = function.pop("batch", None)
-        assert isinstance(batch, int) and batch > 0, batch
         assert function == {
             "name": "embed",
             "args": [1, 2],
             "command": "dirsql-plugin-embeddings worker",
             "deterministic": True,
             "timeout": "600s",
+            "batch": 4096,
         }
 
 

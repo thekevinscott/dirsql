@@ -1,4 +1,3 @@
-from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,20 +18,3 @@ def describe_cache_dir():
         with patch.dict(cache.os.environ, {"XDG_CACHE_HOME": ""}):
             with patch.object(cache.Path, "home", return_value=Path("/home/u")):
                 assert cache.cache_dir() == Path("/home/u/.cache/dirsql/embeddings")
-
-
-def describe_make_cache():
-    def it_builds_a_hashed_cachetta_at_the_cache_dir_with_no_eviction():
-        with patch.object(cache, "Cachetta") as cachetta:
-            with patch.object(
-                cache, "cache_dir", return_value=Path("/somewhere")
-            ) as directory:
-                built = cache.make_cache()
-        directory.assert_called_once_with()
-        cachetta.assert_called_once_with(
-            path=Path("/somewhere"), hashed=True, duration=cache.NO_EVICTION
-        )
-        assert built is cachetta.return_value
-
-    def it_pins_no_eviction_to_a_thousand_years():
-        assert cache.NO_EVICTION == timedelta(days=365000)
