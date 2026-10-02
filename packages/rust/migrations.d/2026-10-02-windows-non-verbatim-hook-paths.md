@@ -30,6 +30,7 @@ device name, a trailing dot or space, a path of 260 or more UTF-16 units, or a
 
 ```toml
 [[table]]
+name = "seen"
 ddl = "CREATE TABLE seen (n INTEGER)"
 glob = "*.txt"
 on-file = "sh -c 'printf \"%s\\n\" \"$1\" >> seen.log; echo []' sh {path}"
