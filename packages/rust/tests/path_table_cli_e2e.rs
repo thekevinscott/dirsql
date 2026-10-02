@@ -4,6 +4,7 @@
 #![cfg(feature = "cli")]
 
 use std::fs;
+use std::path::Path;
 use std::process::Output;
 
 use assert_cmd::prelude::*;
@@ -17,6 +18,11 @@ fn fixture() -> TempDir {
     fs::write(root.path().join("docs/b.md"), "bravo body").unwrap();
     fs::write(root.path().join("docs/c.csv"), "x,y").unwrap();
     root
+}
+
+/// How an absolute path-table reports `path`: always `/`-separated.
+fn reported(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
 }
 
 fn run(dir: &TempDir, sql: &str) -> Output {
@@ -181,7 +187,7 @@ fn a_home_relative_path_table_resolves_against_the_home_directory() {
     let path = rows(&out)[0]["path"].as_str().unwrap().to_string();
     assert_eq!(
         path,
-        home.path().join("notes/n.md").display().to_string(),
+        format!("{}/notes/n.md", reported(home.path())),
         "a '~/' path-table reports absolute paths"
     );
 }
@@ -201,7 +207,7 @@ fn an_absolute_path_table_resolves_outside_the_index_root() {
         .map(|r| r["path"].as_str().unwrap().to_string())
         .collect();
 
-    assert_eq!(found, vec![other.path().join("o.md").display().to_string()]);
+    assert_eq!(found, vec![format!("{}/o.md", reported(other.path()))]);
 }
 
 #[test]
