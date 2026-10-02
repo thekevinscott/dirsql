@@ -2,8 +2,8 @@
 
 Reads the packaged ``dirsql.toml`` exactly as the launcher does and pins the
 whole surface it declares: the sqlite-vec ``[[dirsql.extension]]`` entry
-(unchanged) plus the ``[[dirsql.function]]`` entry for ``embed``, exactly as
-specified in #801.
+(unchanged) plus the ``[[dirsql.function]]`` entry for ``embed``, batched so
+a statement's values reach the worker in bulk.
 """
 
 import sys
@@ -39,6 +39,8 @@ def describe_config_fragment():
 
     def it_declares_the_embed_function_exactly_per_spec():
         (function,) = _fragment()["dirsql"]["function"]
+        batch = function.pop("batch", None)
+        assert isinstance(batch, int) and batch > 0, batch
         assert function == {
             "name": "embed",
             "args": [1, 2],

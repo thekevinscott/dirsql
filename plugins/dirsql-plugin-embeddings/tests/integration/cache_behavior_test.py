@@ -1,16 +1,20 @@
 """Integration: the on-disk vector cache, observed through real workers.
 
-Each (value bytes, model identifier) pair owns exactly one cache entry under
-``$XDG_CACHE_HOME/dirsql/embeddings/``, so entry counts across real worker
-runs pin hit/miss behavior: repeats (same process or a fresh one) add nothing,
-content changes and model changes each add one. The default-model requests are
-driven through a wrapper process that points the default at the on-disk test
-model (the sandboxed suite cannot download the real default); the worker
-itself runs unmodified.
+The cache is one SQLite database per model under
+``$XDG_CACHE_HOME/dirsql/embeddings/``, holding one row per (value bytes,
+model identifier) pair, so row counts across real worker runs pin hit/miss
+behavior: repeats (same process or a fresh one) add nothing, content changes
+and model changes each add one. The default-model requests are driven through
+a wrapper process that points the default at the on-disk test model (the
+sandboxed suite cannot download the real default); the worker itself runs
+unmodified.
 """
 
 import base64
+import json
+import sqlite3
 import sys
+from contextlib import closing
 
 DEFAULT_PATCH_ARGV_PREFIX = [
     sys.executable,
@@ -24,11 +28,20 @@ DEFAULT_PATCH_ARGV_PREFIX = [
 ]
 
 
-def entries(cache_home):
+def databases(cache_home):
     embeddings = cache_home / "dirsql" / "embeddings"
     if not embeddings.is_dir():
-        return 0
-    return sum(1 for path in embeddings.iterdir() if path.is_file())
+        return []
+    return sorted(embeddings.glob("*.db"))
+
+
+def entries(cache_home):
+    total = 0
+    for path in databases(cache_home):
+        with closing(sqlite3.connect(path)) as connection:
+            (count,) = connection.execute("SELECT count(*) FROM vectors").fetchone()
+        total += count
+    return total
 
 
 def describe_cache_location():
@@ -38,6 +51,15 @@ def describe_cache_location():
         worker = spawn_worker()
         worker.request("hello", tiny_model)
         assert entries(cache_home) == 1
+
+    def it_keeps_one_database_per_model(
+        spawn_worker, cache_home, tiny_model, other_model
+    ):
+        worker = spawn_worker()
+        worker.request("hello", tiny_model)
+        assert len(databases(cache_home)) == 1
+        worker.request("hello", other_model)
+        assert len(databases(cache_home)) == 2
 
     def it_never_writes_into_the_working_directory(
         spawn_worker, tiny_model, tmp_path
@@ -111,11 +133,52 @@ def describe_default_model():
         assert entries(cache_home) == 1
 
 
-def describe_cache_reporting():
-    """The worker tells dirsql which answers cost nothing (#1034).
+def describe_batched_requests():
+    def _batch(worker, *texts, model):
+        line = json.dumps({"calls": [[text, model] for text in texts]})
+        return worker.send_line(line)["results"]
 
-    ``cachetta``'s wrapper returns a hit and a miss identically, so the worker
-    has to recover the signal itself; these pin that it recovers the right one.
+    def it_adds_one_entry_per_distinct_value(spawn_worker, cache_home, tiny_model):
+        worker = spawn_worker()
+        _batch(worker, "hello", "world", "hello", model=tiny_model)
+        assert entries(cache_home) == 2
+
+    def it_serves_a_repeated_batch_from_the_cache(
+        spawn_worker, cache_home, tiny_model
+    ):
+        worker = spawn_worker()
+        cold = _batch(worker, "hello", "world", model=tiny_model)
+        warm = _batch(worker, "hello", "world", model=tiny_model)
+        assert [result["meta"] for result in cold] == [{"cached": False}] * 2
+        assert [result["meta"] for result in warm] == [{"cached": True}] * 2
+        assert [result["ok"] for result in warm] == [[1.0, 0.0], [0.0, 1.0]]
+        assert entries(cache_home) == 2
+
+    def it_computes_only_the_misses_of_a_mixed_batch(
+        spawn_worker, cache_home, tiny_model
+    ):
+        worker = spawn_worker()
+        worker.request("hello", tiny_model)
+        hit, miss = _batch(worker, "hello", "world", model=tiny_model)
+        assert hit["meta"] == {"cached": True}
+        assert miss["meta"] == {"cached": False}
+        assert entries(cache_home) == 2
+
+    def it_survives_the_process(spawn_worker, cache_home, tiny_model):
+        first = spawn_worker()
+        _batch(first, "hello", "world", model=tiny_model)
+        first.close()
+        warm = _batch(spawn_worker(), "world", "hello", model=tiny_model)
+        assert [result["ok"] for result in warm] == [[0.0, 1.0], [1.0, 0.0]]
+        assert [result["meta"] for result in warm] == [{"cached": True}] * 2
+        assert entries(cache_home) == 2
+
+
+def describe_cache_reporting():
+    """The worker tells dirsql which answers cost nothing.
+
+    A hit is a row the store already held; a miss is a vector the model
+    computed this call. These pin that the flag says which.
     """
 
     def it_flags_a_recomputed_value_as_not_cached(spawn_worker, tiny_model):
