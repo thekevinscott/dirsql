@@ -4,7 +4,7 @@
 //! consistent with the live user rows across create / modify / delete and
 //! round-trips the persisted cache.
 
-use dirsql::db::{Db, INTERNAL_ROWS_TABLE};
+use dirsql::db::{Db, INTERNAL_RANGES_TABLE, INTERNAL_ROWS_TABLE};
 use dirsql::{DirSQL, Table, Value};
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -110,6 +110,10 @@ fn mapping_table_is_a_durable_sidecar() {
     assert!(
         table_exists(&conn, INTERNAL_ROWS_TABLE),
         "{INTERNAL_ROWS_TABLE} must persist in the cache"
+    );
+    assert!(
+        table_exists(&conn, INTERNAL_RANGES_TABLE),
+        "{INTERNAL_RANGES_TABLE} must persist in the cache"
     );
 }
 

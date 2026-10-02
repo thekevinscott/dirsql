@@ -64,6 +64,13 @@ fn query_rejects_internal_rows_table() {
 }
 
 #[test]
+fn query_rejects_internal_ranges_table() {
+    let root = TempDir::new().unwrap();
+    let db = persisted_db(root.path());
+    assert_rejected(&db, "_dirsql_internal_ranges");
+}
+
+#[test]
 fn query_rejects_files_table() {
     let root = TempDir::new().unwrap();
     let db = persisted_db(root.path());

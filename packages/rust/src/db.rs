@@ -219,20 +219,33 @@ pub type Result<T> = std::result::Result<T, DbError>;
 const MAPPING_INSERT: &str = "INSERT INTO _dirsql_internal_rows \
      (table_name, file_path, row_index, rowid_ref) VALUES (?1, ?2, ?3, ?4)";
 
+const RANGE_INSERT: &str = "INSERT INTO _dirsql_internal_ranges \
+     (table_name, file_path, first_rowid, last_rowid) VALUES (?1, ?2, ?3, ?4)";
+
+const RANGES_BY_FILE: &str = "SELECT first_rowid, last_rowid FROM _dirsql_internal_ranges \
+     WHERE table_name = ?1 AND file_path = ?2 ORDER BY first_rowid";
+
 /// Name of the internal row-bookkeeping table.
 ///
-/// The sole record of row ownership: it maps every inserted user row back to
-/// the file that produced it — `(table_name, file_path, row_index, rowid_ref)`
-/// — keyed on the row's rowid. Written in the same SQLite transaction as each
-/// row insert/delete, so it can never diverge from the rows it describes.
+/// Together with `_dirsql_internal_ranges` it is the sole record of row
+/// ownership. A row inserted one at a time maps back to the file that
+/// produced it here — `(table_name, file_path, row_index, rowid_ref)` — keyed
+/// on the row's rowid; a batch inserted at once is owned as one
+/// `(table_name, file_path, first_rowid, last_rowid)` range. Both are written
+/// in the same SQLite transaction as the row insert/delete, so neither can
+/// diverge from the rows it describes.
 pub const INTERNAL_ROWS_TABLE: &str = "_dirsql_internal_rows";
 
-/// Create the internal `_dirsql_internal_rows` bookkeeping table and its
-/// by-file index if they don't already exist. Idempotent.
+/// Name of the internal batch-ownership table.
+pub const INTERNAL_RANGES_TABLE: &str = "_dirsql_internal_ranges";
+
+/// Create the internal row-ownership tables (`_dirsql_internal_rows` and
+/// `_dirsql_internal_ranges`) and their by-file indexes if they don't already
+/// exist. Idempotent.
 ///
-/// A **real** table (not virtual): it lives in the persisted cache and is
-/// written inside the same transaction as the row inserts/deletes it
-/// describes, which is what gives the mapping crash-atomicity with the user
+/// **Real** tables (not virtual): they live in the persisted cache and are
+/// written inside the same transaction as the row inserts/deletes they
+/// describe, which is what gives ownership crash-atomicity with the user
 /// rows.
 pub fn ensure_internal_rows_table(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
@@ -243,8 +256,55 @@ pub fn ensure_internal_rows_table(conn: &Connection) -> rusqlite::Result<()> {
             rowid_ref  INTEGER NOT NULL
          );
          CREATE INDEX IF NOT EXISTS _dirsql_internal_rows_by_file
-            ON _dirsql_internal_rows(table_name, file_path);",
+            ON _dirsql_internal_rows(table_name, file_path);
+         CREATE TABLE IF NOT EXISTS _dirsql_internal_ranges (
+            table_name  TEXT NOT NULL,
+            file_path   TEXT NOT NULL,
+            first_rowid INTEGER NOT NULL,
+            last_rowid  INTEGER NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS _dirsql_internal_ranges_by_file
+            ON _dirsql_internal_ranges(table_name, file_path);",
     )
+}
+
+/// A batch of rows laid out in a table's DDL column order, so each row binds
+/// positionally with no per-cell lookup.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShapedRows {
+    pub columns: Vec<String>,
+    pub cells: Vec<Vec<Value>>,
+}
+
+impl ShapedRows {
+    pub fn len(&self) -> usize {
+        self.cells.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cells.is_empty()
+    }
+
+    /// The rows as column-name maps, for callers that compare rows by name.
+    pub fn to_maps(&self) -> Vec<HashMap<String, Value>> {
+        self.cells
+            .iter()
+            .map(|row| {
+                self.columns
+                    .iter()
+                    .cloned()
+                    .zip(row.iter().cloned())
+                    .collect()
+            })
+            .collect()
+    }
+}
+
+fn json_into_value(value: serde_json::Value) -> Value {
+    match value {
+        serde_json::Value::String(s) => Value::Text(s),
+        other => crate::json_to_value(&other),
+    }
 }
 
 /// One query's rows plus the column order the SELECT list asked for.
@@ -598,18 +658,81 @@ impl Db {
         Ok(())
     }
 
-    /// Insert every row of `rows` under `file_path`, in order, through one
-    /// prepared statement pair. Rows are bound by the table's columns, so a
-    /// key the table lacks is dropped and a column the row lacks is NULL;
-    /// callers normalize first when they need strictness.
-    pub fn insert_rows(
+    /// Lay `rows` out in `table`'s DDL column order.
+    ///
+    /// In relaxed mode (strict=false): a key the table lacks is dropped and a
+    /// column the row lacks is NULL. In strict mode (strict=true): every key
+    /// is validated as a safe SQL identifier, then any extra or missing key
+    /// produces a SchemaMismatch error. The identifier check runs *first* so a
+    /// malformed key reports as [`DbError::InvalidIdentifier`] rather than as
+    /// a less-actionable "extra columns" mismatch. Every row is shaped before
+    /// any is returned, so a hook that got one row wrong fails as a unit.
+    pub fn shape_rows(
         &self,
         table: &str,
-        rows: &[HashMap<String, Value>],
-        file_path: &str,
-    ) -> Result<()> {
-        validate_identifier(table)?;
+        rows: Vec<crate::infer::JsonRow>,
+        strict: bool,
+    ) -> Result<ShapedRows> {
         let columns = self.get_table_columns(table)?;
+        let mut cells = Vec::with_capacity(rows.len());
+        for row in rows {
+            if strict {
+                for (key, _) in &row.0 {
+                    validate_identifier(key)?;
+                }
+                let extra: Vec<&str> = row
+                    .0
+                    .iter()
+                    .map(|(key, _)| key.as_str())
+                    .filter(|key| !columns.iter().any(|c| c == key))
+                    .collect();
+                if !extra.is_empty() {
+                    return Err(DbError::SchemaMismatch(format!(
+                        "extra columns not in table {}: {}",
+                        table,
+                        extra.join(", ")
+                    )));
+                }
+                let missing: Vec<&str> = columns
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|c| !row.0.iter().any(|(key, _)| key == c))
+                    .collect();
+                if !missing.is_empty() {
+                    return Err(DbError::SchemaMismatch(format!(
+                        "missing columns for table {}: {}",
+                        table,
+                        missing.join(", ")
+                    )));
+                }
+            }
+            let in_order = row.0.len() == columns.len()
+                && row.0.iter().zip(&columns).all(|((key, _), c)| key == c);
+            if in_order {
+                cells.push(row.0.into_iter().map(|(_, v)| json_into_value(v)).collect());
+                continue;
+            }
+            let mut shaped = vec![Value::Null; columns.len()];
+            for (key, value) in row.0 {
+                if let Some(i) = columns.iter().position(|c| *c == key) {
+                    shaped[i] = json_into_value(value);
+                }
+            }
+            cells.push(shaped);
+        }
+        Ok(ShapedRows { columns, cells })
+    }
+
+    /// Insert every row of `rows` under `file_path`, in order, through one
+    /// prepared statement, and own the batch as one rowid range rather than
+    /// a mapping row each.
+    ///
+    /// The range spans the smallest to the largest rowid the batch received,
+    /// so a table whose DDL aliases rowid (`INTEGER PRIMARY KEY`) must not
+    /// interleave batches of different owners.
+    pub fn insert_rows(&self, table: &str, rows: &ShapedRows, file_path: &str) -> Result<()> {
+        validate_identifier(table)?;
+        let columns = &rows.columns;
         let sql = if columns.is_empty() {
             format!("INSERT INTO \"{table}\" DEFAULT VALUES")
         } else {
@@ -628,18 +751,22 @@ impl Db {
         };
         {
             let mut insert = self.conn.prepare_cached(&sql)?;
-            let mut map = self.conn.prepare_cached(MAPPING_INSERT)?;
-            for (row_index, row) in rows.iter().enumerate() {
-                for (i, column) in columns.iter().enumerate() {
-                    insert.raw_bind_parameter(i + 1, row.get(column).unwrap_or(&Value::Null))?;
+            let mut range: Option<(i64, i64)> = None;
+            for row in &rows.cells {
+                for (i, value) in row.iter().enumerate() {
+                    insert.raw_bind_parameter(i + 1, value)?;
                 }
                 insert.raw_execute()?;
-                map.execute(rusqlite::params![
-                    table,
-                    file_path,
-                    i64::try_from(row_index).expect("row index fits in i64"),
-                    self.conn.last_insert_rowid()
-                ])?;
+                let rowid = self.conn.last_insert_rowid();
+                range = Some(match range {
+                    None => (rowid, rowid),
+                    Some((first, last)) => (first.min(rowid), last.max(rowid)),
+                });
+            }
+            if let Some((first, last)) = range {
+                self.conn
+                    .prepare_cached(RANGE_INSERT)?
+                    .execute(rusqlite::params![table, file_path, first, last])?;
             }
         }
         if let Some(tx) = tx {
@@ -721,10 +848,11 @@ impl Db {
         Ok(())
     }
 
-    /// Read back the rows a given file produced for `table`, ordered by row
-    /// index. Ownership and ordering come from the `_dirsql_internal_rows`
-    /// mapping (joined on `rowid`); user columns are qualified with the table
-    /// alias so a user column named like a mapping column stays unambiguous.
+    /// Read back the rows a given file produced for `table`: the rows it
+    /// inserted one at a time, ordered by row index, then the batches it
+    /// inserted at once, in rowid order. User columns are qualified with the
+    /// table alias so a user column named like a mapping column stays
+    /// unambiguous.
     ///
     /// A row read back compares equal to the normalized row that was inserted
     /// only when the on-file callback's value types match the declared column
@@ -747,25 +875,48 @@ impl Db {
             // let SQLite report "no such table".
             col_list = "1".to_string();
         }
-        let sql = format!(
-            "SELECT {col_list} FROM \"{table}\" AS t \
-             JOIN _dirsql_internal_rows AS m ON m.rowid_ref = t.rowid \
-             WHERE m.table_name = ?1 AND m.file_path = ?2 ORDER BY m.row_index"
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params![table, file_path], |row| {
+        let read_row = |row: &rusqlite::Row<'_>| {
             let mut map = HashMap::new();
             for (i, name) in user_columns.iter().enumerate() {
                 let v: rusqlite::types::Value = row.get(i)?;
                 map.insert(name.clone(), Value::from(v));
             }
             Ok(map)
-        })?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row?);
+        };
+        let mapped = format!(
+            "SELECT {col_list} FROM \"{table}\" AS t \
+             JOIN _dirsql_internal_rows AS m ON m.rowid_ref = t.rowid \
+             WHERE m.table_name = ?1 AND m.file_path = ?2 ORDER BY m.row_index"
+        );
+        let mut out = self
+            .conn
+            .prepare(&mapped)?
+            .query_map(rusqlite::params![table, file_path], &read_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let ranged = format!(
+            "SELECT {col_list} FROM \"{table}\" AS t \
+             WHERE t.rowid BETWEEN ?1 AND ?2 ORDER BY t.rowid"
+        );
+        let mut stmt = self.conn.prepare(&ranged)?;
+        for (first, last) in Self::ranges_by_file(&self.conn, table, file_path)? {
+            out.extend(
+                stmt.query_map([first, last], &read_row)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?,
+            );
         }
         Ok(out)
+    }
+
+    fn ranges_by_file(
+        conn: &Connection,
+        table: &str,
+        file_path: &str,
+    ) -> rusqlite::Result<Vec<(i64, i64)>> {
+        conn.prepare_cached(RANGES_BY_FILE)?
+            .query_map(rusqlite::params![table, file_path], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?
+            .collect()
     }
 
     /// Every distinct `(table_name, file_path)` whose file sits beneath the
@@ -773,7 +924,10 @@ impl Db {
     pub fn files_under(&self, dir: &str) -> Result<Vec<(String, String)>> {
         let prefix = format!("{dir}/");
         let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT table_name, file_path FROM _dirsql_internal_rows \
+            "SELECT DISTINCT table_name, file_path FROM ( \
+                SELECT table_name, file_path FROM _dirsql_internal_rows \
+                UNION ALL \
+                SELECT table_name, file_path FROM _dirsql_internal_ranges) \
              WHERE substr(file_path, 1, length(?1)) = ?1 \
              ORDER BY table_name, file_path",
         )?;
@@ -785,26 +939,34 @@ impl Db {
     /// Called from delete_rows_by_file() either inside a caller-supplied
     /// transaction or inside a transaction opened by delete_rows_by_file().
     fn delete_rows_by_file_stmts(conn: &Connection, table: &str, file_path: &str) -> Result<usize> {
-        let sql = format!(
-            "DELETE FROM {} WHERE rowid IN \
+        let mapped = format!(
+            "DELETE FROM \"{table}\" WHERE rowid IN \
              (SELECT rowid_ref FROM _dirsql_internal_rows \
-              WHERE table_name = ?1 AND file_path = ?2)",
-            table
+              WHERE table_name = ?1 AND file_path = ?2)"
         );
-        let count = conn.execute(&sql, rusqlite::params![table, file_path])?;
+        let mut count = conn.execute(&mapped, rusqlite::params![table, file_path])?;
         conn.execute(
             "DELETE FROM _dirsql_internal_rows WHERE table_name = ?1 AND file_path = ?2",
+            rusqlite::params![table, file_path],
+        )?;
+        let ranged = format!("DELETE FROM \"{table}\" WHERE rowid BETWEEN ?1 AND ?2");
+        for (first, last) in Self::ranges_by_file(conn, table, file_path)? {
+            count += conn.execute(&ranged, [first, last])?;
+        }
+        conn.execute(
+            "DELETE FROM _dirsql_internal_ranges WHERE table_name = ?1 AND file_path = ?2",
             rusqlite::params![table, file_path],
         )?;
         Ok(count)
     }
 
     /// Delete all rows that were produced by a given file path. Row ownership
-    /// is resolved through the `_dirsql_internal_rows` mapping.
+    /// is resolved through the `_dirsql_internal_rows` mapping and the
+    /// `_dirsql_internal_ranges` batches.
     ///
-    /// The user-row deletes and the matching mapping deletes commit in ONE
+    /// The user-row deletes and the matching ownership deletes commit in ONE
     /// transaction (either via a transaction opened here in autocommit mode,
-    /// or via the caller's already-open transaction), so the mapping never
+    /// or via the caller's already-open transaction), so the ownership never
     /// outlives the rows it describes.
     pub fn delete_rows_by_file(&self, table: &str, file_path: &str) -> Result<usize> {
         validate_identifier(table)?;
@@ -2405,19 +2567,129 @@ mod tests {
         assert_eq!(rows[0].get("id").unwrap(), &Value::Text("a".into()));
     }
 
+    /// The raw ranges for a table, ordered for stable assertions.
+    fn range_rows(db: &Db, table: &str) -> Vec<(String, i64, i64)> {
+        let mut stmt = db
+            .conn
+            .prepare(
+                "SELECT file_path, first_rowid, last_rowid FROM _dirsql_internal_ranges \
+                 WHERE table_name = ?1 ORDER BY first_rowid",
+            )
+            .unwrap();
+        stmt.query_map([table], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    }
+
+    fn json_rows(payload: &str) -> Vec<crate::infer::JsonRow> {
+        crate::infer::parse_rows(payload).unwrap()
+    }
+
+    fn shaped(db: &Db, table: &str, payload: &str) -> ShapedRows {
+        db.shape_rows(table, json_rows(payload), false).unwrap()
+    }
+
     #[test]
-    fn insert_rows_maps_every_row_to_its_file_in_order() {
+    fn shape_rows_lays_cells_out_in_ddl_order_whatever_the_key_order() {
         let db = Db::new().unwrap();
         db.create_table("t", "CREATE TABLE t (id TEXT, n INTEGER)")
             .unwrap();
-        let rows = vec![
-            HashMap::from([("id".into(), Value::Text("a".into()))]),
-            HashMap::from([
-                ("id".into(), Value::Text("b".into())),
-                ("n".into(), Value::Integer(2)),
-                ("extra".into(), Value::Integer(9)),
-            ]),
-        ];
+        let out = shaped(&db, "t", r#"[{"id":"a","n":1},{"n":2,"id":"b"}]"#);
+        assert_eq!(out.columns, vec!["id", "n"]);
+        assert_eq!(
+            out.cells,
+            vec![
+                vec![Value::Text("a".into()), Value::Integer(1)],
+                vec![Value::Text("b".into()), Value::Integer(2)],
+            ]
+        );
+        assert_eq!(out.len(), 2);
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn shape_rows_relaxed_drops_extra_keys_and_nulls_missing_columns() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (name TEXT, n INTEGER)")
+            .unwrap();
+        let out = shaped(&db, "t", r#"[{"name":"a"},{"n":1,"x":null}]"#).to_maps();
+        assert_eq!(out[0]["name"], Value::Text("a".into()));
+        assert_eq!(out[0]["n"], Value::Null);
+        assert_eq!(out[1]["name"], Value::Null);
+        assert_eq!(out[1]["n"], Value::Integer(1));
+        assert!(!out[1].contains_key("x"));
+    }
+
+    #[test]
+    fn shape_rows_strict_accepts_every_column_in_any_order() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT, n INTEGER)")
+            .unwrap();
+        let out = db
+            .shape_rows("t", json_rows(r#"[{"n":1,"id":"a"}]"#), true)
+            .unwrap();
+        assert_eq!(
+            out.cells,
+            vec![vec![Value::Text("a".into()), Value::Integer(1)]]
+        );
+    }
+
+    #[test]
+    fn shape_rows_strict_names_the_extra_columns() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (name TEXT)").unwrap();
+        let err = db
+            .shape_rows(
+                "t",
+                json_rows(r#"[{"name":"ok"},{"name":"x","color":"red"}]"#),
+                true,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(&err, DbError::SchemaMismatch(m) if m == "extra columns not in table t: color"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn shape_rows_strict_names_the_missing_columns() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (name TEXT, n INTEGER)")
+            .unwrap();
+        let err = db
+            .shape_rows("t", json_rows(r#"[{"name":"ok"}]"#), true)
+            .unwrap_err();
+        assert!(
+            matches!(&err, DbError::SchemaMismatch(m) if m == "missing columns for table t: n"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn shape_rows_strict_rejects_an_unsafe_key_before_judging_the_mismatch() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (name TEXT)").unwrap();
+        let err = db
+            .shape_rows("t", json_rows(r#"[{"name); DROP TABLE t; --":"x"}]"#), true)
+            .unwrap_err();
+        assert!(matches!(err, DbError::InvalidIdentifier(_)), "got: {err}");
+        let relaxed = db
+            .shape_rows(
+                "t",
+                json_rows(r#"[{"name); DROP TABLE t; --":"x"}]"#),
+                false,
+            )
+            .unwrap();
+        assert_eq!(relaxed.cells, vec![vec![Value::Null]]);
+    }
+
+    #[test]
+    fn insert_rows_owns_the_batch_as_one_rowid_range() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT, n INTEGER)")
+            .unwrap();
+        let rows = shaped(&db, "t", r#"[{"id":"a"},{"id":"b","n":2,"extra":9}]"#);
         db.insert_rows("t", &rows, "x.json").unwrap();
 
         let read = db.get_rows_by_file("t", "x.json").unwrap();
@@ -2426,29 +2698,171 @@ mod tests {
         assert_eq!(read[0]["n"], Value::Null);
         assert_eq!(read[1]["n"], Value::Integer(2));
         assert!(!read[1].contains_key("extra"));
-        let mapping = mapping_rows(&db, "t");
-        assert_eq!(mapping[0].0, "x.json");
-        assert_eq!((mapping[0].1, mapping[1].1), (0, 1));
+        assert!(mapping_rows(&db, "t").is_empty());
+        assert_eq!(range_rows(&db, "t"), vec![("x.json".to_string(), 1, 2)]);
+    }
+
+    #[test]
+    fn insert_rows_records_no_range_for_an_empty_batch() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
+        db.insert_rows("t", &shaped(&db, "t", "[]"), "x.json")
+            .unwrap();
+        assert!(range_rows(&db, "t").is_empty());
+        assert!(db.get_rows_by_file("t", "x.json").unwrap().is_empty());
+    }
+
+    #[test]
+    fn insert_rows_range_spans_a_user_declared_rowid_alias() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+            .unwrap();
+        let rows = shaped(&db, "t", r#"[{"id":7,"name":"g"},{"id":3,"name":"c"}]"#);
+        db.insert_rows("t", &rows, "x.json").unwrap();
+
+        assert_eq!(range_rows(&db, "t"), vec![("x.json".to_string(), 3, 7)]);
+        let names: Vec<Value> = db
+            .get_rows_by_file("t", "x.json")
+            .unwrap()
+            .into_iter()
+            .map(|r| r["name"].clone())
+            .collect();
+        assert_eq!(
+            names,
+            vec![Value::Text("c".into()), Value::Text("g".into())]
+        );
+        assert_eq!(db.delete_rows_by_file("t", "x.json").unwrap(), 2);
+    }
+
+    #[test]
+    fn insert_rows_binds_an_empty_column_list_by_default_values() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
+        let rows = ShapedRows {
+            columns: vec![],
+            cells: vec![vec![], vec![]],
+        };
+        db.insert_rows("t", &rows, "x.json").unwrap();
+        assert_eq!(db.get_rows_by_file("t", "x.json").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn get_rows_by_file_reads_mapped_rows_before_ranged_rows() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
+        db.insert_rows(
+            "t",
+            &shaped(&db, "t", r#"[{"id":"r1"},{"id":"r2"}]"#),
+            "x.json",
+        )
+        .unwrap();
+        db.insert_row(
+            "t",
+            &HashMap::from([("id".into(), Value::Text("m".into()))]),
+            "x.json",
+            0,
+        )
+        .unwrap();
+        db.insert_rows("t", &shaped(&db, "t", r#"[{"id":"other"}]"#), "y.json")
+            .unwrap();
+
+        let ids: Vec<Value> = db
+            .get_rows_by_file("t", "x.json")
+            .unwrap()
+            .into_iter()
+            .map(|r| r["id"].clone())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                Value::Text("m".into()),
+                Value::Text("r1".into()),
+                Value::Text("r2".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn delete_rows_by_file_removes_a_range_with_its_rows_and_leaves_other_owners() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
+        db.insert_rows(
+            "t",
+            &shaped(&db, "t", r#"[{"id":"a"},{"id":"b"}]"#),
+            "x.json",
+        )
+        .unwrap();
+        db.insert_rows("t", &shaped(&db, "t", r#"[{"id":"c"}]"#), "y.json")
+            .unwrap();
+        db.insert_row(
+            "t",
+            &HashMap::from([("id".into(), Value::Text("m".into()))]),
+            "x.json",
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(db.delete_rows_by_file("t", "x.json").unwrap(), 3);
+
+        assert!(db.get_rows_by_file("t", "x.json").unwrap().is_empty());
+        assert!(mapping_rows(&db, "t").is_empty());
+        assert_eq!(range_rows(&db, "t"), vec![("y.json".to_string(), 3, 3)]);
+        let left: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 1);
+    }
+
+    #[test]
+    fn files_under_lists_range_owners_too() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
+        db.insert_rows("t", &shaped(&db, "t", r#"[{"id":"a"}]"#), "dir/a.json")
+            .unwrap();
+        db.insert_rows("t", &shaped(&db, "t", r#"[{"id":"b"}]"#), "dir/a.json")
+            .unwrap();
+        db.insert_rows("t", &shaped(&db, "t", r#"[{"id":"c"}]"#), "")
+            .unwrap();
+        db.insert_row(
+            "t",
+            &HashMap::from([("id".into(), Value::Text("m".into()))]),
+            "dir/b.json",
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(
+            db.files_under("dir").unwrap(),
+            vec![
+                ("t".to_string(), "dir/a.json".to_string()),
+                ("t".to_string(), "dir/b.json".to_string()),
+            ]
+        );
     }
 
     #[test]
     fn insert_rows_joins_callers_open_transaction() {
         let db = Db::new().unwrap();
         db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
-        let rows = vec![HashMap::from([("id".into(), Value::Text("a".into()))])];
+        let rows = shaped(&db, "t", r#"[{"id":"a"}]"#);
 
         let tx = db.conn.unchecked_transaction().unwrap();
         db.insert_rows("t", &rows, "a.json").unwrap();
         drop(tx);
 
         assert!(db.get_rows_by_file("t", "a.json").unwrap().is_empty());
-        assert!(mapping_rows(&db, "t").is_empty());
+        assert!(range_rows(&db, "t").is_empty());
     }
 
     #[test]
     fn insert_rows_rejects_an_unsafe_table_name() {
         let db = Db::new().unwrap();
-        let err = db.insert_rows("bad name", &[], "a.json").unwrap_err();
+        let rows = ShapedRows {
+            columns: vec![],
+            cells: vec![],
+        };
+        let err = db.insert_rows("bad name", &rows, "a.json").unwrap_err();
         assert!(matches!(err, DbError::InvalidIdentifier(_)), "got: {err}");
     }
 

@@ -52,7 +52,7 @@ pub mod watcher;
 pub mod cli;
 
 use crate::config::Source;
-use crate::db::Db;
+use crate::db::{Db, ShapedRows};
 use crate::functions::ResolvedFunction;
 use crate::matcher::TableMatcher;
 use crate::persist::{
@@ -97,8 +97,10 @@ pub const DEFAULT_CONFIG_TOML: &str = include_str!("default_config.toml");
 
 type BoxError = Box<dyn StdError + Send + Sync + 'static>;
 type OnFileFn = dyn Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static;
-type OnFilesFn =
-    dyn Fn(&[PathBuf]) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static;
+type OnFilesFn = dyn Fn(&[PathBuf]) -> std::result::Result<Vec<infer::JsonRow>, BoxError>
+    + Send
+    + Sync
+    + 'static;
 
 /// How a table turns matched files into rows: a programmatic callback runs
 /// once per file; a configured `on-file` command runs once per table over
@@ -333,7 +335,10 @@ impl Table {
         on_files: F,
     ) -> Self
     where
-        F: Fn(&[PathBuf]) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static,
+        F: Fn(&[PathBuf]) -> std::result::Result<Vec<infer::JsonRow>, BoxError>
+            + Send
+            + Sync
+            + 'static,
     {
         Self {
             name: name.into(),
@@ -685,7 +690,7 @@ impl DirSQL {
                 Ok(g) => g,
                 Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
             };
-            let new_rows = match normalize_rows(&db, table, raw_rows, strict) {
+            let new_rows = match shape_rows(&db, table, raw_rows, strict) {
                 Ok(rows) => rows,
                 Err(message) => return vec![error_event(Some(table), trigger, message)],
             };
@@ -703,7 +708,7 @@ impl DirSQL {
             if let Err(e) = _tx.commit() {
                 return vec![error_event(Some(table), trigger, e.to_string())];
             }
-            (old_rows, new_rows)
+            (old_rows, new_rows.to_maps())
         };
         if let Ok(mut files) = self.inner.batch_files.lock() {
             files.insert(table.to_string(), rel_paths);
@@ -1288,7 +1293,7 @@ impl DirSQL {
                 let abs_paths: Vec<PathBuf> = rel_paths.iter().map(|r| root.join(r)).collect();
                 let outcome = hook(&abs_paths)
                     .map_err(|e| e.to_string())
-                    .and_then(|raw| normalize_rows(&db, &table_name, raw, strict));
+                    .and_then(|raw| shape_rows(&db, &table_name, raw, strict));
                 match outcome {
                     Ok(rows) => {
                         replace_table_rows(&db, &table_name, &rows).map_err(map_db_error)?;
@@ -2023,8 +2028,20 @@ fn normalize_rows(
         .map_err(|e| e.to_string())
 }
 
+/// Shape every row before any is inserted, so a hook that got one row wrong
+/// fails as a unit rather than leaving half its rows behind.
+fn shape_rows(
+    db: &Db,
+    table: &str,
+    raw_rows: Vec<infer::JsonRow>,
+    strict: bool,
+) -> std::result::Result<ShapedRows, String> {
+    db.shape_rows(table, raw_rows, strict)
+        .map_err(|e| e.to_string())
+}
+
 /// Replace a per-table hook's rows wholesale under [`BATCH_OWNER`].
-fn replace_table_rows(db: &Db, table: &str, rows: &[Row]) -> db::Result<()> {
+fn replace_table_rows(db: &Db, table: &str, rows: &ShapedRows) -> db::Result<()> {
     db.delete_rows_by_file(table, BATCH_OWNER)?;
     db.insert_rows(table, rows, BATCH_OWNER)
 }
@@ -2159,23 +2176,8 @@ fn run_on_files(
     paths: &[PathBuf],
     config_dir: &Path,
     root: &Path,
-) -> std::result::Result<Vec<Row>, BoxError> {
-    let rows = on_file::run(command, config_dir, root, paths)?;
-    Ok(rows.into_iter().map(json_row_into_row).collect())
-}
-
-fn json_row_into_row(row: infer::JsonRow) -> Row {
-    row.0
-        .into_iter()
-        .map(|(key, value)| (key, json_into_value(value)))
-        .collect()
-}
-
-fn json_into_value(value: serde_json::Value) -> Value {
-    match value {
-        serde_json::Value::String(s) => Value::Text(s),
-        other => json_to_value(&other),
-    }
+) -> std::result::Result<Vec<infer::JsonRow>, BoxError> {
+    Ok(on_file::run(command, config_dir, root, paths)?)
 }
 
 /// Map a JSON value to a SQLite [`Value`]: `null` → `Null`; `bool` → `Integer`
@@ -4448,7 +4450,7 @@ mod internal_tests {
         )
         .expect("a well-formed payload parses");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["n"], Value::Integer(1));
+        assert_eq!(rows[0].get("n"), Some(&serde_json::json!(1)));
     }
 
     /// `{abspath}` is not in the substitution table: it is left literal like any
@@ -4464,7 +4466,7 @@ mod internal_tests {
         )
         .expect("a well-formed payload parses");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["q"], Value::Text("{abspath}".into()));
+        assert_eq!(rows[0].get("q"), Some(&serde_json::json!("{abspath}")));
     }
 
     /// Every matched file's **absolute** path arrives as a trailing argument,
@@ -4667,6 +4669,10 @@ mod internal_tests {
         Row::from_iter([("name".to_string(), Value::Text(name.into()))])
     }
 
+    fn name_json_row(name: &str) -> infer::JsonRow {
+        infer::JsonRow(vec![("name".to_string(), serde_json::Value::from(name))])
+    }
+
     type Calls = Arc<Mutex<Vec<Vec<PathBuf>>>>;
 
     /// A per-table hook that records every argument list it is handed and
@@ -4682,7 +4688,7 @@ mod internal_tests {
                 seen.lock().unwrap().push(paths.to_vec());
                 Ok(paths
                     .iter()
-                    .map(|p| name_row(&p.file_name().unwrap().to_string_lossy()))
+                    .map(|p| name_json_row(&p.file_name().unwrap().to_string_lossy()))
                     .collect())
             },
         );
@@ -4951,12 +4957,19 @@ mod internal_tests {
 mod command_rows_tests {
     use super::*;
 
+    /// Parse `payload` and shape it against a table declaring exactly the
+    /// first row's keys, the way a configured `on-file` command's rows reach
+    /// the database.
     fn rows(payload: &str) -> Vec<Row> {
-        infer::parse_rows(payload)
-            .unwrap()
-            .into_iter()
-            .map(json_row_into_row)
-            .collect()
+        let parsed = infer::parse_rows(payload).unwrap();
+        let columns: Vec<String> = parsed
+            .first()
+            .map(|row| row.0.iter().map(|(key, _)| format!("\"{key}\"")).collect())
+            .unwrap_or_else(|| vec!["x".to_string()]);
+        let db = Db::new().unwrap();
+        db.create_table("t", &format!("CREATE TABLE t ({})", columns.join(", ")))
+            .unwrap();
+        db.shape_rows("t", parsed, false).unwrap().to_maps()
     }
 
     #[test]
