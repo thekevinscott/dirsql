@@ -30,7 +30,30 @@
 //! `timeout` key, else the 30-second default — [`DEFAULT_FUNCTION_TIMEOUT`]).
 //! A timeout or a worker crash kills the worker and fails the query with an
 //! actionable error; the next call starts a fresh worker.
+//!
+//! ## Batching
+//!
+//! A function declaring `batch = N` is additionally sent values in bulk:
+//!
+//! - Request: `{"calls": [[<arg>, ...], ...]}` — up to `N` calls, each
+//!   encoded as a single call's argument list.
+//! - Response: `{"results": [<response>, ...]}` — one single-call response
+//!   (`{"ok": ...}` or `{"err": ...}`) per call, in order — or a top-level
+//!   `{"err": "message"}`, which fails every call in the request.
+//!
+//! The round-trip is bounded by the per-call timeout times the number of
+//! calls in the request.
+//!
+//! Core gathers a statement's values in a *collect pass*: the statement runs
+//! once with the function's first real reply standing in for every later
+//! distinct argument tuple, which is queued and sent in batches; the
+//! statement then runs again served from those replies. A statement that
+//! never calls a batched function pays nothing for this — its collect pass
+//! is the only run. SQLite names the function's arguments only as it
+//! evaluates each row, which is why the values are gathered by running the
+//! statement rather than by inspecting it.
 
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -63,11 +86,15 @@ pub struct ResolvedFunction {
     pub command: String,
     pub deterministic: bool,
     pub timeout: Duration,
+    /// The most calls one batched request carries; `None` speaks only the
+    /// single-call protocol.
+    pub batch: Option<usize>,
     pub cwd: PathBuf,
 }
 
 /// Register every resolved function on `conn`, once per accepted arity.
-/// Purely registration — no worker is spawned here.
+/// Purely registration — no worker is spawned here. Returns the workers that
+/// batch, for the query path to run collect passes over.
 ///
 /// Every function shares one `calls` reporter: what a user waiting on a query
 /// wants to know is how many round trips it is paying for, not which function
@@ -76,32 +103,42 @@ pub(crate) fn register_all(
     conn: &Connection,
     functions: &[ResolvedFunction],
     calls: &Arc<CallReporter>,
-) -> rusqlite::Result<()> {
+) -> rusqlite::Result<Vec<Arc<Worker>>> {
+    let mut batched = Vec::new();
     for function in functions {
-        let worker = Arc::new(Worker::for_process(function));
-        for &arity in &function.args {
-            let worker = Arc::clone(&worker);
-            let calls = Arc::clone(calls);
-            conn.create_scalar_function(
-                &function.name,
-                i32::from(arity),
-                function_flags(function.deterministic),
-                move |ctx| {
-                    let mut args = Vec::with_capacity(ctx.len());
-                    for i in 0..ctx.len() {
-                        args.push(Value::from(rusqlite::types::Value::from(ctx.get_raw(i))));
-                    }
-                    calls.record();
-                    let reply = worker
-                        .call(&args)
-                        .map_err(|message| rusqlite::Error::UserFunctionError(message.into()))?;
-                    if reply.cached {
-                        calls.mark_cached();
-                    }
-                    Ok(reply.value)
-                },
-            )?;
+        let worker = Arc::new(Worker::for_process(function, Arc::clone(calls)));
+        register_worker(conn, &worker, &function.args, function.deterministic)?;
+        if function.batch.is_some() {
+            batched.push(worker);
         }
+    }
+    Ok(batched)
+}
+
+/// Register one worker's function on `conn` under each arity in `arities`.
+pub(crate) fn register_worker(
+    conn: &Connection,
+    worker: &Arc<Worker>,
+    arities: &[u8],
+    deterministic: bool,
+) -> rusqlite::Result<()> {
+    for &arity in arities {
+        let worker = Arc::clone(worker);
+        conn.create_scalar_function(
+            &worker.name.clone(),
+            i32::from(arity),
+            function_flags(deterministic),
+            move |ctx| {
+                let mut args = Vec::with_capacity(ctx.len());
+                for i in 0..ctx.len() {
+                    args.push(Value::from(rusqlite::types::Value::from(ctx.get_raw(i))));
+                }
+                worker
+                    .call(&args)
+                    .map(|reply| reply.value)
+                    .map_err(|message| rusqlite::Error::UserFunctionError(message.into()))
+            },
+        )?;
     }
     Ok(())
 }
@@ -241,50 +278,227 @@ pub(crate) struct Worker {
     name: String,
     command: String,
     timeout: Duration,
+    batch: Option<usize>,
+    calls: Arc<CallReporter>,
     inner: Mutex<WorkerInner>,
 }
 
 struct WorkerInner {
     spawner: Spawner,
     transport: Option<Box<dyn Transport>>,
+    /// The open collect pass, if any.
+    collect: Option<Collect>,
+    /// Replies already in hand for the statement's real run, keyed by the
+    /// request line they answer.
+    prefetched: HashMap<String, Result<Reply, String>>,
+}
+
+/// One collect pass over a statement.
+#[derive(Default)]
+struct Collect {
+    /// Whether the statement called the function at all.
+    invoked: bool,
+    /// The first real non-NULL reply, bound for every later call until the
+    /// real run. Something the statement can keep computing with — NULL
+    /// cannot stand in, since functions downstream (sqlite-vec's distance
+    /// functions, say) reject it.
+    placeholder: Option<Value>,
+    /// Argument tuples awaiting a batched request.
+    pending: Vec<Vec<Value>>,
+    /// Every request line queued or answered so far, so a repeated argument
+    /// tuple costs one call.
+    queued: HashSet<String>,
 }
 
 impl Worker {
-    fn for_process(function: &ResolvedFunction) -> Self {
+    fn for_process(function: &ResolvedFunction, calls: Arc<CallReporter>) -> Self {
         let command = function.command.clone();
         let cwd = function.cwd.clone();
         Self::with_spawner(
             &function.name,
             &function.command,
             function.timeout,
+            function.batch,
+            calls,
             Box::new(move || spawn_process(&command, &cwd)),
         )
     }
 
-    fn with_spawner(name: &str, command: &str, timeout: Duration, spawner: Spawner) -> Self {
+    fn with_spawner(
+        name: &str,
+        command: &str,
+        timeout: Duration,
+        batch: Option<usize>,
+        calls: Arc<CallReporter>,
+        spawner: Spawner,
+    ) -> Self {
         Self {
             name: name.to_string(),
             command: command.to_string(),
             timeout,
+            batch,
+            calls,
             inner: Mutex::new(WorkerInner {
                 spawner,
                 transport: None,
+                collect: None,
+                prefetched: HashMap::new(),
             }),
         }
     }
 
-    /// One protocol round-trip: spawn the worker if this is the first call,
-    /// send the encoded request, wait up to the per-call timeout for the
-    /// response, and decode it. `Err` carries the message the query fails
-    /// with. A transport failure (spawn error, crash, timeout) drops the
-    /// worker so the next call starts fresh; a protocol-level `{"err": ...}`
-    /// leaves the healthy worker running.
+    /// Answer one call. Outside a collect pass that is one protocol
+    /// round-trip, unless the collect pass already fetched the reply. Inside
+    /// one, the first call (and any call before a usable placeholder exists)
+    /// makes its round-trip; every later distinct argument tuple is queued
+    /// for a batched request and answered with the placeholder.
+    ///
+    /// `Err` carries the message the query fails with. A transport failure
+    /// (spawn error, crash, timeout) drops the worker so the next call starts
+    /// fresh; a protocol-level `{"err": ...}` leaves the healthy worker
+    /// running.
     fn call(&self, args: &[Value]) -> Result<Reply, String> {
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|e| format!("function `{}` worker state poisoned: {e}", self.name))?;
+        let mut inner = self.lock()?;
+        let key = request_line(args);
+        if let Some(reply) = inner.prefetched.get(&key) {
+            return reply.clone();
+        }
 
+        let mut flush_due = false;
+        let mut stand_in = None;
+        if let Some(collect) = inner.collect.as_mut() {
+            collect.invoked = true;
+            if let Some(placeholder) = &collect.placeholder {
+                stand_in = Some(placeholder.clone());
+                if collect.queued.insert(key.clone()) {
+                    collect.pending.push(args.to_vec());
+                    flush_due = Some(collect.pending.len()) >= self.batch;
+                }
+            }
+        }
+        if let Some(value) = stand_in {
+            if flush_due {
+                self.flush(&mut inner)?;
+            }
+            return Ok(Reply {
+                value,
+                cached: false,
+            });
+        }
+
+        self.calls.record();
+        let reply = self
+            .exchange(&mut inner, &key, self.timeout, 1)
+            .and_then(|line| self.decode(&line));
+        if let Ok(Reply { cached: true, .. }) = &reply {
+            self.calls.mark_cached();
+        }
+        if let Some(collect) = inner.collect.as_mut() {
+            if let Ok(Reply { value, .. }) = &reply
+                && *value != Value::Null
+            {
+                collect.placeholder = Some(value.clone());
+            }
+            collect.queued.insert(key.clone());
+            inner.prefetched.insert(key, reply.clone());
+        }
+        reply
+    }
+
+    /// Open a collect pass. Anything a previous pass left behind is dropped.
+    /// Inert on a worker without `batch`: its calls are real either way.
+    pub(crate) fn begin_collect(&self) -> Result<(), String> {
+        let mut inner = self.lock()?;
+        inner.prefetched.clear();
+        if self.batch.is_some() {
+            inner.collect = Some(Collect::default());
+        }
+        Ok(())
+    }
+
+    /// Close the collect pass, sending whatever is still queued. Returns
+    /// whether the statement called the function at all — the signal for
+    /// whether a real run is owed.
+    pub(crate) fn end_collect(&self) -> Result<bool, String> {
+        let mut inner = self.lock()?;
+        let flushed = self.flush(&mut inner);
+        let invoked = inner.collect.take().is_some_and(|collect| collect.invoked);
+        flushed?;
+        Ok(invoked)
+    }
+
+    /// Drop the replies gathered for a statement once it has run.
+    pub(crate) fn clear(&self) -> Result<(), String> {
+        let mut inner = self.lock()?;
+        inner.collect = None;
+        inner.prefetched.clear();
+        Ok(())
+    }
+
+    /// How many replies are held for a statement's real run.
+    #[cfg(test)]
+    pub(crate) fn gathered(&self) -> usize {
+        self.inner.lock().unwrap().prefetched.len()
+    }
+
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, WorkerInner>, String> {
+        self.inner
+            .lock()
+            .map_err(|e| format!("function `{}` worker state poisoned: {e}", self.name))
+    }
+
+    /// Send the queued argument tuples as one batched request and file each
+    /// reply under its call's request line. A worker-level `{"err": ...}` or
+    /// a malformed response fails every call in the request; a transport
+    /// failure fails the flush itself.
+    fn flush(&self, inner: &mut WorkerInner) -> Result<(), String> {
+        let pending = match inner.collect.as_mut() {
+            Some(collect) if !collect.pending.is_empty() => std::mem::take(&mut collect.pending),
+            _ => return Ok(()),
+        };
+        let count = pending.len();
+        let request = batched_request_line(&pending);
+        let timeout = self
+            .timeout
+            .saturating_mul(u32::try_from(count).unwrap_or(u32::MAX));
+        let line = self.exchange(inner, &request, timeout, count)?;
+        let results = match parse_batched_response(&line, count) {
+            Ok(results) => results,
+            Err(defect) => {
+                let message = format!(
+                    "function `{}` worker sent an invalid batched response ({defect}): {line}",
+                    self.name
+                );
+                vec![Response::Err(message); count]
+            }
+        };
+        for (args, response) in pending.iter().zip(results) {
+            self.calls.record();
+            let reply = match response {
+                Response::Ok { value, cached } => {
+                    if cached {
+                        self.calls.mark_cached();
+                    }
+                    Ok(Reply { value, cached })
+                }
+                Response::Err(message) => Err(message),
+            };
+            inner.prefetched.insert(request_line(args), reply);
+        }
+        Ok(())
+    }
+
+    /// One transport round-trip: spawn the worker if this is the first
+    /// request, send the line, wait up to `timeout` for the response.
+    /// `count` is how many calls the request carries, for the timeout
+    /// message.
+    fn exchange(
+        &self,
+        inner: &mut WorkerInner,
+        request: &str,
+        timeout: Duration,
+        count: usize,
+    ) -> Result<String, String> {
         if inner.transport.is_none() {
             let transport = (inner.spawner)().map_err(|e| {
                 format!(
@@ -296,8 +510,7 @@ impl Worker {
         }
         let transport = inner.transport.as_mut().expect("spawned above");
 
-        let request = request_line(args);
-        if transport.send_line(&request).is_err() {
+        if transport.send_line(request).is_err() {
             inner.transport = None;
             return Err(format!(
                 "worker for function `{}` (command `{}`) is not accepting requests; \
@@ -306,15 +519,20 @@ impl Worker {
             ));
         }
 
-        match transport.recv_line(self.timeout) {
-            Ok(line) => self.decode(&line),
+        match transport.recv_line(timeout) {
+            Ok(line) => Ok(line),
             Err(TransportError::Timeout) => {
                 inner.transport = None;
+                let budget = if count == 1 {
+                    format!("{timeout:?}")
+                } else {
+                    format!("{timeout:?} ({count} calls at {:?} each)", self.timeout)
+                };
                 Err(format!(
-                    "call to function `{}` timed out after {:?} (worker command `{}`); \
+                    "call to function `{}` timed out after {budget} (worker command `{}`); \
                      raise the function's `timeout` if the worker legitimately needs \
                      longer per call",
-                    self.name, self.timeout, self.command
+                    self.name, self.command
                 ))
             }
             Err(TransportError::Closed) => {
@@ -344,8 +562,18 @@ impl Worker {
 /// Encode one request: `{"call": [...]}` with the wire encodings from the
 /// module docs.
 fn request_line(args: &[Value]) -> String {
-    let encoded: Vec<serde_json::Value> = args.iter().map(value_to_json).collect();
-    serde_json::json!({ "call": encoded }).to_string()
+    serde_json::json!({ "call": encode_args(args) }).to_string()
+}
+
+/// Encode one batched request: `{"calls": [[...], ...]}`, one argument list
+/// per call.
+fn batched_request_line(calls: &[Vec<Value>]) -> String {
+    let encoded: Vec<Vec<serde_json::Value>> = calls.iter().map(|args| encode_args(args)).collect();
+    serde_json::json!({ "calls": encoded }).to_string()
+}
+
+fn encode_args(args: &[Value]) -> Vec<serde_json::Value> {
+    args.iter().map(value_to_json).collect()
 }
 
 /// SQL value → wire JSON: TEXT as string, INTEGER/REAL as numbers, NULL as
@@ -365,13 +593,13 @@ fn value_to_json(value: &Value) -> serde_json::Value {
 
 /// A completed round trip: the value to bind, plus whatever the response said
 /// about how it was produced.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Reply {
     value: Value,
     cached: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Response {
     Ok { value: Value, cached: bool },
     Err(String),
@@ -382,6 +610,10 @@ enum Response {
 fn parse_response(line: &str) -> Result<Response, String> {
     let parsed: serde_json::Value =
         serde_json::from_str(line).map_err(|e| format!("invalid JSON: {e}"))?;
+    parse_response_value(&parsed)
+}
+
+fn parse_response_value(parsed: &serde_json::Value) -> Result<Response, String> {
     let object = parsed
         .as_object()
         .ok_or_else(|| "expected a JSON object".to_string())?;
@@ -398,6 +630,41 @@ fn parse_response(line: &str) -> Result<Response, String> {
         value: json_to_sql_value(value)?,
         cached: cached_flag(object),
     })
+}
+
+/// Parse one batched response line into one [`Response`] per call, in
+/// order. A top-level `{"err": "message"}` is that error for every call.
+/// `Err` names the defect (invalid JSON, no `results` array, a count other
+/// than `expected`, a malformed entry) for the caller to wrap.
+fn parse_batched_response(line: &str, expected: usize) -> Result<Vec<Response>, String> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(line).map_err(|e| format!("invalid JSON: {e}"))?;
+    let object = parsed
+        .as_object()
+        .ok_or_else(|| "expected a JSON object".to_string())?;
+    if let Some(message) = object.get("err") {
+        let message = message
+            .as_str()
+            .ok_or_else(|| "\"err\" must be a string".to_string())?;
+        return Ok(vec![Response::Err(message.to_string()); expected]);
+    }
+    let results = object
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "expected a \"results\" array or an \"err\" key".to_string())?;
+    if results.len() != expected {
+        return Err(format!(
+            "expected {expected} results, got {}",
+            results.len()
+        ));
+    }
+    results
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| {
+            parse_response_value(entry).map_err(|defect| format!("result {i}: {defect}"))
+        })
+        .collect()
 }
 
 /// Whether the response flagged itself as served from the worker's own cache:
@@ -718,6 +985,12 @@ mod tests {
     }
 
     #[test]
+    fn batched_request_line_encodes_one_argument_list_per_call() {
+        let calls = vec![vec![text("a")], vec![text("b"), Value::Integer(1)]];
+        assert_eq!(batched_request_line(&calls), r#"{"calls":[["a"],["b",1]]}"#);
+    }
+
+    #[test]
     fn value_to_json_encodes_nonfinite_real_as_null() {
         assert!(value_to_json(&Value::Real(f64::NAN)).is_null());
     }
@@ -842,11 +1115,117 @@ mod tests {
         );
     }
 
+    // --- batched response decoding -------------------------------------------
+
+    fn results(line: &str, expected: usize) -> Vec<Result<(Value, bool), String>> {
+        parse_batched_response(line, expected)
+            .unwrap()
+            .into_iter()
+            .map(|response| match response {
+                Response::Ok { value, cached } => Ok((value, cached)),
+                Response::Err(message) => Err(message),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_batched_response_yields_one_reply_per_call_in_order() {
+        assert_eq!(
+            results(
+                r#"{"results": [{"ok": "A"}, {"err": "bad"}, {"ok": 1, "meta": {"cached": true}}]}"#,
+                3
+            ),
+            [
+                Ok((text("A"), false)),
+                Err("bad".to_string()),
+                Ok((Value::Integer(1), true))
+            ]
+        );
+    }
+
+    /// The worker could not answer the request as a whole; every call in it
+    /// gets that message.
+    #[test]
+    fn a_top_level_err_in_a_batched_response_fails_every_call() {
+        assert_eq!(
+            results(r#"{"err": "model missing"}"#, 2),
+            [
+                Err("model missing".to_string()),
+                Err("model missing".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn batched_response_defects_are_named() {
+        let defect = |line: &str, expected| parse_batched_response(line, expected).unwrap_err();
+        assert!(defect("not json", 1).contains("invalid JSON"));
+        assert!(defect("[]", 1).contains("JSON object"));
+        assert!(defect(r#"{"ok": 1}"#, 1).contains("\"results\" array"));
+        assert!(defect(r#"{"results": 1}"#, 1).contains("\"results\" array"));
+        assert!(defect(r#"{"err": 5}"#, 1).contains("must be a string"));
+        assert_eq!(
+            defect(r#"{"results": [{"ok": 1}]}"#, 2),
+            "expected 2 results, got 1"
+        );
+        assert_eq!(
+            defect(r#"{"results": [{"ok": 1}, 7]}"#, 2),
+            "result 1: expected a JSON object"
+        );
+        assert_eq!(
+            defect(r#"{"results": [{"ok": {"$bytes": "!!"}}]}"#, 1),
+            "result 0: \"$bytes\" is not valid base64"
+        );
+    }
+
+    #[test]
+    fn an_empty_batched_response_matches_an_empty_request() {
+        assert!(results(r#"{"results": []}"#, 0).is_empty());
+    }
+
     // --- defaults -----------------------------------------------------------
 
     #[test]
     fn the_default_function_timeout_is_thirty_seconds() {
         assert_eq!(DEFAULT_FUNCTION_TIMEOUT, Duration::from_secs(30));
+    }
+
+    // --- registration --------------------------------------------------------
+
+    fn resolved(name: &str, batch: Option<usize>) -> ResolvedFunction {
+        ResolvedFunction {
+            name: name.to_string(),
+            args: vec![1],
+            command: "worker".to_string(),
+            deterministic: false,
+            timeout: Duration::from_secs(1),
+            batch,
+            cwd: PathBuf::from("."),
+        }
+    }
+
+    /// Registration makes each function callable and hands back exactly the
+    /// workers that batch, which is what the query path runs collect passes
+    /// over.
+    #[test]
+    fn register_all_registers_every_function_and_returns_the_batching_workers() {
+        let conn = Connection::open_in_memory().unwrap();
+        let calls = Arc::new(reporter().0);
+
+        let batched = register_all(
+            &conn,
+            &[resolved("plain", None), resolved("bulk", Some(4))],
+            &calls,
+        )
+        .unwrap();
+
+        let names: Vec<&str> = batched.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names, ["bulk"]);
+        assert!(conn.prepare("SELECT plain(1), bulk(1)").is_ok());
+        assert!(
+            conn.prepare("SELECT bulk(1, 2)").is_err(),
+            "only the listed arity is registered"
+        );
     }
 
     // --- registration flags ------------------------------------------------
@@ -865,10 +1244,11 @@ mod tests {
 
     // --- worker state machine (scripted transport double) -------------------
 
-    struct FakeTransport {
-        sent: Vec<String>,
-        responses: Vec<Result<String, TransportError>>,
-        fail_send: bool,
+    pub(super) struct FakeTransport {
+        pub(super) sent: Arc<Mutex<Vec<String>>>,
+        pub(super) waits: Arc<Mutex<Vec<Duration>>>,
+        pub(super) responses: Vec<Result<String, TransportError>>,
+        pub(super) fail_send: bool,
     }
 
     impl Transport for FakeTransport {
@@ -876,59 +1256,115 @@ mod tests {
             if self.fail_send {
                 return Err(TransportError::Closed);
             }
-            self.sent.push(line.to_string());
+            self.sent.lock().unwrap().push(line.to_string());
             Ok(())
         }
 
-        fn recv_line(&mut self, _timeout: Duration) -> Result<String, TransportError> {
+        fn recv_line(&mut self, timeout: Duration) -> Result<String, TransportError> {
+            self.waits.lock().unwrap().push(timeout);
             self.responses.remove(0)
         }
     }
 
-    /// A worker over a spawner that scripts each spawn's responses and counts
-    /// spawns via the shared cell.
+    /// A worker over a spawner that scripts each spawn's responses, plus the
+    /// shared cells recording what it did: spawns, request lines sent, and
+    /// the timeout each receive waited.
+    struct Scripted {
+        worker: Worker,
+        spawns: Arc<Mutex<usize>>,
+        sent: Arc<Mutex<Vec<String>>>,
+        waits: Arc<Mutex<Vec<Duration>>>,
+        reporter: Arc<CallReporter>,
+    }
+
+    impl Scripted {
+        fn sent(&self) -> Vec<String> {
+            self.sent.lock().unwrap().clone()
+        }
+
+        fn spawns(&self) -> usize {
+            *self.spawns.lock().unwrap()
+        }
+
+        fn counts(&self) -> (u64, u64) {
+            let state = self.reporter.state.lock().unwrap();
+            (state.count, state.cached)
+        }
+    }
+
+    fn ok(line: &str) -> Result<String, TransportError> {
+        Ok(line.to_string())
+    }
+
     fn scripted_worker(
         scripts: Vec<Vec<Result<String, TransportError>>>,
         fail_send: bool,
-    ) -> (Worker, Arc<Mutex<usize>>) {
-        let spawn_count = Arc::new(Mutex::new(0));
+    ) -> Scripted {
+        scripted(None, scripts, fail_send)
+    }
+
+    fn batched_worker(batch: usize, scripts: Vec<Vec<Result<String, TransportError>>>) -> Scripted {
+        scripted(Some(batch), scripts, false)
+    }
+
+    fn scripted(
+        batch: Option<usize>,
+        scripts: Vec<Vec<Result<String, TransportError>>>,
+        fail_send: bool,
+    ) -> Scripted {
+        let spawns = Arc::new(Mutex::new(0));
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let waits = Arc::new(Mutex::new(Vec::new()));
+        let reporter = Arc::new(reporter().0);
         let scripts = Arc::new(Mutex::new(scripts));
-        let count = Arc::clone(&spawn_count);
+        let (count, sent_cell, waits_cell) =
+            (Arc::clone(&spawns), Arc::clone(&sent), Arc::clone(&waits));
         let worker = Worker::with_spawner(
             "embed",
             "embedder worker",
             Duration::from_secs(5),
+            batch,
+            Arc::clone(&reporter),
             Box::new(move || -> Result<Box<dyn Transport>, String> {
                 *count.lock().unwrap() += 1;
                 let responses = scripts.lock().unwrap().remove(0);
                 Ok(Box::new(FakeTransport {
-                    sent: Vec::new(),
+                    sent: Arc::clone(&sent_cell),
+                    waits: Arc::clone(&waits_cell),
                     responses,
                     fail_send,
                 }))
             }),
         );
-        (worker, spawn_count)
+        Scripted {
+            worker,
+            spawns,
+            sent,
+            waits,
+            reporter,
+        }
+    }
+
+    fn value(worker: &Worker, args: &[Value]) -> Value {
+        worker.call(args).unwrap().value
     }
 
     #[test]
     fn call_spawns_once_and_reuses_the_worker() {
-        let (worker, spawns) = scripted_worker(
-            vec![vec![
-                Ok(r#"{"ok": "A"}"#.to_string()),
-                Ok(r#"{"ok": "B"}"#.to_string()),
-            ]],
+        let s = scripted_worker(
+            vec![vec![ok(r#"{"ok": "A"}"#), ok(r#"{"ok": "B"}"#)]],
             false,
         );
-        assert_eq!(worker.call(&[text("a")]).unwrap().value, text("A"));
-        assert_eq!(worker.call(&[text("b")]).unwrap().value, text("B"));
-        assert_eq!(*spawns.lock().unwrap(), 1);
+        assert_eq!(value(&s.worker, &[text("a")]), text("A"));
+        assert_eq!(value(&s.worker, &[text("b")]), text("B"));
+        assert_eq!(s.spawns(), 1);
     }
 
     #[test]
     fn constructing_a_worker_spawns_nothing() {
-        let (worker, spawns) = scripted_worker(vec![], false);
-        drop(worker);
+        let s = scripted_worker(vec![], false);
+        let spawns = Arc::clone(&s.spawns);
+        drop(s);
         assert_eq!(*spawns.lock().unwrap(), 0);
     }
 
@@ -938,6 +1374,8 @@ mod tests {
             "embed",
             "missing-binary worker",
             Duration::from_secs(5),
+            None,
+            Arc::new(reporter().0),
             Box::new(|| Err("no such file".to_string())),
         );
         let err = worker.call(&[]).unwrap_err();
@@ -949,92 +1387,501 @@ mod tests {
 
     #[test]
     fn protocol_err_fails_the_call_but_keeps_the_worker() {
-        let (worker, spawns) = scripted_worker(
-            vec![vec![
-                Ok(r#"{"err": "boom"}"#.to_string()),
-                Ok(r#"{"ok": 1}"#.to_string()),
-            ]],
+        let s = scripted_worker(
+            vec![vec![ok(r#"{"err": "boom"}"#), ok(r#"{"ok": 1}"#)]],
             false,
         );
-        assert_eq!(worker.call(&[]).unwrap_err(), "boom");
-        assert_eq!(worker.call(&[]).unwrap().value, Value::Integer(1));
-        assert_eq!(*spawns.lock().unwrap(), 1, "err response must not respawn");
+        assert_eq!(s.worker.call(&[]).unwrap_err(), "boom");
+        assert_eq!(value(&s.worker, &[]), Value::Integer(1));
+        assert_eq!(s.spawns(), 1, "err response must not respawn");
     }
 
     #[test]
     fn timeout_drops_the_worker_and_names_the_remedy() {
-        let (worker, spawns) = scripted_worker(
-            vec![
-                vec![Err(TransportError::Timeout)],
-                vec![Ok(r#"{"ok": 1}"#.to_string())],
-            ],
+        let s = scripted_worker(
+            vec![vec![Err(TransportError::Timeout)], vec![ok(r#"{"ok": 1}"#)]],
             false,
         );
-        let err = worker.call(&[]).unwrap_err();
+        let err = s.worker.call(&[]).unwrap_err();
         assert!(err.contains("timed out after 5s"), "got: {err}");
         assert!(err.contains("`embed`"), "got: {err}");
         assert!(err.contains("`timeout`"), "got: {err}");
         // The next call starts a fresh worker.
-        assert_eq!(worker.call(&[]).unwrap().value, Value::Integer(1));
-        assert_eq!(*spawns.lock().unwrap(), 2);
+        assert_eq!(value(&s.worker, &[]), Value::Integer(1));
+        assert_eq!(s.spawns(), 2);
     }
 
     #[test]
     fn a_closed_worker_drops_the_transport_with_an_actionable_error() {
-        let (worker, spawns) = scripted_worker(
-            vec![
-                vec![Err(TransportError::Closed)],
-                vec![Ok(r#"{"ok": 1}"#.to_string())],
-            ],
+        let s = scripted_worker(
+            vec![vec![Err(TransportError::Closed)], vec![ok(r#"{"ok": 1}"#)]],
             false,
         );
-        let err = worker.call(&[]).unwrap_err();
+        let err = s.worker.call(&[]).unwrap_err();
         assert!(err.contains("exited before replying"), "got: {err}");
         assert!(err.contains("stderr"), "got: {err}");
-        assert_eq!(worker.call(&[]).unwrap().value, Value::Integer(1));
-        assert_eq!(*spawns.lock().unwrap(), 2);
+        assert_eq!(value(&s.worker, &[]), Value::Integer(1));
+        assert_eq!(s.spawns(), 2);
     }
 
     #[test]
     fn a_send_failure_reads_as_a_dead_worker() {
-        let (worker, _) = scripted_worker(vec![vec![]], true);
-        let err = worker.call(&[]).unwrap_err();
+        let s = scripted_worker(vec![vec![]], true);
+        let err = s.worker.call(&[]).unwrap_err();
         assert!(err.contains("not accepting requests"), "got: {err}");
         assert!(err.contains("`embed`"), "got: {err}");
     }
 
     #[test]
     fn an_invalid_response_line_is_reported_verbatim() {
-        let (worker, _) = scripted_worker(vec![vec![Ok("garbage".to_string())]], false);
-        let err = worker.call(&[]).unwrap_err();
+        let s = scripted_worker(vec![vec![ok("garbage")]], false);
+        let err = s.worker.call(&[]).unwrap_err();
         assert!(err.contains("invalid response"), "got: {err}");
         assert!(err.contains("garbage"), "got: {err}");
         assert!(err.contains("`embed`"), "got: {err}");
     }
 
     #[test]
-    fn call_sends_the_encoded_request() {
-        // Route the sent line back through the response so the double stays
-        // self-contained: echo transport.
-        struct EchoTransport;
-        impl Transport for EchoTransport {
-            fn send_line(&mut self, line: &str) -> Result<(), TransportError> {
-                assert_eq!(line, r#"{"call":["x",3]}"#);
-                Ok(())
-            }
-            fn recv_line(&mut self, _timeout: Duration) -> Result<String, TransportError> {
-                Ok(r#"{"ok": null}"#.to_string())
-            }
-        }
-        let worker = Worker::with_spawner(
-            "f",
-            "cmd",
-            Duration::from_secs(1),
-            Box::new(|| Ok(Box::new(EchoTransport))),
-        );
+    fn call_sends_the_encoded_request_and_waits_the_per_call_timeout() {
+        let s = scripted_worker(vec![vec![ok(r#"{"ok": null}"#)]], false);
         assert_eq!(
-            worker.call(&[text("x"), Value::Integer(3)]).unwrap().value,
+            value(&s.worker, &[text("x"), Value::Integer(3)]),
             Value::Null
         );
+        assert_eq!(s.sent(), [r#"{"call":["x",3]}"#]);
+        assert_eq!(*s.waits.lock().unwrap(), [Duration::from_secs(5)]);
+    }
+
+    /// Each single call is one round trip in the count; a reply the worker
+    /// flagged cached lands in the split.
+    #[test]
+    fn single_calls_are_counted_with_their_cache_split() {
+        let s = scripted_worker(
+            vec![vec![
+                ok(r#"{"ok": "A"}"#),
+                ok(r#"{"ok": "B", "meta": {"cached": true}}"#),
+            ]],
+            false,
+        );
+        s.worker.call(&[text("a")]).unwrap();
+        s.worker.call(&[text("b")]).unwrap();
+        assert_eq!(s.counts(), (2, 1));
+    }
+
+    // --- collect pass ---------------------------------------------------------
+
+    /// The shape of the whole mechanism: during the collect pass the first
+    /// value makes its own round trip and stands in for every later one,
+    /// which are sent together when the pass ends; the real run is then
+    /// served without another request.
+    #[test]
+    fn a_collect_pass_round_trips_the_first_value_and_batches_the_rest() {
+        let s = batched_worker(
+            8,
+            vec![vec![
+                ok(r#"{"ok": "A"}"#),
+                ok(r#"{"results": [{"ok": "B"}, {"ok": "C"}]}"#),
+            ]],
+        );
+
+        s.worker.begin_collect().unwrap();
+        assert_eq!(value(&s.worker, &[text("a")]), text("A"));
+        assert_eq!(value(&s.worker, &[text("b")]), text("A"), "placeholder");
+        assert_eq!(value(&s.worker, &[text("c")]), text("A"), "placeholder");
+        assert_eq!(
+            s.sent(),
+            [r#"{"call":["a"]}"#],
+            "nothing batched before the pass ends"
+        );
+        assert!(s.worker.end_collect().unwrap(), "the function was invoked");
+        assert_eq!(
+            s.sent(),
+            [r#"{"call":["a"]}"#, r#"{"calls":[["b"],["c"]]}"#]
+        );
+
+        assert_eq!(value(&s.worker, &[text("a")]), text("A"));
+        assert_eq!(value(&s.worker, &[text("b")]), text("B"));
+        assert_eq!(value(&s.worker, &[text("c")]), text("C"));
+        assert_eq!(s.sent().len(), 2, "the real run makes no request");
+        assert_eq!(s.spawns(), 1);
+    }
+
+    #[test]
+    fn a_full_batch_is_sent_as_soon_as_it_fills() {
+        let s = batched_worker(
+            2,
+            vec![vec![
+                ok(r#"{"ok": "A"}"#),
+                ok(r#"{"results": [{"ok": "B"}, {"ok": "C"}]}"#),
+                ok(r#"{"results": [{"ok": "D"}]}"#),
+            ]],
+        );
+
+        s.worker.begin_collect().unwrap();
+        for arg in ["a", "b", "c"] {
+            s.worker.call(&[text(arg)]).unwrap();
+        }
+        assert_eq!(
+            s.sent(),
+            [r#"{"call":["a"]}"#, r#"{"calls":[["b"],["c"]]}"#],
+            "the batch went out when its second value arrived"
+        );
+        s.worker.call(&[text("d")]).unwrap();
+        s.worker.end_collect().unwrap();
+        assert_eq!(s.sent().last().unwrap(), r#"{"calls":[["d"]]}"#);
+        assert_eq!(value(&s.worker, &[text("d")]), text("D"));
+    }
+
+    /// A repeated argument tuple is one call on the wire, not one per row.
+    #[test]
+    fn a_collect_pass_dedupes_argument_tuples() {
+        let s = batched_worker(
+            8,
+            vec![vec![
+                ok(r#"{"ok": "A"}"#),
+                ok(r#"{"results": [{"ok": "B"}]}"#),
+            ]],
+        );
+
+        s.worker.begin_collect().unwrap();
+        for arg in ["a", "b", "b", "a"] {
+            s.worker.call(&[text(arg)]).unwrap();
+        }
+        s.worker.end_collect().unwrap();
+
+        assert_eq!(s.sent(), [r#"{"call":["a"]}"#, r#"{"calls":[["b"]]}"#]);
+        assert_eq!(value(&s.worker, &[text("b")]), text("B"));
+    }
+
+    /// NULL cannot stand in for later values: what the statement does with
+    /// the placeholder (sqlite-vec's distance functions, say) would reject it.
+    /// Until a real non-NULL reply exists, every call makes its own round trip.
+    #[test]
+    fn a_null_reply_is_not_used_as_the_placeholder() {
+        let s = batched_worker(
+            8,
+            vec![vec![
+                ok(r#"{"ok": null}"#),
+                ok(r#"{"ok": "B"}"#),
+                ok(r#"{"results": [{"ok": "C"}]}"#),
+            ]],
+        );
+
+        s.worker.begin_collect().unwrap();
+        assert_eq!(value(&s.worker, &[Value::Null]), Value::Null);
+        assert_eq!(
+            value(&s.worker, &[text("b")]),
+            text("B"),
+            "its own round trip"
+        );
+        assert_eq!(
+            value(&s.worker, &[text("c")]),
+            text("B"),
+            "now a placeholder exists"
+        );
+        s.worker.end_collect().unwrap();
+
+        assert_eq!(
+            s.sent(),
+            [
+                r#"{"call":[null]}"#,
+                r#"{"call":["b"]}"#,
+                r#"{"calls":[["c"]]}"#
+            ]
+        );
+        assert_eq!(value(&s.worker, &[Value::Null]), Value::Null);
+        assert_eq!(value(&s.worker, &[text("c")]), text("C"));
+    }
+
+    /// A statement that never reaches the function owes no real run.
+    #[test]
+    fn an_uninvoked_collect_pass_reports_so_and_sends_nothing() {
+        let s = batched_worker(8, vec![]);
+        s.worker.begin_collect().unwrap();
+        assert!(!s.worker.end_collect().unwrap());
+        assert!(s.sent().is_empty());
+        assert_eq!(s.spawns(), 0);
+    }
+
+    /// Every value is one call in the count whichever request carried it,
+    /// and the real run — served from replies already counted — adds none.
+    #[test]
+    fn batched_results_are_counted_once_with_their_cache_split() {
+        let s = batched_worker(
+            8,
+            vec![vec![
+                ok(r#"{"ok": "A"}"#),
+                ok(r#"{"results": [{"ok": "B", "meta": {"cached": true}}, {"ok": "C"}]}"#),
+            ]],
+        );
+
+        s.worker.begin_collect().unwrap();
+        for arg in ["a", "b", "c"] {
+            s.worker.call(&[text(arg)]).unwrap();
+        }
+        s.worker.end_collect().unwrap();
+        assert_eq!(s.counts(), (3, 1));
+
+        for arg in ["a", "b", "c"] {
+            s.worker.call(&[text(arg)]).unwrap();
+        }
+        assert_eq!(s.counts(), (3, 1), "the real run counts nothing new");
+    }
+
+    /// The placeholder is a stand-in, not an answer: it must never be counted
+    /// as a round trip or a cache hit.
+    #[test]
+    fn placeholder_replies_are_not_counted() {
+        let s = batched_worker(
+            8,
+            vec![vec![
+                ok(r#"{"ok": "A", "meta": {"cached": true}}"#),
+                ok(r#"{"results": [{"ok": "B"}]}"#),
+            ]],
+        );
+
+        s.worker.begin_collect().unwrap();
+        s.worker.call(&[text("a")]).unwrap();
+        assert!(!s.worker.call(&[text("b")]).unwrap().cached);
+        assert_eq!(s.counts(), (1, 1));
+        s.worker.end_collect().unwrap();
+        assert_eq!(s.counts(), (2, 1));
+    }
+
+    /// A worker-level error on a batched request fails every call it carried,
+    /// surfacing where each would have been answered.
+    #[test]
+    fn a_batched_worker_error_fails_each_call_in_the_request() {
+        let s = batched_worker(
+            8,
+            vec![vec![ok(r#"{"ok": "A"}"#), ok(r#"{"err": "boom"}"#)]],
+        );
+
+        s.worker.begin_collect().unwrap();
+        for arg in ["a", "b", "c"] {
+            s.worker.call(&[text(arg)]).unwrap();
+        }
+        assert!(s.worker.end_collect().unwrap());
+
+        assert_eq!(value(&s.worker, &[text("a")]), text("A"));
+        assert_eq!(s.worker.call(&[text("b")]).unwrap_err(), "boom");
+        assert_eq!(s.worker.call(&[text("c")]).unwrap_err(), "boom");
+        assert_eq!(s.spawns(), 1, "a protocol-level error keeps the worker");
+    }
+
+    #[test]
+    fn a_per_entry_error_fails_only_that_call() {
+        let s = batched_worker(
+            8,
+            vec![vec![
+                ok(r#"{"ok": "A"}"#),
+                ok(r#"{"results": [{"err": "bad b"}, {"ok": "C"}]}"#),
+            ]],
+        );
+
+        s.worker.begin_collect().unwrap();
+        for arg in ["a", "b", "c"] {
+            s.worker.call(&[text(arg)]).unwrap();
+        }
+        s.worker.end_collect().unwrap();
+
+        assert_eq!(s.worker.call(&[text("b")]).unwrap_err(), "bad b");
+        assert_eq!(value(&s.worker, &[text("c")]), text("C"));
+    }
+
+    #[test]
+    fn an_invalid_batched_response_fails_each_call_naming_the_defect() {
+        let s = batched_worker(
+            8,
+            vec![vec![
+                ok(r#"{"ok": "A"}"#),
+                ok(r#"{"results": [{"ok": "B"}]}"#),
+            ]],
+        );
+
+        s.worker.begin_collect().unwrap();
+        for arg in ["a", "b", "c"] {
+            s.worker.call(&[text(arg)]).unwrap();
+        }
+        s.worker.end_collect().unwrap();
+
+        let err = s.worker.call(&[text("b")]).unwrap_err();
+        assert!(err.contains("invalid batched response"), "got: {err}");
+        assert!(err.contains("expected 2 results, got 1"), "got: {err}");
+        assert!(err.contains("`embed`"), "got: {err}");
+        assert_eq!(s.worker.call(&[text("c")]).unwrap_err(), err);
+    }
+
+    /// A batched request waits the per-call timeout once per call it carries.
+    #[test]
+    fn a_batched_request_waits_the_per_call_timeout_per_call() {
+        let s = batched_worker(
+            8,
+            vec![vec![
+                ok(r#"{"ok": "A"}"#),
+                ok(r#"{"results": [{"ok": "B"}, {"ok": "C"}, {"ok": "D"}]}"#),
+            ]],
+        );
+
+        s.worker.begin_collect().unwrap();
+        for arg in ["a", "b", "c", "d"] {
+            s.worker.call(&[text(arg)]).unwrap();
+        }
+        s.worker.end_collect().unwrap();
+
+        assert_eq!(
+            *s.waits.lock().unwrap(),
+            [Duration::from_secs(5), Duration::from_secs(15)]
+        );
+    }
+
+    /// A transport failure on the batched request fails the pass itself; the
+    /// worker is dropped so the real run starts a fresh one.
+    #[test]
+    fn a_batched_timeout_fails_the_pass_and_names_the_budget() {
+        let s = batched_worker(
+            8,
+            vec![
+                vec![ok(r#"{"ok": "A"}"#), Err(TransportError::Timeout)],
+                vec![ok(r#"{"ok": "B"}"#)],
+            ],
+        );
+
+        s.worker.begin_collect().unwrap();
+        for arg in ["a", "b", "c"] {
+            s.worker.call(&[text(arg)]).unwrap();
+        }
+        let err = s.worker.end_collect().unwrap_err();
+        assert!(
+            err.contains("timed out after 10s (2 calls at 5s each)"),
+            "got: {err}"
+        );
+        assert!(err.contains("`timeout`"), "got: {err}");
+
+        assert_eq!(value(&s.worker, &[text("b")]), text("B"));
+        assert_eq!(s.spawns(), 2);
+    }
+
+    #[test]
+    fn a_batched_close_fails_the_pass_with_the_dead_worker_error() {
+        let s = batched_worker(
+            8,
+            vec![vec![ok(r#"{"ok": "A"}"#), Err(TransportError::Closed)]],
+        );
+
+        s.worker.begin_collect().unwrap();
+        s.worker.call(&[text("a")]).unwrap();
+        s.worker.call(&[text("b")]).unwrap();
+        let err = s.worker.end_collect().unwrap_err();
+        assert!(err.contains("exited before replying"), "got: {err}");
+    }
+
+    /// A single-call failure during the pass is filed like any reply: the
+    /// real run fails the same way without asking again.
+    #[test]
+    fn a_failed_first_call_is_replayed_on_the_real_run() {
+        let s = batched_worker(8, vec![vec![ok(r#"{"err": "boom"}"#)]]);
+
+        s.worker.begin_collect().unwrap();
+        assert_eq!(s.worker.call(&[text("a")]).unwrap_err(), "boom");
+        assert!(s.worker.end_collect().unwrap());
+        assert_eq!(s.worker.call(&[text("a")]).unwrap_err(), "boom");
+        assert_eq!(s.sent().len(), 1);
+    }
+
+    /// Gathered replies belong to one statement. Once cleared, the next call
+    /// goes to the worker again.
+    #[test]
+    fn clear_drops_the_gathered_replies() {
+        let s = batched_worker(
+            8,
+            vec![vec![
+                ok(r#"{"ok": "A"}"#),
+                ok(r#"{"results": [{"ok": "B"}]}"#),
+                ok(r#"{"ok": "B2"}"#),
+            ]],
+        );
+
+        s.worker.begin_collect().unwrap();
+        s.worker.call(&[text("a")]).unwrap();
+        s.worker.call(&[text("b")]).unwrap();
+        s.worker.end_collect().unwrap();
+        s.worker.clear().unwrap();
+
+        assert_eq!(value(&s.worker, &[text("b")]), text("B2"));
+        assert_eq!(s.sent().last().unwrap(), r#"{"call":["b"]}"#);
+    }
+
+    #[test]
+    fn begin_collect_drops_what_an_earlier_pass_left() {
+        let s = batched_worker(
+            8,
+            vec![vec![
+                ok(r#"{"ok": "A"}"#),
+                ok(r#"{"results": [{"ok": "B"}]}"#),
+                ok(r#"{"ok": "A2"}"#),
+            ]],
+        );
+
+        s.worker.begin_collect().unwrap();
+        s.worker.call(&[text("a")]).unwrap();
+        s.worker.call(&[text("b")]).unwrap();
+        s.worker.end_collect().unwrap();
+
+        s.worker.begin_collect().unwrap();
+        assert_eq!(value(&s.worker, &[text("a")]), text("A2"));
+    }
+
+    /// Without `batch` the collect machinery is inert: every call is its own
+    /// round trip whether or not a pass is open.
+    #[test]
+    fn a_worker_without_batch_round_trips_every_call_during_a_pass() {
+        let s = scripted_worker(
+            vec![vec![ok(r#"{"ok": "A"}"#), ok(r#"{"ok": "B"}"#)]],
+            false,
+        );
+
+        s.worker.begin_collect().unwrap();
+        assert_eq!(value(&s.worker, &[text("a")]), text("A"));
+        assert_eq!(value(&s.worker, &[text("b")]), text("B"));
+        assert!(!s.worker.end_collect().unwrap(), "no real run is owed");
+        assert_eq!(s.sent(), [r#"{"call":["a"]}"#, r#"{"call":["b"]}"#]);
+    }
+}
+
+/// Scripted workers for tests in other modules.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::tests;
+    use super::*;
+
+    /// A batching worker for `name` whose spawned transport answers with
+    /// `responses` in order. Returns the worker and the cell its request
+    /// lines are recorded in.
+    pub(crate) fn batched_worker(
+        name: &str,
+        batch: usize,
+        calls: Arc<CallReporter>,
+        responses: Vec<&str>,
+    ) -> (Arc<Worker>, Arc<Mutex<Vec<String>>>) {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let sent_cell = Arc::clone(&sent);
+        let responses: Vec<String> = responses.into_iter().map(str::to_string).collect();
+        let worker = Worker::with_spawner(
+            name,
+            "scripted worker",
+            Duration::from_secs(5),
+            Some(batch),
+            calls,
+            Box::new(move || -> Result<Box<dyn Transport>, String> {
+                Ok(Box::new(tests::FakeTransport {
+                    sent: Arc::clone(&sent_cell),
+                    waits: Arc::new(Mutex::new(Vec::new())),
+                    responses: responses.iter().cloned().map(Ok).collect(),
+                    fail_send: false,
+                }))
+            }),
+        );
+        (Arc::new(worker), sent)
     }
 }

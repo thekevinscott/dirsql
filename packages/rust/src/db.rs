@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
 
-use crate::functions::CallReporter;
+use crate::functions::{self, CallReporter, ResolvedFunction, Worker};
 use crate::parsed_vtab;
 use crate::path_table::{self, PathTable, Resolution};
 use crate::scanner;
@@ -277,6 +277,27 @@ pub struct Db {
     /// declared function registered on `conn`; inert until a function is both
     /// declared and called.
     calls: Arc<CallReporter>,
+    /// The declared functions that batch. Every statement opens a collect
+    /// pass on each of them; empty, a statement runs exactly once.
+    batched: Vec<Arc<Worker>>,
+}
+
+/// Drops every batching worker's gathered replies when the statement that
+/// gathered them is done, whichever way it left.
+struct ClearOnDrop<'a>(&'a [Arc<Worker>]);
+
+impl Drop for ClearOnDrop<'_> {
+    fn drop(&mut self) {
+        for worker in self.0 {
+            let _ = worker.clear();
+        }
+    }
+}
+
+/// A worker failure outside any SQL call, surfaced the way a failing call
+/// would be.
+fn worker_error(message: String) -> DbError {
+    DbError::Sqlite(rusqlite::Error::UserFunctionError(message.into()))
 }
 
 /// The skip rules a fresh `Db` starts with.
@@ -313,6 +334,7 @@ impl Db {
             path_table_parser: None,
             path_table_cache: None,
             calls: CallReporter::new(),
+            batched: Vec::new(),
         })
     }
 
@@ -336,6 +358,7 @@ impl Db {
             path_table_parser: None,
             path_table_cache: None,
             calls: CallReporter::new(),
+            batched: Vec::new(),
         })
     }
 
@@ -380,10 +403,21 @@ impl Db {
         self.path_table_cache = Some(path);
     }
 
-    /// The reporter every declared function increments. Handed to
-    /// `functions::register_all` at build time.
-    pub(crate) fn call_reporter(&self) -> &Arc<CallReporter> {
-        &self.calls
+    /// Register the declared functions on the connection. Inert: no worker
+    /// is spawned until a query calls one.
+    pub(crate) fn register_functions(
+        &mut self,
+        functions: &[ResolvedFunction],
+    ) -> rusqlite::Result<()> {
+        let batched = functions::register_all(&self.conn, functions, &self.calls)?;
+        self.batched.extend(batched);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn register_batched_worker(&mut self, worker: Arc<Worker>, arities: &[u8]) {
+        functions::register_worker(&self.conn, &worker, arities, true).unwrap();
+        self.batched.push(worker);
     }
 
     /// Borrow the underlying SQLite connection. Internal use only — exposed
@@ -735,6 +769,27 @@ impl Db {
         // prints the rows.
         let _calls = self.calls.phase();
 
+        if self.batched.is_empty() {
+            return self.run_statement(sql);
+        }
+        let _collected = ClearOnDrop(&self.batched);
+        for worker in &self.batched {
+            worker.begin_collect().map_err(worker_error)?;
+        }
+        let collected = self.run_statement(sql);
+        let mut invoked = false;
+        for worker in &self.batched {
+            invoked |= worker.end_collect().map_err(worker_error)?;
+        }
+        if !invoked {
+            return collected;
+        }
+        self.run_statement(sql)
+    }
+
+    /// Prepare and run one read-only statement, registering the path-tables
+    /// it names along the way.
+    fn run_statement(&self, sql: &str) -> Result<QueryResult> {
         // Each iteration must register a table no earlier iteration did; a
         // repeat means the fallback is not making progress, so the SQLite
         // error stands. That is what bounds the loop.
@@ -1056,6 +1111,175 @@ mod tests {
             result.columns,
             vec!["draft".to_string(), "title".to_string()]
         );
+    }
+
+    fn titled_docs(titles: &[&str]) -> Db {
+        let db = Db::new().unwrap();
+        db.create_table("docs", "CREATE TABLE docs (title TEXT)")
+            .unwrap();
+        for (i, title) in titles.iter().enumerate() {
+            let row = HashMap::from([("title".into(), Value::Text((*title).into()))]);
+            db.insert_row("docs", &row, &format!("docs/{title}.md"), i)
+                .unwrap();
+        }
+        db
+    }
+
+    fn texts(result: &QueryResult, column: &str) -> Vec<Value> {
+        result.rows.iter().map(|row| row[column].clone()).collect()
+    }
+
+    /// The statement runs twice: once to gather the function's arguments
+    /// (one round trip, then one batched request for the rest) and once for
+    /// real, served from the replies. The rows are the real ones.
+    #[test]
+    fn query_ordered_serves_a_batched_function_from_one_collect_pass() {
+        let mut db = titled_docs(&["a", "b", "c"]);
+        let (worker, sent) = functions::test_support::batched_worker(
+            "up",
+            8,
+            Arc::clone(&db.calls),
+            vec![
+                r#"{"ok": "A"}"#,
+                r#"{"results": [{"ok": "B"}, {"ok": "C"}]}"#,
+            ],
+        );
+        db.register_batched_worker(worker, &[1]);
+
+        let result = db
+            .query_ordered("SELECT up(title) AS v FROM docs ORDER BY title")
+            .unwrap();
+
+        assert_eq!(
+            texts(&result, "v"),
+            [
+                Value::Text("A".into()),
+                Value::Text("B".into()),
+                Value::Text("C".into())
+            ]
+        );
+        assert_eq!(
+            *sent.lock().unwrap(),
+            [r#"{"call":["a"]}"#, r#"{"calls":[["b"],["c"]]}"#]
+        );
+    }
+
+    /// A statement that never reaches the function asks the worker nothing
+    /// and keeps its first run's rows.
+    #[test]
+    fn a_statement_that_never_calls_a_batched_function_asks_the_worker_nothing() {
+        let mut db = titled_docs(&["a", "b"]);
+        let (worker, sent) =
+            functions::test_support::batched_worker("up", 8, Arc::clone(&db.calls), vec![]);
+        db.register_batched_worker(worker, &[1]);
+
+        let result = db
+            .query_ordered("SELECT title FROM docs ORDER BY title")
+            .unwrap();
+
+        assert_eq!(
+            texts(&result, "title"),
+            [Value::Text("a".into()), Value::Text("b".into())]
+        );
+        assert!(sent.lock().unwrap().is_empty());
+    }
+
+    /// Declared functions become callable, and the ones that batch are the
+    /// ones the query path collects over.
+    #[test]
+    fn register_functions_registers_each_and_keeps_the_batching_workers() {
+        let mut db = Db::new().unwrap();
+        let resolved = |name: &str, batch| ResolvedFunction {
+            name: name.to_string(),
+            args: vec![1],
+            command: "worker".to_string(),
+            deterministic: false,
+            timeout: std::time::Duration::from_secs(1),
+            batch,
+            cwd: PathBuf::from("."),
+        };
+
+        db.register_functions(&[resolved("plain", None), resolved("bulk", Some(4))])
+            .unwrap();
+
+        assert!(db.conn.prepare("SELECT plain(1), bulk(1)").is_ok());
+        assert_eq!(db.batched.len(), 1);
+    }
+
+    /// What a collect pass gathered is dropped as soon as its statement is
+    /// done — a corpus of vectors must not sit in memory until the next
+    /// query — whether the statement succeeded or failed.
+    #[test]
+    fn gathered_replies_are_dropped_when_the_statement_is_done() {
+        let mut db = titled_docs(&["a", "b"]);
+        let (worker, _) = functions::test_support::batched_worker(
+            "up",
+            8,
+            Arc::clone(&db.calls),
+            vec![
+                r#"{"ok": "A"}"#,
+                r#"{"results": [{"ok": "B"}]}"#,
+                r#"{"ok": "A"}"#,
+                r#"{"results": [{"err": "boom"}]}"#,
+            ],
+        );
+        db.register_batched_worker(Arc::clone(&worker), &[1]);
+        let sql = "SELECT up(title) AS v FROM docs ORDER BY title";
+
+        db.query_ordered(sql).unwrap();
+        assert_eq!(worker.gathered(), 0, "after a successful statement");
+
+        db.query_ordered(sql).unwrap_err();
+        assert_eq!(worker.gathered(), 0, "after a failed statement");
+    }
+
+    /// The replies gathered for one statement are not an answer to the next:
+    /// a repeated query asks the worker again.
+    #[test]
+    fn gathered_replies_do_not_outlive_their_statement() {
+        let mut db = titled_docs(&["a", "b"]);
+        let (worker, sent) = functions::test_support::batched_worker(
+            "up",
+            8,
+            Arc::clone(&db.calls),
+            vec![
+                r#"{"ok": "A"}"#,
+                r#"{"results": [{"ok": "B"}]}"#,
+                r#"{"ok": "A2"}"#,
+                r#"{"results": [{"ok": "B2"}]}"#,
+            ],
+        );
+        db.register_batched_worker(worker, &[1]);
+        let sql = "SELECT up(title) AS v FROM docs ORDER BY title";
+
+        db.query_ordered(sql).unwrap();
+        let again = db.query_ordered(sql).unwrap();
+
+        assert_eq!(
+            texts(&again, "v"),
+            [Value::Text("A2".into()), Value::Text("B2".into())]
+        );
+        assert_eq!(sent.lock().unwrap().len(), 4);
+    }
+
+    /// A reply the worker could not give fails the query the way a failing
+    /// call does, naming the function.
+    #[test]
+    fn a_failed_batched_reply_fails_the_query() {
+        let mut db = titled_docs(&["a", "b"]);
+        let (worker, _) = functions::test_support::batched_worker(
+            "up",
+            8,
+            Arc::clone(&db.calls),
+            vec![r#"{"ok": "A"}"#, r#"{"err": "boom"}"#],
+        );
+        db.register_batched_worker(worker, &[1]);
+
+        let err = db
+            .query_ordered("SELECT up(title) AS v FROM docs ORDER BY title")
+            .unwrap_err();
+
+        assert!(err.to_string().contains("boom"), "got: {err}");
     }
 
     #[test]
