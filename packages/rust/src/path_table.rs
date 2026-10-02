@@ -359,6 +359,14 @@ mod tests {
     }
 
     #[test]
+    fn a_relative_glob_roots_at_its_literal_prefix() {
+        let t = table("./docs/*.md", &everything_is_a_dir);
+        assert_eq!(t.root, Path::new("/index/docs"));
+        assert_eq!(t.glob, "*.md");
+        assert_eq!(t.path_prefix, "docs");
+    }
+
+    #[test]
     fn an_absolute_glob_roots_at_its_literal_prefix() {
         let t = table("/var/log/*.log", &nothing_is_a_dir);
         assert_eq!(t.root, Path::new("/var/log"));
