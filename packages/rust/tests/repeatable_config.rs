@@ -25,7 +25,7 @@ fn table_config(name: &str) -> String {
 name = "{name}"
 ddl = "CREATE TABLE {name} (basename TEXT)"
 glob = "*.json"
-on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); printf "[{{\"basename\":\"%s\"}}]" "${{p##*/}}"' sh {{path}}'''
+on-file = '''sh -c 'printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); printf "%s{{\"basename\":\"%s\"}}" "$sep" "${{p##*/}}"; sep=","; done; printf "]"' sh'''
 "#
     )
 }

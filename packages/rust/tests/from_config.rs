@@ -18,7 +18,7 @@ fn from_config_produces_one_row_per_matched_file() {
 name = "files"
 ddl = "CREATE TABLE files (path TEXT, basename TEXT)"
 glob = "data/*.csv"
-on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); r=$(printf %s "$2" | tr "\\\\" /); rel=${p#"$r"/}; base=${p##*/}; printf "[{\"path\":\"%s\",\"basename\":\"%s\"}]" "$rel" "$base"' sh {path} {root}'''
+on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "%s{\"path\":\"%s\",\"basename\":\"%s\"}" "$sep" "$rel" "${p##*/}"; sep=","; done; printf "]"' sh {root}'''
 "#,
     )
     .unwrap();
@@ -57,7 +57,7 @@ ignore = ["ignored/**"]
 name = "files"
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "**/*.csv"
-on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); r=$(printf %s "$2" | tr "\\\\" /); rel=${p#"$r"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''
+on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "%s{\"path\":\"%s\"}" "$sep" "$rel"; sep=","; done; printf "]"' sh {root}'''
 "#,
     )
     .unwrap();
@@ -92,7 +92,7 @@ fn from_config_capture_column_collision_errors() {
 name = "comments"
 ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
 glob = "_comments/{thread_id}/*.txt"
-on-file = "cat {path}"
+on-file = "cat"
 "#,
     )
     .unwrap();
@@ -143,7 +143,7 @@ fn from_config_capture_placeholder_without_column_still_matches() {
 name = "comments"
 ddl = "CREATE TABLE comments (path TEXT, basename TEXT)"
 glob = "_comments/{thread_id}/*.txt"
-on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); r=$(printf %s "$2" | tr "\\\\" /); rel=${p#"$r"/}; base=${p##*/}; printf "[{\"path\":\"%s\",\"basename\":\"%s\"}]" "$rel" "$base"' sh {path} {root}'''
+on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "%s{\"path\":\"%s\",\"basename\":\"%s\"}" "$sep" "$rel" "${p##*/}"; sep=","; done; printf "]"' sh {root}'''
 "#,
     )
     .unwrap();
@@ -196,7 +196,7 @@ fn from_config_exposes_stat_virtuals() {
 name = "files"
 ddl = "CREATE TABLE files (path TEXT, basename TEXT, dir TEXT, ext TEXT, size INTEGER, mtime INTEGER)"
 glob = "docs/*.md"
-on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); r=$(printf %s "$2" | tr "\\\\" /); rel=${p#"$r"/}; base=${p##*/}; case "$rel" in */*) dir=${rel%/*};; *) dir="";; esac; ext=${base##*.}; [ "$ext" = "$base" ] && ext=""; size=$(wc -c < "$1" | tr -d " "); mtime=$(stat -c %Y "$1"); printf "[{\"path\":\"%s\",\"basename\":\"%s\",\"dir\":\"%s\",\"ext\":\"%s\",\"size\":%s,\"mtime\":%s}]" "$rel" "$base" "$dir" "$ext" "$size" "$mtime"' sh {path} {root}'''
+on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for f; do p=$(printf %s "$f" | tr "\\\\" /); rel=${p#"$r"/}; base=${p##*/}; case "$rel" in */*) dir=${rel%/*};; *) dir="";; esac; ext=${base##*.}; [ "$ext" = "$base" ] && ext=""; size=$(wc -c < "$f" | tr -d " "); mtime=$(stat -c %Y "$f"); printf "%s{\"path\":\"%s\",\"basename\":\"%s\",\"dir\":\"%s\",\"ext\":\"%s\",\"size\":%s,\"mtime\":%s}" "$sep" "$rel" "$base" "$dir" "$ext" "$size" "$mtime"; sep=","; done; printf "]"' sh {root}'''
 "#,
     )
     .unwrap();
@@ -243,7 +243,7 @@ fn from_config_undeclared_stat_columns_are_silently_dropped() {
 name = "minimal"
 ddl = "CREATE TABLE minimal (path TEXT)"
 glob = "*.txt"
-on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); r=$(printf %s "$2" | tr "\\\\" /); rel=${p#"$r"/}; base=${p##*/}; printf "[{\"path\":\"%s\",\"basename\":\"%s\"}]" "$rel" "$base"' sh {path} {root}'''
+on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "%s{\"path\":\"%s\",\"basename\":\"%s\"}" "$sep" "$rel" "${p##*/}"; sep=","; done; printf "]"' sh {root}'''
 "#,
     )
     .unwrap();
@@ -313,7 +313,7 @@ fn from_config_with_no_matching_files_yields_empty_table() {
 name = "empty_t"
 ddl = "CREATE TABLE empty_t (path TEXT)"
 glob = "nothing_here/*.txt"
-on-file = "cat {path}"
+on-file = "cat"
 "#,
     )
     .unwrap();
@@ -346,7 +346,7 @@ persist = true
 name = "files"
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.csv"
-on-file = "cat {path}"
+on-file = "cat"
 "#,
     )
     .unwrap();
@@ -377,7 +377,7 @@ name = "files"
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.csv"
 strict = true
-on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); r=$(printf %s "$2" | tr "\\\\" /); rel=${p#"$r"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''
+on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "%s{\"path\":\"%s\"}" "$sep" "$rel"; sep=","; done; printf "]"' sh {root}'''
 "#,
     )
     .unwrap();
@@ -403,7 +403,7 @@ async fn async_from_config_works() {
 name = "files"
 ddl = "CREATE TABLE files (path TEXT, basename TEXT)"
 glob = "*.csv"
-on-file = '''sh -c 'p=$(printf %s "$1" | tr "\\\\" /); r=$(printf %s "$2" | tr "\\\\" /); rel=${p#"$r"/}; base=${p##*/}; printf "[{\"path\":\"%s\",\"basename\":\"%s\"}]" "$rel" "$base"' sh {path} {root}'''
+on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "%s{\"path\":\"%s\",\"basename\":\"%s\"}" "$sep" "$rel" "${p##*/}"; sep=","; done; printf "]"' sh {root}'''
 "#,
     )
     .unwrap();

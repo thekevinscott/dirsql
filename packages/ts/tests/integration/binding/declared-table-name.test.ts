@@ -11,9 +11,9 @@ import { dirname, join } from "node:path";
 import { DirSQL } from "dirsql";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-// Emits the file's root-relative `path`. `{path}` is the absolute path,
-// `{root}` the index root.
-const pathHook = `on-file = '''sh -c 'rel=\${1#"$2"/}; printf "[{\\"path\\":\\"%s\\"}]" "$rel"' sh {path} {root}'''`;
+// Emits each matched file's root-relative `path`. The absolute paths arrive
+// as trailing arguments, `{root}` is the index root.
+const pathHook = `on-file = '''sh -c 'r=$1; shift; printf "["; sep=""; for p; do rel=\${p#"$r"/}; printf "%s{\\"path\\":\\"%s\\"}" "$sep" "$rel"; sep=","; done; printf "]"' sh {root}'''`;
 
 async function seedFile(path: string, content: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });

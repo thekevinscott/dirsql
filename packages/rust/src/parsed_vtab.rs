@@ -30,9 +30,9 @@ use rusqlite::vtab::Context;
 use rusqlite::{Connection, Error, Result};
 
 use crate::Value;
-use crate::command::{Placeholder, run_command};
 use crate::infer::{JsonRow, cell, declared_schema, infer_schema, parse_rows};
 use crate::matcher::TableMatcher;
+use crate::on_file;
 use crate::parsed_cache::{self, CachedParse, Entry, RowCache, SqliteRowCache};
 use crate::path_table;
 use crate::persist::{FileStat, hash_file, now_ns};
@@ -99,39 +99,26 @@ fn parse_module_args(args: &[&[u8]]) -> Result<ModuleArgs> {
 /// spawning a process; `warn` is injected so the skip warnings can be captured.
 /// Production passes a closure over [`run_parser`] and `|m| eprintln!("{m}")`.
 ///
-/// Per-file isolation, matching the `on-file` hook contract: a file whose
-/// parser fails (spawn/exit/timeout/no-output) or whose output does not parse
-/// contributes no rows and a one-line warning to `warn`; the scan continues.
-/// The schema is inferred from whatever files did parse.
-fn collect_rows(
-    rel_paths: &[PathBuf],
-    run: &dyn Fn(&Path) -> std::result::Result<String, String>,
-    warn: &dyn Fn(&str),
-) -> Vec<JsonRow> {
-    let mut all = Vec::new();
-    for rel_path in rel_paths {
-        match run(rel_path) {
-            Err(error) => warn(&command_skip_message(rel_path, &error)),
-            Ok(payload) => match parse_rows(&payload) {
-                Ok(rows) => all.extend(rows),
-                Err(message) => warn(&parse_skip_message(rel_path, &message)),
-            },
-        }
-    }
-    all
+/// One run over every file, matching the `on-file` hook contract: the
+/// parser's output is the table's rows, so a run that fails or does not parse
+/// is the table's error and the schema is inferred from what it emitted.
+fn collect_rows(rel_paths: &[PathBuf], run: &RunParser<'_>) -> Result<Vec<JsonRow>> {
+    run(rel_paths).map_err(Error::ModuleError)
 }
 
-/// The rows for one file, and whether they came from a fresh parse that the
-/// cache should learn.
-struct Parsed {
-    payload: String,
-    stat: FileStat,
-    fresh: bool,
-}
+/// The cache entry holding the whole table's rows. The per-file entries carry
+/// only the stat tuples the freshness check reads; the parser ran over every
+/// file at once, so there is no per-file payload to keep.
+const TABLE_ENTRY: &str = "";
 
-/// The same fan-out as [`collect_rows`], with the persistent cache in front of
-/// the parser: a file whose stat tuple matches its cached entry serves that
-/// entry's payload and is never handed to `run`.
+/// The parser over a table's files: every root-relative path in, the table's
+/// rows out, or the message to fail the table with.
+type RunParser<'a> = dyn Fn(&[PathBuf]) -> std::result::Result<Vec<JsonRow>, String> + 'a;
+
+/// [`collect_rows`] with the persistent cache in front of the parser: when
+/// every matched file's stat tuple matches its cached entry and no cached file
+/// has gone, the table's cached rows are served and the parser never runs.
+/// Any one change re-runs it over every file, since that is what it saw.
 ///
 /// Everything effectful is injected — `stat`, `hash`, `run`, `warn` — so the
 /// reuse decision can be exercised without a filesystem or a child process.
@@ -139,9 +126,8 @@ struct Parsed {
 /// which is what keeps an unchanged tree free of file reads.
 ///
 /// The cache is only written when the scan actually changed something, which is
-/// what lets an unchanged tree leave the cache file byte-for-byte alone. A file
-/// whose parse failed is left uncached and retried next run, matching the
-/// declared-table contract: the cache is incomplete, never wrong.
+/// what lets an unchanged tree leave the cache file byte-for-byte alone. A
+/// failed parse is the table's error and leaves the cache untouched.
 ///
 /// A failed *write* is warned about and swallowed. The rows are already correct
 /// and the next run simply re-parses; failing the user's query over a lost
@@ -153,13 +139,14 @@ fn collect_rows_cached(
     cache: &dyn RowCache,
     rel_paths: &[PathBuf],
     fs: &dyn ParsedFs,
-    run: &dyn Fn(&Path) -> std::result::Result<String, String>,
+    run: &RunParser<'_>,
     warn: &dyn Fn(&str),
 ) -> Result<Vec<JsonRow>> {
     let cached: HashMap<String, CachedParse> = cache.read()?;
     let snapshot_ns = now_ns();
 
-    let mut seen: Vec<(String, Parsed)> = Vec::with_capacity(rel_paths.len());
+    let mut present: Vec<PathBuf> = Vec::with_capacity(rel_paths.len());
+    let mut changed: Vec<(String, FileStat)> = Vec::new();
     for rel_path in rel_paths {
         let key = to_slash(rel_path);
         let Some(live) = fs.stat(rel_path) else {
@@ -167,62 +154,53 @@ fn collect_rows_cached(
             // parse and nothing to cache; the next run decides afresh.
             continue;
         };
-        let entry = cached.get(&key);
-        if parsed_cache::is_fresh(entry, &live, || fs.hash(rel_path)) {
-            let payload = entry.expect("is_fresh implies an entry").payload.clone();
-            seen.push((
-                key,
-                Parsed {
-                    payload,
-                    stat: live,
-                    fresh: false,
-                },
-            ));
-            continue;
+        if !parsed_cache::is_fresh(cached.get(&key), &live, || fs.hash(rel_path)) {
+            changed.push((key.clone(), live));
         }
-        match run(rel_path) {
-            Err(error) => warn(&command_skip_message(rel_path, &error)),
-            Ok(payload) => seen.push((
-                key,
-                Parsed {
-                    payload,
-                    stat: live,
-                    fresh: true,
-                },
-            )),
-        }
+        present.push(PathBuf::from(key));
     }
 
-    let mut rows = Vec::new();
-    let mut writes: Vec<Entry<'_>> = Vec::new();
-    for (key, parsed) in &seen {
-        match parse_rows(&parsed.payload) {
-            Ok(parsed_rows) => {
-                rows.extend(parsed_rows);
-                if parsed.fresh {
-                    writes.push(Entry {
-                        rel_path: key,
-                        stat: &parsed.stat,
-                        content_hash: fs.hash(Path::new(key)),
-                        snapshot_ns,
-                        payload: &parsed.payload,
-                    });
-                }
-            }
-            Err(message) => warn(&parse_skip_message(Path::new(key), &message)),
-        }
-    }
-
-    let live: HashSet<&str> = seen.iter().map(|(key, _)| key.as_str()).collect();
+    let live: HashSet<String> = present.iter().map(|path| to_slash(path)).collect();
     let stale: Vec<&str> = cached
         .keys()
         .map(String::as_str)
-        .filter(|key| !live.contains(key))
+        .filter(|key| *key != TABLE_ENTRY && !live.contains(*key))
         .collect();
 
-    if (!writes.is_empty() || !stale.is_empty())
-        && let Err(error) = cache.commit(&writes, &stale)
+    if changed.is_empty()
+        && stale.is_empty()
+        && let Some(table) = cached.get(TABLE_ENTRY)
     {
+        return parse_rows(&table.payload).map_err(Error::ModuleError);
+    }
+
+    let rows = collect_rows(&present, run)?;
+    let payload = serde_json::to_string(&rows).map_err(|e| Error::ModuleError(e.to_string()))?;
+    let mut writes: Vec<Entry<'_>> = changed
+        .iter()
+        .map(|(key, stat)| Entry {
+            rel_path: key,
+            stat,
+            content_hash: fs.hash(Path::new(key)),
+            snapshot_ns,
+            payload: "",
+        })
+        .collect();
+    let table_stat = FileStat {
+        size: 0,
+        mtime_ns: 0,
+        ctime_ns: 0,
+        inode: 0,
+        dev: 0,
+    };
+    writes.push(Entry {
+        rel_path: TABLE_ENTRY,
+        stat: &table_stat,
+        content_hash: None,
+        snapshot_ns,
+        payload: &payload,
+    });
+    if let Err(error) = cache.commit(&writes, &stale) {
         warn(&cache_write_skip_message(&error));
     }
 
@@ -263,23 +241,6 @@ impl ParsedFs for RootedFs<'_> {
     }
 }
 
-/// Warning for a file whose parser command itself failed. Mirrors the `on-file`
-/// hook's wording so both surfaces read identically.
-fn command_skip_message(rel_path: &Path, error: &str) -> String {
-    format!(
-        "dirsql: skipping `{}`: on-file command failed: {error}",
-        to_slash(rel_path)
-    )
-}
-
-/// Warning for a file whose parser output was not a JSON array of rows.
-fn parse_skip_message(rel_path: &Path, message: &str) -> String {
-    format!(
-        "dirsql: skipping `{}`: on-file output was not a JSON array of rows: {message}",
-        to_slash(rel_path)
-    )
-}
-
 /// The error raised when the sample yields nothing to infer from. SQLite has
 /// no zero-column table, and inventing a placeholder column would make
 /// `SELECT *` mean something the parser never said.
@@ -287,18 +248,15 @@ fn no_rows_message(pattern: &str) -> String {
     format!("{MODULE_NAME}: parser produced no rows for `{pattern}`; cannot infer a schema")
 }
 
-/// Run the parser for one file. `{path}` is the file's absolute path and
-/// `{root}` the scan root, matching the `on-file` contract.
-fn run_parser(command: &str, root: &Path, rel_path: &Path) -> std::result::Result<String, String> {
-    let abs_path = root.join(rel_path);
-    let placeholders = [
-        Placeholder::path("path", &abs_path.to_string_lossy()),
-        Placeholder::path("root", &root.to_string_lossy()),
-    ];
-
-    run_command(command, &placeholders, root, None)
-        .map(|output| output.payload)
-        .map_err(|e| e.to_string())
+/// Run the parser once over `rel_paths`, handing it their absolute paths as
+/// trailing arguments, from the scan root as its working directory.
+fn run_parser(
+    command: &str,
+    root: &Path,
+    rel_paths: &[PathBuf],
+) -> std::result::Result<Vec<JsonRow>, String> {
+    let abs_paths: Vec<PathBuf> = rel_paths.iter().map(|rel| root.join(rel)).collect();
+    on_file::run(command, root, root, &abs_paths)
 }
 
 /// Column name for an index, or `None` when SQLite asks for one out of range.
@@ -337,10 +295,10 @@ impl TableSource for ParsedTable {
         // parsed `SELECT * FROM './'` doesn't drown in dependency trees.
         let ignore_base = path_table::ignore_base(&pattern);
         let rel_paths = scan_glob(&root, &glob, &ignore, &ignore_base, gitignore);
-        let run = |rel: &Path| run_parser(&command, &root, rel);
+        let run = |rel: &[PathBuf]| run_parser(&command, &root, rel);
         let warn = |message: &str| eprintln!("{message}");
         let rows = match &cache {
-            None => collect_rows(&rel_paths, &run, &warn),
+            None => collect_rows(&rel_paths, &run)?,
             Some(path) => {
                 let key = parsed_cache::table_key(&root, &pattern, &command);
                 let cache = SqliteRowCache::open(path, key)?;
@@ -520,99 +478,47 @@ mod tests {
         assert!(parse_module_args(&args).is_err());
     }
 
-    fn ok(payload: &'static str) -> impl Fn(&Path) -> std::result::Result<String, String> {
-        move |_| Ok(payload.to_string())
-    }
-
-    fn collect_with_warnings(
-        paths: &[PathBuf],
-        run: &dyn Fn(&Path) -> std::result::Result<String, String>,
-    ) -> (Vec<JsonRow>, Vec<String>) {
-        let warnings = std::cell::RefCell::new(Vec::new());
-        let rows = collect_rows(paths, run, &|m| warnings.borrow_mut().push(m.to_string()));
-        (rows, warnings.into_inner())
+    fn ok(
+        payload: &'static str,
+    ) -> impl Fn(&[PathBuf]) -> std::result::Result<Vec<JsonRow>, String> {
+        move |_| parse_rows(payload)
     }
 
     #[test]
-    fn collect_rows_concatenates_every_files_rows_in_scan_order() {
+    fn collect_rows_hands_every_file_to_one_run_in_scan_order() {
         let paths = vec![PathBuf::from("a.json"), PathBuf::from("b.json")];
-        let (rows, warnings) = collect_with_warnings(&paths, &|rel| {
-            Ok(format!(r#"[{{"id":"{}"}}]"#, rel.display()))
-        });
+        let seen = std::cell::RefCell::new(Vec::new());
+        let rows = collect_rows(&paths, &|rel| {
+            seen.borrow_mut().push(rel.to_vec());
+            parse_rows(r#"[{"i":1},{"i":2}]"#)
+        })
+        .unwrap();
 
-        let ids: Vec<_> = rows
-            .iter()
-            .map(|r| r.get("id").unwrap().as_str().unwrap().to_string())
-            .collect();
-        assert_eq!(ids, vec!["a.json", "b.json"]);
-        assert!(
-            warnings.is_empty(),
-            "no failures, no warnings: {warnings:?}"
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            *seen.borrow(),
+            vec![paths.clone()],
+            "one run over all files"
         );
     }
 
     #[test]
-    fn collect_rows_keeps_every_row_a_file_emitted() {
-        let paths = vec![PathBuf::from("a.json")];
-        let (rows, _) = collect_with_warnings(&paths, &ok(r#"[{"i":1},{"i":2}]"#));
-        assert_eq!(rows.len(), 2);
-    }
-
-    #[test]
-    fn collect_rows_over_no_files_is_no_rows() {
-        let (rows, warnings) = collect_with_warnings(&[], &ok("[]"));
+    fn collect_rows_over_no_files_hands_the_run_no_paths() {
+        let rows = collect_rows(&[], &|rel| {
+            assert!(rel.is_empty());
+            Ok(Vec::new())
+        })
+        .unwrap();
         assert_eq!(rows, Vec::new());
-        assert!(warnings.is_empty());
     }
 
     #[test]
-    fn collect_rows_skips_a_run_failure_warns_and_continues() {
-        let paths = vec![PathBuf::from("bad.json"), PathBuf::from("good.json")];
-        let (rows, warnings) = collect_with_warnings(&paths, &|rel| {
-            if rel == Path::new("bad.json") {
-                Err("exit 7".to_string())
-            } else {
-                Ok(r#"[{"i":1}]"#.to_string())
-            }
-        });
-
-        assert_eq!(rows.len(), 1, "the good file still contributes its row");
-        assert_eq!(warnings.len(), 1, "the bad file warns once: {warnings:?}");
-        assert!(warnings[0].contains("bad.json"), "got: {}", warnings[0]);
-        assert!(warnings[0].contains("exit 7"), "got: {}", warnings[0]);
-    }
-
-    #[test]
-    fn collect_rows_skips_a_parse_failure_warns_and_continues() {
-        let paths = vec![PathBuf::from("bad.json"), PathBuf::from("good.json")];
-        let (rows, warnings) = collect_with_warnings(&paths, &|rel| {
-            if rel == Path::new("bad.json") {
-                Ok("not json".to_string())
-            } else {
-                Ok(r#"[{"i":1}]"#.to_string())
-            }
-        });
-
-        assert_eq!(rows.len(), 1);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("bad.json"), "got: {}", warnings[0]);
-    }
-
-    #[test]
-    fn command_skip_message_names_the_file_and_the_error() {
-        let message = command_skip_message(Path::new("a/b.json"), "exit 3");
-        assert!(message.contains("a/b.json"), "got: {message}");
-        assert!(message.contains("exit 3"), "got: {message}");
-        assert!(message.contains("on-file command failed"), "got: {message}");
-    }
-
-    #[test]
-    fn parse_skip_message_names_the_file_and_the_defect() {
-        let message = parse_skip_message(Path::new("a/b.json"), "expected an array");
-        assert!(message.contains("a/b.json"), "got: {message}");
+    fn collect_rows_surfaces_a_run_failure_as_the_tables_error() {
+        let paths = vec![PathBuf::from("a.json")];
+        let err = collect_rows(&paths, &|_| Err("exit 7".to_string())).unwrap_err();
         assert!(
-            message.contains("not a JSON array of rows"),
-            "got: {message}"
+            matches!(err, Error::ModuleError(ref m) if m == "exit 7"),
+            "got: {err}"
         );
     }
 
@@ -648,29 +554,35 @@ mod tests {
     // `command.rs` uses for the runner underneath.
 
     #[test]
-    fn run_parser_returns_the_commands_payload() {
-        let payload = run_parser(
-            "sh -c 'echo chatter; echo PAYLOAD'",
+    fn run_parser_returns_the_commands_rows() {
+        let rows = run_parser(
+            r#"sh -c "echo chatter; printf '[{\"id\":1}]'""#,
             Path::new("."),
-            Path::new("a.json"),
+            &[PathBuf::from("a.json")],
         )
         .unwrap();
-        assert_eq!(payload, "PAYLOAD");
+        assert_eq!(ids(&rows), vec![1]);
     }
 
     #[test]
-    fn run_parser_substitutes_the_absolute_path_and_the_root() {
+    fn run_parser_appends_every_absolute_path_after_the_root() {
         let root = std::env::temp_dir();
-        let payload = run_parser("echo {path} {root}", &root, Path::new("a.json")).unwrap();
-        assert_eq!(
-            payload,
-            format!("{} {}", root.join("a.json").display(), root.display())
-        );
+        let rows = run_parser(
+            r#"sh -c 'printf "[{\"root\":\"%s\",\"a\":\"%s\",\"b\":\"%s\"}]" "$1" "$2" "$3"' sh {root}"#,
+            &root,
+            &[PathBuf::from("a.json"), PathBuf::from("b.json")],
+        )
+        .unwrap();
+        let text = |key: &str| rows[0].get(key).unwrap().as_str().unwrap().to_string();
+        assert_eq!(text("root"), root.display().to_string());
+        assert_eq!(text("a"), root.join("a.json").display().to_string());
+        assert_eq!(text("b"), root.join("b.json").display().to_string());
     }
 
     #[test]
     fn run_parser_surfaces_a_command_failure_as_a_message() {
-        let err = run_parser("sh -c 'exit 7'", Path::new("."), Path::new("a.json")).unwrap_err();
+        let err =
+            run_parser("sh -c 'exit 7'", Path::new("."), &[PathBuf::from("a.json")]).unwrap_err();
         assert!(err.contains('7'), "the exit code is reported, got: {err}");
     }
 
@@ -721,11 +633,12 @@ mod tests {
     impl FakeCache {
         /// Seed the cache as a prior run would have, with a snapshot far enough
         /// ahead of the file's mtime to be outside the racy window.
-        fn seeded(entries: &[(&str, i64, &str)]) -> Self {
+        fn seeded(files: &[(&str, i64)], rows: &str) -> Self {
             let cache = Self::default();
-            for (rel_path, mtime_ns, payload) in entries {
-                cache.put(rel_path, stat(*mtime_ns), None, mtime_ns + 1, payload);
+            for (rel_path, mtime_ns) in files {
+                cache.put(rel_path, stat(*mtime_ns), None, mtime_ns + 1, "");
             }
+            cache.put(TABLE_ENTRY, stat(0), None, 1, rows);
             cache
         }
 
@@ -805,7 +718,7 @@ mod tests {
         cache: &FakeCache,
         fs: &FakeFs,
         rel_paths: &[PathBuf],
-        run: &dyn Fn(&Path) -> std::result::Result<String, String>,
+        run: &RunParser<'_>,
     ) -> (Vec<JsonRow>, Vec<String>) {
         let warnings = std::cell::RefCell::new(Vec::new());
         let rows = collect_rows_cached(cache, rel_paths, fs, run, &|m| {
@@ -831,19 +744,20 @@ mod tests {
 
         assert_eq!(ids(&rows), vec![1]);
         assert!(warnings.is_empty(), "{warnings:?}");
-        assert_eq!(cache.payloads()["a.json"], r#"[{"id":1}]"#);
+        assert_eq!(cache.payloads()[TABLE_ENTRY], r#"[{"id":1}]"#);
+        assert!(cache.payloads().contains_key("a.json"));
     }
 
     #[test]
-    fn collect_rows_cached_serves_an_unchanged_file_without_parsing_or_reading_it() {
-        let cache = FakeCache::seeded(&[("a.json", 10, r#"[{"id":9}]"#)]);
+    fn collect_rows_cached_serves_an_unchanged_tree_without_parsing_or_reading_it() {
+        let cache = FakeCache::seeded(&[("a.json", 10)], r#"[{"id":9}]"#);
         let fs = FakeFs::with(&[("a.json", 10)]);
 
         let (rows, _) = collect_cached(&cache, &fs, &paths(&["a.json"]), &|_| {
-            panic!("an unchanged file must not reach the parser")
+            panic!("an unchanged tree must not reach the parser")
         });
 
-        assert_eq!(ids(&rows), vec![9], "the cached payload is served");
+        assert_eq!(ids(&rows), vec![9], "the cached rows are served");
         assert!(
             fs.hashed.borrow().is_empty(),
             "a file outside the racy window is not read: {:?}",
@@ -853,7 +767,7 @@ mod tests {
 
     #[test]
     fn collect_rows_cached_leaves_the_cache_alone_when_nothing_changed() {
-        let cache = FakeCache::seeded(&[("a.json", 10, r#"[{"id":9}]"#)]);
+        let cache = FakeCache::seeded(&[("a.json", 10)], r#"[{"id":9}]"#);
         let fs = FakeFs::with(&[("a.json", 10)]);
 
         collect_cached(&cache, &fs, &paths(&["a.json"]), &ok("[]"));
@@ -866,98 +780,90 @@ mod tests {
     }
 
     #[test]
-    fn collect_rows_cached_reparses_a_file_whose_stat_moved() {
-        let cache = FakeCache::seeded(&[("a.json", 10, r#"[{"id":9}]"#)]);
-        let fs = FakeFs::with(&[("a.json", 20)]);
+    fn collect_rows_cached_reruns_over_every_file_when_one_stat_moved() {
+        let cache = FakeCache::seeded(&[("a.json", 10), ("b.json", 10)], r#"[{"id":9}]"#);
+        let fs = FakeFs::with(&[("a.json", 20), ("b.json", 10)]);
 
-        let (rows, _) = collect_cached(&cache, &fs, &paths(&["a.json"]), &ok(r#"[{"id":2}]"#));
+        let seen = std::cell::RefCell::new(Vec::new());
+        let (rows, _) = collect_cached(&cache, &fs, &paths(&["a.json", "b.json"]), &|rel| {
+            seen.borrow_mut().push(rel.to_vec());
+            parse_rows(r#"[{"id":2}]"#)
+        });
 
         assert_eq!(ids(&rows), vec![2]);
         assert_eq!(
-            cache.payloads()["a.json"],
+            *seen.borrow(),
+            vec![paths(&["a.json", "b.json"])],
+            "the parser sees the whole table again",
+        );
+        assert_eq!(
+            cache.payloads()[TABLE_ENTRY],
             r#"[{"id":2}]"#,
-            "the cache learns the new payload",
+            "the cache learns the new rows",
         );
     }
 
     #[test]
-    fn collect_rows_cached_forgets_a_file_the_scan_no_longer_matches() {
-        let cache = FakeCache::seeded(&[
-            ("a.json", 10, r#"[{"id":9}]"#),
-            ("gone.json", 10, r#"[{"id":8}]"#),
-        ]);
+    fn collect_rows_cached_reruns_when_a_cached_file_no_longer_matches() {
+        let cache = FakeCache::seeded(&[("a.json", 10), ("gone.json", 10)], r#"[{"id":9}]"#);
         let fs = FakeFs::with(&[("a.json", 10)]);
 
-        let (rows, _) = collect_cached(&cache, &fs, &paths(&["a.json"]), &ok("[]"));
+        let (rows, _) = collect_cached(&cache, &fs, &paths(&["a.json"]), &ok(r#"[{"id":1}]"#));
 
-        assert_eq!(ids(&rows), vec![9]);
+        assert_eq!(ids(&rows), vec![1]);
         assert_eq!(
             cache.payloads().keys().collect::<Vec<_>>(),
-            vec!["a.json"],
+            vec![TABLE_ENTRY, "a.json"],
             "the vanished file's entry is dropped",
         );
     }
 
     #[test]
-    fn collect_rows_cached_skips_a_file_that_vanished_before_the_stat() {
-        let cache = FakeCache::default();
-        let fs = FakeFs::default();
-
-        let (rows, warnings) = collect_cached(&cache, &fs, &paths(&["ghost.json"]), &|_| {
-            panic!("a vanished file must not reach the parser")
-        });
-
-        assert!(rows.is_empty());
-        assert!(warnings.is_empty(), "a race is not a parse failure");
-        assert_eq!(*cache.commits.borrow(), 0);
-    }
-
-    #[test]
-    fn collect_rows_cached_isolates_a_parser_failure_and_leaves_it_uncached() {
-        let cache = FakeCache::default();
-        let fs = FakeFs::with(&[("bad.json", 10), ("good.json", 10)]);
-
-        let (rows, warnings) =
-            collect_cached(&cache, &fs, &paths(&["bad.json", "good.json"]), &|rel| {
-                if rel == Path::new("bad.json") {
-                    Err("exit 7".to_string())
-                } else {
-                    Ok(r#"[{"id":1}]"#.to_string())
-                }
-            });
-
-        assert_eq!(ids(&rows), vec![1], "the good file still contributes");
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert!(warnings[0].contains("bad.json"));
-        assert!(
-            !cache.payloads().contains_key("bad.json"),
-            "a failed file stays uncached so the next run retries it",
-        );
-    }
-
-    #[test]
-    fn collect_rows_cached_isolates_output_that_is_not_a_row_array() {
+    fn collect_rows_cached_leaves_out_a_file_that_vanished_before_the_stat() {
         let cache = FakeCache::default();
         let fs = FakeFs::with(&[("a.json", 10)]);
 
-        let (rows, warnings) = collect_cached(&cache, &fs, &paths(&["a.json"]), &ok("not json"));
+        let (rows, warnings) =
+            collect_cached(&cache, &fs, &paths(&["ghost.json", "a.json"]), &|rel| {
+                assert_eq!(
+                    rel,
+                    paths(&["a.json"]),
+                    "the vanished file is not handed over"
+                );
+                parse_rows(r#"[{"id":1}]"#)
+            });
 
-        assert!(rows.is_empty());
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert!(warnings[0].contains("a.json"), "got: {}", warnings[0]);
-        assert_eq!(
-            *cache.commits.borrow(),
-            0,
-            "unparseable output is not worth caching",
+        assert_eq!(ids(&rows), vec![1]);
+        assert!(warnings.is_empty(), "a race is not a parse failure");
+    }
+
+    #[test]
+    fn collect_rows_cached_propagates_a_parser_failure_and_leaves_the_cache_alone() {
+        let cache = FakeCache::default();
+        let fs = FakeFs::with(&[("a.json", 10)]);
+
+        let err = collect_rows_cached(
+            &cache,
+            &paths(&["a.json"]),
+            &fs,
+            &|_| Err("exit 7".to_string()),
+            &|_| {},
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, Error::ModuleError(ref m) if m == "exit 7"),
+            "got: {err}"
         );
+        assert_eq!(*cache.commits.borrow(), 0, "a failed run is not cached");
     }
 
     #[test]
     fn collect_rows_cached_hash_confirms_a_file_inside_the_racy_window() {
         // snapshot_ns == mtime_ns puts the entry inside the racy window, where
         // the stat tuple alone cannot settle it.
-        let cache = FakeCache::default();
-        cache.put("a.json", stat(10), Some([3u8; 32]), 10, "[]");
+        let cache = FakeCache::seeded(&[], "[]");
+        cache.put("a.json", stat(10), Some([3u8; 32]), 10, "");
         let mut fs = FakeFs::with(&[("a.json", 10)]);
         fs.hashes.insert("a.json".to_string(), [3u8; 32]);
 

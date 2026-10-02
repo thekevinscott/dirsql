@@ -2,8 +2,8 @@
 (docs/howto/persist.md).
 
 Runs the Python launcher (`dirsql.cli.main:main`) as a subprocess twice over the
-same unchanged temp tree, with a real parser script that records every
-invocation. The second run must serve the rows from the cache: the parser runs
+same unchanged temp tree, with a real parser script that records every file it
+is handed. The second run must serve the rows from the cache: the parser runs
 for no file and the cache file is not rewritten. No mocks: real launcher, real
 binary, real process, real filesystem.
 """
@@ -26,8 +26,19 @@ import dirsql as _dirsql_pkg
 _BINARY_STAGE_DIR = os.path.join(os.path.dirname(_dirsql_pkg.__file__), "_binary")
 
 _PARSER = """#!/bin/sh
-printf x >> "$2"
-cat "$1"
+counter=$1
+shift
+printf '['
+sep=""
+for f; do
+  printf x >> "$counter"
+  body=$(cat "$f")
+  body=${body#"["}
+  body=${body%"]"}
+  printf '%s%s' "$sep" "$body"
+  sep=","
+done
+printf ']'
 """
 
 
@@ -78,7 +89,7 @@ def describe_persist_query():
             "query",
             "SELECT id, tag FROM './docs/*.json'",
             "--on-file",
-            f"sh {root.parent / 'parse.sh'} {{path}} {counter}",
+            f"sh {root.parent / 'parse.sh'} {counter}",
             "--persist",
         )
 
@@ -105,7 +116,7 @@ def describe_persist_query():
             "an unchanged tree must not rewrite the cache"
         )
 
-    def it_reparses_only_a_changed_file(tree):
+    def it_reparses_every_file_after_one_change(tree):
         counter = tree.parent / "parses"
         assert _query(tree, counter).returncode == 0
         counter.write_bytes(b"")
@@ -117,6 +128,6 @@ def describe_persist_query():
 
         warm = _query(tree, counter)
         assert warm.returncode == 0, warm.stderr
-        assert _parses(counter) == 1, "only the changed file is re-parsed"
+        assert _parses(counter) == 5, "one changed file re-runs the parser over all"
         rows = {r["id"]: r["tag"] for r in json.loads(warm.stdout)}
         assert rows == {0: "v1", 1: "v1", 2: "v1", 3: "v2", 4: "v1"}

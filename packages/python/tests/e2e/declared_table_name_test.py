@@ -51,7 +51,7 @@ def describe_declared_table_name():
             'name = "records"\n'
             'ddl = "CREATE TABLE records (id TEXT)"\n'
             'glob = "data/*.json"\n'
-            'on-file = "cat {path}"\n',
+            'on-file = "cat"\n',
         )
 
         proc = _query(root, cfg, "SELECT id FROM records ORDER BY id")
@@ -65,7 +65,7 @@ def describe_declared_table_name():
             "[[table]]\n"
             'ddl = "CREATE TABLE records (id TEXT)"\n'
             'glob = "data/*.json"\n'
-            'on-file = "cat {path}"\n',
+            'on-file = "cat"\n',
         )
 
         proc = _query(root, cfg, "SELECT id FROM records")
@@ -82,7 +82,7 @@ def describe_declared_table_name():
             'name = "messages"\n'
             'ddl = "CREATE TABLE records (id TEXT)"\n'
             'glob = "data/*.json"\n'
-            'on-file = "cat {path}"\n',
+            'on-file = "cat"\n',
         )
 
         proc = _query(root, cfg, "SELECT id FROM messages")

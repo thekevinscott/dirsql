@@ -2,10 +2,10 @@
 
 Config-defined tables produce one row per matched file. Each row's columns
 come from the table's `on-file` hook: a small `sh` command that derives the
-stat facts (`path`, `basename`, `dir`, `ext`, `size`, `mtime`) from the file
-and emits them as a JSON row. Content interpretation beyond that is out of
-scope; for richer parsing, register a programmatic Table with your own on_file
-function.
+stat facts (`path`, `basename`, `dir`, `ext`, `size`, `mtime`) from every
+file it is handed and emits them as one JSON array of rows. Content
+interpretation beyond that is out of scope; for richer parsing, register a
+programmatic Table with your own on_file function.
 """
 
 import os
@@ -15,12 +15,12 @@ import pytest
 
 from dirsql import DirSQL
 
-# `on-file` hooks that emit the stat facts a row needs, derived from the
-# file path (`{path}`) relative to the scan root (`{root}`). Emitting a
-# superset of the DDL's columns is safe -- undeclared keys are dropped.
-_HOOK_PATH = r"""on-file = '''sh -c 'rel=${1#"$2"/}; printf "[{\"path\":\"%s\"}]" "$rel"' sh {path} {root}'''"""
-_HOOK_PATH_BASENAME = r"""on-file = '''sh -c 'rel=${1#"$2"/}; base=${1##*/}; printf "[{\"path\":\"%s\",\"basename\":\"%s\"}]" "$rel" "$base"' sh {path} {root}'''"""
-_HOOK_STAT = r"""on-file = '''sh -c 'rel=${1#"$2"/}; base=${1##*/}; case "$rel" in */*) dir=${rel%/*};; *) dir="";; esac; ext=${base##*.}; [ "$ext" = "$base" ] && ext=""; size=$(wc -c < "$1" | tr -d " "); mtime=$(stat -c %Y "$1"); printf "[{\"path\":\"%s\",\"basename\":\"%s\",\"dir\":\"%s\",\"ext\":\"%s\",\"size\":%s,\"mtime\":%s}]" "$rel" "$base" "$dir" "$ext" "$size" "$mtime"' sh {path} {root}'''"""
+# `on-file` hooks that emit the stat facts a row needs, one row per handed
+# path, relative to the scan root (`{root}`). Emitting a superset of the
+# DDL's columns is safe -- undeclared keys are dropped.
+_HOOK_PATH = r"""on-file = '''sh -c 'r=$1; shift; printf "["; sep=""; for p; do rel=${p#"$r"/}; printf "%s{\"path\":\"%s\"}" "$sep" "$rel"; sep=","; done; printf "]"' sh {root}'''"""
+_HOOK_PATH_BASENAME = r"""on-file = '''sh -c 'r=$1; shift; printf "["; sep=""; for p; do rel=${p#"$r"/}; printf "%s{\"path\":\"%s\",\"basename\":\"%s\"}" "$sep" "$rel" "${p##*/}"; sep=","; done; printf "]"' sh {root}'''"""
+_HOOK_STAT = r"""on-file = '''sh -c 'r=$1; shift; printf "["; sep=""; for p; do rel=${p#"$r"/}; base=${p##*/}; case "$rel" in */*) dir=${rel%/*};; *) dir="";; esac; ext=${base##*.}; [ "$ext" = "$base" ] && ext=""; size=$(wc -c < "$p" | tr -d " "); mtime=$(stat -c %Y "$p"); printf "%s{\"path\":\"%s\",\"basename\":\"%s\",\"dir\":\"%s\",\"ext\":\"%s\",\"size\":%s,\"mtime\":%s}" "$sep" "$rel" "$base" "$dir" "$ext" "$size" "$mtime"; sep=","; done; printf "]"' sh {root}'''"""
 
 
 @pytest.fixture

@@ -166,7 +166,7 @@ def describe_plugin_extension_discovery():
             'name = "posts"\n'
             'ddl = "CREATE TABLE posts (path TEXT)"\n'
             'glob = "*.md"\n'
-            'on-file = "cat {path}"\n'
+            'on-file = "cat"\n'
         )
         # A user `-c` composes with the injected fragment; the fragment's
         # package-name extension must still be resolved.

@@ -32,9 +32,9 @@ import dirsql as _dirsql_pkg
 
 _BINARY_STAGE_DIR = os.path.join(os.path.dirname(_dirsql_pkg.__file__), "_binary")
 
-# An `on-file` hook emitting `path` and `basename`, derived from the file
-# path (`{path}`) relative to the scan root (`{root}`).
-_HOOK_PATH_BASENAME = r"""on-file = '''sh -c 'rel=${1#"$2"/}; base=${1##*/}; printf "[{\"path\":\"%s\",\"basename\":\"%s\"}]" "$rel" "$base"' sh {path} {root}'''"""
+# An `on-file` hook emitting `path` and `basename` for every handed path,
+# relative to the scan root (`{root}`).
+_HOOK_PATH_BASENAME = r"""on-file = '''sh -c 'r=$1; shift; printf "["; sep=""; for p; do rel=${p#"$r"/}; printf "%s{\"path\":\"%s\",\"basename\":\"%s\"}" "$sep" "$rel" "${p##*/}"; sep=","; done; printf "]"' sh {root}'''"""
 
 
 def _stage_plugin(site_dir):
@@ -168,7 +168,7 @@ def describe_plugin_discovery():
         cfg = data / "dup.toml"
         cfg.write_text(
             '[[table]]\nname = "notes"\nddl = "CREATE TABLE notes (path TEXT)"\nglob = "*.md"\n'
-            'on-file = "cat {path}"\n'
+            'on-file = "cat"\n'
         )
         out = _run(site_dir, ["query", "SELECT 1", "-c", "dup.toml"], data)
         assert out.returncode != 0, (

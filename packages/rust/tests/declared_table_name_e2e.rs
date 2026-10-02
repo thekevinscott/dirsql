@@ -49,7 +49,7 @@ fn declared_name_is_queryable_through_the_cli() {
 name = "records"
 ddl = "CREATE TABLE records (id TEXT)"
 glob = "data/*.json"
-on-file = "cat {path}"
+on-file = "cat"
 "#,
     );
 
@@ -71,7 +71,7 @@ fn missing_name_exits_nonzero_and_names_the_key() {
 [[table]]
 ddl = "CREATE TABLE records (id TEXT)"
 glob = "data/*.json"
-on-file = "cat {path}"
+on-file = "cat"
 "#,
     );
 
@@ -95,7 +95,7 @@ fn name_the_ddl_never_creates_exits_nonzero_before_ingestion() {
 name = "messages"
 ddl = "CREATE TABLE records (id TEXT)"
 glob = "data/*.json"
-on-file = "cat {path}"
+on-file = "cat"
 "#,
     );
 

@@ -49,7 +49,7 @@ fn fixture(extension: &str) -> TempDir {
 name = "files"
 ddl = "CREATE TABLE files (name TEXT)"
 glob = "*.json"
-on-file = "cat {{path}}"
+on-file = "cat"
 "#
         ),
     )

@@ -151,11 +151,17 @@ folder name), and prints them as a JSON row:
 ```bash
 cat > note.sh <<'EOF'
 #!/usr/bin/env sh
-title=$(sed -n 's/^# //p' "$1" | head -n1)
-author=$(basename "$(dirname "$1")")
-printf '[{"title":%s,"author":%s}]' \
-  "$(jq -Rn --arg t "$title" '$t')" \
-  "$(jq -Rn --arg a "$author" '$a')"
+printf '['
+sep=''
+for f; do
+  title=$(sed -n 's/^# //p' "$f" | head -n1)
+  author=$(basename "$(dirname "$f")")
+  printf '%s{"title":%s,"author":%s}' "$sep" \
+    "$(jq -Rn --arg t "$title" '$t')" \
+    "$(jq -Rn --arg a "$author" '$a')"
+  sep=','
+done
+printf ']'
 EOF
 ```
 
@@ -167,7 +173,7 @@ cat > .dirsql.toml <<'EOF'
 name = "notes"
 ddl     = "CREATE TABLE notes (title TEXT, author TEXT)"
 glob    = "notes/**/*.md"
-on-file = "sh note.sh {path}"
+on-file = "sh note.sh"
 EOF
 ```
 
@@ -176,9 +182,10 @@ Three keys define the table:
 - `glob` selects which files feed the table — every `.md` at any depth under
   `notes/`, relative to the directory the config sits in.
 - `ddl` is ordinary `CREATE TABLE` SQL naming the columns you want to keep.
-- `on-file` is the command run once per matched file; `{path}` is the file's
-  path, and its printed JSON row becomes the file's row. The columns are
-  exactly what it emits — `title` from the heading, `author` from the folder.
+- `on-file` is the command run once for the table, with every matched file's
+  path appended as an argument; the JSON array it prints is the table's rows.
+  The columns are exactly what it emits — `title` from the heading, `author`
+  from the folder.
 
 ## 5. Query the table
 

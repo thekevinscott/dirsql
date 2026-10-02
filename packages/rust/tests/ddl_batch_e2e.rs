@@ -74,7 +74,7 @@ const BATCH_CONFIG: &str = r#"
 [[table]]
 name = "records"
 glob = "data/*.json"
-on-file = "cat {path}"
+on-file = "cat"
 ddl = '''
 CREATE TABLE records (id TEXT, body TEXT);
 CREATE INDEX records_id ON records(id);
@@ -130,7 +130,7 @@ fn a_batch_sqlite_rejects_exits_nonzero_naming_the_table() {
 [[table]]
 name = "records"
 glob = "data/*.json"
-on-file = "cat {path}"
+on-file = "cat"
 ddl = '''
 CREATE TABLE records (id TEXT, body TEXT);
 CREATE TABLE oops (
@@ -157,7 +157,7 @@ fn a_declared_name_that_is_a_virtual_table_exits_nonzero() {
 [[table]]
 name = "records"
 glob = "data/*.json"
-on-file = "cat {path}"
+on-file = "cat"
 ddl = "CREATE VIRTUAL TABLE records USING fts5(id, body)"
 "#,
     );
@@ -192,7 +192,7 @@ entrypoint = "sqlite3_extension_init"
 [[table]]
 name = "records"
 glob = "data/*.json"
-on-file = "cat {{path}}"
+on-file = "cat"
 ddl = '''
 CREATE TABLE records (id TEXT, body TEXT);
 CREATE VIRTUAL TABLE records_ext USING dirsql_testext_vtab();{extra}

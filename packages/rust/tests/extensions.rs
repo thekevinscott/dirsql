@@ -29,7 +29,7 @@ path = "/nonexistent/dirsql-no-such-extension.so"
 name = "files"
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.txt"
-on-file = "cat {path}"
+on-file = "cat"
 "#,
     )
     .unwrap();
@@ -120,7 +120,7 @@ entrypoint = "sqlite3_extension_init"
 name = "files"
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.txt"
-on-file = "cat {{path}}"
+on-file = "cat"
 "#,
             toml::Value::String(ext.display().to_string()),
         ),
@@ -171,7 +171,7 @@ path = "does/not/exist.so"
 name = "files"
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.txt"
-on-file = "cat {path}"
+on-file = "cat"
 "#,
     )
     .unwrap();

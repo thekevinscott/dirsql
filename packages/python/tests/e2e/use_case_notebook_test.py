@@ -31,11 +31,13 @@ QUERY = "SELECT date, words FROM './notebook.md' ORDER BY date DESC LIMIT 5"
 EXTRACT = """\
 import json, re, sys
 
-text = open(sys.argv[1], encoding="utf-8").read()
-rows = [
-    {"date": date, "body": body.strip(), "words": len(body.split())}
-    for date, body in re.findall(r"^## (\\d{4}-\\d\\d-\\d\\d)\\n(.*?)(?=^## |\\Z)", text, re.S | re.M)
-]
+rows = []
+for path in sys.argv[1:]:
+    text = open(path, encoding="utf-8").read()
+    rows += [
+        {"date": date, "body": body.strip(), "words": len(body.split())}
+        for date, body in re.findall(r"^## (\\d{4}-\\d\\d-\\d\\d)\\n(.*?)(?=^## |\\Z)", text, re.S | re.M)
+    ]
 print(json.dumps(rows))
 """
 
@@ -109,7 +111,7 @@ def describe_notebook_speed_of_light():
 
         def dirsql():
             proc, seconds = timed(
-                [cli(), "query", QUERY, "--on-file", "python3 extract.py {path}"],
+                [cli(), "query", QUERY, "--on-file", "python3 extract.py"],
                 root,
                 timeout=dirsql_timeout(native_seconds),
             )

@@ -2,9 +2,9 @@
 
 A tree of JSONL session logs, each turned into message rows by a parser
 named in `.dirsql.toml`; the question is how many messages each project has
-per role. Native is one parser process over every file. dirsql spawns the
-same parser per file through the real launcher. No mocks: real console
-script, real process, real filesystem, real parser spawns.
+per role. Native is one parser process over every file. dirsql runs the
+same parser once over every file through the real launcher. No mocks: real
+console script, real process, real filesystem, real parser spawn.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ CONFIG = """\
 name    = "messages"
 glob    = "projects/**/*.jsonl"
 ddl     = "CREATE TABLE messages (project TEXT, kind TEXT, ts TEXT, role TEXT, text TEXT)"
-on-file = "python3 messages.py {path}"
+on-file = "python3 messages.py"
 """
 
 MESSAGES = """\
@@ -72,7 +72,10 @@ def rows(path):
 
 
 if __name__ == "__main__":
-    print(json.dumps(rows(sys.argv[1])))
+    out = []
+    for path in sys.argv[1:]:
+        out.extend(rows(path))
+    print(json.dumps(out))
 """
 
 COUNT = """\
@@ -167,7 +170,10 @@ def describe_transcripts_speed_of_light():
         finally:
             shutil.rmtree(tree, ignore_errors=True)
 
-    @pytest.mark.xfail(strict=True, reason="on-file spawns one parser process per file")
+    @pytest.mark.xfail(
+        strict=True,
+        reason="ingesting the parser's JSON rows costs more than a tenth of the parse itself",
+    )
     def it_matches_native_rows_within_the_bar(root):
         startup = startup_seconds()
 

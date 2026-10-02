@@ -28,7 +28,7 @@ fn on_file_rows_appear_in_query_results() {
 name = "papers"
 ddl = "CREATE TABLE papers (paper_id TEXT, title TEXT, basename TEXT)"
 glob = "**/meta.json"
-on-file = "cat {path}"
+on-file = "cat"
 "#,
     )
     .unwrap();
@@ -57,17 +57,17 @@ on-file = "cat {path}"
     assert_eq!(rows[1]["title"], Value::Text("Second".into()));
 }
 
-/// `{abspath}` is no longer a recognized `on-file` token: a template
-/// referencing it receives the literal string `{abspath}` (unknown tokens are
-/// left literal). The helper echoes its second argument into column `q`, so a
-/// substituted `{abspath}` would surface the absolute path; instead `q` is the
-/// literal `{abspath}`.
+/// `{abspath}` is not a recognized `on-file` token: a template referencing it
+/// receives the literal string `{abspath}` (unknown tokens are left literal).
+/// The helper echoes its first argument into column `q`, so a substituted
+/// `{abspath}` would surface the absolute path; instead `q` is the literal
+/// `{abspath}`.
 #[test]
-fn on_file_abspath_token_is_no_longer_substituted() {
+fn on_file_abspath_token_is_not_substituted() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("echo_args.sh"),
-        "#!/bin/sh\nprintf '[{\"q\":\"%s\"}]' \"$2\"\n",
+        "#!/bin/sh\nprintf '[{\"q\":\"%s\"}]' \"$1\"\n",
     )
     .unwrap();
     fs::write(
@@ -77,7 +77,7 @@ fn on_file_abspath_token_is_no_longer_substituted() {
 name = "items"
 ddl = "CREATE TABLE items (q TEXT)"
 glob = "*.json"
-on-file = "sh echo_args.sh {path} {abspath}"
+on-file = "sh echo_args.sh {abspath}"
 "#,
     )
     .unwrap();
@@ -93,11 +93,45 @@ on-file = "sh echo_args.sh {path} {abspath}"
     assert_eq!(rows[0]["q"], Value::Text("{abspath}".into()));
 }
 
-/// Interpolation is the only channel for the path: a template that omits
-/// `{path}` no longer has it appended, so `on-file = "cat"` runs `cat` with no
-/// file (its stdin is null), producing no payload and therefore no rows.
+/// The command runs once for the table, with every matched path as a trailing
+/// argument: a helper that reports its argument count sees both files in one
+/// invocation and lands one row.
 #[test]
-fn on_file_omitting_path_no_longer_appends_it() {
+fn on_file_runs_once_with_every_matched_path_appended() {
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("count.sh"),
+        "#!/bin/sh\nprintf '[{\"n\":%s}]' \"$#\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join(".dirsql.toml"),
+        r#"
+[[table]]
+name = "items"
+ddl = "CREATE TABLE items (n INTEGER)"
+glob = "*.json"
+on-file = "sh count.sh"
+"#,
+    )
+    .unwrap();
+    fs::write(root.path().join("a.json"), "x").unwrap();
+    fs::write(root.path().join("b.json"), "y").unwrap();
+
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
+    let rows = db.query("SELECT n FROM items").unwrap();
+    assert_eq!(rows.len(), 1, "one invocation, one row: {rows:?}");
+    assert_eq!(rows[0]["n"], Value::Integer(2));
+}
+
+/// A `{path}` in the command belongs to the retired per-file contract, so the
+/// build refuses it up front and says what to do instead.
+#[test]
+fn on_file_with_a_path_placeholder_is_rejected_at_build() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join(".dirsql.toml"),
@@ -106,28 +140,29 @@ fn on_file_omitting_path_no_longer_appends_it() {
 name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.json"
-on-file = "cat"
+on-file = "cat {path}"
 "#,
     )
     .unwrap();
-    fs::write(root.path().join("a.json"), r#"[{"name":"widget"}]"#).unwrap();
 
-    let db = DirSQL::builder()
+    let err = DirSQL::builder()
         .root(root.path())
         .config(root.path().join(".dirsql.toml"))
         .build()
-        .unwrap();
-    let rows = db.query("SELECT name FROM items").unwrap();
+        .err()
+        .expect("`{path}` must be rejected")
+        .to_string();
+    assert!(err.contains("cat {path}"), "names the command: {err}");
     assert!(
-        rows.is_empty(),
-        "a `{{path}}`-less template must not receive the path, got {rows:?}"
+        err.contains("trailing arguments"),
+        "names the contract: {err}"
     );
 }
 
-/// `{path}` interpolates the matched file's **absolute** path, so an `on-file`
-/// script receives a self-sufficient argument that resolves from any cwd. The
+/// Every appended path is the matched file's **absolute** path, so an `on-file`
+/// script receives self-sufficient arguments that resolve from any cwd. The
 /// helper exits non-zero unless its argument is absolute; only then does it
-/// `cat` the file. Rows landing proves the script saw an absolute `{path}`.
+/// `cat` the file. Rows landing proves the script saw an absolute path.
 #[test]
 fn on_file_receives_absolute_path() {
     let root = TempDir::new().unwrap();
@@ -143,7 +178,7 @@ fn on_file_receives_absolute_path() {
 name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.json"
-on-file = "sh abscheck.sh {path}"
+on-file = "sh abscheck.sh"
 "#,
     )
     .unwrap();
@@ -158,15 +193,15 @@ on-file = "sh abscheck.sh {path}"
     assert_eq!(
         rows.len(),
         1,
-        "an absolute `{{path}}` must pass the /*-guard and let the script cat the file"
+        "an absolute path must pass the /*-guard and let the script cat the file"
     );
     assert_eq!(rows[0]["name"], Value::Text("widget".into()));
 }
 
 /// When the index root differs from the config file's directory (here via an
 /// explicit `.root(...)`, since #540 removed the config `root` key), the hook
-/// still runs with cwd = the config dir, so a root-relative `{path}` would not
-/// resolve. The absolute `{path}` does: the script `cat`s the file from a cwd
+/// still runs with cwd = the config dir, so a root-relative path would not
+/// resolve. The absolute path does: the script `cat`s the file from a cwd
 /// that is not the index root and rows land.
 #[test]
 fn on_file_absolute_path_resolves_when_root_differs_from_config_dir() {
@@ -183,7 +218,7 @@ fn on_file_absolute_path_resolves_when_root_differs_from_config_dir() {
 name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "**/meta.json"
-on-file = "sh abscheck.sh {path}"
+on-file = "sh abscheck.sh"
 "#,
     )
     .unwrap();
@@ -206,16 +241,17 @@ on-file = "sh abscheck.sh {path}"
     assert_eq!(rows[0]["name"], Value::Text("widget".into()));
 }
 
-/// A file whose command exits non-zero is skipped; the other file's rows are
-/// still present and the scan does not error. The command is a helper script
-/// (kept out of the TOML to sidestep nested-quote parsing): a file containing
-/// `BOOM` makes it exit non-zero, otherwise it emits a one-row JSON array.
+/// The command runs once for the whole table, so its exit status is the
+/// table's: a non-zero exit leaves the table empty and is reported under the
+/// table's name with the command's stderr, while the scan itself succeeds. The
+/// helper (kept out of the TOML to sidestep nested-quote parsing) fails when
+/// any file it is handed contains `BOOM`.
 #[test]
-fn a_failing_command_skips_only_that_file() {
+fn a_failing_command_fails_the_whole_table() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("extract.sh"),
-        "#!/bin/sh\nif grep -q BOOM \"$1\"; then exit 1; fi\nprintf '[{\"name\":\"ok\"}]'\n",
+        "#!/bin/sh\nif grep -q BOOM \"$@\"; then echo 'boom seen' >&2; exit 1; fi\nprintf '[{\"name\":\"ok\"}]'\n",
     )
     .unwrap();
     fs::write(
@@ -225,34 +261,38 @@ fn a_failing_command_skips_only_that_file() {
 name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
-on-file = "sh extract.sh {path}"
+on-file = "sh extract.sh"
 "#,
     )
     .unwrap();
     fs::write(root.path().join("good.txt"), "fine\n").unwrap();
     fs::write(root.path().join("bad.txt"), "BOOM\n").unwrap();
 
-    // The scan must succeed despite one file's command failing.
     let db = DirSQL::builder()
         .root(root.path())
         .config(root.path().join(".dirsql.toml"))
         .build()
         .unwrap();
     let rows = db.query("SELECT name FROM items").unwrap();
+    assert!(rows.is_empty(), "a failed table has no rows: {rows:?}");
 
-    // Only the good file contributed a row; the bad file was skipped.
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["name"], Value::Text("ok".into()));
+    let failures = db.scan_failures();
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert_eq!(failures[0].path, "items");
+    assert!(
+        failures[0].message.contains("boom seen"),
+        "the failure carries the command's stderr: {}",
+        failures[0].message
+    );
 }
 
-/// Output that is not a JSON array of objects also isolates to a skip, without
-/// aborting the scan.
+/// Output that is not a JSON array of objects fails the table the same way.
 #[test]
-fn malformed_output_skips_only_that_file() {
+fn malformed_output_fails_the_whole_table() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("extract.sh"),
-        "#!/bin/sh\nif grep -q GOOD \"$1\"; then printf '[{\"name\":\"ok\"}]'; else printf 'not json'; fi\n",
+        "#!/bin/sh\nprintf 'not json'\n",
     )
     .unwrap();
     fs::write(
@@ -262,12 +302,11 @@ fn malformed_output_skips_only_that_file() {
 name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
-on-file = "sh extract.sh {path}"
+on-file = "sh extract.sh"
 "#,
     )
     .unwrap();
     fs::write(root.path().join("good.txt"), "GOOD\n").unwrap();
-    fs::write(root.path().join("junk.txt"), "whatever\n").unwrap();
 
     let db = DirSQL::builder()
         .root(root.path())
@@ -275,15 +314,23 @@ on-file = "sh extract.sh {path}"
         .build()
         .unwrap();
     let rows = db.query("SELECT name FROM items").unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["name"], Value::Text("ok".into()));
+    assert!(rows.is_empty(), "{rows:?}");
+
+    let failures = db.scan_failures();
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert_eq!(failures[0].path, "items");
+    assert!(
+        failures[0].message.contains("not a JSON array of rows"),
+        "got: {}",
+        failures[0].message
+    );
 }
 
 /// Bounding a hook is the command's job now: a `timeout(1)`-wrapped hook that
-/// overruns its bound exits non-zero, which isolates to a skip like any other
+/// overruns its bound exits non-zero, which fails the table like any other
 /// hook failure.
 #[test]
-fn a_timeout_wrapped_hook_that_overruns_skips_the_file() {
+fn a_timeout_wrapped_hook_that_overruns_fails_the_table() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("slow.sh"),
@@ -297,13 +344,13 @@ fn a_timeout_wrapped_hook_that_overruns_skips_the_file() {
 name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
-on-file = "timeout 0.5 sh slow.sh {path}"
+on-file = "timeout 0.5 sh slow.sh"
 "#,
     )
     .unwrap();
     fs::write(root.path().join("a.txt"), "x\n").unwrap();
 
-    // The scan must succeed; the killed hook's file contributes no rows.
+    // The scan must succeed; the killed hook's table has no rows.
     let db = DirSQL::builder()
         .root(root.path())
         .config(root.path().join(".dirsql.toml"))
@@ -312,7 +359,7 @@ on-file = "timeout 0.5 sh slow.sh {path}"
     let rows = db.query("SELECT name FROM items").unwrap();
     assert!(
         rows.is_empty(),
-        "a file whose timeout(1)-wrapped hook overruns must be skipped, got {rows:?}"
+        "a table whose timeout(1)-wrapped hook overruns must be empty, got {rows:?}"
     );
 }
 
@@ -333,7 +380,7 @@ fn a_slow_unwrapped_hook_runs_to_completion() {
 name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
-on-file = "sh slowish.sh {path}"
+on-file = "sh slowish.sh"
 "#,
     )
     .unwrap();
@@ -350,15 +397,14 @@ on-file = "sh slowish.sh {path}"
 }
 
 /// A row that fails strict normalization is the hook's mistake, not the
-/// database's, so it costs that file and no other. Before dirsql#714 the bare
-/// `?` on `normalize_row` aborted the whole scan, and the well-formed file's
-/// rows were lost with it.
+/// database's: the table it belongs to is reported and left empty, and the
+/// build itself still succeeds.
 #[test]
-fn a_strict_violation_skips_only_that_file() {
+fn a_strict_violation_fails_the_whole_table() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("gen.sh"),
-        "#!/bin/sh\nif grep -q BAD \"$1\"; then printf '[{\"nope\":1}]'; else printf '[{\"name\":\"ok\"}]'; fi\n",
+        "#!/bin/sh\nprintf '[{\"name\":\"ok\"},{\"nope\":1}]'\n",
     )
     .unwrap();
     fs::write(
@@ -369,12 +415,11 @@ name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
 strict = true
-on-file = "sh gen.sh {path}"
+on-file = "sh gen.sh"
 "#,
     )
     .unwrap();
-    fs::write(root.path().join("a_good.txt"), "fine\n").unwrap();
-    fs::write(root.path().join("z_bad.txt"), "BAD\n").unwrap();
+    fs::write(root.path().join("a.txt"), "fine\n").unwrap();
 
     let db = DirSQL::builder()
         .root(root.path())
@@ -383,8 +428,11 @@ on-file = "sh gen.sh {path}"
         .expect("one bad row must not fail the build");
     let rows = db.query("SELECT name FROM items").unwrap();
 
-    assert_eq!(rows.len(), 1, "the good file's row must survive: {rows:?}");
-    assert_eq!(rows[0]["name"], Value::Text("ok".into()));
+    assert!(
+        rows.is_empty(),
+        "no row lands when one is rejected: {rows:?}"
+    );
+    assert_eq!(db.scan_failures()[0].path, "items");
 }
 
 /// A scan attempts every matched file. One hook failure is that file's

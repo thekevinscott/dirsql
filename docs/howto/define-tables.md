@@ -10,16 +10,19 @@ persist across restarts, instead of repeating an ad-hoc
 Suppose your blog posts live under `posts/`, one markdown file each. A named
 table needs three keys: a `glob` that selects the files, a `ddl` that names
 the columns, and an [`on-file`](../reference/config.md#table) hook that emits
-each file's rows. Put a small parser next to the config — `extract.py`, which
-reads a post's title line and prints a JSON array of row objects:
+the table's rows. Put a small parser next to the config — `extract.py`, which
+reads each post's title line and prints one JSON array of row objects:
 
 ```python
 #!/usr/bin/env python3
 import json, os, sys
 
-text = open(sys.argv[1], encoding="utf-8").read()
-title = next((l[2:].strip() for l in text.splitlines() if l.startswith("# ")), None)
-print(json.dumps([{"title": title, "slug": os.path.basename(sys.argv[1])[:-3]}]))
+rows = []
+for path in sys.argv[1:]:
+    text = open(path, encoding="utf-8").read()
+    title = next((l[2:].strip() for l in text.splitlines() if l.startswith("# ")), None)
+    rows.append({"title": title, "slug": os.path.basename(path)[:-3]})
+print(json.dumps(rows))
 ```
 
 Then declare the table in `.dirsql.toml`:
@@ -29,15 +32,15 @@ Then declare the table in `.dirsql.toml`:
 name = "posts"
 ddl     = "CREATE TABLE posts (title TEXT, slug TEXT)"
 glob    = "posts/**/*.md"
-on-file = "python3 extract.py {path}"
+on-file = "python3 extract.py"
 ```
 
 - `glob` selects the files: every `.md` under `posts/`, at any depth, relative
   to the directory containing the config.
 - `ddl` is a plain SQLite `CREATE TABLE` naming the columns you want to keep.
 - `on-file` is **required** — it is where the table's rows come from. dirsql
-  injects nothing; the hook emits every column, reading the file (it has
-  `{path}`) and deriving whatever it needs. A `[[table]]` with no `on-file` is
+  injects nothing; the hook emits every column, reading the files (their
+  paths are its arguments) and deriving whatever it needs. A `[[table]]` with no `on-file` is
   a [config error](../reference/config.md#parse-errors). For plain stat
   columns with no code, query the path directly with a path-table instead.
 
@@ -75,7 +78,7 @@ two triggers:
 [[table]]
 name    = "posts"
 glob    = "posts/**/*.md"
-on-file = "python3 extract.py {path}"
+on-file = "python3 extract.py"
 ddl     = '''
 CREATE TABLE posts (title TEXT, slug TEXT, body TEXT);
 CREATE INDEX posts_slug ON posts(slug);

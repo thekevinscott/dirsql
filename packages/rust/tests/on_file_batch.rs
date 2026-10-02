@@ -50,10 +50,11 @@ on-file = "sh record.sh"
         "the command runs exactly once per table, got: {log:?}"
     );
 
-    let args: Vec<&str> = invocations[0]
+    let mut args: Vec<&str> = invocations[0]
         .split('\t')
         .filter(|arg| !arg.is_empty())
         .collect();
+    args.sort_unstable();
     let canonical = root.path().canonicalize().unwrap();
     let expected: Vec<String> = ["a.txt", "b.txt", "c.txt"]
         .iter()

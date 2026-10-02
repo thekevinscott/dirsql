@@ -16,9 +16,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 use tempfile::TempDir;
 
-/// Files in the synthetic corpus for the timing test. The parser spawns one
-/// process per file, so this is sized to make per-file parsing, not the fixed
-/// cost of a run, the bulk of the cold run's work.
+/// Files in the synthetic corpus for the timing test. The parser forks once per
+/// file it is handed, so this is sized to make parsing, not the fixed cost of a
+/// run, the bulk of the cold run's work.
 const CORPUS: usize = 4_000;
 
 /// The second run must cost no more than this share of the first.
@@ -26,8 +26,8 @@ const WARM_RATIO: f64 = 0.10;
 
 const SQL: &str = "SELECT id, tag FROM './**/*.json'";
 
-/// The default parser body: hand the file straight back as the row payload.
-const ECHO_FILE: &str = "cat \"$1\"";
+/// The default parser body: hand every file's rows back as one array.
+const ECHO_FILES: &str = "printf '['\nsep=''\nfor f; do\n  body=$(cat \"$f\")\n  body=${body#'['}\n  body=${body%']'}\n  printf '%s%s' \"$sep\" \"$body\"\n  sep=','\ndone\nprintf ']'";
 
 /// A temp tree, a cache path outside it, and a parser that counts its own runs.
 struct Fixture {
@@ -65,17 +65,14 @@ impl Fixture {
             .join(format!("f{i}.json"))
     }
 
-    /// Install a parser that records one byte per invocation before emitting
-    /// `body`. Counting the parser's own runs is the read instrumentation: a
-    /// file served from the cache never reaches it.
+    /// Install a parser that records one byte per invocation before running
+    /// `body` over the files it was handed. Counting the parser's own runs is
+    /// the read instrumentation: a table served from the cache never reaches
+    /// it.
     fn parser(&self, name: &str, body: &str) -> String {
         let script = self.side.path().join(name);
-        fs::write(&script, format!("printf x >> \"$2\"\n{body}\n")).unwrap();
-        format!(
-            "sh {} {{path}} {}",
-            shell_word(&script),
-            shell_word(&self.counter)
-        )
+        fs::write(&script, format!("printf x >> \"$1\"\nshift\n{body}\n")).unwrap();
+        format!("sh {} {}", shell_word(&script), shell_word(&self.counter))
     }
 
     /// Parser invocations since the last [`Self::reset_counter`].
@@ -158,11 +155,11 @@ fn pin_inside_the_racy_window(path: &Path) -> SystemTime {
 #[test]
 fn unchanged_second_run_reuses_the_cache_instead_of_reparsing() {
     let fx = Fixture::with_corpus(CORPUS);
-    let parser = fx.parser("parse.sh", ECHO_FILE);
+    let parser = fx.parser("parse.sh", ECHO_FILES);
     eprintln!("corpus: {CORPUS} files");
 
     let (cold_rows, cold) = fx.run(&parser, true);
-    assert_eq!(fx.parses(), CORPUS, "the cold run parses every file once");
+    assert_eq!(fx.parses(), 1, "the cold run parses the tree once");
     assert_eq!(cold_rows.len(), CORPUS);
 
     let size_before = fx.cache_size();
@@ -174,7 +171,7 @@ fn unchanged_second_run_reuses_the_cache_instead_of_reparsing() {
     assert_eq!(
         fx.parses(),
         0,
-        "an unchanged tree must not re-run the parser for any file",
+        "an unchanged tree must not re-run the parser",
     );
     assert_eq!(warm_rows, cold_rows, "the warm run returns the same rows");
     assert_eq!(
@@ -198,9 +195,9 @@ fn unchanged_second_run_reuses_the_cache_instead_of_reparsing() {
 }
 
 #[test]
-fn a_single_changed_file_is_the_only_one_reparsed() {
+fn a_single_changed_file_reparses_the_tree_once() {
     let fx = Fixture::with_corpus(40);
-    let parser = fx.parser("parse.sh", ECHO_FILE);
+    let parser = fx.parser("parse.sh", ECHO_FILES);
     let _ = fx.run(&parser, true);
     fx.reset_counter();
 
@@ -210,18 +207,18 @@ fn a_single_changed_file_is_the_only_one_reparsed() {
 
     let (rows, _) = fx.run(&parser, true);
 
-    assert_eq!(fx.parses(), 1, "only the changed file is re-parsed");
+    assert_eq!(fx.parses(), 1, "the parser runs once over the whole tree");
     assert!(
         rows.contains(&"Integer(7)|Text(\"v2\")".to_string()),
         "the changed file's new rows are returned: {rows:?}",
     );
-    assert_eq!(rows.len(), 40, "every other file keeps its cached row");
+    assert_eq!(rows.len(), 40, "every other file is still present");
 }
 
 #[test]
 fn a_persisted_run_returns_what_a_non_persisted_run_does() {
     let fx = Fixture::with_corpus(40);
-    let parser = fx.parser("parse.sh", ECHO_FILE);
+    let parser = fx.parser("parse.sh", ECHO_FILES);
 
     let (fresh, _) = fx.run(&parser, false);
     let (cold, _) = fx.run(&parser, true);
@@ -234,7 +231,7 @@ fn a_persisted_run_returns_what_a_non_persisted_run_does() {
 #[test]
 fn a_deleted_file_drops_out_of_the_cached_rows() {
     let fx = Fixture::with_corpus(40);
-    let parser = fx.parser("parse.sh", ECHO_FILE);
+    let parser = fx.parser("parse.sh", ECHO_FILES);
     let _ = fx.run(&parser, true);
     fs::remove_file(fx.file(7)).unwrap();
     fx.reset_counter();
@@ -242,13 +239,13 @@ fn a_deleted_file_drops_out_of_the_cached_rows() {
     let (rows, _) = fx.run(&parser, true);
 
     assert_eq!(rows.len(), 39, "the deleted file's row is gone");
-    assert_eq!(fx.parses(), 0, "no surviving file is re-parsed");
+    assert_eq!(fx.parses(), 1, "the survivors are re-parsed in one run");
 }
 
 #[test]
-fn a_new_file_is_the_only_one_parsed() {
+fn a_new_file_reparses_the_tree_once() {
     let fx = Fixture::with_corpus(40);
-    let parser = fx.parser("parse.sh", ECHO_FILE);
+    let parser = fx.parser("parse.sh", ECHO_FILES);
     let _ = fx.run(&parser, true);
     fx.reset_counter();
 
@@ -257,14 +254,14 @@ fn a_new_file_is_the_only_one_parsed() {
     fs::write(added, payload(40, "v1")).unwrap();
     let (rows, _) = fx.run(&parser, true);
 
-    assert_eq!(fx.parses(), 1, "only the new file is parsed");
-    assert_eq!(rows.len(), 41, "its rows join the cached ones");
+    assert_eq!(fx.parses(), 1, "the parser runs once over the whole tree");
+    assert_eq!(rows.len(), 41, "its rows join the others");
 }
 
 #[test]
 fn a_changed_parser_command_invalidates_the_cached_rows() {
     let fx = Fixture::with_corpus(20);
-    let _ = fx.run(&fx.parser("parse.sh", ECHO_FILE), true);
+    let _ = fx.run(&fx.parser("parse.sh", ECHO_FILES), true);
     fx.reset_counter();
 
     // Same tree, different parser: the cached rows describe the old command's
@@ -272,7 +269,7 @@ fn a_changed_parser_command_invalidates_the_cached_rows() {
     let other = fx.parser("other.sh", "printf '[{\"id\":-1,\"tag\":\"other\"}]'");
     let (rows, _) = fx.run(&other, true);
 
-    assert_eq!(fx.parses(), 20, "every file runs the new parser");
+    assert_eq!(fx.parses(), 1, "the new parser runs over the tree");
     assert!(
         rows.iter().all(|r| r.ends_with("Text(\"other\")")),
         "the new parser's rows are served, not the cached ones: {rows:?}",
@@ -282,18 +279,18 @@ fn a_changed_parser_command_invalidates_the_cached_rows() {
 #[test]
 fn files_inside_the_racy_window_are_hash_confirmed_rather_than_reparsed() {
     // Every file is pinned into the window, so no reuse decision here can be
-    // settled by the stat tuple: each one is reused only if its content hash
-    // confirms it. A hash that cannot be computed cannot confirm, and the whole
-    // corpus goes back to the parser.
+    // settled by the stat tuple: the table is reused only if every content
+    // hash confirms its file. A hash that cannot be computed cannot confirm,
+    // and the whole corpus goes back to the parser.
     let fx = Fixture::with_corpus(8);
-    let parser = fx.parser("parse.sh", ECHO_FILE);
+    let parser = fx.parser("parse.sh", ECHO_FILES);
     let pinned: Vec<SystemTime> = (0..8)
         .map(|i| pin_inside_the_racy_window(&fx.file(i)))
         .collect();
 
     let (cold_rows, _) = fx.run(&parser, true);
 
-    assert_eq!(fx.parses(), 8, "the cold run parses every file once");
+    assert_eq!(fx.parses(), 1, "the cold run parses the tree once");
     let now = SystemTime::now();
     assert!(
         pinned.iter().all(|mtime| *mtime > now),
@@ -318,7 +315,7 @@ fn content_that_leaves_the_stat_tuple_untouched_is_caught_by_the_hash() {
     // inode, different bytes. Inside the racy window the content hash is the
     // only thing standing between the query and a stale cached payload.
     let fx = Fixture::with_corpus(8);
-    let parser = fx.parser("parse.sh", ECHO_FILE);
+    let parser = fx.parser("parse.sh", ECHO_FILES);
     let edited = fx.file(3);
     let pinned = pin_inside_the_racy_window(&edited);
 
@@ -351,7 +348,7 @@ fn content_that_leaves_the_stat_tuple_untouched_is_caught_by_the_hash() {
 
     let (rows, _) = fx.run(&parser, true);
 
-    assert_eq!(fx.parses(), 1, "the edited file, and only it, is re-parsed");
+    assert_eq!(fx.parses(), 1, "the edit sends the tree back to the parser");
     assert!(
         rows.contains(&"Integer(3)|Text(\"v2\")".to_string()),
         "the edited file's new rows are returned, not its cached ones: {rows:?}",

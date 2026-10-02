@@ -216,6 +216,9 @@ pub fn validate_identifier(s: &str) -> Result<()> {
 
 pub type Result<T> = std::result::Result<T, DbError>;
 
+const MAPPING_INSERT: &str = "INSERT INTO _dirsql_internal_rows \
+     (table_name, file_path, row_index, rowid_ref) VALUES (?1, ?2, ?3, ?4)";
+
 /// Name of the internal row-bookkeeping table.
 ///
 /// The sole record of row ownership: it maps every inserted user row back to
@@ -511,14 +514,37 @@ impl Db {
         strict: bool,
     ) -> Result<HashMap<String, Value>> {
         let columns = self.get_table_columns(table)?;
-        let column_set: std::collections::HashSet<&str> =
-            columns.iter().map(|s| s.as_str()).collect();
-        let row_keys: std::collections::HashSet<&str> = row.keys().map(|s| s.as_str()).collect();
+        Self::normalize_against(table, &columns, row.clone(), strict)
+    }
 
+    /// [`Self::normalize_row`] over every row of one table, reading the
+    /// table's columns once rather than once per row.
+    pub fn normalize_rows(
+        &self,
+        table: &str,
+        rows: Vec<HashMap<String, Value>>,
+        strict: bool,
+    ) -> Result<Vec<HashMap<String, Value>>> {
+        let columns = self.get_table_columns(table)?;
+        rows.into_iter()
+            .map(|row| Self::normalize_against(table, &columns, row, strict))
+            .collect()
+    }
+
+    fn normalize_against(
+        table: &str,
+        columns: &[String],
+        mut row: HashMap<String, Value>,
+        strict: bool,
+    ) -> Result<HashMap<String, Value>> {
         if strict {
             for key in row.keys() {
                 validate_identifier(key)?;
             }
+            let column_set: std::collections::HashSet<&str> =
+                columns.iter().map(|s| s.as_str()).collect();
+            let row_keys: std::collections::HashSet<&str> =
+                row.keys().map(|s| s.as_str()).collect();
             let extra: Vec<&str> = row_keys.difference(&column_set).copied().collect();
             if !extra.is_empty() {
                 return Err(DbError::SchemaMismatch(format!(
@@ -535,11 +561,11 @@ impl Db {
                     missing.join(", ")
                 )));
             }
-            Ok(row.clone())
+            Ok(row)
         } else {
-            let mut normalized = HashMap::new();
-            for col in &columns {
-                let value = row.get(col).cloned().unwrap_or(Value::Null);
+            let mut normalized = HashMap::with_capacity(columns.len());
+            for col in columns {
+                let value = row.remove(col).unwrap_or(Value::Null);
                 normalized.insert(col.clone(), value);
             }
             Ok(normalized)
@@ -560,18 +586,65 @@ impl Db {
         file_path: &str,
         row_index: usize,
     ) -> Result<()> {
-        conn.execute(sql, params)?;
+        conn.prepare_cached(sql)?.execute(params)?;
         let rowid = conn.last_insert_rowid();
-        conn.execute(
-            "INSERT INTO _dirsql_internal_rows (table_name, file_path, row_index, rowid_ref) \
-             VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![
+        conn.prepare_cached(MAPPING_INSERT)?
+            .execute(rusqlite::params![
                 table,
                 file_path,
                 i64::try_from(row_index).expect("row index fits in i64"),
                 rowid
-            ],
-        )?;
+            ])?;
+        Ok(())
+    }
+
+    /// Insert every row of `rows` under `file_path`, in order, through one
+    /// prepared statement pair. Rows are bound by the table's columns, so a
+    /// key the table lacks is dropped and a column the row lacks is NULL;
+    /// callers normalize first when they need strictness.
+    pub fn insert_rows(
+        &self,
+        table: &str,
+        rows: &[HashMap<String, Value>],
+        file_path: &str,
+    ) -> Result<()> {
+        validate_identifier(table)?;
+        let columns = self.get_table_columns(table)?;
+        let sql = if columns.is_empty() {
+            format!("INSERT INTO \"{table}\" DEFAULT VALUES")
+        } else {
+            let names: Vec<String> = columns.iter().map(|c| format!("\"{c}\"")).collect();
+            let placeholders: Vec<String> = (1..=columns.len()).map(|i| format!("?{i}")).collect();
+            format!(
+                "INSERT INTO \"{table}\" ({}) VALUES ({})",
+                names.join(", "),
+                placeholders.join(", ")
+            )
+        };
+        let tx = if self.conn.is_autocommit() {
+            Some(self.conn.unchecked_transaction()?)
+        } else {
+            None
+        };
+        {
+            let mut insert = self.conn.prepare_cached(&sql)?;
+            let mut map = self.conn.prepare_cached(MAPPING_INSERT)?;
+            for (row_index, row) in rows.iter().enumerate() {
+                for (i, column) in columns.iter().enumerate() {
+                    insert.raw_bind_parameter(i + 1, row.get(column).unwrap_or(&Value::Null))?;
+                }
+                insert.raw_execute()?;
+                map.execute(rusqlite::params![
+                    table,
+                    file_path,
+                    i64::try_from(row_index).expect("row index fits in i64"),
+                    self.conn.last_insert_rowid()
+                ])?;
+            }
+        }
+        if let Some(tx) = tx {
+            tx.commit()?;
+        }
         Ok(())
     }
 
@@ -601,7 +674,11 @@ impl Db {
         // `_dirsql_internal_rows`, keyed on the row's rowid. A column-less row
         // (SQLite requires ≥1 declared column, so this is only reachable
         // defensively) uses `DEFAULT VALUES`.
-        let columns: Vec<String> = row.keys().map(|c| format!("\"{c}\"")).collect();
+        // Sorted so every row of a table binds the same statement text, which
+        // is what lets the prepared-statement cache serve it.
+        let mut keys: Vec<&String> = row.keys().collect();
+        keys.sort();
+        let columns: Vec<String> = keys.iter().map(|c| format!("\"{c}\"")).collect();
         let sql = if columns.is_empty() {
             format!("INSERT INTO \"{table}\" DEFAULT VALUES")
         } else {
@@ -615,12 +692,10 @@ impl Db {
             )
         };
 
-        let params: Vec<Box<dyn rusqlite::types::ToSql>> = row
-            .values()
-            .map(|v| Box::new(v.clone()) as Box<dyn rusqlite::types::ToSql>)
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = keys
+            .iter()
+            .map(|k| &row[*k] as &dyn rusqlite::types::ToSql)
             .collect();
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|p| p.as_ref()).collect();
 
         if self.conn.is_autocommit() {
             let tx = self.conn.unchecked_transaction()?;
@@ -2328,6 +2403,80 @@ mod tests {
         let rows = db.get_rows_by_file("t", "a.json").unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get("id").unwrap(), &Value::Text("a".into()));
+    }
+
+    #[test]
+    fn insert_rows_maps_every_row_to_its_file_in_order() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT, n INTEGER)")
+            .unwrap();
+        let rows = vec![
+            HashMap::from([("id".into(), Value::Text("a".into()))]),
+            HashMap::from([
+                ("id".into(), Value::Text("b".into())),
+                ("n".into(), Value::Integer(2)),
+                ("extra".into(), Value::Integer(9)),
+            ]),
+        ];
+        db.insert_rows("t", &rows, "x.json").unwrap();
+
+        let read = db.get_rows_by_file("t", "x.json").unwrap();
+        assert_eq!(read.len(), 2);
+        assert_eq!(read[0]["id"], Value::Text("a".into()));
+        assert_eq!(read[0]["n"], Value::Null);
+        assert_eq!(read[1]["n"], Value::Integer(2));
+        assert!(!read[1].contains_key("extra"));
+        let mapping = mapping_rows(&db, "t");
+        assert_eq!(mapping[0].0, "x.json");
+        assert_eq!((mapping[0].1, mapping[1].1), (0, 1));
+    }
+
+    #[test]
+    fn insert_rows_joins_callers_open_transaction() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
+        let rows = vec![HashMap::from([("id".into(), Value::Text("a".into()))])];
+
+        let tx = db.conn.unchecked_transaction().unwrap();
+        db.insert_rows("t", &rows, "a.json").unwrap();
+        drop(tx);
+
+        assert!(db.get_rows_by_file("t", "a.json").unwrap().is_empty());
+        assert!(mapping_rows(&db, "t").is_empty());
+    }
+
+    #[test]
+    fn insert_rows_rejects_an_unsafe_table_name() {
+        let db = Db::new().unwrap();
+        let err = db.insert_rows("bad name", &[], "a.json").unwrap_err();
+        assert!(matches!(err, DbError::InvalidIdentifier(_)), "got: {err}");
+    }
+
+    #[test]
+    fn normalize_rows_fails_as_a_unit_on_a_strict_mismatch() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (name TEXT)").unwrap();
+        let rows = vec![
+            HashMap::from([("name".into(), Value::Text("ok".into()))]),
+            HashMap::from([("color".into(), Value::Text("red".into()))]),
+        ];
+        let err = db.normalize_rows("t", rows, true).unwrap_err();
+        assert!(matches!(err, DbError::SchemaMismatch(_)), "got: {err}");
+    }
+
+    #[test]
+    fn normalize_rows_relaxed_shapes_every_row_to_the_table() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (name TEXT, n INTEGER)")
+            .unwrap();
+        let rows = vec![
+            HashMap::from([("name".into(), Value::Text("a".into()))]),
+            HashMap::from([("n".into(), Value::Integer(1)), ("x".into(), Value::Null)]),
+        ];
+        let out = db.normalize_rows("t", rows, false).unwrap();
+        assert_eq!(out[0]["n"], Value::Null);
+        assert_eq!(out[1]["name"], Value::Null);
+        assert!(!out[1].contains_key("x"));
     }
 
     #[test]

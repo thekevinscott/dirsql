@@ -32,40 +32,43 @@ To get them, you need a parser.
 
 ## 2. Attach a parser with `--on-file`
 
-Any program that reads one file and prints a **JSON array of row objects** on
-stdout is a parser. Here is a small one, `extract.py`, that reads a post's
-frontmatter:
+Any program that reads the files named by its arguments and prints a **JSON
+array of row objects** on stdout is a parser. Here is a small one,
+`extract.py`, that reads each post's frontmatter:
 
 ```python
 #!/usr/bin/env python3
 import json, re, sys
 
-text = open(sys.argv[1], encoding="utf-8").read()
-m = re.match(r"^---\n(.*?)\n---", text, re.DOTALL)
-fields = dict(
-    (k.strip(), v.strip())
-    for k, _, v in (line.partition(":") for line in (m.group(1).splitlines() if m else []))
-)
-print(json.dumps([{"title": fields.get("title"), "author": fields.get("author")}]))
+rows = []
+for path in sys.argv[1:]:
+    text = open(path, encoding="utf-8").read()
+    m = re.match(r"^---\n(.*?)\n---", text, re.DOTALL)
+    fields = dict(
+        (k.strip(), v.strip())
+        for k, _, v in (line.partition(":") for line in (m.group(1).splitlines() if m else []))
+    )
+    rows.append({"title": fields.get("title"), "author": fields.get("author")})
+print(json.dumps(rows))
 ```
 
 Point the path-table at it with `--on-file`:
 
 ```bash
 dirsql query "SELECT title, author FROM './posts/*.md' ORDER BY title" \
-  --on-file 'python3 extract.py {path}'
+  --on-file 'python3 extract.py'
 ```
 
 ```json
 [{"author":"Ada Lovelace","title":"Hello World"},{"author":"Alan Turing","title":"On Recursion"}]
 ```
 
-Now the parser's output *is* the table. `--on-file` runs the command once per
-matched file; `{path}` is the file's absolute path, one of the placeholders in
-the shared [`on-file` hook contract](../reference/hooks.md#on-file) (argv
-splitting, timeout, and per-file failure isolation all come from there). The
-stat columns are no longer reachable — a parser that wants the path emits it,
-since it already has `{path}`. See
+Now the parser's output *is* the table. `--on-file` runs the command once,
+with every matched file's absolute path appended as an argument, under the
+shared [`on-file` hook contract](../reference/hooks.md#on-file) (argv
+splitting, timeout, and failure semantics all come from there). The stat
+columns are no longer reachable — a parser that wants the path emits it, since
+it already has the path. See
 [Parsing rows with `--on-file`](../reference/path-tables.md#parsing-rows-with-on-file)
 for the full behavior.
 
@@ -87,7 +90,7 @@ command in verbatim:
 name = "posts"
 ddl     = "CREATE TABLE posts (title TEXT, author TEXT)"
 glob    = "posts/*.md"
-on-file = "python3 extract.py {path}"
+on-file = "python3 extract.py"
 ```
 
 The `on-file` value is byte-for-byte the string you passed to `--on-file`. The
@@ -109,7 +112,7 @@ indexed on build, kept fresh by the watcher, survives restarts with
 [many tables](./define-tables.md) — each with its own `on-file` — where the flag
 gives every path-table one parser. In both spellings the table's columns are
 exactly what the parser emits: `dirsql` merges no filesystem facts back on. A
-row that needs the file's `path` emits it (the parser has `{path}`).
+row that needs the file's `path` emits it (the parser has the path).
 
 ## Going further
 

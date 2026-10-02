@@ -25,6 +25,7 @@ pub mod infer;
 pub mod launcher;
 #[doc(hidden)]
 pub mod matcher;
+mod on_file;
 #[doc(hidden)]
 pub mod parsed_cache;
 #[doc(hidden)]
@@ -50,7 +51,6 @@ pub mod watcher;
 #[cfg(feature = "cli")]
 pub mod cli;
 
-use crate::command::Placeholder;
 use crate::config::Source;
 use crate::db::Db;
 use crate::functions::ResolvedFunction;
@@ -97,12 +97,29 @@ pub const DEFAULT_CONFIG_TOML: &str = include_str!("default_config.toml");
 
 type BoxError = Box<dyn StdError + Send + Sync + 'static>;
 type OnFileFn = dyn Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static;
+type OnFilesFn =
+    dyn Fn(&[PathBuf]) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static;
+
+/// How a table turns matched files into rows: a programmatic callback runs
+/// once per file; a configured `on-file` command runs once per table over
+/// every matched path.
+#[derive(Clone)]
+enum Hook {
+    PerFile(Arc<OnFileFn>),
+    PerTable(Arc<OnFilesFn>),
+}
+
+/// The `file_path` a per-table hook's rows are recorded under. No real
+/// root-relative path is empty, so it never collides with a per-file owner
+/// and never sits beneath any directory a watcher reports deleted.
+const BATCH_OWNER: &str = "";
 
 /// One file whose on-file hook failed, carried so a scan can report every
 /// failure rather than only whichever came first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OnFileFailure {
-    /// Path relative to the scan root.
+    /// Path relative to the scan root, or the table's name when its command
+    /// failed over the whole table.
     pub path: String,
     /// The hook's error, as rendered by its `Display`.
     pub message: String,
@@ -181,7 +198,7 @@ pub enum DirSqlError {
         "glob capture `{{{placeholder}}}` collides with declared column `{column}`: \
          captures no longer populate columns, so `{column}` would always be NULL. \
          Remove `{column}` from the table's DDL, or emit its value from the on-file \
-         hook by splitting `{{path}}` yourself."
+         hook by splitting the path yourself."
     )]
     CaptureColumnCollision { placeholder: String, column: String },
 
@@ -189,6 +206,9 @@ pub enum DirSqlError {
         "query() only accepts read-only statements; SQLite classified this statement as a write"
     )]
     WriteForbidden,
+
+    #[error("{0}")]
+    PathPlaceholder(String),
 }
 
 impl DirSqlError {
@@ -254,7 +274,7 @@ pub struct Table {
     pub ddl: String,
     pub glob: String,
     pub strict: bool,
-    on_file: Arc<OnFileFn>,
+    hook: Hook,
 }
 
 impl Table {
@@ -299,7 +319,27 @@ impl Table {
             name: name.into(),
             ddl: ddl.into(),
             glob: glob.into(),
-            on_file: Arc::new(on_file),
+            hook: Hook::PerFile(Arc::new(on_file)),
+            strict: false,
+        }
+    }
+
+    /// A table whose hook runs once over every matched absolute path and
+    /// returns the whole table's rows.
+    fn per_table<F>(
+        name: impl Into<String>,
+        ddl: impl Into<String>,
+        glob: impl Into<String>,
+        on_files: F,
+    ) -> Self
+    where
+        F: Fn(&[PathBuf]) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static,
+    {
+        Self {
+            name: name.into(),
+            ddl: ddl.into(),
+            glob: glob.into(),
+            hook: Hook::PerTable(Arc::new(on_files)),
             strict: false,
         }
     }
@@ -316,8 +356,12 @@ struct DirSqlInner {
     /// scan and the `path` column — stays byte-for-byte unchanged.
     watch_root: PathBuf,
     matcher: TableMatcher,
-    on_file_map: HashMap<String, Arc<OnFileFn>>,
+    on_file_map: HashMap<String, Hook>,
     strict_map: HashMap<String, bool>,
+    /// The root-relative paths each per-table hook was last run over. Rows
+    /// are recorded under [`BATCH_OWNER`], not their files, so this is how a
+    /// deleted directory is traced back to the tables it fed.
+    batch_files: Mutex<HashMap<String, Vec<String>>>,
     /// Files the initial scan could not index. Empty for a clean scan.
     scan_failures: Vec<OnFileFailure>,
     watcher: Mutex<Option<Watcher>>,
@@ -483,10 +527,12 @@ impl DirSQL {
     /// the TypeScript binding).
     #[doc(hidden)]
     pub fn apply_file_events(&self, events: Vec<FileEvent>) -> Vec<RowEvent> {
+        let mut pending = PendingRefresh::default();
         let mut out = Vec::new();
         for fe in events {
-            out.extend(self.process_file_event(fe));
+            out.extend(self.route_file_event(fe, &mut pending));
         }
+        out.extend(self.refresh_pending(pending));
         out
     }
 
@@ -527,17 +573,20 @@ impl DirSQL {
             events
         };
 
-        let mut out = Vec::new();
-        for fe in file_events {
-            out.extend(self.process_file_event(fe));
-        }
-        Ok(out)
+        Ok(self.apply_file_events(file_events))
     }
 
     /// Process a single [`FileEvent`], mutating the DB and cache as needed.
     /// Operational errors become [`RowEvent::Error`] items in the returned
     /// vec (matching the semantics of the channel-based watch loop).
+    #[cfg(test)]
     fn process_file_event(&self, event: FileEvent) -> Vec<RowEvent> {
+        self.apply_file_events(vec![event])
+    }
+
+    /// Route one event: per-file tables are updated in place; a per-table
+    /// hook's table is marked in `pending` for one re-run after the batch.
+    fn route_file_event(&self, event: FileEvent, pending: &mut PendingRefresh) -> Vec<RowEvent> {
         let abs_path = match &event {
             FileEvent::Created(p) | FileEvent::Modified(p) | FileEvent::Deleted(p) => p.clone(),
         };
@@ -563,7 +612,7 @@ impl DirSQL {
         if matches!(event, FileEvent::Created(_))
             && self.inner.fs.is_dir(&abs_path).unwrap_or(false)
         {
-            return self.index_subtree(&abs_path);
+            return self.index_subtree(&abs_path, pending);
         }
 
         // Fan-out: dispatch the event to every table whose glob matches, and
@@ -575,6 +624,10 @@ impl DirSQL {
 
         let mut events = Vec::new();
         for m in matches {
+            if self.is_per_table(&m.table_name) {
+                pending.mark(&m.table_name, &rel_path);
+                continue;
+            }
             match &event {
                 FileEvent::Deleted(_) => {
                     events.extend(self.handle_delete(&m.table_name, &rel_path));
@@ -589,14 +642,87 @@ impl DirSQL {
         // event naming the directory and none for the files beneath it. It is
         // already gone, so the rows are the only record of what it held.
         if matches!(event, FileEvent::Deleted(_)) {
-            events.extend(self.delete_subtree(&rel_path));
+            events.extend(self.delete_subtree(&rel_path, pending));
         }
         events
     }
 
+    fn is_per_table(&self, table: &str) -> bool {
+        matches!(self.inner.on_file_map.get(table), Some(Hook::PerTable(_)))
+    }
+
+    /// Re-run every per-table hook `pending` names, once each, over the files
+    /// its glob matches now, and replace that table's rows.
+    fn refresh_pending(&self, pending: PendingRefresh) -> Vec<RowEvent> {
+        let mut events = Vec::new();
+        for (table, trigger) in pending.0 {
+            events.extend(self.refresh_table(&table, &trigger));
+        }
+        events
+    }
+
+    fn refresh_table(&self, table: &str, trigger: &str) -> Vec<RowEvent> {
+        let Some(Hook::PerTable(hook)) = self.inner.on_file_map.get(table) else {
+            return Vec::new();
+        };
+        let root = &self.inner.root;
+        let mut rel_paths = Vec::new();
+        let mut abs_paths = Vec::new();
+        for (path, matched) in self.inner.fs.scan_subtree(root, root, &self.inner.matcher) {
+            if matched == table {
+                rel_paths.push(relative_path(root, &path));
+                abs_paths.push(path);
+            }
+        }
+        let raw_rows = match hook(&abs_paths) {
+            Ok(rows) => rows,
+            Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
+        };
+        let strict = *self.inner.strict_map.get(table).unwrap_or(&false);
+
+        let (old_rows, new_rows) = {
+            let db = match self.inner.db.lock() {
+                Ok(g) => g,
+                Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
+            };
+            let new_rows = match normalize_rows(&db, table, raw_rows, strict) {
+                Ok(rows) => rows,
+                Err(message) => return vec![error_event(Some(table), trigger, message)],
+            };
+            let old_rows = match db.get_rows_by_file(table, BATCH_OWNER) {
+                Ok(rows) => rows,
+                Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
+            };
+            let _tx = match db.conn().unchecked_transaction() {
+                Ok(tx) => tx,
+                Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
+            };
+            if let Err(e) = replace_table_rows(&db, table, &new_rows) {
+                return vec![error_event(Some(table), trigger, e.to_string())];
+            }
+            if let Err(e) = _tx.commit() {
+                return vec![error_event(Some(table), trigger, e.to_string())];
+            }
+            (old_rows, new_rows)
+        };
+        if let Ok(mut files) = self.inner.batch_files.lock() {
+            files.insert(table.to_string(), rel_paths);
+        }
+
+        differ::diff_unordered(table, &old_rows, &new_rows, trigger)
+    }
+
     /// Delete the rows of every file recorded beneath `rel_dir`, in every
     /// table, as if each file had its own delete event.
-    fn delete_subtree(&self, rel_dir: &str) -> Vec<RowEvent> {
+    fn delete_subtree(&self, rel_dir: &str, pending: &mut PendingRefresh) -> Vec<RowEvent> {
+        let prefix = format!("{rel_dir}/");
+        if let Ok(batch_files) = self.inner.batch_files.lock() {
+            for (table, files) in batch_files.iter() {
+                if files.iter().any(|file| file.starts_with(&prefix)) {
+                    pending.mark(table, rel_dir);
+                }
+            }
+        }
         let files = {
             let db = match self.inner.db.lock() {
                 Ok(db) => db,
@@ -617,7 +743,7 @@ impl DirSQL {
     /// Index every file beneath `dir` as if each had its own create event,
     /// using the scanner's walk so the watch path and the initial scan share
     /// one definition of what counts as a row.
-    fn index_subtree(&self, dir: &Path) -> Vec<RowEvent> {
+    fn index_subtree(&self, dir: &Path, pending: &mut PendingRefresh) -> Vec<RowEvent> {
         let base = if dir.starts_with(&self.inner.watch_root) {
             &self.inner.watch_root
         } else {
@@ -626,6 +752,10 @@ impl DirSQL {
         let mut events = Vec::new();
         for (path, table) in self.inner.fs.scan_subtree(base, dir, &self.inner.matcher) {
             let rel_path = scanner::to_slash(path.strip_prefix(base).unwrap_or(&path));
+            if self.is_per_table(&table) {
+                pending.mark(&table, &rel_path);
+                continue;
+            }
             events.extend(self.handle_upsert(&table, &path, &rel_path));
         }
         events
@@ -675,9 +805,8 @@ impl DirSQL {
             Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
         }
 
-        let on_file = match self.inner.on_file_map.get(table) {
-            Some(e) => e,
-            None => return Vec::new(),
+        let Some(Hook::PerFile(on_file)) = self.inner.on_file_map.get(table) else {
+            return Vec::new();
         };
 
         let raw_rows = match on_file(&abs_path.to_string_lossy()) {
@@ -695,13 +824,10 @@ impl DirSQL {
                 Ok(g) => g,
                 Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
             };
-            let mut new_rows = Vec::with_capacity(raw_rows.len());
-            for raw in &raw_rows {
-                match db.normalize_row(table, raw, strict) {
-                    Ok(row) => new_rows.push(row),
-                    Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
-                }
-            }
+            let new_rows = match db.normalize_rows(table, raw_rows, strict) {
+                Ok(rows) => rows,
+                Err(e) => return vec![error_event(Some(table), rel_path, e.to_string())],
+            };
 
             let old_rows = match db.get_rows_by_file(table, rel_path) {
                 Ok(rows) => rows,
@@ -839,7 +965,7 @@ impl DirSQL {
         // When persist is enabled, files whose stat tuple matches the cache
         // (and that pass the racy-window check) are trusted instead of
         // re-parsed.
-        let (scanned_files, _trusted, deleted) = match &persist_ctx {
+        let (scanned_files, deleted) = match &persist_ctx {
             None => {
                 let mut files = Vec::with_capacity(scanned.len());
                 for (path, table_name) in scanned {
@@ -847,9 +973,10 @@ impl DirSQL {
                         rel_path: relative_path(&root, &path),
                         table_name,
                         stat: None,
+                        trusted: false,
                     });
                 }
-                (files, Vec::new(), Vec::new())
+                (files, Vec::new())
             }
             Some(ctx) => reconcile_scan(&root, scanned, ctx, &RealFs)?,
         };
@@ -968,7 +1095,7 @@ impl DirSQL {
             drop_user_tables(db.conn()).map_err(DirSqlError::sqlite)?;
         }
 
-        let mut on_file_map: HashMap<String, Arc<OnFileFn>> = HashMap::new();
+        let mut on_file_map: HashMap<String, Hook> = HashMap::new();
         let mut strict_map: HashMap<String, bool> = HashMap::new();
         let mut ddl_map: HashMap<String, String> = HashMap::new();
 
@@ -1010,7 +1137,7 @@ impl DirSQL {
                     column: name,
                 });
             }
-            on_file_map.insert(table_name.clone(), table.on_file);
+            on_file_map.insert(table_name.clone(), table.hook);
             strict_map.insert(table_name.clone(), table.strict);
             ddl_map.insert(table_name, table.ddl);
         }
@@ -1036,30 +1163,66 @@ impl DirSQL {
 
         let snapshot_ns = now_ns();
         let mut on_file_failures: Vec<OnFileFailure> = Vec::new();
+        let mut batch_files: HashMap<String, Vec<String>> = HashMap::new();
+
+        // Per-file hooks run file by file; a per-table hook's files are
+        // gathered, in scan order, for one run after the per-file pass.
+        let mut per_file: Vec<(ScannedFile, Arc<OnFileFn>)> = Vec::new();
+        let mut batches: Vec<(String, Arc<OnFilesFn>, Vec<ScannedFile>)> = Vec::new();
+        for file in scanned_files {
+            match on_file_map.get(&file.table_name) {
+                Some(Hook::PerFile(hook)) => {
+                    if !file.trusted {
+                        per_file.push((file, Arc::clone(hook)));
+                    }
+                }
+                Some(Hook::PerTable(hook)) => {
+                    match batches
+                        .iter_mut()
+                        .find(|(name, _, _)| *name == file.table_name)
+                    {
+                        Some((_, _, files)) => files.push(file),
+                        None => {
+                            batches.push((file.table_name.clone(), Arc::clone(hook), vec![file]))
+                        }
+                    }
+                }
+                None => {
+                    return Err(DirSqlError::Ddl(format!(
+                        "missing on-file function for table {}",
+                        file.table_name
+                    )));
+                }
+            }
+        }
+
         // The phase a user actually waits on: one `on_file` round trip per
-        // file, plus whatever the table's DDL triggers on insert. The count is
-        // known up front, so this one reports a fraction.
-        let total_files = scanned_files.len() as u64;
+        // file or per table, plus whatever the table's DDL triggers on insert.
+        // The count is known up front, so this one reports a fraction.
+        let total_files = (per_file.len()
+            + batches
+                .iter()
+                .map(|(_, _, files)| files.len())
+                .sum::<usize>()) as u64;
         let mut progress = Progress::indexing();
+        let mut done: u64 = 0;
         for (
-            done,
             ScannedFile {
                 rel_path,
                 table_name,
                 stat,
+                ..
             },
-        ) in scanned_files.into_iter().enumerate()
+            on_file,
+        ) in per_file
         {
-            progress.update(done as u64, Some(total_files));
-            let on_file = on_file_map.get(&table_name).ok_or_else(|| {
-                DirSqlError::Ddl(format!("missing on-file function for table {table_name}"))
-            })?;
+            progress.update(done, Some(total_files));
+            done += 1;
             let strict = *strict_map.get(&table_name).unwrap_or(&false);
             let abs_path = root.join(&rel_path);
             // A hook failure is this file's problem, not the scan's: record it
             // and keep going, so one unreadable file cannot hide the state of
-            // every file after it. The collected failures still fail the build
-            // below -- whether a partial index commits is dirsql#697.
+            // every file after it.
             let raw_rows = match on_file(&abs_path.to_string_lossy()) {
                 Ok(rows) => rows,
                 Err(e) => {
@@ -1077,27 +1240,16 @@ impl DirSQL {
                 db.delete_rows_by_file(&table_name, &rel_path)
                     .map_err(map_db_error)?;
             }
-            // Normalize every row before inserting any: a row the hook got
-            // wrong is that file's failure, and half-inserting a file would
-            // leave rows behind for a file the scan reports as skipped.
-            let mut normalized = Vec::with_capacity(raw_rows.len());
-            let mut rejected = None;
-            for raw_row in &raw_rows {
-                match db.normalize_row(&table_name, raw_row, strict) {
-                    Ok(row) => normalized.push(row),
-                    Err(e) => {
-                        rejected = Some(e.to_string());
-                        break;
-                    }
+            let normalized = match normalize_rows(&db, &table_name, raw_rows, strict) {
+                Ok(rows) => rows,
+                Err(message) => {
+                    on_file_failures.push(OnFileFailure {
+                        path: rel_path.clone(),
+                        message,
+                    });
+                    continue;
                 }
-            }
-            if let Some(message) = rejected {
-                on_file_failures.push(OnFileFailure {
-                    path: rel_path.clone(),
-                    message,
-                });
-                continue;
-            }
+            };
             for (row_index, row) in normalized.iter().enumerate() {
                 db.insert_row(&table_name, row, &rel_path, row_index)
                     .map_err(map_db_error)?;
@@ -1118,6 +1270,56 @@ impl DirSQL {
                 )
                 .map_err(DirSqlError::sqlite)?;
             }
+        }
+
+        for (table_name, hook, files) in batches {
+            progress.update(done, Some(total_files));
+            done += files.len() as u64;
+            let strict = *strict_map.get(&table_name).unwrap_or(&false);
+            let rel_paths: Vec<String> = files.iter().map(|f| f.rel_path.clone()).collect();
+            // A cached table is current only when every file it was run over
+            // is, and none has gone: the command saw them all at once, so any
+            // change re-runs it over all of them.
+            let current = persist_ready.as_ref().is_some_and(|(deleted, _, _)| {
+                files.iter().all(|f| f.trusted) && !deleted.iter().any(|(_, t)| *t == table_name)
+            });
+            if !current {
+                let abs_paths: Vec<PathBuf> = rel_paths.iter().map(|r| root.join(r)).collect();
+                let outcome = hook(&abs_paths)
+                    .map_err(|e| e.to_string())
+                    .and_then(|raw| normalize_rows(&db, &table_name, raw, strict));
+                match outcome {
+                    Ok(rows) => {
+                        replace_table_rows(&db, &table_name, &rows).map_err(map_db_error)?;
+                        if persist_ready.is_some() {
+                            for file in &files {
+                                let Some(stat) = file.stat.as_ref() else {
+                                    continue;
+                                };
+                                let hash = hash_file(&root.join(&file.rel_path)).ok();
+                                upsert_file(
+                                    db.conn(),
+                                    &file.rel_path,
+                                    &table_name,
+                                    stat,
+                                    hash.as_ref(),
+                                    snapshot_ns,
+                                )
+                                .map_err(DirSqlError::sqlite)?;
+                            }
+                        }
+                    }
+                    Err(message) => {
+                        db.delete_rows_by_file(&table_name, BATCH_OWNER)
+                            .map_err(map_db_error)?;
+                        on_file_failures.push(OnFileFailure {
+                            path: table_name.clone(),
+                            message,
+                        });
+                    }
+                }
+            }
+            batch_files.insert(table_name, rel_paths);
         }
 
         progress.finish(total_files);
@@ -1154,6 +1356,7 @@ impl DirSQL {
                 matcher,
                 on_file_map,
                 strict_map,
+                batch_files: Mutex::new(batch_files),
                 scan_failures: on_file_failures,
                 watcher: Mutex::new(None),
                 poll_used: AtomicBool::new(false),
@@ -1384,9 +1587,6 @@ impl DirSQLBuilder {
                 config_dir: cfg_parent,
             } = entry;
 
-            // `on-file` commands run in the config file's directory; `{path}`
-            // is the matched file's absolute path and `{root}` the resolved
-            // index root.
             let cfg_tables = build_tables_from_config(&cfg, &cfg_parent, &root)?;
             tables.extend(cfg_tables);
             ignore.extend(cfg.ignore);
@@ -1410,6 +1610,13 @@ impl DirSQLBuilder {
         }
 
         let hint_legacy_files_table = is_configless(&config_paths, &tables);
+
+        if let Some(message) = path_table_parser
+            .as_deref()
+            .and_then(on_file::path_placeholder_rejection)
+        {
+            return Err(DirSqlError::PathPlaceholder(message));
+        }
 
         Ok(ResolvedBuild {
             root,
@@ -1494,6 +1701,10 @@ pub struct ScannedFile {
     pub rel_path: String,
     pub table_name: String,
     pub stat: Option<FileStat>,
+    /// Whether the persistent cache's rows for this file are current, so a
+    /// per-file hook skips it. A per-table hook re-runs over every file as
+    /// soon as any one of its files is not.
+    pub trusted: bool,
 }
 
 /// Intermediate state produced by [`DirSQL::prepare_resolved`] and consumed
@@ -1533,14 +1744,6 @@ pub struct PreparedPersist {
     /// so the drop runs on a fully configured connection — see
     /// [`PersistContext::needs_sweep`].
     needs_sweep: bool,
-}
-
-/// A file the reconcile decided to trust: its cached rows are kept as-is and
-/// the file is not re-parsed.
-#[doc(hidden)]
-pub struct TrustedFile {
-    pub rel_path: String,
-    pub table_name: String,
 }
 
 struct PersistContext {
@@ -1688,17 +1891,16 @@ impl FileSystem for RealFs {
     }
 }
 
-/// Decide which files are trusted, which need re-parsing, and which were
-/// removed since the last cache write.
+/// Decide which files are trusted and which need re-parsing, in scan order,
+/// and which were removed since the last cache write.
 #[allow(clippy::type_complexity)]
 fn reconcile_scan(
     root: &Path,
     scanned: Vec<(PathBuf, String)>,
     ctx: &PersistContext,
     fs: &dyn FileSystem,
-) -> Result<(Vec<ScannedFile>, Vec<TrustedFile>, Vec<(String, String)>)> {
-    let mut to_parse = Vec::new();
-    let mut trusted = Vec::new();
+) -> Result<(Vec<ScannedFile>, Vec<(String, String)>)> {
+    let mut files = Vec::with_capacity(scanned.len());
     // Keyed by (rel_path, table_name): under fan-out one file may be scanned
     // for several tables, and each pair is trusted/deleted independently.
     let mut seen: std::collections::HashSet<(String, String)> =
@@ -1711,7 +1913,7 @@ fn reconcile_scan(
         let stat = fs.stat(&path)?;
 
         let cached = ctx.cached.get(&(rel_path.clone(), table_name.clone()));
-        let trust = cached.is_some_and(|c| {
+        let trusted = cached.is_some_and(|c| {
             is_trusted(
                 &c.stat,
                 c.content_hash.as_ref(),
@@ -1721,18 +1923,12 @@ fn reconcile_scan(
             )
         });
 
-        if trust {
-            trusted.push(TrustedFile {
-                rel_path,
-                table_name,
-            });
-        } else {
-            to_parse.push(ScannedFile {
-                rel_path,
-                table_name,
-                stat: Some(stat),
-            });
-        }
+        files.push(ScannedFile {
+            rel_path,
+            table_name,
+            stat: Some(stat),
+            trusted,
+        });
     }
 
     let mut deleted = Vec::new();
@@ -1742,7 +1938,7 @@ fn reconcile_scan(
         }
     }
 
-    Ok((to_parse, trusted, deleted))
+    Ok((files, deleted))
 }
 
 /// What SQLite's catalog holds under `name`, if anything.
@@ -1800,6 +1996,38 @@ fn map_db_error(e: DbError) -> DirSqlError {
     }
 }
 
+/// The per-table hooks one batch of file events touched, each with the first
+/// path that touched it. Marked once per table however many events arrive,
+/// which is what keeps a burst of writes to one re-run.
+#[derive(Default)]
+struct PendingRefresh(Vec<(String, String)>);
+
+impl PendingRefresh {
+    fn mark(&mut self, table: &str, trigger: &str) {
+        if !self.0.iter().any(|(t, _)| t == table) {
+            self.0.push((table.to_string(), trigger.to_string()));
+        }
+    }
+}
+
+/// Normalize every row before any is inserted, so a hook that got one row
+/// wrong fails as a unit rather than leaving half its rows behind.
+fn normalize_rows(
+    db: &Db,
+    table: &str,
+    raw_rows: Vec<Row>,
+    strict: bool,
+) -> std::result::Result<Vec<Row>, String> {
+    db.normalize_rows(table, raw_rows, strict)
+        .map_err(|e| e.to_string())
+}
+
+/// Replace a per-table hook's rows wholesale under [`BATCH_OWNER`].
+fn replace_table_rows(db: &Db, table: &str, rows: &[Row]) -> db::Result<()> {
+    db.delete_rows_by_file(table, BATCH_OWNER)?;
+    db.insert_rows(table, rows, BATCH_OWNER)
+}
+
 fn error_event(table: Option<&str>, rel_path: &str, error: String) -> RowEvent {
     RowEvent::Error {
         table: table.map(str::to_string),
@@ -1837,14 +2065,15 @@ fn relative_path(root: &Path, path: &Path) -> String {
 
 /// Build [`Table`] objects from a parsed config.
 ///
-/// A config-defined table runs its `on-file` command once per matched file
-/// (see [`run_on_file`]): the command reads the file and prints a JSON array of
-/// row objects on stdout, which becomes the file's rows verbatim. The core
-/// injects nothing — a DDL column the hook does not emit is NULL, validated
-/// against the DDL as usual. `config_dir` is the command's working directory
-/// (the config file's parent) and `root` is the resolved index root exposed as
-/// the `{root}` placeholder. Runs are unbounded; a config that wants a bound
-/// wraps its command in `timeout(1)`.
+/// A config-defined table runs its `on-file` command once over every matched
+/// file (see [`run_on_files`]): the command receives the absolute paths as
+/// trailing arguments and prints one JSON array of row objects on stdout,
+/// which becomes the table's rows verbatim. The core injects nothing — a DDL
+/// column the hook does not emit is NULL, validated against the DDL as usual.
+/// `config_dir` is the command's working directory (the config file's parent)
+/// and `root` is the resolved index root exposed as the `{root}` placeholder.
+/// Runs are unbounded; a config that wants a bound wraps its command in
+/// `timeout(1)`.
 /// Whether this build declared no tables by any route — neither a config file
 /// nor a programmatic table. That is exactly the state in which `files` used to
 /// exist implicitly, and so the only state whose missing-`files` error earns the
@@ -1898,15 +2127,16 @@ fn build_tables_from_config(
 
     for table_cfg in &cfg.tables {
         let command = table_cfg.on_file.clone();
+        if let Some(message) = on_file::path_placeholder_rejection(&command) {
+            return Err(DirSqlError::PathPlaceholder(message));
+        }
         let config_dir = config_dir.to_path_buf();
         let root = root.to_path_buf();
-        // `Table::try_new`: a hook failure is the scan's to record, not this
-        // closure's to hide. The scan skips the file and reports it.
-        let mut table = Table::try_new(
+        let mut table = Table::per_table(
             table_cfg.name.clone(),
             table_cfg.ddl.clone(),
             table_cfg.glob.clone(),
-            move |abs_path: &str| run_on_file(&command, abs_path, &config_dir, &root),
+            move |paths: &[PathBuf]| run_on_files(&command, paths, &config_dir, &root),
         );
 
         if table_cfg.strict == Some(true) {
@@ -1919,63 +2149,32 @@ fn build_tables_from_config(
     Ok(tables)
 }
 
-/// Run a table's `on-file` command for one matched file and parse its output
-/// into rows.
-///
-/// Placeholders: `{path}` (the file's absolute path) and `{root}` (the index
-/// root). An absolute `{path}` is self-sufficient from any cwd, so a hook whose
-/// config lives outside the index still resolves it. A template that omits a
-/// placeholder simply never receives its value — nothing is appended.
-///
-/// Any failure — a spawn/exit error from [`command::run_command`], or output
-/// that is not a JSON array of objects — is returned to the caller. The scan
-/// turns it into a skipped file rather than a scan error, and needs the `Err`
-/// to tell a skip apart from a file that legitimately produced no rows. The
-/// run is unbounded; a hook that wants a bound wraps itself in `timeout(1)`.
-fn run_on_file(
+/// Run a table's `on-file` command once over every matched file and parse its
+/// output into rows. The absolute paths are appended to the command's argv in
+/// scan order; `{root}` is the index root. Any failure is the table's: the
+/// scan records it and the table stays empty.
+fn run_on_files(
     command: &str,
-    abs_path: &str,
+    paths: &[PathBuf],
     config_dir: &Path,
     root: &Path,
 ) -> std::result::Result<Vec<Row>, BoxError> {
-    let placeholders = [
-        Placeholder::path("path", abs_path),
-        Placeholder::path("root", &root.to_string_lossy()),
-    ];
-
-    // Errors travel to the caller rather than being logged and flattened to an
-    // empty row set here. Swallowing them made a skip indistinguishable from a
-    // file that legitimately produced no rows, so the scan could not count what
-    // it dropped, cap the report, or exit differently.
-    let output = command::run_command(command, &placeholders, config_dir, None)
-        .map_err(|error| -> BoxError { format!("on-file command failed: {error}").into() })?;
-    parse_command_rows(&output.payload).map_err(|message| -> BoxError {
-        format!("on-file output was not a JSON array of rows: {message}").into()
-    })
+    let rows = on_file::run(command, config_dir, root, paths)?;
+    Ok(rows.into_iter().map(json_row_into_row).collect())
 }
 
-/// Parse an `on-file` command's stdout payload — a JSON array of row objects —
-/// into [`Row`]s. Returns `Err(msg)` when the top-level JSON is not an array or
-/// any element is not an object.
-fn parse_command_rows(payload: &str) -> std::result::Result<Vec<Row>, String> {
-    let parsed: serde_json::Value =
-        serde_json::from_str(payload).map_err(|e| format!("invalid JSON: {e}"))?;
-    let array = parsed
-        .as_array()
-        .ok_or_else(|| "expected a JSON array of row objects".to_string())?;
+fn json_row_into_row(row: infer::JsonRow) -> Row {
+    row.0
+        .into_iter()
+        .map(|(key, value)| (key, json_into_value(value)))
+        .collect()
+}
 
-    let mut rows = Vec::with_capacity(array.len());
-    for element in array {
-        let object = element
-            .as_object()
-            .ok_or_else(|| "expected each array element to be a JSON object".to_string())?;
-        let mut row = Row::with_capacity(object.len());
-        for (key, value) in object {
-            row.insert(key.clone(), json_to_value(value));
-        }
-        rows.push(row);
+fn json_into_value(value: serde_json::Value) -> Value {
+    match value {
+        serde_json::Value::String(s) => Value::Text(s),
+        other => json_to_value(&other),
     }
-    Ok(rows)
 }
 
 /// Map a JSON value to a SQLite [`Value`]: `null` → `Null`; `bool` → `Integer`
@@ -2485,6 +2684,7 @@ mod internal_tests {
                 rel_path: "ghost.txt".into(),
                 table_name: "ghost".into(),
                 stat: None,
+                trusted: false,
             }],
             poll_interval: DEFAULT_POLL_INTERVAL,
             persist: None,
@@ -2788,7 +2988,7 @@ mod internal_tests {
     fn delete_subtree_surfaces_db_poison() {
         let (_dir, db, _abs, _rel) = upsert_fixture();
         poison(&db.inner.db);
-        let events = db.delete_subtree("moved");
+        let events = db.delete_subtree("moved", &mut PendingRefresh::default());
         assert_single_lock_error(&events);
     }
 
@@ -2802,7 +3002,7 @@ mod internal_tests {
             .conn()
             .execute("DROP TABLE _dirsql_internal_rows", [])
             .unwrap();
-        let events = db.delete_subtree("moved");
+        let events = db.delete_subtree("moved", &mut PendingRefresh::default());
         assert_eq!(events.len(), 1, "expected one error event: {events:?}");
         assert!(
             matches!(&events[0], RowEvent::Error { table: None, file_path, error }
@@ -2989,11 +3189,10 @@ mod internal_tests {
             needs_sweep: false,
         };
         let scanned = vec![(abs.clone(), "t".to_string())];
-        let (to_parse, trusted, deleted) =
-            reconcile_scan(dir.path(), scanned, &ctx, &fake).unwrap();
-        assert!(to_parse.is_empty());
-        assert_eq!(trusted.len(), 1);
-        assert_eq!(trusted[0].rel_path, "a.txt");
+        let (files, deleted) = reconcile_scan(dir.path(), scanned, &ctx, &fake).unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].trusted);
+        assert_eq!(files[0].rel_path, "a.txt");
         assert!(deleted.is_empty());
     }
 
@@ -3027,10 +3226,9 @@ mod internal_tests {
             needs_sweep: false,
         };
         let scanned = vec![(abs.clone(), "t".to_string())];
-        let (to_parse, trusted, _deleted) =
-            reconcile_scan(dir.path(), scanned, &ctx, &fake).unwrap();
-        assert_eq!(to_parse.len(), 1);
-        assert!(trusted.is_empty());
+        let (files, _deleted) = reconcile_scan(dir.path(), scanned, &ctx, &fake).unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(!files[0].trusted);
     }
 
     #[test]
@@ -3389,12 +3587,25 @@ mod internal_tests {
     fn path_table_parser_carries_the_command_through_resolve() {
         let resolved = DirSQL::builder()
             .root("/tmp/x")
-            .path_table_parser("parse.py {path}")
+            .path_table_parser("parse.py")
             .resolve()
             .unwrap();
-        assert_eq!(
-            resolved.path_table_parser.as_deref(),
-            Some("parse.py {path}")
+        assert_eq!(resolved.path_table_parser.as_deref(), Some("parse.py"));
+    }
+
+    #[test]
+    fn path_table_parser_with_a_path_placeholder_is_rejected_at_resolve() {
+        let err = match DirSQL::builder()
+            .root("/tmp/x")
+            .path_table_parser("parse.py {path}")
+            .resolve()
+        {
+            Err(err) => err,
+            Ok(_) => panic!("`{{path}}` must be rejected"),
+        };
+        assert!(
+            matches!(&err, DirSqlError::PathPlaceholder(m) if m.contains("parse.py {path}")),
+            "got: {err}"
         );
     }
 
@@ -3617,7 +3828,7 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let db = DirSQL::builder()
             .root(dir.path())
-            .path_table_parser("cat {path}")
+            .path_table_parser("cat")
             .build()
             .unwrap();
 
@@ -3839,10 +4050,9 @@ mod internal_tests {
             needs_sweep: false,
         };
         let scanned = vec![(abs, "t".to_string())];
-        let (to_parse, trusted, deleted) =
-            reconcile_scan(dir.path(), scanned, &ctx, &fake).unwrap();
-        assert!(to_parse.is_empty());
-        assert_eq!(trusted.len(), 1);
+        let (files, deleted) = reconcile_scan(dir.path(), scanned, &ctx, &fake).unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].trusted);
         assert!(deleted.is_empty());
     }
 
@@ -3874,10 +4084,9 @@ mod internal_tests {
             needs_sweep: false,
         };
         let scanned = vec![(abs, "t".to_string())];
-        let (to_parse, trusted, _deleted) =
-            reconcile_scan(dir.path(), scanned, &ctx, &fake).unwrap();
-        assert_eq!(to_parse.len(), 1);
-        assert!(trusted.is_empty());
+        let (files, _deleted) = reconcile_scan(dir.path(), scanned, &ctx, &fake).unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(!files[0].trusted);
     }
 
     #[test]
@@ -3903,10 +4112,8 @@ mod internal_tests {
             needs_sweep: false,
         };
         let fake = FakeFs::default();
-        let (to_parse, trusted, deleted) =
-            reconcile_scan(dir.path(), Vec::new(), &ctx, &fake).unwrap();
-        assert!(to_parse.is_empty());
-        assert!(trusted.is_empty());
+        let (files, deleted) = reconcile_scan(dir.path(), Vec::new(), &ctx, &fake).unwrap();
+        assert!(files.is_empty());
         assert_eq!(deleted, vec![("gone.txt".to_string(), "t".to_string())]);
     }
 
@@ -4069,13 +4276,32 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let tables = build_tables_from_config(&cfg, dir.path(), dir.path()).unwrap();
         assert_eq!(tables.len(), 2);
-        assert_eq!(
-            (tables[0].on_file)(&dir.path().join("f.a").to_string_lossy())
-                .unwrap()
-                .len(),
-            1
-        );
+        let Hook::PerTable(on_files) = &tables[0].hook else {
+            panic!("a configured on-file command runs once per table");
+        };
+        assert_eq!(on_files(&[dir.path().join("f.a")]).unwrap().len(), 1);
         assert!(tables[1].strict, "on-file table preserves strict flag");
+    }
+
+    #[test]
+    fn build_tables_from_config_rejects_a_path_placeholder() {
+        let cfg = config::load_config_str(concat!(
+            "[[table]]\n",
+            "name = \"a\"\n",
+            "ddl = \"CREATE TABLE a (x TEXT)\"\n",
+            "glob = \"*.a\"\n",
+            "on-file = \"cat {path}\"\n",
+        ))
+        .unwrap();
+        let dir = TempDir::new().unwrap();
+        let err = match build_tables_from_config(&cfg, dir.path(), dir.path()) {
+            Err(err) => err,
+            Ok(_) => panic!("`{{path}}` must be rejected"),
+        };
+        assert!(
+            matches!(&err, DirSqlError::PathPlaceholder(m) if m.contains("trailing arguments")),
+            "got: {err}"
+        );
     }
 
     fn function_spec(name: &str, timeout: Option<Duration>) -> config::FunctionSpec {
@@ -4211,14 +4437,11 @@ mod internal_tests {
     }
 
     #[test]
-    fn run_on_file_parses_command_json_output() {
+    fn run_on_files_parses_command_json_output() {
         let dir = TempDir::new().unwrap();
-        let abs = dir.path().join("f.txt");
-        // The template omits every placeholder, so nothing is appended; the
-        // `printf` payload is the whole output.
-        let rows = run_on_file(
+        let rows = run_on_files(
             "printf '[{\"n\":1}]'",
-            &abs.to_string_lossy(),
+            &[dir.path().join("f.txt")],
             dir.path(),
             dir.path(),
         )
@@ -4230,12 +4453,11 @@ mod internal_tests {
     /// `{abspath}` is not in the substitution table: it is left literal like any
     /// unknown `{…}`, so `printf` receives the string `{abspath}` verbatim.
     #[test]
-    fn run_on_file_does_not_substitute_abspath() {
+    fn run_on_files_does_not_substitute_abspath() {
         let dir = TempDir::new().unwrap();
-        let abs = dir.path().join("f.txt");
-        let rows = run_on_file(
-            r#"printf '[{"q":"%s"}]' {abspath}"#,
-            &abs.to_string_lossy(),
+        let rows = run_on_files(
+            r#"printf '[{"q":"%s"}]%.0s' {abspath}"#,
+            &[dir.path().join("f.txt")],
             dir.path(),
             dir.path(),
         )
@@ -4244,33 +4466,36 @@ mod internal_tests {
         assert_eq!(rows[0]["q"], Value::Text("{abspath}".into()));
     }
 
-    /// `{path}` interpolates the matched file's **absolute** path (not a
-    /// root-relative one), byte-for-byte, even when the file sits directly
-    /// under `root`. The command writes its argument to a side file rather than
-    /// into the JSON payload, where a Windows path's `\` would need escaping.
+    /// Every matched file's **absolute** path arrives as a trailing argument,
+    /// byte-for-byte, after the user's own argv. The command writes them to a
+    /// side file rather than into the JSON payload, where a Windows path's `\`
+    /// would need escaping.
     #[test]
-    fn run_on_file_passes_absolute_path_for_path_placeholder() {
+    fn run_on_files_appends_every_absolute_path_in_order() {
         let dir = TempDir::new().unwrap();
-        let abs = dir.path().join("f.txt");
-        run_on_file(
-            r#"sh -c 'printf %s "$1" > seen; echo "[]"' sh {path}"#,
-            &abs.to_string_lossy(),
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        run_on_files(
+            r#"sh -c 'shift; printf "%s\n" "$@" > seen; echo "[]"' sh first"#,
+            &[a.clone(), b.clone()],
             dir.path(),
             dir.path(),
         )
         .expect("a well-formed payload parses");
         assert_eq!(
             std::fs::read_to_string(dir.path().join("seen")).unwrap(),
-            abs.to_string_lossy()
+            format!("{}\n{}\n", a.to_string_lossy(), b.to_string_lossy())
         );
     }
 
+    /// A verbatim Windows path reaches the hook in its plain form, both as a
+    /// trailing argument and as `{root}`.
     #[test]
-    fn run_on_file_hands_the_hook_non_verbatim_path_and_root() {
+    fn run_on_files_hands_the_hook_non_verbatim_paths_and_root() {
         let dir = TempDir::new().unwrap();
-        run_on_file(
-            r#"sh -c 'printf "%s|%s" "$1" "$2" > seen; echo "[]"' sh {path} {root}"#,
-            r"\\?\C:\r\f.txt",
+        run_on_files(
+            r#"sh -c 'printf "%s|%s" "$2" "$1" > seen; echo "[]"' sh {root}"#,
+            &[PathBuf::from(r"\\?\C:\r\f.txt")],
             dir.path(),
             Path::new(r"\\?\D:\r"),
         )
@@ -4282,14 +4507,14 @@ mod internal_tests {
     }
 
     /// A command that cannot be spawned is an error the caller records, not an
-    /// empty row set: a skip and a file that legitimately produced no rows must
-    /// stay distinguishable.
+    /// empty row set: a failure and a table that legitimately produced no rows
+    /// must stay distinguishable.
     #[test]
-    fn run_on_file_errors_on_spawn_failure() {
+    fn run_on_files_errors_on_spawn_failure() {
         let dir = TempDir::new().unwrap();
-        let error = run_on_file(
+        let error = run_on_files(
             "definitely-not-a-real-binary-xyzzy",
-            "/outside/f.txt",
+            &[PathBuf::from("/outside/f.txt")],
             dir.path(),
             dir.path(),
         )
@@ -4301,10 +4526,15 @@ mod internal_tests {
     }
 
     #[test]
-    fn run_on_file_errors_on_non_json_output() {
+    fn run_on_files_errors_on_non_json_output() {
         let dir = TempDir::new().unwrap();
-        let error = run_on_file("echo not-json", "/outside/f.txt", dir.path(), dir.path())
-            .expect_err("a non-JSON payload is a failure");
+        let error = run_on_files(
+            "echo not-json",
+            &[PathBuf::from("/outside/f.txt")],
+            dir.path(),
+            dir.path(),
+        )
+        .expect_err("a non-JSON payload is a failure");
         assert!(
             error.to_string().contains("not a JSON array of rows"),
             "the error names the stage: {error}"
@@ -4388,9 +4618,17 @@ mod internal_tests {
 mod command_rows_tests {
     use super::*;
 
+    fn rows(payload: &str) -> Vec<Row> {
+        infer::parse_rows(payload)
+            .unwrap()
+            .into_iter()
+            .map(json_row_into_row)
+            .collect()
+    }
+
     #[test]
-    fn parses_an_array_of_row_objects() {
-        let rows = parse_command_rows(r#"[{"id":"a","n":1},{"id":"b","n":2}]"#).unwrap();
+    fn converts_an_array_of_row_objects() {
+        let rows = rows(r#"[{"id":"a","n":1},{"id":"b","n":2}]"#);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["id"], Value::Text("a".into()));
         assert_eq!(rows[0]["n"], Value::Integer(1));
@@ -4399,16 +4637,15 @@ mod command_rows_tests {
     }
 
     #[test]
-    fn parses_an_empty_array_to_no_rows() {
-        assert_eq!(parse_command_rows("[]").unwrap(), Vec::<Row>::new());
+    fn converts_an_empty_array_to_no_rows() {
+        assert_eq!(rows("[]"), Vec::<Row>::new());
     }
 
     #[test]
     fn maps_every_json_value_type_including_nested_to_text_json() {
-        let rows = parse_command_rows(
+        let rows = rows(
             r#"[{"nul":null,"t":true,"f":false,"i":42,"r":1.5,"s":"hi","arr":[1,2],"obj":{"k":"v"}}]"#,
-        )
-        .unwrap();
+        );
         let row = &rows[0];
         assert_eq!(row["nul"], Value::Null);
         assert_eq!(row["t"], Value::Integer(1));
@@ -4423,26 +4660,8 @@ mod command_rows_tests {
     #[test]
     fn a_number_that_does_not_fit_i64_becomes_real() {
         // 10^19 exceeds i64::MAX but fits u64.
-        let rows = parse_command_rows(r#"[{"big":10000000000000000000}]"#).unwrap();
+        let rows = rows(r#"[{"big":10000000000000000000}]"#);
         assert!(matches!(rows[0]["big"], Value::Real(_)));
-    }
-
-    #[test]
-    fn a_non_array_payload_is_an_error() {
-        let err = parse_command_rows(r#"{"id":"a"}"#).unwrap_err();
-        assert!(err.contains("array"), "got: {err}");
-    }
-
-    #[test]
-    fn an_element_that_is_not_an_object_is_an_error() {
-        let err = parse_command_rows(r#"[{"id":"a"}, 3]"#).unwrap_err();
-        assert!(err.contains("object"), "got: {err}");
-    }
-
-    #[test]
-    fn invalid_json_is_an_error() {
-        let err = parse_command_rows("not json at all").unwrap_err();
-        assert!(err.contains("invalid JSON"), "got: {err}");
     }
 
     #[test]

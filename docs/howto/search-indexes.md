@@ -31,7 +31,7 @@ external-content index beside the row table and let the two triggers feed it:
 [[table]]
 name    = "notes"
 glob    = "notes/**/*.md"
-on-file = "python3 extract.py {path}"
+on-file = "python3 extract.py"
 ddl     = '''
 CREATE TABLE notes (slug TEXT, title TEXT, body TEXT);
 
@@ -150,7 +150,7 @@ inserted vector for the "embedding" column. Expected 8 dimensions but received 4
 [[table]]
 name    = "notes"
 glob    = "notes/**/*.md"
-on-file = "python3 extract.py {path}"
+on-file = "python3 extract.py"
 ddl     = '''
 CREATE TABLE notes (slug TEXT, title TEXT, body TEXT);
 
