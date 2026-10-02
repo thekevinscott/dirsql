@@ -33,8 +33,19 @@ const SCAN_COST: f64 = 1000.;
 /// that SQLite puts a table it can probe on the inner side of a join.
 const LOOKUP_COST: f64 = 10.;
 
+/// Cost of a lookup when the statement names the source's prefetch column.
+/// Dearer than [`LOOKUP_COST`] so that, of two tables a join could probe,
+/// the planner probes the one whose cells are all held and scans this one,
+/// where the column is read ahead for every row at once; probed, it would be
+/// read one row at a time.
+const PREFETCH_LOOKUP_COST: f64 = 100.;
+
 /// `idxNum` for a full scan; a lookup carries its column as `column + 1`.
 const SCAN_IDX: c_int = 0;
+
+/// Set in `idxNum` when the statement names the prefetch column; the low bits
+/// still name the lookup.
+const PREFETCH_IDX: c_int = 1 << 30;
 
 /// What a `dirsql_*` table supplies on top of the scaffolding.
 pub trait TableSource: Sized + Send + Sync + 'static {
@@ -69,6 +80,17 @@ pub trait TableSource: Sized + Send + Sync + 'static {
 
     /// Emit column `i` of `row`.
     fn column(&self, row: &Self::Row, ctx: &mut Context, i: c_int) -> Result<()>;
+
+    /// A column a row does not hold but reads on demand, which a statement
+    /// naming it has read ahead for every row a filter selects, all at once
+    /// rather than one row at a time as SQLite steps the cursor.
+    const PREFETCH_COLUMN: Option<usize> = None;
+
+    /// Read [`Self::PREFETCH_COLUMN`] for `rows`. Only reached when the
+    /// column is declared, so a source that declares none is never asked.
+    fn prefetch(&self, rows: &[&Self::Row]) {
+        let _ = rows;
+    }
 }
 
 /// The row sets the tables on one connection hold across a statement.
@@ -297,9 +319,45 @@ fn lookup_idx_num(column: usize) -> c_int {
         .unwrap_or(SCAN_IDX)
 }
 
+/// The cost a lookup is declared to carry, given whether the statement names
+/// the prefetch column.
+fn lookup_cost(prefetch: bool) -> f64 {
+    if prefetch {
+        PREFETCH_LOOKUP_COST
+    } else {
+        LOOKUP_COST
+    }
+}
+
+/// The `idxNum` for a plan: the lookup it probes, if any, and whether the
+/// statement names the prefetch column.
+fn plan_idx_num(lookup: Option<usize>, prefetch: bool) -> c_int {
+    let lookup = lookup.map_or(SCAN_IDX, lookup_idx_num);
+    if prefetch {
+        lookup | PREFETCH_IDX
+    } else {
+        lookup
+    }
+}
+
 /// The lookup column an `idxNum` names; `None` for a full scan.
 fn lookup_column(idx_num: c_int) -> Option<usize> {
-    usize::try_from(idx_num).ok()?.checked_sub(1)
+    usize::try_from(idx_num & !PREFETCH_IDX)
+        .ok()?
+        .checked_sub(1)
+}
+
+/// Whether an `idxNum` asks for the prefetch column to be read ahead.
+fn prefetches(idx_num: c_int) -> bool {
+    idx_num & PREFETCH_IDX != 0
+}
+
+/// Whether a statement's `colUsed` mask names `column`.
+fn names_column(col_used: u64, column: usize) -> bool {
+    u32::try_from(column)
+        .ok()
+        .and_then(|column| 1u64.checked_shl(column))
+        .is_some_and(|bit| col_used & bit != 0)
 }
 
 /// The text of a filter argument; `None` when it is not text, in which case
@@ -413,14 +471,16 @@ unsafe impl<'vtab, S: TableSource> VTab<'vtab> for ScaffoldTab<S> {
             })
             .collect();
 
+        let prefetch =
+            S::PREFETCH_COLUMN.is_some_and(|column| names_column(info.col_used(), column));
         match choose_lookup(S::LOOKUP_COLUMNS, &constraints) {
             Some(lookup) => {
                 info.constraint_usage(lookup.constraint).set_argv_index(1);
-                info.set_idx_num(lookup_idx_num(lookup.column));
-                info.set_estimated_cost(LOOKUP_COST);
+                info.set_idx_num(plan_idx_num(Some(lookup.column), prefetch));
+                info.set_estimated_cost(lookup_cost(prefetch));
             }
             None => {
-                info.set_idx_num(SCAN_IDX);
+                info.set_idx_num(plan_idx_num(None, prefetch));
                 info.set_estimated_cost(SCAN_COST);
             }
         }
@@ -486,6 +546,16 @@ impl<S: TableSource> ScaffoldCursor<S> {
         let row = self.rows.as_ref()?.get(position)?;
         Some((position, row))
     }
+
+    /// Read the prefetch column ahead for every row the filter selected.
+    fn prefetch(&self) {
+        let Some(rows) = &self.rows else { return };
+        let selected: Vec<&S::Row> = (0..self.selection.len())
+            .filter_map(|step| self.selection.position(step))
+            .filter_map(|position| rows.get(position))
+            .collect();
+        self.source.prefetch(&selected);
+    }
 }
 
 #[expect(unsafe_code, reason = "rusqlite requires an unsafe trait impl")]
@@ -497,6 +567,9 @@ unsafe impl<S: TableSource> VTabCursor for ScaffoldCursor<S> {
             _ => Selection::Every(self.rows().len()),
         };
         self.step = 0;
+        if prefetches(idx_num) {
+            self.prefetch();
+        }
         Ok(())
     }
 
@@ -751,6 +824,53 @@ mod tests {
         assert_eq!(SCAN_IDX, 0);
         assert_eq!(lookup_column(SCAN_IDX), None);
         assert_eq!(lookup_column(-1), None);
+    }
+
+    #[test]
+    fn a_plan_without_prefetch_is_the_bare_lookup_or_scan() {
+        assert_eq!(plan_idx_num(None, false), SCAN_IDX);
+        assert_eq!(plan_idx_num(Some(2), false), lookup_idx_num(2));
+        assert!(!prefetches(plan_idx_num(Some(2), false)));
+        assert!(!prefetches(SCAN_IDX));
+    }
+
+    #[test]
+    fn a_plan_with_prefetch_keeps_its_lookup_and_says_so() {
+        for lookup in [None, Some(0), Some(2), Some(7)] {
+            let idx_num = plan_idx_num(lookup, true);
+            assert!(prefetches(idx_num), "{lookup:?}");
+            assert_eq!(lookup_column(idx_num), lookup);
+            assert_ne!(idx_num, plan_idx_num(lookup, false));
+        }
+        assert_eq!(plan_idx_num(None, true), PREFETCH_IDX);
+    }
+
+    #[test]
+    fn names_column_reads_the_bit_of_the_column() {
+        assert!(names_column(1 << 7, 7));
+        assert!(names_column(u64::MAX, 7));
+        assert!(!names_column(1 << 6, 7));
+        assert!(!names_column(0, 7));
+        assert!(!names_column(0, 0));
+        assert!(names_column(1, 0));
+    }
+
+    #[test]
+    fn names_column_is_false_past_the_mask() {
+        assert!(!names_column(u64::MAX, 64));
+        assert!(!names_column(u64::MAX, usize::MAX));
+    }
+
+    #[test]
+    fn a_lookup_costs_more_when_the_statement_prefetches() {
+        assert_eq!(lookup_cost(false), LOOKUP_COST);
+        assert_eq!(lookup_cost(true), PREFETCH_LOOKUP_COST);
+    }
+
+    #[test]
+    fn a_source_declares_no_prefetch_column_by_default() {
+        assert_eq!(FakeSource::PREFETCH_COLUMN, None);
+        FakeSource.prefetch(&[&(), &()]);
     }
 
     #[test]
@@ -1056,6 +1176,12 @@ mod tests {
         /// Reads of the `initial` column through SQLite on this thread: one
         /// per row the cursor hands back, since SQLite re-checks the equality.
         static INITIAL_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        /// The rows whose `shout` column was read ahead on this thread.
+        static PREFETCHED: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn prefetched() -> Vec<&'static str> {
+        PREFETCHED.with(|rows| rows.borrow().clone())
     }
 
     impl TableSource for Words {
@@ -1069,7 +1195,10 @@ mod tests {
                 scans: std::sync::atomic::AtomicUsize::new(0),
                 keys: std::sync::atomic::AtomicUsize::new(0),
             };
-            Ok(("CREATE TABLE x(word TEXT, initial TEXT)".to_string(), words))
+            Ok((
+                "CREATE TABLE x(word TEXT, initial TEXT, shout TEXT)".to_string(),
+                words,
+            ))
         }
 
         fn rows(&self) -> Arc<Vec<&'static str>> {
@@ -1079,11 +1208,20 @@ mod tests {
         }
 
         fn column(&self, row: &&'static str, ctx: &mut Context, i: c_int) -> Result<()> {
-            if i == 0 {
-                return ctx.set_result(&Value::Text(row.to_string()));
+            match i {
+                0 => ctx.set_result(&Value::Text(row.to_string())),
+                1 => {
+                    INITIAL_READS.with(|reads| reads.set(reads.get() + 1));
+                    ctx.set_result(&Value::Text(row[..1].to_string()))
+                }
+                _ => ctx.set_result(&Value::Text(row.to_uppercase())),
             }
-            INITIAL_READS.with(|reads| reads.set(reads.get() + 1));
-            ctx.set_result(&Value::Text(row[..1].to_string()))
+        }
+
+        const PREFETCH_COLUMN: Option<usize> = Some(2);
+
+        fn prefetch(&self, rows: &[&&'static str]) {
+            PREFETCHED.with(|seen| seen.borrow_mut().extend(rows.iter().map(|row| **row)));
         }
 
         fn lookup_key<'r>(&self, row: &'r &'static str, column: usize) -> Option<&'r str> {
@@ -1305,5 +1443,72 @@ mod tests {
         strings(&conn, "SELECT word FROM w WHERE initial = 'b'");
 
         assert_eq!(INITIAL_READS.with(std::cell::Cell::get), 2);
+    }
+
+    #[test]
+    fn a_statement_naming_the_prefetch_column_has_it_read_ahead_for_every_scanned_row() {
+        let conn = words_table();
+        PREFETCHED.with(|seen| seen.borrow_mut().clear());
+
+        assert_eq!(
+            strings(&conn, "SELECT shout FROM w"),
+            vec!["ANT", "BAT", "BEE"]
+        );
+        assert_eq!(prefetched(), vec!["ant", "bat", "bee"]);
+    }
+
+    #[test]
+    fn a_lookup_has_the_prefetch_column_read_ahead_for_the_rows_it_selects() {
+        let conn = words_table();
+        PREFETCHED.with(|seen| seen.borrow_mut().clear());
+
+        assert_eq!(
+            strings(&conn, "SELECT shout FROM w WHERE initial = 'b'"),
+            vec!["BAT", "BEE"]
+        );
+        assert_eq!(prefetched(), vec!["bat", "bee"]);
+        assert_eq!(
+            plan(&conn, "SELECT shout FROM w WHERE initial = 'b'"),
+            vec![format!("SCAN w VIRTUAL TABLE INDEX {}:", 2 | PREFETCH_IDX)]
+        );
+    }
+
+    #[test]
+    fn a_where_on_the_prefetch_column_names_it_too() {
+        let conn = words_table();
+        PREFETCHED.with(|seen| seen.borrow_mut().clear());
+
+        assert_eq!(
+            strings(&conn, "SELECT word FROM w WHERE shout = 'BAT'"),
+            vec!["bat"]
+        );
+        assert_eq!(prefetched(), vec!["ant", "bat", "bee"]);
+    }
+
+    #[test]
+    fn a_statement_not_naming_the_prefetch_column_reads_nothing_ahead() {
+        let conn = words_table();
+        PREFETCHED.with(|seen| seen.borrow_mut().clear());
+
+        strings(&conn, "SELECT word FROM w WHERE initial = 'b'");
+        strings(&conn, "SELECT word || initial FROM w");
+
+        assert_eq!(prefetched(), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn sqlite_scans_the_side_of_a_join_that_prefetches_and_probes_the_other() {
+        let conn = words_table();
+
+        assert_eq!(
+            plan(
+                &conn,
+                "SELECT y.shout FROM w x JOIN w y ON y.initial = x.initial"
+            ),
+            vec![
+                format!("SCAN y VIRTUAL TABLE INDEX {PREFETCH_IDX}:"),
+                "SCAN x VIRTUAL TABLE INDEX 2:".to_string()
+            ]
+        );
     }
 }
