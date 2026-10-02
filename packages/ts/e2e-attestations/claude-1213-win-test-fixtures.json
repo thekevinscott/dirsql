@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1790941675,
+  "exit_code": 0,
+  "commit": "386b888bd87d3518af64bda2dfb958d98e403ad8",
+  "branch": "claude/1213-win-test-fixtures"
+}
