@@ -19,13 +19,14 @@ use tempfile::TempDir;
 const COMBINE_SCRIPT: &str = "#!/bin/sh\nprintf '['\nsep=''\nfor f; do\n  body=$(cat \"$f\")\n  body=${body#'['}\n  body=${body%']'}\n  if [ -n \"$body\" ]; then printf '%s%s' \"$sep\" \"$body\"; sep=','; fi\ndone\nprintf ']'\n";
 
 /// The SQL that declares a vtab named `t` over `glob` under `dir`, parsed by
-/// the combining script written into `dir`. The parser runs from `dir`, so
-/// the script is named relative to it. The trailing empty argument is the
-/// cache path: this vtab is ephemeral, so there is nowhere to reuse rows from.
+/// the combining script written into `dir`. The parser runs from the index
+/// root, the last argument, which is `dir` itself here, so the script is
+/// named relative to it. The empty argument before it is the cache path:
+/// this vtab is ephemeral, so there is nowhere to reuse rows from.
 fn declare(dir: &TempDir, glob: &str) -> String {
     fs::write(dir.path().join("combine.sh"), COMBINE_SCRIPT).unwrap();
     format!(
-        "CREATE VIRTUAL TABLE t USING dirsql_parsed('{}', '{}', 'sh combine.sh', 'gitignore', '')",
+        "CREATE VIRTUAL TABLE t USING dirsql_parsed('{0}', '{1}', 'sh combine.sh', 'gitignore', '', '{0}')",
         dir.path().display(),
         glob,
     )

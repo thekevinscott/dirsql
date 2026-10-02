@@ -128,19 +128,23 @@ fn a_file_the_parser_cannot_handle_fails_the_whole_table() {
 #[cfg(unix)]
 #[test]
 fn a_parser_is_spawned_in_the_index_root_and_root_names_it() {
-    use std::os::unix::fs::PermissionsExt;
     let root = fixture();
-    let script = root.path().join("parse.sh");
-    fs::write(&script, "#!/bin/sh\nprintf '[{\"root\":\"%s\"}]' \"$1\"\n").unwrap();
-    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-    let db = open_with_parser(&root, "./parse.sh {root}");
+    fs::write(
+        root.path().join("parse.sh"),
+        "printf '[{\"root\":\"%s\"}]' \"$1\"\n",
+    )
+    .unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .path_table_parser("sh parse.sh {root}")
+        .build()
+        .unwrap();
 
     let rows = db.query("SELECT root FROM './docs/*.md'").unwrap();
 
-    let index_root = root.path().to_string_lossy().into_owned();
     assert_eq!(
         texts(&rows, "root"),
-        vec![index_root.clone(), index_root],
+        vec![root.path().to_string_lossy().into_owned()],
         "a relative parser resolves against the index root, which {{root}} names"
     );
 }

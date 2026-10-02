@@ -47,12 +47,12 @@ pub fn load_module(conn: &Connection, scope: Arc<StatementScope>) -> Result<()> 
 }
 
 /// Number of module arguments that are not ignore patterns.
-const FIXED_ARGS: usize = 5;
+const FIXED_ARGS: usize = 6;
 
-/// The module's own arguments: root, glob pattern, parser command, the
+/// The module's own arguments: scan root, glob pattern, parser command, the
 /// gitignore switch, the persistent cache path (empty when the index is
-/// ephemeral), and the skip rules the scan applies (mirroring the stat
-/// path-table's ignore args).
+/// ephemeral), the index root the parser is spawned in, and the skip rules
+/// the scan applies (mirroring the stat path-table's ignore args).
 struct ModuleArgs {
     root: PathBuf,
     pattern: String,
@@ -60,21 +60,31 @@ struct ModuleArgs {
     command: String,
     gitignore: bool,
     cache: Option<PathBuf>,
+    index_root: PathBuf,
     ignore: TableMatcher,
 }
 
 /// Parse a parsed path-table's `CREATE VIRTUAL TABLE` arguments. `args[0..3]`
 /// are the module, database and table names; the module's own follow — root,
-/// glob, parser, the gitignore switch, the cache path, then any ignore
-/// patterns.
+/// glob, parser, the gitignore switch, the cache path, the index root, then
+/// any ignore patterns.
 fn parse_module_args(args: &[&[u8]]) -> Result<ModuleArgs> {
     let user_args = vtab_scaffold::user_args(args);
 
-    let [root, pattern, command, gitignore, cache, ignore @ ..] = user_args.as_slice() else {
+    let [
+        root,
+        pattern,
+        command,
+        gitignore,
+        cache,
+        index_root,
+        ignore @ ..,
+    ] = user_args.as_slice()
+    else {
         return Err(vtab_scaffold::arity_error(
             MODULE_NAME,
             FIXED_ARGS,
-            "root, glob, parser, gitignore switch, cache path",
+            "root, glob, parser, gitignore switch, cache path, index root",
             user_args.len(),
         ));
     };
@@ -88,6 +98,7 @@ fn parse_module_args(args: &[&[u8]]) -> Result<ModuleArgs> {
         // The empty string is how "no cache" is spelled: a module argument
         // cannot be absent without shifting every argument after it.
         cache: Some(PathBuf::from(cache)).filter(|p| !p.as_os_str().is_empty()),
+        index_root: PathBuf::from(index_root),
         ignore: vtab_scaffold::compile_ignore(ignore)?,
     })
 }
@@ -248,14 +259,16 @@ fn no_rows_message(pattern: &str) -> String {
 }
 
 /// Run the parser once over `rel_paths`, handing it their absolute paths as
-/// trailing arguments, from the scan root as its working directory.
+/// trailing arguments, from the index root as its working directory, with
+/// `{root}` naming it, matching the `on-file` contract.
 fn run_parser(
     command: &str,
+    index_root: &Path,
     root: &Path,
     rel_paths: &[PathBuf],
 ) -> std::result::Result<Vec<JsonRow>, String> {
     let abs_paths: Vec<PathBuf> = rel_paths.iter().map(|rel| root.join(rel)).collect();
-    on_file::run(command, root, root, &abs_paths)
+    on_file::run(command, index_root, index_root, &abs_paths)
 }
 
 /// Column name for an index, or `None` when SQLite asks for one out of range.
@@ -286,6 +299,7 @@ impl TableSource for ParsedTable {
             command,
             gitignore,
             cache,
+            index_root,
             ignore,
         } = parse_module_args(args)?;
 
@@ -293,7 +307,7 @@ impl TableSource for ParsedTable {
         // (node_modules/.git, gitignore, plus any configured ignore), so a
         // parsed `SELECT * FROM './'` doesn't drown in dependency trees.
         let rel_paths = scan_glob(&root, &glob, &ignore, gitignore);
-        let run = |rel: &[PathBuf]| run_parser(&command, &root, rel);
+        let run = |rel: &[PathBuf]| run_parser(&command, &index_root, &root, rel);
         let warn = |message: &str| eprintln!("{message}");
         let rows = match &cache {
             None => collect_rows(&rel_paths, &run)?,
@@ -356,26 +370,28 @@ mod tests {
     }
 
     #[test]
-    fn parse_module_args_extracts_root_glob_and_command() {
+    fn parse_module_args_extracts_root_glob_command_and_index_root() {
         let args = args_with(&[
-            b"'/tmp/notes'",
+            b"'/tmp/notes/docs'",
             b"'**/*.json'",
             b"'cat {path}'",
             b"'gitignore'",
             b"''",
+            b"'/tmp/notes'",
         ]);
         let parsed = parse_module_args(&args).unwrap();
 
-        assert_eq!(parsed.root, PathBuf::from("/tmp/notes"));
+        assert_eq!(parsed.root, PathBuf::from("/tmp/notes/docs"));
         assert_eq!(parsed.pattern, "**/*.json");
         assert_eq!(parsed.command, "cat {path}");
+        assert_eq!(parsed.index_root, PathBuf::from("/tmp/notes"));
         assert!(parsed.glob.is_match(Path::new("a.json")));
         assert!(!parsed.glob.is_match(Path::new("a.md")));
     }
 
     #[test]
     fn parse_module_args_accepts_unquoted_arguments() {
-        let args = args_with(&[b"/tmp/notes", b"**/*", b"cat", b"gitignore", b""]);
+        let args = args_with(&[b"/tmp/notes", b"**/*", b"cat", b"gitignore", b"", b"/tmp"]);
         assert_eq!(
             parse_module_args(&args).unwrap().root,
             PathBuf::from("/tmp/notes")
@@ -384,16 +400,37 @@ mod tests {
 
     #[test]
     fn parse_module_args_reads_the_gitignore_switch() {
-        let on = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'gitignore'", b"''"]);
+        let on = args_with(&[
+            b"'/tmp'",
+            b"'**/*'",
+            b"'cat'",
+            b"'gitignore'",
+            b"''",
+            b"'/tmp'",
+        ]);
         assert!(parse_module_args(&on).unwrap().gitignore);
 
-        let off = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'no-gitignore'", b"''"]);
+        let off = args_with(&[
+            b"'/tmp'",
+            b"'**/*'",
+            b"'cat'",
+            b"'no-gitignore'",
+            b"''",
+            b"'/tmp'",
+        ]);
         assert!(!parse_module_args(&off).unwrap().gitignore);
     }
 
     #[test]
     fn parse_module_args_rejects_an_unknown_gitignore_switch() {
-        let args = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'sometimes'", b"''"]);
+        let args = args_with(&[
+            b"'/tmp'",
+            b"'**/*'",
+            b"'cat'",
+            b"'sometimes'",
+            b"''",
+            b"'/tmp'",
+        ]);
         let err = match parse_module_args(&args) {
             Err(err) => err,
             Ok(_) => panic!("an unknown switch must be rejected"),
@@ -409,6 +446,7 @@ mod tests {
             b"'cat'",
             b"'gitignore'",
             b"''",
+            b"'/tmp'",
             b"'node_modules/**'",
         ]);
         let parsed = parse_module_args(&args).unwrap();
@@ -418,17 +456,24 @@ mod tests {
 
     #[test]
     fn parse_module_args_with_no_ignore_patterns_ignores_nothing() {
-        let args = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'gitignore'", b"''"]);
+        let args = args_with(&[
+            b"'/tmp'",
+            b"'**/*'",
+            b"'cat'",
+            b"'gitignore'",
+            b"''",
+            b"'/tmp'",
+        ]);
         let parsed = parse_module_args(&args).unwrap();
         assert!(!parsed.ignore.is_ignored(Path::new("node_modules/pkg/a.js")));
     }
 
     #[test]
     fn parse_module_args_rejects_too_few_arguments() {
-        let args = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'gitignore'"]);
+        let args = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'gitignore'", b"''"]);
         let err = match parse_module_args(&args) {
             Err(err) => err,
-            Ok(_) => panic!("four arguments must be rejected"),
+            Ok(_) => panic!("five arguments must be rejected"),
         };
         assert!(
             err.to_string().contains("at least"),
@@ -438,7 +483,14 @@ mod tests {
 
     #[test]
     fn parse_module_args_rejects_an_invalid_glob() {
-        let args = args_with(&[b"'/tmp'", b"'['", b"'cat'", b"'gitignore'", b"''"]);
+        let args = args_with(&[
+            b"'/tmp'",
+            b"'['",
+            b"'cat'",
+            b"'gitignore'",
+            b"''",
+            b"'/tmp'",
+        ]);
         assert!(parse_module_args(&args).is_err());
     }
 
@@ -450,6 +502,7 @@ mod tests {
             b"'cat'",
             b"'gitignore'",
             b"'/cache/dirsql.db'",
+            b"'/tmp'",
         ]);
         assert_eq!(
             parse_module_args(&args).unwrap().cache,
@@ -459,7 +512,14 @@ mod tests {
 
     #[test]
     fn parse_module_args_reads_an_empty_cache_path_as_no_cache() {
-        let args = args_with(&[b"'/tmp'", b"'**/*'", b"'cat'", b"'gitignore'", b"''"]);
+        let args = args_with(&[
+            b"'/tmp'",
+            b"'**/*'",
+            b"'cat'",
+            b"'gitignore'",
+            b"''",
+            b"'/tmp'",
+        ]);
         assert_eq!(parse_module_args(&args).unwrap().cache, None);
     }
 
@@ -471,6 +531,7 @@ mod tests {
             b"'cat'",
             b"'gitignore'",
             b"''",
+            b"'/tmp'",
             b"'['",
         ]);
         assert!(parse_module_args(&args).is_err());
@@ -556,6 +617,7 @@ mod tests {
         let rows = run_parser(
             r#"sh -c "echo chatter; printf '[{\"id\":1}]'""#,
             Path::new("."),
+            Path::new("."),
             &[PathBuf::from("a.json")],
         )
         .unwrap();
@@ -566,32 +628,41 @@ mod tests {
     /// order. The command writes them to a side file rather than into the
     /// JSON payload, where a Windows path's `\` would need escaping.
     #[test]
-    fn run_parser_appends_every_absolute_path_after_the_root() {
-        let root = std::env::temp_dir().join(format!("dirsql-run-parser-{}", std::process::id()));
+    fn run_parser_appends_every_absolute_path_after_the_index_root() {
+        let index_root =
+            std::env::temp_dir().join(format!("dirsql-run-parser-{}", std::process::id()));
+        let root = index_root.join("docs");
         std::fs::create_dir_all(&root).unwrap();
         run_parser(
             r#"sh -c 'printf "%s\n%s\n%s\n" "$1" "$2" "$3" > seen; echo "[]"' sh {root}"#,
+            &index_root,
             &root,
             &[PathBuf::from("a.json"), PathBuf::from("b.json")],
         )
         .unwrap();
-        let seen = std::fs::read_to_string(root.join("seen")).unwrap();
-        std::fs::remove_dir_all(&root).unwrap();
+        let seen = std::fs::read_to_string(index_root.join("seen")).unwrap();
+        std::fs::remove_dir_all(&index_root).unwrap();
         assert_eq!(
             seen,
             format!(
                 "{}\n{}\n{}\n",
-                root.display(),
+                index_root.display(),
                 root.join("a.json").display(),
                 root.join("b.json").display()
-            )
+            ),
+            "the side file lands in the index root, which is the working directory"
         );
     }
 
     #[test]
     fn run_parser_surfaces_a_command_failure_as_a_message() {
-        let err =
-            run_parser("sh -c 'exit 7'", Path::new("."), &[PathBuf::from("a.json")]).unwrap_err();
+        let err = run_parser(
+            "sh -c 'exit 7'",
+            Path::new("."),
+            Path::new("."),
+            &[PathBuf::from("a.json")],
+        )
+        .unwrap_err();
         assert!(err.contains('7'), "the exit code is reported, got: {err}");
     }
 
