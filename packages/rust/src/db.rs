@@ -9,7 +9,7 @@ use crate::parsed_vtab;
 use crate::path_table::{self, PathTable, Resolution};
 use crate::scanner;
 use crate::sql_literal::{quote_identifier, quote_literal};
-use crate::vtab;
+use crate::vtab::{self, StatementScope};
 
 /// The user's home directory, if the platform reports one. Injected here so
 /// the `~/` rule has a single production source.
@@ -253,6 +253,9 @@ pub struct QueryResult {
 
 pub struct Db {
     conn: Connection,
+    /// Where this connection's path tables hold their rows for the statement in
+    /// progress; `query_ordered` brackets each statement with it.
+    scope: Arc<StatementScope>,
     /// The directory a path-table's glob is resolved against. `None` disables
     /// the path-table fallback entirely, leaving `query()` errors untouched.
     path_table_root: Option<PathBuf>,
@@ -302,10 +305,12 @@ impl Db {
     pub fn new() -> Result<Self> {
         let conn = Connection::open("")?;
         ensure_internal_rows_table(&conn)?;
-        vtab::load_module(&conn)?;
-        parsed_vtab::load_module(&conn)?;
+        let scope = StatementScope::new();
+        vtab::load_module(&conn, Arc::clone(&scope))?;
+        parsed_vtab::load_module(&conn, Arc::clone(&scope))?;
         Ok(Self {
             conn,
+            scope,
             path_table_root: None,
             hint_legacy_files_table: false,
             path_table_ignore: default_path_table_ignore(),
@@ -325,10 +330,12 @@ impl Db {
         let _mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         ensure_internal_rows_table(&conn)?;
-        vtab::load_module(&conn)?;
-        parsed_vtab::load_module(&conn)?;
+        let scope = StatementScope::new();
+        vtab::load_module(&conn, Arc::clone(&scope))?;
+        parsed_vtab::load_module(&conn, Arc::clone(&scope))?;
         Ok(Self {
             conn,
+            scope,
             path_table_root: None,
             hint_legacy_files_table: false,
             path_table_ignore: default_path_table_ignore(),
@@ -734,6 +741,7 @@ impl Db {
         // does, and the guard is what erases the counter before the caller
         // prints the rows.
         let _calls = self.calls.phase();
+        let _scope = self.scope.enter();
 
         // Each iteration must register a table no earlier iteration did; a
         // repeat means the fallback is not making progress, so the SQLite

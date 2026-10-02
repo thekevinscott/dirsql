@@ -2,8 +2,9 @@ use crate::matcher::TableMatcher;
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use std::ffi::OsString;
+use std::fs::{self, DirEntry};
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
 
 /// Top-level directory name reserved for `dirsql`'s own metadata (e.g. the
 /// persistent cache database). Always excluded from the scan, regardless of
@@ -71,36 +72,35 @@ fn scan_below(
     let mut results = Vec::new();
     let mut seen: u64 = 0;
 
-    for entry in walk(root, start, matcher, Path::new(""), false) {
-        let path = entry.path();
+    // Match against relative path so globs like "comments/**/*.jsonl" work
+    // regardless of the absolute root directory.
+    walk(
+        root,
+        start,
+        matcher,
+        Path::new(""),
+        false,
+        &mut |rel_path, entry| {
+            if matcher.is_ignored(&rel_path) {
+                return;
+            }
 
-        // Match against relative path so globs like "comments/**/*.jsonl" work
-        // regardless of the absolute root directory.
-        let rel_path = path.strip_prefix(root).unwrap_or(path);
+            seen += 1;
+            on_file(seen);
 
-        if matcher.is_ignored(rel_path) {
-            continue;
-        }
-
-        if !entry.file_type().is_file() {
-            continue;
-        }
-
-        seen += 1;
-        on_file(seen);
-
-        // Fan-out: a file matching N tables' globs yields N (path, table)
-        // pairs, one per matching table, in declaration order.
-        for m in matcher.match_all(rel_path) {
-            results.push((path.to_path_buf(), m.table_name));
-        }
-    }
+            // Fan-out: a file matching N tables' globs yields N (path, table)
+            // pairs, one per matching table, in declaration order.
+            for m in matcher.match_all(&rel_path) {
+                results.push((entry.path(), m.table_name));
+            }
+        },
+    );
 
     results
 }
 
 /// Walk `root` and return every file whose root-relative path matches `glob`,
-/// as root-relative paths in sorted order.
+/// as root-relative paths in path order.
 ///
 /// The single-glob counterpart to [`scan_directory`]: a path-table names one
 /// glob and mints no table names, so there is nothing to fan out over. Shares
@@ -124,23 +124,18 @@ pub fn scan_glob(
     gitignore: bool,
 ) -> Vec<PathBuf> {
     let mut results = Vec::new();
-
-    for entry in walk(root, root, ignore, ignore_base, gitignore) {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-
-        let path = entry.path();
-        let rel_path = path.strip_prefix(root).unwrap_or(path);
-
-        if is_glob_match(glob, rel_path) && !is_ignored_below(ignore, ignore_base, rel_path) {
-            results.push(rel_path.to_path_buf());
-        }
-    }
-
-    // Stable ordering so a path-table scan is reproducible across runs;
-    // walkdir's traversal order is filesystem-dependent.
-    results.sort();
+    walk(
+        root,
+        root,
+        ignore,
+        ignore_base,
+        gitignore,
+        &mut |rel_path, _| {
+            if is_glob_match(glob, &rel_path) && !is_ignored_below(ignore, ignore_base, &rel_path) {
+                results.push(rel_path);
+            }
+        },
+    );
     results
 }
 
@@ -172,65 +167,115 @@ pub(crate) fn parse_gitignore_arg(arg: &str) -> Result<bool, String> {
     }
 }
 
-/// The shared traversal: every entry under `root`, pruning the reserved
-/// top-level `.dirsql/` subtree and any directory the skip rules ignore
-/// wholesale, so an ignored tree is never read at all. With `gitignore` set,
-/// entries a `.gitignore` in force ignores are pruned/skipped too.
-fn walk<'a>(
+/// The shared traversal: every file under `start`, visited with its
+/// `root`-relative path, siblings in name order, so the whole walk comes out
+/// in path order without a sort at the end. Prunes the reserved top-level
+/// `.dirsql/` subtree and any directory the skip rules ignore wholesale, so an
+/// ignored tree is never read at all. With `gitignore` set, entries a
+/// `.gitignore` in force ignores are pruned/skipped too. Symlinks are not
+/// followed; an unreadable directory contributes nothing.
+fn walk(
     root: &Path,
     start: &Path,
+    ignore: &TableMatcher,
+    ignore_base: &Path,
+    gitignore: bool,
+    visit: &mut dyn FnMut(PathBuf, &DirEntry),
+) {
+    let rel = start.strip_prefix(root).unwrap_or(start);
+    // Depth below `root`, not below `start`: the reserved-directory rule is
+    // about the tree's top level wherever the walk begins.
+    let depth = rel.components().count();
+    let mut walk = Walk {
+        ignore,
+        ignore_base,
+        gitignore,
+        frames: Vec::new(),
+    };
+    walk.descend(start, rel, depth, visit);
+}
+
+struct Walk<'a> {
     ignore: &'a TableMatcher,
     ignore_base: &'a Path,
     gitignore: bool,
-) -> impl Iterator<Item = walkdir::DirEntry> + 'a {
-    let root = root.to_path_buf();
-    // The `.gitignore` files in force at the walk's current position, root
-    // first. `filter_entry` visits a directory before its children and the
-    // children before the next sibling, so a depth-keyed stack tracks scope.
-    let mut frames: Vec<GitignoreFrame> = Vec::new();
-    WalkDir::new(start)
-        .into_iter()
-        .filter_entry(move |entry| {
-            let rel_path = entry.path().strip_prefix(&root).unwrap_or(entry.path());
-            // Depth below `root`, not below `start`: the reserved-directory
-            // rule is about the tree's top level wherever the walk begins.
-            let depth = rel_path.components().count();
-            let is_dir = entry.file_type().is_dir();
-            if !should_descend(
-                depth,
-                is_dir,
-                entry.file_name(),
-                rel_path,
-                ignore,
-                ignore_base,
-            ) {
-                return false;
-            }
-            if !gitignore {
-                return true;
-            }
-            while frames.last().is_some_and(|f| f.depth >= depth) {
-                frames.pop();
-            }
-            if is_gitignored(&frames, entry.path(), rel_path, is_dir, ignore_base) {
-                return false;
-            }
-            if is_dir && let Some(matcher) = load_gitignore(entry.path()) {
-                frames.push(GitignoreFrame {
-                    depth,
-                    dir: rel_path.to_path_buf(),
-                    matcher,
-                });
-            }
-            true
-        })
-        .filter_map(Result::ok)
+    /// The `.gitignore` files in force at the walk's current position, root
+    /// first; a directory's own file is pushed on entry and popped on exit.
+    frames: Vec<GitignoreFrame>,
 }
 
-/// One `.gitignore` in force over the walk: its compiled matcher, the
-/// root-relative directory it sits in, and that directory's walk depth.
+impl Walk<'_> {
+    fn descend(
+        &mut self,
+        dir: &Path,
+        rel: &Path,
+        depth: usize,
+        visit: &mut dyn FnMut(PathBuf, &DirEntry),
+    ) {
+        let mut pushed = false;
+        if self.gitignore
+            && let Some(matcher) = load_gitignore(dir)
+        {
+            self.frames.push(GitignoreFrame {
+                dir: rel.to_path_buf(),
+                matcher,
+            });
+            pushed = true;
+        }
+        for (name, entry) in sorted_entries(dir) {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let is_dir = file_type.is_dir();
+            let child = rel.join(&name);
+            if !should_descend(
+                depth + 1,
+                is_dir,
+                &name,
+                &child,
+                self.ignore,
+                self.ignore_base,
+            ) {
+                continue;
+            }
+            if !self.frames.is_empty()
+                && is_gitignored(
+                    &self.frames,
+                    &entry.path(),
+                    &child,
+                    is_dir,
+                    self.ignore_base,
+                )
+            {
+                continue;
+            }
+            if is_dir {
+                self.descend(&entry.path(), &child, depth + 1, visit);
+            } else if file_type.is_file() {
+                visit(child, &entry);
+            }
+        }
+        if pushed {
+            self.frames.pop();
+        }
+    }
+}
+
+fn sorted_entries(dir: &Path) -> Vec<(OsString, DirEntry)> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<(OsString, DirEntry)> = entries
+        .filter_map(Result::ok)
+        .map(|entry| (entry.file_name(), entry))
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
+
+/// One `.gitignore` in force over the walk: its compiled matcher and the
+/// root-relative directory it sits in.
 struct GitignoreFrame {
-    depth: usize,
     dir: PathBuf,
     matcher: Gitignore,
 }
@@ -555,13 +600,12 @@ mod tests {
     }
 
     /// A gitignore frame compiled from in-memory lines; no filesystem.
-    fn frame(depth: usize, dir: &str, lines: &[&str]) -> GitignoreFrame {
+    fn frame(dir: &str, lines: &[&str]) -> GitignoreFrame {
         let mut builder = GitignoreBuilder::new(Path::new(dir));
         for line in lines {
             builder.add_line(None, line).unwrap();
         }
         GitignoreFrame {
-            depth,
             dir: PathBuf::from(dir),
             matcher: builder.build().unwrap(),
         }
@@ -569,7 +613,7 @@ mod tests {
 
     #[test]
     fn is_gitignored_matches_a_rule_from_the_root_gitignore() {
-        let frames = [frame(0, "", &["*.log"])];
+        let frames = [frame("", &["*.log"])];
         assert!(is_gitignored(
             &frames,
             Path::new("debug.log"),
@@ -588,7 +632,7 @@ mod tests {
 
     #[test]
     fn is_gitignored_marks_a_directory_rule_for_pruning() {
-        let frames = [frame(0, "", &["dist/"])];
+        let frames = [frame("", &["dist/"])];
         assert!(is_gitignored(
             &frames,
             Path::new("dist"),
@@ -600,7 +644,7 @@ mod tests {
 
     #[test]
     fn is_gitignored_lets_a_deeper_whitelist_override_a_shallower_rule() {
-        let frames = [frame(0, "", &["*.log"]), frame(1, "sub", &["!keep.log"])];
+        let frames = [frame("", &["*.log"]), frame("sub", &["!keep.log"])];
         assert!(!is_gitignored(
             &frames,
             Path::new("sub/keep.log"),
@@ -612,7 +656,7 @@ mod tests {
 
     #[test]
     fn is_gitignored_exempts_the_literal_chain_the_pattern_named() {
-        let frames = [frame(0, "", &["dist/"])];
+        let frames = [frame("", &["dist/"])];
         assert!(!is_gitignored(
             &frames,
             Path::new("dist"),
@@ -624,7 +668,7 @@ mod tests {
 
     #[test]
     fn is_gitignored_exempts_ancestor_rules_beneath_the_named_base() {
-        let frames = [frame(0, "", &["dist/pkg/"])];
+        let frames = [frame("", &["dist/pkg/"])];
         assert!(!is_gitignored(
             &frames,
             Path::new("dist/pkg"),
@@ -636,7 +680,7 @@ mod tests {
 
     #[test]
     fn is_gitignored_honors_a_rule_at_the_named_base_itself() {
-        let frames = [frame(1, "dist", &["*.map"])];
+        let frames = [frame("dist", &["*.map"])];
         assert!(is_gitignored(
             &frames,
             Path::new("dist/a.map"),

@@ -7,8 +7,9 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::sync::Arc;
 
-use dirsql::vtab::load_module;
+use dirsql::vtab::{StatementScope, load_module};
 use rusqlite::Connection;
 use tempfile::TempDir;
 
@@ -22,23 +23,29 @@ fn make_unreadable(path: &Path) -> bool {
 }
 
 /// A connection with the path-table module registered and one vtab named `t`
-/// spanning `glob` under `dir`.
-fn open_over(dir: &TempDir, glob: &str) -> Connection {
+/// spanning `glob` under `dir`, plus the scope that ends a statement over it.
+fn open_scoped(dir: &TempDir, glob: &str) -> (Connection, Arc<StatementScope>) {
     let conn = Connection::open_in_memory().unwrap();
-    load_module(&conn).unwrap();
+    let scope = StatementScope::new();
+    load_module(&conn, Arc::clone(&scope)).unwrap();
     conn.execute_batch(&format!(
         "CREATE VIRTUAL TABLE t USING dirsql_path('{}', '{}', '', 'gitignore')",
         dir.path().display(),
         glob
     ))
     .unwrap();
-    conn
+    (conn, scope)
+}
+
+/// [`open_scoped`] for tests that run one statement.
+fn open_over(dir: &TempDir, glob: &str) -> Connection {
+    open_scoped(dir, glob).0
 }
 
 /// A connection whose vtab reports paths under `prefix` and skips `ignore`.
 fn open_over_with(dir: &TempDir, glob: &str, prefix: &str, ignore: &[&str]) -> Connection {
     let conn = Connection::open_in_memory().unwrap();
-    load_module(&conn).unwrap();
+    load_module(&conn, StatementScope::new()).unwrap();
     let mut args = format!(
         "'{}', '{}', '{}', 'gitignore'",
         dir.path().display(),
@@ -299,7 +306,7 @@ fn reads_are_live_across_statements() {
     let dir = TempDir::new().unwrap();
     fs::write(dir.path().join("a.md"), "x").unwrap();
     fs::write(dir.path().join("b.md"), "x").unwrap();
-    let conn = open_over(&dir, "**/*");
+    let (conn, scope) = open_scoped(&dir, "**/*");
 
     let before: i64 = conn
         .query_row("SELECT count(*) FROM t", [], |r| r.get(0))
@@ -307,6 +314,7 @@ fn reads_are_live_across_statements() {
     assert_eq!(before, 2);
 
     fs::remove_file(dir.path().join("b.md")).unwrap();
+    scope.reset();
 
     let after: i64 = conn
         .query_row("SELECT count(*) FROM t", [], |r| r.get(0))

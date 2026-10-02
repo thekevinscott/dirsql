@@ -8,7 +8,7 @@
 //! write twice lives here.
 
 use std::ffi::c_int;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
 
 use globset::GlobSet;
 use rusqlite::vtab::{
@@ -30,7 +30,7 @@ const SCAN_COST: f64 = 1000.;
 /// What a `dirsql_*` table supplies on top of the scaffolding.
 pub trait TableSource: Sized + 'static {
     /// One row, as the table models it.
-    type Row;
+    type Row: Send + Sync + 'static;
 
     /// SQL module name the table is created with.
     const NAME: &'static str;
@@ -39,19 +39,109 @@ pub trait TableSource: Sized + 'static {
     /// declares to SQLite.
     fn connect(args: &[&[u8]]) -> Result<(String, Self)>;
 
-    /// The row set one statement reads, taken fresh on every `xFilter`. A
-    /// table whose reads are live rescans here; one that materialized at
-    /// `CREATE` hands back the `Arc` it already holds.
+    /// The row set one statement reads, taken on the statement's first
+    /// `xFilter` over the table and held for the rest of it. A table whose
+    /// reads are live rescans here; one that materialized at `CREATE` hands
+    /// back the `Arc` it already holds.
     fn rows(&self) -> Arc<Vec<Self::Row>>;
 
     /// Emit column `i` of `row`.
     fn column(&self, row: &Self::Row, ctx: &mut Context, i: c_int) -> Result<()>;
 }
 
-/// Register `S` as a virtual-table module on `conn`.
-pub fn load_module<S: TableSource>(conn: &Connection) -> Result<()> {
-    let aux: Option<()> = None;
-    conn.create_module(S::NAME, read_only_module::<ScaffoldTab<S>>(), aux)
+/// The row sets the tables on one connection hold across a statement.
+///
+/// SQLite opens a fresh cursor for every reference to a table — each CTE,
+/// each `UNION` arm, each pass of a join — and a path table that rescanned on
+/// every cursor would walk the tree once per reference. Instead a table keeps
+/// the rows its first cursor in a statement produced and serves the same rows
+/// to the rest. What ends a statement is [`reset`](Self::reset): the owner of
+/// the connection brackets each statement with it, so the next statement
+/// scans afresh and the rows do not outlive the statement that read them.
+#[derive(Default)]
+pub struct StatementScope {
+    caches: Mutex<Vec<Weak<dyn Evict + Send + Sync>>>,
+}
+
+impl StatementScope {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// Reset now and again when the returned guard drops: the two edges of
+    /// one statement.
+    pub fn enter(self: &Arc<Self>) -> StatementGuard {
+        self.reset();
+        StatementGuard(Arc::clone(self))
+    }
+
+    /// Drop every row set a table under this scope is holding, so its next
+    /// read scans afresh.
+    pub fn reset(&self) {
+        let mut caches = self.caches.lock().unwrap();
+        caches.retain(|cache| {
+            cache.upgrade().is_some_and(|cache| {
+                cache.evict();
+                true
+            })
+        });
+    }
+
+    fn adopt(&self, cache: Weak<dyn Evict + Send + Sync>) {
+        self.caches.lock().unwrap().push(cache);
+    }
+}
+
+pub struct StatementGuard(Arc<StatementScope>);
+
+impl Drop for StatementGuard {
+    fn drop(&mut self) {
+        self.0.reset();
+    }
+}
+
+trait Evict {
+    fn evict(&self);
+}
+
+/// One table's rows for the statement in progress, empty between statements.
+struct RowCache<R> {
+    rows: Mutex<Option<Arc<Vec<R>>>>,
+}
+
+impl<R> Default for RowCache<R> {
+    fn default() -> Self {
+        Self {
+            rows: Mutex::new(None),
+        }
+    }
+}
+
+impl<R> RowCache<R> {
+    /// The rows already held, or the ones `scan` produces, held from now on.
+    fn rows_or_else(&self, scan: impl FnOnce() -> Arc<Vec<R>>) -> Arc<Vec<R>> {
+        let mut slot = self.rows.lock().unwrap();
+        match &*slot {
+            Some(rows) => Arc::clone(rows),
+            None => {
+                let rows = scan();
+                *slot = Some(Arc::clone(&rows));
+                rows
+            }
+        }
+    }
+}
+
+impl<R> Evict for RowCache<R> {
+    fn evict(&self) {
+        *self.rows.lock().unwrap() = None;
+    }
+}
+
+/// Register `S` as a virtual-table module on `conn`, its tables caching rows
+/// under `scope`.
+pub fn load_module<S: TableSource>(conn: &Connection, scope: Arc<StatementScope>) -> Result<()> {
+    conn.create_module(S::NAME, read_only_module::<ScaffoldTab<S>>(), Some(scope))
 }
 
 /// The module's own arguments: the three SQLite prepends (module, database and
@@ -69,6 +159,12 @@ pub fn user_args(args: &[&[u8]]) -> Vec<String> {
 pub fn arity_error(module: &str, wanted: usize, names: &str, got: usize) -> Error {
     Error::ModuleError(format!(
         "{module} takes at least {wanted} arguments ({names}), got {got}"
+    ))
+}
+
+fn no_scope_error(module: &str) -> Error {
+    Error::ModuleError(format!(
+        "{module} was registered without a statement scope; load it through dirsql::vtab::load_module"
     ))
 }
 
@@ -106,22 +202,27 @@ pub struct ScaffoldTab<S: TableSource> {
     /// Base class. Must be first.
     base: ffi::sqlite3_vtab,
     source: Arc<S>,
+    cache: Arc<RowCache<S::Row>>,
 }
 
 #[expect(unsafe_code, reason = "rusqlite requires an unsafe trait impl")]
 unsafe impl<'vtab, S: TableSource> VTab<'vtab> for ScaffoldTab<S> {
-    type Aux = ();
+    type Aux = Arc<StatementScope>;
     type Cursor = ScaffoldCursor<S>;
 
     fn connect(
         _db: &mut VTabConnection,
-        _aux: Option<&()>,
+        aux: Option<&Arc<StatementScope>>,
         args: &[&[u8]],
     ) -> Result<(String, Self)> {
+        let scope = aux.ok_or_else(|| no_scope_error(S::NAME))?;
         let (schema, source) = S::connect(args)?;
+        let cache = Arc::new(RowCache::default());
+        scope.adopt(Arc::downgrade(&cache) as Weak<dyn Evict + Send + Sync>);
         let vtab = Self {
             base: ffi::sqlite3_vtab::default(),
             source: Arc::new(source),
+            cache,
         };
         Ok((schema, vtab))
     }
@@ -135,6 +236,7 @@ unsafe impl<'vtab, S: TableSource> VTab<'vtab> for ScaffoldTab<S> {
         Ok(ScaffoldCursor {
             base: ffi::sqlite3_vtab_cursor::default(),
             source: Arc::clone(&self.source),
+            cache: Arc::clone(&self.cache),
             rows: Arc::new(Vec::new()),
             index: 0,
         })
@@ -152,6 +254,7 @@ pub struct ScaffoldCursor<S: TableSource> {
     /// overwritten.
     base: ffi::sqlite3_vtab_cursor,
     source: Arc<S>,
+    cache: Arc<RowCache<S::Row>>,
     rows: Arc<Vec<S::Row>>,
     index: usize,
 }
@@ -164,7 +267,7 @@ unsafe impl<S: TableSource> VTabCursor for ScaffoldCursor<S> {
         _idx_str: Option<&str>,
         _args: &Values<'_>,
     ) -> Result<()> {
-        self.rows = self.source.rows();
+        self.rows = self.cache.rows_or_else(|| self.source.rows());
         self.index = 0;
         Ok(())
     }
@@ -248,6 +351,18 @@ mod tests {
     }
 
     #[test]
+    fn no_scope_error_names_the_module_and_the_loader_to_use() {
+        let err = no_scope_error("dirsql_path");
+        assert!(matches!(err, Error::ModuleError(_)), "got {err:?}");
+        let message = err.to_string();
+        assert!(message.contains("dirsql_path"), "got: {message}");
+        assert!(
+            message.contains("dirsql::vtab::load_module"),
+            "got: {message}"
+        );
+    }
+
+    #[test]
     fn compile_glob_accepts_a_valid_pattern() {
         assert!(compile_glob("**/*.md").unwrap().is_match(Path::new("a.md")));
     }
@@ -327,6 +442,76 @@ mod tests {
         assert_eq!(rowid_of(usize::MAX), i64::MAX);
     }
 
+    #[test]
+    fn a_row_cache_scans_once_and_serves_the_same_rows_after() {
+        let cache: RowCache<u8> = RowCache::default();
+        let mut scans = 0;
+        let first = cache.rows_or_else(|| {
+            scans += 1;
+            Arc::new(vec![1, 2])
+        });
+        let second = cache.rows_or_else(|| {
+            scans += 1;
+            Arc::new(Vec::new())
+        });
+        assert_eq!(scans, 1);
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn an_evicted_row_cache_scans_again() {
+        let cache: RowCache<u8> = RowCache::default();
+        cache.rows_or_else(|| Arc::new(vec![1]));
+        cache.evict();
+        let rows = cache.rows_or_else(|| Arc::new(vec![2, 3]));
+        assert_eq!(*rows, vec![2, 3]);
+    }
+
+    fn adopted(scope: &StatementScope) -> Arc<RowCache<u8>> {
+        let cache = Arc::new(RowCache::default());
+        scope.adopt(Arc::downgrade(&cache) as Weak<dyn Evict + Send + Sync>);
+        cache
+    }
+
+    #[test]
+    fn a_scope_reset_evicts_every_cache_it_adopted() {
+        let scope = StatementScope::new();
+        let a = adopted(&scope);
+        let b = adopted(&scope);
+        a.rows_or_else(|| Arc::new(vec![1]));
+        b.rows_or_else(|| Arc::new(vec![2]));
+
+        scope.reset();
+
+        assert_eq!(*a.rows_or_else(|| Arc::new(vec![9])), vec![9]);
+        assert_eq!(*b.rows_or_else(|| Arc::new(vec![9])), vec![9]);
+    }
+
+    #[test]
+    fn a_scope_forgets_a_cache_whose_table_is_gone() {
+        let scope = StatementScope::new();
+        let gone = adopted(&scope);
+        let kept = adopted(&scope);
+        drop(gone);
+
+        scope.reset();
+
+        assert_eq!(scope.caches.lock().unwrap().len(), 1);
+        assert!(Arc::weak_count(&kept) == 1);
+    }
+
+    #[test]
+    fn entering_a_scope_resets_on_entry_and_on_exit() {
+        let scope = StatementScope::new();
+        let cache = adopted(&scope);
+        cache.rows_or_else(|| Arc::new(vec![1]));
+
+        let guard = scope.enter();
+        assert_eq!(*cache.rows_or_else(|| Arc::new(vec![2])), vec![2]);
+        drop(guard);
+        assert_eq!(*cache.rows_or_else(|| Arc::new(vec![3])), vec![3]);
+    }
+
     struct FakeSource;
 
     impl TableSource for FakeSource {
@@ -350,6 +535,7 @@ mod tests {
         ScaffoldCursor {
             base: ffi::sqlite3_vtab_cursor::default(),
             source: Arc::new(FakeSource),
+            cache: Arc::new(RowCache::default()),
             rows: Arc::new(rows),
             index: 0,
         }

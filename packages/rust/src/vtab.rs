@@ -1,17 +1,21 @@
 use std::ffi::c_int;
+use std::fs::{self, Metadata};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use globset::GlobSet;
+use rusqlite::types::Null;
 use rusqlite::vtab::Context;
 use rusqlite::{Connection, Result};
 
-use crate::compute_stat_virtuals;
 use crate::matcher::TableMatcher;
 use crate::path_table;
 use crate::scanner::{scan_glob, to_slash};
 use crate::vtab_scaffold::{self, TableSource};
-use crate::{Row, Value};
+
+pub use crate::vtab_scaffold::StatementScope;
 
 /// SQL module name a path-table is created with:
 /// `CREATE VIRTUAL TABLE t USING dirsql_path('<root>', '<glob>', '<path prefix>',
@@ -23,6 +27,14 @@ const FIXED_ARGS: usize = 4;
 
 /// The seven stat columns, in declaration order.
 pub const STAT_COLUMNS: [&str; 7] = ["path", "basename", "dir", "ext", "size", "mtime", "ctime"];
+
+const PATH_COLUMN: usize = 0;
+const BASENAME_COLUMN: usize = 1;
+const DIR_COLUMN: usize = 2;
+const EXT_COLUMN: usize = 3;
+const SIZE_COLUMN: usize = 4;
+const MTIME_COLUMN: usize = 5;
+const CTIME_COLUMN: usize = 6;
 
 /// Column index of the lazily-read `content`, which follows the stat columns.
 const CONTENT_COLUMN: usize = STAT_COLUMNS.len();
@@ -75,11 +87,121 @@ struct ScanSpec {
     gitignore: bool,
 }
 
-/// One matched file: its absolute path, kept for the lazy content read, and
-/// its already-computed stat columns.
+/// One matched file, as compact as the seven stat columns allow: the three
+/// path-derived text columns are slices of `path` located by [`PathSpans`],
+/// so a row costs two allocations however many columns a query reads.
 struct FileRow {
-    abs_path: PathBuf,
-    stats: Row,
+    /// The path as scanned, root-relative; where the lazy content read goes.
+    rel: PathBuf,
+    /// The path as reported, under the table's prefix when it has one.
+    path: String,
+    spans: PathSpans,
+    size: Option<i64>,
+    mtime: Option<i64>,
+    ctime: Option<i64>,
+}
+
+impl FileRow {
+    fn new(path_prefix: &Path, rel: PathBuf, metadata: Option<&Metadata>) -> Self {
+        let path = reported_path(path_prefix, &rel);
+        let spans = PathSpans::of(&path);
+        let (size, mtime, ctime) = stat_facts(metadata);
+        Self {
+            rel,
+            path,
+            spans,
+            size,
+            mtime,
+            ctime,
+        }
+    }
+
+    fn basename(&self) -> Option<&str> {
+        self.spans.name_at.map(|at| &self.path[at..])
+    }
+
+    fn dir(&self) -> Option<&str> {
+        self.spans.dir_len.map(|len| &self.path[..len])
+    }
+
+    fn ext(&self) -> Option<&str> {
+        self.spans.ext_at.map(|at| &self.path[at..])
+    }
+}
+
+/// Where `basename`, `dir` and `ext` sit inside a reported path, each `None`
+/// where [`Path`] has no answer: no basename or dir for an empty path, no ext
+/// for a dotfile or an extensionless name. [`Path::parent`] is a prefix of
+/// the path and [`Path::file_name`] and [`Path::extension`] are suffixes, so
+/// one length each locates them.
+#[derive(Debug, PartialEq, Eq)]
+struct PathSpans {
+    name_at: Option<usize>,
+    dir_len: Option<usize>,
+    ext_at: Option<usize>,
+}
+
+impl PathSpans {
+    fn of(path: &str) -> Self {
+        let p = Path::new(path);
+        let suffix_at = |s: &std::ffi::OsStr| path.len() - s.len();
+        Self {
+            name_at: p.file_name().map(suffix_at),
+            dir_len: p.parent().map(|d| d.as_os_str().len()),
+            ext_at: p.extension().map(suffix_at),
+        }
+    }
+}
+
+/// The stat-derived columns, each `None` when the file could not be stat'ed
+/// or the platform cannot supply the fact (or it predates the epoch).
+fn stat_facts(metadata: Option<&Metadata>) -> (Option<i64>, Option<i64>, Option<i64>) {
+    let Some(metadata) = metadata else {
+        return (None, None, None);
+    };
+    (
+        i64::try_from(metadata.len()).ok(),
+        epoch_secs(metadata.modified().ok()),
+        epoch_secs(metadata.created().ok()),
+    )
+}
+
+fn epoch_secs(time: Option<SystemTime>) -> Option<i64> {
+    let since = time?.duration_since(UNIX_EPOCH).ok()?;
+    i64::try_from(since.as_secs()).ok()
+}
+
+/// The rows for the files a scan found, in scan order. The stat behind each
+/// row is a syscall the kernel answers independently of the last, so the
+/// files are shared out across every core: one stat per file is the floor
+/// `find` pays too, and spreading them is how a walk comes in under it.
+fn build_rows(root: &Path, path_prefix: &Path, rel_paths: Vec<PathBuf>) -> Vec<FileRow> {
+    let workers = thread::available_parallelism().map_or(1, usize::from);
+    let per_worker = rel_paths.len().div_ceil(workers).max(1);
+    let row = |rel: PathBuf| {
+        let metadata = fs::metadata(root.join(&rel)).ok();
+        FileRow::new(path_prefix, rel, metadata.as_ref())
+    };
+    if rel_paths.len() <= per_worker {
+        return rel_paths.into_iter().map(row).collect();
+    }
+    thread::scope(|scope| {
+        let mut chunks: Vec<Vec<PathBuf>> = Vec::with_capacity(workers);
+        let mut rest = rel_paths;
+        while rest.len() > per_worker {
+            let tail = rest.split_off(per_worker);
+            chunks.push(std::mem::replace(&mut rest, tail));
+        }
+        chunks.push(rest);
+        let handles: Vec<_> = chunks
+            .into_iter()
+            .map(|chunk| scope.spawn(move || chunk.into_iter().map(row).collect::<Vec<_>>()))
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("a stat worker only stats"))
+            .collect()
+    })
 }
 
 /// Parse a path-table's own `CREATE VIRTUAL TABLE` arguments into its scan
@@ -122,40 +244,6 @@ fn reported_path(path_prefix: &Path, rel_path: &Path) -> String {
     format!("{prefix}/{rel_path}")
 }
 
-/// Whether `column` addresses the hidden `content` column.
-fn is_content_column(column: usize) -> bool {
-    column == CONTENT_COLUMN
-}
-
-/// Value of a stat column, NULL when the index is out of range or the fact was
-/// unavailable for this file (an unstattable file still yields a row).
-fn stat_cell(stats: &Row, column: usize) -> Value {
-    STAT_COLUMNS
-        .get(column)
-        .and_then(|name| stats.get(*name))
-        .cloned()
-        .unwrap_or(Value::Null)
-}
-
-/// Build the row set for a scan. `stat` is injected so unit tests can supply
-/// deterministic facts without touching the filesystem; production passes
-/// [`compute_stat_virtuals`].
-fn build_rows(
-    root: &Path,
-    path_prefix: &Path,
-    rel_paths: Vec<PathBuf>,
-    stat: &dyn Fn(&str, &Path) -> Row,
-) -> Vec<FileRow> {
-    rel_paths
-        .into_iter()
-        .map(|rel_path| {
-            let abs_path = root.join(&rel_path);
-            let stats = stat(&reported_path(path_prefix, &rel_path), &abs_path);
-            FileRow { abs_path, stats }
-        })
-        .collect()
-}
-
 impl TableSource for ScanSpec {
     type Row = FileRow;
 
@@ -175,33 +263,30 @@ impl TableSource for ScanSpec {
             &self.ignore_base,
             self.gitignore,
         );
-        Arc::new(build_rows(
-            &self.root,
-            &self.path_prefix,
-            rel_paths,
-            &compute_stat_virtuals,
-        ))
+        Arc::new(build_rows(&self.root, &self.path_prefix, rel_paths))
     }
 
     fn column(&self, row: &FileRow, ctx: &mut Context, i: c_int) -> Result<()> {
-        let column = usize::try_from(i).unwrap_or(usize::MAX);
-
-        if is_content_column(column) {
+        match usize::try_from(i).unwrap_or(usize::MAX) {
+            PATH_COLUMN => ctx.set_result(&row.path.as_str()),
+            BASENAME_COLUMN => ctx.set_result(&row.basename()),
+            DIR_COLUMN => ctx.set_result(&row.dir()),
+            EXT_COLUMN => ctx.set_result(&row.ext()),
+            SIZE_COLUMN => ctx.set_result(&row.size),
+            MTIME_COLUMN => ctx.set_result(&row.mtime),
+            CTIME_COLUMN => ctx.set_result(&row.ctime),
             // The one effectful read, reached only when a query names the
             // column: this is where laziness actually lives.
-            return match read_text(&row.abs_path) {
-                Some(text) => ctx.set_result(&Value::Text(text)),
-                None => ctx.set_result(&Value::Null),
-            };
+            CONTENT_COLUMN => ctx.set_result(&read_text(&self.root.join(&row.rel))),
+            _ => ctx.set_result(&Null),
         }
-
-        ctx.set_result(&stat_cell(&row.stats, column))
     }
 }
 
-/// Register the path-table module on `conn`.
-pub fn load_module(conn: &Connection) -> Result<()> {
-    vtab_scaffold::load_module::<ScanSpec>(conn)
+/// Register the path-table module on `conn`. Its tables hold the rows of the
+/// statement in progress under `scope`; see [`StatementScope`].
+pub fn load_module(conn: &Connection, scope: Arc<StatementScope>) -> Result<()> {
+    vtab_scaffold::load_module::<ScanSpec>(conn, scope)
 }
 
 #[cfg(test)]
@@ -217,6 +302,17 @@ mod tests {
             STAT_COLUMNS,
             ["path", "basename", "dir", "ext", "size", "mtime", "ctime"]
         );
+    }
+
+    #[test]
+    fn column_indices_follow_the_declared_order() {
+        assert_eq!(STAT_COLUMNS[PATH_COLUMN], "path");
+        assert_eq!(STAT_COLUMNS[BASENAME_COLUMN], "basename");
+        assert_eq!(STAT_COLUMNS[DIR_COLUMN], "dir");
+        assert_eq!(STAT_COLUMNS[EXT_COLUMN], "ext");
+        assert_eq!(STAT_COLUMNS[SIZE_COLUMN], "size");
+        assert_eq!(STAT_COLUMNS[MTIME_COLUMN], "mtime");
+        assert_eq!(STAT_COLUMNS[CTIME_COLUMN], "ctime");
     }
 
     #[test]
@@ -398,101 +494,94 @@ mod tests {
         assert_eq!(reported_path(Path::new("/"), Path::new("a.log")), "/a.log");
     }
 
-    #[test]
-    fn is_content_column_identifies_only_the_hidden_column() {
-        assert!(is_content_column(CONTENT_COLUMN));
-        assert!(!is_content_column(0));
-        assert!(!is_content_column(CONTENT_COLUMN - 1));
-    }
-
-    fn stats_with(name: &str, value: Value) -> Row {
-        let mut row = Row::new();
-        row.insert(name.to_string(), value);
-        row
+    fn row_for(prefix: &str, rel: &str) -> FileRow {
+        FileRow::new(Path::new(prefix), PathBuf::from(rel), None)
     }
 
     #[test]
-    fn stat_cell_returns_the_declared_column_value() {
-        let stats = stats_with("path", Value::Text("a.md".into()));
-        assert_eq!(stat_cell(&stats, 0), Value::Text("a.md".into()));
+    fn a_nested_path_splits_into_dir_basename_and_ext() {
+        let row = row_for("", "nested/sub.txt");
+        assert_eq!(row.path, "nested/sub.txt");
+        assert_eq!(row.dir(), Some("nested"));
+        assert_eq!(row.basename(), Some("sub.txt"));
+        assert_eq!(row.ext(), Some("txt"));
     }
 
     #[test]
-    fn stat_cell_is_null_when_the_fact_is_absent() {
-        let stats = stats_with("path", Value::Text("a.md".into()));
-        // `ext` is index 3 and absent for an extensionless file.
-        assert_eq!(stat_cell(&stats, 3), Value::Null);
+    fn a_top_level_file_has_an_empty_dir() {
+        let row = row_for("", "a.md");
+        assert_eq!(row.dir(), Some(""));
+        assert_eq!(row.basename(), Some("a.md"));
     }
 
     #[test]
-    fn stat_cell_is_null_for_an_out_of_range_column() {
-        let stats = stats_with("path", Value::Text("a.md".into()));
-        assert_eq!(stat_cell(&stats, 99), Value::Null);
-    }
-
-    #[test]
-    fn build_rows_joins_each_relative_path_onto_the_root() {
-        let rows = build_rows(
-            Path::new("/root"),
-            Path::new(""),
-            vec![PathBuf::from("docs/a.md")],
-            &|rel, _abs| stats_with("path", Value::Text(rel.to_string())),
-        );
-
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].abs_path, PathBuf::from("/root/docs/a.md"));
+    fn an_absolute_row_reports_its_prefix_in_path_and_dir() {
+        let row = row_for("/var/log", "a.log");
+        assert_eq!(row.path, "/var/log/a.log");
+        assert_eq!(row.dir(), Some("/var/log"));
+        assert_eq!(row.basename(), Some("a.log"));
         assert_eq!(
-            rows[0].stats.get("path"),
-            Some(&Value::Text("docs/a.md".into())),
-            "stats are computed from the relative path"
+            row.rel,
+            PathBuf::from("a.log"),
+            "content is read from the scanned path"
         );
     }
 
     #[test]
-    fn build_rows_preserves_scan_order() {
-        let rows = build_rows(
-            Path::new("/root"),
-            Path::new(""),
-            vec![PathBuf::from("a.md"), PathBuf::from("b.md")],
-            &|rel, _abs| stats_with("path", Value::Text(rel.to_string())),
-        );
+    fn a_file_at_the_filesystem_root_has_the_root_as_its_dir() {
+        assert_eq!(row_for("/", "a.md").dir(), Some("/"));
+    }
 
-        let paths: Vec<_> = rows.iter().map(|r| r.abs_path.clone()).collect();
+    #[test]
+    fn a_dotfile_and_a_bare_name_have_no_ext() {
+        assert_eq!(row_for("", ".bashrc").ext(), None);
+        assert_eq!(row_for("", "Makefile").ext(), None);
+    }
+
+    #[test]
+    fn a_trailing_dot_is_an_empty_ext() {
+        assert_eq!(row_for("", "a.").ext(), Some(""));
+    }
+
+    #[test]
+    fn ext_keeps_its_case() {
+        assert_eq!(row_for("", "Photo.JPG").ext(), Some("JPG"));
+    }
+
+    #[test]
+    fn an_empty_path_has_neither_basename_nor_dir() {
         assert_eq!(
-            paths,
-            vec![PathBuf::from("/root/a.md"), PathBuf::from("/root/b.md")]
+            PathSpans::of(""),
+            PathSpans {
+                name_at: None,
+                dir_len: None,
+                ext_at: None,
+            }
         );
     }
 
     #[test]
-    fn build_rows_yields_nothing_for_an_empty_scan() {
-        let rows = build_rows(
-            Path::new("/root"),
-            Path::new(""),
-            Vec::new(),
-            &|_rel, _abs| Row::new(),
-        );
-        assert!(rows.is_empty());
+    fn an_unstattable_file_has_null_facts_but_is_still_a_row() {
+        let row = row_for("", "bare");
+        assert_eq!(row.basename(), Some("bare"));
+        assert_eq!((row.size, row.mtime, row.ctime), (None, None, None));
     }
 
     #[test]
-    fn build_rows_reports_paths_under_the_prefix() {
-        let rows = build_rows(
-            Path::new("/var/log"),
-            Path::new("/var/log"),
-            vec![PathBuf::from("a.log")],
-            &|rel, _abs| stats_with("path", Value::Text(rel.to_string())),
-        );
+    fn stat_facts_are_absent_without_metadata() {
+        assert_eq!(stat_facts(None), (None, None, None));
+    }
 
-        assert_eq!(
-            rows[0].stats.get("path"),
-            Some(&Value::Text("/var/log/a.log".into())),
-            "an absolute path-table reports absolute paths"
-        );
-        assert_eq!(
-            rows[0].abs_path,
-            PathBuf::from("/var/log/a.log"),
-            "content is still read from the scanned file"
-        );
+    #[test]
+    fn epoch_secs_truncates_to_whole_seconds() {
+        let t = UNIX_EPOCH + std::time::Duration::from_millis(100_900);
+        assert_eq!(epoch_secs(Some(t)), Some(100));
+    }
+
+    #[test]
+    fn epoch_secs_is_absent_before_the_epoch_or_without_a_time() {
+        let t = UNIX_EPOCH - std::time::Duration::from_secs(1);
+        assert_eq!(epoch_secs(Some(t)), None);
+        assert_eq!(epoch_secs(None), None);
     }
 }
