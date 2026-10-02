@@ -120,10 +120,6 @@ def describe_dossier_speed_of_light():
         finally:
             shutil.rmtree(tree, ignore_errors=True)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="each CTE's path-table reference walks the tree again, and one walk is slower than find",
-    )
     def it_matches_native_rows_within_the_bar(root):
         startup = startup_seconds()
 
