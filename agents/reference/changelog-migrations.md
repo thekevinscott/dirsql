@@ -1,7 +1,7 @@
 # Changelog and Migrations — full mechanics
 
 
-**Every PR that touches public-facing SDK code must add a changelog fragment.** This is enforced in CI by the `changelog-gate` check (`internals/checks`), whose implementation mirrors [template-lib](https://github.com/thekevinbot/template-lib)'s reference gate (#566); an unmet gate blocks merge.
+**Every PR that touches public-facing SDK code must add a changelog fragment.** This is enforced in CI twice: by the `changelog-gate` check (`internals/checks`), whose implementation mirrors [template-lib](https://github.com/thekevinbot/template-lib)'s reference gate (#566), and by the `CHANGELOG + MIGRATIONS touched` job of the testing-conventions reusable workflow (its `changelog` gate), which also demands the migrations twin described below; an unmet gate blocks merge.
 
 The scope: any change to non-test source under a package root -- `packages/<pkg>/` (the three SDKs) or `plugins/<pkg>/` (independently published plugins, #896) -- requires a fragment naming that package. A package is identified by its root-qualified directory, so `plugins/ts` and `packages/ts` would be two packages. Exempt are test files (`*_test.py`, `*.test.ts` / `*.spec.ts`, anything under `<root>/<pkg>/tests/`), the package `CHANGELOG.md` / `MIGRATIONS.md` pointer stubs, the `e2e-attestations/` receipts, and the fragment folders themselves.
 
@@ -29,23 +29,17 @@ skip-changelog: <reason>
 
 The gate scans raw commit bodies (#566, mirroring template-lib), so the line works from **any** line of any commit -- it need not be a formal git trailer, which removes the blank-line-splits-the-trailer footgun entirely. The reason stays in git history, so the decision is auditable. Use this sparingly; when in doubt, write the changelog fragment.
 
-**A migration fragment is additionally required when a PR:**
+**Every changelog fragment has a migrations twin.** The `CHANGELOG + MIGRATIONS touched` job requires, for each package whose public surface changed, one added file under `changelog.d/` *and* one under `migrations.d/`. It honors no exemption rules: an additive change, a behavior-preserving bug fix, a help-text or README edit all owe both files. The only bypass is the `skip-changelog:` line above, which stays reserved for internal refactors with no observable change.
 
-- Breaks a public API (signature, name, return type, config key, CLI flag, action input).
-- Removes a previously deprecated symbol.
-- Changes runtime behavior without changing the API (exit codes, event payloads, on-disk layouts, default values, tag formats).
+Migration fragments are per-package too, one file per changed package under `<root>/<pkg>/migrations.d/YYYY-MM-DD-<slug>.md`, carrying the same date and slug as the changelog fragment it twins. Each is a complete entry -- a `### <title>` heading plus the five required subsections:
 
-Purely additive changes and behavior-preserving bug fixes do NOT require a migration entry.
-
-Migration fragments are per-package too, one file per changed package under `<root>/<pkg>/migrations.d/YYYY-MM-DD-<slug>.md` (same naming as changelog fragments). Each is a complete entry -- a `### <title>` heading plus the five required subsections:
-
-1. **Summary** -- one paragraph: what broke, which SDKs/call sites, and why.
+1. **Summary** -- one paragraph: what changed, which SDKs/call sites, and whether anything breaks.
 2. **Required changes** -- table of before/after snippets for every affected surface (config, CLI, action inputs, function signatures, return types).
 3. **Deprecations removed** -- previously warned symbols that are now hard errors.
 4. **Behavior changes without code changes** -- same API, different runtime behavior.
 5. **Verification** -- a concrete dry-run command plus expected output that a consumer can run to confirm the upgrade.
 
-If a subsection does not apply, keep the heading and write `_None._`. Do not omit subsections. The template lives at the bottom of the frozen root `MIGRATIONS.md`.
+If a subsection does not apply, keep the heading and write `_None._`. Do not omit subsections. When there is nothing to migrate -- the usual case -- the Summary says in a sentence what changed and that nothing breaks, and the other four subsections each read `_None._`. The template lives at the bottom of the frozen root `MIGRATIONS.md`.
 
 The frozen root `MIGRATIONS.md` is not published on the docs site: it holds only pre-fragment history, so a page built from it silently omits every migration written under the fragment convention -- an upgrade guide that looks authoritative and is not (#885). Aggregating `packages/*/migrations.d/*.md` into a page at build time is the option not taken; it needs a build step and a fragment ordering convention.
 
@@ -55,16 +49,7 @@ The frozen root `MIGRATIONS.md` is not published on the docs site: it holds only
 ## Changelog / Migrations
 
 - [ ] Changelog fragment added under `<root>/<pkg>/changelog.d/` for each changed package (or: `skip-changelog` trailer on a commit with reason)
-- [ ] Migration fragment added under `<root>/<pkg>/migrations.d/` (or: not required -- additive/bugfix only)
+- [ ] Migration fragment with the same slug added under `<root>/<pkg>/migrations.d/` for each changed package (every subsection but Summary `_None._` when nothing breaks)
 ```
 
-Orchestrators must block merges of SDK-touching PRs that miss either file when required.
-
-
-## Changelog / Migrations
-
-- [ ] Changelog fragment added under `<root>/<pkg>/changelog.d/` for each changed package (or: `skip-changelog` trailer on a commit with reason)
-- [ ] Migration fragment added under `<root>/<pkg>/migrations.d/` (or: not required -- additive/bugfix only)
-```
-
-Orchestrators must block merges of SDK-touching PRs that miss either file when required.
+Orchestrators must block merges of SDK-touching PRs that miss either file.

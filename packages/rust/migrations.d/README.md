@@ -1,9 +1,8 @@
 # migrations.d — Rust SDK
 
-One migration fragment per breaking change, so PRs never conflict on a shared
-file. A PR that breaks this package's public API (signature, name, return
-type, config key, CLI flag) or changes its runtime behavior without changing
-the API adds one file here:
+One migration fragment per change, twinned with the changelog fragment, so
+PRs never conflict on a shared file. Each PR that touches this package's
+public-facing source adds one file here, whether or not anything breaks:
 
     migrations.d/YYYY-MM-DD-<slug>.md
 
@@ -12,7 +11,8 @@ the API adds one file here:
 - **Body** — one complete migration entry following the five-subsection
   template (Summary / Required changes / Deprecations removed / Behavior
   changes without code changes / Verification); keep every heading, writing
-  `_None._` where a subsection does not apply.
+  `_None._` where a subsection does not apply -- every one but Summary when
+  nothing breaks.
 
 Fragments are **permanent and append-only** — nothing is assembled back into a
 single `MIGRATIONS.md`. This README is not a fragment. See
