@@ -87,9 +87,7 @@ pub trait TableSource: Sized + 'static {
 
     /// Read [`Self::PREFETCH_COLUMN`] for `rows`. Only reached when the
     /// column is declared, so a source that declares none is never asked.
-    fn prefetch(&self, rows: &[&Self::Row]) {
-        let _ = rows;
-    }
+    fn prefetch(&self, _rows: &[&Self::Row]) {}
 }
 
 /// The row sets the tables on one connection hold across a statement.

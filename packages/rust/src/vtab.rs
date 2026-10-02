@@ -787,6 +787,26 @@ mod tests {
         assert_eq!(read_all(&mut reader, 0).unwrap(), b"hello");
     }
 
+    struct Counting<R>(R, usize);
+
+    impl<R: Read> Read for Counting<R> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.1 += 1;
+            self.0.read(buf)
+        }
+    }
+
+    #[test]
+    fn read_all_grows_geometrically_when_a_file_has_outgrown_its_size() {
+        let chunked = Chunked {
+            chunks: vec![vec![b'x'; 4096]],
+            interrupted: 0,
+        };
+        let mut reader = Counting(chunked, 0);
+        assert_eq!(read_all(&mut reader, 1).unwrap().len(), 4096);
+        assert!(reader.1 <= 16, "{} reads", reader.1);
+    }
+
     #[test]
     fn read_all_retries_an_interrupted_read() {
         let mut reader = Chunked {
