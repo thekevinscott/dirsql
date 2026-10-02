@@ -409,3 +409,43 @@ fn a_join_against_a_small_table_plans_as_a_plain_scan() {
         "the declared cost must keep SQLite from building an automatic index, got {plan:?}"
     );
 }
+
+/// Three references to one path table in a statement must not cost three
+/// walks. A function that deletes a file while the first arm scans would, with
+/// one walk per arm, make the second arm's count come up short.
+#[test]
+fn a_statement_walks_the_tree_once_however_often_it_reads_the_table() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("a.md"), "x").unwrap();
+    fs::write(dir.path().join("b.md"), "x").unwrap();
+    let conn = open_over(&dir, "**/*");
+    let doomed = dir.path().join("b.md");
+    conn.create_scalar_function(
+        "unlink_b",
+        0,
+        rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+        move |_| {
+            let _ = fs::remove_file(&doomed);
+            Ok(0i64)
+        },
+    )
+    .unwrap();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT count(*) FROM t WHERE unlink_b() = 0
+             UNION ALL SELECT count(*) FROM t
+             UNION ALL SELECT count(*) FROM t",
+        )
+        .unwrap();
+    let counts: Vec<i64> = stmt
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        counts,
+        vec![2, 2, 2],
+        "every read of the table within one statement sees the one walk's rows"
+    );
+}
