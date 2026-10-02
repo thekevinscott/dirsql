@@ -463,3 +463,47 @@ fn a_statement_walks_the_tree_once_however_often_it_reads_the_table() {
         "every read of the table within one statement sees the one walk's rows"
     );
 }
+
+/// A connection with two path-tables, `a` over `glob_a` and `b` over
+/// `glob_b`, both under `dir`.
+fn open_pair(dir: &TempDir, glob_a: &str, glob_b: &str) -> Connection {
+    let conn = Connection::open_in_memory().unwrap();
+    load_module(&conn, StatementScope::new()).unwrap();
+    for (name, glob) in [("a", glob_a), ("b", glob_b)] {
+        conn.execute_batch(&format!(
+            "CREATE VIRTUAL TABLE {name} USING dirsql_path('{}', '{glob}', '', 'gitignore')",
+            dir.path().display(),
+        ))
+        .unwrap();
+    }
+    conn
+}
+
+fn query_plan(conn: &Connection, sql: &str) -> Vec<String> {
+    let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+    stmt.query_map([], |r| r.get(3))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+/// Joining two path-tables on `dir` must not be a nested rescan of the inner
+/// glob: `xBestIndex` accepts the equality and the inner side is driven by
+/// lookup, which SQLite reports as a non-zero virtual-table index.
+#[test]
+fn a_join_of_two_path_tables_looks_the_inner_side_up_by_dir() {
+    let dir = TempDir::new().unwrap();
+    for paper in ["p1", "p2"] {
+        fs::create_dir(dir.path().join(paper)).unwrap();
+        fs::write(dir.path().join(paper).join("abstract.md"), "x").unwrap();
+        fs::write(dir.path().join(paper).join("title.md"), "x").unwrap();
+    }
+    let conn = open_pair(&dir, "*/abstract.md", "*/title.md");
+
+    let plan = query_plan(&conn, "SELECT a.dir FROM a JOIN b ON b.dir = a.dir");
+    assert!(
+        plan.iter()
+            .any(|step| step.contains("VIRTUAL TABLE INDEX") && !step.contains("INDEX 0:")),
+        "expected the inner path-table to use an equality lookup, got {plan:?}"
+    );
+}
