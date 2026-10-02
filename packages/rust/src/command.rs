@@ -49,6 +49,20 @@ impl Placeholder {
             value: value.into(),
         }
     }
+
+    /// A placeholder whose value is a filesystem path, handed to the child in
+    /// its plain (non-verbatim) form; see [`non_verbatim`].
+    pub fn path(name: impl Into<String>, path: &str) -> Self {
+        Self::new(name, non_verbatim(path))
+    }
+}
+
+/// The plain form of a Windows verbatim path: `\\?\C:\x` becomes `C:\x` and
+/// `\\?\UNC\server\share\x` becomes `\\server\share\x`. Anything else, and any
+/// verbatim path whose plain spelling would name a different file, is returned
+/// unchanged.
+pub(crate) fn non_verbatim(path: &str) -> String {
+    path.to_string()
 }
 
 /// A successful command run.
@@ -313,6 +327,113 @@ mod tests {
 
     fn argv(command: &str, placeholders: &[Placeholder]) -> Vec<String> {
         build_argv(command, placeholders).expect("valid command")
+    }
+
+    fn unchanged(path: &str) {
+        assert_eq!(non_verbatim(path), path);
+    }
+
+    #[test]
+    fn non_verbatim_strips_a_verbatim_drive_path() {
+        assert_eq!(
+            non_verbatim(r"\\?\C:\Users\runner\in_cwd.txt"),
+            r"C:\Users\runner\in_cwd.txt"
+        );
+        assert_eq!(non_verbatim(r"\\?\d:\x"), r"d:\x");
+    }
+
+    #[test]
+    fn non_verbatim_strips_a_verbatim_drive_root() {
+        assert_eq!(non_verbatim(r"\\?\C:\"), r"C:\");
+    }
+
+    #[test]
+    fn non_verbatim_rewrites_a_verbatim_unc_path() {
+        assert_eq!(
+            non_verbatim(r"\\?\UNC\server\share\dir\f.txt"),
+            r"\\server\share\dir\f.txt"
+        );
+    }
+
+    #[test]
+    fn non_verbatim_leaves_plain_paths_unchanged() {
+        unchanged(r"C:\Users\runner\f.txt");
+        unchanged(r"\\server\share\f.txt");
+        unchanged("/tmp/root/f.txt");
+        unchanged("relative/f.txt");
+        unchanged("");
+    }
+
+    #[test]
+    fn non_verbatim_leaves_verbatim_forms_without_a_drive_or_unc_unchanged() {
+        unchanged(r"\\?\GLOBALROOT\Device\HarddiskVolume1\f.txt");
+        unchanged(r"\\?\Volume{0b1c2d3e-0000-0000-0000-100000000000}\f.txt");
+        unchanged(r"\\?\C:");
+        unchanged(r"\\?\C:x");
+        unchanged(r"\\?\1:\x");
+        unchanged(r"\\?\");
+    }
+
+    #[test]
+    fn non_verbatim_leaves_an_incomplete_unc_unchanged() {
+        unchanged(r"\\?\UNC\");
+        unchanged(r"\\?\UNC\server");
+        unchanged(r"\\?\UNC\server\");
+    }
+
+    #[test]
+    fn non_verbatim_leaves_components_win32_would_reinterpret_unchanged() {
+        unchanged(r"\\?\C:\a\..\b");
+        unchanged(r"\\?\C:\a\.\b");
+        unchanged(r"\\?\C:\a\\b");
+        unchanged(r"\\?\C:\a\");
+        unchanged(r"\\?\C:\trailing.");
+        unchanged(r"\\?\C:\trailing ");
+        unchanged(r"\\?\C:\a/b");
+        unchanged(r"\\?\C:\a?b");
+        unchanged(r"\\?\C:\a*b");
+        unchanged(r"\\?\C:\a:b");
+        unchanged(r#"\\?\C:\a"b"#);
+        unchanged(r"\\?\C:\a<b");
+        unchanged(r"\\?\C:\a>b");
+        unchanged(r"\\?\C:\a|b");
+        unchanged("\\\\?\\C:\\a\u{1}b");
+        unchanged(r"\\?\UNC\server\share\..\x");
+    }
+
+    #[test]
+    fn non_verbatim_leaves_reserved_device_names_unchanged() {
+        for name in [
+            "CON", "con", "PRN", "AUX", "NUL", "nul.txt", "NUL .txt", "COM1", "COM9", "LPT1",
+            "lpt9.log",
+        ] {
+            unchanged(&format!(r"\\?\C:\dir\{name}"));
+        }
+    }
+
+    #[test]
+    fn non_verbatim_strips_names_that_only_resemble_device_names() {
+        for name in ["CONSOLE", "NULL.txt", "COM0", "COM10", "LPT", "xCON", "AUXa"] {
+            assert_eq!(
+                non_verbatim(&format!(r"\\?\C:\dir\{name}")),
+                format!(r"C:\dir\{name}")
+            );
+        }
+    }
+
+    #[test]
+    fn non_verbatim_strips_up_to_max_path_and_no_further() {
+        let fits = format!(r"C:\{}", "a".repeat(256));
+        assert_eq!(fits.encode_utf16().count(), 259);
+        assert_eq!(non_verbatim(&format!(r"\\?\{fits}")), fits);
+        unchanged(&format!(r"\\?\C:\{}", "a".repeat(257)));
+    }
+
+    #[test]
+    fn path_placeholder_carries_the_non_verbatim_value() {
+        let placeholder = Placeholder::path("path", r"\\?\C:\a\f.txt");
+        assert_eq!(placeholder.name, "path");
+        assert_eq!(placeholder.value, r"C:\a\f.txt");
     }
 
     #[test]

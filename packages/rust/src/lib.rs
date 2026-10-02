@@ -1945,8 +1945,8 @@ fn run_on_file(
     root: &Path,
 ) -> std::result::Result<Vec<Row>, BoxError> {
     let placeholders = [
-        Placeholder::new("path", abs_path),
-        Placeholder::new("root", root.to_string_lossy().into_owned()),
+        Placeholder::path("path", abs_path),
+        Placeholder::path("root", &root.to_string_lossy()),
     ];
 
     // Errors travel to the caller rather than being logged and flattened to an
@@ -4380,6 +4380,22 @@ mod internal_tests {
         assert_eq!(
             std::fs::read_to_string(dir.path().join("seen")).unwrap(),
             abs.to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn run_on_file_hands_the_hook_non_verbatim_path_and_root() {
+        let dir = TempDir::new().unwrap();
+        run_on_file(
+            r#"sh -c 'printf "%s|%s" "$1" "$2" > seen; echo "[]"' sh {path} {root}"#,
+            r"\\?\C:\r\f.txt",
+            dir.path(),
+            Path::new(r"\\?\UNC\server\share\r"),
+        )
+        .expect("a well-formed payload parses");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("seen")).unwrap(),
+            r"C:\r\f.txt|\\server\share\r"
         );
     }
 
