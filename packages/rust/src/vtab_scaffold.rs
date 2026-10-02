@@ -7,9 +7,10 @@
 //! set, which columns answer an equality by lookup, and how a row becomes a
 //! cell. Everything either one would otherwise write twice lives here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_int;
 use std::sync::{Arc, Mutex, Weak};
+use std::thread::{self, JoinHandle};
 
 use globset::GlobSet;
 use rusqlite::types::ValueRef;
@@ -36,7 +37,7 @@ const LOOKUP_COST: f64 = 10.;
 const SCAN_IDX: c_int = 0;
 
 /// What a `dirsql_*` table supplies on top of the scaffolding.
-pub trait TableSource: Sized + 'static {
+pub trait TableSource: Sized + Send + Sync + 'static {
     /// One row, as the table models it.
     type Row: Send + Sync + 'static;
 
@@ -79,9 +80,14 @@ pub trait TableSource: Sized + 'static {
 /// to the rest. What ends a statement is [`reset`](Self::reset): the owner of
 /// the connection brackets each statement with it, so the next statement
 /// scans afresh and the rows do not outlive the statement that read them.
+///
+/// SQLite also opens those cursors one at a time, so left to itself a
+/// statement over two tables walks the second tree only after the first is
+/// done. [`warm`](Self::warm) starts the scans of the tables a statement
+/// names before SQLite asks for any of them, each on a thread of its own.
 #[derive(Default)]
 pub struct StatementScope {
-    caches: Mutex<Vec<Weak<dyn Evict + Send + Sync>>>,
+    tables: Mutex<Vec<(String, Weak<dyn Held + Send + Sync>)>>,
 }
 
 impl StatementScope {
@@ -99,8 +105,8 @@ impl StatementScope {
     /// Drop every row set a table under this scope is holding, so its next
     /// read scans afresh.
     pub fn reset(&self) {
-        let mut caches = self.caches.lock().unwrap();
-        caches.retain(|cache| {
+        let mut tables = self.tables.lock().unwrap();
+        tables.retain(|(_, cache)| {
             cache.upgrade().is_some_and(|cache| {
                 cache.evict();
                 true
@@ -108,8 +114,21 @@ impl StatementScope {
         });
     }
 
-    fn adopt(&self, cache: Weak<dyn Evict + Send + Sync>) {
-        self.caches.lock().unwrap().push(cache);
+    /// Start scanning every table named in `names` now, so the statement
+    /// about to read them finds their rows underway. A name no table here
+    /// answers to is passed over; a table already holding rows keeps them.
+    pub fn warm(&self, names: &HashSet<String>) {
+        for (name, cache) in self.tables.lock().unwrap().iter() {
+            if names.contains(name)
+                && let Some(cache) = cache.upgrade()
+            {
+                cache.warm();
+            }
+        }
+    }
+
+    fn adopt(&self, name: String, cache: Weak<dyn Held + Send + Sync>) {
+        self.tables.lock().unwrap().push((name, cache));
     }
 }
 
@@ -121,41 +140,69 @@ impl Drop for StatementGuard {
     }
 }
 
-trait Evict {
+trait Held {
     fn evict(&self);
+    fn warm(&self);
+}
+
+/// Where one table's rows stand within the statement in progress.
+enum Slot<R> {
+    Empty,
+    /// A scan started ahead of the first read, on a thread of its own.
+    Pending(JoinHandle<Arc<Vec<R>>>),
+    Ready(Arc<Vec<R>>),
 }
 
 /// One table's rows for the statement in progress, empty between statements.
-struct RowCache<R> {
-    rows: Mutex<Option<Arc<Vec<R>>>>,
+struct RowCache<S: TableSource> {
+    source: Arc<S>,
+    slot: Mutex<Slot<S::Row>>,
 }
 
-impl<R> Default for RowCache<R> {
-    fn default() -> Self {
+impl<S: TableSource> RowCache<S> {
+    fn new(source: Arc<S>) -> Self {
         Self {
-            rows: Mutex::new(None),
+            source,
+            slot: Mutex::new(Slot::Empty),
+        }
+    }
+
+    /// The rows held, waiting for a scan started ahead to finish; or else the
+    /// source's rows scanned now, held from here on.
+    fn rows(&self) -> Arc<Vec<S::Row>> {
+        let mut slot = self.slot.lock().unwrap();
+        let rows = match std::mem::replace(&mut *slot, Slot::Empty) {
+            Slot::Ready(rows) => rows,
+            Slot::Pending(scan) => scan
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            Slot::Empty => self.source.rows(),
+        };
+        *slot = Slot::Ready(Arc::clone(&rows));
+        rows
+    }
+
+    /// Start the scan on a thread of its own, unless rows are already held
+    /// or underway.
+    fn warm(&self) {
+        let mut slot = self.slot.lock().unwrap();
+        if !matches!(*slot, Slot::Empty) {
+            return;
+        }
+        let source = Arc::clone(&self.source);
+        if let Ok(scan) = thread::Builder::new().spawn(move || source.rows()) {
+            *slot = Slot::Pending(scan);
         }
     }
 }
 
-impl<R> RowCache<R> {
-    /// The rows already held, or the ones `scan` produces, held from now on.
-    fn rows_or_else(&self, scan: impl FnOnce() -> Arc<Vec<R>>) -> Arc<Vec<R>> {
-        let mut slot = self.rows.lock().unwrap();
-        match &*slot {
-            Some(rows) => Arc::clone(rows),
-            None => {
-                let rows = scan();
-                *slot = Some(Arc::clone(&rows));
-                rows
-            }
-        }
-    }
-}
-
-impl<R> Evict for RowCache<R> {
+impl<S: TableSource> Held for RowCache<S> {
     fn evict(&self) {
-        *self.rows.lock().unwrap() = None;
+        *self.slot.lock().unwrap() = Slot::Empty;
+    }
+
+    fn warm(&self) {
+        self.warm();
     }
 }
 
@@ -172,6 +219,14 @@ pub fn user_args(args: &[&[u8]]) -> Vec<String> {
         .skip(3)
         .map(|a| unquote(&String::from_utf8_lossy(a)).to_string())
         .collect()
+}
+
+/// The table's name, the third argument SQLite prepends: the same spelling
+/// its authorizer reports a read of the table under.
+fn table_name(args: &[&[u8]]) -> String {
+    args.get(2)
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+        .unwrap_or_default()
 }
 
 /// The error a module raises when it was handed too few arguments. Named
@@ -319,7 +374,7 @@ pub struct ScaffoldTab<S: TableSource> {
     /// Base class. Must be first.
     base: ffi::sqlite3_vtab,
     source: Arc<S>,
-    cache: Arc<RowCache<S::Row>>,
+    cache: Arc<RowCache<S>>,
 }
 
 #[expect(unsafe_code, reason = "rusqlite requires an unsafe trait impl")]
@@ -334,11 +389,15 @@ unsafe impl<'vtab, S: TableSource> VTab<'vtab> for ScaffoldTab<S> {
     ) -> Result<(String, Self)> {
         let scope = aux.ok_or_else(|| no_scope_error(S::NAME))?;
         let (schema, source) = S::connect(args)?;
-        let cache = Arc::new(RowCache::default());
-        scope.adopt(Arc::downgrade(&cache) as Weak<dyn Evict + Send + Sync>);
+        let source = Arc::new(source);
+        let cache = Arc::new(RowCache::new(Arc::clone(&source)));
+        scope.adopt(
+            table_name(args),
+            Arc::downgrade(&cache) as Weak<dyn Held + Send + Sync>,
+        );
         let vtab = Self {
             base: ffi::sqlite3_vtab::default(),
-            source: Arc::new(source),
+            source,
             cache,
         };
         Ok((schema, vtab))
@@ -392,7 +451,7 @@ pub struct ScaffoldCursor<S: TableSource> {
     /// overwritten.
     base: ffi::sqlite3_vtab_cursor,
     source: Arc<S>,
-    cache: Arc<RowCache<S::Row>>,
+    cache: Arc<RowCache<S>>,
     /// Taken from the statement's cache on the first `xFilter`; `None` until
     /// then.
     rows: Option<Arc<Vec<S::Row>>>,
@@ -405,11 +464,7 @@ pub struct ScaffoldCursor<S: TableSource> {
 impl<S: TableSource> ScaffoldCursor<S> {
     fn rows(&mut self) -> Arc<Vec<S::Row>> {
         let cache = &self.cache;
-        let source = &self.source;
-        Arc::clone(
-            self.rows
-                .get_or_insert_with(|| cache.rows_or_else(|| source.rows())),
-        )
+        Arc::clone(self.rows.get_or_insert_with(|| cache.rows()))
     }
 
     fn select_by_lookup(&mut self, column: usize, key: &str) -> Selection {
@@ -784,74 +839,189 @@ mod tests {
         assert_eq!(rowid_of(usize::MAX), i64::MAX);
     }
 
+    /// A source whose rows are the number of scans it has served, so a test
+    /// can tell a fresh scan from rows held over.
+    struct Counted {
+        scans: std::sync::atomic::AtomicUsize,
+    }
+
+    impl TableSource for Counted {
+        type Row = usize;
+        const NAME: &'static str = "counted";
+
+        fn connect(_args: &[&[u8]]) -> Result<(String, Self)> {
+            unreachable!()
+        }
+
+        fn rows(&self) -> Arc<Vec<usize>> {
+            let scan = self
+                .scans
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                + 1;
+            Arc::new(vec![scan])
+        }
+
+        fn column(&self, _row: &usize, _ctx: &mut Context, _i: c_int) -> Result<()> {
+            unreachable!()
+        }
+    }
+
+    fn counted() -> RowCache<Counted> {
+        RowCache::new(Arc::new(Counted {
+            scans: std::sync::atomic::AtomicUsize::new(0),
+        }))
+    }
+
+    fn scans(cache: &RowCache<Counted>) -> usize {
+        cache
+            .source
+            .scans
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn is_pending(cache: &RowCache<Counted>) -> bool {
+        matches!(*cache.slot.lock().unwrap(), Slot::Pending(_))
+    }
+
     #[test]
     fn a_row_cache_scans_once_and_serves_the_same_rows_after() {
-        let cache: RowCache<u8> = RowCache::default();
-        let mut scans = 0;
-        let first = cache.rows_or_else(|| {
-            scans += 1;
-            Arc::new(vec![1, 2])
-        });
-        let second = cache.rows_or_else(|| {
-            scans += 1;
-            Arc::new(Vec::new())
-        });
-        assert_eq!(scans, 1);
+        let cache = counted();
+        let first = cache.rows();
+        let second = cache.rows();
+        assert_eq!(scans(&cache), 1);
         assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[test]
     fn an_evicted_row_cache_scans_again() {
-        let cache: RowCache<u8> = RowCache::default();
-        cache.rows_or_else(|| Arc::new(vec![1]));
+        let cache = counted();
+        cache.rows();
         cache.evict();
-        let rows = cache.rows_or_else(|| Arc::new(vec![2, 3]));
-        assert_eq!(*rows, vec![2, 3]);
+        assert_eq!(*cache.rows(), vec![2]);
     }
 
-    fn adopted(scope: &StatementScope) -> Arc<RowCache<u8>> {
-        let cache = Arc::new(RowCache::default());
-        scope.adopt(Arc::downgrade(&cache) as Weak<dyn Evict + Send + Sync>);
+    #[test]
+    fn a_warmed_row_cache_has_its_scan_underway_before_any_read() {
+        let cache = counted();
+        cache.warm();
+        assert!(is_pending(&cache));
+        assert_eq!(*cache.rows(), vec![1]);
+        assert_eq!(scans(&cache), 1);
+    }
+
+    #[test]
+    fn warming_twice_starts_one_scan() {
+        let cache = counted();
+        cache.warm();
+        cache.warm();
+        assert_eq!(*cache.rows(), vec![1]);
+        assert_eq!(scans(&cache), 1);
+    }
+
+    #[test]
+    fn warming_a_row_cache_holding_rows_keeps_them() {
+        let cache = counted();
+        let held = cache.rows();
+        cache.warm();
+        assert!(!is_pending(&cache));
+        assert!(Arc::ptr_eq(&held, &cache.rows()));
+        assert_eq!(scans(&cache), 1);
+    }
+
+    #[test]
+    fn a_read_after_a_warmed_scan_serves_that_scan_again() {
+        let cache = counted();
+        cache.warm();
+        let first = cache.rows();
+        assert!(Arc::ptr_eq(&first, &cache.rows()));
+    }
+
+    fn adopted(scope: &StatementScope, name: &str) -> Arc<RowCache<Counted>> {
+        let cache = Arc::new(counted());
+        scope.adopt(
+            name.to_string(),
+            Arc::downgrade(&cache) as Weak<dyn Held + Send + Sync>,
+        );
         cache
+    }
+
+    fn names(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|name| name.to_string()).collect()
     }
 
     #[test]
     fn a_scope_reset_evicts_every_cache_it_adopted() {
         let scope = StatementScope::new();
-        let a = adopted(&scope);
-        let b = adopted(&scope);
-        a.rows_or_else(|| Arc::new(vec![1]));
-        b.rows_or_else(|| Arc::new(vec![2]));
+        let a = adopted(&scope, "a");
+        let b = adopted(&scope, "b");
+        a.rows();
+        b.rows();
 
         scope.reset();
 
-        assert_eq!(*a.rows_or_else(|| Arc::new(vec![9])), vec![9]);
-        assert_eq!(*b.rows_or_else(|| Arc::new(vec![9])), vec![9]);
+        assert_eq!(*a.rows(), vec![2]);
+        assert_eq!(*b.rows(), vec![2]);
     }
 
     #[test]
     fn a_scope_forgets_a_cache_whose_table_is_gone() {
         let scope = StatementScope::new();
-        let gone = adopted(&scope);
-        let kept = adopted(&scope);
+        let gone = adopted(&scope, "gone");
+        let kept = adopted(&scope, "kept");
         drop(gone);
 
         scope.reset();
 
-        assert_eq!(scope.caches.lock().unwrap().len(), 1);
+        assert_eq!(scope.tables.lock().unwrap().len(), 1);
         assert!(Arc::weak_count(&kept) == 1);
+    }
+
+    #[test]
+    fn a_scope_warms_the_tables_named_and_no_other() {
+        let scope = StatementScope::new();
+        let named = adopted(&scope, "named");
+        let other = adopted(&scope, "other");
+
+        scope.warm(&names(&["named", "absent"]));
+
+        assert!(is_pending(&named));
+        assert!(!is_pending(&other));
+        assert_eq!(scans(&other), 0);
+    }
+
+    #[test]
+    fn a_scope_warms_a_table_by_its_own_name_only() {
+        let scope = StatementScope::new();
+        let table = adopted(&scope, "./a");
+
+        scope.warm(&names(&["./b"]));
+
+        assert!(!is_pending(&table));
     }
 
     #[test]
     fn entering_a_scope_resets_on_entry_and_on_exit() {
         let scope = StatementScope::new();
-        let cache = adopted(&scope);
-        cache.rows_or_else(|| Arc::new(vec![1]));
+        let cache = adopted(&scope, "t");
+        cache.rows();
 
         let guard = scope.enter();
-        assert_eq!(*cache.rows_or_else(|| Arc::new(vec![2])), vec![2]);
+        assert_eq!(*cache.rows(), vec![2]);
         drop(guard);
-        assert_eq!(*cache.rows_or_else(|| Arc::new(vec![3])), vec![3]);
+        assert_eq!(*cache.rows(), vec![3]);
+    }
+
+    #[test]
+    fn table_name_is_the_third_argument_sqlite_prepends() {
+        assert_eq!(
+            table_name(&[b"dirsql_path", b"temp", b"./a", b"'/root'"]),
+            "./a"
+        );
+    }
+
+    #[test]
+    fn table_name_is_empty_when_sqlite_prepends_too_few() {
+        assert_eq!(table_name(&[b"dirsql_path"]), "");
     }
 
     struct FakeSource;
@@ -923,14 +1093,15 @@ mod tests {
     }
 
     fn cursor_over(words: Vec<&'static str>) -> ScaffoldCursor<Words> {
+        let source = Arc::new(Words {
+            words,
+            scans: std::sync::atomic::AtomicUsize::new(0),
+            keys: std::sync::atomic::AtomicUsize::new(0),
+        });
         ScaffoldCursor {
             base: ffi::sqlite3_vtab_cursor::default(),
-            source: Arc::new(Words {
-                words,
-                scans: std::sync::atomic::AtomicUsize::new(0),
-                keys: std::sync::atomic::AtomicUsize::new(0),
-            }),
-            cache: Arc::new(RowCache::default()),
+            cache: Arc::new(RowCache::new(Arc::clone(&source))),
+            source,
             rows: None,
             index: None,
             selection: Selection::Every(0),
