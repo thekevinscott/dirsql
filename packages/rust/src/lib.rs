@@ -4346,15 +4346,13 @@ mod internal_tests {
     }
 
     /// `{abspath}` is not in the substitution table: it is left literal like any
-    /// unknown `{…}`, so `printf` receives the string `{abspath}` verbatim. The
-    /// template references `{path}` so that arg is the real path (and no path is
-    /// appended), isolating the `{abspath}` behavior in the `q` column.
+    /// unknown `{…}`, so `printf` receives the string `{abspath}` verbatim.
     #[test]
     fn run_on_file_does_not_substitute_abspath() {
         let dir = TempDir::new().unwrap();
         let abs = dir.path().join("f.txt");
         let rows = run_on_file(
-            r#"printf '[{"p":"%s","q":"%s"}]' {path} {abspath}"#,
+            r#"printf '[{"q":"%s"}]' {abspath}"#,
             &abs.to_string_lossy(),
             dir.path(),
             dir.path(),
@@ -4365,25 +4363,23 @@ mod internal_tests {
     }
 
     /// `{path}` interpolates the matched file's **absolute** path (not a
-    /// root-relative one). The command echoes its `{path}` argument back as a
-    /// row value, and we assert it is byte-for-byte the absolute path even when
-    /// the file sits directly under `root` (the case the old `strip_prefix`
-    /// would have shortened to a bare relative path).
+    /// root-relative one), byte-for-byte, even when the file sits directly
+    /// under `root`. The command writes its argument to a side file rather than
+    /// into the JSON payload, where a Windows path's `\` would need escaping.
     #[test]
     fn run_on_file_passes_absolute_path_for_path_placeholder() {
         let dir = TempDir::new().unwrap();
         let abs = dir.path().join("f.txt");
-        let rows = run_on_file(
-            r#"sh -c "printf '[{\"p\":\"%s\"}]' \"$1\"" sh {path}"#,
+        run_on_file(
+            r#"sh -c 'printf %s "$1" > seen; echo "[]"' sh {path}"#,
             &abs.to_string_lossy(),
             dir.path(),
             dir.path(),
         )
         .expect("a well-formed payload parses");
-        assert_eq!(rows.len(), 1);
         assert_eq!(
-            rows[0]["p"],
-            Value::Text(abs.to_string_lossy().into_owned())
+            std::fs::read_to_string(dir.path().join("seen")).unwrap(),
+            abs.to_string_lossy()
         );
     }
 
