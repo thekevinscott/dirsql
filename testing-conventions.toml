@@ -125,14 +125,8 @@ reason = "a child's depth decides the reserved top-level .dirsql rule for a real
 [[rust.exempt]]
 path = "src/vtab.rs"
 rules = ["mutation"]
-lines = [288, 305]
+lines = [294, 311]
 reason = "rows walks and stats a real tree and column hands a cell to SQLite; the cell choice is unit-tested in `cell`, and tests/vtab.rs stat_columns_carry_real_values and content_is_excluded_from_star_but_selectable_by_name assert both through a real connection"
-
-[[rust.exempt]]
-path = "src/vtab_scaffold.rs"
-rules = ["mutation"]
-lines = [270]
-reason = "filter is the SQLite cursor hook that fills the row cache; tests/vtab.rs a_statement_walks_the_tree_once_however_often_it_reads_the_table and reads_are_live_across_statements assert it through a real connection"
 
 # Unit-only coverage floor: measured by `cargo llvm-cov --lib --features cli`
 # (the `--lib` scoping keeps the integration tier under packages/rust/tests/ out

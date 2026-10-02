@@ -39,6 +39,10 @@ const CTIME_COLUMN: usize = 6;
 /// Column index of the lazily-read `content`, which follows the stat columns.
 const CONTENT_COLUMN: usize = STAT_COLUMNS.len();
 
+/// `path`, `basename` and `dir`: the columns a join between two path-tables
+/// is written on, answered by lookup rather than a rescan of the inner glob.
+const LOOKUP_COLUMNS: [usize; 3] = [PATH_COLUMN, BASENAME_COLUMN, DIR_COLUMN];
+
 /// Schema a path-table declares to SQLite.
 ///
 /// `content` is declared last and `HIDDEN` so SQLite excludes it from
@@ -278,6 +282,8 @@ impl TableSource for ScanSpec {
 
     const NAME: &'static str = MODULE_NAME;
 
+    const LOOKUP_COLUMNS: &'static [usize] = &LOOKUP_COLUMNS;
+
     fn connect(args: &[&[u8]]) -> Result<(String, Self)> {
         Ok((declared_schema(), parse_module_args(args)?))
     }
@@ -307,6 +313,15 @@ impl TableSource for ScanSpec {
             // The one effectful read, reached only when a query names the
             // column: this is where laziness actually lives.
             None => ctx.set_result(&read_text(&self.root.join(&row.rel))),
+        }
+    }
+
+    fn lookup_key<'r>(&self, row: &'r FileRow, column: usize) -> Option<&'r str> {
+        match column {
+            PATH_COLUMN => Some(&row.path),
+            BASENAME_COLUMN => row.basename(),
+            DIR_COLUMN => row.dir(),
+            _ => None,
         }
     }
 }
@@ -569,6 +584,29 @@ mod tests {
         let row = row_for("", "a.md");
         assert_eq!(cell(&row, 8), Some(ValueRef::Null));
         assert_eq!(cell(&row, -1), Some(ValueRef::Null));
+    }
+
+    #[test]
+    fn lookup_columns_are_path_basename_and_dir_in_that_order() {
+        let names: Vec<&str> = LOOKUP_COLUMNS.iter().map(|c| STAT_COLUMNS[*c]).collect();
+        assert_eq!(names, ["path", "basename", "dir"]);
+    }
+
+    #[test]
+    fn a_scan_spec_keys_a_row_by_the_text_of_the_lookup_column() {
+        let args = args_with(&[b"'/tmp/notes'", b"'**/*.md'", b"''", b"'gitignore'"]);
+        let spec = parse_module_args(&args).unwrap();
+        let mut row = row_for("", "docs/a.md");
+        row.facts = facts(3);
+
+        assert_eq!(spec.lookup_key(&row, 0), Some("docs/a.md"));
+        assert_eq!(spec.lookup_key(&row, 1), Some("a.md"));
+        assert_eq!(spec.lookup_key(&row, 2), Some("docs"));
+        assert_eq!(
+            spec.lookup_key(&row, 4),
+            None,
+            "size is not a lookup column"
+        );
     }
 
     #[test]

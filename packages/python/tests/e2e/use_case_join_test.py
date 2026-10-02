@@ -83,7 +83,8 @@ def describe_join_speed_of_light():
             shutil.rmtree(tree, ignore_errors=True)
 
     @pytest.mark.xfail(
-        strict=True, reason="path-table join is an unindexed nested loop"
+        strict=True,
+        reason="two serial tree walks run over the speed-of-light bar",
     )
     def it_matches_native_rows_within_the_bar(root):
         startup = startup_seconds()
