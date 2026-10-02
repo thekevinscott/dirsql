@@ -367,10 +367,6 @@ async fn run_default(cli: Cli) -> u8 {
                 }
             };
             let state = load_state(&cli.common, parser);
-            // Skipped files are named once here rather than per statement, and
-            // `PARTIAL_SCAN_EXIT` has no REPL meaning: the session's exit code
-            // describes the session, not one scan.
-            report_scan_failures(&state);
             run_repl(
                 &state,
                 cli.format.resolve(std::io::stdout().is_terminal()),
@@ -401,7 +397,6 @@ async fn run_query(args: QueryArgs) -> u8 {
         }
     };
     let state = load_state(&args.common, parser);
-    let skipped = report_scan_failures(&state);
 
     // Unbounded: the process IS the query, so `timeout(1)` expresses any cap
     // natively; only the long-lived server enforces `query_timeout` (408).
@@ -410,49 +405,13 @@ async fn run_query(args: QueryArgs) -> u8 {
     match execute_query(&state, query_body(&args.sql), None).await {
         Ok(value) => {
             print!("{}", render_rows(&value, format));
-            // The query ran and its rows are on stdout, so this is not a
-            // failure -- but the index behind them is missing files, and a
-            // caller piping into `jq` under `set -e` has no other way to find
-            // that out.
-            if skipped { PARTIAL_SCAN_EXIT } else { 0 }
+            0
         }
         Err(failure) => {
             eprintln!("dirsql query: {}", failure.message());
             1
         }
     }
-}
-
-/// Exit code for "the scan completed, but some files were skipped" -- distinct
-/// from `1` so a script can tell a partial index from a run that failed.
-/// Follows rsync's `23` ("partial transfer due to error").
-const PARTIAL_SCAN_EXIT: u8 = 23;
-
-/// How many skipped files to name before collapsing the rest into a count. A
-/// directory of unreadable files should not bury the terminal.
-const MAX_REPORTED_FAILURES: usize = 10;
-
-/// Print the scan's skipped files to stderr, capped, and report whether there
-/// were any. stdout is left for the query result alone.
-fn report_scan_failures(state: &AppState) -> bool {
-    let AppState::Ready(db) = state else {
-        return false;
-    };
-    let failures = db.scan_failures();
-    if failures.is_empty() {
-        return false;
-    }
-    for failure in failures.iter().take(MAX_REPORTED_FAILURES) {
-        eprintln!("dirsql: skipping `{}`: {}", failure.path, failure.message);
-    }
-    if let Some(rest) = failures
-        .len()
-        .checked_sub(MAX_REPORTED_FAILURES)
-        .filter(|n| *n > 0)
-    {
-        eprintln!("dirsql: ... and {rest} more");
-    }
-    true
 }
 
 /// Synthesize the exact `POST /query` body for a positional SQL argument,
@@ -747,9 +706,9 @@ mod tests {
     #[test]
     fn bare_sql_carries_on_file_for_the_default_query() {
         // #662: `--on-file` works in the default mode exactly as under `query`.
-        let cli = Cli::parse_from(["dirsql", "SELECT 1", "--on-file", "cat {path}"]);
+        let cli = Cli::parse_from(["dirsql", "SELECT 1", "--on-file", "cat"]);
         assert!(cli.command.is_none());
-        assert_eq!(cli.on_file, vec!["cat {path}".to_string()]);
+        assert_eq!(cli.on_file, vec!["cat".to_string()]);
     }
 
     #[test]
@@ -1001,8 +960,8 @@ mod tests {
     #[test]
     fn on_file_parses_after_the_query_subcommand() {
         assert_eq!(
-            query_on_file(&["dirsql", "query", "SELECT 1", "--on-file", "cat {path}"]),
-            vec!["cat {path}".to_string()]
+            query_on_file(&["dirsql", "query", "SELECT 1", "--on-file", "cat"]),
+            vec!["cat".to_string()]
         );
     }
 
@@ -1039,8 +998,8 @@ mod tests {
     #[test]
     fn resolve_on_file_returns_the_single_command() {
         assert_eq!(
-            resolve_on_file(&["cat {path}".to_string()]),
-            Ok(Some("cat {path}".to_string()))
+            resolve_on_file(&["cat".to_string()]),
+            Ok(Some("cat".to_string()))
         );
     }
 
@@ -1139,14 +1098,6 @@ mod tests {
             "SELECT 1".into(),
         ]);
         assert_eq!(code, 2);
-    }
-
-    #[test]
-    fn report_scan_failures_is_false_when_the_index_is_degraded() {
-        // The `Ready` arm needs a real scanned directory, so it lives in the
-        // integration tier; the degraded arm short-circuits before any I/O.
-        let state = AppState::Unavailable("config failed to load".to_string());
-        assert!(!report_scan_failures(&state));
     }
 
     #[test]

@@ -16,7 +16,7 @@
 use std::fs;
 use std::path::Path;
 
-use dirsql::{DirSQL, Value};
+use dirsql::{DirSQL, DirSqlError, Value};
 use tempfile::TempDir;
 
 /// Write `.dirsql.toml` with `contents` into `dir` and return its path.
@@ -138,10 +138,10 @@ on-file = "sh ./emit.sh"
 }
 
 #[test]
-fn a_timeout_wrapped_hook_in_one_config_leaves_the_other_untouched() {
+fn a_timeout_wrapped_hook_in_one_config_fails_the_build_under_its_table() {
     // Distinct globs (one-file-one-table). Config A wraps ITS slow hook in
-    // timeout(1): its table fails and stays empty. Config B's unwrapped fast
-    // hook is unaffected.
+    // timeout(1): the kill fails the build, and the error names A's table
+    // rather than config B's fast one.
     let data = TempDir::new().unwrap();
     fs::write(data.path().join("a.json"), "{}").unwrap();
     fs::write(data.path().join("b.json"), "{}").unwrap();
@@ -180,26 +180,18 @@ on-file = "sh ./fast.sh"
 "#,
     );
 
-    let db = DirSQL::builder()
+    let err = DirSQL::builder()
         .root(data.path())
         .config(&cfg_a_path)
         .config(&cfg_b_path)
         .build()
-        .expect("two config entries must both load");
+        .err()
+        .expect("a hook killed by its timeout(1) wrapper fails the build");
 
-    let slow = db
-        .query("SELECT v FROM slow")
-        .expect("the timed-out table must still exist");
-    assert_eq!(
-        slow.len(),
-        0,
-        "a hook killed by its timeout(1) wrapper leaves its table empty"
+    assert!(
+        matches!(&err, DirSqlError::TableCommand { name, .. } if name == "slow"),
+        "got: {err}"
     );
-
-    let fast = db
-        .query("SELECT v FROM fast")
-        .expect("the second config's table must be queryable");
-    assert_eq!(fast[0]["v"], Value::Text("in-time".into()));
 }
 
 #[test]

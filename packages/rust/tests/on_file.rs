@@ -12,7 +12,7 @@
 use std::fs;
 use std::sync::{Arc, Mutex};
 
-use dirsql::{DirSQL, Table, Value};
+use dirsql::{DirSQL, DirSqlError, Table, Value};
 use tempfile::TempDir;
 
 /// An `on-file` command that reads the matched file (a JSON array of row
@@ -242,12 +242,11 @@ on-file = "sh abscheck.sh"
 }
 
 /// The command runs once for the whole table, so its exit status is the
-/// table's: a non-zero exit leaves the table empty and is reported under the
-/// table's name with the command's stderr, while the scan itself succeeds. The
-/// helper (kept out of the TOML to sidestep nested-quote parsing) fails when
-/// any file it is handed contains `BOOM`.
+/// table's: a non-zero exit fails the build, naming the table and carrying
+/// the command's stderr. The helper (kept out of the TOML to sidestep
+/// nested-quote parsing) fails when any file it is handed contains `BOOM`.
 #[test]
-fn a_failing_command_fails_the_whole_table() {
+fn a_failing_command_fails_the_build() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("extract.sh"),
@@ -268,27 +267,30 @@ on-file = "sh extract.sh"
     fs::write(root.path().join("good.txt"), "fine\n").unwrap();
     fs::write(root.path().join("bad.txt"), "BOOM\n").unwrap();
 
-    let db = DirSQL::builder()
-        .root(root.path())
-        .config(root.path().join(".dirsql.toml"))
-        .build()
-        .unwrap();
-    let rows = db.query("SELECT name FROM items").unwrap();
-    assert!(rows.is_empty(), "a failed table has no rows: {rows:?}");
+    let err = build_err(&root);
 
-    let failures = db.scan_failures();
-    assert_eq!(failures.len(), 1, "{failures:?}");
-    assert_eq!(failures[0].path, "items");
+    let DirSqlError::TableCommand { name, message } = err else {
+        panic!("a failed command is the table's error, got: {err}");
+    };
+    assert_eq!(name, "items");
     assert!(
-        failures[0].message.contains("boom seen"),
-        "the failure carries the command's stderr: {}",
-        failures[0].message
+        message.contains("boom seen"),
+        "the failure carries the command's stderr: {message}"
     );
 }
 
-/// Output that is not a JSON array of objects fails the table the same way.
+fn build_err(root: &TempDir) -> DirSqlError {
+    DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .err()
+        .expect("a failed command must fail the build")
+}
+
+/// Output that is not a JSON array of objects fails the build the same way.
 #[test]
-fn malformed_output_fails_the_whole_table() {
+fn malformed_output_fails_the_build() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("extract.sh"),
@@ -308,29 +310,20 @@ on-file = "sh extract.sh"
     .unwrap();
     fs::write(root.path().join("good.txt"), "GOOD\n").unwrap();
 
-    let db = DirSQL::builder()
-        .root(root.path())
-        .config(root.path().join(".dirsql.toml"))
-        .build()
-        .unwrap();
-    let rows = db.query("SELECT name FROM items").unwrap();
-    assert!(rows.is_empty(), "{rows:?}");
+    let err = build_err(&root);
 
-    let failures = db.scan_failures();
-    assert_eq!(failures.len(), 1, "{failures:?}");
-    assert_eq!(failures[0].path, "items");
     assert!(
-        failures[0].message.contains("not a JSON array of rows"),
-        "got: {}",
-        failures[0].message
+        matches!(&err, DirSqlError::TableCommand { name, message }
+            if name == "items" && message.contains("not a JSON array of rows")),
+        "got: {err}"
     );
 }
 
 /// Bounding a hook is the command's job now: a `timeout(1)`-wrapped hook that
-/// overruns its bound exits non-zero, which fails the table like any other
+/// overruns its bound exits non-zero, which fails the build like any other
 /// hook failure.
 #[test]
-fn a_timeout_wrapped_hook_that_overruns_fails_the_table() {
+fn a_timeout_wrapped_hook_that_overruns_fails_the_build() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("slow.sh"),
@@ -350,16 +343,11 @@ on-file = "timeout 0.5 sh slow.sh"
     .unwrap();
     fs::write(root.path().join("a.txt"), "x\n").unwrap();
 
-    // The scan must succeed; the killed hook's table has no rows.
-    let db = DirSQL::builder()
-        .root(root.path())
-        .config(root.path().join(".dirsql.toml"))
-        .build()
-        .unwrap();
-    let rows = db.query("SELECT name FROM items").unwrap();
+    let err = build_err(&root);
+
     assert!(
-        rows.is_empty(),
-        "a table whose timeout(1)-wrapped hook overruns must be empty, got {rows:?}"
+        matches!(&err, DirSqlError::TableCommand { name, .. } if name == "items"),
+        "got: {err}"
     );
 }
 
@@ -396,11 +384,11 @@ on-file = "sh slowish.sh"
     assert_eq!(rows[0]["name"], Value::Text("ok".into()));
 }
 
-/// A row that fails strict normalization is the hook's mistake, not the
-/// database's: the table it belongs to is reported and left empty, and the
-/// build itself still succeeds.
+/// A row that fails strict normalization is the hook's mistake, and the
+/// command ran once for the whole table, so it fails the build under the
+/// table's name.
 #[test]
-fn a_strict_violation_fails_the_whole_table() {
+fn a_strict_violation_fails_the_build() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("gen.sh"),
@@ -421,18 +409,12 @@ on-file = "sh gen.sh"
     .unwrap();
     fs::write(root.path().join("a.txt"), "fine\n").unwrap();
 
-    let db = DirSQL::builder()
-        .root(root.path())
-        .config(root.path().join(".dirsql.toml"))
-        .build()
-        .expect("one bad row must not fail the build");
-    let rows = db.query("SELECT name FROM items").unwrap();
+    let err = build_err(&root);
 
     assert!(
-        rows.is_empty(),
-        "no row lands when one is rejected: {rows:?}"
+        matches!(&err, DirSqlError::TableCommand { name, .. } if name == "items"),
+        "got: {err}"
     );
-    assert_eq!(db.scan_failures()[0].path, "items");
 }
 
 /// A scan attempts every matched file. One hook failure is that file's
