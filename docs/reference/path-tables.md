@@ -35,14 +35,16 @@ Two consequences follow directly:
 A `./` path is relative to the **index root** — the directory dirsql is
 indexing, not your shell's working directory.
 
-**Directories are recursive by default.** Naming a directory scans everything
-beneath it; the non-recursive form is spelled explicitly with `*`.
+**A directory name is one level, like `ls`.** Naming a directory lists the
+files directly inside it and no deeper; `*` matches one level and `**` any
+depth, as in the shell.
 
 | You write | dirsql scans |
 | --- | --- |
-| `'./'` | every file under the index root, recursively |
-| `'./docs'` | every file under `docs/`, recursively |
-| `'./*'` | files directly inside the index root, and no deeper |
+| `'./'` | files directly inside the index root, and no deeper |
+| `'./docs'`, `'./docs/'` | files directly inside `docs/` |
+| `'./*'` | the same as `'./'` |
+| `'./**'` | every file under the index root, recursively |
 | `'./docs/*.md'` | markdown files directly inside `docs/` |
 | `'./docs/**/*.md'` | markdown files at any depth under `docs/` |
 | `'./notes/today.md'` | exactly that one file — one file is one row |
@@ -87,6 +89,7 @@ Three other prefixes resolve, with their usual shell meanings:
 | `'../notes'` | relative to the index root's parent |
 | `'~/notes/*.md'` | relative to your home directory |
 
+A directory named this way is one level too; `'../notes/**'` descends.
 `..` is folded out textually, not followed through symlinks, so the directory
 scanned is a function of the string you wrote.
 
@@ -216,7 +219,7 @@ A path-table scan applies the same [`ignore`](/reference/config) patterns your
 declared tables use — matched against root-relative paths under the same
 [glob rule](/reference/config#glob-rule) as the path itself, `*` one level and
 `**` any depth — plus two built-in defaults so a zero-config
-`SELECT * FROM './'` does not drown in machinery:
+`SELECT * FROM './**'` does not drown in machinery:
 
 - `**/node_modules/**`
 - `**/.git/**`
@@ -246,7 +249,7 @@ Skip rules are judged from the directory the scan starts in, so pointing at a
 skipped directory — built-in or gitignored — still scans it:
 
 ```sql
-SELECT path FROM './';                     -- no node_modules rows
+SELECT path FROM './**';                   -- no node_modules rows
 SELECT path FROM './node_modules/*/package.json';  -- scans it anyway
 SELECT path FROM './dist';                 -- scans dist/ even when gitignored
 ```

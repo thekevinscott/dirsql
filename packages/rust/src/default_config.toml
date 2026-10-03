@@ -2,9 +2,9 @@
 #
 # Any FROM target that starts with ./, ../, /, or ~/ is a live, read-only
 # view of the filesystem -- no config required. To list every file under the
-# current directory:
+# current directory, at any depth:
 #
-#     dirsql query "SELECT * FROM './'"
+#     dirsql query "SELECT * FROM './**'"
 #
 # That path-table gives you path, basename, dir, ext, size, mtime and ctime
 # for free, and takes a glob to scope it: "SELECT * FROM './**/*.md'".

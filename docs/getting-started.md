@@ -68,11 +68,11 @@ this directory anyway — from inside `my-notes`, run one command:
 ::: code-group
 
 ```bash [npm]
-npx dirsql "SELECT COUNT(*) AS files FROM './'"
+npx dirsql "SELECT COUNT(*) AS files FROM './**'"
 ```
 
 ```bash [PyPI]
-uvx dirsql "SELECT COUNT(*) AS files FROM './'"
+uvx dirsql "SELECT COUNT(*) AS files FROM './**'"
 ```
 
 :::
@@ -91,10 +91,11 @@ files
 Three files, three rows. That one command scanned the directory, handed
 SQLite one row per file, ran your SQL, and printed the answer.
 
-There is no named table here — you never declared one. `'./'` is a
+There is no named table here — you never declared one. `'./**'` is a
 [path-table](./reference/path-tables.md): a quoted path written where a table
-name goes. `'./'` means everything under the directory you ran the command
-in. The path *is* the query.
+name goes. `'./**'` means every file under the directory you ran the command
+in, at any depth; `'./'` alone would list only the files directly inside it,
+like `ls`. The path *is* the query.
 
 ## 3. Select some columns
 
@@ -105,11 +106,11 @@ pretty-print. Ask for two columns instead of a count:
 ::: code-group
 
 ```bash [npm]
-npx dirsql query "SELECT path, size FROM './' ORDER BY path" | jq
+npx dirsql query "SELECT path, size FROM './**' ORDER BY path" | jq
 ```
 
 ```bash [PyPI]
-uvx dirsql query "SELECT path, size FROM './' ORDER BY path" | jq
+uvx dirsql query "SELECT path, size FROM './**' ORDER BY path" | jq
 ```
 
 :::

@@ -54,7 +54,7 @@ pub enum ConfigError {
     #[error(
         "[[table]] '{glob}' has no on-file hook, so every row would be all-NULL. \
          Add an `on-file` hook that emits the columns, or, for stat columns with \
-         no code, query the path directly: `FROM './'`"
+         no code, query the path directly: `FROM './**'`"
     )]
     HooklessTable { glob: String },
 

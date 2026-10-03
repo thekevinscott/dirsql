@@ -19,9 +19,9 @@ use typed_path::{
 /// still scans it.
 pub const DEFAULT_IGNORES: [&str; 2] = ["**/node_modules/**", "**/.git/**"];
 
-/// The glob a directory expands to: recursion is the default, and the
-/// non-recursive form is spelled explicitly as `*`.
-const RECURSIVE_GLOB: &str = "**/*";
+/// The glob a directory expands to: one level, like `ls`. Any depth is
+/// spelled explicitly as `**`.
+const DIRECTORY_GLOB: &str = "*";
 
 /// A resolved path-table: what to walk, what to match, and what to report.
 #[derive(Debug, PartialEq)]
@@ -220,8 +220,8 @@ fn split_absolute<S: Syntax>(target: &Utf8Path<S>, is_dir: &dyn Fn(&Path) -> boo
 }
 
 /// The directory to walk and the glob to match beneath it. A wholly literal
-/// target is a directory (scan it recursively) or a single file (match exactly
-/// that name beneath its parent).
+/// target is a directory (list it one level deep) or a single file (match
+/// exactly that name beneath its parent).
 fn split_target<S: Syntax>(
     target: &Utf8Path<S>,
     is_dir: &dyn Fn(&Path) -> bool,
@@ -232,13 +232,13 @@ fn split_target<S: Syntax>(
         return (literal, rest);
     }
     if is_dir(Path::new(literal.as_str())) {
-        return (literal, RECURSIVE_GLOB.to_string());
+        return (literal, DIRECTORY_GLOB.to_string());
     }
 
     let name = literal
         .file_name()
         .map(str::to_string)
-        .unwrap_or_else(|| RECURSIVE_GLOB.to_string());
+        .unwrap_or_else(|| DIRECTORY_GLOB.to_string());
     let parent = literal.parent().unwrap_or(&literal).to_path_buf();
     (parent, name)
 }

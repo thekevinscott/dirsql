@@ -84,7 +84,7 @@ fn bare_glob_hint(name: &str) -> String {
 const LEGACY_DEFAULT_TABLE: &str = "files";
 
 fn legacy_files_table_hint() -> String {
-    format!("{NO_SUCH_TABLE}{LEGACY_DEFAULT_TABLE}; did you mean FROM './'?")
+    format!("{NO_SUCH_TABLE}{LEGACY_DEFAULT_TABLE}; did you mean FROM './**'?")
 }
 
 /// The characters a bare filesystem path can be spelled with where a table

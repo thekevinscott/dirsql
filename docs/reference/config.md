@@ -396,7 +396,7 @@ SDKs raise/reject) when:
 - A `[[table]]` entry omits `on-file` (or it is empty/whitespace). The error
   names the offending glob and points at the fix:
 
-  > `[[table]] '**/*.md' has no on-file hook, so every row would be all-NULL. Add an `on-file` hook that emits the columns, or, for stat columns with no code, query the path directly: `FROM './'``
+  > `[[table]] '**/*.md' has no on-file hook, so every row would be all-NULL. Add an `on-file` hook that emits the columns, or, for stat columns with no code, query the path directly: `FROM './**'``
 
 - A `[[dirsql.extension]]` entry omits `path`, or `path` is empty.
 - A `[[dirsql.function]]` entry omits `name`, `command`, or `args` (or
