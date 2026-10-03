@@ -1,4 +1,4 @@
-use globset::{Glob, GlobSet, GlobSetBuilder};
+use globset::{Glob, GlobBuilder, GlobSet, GlobSetBuilder};
 use std::path::Path;
 
 /// Result of matching a file path against a glob pattern.
@@ -83,6 +83,12 @@ fn glob_with_placeholders_as_star(pattern: &str) -> String {
     out
 }
 
+/// One glob rule on every surface: `*` and `?` stop at `/`, `**` crosses it,
+/// exactly as `scanner::compile_glob` reads a path-table.
+fn compile(pattern: &str) -> Result<Glob, globset::Error> {
+    GlobBuilder::new(pattern).literal_separator(true).build()
+}
+
 impl TableMatcher {
     /// Build a new matcher from (glob_pattern, table_name) pairs and ignore patterns.
     /// Glob patterns may contain `{name}` placeholders, which match like `*`.
@@ -94,7 +100,7 @@ impl TableMatcher {
         for (pattern, table_name) in mappings {
             let glob_pattern = glob_with_placeholders_as_star(pattern);
             let mut builder = GlobSetBuilder::new();
-            builder.add(Glob::new(&glob_pattern)?);
+            builder.add(compile(&glob_pattern)?);
             entries.push(PatternEntry {
                 glob_set: builder.build()?,
                 table_name: table_name.to_string(),
@@ -104,9 +110,9 @@ impl TableMatcher {
         let mut ignore_builder = GlobSetBuilder::new();
         let mut ignore_dir_builder = GlobSetBuilder::new();
         for pattern in ignore_patterns {
-            ignore_builder.add(Glob::new(pattern)?);
+            ignore_builder.add(compile(pattern)?);
             if let Some(subtree) = pattern.strip_suffix("/**") {
-                ignore_dir_builder.add(Glob::new(subtree)?);
+                ignore_dir_builder.add(compile(subtree)?);
             }
         }
         let ignore_set = ignore_builder.build()?;

@@ -207,7 +207,9 @@ choice is stated as one trade in
 ## Skip rules
 
 A path-table scan applies the same [`ignore`](/reference/config) patterns your
-declared tables use, plus two built-in defaults so a zero-config
+declared tables use — matched against root-relative paths under the same
+[glob rule](/reference/config#glob-rule) as the path itself, `*` one level and
+`**` any depth — plus two built-in defaults so a zero-config
 `SELECT * FROM './'` does not drown in machinery:
 
 - `**/node_modules/**`

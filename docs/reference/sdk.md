@@ -116,8 +116,9 @@ shortcut was removed in #603 — use
 - `root` — Directory to index. When omitted, the index roots at the process
   cwd (even when `config` is supplied).
 - `tables` — Programmatic [`Table`](#table) definitions.
-- `ignore` — Glob patterns matched against root-relative paths; matched
-  files are skipped entirely (scan and watch).
+- `ignore` — Glob patterns matched against root-relative paths under the
+  [glob rule](./config.md#glob-rule) (`*` one level, `**` any depth);
+  matched files are skipped entirely (scan and watch).
 - `no_ignore` / `noIgnore` — Scan files a `.gitignore` would hide.
   [Path-tables](./path-tables.md#skip-rules) respect `.gitignore` files by
   default; the built-in `node_modules`/`.git` skips and any `ignore` patterns
