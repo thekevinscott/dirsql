@@ -388,9 +388,8 @@ mod tests {
         assert_eq!(glob_with_placeholders_as_star("{a{b}"), "{a*");
     }
 
-    /// The nested fixture the #1223 table was measured against: two files at
-    /// depth 0, two under `folder/`, two under `folder/sub/`, one under a
-    /// sibling directory.
+    /// Two files at depth 0, two under `folder/`, two under `folder/sub/`, one
+    /// under a sibling directory.
     const FIXTURE: [&str; 7] = [
         "root.md",
         "root.txt",
