@@ -67,7 +67,10 @@ fn a_default_scan_excludes_gitignored_files() {
 #[test]
 fn no_ignore_restores_gitignored_files() {
     let dir = fixture();
-    let out = run(&dir, &["query", "SELECT basename FROM './**'", "--no-ignore"]);
+    let out = run(
+        &dir,
+        &["query", "SELECT basename FROM './**'", "--no-ignore"],
+    );
 
     let names = basenames(&out);
     assert!(
@@ -83,7 +86,10 @@ fn no_ignore_restores_gitignored_files() {
 #[test]
 fn no_ignore_keeps_the_built_in_ignore_floor() {
     let dir = fixture();
-    let out = run(&dir, &["query", "SELECT basename FROM './**'", "--no-ignore"]);
+    let out = run(
+        &dir,
+        &["query", "SELECT basename FROM './**'", "--no-ignore"],
+    );
 
     let names = basenames(&out);
     assert!(
