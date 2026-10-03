@@ -24,7 +24,7 @@ describe("new DirSQL() with no config", () => {
     const db = new DirSQL({ root: dir });
     await db.ready;
     await expect(db.query("SELECT basename FROM files")).rejects.toThrow(
-      /no such table: files; did you mean FROM '\.\/'\?/,
+      /no such table: files; did you mean FROM '\.\/\*\*'\?/,
     );
   });
 
