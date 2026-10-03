@@ -36,14 +36,18 @@ describe("path-tables (#627)", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it("scans the index root for a bare './'", async () => {
-    const rows = await open().query("SELECT path FROM './'");
+  it("scans the whole index root for './**'", async () => {
+    const rows = await open().query("SELECT path FROM './**'");
 
     expect(rows.map((r) => r.path).sort()).toEqual([
       "docs/a.md",
       "docs/b.md",
       "docs/c.csv",
     ]);
+  });
+
+  it("lists one level for a directory name", async () => {
+    expect(await open().query("SELECT path FROM './'")).toEqual([]);
   });
 
   it("scopes the scan to the glob", async () => {

@@ -678,7 +678,7 @@ fn no_config_serves_path_tables_not_a_files_table() {
     );
     let body = miss.text().unwrap();
     assert!(
-        body.contains("no such table: files") && body.contains("did you mean FROM './'?"),
+        body.contains("no such table: files") && body.contains("did you mean FROM './**'?"),
         "the no-config `files` miss must carry the path-table hint, got {body:?}"
     );
 
@@ -1090,7 +1090,7 @@ fn hookless_table_config_exits_nonzero_pointing_at_the_path_table() {
         "stderr must name the missing on-file hook, got {stderr:?}"
     );
     assert!(
-        stderr.contains("FROM './'"),
+        stderr.contains("FROM './**'"),
         "stderr must point at the path-table replacement, got {stderr:?}"
     );
 }
@@ -1344,7 +1344,7 @@ fn query_subcommand_without_config_hints_at_the_path_table_form() {
     );
     let stderr = String::from_utf8(miss.stderr).unwrap();
     assert!(
-        stderr.contains("no such table: files") && stderr.contains("did you mean FROM './'?"),
+        stderr.contains("no such table: files") && stderr.contains("did you mean FROM './**'?"),
         "the no-config `files` miss must carry the path-table hint, got {stderr:?}"
     );
 

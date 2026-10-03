@@ -867,7 +867,7 @@ glob = "*.json"
         );
         let msg = err.to_string();
         assert!(msg.contains("on-file"), "got: {msg}");
-        assert!(msg.contains("FROM './'"), "got: {msg}");
+        assert!(msg.contains("FROM './**'"), "got: {msg}");
     }
 
     #[test]

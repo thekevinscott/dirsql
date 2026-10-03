@@ -71,6 +71,26 @@ fn a_parsed_path_table_serves_the_parser_rows_and_schema() {
 }
 
 #[test]
+fn a_parsed_directory_path_table_lists_one_level() {
+    let root = fixture();
+    fs::create_dir_all(root.path().join("docs/sub")).unwrap();
+    fs::write(
+        root.path().join("docs/sub/c.md"),
+        r#"[{"title":"charlie","n":3}]"#,
+    )
+    .unwrap();
+
+    let db = open_with_parser(&root);
+    let rows = db.query("SELECT title FROM './docs'").unwrap();
+
+    assert_eq!(
+        texts(&rows, "title"),
+        vec!["alpha", "bravo"],
+        "a parsed './docs' is one level too: docs/sub must not be read"
+    );
+}
+
+#[test]
 fn stat_columns_are_not_reachable_on_a_parsed_path_table() {
     let root = fixture();
     let db = open_with_parser(&root);

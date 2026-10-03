@@ -51,7 +51,7 @@ fn a_root_gitignore_excludes_its_matches_from_a_path_table_scan() {
     let root = fixture();
     let db = open(&root);
 
-    let rows = db.query("SELECT path FROM './'").unwrap();
+    let rows = db.query("SELECT path FROM './**'").unwrap();
     let scanned = paths(&rows);
 
     assert!(
@@ -73,7 +73,7 @@ fn a_gitignore_negation_keeps_the_whitelisted_file() {
     let root = fixture();
     let db = open(&root);
 
-    let scanned = paths(&db.query("SELECT path FROM './'").unwrap());
+    let scanned = paths(&db.query("SELECT path FROM './**'").unwrap());
 
     assert!(
         scanned.contains(&"keep.log".to_string()),
@@ -86,7 +86,7 @@ fn a_nested_gitignore_applies_below_its_own_directory() {
     let root = fixture();
     let db = open(&root);
 
-    let scanned = paths(&db.query("SELECT path FROM './'").unwrap());
+    let scanned = paths(&db.query("SELECT path FROM './**'").unwrap());
 
     assert!(
         !scanned.contains(&"sub/scratch.tmp".to_string()),
@@ -107,7 +107,7 @@ fn a_nested_gitignore_does_not_reach_outside_its_directory() {
     fs::write(root.path().join("outside.md"), "out").unwrap();
     let db = open(&root);
 
-    let scanned = paths(&db.query("SELECT path FROM './'").unwrap());
+    let scanned = paths(&db.query("SELECT path FROM './**'").unwrap());
 
     assert!(
         scanned.contains(&"outside.md".to_string()),
@@ -124,7 +124,7 @@ fn hidden_files_are_still_scanned() {
     let root = fixture();
     let db = open(&root);
 
-    let scanned = paths(&db.query("SELECT path FROM './'").unwrap());
+    let scanned = paths(&db.query("SELECT path FROM './**'").unwrap());
 
     assert!(
         scanned.contains(&".env".to_string()),
@@ -161,7 +161,7 @@ fn no_ignore_restores_gitignored_files_but_keeps_the_built_in_floor() {
         .build()
         .unwrap();
 
-    let scanned = paths(&db.query("SELECT path FROM './'").unwrap());
+    let scanned = paths(&db.query("SELECT path FROM './**'").unwrap());
 
     assert!(
         scanned.contains(&"dist/bundle.js".to_string()),

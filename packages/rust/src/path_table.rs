@@ -315,26 +315,50 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_dot_slash_scans_the_index_root_recursively() {
+    fn a_bare_dot_slash_lists_the_index_root_one_level_deep() {
         let t = table("./", &nothing_is_a_dir);
         assert_eq!(t.root, Path::new(ROOT));
-        assert_eq!(t.glob, "**/*");
+        assert_eq!(t.glob, "*");
         assert_eq!(t.path_prefix, "");
     }
 
     #[test]
-    fn a_relative_directory_expands_recursively() {
+    fn a_relative_directory_lists_one_level() {
         let t = table("./docs", &everything_is_a_dir);
         assert_eq!(t.root, Path::new("/index/docs"));
-        assert_eq!(t.glob, "**/*");
+        assert_eq!(t.glob, "*");
         assert_eq!(t.path_prefix, "docs");
     }
 
     #[test]
-    fn a_relative_directory_with_a_trailing_slash_expands_recursively() {
+    fn a_relative_directory_with_a_trailing_slash_lists_one_level() {
         let t = table("./docs/", &everything_is_a_dir);
         assert_eq!(t.root, Path::new("/index/docs"));
-        assert_eq!(t.glob, "**/*");
+        assert_eq!(t.glob, "*");
+    }
+
+    #[test]
+    fn an_explicit_star_is_the_same_as_the_bare_dot_slash() {
+        assert_eq!(
+            table("./*", &everything_is_a_dir),
+            table("./", &everything_is_a_dir)
+        );
+    }
+
+    #[test]
+    fn a_double_star_scans_every_depth() {
+        let t = table("./**", &everything_is_a_dir);
+        assert_eq!(t.root, Path::new(ROOT));
+        assert_eq!(t.glob, "**");
+        assert_eq!(t.path_prefix, "");
+    }
+
+    #[test]
+    fn a_relative_recursive_glob_is_used_as_written() {
+        let t = table("./docs/**/*.md", &everything_is_a_dir);
+        assert_eq!(t.root, Path::new("/index/docs"));
+        assert_eq!(t.glob, "**/*.md");
+        assert_eq!(t.path_prefix, "docs");
     }
 
     #[test]
@@ -380,11 +404,6 @@ mod tests {
     }
 
     #[test]
-    fn an_explicit_star_is_left_non_recursive() {
-        assert_eq!(table("./*", &everything_is_a_dir).glob, "*");
-    }
-
-    #[test]
     fn a_relative_table_reports_under_its_literal_prefix() {
         assert_eq!(
             table("./docs/nested/*.md", &nothing_is_a_dir).path_prefix,
@@ -409,10 +428,24 @@ mod tests {
     }
 
     #[test]
-    fn an_absolute_directory_expands_recursively() {
+    fn an_absolute_directory_lists_one_level() {
         let t = table("/var/log", &everything_is_a_dir);
         assert_eq!(t.root, Path::new("/var/log"));
-        assert_eq!(t.glob, "**/*");
+        assert_eq!(t.glob, "*");
+    }
+
+    #[test]
+    fn a_parent_relative_directory_lists_one_level() {
+        let t = table("../notes", &everything_is_a_dir);
+        assert_eq!(t.root, Path::new("/notes"));
+        assert_eq!(t.glob, "*");
+    }
+
+    #[test]
+    fn a_home_relative_directory_lists_one_level() {
+        let t = table("~/notes", &everything_is_a_dir);
+        assert_eq!(t.root, Path::new("/home/u/notes"));
+        assert_eq!(t.glob, "*");
     }
 
     #[test]
@@ -424,10 +457,10 @@ mod tests {
     }
 
     #[test]
-    fn the_filesystem_root_scans_everything() {
+    fn the_filesystem_root_lists_one_level() {
         let t = table("/", &everything_is_a_dir);
         assert_eq!(t.root, Path::new("/"));
-        assert_eq!(t.glob, "**/*");
+        assert_eq!(t.glob, "*");
     }
 
     #[test]
@@ -578,10 +611,10 @@ mod tests {
         }
 
         #[test]
-        fn a_drive_letter_directory_expands_recursively() {
+        fn a_drive_letter_directory_lists_one_level() {
             let t = table(r"C:\var\log", &everything_is_a_dir);
             assert_eq!(t.root, Path::new(r"C:\var\log"));
-            assert_eq!(t.glob, "**/*");
+            assert_eq!(t.glob, "*");
         }
 
         #[test]
@@ -592,10 +625,10 @@ mod tests {
         }
 
         #[test]
-        fn a_drive_root_scans_everything() {
+        fn a_drive_root_lists_one_level() {
             let t = table(r"C:\", &everything_is_a_dir);
             assert_eq!(t.root, Path::new(r"C:\"));
-            assert_eq!(t.glob, "**/*");
+            assert_eq!(t.glob, "*");
             assert_eq!(t.path_prefix, "C:/");
         }
 

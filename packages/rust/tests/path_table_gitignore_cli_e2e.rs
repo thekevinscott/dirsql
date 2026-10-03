@@ -55,7 +55,7 @@ fn basenames(out: &Output) -> Vec<String> {
 #[test]
 fn a_default_scan_excludes_gitignored_files() {
     let dir = fixture();
-    let out = run(&dir, &["query", "SELECT basename FROM './'"]);
+    let out = run(&dir, &["query", "SELECT basename FROM './**'"]);
 
     assert_eq!(
         basenames(&out),
@@ -67,7 +67,7 @@ fn a_default_scan_excludes_gitignored_files() {
 #[test]
 fn no_ignore_restores_gitignored_files() {
     let dir = fixture();
-    let out = run(&dir, &["query", "SELECT basename FROM './'", "--no-ignore"]);
+    let out = run(&dir, &["query", "SELECT basename FROM './**'", "--no-ignore"]);
 
     let names = basenames(&out);
     assert!(
@@ -83,7 +83,7 @@ fn no_ignore_restores_gitignored_files() {
 #[test]
 fn no_ignore_keeps_the_built_in_ignore_floor() {
     let dir = fixture();
-    let out = run(&dir, &["query", "SELECT basename FROM './'", "--no-ignore"]);
+    let out = run(&dir, &["query", "SELECT basename FROM './**'", "--no-ignore"]);
 
     let names = basenames(&out);
     assert!(
@@ -95,7 +95,7 @@ fn no_ignore_keeps_the_built_in_ignore_floor() {
 #[test]
 fn no_ignore_works_in_the_default_query_mode() {
     let dir = fixture();
-    let out = run(&dir, &["SELECT basename FROM './'", "--no-ignore"]);
+    let out = run(&dir, &["SELECT basename FROM './**'", "--no-ignore"]);
 
     let names = basenames(&out);
     assert!(

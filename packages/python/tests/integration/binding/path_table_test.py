@@ -38,14 +38,20 @@ def _open(root):
 
 def describe_path_tables():
     @pytest.mark.asyncio
-    async def it_scans_the_index_root_for_a_bare_dot_slash(docs_dir):
-        rows = await _open(docs_dir).query("SELECT path FROM './'")
+    async def it_scans_the_whole_index_root_for_a_double_star(docs_dir):
+        rows = await _open(docs_dir).query("SELECT path FROM './**'")
 
         assert sorted(r["path"] for r in rows) == [
             "docs/a.md",
             "docs/b.md",
             "docs/c.csv",
         ]
+
+    @pytest.mark.asyncio
+    async def it_lists_one_level_for_a_directory_name(docs_dir):
+        rows = await _open(docs_dir).query("SELECT path FROM './'")
+
+        assert rows == []
 
     @pytest.mark.asyncio
     async def it_scopes_the_scan_to_the_glob(docs_dir):

@@ -3403,7 +3403,7 @@ mod tests {
     fn legacy_files_table_hint_names_files_and_the_dot_slash_form() {
         assert_eq!(
             legacy_files_table_hint(),
-            "no such table: files; did you mean FROM './'?"
+            "no such table: files; did you mean FROM './**'?"
         );
     }
 
@@ -3416,7 +3416,7 @@ mod tests {
         let err = db.query("SELECT * FROM files").unwrap_err().to_string();
 
         assert!(err.contains("no such table: files"), "got: {err}");
-        assert!(err.contains("did you mean FROM './'?"), "got: {err}");
+        assert!(err.contains("did you mean FROM './**'?"), "got: {err}");
     }
 
     #[test]

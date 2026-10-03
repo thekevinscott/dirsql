@@ -20,6 +20,18 @@ fn fixture() -> TempDir {
     root
 }
 
+/// Three depths and a sibling directory, so each spelling's reach is visible.
+fn nested() -> TempDir {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("folder/sub")).unwrap();
+    fs::create_dir_all(root.path().join("sibling")).unwrap();
+    fs::write(root.path().join("root.md"), "root").unwrap();
+    fs::write(root.path().join("folder/a.md"), "a").unwrap();
+    fs::write(root.path().join("folder/sub/b.md"), "b").unwrap();
+    fs::write(root.path().join("sibling/c.md"), "c").unwrap();
+    root
+}
+
 /// How an absolute path-table reports `path`: always `/`-separated.
 fn reported(path: &Path) -> String {
     path.display().to_string().replace('\\', "/")
@@ -67,12 +79,64 @@ fn basenames(out: &Output) -> Vec<String> {
     names
 }
 
+fn paths(out: &Output) -> Vec<String> {
+    let mut found: Vec<String> = rows(out)
+        .into_iter()
+        .map(|r| r["path"].as_str().unwrap().to_string())
+        .collect();
+    found.sort();
+    found
+}
+
 #[test]
-fn bare_dot_slash_returns_stat_rows_for_the_working_directory() {
+fn a_double_star_returns_stat_rows_for_the_whole_working_directory() {
     let dir = fixture();
-    let out = run(&dir, "SELECT basename FROM './'");
+    let out = run(&dir, "SELECT basename FROM './**'");
 
     assert_eq!(basenames(&out), vec!["a.md", "b.md", "c.csv"]);
+}
+
+#[test]
+fn a_bare_dot_slash_lists_the_working_directory_one_level_deep() {
+    let dir = nested();
+    let out = run(&dir, "SELECT path FROM './'");
+
+    assert_eq!(paths(&out), vec!["root.md"]);
+}
+
+#[test]
+fn a_directory_path_lists_one_level() {
+    let dir = nested();
+    let out = run(&dir, "SELECT path FROM './folder'");
+
+    assert_eq!(paths(&out), vec!["folder/a.md"]);
+}
+
+#[test]
+fn an_explicit_star_is_the_same_as_the_bare_dot_slash() {
+    let dir = nested();
+    let out = run(&dir, "SELECT path FROM './*'");
+
+    assert_eq!(paths(&out), vec!["root.md"]);
+}
+
+#[test]
+fn a_double_star_scans_every_depth() {
+    let dir = nested();
+    let out = run(&dir, "SELECT path FROM './**'");
+
+    assert_eq!(
+        paths(&out),
+        vec!["folder/a.md", "folder/sub/b.md", "root.md", "sibling/c.md"]
+    );
+}
+
+#[test]
+fn a_recursive_glob_under_a_directory_is_used_as_written() {
+    let dir = nested();
+    let out = run(&dir, "SELECT path FROM './folder/**/*.md'");
+
+    assert_eq!(paths(&out), vec!["folder/a.md", "folder/sub/b.md"]);
 }
 
 #[test]
@@ -89,7 +153,7 @@ fn two_path_tables_join_against_each_other() {
     let out = run(
         &dir,
         "SELECT p.basename FROM './docs/*.md' AS p \
-         JOIN './' AS f ON f.path = p.path",
+         JOIN './**' AS f ON f.path = p.path",
     );
 
     assert_eq!(basenames(&out), vec!["a.md", "b.md"]);
@@ -124,11 +188,8 @@ fn a_recursive_scan_omits_ignored_directories() {
     fs::write(dir.path().join("node_modules/pkg/index.js"), "js").unwrap();
     fs::write(dir.path().join(".git/config"), "cfg").unwrap();
 
-    let out = run(&dir, "SELECT path FROM './'");
-    let found: Vec<String> = rows(&out)
-        .into_iter()
-        .map(|r| r["path"].as_str().unwrap().to_string())
-        .collect();
+    let out = run(&dir, "SELECT path FROM './**'");
+    let found = paths(&out);
 
     assert!(
         !found.iter().any(|p| p.starts_with("node_modules/")),
@@ -142,28 +203,6 @@ fn a_recursive_scan_omits_ignored_directories() {
         found.contains(&"docs/a.md".to_string()),
         "ordinary files must survive: {found:?}"
     );
-}
-
-#[test]
-fn an_explicit_star_returns_only_top_level_files() {
-    let dir = fixture();
-    fs::write(dir.path().join("top.md"), "top").unwrap();
-
-    let out = run(&dir, "SELECT basename FROM './*'");
-
-    assert_eq!(
-        basenames(&out),
-        vec!["top.md"],
-        "'./*' must not descend into docs/"
-    );
-}
-
-#[test]
-fn a_directory_path_is_recursive_by_default() {
-    let dir = fixture();
-    let out = run(&dir, "SELECT basename FROM './docs'");
-
-    assert_eq!(basenames(&out), vec!["a.md", "b.md", "c.csv"]);
 }
 
 #[test]
