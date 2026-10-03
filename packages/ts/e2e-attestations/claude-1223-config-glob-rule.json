@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791065880,
+  "exit_code": 0,
+  "commit": "c7393ed1e19747906e942707e759b671a6e9490e",
+  "branch": "claude/1223-config-glob-rule"
+}
