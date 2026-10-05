@@ -21,7 +21,6 @@ use std::ffi::c_int;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use globset::GlobSet;
 use rusqlite::vtab::Context;
 use rusqlite::{Connection, Error, Result};
 
@@ -29,7 +28,7 @@ use crate::Value;
 use crate::infer::{JsonRow, cell, declared_schema, infer_schema};
 use crate::matcher::TableMatcher;
 use crate::on_file;
-use crate::scanner::scan_glob;
+use crate::scanner::{PathGlob, scan_glob};
 use crate::vtab_scaffold::{self, StatementScope, TableSource};
 
 /// SQL module name a parsed path-table is created with.
@@ -49,7 +48,7 @@ const FIXED_ARGS: usize = 5;
 struct ModuleArgs {
     root: PathBuf,
     pattern: String,
-    glob: GlobSet,
+    glob: PathGlob,
     command: String,
     gitignore: bool,
     index_root: PathBuf,

@@ -5,13 +5,12 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use globset::GlobSet;
 use rusqlite::types::{ToSqlOutput, ValueRef};
 use rusqlite::vtab::Context;
 use rusqlite::{Connection, Result};
 
 use crate::matcher::TableMatcher;
-use crate::scanner::{scan_glob, to_slash};
+use crate::scanner::{PathGlob, scan_glob, to_slash};
 use crate::vtab_scaffold::{self, TableSource};
 
 pub use crate::vtab_scaffold::StatementScope;
@@ -78,7 +77,7 @@ fn read_text(path: &Path) -> Option<String> {
 /// results, and what to skip.
 struct ScanSpec {
     root: PathBuf,
-    glob: GlobSet,
+    glob: PathGlob,
     /// Prepended to each matched path before the stat columns are computed.
     /// Empty for index-root-relative tables.
     path_prefix: PathBuf,

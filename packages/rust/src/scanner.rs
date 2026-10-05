@@ -74,7 +74,7 @@ fn scan_below(
 
     // Match against relative path so globs like "comments/**/*.jsonl" work
     // regardless of the absolute root directory.
-    walk(root, start, matcher, false, &mut |rel_path, entry| {
+    walk(root, start, matcher, None, false, &mut |rel_path, entry| {
         if matcher.is_ignored(&rel_path) {
             return;
         }
@@ -103,40 +103,86 @@ fn scan_below(
 /// Skip rules are judged on paths relative to `root`, so a table rooted at a
 /// directory the rules would otherwise skip still scans it.
 ///
+/// A dot-named entry is skipped unless `glob` spells it (see [`PathGlob`]);
+/// the walk starts at the path's literal prefix, so a dot directory named
+/// there is already inside.
+///
 /// With `gitignore` set, `.gitignore` files apply hierarchically (each one
-/// below its own directory) and prune traversal, like fd/ripgrep — except
-/// that hidden files are still scanned, and no `.git` directory is required.
-/// Only files at or below `root` are read; one above it has no say.
+/// below its own directory) and prune traversal, like fd/ripgrep, and no
+/// `.git` directory is required. Only files at or below `root` are read; one
+/// above it has no say.
 pub fn scan_glob(
     root: &Path,
-    glob: &GlobSet,
+    glob: &PathGlob,
     ignore: &TableMatcher,
     gitignore: bool,
 ) -> Vec<PathBuf> {
     let mut results = Vec::new();
-    walk(root, root, ignore, gitignore, &mut |rel_path, _| {
-        if is_wanted(glob, ignore, &rel_path) {
-            results.push(rel_path);
-        }
-    });
+    let spelled = Some(&glob.spelled_dot_names);
+    walk(
+        root,
+        root,
+        ignore,
+        spelled,
+        gitignore,
+        &mut |rel_path, _| {
+            if is_wanted(glob, ignore, &rel_path) {
+                results.push(rel_path);
+            }
+        },
+    );
     results
 }
 
 /// Whether a walked file is a row of the table: it matches the glob and no
 /// skip rule ignores it.
-fn is_wanted(glob: &GlobSet, ignore: &TableMatcher, rel_path: &Path) -> bool {
+fn is_wanted(glob: &PathGlob, ignore: &TableMatcher, rel_path: &Path) -> bool {
     is_glob_match(glob, rel_path) && !ignore.is_ignored(rel_path)
 }
 
-/// Compile a single glob pattern into the set [`scan_glob`] expects.
+/// A path-table's glob as [`scan_glob`] reads it: the files it matches, and
+/// the dot-named entries it spells out and so lets the walk into.
+///
+/// A component beginning with `.` is spelled; `.claude` and `.env` admit
+/// exactly those names, `.*` any dot-named entry, as in the shell. Every
+/// other dot-named file or directory is skipped, the rule `ls` and `fd` use.
+#[derive(Debug)]
+pub struct PathGlob {
+    files: GlobSet,
+    spelled_dot_names: GlobSet,
+}
+
+impl PathGlob {
+    /// Whether `rel_path` is a file the glob matches.
+    pub fn is_match(&self, rel_path: &Path) -> bool {
+        self.files.is_match(rel_path)
+    }
+}
+
+/// Compile a single glob pattern into the form [`scan_glob`] expects.
 ///
 /// `literal_separator` is what makes `*` mean *this directory only*: without
 /// it a lone `*` would cross `/` and the explicit non-recursive spelling would
 /// silently recurse. `**` still crosses separators.
-pub fn compile_glob(pattern: &str) -> Result<GlobSet, globset::Error> {
-    let mut builder = GlobSetBuilder::new();
-    builder.add(GlobBuilder::new(pattern).literal_separator(true).build()?);
-    builder.build()
+pub fn compile_glob(pattern: &str) -> Result<PathGlob, globset::Error> {
+    let mut files = GlobSetBuilder::new();
+    files.add(compile_component(pattern)?);
+    let mut spelled = GlobSetBuilder::new();
+    for component in pattern.split('/').filter(|c| is_dot_named(OsStr::new(c))) {
+        spelled.add(compile_component(component)?);
+    }
+    Ok(PathGlob {
+        files: files.build()?,
+        spelled_dot_names: spelled.build()?,
+    })
+}
+
+fn compile_component(pattern: &str) -> Result<globset::Glob, globset::Error> {
+    GlobBuilder::new(pattern).literal_separator(true).build()
+}
+
+fn is_dot_named(name: &OsStr) -> bool {
+    name.as_encoded_bytes().first() == Some(&b'.')
 }
 
 /// Module-argument spelling for a scan that respects `.gitignore`.
@@ -160,13 +206,15 @@ pub(crate) fn parse_gitignore_arg(arg: &str) -> Result<bool, String> {
 /// `root`-relative path, siblings in name order, so the whole walk comes out
 /// in path order without a sort at the end. Prunes the reserved top-level
 /// `.dirsql/` subtree and any directory the skip rules ignore wholesale, so an
-/// ignored tree is never read at all. With `gitignore` set, entries a
-/// `.gitignore` in force ignores are pruned/skipped too. Symlinks are not
-/// followed; an unreadable directory contributes nothing.
+/// ignored tree is never read at all. With `spelled` given, a dot-named entry
+/// it does not match is skipped; `None` admits them all. With `gitignore`
+/// set, entries a `.gitignore` in force ignores are pruned/skipped too.
+/// Symlinks are not followed; an unreadable directory contributes nothing.
 fn walk(
     root: &Path,
     start: &Path,
     ignore: &TableMatcher,
+    spelled: Option<&GlobSet>,
     gitignore: bool,
     visit: &mut dyn FnMut(PathBuf, &DirEntry),
 ) {
@@ -176,6 +224,7 @@ fn walk(
     let depth = rel.components().count();
     let mut walk = Walk {
         ignore,
+        spelled,
         gitignore,
         frames: Vec::new(),
     };
@@ -184,6 +233,7 @@ fn walk(
 
 struct Walk<'a> {
     ignore: &'a TableMatcher,
+    spelled: Option<&'a GlobSet>,
     gitignore: bool,
     /// The `.gitignore` files in force at the walk's current position, root
     /// first; a directory's own file is pushed on entry and popped on exit.
@@ -226,10 +276,19 @@ impl Walk<'_> {
     }
 
     /// Whether the walk takes an entry at `depth`: the skip rules and the
-    /// reserved-directory rule first, then the `.gitignore` files in force.
+    /// reserved-directory rule first, then the dot-name rule, then the
+    /// `.gitignore` files in force.
     fn admits(&self, depth: usize, is_dir: bool, name: &OsStr, path: &Path, rel: &Path) -> bool {
         should_descend(depth, is_dir, name, rel, self.ignore)
+            && self.admits_name(name)
             && (self.frames.is_empty() || !is_gitignored(&self.frames, path, is_dir))
+    }
+
+    fn admits_name(&self, name: &OsStr) -> bool {
+        match self.spelled {
+            Some(spelled) => !is_dot_named(name) || spelled.is_match(name),
+            None => true,
+        }
     }
 }
 
@@ -287,7 +346,7 @@ fn should_descend(
 }
 
 /// Whether `rel_path` matches `glob`.
-fn is_glob_match(glob: &GlobSet, rel_path: &Path) -> bool {
+fn is_glob_match(glob: &PathGlob, rel_path: &Path) -> bool {
     glob.is_match(rel_path)
 }
 
@@ -467,9 +526,14 @@ mod tests {
         assert!(!is_wanted(&glob, &ignore, Path::new("drafts/a.md")));
     }
 
-    fn walk_with<'a>(ignore: &'a TableMatcher, frames: Vec<Gitignore>) -> Walk<'a> {
+    fn walk_with<'a>(
+        ignore: &'a TableMatcher,
+        glob: &'a PathGlob,
+        frames: Vec<Gitignore>,
+    ) -> Walk<'a> {
         Walk {
             ignore,
+            spelled: Some(&glob.spelled_dot_names),
             gitignore: !frames.is_empty(),
             frames,
         }
@@ -478,7 +542,8 @@ mod tests {
     #[test]
     fn admits_an_ordinary_file_under_no_gitignore() {
         let ignore = TableMatcher::new(&[], &[]).unwrap();
-        let walk = walk_with(&ignore, Vec::new());
+        let glob = compile_glob("**").unwrap();
+        let walk = walk_with(&ignore, &glob, Vec::new());
         assert!(walk.admits(
             1,
             false,
@@ -491,7 +556,8 @@ mod tests {
     #[test]
     fn admits_nothing_the_skip_rules_prune() {
         let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
-        let walk = walk_with(&ignore, vec![frame("", &["*.log"])]);
+        let glob = compile_glob("**").unwrap();
+        let walk = walk_with(&ignore, &glob, vec![frame("", &["*.log"])]);
         assert!(!walk.admits(
             2,
             true,
@@ -504,7 +570,8 @@ mod tests {
     #[test]
     fn admits_no_dot_named_entry_the_glob_does_not_spell() {
         let ignore = TableMatcher::new(&[], &[]).unwrap();
-        let walk = walk_with(&ignore, Vec::new());
+        let glob = compile_glob("**").unwrap();
+        let walk = walk_with(&ignore, &glob, Vec::new());
         assert!(!walk.admits(
             1,
             false,
@@ -522,9 +589,78 @@ mod tests {
     }
 
     #[test]
+    fn admits_a_dot_named_entry_the_glob_spells() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("**/.env").unwrap();
+        let walk = walk_with(&ignore, &glob, Vec::new());
+        assert!(walk.admits(
+            2,
+            false,
+            OsStr::new(".env"),
+            Path::new("/r/sub/.env"),
+            Path::new("sub/.env")
+        ));
+        assert!(!walk.admits(
+            1,
+            true,
+            OsStr::new(".hidden"),
+            Path::new("/r/.hidden"),
+            Path::new(".hidden")
+        ));
+    }
+
+    #[test]
+    fn admits_every_dot_named_entry_when_no_glob_governs_the_walk() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let walk = Walk {
+            ignore: &ignore,
+            spelled: None,
+            gitignore: false,
+            frames: Vec::new(),
+        };
+        assert!(walk.admits(
+            1,
+            false,
+            OsStr::new(".env"),
+            Path::new("/r/.env"),
+            Path::new(".env")
+        ));
+    }
+
+    #[test]
+    fn a_spelled_dot_component_may_itself_be_a_glob() {
+        let glob = compile_glob(".env*").unwrap();
+        assert!(glob.spelled_dot_names.is_match(".env.local"));
+        assert!(!glob.spelled_dot_names.is_match(".git"));
+    }
+
+    #[test]
+    fn a_dot_component_is_spelled_wherever_it_sits_in_the_glob() {
+        let glob = compile_glob("*/.cache/*").unwrap();
+        assert!(glob.spelled_dot_names.is_match(".cache"));
+        assert!(!glob.spelled_dot_names.is_match(".config"));
+    }
+
+    #[test]
+    fn a_glob_without_a_dot_component_spells_no_dot_name() {
+        let glob = compile_glob("docs/**/*.md").unwrap();
+        assert!(!glob.spelled_dot_names.is_match(".md"));
+        assert!(!glob.spelled_dot_names.is_match(".docs"));
+    }
+
+    #[test]
+    fn is_dot_named_looks_at_the_first_byte_only() {
+        assert!(is_dot_named(OsStr::new(".env")));
+        assert!(is_dot_named(OsStr::new(".")));
+        assert!(!is_dot_named(OsStr::new("a.md")));
+        assert!(!is_dot_named(OsStr::new("")));
+    }
+
+    #[test]
     fn admits_nothing_a_gitignore_in_force_ignores() {
         let ignore = TableMatcher::new(&[], &[]).unwrap();
-        let walk = walk_with(&ignore, vec![frame("", &["*.log"])]);
+        let glob = compile_glob("**").unwrap();
+        let walk = walk_with(&ignore, &glob, vec![frame("", &["*.log"])]);
         assert!(!walk.admits(
             1,
             false,
