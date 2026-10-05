@@ -456,6 +456,51 @@ fn a_prefixed_glob_starts_its_walk_at_the_named_directory() {
     );
 }
 
+/// Backdate `dir`'s access time, reporting whether a listing would move it
+/// again. A `noatime` mount records no listing, so the caller has nothing to
+/// assert there.
+#[cfg(unix)]
+fn backdate_atime(dir: &Path) -> bool {
+    let probe = dir.join("probe");
+    fs::create_dir(&probe).unwrap();
+    set_epoch_atime(&probe);
+    fs::read_dir(&probe).unwrap().for_each(drop);
+    let recorded = !unlisted_since_backdate(&probe);
+    fs::remove_dir(&probe).unwrap();
+    set_epoch_atime(dir);
+    recorded
+}
+
+#[cfg(unix)]
+fn set_epoch_atime(dir: &Path) {
+    let times = fs::FileTimes::new().set_accessed(std::time::UNIX_EPOCH);
+    fs::File::open(dir).unwrap().set_times(times).unwrap();
+}
+
+#[cfg(unix)]
+fn unlisted_since_backdate(dir: &Path) -> bool {
+    fs::metadata(dir).unwrap().accessed().unwrap() == std::time::UNIX_EPOCH
+}
+
+#[cfg(unix)]
+#[test]
+fn a_glob_without_a_double_star_never_lists_below_its_depth() {
+    let root = fixture();
+    let db = open(&root);
+    let nested = root.path().join("docs/nested");
+
+    for table in ["./docs/*.md", "./docs/a.md"] {
+        if !backdate_atime(&nested) {
+            return;
+        }
+        db.query(&format!("SELECT path FROM '{table}'")).unwrap();
+        assert!(
+            unlisted_since_backdate(&nested),
+            "'{table}' cannot match below docs/, so docs/nested must not be listed"
+        );
+    }
+}
+
 /// A tree with a dotfile and a dot-directory beside ordinary files, the
 /// dot-directory holding a nested dot-directory of its own.
 fn dotted() -> TempDir {

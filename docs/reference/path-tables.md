@@ -55,9 +55,10 @@ A path containing `*`, `?`, `[` or `{` is a glob and is used exactly as
 written: `*` matches within a single directory, `**` crosses directories.
 
 The scan starts at the last directory named outright before the first glob
-component -- `'./small/*.md'` walks `small/` and nothing else -- so a query
-over one directory costs what `find ./small` costs, however large the
-directories beside it.
+component, and descends only as deep as the pattern can match --
+`'./small/*.md'` lists `small/` and nothing else -- so a query over one
+directory costs what `ls small` costs, however large the directories beside
+or below it. Only `**` walks a whole subtree.
 
 A path naming a single file yields exactly one row. dirsql never splits a file
 into rows on its own — that is what a table's `on_file` hook is for.
