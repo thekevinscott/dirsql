@@ -115,6 +115,10 @@ def describe_run():
         runner = mock.Mock(return_value=_result(0, stdout="dirsql 10.2.7\n"))
         assert _run_with(runner) == 0
 
+    def a_version_sorting_before_the_literal_passes():
+        runner = mock.Mock(return_value=_result(0, stdout="dirsql 0.10.0\n"))
+        assert _run_with(runner) == 0
+
     def success_reports_the_stamped_version(capsys):
         runner = mock.Mock(return_value=_result(0, stdout="dirsql 0.4.72\n"))
         assert _run_with(runner) == 0
