@@ -79,6 +79,25 @@ SELECT * FROM ./;
 -- hint: paths used as table names must be quoted; did you mean "./"?
 ```
 
+### Symlinks
+
+Symlinks are followed the way `bash -O globstar` follows them. A symlinked
+file is a file: `'./*'` lists it, and so does naming it. A symlinked directory
+is entered by any component of the path except `**`, which never walks into
+one. A broken link lists nothing.
+
+With `linkdir -> real`:
+
+| You write | dirsql scans |
+| --- | --- |
+| `'./*/*'` | `linkdir/r.md` and `real/r.md` |
+| `'./**'` | everything under `real/`, nothing under `linkdir/` |
+| `'./**/*.md'` | `linkdir/r.md` too: `**` may stop on `linkdir` for `*.md` to enter |
+| `'./linkdir/**'` | everything under `linkdir/` |
+
+Each link entered uses up one component of the path, so a symlink cycle is
+followed at most once per component and never hangs a scan.
+
 ### Paths outside the index root
 
 Three other prefixes resolve, with their usual shell meanings:

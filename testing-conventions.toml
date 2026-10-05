@@ -103,12 +103,13 @@ features = ["cli"]
 
 # The walkers: a body that reads directories has no unit-tier contract, and
 # the decisions it makes are lifted into pure functions the unit suite judges
-# (`is_wanted`, `Walk::admits`, `should_descend`, `is_gitignored`).
+# (`is_wanted`, `Walk::admits`, `Walk::follows`, `PathGlob::step`,
+# `classify`, `should_descend`, `is_gitignored`).
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [72, 116, 173, 201, 237]
-reason = "scan_below, scan_glob, walk, descend and sorted_entries read the filesystem; tests/scanner.rs (scan_finds_matching_files, scan_recurses_into_subdirectories) and tests/vtab.rs (glob_scopes_the_walk, rowids_count_up_from_zero_in_scan_order) assert what they return"
+lines = [72, 119, 285, 318, 373, 394]
+reason = "scan_below, scan_glob, walk, descend, kind_of and sorted_entries read the filesystem; tests/scanner.rs (scan_finds_matching_files, scan_recurses_into_subdirectories), tests/vtab.rs (glob_scopes_the_walk, rowids_count_up_from_zero_in_scan_order) and tests/path_table_symlinks.rs assert what they return"
 
 [[rust.exempt]]
 path = "src/scanner.rs"
@@ -119,7 +120,7 @@ reason = "the walk's running file count is observable only through the CLI's pro
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [208]
+lines = [325]
 reason = "a child's depth decides the reserved top-level .dirsql rule for a real tree; tests/scanner.rs scan_excludes_top_level_dirsql_directory and tests/vtab.rs reserved_dirsql_directory_is_skipped assert it"
 
 [[rust.exempt]]
