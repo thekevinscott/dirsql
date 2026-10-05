@@ -114,6 +114,12 @@ reason = "scan_below, scan_glob, walk, descend, kind_of and sorted_entries read 
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
+lines = [332, 333, 336, 375, 378]
+reason = "whether a walked entry is a symlink, and whether the walk is below one, is known only from a real tree; tests/path_table_symlinks.rs asserts every outcome against bash, and the decisions themselves are unit-tested in classify, Walk::follows and PathGlob::step"
+
+[[rust.exempt]]
+path = "src/scanner.rs"
+rules = ["mutation"]
 lines = [82]
 reason = "the walk's running file count is observable only through the CLI's progress line; tests/scan_progress_e2e.rs forced_progress_reports_the_walk_phase_on_stderr asserts the number"
 
