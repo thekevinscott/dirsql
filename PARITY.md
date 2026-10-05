@@ -305,6 +305,14 @@ names come from the SQLite authorizer at the final prepare, so the fallback
 loop above stays the only thing that registers a table. `StatementScope::warm`
 lives in the shared core; no SDK signature changes.
 
+**Content read ahead in parallel (#1241) — Rust-crate-only surface, no SDK
+drift.** A statement that names a path table's `content` has the column read
+for every row it selects at once, eight files at a time, before SQLite steps
+the first row; a statement that does not name it reads no file, as before. The
+read-ahead and the planner cost that keeps a content-bearing table on the
+scanned side of a join live in the shared core, so all three SDKs and the CLI
+inherit it with no per-binding surface and no signature changes.
+
 ## AsyncDirSQL
 
 | API                        | Python                                | Rust                                   |

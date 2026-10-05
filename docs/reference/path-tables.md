@@ -210,12 +210,14 @@ A path-table is scanned when the statement runs, so it always reflects the
 filesystem as it is *now* — unlike declared tables, which are indexed on build
 and updated by the watcher. A file created a moment ago shows up immediately.
 
-The scan is live all the way down to `content`: a file's body is read when the
-query names the `content` column, not when the row is discovered. A file
-deleted *after* the scan finds it but *before* its `content` is read yields
-`NULL` content — the same NULL an unreadable or non-UTF-8 file gives — rather
-than failing the query. This is an accepted consequence of reading live, not a
-bug to design around.
+The scan is live all the way down to `content`: a file's body is read only
+when the query names the `content` column, not when the row is discovered. A
+query that names it has the bodies of the rows it selects read all at once,
+several files at a time, before the first row comes back. A file deleted
+*after* the scan finds it but *before* its `content` is read yields `NULL`
+content — the same NULL an unreadable or non-UTF-8 file gives — rather than
+failing the query. This is an accepted consequence of reading live, not a bug
+to design around.
 
 The table itself is per-connection: it lives in `temp`, so it cannot leak into
 `sqlite_master` or survive a restart. Under `--persist` a *parsed* table's rows
