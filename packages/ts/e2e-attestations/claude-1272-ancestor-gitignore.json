@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791216160,
+  "exit_code": 0,
+  "commit": "e72a8787aab05b139ca590fca9cc1d42137f2842",
+  "branch": "claude/1272-ancestor-gitignore"
+}
