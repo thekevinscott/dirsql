@@ -12,7 +12,6 @@ use std::ffi::c_int;
 use std::sync::{Arc, Mutex, Weak};
 use std::thread::{self, JoinHandle};
 
-use globset::GlobSet;
 use rusqlite::types::ValueRef;
 use rusqlite::vtab::{
     Context, CreateVTab, IndexConstraintOp, IndexInfo, VTab, VTabConnection, VTabCursor, VTabKind,
@@ -22,7 +21,7 @@ use rusqlite::{Connection, Error, Result, ffi};
 
 use crate::Value;
 use crate::matcher::TableMatcher;
-use crate::scanner;
+use crate::scanner::{self, PathGlob};
 use crate::sql_literal::unquote;
 
 /// Cost a full scan is declared to carry: enough below SQLite's near-infinite
@@ -246,7 +245,7 @@ fn no_scope_error(module: &str) -> Error {
 
 /// Compile a table's glob, surfacing a bad pattern as a module error so SQLite
 /// reports it against the `CREATE VIRTUAL TABLE` statement.
-pub fn compile_glob(pattern: &str) -> Result<GlobSet> {
+pub fn compile_glob(pattern: &str) -> Result<PathGlob> {
     scanner::compile_glob(pattern).map_err(|e| Error::ModuleError(e.to_string()))
 }
 

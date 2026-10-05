@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791201907,
+  "exit_code": 0,
+  "commit": "b979452393c2a88ceaaa9b9e91f491d9ab5411f1",
+  "branch": "claude/1256-symlinks"
+}
