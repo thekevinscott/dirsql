@@ -574,6 +574,7 @@ dependencies = [
  "notify",
  "predicates",
  "reedline",
+ "regex",
  "reqwest",
  "rusqlite",
  "serde",

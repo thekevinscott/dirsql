@@ -45,7 +45,7 @@ uvx dirsql "SELECT path FROM './**'" --format json
 ### Empty `[]` for files you can see
 
 - **You named a directory**, which lists one level only. `'./**'` and `'./docs/**'` are the recursive forms.
-- **The files are gitignored.** `--no-ignore` scans them:
+- **The files are gitignored**, inside a git repo (outside one, no `.gitignore` applies). `--no-ignore` scans them:
 
   ```sh
   uvx dirsql "SELECT path FROM './**'" --format json --no-ignore
