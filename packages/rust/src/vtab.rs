@@ -11,7 +11,6 @@ use rusqlite::vtab::Context;
 use rusqlite::{Connection, Result};
 
 use crate::matcher::TableMatcher;
-use crate::path_table;
 use crate::scanner::{scan_glob, to_slash};
 use crate::vtab_scaffold::{self, TableSource};
 
@@ -84,9 +83,6 @@ struct ScanSpec {
     /// Empty for index-root-relative tables.
     path_prefix: PathBuf,
     ignore: TableMatcher,
-    /// Literal directories the pattern named outright; skip rules are judged
-    /// below this.
-    ignore_base: PathBuf,
     /// Whether the scan respects `.gitignore` files (off under `--no-ignore`).
     gitignore: bool,
 }
@@ -258,7 +254,6 @@ fn parse_module_args(args: &[&[u8]]) -> Result<ScanSpec> {
         glob: vtab_scaffold::compile_glob(pattern)?,
         path_prefix: PathBuf::from(path_prefix),
         ignore: vtab_scaffold::compile_ignore(ignore)?,
-        ignore_base: path_table::ignore_base(pattern),
         gitignore: vtab_scaffold::parse_gitignore(gitignore)?,
     })
 }
@@ -291,13 +286,7 @@ impl TableSource for ScanSpec {
     fn rows(&self) -> Arc<Vec<FileRow>> {
         // The scan runs per statement rather than at CREATE, which is what
         // makes reads live: each statement sees the filesystem as it is now.
-        let rel_paths = scan_glob(
-            &self.root,
-            &self.glob,
-            &self.ignore,
-            &self.ignore_base,
-            self.gitignore,
-        );
+        let rel_paths = scan_glob(&self.root, &self.glob, &self.ignore, self.gitignore);
         let stat = |rel: &Path| {
             fs::metadata(self.root.join(rel)).map_or_else(
                 |_| StatFacts::default(),
@@ -440,15 +429,6 @@ mod tests {
         assert_eq!(
             parse_module_args(&args).unwrap().path_prefix,
             PathBuf::from("/var/log")
-        );
-    }
-
-    #[test]
-    fn parse_module_args_derives_the_ignore_base_from_the_glob() {
-        let args = args_with(&[b"'/tmp'", b"'docs/**/*'", b"''", b"'gitignore'"]);
-        assert_eq!(
-            parse_module_args(&args).unwrap().ignore_base,
-            PathBuf::from("docs")
         );
     }
 

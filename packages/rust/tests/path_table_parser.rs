@@ -124,3 +124,27 @@ fn a_file_the_parser_cannot_handle_fails_the_whole_table() {
         "the parser's output is the table's output, so one bad file fails it: {err}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_parser_is_spawned_in_the_index_root_and_root_names_it() {
+    let root = fixture();
+    fs::write(
+        root.path().join("parse.sh"),
+        "printf '[{\"root\":\"%s\"}]' \"$1\"\n",
+    )
+    .unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .path_table_parser("sh parse.sh {root}")
+        .build()
+        .unwrap();
+
+    let rows = db.query("SELECT root FROM './docs/*.md'").unwrap();
+
+    assert_eq!(
+        texts(&rows, "root"),
+        vec![root.path().to_string_lossy().into_owned()],
+        "a relative parser resolves against the index root, which {{root}} names"
+    );
+}

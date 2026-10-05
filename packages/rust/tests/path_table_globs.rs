@@ -319,3 +319,37 @@ fn a_missing_absolute_path_table_returns_no_rows() {
 
     assert!(rows.is_empty(), "expected no rows, got {rows:?}");
 }
+
+/// Make `dir` traversable but not listable. Returns false when the process
+/// bypasses permission checks (root), since the test's premise cannot hold.
+#[cfg(unix)]
+fn make_unlistable(dir: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o311)).unwrap();
+    fs::read_dir(dir).is_err()
+}
+
+#[cfg(unix)]
+fn make_listable(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_prefixed_glob_starts_its_walk_at_the_named_directory() {
+    let root = fixture();
+    let db = open(&root);
+    if !make_unlistable(root.path()) {
+        return;
+    }
+
+    let found = db.query("SELECT path FROM './docs/*.md'");
+    make_listable(root.path());
+
+    assert_eq!(
+        texts(&found.unwrap(), "path"),
+        vec!["docs/a.md", "docs/b.md"],
+        "the walk must begin at docs/, not list the index root"
+    );
+}

@@ -194,3 +194,20 @@ fn a_scoped_glob_still_honors_gitignore_rules_beneath_its_base() {
         "a gitignore at the named base still filters below it"
     );
 }
+
+#[test]
+fn a_gitignore_above_the_named_base_does_not_reach_beneath_it() {
+    let root = fixture();
+    fs::create_dir_all(root.path().join("docs")).unwrap();
+    fs::write(root.path().join("docs/a.md"), "a").unwrap();
+    fs::write(root.path().join("docs/trace.log"), "log").unwrap();
+    let db = open(&root);
+
+    let scanned = paths(&db.query("SELECT path FROM './docs/*'").unwrap());
+
+    assert_eq!(
+        scanned,
+        vec!["docs/a.md", "docs/trace.log"],
+        "the root `*.log` rule is above the named base, so it does not apply there"
+    );
+}
