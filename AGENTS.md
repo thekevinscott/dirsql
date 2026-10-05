@@ -4,6 +4,8 @@ In your responses, strive for brevity. As concise as possible.
 
 @agents/build/environment.md
 
+@agents/reference/session-handoff.md
+
 ## Rules
 
 1. **Never merge a PR.** Merging to `main` publishes a release. Shepherd to green and stop; only the maintainer merges.
@@ -35,4 +37,3 @@ Not auto-loaded. **Read the relevant file before working in that area.**
 - `agents/reference/pr-monitor.md` -- the `CI Gate` aggregator: reading it, debugging it
 - `agents/reference/conventions.md` -- naming, imports, dependency hygiene, where CI logic may live
 - `agents/reference/source-size.md` -- judging a change that claims to shrink the codebase
-- `agents/reference/session-handoff.md` -- the per-session handoff doc; deliver it at every stopping point
