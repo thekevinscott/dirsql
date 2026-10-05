@@ -16,6 +16,7 @@ In your responses, strive for brevity. As concise as possible.
 8. **Comments: default to none.** Only a non-obvious *why* -- a constraint, an invariant, a workaround. Never archaeology: no issue references, no "added for the X flow", no restating the code.
 9. **Never chain shell commands** with `;`, `&&`, or `||`; it breaks the per-command permission model. Pipes and heredocs are fine. Scratch files go to `/tmp` under unique names. `uv` never `pip`, `pnpm` never `npm`, `trash-put` never `rm`.
 10. **Every PR is M or smaller.** Break a larger change into a sequence and stack it, each PR based on the one below, rather than serializing.
+11. **Print the handoff doc's path every time you update it, and at least every few replies.** It changes all session; the latest path must always be near the bottom of the conversation, or a stale resume costs the whole history. See `agents/reference/session-handoff.md`.
 
 Run `scripts/agent-preflight.sh <commit|push|pr>` before every `git commit`, `git push`, and `gh pr create`.
 
