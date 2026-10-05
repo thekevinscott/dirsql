@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791224448,
+  "exit_code": 0,
+  "commit": "de85e688f134577349363e83cbe3da57beb10788",
+  "branch": "claude/1297-npm-version"
+}
