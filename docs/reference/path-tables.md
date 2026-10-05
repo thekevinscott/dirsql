@@ -266,6 +266,11 @@ directory is required — a `.gitignore` in any scanned directory counts — and
 the built-in defaults above remain as a floor for directories with no
 `.gitignore` at all.
 
+The `.gitignore` files above the directory a scan starts in apply too, as
+they do in git: every one from the repo root (the nearest directory holding
+`.git`) down, or from the index root when there is no repo. So
+`'./docs/*.log'` and `'./**/*.log'` agree about `docs/`.
+
 Pass [`--no-ignore`](./cli.md#flags) to restore the full walk — the
 determinism switch for scripted use, since results otherwise depend on
 `.gitignore` state. It disables only the `.gitignore` respect; the built-in
@@ -282,8 +287,8 @@ SELECT path FROM './node_modules/*/package.json';  -- scans it anyway
 SELECT path FROM './dist';                 -- scans dist/ even when gitignored
 ```
 
-A `.gitignore` at or below the directory the scan starts in still filters
-beneath it; one above it is never read.
+The `.gitignore` files in force there, including those above it, still
+filter what lies beneath it.
 
 ### Hidden files
 

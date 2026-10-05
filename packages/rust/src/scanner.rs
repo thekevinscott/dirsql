@@ -74,20 +74,28 @@ fn scan_below(
 
     // Match against relative path so globs like "comments/**/*.jsonl" work
     // regardless of the absolute root directory.
-    walk(root, start, matcher, None, false, &mut |rel_path, entry| {
-        if matcher.is_ignored(&rel_path) {
-            return;
-        }
+    walk(
+        root,
+        start,
+        matcher,
+        None,
+        false,
+        Vec::new(),
+        &mut |rel_path, entry| {
+            if matcher.is_ignored(&rel_path) {
+                return;
+            }
 
-        seen += 1;
-        on_file(seen);
+            seen += 1;
+            on_file(seen);
 
-        // Fan-out: a file matching N tables' globs yields N (path, table)
-        // pairs, one per matching table, in declaration order.
-        for m in matcher.match_all(&rel_path) {
-            results.push((entry.path(), m.table_name));
-        }
-    });
+            // Fan-out: a file matching N tables' globs yields N (path, table)
+            // pairs, one per matching table, in declaration order.
+            for m in matcher.match_all(&rel_path) {
+                results.push((entry.path(), m.table_name));
+            }
+        },
+    );
 
     results
 }
@@ -109,13 +117,22 @@ fn scan_below(
 /// With `gitignore` set, `.gitignore` files apply hierarchically (each one
 /// below its own directory) and prune traversal, like fd/ripgrep — except
 /// that hidden files are still scanned, and no `.git` directory is required.
-/// Only files at or below `root` are read; one above it has no say.
+/// Those above `root` apply too, as in git: up to the nearest directory
+/// holding `.git`, or with no repo up to `index_root`. They filter what lies
+/// below `root`, never `root` itself, so naming an ignored directory still
+/// scans it.
 pub fn scan_glob(
     root: &Path,
+    index_root: &Path,
     glob: &PathGlob,
     ignore: &TableMatcher,
     gitignore: bool,
 ) -> Vec<PathBuf> {
+    let frames = if gitignore {
+        gitignores_above(root, index_root)
+    } else {
+        Vec::new()
+    };
     let mut results = Vec::new();
     walk(
         root,
@@ -123,6 +140,7 @@ pub fn scan_glob(
         ignore,
         Some(glob),
         gitignore,
+        frames,
         &mut |rel_path, _| {
             if is_wanted(glob, ignore, &rel_path) {
                 results.push(rel_path);
@@ -272,15 +290,17 @@ pub(crate) fn parse_gitignore_arg(arg: &str) -> Result<bool, String> {
 /// in path order without a sort at the end. Prunes the reserved top-level
 /// `.dirsql/` subtree and any directory the skip rules ignore wholesale, so an
 /// ignored tree is never read at all. With `gitignore` set, entries a
-/// `.gitignore` in force ignores are pruned/skipped too. Symlinks are followed
-/// only as `glob` allows, and not at all without one; a broken link or an
-/// unreadable directory contributes nothing.
+/// `.gitignore` in force ignores are pruned/skipped too, starting from
+/// `frames`, the ones in force above `start`. Symlinks are followed only as
+/// `glob` allows, and not at all without one; a broken link or an unreadable
+/// directory contributes nothing.
 fn walk(
     root: &Path,
     start: &Path,
     ignore: &TableMatcher,
     glob: Option<&PathGlob>,
     gitignore: bool,
+    frames: Vec<Gitignore>,
     visit: &mut dyn FnMut(PathBuf, &DirEntry),
 ) {
     let rel = start.strip_prefix(root).unwrap_or(start);
@@ -291,7 +311,7 @@ fn walk(
         ignore,
         glob,
         gitignore,
-        frames: Vec::new(),
+        frames,
     };
     let states = glob.map_or_else(Vec::new, PathGlob::start);
     walk.descend(start, rel, depth, &states, false, visit);
@@ -401,6 +421,41 @@ fn sorted_entries(dir: &Path) -> Vec<(OsString, DirEntry)> {
         .collect();
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     entries
+}
+
+/// The `.gitignore` files above `start` that are in force at it, outermost
+/// first.
+fn gitignores_above(start: &Path, index_root: &Path) -> Vec<Gitignore> {
+    let top = gitignore_top(start, index_root, &|dir| dir.join(".git").exists());
+    dirs_above(start, top)
+        .into_iter()
+        .filter_map(load_gitignore)
+        .collect()
+}
+
+/// The highest directory whose `.gitignore` reaches `start`: the nearest one
+/// holding `.git`, where git stops looking. With no repo, the index root,
+/// matching a scan that starts there; a `start` outside the index root reads
+/// nothing above itself.
+fn gitignore_top<'a>(
+    start: &'a Path,
+    index_root: &Path,
+    is_repo_root: &dyn Fn(&Path) -> bool,
+) -> &'a Path {
+    start
+        .ancestors()
+        .find(|dir| is_repo_root(dir))
+        .or_else(|| start.ancestors().find(|dir| *dir == index_root))
+        .unwrap_or(start)
+}
+
+/// The directories strictly above `start`, up to and including its ancestor
+/// `top`, outermost first.
+fn dirs_above<'a>(start: &'a Path, top: &Path) -> Vec<&'a Path> {
+    let depth = start.ancestors().position(|dir| dir == top).unwrap_or(0);
+    let mut dirs: Vec<&Path> = start.ancestors().skip(1).take(depth).collect();
+    dirs.reverse();
+    dirs
 }
 
 /// Compile the `.gitignore` in `dir`, if one exists. An unparsable file
@@ -623,6 +678,58 @@ mod tests {
         let ignore = TableMatcher::new(&[], &["drafts/**"]).unwrap();
         assert!(!is_wanted(&glob, &ignore, Path::new("docs/a.csv")));
         assert!(!is_wanted(&glob, &ignore, Path::new("drafts/a.md")));
+    }
+
+    #[test]
+    fn gitignore_top_is_the_nearest_repo_root() {
+        let top = gitignore_top(Path::new("/repo/a/b"), Path::new("/repo/a"), &|dir| {
+            dir == Path::new("/repo")
+        });
+        assert_eq!(top, Path::new("/repo"));
+    }
+
+    #[test]
+    fn gitignore_top_stops_at_a_repo_nested_below_another() {
+        let top = gitignore_top(Path::new("/outer/inner/a"), Path::new("/"), &|dir| {
+            dir == Path::new("/outer") || dir == Path::new("/outer/inner")
+        });
+        assert_eq!(top, Path::new("/outer/inner"));
+    }
+
+    #[test]
+    fn gitignore_top_is_the_index_root_with_no_repo() {
+        let top = gitignore_top(Path::new("/idx/docs/sub"), Path::new("/idx"), &|_| false);
+        assert_eq!(top, Path::new("/idx"));
+    }
+
+    #[test]
+    fn gitignore_top_is_the_start_outside_the_index_root_with_no_repo() {
+        let top = gitignore_top(Path::new("/var/log"), Path::new("/idx"), &|_| false);
+        assert_eq!(top, Path::new("/var/log"));
+    }
+
+    #[test]
+    fn dirs_above_lists_the_ancestors_up_to_top_outermost_first() {
+        assert_eq!(
+            dirs_above(Path::new("/r/a/b"), Path::new("/r")),
+            vec![Path::new("/r"), Path::new("/r/a")]
+        );
+    }
+
+    #[test]
+    fn dirs_above_is_empty_when_the_start_is_the_top() {
+        assert!(dirs_above(Path::new("/r"), Path::new("/r")).is_empty());
+    }
+
+    #[test]
+    fn an_ancestor_frame_filters_entries_below_the_start_but_not_the_start() {
+        let frames = vec![frame("/r", &["*.log", "dist/"])];
+        assert!(is_gitignored(&frames, Path::new("/r/docs/z.log"), false));
+        assert!(!is_gitignored(
+            &frames,
+            Path::new("/r/dist/bundle.js"),
+            false
+        ));
     }
 
     fn walk_with<'a>(ignore: &'a TableMatcher, frames: Vec<Gitignore>) -> Walk<'a> {

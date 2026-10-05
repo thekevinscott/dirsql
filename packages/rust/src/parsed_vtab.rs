@@ -152,7 +152,7 @@ impl TableSource for ParsedTable {
         // A parsed path-table honors the same skip rules a stat path-table does
         // (node_modules/.git, gitignore, plus any configured ignore), so a
         // parsed `SELECT * FROM './'` doesn't drown in dependency trees.
-        let rel_paths = scan_glob(&root, &glob, &ignore, gitignore);
+        let rel_paths = scan_glob(&root, &index_root, &glob, &ignore, gitignore);
         let run = |rel: &[PathBuf]| run_parser(&command, &index_root, &root, rel);
         let rows = collect_rows(&rel_paths, &run)?;
 

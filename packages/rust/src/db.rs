@@ -144,8 +144,9 @@ fn no_home_path_table(name: &str) -> String {
 /// the stat columns, and the `path_prefix` is irrelevant (a parser wanting a
 /// path emits it). Both forms carry the same ignore rules.
 ///
-/// A parsed table also carries `index_root`, where the parser is spawned. The
-/// stat module takes no such argument: it spawns nothing.
+/// Both carry `index_root`: the top of the `.gitignore` files that apply when
+/// no repo encloses the scan, and for a parsed table where its parser is
+/// spawned.
 fn path_table_ddl(
     name: &str,
     table: &PathTable,
@@ -177,9 +178,7 @@ fn path_table_ddl(
     } else {
         scanner::NO_GITIGNORE_ARG
     }));
-    if parser.is_some() {
-        args.push(quote_literal(&index_root.to_string_lossy()));
-    }
+    args.push(quote_literal(&index_root.to_string_lossy()));
     args.extend(ignore.iter().map(|p| quote_literal(p)));
 
     format!(
@@ -3107,7 +3106,7 @@ mod tests {
         assert_eq!(
             ddl,
             "CREATE VIRTUAL TABLE IF NOT EXISTS temp.\"./docs/*.md\" \
-             USING dirsql_path('/root', 'docs/*.md', '', 'gitignore')"
+             USING dirsql_path('/root', 'docs/*.md', '', 'gitignore', '/root')"
         );
     }
 
@@ -3127,7 +3126,7 @@ mod tests {
                 None,
                 Path::new("/root"),
             )
-            .contains("'/var/log', '*.log', '/var/log', 'gitignore')"),
+            .contains("'/var/log', '*.log', '/var/log', 'gitignore', '/root')"),
             "got: {}",
             path_table_ddl(
                 "/var/log/*.log",
@@ -3151,7 +3150,7 @@ mod tests {
             Path::new("/root"),
         );
         assert!(
-            ddl.ends_with("'', 'no-gitignore')"),
+            ddl.ends_with("'', 'no-gitignore', '/root')"),
             "gitignore off must emit the no-gitignore switch, got: {ddl}"
         );
     }
@@ -3167,7 +3166,7 @@ mod tests {
             Path::new("/root"),
         );
         assert!(
-            ddl.ends_with("'', 'gitignore', 'node_modules/**', '*.tmp')"),
+            ddl.ends_with("'', 'gitignore', '/root', 'node_modules/**', '*.tmp')"),
             "got: {ddl}"
         );
     }
