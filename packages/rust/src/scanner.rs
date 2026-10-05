@@ -1,10 +1,12 @@
 use crate::listing::{Listing, Seen};
 use crate::matcher::{GlobError, Pattern, TableMatcher};
+use crate::tree_walk::{Step, walk_in_order};
 use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::thread;
 
 /// Top-level directory name reserved for `dirsql`'s own metadata (e.g. the
@@ -75,25 +77,27 @@ fn scan_below(
 
     // Match against relative path so globs like "comments/**/*.jsonl" work
     // regardless of the absolute root directory.
+    let walker = Walk {
+        ignore: matcher,
+        glob: None,
+        gitignore: false,
+        in_repo: false,
+        frames: Vec::new(),
+    };
     walk(
         root,
         start,
-        matcher,
-        None,
-        false,
-        None,
-        &mut |rel_path, dir, name| {
-            if matcher.is_ignored(&rel_path) {
-                return;
-            }
-
+        walker,
+        &|rel_path| !matcher.is_ignored(rel_path),
+        &mut |rel_path, dir| {
             seen += 1;
             on_file(seen);
 
             // Fan-out: a file matching N tables' globs yields N (path, table)
             // pairs, one per matching table, in declaration order.
+            let path = dir.join(rel_path.file_name().unwrap_or_default());
             for m in matcher.match_all(&rel_path) {
-                results.push((dir.join(name), m.table_name));
+                results.push((path.clone(), m.table_name));
             }
         },
     );
@@ -134,20 +138,20 @@ pub fn scan_glob(
     } else {
         None
     };
-    let repo_frames = repo.map(|top| gitignores_above(root, top));
+    let walker = Walk {
+        ignore,
+        glob: Some(glob),
+        gitignore,
+        in_repo: repo.is_some(),
+        frames: repo.map_or_else(Vec::new, |top| gitignores_above(root, top)),
+    };
     let mut results = Vec::new();
     walk(
         root,
         root,
-        ignore,
-        Some(glob),
-        gitignore,
-        repo_frames,
-        &mut |rel_path, _, _| {
-            if is_wanted(glob, ignore, &rel_path) {
-                results.push(rel_path);
-            }
-        },
+        walker,
+        &|rel_path| is_wanted(glob, ignore, rel_path),
+        &mut |rel_path, _| results.push(rel_path),
     );
     results
 }
@@ -308,42 +312,119 @@ pub(crate) fn parse_gitignore_arg(arg: &str) -> Result<bool, String> {
     }
 }
 
-/// The shared traversal: every file under `start`, visited with its
-/// `root`-relative path, siblings in name order, so the whole walk comes out
-/// in path order without a sort at the end. Prunes the reserved top-level
-/// `.dirsql/` subtree and any directory the skip rules ignore wholesale, so an
-/// ignored tree is never read at all. With `glob` given, a dot-named entry it
-/// does not spell is skipped; `None` admits them all. With `gitignore` set,
-/// entries a `.gitignore` in force ignores are pruned/skipped too, starting
-/// from `repo_frames`: the ones in force above `start` when a repo encloses
-/// it, `None` when none does. Inside a directory holding `.git`, its
-/// `.gitignore` files apply. Symlinks are followed only as `glob` allows, and
-/// not at all without one; a broken link or an unreadable directory
-/// contributes nothing.
+/// The shared traversal: every file under `start` that `keep` takes, visited
+/// with its `root`-relative path and its directory, siblings in name order,
+/// so the whole walk comes out in path order without a sort at the end.
+/// Directories are read on spare cores ahead of the visiting. Prunes the
+/// reserved top-level `.dirsql/` subtree and any directory the skip rules
+/// ignore wholesale, so an ignored tree is never read at all. With a glob, a
+/// dot-named entry it does not spell is skipped; without one all are
+/// admitted. With `gitignore` set, entries a `.gitignore` in force ignores
+/// are pruned/skipped too, starting from the walker's frames: the ones in
+/// force above `start` when a repo encloses it. Inside a directory holding
+/// `.git`, its `.gitignore` files apply. Symlinks are followed only as the
+/// glob allows, and not at all without one; a broken link or an unreadable
+/// directory contributes nothing.
 fn walk(
     root: &Path,
     start: &Path,
-    ignore: &TableMatcher,
-    glob: Option<&PathGlob>,
-    gitignore: bool,
-    repo_frames: Option<Vec<Gitignore>>,
-    visit: &mut dyn FnMut(PathBuf, &Path, &OsStr),
+    walker: Walk<'_>,
+    keep: &(dyn Fn(&Path) -> bool + Sync),
+    visit: &mut dyn FnMut(PathBuf, &Path),
 ) {
     let rel = start.strip_prefix(root).unwrap_or(start);
-    // Depth below `root`, not below `start`: the reserved-directory rule is
-    // about the tree's top level wherever the walk begins.
-    let depth = rel.components().count();
-    let mut walk = Walk {
-        ignore,
-        glob,
-        gitignore,
-        in_repo: repo_frames.is_some(),
-        frames: repo_frames.unwrap_or_default(),
+    let states = walker.glob.map_or_else(Vec::new, PathGlob::start);
+    let place = Place {
+        walk: walker,
+        dir: start.to_path_buf(),
+        rel: rel.to_path_buf(),
+        // Depth below `root`, not below `start`: the reserved-directory rule
+        // is about the tree's top level wherever the walk begins.
+        depth: rel.components().count(),
+        states,
+        linked: false,
     };
-    let states = glob.map_or_else(Vec::new, PathGlob::start);
-    walk.descend(start, rel, depth, &states, false, visit);
+    walk_in_order(place, &|place: Place<'_>| place.explore(keep), &mut |(
+        rel,
+        dir,
+    )| {
+        visit(rel, &dir);
+    });
 }
 
+/// A directory the walk enters, and how it got there: the glob `states`
+/// it is entered with, and `linked` as whether its path crosses a followed
+/// symlink.
+struct Place<'a> {
+    walk: Walk<'a>,
+    dir: PathBuf,
+    rel: PathBuf,
+    depth: usize,
+    states: Vec<usize>,
+    linked: bool,
+}
+
+type Found = (PathBuf, Arc<Path>);
+
+impl<'a> Place<'a> {
+    /// The directory's entries in walk order: each file `keep` takes, and
+    /// each directory to enter.
+    fn explore(self, keep: &(dyn Fn(&Path) -> bool + Sync)) -> Vec<Step<Place<'a>, Found>> {
+        let Place {
+            mut walk,
+            dir,
+            rel,
+            depth,
+            states,
+            linked,
+        } = self;
+        walk.in_repo = walk.in_repo || (walk.gitignore && holds_git(&dir));
+        if walk.in_repo
+            && let Some(matcher) = load_gitignore(&dir)
+        {
+            walk.frames.push(Arc::new(matcher));
+        }
+        let listing = Listing::read(&dir);
+        let taken = judge_all(listing.entries(), &|listed| {
+            walk.take(
+                &dir,
+                listing.name(listed),
+                listed.seen,
+                &rel,
+                depth + 1,
+                &states,
+                linked,
+            )
+            .filter(|taken| match taken {
+                Taken::File(child) => keep(child),
+                Taken::Dir { .. } => true,
+            })
+        });
+        let dir: Arc<Path> = Arc::from(dir);
+        listing
+            .entries()
+            .iter()
+            .zip(taken)
+            .filter_map(|(listed, taken)| match taken? {
+                Taken::Dir {
+                    child,
+                    next,
+                    linked,
+                } => Some(Step::Dir(Place {
+                    walk: walk.clone(),
+                    dir: dir.join(listing.name(listed)),
+                    rel: child,
+                    depth: depth + 1,
+                    states: next,
+                    linked,
+                })),
+                Taken::File(child) => Some(Step::Leaf((child, Arc::clone(&dir)))),
+            })
+            .collect()
+    }
+}
+
+#[derive(Clone)]
 struct Walk<'a> {
     ignore: &'a TableMatcher,
     glob: Option<&'a PathGlob>,
@@ -352,65 +433,11 @@ struct Walk<'a> {
     /// puts a `.gitignore` in force.
     in_repo: bool,
     /// The `.gitignore` files in force at the walk's current position, root
-    /// first; a directory's own file is pushed on entry and popped on exit.
-    frames: Vec<Gitignore>,
+    /// first.
+    frames: Vec<Arc<Gitignore>>,
 }
 
 impl Walk<'_> {
-    fn descend(
-        &mut self,
-        dir: &Path,
-        rel: &Path,
-        depth: usize,
-        states: &[usize],
-        linked: bool,
-        visit: &mut dyn FnMut(PathBuf, &Path, &OsStr),
-    ) {
-        let entered_repo = self.gitignore && !self.in_repo && holds_git(dir);
-        if entered_repo {
-            self.in_repo = true;
-        }
-        let mut pushed = false;
-        if self.in_repo
-            && let Some(matcher) = load_gitignore(dir)
-        {
-            self.frames.push(matcher);
-            pushed = true;
-        }
-        let listing = Listing::read(dir);
-        let taken = judge_all(listing.entries(), &|listed| {
-            self.take(
-                dir,
-                listing.name(listed),
-                listed.seen,
-                rel,
-                depth + 1,
-                states,
-                linked,
-            )
-        });
-        for (listed, taken) in listing.entries().iter().zip(taken) {
-            let name = listing.name(listed);
-            match taken {
-                Some(Taken::Dir {
-                    child,
-                    next,
-                    linked,
-                }) => {
-                    self.descend(&dir.join(name), &child, depth + 1, &next, linked, visit);
-                }
-                Some(Taken::File(child)) => visit(child, dir, name),
-                None => {}
-            }
-        }
-        if pushed {
-            self.frames.pop();
-        }
-        if entered_repo {
-            self.in_repo = false;
-        }
-    }
-
     /// What the walk makes of entry `name` of `dir`, seen as `seen`, the
     /// directory at `rel` whose entries sit at `depth`, reached with glob
     /// `states` and `linked` as whether its path already crosses a followed
@@ -570,10 +597,11 @@ fn classify(is_dir: bool, is_file: bool, linked: bool) -> Option<Kind> {
 
 /// The `.gitignore` files above `start`, up to and including the repo root
 /// `top`, outermost first.
-fn gitignores_above(start: &Path, top: &Path) -> Vec<Gitignore> {
+fn gitignores_above(start: &Path, top: &Path) -> Vec<Arc<Gitignore>> {
     dirs_above(start, top)
         .into_iter()
         .filter_map(load_gitignore)
+        .map(Arc::new)
         .collect()
 }
 
@@ -610,7 +638,7 @@ fn load_gitignore(dir: &Path) -> Option<Gitignore> {
 
 /// Whether the `.gitignore` files in force mark `path` ignored. Deeper files
 /// take precedence (git's rule), and a whitelisting `!pattern` un-ignores.
-fn is_gitignored(frames: &[Gitignore], path: &Path, is_dir: bool) -> bool {
+fn is_gitignored(frames: &[Arc<Gitignore>], path: &Path, is_dir: bool) -> bool {
     for frame in frames.iter().rev() {
         match frame.matched(path, is_dir) {
             Match::Ignore(_) => return true,
@@ -840,12 +868,12 @@ mod tests {
     }
 
     /// A gitignore frame compiled from in-memory lines; no filesystem.
-    fn frame(dir: &str, lines: &[&str]) -> Gitignore {
+    fn frame(dir: &str, lines: &[&str]) -> Arc<Gitignore> {
         let mut builder = GitignoreBuilder::new(Path::new(dir));
         for line in lines {
             builder.add_line(None, line).unwrap();
         }
-        builder.build().unwrap()
+        Arc::new(builder.build().unwrap())
     }
 
     #[test]
@@ -909,7 +937,7 @@ mod tests {
     fn walk_with<'a>(
         ignore: &'a TableMatcher,
         glob: Option<&'a PathGlob>,
-        frames: Vec<Gitignore>,
+        frames: Vec<Arc<Gitignore>>,
     ) -> Walk<'a> {
         Walk {
             ignore,
