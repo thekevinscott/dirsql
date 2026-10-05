@@ -108,19 +108,19 @@ features = ["cli"]
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [72, 131, 326, 363, 434, 455]
+lines = [72, 131, 330, 367, 445, 466]
 reason = "scan_below, scan_glob, walk, descend, kind_of and sorted_entries read the filesystem; tests/scanner.rs (scan_finds_matching_files, scan_recurses_into_subdirectories), tests/vtab.rs (glob_scopes_the_walk, rowids_count_up_from_zero_in_scan_order) and tests/path_table_symlinks.rs assert what they return"
 
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [380, 381, 384, 435, 438]
+lines = [384, 385, 388, 446, 449]
 reason = "whether a walked entry is a symlink, and whether the walk is below one, is known only from a real tree; tests/path_table_symlinks.rs asserts every outcome against bash, and the decisions themselves are unit-tested in classify, Walk::follows and PathGlob::step"
 
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [364, 368, 397, 469, 482]
+lines = [368, 372, 401, 480, 493]
 reason = "whether a repo encloses the walk, and which .gitignore files are in force, is known only from a real tree holding .git; the choice of directories is unit-tested in enclosing_repo and dirs_above, and tests/path_table_gitignore.rs (with_no_repo_a_gitignore_does_not_apply_at_the_index_root, inside_a_repo_the_same_gitignore_hides_everything, a_repo_root_gitignore_above_the_index_root_applies) asserts every outcome"
 
 [[rust.exempt]]
@@ -132,7 +132,7 @@ reason = "the walk's running file count is observable only through the CLI's pro
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [374]
+lines = [378]
 reason = "a child's depth decides the reserved top-level .dirsql rule for a real tree; tests/scanner.rs scan_excludes_top_level_dirsql_directory and tests/vtab.rs reserved_dirsql_directory_is_skipped assert it"
 
 [[rust.exempt]]
