@@ -399,3 +399,58 @@ fn a_prefixed_glob_starts_its_walk_at_the_named_directory() {
         "the walk must begin at docs/, not list the index root"
     );
 }
+
+/// Files whose names a brace group could plausibly expand to, including one
+/// whose name holds the braces themselves.
+fn brace_fixture() -> TempDir {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("br")).unwrap();
+    for name in ["q.md", "{q}.md", "a1.md", "a2.md", "a3.md", "a{1..2}.md"] {
+        fs::write(root.path().join("br").join(name), name).unwrap();
+    }
+    root
+}
+
+#[test]
+fn a_brace_group_without_a_comma_is_literal_text() {
+    let root = brace_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './br/{q}.md'"),
+        vec!["br/{q}.md"]
+    );
+}
+
+#[test]
+fn a_brace_group_with_a_comma_is_an_alternation() {
+    let root = brace_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './br/{q,a1}.md'"),
+        vec!["br/a1.md", "br/q.md"]
+    );
+}
+
+#[test]
+fn a_brace_sequence_expands_to_each_value() {
+    let root = brace_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './br/a{1..2}.md'"),
+        vec!["br/a1.md", "br/a2.md"]
+    );
+}
+
+#[test]
+fn a_literal_brace_group_nested_in_an_alternation_stays_literal() {
+    let root = brace_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './br/{a3,{q}}.md'"),
+        vec!["br/a3.md", "br/{q}.md"]
+    );
+}

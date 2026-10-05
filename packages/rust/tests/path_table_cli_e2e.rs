@@ -291,3 +291,28 @@ fn an_ordinary_syntax_error_carries_no_quoting_hint() {
         "a syntax error with no path in it must stay unhinted, got: {stderr}"
     );
 }
+
+fn braces() -> TempDir {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("br")).unwrap();
+    for name in ["q.md", "{q}.md", "a1.md", "a2.md", "a3.md"] {
+        fs::write(root.path().join("br").join(name), name).unwrap();
+    }
+    root
+}
+
+#[test]
+fn a_brace_group_without_a_comma_matches_literally() {
+    let dir = braces();
+    let out = run(&dir, "SELECT path FROM './br/{q}.md'");
+
+    assert_eq!(paths(&out), vec!["br/{q}.md"]);
+}
+
+#[test]
+fn a_brace_sequence_expands_like_bash() {
+    let dir = braces();
+    let out = run(&dir, "SELECT path FROM './br/a{1..3..2}.md'");
+
+    assert_eq!(paths(&out), vec!["br/a1.md", "br/a3.md"]);
+}
