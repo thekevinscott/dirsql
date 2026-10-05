@@ -490,6 +490,19 @@ impl DirSQL {
         db.query_ordered(sql).map_err(map_db_error)
     }
 
+    /// [`query_ordered`](Self::query_ordered) folding each row's cells, in
+    /// projection order, into the state `start` makes from the projection,
+    /// as they are read rather than collected first.
+    pub fn query_each<S>(
+        &self,
+        sql: &str,
+        start: impl FnOnce(&[String]) -> S,
+        on_row: impl FnMut(&mut S, &[Value]),
+    ) -> Result<S> {
+        let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
+        db.query_each(sql, start, on_row).map_err(map_db_error)
+    }
+
     /// Lazily create the filesystem watcher. Idempotent; subsequent calls are
     /// no-ops. Called implicitly by [`poll_events`](Self::poll_events) and
     /// [`watch`](Self::watch).

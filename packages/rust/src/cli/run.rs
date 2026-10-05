@@ -15,11 +15,14 @@
 //! The `dirsql` binary is a shim over [`run_cli`], so `cargo install dirsql
 //! --features cli` and every other entry path run the same code.
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
 use super::{
-    AppState, ServerConfig, execute::execute_query, init::InitOptions, repl::run_repl,
+    AppState, ServerConfig,
+    execute::{execute_query, execute_query_json},
+    init::InitOptions,
+    repl::run_repl,
     serve_with_state, table,
 };
 use crate::{DirSQL, Extension, Row, Table};
@@ -411,9 +414,18 @@ async fn run_query(args: QueryArgs) -> u8 {
     // natively; only the long-lived server enforces `query_timeout` (408).
     let format = args.format.resolve(std::io::stdout().is_terminal());
 
-    match execute_query(&state, query_body(&args.sql), None).await {
-        Ok(value) => {
-            print!("{}", render_rows(&value, format));
+    let printed = match format {
+        Format::Table => execute_query(&state, query_body(&args.sql), None)
+            .await
+            .map(|value| render_rows(&value, format).into_bytes()),
+        _ => execute_query_json(&state, query_body(&args.sql)).await,
+    };
+    match printed {
+        Ok(text) => {
+            let mut stdout = std::io::stdout().lock();
+            // A closed pipe (`| head`) is the reader's choice, not a failure.
+            let _ = stdout.write_all(&text);
+            let _ = stdout.flush();
             0
         }
         Err(failure) => {

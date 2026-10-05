@@ -995,15 +995,79 @@ impl Db {
         self.run_statement(sql)
     }
 
+    /// [`query_ordered`](Self::query_ordered) folding each row's cells, in
+    /// projection order, into the state `start` makes from the projection,
+    /// as SQLite yields them rather than collected first.
+    pub fn query_each<S>(
+        &self,
+        sql: &str,
+        start: impl FnOnce(&[String]) -> S,
+        mut on_row: impl FnMut(&mut S, &[Value]),
+    ) -> Result<S> {
+        if !self.batched.is_empty() {
+            // A batched worker may force a second run, so the rows of the
+            // first are not final until it ends.
+            let result = self.query_ordered(sql)?;
+            let mut state = start(&result.columns);
+            for row in &result.rows {
+                let cells: Vec<Value> = result
+                    .columns
+                    .iter()
+                    .map(|column| row.get(column).cloned().unwrap_or(Value::Null))
+                    .collect();
+                on_row(&mut state, &cells);
+            }
+            return Ok(state);
+        }
+        let _calls = self.calls.phase();
+        let _scope = self.scope.enter();
+        let (mut stmt, column_names) = self.prepare_statement(sql)?;
+        let mut state = start(&column_names);
+        let mut rows = stmt.query([])?;
+        let mut cells = Vec::with_capacity(column_names.len());
+        while let Some(row) = rows.next()? {
+            cells.clear();
+            for i in 0..column_names.len() {
+                let val: rusqlite::types::Value = row.get(i)?;
+                cells.push(Value::from(val));
+            }
+            on_row(&mut state, &cells);
+        }
+        Ok(state)
+    }
+
     /// Prepare and run one read-only statement, registering the path-tables
     /// it names along the way.
     fn run_statement(&self, sql: &str) -> Result<QueryResult> {
+        let (mut stmt, column_names) = self.prepare_statement(sql)?;
+        let rows = stmt.query_map([], |row| {
+            let mut map = HashMap::new();
+            for (i, name) in column_names.iter().enumerate() {
+                let val: rusqlite::types::Value = row.get(i)?;
+                map.insert(name.clone(), Value::from(val));
+            }
+            Ok(map)
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(QueryResult {
+            columns: column_names,
+            rows: results,
+        })
+    }
+
+    /// Prepare one read-only statement, registering the path-tables it names
+    /// along the way, with its column names.
+    fn prepare_statement(&self, sql: &str) -> Result<(rusqlite::Statement<'_>, Vec<String>)> {
         // Each iteration must register a table no earlier iteration did; a
         // repeat means the fallback is not making progress, so the SQLite
         // error stands. That is what bounds the loop.
         let mut attempted: HashSet<String> = HashSet::new();
 
-        let (mut stmt, reads) = loop {
+        let (stmt, reads) = loop {
             let error = match self.prepare_guarded(sql) {
                 Ok(prepared) => break prepared,
                 Err(e) => e,
@@ -1022,24 +1086,7 @@ impl Db {
         }
         self.scope.warm(&reads);
         let column_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
-
-        let rows = stmt.query_map([], |row| {
-            let mut map = HashMap::new();
-            for (i, name) in column_names.iter().enumerate() {
-                let val: rusqlite::types::Value = row.get(i)?;
-                map.insert(name.clone(), Value::from(val));
-            }
-            Ok(map)
-        })?;
-
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(QueryResult {
-            columns: column_names,
-            rows: results,
-        })
+        Ok((stmt, column_names))
     }
 
     /// Prepare `sql` with the internal-table / ATTACH authorizer installed for

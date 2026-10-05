@@ -27,6 +27,65 @@ fn ordered_row_to_json(columns: &[String], row: &Row) -> Value {
     Value::Object(map)
 }
 
+/// A query's rows written one at a time as the JSON array [`result_to_json`]
+/// renders, with no map per row.
+pub(super) struct JsonRows {
+    out: Vec<u8>,
+    /// Each key as JSON with the position of the cell it takes.
+    keys: Vec<(Vec<u8>, usize)>,
+    rows: usize,
+}
+
+impl JsonRows {
+    pub(super) fn new(columns: &[String]) -> Self {
+        let keys = columns
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (json_bytes(name), i))
+            .collect();
+        Self {
+            out: b"[".to_vec(),
+            keys,
+            rows: 0,
+        }
+    }
+
+    pub(super) fn row(&mut self, cells: &[CellValue]) {
+        if self.rows > 0 {
+            self.out.push(b',');
+        }
+        self.rows += 1;
+        self.out.push(b'{');
+        for (n, (key, i)) in self.keys.iter().enumerate() {
+            if n > 0 {
+                self.out.push(b',');
+            }
+            self.out.extend_from_slice(key);
+            self.out.push(b':');
+            write_cell(&mut self.out, &cells[*i]);
+        }
+        self.out.push(b'}');
+    }
+
+    /// The array with the newline the CLI prints after it.
+    pub(super) fn finish(mut self) -> Vec<u8> {
+        self.out.extend_from_slice(b"]\n");
+        self.out
+    }
+}
+
+fn json_bytes(text: &str) -> Vec<u8> {
+    serde_json::to_vec(text).expect("a string always serializes")
+}
+
+fn write_cell(out: &mut Vec<u8>, value: &CellValue) {
+    let written = match value {
+        CellValue::Text(text) => serde_json::to_writer(&mut *out, text),
+        other => serde_json::to_writer(&mut *out, &cell_to_json(other)),
+    };
+    written.expect("writing JSON to memory cannot fail");
+}
+
 pub(super) fn row_to_json(row: &Row) -> Value {
     let mut map = Map::with_capacity(row.len());
     for (k, v) in row {
@@ -118,6 +177,73 @@ mod tests {
         let json = result_to_json(&result);
 
         assert_eq!(json[0].to_string(), r#"{"title":"Hello"}"#);
+    }
+
+    fn rendered(result: &QueryResult) -> String {
+        format!("{}\n", Value::Array(result_to_json(result)))
+    }
+
+    fn streamed(result: &QueryResult) -> String {
+        let mut rows = JsonRows::new(&result.columns);
+        for row in &result.rows {
+            let cells: Vec<CellValue> = result
+                .columns
+                .iter()
+                .map(|column| row[column].clone())
+                .collect();
+            rows.row(&cells);
+        }
+        String::from_utf8(rows.finish()).unwrap()
+    }
+
+    fn row_of(cells: &[(&str, CellValue)]) -> Row {
+        cells
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), value.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn streamed_rows_match_the_rendered_array_cell_for_cell() {
+        let result = QueryResult {
+            columns: vec!["path".into(), "size".into(), "ratio".into(), "body".into()],
+            rows: vec![
+                row_of(&[
+                    ("path", CellValue::Text("a \"quoted\" \u{e9}\n.md".into())),
+                    ("size", CellValue::Integer(-3)),
+                    ("ratio", CellValue::Real(0.1)),
+                    ("body", CellValue::Blob(vec![0, 255])),
+                ]),
+                row_of(&[
+                    ("path", CellValue::Null),
+                    ("size", CellValue::Integer(i64::MAX)),
+                    ("ratio", CellValue::Real(f64::NAN)),
+                    ("body", CellValue::Text(String::new())),
+                ]),
+            ],
+        };
+        assert_eq!(streamed(&result), rendered(&result));
+    }
+
+    #[test]
+    fn streamed_rows_keep_one_key_per_repeated_column_name() {
+        let result = QueryResult {
+            columns: vec!["a".into(), "b".into(), "a".into()],
+            rows: vec![row_of(&[
+                ("a", CellValue::Integer(1)),
+                ("b", CellValue::Integer(2)),
+            ])],
+        };
+        assert_eq!(streamed(&result), rendered(&result));
+    }
+
+    #[test]
+    fn no_rows_stream_as_an_empty_array() {
+        let result = QueryResult {
+            columns: vec!["path".into()],
+            rows: Vec::new(),
+        };
+        assert_eq!(streamed(&result), "[]\n");
     }
 
     #[test]
