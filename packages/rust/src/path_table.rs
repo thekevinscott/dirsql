@@ -16,8 +16,11 @@ use typed_path::{
 
 /// Directories a path-table scan skips, at any depth. They are skipped only
 /// *beneath* the literal part of the path you write, so naming one explicitly
-/// still scans it.
-pub const DEFAULT_IGNORES: [&str; 2] = ["**/node_modules/**", "**/.git/**"];
+/// still scans it. See [`PathTable::default_ignores`] for `node_modules`
+/// named after a glob.
+pub const DEFAULT_IGNORES: [&str; 2] = [NODE_MODULES_IGNORE, "**/.git/**"];
+
+const NODE_MODULES_IGNORE: &str = "**/node_modules/**";
 
 /// The glob a directory expands to: one level, like `ls`. Any depth is
 /// spelled explicitly as `**`.
@@ -34,6 +37,18 @@ pub struct PathTable {
     /// computed: the directories a `./` table named ahead of its glob, so its
     /// paths read as index-root-relative; the absolute scan root for the rest.
     pub path_prefix: String,
+}
+
+impl PathTable {
+    /// The [`DEFAULT_IGNORES`] this table applies. A glob with a
+    /// `node_modules` component names that directory wherever the component
+    /// sits, so its skip rule is dropped.
+    pub fn default_ignores(&self) -> impl Iterator<Item = &'static str> {
+        let names_node_modules = self.glob.split('/').any(|c| c == "node_modules");
+        DEFAULT_IGNORES
+            .into_iter()
+            .filter(move |rule| !(names_node_modules && *rule == NODE_MODULES_IGNORE))
+    }
 }
 
 /// What a name SQLite could not find turns out to be.
@@ -299,6 +314,32 @@ mod tests {
     #[test]
     fn default_ignores_cover_vcs_and_dependency_directories() {
         assert_eq!(DEFAULT_IGNORES, ["**/node_modules/**", "**/.git/**"]);
+    }
+
+    fn table_globbing(glob: &str) -> PathTable {
+        PathTable {
+            root: PathBuf::from("/r"),
+            glob: glob.to_string(),
+            path_prefix: String::new(),
+        }
+    }
+
+    fn default_ignores_of(glob: &str) -> Vec<&'static str> {
+        table_globbing(glob).default_ignores().collect()
+    }
+
+    #[test]
+    fn a_glob_not_naming_node_modules_keeps_every_default_ignore() {
+        assert_eq!(default_ignores_of("**"), DEFAULT_IGNORES);
+        assert_eq!(default_ignores_of("**/*.js"), DEFAULT_IGNORES);
+        assert_eq!(default_ignores_of("node_modules*/*"), DEFAULT_IGNORES);
+    }
+
+    #[test]
+    fn a_glob_naming_node_modules_anywhere_drops_its_ignore() {
+        assert_eq!(default_ignores_of("**/node_modules/**"), ["**/.git/**"]);
+        assert_eq!(default_ignores_of("*/node_modules/*/*"), ["**/.git/**"]);
+        assert_eq!(default_ignores_of("node_modules"), ["**/.git/**"]);
     }
 
     #[test]
