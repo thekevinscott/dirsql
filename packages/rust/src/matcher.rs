@@ -1,3 +1,4 @@
+use crate::posix_class::expand_posix_classes;
 use globset::GlobBuilder;
 use regex::{Regex, RegexBuilder};
 use std::path::Path;
@@ -20,7 +21,9 @@ pub(crate) struct Pattern(Regex);
 impl Pattern {
     /// `*` and `?` stop at `/`; `**` crosses it.
     pub(crate) fn new(glob: &str) -> Result<Self, GlobError> {
-        let glob = GlobBuilder::new(glob).literal_separator(true).build()?;
+        let glob = GlobBuilder::new(&expand_posix_classes(glob))
+            .literal_separator(true)
+            .build()?;
         let regex = RegexBuilder::new(&unicode_regex(glob.regex()))
             .dot_matches_new_line(true)
             .build()?;
@@ -585,5 +588,12 @@ mod tests {
                 .match_all(Path::new("data/x/y/metadata.json"))
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_posix_class_in_a_table_glob_matches_its_characters() {
+        let matcher = TableMatcher::new(&[("notes/[[:digit:]].md", "n")], &[]).unwrap();
+        assert_eq!(names(&matcher, "notes/7.md"), vec!["n"]);
+        assert!(matcher.match_all(Path::new("notes/x.md")).is_empty());
     }
 }

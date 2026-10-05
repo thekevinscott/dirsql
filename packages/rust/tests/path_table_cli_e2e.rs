@@ -389,6 +389,17 @@ fn naming_a_dotfile_lists_it() {
     assert_eq!(paths(&out), vec![".dotfile"]);
 }
 
+#[test]
+fn a_posix_character_class_matches_like_bash() {
+    let root = TempDir::new().unwrap();
+    for name in ["1.md", "5.md", "A.md", "b.md"] {
+        fs::write(root.path().join(name), name).unwrap();
+    }
+    let out = run(&root, "SELECT path FROM './[[:digit:]].md'");
+
+    assert_eq!(paths(&out), vec!["1.md", "5.md"]);
+}
+
 fn braces() -> TempDir {
     let root = TempDir::new().unwrap();
     fs::create_dir_all(root.path().join("br")).unwrap();
