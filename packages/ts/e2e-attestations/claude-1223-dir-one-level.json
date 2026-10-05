@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791159992,
+  "exit_code": 0,
+  "commit": "ae011d9f22bd3aa967bb184c91e58ef7c85d67d9",
+  "branch": "claude/1223-dir-one-level"
+}

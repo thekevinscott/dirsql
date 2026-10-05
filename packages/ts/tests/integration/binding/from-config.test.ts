@@ -218,7 +218,7 @@ glob = "**/*.md"
 `,
     );
     const db = new DirSQL(configPath);
-    await expect(db.ready).rejects.toThrow(/FROM '\.\/'/);
+    await expect(db.ready).rejects.toThrow(/FROM '\.\/\*\*'/);
   });
 
   it("rejects table entries missing ddl", async () => {

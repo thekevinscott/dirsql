@@ -53,37 +53,86 @@ fn paths(db: &DirSQL, sql: &str) -> Vec<String> {
 }
 
 #[test]
-fn a_directory_path_scans_it_recursively() {
+fn a_bare_dot_slash_lists_the_index_root_one_level_deep() {
+    let root = fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './'"),
+        vec!["top.md"],
+        "'./' is one level, like `ls`: it must not reach docs/"
+    );
+}
+
+#[test]
+fn a_directory_path_lists_one_level() {
     let root = fixture();
     let db = open(&root);
 
     assert_eq!(
         paths(&db, "SELECT path FROM './docs'"),
-        vec!["docs/a.md", "docs/b.md", "docs/nested/deep.md"],
-        "a directory is recursive by default"
+        vec!["docs/a.md", "docs/b.md"],
+        "'./docs' is `ls docs`: it must not reach docs/nested"
     );
 }
 
 #[test]
-fn a_trailing_slash_directory_path_also_scans_recursively() {
+fn a_trailing_slash_directory_path_also_lists_one_level() {
     let root = fixture();
     let db = open(&root);
 
     assert_eq!(
         paths(&db, "SELECT path FROM './docs/'"),
-        vec!["docs/a.md", "docs/b.md", "docs/nested/deep.md"],
+        vec!["docs/a.md", "docs/b.md"],
     );
 }
 
 #[test]
-fn an_explicit_star_is_not_recursive() {
+fn an_explicit_star_is_the_same_as_the_bare_dot_slash() {
     let root = fixture();
     let db = open(&root);
 
     assert_eq!(
         paths(&db, "SELECT path FROM './*'"),
-        vec!["top.md"],
-        "'./*' is the explicit non-recursive spelling: top level only"
+        paths(&db, "SELECT path FROM './'"),
+    );
+}
+
+#[test]
+fn a_double_star_scans_every_depth() {
+    let root = fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './**'"),
+        vec![
+            "docs/a.md",
+            "docs/b.md",
+            "docs/nested/deep.md",
+            "skip/s.md",
+            "top.md"
+        ],
+        "'./**' is the recursive spelling"
+    );
+}
+
+#[test]
+fn a_file_created_two_levels_down_does_not_join_a_one_level_table() {
+    let root = fixture();
+    let db = open(&root);
+    assert_eq!(paths(&db, "SELECT path FROM './'"), vec!["top.md"]);
+
+    fs::write(root.path().join("docs/nested/late.md"), "late").unwrap();
+    fs::write(root.path().join("late.md"), "late").unwrap();
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './'"),
+        vec!["late.md", "top.md"],
+        "a live re-scan still stops at one level"
+    );
+    assert!(
+        paths(&db, "SELECT path FROM './**'").contains(&"docs/nested/late.md".to_string()),
+        "the recursive spelling sees the deep file"
     );
 }
 
@@ -126,7 +175,7 @@ fn a_recursive_scan_skips_vcs_and_dependency_directories() {
     let root = fixture();
     let db = open(&root);
 
-    let found = paths(&db, "SELECT path FROM './'");
+    let found = paths(&db, "SELECT path FROM './**'");
 
     assert!(
         !found.iter().any(|p| p.starts_with("node_modules/")),
@@ -148,7 +197,7 @@ fn naming_a_skipped_directory_explicitly_still_scans_it() {
     let db = open(&root);
 
     assert_eq!(
-        paths(&db, "SELECT path FROM './node_modules'"),
+        paths(&db, "SELECT path FROM './node_modules/**'"),
         vec!["node_modules/pkg/index.js"],
         "skip rules apply beneath the path you name, not to the path itself"
     );
@@ -168,7 +217,7 @@ fn a_recursive_scan_skips_nested_vcs_and_dependency_directories() {
     fs::write(root.path().join("apps/site/.git/config"), "cfg").unwrap();
     let db = DirSQL::new(root.path(), vec![]).unwrap();
 
-    let found = paths(&db, "SELECT path FROM './'");
+    let found = paths(&db, "SELECT path FROM './**'");
 
     assert_eq!(
         found,
@@ -190,7 +239,7 @@ fn a_scoped_directory_scan_also_skips_nested_dependency_directories() {
     let db = DirSQL::new(root.path(), vec![]).unwrap();
 
     assert_eq!(
-        paths(&db, "SELECT path FROM './apps'"),
+        paths(&db, "SELECT path FROM './apps/**'"),
         vec!["apps/site/main.js"],
         "the skip rules apply inside a scoped directory scan too"
     );
@@ -208,7 +257,7 @@ fn naming_a_nested_skipped_directory_explicitly_still_scans_it() {
     let db = DirSQL::new(root.path(), vec![]).unwrap();
 
     assert_eq!(
-        paths(&db, "SELECT path FROM './apps/site/node_modules'"),
+        paths(&db, "SELECT path FROM './apps/site/node_modules/**'"),
         vec!["apps/site/node_modules/pkg/index.js"],
         "skip rules apply beneath the path you name, not to the path itself"
     );
@@ -219,7 +268,7 @@ fn configured_ignore_patterns_apply_to_a_path_table() {
     let root = fixture();
     let db = DirSQL::with_ignore(root.path(), vec![], ["skip/**"]).unwrap();
 
-    let found = paths(&db, "SELECT path FROM './'");
+    let found = paths(&db, "SELECT path FROM './**'");
 
     assert!(
         !found.iter().any(|p| p.starts_with("skip/")),
@@ -243,7 +292,7 @@ fn an_absolute_path_table_resolves_and_reports_absolute_paths() {
 }
 
 #[test]
-fn an_absolute_directory_path_scans_it_recursively() {
+fn an_absolute_directory_path_lists_one_level() {
     let root = fixture();
     let db = open(&root);
 
@@ -252,11 +301,8 @@ fn an_absolute_directory_path_scans_it_recursively() {
 
     assert_eq!(
         found,
-        vec![
-            format!("{dir}/docs/a.md"),
-            format!("{dir}/docs/b.md"),
-            format!("{dir}/docs/nested/deep.md"),
-        ],
+        vec![format!("{dir}/docs/a.md"), format!("{dir}/docs/b.md")],
+        "an absolute directory is one level too"
     );
 }
 

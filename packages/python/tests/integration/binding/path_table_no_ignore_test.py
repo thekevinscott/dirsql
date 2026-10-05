@@ -43,6 +43,6 @@ def describe_no_ignore():
         (tmp_path / "node_modules" / "dep.js").write_text("x", encoding="utf-8")
         db = DirSQL(gitignored_dir, no_ignore=True)
 
-        rows = await db.query("SELECT path FROM './'")
+        rows = await db.query("SELECT path FROM './**'")
 
         assert "node_modules/dep.js" not in [r["path"] for r in rows]

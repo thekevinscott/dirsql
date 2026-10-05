@@ -70,7 +70,7 @@ def describe_DirSQL():
                 await db.query("SELECT basename FROM files")
             message = str(excinfo.value)
             assert "no such table: files" in message
-            assert "did you mean FROM './'?" in message
+            assert "did you mean FROM './**'?" in message
 
         @pytest.mark.asyncio
         async def it_serves_path_tables(tmp_path):

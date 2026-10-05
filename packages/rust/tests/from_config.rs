@@ -297,7 +297,7 @@ glob = "**/*.md"
         "error must name the missing on-file hook, got: {msg}"
     );
     assert!(
-        msg.contains("FROM './'"),
+        msg.contains("FROM './**'"),
         "error must point at the path-table replacement, got: {msg}"
     );
 }

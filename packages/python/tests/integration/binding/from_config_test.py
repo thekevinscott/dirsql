@@ -251,7 +251,7 @@ glob = "**/*.md"
 """,
             )
             db = DirSQL(config=os.path.join(config_dir, ".dirsql.toml"))
-            with pytest.raises(Exception, match="FROM './'"):
+            with pytest.raises(Exception, match=r"FROM '\./\*\*'"):
                 await db.ready()
 
         @pytest.mark.asyncio

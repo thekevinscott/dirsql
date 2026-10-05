@@ -54,16 +54,16 @@ fn texts(rows: &[Row], column: &str) -> Vec<String> {
 }
 
 #[test]
-fn bare_dot_slash_scans_the_index_root_recursively() {
+fn a_double_star_scans_the_index_root_recursively() {
     let root = fixture();
     let db = open(&root);
 
-    let rows = db.query("SELECT path FROM './'").unwrap();
+    let rows = db.query("SELECT path FROM './**'").unwrap();
 
     assert_eq!(
         texts(&rows, "path"),
         vec!["docs/a.md", "docs/b.md", "docs/c.csv", "notes/deep/d.md"],
-        "'./' must scan the whole index root"
+        "'./**' must scan the whole index root"
     );
 }
 

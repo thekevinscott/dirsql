@@ -52,7 +52,7 @@ fn a_no_config_files_query_carries_the_path_table_hint() {
     let err = db.query("SELECT * FROM files").unwrap_err().to_string();
 
     assert!(
-        err.contains("did you mean FROM './'?"),
+        err.contains("did you mean FROM './**'?"),
         "the no-config `files` miss must point at the path-table form, got: {err}"
     );
 }
@@ -62,12 +62,12 @@ fn a_no_config_path_table_query_still_works() {
     let root = fixture();
 
     let db = DirSQL::builder().root(root.path()).build().unwrap();
-    let rows = db.query("SELECT basename FROM './'").unwrap();
+    let rows = db.query("SELECT basename FROM './**'").unwrap();
 
     let names: Vec<Value> = rows.iter().map(|r| r["basename"].clone()).collect();
     assert!(
         names.contains(&Value::Text("readme.md".into())),
-        "`FROM './'` is the replacement for the retired default table, got {names:?}"
+        "`FROM './**'` is the replacement for the retired default table, got {names:?}"
     );
 }
 

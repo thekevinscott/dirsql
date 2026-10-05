@@ -88,7 +88,7 @@ front.
 ### Output format
 
 Rows go where they are useful: a **table** when stdout is a terminal, the
-**JSON array** when it is piped or redirected. `SELECT * FROM './'` in a
+**JSON array** when it is piped or redirected. `SELECT * FROM './**'` in a
 5000-file tree should not put a 5000-element JSON array in front of a person,
 and `dirsql "…" | jq` should not have to parse a table.
 
@@ -283,7 +283,7 @@ curl -s localhost:7117/query -H 'content-type: application/json' \
 ```
 
 Earlier versions served an implicit table named `files` here. It is gone; a
-`SELECT ... FROM files` with no config now fails and points at `FROM './'`.
+`SELECT ... FROM files` with no config now fails and points at `FROM './**'`.
 
 Passing a config with `-c` fully overrules this default. A `-c` naming a file
 that does not exist is an error (not a fallback to the default); a config that
@@ -403,8 +403,8 @@ takes, with the same `auto` default. A one-shot query is usually piped, so
 ## `dirsql init`
 
 Writes a starter `.dirsql.toml` as a scaffold to edit. It does **not**
-duplicate the zero-config floor (`SELECT * FROM './'` already lists every file
-with no config); instead it shows the **escalation**: one named `[[table]]`
+duplicate the zero-config floor (`SELECT * FROM './**'` already lists every
+file with no config); instead it shows the **escalation**: one named `[[table]]`
 with a glob, a schema, and a real `on-file` hook that pulls structured rows
 out of your files.
 

@@ -34,17 +34,17 @@ COLUMNS = ("rank", "kind", "path", "mtime")
 
 QUERY = """
 WITH standing AS (
-  SELECT path, mtime FROM './'
+  SELECT path, mtime FROM './**'
     WHERE dir = 'planner/background'
       AND basename IN ('situation.md', 'projects.md', 'profile.md')
 ),
 dailies AS (
-  SELECT path, mtime FROM './'
+  SELECT path, mtime FROM './**'
     WHERE path LIKE 'vault/Dailies/Daily %'
     ORDER BY basename DESC LIMIT 5
 ),
 recent AS (
-  SELECT path, mtime FROM './'
+  SELECT path, mtime FROM './**'
     WHERE ext = 'md'
       AND path NOT LIKE 'vault/Dailies/%'
       AND mtime > strftime('%s', 'now') - 14 * 86400

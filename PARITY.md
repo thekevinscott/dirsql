@@ -43,7 +43,7 @@ Constructing with neither a `config` nor programmatic `tables` defines **no
 named tables** — the same as the CLI with no `-c`. Filesystem queries go
 through [path-tables](docs/reference/path-tables.md) (`SELECT * FROM './'`),
 and a `SELECT ... FROM files` in exactly that state fails with
-`no such table: files; did you mean FROM './'?`. The hint is scoped to the
+`no such table: files; did you mean FROM './**'?`. The hint is scoped to the
 configless case: a config or table set that merely omits `files` gets the plain
 SQLite error. The logic lives in the shared core (`DirSQLBuilder::resolve` arms
 the hint when config paths and tables are both empty; `Db::query` emits it), so
@@ -537,6 +537,7 @@ incl. #313).
 | `Table` construction + `name`/`ddl`/`glob` attributes | Y | Y | Y (`Table` class + plain-object interchangeability) |
 | Quoted-identifier DDL registers/queries by bare name (#204) | Y | Y | Y |
 | Path-table query (`FROM './'`, glob scoping, zero-match rows, live re-scan, JOIN vs named) | Y (#629) | Y | Y (#629) |
+| Path-table directory name is one level; `**` descends (#1223) | Y | Y | Y |
 | Path-table hidden `content` (excluded from `*`, selectable by name, non-UTF-8 → NULL) | Y (#629) | Y | Y (#629) |
 | Path-table error surface (`no such table` + `did you mean './…'?` hint reaches the caller; plain typo unchanged) | Y (#629) | Y | Y (#629) |
 

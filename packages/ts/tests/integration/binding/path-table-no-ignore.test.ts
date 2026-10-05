@@ -28,7 +28,7 @@ describe("path-table gitignore opt-out (#746)", () => {
   });
 
   const paths = async (db: DirSQL) => {
-    const rows = await db.query("SELECT path FROM './'");
+    const rows = await db.query("SELECT path FROM './**'");
     return rows.map((r) => r.path).sort();
   };
 
