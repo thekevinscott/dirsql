@@ -216,7 +216,8 @@ at once with no binding changes and no public-surface change.
 
 **Verbatim table columns (#361, epic #358) — parity by construction, no drift.**
 User tables carry exactly the columns declared in their DDL (row ownership is
-tracked in the internal `_dirsql_internal_rows` table, not injected columns).
+tracked in the internal `_dirsql_internal_rows` and `_dirsql_internal_ranges`
+tables, not injected columns).
 This lives entirely in the shared Rust core (`create_table` runs DDL verbatim;
 `query` returns vanilla rows), so `PRAGMA table_info` and `SELECT *` report the
 same user-only columns across all three SDKs.
@@ -232,7 +233,7 @@ together.
 
 **Internal tables unreachable through `query()` (#378, epic #358) — parity by
 construction, no drift.** The internal bookkeeping tables (`_dirsql_internal_rows`,
-`_dirsql_files`, `_dirsql_meta`) are denied on the `query()` path by a SQLite
+`_dirsql_internal_ranges`, `_dirsql_files`, `_dirsql_meta`) are denied on the `query()` path by a SQLite
 authorizer in the shared Rust core (`db::query`), so a read of any `_dirsql_*`
 table fails identically across all three SDKs (and the CLI's `POST /query`) with
 a "not authorized" error — no per-binding surface.

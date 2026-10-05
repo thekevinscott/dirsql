@@ -425,9 +425,10 @@ pub fn drop_user_tables(conn: &Connection) -> rusqlite::Result<()> {
         conn.execute(&format!("DROP TABLE IF EXISTS \"{name}\""), [])?;
     }
     conn.execute("DELETE FROM _dirsql_files", [])?;
-    // Wipe the row mapping too: a cold rebuild re-ingests every file and
-    // `insert_row` repopulates it; stale rows would duplicate/orphan state.
+    // Wipe the row ownership too: a cold rebuild re-ingests every file and
+    // repopulates it; stale rows would duplicate/orphan state.
     conn.execute("DELETE FROM _dirsql_internal_rows", [])?;
+    conn.execute("DELETE FROM _dirsql_internal_ranges", [])?;
     // The parsed path-table rows are keyed by their own identity hash, not by
     // the meta the caller just rejected, but they are cached data in a cache
     // being discarded: keep the file one thing, wholly stale or wholly warm.
@@ -606,6 +607,14 @@ mod tests {
         assert!(read_cached_files(&conn).unwrap().is_empty());
     }
 
+    /// These tests drive a raw connection, so `Db::open` never creates these.
+    const INTERNAL_ROWS_DDL: &str = "CREATE TABLE _dirsql_internal_rows (
+            table_name TEXT NOT NULL, file_path TEXT NOT NULL,
+            row_index INTEGER NOT NULL, rowid_ref INTEGER NOT NULL);
+         CREATE TABLE _dirsql_internal_ranges (
+            table_name TEXT NOT NULL, file_path TEXT NOT NULL,
+            first_rowid INTEGER NOT NULL, last_rowid INTEGER NOT NULL);";
+
     /// A `ddl` batch may leave a virtual table and its shadow tables in the
     /// cache. The sweep must clear all of it: the shadows go with the virtual
     /// table, and dropping one out from under the other is what poisons the
@@ -614,13 +623,7 @@ mod tests {
     fn drop_user_tables_clears_virtual_tables_and_their_shadows() {
         let conn = Connection::open_in_memory().unwrap();
         create_sidecar_tables(&conn).unwrap();
-        conn.execute(
-            "CREATE TABLE _dirsql_internal_rows (
-                table_name TEXT NOT NULL, file_path TEXT NOT NULL,
-                row_index INTEGER NOT NULL, rowid_ref INTEGER NOT NULL)",
-            [],
-        )
-        .unwrap();
+        conn.execute_batch(INTERNAL_ROWS_DDL).unwrap();
         conn.execute_batch(
             "CREATE TABLE notes (body TEXT);\n\
              CREATE VIRTUAL TABLE notes_fts USING fts5(body, content='notes');",
@@ -649,21 +652,19 @@ mod tests {
     fn drop_user_tables_clears_user_data_and_files_index() {
         let conn = Connection::open_in_memory().unwrap();
         create_sidecar_tables(&conn).unwrap();
-        // `_dirsql_internal_rows` is created by `Db::open` in production;
-        // declared inline here since this test uses a raw connection.
-        conn.execute(
-            "CREATE TABLE _dirsql_internal_rows (
-                table_name TEXT NOT NULL, file_path TEXT NOT NULL,
-                row_index INTEGER NOT NULL, rowid_ref INTEGER NOT NULL)",
-            [],
-        )
-        .unwrap();
+        conn.execute_batch(INTERNAL_ROWS_DDL).unwrap();
         conn.execute("CREATE TABLE rows (x TEXT)", []).unwrap();
-        conn.execute("INSERT INTO rows (x) VALUES ('a')", [])
+        conn.execute("INSERT INTO rows (x) VALUES ('a'), ('b')", [])
             .unwrap();
         conn.execute(
             "INSERT INTO _dirsql_internal_rows (table_name, file_path, row_index, rowid_ref) \
              VALUES ('rows', 'a.csv', 0, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO _dirsql_internal_ranges (table_name, file_path, first_rowid, last_rowid) \
+             VALUES ('rows', '', 2, 2)",
             [],
         )
         .unwrap();
@@ -694,6 +695,12 @@ mod tests {
             })
             .unwrap();
         assert_eq!(mapping_count, 0);
+        let range_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _dirsql_internal_ranges", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(range_count, 0);
         // Meta is preserved; callers replace it explicitly.
         let m = read_meta(&conn).unwrap();
         assert_eq!(m.get("x"), Some(&"y".to_string()));
