@@ -33,6 +33,7 @@ pub mod parsed_vtab;
 pub mod path_table;
 #[doc(hidden)]
 pub mod persist;
+mod posix_class;
 #[doc(hidden)]
 pub mod progress;
 #[doc(hidden)]
