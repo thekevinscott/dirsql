@@ -108,7 +108,7 @@ features = ["cli"]
 [[rust.exempt]]
 path = "src/listing.rs"
 rules = ["mutation"]
-lines = [42, 103, 115, 119, 120, 121, 122]
+lines = [42, 103, 119, 121, 122]
 reason = "Listing::read and read_into read a real directory; the ordering and the names are unit-tested on a pushed listing, and tests/scanner.rs (scan_finds_matching_files, scan_recurses_into_subdirectories), tests/vtab.rs (rowids_count_up_from_zero_in_scan_order) and tests/path_table_symlinks.rs assert what a real walk returns"
 
 [[rust.exempt]]
