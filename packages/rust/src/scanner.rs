@@ -506,9 +506,6 @@ fn judge_all<T: Sync, R: Send>(items: &[T], judge: &(dyn Fn(&T) -> R + Sync)) ->
         return items.iter().map(judge).collect();
     }
     let workers = thread::available_parallelism().map_or(1, usize::from);
-    if workers < 2 {
-        return items.iter().map(judge).collect();
-    }
     let per_worker = items.len().div_ceil(workers);
     thread::scope(|scope| {
         let handles: Vec<_> = items
@@ -674,7 +671,7 @@ mod tests {
 
     #[test]
     fn judge_all_shares_a_large_directory_across_threads() {
-        let items = vec![(); PARALLEL_ENTRIES * 4];
+        let items = vec![(); PARALLEL_ENTRIES];
         let threads: std::collections::HashSet<_> = judge_all(&items, &|()| thread::current().id())
             .into_iter()
             .collect();
