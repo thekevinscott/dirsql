@@ -700,6 +700,20 @@ mod tests {
     }
 
     #[test]
+    fn build_rows_stats_no_file() {
+        let stats = AtomicUsize::new(0);
+        build_rows(
+            Path::new(""),
+            vec![PathBuf::from("a.md"), PathBuf::from("b.md")],
+            &|_| {
+                stats.fetch_add(1, Ordering::Relaxed);
+                StatFacts::default()
+            },
+        );
+        assert_eq!(stats.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
     fn build_rows_yields_nothing_for_an_empty_scan() {
         let rows = build_rows(Path::new(""), Vec::new(), &|_| StatFacts::default());
         assert!(rows.is_empty());
