@@ -244,6 +244,7 @@ mod tests {
     fn a_dash_after_a_class_is_literal() {
         assert_eq!(expand_posix_classes("[[:digit:]-z]"), "[0-9z-]");
         assert_eq!(expand_posix_classes("[[:digit:]-]"), "[0-9-]");
+        assert_eq!(expand_posix_classes("[[:digit:]x-]"), "[0-9x-]");
     }
 
     #[test]
@@ -277,7 +278,15 @@ mod tests {
 
     #[test]
     fn a_bracket_without_a_class_is_untouched() {
-        for pattern in ["[a-c]*", "[!x].md", "[]]", "[[:a]", "{a,b}/[xy]"] {
+        for pattern in [
+            "[a-c]*",
+            "[!x].md",
+            "[]]",
+            "[[:a]",
+            "{a,b}/[xy]",
+            "[a:digit:]]",
+            "[[:a][:digit:]]",
+        ] {
             assert_eq!(expand_posix_classes(pattern), pattern);
         }
     }
