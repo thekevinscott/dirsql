@@ -6,10 +6,4 @@ allowed-tools: Bash(uvx dirsql context)
 
 !`uvx dirsql context`
 
-If the block above is empty, run `uvx dirsql context` and follow its guide.
-
-Always, whatever version runs:
-
-- dirsql is read-only. It never writes to the files it queries; make changes with your own tools.
-- Never use `--persist`.
-- Always pass `--format json`.
+dirsql is read-only. It never writes to the files it queries; make changes with your own tools.

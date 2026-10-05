@@ -15,7 +15,6 @@ on:
       - 'Cargo.lock'
       - 'testing-conventions.toml'
       - '.github/workflows/dirsql-rust-ci.yml'
-      - '.claude/skills/dirsql/**'
   pull_request:
     paths:
       - 'packages/rust/**'
@@ -28,7 +27,6 @@ on:
       - 'Cargo.lock'
       - 'testing-conventions.toml'
       - '.github/workflows/dirsql-rust-ci.yml'
-      - '.claude/skills/dirsql/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
