@@ -1,7 +1,7 @@
 {
   "command": "just test-e2e",
-  "ran_at": 1790975863,
+  "ran_at": 1791160145,
   "exit_code": 0,
-  "commit": "2aa0df818cd7140d9567930544cd2e5ad9346317",
+  "commit": "aca220b1da45e03e5ff612678b4cdca085dbdedf",
   "branch": "claude/1216-on-file-cleanup"
 }
