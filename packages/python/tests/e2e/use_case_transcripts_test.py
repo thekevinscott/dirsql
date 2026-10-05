@@ -91,7 +91,9 @@ for (project, role), n in sorted(counts.items()):
     print(project, role, n, sep="\\t")
 """
 
-NATIVE = "find projects -name '*.jsonl' -exec python3 messages.py {} + | python3 count.py"
+NATIVE = (
+    "find projects -name '*.jsonl' -exec python3 messages.py {} + | python3 count.py"
+)
 
 LINE_KINDS = (
     {
@@ -168,10 +170,6 @@ def describe_transcripts_speed_of_light():
         finally:
             shutil.rmtree(tree, ignore_errors=True)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="ingesting the parser's JSON rows costs more than a tenth of the parse itself",
-    )
     def it_matches_native_rows_within_the_bar(root):
         startup = startup_seconds()
 
