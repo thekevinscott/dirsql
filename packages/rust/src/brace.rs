@@ -198,7 +198,7 @@ fn steps(lo: i64, hi: i64, step: i64) -> Option<impl Iterator<Item = i128>> {
 
 /// Escape the braces bash left as literal text, so globset matches them
 /// rather than reading an alternation. A complete `[...]` class is copied as
-/// written; an unclosed one ends escaping so globset reports it as before.
+/// written; an unclosed one ends escaping so globset reports the error.
 fn escape_braces(word: &str) -> String {
     let chars: Vec<char> = word.chars().collect();
     let mut out = String::with_capacity(word.len());
