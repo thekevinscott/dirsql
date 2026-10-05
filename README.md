@@ -84,7 +84,7 @@ The canonical facts -- flags, schemas, contracts, and API shapes:
 - [CLI](docs/reference/cli.md) -- flags, `dirsql init`, defaults, exit codes
 - [Configuration file](docs/reference/config.md) -- the complete `.dirsql.toml` schema
 - [Command hooks](docs/reference/hooks.md) -- placeholders, stdout protocol, exit codes, timeouts
-- [Stat columns & glob captures](docs/reference/columns.md) -- `path`, `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`, and `{name}` captures
+- [Columns](docs/reference/columns.md) -- where a table's columns come from, and the stat columns `path`, `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`
 - [HTTP API](docs/reference/http-api.md) -- `POST /query`, `GET /events`, errors
 - [SDK](docs/reference/sdk.md) -- `DirSQL`, `Table`, and `RowEvent` across Python, Rust, and TypeScript
 - Migrations -- upgrade notes for breaking changes, one file per change under each package's `migrations.d/` ([python](packages/python/migrations.d/), [rust](packages/rust/migrations.d/), [ts](packages/ts/migrations.d/)); pre-fragment history is frozen in [`MIGRATIONS.md`](MIGRATIONS.md) at the repo root
