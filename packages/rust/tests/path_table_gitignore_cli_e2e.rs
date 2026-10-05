@@ -16,6 +16,7 @@ use tempfile::TempDir;
 /// and a `node_modules` for the built-in floor.
 fn fixture() -> TempDir {
     let root = TempDir::new().unwrap();
+    fs::create_dir(root.path().join(".git")).unwrap();
     fs::create_dir_all(root.path().join("dist")).unwrap();
     fs::create_dir_all(root.path().join(".hidden")).unwrap();
     fs::create_dir_all(root.path().join("node_modules/pkg")).unwrap();
@@ -113,6 +114,7 @@ fn no_ignore_works_in_the_default_query_mode() {
 #[test]
 fn a_root_gitignore_applies_to_a_scan_started_below_it() {
     let dir = TempDir::new().unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
     fs::create_dir_all(dir.path().join("docs")).unwrap();
     fs::write(dir.path().join(".gitignore"), "*.log\n").unwrap();
     fs::write(dir.path().join("docs/a.md"), "a").unwrap();
@@ -124,5 +126,25 @@ fn a_root_gitignore_applies_to_a_scan_started_below_it() {
         basenames(&out),
         vec!["a.md"],
         "the root `*.log` rule hides docs/z.log, as it does under './**'"
+    );
+}
+
+#[test]
+fn with_no_repo_a_gitignore_hides_nothing() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".claude/projects/p")).unwrap();
+    fs::write(dir.path().join(".claude/.gitignore"), "*\n").unwrap();
+    fs::write(dir.path().join(".claude/projects/p/t.jsonl"), "{}").unwrap();
+    let sql = format!(
+        "SELECT basename FROM '{}/*/*.jsonl'",
+        dir.path().join(".claude/projects").display()
+    );
+
+    let out = run(&dir, &["query", &sql]);
+
+    assert_eq!(
+        basenames(&out),
+        vec!["t.jsonl"],
+        "no .git encloses the tree, so its `*` .gitignore is not in force"
     );
 }

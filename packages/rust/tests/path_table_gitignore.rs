@@ -1,7 +1,7 @@
-//! Integration tests for gitignore-by-default in path-table scans: a
-//! `.gitignore` anywhere in the tree prunes the files it names below its own
-//! directory, hierarchically, like fd/ripgrep — with no `.git` directory
-//! required. Dot-named entries are hidden unless the path spells them.
+//! Integration tests for gitignore-by-default in path-table scans: inside a
+//! git repo, a `.gitignore` anywhere in the tree prunes the files it names
+//! below its own directory, hierarchically, like git, fd and ripgrep; with no
+//! repo, none applies. Dot-named entries are hidden unless the path spells them.
 //! Real filesystem, real SQLite, SDK public API.
 
 use std::fs;
@@ -9,10 +9,27 @@ use std::fs;
 use dirsql::{DirSQL, Row, Value};
 use tempfile::TempDir;
 
+/// An empty directory holding `.git`, which puts its `.gitignore` files in
+/// force.
+fn repo() -> TempDir {
+    let root = TempDir::new().unwrap();
+    fs::create_dir(root.path().join(".git")).unwrap();
+    root
+}
+
+/// A tree shaped like `~/.claude`: a `.gitignore` of `*` over transcripts.
+fn claude_home() -> TempDir {
+    let home = TempDir::new().unwrap();
+    fs::create_dir_all(home.path().join(".claude/projects/p")).unwrap();
+    fs::write(home.path().join(".claude/.gitignore"), "*\n").unwrap();
+    fs::write(home.path().join(".claude/projects/p/t.jsonl"), "{}").unwrap();
+    home
+}
+
 /// A tree with a root `.gitignore`, a nested one, ignored and kept files,
 /// hidden files, and a `node_modules` for the built-in floor.
 fn fixture() -> TempDir {
-    let root = TempDir::new().unwrap();
+    let root = repo();
     fs::create_dir_all(root.path().join("dist")).unwrap();
     fs::create_dir_all(root.path().join("src")).unwrap();
     fs::create_dir_all(root.path().join("sub")).unwrap();
@@ -100,7 +117,7 @@ fn a_nested_gitignore_applies_below_its_own_directory() {
 
 #[test]
 fn a_nested_gitignore_does_not_reach_outside_its_directory() {
-    let root = TempDir::new().unwrap();
+    let root = repo();
     fs::create_dir_all(root.path().join("sub")).unwrap();
     fs::write(root.path().join("sub/.gitignore"), "*.md\n").unwrap();
     fs::write(root.path().join("sub/inside.md"), "in").unwrap();
@@ -214,7 +231,7 @@ fn no_ignore_restores_gitignored_files_but_keeps_the_built_in_floor() {
 
 #[test]
 fn a_scoped_glob_still_honors_gitignore_rules_beneath_its_base() {
-    let root = TempDir::new().unwrap();
+    let root = repo();
     fs::create_dir_all(root.path().join("docs")).unwrap();
     fs::write(root.path().join("docs/.gitignore"), "draft.md\n").unwrap();
     fs::write(root.path().join("docs/draft.md"), "d").unwrap();
@@ -287,4 +304,50 @@ fn a_gitignore_above_the_repo_root_does_not_apply() {
         vec!["z.log"],
         "git reads no .gitignore above the repo root"
     );
+}
+
+#[test]
+fn with_no_repo_a_gitignore_does_not_apply_at_the_index_root() {
+    let home = claude_home();
+    let db = DirSQL::builder()
+        .root(home.path().join(".claude"))
+        .build()
+        .unwrap();
+
+    let scanned = paths(&db.query("SELECT path FROM './projects/*/*.jsonl'").unwrap());
+
+    assert_eq!(
+        scanned,
+        vec!["projects/p/t.jsonl"],
+        "no .git encloses the tree, so its `*` .gitignore is not in force"
+    );
+}
+
+#[test]
+fn with_no_repo_a_gitignore_does_not_apply_above_the_scan_start() {
+    let home = claude_home();
+    let db = open(&home);
+    let base = home.path().join(".claude/projects");
+
+    let sql = format!("SELECT path FROM '{}/*/*.jsonl'", base.display());
+    let scanned = paths(&db.query(&sql).unwrap());
+
+    assert!(
+        scanned.len() == 1 && scanned[0].ends_with("t.jsonl"),
+        "no .git encloses the tree, so its `*` .gitignore is not in force, got: {scanned:?}"
+    );
+}
+
+#[test]
+fn inside_a_repo_the_same_gitignore_hides_everything() {
+    let home = claude_home();
+    fs::create_dir(home.path().join(".claude/.git")).unwrap();
+    let db = DirSQL::builder()
+        .root(home.path().join(".claude"))
+        .build()
+        .unwrap();
+
+    let scanned = paths(&db.query("SELECT path FROM './projects/*/*.jsonl'").unwrap());
+
+    assert!(scanned.is_empty(), "got: {scanned:?}");
 }

@@ -12,6 +12,7 @@ from dirsql import DirSQL
 
 @pytest.fixture
 def gitignored_dir(tmp_path):
+    (tmp_path / ".git").mkdir()
     (tmp_path / ".gitignore").write_text("ignored.md\n", encoding="utf-8")
     (tmp_path / "kept.md").write_text("kept", encoding="utf-8")
     (tmp_path / "ignored.md").write_text("ignored", encoding="utf-8")
