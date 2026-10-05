@@ -37,6 +37,14 @@ fn comments_table() -> Table {
     )
 }
 
+// Staged outside the glob and renamed into place: `fs::write` truncates
+// before it writes, and the watcher can read the file in between.
+fn write_watched(root: &std::path::Path, name: &str, content: &str) {
+    let staged = root.join(format!("{name}.tmp"));
+    fs::write(&staged, content).unwrap();
+    fs::rename(&staged, root.join(name)).unwrap();
+}
+
 fn items_table() -> Table {
     Table::new(
         "items",
@@ -167,7 +175,7 @@ fn it_streams_watch_events() {
     let mut stream = db.watch().unwrap();
 
     std::thread::sleep(Duration::from_millis(250));
-    fs::write(root.path().join("new_item.txt"), "apple").unwrap();
+    write_watched(root.path(), "new_item.txt", "apple");
 
     let event = block_on(stream.next()).expect("watch event");
     match event {
@@ -416,7 +424,7 @@ fn it_streams_watch_update_events() {
     let mut stream = db.watch().unwrap();
 
     std::thread::sleep(Duration::from_millis(250));
-    fs::write(root.path().join("item.txt"), "final").unwrap();
+    write_watched(root.path(), "item.txt", "final");
 
     let event = block_on(stream.next()).expect("watch event");
     // Could be Update or Delete+Insert
