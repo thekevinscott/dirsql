@@ -364,10 +364,10 @@ impl Walk<'_> {
         linked: bool,
         visit: &mut dyn FnMut(PathBuf, &DirEntry),
     ) {
-        let entered_repo = self.gitignore && !self.in_repo && holds_git(dir);
-        if entered_repo {
-            self.in_repo = true;
-        }
+        let entered_repo = self.gitignore && holds_git(dir);
+        let was_in_repo = self.in_repo;
+        let inherited_frames = entered_repo.then(|| std::mem::take(&mut self.frames));
+        self.in_repo |= entered_repo;
         let mut pushed = false;
         if self.in_repo
             && let Some(matcher) = load_gitignore(dir)
@@ -398,9 +398,10 @@ impl Walk<'_> {
         if pushed {
             self.frames.pop();
         }
-        if entered_repo {
-            self.in_repo = false;
+        if let Some(frames) = inherited_frames {
+            self.frames = frames;
         }
+        self.in_repo = was_in_repo;
     }
 
     /// Whether the walk takes an entry at `depth`: the skip rules and the
