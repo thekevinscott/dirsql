@@ -375,24 +375,21 @@ impl Walk<'_> {
             self.frames.push(matcher);
             pushed = true;
         }
-        let below = depth + 1;
-        for (name, entry) in sorted_entries(dir) {
-            let Some(kind) = kind_of(&entry, self.glob.is_some()) else {
-                continue;
-            };
-            let next = self.next_states(states, &name, kind);
-            let linked = linked || kind == Kind::LinkedDir;
-            if !self.follows(linked, &next, kind) {
-                continue;
-            }
-            let is_dir = kind != Kind::File;
-            let child = rel.join(&name);
-            if self.admits(below, is_dir, &name, &entry.path(), &child) {
-                if is_dir {
-                    self.descend(&entry.path(), &child, below, &next, linked, visit);
-                } else {
-                    visit(child, &entry);
+        let entries = sorted_entries(dir);
+        let taken = judge_all(&entries, &|(name, entry)| {
+            self.take(name, entry, rel, depth + 1, states, linked)
+        });
+        for ((_, entry), taken) in entries.iter().zip(taken) {
+            match taken {
+                Some(Taken::Dir {
+                    child,
+                    next,
+                    linked,
+                }) => {
+                    self.descend(&entry.path(), &child, depth + 1, &next, linked, visit);
                 }
+                Some(Taken::File(child)) => visit(child, entry),
+                None => {}
             }
         }
         if pushed {
@@ -401,6 +398,40 @@ impl Walk<'_> {
         if entered_repo {
             self.in_repo = false;
         }
+    }
+
+    /// What the walk makes of one entry of the directory at `rel`, whose
+    /// entries sit at `depth`, reached with glob `states` and `linked` as
+    /// whether its path already crosses a followed symlink.
+    fn take(
+        &self,
+        name: &OsStr,
+        entry: &DirEntry,
+        rel: &Path,
+        depth: usize,
+        states: &[usize],
+        linked: bool,
+    ) -> Option<Taken> {
+        let kind = kind_of(entry, self.glob.is_some())?;
+        let linked = linked || kind == Kind::LinkedDir;
+        let next = self.next_states(states, name, kind);
+        if !self.follows(linked, &next, kind) {
+            return None;
+        }
+        let is_dir = kind != Kind::File;
+        let child = rel.join(name);
+        if !self.admits(depth, is_dir, name, &entry.path(), &child) {
+            return None;
+        }
+        Some(if is_dir {
+            Taken::Dir {
+                child,
+                next,
+                linked,
+            }
+        } else {
+            Taken::File(child)
+        })
     }
 
     /// Whether the walk takes an entry at `depth`: the skip rules and the
@@ -437,6 +468,23 @@ impl Walk<'_> {
             None => !linked,
         }
     }
+}
+
+/// An entry the walk takes: a directory to enter, with the glob states and
+/// link crossing it is entered with, or a file to visit.
+enum Taken {
+    Dir {
+        child: PathBuf,
+        next: Vec<usize>,
+        linked: bool,
+    },
+    File(PathBuf),
+}
+
+/// `judge` applied to each of `items`, in order, shared across the cores
+/// once there are enough items to pay for the threads.
+fn judge_all<T: Sync, R: Send>(items: &[T], judge: &(dyn Fn(&T) -> R + Sync)) -> Vec<R> {
+    items.iter().map(judge).collect()
 }
 
 /// What the walk makes of an entry, following a symlink only when
@@ -558,9 +606,41 @@ fn is_reserved_dir(depth: usize, is_dir: bool, file_name: &std::ffi::OsStr) -> b
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+    use std::thread;
+
+    const PARALLEL_ENTRIES: usize = 4096;
 
     // Real directory-walk behavior is covered by `tests/scanner.rs`
     // (unit-lint isolation); only the pure predicate is tested here.
+
+    #[test]
+    fn judge_all_keeps_the_order_of_its_items() {
+        let items: Vec<usize> = (0..PARALLEL_ENTRIES * 3).collect();
+        assert_eq!(
+            judge_all(&items, &|n| n * 2),
+            items.iter().map(|n| n * 2).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn judge_all_shares_a_large_directory_across_threads() {
+        let items = vec![(); PARALLEL_ENTRIES * 4];
+        let threads: std::collections::HashSet<_> = judge_all(&items, &|()| thread::current().id())
+            .into_iter()
+            .collect();
+        assert!(threads.len() > 1, "judged on {} thread(s)", threads.len());
+    }
+
+    #[test]
+    fn judge_all_judges_a_small_directory_on_the_calling_thread() {
+        let items = vec![(); PARALLEL_ENTRIES - 1];
+        let caller = thread::current().id();
+        assert!(
+            judge_all(&items, &|()| thread::current().id())
+                .iter()
+                .all(|id| *id == caller)
+        );
+    }
 
     #[test]
     fn is_reserved_dir_matches_top_level_dirsql() {
