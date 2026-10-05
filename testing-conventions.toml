@@ -107,7 +107,7 @@ features = ["cli"]
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [72, 116, 173, 201, 237]
+lines = [72, 120, 221, 251, 296]
 reason = "scan_below, scan_glob, walk, descend and sorted_entries read the filesystem; tests/scanner.rs (scan_finds_matching_files, scan_recurses_into_subdirectories) and tests/vtab.rs (glob_scopes_the_walk, rowids_count_up_from_zero_in_scan_order) assert what they return"
 
 [[rust.exempt]]
@@ -119,13 +119,13 @@ reason = "the walk's running file count is observable only through the CLI's pro
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [208]
+lines = [258]
 reason = "a child's depth decides the reserved top-level .dirsql rule for a real tree; tests/scanner.rs scan_excludes_top_level_dirsql_directory and tests/vtab.rs reserved_dirsql_directory_is_skipped assert it"
 
 [[rust.exempt]]
 path = "src/vtab.rs"
 rules = ["mutation"]
-lines = [289, 302]
+lines = [288, 301]
 reason = "rows walks and stats a real tree and column hands a cell to SQLite; the cell choice is unit-tested in `cell`, and tests/vtab.rs stat_columns_carry_real_values and content_is_excluded_from_star_but_selectable_by_name assert both through a real connection"
 
 [[rust.exempt]]
