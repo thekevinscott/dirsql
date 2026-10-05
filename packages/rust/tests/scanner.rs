@@ -5,7 +5,7 @@
 use std::fs;
 
 use dirsql::matcher::TableMatcher;
-use dirsql::scanner::{scan_directory, scan_subtree};
+use dirsql::scanner::{compile_glob, scan_directory, scan_glob, scan_subtree};
 use tempfile::TempDir;
 
 #[test]
@@ -176,4 +176,21 @@ fn scan_subtree_prunes_ignored_directories() {
     let results = scan_subtree(dir.path(), &moved, &matcher);
 
     assert_eq!(results, vec![(moved.join("keep.csv"), "t".to_string())]);
+}
+
+#[test]
+fn scan_glob_stops_outer_gitignore_rules_at_nested_repo() {
+    let outer = TempDir::new().unwrap();
+    fs::create_dir(outer.path().join(".git")).unwrap();
+    fs::write(outer.path().join(".gitignore"), "*.log\n").unwrap();
+    let nested = outer.path().join("repo");
+    fs::create_dir(&nested).unwrap();
+    fs::create_dir(nested.join(".git")).unwrap();
+    fs::write(nested.join("z.log"), "nested").unwrap();
+
+    let ignore = TableMatcher::new(&[], &[]).unwrap();
+    let glob = compile_glob("**").unwrap();
+    let results = scan_glob(outer.path(), &glob, &ignore, true);
+
+    assert_eq!(results, vec![std::path::PathBuf::from("repo/z.log")]);
 }

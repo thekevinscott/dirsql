@@ -175,6 +175,34 @@ fn help_flag_lists_the_subcommands_and_default_query_flags() {
 }
 
 #[test]
+fn query_glob_does_not_apply_outer_gitignore_inside_nested_repo() {
+    let outer = TempDir::new().unwrap();
+    fs::create_dir(outer.path().join(".git")).unwrap();
+    fs::write(outer.path().join(".gitignore"), "*.log\n").unwrap();
+    let nested = outer.path().join("repo");
+    fs::create_dir(&nested).unwrap();
+    fs::create_dir(nested.join(".git")).unwrap();
+    fs::write(nested.join("z.log"), "nested").unwrap();
+
+    let output = std::process::Command::cargo_bin("dirsql")
+        .unwrap()
+        .args(["query", "SELECT path FROM './**'", "--format", "json"])
+        .current_dir(outer.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "query failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Vec<Value>>(&output.stdout).unwrap(),
+        vec![json!({"path": "repo/z.log"})]
+    );
+}
+
+#[test]
 fn server_help_lists_the_bind_flags() {
     // #662: `--host`/`--port` are server-local now, documented under
     // `dirsql server --help`.
