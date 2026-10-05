@@ -364,8 +364,10 @@ impl Walk<'_> {
         linked: bool,
         visit: &mut dyn FnMut(PathBuf, &DirEntry),
     ) {
-        let entered_repo = self.gitignore && !self.in_repo && holds_git(dir);
-        if entered_repo {
+        let entered_repo = self.gitignore && holds_git(dir);
+        let was_in_repo = self.in_repo;
+        let inherited_frames = entered_repo.then(|| std::mem::take(&mut self.frames));
+        if entered_repo && !was_in_repo {
             self.in_repo = true;
         }
         let mut pushed = false;
@@ -398,7 +400,10 @@ impl Walk<'_> {
         if pushed {
             self.frames.pop();
         }
-        if entered_repo {
+        if let Some(frames) = inherited_frames {
+            self.frames = frames;
+        }
+        if entered_repo && !was_in_repo {
             self.in_repo = false;
         }
     }
@@ -1031,6 +1036,7 @@ mod tests {
             ignore: &ignore,
             glob: Some(&glob),
             gitignore: false,
+            in_repo: false,
             frames: Vec::new(),
         };
         assert!(walk.follows(false, &[1], Kind::Dir));
@@ -1046,6 +1052,7 @@ mod tests {
             ignore: &ignore,
             glob: Some(&glob),
             gitignore: false,
+            in_repo: false,
             frames: Vec::new(),
         };
         assert!(walk.follows(false, &[], Kind::Dir));
