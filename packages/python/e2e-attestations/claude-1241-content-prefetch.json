@@ -1,7 +1,7 @@
 {
   "command": "just test-e2e",
-  "ran_at": 1791160195,
+  "ran_at": 1791162240,
   "exit_code": 0,
-  "commit": "d899839e25c8663fcfdc33c9f83c68dcd10913c2",
+  "commit": "4c645eb195b0c6a04d18c2f1064157adb275c8a5",
   "branch": "claude/1241-content-prefetch"
 }
