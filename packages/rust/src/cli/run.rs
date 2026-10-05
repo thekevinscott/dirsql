@@ -339,7 +339,7 @@ pub fn run_cli(argv: Vec<String>) -> i32 {
     let code = runtime.block_on(async {
         match cli.command.take() {
             Some(Command::Init(args)) => run_init(args),
-            Some(Command::Query(args)) => run_query(args).await,
+            Some(Command::Query(args)) => run_query(args, &mut std::io::stdout()).await,
             Some(Command::Server(args)) => run_server(args).await,
             Some(Command::Context) => {
                 print!("{}", super::context::guide());
@@ -362,12 +362,15 @@ pub fn run_cli(argv: Vec<String>) -> i32 {
 async fn run_default(cli: Cli) -> u8 {
     match cli.sql {
         Some(sql) => {
-            run_query(QueryArgs {
-                sql,
-                on_file: cli.on_file,
-                format: cli.format,
-                common: cli.common,
-            })
+            run_query(
+                QueryArgs {
+                    sql,
+                    on_file: cli.on_file,
+                    format: cli.format,
+                    common: cli.common,
+                },
+                &mut std::io::stdout(),
+            )
             .await
         }
         None => {
@@ -396,11 +399,11 @@ async fn run_default(cli: Cli) -> u8 {
 
 /// One-shot `dirsql query`: build the index exactly as server mode would
 /// (same `load_state` / hook loading), run the SQL through the shared
-/// [`execute_query`] pipeline, print the result JSON on stdout, and exit.
+/// [`execute_query`] pipeline, write the result to `out`, and exit.
 /// Any [`QueryFailure`](super::execute::QueryFailure) prints its
 /// message — the same string the HTTP `{"error": …}` body carries — to
 /// stderr with a non-zero exit.
-async fn run_query(args: QueryArgs) -> u8 {
+async fn run_query(args: QueryArgs, out: &mut dyn Write) -> u8 {
     let parser = match resolve_on_file(&args.on_file) {
         Ok(parser) => parser,
         Err(message) => {
@@ -422,10 +425,9 @@ async fn run_query(args: QueryArgs) -> u8 {
     };
     match printed {
         Ok(text) => {
-            let mut stdout = std::io::stdout().lock();
             // A closed pipe (`| head`) is the reader's choice, not a failure.
-            let _ = stdout.write_all(&text);
-            let _ = stdout.flush();
+            let _ = out.write_all(&text);
+            let _ = out.flush();
             0
         }
         Err(failure) => {
@@ -674,6 +676,43 @@ mod tests {
         // Blank SQL is NOT rejected here: it flows to the pipeline's shared
         // empty-rejection so both surfaces emit the identical message.
         assert_eq!(query_body("   "), r#"{"sql":"   "}"#);
+    }
+
+    fn query_args(argv: &[&str]) -> QueryArgs {
+        match Cli::parse_from(argv).command {
+            Some(Command::Query(args)) => args,
+            other => panic!("expected a query subcommand, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_query_writes_the_rows_as_json_and_exits_zero() {
+        let mut out = Vec::new();
+        let args = query_args(&[
+            "dirsql",
+            "query",
+            "--format",
+            "json",
+            "SELECT 1 AS a, 'x' AS b",
+        ]);
+        assert_eq!(run_query(args, &mut out).await, 0);
+        assert_eq!(out, b"[{\"a\":1,\"b\":\"x\"}]\n");
+    }
+
+    #[tokio::test]
+    async fn run_query_writes_the_rows_as_a_table_when_asked() {
+        let mut out = Vec::new();
+        let args = query_args(&["dirsql", "query", "--format", "table", "SELECT 1 AS a"]);
+        assert_eq!(run_query(args, &mut out).await, 0);
+        assert_eq!(out, b"a\n-\n1\n\n1 row\n");
+    }
+
+    #[tokio::test]
+    async fn run_query_exits_one_and_writes_nothing_when_the_query_fails() {
+        let mut out = Vec::new();
+        let args = query_args(&["dirsql", "query", "--format", "json", "SELECT nope"]);
+        assert_eq!(run_query(args, &mut out).await, 1);
+        assert!(out.is_empty());
     }
 
     /// The `ConfigArgs` parsed from a `query` subcommand invocation (#609:
