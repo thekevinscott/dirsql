@@ -1,7 +1,7 @@
 {
   "command": "pnpm test:e2e",
-  "ran_at": 1791227109,
+  "ran_at": 1791230573,
   "exit_code": 0,
-  "commit": "e8cf66b23f7b8b67f3efcf9bd5af9c56809daefe",
+  "commit": "c881e13cf4f94ebf5862ade991ecfbcd81d4600a",
   "branch": "claude/1286-nested-repo"
 }
