@@ -47,8 +47,10 @@ dirsql query "SELECT basename FROM notes ORDER BY basename" -c ./.dirsql.toml
 ## Notes
 
 - `ignore` lives in a config file, so it needs one:
-  [configless mode](../reference/cli.md#configless-mode) indexes
-  everything with no ignores.
+  [configless mode](../reference/cli.md#configless-mode) has no `ignore`
+  list, though its path-tables still apply the built-in
+  [skip rules](../reference/path-tables.md#skip-rules) and respect
+  `.gitignore`.
 - The top-level `.dirsql/` directory is always excluded, ignore list or
   not — it is reserved for `dirsql`'s own metadata
   ([config reference](../reference/config.md#dirsql-keys)).

@@ -269,8 +269,10 @@ defines **no named tables**. Filesystem queries go through
 scanned live. A `./.dirsql.toml` sitting in the current directory is **not**
 auto-loaded (pass it with `-c ./.dirsql.toml` to use it).
 
-`'./'` is the whole root — every file at any depth, one row per file, with
-all seven [stat columns](./columns.md): `path`, `basename`, `dir`, `ext`,
+`'./'` lists the files directly inside the root, one level, like `ls`;
+`'./**'` reaches every depth. Both scans apply the path-table
+[skip rules](./path-tables.md#skip-rules), and each returns one row per file
+with all seven [stat columns](./columns.md): `path`, `basename`, `dir`, `ext`,
 `size`, `mtime`, `ctime`.
 
 ```bash
