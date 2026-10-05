@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1791225357,
+  "exit_code": 0,
+  "commit": "298b01b2bc47c514f59298c512c6c96ea6c0563c",
+  "branch": "claude/1301-walk-in-repo"
+}
