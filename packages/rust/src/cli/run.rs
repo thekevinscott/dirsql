@@ -6,6 +6,7 @@
 //!   `docs/reference/cli.md`.
 //! - `server`: the HTTP server documented in `docs/reference/cli.md`.
 //! - `init`: writes a fixed starter `.dirsql.toml`; see `docs/reference/cli.md`.
+//! - `context`: prints the agent usage guide; see [`context`](super::context).
 //! - No subcommand and no SQL (bare `dirsql`): an interactive REPL over the
 //!   current directory; see [`repl`](super::repl).
 //!
@@ -174,6 +175,10 @@ enum Command {
     /// over `POST /query` and `GET /events`. Config flags follow the
     /// subcommand: `dirsql server -c <cfg>`. Runs until `SIGINT` / `SIGTERM`.
     Server(ServerArgs),
+
+    /// Print the agent usage guide for this dirsql version as markdown:
+    /// path-table syntax, verified recipes, and fixes for common errors.
+    Context,
 }
 
 #[derive(Debug, Args)]
@@ -333,6 +338,10 @@ pub fn run_cli(argv: Vec<String>) -> i32 {
             Some(Command::Init(args)) => run_init(args),
             Some(Command::Query(args)) => run_query(args).await,
             Some(Command::Server(args)) => run_server(args).await,
+            Some(Command::Context) => {
+                print!("{}", super::context::guide());
+                0
+            }
             None => run_default(cli).await,
         }
     });
@@ -1078,6 +1087,23 @@ mod tests {
     #[test]
     fn run_cli_returns_zero_for_help() {
         assert_eq!(run_cli(vec!["dirsql".into(), "--help".into()]), 0);
+    }
+
+    #[test]
+    fn context_parses_as_its_own_subcommand_not_as_sql() {
+        let cli = Cli::try_parse_from(["dirsql", "context"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Context)));
+        assert!(cli.sql.is_none());
+    }
+
+    #[test]
+    fn context_takes_no_flags() {
+        assert!(Cli::try_parse_from(["dirsql", "context", "--format", "json"]).is_err());
+    }
+
+    #[test]
+    fn run_cli_returns_zero_for_context() {
+        assert_eq!(run_cli(vec!["dirsql".into(), "context".into()]), 0);
     }
 
     #[test]

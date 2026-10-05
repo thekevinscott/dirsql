@@ -32,6 +32,15 @@ def describe_with_discovered_plugins():
         ):
             assert with_discovered_plugins([init, "--force"]) == [init, "--force"]
 
+    def it_leaves_context_untouched():
+        context = "".join(["con", "text"])
+        with (
+            patch.object(module, "discovery_disabled", return_value=False),
+            patch.object(module, "discovered_fragments", side_effect=AssertionError),
+            patch.object(module, "user_passed_config", side_effect=AssertionError),
+        ):
+            assert with_discovered_plugins([context]) == [context]
+
     def it_is_a_no_op_when_no_plugins_are_installed():
         with (
             patch.object(module, "discovery_disabled", return_value=False),
