@@ -129,6 +129,24 @@ fn a_parsed_scan_honors_the_default_ignore_rules() {
 }
 
 #[test]
+fn a_parsed_scan_enters_node_modules_the_glob_names() {
+    let root = fixture();
+    fs::create_dir_all(root.path().join("node_modules/pkg")).unwrap();
+    fs::write(
+        root.path().join("node_modules/pkg/dep.md"),
+        r#"[{"title":"dependency","n":9}]"#,
+    )
+    .unwrap();
+
+    let db = open_with_parser(&root);
+    let rows = db
+        .query("SELECT title FROM './**/node_modules/**/*.md'")
+        .unwrap();
+
+    assert_eq!(texts(&rows, "title"), vec!["dependency"]);
+}
+
+#[test]
 fn a_file_the_parser_cannot_handle_fails_the_whole_table() {
     let root = fixture();
     fs::write(root.path().join("docs/bad.md"), "not valid json").unwrap();
