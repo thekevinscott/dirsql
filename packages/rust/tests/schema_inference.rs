@@ -21,12 +21,11 @@ const COMBINE_SCRIPT: &str = "#!/bin/sh\nprintf '['\nsep=''\nfor f; do\n  body=$
 /// The SQL that declares a vtab named `t` over `glob` under `dir`, parsed by
 /// the combining script written into `dir`. The parser runs from the index
 /// root, the last argument, which is `dir` itself here, so the script is
-/// named relative to it. The empty argument before it is the cache path:
-/// this vtab is ephemeral, so there is nowhere to reuse rows from.
+/// named relative to it.
 fn declare(dir: &TempDir, glob: &str) -> String {
     fs::write(dir.path().join("combine.sh"), COMBINE_SCRIPT).unwrap();
     format!(
-        "CREATE VIRTUAL TABLE t USING dirsql_parsed('{0}', '{1}', 'sh combine.sh', 'gitignore', '', '{0}')",
+        "CREATE VIRTUAL TABLE t USING dirsql_parsed('{0}', '{1}', 'sh combine.sh', 'gitignore', '{0}')",
         dir.path().display(),
         glob,
     )

@@ -1,9 +1,7 @@
-"""Binding-tier tests for the scan's record of files it skipped (#715).
-
-Since #714 a file whose ``on_file`` hook raises, or whose row the table
-rejects, is skipped rather than failing the scan. The CLI reports those skips
-on stderr and exits 23; a Python caller had no equivalent, so an incomplete
-index was indistinguishable from a complete one -- the regression this closes.
+"""Binding-tier tests for the scan's record of files a per-file ``on_file``
+hook skipped: one whose hook raises, or whose row the table rejects, is skipped
+rather than failing the scan, and the caller can tell an incomplete index from
+a complete one.
 """
 
 import os

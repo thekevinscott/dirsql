@@ -223,11 +223,7 @@ every statement, so it is reported once and exits `1` before the first prompt.
 | Code | Meaning |
 |---|---|
 | `0` | Clean EOF (Ctrl-D, `exit`, `quit`, or the end of a piped script) — **including when statements failed**. Matches interactive `sqlite3`; use [`dirsql query`](#dirsql-query) when a script needs a statement's exit status. |
-| `1` | The index could not be built (a bad `-c`, an unresolvable `--on-file`), or stdin could not be read. Nothing was executed. |
-
-`23` (partial scan) is not produced here: skipped files are reported before the
-first prompt, and a session's exit code describes the session rather than one
-scan.
+| `1` | The index could not be built (a bad `-c`, an unresolvable `--on-file`, a failed `on-file` command), or stdin could not be read. Nothing was executed. |
 
 ## `dirsql server`
 

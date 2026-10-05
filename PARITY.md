@@ -399,12 +399,13 @@ to the Rust-core-public `functions::DEFAULT_FUNCTION_TIMEOUT` (30s, #820) —
 config-schema surface shared by every install, with **no** Python/TypeScript
 public-API binding, so no drift.
 
-- **`on-file` (B2 #327).** A **required** `[[table]]` key naming a per-file
-  command whose JSON-array stdout becomes the table's rows (interpolation-only
-  placeholders `{path}` (the file's **absolute** path, #542) / `{root}` — a
-  template that omits one receives no value, no append-if-absent, #538/#539;
-  per-file error isolation; unbounded since #820 — bound a hook by wrapping
-  its command in `timeout(1)`). A `[[table]]` without
+- **`on-file` (B2 #327).** A **required** `[[table]]` key naming a per-table
+  command whose JSON-array stdout becomes the table's rows (every matched
+  file's **absolute** path appended as a trailing argument; the
+  interpolation-only placeholder `{root}` — a template that omits it receives
+  no value, no append-if-absent, #538/#539; a failed command fails the build;
+  unbounded since #820 — bound a hook by wrapping its command in
+  `timeout(1)`). A `[[table]]` without
   it is a load error since #634 (after fact-injection removal a hook-less table
   would emit only all-NULL rows), so `config::TableConfig::on_file` is `String`,
   not `Option<String>`. Parsed and executed in the shared Rust core
@@ -423,8 +424,8 @@ public-API binding, so no drift.
 
 - **`--on-file` (path-table parser, #631).** A `dirsql query` flag naming a
   command that supplies every path-table's rows and schema (a JSON array of row
-  objects; the `on-file` hook contract — argv splitting, `{path}`/`{root}`,
-  per-file failure isolation). The stat columns are not
+  objects; the `on-file` hook contract — argv splitting, `{root}`, trailing
+  paths, a failed command fails the query). The stat columns are not
   reachable on a parsed path-table; parsed scans honor the same skip rules stat
   scans do. Threaded through the shared Rust core (`db::Db::set_path_table_parser`
   → the `dirsql_parsed` module) via a **doc-hidden** `DirSQLBuilder::path_table_parser`
@@ -451,7 +452,7 @@ public-API binding, so no drift.
 - `AsyncDirSQL` uses tokio and `OnceCell` internally.
 - Watch returns `futures_channel::mpsc::UnboundedReceiver<RowEvent>` implementing `Stream`.
 - All fallible operations return `Result<T, DirSqlError>`. Statements classified as writes by SQLite's `sqlite3_stmt_readonly` surface as the unit variant `DirSqlError::WriteForbidden`; in the Python/TS bindings the same condition is a `RuntimeError` / `Error` with a "read-only" message.
-- **Parity restored (dirsql#715).** All three SDKs expose the files a scan could not index: Rust `DirSQL::scan_failures() -> &[OnFileFailure]`, Python `await db.scan_failures()` (a list of `ScanFailure` with `.path` / `.message`, importable as `from dirsql import ScanFailure`), TypeScript `await db.scanFailures()` (`ScanFailure[]` with `path` / `message`, exported from the package barrel). A hook that fails, or a row the table rejects, skips that file rather than the scan; the list is how a caller learns the index is incomplete and which files are missing. Empty after a clean scan. The CLI additionally reports skips on stderr (capped at ten, then `... and N more`) and exits `23` — CLI-only by nature, since a library has no exit code. `--allow-skipped` remains unbuilt and is tracked in #715.
+- **Parity restored (dirsql#715).** All three SDKs expose the files a scan could not index: Rust `DirSQL::scan_failures() -> &[OnFileFailure]`, Python `await db.scan_failures()` (a list of `ScanFailure` with `.path` / `.message`, importable as `from dirsql import ScanFailure`), TypeScript `await db.scanFailures()` (`ScanFailure[]` with `path` / `message`, exported from the package barrel). A programmatic per-file hook that fails, or a row the table rejects, skips that file rather than the scan; the list is how a caller learns the index is incomplete and which files are missing. Empty after a clean scan. A config-declared `on-file` command runs once per table, so its failure is a build error, not a skip; the CLI prints it and exits `1`. `--allow-skipped` remains unbuilt and is tracked in #715.
 
 ### TypeScript
 - Uses `camelCase` for method names.
@@ -486,7 +487,7 @@ Real-core file map:
 | Async / ready | `async_dirsql_test.py` | `async_sdk.rs` | `index.test.ts` |
 | Watch events | `async_dirsql_test.py`, `docs_gaps_test.py` | `sdk.rs`, `watcher.rs`, `watch_relative_root.rs` | `watch.test.ts`, `index.test.ts` |
 | Config file | `from_config_test.py` | `from_config.rs`, `config.rs` | `from-config.test.ts` |
-| Persistence | `persist_test.py` | `persist.rs`, `persist_parsed_path_table.rs` | `persist.test.ts` |
+| Persistence | `persist_test.py` | `persist.rs` | `persist.test.ts` |
 | Extensions | `extensions_test.py`, `extension_package_test.py`, `config_extension_package_test.py` | `extensions.rs` | `extensions.test.ts`, `extension-package.test.ts`, `config-extension-package.test.ts` |
 | Quoted-identifier DDL (#204) | `table_name_resolution_test.py` | `table_name_resolution.rs` | (covered by `declared-table-name.test.ts`) |
 | Declared table `name` (#962) | `declared_table_name_test.py` | `declared_table_name.rs`, `declared_table_name_e2e.rs` | `declared-table-name.test.ts` |
@@ -604,7 +605,6 @@ incl. #313).
 | Persist: `.dirsql/` excluded from walk | Y      | Y    | Y          |
 | Persist: custom persist_path honored   | Y      | Y    | Y          |
 | Persist: unchanged run leaves cache byte-identical | Y | Y | Y |
-| Persist: parsed path-table reuses cached rows (#825) | N/A — `--on-file` is a CLI flag, not an SDK surface | Y (`persist_parsed_path_table.rs`) | N/A — same |
 
 ### Extensions
 

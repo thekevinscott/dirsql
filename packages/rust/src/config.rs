@@ -507,13 +507,13 @@ ignore = ["node_modules/**", ".git/**"]
 name = "comments"
 ddl = "CREATE TABLE comments (thread_id TEXT, path TEXT)"
 glob = "_comments/{thread_id}/index.jsonl"
-on-file = "cat {path}"
+on-file = "cat"
 
 [[table]]
 name = "items"
 ddl = "CREATE TABLE items (path TEXT, size INTEGER)"
 glob = "catalog/*.json"
-on-file = "cat {path}"
+on-file = "cat"
 strict = true
 "#;
         let config = load_config_str(toml).unwrap();
@@ -535,7 +535,7 @@ strict = true
 [[table]]
 ddl = "CREATE TABLE t (x TEXT)"
 glob = "*.json"
-on-file = "cat {path}"
+on-file = "cat"
 "#;
         let err = load_config_str(toml).unwrap_err();
         assert!(
@@ -552,7 +552,7 @@ on-file = "cat {path}"
 name = "   "
 ddl = "CREATE TABLE t (x TEXT)"
 glob = "*.json"
-on-file = "cat {path}"
+on-file = "cat"
 "#;
         let err = load_config_str(toml).unwrap_err();
         assert!(
@@ -570,7 +570,7 @@ on-file = "cat {path}"
 name = "messages"
 ddl = "CREATE TABLE notes (x TEXT)"
 glob = "*.json"
-on-file = "cat {path}"
+on-file = "cat"
 "#;
         let config = load_config_str(toml).unwrap();
         assert_eq!(config.tables[0].name, "messages");
@@ -582,7 +582,7 @@ on-file = "cat {path}"
 [[table]]
 name = "t"
 glob = "*.json"
-on-file = "cat {path}"
+on-file = "cat"
 "#;
         let err = load_config_str(toml).unwrap_err();
         assert!(err.to_string().contains("ddl"));
@@ -632,7 +632,7 @@ ignore = ["*.tmp"]
 name = "t"
 ddl = "CREATE TABLE t (x TEXT)"
 glob = "*.json"
-on-file = "cat {path}"
+on-file = "cat"
 "#;
         let config = load_config_str(toml).unwrap();
         assert!(config.ignore.is_empty());
@@ -674,19 +674,19 @@ persist_path = "/var/cache/dirsql.db"
 name = "a"
 ddl = "CREATE TABLE a (path TEXT)"
 glob = "a/*.json"
-on-file = "cat {path}"
+on-file = "cat"
 
 [[table]]
 name = "b"
 ddl = "CREATE TABLE b (path TEXT)"
 glob = "b/*.csv"
-on-file = "cat {path}"
+on-file = "cat"
 
 [[table]]
 name = "c"
 ddl = "CREATE TABLE c (path TEXT)"
 glob = "c/*.yaml"
-on-file = "cat {path}"
+on-file = "cat"
 "#;
         let config = load_config_str(toml).unwrap();
         assert_eq!(config.tables.len(), 3);
@@ -704,7 +704,7 @@ on-file = "cat {path}"
 name = "t"
 ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
-on-file = "cat {path}"
+on-file = "cat"
 format = "json"
 "#;
         let err = load_config_str(toml).unwrap_err();
@@ -772,7 +772,7 @@ entrypoint = "sqlite3_vec_init"
 name = "t"
 ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
-on-file = "cat {path}"
+on-file = "cat"
 "#;
         let config = load_config_str(toml).unwrap();
         assert_eq!(config.extensions.len(), 1);
@@ -814,7 +814,7 @@ entrypoint = "sqlite3_x_init"
 name = "t"
 ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
-on-file = "cat {path}"
+on-file = "cat"
 "#;
         let config = load_config_str(toml).unwrap();
         assert!(config.extensions.is_empty());
@@ -842,14 +842,11 @@ path = "b.so"
 name = "papers"
 ddl = "CREATE TABLE papers (paper_id TEXT, title TEXT)"
 glob = "**/meta.json"
-on-file = "uv run python extract_papers.py {path}"
+on-file = "uv run python extract_papers.py"
 "#;
         let config = load_config_str(toml).unwrap();
         assert_eq!(config.tables.len(), 1);
-        assert_eq!(
-            config.tables[0].on_file,
-            "uv run python extract_papers.py {path}"
-        );
+        assert_eq!(config.tables[0].on_file, "uv run python extract_papers.py");
     }
 
     #[test]
@@ -939,7 +936,7 @@ entrypoint = "sqlite3_vec_init"
 name = "t"
 ddl = "CREATE TABLE t (path TEXT)"
 glob = "*.json"
-on-file = "cat {path}"
+on-file = "cat"
 "#);
         let merged = combine_configs(&[(src("/proj/.dirsql.toml"), config.clone())]).unwrap();
         assert_eq!(merged.ignore, config.ignore);
@@ -956,20 +953,20 @@ on-file = "cat {path}"
 name = "a"
 ddl = "CREATE TABLE a (path TEXT)"
 glob = "a/*.json"
-on-file = "cat {path}"
+on-file = "cat"
 
 [[table]]
 name = "b"
 ddl = "CREATE TABLE b (path TEXT)"
 glob = "b/*.json"
-on-file = "cat {path}"
+on-file = "cat"
 "#);
         let b = cfg(r#"
 [[table]]
 name = "c"
 ddl = "CREATE TABLE c (path TEXT)"
 glob = "c/*.json"
-on-file = "cat {path}"
+on-file = "cat"
 "#);
         let merged = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap();
         let ddls: Vec<&str> = merged.tables.iter().map(|t| t.ddl.as_str()).collect();
@@ -1015,10 +1012,10 @@ on-file = "cat {path}"
     #[test]
     fn combine_duplicate_table_name_errors_naming_both_sources() {
         let a = cfg(
-            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\non-file = \"cat {path}\"\n",
+            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\non-file = \"cat\"\n",
         );
         let b = cfg(
-            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\non-file = \"cat {path}\"\n",
+            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\non-file = \"cat\"\n",
         );
         let err = combine_configs(&[
             (src("/proj/.dirsql.toml"), a),
@@ -1048,8 +1045,8 @@ on-file = "cat {path}"
         // The single-entry identity path runs no collision check, exactly like
         // a plain single-config load.
         let config = cfg(concat!(
-            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\non-file = \"cat {path}\"\n",
-            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\non-file = \"cat {path}\"\n",
+            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\non-file = \"cat\"\n",
+            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\non-file = \"cat\"\n",
         ));
         let merged = combine_configs(&[(src("/a"), config)]).unwrap();
         assert_eq!(merged.tables.len(), 2);
@@ -1058,8 +1055,8 @@ on-file = "cat {path}"
     #[test]
     fn combine_intra_config_duplicate_in_multi_merge_errors() {
         let a = cfg(concat!(
-            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\non-file = \"cat {path}\"\n",
-            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\non-file = \"cat {path}\"\n",
+            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\non-file = \"cat\"\n",
+            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\non-file = \"cat\"\n",
         ));
         let b = cfg("[dirsql]\nignore = [\"c/**\"]\n");
         let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
@@ -1080,10 +1077,10 @@ on-file = "cat {path}"
     #[test]
     fn combine_duplicate_table_name_detected_through_quoting() {
         let a = cfg(
-            "[[table]]\nname = 't'\nddl = 'CREATE TABLE \"t\" (x TEXT)'\nglob = \"a/*.json\"\non-file = \"cat {path}\"\n",
+            "[[table]]\nname = 't'\nddl = 'CREATE TABLE \"t\" (x TEXT)'\nglob = \"a/*.json\"\non-file = \"cat\"\n",
         );
         let b = cfg(
-            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\non-file = \"cat {path}\"\n",
+            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\non-file = \"cat\"\n",
         );
         let err = combine_configs(&[(src("/a"), a), (src("/b"), b)]).unwrap_err();
         assert!(
@@ -1095,10 +1092,10 @@ on-file = "cat {path}"
     #[test]
     fn combine_error_display_includes_package_source_verbatim() {
         let a = cfg(
-            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\non-file = \"cat {path}\"\n",
+            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"a/*.json\"\non-file = \"cat\"\n",
         );
         let b = cfg(
-            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\non-file = \"cat {path}\"\n",
+            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (y TEXT)\"\nglob = \"b/*.json\"\non-file = \"cat\"\n",
         );
         let err = combine_configs(&[
             (src("/proj/.dirsql.toml"), a),
@@ -1113,13 +1110,13 @@ on-file = "cat {path}"
     #[test]
     fn combine_three_configs_concatenates_across_all() {
         let a = cfg(
-            "[dirsql]\nignore = [\"a/**\"]\n\n[[table]]\nname = \"a\"\nddl = \"CREATE TABLE a (x TEXT)\"\nglob = \"a/*\"\non-file = \"cat {path}\"\n",
+            "[dirsql]\nignore = [\"a/**\"]\n\n[[table]]\nname = \"a\"\nddl = \"CREATE TABLE a (x TEXT)\"\nglob = \"a/*\"\non-file = \"cat\"\n",
         );
         let b = cfg(
-            "[[table]]\nname = \"b\"\nddl = \"CREATE TABLE b (x TEXT)\"\nglob = \"b/*\"\non-file = \"cat {path}\"\n",
+            "[[table]]\nname = \"b\"\nddl = \"CREATE TABLE b (x TEXT)\"\nglob = \"b/*\"\non-file = \"cat\"\n",
         );
         let c = cfg(
-            "[dirsql]\nignore = [\"c/**\"]\n\n[[table]]\nname = \"c\"\nddl = \"CREATE TABLE c (x TEXT)\"\nglob = \"c/*\"\non-file = \"cat {path}\"\n",
+            "[dirsql]\nignore = [\"c/**\"]\n\n[[table]]\nname = \"c\"\nddl = \"CREATE TABLE c (x TEXT)\"\nglob = \"c/*\"\non-file = \"cat\"\n",
         );
         let merged = combine_configs(&[(src("/a"), a), (src("/b"), b), (src("/c"), c)]).unwrap();
         assert_eq!(merged.ignore, vec!["a/**", "c/**"]);

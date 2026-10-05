@@ -159,18 +159,14 @@ placeholder, same timeout. Its output *is* the table:
   across the emitted rows. The stat columns (`path`, `size`, …) are **not**
   reachable on a parsed path-table — a parser that wants the path emits it (it
   has the paths). The two modes stay cleanly separate.
-- **Failures are isolated per file.** A file whose parser fails (spawn, non-zero
-  exit, timeout, or no output) or whose output is not a JSON array of rows
-  contributes no rows; a one-line warning naming the file goes to stderr and the
-  scan continues. The schema is inferred from the files that did parse.
+- **A parser failure is the table's failure.** A run that fails (spawn,
+  non-zero exit, a `timeout(1)` kill, or no output) or whose output is not a
+  JSON array of rows fails the query with an error naming the table; there is
+  no partial table.
 - **The skip rules still apply.** A parsed scan honors the same `node_modules`
   /`.git`/`ignore` rules a stat scan does (see below).
-- **`--persist` skips the parser for unchanged files.** With a
-  [persistent cache](/howto/persist), each file's parser output is stored
-  against its stat metadata, so a later run over an unchanged tree serves the
-  rows from the cache and spawns no process. Change the file, the glob, the
-  parser command, or the dirsql version and that file (or that whole table) is
-  parsed again.
+- **The parser runs on every start.** A parsed path-table is not kept in the
+  [persistent cache](/howto/persist); declared tables are.
 
 `--on-file` applies to **every** path-table in the query and may be given **at
 most once**. For different parsers per file set, define named tables in a

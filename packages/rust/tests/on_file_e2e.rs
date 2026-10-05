@@ -286,7 +286,7 @@ on-file = "sh count.sh"
 }
 
 #[test]
-fn a_table_whose_command_errors_is_empty_while_the_server_stays_up() {
+fn a_table_whose_command_errors_leaves_the_server_unavailable() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("extract.sh"),
@@ -316,9 +316,13 @@ on-file = "sh extract.sh"
         .json(&json!({"sql": "SELECT name FROM items"}))
         .send()
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body: Vec<Value> = resp.json().unwrap();
-    assert!(body.is_empty(), "a failed table has no rows: {body:?}");
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body: Value = resp.json().unwrap();
+    let error = body["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("`items`"),
+        "the failed table is named in the error: {body}"
+    );
 
     kill_and_wait(child);
 }
