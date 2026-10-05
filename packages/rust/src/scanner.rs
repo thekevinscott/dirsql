@@ -4,6 +4,7 @@ use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, DirEntry};
 use std::path::{Path, PathBuf};
+use std::thread;
 
 /// Top-level directory name reserved for `dirsql`'s own metadata (e.g. the
 /// persistent cache database). Always excluded from the scan, regardless of
@@ -414,13 +415,24 @@ impl Walk<'_> {
     ) -> Option<Taken> {
         let kind = kind_of(entry, self.glob.is_some())?;
         let linked = linked || kind == Kind::LinkedDir;
-        let next = self.next_states(states, name, kind);
+        let next = if linked || kind != Kind::File {
+            self.next_states(states, name, kind)
+        } else {
+            Vec::new()
+        };
         if !self.follows(linked, &next, kind) {
             return None;
         }
         let is_dir = kind != Kind::File;
         let child = rel.join(name);
-        if !self.admits(depth, is_dir, name, &entry.path(), &child) {
+        // Only a `.gitignore` reads the full path, and building one per entry
+        // is a large share of a big directory's walk.
+        let path = if self.frames.is_empty() {
+            PathBuf::new()
+        } else {
+            entry.path()
+        };
+        if !self.admits(depth, is_dir, name, &path, &child) {
             return None;
         }
         Some(if is_dir {
@@ -481,10 +493,33 @@ enum Taken {
     File(PathBuf),
 }
 
+/// Below this many entries a directory is judged on one thread; spawning
+/// workers costs more than the judging.
+const PARALLEL_ENTRIES: usize = 4096;
+
 /// `judge` applied to each of `items`, in order, shared across the cores
 /// once there are enough items to pay for the threads.
 fn judge_all<T: Sync, R: Send>(items: &[T], judge: &(dyn Fn(&T) -> R + Sync)) -> Vec<R> {
-    items.iter().map(judge).collect()
+    // Asking for the core count reads cgroup files, too dear to pay in every
+    // small directory of a deep tree.
+    if items.len() < PARALLEL_ENTRIES {
+        return items.iter().map(judge).collect();
+    }
+    let workers = thread::available_parallelism().map_or(1, usize::from);
+    if workers < 2 {
+        return items.iter().map(judge).collect();
+    }
+    let per_worker = items.len().div_ceil(workers);
+    thread::scope(|scope| {
+        let handles: Vec<_> = items
+            .chunks(per_worker)
+            .map(|chunk| scope.spawn(move || chunk.iter().map(judge).collect::<Vec<_>>()))
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("judging an entry does not panic"))
+            .collect()
+    })
 }
 
 /// What the walk makes of an entry, following a symlink only when
@@ -514,12 +549,30 @@ fn sorted_entries(dir: &Path) -> Vec<(OsString, DirEntry)> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
-    let mut entries: Vec<(OsString, DirEntry)> = entries
+    let mut entries: Vec<(u64, OsString, DirEntry)> = entries
         .filter_map(Result::ok)
-        .map(|entry| (entry.file_name(), entry))
+        .map(|entry| {
+            let name = entry.file_name();
+            (name_prefix(&name), name, entry)
+        })
         .collect();
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    // Comparing a leading word first keeps most comparisons off the heap,
+    // which is most of the sort's cost in a large directory.
+    entries.sort_unstable_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
     entries
+        .into_iter()
+        .map(|(_, name, entry)| (name, entry))
+        .collect()
+}
+
+/// A name's first eight bytes as a big-endian word, which orders names as
+/// their bytes do as far as those bytes go.
+fn name_prefix(name: &OsStr) -> u64 {
+    let bytes = name.as_encoded_bytes();
+    let mut word = [0u8; 8];
+    let len = bytes.len().min(8);
+    word[..len].copy_from_slice(&bytes[..len]);
+    u64::from_be_bytes(word)
 }
 
 /// The `.gitignore` files above `start`, up to and including the repo root
@@ -606,9 +659,6 @@ fn is_reserved_dir(depth: usize, is_dir: bool, file_name: &std::ffi::OsStr) -> b
 mod tests {
     use super::*;
     use std::ffi::OsStr;
-    use std::thread;
-
-    const PARALLEL_ENTRIES: usize = 4096;
 
     // Real directory-walk behavior is covered by `tests/scanner.rs`
     // (unit-lint isolation); only the pure predicate is tested here.
@@ -639,6 +689,16 @@ mod tests {
             judge_all(&items, &|()| thread::current().id())
                 .iter()
                 .all(|id| *id == caller)
+        );
+    }
+
+    #[test]
+    fn name_prefix_orders_names_as_their_bytes_do() {
+        let mut names = ["abcdefghZ", "abcdefgh", "abcdefghA", "ab", "b", "abc", ""];
+        names.sort_by_key(|name| (name_prefix(OsStr::new(name)), *name));
+        assert_eq!(
+            names,
+            ["", "ab", "abc", "abcdefgh", "abcdefghA", "abcdefghZ", "b"]
         );
     }
 

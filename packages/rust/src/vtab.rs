@@ -287,13 +287,17 @@ fn build_rows(path_prefix: &Path, rel_paths: Vec<PathBuf>) -> Vec<FileRow> {
 /// `items` cut into runs of `size` in order, the last run holding whatever
 /// remains; one (possibly empty) run when there is less than a full one.
 fn chunks<T>(items: Vec<T>, size: usize) -> Vec<Vec<T>> {
-    let mut runs = Vec::with_capacity(items.len().div_ceil(size.max(1)));
+    let size = size.max(1);
+    let mut runs = Vec::with_capacity(items.len().div_ceil(size));
     let mut rest = items;
+    // Cut from the back so each item moves once; cutting from the front
+    // would move the whole remainder on every cut.
     while rest.len() > size {
-        let tail = rest.split_off(size);
-        runs.push(std::mem::replace(&mut rest, tail));
+        let start = (rest.len() - 1) / size * size;
+        runs.push(rest.split_off(start));
     }
     runs.push(rest);
+    runs.reverse();
     runs
 }
 
@@ -726,6 +730,14 @@ mod tests {
         assert_eq!(
             chunks(vec![1, 2, 3, 4, 5], 2),
             vec![vec![1, 2], vec![3, 4], vec![5]]
+        );
+    }
+
+    #[test]
+    fn an_exact_multiple_cuts_into_full_runs() {
+        assert_eq!(
+            chunks(vec![1, 2, 3, 4, 5, 6], 3),
+            vec![vec![1, 2, 3], vec![4, 5, 6]]
         );
     }
 
