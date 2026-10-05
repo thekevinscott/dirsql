@@ -153,7 +153,6 @@ pub struct PathGlob {
 }
 
 impl PathGlob {
-    /// Whether `rel_path` is a file the glob matches.
     pub fn is_match(&self, rel_path: &Path) -> bool {
         self.files.is_match(rel_path)
     }
