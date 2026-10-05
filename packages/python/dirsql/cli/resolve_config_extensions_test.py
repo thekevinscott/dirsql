@@ -42,6 +42,13 @@ def describe_with_resolved_extensions():
             scan.assert_not_called()
             resolver.assert_not_called()
 
+    def it_passes_context_through_untouched():
+        argv = ["".join(["con", "text"])]
+        with _patch([{"path": "R:pkg", "entrypoint": None}]) as (scan, resolver):
+            assert rce.with_resolved_extensions(argv) is argv
+            scan.assert_not_called()
+            resolver.assert_not_called()
+
     def it_matches_init_by_value_not_identity_or_ordering():
         # Only the exact first argument "init" skips resolution: a
         # runtime-built "init" still skips; other subcommands (sorting above

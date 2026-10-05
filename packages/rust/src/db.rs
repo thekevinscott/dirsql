@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use rusqlite::types::{ToSql, ToSqlOutput, ValueRef};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1189,24 +1190,14 @@ pub enum Value {
     Blob(Vec<u8>),
 }
 
-impl rusqlite::types::ToSql for Value {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+impl ToSql for Value {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
         match self {
-            Value::Null => Ok(rusqlite::types::ToSqlOutput::Owned(
-                rusqlite::types::Value::Null,
-            )),
-            Value::Integer(i) => Ok(rusqlite::types::ToSqlOutput::Owned(
-                rusqlite::types::Value::Integer(*i),
-            )),
-            Value::Real(f) => Ok(rusqlite::types::ToSqlOutput::Owned(
-                rusqlite::types::Value::Real(*f),
-            )),
-            Value::Text(s) => Ok(rusqlite::types::ToSqlOutput::Owned(
-                rusqlite::types::Value::Text(s.clone()),
-            )),
-            Value::Blob(b) => Ok(rusqlite::types::ToSqlOutput::Owned(
-                rusqlite::types::Value::Blob(b.clone()),
-            )),
+            Value::Null => Ok(ToSqlOutput::Owned(rusqlite::types::Value::Null)),
+            Value::Integer(i) => Ok(ToSqlOutput::Owned(rusqlite::types::Value::Integer(*i))),
+            Value::Real(f) => Ok(ToSqlOutput::Owned(rusqlite::types::Value::Real(*f))),
+            Value::Text(s) => Ok(ToSqlOutput::Borrowed(ValueRef::Text(s.as_bytes()))),
+            Value::Blob(b) => Ok(ToSqlOutput::Borrowed(ValueRef::Blob(b))),
         }
     }
 }
@@ -1280,6 +1271,20 @@ impl From<rusqlite::types::Value> for Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_and_blob_values_bind_without_copying() {
+        let text = Value::Text("abc".into());
+        let blob = Value::Blob(vec![1, 2]);
+        assert_eq!(
+            text.to_sql().unwrap(),
+            ToSqlOutput::Borrowed(ValueRef::Text(b"abc"))
+        );
+        assert_eq!(
+            blob.to_sql().unwrap(),
+            ToSqlOutput::Borrowed(ValueRef::Blob(&[1, 2]))
+        );
+    }
 
     #[test]
     fn create_table_from_ddl() {

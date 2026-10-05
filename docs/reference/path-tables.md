@@ -37,14 +37,16 @@ indexing, not your shell's working directory.
 
 **A directory name is one level, like `ls`.** Naming a directory lists the
 files directly inside it and no deeper; `*` matches one level and `**` any
-depth, as in the shell.
+depth, as in the shell. A trailing `/` is `*` appended, so `'./*/'` is
+`'./*/*'`: the files directly inside each top-level directory, like `ls */`.
 
 | You write | dirsql scans |
 | --- | --- |
 | `'./'` | files directly inside the index root, and no deeper |
 | `'./docs'`, `'./docs/'` | files directly inside `docs/` |
 | `'./*'` | the same as `'./'` |
-| `'./**'` | every file under the index root, recursively |
+| `'./**'`, `'./**/'` | every file under the index root, recursively |
+| `'./*/'` | the same as `'./*/*'`: files directly inside each top-level directory |
 | `'./docs/*.md'` | markdown files directly inside `docs/` |
 | `'./docs/**/*.md'` | markdown files at any depth under `docs/` |
 | `'./notes/today.md'` | exactly that one file — one file is one row |
@@ -53,9 +55,10 @@ A path containing `*`, `?`, `[` or `{` is a glob and is used exactly as
 written: `*` matches within a single directory, `**` crosses directories.
 
 The scan starts at the last directory named outright before the first glob
-component -- `'./small/*.md'` walks `small/` and nothing else -- so a query
-over one directory costs what `find ./small` costs, however large the
-directories beside it.
+component, and descends only as deep as the pattern can match --
+`'./small/*.md'` lists `small/` and nothing else -- so a query over one
+directory costs what `ls small` costs, however large the directories beside
+or below it. Only `**` walks a whole subtree.
 
 A path naming a single file yields exactly one row. dirsql never splits a file
 into rows on its own — that is what a table's `on_file` hook is for.
@@ -108,7 +111,8 @@ Three other prefixes resolve, with their usual shell meanings:
 | `'../notes'` | relative to the index root's parent |
 | `'~/notes/*.md'` | relative to your home directory |
 
-A directory named this way is one level too; `'../notes/**'` descends.
+A directory named this way is one level too; `'../notes/**'` descends. The
+trailing-`/` rule holds here as well: `'~/*/'` is `'~/*/*'`.
 `..` is folded out textually, not followed through symlinks, so the directory
 scanned is a function of the string you wrote.
 
@@ -257,14 +261,20 @@ skipped just like one at the top.
 
 ### `.gitignore`
 
-Path-table scans also respect `.gitignore` files by default, the way fd and
-ripgrep do: a `.gitignore` anywhere in the tree applies below its own
+Path-table scans also respect `.gitignore` files by default, inside a git
+repo, the way git, fd and ripgrep do: a `.gitignore` applies below its own
 directory, deeper files override shallower ones, `!pattern` re-includes, and
 an ignored directory is pruned rather than walked. In a typical repo this
-excludes build output, virtualenvs, and caches with zero ceremony. No `.git`
-directory is required — a `.gitignore` in any scanned directory counts — and
-the built-in defaults above remain as a floor for directories with no
+excludes build output, virtualenvs, and caches with zero ceremony. The
+built-in defaults above remain as a floor for directories with no
 `.gitignore` at all.
+
+A `.gitignore` is in force only when a directory holding `.git` encloses it.
+Outside a repo none applies, at the scan's start, above it or below it: a
+`~/.claude` whose `.gitignore` is `*` still lists its files when `~/.claude`
+is not a repo. Inside one, every `.gitignore` from the repo root down
+applies, including those above the directory a scan starts in, so
+`'./docs/*.log'` and `'./**/*.log'` agree about `docs/`.
 
 Pass [`--no-ignore`](./cli.md#flags) to restore the full walk — the
 determinism switch for scripted use, since results otherwise depend on
@@ -282,6 +292,9 @@ SELECT path FROM './node_modules/*/package.json';  -- scans it anyway
 SELECT path FROM './dist';                 -- scans dist/ even when gitignored
 ```
 
+The `.gitignore` files in force there, including those above it, still
+filter what lies beneath it.
+
 A `node_modules` component after a glob names it too, at any depth:
 
 ```sql
@@ -290,9 +303,6 @@ SELECT path FROM './*/node_modules/**';               -- one level down
 ```
 
 Only the literal name counts; `'./**/*.js'` still skips every `node_modules`.
-
-A `.gitignore` at or below the directory the scan starts in still filters
-beneath it; one above it is never read.
 
 ### Hidden files
 

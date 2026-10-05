@@ -15,9 +15,11 @@ const PATTERNS: usize = 100;
 const ROUNDS: usize = 4;
 
 /// A tree whose walk costs CPU rather than disk: every directory carries a
-/// `.gitignore` the walker compiles on entry, so a scan takes the same time
-/// whether or not the page cache already holds the tree.
+/// `.gitignore` the walker compiles on entry (`.git` puts them in force), so a
+/// scan takes the same time whether or not the page cache already holds the
+/// tree.
 fn tree(root: &Path, name: &str) {
+    fs::create_dir_all(root.join(".git")).unwrap();
     let ignore: String = (0..PATTERNS)
         .map(|i| format!("build-{i}/**/*.tmp\n"))
         .collect();

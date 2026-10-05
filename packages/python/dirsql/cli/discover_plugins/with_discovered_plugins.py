@@ -22,8 +22,8 @@ from .user_passed_config import user_passed_config
 def with_discovered_plugins(argv: list[str]) -> list[str]:
     """Return ``argv`` with each installed plugin's fragment appended as ``-c``
     (plus ``--include-default`` when the user passed no ``-c``). ``--no-plugin``
-    / ``DIRSQL_NO_PLUGIN`` skip discovery, consuming the flag. ``init`` takes no
-    config, so it is left untouched. Raises if a declared plugin is missing its
+    / ``DIRSQL_NO_PLUGIN`` skip discovery, consuming the flag. ``init`` and ``context`` take no
+    config, so they are left untouched. Raises if a declared plugin is missing its
     module or fragment (the launcher surfaces a clean error).
 
     Appending is safe because config flags are subcommand-local (#609): the
@@ -34,7 +34,7 @@ def with_discovered_plugins(argv: list[str]) -> list[str]:
     """
     if discovery_disabled(argv):
         return [a for a in argv if a != NO_PLUGIN_FLAG]
-    if argv and argv[0] == "init":
+    if argv and argv[0] in ("init", "context"):
         return argv
     fragments = discovered_fragments()
     if not fragments:

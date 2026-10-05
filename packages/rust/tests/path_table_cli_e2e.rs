@@ -140,6 +140,53 @@ fn a_recursive_glob_under_a_directory_is_used_as_written() {
 }
 
 #[test]
+fn a_trailing_slash_after_a_glob_lists_inside_each_matched_directory() {
+    let dir = nested();
+    let out = run(&dir, "SELECT path FROM './*/'");
+
+    assert_eq!(
+        paths(&out),
+        vec!["folder/a.md", "sibling/c.md"],
+        "'./*/' is `ls */`: the files directly inside each top-level directory"
+    );
+}
+
+#[test]
+fn a_trailing_slash_after_a_nested_glob_lists_inside_each_matched_directory() {
+    let dir = nested();
+    let out = run(&dir, "SELECT path FROM './folder/*/'");
+
+    assert_eq!(paths(&out), vec!["folder/sub/b.md"]);
+}
+
+#[test]
+fn a_trailing_slash_after_a_double_star_scans_every_depth() {
+    let dir = nested();
+    let out = run(&dir, "SELECT path FROM './**/'");
+
+    assert_eq!(
+        paths(&out),
+        vec!["folder/a.md", "folder/sub/b.md", "root.md", "sibling/c.md"]
+    );
+}
+
+#[test]
+fn a_trailing_slash_after_a_home_relative_glob_lists_inside_each_matched_directory() {
+    let dir = fixture();
+    let home = TempDir::new().unwrap();
+    fs::create_dir_all(home.path().join("notes")).unwrap();
+    fs::write(home.path().join("top.md"), "top").unwrap();
+    fs::write(home.path().join("notes/n.md"), "note").unwrap();
+
+    let out = run_with_home(&dir, &home, "SELECT path FROM '~/*/'");
+
+    assert_eq!(
+        paths(&out),
+        vec![format!("{}/notes/n.md", reported(home.path()))]
+    );
+}
+
+#[test]
 fn a_scoped_glob_limits_the_cli_scan() {
     let dir = fixture();
     let out = run(&dir, "SELECT basename FROM './docs/*.md'");

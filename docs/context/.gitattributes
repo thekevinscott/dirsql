@@ -1,0 +1,2 @@
+# include_str! embeds these verbatim; a CRLF checkout would print a mixed-ending guide.
+*.md text eol=lf

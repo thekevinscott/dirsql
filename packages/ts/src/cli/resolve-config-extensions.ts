@@ -27,7 +27,7 @@ const NATIVE_CONFIG_SUFFIXES = [".py", ".js", ".mjs", ".cjs"];
 export async function withResolvedExtensions(
   argv: string[],
 ): Promise<string[]> {
-  if (argv[0] === "init") {
+  if (argv[0] === "init" || argv[0] === "context") {
     return argv;
   }
   const configPaths = getCore()

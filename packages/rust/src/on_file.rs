@@ -47,8 +47,23 @@ pub(crate) fn run(
     root: &Path,
     paths: &[PathBuf],
 ) -> Result<Vec<JsonRow>, String> {
+    let mut rows = Vec::new();
+    run_streaming(command, cwd, root, paths, &mut |chunk| rows.extend(chunk))?;
+    Ok(rows)
+}
+
+/// [`run`], handing each invocation's rows to `sink` as they parse. The
+/// invocations still run one after another; parsing one invocation's output
+/// overlaps the next invocation, the way a shell pipe would.
+pub(crate) fn run_streaming(
+    command: &str,
+    cwd: &Path,
+    root: &Path,
+    paths: &[PathBuf],
+    sink: &mut (dyn FnMut(Vec<JsonRow>) + Send),
+) -> Result<(), String> {
     if paths.is_empty() {
-        return Ok(Vec::new());
+        return Ok(());
     }
     let placeholders = [Placeholder::path("root", &root.to_string_lossy())];
     let argv = command::build_argv(command, &placeholders).map_err(spawn_failure)?;
@@ -57,16 +72,33 @@ pub(crate) fn run(
         .map(|path| command::non_verbatim(&path.to_string_lossy()))
         .collect();
 
-    let mut rows = Vec::new();
-    for chunk in chunks(&args, ARG_BUDGET.saturating_sub(argv_bytes(&argv))) {
-        let mut full = argv.clone();
-        full.extend(chunk.iter().cloned());
-        let output = command::run_argv(command, &full, cwd, None).map_err(spawn_failure)?;
-        let parsed = parse_rows(&output.payload)
-            .map_err(|message| format!("on-file output was not a JSON array of rows: {message}"))?;
-        rows.extend(parsed);
-    }
-    Ok(rows)
+    std::thread::scope(|scope| {
+        let (payloads, received) = std::sync::mpsc::channel::<String>();
+        let parser = scope.spawn(move || -> Result<(), String> {
+            for payload in received {
+                let rows = parse_rows(&payload).map_err(|message| {
+                    format!("on-file output was not a JSON array of rows: {message}")
+                })?;
+                sink(rows);
+            }
+            Ok(())
+        });
+        let spawned = (|| -> Result<(), String> {
+            for chunk in chunks(&args, ARG_BUDGET.saturating_sub(argv_bytes(&argv))) {
+                let mut full = argv.clone();
+                full.extend(chunk.iter().cloned());
+                let output = command::run_argv(command, &full, cwd, None).map_err(spawn_failure)?;
+                if payloads.send(output.payload).is_err() {
+                    break;
+                }
+            }
+            Ok(())
+        })();
+        drop(payloads);
+        // An earlier invocation's bad output outranks a later one's failure.
+        parser.join().expect("parser thread panicked")?;
+        spawned
+    })
 }
 
 fn spawn_failure(error: command::CommandError) -> String {

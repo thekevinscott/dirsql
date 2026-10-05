@@ -68,6 +68,7 @@ pub enum Resolution {
 /// resolved scan root is reported.
 trait Syntax: Utf8Encoding + Sized {
     const HOME_PREFIXES: &'static [&'static str];
+    const SEPARATORS: &'static [char];
 
     fn is_rooted(name: &str) -> bool;
 
@@ -76,6 +77,7 @@ trait Syntax: Utf8Encoding + Sized {
 
 impl Syntax for Utf8UnixEncoding {
     const HOME_PREFIXES: &'static [&'static str] = &["~/"];
+    const SEPARATORS: &'static [char] = &['/'];
 
     fn is_rooted(name: &str) -> bool {
         name.starts_with('/')
@@ -88,6 +90,7 @@ impl Syntax for Utf8UnixEncoding {
 
 impl Syntax for Utf8WindowsEncoding {
     const HOME_PREFIXES: &'static [&'static str] = &["~/", "~\\"];
+    const SEPARATORS: &'static [char] = &['/', '\\'];
 
     fn is_rooted(name: &str) -> bool {
         Utf8WindowsPath::new(name).has_root()
@@ -133,15 +136,26 @@ fn resolve_as<S: Syntax>(
     home: Option<&Path>,
     is_dir: &dyn Fn(&Path) -> bool,
 ) -> Resolution {
-    if let Some(rest) = name.strip_prefix("./") {
+    let target = trailing_separator_as_star::<S>(name);
+    if let Some(rest) = target.strip_prefix("./") {
         return Resolution::Table(split_relative(index_root, rest, is_dir));
     }
 
-    match absolute_target::<S>(name, index_root, home) {
+    match absolute_target::<S>(&target, index_root, home) {
         Some(Some(target)) => Resolution::Table(split_absolute(&target, is_dir)),
         Some(None) => Resolution::NoHome,
         None if has_glob_metacharacter(name) => Resolution::Hint,
         None => Resolution::NotAPath,
+    }
+}
+
+/// A trailing separator is `*` appended, so `./*/` is `./*/*` (like `ls */`)
+/// rather than a `./*` whose slash the path parser would drop.
+fn trailing_separator_as_star<S: Syntax>(name: &str) -> String {
+    if name.ends_with(S::SEPARATORS) {
+        format!("{name}*")
+    } else {
+        name.to_string()
     }
 }
 
@@ -150,7 +164,7 @@ fn resolve_as<S: Syntax>(
 /// and `path` is reported under it, so the rows read as if the index root
 /// had been walked whole.
 fn split_relative(index_root: &Path, rest: &str, is_dir: &dyn Fn(&Path) -> bool) -> PathTable {
-    let target = Utf8Path::<Utf8UnixEncoding>::new(rest.trim_end_matches('/'));
+    let target = Utf8Path::<Utf8UnixEncoding>::new(rest);
     let (literal, glob) = split_target(target, &|rel| is_dir(&index_root.join(rel)));
     let root = if literal.as_str().is_empty() {
         index_root.to_path_buf()
@@ -376,6 +390,63 @@ mod tests {
         let t = table("./docs/", &everything_is_a_dir);
         assert_eq!(t.root, Path::new("/index/docs"));
         assert_eq!(t.glob, "*");
+    }
+
+    #[test]
+    fn a_trailing_slash_after_a_glob_is_a_star_appended() {
+        let t = table("./*/", &everything_is_a_dir);
+        assert_eq!(t.root, Path::new(ROOT));
+        assert_eq!(t.glob, "*/*");
+        assert_eq!(t.path_prefix, "");
+    }
+
+    #[test]
+    fn a_trailing_slash_after_a_nested_glob_is_a_star_appended() {
+        let t = table("./docs/*/", &everything_is_a_dir);
+        assert_eq!(t.root, Path::new("/index/docs"));
+        assert_eq!(t.glob, "*/*");
+        assert_eq!(t.path_prefix, "docs");
+    }
+
+    #[test]
+    fn a_trailing_slash_after_a_double_star_is_a_star_appended() {
+        assert_eq!(table("./**/", &everything_is_a_dir).glob, "**/*");
+    }
+
+    #[test]
+    fn an_absolute_trailing_slash_after_a_glob_is_a_star_appended() {
+        let t = table("/var/*/", &nothing_is_a_dir);
+        assert_eq!(t.root, Path::new("/var"));
+        assert_eq!(t.glob, "*/*");
+    }
+
+    #[test]
+    fn a_parent_relative_trailing_slash_after_a_glob_is_a_star_appended() {
+        let t = table("../*/", &nothing_is_a_dir);
+        assert_eq!(t.root, Path::new("/"));
+        assert_eq!(t.glob, "*/*");
+    }
+
+    #[test]
+    fn a_home_relative_trailing_slash_after_a_glob_is_a_star_appended() {
+        let t = table("~/*/", &nothing_is_a_dir);
+        assert_eq!(t.root, Path::new("/home/u"));
+        assert_eq!(t.glob, "*/*");
+    }
+
+    #[test]
+    fn an_absolute_directory_with_a_trailing_slash_lists_one_level() {
+        let t = table("/var/log/", &everything_is_a_dir);
+        assert_eq!(t.root, Path::new("/var/log"));
+        assert_eq!(t.glob, "*");
+    }
+
+    #[test]
+    fn a_plain_identifier_with_a_trailing_slash_is_not_a_path() {
+        assert_eq!(
+            resolve_with("users/", &nothing_is_a_dir),
+            Resolution::NotAPath
+        );
     }
 
     #[test]
@@ -656,6 +727,13 @@ mod tests {
             let t = table(r"C:\var\log", &everything_is_a_dir);
             assert_eq!(t.root, Path::new(r"C:\var\log"));
             assert_eq!(t.glob, "*");
+        }
+
+        #[test]
+        fn a_backslash_after_a_glob_is_a_star_appended() {
+            let t = table(r"C:\var\*\", &nothing_is_a_dir);
+            assert_eq!(t.root, Path::new(r"C:\var"));
+            assert_eq!(t.glob, "*/*");
         }
 
         #[test]

@@ -11,6 +11,7 @@ The `dirsql` binary has these modes:
 | `dirsql query "<sql>"` | Explicit synonym for the default one-shot query. |
 | `dirsql server` | Start a long-lived HTTP server exposing a SQL view of a directory. See [HTTP API](./http-api.md). |
 | `dirsql init` | Generate a `.dirsql.toml`. |
+| `dirsql context` | Print the usage guide for this version, for an agent to read. |
 | `dirsql` (bare) | Open a [REPL](#the-repl) over the current directory, reading statements until EOF. |
 
 Bare `dirsql` does **not** start the server — that is `dirsql server`.
@@ -277,7 +278,7 @@ with all seven [stat columns](./columns.md): `path`, `basename`, `dir`, `ext`,
 
 ```bash
 curl -s localhost:7117/query -H 'content-type: application/json' \
-  -d '{"sql":"SELECT basename, size FROM \'./\' ORDER BY size DESC LIMIT 5"}'
+  -d "{\"sql\":\"SELECT basename, size FROM './' ORDER BY size DESC LIMIT 5\"}"
 ```
 
 Earlier versions served an implicit table named `files` here. It is gone; a
@@ -440,6 +441,17 @@ All failures exit `1` with a message on stderr:
 | Output path unwritable (e.g. missing parent directory) | Fails with the underlying I/O error. |
 
 On success, `init` exits `0`.
+
+## `dirsql context`
+
+```sh
+uvx dirsql context
+```
+
+Prints a markdown guide for an agent that is about to query files: the
+first line is `dirsql <version>`, then sections on usage, recipes and
+troubleshooting. The guide is compiled into the binary, so it describes the
+version that prints it. It takes no flags and exits `0`.
 
 ## Plugins
 

@@ -27,7 +27,7 @@ def with_resolved_extensions(argv: list[str]) -> list[str]:
     """Return ``argv`` plus ``--extension`` flags when a TOML config names an
     extension by package name; otherwise return ``argv`` unchanged. Raises if a
     package name cannot be resolved (the launcher surfaces a clean error)."""
-    if argv and argv[0] == "init":
+    if argv and argv[0] in ("init", "context"):
         return argv
     config_paths = [
         p for p in config_paths_from_argv(argv) if not p.endswith(_NATIVE_SUFFIXES)
