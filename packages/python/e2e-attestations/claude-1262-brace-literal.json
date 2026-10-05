@@ -1,7 +1,7 @@
 {
   "command": "just test-e2e",
-  "ran_at": 1791234595,
+  "ran_at": 1791234759,
   "exit_code": 0,
-  "commit": "b3643163aa5fb94ef8a15e642cd0767ecd3588e0",
+  "commit": "47fcbcd9842bdf693a5c803fa67579671d0fbc6e",
   "branch": "claude/1262-brace-literal"
 }
