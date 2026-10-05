@@ -1,7 +1,7 @@
 {
   "command": "just test-e2e",
-  "ran_at": 1791230538,
+  "ran_at": 1791238629,
   "exit_code": 0,
-  "commit": "41eccbeb65dea081f78bd3b31bf9f5000f99bbed",
+  "commit": "68858295a0d429345af616a28e2cee3946f186cc",
   "branch": "claude/1286-nested-repo"
 }
