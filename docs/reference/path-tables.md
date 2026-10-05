@@ -37,14 +37,16 @@ indexing, not your shell's working directory.
 
 **A directory name is one level, like `ls`.** Naming a directory lists the
 files directly inside it and no deeper; `*` matches one level and `**` any
-depth, as in the shell.
+depth, as in the shell. A trailing `/` is `*` appended, so `'./*/'` is
+`'./*/*'`: the files directly inside each top-level directory, like `ls */`.
 
 | You write | dirsql scans |
 | --- | --- |
 | `'./'` | files directly inside the index root, and no deeper |
 | `'./docs'`, `'./docs/'` | files directly inside `docs/` |
 | `'./*'` | the same as `'./'` |
-| `'./**'` | every file under the index root, recursively |
+| `'./**'`, `'./**/'` | every file under the index root, recursively |
+| `'./*/'` | the same as `'./*/*'`: files directly inside each top-level directory |
 | `'./docs/*.md'` | markdown files directly inside `docs/` |
 | `'./docs/**/*.md'` | markdown files at any depth under `docs/` |
 | `'./notes/today.md'` | exactly that one file — one file is one row |
@@ -89,7 +91,8 @@ Three other prefixes resolve, with their usual shell meanings:
 | `'../notes'` | relative to the index root's parent |
 | `'~/notes/*.md'` | relative to your home directory |
 
-A directory named this way is one level too; `'../notes/**'` descends.
+A directory named this way is one level too; `'../notes/**'` descends. The
+trailing-`/` rule holds here as well: `'~/*/'` is `'~/*/*'`.
 `..` is folded out textually, not followed through symlinks, so the directory
 scanned is a function of the string you wrote.
 

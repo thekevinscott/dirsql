@@ -53,6 +53,7 @@ pub enum Resolution {
 /// resolved scan root is reported.
 trait Syntax: Utf8Encoding + Sized {
     const HOME_PREFIXES: &'static [&'static str];
+    const SEPARATORS: &'static [char];
 
     fn is_rooted(name: &str) -> bool;
 
@@ -61,6 +62,7 @@ trait Syntax: Utf8Encoding + Sized {
 
 impl Syntax for Utf8UnixEncoding {
     const HOME_PREFIXES: &'static [&'static str] = &["~/"];
+    const SEPARATORS: &'static [char] = &['/'];
 
     fn is_rooted(name: &str) -> bool {
         name.starts_with('/')
@@ -73,6 +75,7 @@ impl Syntax for Utf8UnixEncoding {
 
 impl Syntax for Utf8WindowsEncoding {
     const HOME_PREFIXES: &'static [&'static str] = &["~/", "~\\"];
+    const SEPARATORS: &'static [char] = &['/', '\\'];
 
     fn is_rooted(name: &str) -> bool {
         Utf8WindowsPath::new(name).has_root()
@@ -118,15 +121,26 @@ fn resolve_as<S: Syntax>(
     home: Option<&Path>,
     is_dir: &dyn Fn(&Path) -> bool,
 ) -> Resolution {
-    if let Some(rest) = name.strip_prefix("./") {
+    let target = trailing_separator_as_star::<S>(name);
+    if let Some(rest) = target.strip_prefix("./") {
         return Resolution::Table(split_relative(index_root, rest, is_dir));
     }
 
-    match absolute_target::<S>(name, index_root, home) {
+    match absolute_target::<S>(&target, index_root, home) {
         Some(Some(target)) => Resolution::Table(split_absolute(&target, is_dir)),
         Some(None) => Resolution::NoHome,
         None if has_glob_metacharacter(name) => Resolution::Hint,
         None => Resolution::NotAPath,
+    }
+}
+
+/// A trailing separator is `*` appended, so `./*/` is `./*/*` (like `ls */`)
+/// rather than a `./*` whose slash the path parser would drop.
+fn trailing_separator_as_star<S: Syntax>(name: &str) -> String {
+    if name.ends_with(S::SEPARATORS) {
+        format!("{name}*")
+    } else {
+        name.to_string()
     }
 }
 
@@ -135,7 +149,7 @@ fn resolve_as<S: Syntax>(
 /// and `path` is reported under it, so the rows read as if the index root
 /// had been walked whole.
 fn split_relative(index_root: &Path, rest: &str, is_dir: &dyn Fn(&Path) -> bool) -> PathTable {
-    let target = Utf8Path::<Utf8UnixEncoding>::new(rest.trim_end_matches('/'));
+    let target = Utf8Path::<Utf8UnixEncoding>::new(rest);
     let (literal, glob) = split_target(target, &|rel| is_dir(&index_root.join(rel)));
     let root = if literal.as_str().is_empty() {
         index_root.to_path_buf()
