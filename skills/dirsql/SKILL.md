@@ -6,12 +6,18 @@ allowed-tools: Bash(uvx dirsql:*)
 
 # dirsql
 
-Before writing a query, run this and follow the guide it prints:
+Learn about `dirsql`'s skill implementation with `uv`, `npm`, or `cargo`:
+
+## `uv`
 
 ```bash
 uvx dirsql context
 ```
 
-The guide is compiled into the CLI, so it always matches the installed version.
+## `npm`
 
-dirsql is read-only. It never writes to the files it queries; make changes with your own tools.
+```bash
+npx -y dirsql context
+```
+
+## `cargo`
