@@ -17,46 +17,48 @@ pub(crate) fn expand(pattern: &str) -> Vec<String> {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Stop {
-    Open,
     Close,
     Comma,
 }
 
+/// The characters of `text` from `from` on that no backslash escapes, with
+/// their indices; the backslashes themselves are dropped too.
+fn unescaped(text: &[char], from: usize) -> impl Iterator<Item = (usize, char)> + '_ {
+    let mut escaped = false;
+    text.iter()
+        .copied()
+        .enumerate()
+        .skip(from)
+        .filter(move |&(_, c)| {
+            let keep = !escaped && c != '\\';
+            escaped = !escaped && c == '\\';
+            keep
+        })
+}
+
 /// Index of the first unescaped `stop` at nesting level zero, scanning from
-/// `i`; `text.len()` when there is none. A `}` only closes once a comma or a
-/// `..` has been seen, which is why `{q}` never closes.
-fn gobble(text: &[char], mut i: usize, stop: Stop) -> usize {
+/// `from`; `text.len()` when there is none. A `}` only closes once a comma or
+/// a `..` has been seen, which is why `{q}` never closes.
+fn gobble(text: &[char], from: usize, stop: Stop) -> usize {
     let target = match stop {
-        Stop::Open => '{',
         Stop::Close => '}',
         Stop::Comma => ',',
     };
     let mut level = 0usize;
-    let mut separators = usize::from(stop != Stop::Close);
-    while i < text.len() {
-        let c = text[i];
-        if c == '\\' {
-            i += 2;
-            continue;
-        }
-        if c == target && level == 0 && separators > 0 {
-            if stop == Stop::Open && is_shell_brace(text, i) {
-                i += 1;
-                continue;
-            }
+    let mut closable = stop != Stop::Close;
+    for (i, c) in unescaped(text, from) {
+        if c == target && level == 0 && closable {
             return i;
         }
         if c == '{' {
             level += 1;
         } else if c == '}' && level > 0 {
             level -= 1;
-        } else if stop == Stop::Close
-            && level == 0
+        } else if level == 0
             && (c == ',' || (text[i..].starts_with(&['.', '.']) && text.get(i + 2) != Some(&'}')))
         {
-            separators += 1;
+            closable = true;
         }
-        i += 1;
     }
     text.len()
 }
@@ -72,21 +74,18 @@ fn is_shell_brace(text: &[char], i: usize) -> bool {
 }
 
 fn expand_word(text: &[char]) -> Vec<String> {
-    let mut i = 0;
-    let (open, close) = loop {
-        i = gobble(text, i, Stop::Open);
-        if i >= text.len() {
-            return vec![text.iter().collect()];
-        }
-        let close = gobble(text, i + 1, Stop::Close);
-        if close < text.len() {
-            break (i, close);
-        }
-        i += 1;
+    let group = unescaped(text, 0)
+        .filter(|&(i, c)| c == '{' && !is_shell_brace(text, i))
+        .find_map(|(open, _)| {
+            let close = gobble(text, open + 1, Stop::Close);
+            (close < text.len()).then_some((open, close))
+        });
+    let Some((open, close)) = group else {
+        return vec![text.iter().collect()];
     };
     let preamble: String = text[..open].iter().collect();
     let amble = &text[open + 1..close];
-    let middle = if has_comma(amble) {
+    let middle = if unescaped(amble, 0).any(|(_, c)| c == ',') {
         expand_alternatives(amble)
     } else {
         let amble: String = amble.iter().collect();
@@ -103,29 +102,13 @@ fn expand_word(text: &[char]) -> Vec<String> {
         .collect()
 }
 
-fn has_comma(amble: &[char]) -> bool {
-    let mut i = 0;
-    while i < amble.len() {
-        match amble[i] {
-            '\\' => i += 2,
-            ',' => return true,
-            _ => i += 1,
-        }
-    }
-    false
-}
-
 fn expand_alternatives(amble: &[char]) -> Vec<String> {
-    let mut words = Vec::new();
-    let mut start = 0;
-    loop {
-        let end = gobble(amble, start, Stop::Comma);
-        words.extend(expand_word(&amble[start..end]));
-        if end >= amble.len() {
-            return words;
-        }
-        start = end + 1;
+    let end = gobble(amble, 0, Stop::Comma);
+    let mut words = expand_word(&amble[..end]);
+    if let Some(tail) = amble.get(end + 1..) {
+        words.extend(expand_alternatives(tail));
     }
+    words
 }
 
 /// The `..` range bash expands `{lo..hi}` / `{lo..hi..step}` to, or `None`
@@ -219,43 +202,34 @@ fn steps(lo: i64, hi: i64, step: i64) -> Option<impl Iterator<Item = i128>> {
 fn escape_braces(word: &str) -> String {
     let chars: Vec<char> = word.chars().collect();
     let mut out = String::with_capacity(word.len());
-    let mut i = 0;
-    while i < chars.len() {
-        match chars[i] {
-            '\\' if i + 1 < chars.len() => {
-                match chars[i + 1] {
+    let mut resume = 0;
+    for (i, &c) in chars.iter().enumerate() {
+        if i < resume {
+            continue;
+        }
+        match (c, chars.get(i + 1)) {
+            ('\\', Some(&next)) => {
+                match next {
                     '{' => out.push_str("[{]"),
                     '}' => out.push_str("[}]"),
                     ',' => out.push(','),
-                    c => {
-                        out.push('\\');
-                        out.push(c);
-                    }
+                    _ => out.extend(['\\', next]),
                 }
-                i += 2;
+                resume = i + 2;
             }
-            '[' => match class_end(&chars, i) {
+            ('[', _) => match class_end(&chars, i) {
                 Some(end) => {
                     out.extend(&chars[i..=end]);
-                    i = end + 1;
+                    resume = end + 1;
                 }
                 None => {
                     out.extend(&chars[i..]);
                     return out;
                 }
             },
-            '{' => {
-                out.push_str("[{]");
-                i += 1;
-            }
-            '}' => {
-                out.push_str("[}]");
-                i += 1;
-            }
-            c => {
-                out.push(c);
-                i += 1;
-            }
+            ('{', _) => out.push_str("[{]"),
+            ('}', _) => out.push_str("[}]"),
+            _ => out.push(c),
         }
     }
     out
