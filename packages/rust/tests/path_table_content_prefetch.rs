@@ -40,7 +40,7 @@ fn open(root: &Path) -> Connection {
     load_module(&conn, StatementScope::new()).unwrap();
     for (name, glob) in [("a", "*/abstract.md"), ("t", "*/title.md")] {
         conn.execute_batch(&format!(
-            "CREATE VIRTUAL TABLE {name} USING dirsql_path('{0}', '{glob}', '', 'gitignore', '{0}')",
+            "CREATE VIRTUAL TABLE {name} USING dirsql_path('{}', '{glob}', '', 'gitignore')",
             root.display()
         ))
         .unwrap();

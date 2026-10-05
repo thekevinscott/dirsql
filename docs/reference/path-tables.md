@@ -257,18 +257,19 @@ skipped just like one at the top.
 
 ### `.gitignore`
 
-Path-table scans also respect `.gitignore` files by default, the way fd and
-ripgrep do: a `.gitignore` anywhere in the tree applies below its own
+Path-table scans also respect `.gitignore` files by default, inside a git
+repo, the way git, fd and ripgrep do: a `.gitignore` applies below its own
 directory, deeper files override shallower ones, `!pattern` re-includes, and
 an ignored directory is pruned rather than walked. In a typical repo this
-excludes build output, virtualenvs, and caches with zero ceremony. No `.git`
-directory is required — a `.gitignore` in any scanned directory counts — and
-the built-in defaults above remain as a floor for directories with no
+excludes build output, virtualenvs, and caches with zero ceremony. The
+built-in defaults above remain as a floor for directories with no
 `.gitignore` at all.
 
-The `.gitignore` files above the directory a scan starts in apply too, as
-they do in git: every one from the repo root (the nearest directory holding
-`.git`) down, or from the index root when there is no repo. So
+A `.gitignore` is in force only when a directory holding `.git` encloses it.
+Outside a repo none applies, at the scan's start, above it or below it: a
+`~/.claude` whose `.gitignore` is `*` still lists its files when `~/.claude`
+is not a repo. Inside one, every `.gitignore` from the repo root down
+applies, including those above the directory a scan starts in, so
 `'./docs/*.log'` and `'./**/*.log'` agree about `docs/`.
 
 Pass [`--no-ignore`](./cli.md#flags) to restore the full walk — the

@@ -4,11 +4,10 @@
 
 A path-table scan used to read only the `.gitignore` files at or below the
 directory it starts in, so `'./docs/*.log'` listed files a root `*.log` rule
-hides from `'./**'`. It now reads every `.gitignore` from the repo root (the
-nearest directory holding `.git`) down to that directory, or from the index
-root when no repo encloses it. Every surface that resolves a path-table is
-affected: the CLI, the REPL, the HTTP server, the SDKs, and the `--on-file`
-form. No call changes; a query can return fewer rows. `--no-ignore` restores
+hides from `'./**'`. Inside a git repo it now reads every `.gitignore` from the
+repo root (the nearest directory holding `.git`) down to that directory. Every
+surface that resolves a path-table is affected: the CLI, the REPL, the HTTP
+server, the SDKs, and the `--on-file` form. No call changes; a query can return fewer rows. `--no-ignore` restores
 the old listing.
 
 #### Required changes
@@ -30,6 +29,7 @@ _None._
 
 ```bash
 cd "$(mktemp -d)"
+git init -q
 mkdir docs
 printf '*.log\n' > .gitignore
 touch docs/a.md docs/z.log

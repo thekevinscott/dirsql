@@ -80,7 +80,7 @@ fn scan_below(
         matcher,
         None,
         false,
-        Vec::new(),
+        None,
         &mut |rel_path, entry| {
             if matcher.is_ignored(&rel_path) {
                 return;
@@ -116,24 +116,24 @@ fn scan_below(
 /// starts at the path's literal prefix, so a dot directory named there is
 /// already inside.
 ///
-/// With `gitignore` set, `.gitignore` files apply hierarchically (each one
-/// below its own directory) and prune traversal, like fd/ripgrep, and no
-/// `.git` directory is required. Those above `root` apply too, as in git: up
-/// to the nearest directory holding `.git`, or with no repo up to
-/// `index_root`. They filter what lies below `root`, never `root` itself, so
-/// naming an ignored directory still scans it.
+/// With `gitignore` set, `.gitignore` files inside a git repo apply as git
+/// applies them: hierarchically, each below its own directory, from the repo
+/// root (the nearest directory holding `.git`) down, pruning traversal.
+/// Outside a repo none applies, as in git, fd and ripgrep. Those above `root`
+/// filter what lies below it, never `root` itself, so naming an ignored
+/// directory still scans it.
 pub fn scan_glob(
     root: &Path,
-    index_root: &Path,
     glob: &PathGlob,
     ignore: &TableMatcher,
     gitignore: bool,
 ) -> Vec<PathBuf> {
-    let frames = if gitignore {
-        gitignores_above(root, index_root)
+    let repo = if gitignore {
+        enclosing_repo(root, &holds_git)
     } else {
-        Vec::new()
+        None
     };
+    let repo_frames = repo.map(|top| gitignores_above(root, top));
     let mut results = Vec::new();
     walk(
         root,
@@ -141,7 +141,7 @@ pub fn scan_glob(
         ignore,
         Some(glob),
         gitignore,
-        frames,
+        repo_frames,
         &mut |rel_path, _| {
             if is_wanted(glob, ignore, &rel_path) {
                 results.push(rel_path);
@@ -309,7 +309,8 @@ pub(crate) fn parse_gitignore_arg(arg: &str) -> Result<bool, String> {
 /// ignored tree is never read at all. With `glob` given, a dot-named entry it
 /// does not spell is skipped; `None` admits them all. With `gitignore` set,
 /// entries a `.gitignore` in force ignores are pruned/skipped too, starting
-/// from `frames`, the ones in force above `start`. Symlinks are followed only
+/// from `repo_frames`: the ones in force above `start` when a repo encloses
+/// it, `None` when none does. Below a directory holding `.git` a repo does. Symlinks are followed only
 /// as `glob` allows, and not at all without one; a broken link or an
 /// unreadable directory contributes nothing.
 fn walk(
@@ -318,7 +319,7 @@ fn walk(
     ignore: &TableMatcher,
     glob: Option<&PathGlob>,
     gitignore: bool,
-    frames: Vec<Gitignore>,
+    repo_frames: Option<Vec<Gitignore>>,
     visit: &mut dyn FnMut(PathBuf, &DirEntry),
 ) {
     let rel = start.strip_prefix(root).unwrap_or(start);
@@ -329,7 +330,8 @@ fn walk(
         ignore,
         glob,
         gitignore,
-        frames,
+        in_repo: repo_frames.is_some(),
+        frames: repo_frames.unwrap_or_default(),
     };
     let states = glob.map_or_else(Vec::new, PathGlob::start);
     walk.descend(start, rel, depth, &states, false, visit);
@@ -339,6 +341,9 @@ struct Walk<'a> {
     ignore: &'a TableMatcher,
     glob: Option<&'a PathGlob>,
     gitignore: bool,
+    /// Whether a repo encloses the walk's current position, which is what
+    /// puts a `.gitignore` in force.
+    in_repo: bool,
     /// The `.gitignore` files in force at the walk's current position, root
     /// first; a directory's own file is pushed on entry and popped on exit.
     frames: Vec<Gitignore>,
@@ -354,8 +359,12 @@ impl Walk<'_> {
         linked: bool,
         visit: &mut dyn FnMut(PathBuf, &DirEntry),
     ) {
+        let entered_repo = self.gitignore && !self.in_repo && holds_git(dir);
+        if entered_repo {
+            self.in_repo = true;
+        }
         let mut pushed = false;
-        if self.gitignore
+        if self.in_repo
             && let Some(matcher) = load_gitignore(dir)
         {
             self.frames.push(matcher);
@@ -383,6 +392,9 @@ impl Walk<'_> {
         }
         if pushed {
             self.frames.pop();
+        }
+        if entered_repo {
+            self.in_repo = false;
         }
     }
 
@@ -450,30 +462,23 @@ fn sorted_entries(dir: &Path) -> Vec<(OsString, DirEntry)> {
     entries
 }
 
-/// The `.gitignore` files above `start` that are in force at it, outermost
-/// first.
-fn gitignores_above(start: &Path, index_root: &Path) -> Vec<Gitignore> {
-    let top = gitignore_top(start, index_root, &|dir| dir.join(".git").exists());
+/// The `.gitignore` files above `start`, up to and including the repo root
+/// `top`, outermost first.
+fn gitignores_above(start: &Path, top: &Path) -> Vec<Gitignore> {
     dirs_above(start, top)
         .into_iter()
         .filter_map(load_gitignore)
         .collect()
 }
 
-/// The highest directory whose `.gitignore` reaches `start`: the nearest one
-/// holding `.git`, where git stops looking. With no repo, the index root,
-/// matching a scan that starts there; a `start` outside the index root reads
-/// nothing above itself.
-fn gitignore_top<'a>(
-    start: &'a Path,
-    index_root: &Path,
-    is_repo_root: &dyn Fn(&Path) -> bool,
-) -> &'a Path {
-    start
-        .ancestors()
-        .find(|dir| is_repo_root(dir))
-        .or_else(|| start.ancestors().find(|dir| *dir == index_root))
-        .unwrap_or(start)
+/// The root of the git repo enclosing `start`: the nearest directory, `start`
+/// included, holding `.git`.
+fn enclosing_repo<'a>(start: &'a Path, is_repo_root: &dyn Fn(&Path) -> bool) -> Option<&'a Path> {
+    start.ancestors().find(|dir| is_repo_root(dir))
+}
+
+fn holds_git(dir: &Path) -> bool {
+    dir.join(".git").exists()
 }
 
 /// The directories strictly above `start`, up to and including its ancestor
@@ -708,31 +713,22 @@ mod tests {
     }
 
     #[test]
-    fn gitignore_top_is_the_nearest_repo_root() {
-        let top = gitignore_top(Path::new("/repo/a/b"), Path::new("/repo/a"), &|dir| {
-            dir == Path::new("/repo")
-        });
-        assert_eq!(top, Path::new("/repo"));
-    }
-
-    #[test]
-    fn gitignore_top_stops_at_a_repo_nested_below_another() {
-        let top = gitignore_top(Path::new("/outer/inner/a"), Path::new("/"), &|dir| {
+    fn enclosing_repo_is_the_nearest_directory_holding_git() {
+        let repo = enclosing_repo(Path::new("/outer/inner/a"), &|dir| {
             dir == Path::new("/outer") || dir == Path::new("/outer/inner")
         });
-        assert_eq!(top, Path::new("/outer/inner"));
+        assert_eq!(repo, Some(Path::new("/outer/inner")));
     }
 
     #[test]
-    fn gitignore_top_is_the_index_root_with_no_repo() {
-        let top = gitignore_top(Path::new("/idx/docs/sub"), Path::new("/idx"), &|_| false);
-        assert_eq!(top, Path::new("/idx"));
+    fn enclosing_repo_includes_the_start_itself() {
+        let repo = enclosing_repo(Path::new("/r"), &|dir| dir == Path::new("/r"));
+        assert_eq!(repo, Some(Path::new("/r")));
     }
 
     #[test]
-    fn gitignore_top_is_the_start_outside_the_index_root_with_no_repo() {
-        let top = gitignore_top(Path::new("/var/log"), Path::new("/idx"), &|_| false);
-        assert_eq!(top, Path::new("/var/log"));
+    fn enclosing_repo_is_none_outside_any_repo() {
+        assert_eq!(enclosing_repo(Path::new("/idx/docs"), &|_| false), None);
     }
 
     #[test]
@@ -768,6 +764,7 @@ mod tests {
             ignore,
             glob,
             gitignore: !frames.is_empty(),
+            in_repo: !frames.is_empty(),
             frames,
         }
     }
@@ -1006,6 +1003,7 @@ mod tests {
             ignore: &ignore,
             glob: Some(&glob),
             gitignore: false,
+            in_repo: false,
             frames: Vec::new(),
         };
         assert!(walk.follows(true, &[2], Kind::File));

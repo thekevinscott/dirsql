@@ -35,7 +35,7 @@ fn open_scoped(dir: &TempDir, glob: &str) -> (Connection, Arc<StatementScope>) {
     let scope = StatementScope::new();
     load_module(&conn, Arc::clone(&scope)).unwrap();
     conn.execute_batch(&format!(
-        "CREATE VIRTUAL TABLE t USING dirsql_path('{0}', '{1}', '', 'gitignore', '{0}')",
+        "CREATE VIRTUAL TABLE t USING dirsql_path('{}', '{}', '', 'gitignore')",
         dir.path().display(),
         glob
     ))
@@ -53,7 +53,7 @@ fn open_over_with(dir: &TempDir, glob: &str, prefix: &str, ignore: &[&str]) -> C
     let conn = Connection::open_in_memory().unwrap();
     load_module(&conn, StatementScope::new()).unwrap();
     let mut args = format!(
-        "'{0}', '{1}', '{2}', 'gitignore', '{0}'",
+        "'{}', '{}', '{}', 'gitignore'",
         dir.path().display(),
         glob,
         prefix
@@ -366,7 +366,7 @@ fn a_table_rooted_in_an_ignored_directory_still_scans_it() {
     let conn = Connection::open_in_memory().unwrap();
     load_module(&conn, StatementScope::new()).unwrap();
     conn.execute_batch(&format!(
-        "CREATE VIRTUAL TABLE t USING dirsql_path('{0}', '**/*', 'node_modules', 'gitignore', '{0}', '**/node_modules/**')",
+        "CREATE VIRTUAL TABLE t USING dirsql_path('{}', '**/*', 'node_modules', 'gitignore', '**/node_modules/**')",
         dir.path().join("node_modules").display()
     ))
     .unwrap();
@@ -490,7 +490,7 @@ fn open_pair_scoped(
     load_module(&conn, Arc::clone(&scope)).unwrap();
     for (name, glob) in [("a", glob_a), ("b", glob_b)] {
         conn.execute_batch(&format!(
-            "CREATE VIRTUAL TABLE {name} USING dirsql_path('{0}', '{glob}', '', 'gitignore', '{0}')",
+            "CREATE VIRTUAL TABLE {name} USING dirsql_path('{}', '{glob}', '', 'gitignore')",
             dir.path().display(),
         ))
         .unwrap();

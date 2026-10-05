@@ -108,20 +108,20 @@ features = ["cli"]
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [72, 132, 324, 357, 421, 442]
+lines = [72, 131, 325, 362, 433, 454]
 reason = "scan_below, scan_glob, walk, descend, kind_of and sorted_entries read the filesystem; tests/scanner.rs (scan_finds_matching_files, scan_recurses_into_subdirectories), tests/vtab.rs (glob_scopes_the_walk, rowids_count_up_from_zero_in_scan_order) and tests/path_table_symlinks.rs assert what they return"
 
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [370, 371, 374, 422, 425]
+lines = [379, 380, 383, 434, 437]
 reason = "whether a walked entry is a symlink, and whether the walk is below one, is known only from a real tree; tests/path_table_symlinks.rs asserts every outcome against bash, and the decisions themselves are unit-tested in classify, Walk::follows and PathGlob::step"
 
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [456]
-reason = "gitignores_above probes a real tree for .git and reads the .gitignore files it finds; the choice of directories is unit-tested in gitignore_top and dirs_above, and tests/path_table_gitignore.rs (a_gitignore_above_the_named_base_applies_beneath_it, a_repo_root_gitignore_above_the_index_root_applies) asserts the result"
+lines = [363, 367, 396, 468, 481]
+reason = "whether a repo encloses the walk, and which .gitignore files are in force, is known only from a real tree holding .git; the choice of directories is unit-tested in enclosing_repo and dirs_above, and tests/path_table_gitignore.rs (with_no_repo_a_gitignore_does_not_apply_at_the_index_root, inside_a_repo_the_same_gitignore_hides_everything, a_repo_root_gitignore_above_the_index_root_applies) asserts every outcome"
 
 [[rust.exempt]]
 path = "src/scanner.rs"
@@ -132,13 +132,13 @@ reason = "the walk's running file count is observable only through the CLI's pro
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [364]
+lines = [373]
 reason = "a child's depth decides the reserved top-level .dirsql rule for a real tree; tests/scanner.rs scan_excludes_top_level_dirsql_directory and tests/vtab.rs reserved_dirsql_directory_is_skipped assert it"
 
 [[rust.exempt]]
 path = "src/vtab.rs"
 rules = ["mutation"]
-lines = [369, 376, 387]
+lines = [360, 371]
 reason = "rows walks and stats a real tree and column hands a cell to SQLite; the cell choice is unit-tested in `cell`, and tests/vtab.rs stat_columns_carry_real_values and content_is_excluded_from_star_but_selectable_by_name assert both through a real connection"
 
 [[rust.exempt]]
@@ -150,7 +150,7 @@ reason = "run_default and run_query build a real index and drive stdout, stderr 
 [[rust.exempt]]
 path = "src/vtab.rs"
 rules = ["mutation"]
-lines = [81, 338, 398]
+lines = [81, 328, 382]
 reason = "read_text and ScanSpec::read open a real file and prefetch reads a real tree ahead of the cursor; the buffer logic is unit-tested in `read_all` and `presize`, tests/vtab.rs content_is_excluded_from_star_but_selectable_by_name, content_is_null_for_non_utf8_files and unreadable_file_yields_null_content_without_erroring_the_row assert the cell, and tests/path_table_content_prefetch.rs content_is_read_for_every_row_before_the_first_is_delivered and a_join_has_the_content_it_names_read_ahead assert the read-ahead"
 
 [[rust.exempt]]
