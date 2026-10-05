@@ -62,9 +62,10 @@ nest. A group holding a `..` range counts: `'./log/{1..3}.txt'`,
 names the file `br/{q}.md`, and `\{` is always a literal brace.
 
 The scan starts at the last directory named outright before the first glob
-component -- `'./small/*.md'` walks `small/` and nothing else -- so a query
-over one directory costs what `find ./small` costs, however large the
-directories beside it.
+component, and descends only as deep as the pattern can match --
+`'./small/*.md'` lists `small/` and nothing else -- so a query over one
+directory costs what `ls small` costs, however large the directories beside
+or below it. Only `**` walks a whole subtree.
 
 A path naming a single file yields exactly one row. dirsql never splits a file
 into rows on its own — that is what a table's `on_file` hook is for.
@@ -267,14 +268,20 @@ skipped just like one at the top.
 
 ### `.gitignore`
 
-Path-table scans also respect `.gitignore` files by default, the way fd and
-ripgrep do: a `.gitignore` anywhere in the tree applies below its own
+Path-table scans also respect `.gitignore` files by default, inside a git
+repo, the way git, fd and ripgrep do: a `.gitignore` applies below its own
 directory, deeper files override shallower ones, `!pattern` re-includes, and
 an ignored directory is pruned rather than walked. In a typical repo this
-excludes build output, virtualenvs, and caches with zero ceremony. No `.git`
-directory is required — a `.gitignore` in any scanned directory counts — and
-the built-in defaults above remain as a floor for directories with no
+excludes build output, virtualenvs, and caches with zero ceremony. The
+built-in defaults above remain as a floor for directories with no
 `.gitignore` at all.
+
+A `.gitignore` is in force only when a directory holding `.git` encloses it.
+Outside a repo none applies, at the scan's start, above it or below it: a
+`~/.claude` whose `.gitignore` is `*` still lists its files when `~/.claude`
+is not a repo. Inside one, every `.gitignore` from the repo root down
+applies, including those above the directory a scan starts in, so
+`'./docs/*.log'` and `'./**/*.log'` agree about `docs/`.
 
 Pass [`--no-ignore`](./cli.md#flags) to restore the full walk — the
 determinism switch for scripted use, since results otherwise depend on
@@ -292,8 +299,8 @@ SELECT path FROM './node_modules/*/package.json';  -- scans it anyway
 SELECT path FROM './dist';                 -- scans dist/ even when gitignored
 ```
 
-A `.gitignore` at or below the directory the scan starts in still filters
-beneath it; one above it is never read.
+The `.gitignore` files in force there, including those above it, still
+filter what lies beneath it.
 
 ### Hidden files
 

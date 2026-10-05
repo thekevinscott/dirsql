@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1791218987,
+  "exit_code": 0,
+  "commit": "a433cc9c0cf5c32e3d731625dd63ecd040d9f235",
+  "branch": "claude/1272-ancestor-gitignore"
+}

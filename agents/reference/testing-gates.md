@@ -14,13 +14,15 @@ The scan covers the two native **binding crates** too (#405): `dirsql-typescript
 
 `internals/distcheck` (#520) is the same species of repo-only uv package: the packaging distcheck flows (build → pack → install → run the published artifact), extracted from the former per-package packaging suites. It is a click group (`dirsql-distcheck`) with one subcommand per flow (`dirsql-distcheck python`, `dirsql-distcheck node` -- the node flow drives `npm`/`pnpm` via subprocess from Python; one tested home matters more than harness-language purity), each backed by a `gate.run()` whose effects funnel through an injected `runner` (subprocess) + `FileSystem` seam so the orchestration is unit-testable without a real build. The real flows run in CI via the `distcheck` jobs in `dirsql-python-ci.yml` / `dirsql-typescript-ci.yml` (which build the prerequisites first, then invoke `dirsql-distcheck <flow>`); `internals-distcheck-ci.yml`'s `internals-distcheck` call gates the package with `colocated-test`, `unit-lint`, `integration-lint`, `unit-coverage`, and `mutation` at `internals/distcheck/src` (a single call -- with #417 live on `@v0`, `integration-lint` derives its subjects from the package root, so no separate integration call is needed). No `e2e-verify`/attestation: the package has no e2e tier, since its `tests/integration/` (each flow's `gate.run()` against real subprocesses) is the outermost tier and the CI distcheck jobs run the real flows directly.
 
-Run it locally before pushing:
+Run it locally before pushing, **without the `mutation` gate** -- agents never run mutation locally (see *Mutation* below):
 
 ```bash
-just preflight                    # every (root, gate) pair the CI workflows declare
+just preflight --gate colocated-test --gate one-function-per-file --gate unit-lint --gate integration-lint --gate unit-coverage --gate packaging --gate e2e-verify
 just preflight --dry-run          # print the derived matrix without running it
 just preflight --gate unit-lint   # narrow to one gate (repeatable)
 ```
+
+Plain `just preflight` runs every (root, gate) pair the CI workflows declare, mutation included. An unrecognized `--gate` name matches no pair and reports `0 failing pair(s)`, so check a new name with `--dry-run` first.
 
 `just preflight` is `dirsql-checks preflight` (#781): it **derives** the pairs from
 the CI workflows rather than restating them, reading every `.github/workflows/*.yml`
@@ -50,7 +52,9 @@ The gate reruns the real unit suite per mutant, so it needs the native bindings 
 
 **Python mutation now runs in the reusable workflow too** (`dirsql-python-ci.yml`, `python-sdk` gates: `mutation`): the testing-conventions wheel bundles the cosmic-ray adapter as a runtime dependency, so the reusable mutation job resolves the engine from the same `python_env=uv` (`uv sync`) environment it provisions for coverage — no separate install and no bespoke workflow. This retired `python-mutation.yml` (#426). All three SDKs' `mutation` gates now run inside their own CI workflow.
 
-Run a language locally (after building its native artifact), against your PR's base -- `just preflight --gate mutation` runs all three, or one at a time:
+**Agents never run this gate locally** -- not `just preflight --gate mutation`, not the commands below, not `cargo mutants`. The memory cap below is per run, so parallel agent runs still exhaust the host. CI runs the gate on every PR; read its log and fix the survivors it names.
+
+For the maintainer, against the PR's base (after building the native artifact) -- `just preflight --gate mutation` runs every lane, or one at a time:
 
 ```bash
 # from packages/python -- `uv run` is REQUIRED, see below

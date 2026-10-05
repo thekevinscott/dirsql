@@ -456,6 +456,51 @@ fn a_prefixed_glob_starts_its_walk_at_the_named_directory() {
     );
 }
 
+/// Backdate `dir`'s access time, reporting whether a listing would move it
+/// again. A `noatime` mount records no listing, so the caller has nothing to
+/// assert there.
+#[cfg(unix)]
+fn backdate_atime(dir: &Path) -> bool {
+    let probe = dir.join("probe");
+    fs::create_dir(&probe).unwrap();
+    set_epoch_atime(&probe);
+    fs::read_dir(&probe).unwrap().for_each(drop);
+    let recorded = !unlisted_since_backdate(&probe);
+    fs::remove_dir(&probe).unwrap();
+    set_epoch_atime(dir);
+    recorded
+}
+
+#[cfg(unix)]
+fn set_epoch_atime(dir: &Path) {
+    let times = fs::FileTimes::new().set_accessed(std::time::UNIX_EPOCH);
+    fs::File::open(dir).unwrap().set_times(times).unwrap();
+}
+
+#[cfg(unix)]
+fn unlisted_since_backdate(dir: &Path) -> bool {
+    fs::metadata(dir).unwrap().accessed().unwrap() == std::time::UNIX_EPOCH
+}
+
+#[cfg(unix)]
+#[test]
+fn a_glob_without_a_double_star_never_lists_below_its_depth() {
+    let root = fixture();
+    let db = open(&root);
+    let nested = root.path().join("docs/nested");
+
+    for table in ["./docs/*.md", "./docs/a.md"] {
+        if !backdate_atime(&nested) {
+            return;
+        }
+        db.query(&format!("SELECT path FROM '{table}'")).unwrap();
+        assert!(
+            unlisted_since_backdate(&nested),
+            "'{table}' cannot match below docs/, so docs/nested must not be listed"
+        );
+    }
+}
+
 /// A tree with a dotfile and a dot-directory beside ordinary files, the
 /// dot-directory holding a nested dot-directory of its own.
 fn dotted() -> TempDir {
@@ -555,6 +600,68 @@ fn an_absolute_path_table_hides_dot_named_files_too() {
     assert_eq!(
         paths(&db, &format!("SELECT path FROM '{dir}/.hidden/*'")),
         vec![format!("{dir}/.hidden/x.md")]
+    );
+}
+
+/// Names that differ from their ASCII twins by one two-byte character.
+fn non_ascii_fixture() -> TempDir {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("u")).unwrap();
+    for name in ["cafe.md", "caf\u{e9}.md", "naive.txt", "na\u{ef}ve.txt"] {
+        fs::write(root.path().join("u").join(name), name).unwrap();
+    }
+    root
+}
+
+#[test]
+fn a_question_mark_matches_one_non_ascii_character() {
+    let root = non_ascii_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './u/caf?.md'"),
+        vec!["u/cafe.md", "u/caf\u{e9}.md"]
+    );
+}
+
+#[test]
+fn two_question_marks_do_not_match_one_non_ascii_character() {
+    let root = non_ascii_fixture();
+    let db = open(&root);
+
+    assert!(paths(&db, "SELECT path FROM './u/na??ve.txt'").is_empty());
+}
+
+#[test]
+fn a_bracket_expression_matches_a_non_ascii_member() {
+    let root = non_ascii_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './u/na[\u{ef}]ve.txt'"),
+        vec!["u/na\u{ef}ve.txt"]
+    );
+}
+
+#[test]
+fn a_negated_bracket_expression_matches_one_non_ascii_character() {
+    let root = non_ascii_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './u/na[!i]ve.txt'"),
+        vec!["u/na\u{ef}ve.txt"]
+    );
+}
+
+#[test]
+fn a_bracket_range_spans_non_ascii_characters() {
+    let root = non_ascii_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './u/caf[\u{e0}-\u{ea}].md'"),
+        vec!["u/caf\u{e9}.md"]
     );
 }
 

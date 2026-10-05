@@ -278,7 +278,7 @@ with all seven [stat columns](./columns.md): `path`, `basename`, `dir`, `ext`,
 
 ```bash
 curl -s localhost:7117/query -H 'content-type: application/json' \
-  -d '{"sql":"SELECT basename, size FROM \'./\' ORDER BY size DESC LIMIT 5"}'
+  -d "{\"sql\":\"SELECT basename, size FROM './' ORDER BY size DESC LIMIT 5\"}"
 ```
 
 Earlier versions served an implicit table named `files` here. It is gone; a
