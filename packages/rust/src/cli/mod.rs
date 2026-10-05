@@ -16,6 +16,7 @@
 //!
 //! - [`server`] — bind/serve/shutdown plumbing.
 //! - [`router`] — axum routes + request handlers (thin HTTP adapters).
+//! - [`context`] — the agent usage guide behind `dirsql context`.
 //! - [`execute`] — the transport-agnostic query pipeline shared by the
 //!   HTTP handler and the one-shot `dirsql query` subcommand.
 //! - [`repl`] — the read-eval-print loop behind bare `dirsql`.
@@ -31,6 +32,7 @@ use tokio::task::JoinHandle;
 
 use crate::DirSQL;
 
+pub mod context;
 pub mod execute;
 pub mod init;
 pub mod repl;

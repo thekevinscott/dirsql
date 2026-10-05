@@ -1,0 +1,1 @@
+**Changed** A `[[table]]` `on-file` hook's rows are now stored while the next batch of files is still being parsed, and text values are bound to SQLite without copying. A transcripts ingest of 4,096 files runs within 4% of the equivalent `find -exec ... +` pipeline, down from 28%.

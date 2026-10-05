@@ -1,6 +1,4 @@
-use crate::matcher::TableMatcher;
-use crate::posix_class::expand_posix_classes;
-use globset::{GlobBuilder, GlobMatcher, GlobSet, GlobSetBuilder};
+use crate::matcher::{GlobError, Pattern, TableMatcher};
 use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::ffi::{OsStr, OsString};
@@ -75,20 +73,28 @@ fn scan_below(
 
     // Match against relative path so globs like "comments/**/*.jsonl" work
     // regardless of the absolute root directory.
-    walk(root, start, matcher, None, false, &mut |rel_path, entry| {
-        if matcher.is_ignored(&rel_path) {
-            return;
-        }
+    walk(
+        root,
+        start,
+        matcher,
+        None,
+        false,
+        None,
+        &mut |rel_path, entry| {
+            if matcher.is_ignored(&rel_path) {
+                return;
+            }
 
-        seen += 1;
-        on_file(seen);
+            seen += 1;
+            on_file(seen);
 
-        // Fan-out: a file matching N tables' globs yields N (path, table)
-        // pairs, one per matching table, in declaration order.
-        for m in matcher.match_all(&rel_path) {
-            results.push((entry.path(), m.table_name));
-        }
-    });
+            // Fan-out: a file matching N tables' globs yields N (path, table)
+            // pairs, one per matching table, in declaration order.
+            for m in matcher.match_all(&rel_path) {
+                results.push((entry.path(), m.table_name));
+            }
+        },
+    );
 
     results
 }
@@ -109,16 +115,24 @@ fn scan_below(
 /// starts at the path's literal prefix, so a dot directory named there is
 /// already inside.
 ///
-/// With `gitignore` set, `.gitignore` files apply hierarchically (each one
-/// below its own directory) and prune traversal, like fd/ripgrep, and no
-/// `.git` directory is required. Only files at or below `root` are read; one
-/// above it has no say.
+/// With `gitignore` set, `.gitignore` files inside a git repo apply as git
+/// applies them: hierarchically, each below its own directory, from the repo
+/// root (the nearest directory holding `.git`) down, pruning traversal.
+/// Outside a repo none applies, as in git, fd and ripgrep. Those above `root`
+/// filter what lies below it, never `root` itself, so naming an ignored
+/// directory still scans it.
 pub fn scan_glob(
     root: &Path,
     glob: &PathGlob,
     ignore: &TableMatcher,
     gitignore: bool,
 ) -> Vec<PathBuf> {
+    let repo = if gitignore {
+        enclosing_repo(root, &holds_git)
+    } else {
+        None
+    };
+    let repo_frames = repo.map(|top| gitignores_above(root, top));
     let mut results = Vec::new();
     walk(
         root,
@@ -126,6 +140,7 @@ pub fn scan_glob(
         ignore,
         Some(glob),
         gitignore,
+        repo_frames,
         &mut |rel_path, _| {
             if is_wanted(glob, ignore, &rel_path) {
                 results.push(rel_path);
@@ -158,15 +173,15 @@ fn is_wanted(glob: &PathGlob, ignore: &TableMatcher, rel_path: &Path) -> bool {
 /// cannot recurse without bound.
 #[derive(Debug)]
 pub struct PathGlob {
-    files: GlobSet,
-    spelled_dot_names: GlobSet,
+    files: Pattern,
+    spelled_dot_names: Vec<Pattern>,
     components: Vec<Component>,
 }
 
 #[derive(Debug)]
 enum Component {
     AnyDepth,
-    Name(GlobMatcher),
+    Name(Pattern),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -177,8 +192,18 @@ enum Kind {
 }
 
 impl PathGlob {
+    fn spells_dot_name(&self, name: &OsStr) -> bool {
+        self.spelled_dot_names
+            .iter()
+            .any(|p| p.is_match(Path::new(name)))
+    }
+
     pub fn is_match(&self, rel_path: &Path) -> bool {
         self.files.is_match(rel_path)
+    }
+
+    fn has_components(&self) -> bool {
+        !self.components.is_empty()
     }
 
     fn start(&self) -> Vec<usize> {
@@ -193,7 +218,7 @@ impl PathGlob {
             match self.components.get(i) {
                 Some(Component::AnyDepth) if kind == Kind::LinkedDir => next.push(i + 1),
                 Some(Component::AnyDepth) => next.push(i),
-                Some(Component::Name(m)) if m.is_match(name) => next.push(i + 1),
+                Some(Component::Name(m)) if m.is_match(Path::new(name)) => next.push(i + 1),
                 _ => {}
             }
         }
@@ -232,24 +257,17 @@ impl PathGlob {
 /// `literal_separator` is what makes `*` mean *this directory only*: without
 /// it a lone `*` would cross `/` and the explicit non-recursive spelling would
 /// silently recurse. `**` still crosses separators.
-pub fn compile_glob(pattern: &str) -> Result<PathGlob, globset::Error> {
-    let mut files = GlobSetBuilder::new();
-    files.add(compile_component(pattern)?);
-    let mut spelled = GlobSetBuilder::new();
-    for component in pattern.split('/').filter(|c| is_dot_named(OsStr::new(c))) {
-        spelled.add(compile_component(component)?);
-    }
+pub fn compile_glob(pattern: &str) -> Result<PathGlob, GlobError> {
+    let spelled_dot_names = pattern
+        .split('/')
+        .filter(|c| is_dot_named(OsStr::new(c)))
+        .map(Pattern::new)
+        .collect::<Result<_, _>>()?;
     Ok(PathGlob {
-        files: files.build()?,
-        spelled_dot_names: spelled.build()?,
+        files: Pattern::new(pattern)?,
+        spelled_dot_names,
         components: compile_components(pattern),
     })
-}
-
-fn compile_component(pattern: &str) -> Result<globset::Glob, globset::Error> {
-    GlobBuilder::new(&expand_posix_classes(pattern))
-        .literal_separator(true)
-        .build()
 }
 
 fn is_dot_named(name: &OsStr) -> bool {
@@ -263,7 +281,7 @@ fn compile_components(pattern: &str) -> Vec<Component> {
         .split('/')
         .map(|c| match c {
             "**" => Ok(Component::AnyDepth),
-            _ => compile_component(c).map(|g| Component::Name(g.compile_matcher())),
+            _ => Pattern::new(c).map(Component::Name),
         })
         .collect::<Result<Vec<_>, _>>()
         .unwrap_or_default();
@@ -294,15 +312,19 @@ pub(crate) fn parse_gitignore_arg(arg: &str) -> Result<bool, String> {
 /// `.dirsql/` subtree and any directory the skip rules ignore wholesale, so an
 /// ignored tree is never read at all. With `glob` given, a dot-named entry it
 /// does not spell is skipped; `None` admits them all. With `gitignore` set,
-/// entries a `.gitignore` in force ignores are pruned/skipped too. Symlinks
-/// are followed only as `glob` allows, and not at all without one; a broken
-/// link or an unreadable directory contributes nothing.
+/// entries a `.gitignore` in force ignores are pruned/skipped too, starting
+/// from `repo_frames`: the ones in force above `start` when a repo encloses
+/// it, `None` when none does. Inside a directory holding `.git`, its
+/// `.gitignore` files apply. Symlinks are followed only as `glob` allows, and
+/// not at all without one; a broken link or an unreadable directory
+/// contributes nothing.
 fn walk(
     root: &Path,
     start: &Path,
     ignore: &TableMatcher,
     glob: Option<&PathGlob>,
     gitignore: bool,
+    repo_frames: Option<Vec<Gitignore>>,
     visit: &mut dyn FnMut(PathBuf, &DirEntry),
 ) {
     let rel = start.strip_prefix(root).unwrap_or(start);
@@ -313,7 +335,8 @@ fn walk(
         ignore,
         glob,
         gitignore,
-        frames: Vec::new(),
+        in_repo: repo_frames.is_some(),
+        frames: repo_frames.unwrap_or_default(),
     };
     let states = glob.map_or_else(Vec::new, PathGlob::start);
     walk.descend(start, rel, depth, &states, false, visit);
@@ -323,6 +346,9 @@ struct Walk<'a> {
     ignore: &'a TableMatcher,
     glob: Option<&'a PathGlob>,
     gitignore: bool,
+    /// Whether a repo encloses the walk's current position, which is what
+    /// puts a `.gitignore` in force.
+    in_repo: bool,
     /// The `.gitignore` files in force at the walk's current position, root
     /// first; a directory's own file is pushed on entry and popped on exit.
     frames: Vec<Gitignore>,
@@ -338,8 +364,12 @@ impl Walk<'_> {
         linked: bool,
         visit: &mut dyn FnMut(PathBuf, &DirEntry),
     ) {
+        let entered_repo = self.gitignore && !self.in_repo && holds_git(dir);
+        if entered_repo {
+            self.in_repo = true;
+        }
         let mut pushed = false;
-        if self.gitignore
+        if self.in_repo
             && let Some(matcher) = load_gitignore(dir)
         {
             self.frames.push(matcher);
@@ -368,6 +398,9 @@ impl Walk<'_> {
         if pushed {
             self.frames.pop();
         }
+        if entered_repo {
+            self.in_repo = false;
+        }
     }
 
     /// Whether the walk takes an entry at `depth`: the skip rules and the
@@ -381,7 +414,7 @@ impl Walk<'_> {
 
     fn admits_name(&self, name: &OsStr) -> bool {
         match self.glob {
-            Some(glob) => !is_dot_named(name) || glob.spelled_dot_names.is_match(name),
+            Some(glob) => !is_dot_named(name) || glob.spells_dot_name(name),
             None => true,
         }
     }
@@ -392,10 +425,17 @@ impl Walk<'_> {
     }
 
     /// Whether the walk takes an entry given whether its path crosses a
-    /// followed symlink. Off a link the glob is judged on the whole path
-    /// afterwards; below one, only a path bash would also reach is taken.
+    /// followed symlink. Off a link a file is judged on the whole path
+    /// afterwards, and a directory is entered only while some component can
+    /// still enter it; below one, only a path bash would also reach is taken.
     fn follows(&self, linked: bool, states: &[usize], kind: Kind) -> bool {
-        !linked || self.glob.is_some_and(|glob| glob.reaches(states, kind))
+        match self.glob {
+            Some(glob) if linked || (kind == Kind::Dir && glob.has_components()) => {
+                glob.reaches(states, kind)
+            }
+            Some(_) => true,
+            None => !linked,
+        }
     }
 }
 
@@ -432,6 +472,34 @@ fn sorted_entries(dir: &Path) -> Vec<(OsString, DirEntry)> {
         .collect();
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     entries
+}
+
+/// The `.gitignore` files above `start`, up to and including the repo root
+/// `top`, outermost first.
+fn gitignores_above(start: &Path, top: &Path) -> Vec<Gitignore> {
+    dirs_above(start, top)
+        .into_iter()
+        .filter_map(load_gitignore)
+        .collect()
+}
+
+/// The root of the git repo enclosing `start`: the nearest directory, `start`
+/// included, holding `.git`.
+fn enclosing_repo<'a>(start: &'a Path, is_repo_root: &dyn Fn(&Path) -> bool) -> Option<&'a Path> {
+    start.ancestors().find(|dir| is_repo_root(dir))
+}
+
+fn holds_git(dir: &Path) -> bool {
+    dir.join(".git").exists()
+}
+
+/// The directories strictly above `start`, up to and including its ancestor
+/// `top`, outermost first.
+fn dirs_above<'a>(start: &'a Path, top: &Path) -> Vec<&'a Path> {
+    let depth = start.ancestors().position(|dir| dir == top).unwrap_or(0);
+    let mut dirs: Vec<&Path> = start.ancestors().skip(1).take(depth).collect();
+    dirs.reverse();
+    dirs
 }
 
 /// Compile the `.gitignore` in `dir`, if one exists. An unparsable file
@@ -656,6 +724,49 @@ mod tests {
         assert!(!is_wanted(&glob, &ignore, Path::new("drafts/a.md")));
     }
 
+    #[test]
+    fn enclosing_repo_is_the_nearest_directory_holding_git() {
+        let repo = enclosing_repo(Path::new("/outer/inner/a"), &|dir| {
+            dir == Path::new("/outer") || dir == Path::new("/outer/inner")
+        });
+        assert_eq!(repo, Some(Path::new("/outer/inner")));
+    }
+
+    #[test]
+    fn enclosing_repo_includes_the_start_itself() {
+        let repo = enclosing_repo(Path::new("/r"), &|dir| dir == Path::new("/r"));
+        assert_eq!(repo, Some(Path::new("/r")));
+    }
+
+    #[test]
+    fn enclosing_repo_is_none_outside_any_repo() {
+        assert_eq!(enclosing_repo(Path::new("/idx/docs"), &|_| false), None);
+    }
+
+    #[test]
+    fn dirs_above_lists_the_ancestors_up_to_top_outermost_first() {
+        assert_eq!(
+            dirs_above(Path::new("/r/a/b"), Path::new("/r")),
+            vec![Path::new("/r"), Path::new("/r/a")]
+        );
+    }
+
+    #[test]
+    fn dirs_above_is_empty_when_the_start_is_the_top() {
+        assert!(dirs_above(Path::new("/r"), Path::new("/r")).is_empty());
+    }
+
+    #[test]
+    fn an_ancestor_frame_filters_entries_below_the_start_but_not_the_start() {
+        let frames = vec![frame("/r", &["*.log", "dist/"])];
+        assert!(is_gitignored(&frames, Path::new("/r/docs/z.log"), false));
+        assert!(!is_gitignored(
+            &frames,
+            Path::new("/r/dist/bundle.js"),
+            false
+        ));
+    }
+
     fn walk_with<'a>(
         ignore: &'a TableMatcher,
         glob: Option<&'a PathGlob>,
@@ -665,6 +776,7 @@ mod tests {
             ignore,
             glob,
             gitignore: !frames.is_empty(),
+            in_repo: !frames.is_empty(),
             frames,
         }
     }
@@ -755,22 +867,22 @@ mod tests {
     #[test]
     fn a_spelled_dot_component_may_itself_be_a_glob() {
         let glob = compile_glob(".env*").unwrap();
-        assert!(glob.spelled_dot_names.is_match(".env.local"));
-        assert!(!glob.spelled_dot_names.is_match(".git"));
+        assert!(glob.spells_dot_name(OsStr::new(".env.local")));
+        assert!(!glob.spells_dot_name(OsStr::new(".git")));
     }
 
     #[test]
     fn a_dot_component_is_spelled_wherever_it_sits_in_the_glob() {
         let glob = compile_glob("*/.cache/*").unwrap();
-        assert!(glob.spelled_dot_names.is_match(".cache"));
-        assert!(!glob.spelled_dot_names.is_match(".config"));
+        assert!(glob.spells_dot_name(OsStr::new(".cache")));
+        assert!(!glob.spells_dot_name(OsStr::new(".config")));
     }
 
     #[test]
     fn a_glob_without_a_dot_component_spells_no_dot_name() {
         let glob = compile_glob("docs/**/*.md").unwrap();
-        assert!(!glob.spelled_dot_names.is_match(".md"));
-        assert!(!glob.spelled_dot_names.is_match(".docs"));
+        assert!(!glob.spells_dot_name(OsStr::new(".md")));
+        assert!(!glob.spells_dot_name(OsStr::new(".docs")));
     }
 
     #[test]
@@ -903,11 +1015,42 @@ mod tests {
             ignore: &ignore,
             glob: Some(&glob),
             gitignore: false,
+            in_repo: false,
             frames: Vec::new(),
         };
         assert!(walk.follows(true, &[2], Kind::File));
         assert!(!walk.follows(true, &[1], Kind::File));
         assert!(walk.follows(false, &[1], Kind::File));
+    }
+
+    #[test]
+    fn enters_a_real_directory_only_while_a_component_can_enter_it() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("*/x").unwrap();
+        let walk = Walk {
+            ignore: &ignore,
+            glob: Some(&glob),
+            gitignore: false,
+            in_repo: false,
+            frames: Vec::new(),
+        };
+        assert!(walk.follows(false, &[1], Kind::Dir));
+        assert!(!walk.follows(false, &[2], Kind::Dir));
+        assert!(!walk.follows(false, &[], Kind::Dir));
+    }
+
+    #[test]
+    fn enters_every_real_directory_when_the_glob_has_no_components() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("{a/b,c}").unwrap();
+        let walk = Walk {
+            ignore: &ignore,
+            glob: Some(&glob),
+            gitignore: false,
+            in_repo: false,
+            frames: Vec::new(),
+        };
+        assert!(walk.follows(false, &[], Kind::Dir));
     }
 
     #[test]

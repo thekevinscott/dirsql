@@ -13,6 +13,7 @@ describe("path-table gitignore opt-out (#746)", () => {
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "dirsql-746-"));
+    await mkdir(join(dir, ".git"));
     await mkdir(join(dir, "dist"), { recursive: true });
     await mkdir(join(dir, "src"), { recursive: true });
     await mkdir(join(dir, "node_modules", "pkg"), { recursive: true });
