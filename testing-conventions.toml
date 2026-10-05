@@ -138,8 +138,8 @@ reason = "a child's depth decides the reserved top-level .dirsql rule for a real
 [[rust.exempt]]
 path = "src/vtab.rs"
 rules = ["mutation"]
-lines = [405, 414]
-reason = "rows walks a real tree and column hands a cell to SQLite; the cell choice is unit-tested in `cell`, and tests/vtab.rs stat_columns_carry_real_values and content_is_excluded_from_star_but_selectable_by_name assert both through a real connection"
+lines = [414]
+reason = "column hands a cell to SQLite; the cell choice is unit-tested in `cell`, and tests/vtab.rs stat_columns_carry_real_values and content_is_excluded_from_star_but_selectable_by_name assert both through a real connection"
 
 [[rust.exempt]]
 path = "src/cli/run.rs"
