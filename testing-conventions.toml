@@ -143,7 +143,7 @@ reason = "read_text and ScanSpec::read open a real file and prefetch reads a rea
 [[rust.exempt]]
 path = "src/vtab_scaffold.rs"
 rules = ["mutation"]
-lines = [337]
+lines = [335]
 reason = "`|` -> `^` is equivalent: the lookup idx_num is a column index plus one, and SQLite caps a table at 32767 columns, so it never carries the PREFETCH_IDX bit and the two operators agree on every input"
 
 # Unit-only coverage floor: measured by `cargo llvm-cov --lib --features cli`
