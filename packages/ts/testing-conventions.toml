@@ -4,9 +4,9 @@
 # start staling this package.
 #
 # The napi crate is in scope because the npm launcher runs the CLI in-process
-# through it (#721), so every e2e case crosses it -- the whole crate dir, since
-# Cargo.toml and build.rs decide what lands in the addon. packages/python/src is
-# not: it cannot reach this suite.
+# through it (#721), so every e2e case crosses it. The verifier accepts only
+# directory scopes, so the package-root Cargo.toml cannot be listed here.
+# packages/python/src is not: it cannot reach this suite.
 [e2e]
 extra_scope = ["packages/rust/src", "packages/ts/napi"]
 
