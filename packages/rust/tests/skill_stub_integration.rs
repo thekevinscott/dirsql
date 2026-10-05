@@ -14,7 +14,9 @@ fn skill() -> String {
         env!("CARGO_MANIFEST_DIR"),
         "/../../.claude/skills/dirsql/SKILL.md"
     );
-    std::fs::read_to_string(path).unwrap_or_else(|e| panic!("reading {path}: {e}"))
+    std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("reading {path}: {e}"))
+        .replace("\r\n", "\n")
 }
 
 fn frontmatter_and_body(skill: &str) -> (&str, &str) {
@@ -43,7 +45,9 @@ fn the_frontmatter_names_the_skill_and_describes_its_trigger() {
         "frontmatter must declare `name: dirsql`:\n{frontmatter}"
     );
     assert!(
-        frontmatter.lines().any(|line| line.starts_with("description: ")),
+        frontmatter
+            .lines()
+            .any(|line| line.starts_with("description: ")),
         "frontmatter must carry a description:\n{frontmatter}"
     );
 }
@@ -76,8 +80,18 @@ fn the_body_carries_no_usage_guidance_that_could_drift() {
     let skill = skill();
     let (_, body) = frontmatter_and_body(&skill);
     for forbidden in [
-        "```", "|", "'./", "'**", "SELECT", "select ", "FROM", "->>", "-c ",
-        "--on-file", "dirsql-plugin", ".dirsql.toml",
+        "```",
+        "|",
+        "'./",
+        "'**",
+        "SELECT",
+        "select ",
+        "FROM",
+        "->>",
+        "-c ",
+        "--on-file",
+        "dirsql-plugin",
+        ".dirsql.toml",
     ] {
         assert!(
             !body.contains(forbidden),
