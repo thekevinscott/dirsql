@@ -1,7 +1,8 @@
 name: dirsql Rust CI
 
-# The binding crates fan in (packages/ts/napi, packages/python/src): they are
-# cargo workspace members, so the workspace-wide unit/lint jobs compile them.
+# The binding crates fan in (packages/ts/napi with its manifest at
+# packages/ts/Cargo.toml, and packages/python/src): they are cargo workspace
+# members, so the workspace-wide unit/lint jobs compile them.
 # The root testing-conventions.toml carries this lane's config and the
 # [rust.coverage] floors the coverage job reads.
 on:
@@ -10,6 +11,7 @@ on:
     paths:
       - 'packages/rust/**'
       - 'packages/ts/napi/**'
+      - 'packages/ts/Cargo.toml'
       - 'packages/python/src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -22,6 +24,7 @@ on:
       - '!packages/rust/migrations.d/**'
       - '!packages/rust/README.md'
       - 'packages/ts/napi/**'
+      - 'packages/ts/Cargo.toml'
       - 'packages/python/src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
