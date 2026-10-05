@@ -502,6 +502,26 @@ mod tests {
     }
 
     #[test]
+    fn admits_no_dot_named_entry_the_glob_does_not_spell() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let walk = walk_with(&ignore, Vec::new());
+        assert!(!walk.admits(
+            1,
+            false,
+            OsStr::new(".env"),
+            Path::new("/r/.env"),
+            Path::new(".env")
+        ));
+        assert!(!walk.admits(
+            1,
+            true,
+            OsStr::new(".hidden"),
+            Path::new("/r/.hidden"),
+            Path::new(".hidden")
+        ));
+    }
+
+    #[test]
     fn admits_nothing_a_gitignore_in_force_ignores() {
         let ignore = TableMatcher::new(&[], &[]).unwrap();
         let walk = walk_with(&ignore, vec![frame("", &["*.log"])]);
