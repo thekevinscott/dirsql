@@ -12,7 +12,7 @@ The full documentation lives in [`docs/`](docs/) and is published at <https://di
 
 A folder of files is durable, diff-able, version-controllable, and legible without `dirsql` running. A SQL database is fast to query, easy to join across, and ergonomic for filtering. `dirsql` bridges the two: the filesystem stays the source of truth, and you get a SQL index over it for free.
 
-`dirsql` is a queryable index over a filesystem. Files are rows; columns come from filesystem facts (the path, glob captures like `posts/{thread_id}/*.md`, and stat metadata). Content interpretation — parsing markdown frontmatter, JSON, CSV, and the like — is intentionally not dirsql's job; if you need that, register a programmatic table whose on-file callback does the parsing.
+`dirsql` is a queryable index over a filesystem. Files are rows; columns come from filesystem facts (the path and stat metadata). Content interpretation — parsing markdown frontmatter, JSON, CSV, and the like — is intentionally not dirsql's job; if you need that, pass your own parser with `--on-file <command>`: it receives the matched paths and prints the rows as JSON.
 
 ## Installation
 
