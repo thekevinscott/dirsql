@@ -13,6 +13,9 @@ files, which is the same shape one directory shallower.
 
 from __future__ import annotations
 
+import tomllib
+from pathlib import Path
+
 import pytest
 
 from checks.release_globs.carve_out import carve_out
@@ -81,3 +84,14 @@ def describe_run_against_real_config_files():
         globs = [*carve_out("packages/rust"), negation]
         assert run(*write(tmp_path, globs)) == 1
         assert "leading-`!` negation" in capsys.readouterr().out
+
+
+def describe_the_real_release_config():
+    def it_keeps_the_napi_manifest_at_the_npm_package_path():
+        # The release stamps the planned version into a napi crate only when its
+        # Cargo.toml sits at the npm package's `path`; elsewhere the CLI reports
+        # the committed literal.
+        repo = Path(__file__).resolve().parents[4]
+        config = tomllib.loads((repo / "putitoutthere.toml").read_text())
+        (npm,) = [package for package in config["package"] if package["kind"] == "npm"]
+        assert (repo / npm["path"] / "Cargo.toml").is_file()
