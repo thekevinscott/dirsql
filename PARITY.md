@@ -554,6 +554,7 @@ incl. #313).
 | Quoted-identifier DDL registers/queries by bare name (#204) | Y | Y | Y |
 | Path-table query (`FROM './'`, glob scoping, zero-match rows, live re-scan, JOIN vs named) | Y (#629) | Y | Y (#629) |
 | Path-table directory name is one level; `**` descends (#1223) | Y | Y | Y |
+| Path-table trailing `/` is `*` appended (`./*/` == `./*/*`) (#1257) | Y | Y | Y |
 | Path-table dot-named entries hidden unless the path spells them (#1249) | Y | Y | Y |
 | Path-table symlinks followed as bash globstar follows them (#1256) | Y | Y | Y |
 | Path-table hidden `content` (excluded from `*`, selectable by name, non-UTF-8 → NULL) | Y (#629) | Y | Y (#629) |
