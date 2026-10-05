@@ -9,8 +9,9 @@ use std::os::unix::fs::symlink;
 use dirsql::{DirSQL, Value};
 use tempfile::TempDir;
 
-/// `link.md -> top.md`, `linkdir -> real`, `real/loop -> .` (a cycle) and a
-/// dangling `broken.md`.
+/// `link.md -> top.md`, `linkdir -> real`, `real/loop -> .` (a cycle), a
+/// dangling `broken.md`, and the dot-named `.dotlink.md -> top.md` and
+/// `.dotdir -> real`.
 fn fixture() -> TempDir {
     let root = TempDir::new().unwrap();
     let at = |rel: &str| root.path().join(rel);
@@ -22,6 +23,8 @@ fn fixture() -> TempDir {
     symlink("real", at("linkdir")).unwrap();
     symlink(".", at("real/loop")).unwrap();
     symlink("missing.md", at("broken.md")).unwrap();
+    symlink("top.md", at(".dotlink.md")).unwrap();
+    symlink("real", at(".dotdir")).unwrap();
     root
 }
 
@@ -103,4 +106,12 @@ fn a_symlink_cycle_is_followed_once_per_star_component() {
             "real/loop/loop/r.md"
         ]
     );
+}
+
+#[test]
+fn a_dot_named_symlink_is_hidden_unless_the_pattern_spells_the_dot() {
+    assert_eq!(paths("./*"), vec!["link.md", "top.md"]);
+    assert_eq!(paths("./.*"), vec![".dotlink.md"]);
+    assert_eq!(paths("./.dotdir/*"), vec![".dotdir/r.md"]);
+    assert_eq!(paths("./.*/*"), vec![".dotdir/r.md"]);
 }

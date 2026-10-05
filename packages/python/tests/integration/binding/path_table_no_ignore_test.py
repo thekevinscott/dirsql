@@ -23,7 +23,7 @@ def describe_no_ignore():
     async def it_excludes_gitignored_files_by_default(gitignored_dir):
         rows = await DirSQL(gitignored_dir).query("SELECT path FROM './'")
 
-        assert sorted(r["path"] for r in rows) == [".gitignore", "kept.md"]
+        assert sorted(r["path"] for r in rows) == ["kept.md"]
 
     @pytest.mark.asyncio
     async def it_returns_gitignored_files_with_no_ignore(gitignored_dir):
@@ -31,11 +31,7 @@ def describe_no_ignore():
 
         rows = await db.query("SELECT path FROM './'")
 
-        assert sorted(r["path"] for r in rows) == [
-            ".gitignore",
-            "ignored.md",
-            "kept.md",
-        ]
+        assert sorted(r["path"] for r in rows) == ["ignored.md", "kept.md"]
 
     @pytest.mark.asyncio
     async def it_keeps_the_built_in_floor_under_no_ignore(gitignored_dir, tmp_path):

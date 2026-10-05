@@ -1,7 +1,7 @@
 //! CLI e2e for gitignore-by-default: the real `dirsql` binary over a real
 //! temp directory with real `.gitignore` files, nothing mocked. Pins the
-//! default exclusion, the `--no-ignore` escape hatch, and the hidden-file
-//! divergence from fd/rg.
+//! default exclusion, the `--no-ignore` escape hatch, and that dot-named
+//! entries stay hidden under both.
 
 #![cfg(feature = "cli")]
 
@@ -59,8 +59,8 @@ fn a_default_scan_excludes_gitignored_files() {
 
     assert_eq!(
         basenames(&out),
-        vec![".gitignore", "app.js", "inside.txt"],
-        "dist/ is gitignored, node_modules is a built-in ignore, hidden files stay"
+        vec!["app.js"],
+        "dist/ is gitignored, node_modules is a built-in ignore, dot-named entries are hidden"
     );
 }
 
@@ -78,8 +78,8 @@ fn no_ignore_restores_gitignored_files() {
         "--no-ignore must disable gitignore respect, got: {names:?}"
     );
     assert!(
-        names.contains(&"inside.txt".to_string()),
-        "hidden files are scanned with or without --no-ignore, got: {names:?}"
+        !names.contains(&"inside.txt".to_string()),
+        "dot-named entries stay hidden with or without --no-ignore, got: {names:?}"
     );
 }
 
