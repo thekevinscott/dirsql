@@ -2,9 +2,10 @@
 
 A tree of JSONL session logs, each turned into message rows by a parser
 named in `.dirsql.toml`; the question is how many messages each project has
-per role. Native is one parser process over every file. dirsql runs the
-same parser once over every file through the real launcher. No mocks: real
-console script, real process, real filesystem, real parser spawn.
+per role. Native pipes the parser's JSON rows over every file into a
+second process that decodes and counts them, the same hand-off dirsql pays.
+dirsql runs the same parser over every file through the real launcher. No
+mocks: real console script, real process, real filesystem, real parser spawn.
 """
 
 from __future__ import annotations
@@ -79,21 +80,18 @@ if __name__ == "__main__":
 """
 
 COUNT = """\
-import os, sys
+import json, sys
 from collections import Counter
-from messages import rows
 
 counts = Counter()
-for folder, _, names in os.walk("projects"):
-    for name in names:
-        if name.endswith(".jsonl"):
-            for row in rows(os.path.join(folder, name)):
-                counts[(row["project"], row["role"])] += 1
+for line in sys.stdin:
+    for row in json.loads(line):
+        counts[(row["project"], row["role"])] += 1
 for (project, role), n in sorted(counts.items()):
     print(project, role, n, sep="\\t")
 """
 
-NATIVE = "python3 count.py"
+NATIVE = "find projects -name '*.jsonl' -exec python3 messages.py {} + | python3 count.py"
 
 LINE_KINDS = (
     {

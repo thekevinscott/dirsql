@@ -1284,6 +1284,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn text_and_blob_values_bind_without_copying() {
+        use rusqlite::types::{ToSql, ToSqlOutput, ValueRef};
+        let text = Value::Text("abc".into());
+        let blob = Value::Blob(vec![1, 2]);
+        assert_eq!(
+            text.to_sql().unwrap(),
+            ToSqlOutput::Borrowed(ValueRef::Text(b"abc"))
+        );
+        assert_eq!(
+            blob.to_sql().unwrap(),
+            ToSqlOutput::Borrowed(ValueRef::Blob(&[1, 2]))
+        );
+    }
+
+    #[test]
     fn create_table_from_ddl() {
         let db = Db::new().unwrap();
         db.create_table(
