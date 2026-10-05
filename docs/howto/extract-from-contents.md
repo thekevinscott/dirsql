@@ -2,8 +2,9 @@
 
 Paths and stat metadata only get you so far — when the columns you want live
 *inside* the files (JSON fields, frontmatter, log lines), add an
-[`on-file`](../reference/config.md#table) command: it runs once per matched
-file and its stdout becomes the file's rows.
+[`on-file`](../reference/config.md#table) command: it runs once for the
+table, with every matched file as an argument, and the JSON array it prints
+becomes the table's rows.
 
 ## 1. Point a command at the files
 
@@ -13,8 +14,8 @@ Suppose each book is a JSON file:
 {"title": "Middlemarch", "author": "George Eliot", "year": 1871}
 ```
 
-Any program that reads a file and prints a **JSON array of row objects** on
-stdout works. With [`jq`](https://jqlang.org/):
+Any program that reads the files named by its arguments and prints a **JSON
+array of row objects** on stdout works. With [`jq`](https://jqlang.org/):
 
 ```toml
 [[table]]
@@ -27,8 +28,8 @@ on-file = "jq -c -n '[inputs | {title, author, year}]'"
 The command runs once for the table, with every matched file's absolute path
 appended as an argument, and prints one array for all of them — the
 [command hook contract](../reference/hooks.md#on-file), which also covers
-the argv splitting, working directory, stdout protocol, and timeout shared
-by every hook.
+the argv splitting, working directory, and stdout protocol shared by every
+hook.
 
 ## 2. Query the extracted columns
 
@@ -68,13 +69,21 @@ dirsql query "SELECT event, user FROM events" -c ./.dirsql.toml
 [{"event":"login","user":"alice"},{"event":"logout","user":"alice"},{"event":"login","user":"bob"}]
 ```
 
-## When a file fails
+## When the command fails
 
-A file whose command errors (or prints something that isn't a JSON array of
-objects) contributes no rows: `dirsql` warns on stderr and the scan
-continues — one bad file never takes down the index. Details in
-[failure semantics](../reference/hooks.md#failure-semantics); the JSON to
-SQLite value mapping is under
+The command runs once for the whole table, so its failure is the table's: a
+non-zero exit, no output, or output that is not a JSON array of objects fails
+the build, and `dirsql query` exits `1` with the command's stderr tail on
+stderr and nothing on stdout.
+
+```
+dirsql query: failed to load config: table `books`: on-file command failed: command `jq -c -n '[inputs | {title, author, year}]'` failed (exit 5): jq: error (at /home/me/library/books/broken.json:1): Cannot index string with string "title"
+```
+
+A file the command cannot parse is the command's to handle — skip it, or
+emit a row with `NULL`s — because dirsql has no per-file view of the rows.
+Details in [failure semantics](../reference/hooks.md#failure-semantics); the
+JSON to SQLite value mapping is under
 [`on-file` row mapping](../reference/config.md#on-file-row-mapping).
 
 ## Going further
@@ -82,8 +91,9 @@ SQLite value mapping is under
 - Just want to read a field or two out of some JSON files? SQLite's JSON
   operators work directly on a path-table's `content` column, with no config
   and no command — [Query JSON file contents](./query-json.md).
-- The command re-runs on every startup and on every change to a matched
-  file. If it is expensive, [keep the index across restarts](./persist.md).
+- The command re-runs on every startup and, over all of the table's files, on
+  every change under the table's glob. If it is expensive,
+  [keep the index across restarts](./persist.md).
 - Embedding `dirsql` in a program instead? The SDK's `on_file` callback
   fills the same role in-process — see
   [Embed `dirsql` in your application](./embed.md).

@@ -37,10 +37,13 @@ The available placeholders are listed under the
 
 ### Working directory and environment
 
-The command runs in the **config file's directory**, so relative paths in
-the command resolve predictably regardless of where `dirsql` was launched.
-It inherits `dirsql`'s environment, so tools like `uvx --with …` / `npx …`
-resolve their dependencies as usual.
+A command named by a `[[table]]` runs in the **config file's directory**, so
+relative paths in the command resolve predictably regardless of where
+`dirsql` was launched. A command named by the `--on-file` flag has no config
+file: it runs in the **index root**, the directory `dirsql query` was run in,
+which is also the directory a `./` path-table is relative to. In both forms
+`{root}` is the index root. The command inherits `dirsql`'s environment, so
+tools like `uvx --with …` / `npx …` resolve their dependencies as usual.
 
 ### stdout protocol
 
@@ -102,10 +105,30 @@ counts as the same kind of failure.
 
 ## `on-file` contract
 
-Runs once per table, over every file matched by the table's `glob`, at
-initial scan and on every watched change. The command reads the files itself
-and prints a JSON array of row objects; see [`[[table]]`](./config.md#table) for the
+Runs **once per table**, with every file matched by the table's `glob`
+appended to the command as a trailing argument, and prints **one JSON array
+of row objects** for the whole table. That is the whole contract. The command
+reads the files itself; see [`[[table]]`](./config.md#table) for the
 row-mapping rules.
+
+One process over all the files is the shape to write: a loop over the
+arguments that collects rows and prints them once at the end. Parsing is the
+command's cost, not dirsql's — dirsql spawns the command, waits, and reads
+its stdout. A table over no matched files spawns nothing.
+
+```python
+import json, sys
+
+rows = []
+for path in sys.argv[1:]:
+    rows.extend(parse(path))
+print(json.dumps(rows))
+```
+
+There is no row-to-file attribution: dirsql does not know which file a row
+came from, and a row that needs the path carries it as a column the command
+emitted. In watch mode a change to any file under the table's glob re-runs
+the command over all of the table's files and replaces the table's rows.
 
 The same command is attachable two ways, over the same contract: the
 `on-file` config key on a `[[table]]`, and the
@@ -125,5 +148,20 @@ the path or stat metadata emits it (it has the paths).
 The matched files' **absolute** paths are not placeholders: they are appended
 to the command as trailing arguments, after everything written in the
 command, so `on-file = "extract.py"` receives them as `sys.argv[1:]` — one run
-per table, self-sufficient from any working directory. A command that still
-spells `{path}` is rejected at startup.
+per table, self-sufficient from any working directory. A tool that needs a
+path anywhere other than last gets a wrapper script. A command that spells
+`{path}` is rejected at startup:
+
+```
+on-file command `python3 extract.py {path}` uses `{path}`, but an on-file command now runs once per table with every matched path appended as trailing arguments and prints one JSON array of row objects. Remove `{path}` and read the paths from the command's arguments.
+```
+
+### Argument-list limits
+
+Every platform caps the bytes one process may receive as arguments. When a
+table's paths outgrow that cap, dirsql splits them into the fewest
+consecutive runs that fit, runs the command once per run, and concatenates
+the arrays it prints, in order. The command cannot tell: each run is an
+ordinary invocation with a subset of the paths. A command must therefore not
+assume one invocation sees every path — a count, a cross-file join, or a
+dedupe over `sys.argv[1:]` is per run, not per table. Do that work in SQL.

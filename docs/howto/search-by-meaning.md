@@ -120,6 +120,25 @@ ORDER BY vec_distance_cosine(emb, embed('local private models'))
 LIMIT 10
 ```
 
+A field that needs real parsing — frontmatter, a log line — comes out with a
+[parser attached](../reference/path-tables.md#parsing-rows-with-on-file) by
+`--on-file`; the plugin's `embed()` then works on the parser's columns, since a
+discovered plugin and an inline parser compose. With `title.py` printing one
+`{"path", "title"}` row per note from its frontmatter:
+
+```bash
+uvx --with dirsql-plugin-embeddings dirsql "
+  SELECT title,
+         vec_distance_cosine(embed(title), embed('how do I cook pasta?')) AS distance
+  FROM './notes/*.md'
+  ORDER BY distance
+  LIMIT 3" --on-file 'python3 title.py'
+```
+
+```json
+[{"title":"Boiling spaghetti","distance":0.491},{"title":"Planting tomatoes","distance":0.836},{"title":"Feature branches","distance":1.064}]
+```
+
 The same projection works as an `on-file` hook feeding the indexed shape:
 parse the field in the hook, store it as a column, and the trigger embeds it
 once instead of on every query.
