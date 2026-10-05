@@ -108,7 +108,7 @@ features = ["cli"]
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [72, 119, 285, 318, 373, 394]
+lines = [72, 119, 286, 319, 374, 395]
 reason = "scan_below, scan_glob, walk, descend, kind_of and sorted_entries read the filesystem; tests/scanner.rs (scan_finds_matching_files, scan_recurses_into_subdirectories), tests/vtab.rs (glob_scopes_the_walk, rowids_count_up_from_zero_in_scan_order) and tests/path_table_symlinks.rs assert what they return"
 
 [[rust.exempt]]
@@ -120,7 +120,7 @@ reason = "the walk's running file count is observable only through the CLI's pro
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [325]
+lines = [326]
 reason = "a child's depth decides the reserved top-level .dirsql rule for a real tree; tests/scanner.rs scan_excludes_top_level_dirsql_directory and tests/vtab.rs reserved_dirsql_directory_is_skipped assert it"
 
 [[rust.exempt]]

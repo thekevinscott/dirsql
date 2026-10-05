@@ -190,15 +190,16 @@ impl PathGlob {
         self.closure(next)
     }
 
-    /// `**` also matches zero names.
-    fn closure(&self, mut states: Vec<usize>) -> Vec<usize> {
-        let mut k = 0;
-        while k < states.len() {
-            if matches!(self.components.get(states[k]), Some(Component::AnyDepth)) {
-                states.push(states[k] + 1);
-            }
-            k += 1;
-        }
+    /// `**` also matches zero names. One pass suffices because repeated `**`
+    /// components were collapsed into one.
+    fn closure(&self, states: Vec<usize>) -> Vec<usize> {
+        let mut states: Vec<usize> = states
+            .into_iter()
+            .flat_map(|i| {
+                let any_depth = matches!(self.components.get(i), Some(Component::AnyDepth));
+                std::iter::once(i).chain(any_depth.then_some(i + 1))
+            })
+            .collect();
         states.sort_unstable();
         states.dedup();
         states
