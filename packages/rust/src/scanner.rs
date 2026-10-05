@@ -310,9 +310,10 @@ pub(crate) fn parse_gitignore_arg(arg: &str) -> Result<bool, String> {
 /// does not spell is skipped; `None` admits them all. With `gitignore` set,
 /// entries a `.gitignore` in force ignores are pruned/skipped too, starting
 /// from `repo_frames`: the ones in force above `start` when a repo encloses
-/// it, `None` when none does. Below a directory holding `.git` a repo does. Symlinks are followed only
-/// as `glob` allows, and not at all without one; a broken link or an
-/// unreadable directory contributes nothing.
+/// it, `None` when none does. Inside a directory holding `.git`, its
+/// `.gitignore` files apply. Symlinks are followed only as `glob` allows, and
+/// not at all without one; a broken link or an unreadable directory
+/// contributes nothing.
 fn walk(
     root: &Path,
     start: &Path,
