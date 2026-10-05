@@ -1,3 +1,4 @@
+use crate::posix_class::expand_posix_classes;
 use globset::{Glob, GlobBuilder, GlobSet, GlobSetBuilder};
 use std::path::Path;
 
@@ -86,7 +87,9 @@ fn glob_with_placeholders_as_star(pattern: &str) -> String {
 /// One glob rule on every surface: `*` and `?` stop at `/`, `**` crosses it,
 /// exactly as `scanner::compile_glob` reads a path-table.
 fn compile(pattern: &str) -> Result<Glob, globset::Error> {
-    GlobBuilder::new(pattern).literal_separator(true).build()
+    GlobBuilder::new(&expand_posix_classes(pattern))
+        .literal_separator(true)
+        .build()
 }
 
 impl TableMatcher {

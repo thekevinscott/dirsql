@@ -1,4 +1,5 @@
 use crate::matcher::TableMatcher;
+use crate::posix_class::expand_posix_classes;
 use globset::{GlobBuilder, GlobMatcher, GlobSet, GlobSetBuilder};
 use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
@@ -232,7 +233,9 @@ pub fn compile_glob(pattern: &str) -> Result<PathGlob, globset::Error> {
 }
 
 fn compile_component(pattern: &str) -> Result<globset::Glob, globset::Error> {
-    GlobBuilder::new(pattern).literal_separator(true).build()
+    GlobBuilder::new(&expand_posix_classes(pattern))
+        .literal_separator(true)
+        .build()
 }
 
 /// A pattern whose components do not compile on their own (an alternation
