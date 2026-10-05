@@ -344,12 +344,13 @@ fn walk(
         states,
         linked: false,
     };
-    walk_in_order(place, &|place: Place<'_>| place.explore(keep), &mut |(
-        rel,
-        dir,
-    )| {
-        visit(rel, &dir);
-    });
+    walk_in_order(
+        Box::new(place),
+        &|place: Box<Place<'_>>| (*place).explore(keep),
+        &mut |(rel, dir)| {
+            visit(rel, &dir);
+        },
+    );
 }
 
 /// A directory the walk enters, and how it got there: the glob `states`
@@ -369,7 +370,7 @@ type Found = (PathBuf, Arc<Path>);
 impl<'a> Place<'a> {
     /// The directory's entries in walk order: each file `keep` takes, and
     /// each directory to enter.
-    fn explore(self, keep: &(dyn Fn(&Path) -> bool + Sync)) -> Vec<Step<Place<'a>, Found>> {
+    fn explore(self, keep: &(dyn Fn(&Path) -> bool + Sync)) -> Vec<Step<Box<Place<'a>>, Found>> {
         let Place {
             mut walk,
             dir,
@@ -410,14 +411,14 @@ impl<'a> Place<'a> {
                     child,
                     next,
                     linked,
-                } => Some(Step::Dir(Place {
+                } => Some(Step::Dir(Box::new(Place {
                     walk: walk.clone(),
                     dir: dir.join(listing.name(listed)),
                     rel: child,
                     depth: depth + 1,
                     states: next,
                     linked,
-                })),
+                }))),
                 Taken::File(child) => Some(Step::Leaf((child, Arc::clone(&dir)))),
             })
             .collect()

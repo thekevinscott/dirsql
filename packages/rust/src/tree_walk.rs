@@ -4,6 +4,8 @@
 //! of every other directory, so workers explore ahead of the walk while the
 //! calling thread hands out what they found in depth-first order.
 
+use std::sync::{Condvar, Mutex};
+use std::thread;
 
 /// What exploring a directory yields: a leaf to hand out, or a directory to
 /// explore in its place.
@@ -12,18 +14,152 @@ pub(crate) enum Step<D, L> {
     Leaf(L),
 }
 
+/// Once a walk has found this many directories it shares them across the
+/// cores; below it, spawning workers costs more than the exploring.
+const PARALLEL_DIRS: usize = 16;
+
+enum Item<L> {
+    Dir(usize),
+    Leaf(L),
+}
+
+struct Queue<D, L> {
+    /// Each directory found, until a thread claims it.
+    unclaimed: Vec<Option<D>>,
+    /// Each explored directory's items, until the walk reaches it.
+    explored: Vec<Option<Vec<Item<L>>>>,
+    /// Unclaimed directories, the next one the walk will want on top.
+    open: Vec<usize>,
+    done: bool,
+}
+
+struct Shared<'e, D, L> {
+    queue: Mutex<Queue<D, L>>,
+    changed: Condvar,
+    explore: &'e (dyn Fn(D) -> Vec<Step<D, L>> + Sync),
+}
+
 /// Hand `visit` every leaf under `root`, depth first in the order `explore`
-/// yields each directory's steps.
+/// yields each directory's steps, exploring directories on every core.
 pub(crate) fn walk_in_order<D: Send, L: Send>(
     root: D,
     explore: &(dyn Fn(D) -> Vec<Step<D, L>> + Sync),
     visit: &mut dyn FnMut(L),
 ) {
-    for step in explore(root) {
-        match step {
-            Step::Dir(dir) => walk_in_order(dir, explore, visit),
-            Step::Leaf(leaf) => visit(leaf),
+    let shared = Shared {
+        queue: Mutex::new(Queue {
+            unclaimed: vec![Some(root)],
+            explored: vec![None],
+            open: Vec::new(),
+            done: false,
+        }),
+        changed: Condvar::new(),
+        explore,
+    };
+    thread::scope(|scope| {
+        let mut spawned = false;
+        let mut stack = vec![shared.obtain(0).into_iter()];
+        while let Some(items) = stack.last_mut() {
+            match items.next() {
+                Some(Item::Leaf(leaf)) => visit(leaf),
+                Some(Item::Dir(id)) => {
+                    if !spawned && shared.found() >= PARALLEL_DIRS {
+                        spawned = true;
+                        let workers = thread::available_parallelism().map_or(1, usize::from);
+                        for _ in 1..workers {
+                            scope.spawn(|| shared.work());
+                        }
+                    }
+                    stack.push(shared.obtain(id).into_iter());
+                }
+                None => {
+                    stack.pop();
+                }
+            }
         }
+        shared.lock().done = true;
+        shared.changed.notify_all();
+    });
+}
+
+impl<D, L> Shared<'_, D, L> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Queue<D, L>> {
+        self.queue
+            .lock()
+            .expect("exploring a directory does not panic")
+    }
+
+    fn found(&self) -> usize {
+        self.lock().unclaimed.len()
+    }
+
+    /// Directory `id`'s items: explored here if no worker has claimed it,
+    /// else once the worker that has is through.
+    fn obtain(&self, id: usize) -> Vec<Item<L>> {
+        let mut queue = self.lock();
+        loop {
+            if let Some(items) = queue.explored[id].take() {
+                return items;
+            }
+            if let Some(dir) = queue.unclaimed[id].take() {
+                drop(queue);
+                return self.explore(dir);
+            }
+            queue = self
+                .changed
+                .wait(queue)
+                .expect("exploring a directory does not panic");
+        }
+    }
+
+    fn work(&self) {
+        let mut queue = self.lock();
+        loop {
+            if queue.done {
+                return;
+            }
+            let claimed = queue.open.pop().map(|id| (id, queue.unclaimed[id].take()));
+            match claimed {
+                Some((id, Some(dir))) => {
+                    drop(queue);
+                    let items = self.explore(dir);
+                    queue = self.lock();
+                    queue.explored[id] = Some(items);
+                    self.changed.notify_all();
+                }
+                Some((_, None)) => {}
+                None => {
+                    queue = self
+                        .changed
+                        .wait(queue)
+                        .expect("exploring a directory does not panic");
+                }
+            }
+        }
+    }
+
+    /// Explore `dir`, registering the directories it holds for any thread
+    /// to claim.
+    fn explore(&self, dir: D) -> Vec<Item<L>> {
+        let steps = (self.explore)(dir);
+        let mut queue = self.lock();
+        let mut dirs = Vec::new();
+        let items = steps
+            .into_iter()
+            .map(|step| match step {
+                Step::Leaf(leaf) => Item::Leaf(leaf),
+                Step::Dir(dir) => {
+                    let id = queue.unclaimed.len();
+                    queue.unclaimed.push(Some(dir));
+                    queue.explored.push(None);
+                    dirs.push(id);
+                    Item::Dir(id)
+                }
+            })
+            .collect();
+        queue.open.extend(dirs.into_iter().rev());
+        self.changed.notify_all();
+        items
     }
 }
 
@@ -31,8 +167,6 @@ pub(crate) fn walk_in_order<D: Send, L: Send>(
 mod tests {
     use super::*;
     use std::collections::HashSet;
-    use std::sync::Mutex;
-    use std::thread;
     use std::time::Duration;
 
     /// A tree of `fanout` directories per level, `depth` levels deep, each
