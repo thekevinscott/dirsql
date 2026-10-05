@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/ -q --deselect tests/e2e/glob_speed_one_level_test.py",
+  "ran_at": 1791236972,
+  "exit_code": 0,
+  "commit": "c6ce2dfec351b4bf615a22e9268dafb72eabeebd",
+  "branch": "claude/1320-walk-speed"
+}
