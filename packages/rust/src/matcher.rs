@@ -491,6 +491,19 @@ mod tests {
     }
 
     #[test]
+    fn a_question_mark_matches_one_character_not_one_byte() {
+        let matcher = TableMatcher::new(&[("caf?.md", "t"), ("na??ve.txt", "u")], &[]).unwrap();
+        assert_eq!(names(&matcher, "caf\u{e9}.md"), vec!["t"]);
+        assert!(matcher.match_all(Path::new("na\u{ef}ve.txt")).is_empty());
+    }
+
+    #[test]
+    fn a_bracket_expression_matches_a_non_ascii_character() {
+        let matcher = TableMatcher::new(&[("na[\u{ef}]ve.txt", "t")], &[]).unwrap();
+        assert_eq!(names(&matcher, "na\u{ef}ve.txt"), vec!["t"]);
+    }
+
+    #[test]
     fn a_placeholder_matches_exactly_one_path_segment() {
         let matcher = TableMatcher::new(&[("data/{id}/metadata.json", "a")], &[]).unwrap();
         assert_eq!(names(&matcher, "data/x/metadata.json"), vec!["a"]);

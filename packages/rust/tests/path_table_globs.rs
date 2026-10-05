@@ -399,3 +399,65 @@ fn a_prefixed_glob_starts_its_walk_at_the_named_directory() {
         "the walk must begin at docs/, not list the index root"
     );
 }
+
+/// Names that differ from their ASCII twins by one two-byte character.
+fn non_ascii_fixture() -> TempDir {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("u")).unwrap();
+    for name in ["cafe.md", "caf\u{e9}.md", "naive.txt", "na\u{ef}ve.txt"] {
+        fs::write(root.path().join("u").join(name), name).unwrap();
+    }
+    root
+}
+
+#[test]
+fn a_question_mark_matches_one_non_ascii_character() {
+    let root = non_ascii_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './u/caf?.md'"),
+        vec!["u/cafe.md", "u/caf\u{e9}.md"]
+    );
+}
+
+#[test]
+fn two_question_marks_do_not_match_one_non_ascii_character() {
+    let root = non_ascii_fixture();
+    let db = open(&root);
+
+    assert!(paths(&db, "SELECT path FROM './u/na??ve.txt'").is_empty());
+}
+
+#[test]
+fn a_bracket_expression_matches_a_non_ascii_member() {
+    let root = non_ascii_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './u/na[\u{ef}]ve.txt'"),
+        vec!["u/na\u{ef}ve.txt"]
+    );
+}
+
+#[test]
+fn a_negated_bracket_expression_matches_one_non_ascii_character() {
+    let root = non_ascii_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './u/na[!i]ve.txt'"),
+        vec!["u/na\u{ef}ve.txt"]
+    );
+}
+
+#[test]
+fn a_bracket_range_spans_non_ascii_characters() {
+    let root = non_ascii_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './u/caf[\u{e0}-\u{ea}].md'"),
+        vec!["u/caf\u{e9}.md"]
+    );
+}
