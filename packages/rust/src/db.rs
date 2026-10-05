@@ -881,9 +881,9 @@ impl Db {
         // error stands. That is what bounds the loop.
         let mut attempted: HashSet<String> = HashSet::new();
 
-        let mut stmt = loop {
+        let (mut stmt, reads) = loop {
             let error = match self.prepare_guarded(sql) {
-                Ok(stmt) => break stmt,
+                Ok(prepared) => break prepared,
                 Err(e) => e,
             };
             let Some((name, table)) = self.path_table_for(&error)? else {
@@ -898,6 +898,7 @@ impl Db {
         if !stmt.readonly() {
             return Err(DbError::WriteForbidden);
         }
+        self.scope.warm(&reads);
         let column_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
 
         let rows = stmt.query_map([], |row| {
@@ -920,10 +921,10 @@ impl Db {
     }
 
     /// Prepare `sql` with the internal-table / ATTACH authorizer installed for
-    /// exactly that one call. The authorizer is installed and cleared around
-    /// every attempt, so a re-prepare after registering a path-table is gated
-    /// identically to the first.
-    fn prepare_guarded(&self, sql: &str) -> Result<rusqlite::Statement<'_>> {
+    /// exactly that one call, and name the tables it reads. The authorizer is
+    /// installed and cleared around every attempt, so a re-prepare after
+    /// registering a path-table is gated identically to the first.
+    fn prepare_guarded(&self, sql: &str) -> Result<(rusqlite::Statement<'_>, HashSet<String>)> {
         use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
         use std::sync::{Arc, Mutex};
 
@@ -932,11 +933,17 @@ impl Db {
         // matching message (the closure must be `'static`, so it owns a clone).
         let denial: Arc<Mutex<Option<&'static str>>> = Arc::new(Mutex::new(None));
         let denial_cb = Arc::clone(&denial);
+        let reads: Arc<Mutex<HashSet<String>>> = Arc::default();
+        let reads_cb = Arc::clone(&reads);
         self.conn
             .authorizer(Some(move |ctx: AuthContext<'_>| match ctx.action {
                 AuthAction::Read { table_name, .. } if is_internal_table(table_name) => {
                     *denial_cb.lock().unwrap() = Some(INTERNAL_TABLE_DENIED_MSG);
                     Authorization::Deny
+                }
+                AuthAction::Read { table_name, .. } => {
+                    reads_cb.lock().unwrap().insert(table_name.to_owned());
+                    Authorization::Allow
                 }
                 AuthAction::Pragma {
                     pragma_value: Some(value),
@@ -961,7 +968,7 @@ impl Db {
             .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
 
         match prepared {
-            Ok(stmt) => Ok(stmt),
+            Ok(stmt) => Ok((stmt, std::mem::take(&mut *reads.lock().unwrap()))),
             Err(e)
                 if e.sqlite_error_code()
                     == Some(rusqlite::ErrorCode::AuthorizationForStatementDenied) =>
@@ -1690,6 +1697,30 @@ mod tests {
             "delete-by-file reads _dirsql_internal_rows internally; a leaked \
              authorizer would have denied that read"
         );
+    }
+
+    #[test]
+    fn prepare_guarded_names_the_tables_a_statement_reads() {
+        let db = Db::new().unwrap();
+        db.conn
+            .execute_batch("CREATE TABLE a(x); CREATE TABLE b(y)")
+            .unwrap();
+
+        let (_, reads) = db
+            .prepare_guarded("SELECT count(*) FROM a JOIN b ON b.y = a.x")
+            .unwrap();
+
+        assert_eq!(reads, HashSet::from(["a".to_string(), "b".to_string()]));
+    }
+
+    #[test]
+    fn prepare_guarded_names_a_table_the_statement_takes_no_column_from() {
+        let db = Db::new().unwrap();
+        db.conn.execute_batch("CREATE TABLE a(x)").unwrap();
+
+        let (_, reads) = db.prepare_guarded("SELECT count(*) FROM a").unwrap();
+
+        assert_eq!(reads, HashSet::from(["a".to_string()]));
     }
 
     #[test]

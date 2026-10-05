@@ -296,6 +296,14 @@ per-binding surface. The one signature change is Rust-only: `vtab::load_module`
 and `parsed_vtab::load_module` take the `Arc<StatementScope>` their tables
 cache under, a surface neither binding exposes.
 
+**Path tables of one statement walked at the same time — Rust-crate-only
+surface, no SDK drift.** A statement that names several path tables starts
+every walk before SQLite opens the first cursor, each on a thread of its own,
+so a join over two globs costs about one walk instead of one per table. The
+names come from the SQLite authorizer at the final prepare, so the fallback
+loop above stays the only thing that registers a table. `StatementScope::warm`
+lives in the shared core; no SDK signature changes.
+
 ## AsyncDirSQL
 
 | API                        | Python                                | Rust                                   |

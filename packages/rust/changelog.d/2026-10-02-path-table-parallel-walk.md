@@ -1,0 +1,1 @@
+**Changed** A statement that names several path-tables walks their trees at the same time, each on a thread of its own, instead of one after the other as SQLite opens their cursors. A join between two globs over one corpus now costs about one walk.

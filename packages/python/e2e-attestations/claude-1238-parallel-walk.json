@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1790970269,
+  "exit_code": 0,
+  "commit": "e7987c66259acd23c0c1e23b0aba965b97201992",
+  "branch": "claude/1238-parallel-walk"
+}
