@@ -50,6 +50,26 @@ describe("path-tables (#627)", () => {
     expect(await open().query("SELECT path FROM './'")).toEqual([]);
   });
 
+  it("hides a dotfile the path does not spell", async () => {
+    await writeFile(join(dir, "docs", ".draft.md"), "draft");
+
+    const rows = await open().query("SELECT path FROM './docs/*'");
+
+    expect(rows.map((r) => r.path).sort()).toEqual([
+      "docs/a.md",
+      "docs/b.md",
+      "docs/c.csv",
+    ]);
+  });
+
+  it("lists a dotfile the path spells", async () => {
+    await writeFile(join(dir, "docs", ".draft.md"), "draft");
+
+    const rows = await open().query("SELECT path FROM './docs/.draft.md'");
+
+    expect(rows.map((r) => r.path)).toEqual(["docs/.draft.md"]);
+  });
+
   it("scopes the scan to the glob", async () => {
     const rows = await open().query("SELECT basename, size FROM './docs/*.md'");
 
