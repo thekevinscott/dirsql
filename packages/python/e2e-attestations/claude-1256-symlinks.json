@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1791201880,
+  "exit_code": 0,
+  "commit": "8560f8612a32742d8cd3e00f0c11035ea2e3e90f",
+  "branch": "claude/1256-symlinks"
+}
