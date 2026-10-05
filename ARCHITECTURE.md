@@ -74,11 +74,11 @@ two are ordinary SQLite tables once resolved, so a query is free to join one
 against the other.
 
 The user-facing versions of both sides are
-[Query files without a config](https://thekevinscott.github.io/dirsql/howto/query-without-config)
+[Query files without a config](https://dirsql.dev/howto/query-without-config)
 and
-[Define tables for your files](https://thekevinscott.github.io/dirsql/howto/define-tables);
+[Define tables for your files](https://dirsql.dev/howto/define-tables);
 the index templates are in
-[Add a search index to a table](https://thekevinscott.github.io/dirsql/howto/search-indexes).
+[Add a search index to a table](https://dirsql.dev/howto/search-indexes).
 
 ## Read-only by design
 
@@ -214,7 +214,7 @@ reinvent what SQLite expresses natively*. `validate_identifier` remains: `name`
 is spliced into `format!()`-built INSERT/DELETE SQL, so it is still the
 injection guard.
 
-**Named tables are real; path-tables are virtual.** A declared `[[table]]` (or programmatic `Table`) is a real SQLite table whose rows are inserted on build and maintained by the watcher — the `db` module above. A [path-table](https://thekevinscott.github.io/dirsql/reference/path-tables) (`SELECT * FROM './'`, epic path-as-table) is a `dirsql_path` **virtual table** (`vtab.rs` / `path_table.rs`, rusqlite's `vtab` feature): no rows are stored, no reconcile or watcher runs, and the filesystem is walked live at query time (`xFilter`/`xNext` enumerate matched files; `xColumn` supplies stat values and lazily reads `content`). SQLite stays the entire query engine either way; the vtab only enumerates rows and supplies column values. Path-tables are registered on demand — see *Query execution* below.
+**Named tables are real; path-tables are virtual.** A declared `[[table]]` (or programmatic `Table`) is a real SQLite table whose rows are inserted on build and maintained by the watcher — the `db` module above. A [path-table](https://dirsql.dev/reference/path-tables) (`SELECT * FROM './'`, epic path-as-table) is a `dirsql_path` **virtual table** (`vtab.rs` / `path_table.rs`, rusqlite's `vtab` feature): no rows are stored, no reconcile or watcher runs, and the filesystem is walked live at query time (`xFilter`/`xNext` enumerate matched files; `xColumn` supplies stat values and lazily reads `content`). SQLite stays the entire query engine either way; the vtab only enumerates rows and supplies column values. Path-tables are registered on demand — see *Query execution* below.
 
 ### `scanner` -- Directory traversal
 
