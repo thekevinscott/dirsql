@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791201413,
+  "exit_code": 0,
+  "commit": "29bb423ec71c78b796aeb50816d9939a8092d750",
+  "branch": "claude/1257-trailing-slash"
+}
