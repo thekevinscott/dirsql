@@ -108,7 +108,7 @@ features = ["cli"]
 [[rust.exempt]]
 path = "src/listing.rs"
 rules = ["mutation"]
-lines = [42, 103, 115, 119, 120, 121, 122]
+lines = [42, 103, 119, 121, 122]
 reason = "Listing::read and read_into read a real directory; the ordering and the names are unit-tested on a pushed listing, and tests/scanner.rs (scan_finds_matching_files, scan_recurses_into_subdirectories), tests/vtab.rs (rowids_count_up_from_zero_in_scan_order) and tests/path_table_symlinks.rs assert what a real walk returns"
 
 [[rust.exempt]]
@@ -148,9 +148,15 @@ lines = [418]
 reason = "column hands a cell to SQLite; the cell choice is unit-tested in `cell`, and tests/vtab.rs stat_columns_carry_real_values and content_is_excluded_from_star_but_selectable_by_name assert both through a real connection"
 
 [[rust.exempt]]
+path = "src/cli/execute.rs"
+rules = ["mutation"]
+lines = [90]
+reason = "execute_query_json runs a statement against a real index on a blocking thread; its bytes are unit-tested through JsonRows in cli/serialize.rs, and tests/cli_e2e.rs (bare_dirsql_and_query_subcommand_are_byte_identical) and tests/declared_table_name_e2e.rs assert the JSON the built binary prints"
+
+[[rust.exempt]]
 path = "src/cli/run.rs"
 rules = ["mutation"]
-lines = [351, 392]
+lines = [351, 392, 404, 418]
 reason = "run_default and run_query build a real index and drive stdout, stderr and the process exit; tests/on_file_failure_e2e.rs (a_clean_scan_exits_zero, a_failed_command_fails_the_run) and tests/repl_pipe_e2e.rs assert their codes through the built binary"
 
 [[rust.exempt]]

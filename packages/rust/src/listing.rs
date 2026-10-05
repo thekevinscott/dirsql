@@ -205,4 +205,13 @@ mod tests {
             ["", "ab", "abc", "abcdefgh", "abcdefghA", "abcdefghZ", "b"]
         );
     }
+
+    #[test]
+    fn name_prefix_is_the_first_eight_bytes_padded_with_zeros() {
+        assert_eq!(name_prefix(OsStr::new("ab")), 0x6162_0000_0000_0000);
+        assert_eq!(
+            name_prefix(OsStr::new("abcdefghZ")),
+            u64::from_be_bytes(*b"abcdefgh")
+        );
+    }
 }
