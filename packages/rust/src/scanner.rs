@@ -135,7 +135,9 @@ fn is_wanted(glob: &GlobSet, ignore: &TableMatcher, rel_path: &Path) -> bool {
 /// silently recurse. `**` still crosses separators.
 pub fn compile_glob(pattern: &str) -> Result<GlobSet, globset::Error> {
     let mut builder = GlobSetBuilder::new();
-    builder.add(GlobBuilder::new(pattern).literal_separator(true).build()?);
+    for word in crate::brace::expand(pattern) {
+        builder.add(GlobBuilder::new(&word).literal_separator(true).build()?);
+    }
     builder.build()
 }
 

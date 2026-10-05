@@ -52,6 +52,13 @@ depth, as in the shell.
 A path containing `*`, `?`, `[` or `{` is a glob and is used exactly as
 written: `*` matches within a single directory, `**` crosses directories.
 
+Braces expand as bash expands them. A group holding a comma is an
+alternation: `'./docs/{a,b}.md'` is `docs/a.md` and `docs/b.md`, and groups
+nest. A group holding a `..` range counts: `'./log/{1..3}.txt'`,
+`'./{a..c}.md'`, `'./{01..10}.md'` (zero-padded) and `'./{1..10..2}.md'`
+(every second value). Any other brace is literal text, so `'./br/{q}.md'`
+names the file `br/{q}.md`, and `\{` is always a literal brace.
+
 The scan starts at the last directory named outright before the first glob
 component -- `'./small/*.md'` walks `small/` and nothing else -- so a query
 over one directory costs what `find ./small` costs, however large the
