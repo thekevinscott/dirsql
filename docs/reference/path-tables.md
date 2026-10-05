@@ -153,16 +153,27 @@ dirsql query "SELECT title, author FROM './posts/*.md'" \
 The command runs once, with every matched file's absolute path appended as an
 argument, and prints one JSON array of row objects, exactly like a declared
 table's [`on-file` hook](/reference/hooks) — same argv splitting, same `{root}`
-placeholder, same timeout. Its output *is* the table:
+placeholder, same [argument-list splitting](/reference/hooks#argument-list-limits)
+over a very large table. Its output *is* the table:
 
 - **The parser supplies the whole schema.** Columns are inferred from the keys
   across the emitted rows. The stat columns (`path`, `size`, …) are **not**
   reachable on a parsed path-table — a parser that wants the path emits it (it
   has the paths). The two modes stay cleanly separate.
-- **A parser failure is the table's failure.** A run that fails (spawn,
-  non-zero exit, a `timeout(1)` kill, or no output) or whose output is not a
-  JSON array of rows fails the query with an error naming the table; there is
-  no partial table.
+- **The parser runs from the index root.** There is no config file to anchor
+  it, so the command's working directory is the directory `dirsql query` was
+  run in — the same directory the `./` path is relative to — and `{root}`
+  names it. `python3 extract.py` finds `extract.py` in that directory,
+  whatever directory the path-table scans.
+- **A parser failure is the query's failure.** A run that fails (spawn,
+  non-zero exit, or no output) or whose output is not a JSON array of row
+  objects fails the query with the command's stderr tail; there is no partial
+  table, and the CLI exits `1`. A run that succeeds but prints an empty array
+  fails too, because there are no keys to infer columns from:
+
+  ```
+  dirsql_parsed: parser produced no rows for `posts/*.md`; cannot infer a schema
+  ```
 - **The skip rules still apply.** A parsed scan honors the same `node_modules`
   /`.git`/`ignore` rules a stat scan does (see below).
 - **The parser runs on every start.** A parsed path-table is not kept in the

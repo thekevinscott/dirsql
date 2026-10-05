@@ -7,9 +7,9 @@ database is the index. Where a table's columns come from depends on the table
 kind, and dirsql never injects a column the table did not produce:
 
 - **Named tables** (`[[table]]` / SDK `Table`) have exactly the columns their
-  `on_file` hook emits, narrowed to the DDL. A hook is required; a hook-less
+  `on-file` hook emits, narrowed to the DDL. A hook is required; a hook-less
   `[[table]]` is a config-load error (every row would be all-NULL). A hook that
-  wants the path or stat metadata computes it from the path it receives.
+  wants the path or stat metadata computes it from the paths it receives.
 - **Path-tables** (`FROM './'`) expose seven filesystem stat columns (`path`,
   `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`) plus a lazily-read hidden
   `content` column — the one place dirsql supplies columns for you. Attaching a
@@ -22,8 +22,10 @@ removed in the fact-removal epic, [#624](https://github.com/thekevinscott/dirsql
 **Content interpretation is intentionally out of scope.** dirsql does not
 parse markdown frontmatter, JSON, CSV, YAML, TOML, or any other file format
 on the user's behalf. If a project needs columns derived from file content,
-the consumer registers a programmatic `Table` whose `on_file` callback does
-the parsing in the host language (Python / TypeScript / Rust).
+the user names an `on-file` command (the `--on-file` flag or a `[[table]]`
+key) that parses the files and prints the rows, or an SDK consumer registers
+a programmatic `Table` whose `on_file` callback does the parsing in the host
+language (Python / TypeScript / Rust).
 
 This scope is a deliberate inversion of the original design and was settled
 in [issue #169](https://github.com/thekevinscott/dirsql/issues/169). The
@@ -232,12 +234,46 @@ Wraps the `notify` crate to watch for filesystem changes. Emits `FileEvent` vari
 
 Compares old and new row sets for a file to produce `RowEvent` variants: `Insert`, `Update`, `Delete`, `Error`. Rows are compared by position (index within the file).
 
+### `on_file` -- The per-table command runner
+
+Runs a configured `on-file` command once over a table's matched files: the
+command string is split into an argv (`command`), `{root}` is substituted,
+every matched absolute path is appended as a trailing argument, and the
+command's stdout is parsed as one JSON array of row objects (`infer`). There
+is no `{path}` placeholder; a command containing one is rejected when the
+config or flag is loaded. A table whose paths exceed the platform's argument
+budget is split into the fewest consecutive runs that fit and the arrays are
+concatenated in order; the command cannot observe the split. No paths spawns
+nothing. Any failure — spawn error, non-zero exit, empty output, or output
+that is not an array of objects — is the table's failure and fails the build,
+carrying the tail of the command's stderr.
+
+Two callers share it. A `[[table]]` entry becomes a `Table::per_table` whose
+closure runs the command from the config file's directory. The `--on-file`
+flag arms the `dirsql_parsed` virtual-table module (`parsed_vtab`), which runs
+the command from the index root when a path-table is minted and infers the
+table's columns from the keys the rows carry; an empty array is an error,
+because there is nothing to infer a schema from.
+
 ### Named-table rows (in `lib.rs`)
 
-A named table's rows come entirely from its `on_file` hook — the core injects
-no columns. The `on_file` callback receives only the matched file's absolute
-path; dirsql does not read file contents on its behalf. A callback that needs
-the file body, path parts, or stat metadata computes them from that path and
+A named table's rows come entirely from its hook — the core injects no
+columns. There are two hook kinds:
+
+- A **per-table command** (`Table::per_table`), built from a `[[table]]`
+  entry's `on-file` key. It runs once over every matched path through the
+  `on_file` module above; its rows are stored as one rowid range per run in
+  `_dirsql_internal_ranges`, so there is no row-to-file attribution. A change to any file under the table's glob
+  re-runs the command over all of the table's files and replaces its rows.
+  A failure fails the build.
+- A **per-file callback** (SDK `Table` with an `on_file` function), which
+  receives one matched file's absolute path and returns that file's rows,
+  tracked per file in `_dirsql_internal_rows` so the watcher can diff and
+  replace them file by file. A failing callback skips that file and is
+  recorded in `scan_failures()`; the scan continues.
+
+Neither kind has dirsql read file contents on its behalf. A hook that needs
+the file body, path parts, or stat metadata computes them from the paths and
 emits them as ordinary keys.
 
 The returned keys are filtered to the columns declared in the table's DDL (via
@@ -274,7 +310,9 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 1. Python creates `DirSQL` with root path and table definitions
 2. Rust executes DDL to create SQLite tables
 3. `scanner` walks the directory and matches files to tables
-4. For each matched file, Python `on_file` is called via PyO3
+4. For a programmatic table, Python `on_file` is called via PyO3 for each
+   matched file; for a config-declared table, the `on-file` command runs once
+   with every matched path as an argument
 5. The returned rows are filtered to the DDL's declared columns (no columns are
    injected); rows are the hook's output alone
 6. Rows are inserted into SQLite with tracking metadata
@@ -284,11 +322,16 @@ The public `DirSQL` class (`_async.py`) is a pure-Python async wrapper that uses
 
 1. `notify` detects a filesystem event (create/modify/delete)
 2. The matcher checks if the file belongs to a table
-3. For create/modify: `on_file` is called with the file's absolute path
-   (reading the file itself if it needs the body); its rows are filtered to the
-   DDL's columns (no injection), then `differ` compares old and new rows
-4. For delete: old rows are retrieved, all emitted as delete events
-5. SQLite is updated (old rows deleted, new rows inserted)
+3. For create/modify on a programmatic table: `on_file` is called with the
+   file's absolute path (reading the file itself if it needs the body); its
+   rows are filtered to the DDL's columns (no injection), then `differ`
+   compares old and new rows
+4. For delete on a programmatic table: old rows are retrieved, all emitted as
+   delete events
+5. SQLite is updated (old rows deleted, new rows inserted). A config-declared
+   table takes none of these per-file steps: any event under its glob marks
+   it for one re-run of its `on-file` command after the batch, which replaces
+   the table's rows
 6. `RowEvent` objects are returned to Python
 
 ### Query execution

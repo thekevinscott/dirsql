@@ -578,7 +578,7 @@ incl. #313).
 |----------------------------|--------|------|------------|
 | Construct from config file | Y      | Y    | Y          |
 | Explicit root overrides config root | Y      | Y    | Y          |
-| One row per matched file; columns come from the `on-file` hook (core injects no stat columns — a declared column the hook omits is `NULL`) | Y | Y | Y |
+| Rows come from one `on-file` run per table over all matched files; columns are the hook's output (core injects no stat columns — a declared column the hook omits is `NULL`) | Y | Y | Y |
 | `{name}` glob placeholder colliding with a declared column errors at load | Y | Y | Y |
 | Config `[dirsql].ignore` respected | Y | Y | Y |
 | Multiple `[[table]]` entries | Y | Y | Y |

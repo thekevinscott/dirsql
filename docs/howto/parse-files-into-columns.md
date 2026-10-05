@@ -66,11 +66,16 @@ dirsql query "SELECT title, author FROM './posts/*.md' ORDER BY title" \
 Now the parser's output *is* the table. `--on-file` runs the command once,
 with every matched file's absolute path appended as an argument, under the
 shared [`on-file` hook contract](../reference/hooks.md#on-file) (argv
-splitting, timeout, and failure semantics all come from there). The stat
-columns are no longer reachable — a parser that wants the path emits it, since
-it already has the path. See
+splitting and failure semantics come from there). It runs in the directory
+you ran `dirsql` from, which is why `python3 extract.py` finds the script. The
+stat columns are no longer reachable — a parser that wants the path emits it,
+since it already has the path. See
 [Parsing rows with `--on-file`](../reference/path-tables.md#parsing-rows-with-on-file)
 for the full behavior.
+
+One run, one process: on a thousand files the parser starts once, not a
+thousand times, so a Python or Node parser costs its startup once per query.
+That is the shape to write — loop over `sys.argv[1:]`, collect, print once.
 
 `--on-file` applies to every path-table in the query and may be given at most
 once. It is a `query`-only flag: there is no config file involved yet, so it is
@@ -114,12 +119,74 @@ gives every path-table one parser. In both spellings the table's columns are
 exactly what the parser emits: `dirsql` merges no filesystem facts back on. A
 row that needs the file's `path` emits it (the parser has the path).
 
+## The two shapes
+
+Every parser is one of two shapes. The array length is the row count either
+way; what differs is how many files feed it.
+
+**One file, many rows.** A lab notebook is a single Markdown file of dated
+`## YYYY-MM-DD` sections, and the question is about the sections. Name the one
+file as the path-table; the parser receives one path and prints one row per
+section. `notebook.py`:
+
+```python
+import json, re, sys
+
+rows = []
+for path in sys.argv[1:]:
+    text = open(path, encoding="utf-8").read()
+    for date, body in re.findall(r"^## (\d{4}-\d\d-\d\d)\n(.*?)(?=^## |\Z)", text, re.S | re.M):
+        rows.append({"date": date, "words": len(body.split())})
+print(json.dumps(rows))
+```
+
+```bash
+dirsql query "SELECT date, words FROM './notebook.md' ORDER BY date DESC LIMIT 2" \
+  --on-file 'python3 notebook.py'
+```
+
+```json
+[{"date":"2026-09-23","words":10},{"date":"2026-09-22","words":3}]
+```
+
+**Many files, many rows.** A tree of JSONL session logs under
+`projects/<name>/`, and the question is how many messages each project has per
+role. The parser receives every log's path and prints one row per message,
+carrying the project name it derived from the path, because dirsql will not
+attach it. `messages.py`:
+
+```python
+import json, os, sys
+
+rows = []
+for path in sys.argv[1:]:
+    project = os.path.relpath(path, "projects").split(os.sep)[0]
+    for line in open(path, encoding="utf-8"):
+        entry = json.loads(line)
+        if entry["type"] in ("user", "assistant"):
+            rows.append({"project": project, "role": entry["type"], "text": entry["message"]["content"]})
+print(json.dumps(rows))
+```
+
+```bash
+dirsql query "SELECT project, role, count(*) AS n FROM './projects/**/*.jsonl' GROUP BY project, role ORDER BY project, role" \
+  --on-file 'python3 messages.py'
+```
+
+```json
+[{"project":"alpha","role":"assistant","n":2},{"project":"alpha","role":"user","n":1},{"project":"beta","role":"user","n":2}]
+```
+
+The same two scripts work unchanged as a `[[table]]`'s `on-file` key. The
+loop is the same in both shapes, so a parser written for one file already
+handles a glob.
+
 ## Going further
 
-- The full stat-vs-parsed behavior, failure isolation, and skip rules:
+- The full stat-vs-parsed behavior, failure semantics, and skip rules:
   [Parsing rows with `--on-file`](../reference/path-tables.md#parsing-rows-with-on-file).
 - Starting from a declared table instead of a path-table?
   [Extract rows from file contents](./extract-from-contents.md) covers the
   config-first path.
-- One row per record *within* a file (JSONL, multiple frontmatter blocks): the
-  parser prints one object per row — the array length is the row count.
+- A very large table may reach the parser in several invocations; see
+  [Argument-list limits](../reference/hooks.md#argument-list-limits).
