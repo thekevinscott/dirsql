@@ -2069,8 +2069,7 @@ fn collect_table_rows(
 /// the hook emits while the hook, on its own thread, goes on producing the
 /// next. The caller's open transaction keeps a failure from being seen: the
 /// outer `Err` is SQLite's, the inner one the hook's or a row's. A hook
-/// failure outranks a row that failed to shape, as when every row was
-/// shaped only after the hook returned.
+/// failure outranks a row that failed to shape.
 fn stream_table_rows(
     db: &Db,
     table: &str,
@@ -2232,9 +2231,9 @@ fn build_tables_from_config(
 }
 
 /// Run a table's `on-file` command once over every matched file and hand its
-/// rows to `sink` as each invocation's output parses. The absolute paths are appended to the command's argv in
-/// scan order; `{root}` is the index root. Any failure is the table's and
-/// fails the build.
+/// rows to `sink` as each invocation's output parses. The absolute paths are
+/// appended to the command's argv in scan order; `{root}` is the index root.
+/// Any failure is the table's and fails the build.
 fn run_on_files(
     command: &str,
     paths: &[PathBuf],
