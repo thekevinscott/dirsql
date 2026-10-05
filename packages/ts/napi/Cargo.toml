@@ -3,12 +3,8 @@ name = "dirsql-napi"
 version.workspace = true
 edition.workspace = true
 publish = false
-# Colocated with package.json because the release only stamps the planned
-# version into a napi crate whose manifest sits at the npm package path.
-build = "napi/build.rs"
 
 [lib]
-path = "napi/src/lib.rs"
 crate-type = ["cdylib"]
 
 [dependencies]

@@ -113,7 +113,7 @@ jobs:
   build:
     # Builds the napi addon once and shares it with unit/binding/distcheck
     # below instead of each job/matrix-cell rebuilding it independently.
-    # The addon is N-API (napi6, see packages/ts/Cargo.toml), which is
+    # The addon is N-API (napi6, see packages/ts/napi/Cargo.toml), which is
     # ABI-stable across Node majors, so one build serves the whole Node
     # 20/22/24 matrix.
     name: Build native module

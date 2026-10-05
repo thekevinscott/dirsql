@@ -12,7 +12,6 @@ from checks.artifact_completeness.cli import cli as artifact_completeness
 from checks.attestation_guard.cli import cli as attestation_guard
 from checks.changelog_gate.cli import cli as changelog_gate
 from checks.declared_deps.cli import cli as declared_deps
-from checks.npm_addon_version.cli import cli as npm_addon_version
 from checks.preflight.cli import cli as preflight
 from checks.release_globs.cli import cli as release_globs
 from checks.wheel_extension_load.cli import cli as wheel_extension_load
@@ -27,7 +26,6 @@ main.add_command(artifact_completeness, name="artifact-completeness")
 main.add_command(attestation_guard, name="attestation-guard")
 main.add_command(changelog_gate, name="changelog-gate")
 main.add_command(declared_deps, name="declared-deps")
-main.add_command(npm_addon_version, name="npm-addon-version")
 main.add_command(preflight, name="preflight")
 main.add_command(release_globs, name="release-globs")
 main.add_command(wheel_extension_load, name="wheel-extension-load")
