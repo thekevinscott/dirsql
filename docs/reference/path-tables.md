@@ -295,6 +295,15 @@ SELECT path FROM './dist';                 -- scans dist/ even when gitignored
 The `.gitignore` files in force there, including those above it, still
 filter what lies beneath it.
 
+A `node_modules` component after a glob names it too, at any depth:
+
+```sql
+SELECT path FROM './**/node_modules/*/package.json';  -- every node_modules
+SELECT path FROM './*/node_modules/**';               -- one level down
+```
+
+Only the literal name counts; `'./**/*.js'` still skips every `node_modules`.
+
 ### Hidden files
 
 A path component starting with `.` is skipped unless the path spells it, the

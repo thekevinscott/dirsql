@@ -1031,6 +1031,7 @@ mod tests {
             ignore: &ignore,
             glob: Some(&glob),
             gitignore: false,
+            in_repo: false,
             frames: Vec::new(),
         };
         assert!(walk.follows(false, &[1], Kind::Dir));
@@ -1046,6 +1047,7 @@ mod tests {
             ignore: &ignore,
             glob: Some(&glob),
             gitignore: false,
+            in_repo: false,
             frames: Vec::new(),
         };
         assert!(walk.follows(false, &[], Kind::Dir));

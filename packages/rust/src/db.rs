@@ -315,7 +315,8 @@ pub struct Db {
     /// exactly where `files` used to exist implicitly. A user who declared
     /// tables and forgot `files` gets the plain SQLite error.
     hint_legacy_files_table: bool,
-    /// Skip rules a path-table scan applies, seeded with the built-in defaults.
+    /// Configured skip rules a path-table scan applies on top of the table's
+    /// [`PathTable::default_ignores`].
     path_table_ignore: Vec<String>,
     /// Whether a path-table scan respects `.gitignore` files. On by default;
     /// the CLI's `--no-ignore` turns it off.
@@ -351,14 +352,6 @@ fn worker_error(message: String) -> DbError {
     DbError::Sqlite(rusqlite::Error::UserFunctionError(message.into()))
 }
 
-/// The skip rules a fresh `Db` starts with.
-fn default_path_table_ignore() -> Vec<String> {
-    path_table::DEFAULT_IGNORES
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect()
-}
-
 impl Db {
     /// Open the default, ephemeral `Db`: an **anonymous disk-backed temp
     /// database** (`Connection::open("")`), not `:memory:`.
@@ -382,7 +375,7 @@ impl Db {
             scope,
             path_table_root: None,
             hint_legacy_files_table: false,
-            path_table_ignore: default_path_table_ignore(),
+            path_table_ignore: Vec::new(),
             path_table_gitignore: true,
             path_table_parser: None,
             calls: CallReporter::new(),
@@ -407,7 +400,7 @@ impl Db {
             scope,
             path_table_root: None,
             hint_legacy_files_table: false,
-            path_table_ignore: default_path_table_ignore(),
+            path_table_ignore: Vec::new(),
             path_table_gitignore: true,
             path_table_parser: None,
             calls: CallReporter::new(),
@@ -1170,10 +1163,15 @@ impl Db {
             .path_table_root
             .as_deref()
             .expect("a path-table resolves only under an index root");
+        let ignore: Vec<String> = table
+            .default_ignores()
+            .map(str::to_string)
+            .chain(self.path_table_ignore.iter().cloned())
+            .collect();
         self.conn.execute_batch(&path_table_ddl(
             name,
             table,
-            &self.path_table_ignore,
+            &ignore,
             self.path_table_gitignore,
             self.path_table_parser.as_deref(),
             index_root,
@@ -3083,14 +3081,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn default_path_table_ignore_carries_the_documented_defaults() {
-        assert_eq!(
-            default_path_table_ignore(),
-            vec!["**/node_modules/**".to_string(), "**/.git/**".to_string()]
-        );
-    }
-
     fn docs_path_table() -> PathTable {
         PathTable {
             root: PathBuf::from("/root"),
@@ -3304,17 +3294,12 @@ mod tests {
     }
 
     #[test]
-    fn add_path_table_ignore_extends_the_defaults() {
+    fn add_path_table_ignore_accumulates_configured_rules() {
         let mut db = Db::new().unwrap();
         db.add_path_table_ignore(vec!["*.tmp".to_string()]);
+        db.add_path_table_ignore(vec!["*.bak".to_string()]);
 
-        assert_eq!(db.path_table_ignore.last(), Some(&"*.tmp".to_string()));
-        assert!(
-            db.path_table_ignore
-                .contains(&"**/node_modules/**".to_string()),
-            "the built-in defaults must survive: {:?}",
-            db.path_table_ignore
-        );
+        assert_eq!(db.path_table_ignore, ["*.tmp", "*.bak"]);
     }
 
     #[test]
