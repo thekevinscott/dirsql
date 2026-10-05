@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1791218826,
+  "exit_code": 0,
+  "commit": "c31adf5c4c57cf7683aed2dddf847f1719d44016",
+  "branch": "claude/1285-ingest-fast"
+}

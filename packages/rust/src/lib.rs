@@ -96,7 +96,9 @@ pub const DEFAULT_CONFIG_TOML: &str = include_str!("default_config.toml");
 
 type BoxError = Box<dyn StdError + Send + Sync + 'static>;
 type OnFileFn = dyn Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static;
-type OnFilesFn = dyn Fn(&[PathBuf]) -> std::result::Result<Vec<infer::JsonRow>, BoxError>
+/// Where a per-table hook hands its rows, one chunk at a time.
+type RowSink<'a> = dyn FnMut(Vec<infer::JsonRow>) + Send + 'a;
+type OnFilesFn = dyn Fn(&[PathBuf], &mut RowSink<'_>) -> std::result::Result<(), BoxError>
     + Send
     + Sync
     + 'static;
@@ -329,6 +331,7 @@ impl Table {
 
     /// A table whose hook runs once over every matched absolute path and
     /// returns the whole table's rows.
+    #[cfg(test)]
     fn per_table<F>(
         name: impl Into<String>,
         ddl: impl Into<String>,
@@ -337,6 +340,26 @@ impl Table {
     ) -> Self
     where
         F: Fn(&[PathBuf]) -> std::result::Result<Vec<infer::JsonRow>, BoxError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        Self::per_table_streaming(name, ddl, glob, move |paths, sink: &mut RowSink<'_>| {
+            sink(on_files(paths)?);
+            Ok(())
+        })
+    }
+
+    /// [`per_table`](Self::per_table) for a hook that hands its rows over in
+    /// chunks as it produces them, so they can be stored while it runs on.
+    fn per_table_streaming<F>(
+        name: impl Into<String>,
+        ddl: impl Into<String>,
+        glob: impl Into<String>,
+        on_files: F,
+    ) -> Self
+    where
+        F: Fn(&[PathBuf], &mut RowSink<'_>) -> std::result::Result<(), BoxError>
             + Send
             + Sync
             + 'static,
@@ -680,7 +703,7 @@ impl DirSQL {
                 abs_paths.push(path);
             }
         }
-        let raw_rows = match hook(&abs_paths) {
+        let raw_rows = match collect_table_rows(hook.as_ref(), &abs_paths) {
             Ok(rows) => rows,
             Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
         };
@@ -1291,12 +1314,11 @@ impl DirSQL {
             });
             if !current {
                 let abs_paths: Vec<PathBuf> = rel_paths.iter().map(|r| root.join(r)).collect();
-                let outcome = hook(&abs_paths)
-                    .map_err(|e| e.to_string())
-                    .and_then(|raw| shape_rows(&db, &table_name, raw, strict));
+                let outcome =
+                    stream_table_rows(&db, &table_name, hook.as_ref(), &abs_paths, strict)
+                        .map_err(map_db_error)?;
                 match outcome {
-                    Ok(rows) => {
-                        replace_table_rows(&db, &table_name, &rows).map_err(map_db_error)?;
+                    Ok(()) => {
                         if persist_ready.is_some() {
                             for file in &files {
                                 let Some(stat) = file.stat.as_ref() else {
@@ -2033,6 +2055,52 @@ fn shape_rows(
         .map_err(|e| e.to_string())
 }
 
+/// Every row a per-table hook produces over `paths`, gathered into one list.
+fn collect_table_rows(
+    hook: &OnFilesFn,
+    paths: &[PathBuf],
+) -> std::result::Result<Vec<infer::JsonRow>, BoxError> {
+    let mut rows = Vec::new();
+    hook(paths, &mut |chunk| rows.extend(chunk))?;
+    Ok(rows)
+}
+
+/// Replace a per-table hook's rows under [`BATCH_OWNER`], storing each chunk
+/// the hook emits while the hook, on its own thread, goes on producing the
+/// next. The caller's open transaction keeps a failure from being seen: the
+/// outer `Err` is SQLite's, the inner one the hook's or a row's. A hook
+/// failure outranks a row that failed to shape.
+fn stream_table_rows(
+    db: &Db,
+    table: &str,
+    hook: &OnFilesFn,
+    paths: &[PathBuf],
+    strict: bool,
+) -> db::Result<std::result::Result<(), String>> {
+    db.delete_rows_by_file(table, BATCH_OWNER)?;
+    std::thread::scope(|scope| {
+        let (chunks, received) = std::sync::mpsc::channel();
+        let producer = scope.spawn(move || {
+            hook(paths, &mut |chunk| {
+                let _ = chunks.send(chunk);
+            })
+            .map_err(|e| e.to_string())
+        });
+        let mut shaped = Ok(());
+        for chunk in received {
+            if shaped.is_err() {
+                continue;
+            }
+            match db.shape_rows(table, chunk, strict) {
+                Ok(rows) => db.insert_rows(table, &rows, BATCH_OWNER)?,
+                Err(e) => shaped = Err(e.to_string()),
+            }
+        }
+        let produced = producer.join().expect("per-table hook panicked");
+        Ok(produced.and(shaped))
+    })
+}
+
 /// Replace a per-table hook's rows wholesale under [`BATCH_OWNER`].
 fn replace_table_rows(db: &Db, table: &str, rows: &ShapedRows) -> db::Result<()> {
     db.delete_rows_by_file(table, BATCH_OWNER)?;
@@ -2143,11 +2211,13 @@ fn build_tables_from_config(
         }
         let config_dir = config_dir.to_path_buf();
         let root = root.to_path_buf();
-        let mut table = Table::per_table(
+        let mut table = Table::per_table_streaming(
             table_cfg.name.clone(),
             table_cfg.ddl.clone(),
             table_cfg.glob.clone(),
-            move |paths: &[PathBuf]| run_on_files(&command, paths, &config_dir, &root),
+            move |paths: &[PathBuf], sink: &mut RowSink<'_>| {
+                run_on_files(&command, paths, &config_dir, &root, sink)
+            },
         );
 
         if table_cfg.strict == Some(true) {
@@ -2160,17 +2230,20 @@ fn build_tables_from_config(
     Ok(tables)
 }
 
-/// Run a table's `on-file` command once over every matched file and parse its
-/// output into rows. The absolute paths are appended to the command's argv in
-/// scan order; `{root}` is the index root. Any failure is the table's and
-/// fails the build.
+/// Run a table's `on-file` command once over every matched file and hand its
+/// rows to `sink` as each invocation's output parses. The absolute paths are
+/// appended to the command's argv in scan order; `{root}` is the index root.
+/// Any failure is the table's and fails the build.
 fn run_on_files(
     command: &str,
     paths: &[PathBuf],
     config_dir: &Path,
     root: &Path,
-) -> std::result::Result<Vec<infer::JsonRow>, BoxError> {
-    Ok(on_file::run(command, config_dir, root, paths)?)
+    sink: &mut RowSink<'_>,
+) -> std::result::Result<(), BoxError> {
+    Ok(on_file::run_streaming(
+        command, config_dir, root, paths, sink,
+    )?)
 }
 
 /// Map a JSON value to a SQLite [`Value`]: `null` → `Null`; `bool` → `Integer`
@@ -4269,7 +4342,12 @@ mod internal_tests {
         let Hook::PerTable(on_files) = &tables[0].hook else {
             panic!("a configured on-file command runs once per table");
         };
-        assert_eq!(on_files(&[dir.path().join("f.a")]).unwrap().len(), 1);
+        assert_eq!(
+            collect_table_rows(on_files.as_ref(), &[dir.path().join("f.a")])
+                .unwrap()
+                .len(),
+            1
+        );
         assert!(tables[1].strict, "on-file table preserves strict flag");
     }
 
@@ -4426,10 +4504,23 @@ mod internal_tests {
         assert_eq!(out[1].cwd, PathBuf::from("/b"));
     }
 
+    fn collect_on_files(
+        command: &str,
+        paths: &[PathBuf],
+        config_dir: &Path,
+        root: &Path,
+    ) -> std::result::Result<Vec<infer::JsonRow>, BoxError> {
+        let mut rows = Vec::new();
+        run_on_files(command, paths, config_dir, root, &mut |chunk| {
+            rows.extend(chunk)
+        })?;
+        Ok(rows)
+    }
+
     #[test]
     fn run_on_files_parses_command_json_output() {
         let dir = TempDir::new().unwrap();
-        let rows = run_on_files(
+        let rows = collect_on_files(
             "printf '[{\"n\":1}]'",
             &[dir.path().join("f.txt")],
             dir.path(),
@@ -4440,12 +4531,41 @@ mod internal_tests {
         assert_eq!(rows[0].get("n"), Some(&serde_json::json!(1)));
     }
 
+    #[test]
+    fn run_on_files_hands_over_each_invocations_rows_as_one_chunk() {
+        let dir = TempDir::new().unwrap();
+        let paths: Vec<PathBuf> = (0..3000)
+            .map(|i| dir.path().join(format!("{i:0>96}.txt")))
+            .collect();
+        let mut chunks = Vec::new();
+        run_on_files(
+            r#"sh -c 'echo "[{\"n\":$#}]"' sh"#,
+            &paths,
+            dir.path(),
+            dir.path(),
+            &mut |chunk| chunks.push(chunk),
+        )
+        .expect("a well-formed payload parses");
+        assert!(chunks.len() > 1, "{} invocation(s)", chunks.len());
+        let total: u64 = chunks
+            .iter()
+            .map(|chunk| {
+                assert_eq!(chunk.len(), 1);
+                chunk[0]
+                    .get("n")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap()
+            })
+            .sum();
+        assert_eq!(total, 3000);
+    }
+
     /// `{abspath}` is not in the substitution table: it is left literal like any
     /// unknown `{…}`, so `printf` receives the string `{abspath}` verbatim.
     #[test]
     fn run_on_files_does_not_substitute_abspath() {
         let dir = TempDir::new().unwrap();
-        let rows = run_on_files(
+        let rows = collect_on_files(
             r#"printf '[{"q":"%s"}]%.0s' {abspath}"#,
             &[dir.path().join("f.txt")],
             dir.path(),
@@ -4465,7 +4585,7 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let a = dir.path().join("a.txt");
         let b = dir.path().join("b.txt");
-        run_on_files(
+        collect_on_files(
             r#"sh -c 'shift; printf "%s\n" "$@" > seen; echo "[]"' sh first"#,
             &[a.clone(), b.clone()],
             dir.path(),
@@ -4483,7 +4603,7 @@ mod internal_tests {
     #[test]
     fn run_on_files_hands_the_hook_non_verbatim_paths_and_root() {
         let dir = TempDir::new().unwrap();
-        run_on_files(
+        collect_on_files(
             r#"sh -c 'printf "%s|%s" "$2" "$1" > seen; echo "[]"' sh {root}"#,
             &[PathBuf::from(r"\\?\C:\r\f.txt")],
             dir.path(),
@@ -4502,7 +4622,7 @@ mod internal_tests {
     #[test]
     fn run_on_files_errors_on_spawn_failure() {
         let dir = TempDir::new().unwrap();
-        let error = run_on_files(
+        let error = collect_on_files(
             "definitely-not-a-real-binary-xyzzy",
             &[PathBuf::from("/outside/f.txt")],
             dir.path(),
@@ -4518,7 +4638,7 @@ mod internal_tests {
     #[test]
     fn run_on_files_errors_on_non_json_output() {
         let dir = TempDir::new().unwrap();
-        let error = run_on_files(
+        let error = collect_on_files(
             "echo not-json",
             &[PathBuf::from("/outside/f.txt")],
             dir.path(),
@@ -4706,6 +4826,92 @@ mod internal_tests {
             vec![name_row("b.txt"), name_row("a.txt")]
         );
         assert!(db.scan_failures().is_empty(), "{:?}", db.scan_failures());
+    }
+
+    fn streaming_per_table(
+        hook: impl Fn(&mut RowSink<'_>) -> std::result::Result<(), BoxError> + Send + Sync + 'static,
+    ) -> Table {
+        Table::per_table_streaming(
+            "items",
+            "CREATE TABLE items (name TEXT)",
+            "*.txt",
+            move |_: &[PathBuf], sink: &mut RowSink<'_>| hook(sink),
+        )
+    }
+
+    fn table_command_error(table: Table, dir: &Path) -> String {
+        let prepared = prepared_build(
+            dir,
+            vec![table],
+            vec![scanned("a.txt", "items", false)],
+            None,
+        );
+        match DirSQL::finish_build_with_fs(
+            prepared,
+            Arc::new(FakeFs::default()),
+            Progress::indexing(),
+        ) {
+            Err(DirSqlError::TableCommand { message, .. }) => message,
+            Err(other) => panic!("expected a table command error, got {other}"),
+            Ok(_) => panic!("expected the build to fail"),
+        }
+    }
+
+    #[test]
+    fn finish_build_stores_every_chunk_a_per_table_hook_emits_in_order() {
+        let dir = TempDir::new().unwrap();
+        let items = streaming_per_table(|sink| {
+            sink(vec![name_json_row("a"), name_json_row("b")]);
+            sink(vec![name_json_row("c")]);
+            Ok(())
+        });
+
+        let db = build(prepared_build(
+            dir.path(),
+            vec![items],
+            vec![scanned("a.txt", "items", false)],
+            None,
+        ));
+
+        assert_eq!(
+            db.query("SELECT name FROM items ORDER BY rowid").unwrap(),
+            vec![name_row("a"), name_row("b"), name_row("c")]
+        );
+    }
+
+    #[test]
+    fn finish_build_fails_a_table_whose_chunk_does_not_shape() {
+        let dir = TempDir::new().unwrap();
+        let mut items = streaming_per_table(|sink| {
+            sink(vec![name_json_row("a")]);
+            sink(vec![infer::JsonRow(vec![(
+                "nope".to_string(),
+                serde_json::json!(1),
+            )])]);
+            Ok(())
+        });
+        items.strict = true;
+
+        let message = table_command_error(items, dir.path());
+
+        assert!(message.contains("extra columns"), "{message}");
+    }
+
+    #[test]
+    fn finish_build_reports_a_hook_failure_over_an_earlier_chunk_that_did_not_shape() {
+        let dir = TempDir::new().unwrap();
+        let mut items = streaming_per_table(|sink| {
+            sink(vec![infer::JsonRow(vec![(
+                "nope".to_string(),
+                serde_json::json!(1),
+            )])]);
+            Err("parser exploded".into())
+        });
+        items.strict = true;
+
+        let message = table_command_error(items, dir.path());
+
+        assert_eq!(message, "parser exploded");
     }
 
     #[test]

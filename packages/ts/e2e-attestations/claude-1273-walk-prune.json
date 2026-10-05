@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791208581,
+  "exit_code": 0,
+  "commit": "a578910cbfc89c7ca3c523ae4d5d5ed9aa578dd2",
+  "branch": "claude/1273-walk-prune"
+}
