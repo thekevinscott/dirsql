@@ -455,3 +455,105 @@ fn a_prefixed_glob_starts_its_walk_at_the_named_directory() {
         "the walk must begin at docs/, not list the index root"
     );
 }
+
+/// A tree with a dotfile and a dot-directory beside ordinary files, the
+/// dot-directory holding a nested dot-directory of its own.
+fn dotted() -> TempDir {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join(".hidden/.cache")).unwrap();
+    fs::create_dir_all(root.path().join("docs")).unwrap();
+    fs::write(root.path().join("top.md"), "top").unwrap();
+    fs::write(root.path().join(".dotfile"), "dot").unwrap();
+    fs::write(root.path().join(".hidden/x.md"), "x").unwrap();
+    fs::write(root.path().join(".hidden/.cache/c.md"), "c").unwrap();
+    fs::write(root.path().join("docs/a.md"), "alpha").unwrap();
+    fs::write(root.path().join("docs/.draft.md"), "draft").unwrap();
+    root
+}
+
+#[test]
+fn a_recursive_scan_hides_dot_named_files_and_directories() {
+    let root = dotted();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './**'"),
+        vec!["docs/a.md", "top.md"],
+        "a dot component the path does not spell is skipped at every depth"
+    );
+}
+
+#[test]
+fn a_one_level_scan_hides_dot_named_files() {
+    let root = dotted();
+    let db = open(&root);
+
+    assert_eq!(paths(&db, "SELECT path FROM './*'"), vec!["top.md"]);
+    assert_eq!(paths(&db, "SELECT path FROM './'"), vec!["top.md"]);
+}
+
+#[test]
+fn naming_a_dot_directory_lists_beneath_it() {
+    let root = dotted();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './.hidden/**'"),
+        vec![".hidden/x.md"],
+        "the spelled dot directory is scanned; a deeper unspelled one is not"
+    );
+}
+
+#[test]
+fn naming_a_dot_directory_without_a_glob_lists_one_level() {
+    let root = dotted();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './.hidden'"),
+        vec![".hidden/x.md"]
+    );
+}
+
+#[test]
+fn naming_a_dotfile_lists_exactly_that_file() {
+    let root = dotted();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './.dotfile'"),
+        vec![".dotfile"]
+    );
+}
+
+#[test]
+fn a_dot_component_spelled_in_the_glob_admits_what_it_matches() {
+    let root = dotted();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './**/.draft.md'"),
+        vec!["docs/.draft.md"],
+        "a spelled dot component is admitted wherever the glob reaches"
+    );
+    assert_eq!(
+        paths(&db, "SELECT path FROM './.hidden/.cache/*'"),
+        vec![".hidden/.cache/c.md"]
+    );
+}
+
+#[test]
+fn an_absolute_path_table_hides_dot_named_files_too() {
+    let root = dotted();
+    let db = open(&root);
+
+    let dir = reported(root.path());
+    assert_eq!(
+        paths(&db, &format!("SELECT path FROM '{dir}/**'")),
+        vec![format!("{dir}/docs/a.md"), format!("{dir}/top.md")]
+    );
+    assert_eq!(
+        paths(&db, &format!("SELECT path FROM '{dir}/.hidden/*'")),
+        vec![format!("{dir}/.hidden/x.md")]
+    );
+}
