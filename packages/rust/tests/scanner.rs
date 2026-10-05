@@ -182,15 +182,39 @@ fn scan_subtree_prunes_ignored_directories() {
 fn scan_glob_stops_outer_gitignore_rules_at_nested_repo() {
     let outer = TempDir::new().unwrap();
     fs::create_dir(outer.path().join(".git")).unwrap();
-    fs::write(outer.path().join(".gitignore"), "*.log\n").unwrap();
+    fs::write(outer.path().join(".gitignore"), "repo/*.log\n").unwrap();
     let nested = outer.path().join("repo");
     fs::create_dir(&nested).unwrap();
     fs::create_dir(nested.join(".git")).unwrap();
     fs::write(nested.join("z.log"), "nested").unwrap();
+    let sibling = outer.path().join("zz-sibling");
+    fs::create_dir(&sibling).unwrap();
+    fs::write(sibling.join(".gitignore"), "*.log\n").unwrap();
+    fs::write(sibling.join("z.log"), "ignored").unwrap();
 
     let ignore = TableMatcher::new(&[], &[]).unwrap();
     let glob = compile_glob("**").unwrap();
     let results = scan_glob(outer.path(), &glob, &ignore, true);
 
     assert_eq!(results, vec![std::path::PathBuf::from("repo/z.log")]);
+}
+
+#[test]
+fn scan_glob_applies_gitignore_only_inside_a_repo() {
+    let outer = TempDir::new().unwrap();
+    let nested = outer.path().join("repo");
+    fs::create_dir(&nested).unwrap();
+    fs::create_dir(nested.join(".git")).unwrap();
+    fs::write(nested.join(".gitignore"), "*.log\n").unwrap();
+    fs::write(nested.join("z.log"), "ignored").unwrap();
+    let sibling = outer.path().join("zz-sibling");
+    fs::create_dir(&sibling).unwrap();
+    fs::write(sibling.join(".gitignore"), "*.log\n").unwrap();
+    fs::write(sibling.join("z.log"), "visible").unwrap();
+
+    let ignore = TableMatcher::new(&[], &[]).unwrap();
+    let glob = compile_glob("**").unwrap();
+    let results = scan_glob(outer.path(), &glob, &ignore, true);
+
+    assert_eq!(results, vec![std::path::PathBuf::from("zz-sibling/z.log")]);
 }
