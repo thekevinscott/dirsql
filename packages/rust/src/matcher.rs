@@ -1,4 +1,4 @@
-use globset::{Glob, GlobSet, GlobSetBuilder};
+use globset::{Glob, GlobBuilder, GlobSet, GlobSetBuilder};
 use std::path::Path;
 
 /// Result of matching a file path against a glob pattern.
@@ -83,6 +83,12 @@ fn glob_with_placeholders_as_star(pattern: &str) -> String {
     out
 }
 
+/// One glob rule on every surface: `*` and `?` stop at `/`, `**` crosses it,
+/// exactly as `scanner::compile_glob` reads a path-table.
+fn compile(pattern: &str) -> Result<Glob, globset::Error> {
+    GlobBuilder::new(pattern).literal_separator(true).build()
+}
+
 impl TableMatcher {
     /// Build a new matcher from (glob_pattern, table_name) pairs and ignore patterns.
     /// Glob patterns may contain `{name}` placeholders, which match like `*`.
@@ -94,7 +100,7 @@ impl TableMatcher {
         for (pattern, table_name) in mappings {
             let glob_pattern = glob_with_placeholders_as_star(pattern);
             let mut builder = GlobSetBuilder::new();
-            builder.add(Glob::new(&glob_pattern)?);
+            builder.add(compile(&glob_pattern)?);
             entries.push(PatternEntry {
                 glob_set: builder.build()?,
                 table_name: table_name.to_string(),
@@ -104,9 +110,9 @@ impl TableMatcher {
         let mut ignore_builder = GlobSetBuilder::new();
         let mut ignore_dir_builder = GlobSetBuilder::new();
         for pattern in ignore_patterns {
-            ignore_builder.add(Glob::new(pattern)?);
+            ignore_builder.add(compile(pattern)?);
             if let Some(subtree) = pattern.strip_suffix("/**") {
-                ignore_dir_builder.add(Glob::new(subtree)?);
+                ignore_dir_builder.add(compile(subtree)?);
             }
         }
         let ignore_set = ignore_builder.build()?;
@@ -273,6 +279,7 @@ mod tests {
         assert_eq!(names(&matcher, "file1.txt"), vec!["t"]);
         assert_eq!(names(&matcher, "fileA.txt"), vec!["t"]);
         assert!(matcher.match_all(Path::new("file.txt")).is_empty());
+        assert!(matcher.match_all(Path::new("file/.txt")).is_empty());
     }
 
     #[test]
@@ -379,5 +386,118 @@ mod tests {
         // time and still finds the real placeholder behind it.
         assert_eq!(placeholder_names("{a{b}"), vec!["b".to_string()]);
         assert_eq!(glob_with_placeholders_as_star("{a{b}"), "{a*");
+    }
+
+    /// Two files at depth 0, two under `folder/`, two under `folder/sub/`, one
+    /// under a sibling directory.
+    const FIXTURE: [&str; 7] = [
+        "root.md",
+        "root.txt",
+        "folder/a.md",
+        "folder/a.txt",
+        "folder/sub/b.md",
+        "folder/sub/b.txt",
+        "sibling/c.md",
+    ];
+
+    fn matched(glob: &str) -> Vec<&'static str> {
+        let matcher = TableMatcher::new(&[(glob, "t")], &[]).unwrap();
+        FIXTURE
+            .into_iter()
+            .filter(|p| !matcher.match_all(Path::new(p)).is_empty())
+            .collect()
+    }
+
+    fn hidden(ignore: &str) -> Vec<&'static str> {
+        let matcher = TableMatcher::new(&[], &[ignore]).unwrap();
+        FIXTURE
+            .into_iter()
+            .filter(|p| matcher.is_ignored(Path::new(p)))
+            .collect()
+    }
+
+    #[test]
+    fn a_lone_star_glob_matches_depth_zero_only() {
+        assert_eq!(matched("*"), ["root.md", "root.txt"]);
+    }
+
+    #[test]
+    fn a_bare_directory_name_glob_matches_nothing() {
+        assert!(matched("folder").is_empty());
+    }
+
+    #[test]
+    fn a_directory_slash_star_glob_stops_at_the_next_separator() {
+        assert_eq!(matched("folder/*"), ["folder/a.md", "folder/a.txt"]);
+    }
+
+    #[test]
+    fn a_directory_slash_double_star_glob_matches_any_depth_below() {
+        assert_eq!(
+            matched("folder/**"),
+            [
+                "folder/a.md",
+                "folder/a.txt",
+                "folder/sub/b.md",
+                "folder/sub/b.txt"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_leading_double_star_glob_matches_the_suffix_at_any_depth() {
+        assert_eq!(
+            matched("**/*.md"),
+            ["root.md", "folder/a.md", "folder/sub/b.md", "sibling/c.md"]
+        );
+    }
+
+    #[test]
+    fn a_double_star_slash_star_glob_matches_every_file() {
+        assert_eq!(matched("**/*"), FIXTURE);
+    }
+
+    #[test]
+    fn a_directory_slash_star_ignore_hides_only_that_directory_s_files() {
+        assert_eq!(hidden("folder/*"), ["folder/a.md", "folder/a.txt"]);
+    }
+
+    #[test]
+    fn a_lone_star_ignore_hides_depth_zero_only() {
+        assert_eq!(hidden("*"), ["root.md", "root.txt"]);
+    }
+
+    #[test]
+    fn the_default_ignores_still_hide_at_every_depth() {
+        let matcher = TableMatcher::new(&[], &["**/node_modules/**", "**/.git/**"]).unwrap();
+        for path in [
+            "node_modules/pkg/index.js",
+            "apps/site/node_modules/pkg/dist/index.js",
+            ".git/config",
+            "vendor/lib/.git/HEAD",
+        ] {
+            assert!(
+                matcher.is_ignored(Path::new(path)),
+                "{path} must stay hidden"
+            );
+        }
+    }
+
+    #[test]
+    fn a_subtree_ignore_whose_prefix_has_a_star_marks_one_level_of_directories() {
+        let matcher = TableMatcher::new(&[], &["folder/*/**"]).unwrap();
+        assert!(matcher.is_ignored_dir(Path::new("folder/sub")));
+        assert!(!matcher.is_ignored_dir(Path::new("folder/sub/deeper")));
+    }
+
+    #[test]
+    fn a_placeholder_matches_exactly_one_path_segment() {
+        let matcher = TableMatcher::new(&[("data/{id}/metadata.json", "a")], &[]).unwrap();
+        assert_eq!(names(&matcher, "data/x/metadata.json"), vec!["a"]);
+        assert!(
+            matcher
+                .match_all(Path::new("data/x/y/metadata.json"))
+                .is_empty()
+        );
     }
 }

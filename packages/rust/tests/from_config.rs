@@ -422,3 +422,65 @@ on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""
     assert_eq!(rows[0]["path"], Value::Text("data.csv".into()));
     assert_eq!(rows[0]["basename"], Value::Text("data.csv".into()));
 }
+
+const PATH_HOOK: &str = r#"on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "%s{\"path\":\"%s\"}" "$sep" "$rel"; sep=","; done; printf "]"' sh {root}'''"#;
+
+/// root.json at depth 0, folder/a.json at depth 1, folder/sub/b.json at depth 2.
+fn nested_json_fixture() -> TempDir {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("folder").join("sub")).unwrap();
+    fs::write(root.path().join("root.json"), "{}").unwrap();
+    fs::write(root.path().join("folder").join("a.json"), "{}").unwrap();
+    fs::write(root.path().join("folder").join("sub").join("b.json"), "{}").unwrap();
+    root
+}
+
+fn paths(root: &TempDir, config: &str) -> Vec<String> {
+    fs::write(root.path().join(".dirsql.toml"), config).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
+    db.query("SELECT path FROM files ORDER BY path")
+        .unwrap()
+        .into_iter()
+        .map(|r| match &r["path"] {
+            Value::Text(s) => s.clone(),
+            other => panic!("path must be text, got {other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn from_config_a_star_glob_ingests_depth_zero_only() {
+    let root = nested_json_fixture();
+    let config = format!(
+        r#"
+[[table]]
+name = "files"
+ddl = "CREATE TABLE files (path TEXT)"
+glob = "*.json"
+{PATH_HOOK}
+"#
+    );
+    assert_eq!(paths(&root, &config), ["root.json"]);
+}
+
+#[test]
+fn from_config_a_directory_slash_star_ignore_hides_only_that_directory_s_files() {
+    let root = nested_json_fixture();
+    let config = format!(
+        r#"
+[dirsql]
+ignore = ["folder/*"]
+
+[[table]]
+name = "files"
+ddl = "CREATE TABLE files (path TEXT)"
+glob = "**/*.json"
+{PATH_HOOK}
+"#
+    );
+    assert_eq!(paths(&root, &config), ["folder/sub/b.json", "root.json"]);
+}

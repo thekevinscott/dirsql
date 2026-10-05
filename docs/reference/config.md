@@ -24,7 +24,7 @@ the config file's location. See [`--config`](./cli.md#flags).
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `ignore` | array of strings | `[]` | Glob patterns matched against root-relative paths. Matched files are skipped entirely — excluded from the initial scan and from watch events. |
+| `ignore` | array of strings | `[]` | Glob patterns matched against root-relative paths, under the [one glob rule](#glob-rule): `*` matches one level, `**` any depth. Matched files are skipped entirely — excluded from the initial scan and from watch events. |
 
 There is no timeout key. `on-file` hook runs are unbounded; to bound one, wrap
 its command in `timeout(1)` (see [Command hooks](./hooks.md#bounding-a-hook)).
@@ -42,6 +42,16 @@ directory.
 [dirsql]
 ignore = ["node_modules/**", ".git/**"]
 ```
+
+### Glob rule
+
+Every glob in dirsql — `ignore`, a `[[table]]`'s `glob`, and a
+[path-table](./path-tables.md#writing-the-path) — reads as the shell does:
+`*` and `?` match within one path segment and never cross `/`; `**` matches
+any depth. So `ignore = ["*"]` hides only the files directly inside the root,
+`ignore = ["build/*"]` hides `build/a.o` but not `build/sub/b.o`, and
+`glob = "*.json"` selects only the top-level `.json` files; write
+`**/*.json` to select them at every depth.
 
 Persistence is not a config key. Keep the SQLite index on disk between runs
 with the [`--persist [PATH]` CLI flag](./cli.md#dirsql-server) — a machine-local
@@ -220,7 +230,7 @@ what its required `on-file` command emits — dirsql injects nothing (see
 |---|---|---|
 | `name` | yes | The table's SQL name — the name you query it by. Declared, never derived from `ddl`: dirsql does not read the DDL text. The `ddl` must create a table by this name; if it doesn't, loading fails. |
 | `ddl` | yes | A SQL batch, run verbatim — any number of statements. It must create a table called `name`; that table holds the file rows, and only the columns it declares are kept (keys the `on-file` command emits that are not declared are dropped). The rest of the batch is yours: indexes, virtual tables, triggers. See [Batch `ddl`](#batch-ddl). |
-| `glob` | yes | Glob pattern matched against root-relative paths. Every table whose glob matches a file receives that file's rows — a file can populate multiple tables. A `{name}` segment is rewritten to `*` (it matches one path segment but captures nothing). |
+| `glob` | yes | Glob pattern matched against root-relative paths, under the [one glob rule](#glob-rule): `*` matches one level, `**` any depth. Every table whose glob matches a file receives that file's rows — a file can populate multiple tables. A `{name}` segment is rewritten to `*` (it matches one path segment but captures nothing). |
 | `on-file` | **yes** | A command run once per table, with every matched file's absolute path appended as a trailing argument; its stdout (one JSON array of row objects) is the table's rows. Must be non-empty. A `[[table]]` with no `on-file` is a load error (see [parse errors](#parse-errors)). See [Command hooks](./hooks.md#on-file). |
 | `strict` | no (default `false`) | When `true`, rows whose keys do not exactly match the declared columns are rejected with an error: extra keys error, and every declared column must be supplied by the `on-file` output. When `false`, extra keys are dropped and missing columns become `NULL`. |
 
