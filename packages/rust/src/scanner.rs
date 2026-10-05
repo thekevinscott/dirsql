@@ -1,8 +1,9 @@
+use crate::listing::{Listing, Seen};
 use crate::matcher::{GlobError, Pattern, TableMatcher};
 use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
-use std::ffi::{OsStr, OsString};
-use std::fs::{self, DirEntry};
+use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 
@@ -81,7 +82,7 @@ fn scan_below(
         None,
         false,
         None,
-        &mut |rel_path, entry| {
+        &mut |rel_path, dir, name| {
             if matcher.is_ignored(&rel_path) {
                 return;
             }
@@ -92,7 +93,7 @@ fn scan_below(
             // Fan-out: a file matching N tables' globs yields N (path, table)
             // pairs, one per matching table, in declaration order.
             for m in matcher.match_all(&rel_path) {
-                results.push((entry.path(), m.table_name));
+                results.push((dir.join(name), m.table_name));
             }
         },
     );
@@ -142,7 +143,7 @@ pub fn scan_glob(
         Some(glob),
         gitignore,
         repo_frames,
-        &mut |rel_path, _| {
+        &mut |rel_path, _, _| {
             if is_wanted(glob, ignore, &rel_path) {
                 results.push(rel_path);
             }
@@ -326,7 +327,7 @@ fn walk(
     glob: Option<&PathGlob>,
     gitignore: bool,
     repo_frames: Option<Vec<Gitignore>>,
-    visit: &mut dyn FnMut(PathBuf, &DirEntry),
+    visit: &mut dyn FnMut(PathBuf, &Path, &OsStr),
 ) {
     let rel = start.strip_prefix(root).unwrap_or(start);
     // Depth below `root`, not below `start`: the reserved-directory rule is
@@ -363,7 +364,7 @@ impl Walk<'_> {
         depth: usize,
         states: &[usize],
         linked: bool,
-        visit: &mut dyn FnMut(PathBuf, &DirEntry),
+        visit: &mut dyn FnMut(PathBuf, &Path, &OsStr),
     ) {
         let entered_repo = self.gitignore && !self.in_repo && holds_git(dir);
         if entered_repo {
@@ -376,20 +377,29 @@ impl Walk<'_> {
             self.frames.push(matcher);
             pushed = true;
         }
-        let entries = sorted_entries(dir);
-        let taken = judge_all(&entries, &|(name, entry)| {
-            self.take(name, entry, rel, depth + 1, states, linked)
+        let listing = Listing::read(dir);
+        let taken = judge_all(listing.entries(), &|listed| {
+            self.take(
+                dir,
+                listing.name(listed),
+                listed.seen,
+                rel,
+                depth + 1,
+                states,
+                linked,
+            )
         });
-        for ((_, entry), taken) in entries.iter().zip(taken) {
+        for (listed, taken) in listing.entries().iter().zip(taken) {
+            let name = listing.name(listed);
             match taken {
                 Some(Taken::Dir {
                     child,
                     next,
                     linked,
                 }) => {
-                    self.descend(&entry.path(), &child, depth + 1, &next, linked, visit);
+                    self.descend(&dir.join(name), &child, depth + 1, &next, linked, visit);
                 }
-                Some(Taken::File(child)) => visit(child, entry),
+                Some(Taken::File(child)) => visit(child, dir, name),
                 None => {}
             }
         }
@@ -401,19 +411,25 @@ impl Walk<'_> {
         }
     }
 
-    /// What the walk makes of one entry of the directory at `rel`, whose
-    /// entries sit at `depth`, reached with glob `states` and `linked` as
-    /// whether its path already crosses a followed symlink.
+    /// What the walk makes of entry `name` of `dir`, seen as `seen`, the
+    /// directory at `rel` whose entries sit at `depth`, reached with glob
+    /// `states` and `linked` as whether its path already crosses a followed
+    /// symlink.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the walk's position is the arguments"
+    )]
     fn take(
         &self,
+        dir: &Path,
         name: &OsStr,
-        entry: &DirEntry,
+        seen: Seen,
         rel: &Path,
         depth: usize,
         states: &[usize],
         linked: bool,
     ) -> Option<Taken> {
-        let kind = kind_of(entry, self.glob.is_some())?;
+        let kind = kind_of(dir, name, seen, self.glob.is_some())?;
         let linked = linked || kind == Kind::LinkedDir;
         let next = if linked || kind != Kind::File {
             self.next_states(states, name, kind)
@@ -430,7 +446,7 @@ impl Walk<'_> {
         let path = if self.frames.is_empty() {
             PathBuf::new()
         } else {
-            entry.path()
+            dir.join(name)
         };
         if !self.admits(depth, is_dir, name, &path, &child) {
             return None;
@@ -519,18 +535,28 @@ fn judge_all<T: Sync, R: Send>(items: &[T], judge: &(dyn Fn(&T) -> R + Sync)) ->
     })
 }
 
-/// What the walk makes of an entry, following a symlink only when
-/// `follow_links` is set. `None` for anything else, a broken link included.
-fn kind_of(entry: &DirEntry, follow_links: bool) -> Option<Kind> {
-    let file_type = entry.file_type().ok()?;
-    if !file_type.is_symlink() {
-        return classify(file_type.is_dir(), file_type.is_file(), false);
+/// What the walk makes of entry `name` of `dir`, seen as `seen`, following a
+/// symlink only when `follow_links` is set. `None` for anything else, a broken
+/// link included.
+fn kind_of(dir: &Path, name: &OsStr, seen: Seen, follow_links: bool) -> Option<Kind> {
+    match seen {
+        Seen::Dir => Some(Kind::Dir),
+        Seen::File => Some(Kind::File),
+        Seen::Other => None,
+        Seen::Unknown => {
+            let file_type = fs::symlink_metadata(dir.join(name)).ok()?.file_type();
+            if file_type.is_symlink() {
+                kind_of(dir, name, Seen::Link, follow_links)
+            } else {
+                classify(file_type.is_dir(), file_type.is_file(), false)
+            }
+        }
+        Seen::Link if follow_links => {
+            let target = fs::metadata(dir.join(name)).ok()?;
+            classify(target.is_dir(), target.is_file(), true)
+        }
+        Seen::Link => None,
     }
-    if !follow_links {
-        return None;
-    }
-    let target = fs::metadata(entry.path()).ok()?;
-    classify(target.is_dir(), target.is_file(), true)
 }
 
 fn classify(is_dir: bool, is_file: bool, linked: bool) -> Option<Kind> {
@@ -540,36 +566,6 @@ fn classify(is_dir: bool, is_file: bool, linked: bool) -> Option<Kind> {
         (_, true) => Some(Kind::File),
         _ => None,
     }
-}
-
-fn sorted_entries(dir: &Path) -> Vec<(OsString, DirEntry)> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut entries: Vec<(u64, OsString, DirEntry)> = entries
-        .filter_map(Result::ok)
-        .map(|entry| {
-            let name = entry.file_name();
-            (name_prefix(&name), name, entry)
-        })
-        .collect();
-    // Comparing a leading word first keeps most comparisons off the heap,
-    // which is most of the sort's cost in a large directory.
-    entries.sort_unstable_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
-    entries
-        .into_iter()
-        .map(|(_, name, entry)| (name, entry))
-        .collect()
-}
-
-/// A name's first eight bytes as a big-endian word, which orders names as
-/// their bytes do as far as those bytes go.
-fn name_prefix(name: &OsStr) -> u64 {
-    let bytes = name.as_encoded_bytes();
-    let mut word = [0u8; 8];
-    let len = bytes.len().min(8);
-    word[..len].copy_from_slice(&bytes[..len]);
-    u64::from_be_bytes(word)
 }
 
 /// The `.gitignore` files above `start`, up to and including the repo root
@@ -686,16 +682,6 @@ mod tests {
             judge_all(&items, &|()| thread::current().id())
                 .iter()
                 .all(|id| *id == caller)
-        );
-    }
-
-    #[test]
-    fn name_prefix_orders_names_as_their_bytes_do() {
-        let mut names = ["abcdefghZ", "abcdefgh", "abcdefghA", "ab", "b", "abc", ""];
-        names.sort_by_key(|name| (name_prefix(OsStr::new(name)), *name));
-        assert_eq!(
-            names,
-            ["", "ab", "abc", "abcdefgh", "abcdefghA", "abcdefghZ", "b"]
         );
     }
 
