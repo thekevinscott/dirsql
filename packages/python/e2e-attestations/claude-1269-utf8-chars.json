@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1791215881,
+  "exit_code": 0,
+  "commit": "e6e8716ac1fca13d6b03e48c7ff0551b48c7f537",
+  "branch": "claude/1269-utf8-chars"
+}
