@@ -382,8 +382,16 @@ mod tests {
     #[test]
     fn a_range_bash_refuses_to_generate_stays_literal() {
         assert!(steps(0, i64::from(i32::MAX), 1).is_none());
-        let widest = steps(0, i64::from(i32::MAX) - 4, 1).unwrap();
-        assert_eq!(widest.size_hint().0, i32::MAX as usize - 3);
+        assert!(steps(0, i64::from(i32::MAX) - 2, 1).is_none());
+        let widest = steps(0, i64::from(i32::MAX) - 3, 1).unwrap();
+        assert_eq!(widest.size_hint().0, i32::MAX as usize - 2);
+        assert!(steps(0, i64::from(i32::MAX), 2).is_some());
+    }
+
+    #[test]
+    fn a_range_missing_either_end_is_not_a_sequence() {
+        assert!(sequence("a..").is_none());
+        assert!(sequence("..a").is_none());
     }
 
     #[test]
