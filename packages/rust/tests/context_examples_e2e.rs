@@ -166,5 +166,8 @@ fn every_fenced_example_in_the_guide_runs_clean() {
         assert!(rows.is_array(), "expected a JSON array:\n{cmd}");
         ran += 1;
     }
-    assert!(ran >= 10, "expected at least 10 runnable examples, ran {ran}");
+    assert!(
+        ran >= 10,
+        "expected at least 10 runnable examples, ran {ran}"
+    );
 }
