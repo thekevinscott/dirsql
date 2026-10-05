@@ -1,5 +1,4 @@
-use crate::matcher::TableMatcher;
-use globset::{GlobBuilder, GlobMatcher, GlobSet, GlobSetBuilder};
+use crate::matcher::{GlobError, Pattern, TableMatcher};
 use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::ffi::{OsStr, OsString};
@@ -157,15 +156,15 @@ fn is_wanted(glob: &PathGlob, ignore: &TableMatcher, rel_path: &Path) -> bool {
 /// cannot recurse without bound.
 #[derive(Debug)]
 pub struct PathGlob {
-    files: GlobSet,
-    spelled_dot_names: GlobSet,
+    files: Pattern,
+    spelled_dot_names: Vec<Pattern>,
     components: Vec<Component>,
 }
 
 #[derive(Debug)]
 enum Component {
     AnyDepth,
-    Name(GlobMatcher),
+    Name(Pattern),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -176,6 +175,12 @@ enum Kind {
 }
 
 impl PathGlob {
+    fn spells_dot_name(&self, name: &OsStr) -> bool {
+        self.spelled_dot_names
+            .iter()
+            .any(|p| p.is_match(Path::new(name)))
+    }
+
     pub fn is_match(&self, rel_path: &Path) -> bool {
         self.files.is_match(rel_path)
     }
@@ -192,7 +197,7 @@ impl PathGlob {
             match self.components.get(i) {
                 Some(Component::AnyDepth) if kind == Kind::LinkedDir => next.push(i + 1),
                 Some(Component::AnyDepth) => next.push(i),
-                Some(Component::Name(m)) if m.is_match(name) => next.push(i + 1),
+                Some(Component::Name(m)) if m.is_match(Path::new(name)) => next.push(i + 1),
                 _ => {}
             }
         }
@@ -231,22 +236,17 @@ impl PathGlob {
 /// `literal_separator` is what makes `*` mean *this directory only*: without
 /// it a lone `*` would cross `/` and the explicit non-recursive spelling would
 /// silently recurse. `**` still crosses separators.
-pub fn compile_glob(pattern: &str) -> Result<PathGlob, globset::Error> {
-    let mut files = GlobSetBuilder::new();
-    files.add(compile_component(pattern)?);
-    let mut spelled = GlobSetBuilder::new();
-    for component in pattern.split('/').filter(|c| is_dot_named(OsStr::new(c))) {
-        spelled.add(compile_component(component)?);
-    }
+pub fn compile_glob(pattern: &str) -> Result<PathGlob, GlobError> {
+    let spelled_dot_names = pattern
+        .split('/')
+        .filter(|c| is_dot_named(OsStr::new(c)))
+        .map(Pattern::new)
+        .collect::<Result<_, _>>()?;
     Ok(PathGlob {
-        files: files.build()?,
-        spelled_dot_names: spelled.build()?,
+        files: Pattern::new(pattern)?,
+        spelled_dot_names,
         components: compile_components(pattern),
     })
-}
-
-fn compile_component(pattern: &str) -> Result<globset::Glob, globset::Error> {
-    GlobBuilder::new(pattern).literal_separator(true).build()
 }
 
 fn is_dot_named(name: &OsStr) -> bool {
@@ -260,7 +260,7 @@ fn compile_components(pattern: &str) -> Vec<Component> {
         .split('/')
         .map(|c| match c {
             "**" => Ok(Component::AnyDepth),
-            _ => compile_component(c).map(|g| Component::Name(g.compile_matcher())),
+            _ => Pattern::new(c).map(Component::Name),
         })
         .collect::<Result<Vec<_>, _>>()
         .unwrap_or_default();
@@ -378,7 +378,7 @@ impl Walk<'_> {
 
     fn admits_name(&self, name: &OsStr) -> bool {
         match self.glob {
-            Some(glob) => !is_dot_named(name) || glob.spelled_dot_names.is_match(name),
+            Some(glob) => !is_dot_named(name) || glob.spells_dot_name(name),
             None => true,
         }
     }
@@ -752,22 +752,22 @@ mod tests {
     #[test]
     fn a_spelled_dot_component_may_itself_be_a_glob() {
         let glob = compile_glob(".env*").unwrap();
-        assert!(glob.spelled_dot_names.is_match(".env.local"));
-        assert!(!glob.spelled_dot_names.is_match(".git"));
+        assert!(glob.spells_dot_name(OsStr::new(".env.local")));
+        assert!(!glob.spells_dot_name(OsStr::new(".git")));
     }
 
     #[test]
     fn a_dot_component_is_spelled_wherever_it_sits_in_the_glob() {
         let glob = compile_glob("*/.cache/*").unwrap();
-        assert!(glob.spelled_dot_names.is_match(".cache"));
-        assert!(!glob.spelled_dot_names.is_match(".config"));
+        assert!(glob.spells_dot_name(OsStr::new(".cache")));
+        assert!(!glob.spells_dot_name(OsStr::new(".config")));
     }
 
     #[test]
     fn a_glob_without_a_dot_component_spells_no_dot_name() {
         let glob = compile_glob("docs/**/*.md").unwrap();
-        assert!(!glob.spelled_dot_names.is_match(".md"));
-        assert!(!glob.spelled_dot_names.is_match(".docs"));
+        assert!(!glob.spells_dot_name(OsStr::new(".md")));
+        assert!(!glob.spells_dot_name(OsStr::new(".docs")));
     }
 
     #[test]
