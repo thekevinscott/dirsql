@@ -108,13 +108,13 @@ features = ["cli"]
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [73, 132, 331, 368, 525, 546]
+lines = [73, 132, 331, 525]
 reason = "scan_below, scan_glob, walk, descend, kind_of and sorted_entries read the filesystem; tests/scanner.rs (scan_finds_matching_files, scan_recurses_into_subdirectories), tests/vtab.rs (glob_scopes_the_walk, rowids_count_up_from_zero_in_scan_order) and tests/path_table_symlinks.rs assert what they return"
 
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [417, 418, 423, 426, 526, 529]
+lines = [417, 418, 526, 529]
 reason = "whether a walked entry is a symlink, and whether the walk is below one, is known only from a real tree; tests/path_table_symlinks.rs asserts every outcome against bash, and the decisions themselves are unit-tested in classify, Walk::follows and PathGlob::step"
 
 [[rust.exempt]]
@@ -138,8 +138,8 @@ reason = "a child's depth decides the reserved top-level .dirsql rule for a real
 [[rust.exempt]]
 path = "src/vtab.rs"
 rules = ["mutation"]
-lines = [409, 418]
-reason = "rows walks a real tree and column hands a cell to SQLite; the cell choice is unit-tested in `cell`, and tests/vtab.rs stat_columns_carry_real_values and content_is_excluded_from_star_but_selectable_by_name assert both through a real connection"
+lines = [418]
+reason = "column hands a cell to SQLite; the cell choice is unit-tested in `cell`, and tests/vtab.rs stat_columns_carry_real_values and content_is_excluded_from_star_but_selectable_by_name assert both through a real connection"
 
 [[rust.exempt]]
 path = "src/cli/run.rs"
