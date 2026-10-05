@@ -35,7 +35,7 @@ Every row has `path`, `basename`, `dir`, `ext` (no dot, `NULL` when absent), `si
 
 ### What a scan skips
 
-- **`.gitignore` is respected.** Pass `--no-ignore` to scan gitignored files too, or name the ignored directory outright: `'./build'` scans `build/`.
+- **`.gitignore` is respected inside a git repo**, as git does; outside one (no enclosing `.git`) no `.gitignore` applies. Pass `--no-ignore` to scan gitignored files too, or name the ignored directory outright: `'./build'` scans `build/`.
 - **`node_modules` is skipped** unless the path names it: `'./node_modules/**'`.
 - **`'./**'` does not enter `.git`.** Naming it scans it: `'./.git/**'`.
 - **To match dotfiles, spell the dot:** `'./.github/**'`, `'./**/.env'`.
