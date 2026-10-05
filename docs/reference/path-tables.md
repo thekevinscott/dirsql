@@ -86,6 +86,25 @@ SELECT * FROM ./;
 -- hint: paths used as table names must be quoted; did you mean "./"?
 ```
 
+### Symlinks
+
+Symlinks are followed the way `bash -O globstar` follows them. A symlinked
+file is a file: `'./*'` lists it, and so does naming it. A symlinked directory
+is entered by any component of the path except `**`, which never walks into
+one. A broken link lists nothing.
+
+With `linkdir -> real`:
+
+| You write | dirsql scans |
+| --- | --- |
+| `'./*/*'` | `linkdir/r.md` and `real/r.md` |
+| `'./**'` | everything under `real/`, nothing under `linkdir/` |
+| `'./**/*.md'` | `linkdir/r.md` too: `**` may stop on `linkdir` for `*.md` to enter |
+| `'./linkdir/**'` | everything under `linkdir/` |
+
+Each link entered uses up one component of the path, so a symlink cycle is
+followed at most once per component and never hangs a scan.
+
 ### Paths outside the index root
 
 Three other prefixes resolve, with their usual shell meanings:
@@ -198,12 +217,14 @@ A path-table is scanned when the statement runs, so it always reflects the
 filesystem as it is *now* — unlike declared tables, which are indexed on build
 and updated by the watcher. A file created a moment ago shows up immediately.
 
-The scan is live all the way down to `content`: a file's body is read when the
-query names the `content` column, not when the row is discovered. A file
-deleted *after* the scan finds it but *before* its `content` is read yields
-`NULL` content — the same NULL an unreadable or non-UTF-8 file gives — rather
-than failing the query. This is an accepted consequence of reading live, not a
-bug to design around.
+The scan is live all the way down to `content`: a file's body is read only
+when the query names the `content` column, not when the row is discovered. A
+query that names it has the bodies of the rows it selects read all at once,
+several files at a time, before the first row comes back. A file deleted
+*after* the scan finds it but *before* its `content` is read yields `NULL`
+content — the same NULL an unreadable or non-UTF-8 file gives — rather than
+failing the query. This is an accepted consequence of reading live, not a bug
+to design around.
 
 The table itself is per-connection: it lives in `temp`, so it cannot leak into
 `sqlite_master` or survive a restart. Under `--persist` a *parsed* table's rows
@@ -273,10 +294,25 @@ beneath it; one above it is never read.
 
 ### Hidden files
 
-Dotfiles are ordinary files: `'./'` and `'./*'` include them, with or without
-`--no-ignore`. This is a deliberate divergence from fd/ripgrep — querying
-dotfile directories (`.claude/`, …) is a first-class `dirsql` use case. Add an
-`ignore` pattern if you would rather not see them.
+A path component starting with `.` is skipped unless the path spells it, the
+rule `ls` and `fd` use. `'./'` and `'./**'` skip `.gitignore`, `.env` and
+everything under `.claude/`; naming the component lists it:
+
+| You write | dirsql scans |
+| --- | --- |
+| `'./**'` | every file, skipping dot-named files and directories at any depth |
+| `'./.claude'`, `'./.claude/**'` | the files under `.claude/` |
+| `'./.env'` | that one file |
+| `'./**/.env'` | every `.env` whose parent directories are not themselves dot-named |
+| `'~/.claude/projects/*/*.jsonl'` | the walk starts inside `.claude/`, so nothing there is hidden |
+
+A spelled component may be a glob of its own: `'./.env*'` lists `.env.local`,
+and `'./.*'` lists every dot-named entry one level down. A dot component the
+path does not spell stays hidden however deep the scan goes, so
+`'./.claude/**'` lists `.claude/sub/notes.md` but not `.claude/sub/.cache/x`.
+
+This is independent of `.gitignore`: [`--no-ignore`](./cli.md#flags) restores
+gitignored files and leaves dot-named entries hidden.
 
 ## Joining against declared tables
 

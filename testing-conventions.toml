@@ -103,12 +103,19 @@ features = ["cli"]
 
 # The walkers: a body that reads directories has no unit-tier contract, and
 # the decisions it makes are lifted into pure functions the unit suite judges
-# (`is_wanted`, `Walk::admits`, `should_descend`, `is_gitignored`).
+# (`is_wanted`, `Walk::admits`, `Walk::follows`, `PathGlob::step`,
+# `classify`, `should_descend`, `is_gitignored`).
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [72, 116, 173, 201, 237]
-reason = "scan_below, scan_glob, walk, descend and sorted_entries read the filesystem; tests/scanner.rs (scan_finds_matching_files, scan_recurses_into_subdirectories) and tests/vtab.rs (glob_scopes_the_walk, rowids_count_up_from_zero_in_scan_order) assert what they return"
+lines = [72, 121, 320, 353, 417, 438]
+reason = "scan_below, scan_glob, walk, descend, kind_of and sorted_entries read the filesystem; tests/scanner.rs (scan_finds_matching_files, scan_recurses_into_subdirectories), tests/vtab.rs (glob_scopes_the_walk, rowids_count_up_from_zero_in_scan_order) and tests/path_table_symlinks.rs assert what they return"
+
+[[rust.exempt]]
+path = "src/scanner.rs"
+rules = ["mutation"]
+lines = [366, 367, 370, 418, 421]
+reason = "whether a walked entry is a symlink, and whether the walk is below one, is known only from a real tree; tests/path_table_symlinks.rs asserts every outcome against bash, and the decisions themselves are unit-tested in classify, Walk::follows and PathGlob::step"
 
 [[rust.exempt]]
 path = "src/scanner.rs"
@@ -119,13 +126,13 @@ reason = "the walk's running file count is observable only through the CLI's pro
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [208]
+lines = [360]
 reason = "a child's depth decides the reserved top-level .dirsql rule for a real tree; tests/scanner.rs scan_excludes_top_level_dirsql_directory and tests/vtab.rs reserved_dirsql_directory_is_skipped assert it"
 
 [[rust.exempt]]
 path = "src/vtab.rs"
 rules = ["mutation"]
-lines = [289, 302]
+lines = [360, 371]
 reason = "rows walks and stats a real tree and column hands a cell to SQLite; the cell choice is unit-tested in `cell`, and tests/vtab.rs stat_columns_carry_real_values and content_is_excluded_from_star_but_selectable_by_name assert both through a real connection"
 
 [[rust.exempt]]
@@ -133,6 +140,18 @@ path = "src/cli/run.rs"
 rules = ["mutation"]
 lines = [351, 392]
 reason = "run_default and run_query build a real index and drive stdout, stderr and the process exit; tests/on_file_failure_e2e.rs (a_clean_scan_exits_zero, a_failed_command_fails_the_run) and tests/repl_pipe_e2e.rs assert their codes through the built binary"
+
+[[rust.exempt]]
+path = "src/vtab.rs"
+rules = ["mutation"]
+lines = [81, 328, 382]
+reason = "read_text and ScanSpec::read open a real file and prefetch reads a real tree ahead of the cursor; the buffer logic is unit-tested in `read_all` and `presize`, tests/vtab.rs content_is_excluded_from_star_but_selectable_by_name, content_is_null_for_non_utf8_files and unreadable_file_yields_null_content_without_erroring_the_row assert the cell, and tests/path_table_content_prefetch.rs content_is_read_for_every_row_before_the_first_is_delivered and a_join_has_the_content_it_names_read_ahead assert the read-ahead"
+
+[[rust.exempt]]
+path = "src/vtab_scaffold.rs"
+rules = ["mutation"]
+lines = [335]
+reason = "`|` -> `^` is equivalent: the lookup idx_num is a column index plus one, and SQLite caps a table at 32767 columns, so it never carries the PREFETCH_IDX bit and the two operators agree on every input"
 
 # Unit-only coverage floor: measured by `cargo llvm-cov --lib --features cli`
 # (the `--lib` scoping keeps the integration tier under packages/rust/tests/ out

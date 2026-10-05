@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791162277,
+  "exit_code": 0,
+  "commit": "6f1ae99e79ae4033eb5760d1120528fe82d5c25b",
+  "branch": "claude/1241-content-prefetch"
+}

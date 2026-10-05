@@ -1,17 +1,18 @@
 use std::ffi::c_int;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use globset::GlobSet;
 use rusqlite::types::{ToSqlOutput, ValueRef};
 use rusqlite::vtab::Context;
 use rusqlite::{Connection, Result};
 
 use crate::matcher::TableMatcher;
-use crate::scanner::{scan_glob, to_slash};
+use crate::scanner::{PathGlob, scan_glob, to_slash};
 use crate::vtab_scaffold::{self, TableSource};
 
 pub use crate::vtab_scaffold::StatementScope;
@@ -65,20 +66,78 @@ fn column_type(column: &str) -> &'static str {
     }
 }
 
+/// Files read at once when `content` is read ahead. Each read is a few
+/// syscalls the kernel answers independently of the last, so they overlap
+/// almost perfectly; past eight the box, not the count, sets the pace.
+const READERS: usize = 8;
+
 /// Read `path` as text, yielding `None` when it is unreadable or not valid
 /// UTF-8. A file that cannot be read is a NULL cell, never a failed row: the
 /// filesystem is allowed to be messy and a query over it should still return.
-fn read_text(path: &Path) -> Option<String> {
-    std::fs::read(path)
-        .ok()
-        .and_then(|b| String::from_utf8(b).ok())
+/// `size` is what the scan's stat reported, so the buffer is sized without
+/// stat'ing again; a file that has grown since is still read whole.
+fn read_text(path: &Path, size: Option<i64>) -> Option<String> {
+    let mut file = File::open(path).ok()?;
+    let bytes = read_all(&mut file, presize(size)).ok()?;
+    String::from_utf8(bytes).ok()
+}
+
+/// One past the size the scan saw: a file unchanged since fills the buffer in
+/// one read and reports its end on the next, with no stat in between.
+fn presize(size: Option<i64>) -> usize {
+    usize::try_from(size.unwrap_or(0))
+        .unwrap_or(0)
+        .saturating_add(1)
+}
+
+/// Every byte `reader` yields, into a buffer of `expected` bytes that grows
+/// if the reader has more.
+fn read_all(reader: &mut impl Read, expected: usize) -> io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    buf.try_reserve_exact(expected.max(1))?;
+    buf.resize(expected.max(1), 0);
+    let mut filled = 0;
+    loop {
+        if filled == buf.len() {
+            buf.resize(buf.len() * 2, 0);
+        }
+        match reader.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    buf.truncate(filled);
+    Ok(buf)
+}
+
+/// Read `content` for every row in `rows` that has none yet, [`READERS`]
+/// files at a time, each reader taking the next unread row. `read` is
+/// injected so the sharing-out is testable without a filesystem.
+fn read_contents(rows: &[&FileRow], read: &(dyn Fn(&FileRow) -> Option<String> + Sync)) {
+    let unread: Vec<&FileRow> = rows
+        .iter()
+        .copied()
+        .filter(|row| row.content.get().is_none())
+        .collect();
+    let next = AtomicUsize::new(0);
+    thread::scope(|scope| {
+        for _ in 0..READERS.min(unread.len()) {
+            scope.spawn(|| {
+                while let Some(row) = unread.get(next.fetch_add(1, Ordering::Relaxed)) {
+                    row.content.get_or_init(|| read(row));
+                }
+            });
+        }
+    });
 }
 
 /// Everything a scan needs: where to walk, what to match, what to call the
 /// results, and what to skip.
 struct ScanSpec {
     root: PathBuf,
-    glob: GlobSet,
+    glob: PathGlob,
     /// Prepended to each matched path before the stat columns are computed.
     /// Empty for index-root-relative tables.
     path_prefix: PathBuf,
@@ -97,6 +156,10 @@ struct FileRow {
     path: String,
     spans: PathSpans,
     facts: StatFacts,
+    /// The file's text once a statement has asked for it, read at most once
+    /// per statement: ahead for every row when the statement names the
+    /// column, or on demand for the row being emitted.
+    content: OnceLock<Option<String>>,
 }
 
 impl FileRow {
@@ -108,6 +171,7 @@ impl FileRow {
             path,
             spans,
             facts,
+            content: OnceLock::new(),
         }
     }
 
@@ -217,8 +281,8 @@ fn integer(n: Option<i64>) -> ValueRef<'static> {
     n.map_or(ValueRef::Null, ValueRef::Integer)
 }
 
-/// The cell a row holds for column `i`, `None` for the one it does not hold:
-/// `content` is read from the file when asked for, never stored.
+/// The cell a row holds for column `i`, `None` for the one it does not hold
+/// until asked: `content` is read from the file, not stat'ed with the rest.
 fn cell(row: &FileRow, i: c_int) -> Option<ValueRef<'_>> {
     Some(match usize::try_from(i).unwrap_or(usize::MAX) {
         PATH_COLUMN => ValueRef::from(row.path.as_str()),
@@ -256,6 +320,12 @@ fn parse_module_args(args: &[&[u8]]) -> Result<ScanSpec> {
         ignore: vtab_scaffold::compile_ignore(ignore)?,
         gitignore: vtab_scaffold::parse_gitignore(gitignore)?,
     })
+}
+
+impl ScanSpec {
+    fn read(&self, row: &FileRow) -> Option<String> {
+        read_text(&self.root.join(&row.rel), row.facts.size)
+    }
 }
 
 /// The string a matched file is reported under: the relative path as scanned,
@@ -301,8 +371,14 @@ impl TableSource for ScanSpec {
             Some(value) => ctx.set_result(&ToSqlOutput::Borrowed(value)),
             // The one effectful read, reached only when a query names the
             // column: this is where laziness actually lives.
-            None => ctx.set_result(&read_text(&self.root.join(&row.rel))),
+            None => ctx.set_result(row.content.get_or_init(|| self.read(row))),
         }
+    }
+
+    const PREFETCH_COLUMN: Option<usize> = Some(CONTENT_COLUMN);
+
+    fn prefetch(&self, rows: &[&FileRow]) {
+        read_contents(rows, &|row| self.read(row));
     }
 
     fn lookup_key<'r>(&self, row: &'r FileRow, column: usize) -> Option<&'r str> {
@@ -627,6 +703,164 @@ mod tests {
     fn build_rows_yields_nothing_for_an_empty_scan() {
         let rows = build_rows(Path::new(""), Vec::new(), &|_| StatFacts::default());
         assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn presize_is_one_past_the_size_the_scan_saw() {
+        assert_eq!(presize(Some(0)), 1);
+        assert_eq!(presize(Some(41)), 42);
+    }
+
+    #[test]
+    fn presize_is_one_byte_without_a_usable_size() {
+        assert_eq!(presize(None), 1);
+        assert_eq!(presize(Some(-1)), 1);
+    }
+
+    /// A reader that yields `chunks` one call at a time, `interrupted` times
+    /// interrupted first.
+    struct Chunked {
+        chunks: Vec<Vec<u8>>,
+        interrupted: usize,
+    }
+
+    impl Read for Chunked {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.interrupted > 0 {
+                self.interrupted -= 1;
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+            if self.chunks.is_empty() {
+                return Ok(0);
+            }
+            let chunk = self.chunks.remove(0);
+            let n = chunk.len().min(buf.len());
+            buf[..n].copy_from_slice(&chunk[..n]);
+            if n < chunk.len() {
+                self.chunks.insert(0, chunk[n..].to_vec());
+            }
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn read_all_takes_every_byte_a_presized_read_yields() {
+        let mut reader = Chunked {
+            chunks: vec![b"hello".to_vec()],
+            interrupted: 0,
+        };
+        assert_eq!(read_all(&mut reader, 6).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn read_all_grows_past_a_size_the_file_has_outgrown() {
+        let mut reader = Chunked {
+            chunks: vec![b"hello".to_vec(), b" world".to_vec()],
+            interrupted: 0,
+        };
+        assert_eq!(read_all(&mut reader, 2).unwrap(), b"hello world");
+        let mut reader = Chunked {
+            chunks: vec![b"hello".to_vec()],
+            interrupted: 0,
+        };
+        assert_eq!(read_all(&mut reader, 0).unwrap(), b"hello");
+    }
+
+    struct Counting<R>(R, usize);
+
+    impl<R: Read> Read for Counting<R> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.1 += 1;
+            self.0.read(buf)
+        }
+    }
+
+    #[test]
+    fn read_all_grows_geometrically_when_a_file_has_outgrown_its_size() {
+        let chunked = Chunked {
+            chunks: vec![vec![b'x'; 4096]],
+            interrupted: 0,
+        };
+        let mut reader = Counting(chunked, 0);
+        assert_eq!(read_all(&mut reader, 1).unwrap().len(), 4096);
+        assert!(reader.1 <= 16, "{} reads", reader.1);
+    }
+
+    #[test]
+    fn read_all_retries_an_interrupted_read() {
+        let mut reader = Chunked {
+            chunks: vec![b"hi".to_vec()],
+            interrupted: 2,
+        };
+        assert_eq!(read_all(&mut reader, 3).unwrap(), b"hi");
+    }
+
+    #[test]
+    fn read_all_surfaces_a_failed_read() {
+        struct Broken;
+        impl Read for Broken {
+            fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::from(io::ErrorKind::PermissionDenied))
+            }
+        }
+        let err = read_all(&mut Broken, 4).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn read_all_yields_nothing_for_an_empty_reader() {
+        let mut reader = Chunked {
+            chunks: Vec::new(),
+            interrupted: 0,
+        };
+        assert_eq!(read_all(&mut reader, 1).unwrap(), b"");
+    }
+
+    #[test]
+    fn read_contents_reads_each_unread_row_once() {
+        let rows: Vec<FileRow> = (0..40).map(|n| row_for("", &format!("f{n}.md"))).collect();
+        rows[3].content.set(Some("already".to_string())).unwrap();
+        let reads = std::sync::Mutex::new(Vec::new());
+        let read = |row: &FileRow| {
+            reads.lock().unwrap().push(row.path.clone());
+            Some(format!("body of {}", row.path))
+        };
+
+        read_contents(&rows.iter().collect::<Vec<_>>(), &read);
+
+        let mut reads = reads.into_inner().unwrap();
+        reads.sort();
+        let mut expected: Vec<String> = (0..40)
+            .filter(|&n| n != 3)
+            .map(|n| format!("f{n}.md"))
+            .collect();
+        expected.sort();
+        assert_eq!(
+            reads, expected,
+            "every row but the one already read, once each"
+        );
+        assert_eq!(rows[3].content.get().unwrap().as_deref(), Some("already"));
+        assert_eq!(
+            rows[7].content.get().unwrap().as_deref(),
+            Some("body of f7.md")
+        );
+    }
+
+    #[test]
+    fn read_contents_keeps_a_null_read() {
+        let rows = [row_for("", "a.md")];
+        read_contents(&[&rows[0]], &|_| None);
+        assert_eq!(rows[0].content.get(), Some(&None));
+    }
+
+    #[test]
+    fn read_contents_reads_nothing_when_every_row_is_read() {
+        let rows = [row_for("", "a.md")];
+        rows[0].content.set(None).unwrap();
+        read_contents(&[&rows[0]], &|_| {
+            panic!("a row read already is not read again")
+        });
+        read_contents(&[], &|_| panic!("nothing to read"));
     }
 
     #[test]

@@ -292,6 +292,56 @@ fn an_ordinary_syntax_error_carries_no_quoting_hint() {
     );
 }
 
+/// Ordinary files beside a dotfile and a dot-directory.
+fn dotted() -> TempDir {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join(".hidden")).unwrap();
+    fs::write(root.path().join("top.md"), "top").unwrap();
+    fs::write(root.path().join(".dotfile"), "dot").unwrap();
+    fs::write(root.path().join(".hidden/x.md"), "x").unwrap();
+    root
+}
+
+#[test]
+fn a_double_star_hides_dot_named_files_and_directories() {
+    let dir = dotted();
+    let out = run(&dir, "SELECT path FROM './**'");
+
+    assert_eq!(paths(&out), vec!["top.md"]);
+}
+
+#[test]
+fn a_single_star_hides_dot_named_files() {
+    let dir = dotted();
+    let out = run(&dir, "SELECT path FROM './*'");
+
+    assert_eq!(paths(&out), vec!["top.md"]);
+}
+
+#[test]
+fn naming_a_dot_directory_with_a_glob_lists_beneath_it() {
+    let dir = dotted();
+    let out = run(&dir, "SELECT path FROM './.hidden/**'");
+
+    assert_eq!(paths(&out), vec![".hidden/x.md"]);
+}
+
+#[test]
+fn naming_a_dot_directory_lists_one_level() {
+    let dir = dotted();
+    let out = run(&dir, "SELECT path FROM './.hidden'");
+
+    assert_eq!(paths(&out), vec![".hidden/x.md"]);
+}
+
+#[test]
+fn naming_a_dotfile_lists_it() {
+    let dir = dotted();
+    let out = run(&dir, "SELECT path FROM './.dotfile'");
+
+    assert_eq!(paths(&out), vec![".dotfile"]);
+}
+
 fn braces() -> TempDir {
     let root = TempDir::new().unwrap();
     fs::create_dir_all(root.path().join("br")).unwrap();

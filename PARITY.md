@@ -312,6 +312,14 @@ names come from the SQLite authorizer at the final prepare, so the fallback
 loop above stays the only thing that registers a table. `StatementScope::warm`
 lives in the shared core; no SDK signature changes.
 
+**Content read ahead in parallel (#1241) — Rust-crate-only surface, no SDK
+drift.** A statement that names a path table's `content` has the column read
+for every row it selects at once, eight files at a time, before SQLite steps
+the first row; a statement that does not name it reads no file, as before. The
+read-ahead and the planner cost that keeps a content-bearing table on the
+scanned side of a join live in the shared core, so all three SDKs and the CLI
+inherit it with no per-binding surface and no signature changes.
+
 ## AsyncDirSQL
 
 | API                        | Python                                | Rust                                   |
@@ -546,6 +554,8 @@ incl. #313).
 | Quoted-identifier DDL registers/queries by bare name (#204) | Y | Y | Y |
 | Path-table query (`FROM './'`, glob scoping, zero-match rows, live re-scan, JOIN vs named) | Y (#629) | Y | Y (#629) |
 | Path-table directory name is one level; `**` descends (#1223) | Y | Y | Y |
+| Path-table dot-named entries hidden unless the path spells them (#1249) | Y | Y | Y |
+| Path-table symlinks followed as bash globstar follows them (#1256) | Y | Y | Y |
 | Path-table hidden `content` (excluded from `*`, selectable by name, non-UTF-8 → NULL) | Y (#629) | Y | Y (#629) |
 | Path-table error surface (`no such table` + `did you mean './…'?` hint reaches the caller; plain typo unchanged) | Y (#629) | Y | Y (#629) |
 

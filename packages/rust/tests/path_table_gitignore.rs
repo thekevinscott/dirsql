@@ -1,7 +1,7 @@
 //! Integration tests for gitignore-by-default in path-table scans: a
 //! `.gitignore` anywhere in the tree prunes the files it names below its own
 //! directory, hierarchically, like fd/ripgrep — with no `.git` directory
-//! required. Hidden files stay scanned (deliberate divergence from fd/rg).
+//! required. Dot-named entries are hidden unless the path spells them.
 //! Real filesystem, real SQLite, SDK public API.
 
 use std::fs;
@@ -120,20 +120,55 @@ fn a_nested_gitignore_does_not_reach_outside_its_directory() {
 }
 
 #[test]
-fn hidden_files_are_still_scanned() {
+fn dot_named_entries_are_hidden_from_a_recursive_scan() {
     let root = fixture();
     let db = open(&root);
 
     let scanned = paths(&db.query("SELECT path FROM './**'").unwrap());
 
     assert!(
-        scanned.contains(&".env".to_string()),
-        "dotfiles are first-class in dirsql (no fd/rg hidden-skip), got: {scanned:?}"
+        !scanned.contains(&".env".to_string()),
+        "a dotfile the path does not spell is hidden, got: {scanned:?}"
     );
     assert!(
-        scanned.contains(&".hidden/secret.txt".to_string()),
-        "dot-directories must still be walked, got: {scanned:?}"
+        !scanned.contains(&".hidden/secret.txt".to_string()),
+        "a dot-directory the path does not spell is not walked, got: {scanned:?}"
     );
+    assert!(
+        !scanned.contains(&".gitignore".to_string()),
+        "the .gitignore file itself is a dotfile, got: {scanned:?}"
+    );
+}
+
+#[test]
+fn dot_named_entries_stay_hidden_without_gitignore_respect() {
+    let root = fixture();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .no_ignore(true)
+        .build()
+        .unwrap();
+
+    let scanned = paths(&db.query("SELECT path FROM './**'").unwrap());
+
+    assert!(
+        scanned.contains(&"dist/bundle.js".to_string()),
+        "no_ignore restores gitignored files, got: {scanned:?}"
+    );
+    assert!(
+        !scanned.contains(&".env".to_string()),
+        "dotfile hiding is independent of no_ignore, got: {scanned:?}"
+    );
+}
+
+#[test]
+fn spelling_a_dot_directory_scans_it() {
+    let root = fixture();
+    let db = open(&root);
+
+    let scanned = paths(&db.query("SELECT path FROM './.hidden/*'").unwrap());
+
+    assert_eq!(scanned, vec![".hidden/secret.txt"]);
 }
 
 #[test]
