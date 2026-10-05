@@ -32,3 +32,7 @@ def test_preflight_is_registered():
 
 def test_release_globs_is_registered():
     assert "release-globs" in main.commands
+
+
+def test_npm_addon_version_is_registered():
+    assert "npm-addon-version" in main.commands

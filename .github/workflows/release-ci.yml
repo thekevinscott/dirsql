@@ -125,3 +125,33 @@ jobs:
 
       - name: Probe extension loading through the installed wheel
         run: uv run --project internals/checks dirsql-checks wheel-extension-load --dist-dir dist/
+
+  # Every other tier builds the addon from the committed manifests, so only
+  # the release-shape build can show whether the planned version reached the
+  # crate the CLI reads its `--version` from. Skips cleanly when the plan
+  # built no dirsql-npm addon for this PR.
+  npm-addon-version:
+    name: npm addon version probe
+    needs: precheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: dirsql-npm-linux-x64-gnu
+          path: dist/
+          merge-multiple: true
+
+      - name: Install Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Assert the addon's CLI reports the stamped release version
+        run: uv run --project internals/checks dirsql-checks npm-addon-version --dist-dir dist/
