@@ -292,10 +292,25 @@ filter what lies beneath it.
 
 ### Hidden files
 
-Dotfiles are ordinary files: `'./'` and `'./*'` include them, with or without
-`--no-ignore`. This is a deliberate divergence from fd/ripgrep — querying
-dotfile directories (`.claude/`, …) is a first-class `dirsql` use case. Add an
-`ignore` pattern if you would rather not see them.
+A path component starting with `.` is skipped unless the path spells it, the
+rule `ls` and `fd` use. `'./'` and `'./**'` skip `.gitignore`, `.env` and
+everything under `.claude/`; naming the component lists it:
+
+| You write | dirsql scans |
+| --- | --- |
+| `'./**'` | every file, skipping dot-named files and directories at any depth |
+| `'./.claude'`, `'./.claude/**'` | the files under `.claude/` |
+| `'./.env'` | that one file |
+| `'./**/.env'` | every `.env` whose parent directories are not themselves dot-named |
+| `'~/.claude/projects/*/*.jsonl'` | the walk starts inside `.claude/`, so nothing there is hidden |
+
+A spelled component may be a glob of its own: `'./.env*'` lists `.env.local`,
+and `'./.*'` lists every dot-named entry one level down. A dot component the
+path does not spell stays hidden however deep the scan goes, so
+`'./.claude/**'` lists `.claude/sub/notes.md` but not `.claude/sub/.cache/x`.
+
+This is independent of `.gitignore`: [`--no-ignore`](./cli.md#flags) restores
+gitignored files and leaves dot-named entries hidden.
 
 ## Joining against declared tables
 
