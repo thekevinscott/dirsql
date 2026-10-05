@@ -44,13 +44,7 @@ Do **NOT** hardcode `/home/duncan/...`. Use `$PWD` or the actual sandbox root (e
 - TypeScript: `pnpm --dir packages/ts run <script>`.
 - Rust: `cargo test --workspace --features cli` (plain `cargo test --workspace` skips the feature-gated CLI e2e tests); `cargo bench -p dirsql` for benches.
 
-The testing-conventions gates are the trap here: `pip install testing-conventions` cannot build in the sandbox, so `uvx testing-conventions <gate>` is the natural reach -- and for the **python mutation** gate it is wrong. `uvx` runs the tool from its own environment, so cosmic-ray's `python3 -m pytest` resolves to an interpreter with no pytest instead of `packages/python/.venv`, and the gate dies on a baseline failure that names no cause (#706). Run that one through the project venv instead:
-
-```bash
-cd packages/python && uv run --with testing-conventions testing-conventions unit mutation --language python --base origin/main --config testing-conventions.toml dirsql
-```
-
-`uvx` is fine for the gates that do not execute the python suite (`unit colocated-test`, `unit lint`, `e2e verify`, `e2e attest`). Full detail: `agents/reference/testing-gates.md`.
+`pip install testing-conventions` cannot build in the sandbox, so use `uvx testing-conventions <gate>` for the gates that do not execute the python suite (`unit colocated-test`, `unit lint`, `e2e verify`, `e2e attest`). Never run the mutation gate here (AGENTS.md rule 4); CI runs it. Full detail: `agents/reference/testing-gates.md`.
 
 ## E2E suites
 
