@@ -686,6 +686,22 @@ mod tests {
     }
 
     #[test]
+    fn kind_of_takes_a_directory_and_a_file_as_they_were_seen() {
+        let dir = Path::new("/no/such/dir");
+        let name = OsStr::new("entry");
+        assert_eq!(kind_of(dir, name, Seen::Dir, true), Some(Kind::Dir));
+        assert_eq!(kind_of(dir, name, Seen::File, true), Some(Kind::File));
+    }
+
+    #[test]
+    fn kind_of_drops_a_device_and_an_unfollowed_link() {
+        let dir = Path::new("/no/such/dir");
+        let name = OsStr::new("entry");
+        assert_eq!(kind_of(dir, name, Seen::Other, true), None);
+        assert_eq!(kind_of(dir, name, Seen::Link, false), None);
+    }
+
+    #[test]
     fn is_reserved_dir_matches_top_level_dirsql() {
         assert!(is_reserved_dir(1, true, OsStr::new(RESERVED_DIR)));
     }

@@ -87,7 +87,15 @@ impl Listing {
     }
 
     pub(crate) fn sort(&mut self) {
-        self.entries.sort_by_key(|listed| listed.prefix);
+        let mut entries = std::mem::take(&mut self.entries);
+        // Comparing a leading word first keeps most comparisons out of the
+        // name buffer, which is most of the sort's cost in a large directory.
+        entries.sort_unstable_by(|a, b| {
+            a.prefix
+                .cmp(&b.prefix)
+                .then_with(|| self.name(a).cmp(self.name(b)))
+        });
+        self.entries = entries;
     }
 }
 
