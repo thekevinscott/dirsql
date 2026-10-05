@@ -109,3 +109,20 @@ fn no_ignore_works_in_the_default_query_mode() {
         "the bare `dirsql \"<sql>\"` form takes --no-ignore too, got: {names:?}"
     );
 }
+
+#[test]
+fn a_root_gitignore_applies_to_a_scan_started_below_it() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join("docs")).unwrap();
+    fs::write(dir.path().join(".gitignore"), "*.log\n").unwrap();
+    fs::write(dir.path().join("docs/a.md"), "a").unwrap();
+    fs::write(dir.path().join("docs/z.log"), "log").unwrap();
+
+    let out = run(&dir, &["query", "SELECT basename FROM './docs/*'"]);
+
+    assert_eq!(
+        basenames(&out),
+        vec!["a.md"],
+        "the root `*.log` rule hides docs/z.log, as it does under './**'"
+    );
+}

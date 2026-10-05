@@ -196,7 +196,7 @@ fn a_scoped_glob_still_honors_gitignore_rules_beneath_its_base() {
 }
 
 #[test]
-fn a_gitignore_above_the_named_base_does_not_reach_beneath_it() {
+fn a_gitignore_above_the_named_base_applies_beneath_it() {
     let root = fixture();
     fs::create_dir_all(root.path().join("docs")).unwrap();
     fs::write(root.path().join("docs/a.md"), "a").unwrap();
@@ -207,7 +207,49 @@ fn a_gitignore_above_the_named_base_does_not_reach_beneath_it() {
 
     assert_eq!(
         scanned,
-        vec!["docs/a.md", "docs/trace.log"],
-        "the root `*.log` rule is above the named base, so it does not apply there"
+        vec!["docs/a.md"],
+        "the root `*.log` rule applies however the path is spelled"
+    );
+}
+
+#[test]
+fn a_repo_root_gitignore_above_the_index_root_applies() {
+    let repo = TempDir::new().unwrap();
+    fs::create_dir_all(repo.path().join(".git")).unwrap();
+    fs::create_dir_all(repo.path().join("sub")).unwrap();
+    fs::write(repo.path().join(".gitignore"), "*.log\n").unwrap();
+    fs::write(repo.path().join("sub/a.md"), "a").unwrap();
+    fs::write(repo.path().join("sub/z.log"), "log").unwrap();
+    let db = DirSQL::builder()
+        .root(repo.path().join("sub"))
+        .build()
+        .unwrap();
+
+    let scanned = paths(&db.query("SELECT path FROM './*'").unwrap());
+
+    assert_eq!(
+        scanned,
+        vec!["a.md"],
+        "git applies every .gitignore from the repo root down"
+    );
+}
+
+#[test]
+fn a_gitignore_above_the_repo_root_does_not_apply() {
+    let outer = TempDir::new().unwrap();
+    fs::create_dir_all(outer.path().join("repo/.git")).unwrap();
+    fs::write(outer.path().join(".gitignore"), "*.log\n").unwrap();
+    fs::write(outer.path().join("repo/z.log"), "log").unwrap();
+    let db = DirSQL::builder()
+        .root(outer.path().join("repo"))
+        .build()
+        .unwrap();
+
+    let scanned = paths(&db.query("SELECT path FROM './*'").unwrap());
+
+    assert_eq!(
+        scanned,
+        vec!["z.log"],
+        "git reads no .gitignore above the repo root"
     );
 }
