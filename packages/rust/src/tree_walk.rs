@@ -211,7 +211,11 @@ mod tests {
 
     #[test]
     fn sibling_directories_are_explored_on_more_than_one_thread() {
-        let tree = explore_tree(4, 3);
+        assert!(threads_exploring(4, 3) > 1);
+    }
+
+    fn threads_exploring(fanout: usize, depth: usize) -> usize {
+        let tree = explore_tree(fanout, depth);
         let threads = Mutex::new(HashSet::new());
         let explore = |path: String| {
             threads.lock().unwrap().insert(thread::current().id());
@@ -219,6 +223,17 @@ mod tests {
             tree(path)
         };
         walk_in_order(String::from("r"), &explore, &mut |_| {});
-        assert!(threads.into_inner().unwrap().len() > 1);
+        threads.into_inner().unwrap().len()
+    }
+
+    #[test]
+    fn a_walk_of_few_directories_stays_on_the_calling_thread() {
+        assert_eq!(threads_exploring(3, 1), 1);
+    }
+
+    #[test]
+    fn a_walk_spawns_its_workers_once() {
+        let cores = thread::available_parallelism().map_or(1, usize::from);
+        assert!(threads_exploring(4, 3) <= cores);
     }
 }
