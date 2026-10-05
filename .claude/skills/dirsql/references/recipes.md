@@ -5,13 +5,13 @@ Every query here runs as written from the directory in question. Output is a JSO
 ## Largest files
 
 ```dirsql
-uvx dirsql "SELECT path, size FROM './' ORDER BY size DESC LIMIT 10" --format json
+uvx dirsql "SELECT path, size FROM './**' ORDER BY size DESC LIMIT 10" --format json
 ```
 
 ## Count and total size by extension
 
 ```dirsql
-uvx dirsql "SELECT ext, COUNT(*) AS files, SUM(size) AS bytes FROM './' GROUP BY ext ORDER BY files DESC" --format json
+uvx dirsql "SELECT ext, COUNT(*) AS files, SUM(size) AS bytes FROM './**' GROUP BY ext ORDER BY files DESC" --format json
 ```
 
 `ext` is `NULL` for files with no extension and keeps its case; group by `LOWER(ext)` to fold `JPG` into `jpg`.
@@ -19,7 +19,7 @@ uvx dirsql "SELECT ext, COUNT(*) AS files, SUM(size) AS bytes FROM './' GROUP BY
 ## Files per directory
 
 ```dirsql
-uvx dirsql "SELECT dir, COUNT(*) AS files FROM './' GROUP BY dir ORDER BY files DESC" --format json
+uvx dirsql "SELECT dir, COUNT(*) AS files FROM './**' GROUP BY dir ORDER BY files DESC" --format json
 ```
 
 `dir` is the empty string for files at the top level.
@@ -29,7 +29,7 @@ uvx dirsql "SELECT dir, COUNT(*) AS files FROM './' GROUP BY dir ORDER BY files 
 Not modified in the last 90 days:
 
 ```dirsql
-uvx dirsql "SELECT path, datetime(mtime, 'unixepoch') AS modified FROM './' WHERE mtime < strftime('%s', 'now') - 90 * 86400 ORDER BY mtime" --format json
+uvx dirsql "SELECT path, datetime(mtime, 'unixepoch') AS modified FROM './**' WHERE mtime < strftime('%s', 'now') - 90 * 86400 ORDER BY mtime" --format json
 ```
 
 Most recently modified markdown:

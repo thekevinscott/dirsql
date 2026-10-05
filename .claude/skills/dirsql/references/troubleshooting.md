@@ -34,12 +34,12 @@ One file in the glob is not valid JSON (an empty file counts), and that fails th
 uvx dirsql "SELECT path, content ->> 'name' AS name FROM './**/*.json' WHERE json_valid(content)" --format json
 ```
 
-## `no such table: files; did you mean FROM './'?`
+## `no such table: files; did you mean FROM './**'?`
 
-There is no implicit table. Query the directory directly:
+There is no implicit table. Query the tree directly:
 
 ```dirsql
-uvx dirsql "SELECT path FROM './'" --format json
+uvx dirsql "SELECT path FROM './**'" --format json
 ```
 
 ## Empty `[]` for files you can see
@@ -47,12 +47,12 @@ uvx dirsql "SELECT path FROM './'" --format json
 - The files are gitignored. `.gitignore` is respected by default; `--no-ignore` scans them:
 
   ```dirsql
-  uvx dirsql "SELECT path FROM './'" --format json --no-ignore
+  uvx dirsql "SELECT path FROM './**'" --format json --no-ignore
   ```
 
   Naming the directory outright also works: `'./build'` scans `build/` even when ignored.
 - The directory is `node_modules` or `.git`. Those are always skipped unless named outright.
-- You wrote `'./*'`, which is shallow. `'./'` is the recursive form.
+- You named a directory (`'./'`, `'./docs'`), which lists one level only. `'./**'` and `'./docs/**'` are the recursive forms.
 
 ## `table ./ may not be modified`
 

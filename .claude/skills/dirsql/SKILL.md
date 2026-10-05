@@ -8,7 +8,7 @@ description: Answer a question about a directory tree by writing SQL and running
 The current directory is a database. Nothing to install; run from the directory in question:
 
 ```dirsql
-uvx dirsql "SELECT basename, size FROM './' ORDER BY size DESC LIMIT 5" --format json
+uvx dirsql "SELECT basename, size FROM './**' ORDER BY size DESC LIMIT 5" --format json
 ```
 
 Always pass `--format json`. The default `auto` keys on stdout: a terminal gets a table, a pipe gets JSON, and you cannot know which you are. With it, stdout is one JSON array of row objects, every time. Errors go to stderr with exit `1`.
@@ -19,14 +19,15 @@ A quoted path stands in for a table name. Paths are relative to the directory yo
 
 | You write | dirsql scans |
 | --- | --- |
-| `'./'` | every file, recursively |
-| `'./docs'` | every file under `docs/`, recursively |
-| `'./*'` | files directly here, no deeper |
+| `'./'` | files directly here, no deeper |
+| `'./docs'` | files directly inside `docs/`, no deeper |
+| `'./**'` | every file, any depth |
+| `'./docs/**'` | every file under `docs/`, any depth |
 | `'./docs/*.md'` | markdown directly inside `docs/` |
 | `'./**/*.md'` | markdown at any depth |
 | `'./notes/today.md'` | that one file, one row |
 
-A directory name is recursive; `*` is the shallow form. `'/var/log/*.log'`, `'../notes'` and `'~/notes/*.md'` also resolve, and those report absolute `path` values.
+A directory name is one level, like `ls docs`; `*` matches one level and `**` any depth, as in the shell. To scan a whole tree, write `'./**'`. `'/var/log/*.log'`, `'../notes'` and `'~/notes/*.md'` also resolve, and those report absolute `path` values.
 
 ## Two things that break
 
