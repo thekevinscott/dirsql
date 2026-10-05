@@ -27,6 +27,13 @@ describe("withResolvedExtensions", () => {
     expect(resolveConfigsExtensionSpecs).not.toHaveBeenCalled();
   });
 
+  it("passes `context` through untouched without scanning or resolving", async () => {
+    const argv = ["context"];
+    expect(await withResolvedExtensions(argv)).toBe(argv);
+    expect(configPathsFromArgv).not.toHaveBeenCalled();
+    expect(resolveConfigsExtensionSpecs).not.toHaveBeenCalled();
+  });
+
   it("scans the whole argv for config paths", async () => {
     vi.mocked(resolveConfigsExtensionSpecs).mockReturnValue(null);
     const argv = ["query", "SELECT 1", "-c", "/frag/dirsql.toml"];

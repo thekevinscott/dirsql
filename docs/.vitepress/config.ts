@@ -5,6 +5,9 @@ export default defineConfig({
   description: 'Ephemeral SQL index over a local directory. Watches a filesystem, ingests structured files into an ephemeral SQLite database, and exposes a SQL query interface.',
   base: '/',
 
+  // The guide `dirsql context` prints, compiled into the binary; not site pages.
+  srcExclude: ['context/**'],
+
   // Vite blocks dev-server requests whose Host header isn't allowlisted, so
   // `pnpm dev --host` reached by a network hostname (e.g. a Tailscale
   // `*.ts.net` name) 400s. Allow extra hosts from the environment so a

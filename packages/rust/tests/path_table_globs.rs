@@ -117,6 +117,33 @@ fn a_double_star_scans_every_depth() {
 }
 
 #[test]
+fn a_trailing_slash_after_a_glob_lists_inside_each_matched_directory() {
+    let root = fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './*/'"),
+        vec!["docs/a.md", "docs/b.md", "skip/s.md"],
+        "'./*/' is `ls */`: the files directly inside each top-level directory"
+    );
+    assert_eq!(
+        paths(&db, "SELECT path FROM './*/'"),
+        paths(&db, "SELECT path FROM './*/*'"),
+    );
+}
+
+#[test]
+fn a_trailing_slash_after_a_double_star_is_the_same_as_the_double_star() {
+    let root = fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './**/'"),
+        paths(&db, "SELECT path FROM './**'"),
+    );
+}
+
+#[test]
 fn a_file_created_two_levels_down_does_not_join_a_one_level_table() {
     let root = fixture();
     let db = open(&root);
@@ -304,6 +331,35 @@ fn an_absolute_directory_path_lists_one_level() {
         vec![format!("{dir}/docs/a.md"), format!("{dir}/docs/b.md")],
         "an absolute directory is one level too"
     );
+}
+
+#[test]
+fn an_absolute_trailing_slash_after_a_glob_lists_inside_each_matched_directory() {
+    let root = fixture();
+    let db = open(&root);
+
+    let dir = reported(root.path());
+    let found = paths(&db, &format!("SELECT path FROM '{dir}/*/'"));
+
+    assert_eq!(
+        found,
+        vec![
+            format!("{dir}/docs/a.md"),
+            format!("{dir}/docs/b.md"),
+            format!("{dir}/skip/s.md"),
+        ],
+    );
+}
+
+#[test]
+fn a_parent_relative_trailing_slash_after_a_glob_lists_inside_each_matched_directory() {
+    let root = fixture();
+    let db = DirSQL::new(root.path().join("docs/nested"), vec![]).unwrap();
+
+    let dir = reported(root.path());
+    let found = paths(&db, "SELECT path FROM '../*/'");
+
+    assert_eq!(found, vec![format!("{dir}/docs/nested/deep.md")]);
 }
 
 #[test]
