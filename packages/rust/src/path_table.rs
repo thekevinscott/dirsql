@@ -338,6 +338,63 @@ mod tests {
     }
 
     #[test]
+    fn a_trailing_slash_after_a_glob_is_a_star_appended() {
+        let t = table("./*/", &everything_is_a_dir);
+        assert_eq!(t.root, Path::new(ROOT));
+        assert_eq!(t.glob, "*/*");
+        assert_eq!(t.path_prefix, "");
+    }
+
+    #[test]
+    fn a_trailing_slash_after_a_nested_glob_is_a_star_appended() {
+        let t = table("./docs/*/", &everything_is_a_dir);
+        assert_eq!(t.root, Path::new("/index/docs"));
+        assert_eq!(t.glob, "*/*");
+        assert_eq!(t.path_prefix, "docs");
+    }
+
+    #[test]
+    fn a_trailing_slash_after_a_double_star_is_a_star_appended() {
+        assert_eq!(table("./**/", &everything_is_a_dir).glob, "**/*");
+    }
+
+    #[test]
+    fn an_absolute_trailing_slash_after_a_glob_is_a_star_appended() {
+        let t = table("/var/*/", &nothing_is_a_dir);
+        assert_eq!(t.root, Path::new("/var"));
+        assert_eq!(t.glob, "*/*");
+    }
+
+    #[test]
+    fn a_parent_relative_trailing_slash_after_a_glob_is_a_star_appended() {
+        let t = table("../*/", &nothing_is_a_dir);
+        assert_eq!(t.root, Path::new("/"));
+        assert_eq!(t.glob, "*/*");
+    }
+
+    #[test]
+    fn a_home_relative_trailing_slash_after_a_glob_is_a_star_appended() {
+        let t = table("~/*/", &nothing_is_a_dir);
+        assert_eq!(t.root, Path::new("/home/u"));
+        assert_eq!(t.glob, "*/*");
+    }
+
+    #[test]
+    fn an_absolute_directory_with_a_trailing_slash_lists_one_level() {
+        let t = table("/var/log/", &everything_is_a_dir);
+        assert_eq!(t.root, Path::new("/var/log"));
+        assert_eq!(t.glob, "*");
+    }
+
+    #[test]
+    fn a_plain_identifier_with_a_trailing_slash_is_not_a_path() {
+        assert_eq!(
+            resolve_with("users/", &nothing_is_a_dir),
+            Resolution::NotAPath
+        );
+    }
+
+    #[test]
     fn an_explicit_star_is_the_same_as_the_bare_dot_slash() {
         assert_eq!(
             table("./*", &everything_is_a_dir),
@@ -615,6 +672,13 @@ mod tests {
             let t = table(r"C:\var\log", &everything_is_a_dir);
             assert_eq!(t.root, Path::new(r"C:\var\log"));
             assert_eq!(t.glob, "*");
+        }
+
+        #[test]
+        fn a_backslash_after_a_glob_is_a_star_appended() {
+            let t = table(r"C:\var\*\", &nothing_is_a_dir);
+            assert_eq!(t.root, Path::new(r"C:\var"));
+            assert_eq!(t.glob, "*/*");
         }
 
         #[test]
