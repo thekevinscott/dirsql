@@ -171,6 +171,10 @@ impl PathGlob {
         self.files.is_match(rel_path)
     }
 
+    fn has_components(&self) -> bool {
+        !self.components.is_empty()
+    }
+
     fn start(&self) -> Vec<usize> {
         self.closure(vec![0])
     }
@@ -361,10 +365,17 @@ impl Walk<'_> {
     }
 
     /// Whether the walk takes an entry given whether its path crosses a
-    /// followed symlink. Off a link the glob is judged on the whole path
-    /// afterwards; below one, only a path bash would also reach is taken.
+    /// followed symlink. Off a link a file is judged on the whole path
+    /// afterwards, and a directory is entered only while some component can
+    /// still enter it; below one, only a path bash would also reach is taken.
     fn follows(&self, linked: bool, states: &[usize], kind: Kind) -> bool {
-        !linked || self.glob.is_some_and(|glob| glob.reaches(states, kind))
+        match self.glob {
+            Some(glob) if linked || (kind == Kind::Dir && glob.has_components()) => {
+                glob.reaches(states, kind)
+            }
+            Some(_) => true,
+            None => !linked,
+        }
     }
 }
 
@@ -786,6 +797,34 @@ mod tests {
         assert!(walk.follows(true, &[2], Kind::File));
         assert!(!walk.follows(true, &[1], Kind::File));
         assert!(walk.follows(false, &[1], Kind::File));
+    }
+
+    #[test]
+    fn enters_a_real_directory_only_while_a_component_can_enter_it() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("*/x").unwrap();
+        let walk = Walk {
+            ignore: &ignore,
+            glob: Some(&glob),
+            gitignore: false,
+            frames: Vec::new(),
+        };
+        assert!(walk.follows(false, &[1], Kind::Dir));
+        assert!(!walk.follows(false, &[2], Kind::Dir));
+        assert!(!walk.follows(false, &[], Kind::Dir));
+    }
+
+    #[test]
+    fn enters_every_real_directory_when_the_glob_has_no_components() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("{a/b,c}").unwrap();
+        let walk = Walk {
+            ignore: &ignore,
+            glob: Some(&glob),
+            gitignore: false,
+            frames: Vec::new(),
+        };
+        assert!(walk.follows(false, &[], Kind::Dir));
     }
 
     #[test]
