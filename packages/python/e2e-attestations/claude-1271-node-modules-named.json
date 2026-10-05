@@ -1,7 +1,7 @@
 {
   "command": "just test-e2e",
-  "ran_at": 1791208195,
+  "ran_at": 1791224899,
   "exit_code": 0,
-  "commit": "98c65dbebb61c598e97af3fdaf6bc2b41ac6b0bf",
+  "commit": "e48a79c9fc67e5c2d69ec6c77116e5d2730684bb",
   "branch": "claude/1271-node-modules-named"
 }
