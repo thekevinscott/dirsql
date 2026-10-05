@@ -1,7 +1,7 @@
 {
   "command": "pnpm test:e2e",
-  "ran_at": 1791216276,
+  "ran_at": 1791224931,
   "exit_code": 0,
-  "commit": "86675043c73d6f45f6eba1c13bdf7ec04a49d5ce",
+  "commit": "64eda35efa62818c4b2f74f67c0fb80408465858",
   "branch": "claude/1267-posix-classes"
 }
