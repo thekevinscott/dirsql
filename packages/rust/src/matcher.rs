@@ -1,5 +1,73 @@
-use globset::{Glob, GlobBuilder, GlobSet, GlobSetBuilder};
+use globset::GlobBuilder;
+use regex::{Regex, RegexBuilder};
 use std::path::Path;
+
+#[derive(Debug, thiserror::Error)]
+pub enum GlobError {
+    #[error(transparent)]
+    Glob(#[from] globset::Error),
+    #[error(transparent)]
+    Regex(#[from] regex::Error),
+}
+
+/// A glob whose `?` and bracket expressions match one character, as bash
+/// does in a UTF-8 locale. globset parses the pattern, but its regex is
+/// byte-oriented, so it is recompiled in Unicode mode over the `/`-separated
+/// path text.
+#[derive(Debug)]
+pub(crate) struct Pattern(Regex);
+
+impl Pattern {
+    /// `*` and `?` stop at `/`; `**` crosses it.
+    pub(crate) fn new(glob: &str) -> Result<Self, GlobError> {
+        let glob = GlobBuilder::new(glob).literal_separator(true).build()?;
+        let regex = RegexBuilder::new(&unicode_regex(glob.regex()))
+            .dot_matches_new_line(true)
+            .build()?;
+        Ok(Self(regex))
+    }
+
+    pub(crate) fn is_match(&self, path: &Path) -> bool {
+        self.0.is_match(&crate::scanner::to_slash(path))
+    }
+}
+
+/// globset spells each non-ASCII character as the `\xNN` escapes of its UTF-8
+/// bytes, which in Unicode mode would name code points instead; decode each
+/// run back into the characters it encodes.
+fn unicode_regex(byte_regex: &str) -> String {
+    let body = byte_regex
+        .strip_prefix("(?-u)")
+        .unwrap_or(byte_regex)
+        .as_bytes();
+    let mut out = Vec::with_capacity(body.len());
+    let mut rest = body;
+    loop {
+        rest = match rest {
+            [b'\\', b'x', hi, lo, tail @ ..] => {
+                out.push(hex_byte([*hi, *lo]));
+                tail
+            }
+            [b'\\', escaped, tail @ ..] => {
+                out.extend([b'\\', *escaped]);
+                tail
+            }
+            [b, tail @ ..] => {
+                out.push(*b);
+                tail
+            }
+            [] => break,
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_byte(digits: [u8; 2]) -> u8 {
+    std::str::from_utf8(&digits)
+        .ok()
+        .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+        .unwrap_or_default()
+}
 
 /// Result of matching a file path against a glob pattern.
 #[derive(Debug, Clone, PartialEq)]
@@ -10,7 +78,7 @@ pub struct MatchResult {
 /// A compiled glob pattern. `{name}` placeholders are rewritten to `*` before
 /// compilation, so they are pure match wildcards.
 struct PatternEntry {
-    glob_set: GlobSet,
+    pattern: Pattern,
     table_name: String,
 }
 
@@ -21,8 +89,8 @@ struct PatternEntry {
 /// patterns are accepted and behave like `*`.
 pub struct TableMatcher {
     entries: Vec<PatternEntry>,
-    ignore_set: GlobSet,
-    ignore_dir_set: GlobSet,
+    ignore_set: Vec<Pattern>,
+    ignore_dir_set: Vec<Pattern>,
 }
 
 /// Byte spans of the `{name}` placeholders in `pattern`, in order: `(start,
@@ -83,40 +151,26 @@ fn glob_with_placeholders_as_star(pattern: &str) -> String {
     out
 }
 
-/// One glob rule on every surface: `*` and `?` stop at `/`, `**` crosses it,
-/// exactly as `scanner::compile_glob` reads a path-table.
-fn compile(pattern: &str) -> Result<Glob, globset::Error> {
-    GlobBuilder::new(pattern).literal_separator(true).build()
-}
-
 impl TableMatcher {
     /// Build a new matcher from (glob_pattern, table_name) pairs and ignore patterns.
     /// Glob patterns may contain `{name}` placeholders, which match like `*`.
-    pub fn new(
-        mappings: &[(&str, &str)],
-        ignore_patterns: &[&str],
-    ) -> Result<Self, globset::Error> {
+    pub fn new(mappings: &[(&str, &str)], ignore_patterns: &[&str]) -> Result<Self, GlobError> {
         let mut entries = Vec::new();
         for (pattern, table_name) in mappings {
-            let glob_pattern = glob_with_placeholders_as_star(pattern);
-            let mut builder = GlobSetBuilder::new();
-            builder.add(compile(&glob_pattern)?);
             entries.push(PatternEntry {
-                glob_set: builder.build()?,
+                pattern: Pattern::new(&glob_with_placeholders_as_star(pattern))?,
                 table_name: table_name.to_string(),
             });
         }
 
-        let mut ignore_builder = GlobSetBuilder::new();
-        let mut ignore_dir_builder = GlobSetBuilder::new();
+        let mut ignore_set = Vec::new();
+        let mut ignore_dir_set = Vec::new();
         for pattern in ignore_patterns {
-            ignore_builder.add(compile(pattern)?);
+            ignore_set.push(Pattern::new(pattern)?);
             if let Some(subtree) = pattern.strip_suffix("/**") {
-                ignore_dir_builder.add(compile(subtree)?);
+                ignore_dir_set.push(Pattern::new(subtree)?);
             }
         }
-        let ignore_set = ignore_builder.build()?;
-        let ignore_dir_set = ignore_dir_builder.build()?;
 
         Ok(Self {
             entries,
@@ -131,7 +185,7 @@ impl TableMatcher {
     pub fn match_all(&self, path: &Path) -> Vec<MatchResult> {
         self.entries
             .iter()
-            .filter(|entry| entry.glob_set.is_match(path))
+            .filter(|entry| entry.pattern.is_match(path))
             .map(|entry| MatchResult {
                 table_name: entry.table_name.clone(),
             })
@@ -140,14 +194,14 @@ impl TableMatcher {
 
     /// Returns true if the path matches any ignore pattern.
     pub fn is_ignored(&self, path: &Path) -> bool {
-        self.ignore_set.is_match(path)
+        self.ignore_set.iter().any(|p| p.is_match(path))
     }
 
     /// True when an ignore pattern covers the whole subtree beneath `dir`
     /// (the `<dir>/**` form), so a walk may skip the directory without
     /// reading it.
     pub(crate) fn is_ignored_dir(&self, dir: &Path) -> bool {
-        self.ignore_dir_set.is_match(dir)
+        self.ignore_dir_set.iter().any(|p| p.is_match(dir))
     }
 }
 
@@ -495,6 +549,25 @@ mod tests {
         let matcher = TableMatcher::new(&[("caf?.md", "t"), ("na??ve.txt", "u")], &[]).unwrap();
         assert_eq!(names(&matcher, "caf\u{e9}.md"), vec!["t"]);
         assert!(matcher.match_all(Path::new("na\u{ef}ve.txt")).is_empty());
+    }
+
+    #[test]
+    fn unicode_regex_decodes_byte_escapes_into_characters() {
+        assert_eq!(
+            unicode_regex(r"(?-u)^caf\xc3\xa9[\xc3\xa0-\xc3\xaa]$"),
+            "^café[à-ê]$"
+        );
+    }
+
+    #[test]
+    fn unicode_regex_keeps_an_escaped_backslash_before_an_x() {
+        assert_eq!(unicode_regex(r"(?-u)^\\x41\.md$"), r"^\\x41\.md$");
+    }
+
+    #[test]
+    fn a_pattern_too_large_for_a_unicode_regex_is_an_error() {
+        let err = Pattern::new(&"?".repeat(200_000)).unwrap_err();
+        assert!(matches!(err, GlobError::Regex(_)), "{err:?}");
     }
 
     #[test]

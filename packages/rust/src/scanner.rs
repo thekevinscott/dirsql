@@ -1,5 +1,4 @@
-use crate::matcher::TableMatcher;
-use globset::{GlobBuilder, GlobMatcher, GlobSet, GlobSetBuilder};
+use crate::matcher::{GlobError, Pattern, TableMatcher};
 use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::ffi::{OsStr, OsString};
@@ -149,14 +148,14 @@ fn is_wanted(glob: &PathGlob, ignore: &TableMatcher, rel_path: &Path) -> bool {
 /// bound.
 #[derive(Debug)]
 pub struct PathGlob {
-    files: GlobSet,
+    files: Pattern,
     components: Vec<Component>,
 }
 
 #[derive(Debug)]
 enum Component {
     AnyDepth,
-    Name(GlobMatcher),
+    Name(Pattern),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -183,7 +182,7 @@ impl PathGlob {
             match self.components.get(i) {
                 Some(Component::AnyDepth) if kind == Kind::LinkedDir => next.push(i + 1),
                 Some(Component::AnyDepth) => next.push(i),
-                Some(Component::Name(m)) if m.is_match(name) => next.push(i + 1),
+                Some(Component::Name(m)) if m.is_match(Path::new(name)) => next.push(i + 1),
                 _ => {}
             }
         }
@@ -222,17 +221,11 @@ impl PathGlob {
 /// `literal_separator` is what makes `*` mean *this directory only*: without
 /// it a lone `*` would cross `/` and the explicit non-recursive spelling would
 /// silently recurse. `**` still crosses separators.
-pub fn compile_glob(pattern: &str) -> Result<PathGlob, globset::Error> {
-    let mut files = GlobSetBuilder::new();
-    files.add(compile_component(pattern)?);
+pub fn compile_glob(pattern: &str) -> Result<PathGlob, GlobError> {
     Ok(PathGlob {
-        files: files.build()?,
+        files: Pattern::new(pattern)?,
         components: compile_components(pattern),
     })
-}
-
-fn compile_component(pattern: &str) -> Result<globset::Glob, globset::Error> {
-    GlobBuilder::new(pattern).literal_separator(true).build()
 }
 
 /// A pattern whose components do not compile on their own (an alternation
@@ -242,7 +235,7 @@ fn compile_components(pattern: &str) -> Vec<Component> {
         .split('/')
         .map(|c| match c {
             "**" => Ok(Component::AnyDepth),
-            _ => compile_component(c).map(|g| Component::Name(g.compile_matcher())),
+            _ => Pattern::new(c).map(Component::Name),
         })
         .collect::<Result<Vec<_>, _>>()
         .unwrap_or_default();
