@@ -263,6 +263,57 @@ fn naming_a_nested_skipped_directory_explicitly_still_scans_it() {
     );
 }
 
+fn nested_dependencies() -> TempDir {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("node_modules/pkg")).unwrap();
+    fs::create_dir_all(root.path().join("pkg/node_modules/dep")).unwrap();
+    fs::create_dir_all(root.path().join("src")).unwrap();
+    fs::write(root.path().join("node_modules/top.js"), "js").unwrap();
+    fs::write(root.path().join("node_modules/pkg/index.js"), "js").unwrap();
+    fs::write(root.path().join("pkg/node_modules/dep/i.js"), "js").unwrap();
+    fs::write(root.path().join("src/a.js"), "js").unwrap();
+    root
+}
+
+#[test]
+fn node_modules_named_after_a_globstar_is_scanned() {
+    let root = nested_dependencies();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './**/node_modules/**'"),
+        vec![
+            "node_modules/pkg/index.js",
+            "node_modules/top.js",
+            "pkg/node_modules/dep/i.js",
+        ],
+    );
+    assert_eq!(
+        paths(&db, "SELECT path FROM './**/node_modules/*/*'"),
+        vec!["node_modules/pkg/index.js", "pkg/node_modules/dep/i.js"],
+    );
+}
+
+#[test]
+fn node_modules_named_after_a_star_is_scanned() {
+    let root = nested_dependencies();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './*/node_modules/*/*'"),
+        vec!["pkg/node_modules/dep/i.js"],
+    );
+}
+
+#[test]
+fn node_modules_the_glob_does_not_name_stays_skipped() {
+    let root = nested_dependencies();
+    let db = open(&root);
+
+    assert_eq!(paths(&db, "SELECT path FROM './**'"), vec!["src/a.js"]);
+    assert_eq!(paths(&db, "SELECT path FROM './**/*.js'"), vec!["src/a.js"]);
+}
+
 #[test]
 fn configured_ignore_patterns_apply_to_a_path_table() {
     let root = fixture();
