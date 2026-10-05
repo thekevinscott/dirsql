@@ -63,8 +63,7 @@ struct ModuleArgs {
 fn parse_module_args(args: &[&[u8]]) -> Result<ModuleArgs> {
     let user_args = vtab_scaffold::user_args(args);
 
-    let [root, pattern, command, gitignore, index_root, ignore @ ..] = user_args.as_slice()
-    else {
+    let [root, pattern, command, gitignore, index_root, ignore @ ..] = user_args.as_slice() else {
         return Err(vtab_scaffold::arity_error(
             MODULE_NAME,
             FIXED_ARGS,

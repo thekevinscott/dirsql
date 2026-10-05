@@ -117,12 +117,10 @@ pub fn hash_file(path: &Path) -> io::Result<[u8; 32]> {
 
 /// Whether a cached entry still describes the live file.
 ///
-/// The racy-stat rule, in one place because both cache tiers (the declared
-/// tables' `_dirsql_files` and the parsed path-tables' row cache) must decide
-/// it identically: an unchanged stat tuple is trusted outright once the cache
-/// write is known to postdate the file's mtime, and hash-confirmed when it is
-/// not (the file could have changed within the same timestamp tick). A cached
-/// entry with no hash cannot be confirmed, so it is not trusted.
+/// The racy-stat rule: an unchanged stat tuple is trusted outright once the
+/// cache write is known to postdate the file's mtime, and hash-confirmed when
+/// it is not (the file could have changed within the same timestamp tick). A
+/// cached entry with no hash cannot be confirmed, so it is not trusted.
 ///
 /// `hash` is lazy: it is only called for entries inside the racy window, which
 /// is what keeps the common path free of file reads.
@@ -208,9 +206,8 @@ pub fn ensure_parent_dir(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Create the `_dirsql_meta`, `_dirsql_files` and `_dirsql_parsed_rows`
-/// sidecar tables (if they don't already exist). The parsed path-table's own
-/// table is created by the module that owns its shape.
+/// Create the `_dirsql_meta` and `_dirsql_files` sidecar tables (if they
+/// don't already exist).
 pub fn create_sidecar_tables(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS _dirsql_meta (
@@ -307,16 +304,13 @@ pub fn meta_is_compatible(
     true
 }
 
-/// The bookkeeping columns every cache tier stores per file, in the order
+/// The bookkeeping columns `_dirsql_files` stores per file, in the order
 /// [`read_cached_file_row`] expects them selected.
 pub const FILE_COLUMNS: &str =
     "rel_path, size, mtime_ns, ctime_ns, inode, dev, content_hash, snapshot_ns";
 
 /// Read one file's bookkeeping from a row whose first eight columns are
-/// [`FILE_COLUMNS`]. Shared so the declared-table index (`_dirsql_files`) and
-/// the parsed path-table row cache (`_dirsql_parsed_rows`) store and interpret
-/// a file's identity identically; each supplies its own `table_name` (the
-/// declared table, or the path-table's identity key).
+/// [`FILE_COLUMNS`].
 pub fn read_cached_file_row(
     row: &rusqlite::Row<'_>,
     table_name: &str,
