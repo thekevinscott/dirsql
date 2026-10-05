@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1791208404,
+  "exit_code": 0,
+  "commit": "e6dcbe0770d2d87d3a26d6318a4b1f716a677197",
+  "branch": "claude/1273-walk-prune"
+}
