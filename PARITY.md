@@ -540,6 +540,7 @@ incl. #313).
 | Path-table query (`FROM './'`, glob scoping, zero-match rows, live re-scan, JOIN vs named) | Y (#629) | Y | Y (#629) |
 | Path-table directory name is one level; `**` descends (#1223) | Y | Y | Y |
 | Path-table dot-named entries hidden unless the path spells them (#1249) | Y | Y | Y |
+| Path-table symlinks followed as bash globstar follows them (#1256) | Y | Y | Y |
 | Path-table hidden `content` (excluded from `*`, selectable by name, non-UTF-8 → NULL) | Y (#629) | Y | Y (#629) |
 | Path-table error surface (`no such table` + `did you mean './…'?` hint reaches the caller; plain typo unchanged) | Y (#629) | Y | Y (#629) |
 
@@ -579,7 +580,7 @@ incl. #313).
 |----------------------------|--------|------|------------|
 | Construct from config file | Y      | Y    | Y          |
 | Explicit root overrides config root | Y      | Y    | Y          |
-| One row per matched file; columns come from the `on-file` hook (core injects no stat columns — a declared column the hook omits is `NULL`) | Y | Y | Y |
+| Rows come from one `on-file` run per table over all matched files; columns are the hook's output (core injects no stat columns — a declared column the hook omits is `NULL`) | Y | Y | Y |
 | `{name}` glob placeholder colliding with a declared column errors at load | Y | Y | Y |
 | Config `[dirsql].ignore` respected | Y | Y | Y |
 | Multiple `[[table]]` entries | Y | Y | Y |

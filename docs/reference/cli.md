@@ -361,8 +361,9 @@ uses**, so behavior is identical to `POST /query` by construction:
 #### `--on-file <command>`
 
 Attach a parser to every [path-table](./path-tables.md#parsing-rows-with-on-file)
-in the query, so each matched file yields the rows the command prints (a JSON
-array of row objects) instead of the stat columns:
+in the query: the command runs once per path-table, with every matched file's
+path as a trailing argument, and the JSON array of row objects it prints
+replaces the stat columns:
 
 ```sh
 dirsql query "SELECT title, author FROM './posts/*.md'" \
@@ -371,17 +372,21 @@ dirsql query "SELECT title, author FROM './posts/*.md'" \
 
 The command follows the [`on-file` hook contract](./hooks.md#on-file) — argv
 splitting, the `{root}` placeholder, every matched path as a trailing
-argument, the failure semantics, and the timeout. The parser's output is the whole schema; the stat columns are not
-reachable on a parsed path-table. `--on-file` may be given **at most once** (a
-repeat is an error pointing at config files) and never touches config-declared
-tables. It is a `query`-only flag — server mode rejects it as an unknown
+argument, and the failure semantics — with one difference from the config
+key: there is no config file, so the command runs in the index root (the
+directory `dirsql query` was run in). The parser's output is the whole
+schema; the stat columns are not reachable on a parsed path-table.
+`--on-file` may be given **at most once** (a repeat is an error pointing at
+config files) and never touches config-declared tables. It is a `query`-only flag — server mode rejects it as an unknown
 argument. The command string is copy-paste identical to a `[[table]]`
 `on-file` key, so an inline parser graduates to a config file unchanged — see
 [Parse your files into columns](../howto/parse-files-into-columns.md).
 
 Errors print the same diagnostic the HTTP `{"error": …}` body carries —
-config failures, SQL errors, rejected reads, hook failures, timeouts — to
-stderr, with exit code `1`.
+config failures, SQL errors, rejected reads, hook failures — to stderr, with
+exit code `1`. A failed `on-file` command is a hook failure: nothing is
+printed on stdout, and the diagnostic carries the command's exit status and
+the tail of its stderr.
 
 #### `--format {auto,table,json}`
 
@@ -394,7 +399,7 @@ takes, with the same `auto` default. A one-shot query is usually piped, so
 | Code | Meaning |
 |---|---|
 | `0` | Query succeeded; rows printed on stdout. |
-| `1` | Any failure: config, SQL, rejected read, hook, or timeout. The diagnostic is on stderr. |
+| `1` | Any failure: config, SQL, rejected read, or a failed `on-file` command. The diagnostic is on stderr. |
 
 ## `dirsql init`
 
@@ -463,9 +468,9 @@ fragment is a launcher error naming the package — never a silent skip.
 ## Progress reporting
 
 Building the index over a large tree is not instant: the walk visits every
-file, then each matched file costs one `on-file` round trip plus whatever the
-table's `ddl` fires on insert. On a big corpus that is minutes. dirsql reports
-the two phases on **stderr** while they run:
+file, then each table runs its `on-file` command over all of its files, plus
+whatever the table's `ddl` fires on insert. On a big corpus that is minutes.
+dirsql reports the two phases on **stderr** while they run:
 
 ```
 dirsql: scanning 128413 files
