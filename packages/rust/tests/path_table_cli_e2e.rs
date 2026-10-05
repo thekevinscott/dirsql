@@ -291,3 +291,14 @@ fn an_ordinary_syntax_error_carries_no_quoting_hint() {
         "a syntax error with no path in it must stay unhinted, got: {stderr}"
     );
 }
+
+#[test]
+fn a_posix_character_class_matches_like_bash() {
+    let root = TempDir::new().unwrap();
+    for name in ["1.md", "5.md", "A.md", "b.md"] {
+        fs::write(root.path().join(name), name).unwrap();
+    }
+    let out = run(&root, "SELECT path FROM './[[:digit:]].md'");
+
+    assert_eq!(paths(&out), vec!["1.md", "5.md"]);
+}

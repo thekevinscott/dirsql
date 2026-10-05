@@ -500,4 +500,11 @@ mod tests {
                 .is_empty()
         );
     }
+
+    #[test]
+    fn a_posix_class_in_a_table_glob_matches_its_characters() {
+        let matcher = TableMatcher::new(&[("notes/[[:digit:]].md", "n")], &[]).unwrap();
+        assert_eq!(names(&matcher, "notes/7.md"), vec!["n"]);
+        assert!(matcher.match_all(Path::new("notes/x.md")).is_empty());
+    }
 }

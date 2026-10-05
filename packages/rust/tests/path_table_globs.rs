@@ -399,3 +399,62 @@ fn a_prefixed_glob_starts_its_walk_at_the_named_directory() {
         "the walk must begin at docs/, not list the index root"
     );
 }
+
+/// Names no two of which differ only by case, so the fixture holds on a
+/// case-insensitive filesystem.
+fn posix_class_fixture() -> TempDir {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("pc")).unwrap();
+    for name in ["1.md", "5.md", "A.md", "b.md", "README.MD", "_x.md"] {
+        fs::write(root.path().join("pc").join(name), name).unwrap();
+    }
+    root
+}
+
+#[test]
+fn a_digit_class_matches_each_digit() {
+    let root = posix_class_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './pc/[[:digit:]].md'"),
+        vec!["pc/1.md", "pc/5.md"]
+    );
+}
+
+#[test]
+fn an_upper_class_matches_each_uppercase_letter() {
+    let root = posix_class_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './pc/[[:upper:]]*'"),
+        vec!["pc/A.md", "pc/README.MD"]
+    );
+}
+
+#[test]
+fn a_negated_class_matches_everything_outside_it() {
+    let root = posix_class_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './pc/[![:digit:]].md'"),
+        vec!["pc/A.md", "pc/b.md"]
+    );
+}
+
+#[test]
+fn a_punct_class_never_matches_the_separator() {
+    let root = posix_class_fixture();
+    let db = open(&root);
+
+    assert_eq!(
+        paths(&db, "SELECT path FROM './pc[[:punct:]]*.md'"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        paths(&db, "SELECT path FROM './pc/[[:punct:]]*.md'"),
+        vec!["pc/_x.md"]
+    );
+}
