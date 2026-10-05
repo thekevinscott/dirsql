@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1791166584,
+  "exit_code": 0,
+  "commit": "009125bdab94f7f845df78b251328aa590fe75d9",
+  "branch": "claude/1249-dotfiles"
+}

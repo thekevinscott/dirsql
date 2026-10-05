@@ -54,6 +54,26 @@ def describe_path_tables():
         assert rows == []
 
     @pytest.mark.asyncio
+    async def it_hides_a_dotfile_the_path_does_not_spell(docs_dir, tmp_path):
+        (tmp_path / "docs" / ".draft.md").write_text("draft", encoding="utf-8")
+
+        rows = await _open(docs_dir).query("SELECT path FROM './docs/*'")
+
+        assert sorted(r["path"] for r in rows) == [
+            "docs/a.md",
+            "docs/b.md",
+            "docs/c.csv",
+        ]
+
+    @pytest.mark.asyncio
+    async def it_lists_a_dotfile_the_path_spells(docs_dir, tmp_path):
+        (tmp_path / "docs" / ".draft.md").write_text("draft", encoding="utf-8")
+
+        rows = await _open(docs_dir).query("SELECT path FROM './docs/.draft.md'")
+
+        assert [r["path"] for r in rows] == ["docs/.draft.md"]
+
+    @pytest.mark.asyncio
     async def it_scopes_the_scan_to_the_glob(docs_dir):
         rows = await _open(docs_dir).query("SELECT basename, size FROM './docs/*.md'")
 
