@@ -1439,6 +1439,65 @@ mod tests {
         );
     }
 
+    fn folded(db: &Db, sql: &str) -> (Vec<String>, Vec<Vec<Value>>) {
+        db.query_each(
+            sql,
+            |columns| (columns.to_vec(), Vec::new()),
+            |(_, rows), cells| rows.push(cells.to_vec()),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn query_each_folds_each_row_in_projection_order() {
+        let db = titled_docs(&["a", "b"]);
+
+        let (columns, rows) = folded(&db, "SELECT 7 AS n, title FROM docs ORDER BY title");
+
+        assert_eq!(columns, ["n", "title"]);
+        assert_eq!(
+            rows,
+            [
+                [Value::Integer(7), Value::Text("a".into())],
+                [Value::Integer(7), Value::Text("b".into())]
+            ]
+        );
+    }
+
+    #[test]
+    fn query_each_folds_the_rows_a_batched_function_serves() {
+        let mut db = titled_docs(&["a", "b"]);
+        let (worker, _) = functions::test_support::batched_worker(
+            "up",
+            8,
+            Arc::clone(&db.calls),
+            vec![r#"{"ok": "A"}"#, r#"{"results": [{"ok": "B"}]}"#],
+        );
+        db.register_batched_worker(worker, &[1]);
+
+        let (columns, rows) = folded(&db, "SELECT title, up(title) AS v FROM docs ORDER BY title");
+
+        assert_eq!(columns, ["title", "v"]);
+        assert_eq!(
+            rows,
+            [
+                [Value::Text("a".into()), Value::Text("A".into())],
+                [Value::Text("b".into()), Value::Text("B".into())]
+            ]
+        );
+    }
+
+    #[test]
+    fn query_each_refuses_a_write() {
+        let db = titled_docs(&["a"]);
+
+        let err = db
+            .query_each("DELETE FROM docs", |_| (), |_, _| {})
+            .unwrap_err();
+
+        assert!(matches!(err, DbError::WriteForbidden));
+    }
+
     /// A statement that never reaches the function asks the worker nothing
     /// and keeps its first run's rows.
     #[test]

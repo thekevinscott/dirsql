@@ -83,7 +83,10 @@ pub async fn execute_query(
 /// errors, with the rows written as JSON while SQLite yields them. The text
 /// is the `{value}\n` the CLI printed from [`execute_query`]'s array, held
 /// until the statement ends so a failing query still prints no rows.
-pub async fn execute_query_json(state: &AppState, raw_body: String) -> Result<Vec<u8>, QueryFailure> {
+pub async fn execute_query_json(
+    state: &AppState,
+    raw_body: String,
+) -> Result<Vec<u8>, QueryFailure> {
     let sql = parse_sql_body(&raw_body)?;
     let db = require_ready(state)?;
     let join = tokio::task::spawn_blocking(move || {

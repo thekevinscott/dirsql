@@ -38,11 +38,19 @@ pub(super) struct JsonRows {
 
 impl JsonRows {
     pub(super) fn new(columns: &[String]) -> Self {
-        let keys = columns
-            .iter()
-            .enumerate()
-            .map(|(i, name)| (json_bytes(name), i))
-            .collect();
+        // A name the projection repeats is one key, at its first position,
+        // holding its last cell, as a JSON object built cell by cell is.
+        let mut keys: Vec<(Vec<u8>, usize)> = Vec::new();
+        let mut firsts: Vec<&String> = Vec::new();
+        for (i, name) in columns.iter().enumerate() {
+            match firsts.iter().position(|first| *first == name) {
+                Some(at) => keys[at].1 = i,
+                None => {
+                    firsts.push(name);
+                    keys.push((json_bytes(name), i));
+                }
+            }
+        }
         Self {
             out: b"[".to_vec(),
             keys,
