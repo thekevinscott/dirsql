@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791165669,
+  "exit_code": 0,
+  "commit": "d2dd9d3e115e9f5cedb38f68b25c50f02ba78c44",
+  "branch": "claude/1249-dotfiles"
+}
