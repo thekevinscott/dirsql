@@ -66,7 +66,7 @@ use crate::persist::{
 };
 use crate::progress::Progress;
 use crate::scanner::scan_directory_reporting;
-use crate::watcher::{FileEvent, Watcher};
+use crate::watcher::{FileEvent, WatchScope, Watcher};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use std::collections::HashMap;
 use std::error::Error as StdError;
@@ -445,20 +445,20 @@ struct DirSqlInner {
     fs: Arc<dyn FileSystem>,
 }
 
-fn watch_roots(index_root: &Path, groups: &[AnchorGroup]) -> Vec<PathBuf> {
+fn watch_scopes(index_root: &Path, groups: &[AnchorGroup]) -> Vec<WatchScope> {
     if groups.is_empty() {
-        return vec![index_root.to_path_buf()];
+        return vec![WatchScope {
+            root: index_root.to_path_buf(),
+            ignore: TableMatcher::new(&[], &[]).expect("no patterns to compile"),
+        }];
     }
-    let mut roots: Vec<PathBuf> = Vec::new();
-    for group in groups {
-        let anchor = &group.watch_anchor;
-        if roots.iter().any(|kept| anchor.starts_with(kept)) {
-            continue;
-        }
-        roots.retain(|kept| !kept.starts_with(anchor));
-        roots.push(anchor.clone());
-    }
-    roots
+    groups
+        .iter()
+        .map(|group| WatchScope {
+            root: group.watch_anchor.clone(),
+            ignore: group.matcher.clone(),
+        })
+        .collect()
 }
 
 /// The tables sharing one anchor, matched against paths relative to it.
@@ -597,17 +597,17 @@ impl DirSQL {
         if guard.is_none() {
             // Watch the canonicalized anchors, never the (possibly relative)
             // user-supplied ones — `notify` misbehaves on relative paths.
-            let watcher = Watcher::over(&self.watch_roots()).map_err(DirSqlError::watch)?;
+            let watcher = Watcher::scoped(self.watch_scopes()).map_err(DirSqlError::watch)?;
             *guard = Some(watcher);
         }
         Ok(())
     }
 
-    /// The directories the live watcher must cover: each table anchor, minus
-    /// any already inside another's recursive watch. A build with no tables
-    /// still watches the index root.
-    fn watch_roots(&self) -> Vec<PathBuf> {
-        watch_roots(&self.inner.watch_root, &self.inner.groups)
+    /// The trees the live watcher must cover: each table anchor, under the
+    /// skip rules its tables' scan applies. A build with no tables still
+    /// watches the index root.
+    fn watch_scopes(&self) -> Vec<WatchScope> {
+        watch_scopes(&self.inner.watch_root, &self.inner.groups)
     }
 
     /// Poll-based watch API. Blocks up to `timeout` waiting for the next
@@ -5558,14 +5558,19 @@ mod internal_tests {
         assert_eq!(hits[0].1, PathBuf::from("/elsewhere/x.txt"));
     }
 
-    fn roots_for(anchors: &[&str]) -> Vec<PathBuf> {
+    fn scopes_for(anchors: &[&str], ignore: &[&str]) -> Vec<WatchScope> {
         let tables: Vec<Table> = anchors
             .iter()
             .enumerate()
             .map(|(i, anchor)| anchored_table(&format!("t{i}"), "*.txt", anchor))
             .collect();
-        let (groups, _, _) = compile_groups(&tables, &[], Path::new("/idx")).unwrap();
-        watch_roots(Path::new("/canonical-idx"), &groups)
+        let ignore: Vec<String> = ignore.iter().map(|p| p.to_string()).collect();
+        let (groups, _, _) = compile_groups(&tables, &ignore, Path::new("/idx")).unwrap();
+        watch_scopes(Path::new("/canonical-idx"), &groups)
+    }
+
+    fn roots(scopes: &[WatchScope]) -> Vec<PathBuf> {
+        scopes.iter().map(|scope| scope.root.clone()).collect()
     }
 
     #[test]
@@ -5573,36 +5578,27 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let db = populated_db(dir.path(), "**/*.txt", &["a.txt"]);
 
-        assert_eq!(db.watch_roots(), vec![db.inner.watch_root.clone()]);
-        assert!(!db.watch_roots().is_empty());
+        assert_eq!(roots(&db.watch_scopes()), vec![db.inner.watch_root.clone()]);
     }
 
     #[test]
-    fn watch_roots_without_tables_is_the_index_root() {
-        assert_eq!(roots_for(&[]), vec![PathBuf::from("/canonical-idx")]);
+    fn watch_scopes_without_tables_is_the_whole_index_root() {
+        let scopes = scopes_for(&[], &[]);
+        assert_eq!(roots(&scopes), vec![PathBuf::from("/canonical-idx")]);
+        assert!(!scopes[0].ignore.is_ignored_dir(Path::new("node_modules")));
     }
 
     #[test]
-    fn watch_roots_lists_each_distinct_anchor() {
+    fn watch_scopes_lists_each_anchor_under_its_skip_rules() {
+        let scopes = scopes_for(&["/one", "/one/deep"], &["node_modules/**"]);
         assert_eq!(
-            roots_for(&["/one", "/two"]),
-            vec![PathBuf::from("/one"), PathBuf::from("/two")]
+            roots(&scopes),
+            vec![PathBuf::from("/one"), PathBuf::from("/one/deep")]
         );
-    }
-
-    #[test]
-    fn watch_roots_drops_an_anchor_inside_an_earlier_one() {
-        assert_eq!(
-            roots_for(&["/one", "/one/deep"]),
-            vec![PathBuf::from("/one")]
-        );
-    }
-
-    #[test]
-    fn watch_roots_replaces_an_anchor_with_the_enclosing_later_one() {
-        assert_eq!(
-            roots_for(&["/one/deep", "/one"]),
-            vec![PathBuf::from("/one")]
+        assert!(
+            scopes
+                .iter()
+                .all(|scope| scope.ignore.is_ignored_dir(Path::new("node_modules")))
         );
     }
 }
