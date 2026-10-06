@@ -76,6 +76,7 @@ export default defineConfig({
             { text: 'Command Hooks', link: '/reference/hooks' },
             { text: 'Columns', link: '/reference/columns' },
             { text: 'Path-tables', link: '/reference/path-tables' },
+            { text: 'Globs', link: '/reference/glob' },
             { text: 'HTTP API', link: '/reference/http-api' },
             { text: 'SDK', link: '/reference/sdk' }
           ]

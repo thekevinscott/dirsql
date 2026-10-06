@@ -119,17 +119,19 @@ A test runs every row against dirsql as a path-table and, with the leading
 
 ## Where the glob is anchored
 
-A path-table pattern is relative to the index root. A config `[[table]] glob`
+A path-table pattern is relative to the index root and starts with `./`. A config `[[table]] glob`
 is relative to the directory holding its config file, whatever directory you
-run `dirsql` from. A config table whose glob matches no files prints
+run `dirsql` from, and is written without the `./`: `./docs/*.md` in a path-table
+is `glob = "docs/*.md"` in a config. A config table whose glob matches no files prints
 `dirsql: table 'name': glob 'pattern' matched no files under <anchor>` to
 stderr; the exit code is unchanged. Path-tables never warn.
 
 ## Edge cases
 
-- `{` , `}` or `[` with no partner is a literal character.
+- A `{`, `}` or `[` with no partner is a literal character.
 - A brace group with no comma and no `..` is literal (`{q}`); `{1..3}` and
-  `{a..c}` expand.
+  `{a..c}` expand, as do zero-padded
+  `{01..10}` and stepped `{1..10..2}` ranges. Groups nest.
 - `\[` is a literal bracket.
 - A dot-named file or directory is listed only where a component spells the
   dot at that depth: `./**/.*` finds `docs/.draft.md` but does not enter
