@@ -33,6 +33,8 @@ Agent skill, for Claude Code, Codex, Cursor, Gemini CLI and others:
 npx skills add thekevinscott/dirsql
 ```
 
+See [Give your coding agent the `dirsql` skill](docs/howto/agent-skill.md).
+
 > The npm CLI requires **Node ≥ 20.11**.
 >
 > Supported on Linux, macOS, and Windows (x64). CI runs the Rust test suite on Linux and Windows; the macOS artifacts are built but not tested in CI.

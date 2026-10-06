@@ -17,14 +17,17 @@ const ROUNDS: usize = 4;
 /// A tree whose walk costs CPU rather than disk: every directory carries a
 /// `.gitignore` the walker compiles on entry (`.git` puts them in force), so a
 /// scan takes the same time whether or not the page cache already holds the
-/// tree.
+/// tree. Each directory nests in the one before, so no one walk has two
+/// directories to read at once and only walking both trees together can
+/// overlap.
 fn tree(root: &Path, name: &str) {
     fs::create_dir_all(root.join(".git")).unwrap();
     let ignore: String = (0..PATTERNS)
         .map(|i| format!("build-{i}/**/*.tmp\n"))
         .collect();
-    for i in 0..DIRS {
-        let dir = root.join(name).join(format!("d{i:05}"));
+    let mut dir = root.join(name);
+    for _ in 0..DIRS {
+        dir.push("d");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(".gitignore"), &ignore).unwrap();
         fs::write(dir.join("f.txt"), "x").unwrap();

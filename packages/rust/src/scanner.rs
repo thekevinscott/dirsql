@@ -1,9 +1,13 @@
+use crate::listing::{Listing, Seen};
 use crate::matcher::{GlobError, Pattern, TableMatcher};
+use crate::tree_walk::{Step, walk_in_order};
 use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
-use std::ffi::{OsStr, OsString};
-use std::fs::{self, DirEntry};
+use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::thread;
 
 /// Top-level directory name reserved for `dirsql`'s own metadata (e.g. the
 /// persistent cache database). Always excluded from the scan, regardless of
@@ -73,25 +77,27 @@ fn scan_below(
 
     // Match against relative path so globs like "comments/**/*.jsonl" work
     // regardless of the absolute root directory.
+    let walker = Walk {
+        ignore: matcher,
+        glob: None,
+        gitignore: false,
+        in_repo: false,
+        frames: Vec::new(),
+    };
     walk(
         root,
         start,
-        matcher,
-        None,
-        false,
-        None,
-        &mut |rel_path, entry| {
-            if matcher.is_ignored(&rel_path) {
-                return;
-            }
-
+        walker,
+        &|rel_path| !matcher.is_ignored(rel_path),
+        &mut |rel_path, dir| {
             seen += 1;
             on_file(seen);
 
             // Fan-out: a file matching N tables' globs yields N (path, table)
             // pairs, one per matching table, in declaration order.
+            let path = dir.join(rel_path.file_name().unwrap_or_default());
             for m in matcher.match_all(&rel_path) {
-                results.push((entry.path(), m.table_name));
+                results.push((path.clone(), m.table_name));
             }
         },
     );
@@ -132,20 +138,20 @@ pub fn scan_glob(
     } else {
         None
     };
-    let repo_frames = repo.map(|top| gitignores_above(root, top));
+    let walker = Walk {
+        ignore,
+        glob: Some(glob),
+        gitignore,
+        in_repo: repo.is_some(),
+        frames: repo.map_or_else(Vec::new, |top| gitignores_above(root, top, &load_gitignore)),
+    };
     let mut results = Vec::new();
     walk(
         root,
         root,
-        ignore,
-        Some(glob),
-        gitignore,
-        repo_frames,
-        &mut |rel_path, _| {
-            if is_wanted(glob, ignore, &rel_path) {
-                results.push(rel_path);
-            }
-        },
+        walker,
+        &|rel_path| is_wanted(glob, ignore, rel_path),
+        &mut |rel_path, _| results.push(rel_path),
     );
     results
 }
@@ -325,42 +331,123 @@ pub(crate) fn parse_gitignore_arg(arg: &str) -> Result<bool, String> {
     }
 }
 
-/// The shared traversal: every file under `start`, visited with its
-/// `root`-relative path, siblings in name order, so the whole walk comes out
-/// in path order without a sort at the end. Prunes the reserved top-level
-/// `.dirsql/` subtree and any directory the skip rules ignore wholesale, so an
-/// ignored tree is never read at all. With `glob` given, a dot-named entry it
-/// does not spell is skipped; `None` admits them all. With `gitignore` set,
-/// entries a `.gitignore` in force ignores are pruned/skipped too, starting
-/// from `repo_frames`: the ones in force above `start` when a repo encloses
-/// it, `None` when none does. Inside a directory holding `.git`, its
-/// `.gitignore` files apply. Symlinks are followed only as `glob` allows, and
-/// not at all without one; a broken link or an unreadable directory
-/// contributes nothing.
+/// The shared traversal: every file under `start` that `keep` takes, visited
+/// with its `root`-relative path and its directory, siblings in name order,
+/// so the whole walk comes out in path order without a sort at the end.
+/// Directories are read on spare cores ahead of the visiting. Prunes the
+/// reserved top-level `.dirsql/` subtree and any directory the skip rules
+/// ignore wholesale, so an ignored tree is never read at all. With a glob, a
+/// dot-named entry it does not spell is skipped; without one all are
+/// admitted. With `gitignore` set, entries a `.gitignore` in force ignores
+/// are pruned/skipped too, starting from the walker's frames: the ones in
+/// force above `start` when a repo encloses it. Inside a directory holding
+/// `.git`, its `.gitignore` files apply. Symlinks are followed only as the
+/// glob allows, and not at all without one; a broken link or an unreadable
+/// directory contributes nothing.
 fn walk(
     root: &Path,
     start: &Path,
-    ignore: &TableMatcher,
-    glob: Option<&PathGlob>,
-    gitignore: bool,
-    repo_frames: Option<Vec<Gitignore>>,
-    visit: &mut dyn FnMut(PathBuf, &DirEntry),
+    walker: Walk<'_>,
+    keep: &(dyn Fn(&Path) -> bool + Sync),
+    visit: &mut dyn FnMut(PathBuf, &Path),
 ) {
     let rel = start.strip_prefix(root).unwrap_or(start);
-    // Depth below `root`, not below `start`: the reserved-directory rule is
-    // about the tree's top level wherever the walk begins.
-    let depth = rel.components().count();
-    let mut walk = Walk {
-        ignore,
-        glob,
-        gitignore,
-        in_repo: repo_frames.is_some(),
-        frames: repo_frames.unwrap_or_default(),
+    let states = walker.glob.map_or_else(Vec::new, PathGlob::start);
+    let place = Place {
+        walk: walker,
+        dir: start.to_path_buf(),
+        rel: rel.to_path_buf(),
+        // Depth below `root`, not below `start`: the reserved-directory rule
+        // is about the tree's top level wherever the walk begins.
+        depth: rel.components().count(),
+        states,
+        linked: false,
     };
-    let states = glob.map_or_else(Vec::new, PathGlob::start);
-    walk.descend(start, rel, depth, &states, false, visit);
+    walk_in_order(
+        Box::new(place),
+        &|place: Box<Place<'_>>| (*place).explore(keep),
+        &mut |(rel, dir)| {
+            visit(rel, &dir);
+        },
+    );
 }
 
+/// A directory the walk enters, and how it got there: the glob `states`
+/// it is entered with, and `linked` as whether its path crosses a followed
+/// symlink.
+struct Place<'a> {
+    walk: Walk<'a>,
+    dir: PathBuf,
+    rel: PathBuf,
+    depth: usize,
+    states: Vec<usize>,
+    linked: bool,
+}
+
+type Found = (PathBuf, Arc<Path>);
+
+impl<'a> Place<'a> {
+    /// The directory's entries in walk order: each file `keep` takes, and
+    /// each directory to enter.
+    fn explore(self, keep: &(dyn Fn(&Path) -> bool + Sync)) -> Vec<Step<Box<Place<'a>>, Found>> {
+        let Place {
+            mut walk,
+            dir,
+            rel,
+            depth,
+            states,
+            linked,
+        } = self;
+        if walk.gitignore && holds_git(&dir) {
+            walk.in_repo = true;
+            walk.frames.clear();
+        }
+        if walk.in_repo
+            && let Some(matcher) = load_gitignore(&dir)
+        {
+            walk.frames.push(Arc::new(matcher));
+        }
+        let listing = Listing::read(&dir);
+        let taken = judge_all(listing.entries(), &|listed| {
+            walk.take(
+                &dir,
+                listing.name(listed),
+                listed.seen,
+                &rel,
+                depth + 1,
+                &states,
+                linked,
+            )
+            .filter(|taken| match taken {
+                Taken::File(child) => keep(child),
+                Taken::Dir { .. } => true,
+            })
+        });
+        let dir: Arc<Path> = Arc::from(dir);
+        listing
+            .entries()
+            .iter()
+            .zip(taken)
+            .filter_map(|(listed, taken)| match taken? {
+                Taken::Dir {
+                    child,
+                    next,
+                    linked,
+                } => Some(Step::Dir(Box::new(Place {
+                    walk: walk.clone(),
+                    dir: dir.join(listing.name(listed)),
+                    rel: child,
+                    depth: depth + 1,
+                    states: next,
+                    linked,
+                }))),
+                Taken::File(child) => Some(Step::Leaf((child, Arc::clone(&dir)))),
+            })
+            .collect()
+    }
+}
+
+#[derive(Clone)]
 struct Walk<'a> {
     ignore: &'a TableMatcher,
     glob: Option<&'a PathGlob>,
@@ -369,58 +456,62 @@ struct Walk<'a> {
     /// puts a `.gitignore` in force.
     in_repo: bool,
     /// The `.gitignore` files in force at the walk's current position, root
-    /// first; a directory's own file is pushed on entry and popped on exit.
-    frames: Vec<Gitignore>,
+    /// first.
+    frames: Vec<Arc<Gitignore>>,
 }
 
 impl Walk<'_> {
-    fn descend(
-        &mut self,
+    /// What the walk makes of entry `name` of `dir`, seen as `seen`, the
+    /// directory at `rel` whose entries sit at `depth`, reached with glob
+    /// `states` and `linked` as whether its path already crosses a followed
+    /// symlink.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the walk's position is the arguments"
+    )]
+    fn take(
+        &self,
         dir: &Path,
+        name: &OsStr,
+        seen: Seen,
         rel: &Path,
         depth: usize,
         states: &[usize],
         linked: bool,
-        visit: &mut dyn FnMut(PathBuf, &DirEntry),
-    ) {
-        let entered_repo = self.gitignore && holds_git(dir);
-        let was_in_repo = self.in_repo;
-        let inherited_frames = entered_repo.then(|| std::mem::take(&mut self.frames));
-        self.in_repo |= entered_repo;
-        let mut pushed = false;
-        if self.in_repo
-            && let Some(matcher) = load_gitignore(dir)
-        {
-            self.frames.push(matcher);
-            pushed = true;
+    ) -> Option<Taken> {
+        let kind = kind_of(seen, self.glob.is_some(), &|follow| {
+            stat_of(&dir.join(name), follow)
+        })?;
+        let linked = linked || kind == Kind::LinkedDir;
+        let next = if linked || kind != Kind::File {
+            self.next_states(states, name, kind)
+        } else {
+            Vec::new()
+        };
+        if !self.follows(linked, &next, kind) {
+            return None;
         }
-        let below = child_depth(depth);
-        for (name, entry) in sorted_entries(dir) {
-            let Some(kind) = kind_of(&entry, self.glob.is_some()) else {
-                continue;
-            };
-            let next = self.next_states(states, &name, kind);
-            let linked = linked || kind == Kind::LinkedDir;
-            if !self.follows(linked, &next, kind) {
-                continue;
+        let is_dir = kind != Kind::File;
+        let child = rel.join(name);
+        // Only a `.gitignore` reads the full path, and building one per entry
+        // is a large share of a big directory's walk.
+        let path = if self.frames.is_empty() {
+            PathBuf::new()
+        } else {
+            dir.join(name)
+        };
+        if !self.admits(depth, is_dir, name, &path, &child) {
+            return None;
+        }
+        Some(if is_dir {
+            Taken::Dir {
+                child,
+                next,
+                linked,
             }
-            let is_dir = kind != Kind::File;
-            let child = rel.join(&name);
-            if self.admits(below, is_dir, &name, &entry.path(), &child) {
-                if is_dir {
-                    self.descend(&entry.path(), &child, below, &next, linked, visit);
-                } else {
-                    visit(child, &entry);
-                }
-            }
-        }
-        if pushed {
-            self.frames.pop();
-        }
-        if let Some(frames) = inherited_frames {
-            self.frames = frames;
-        }
-        self.in_repo = was_in_repo;
+        } else {
+            Taken::File(child)
+        })
     }
 
     /// Whether the walk takes an entry at `depth`: the skip rules and the
@@ -459,18 +550,89 @@ impl Walk<'_> {
     }
 }
 
-/// What the walk makes of an entry, following a symlink only when
-/// `follow_links` is set. `None` for anything else, a broken link included.
-fn kind_of(entry: &DirEntry, follow_links: bool) -> Option<Kind> {
-    let file_type = entry.file_type().ok()?;
-    if !file_type.is_symlink() {
-        return classify(file_type.is_dir(), file_type.is_file(), false);
+/// An entry the walk takes: a directory to enter, with the glob states and
+/// link crossing it is entered with, or a file to visit.
+#[derive(Debug, PartialEq)]
+enum Taken {
+    Dir {
+        child: PathBuf,
+        next: Vec<usize>,
+        linked: bool,
+    },
+    File(PathBuf),
+}
+
+/// Below this many entries a directory is judged on one thread; spawning
+/// workers costs more than the judging.
+const PARALLEL_ENTRIES: usize = 4096;
+
+/// `judge` applied to each of `items`, in order, shared across the cores
+/// once there are enough items to pay for the threads.
+fn judge_all<T: Sync, R: Send>(items: &[T], judge: &(dyn Fn(&T) -> R + Sync)) -> Vec<R> {
+    // Asking for the core count reads cgroup files, too dear to pay in every
+    // small directory of a deep tree.
+    if items.len() < PARALLEL_ENTRIES {
+        return items.iter().map(judge).collect();
     }
-    if !follow_links {
-        return None;
+    let workers = thread::available_parallelism().map_or(1, usize::from);
+    let per_worker = items.len().div_ceil(workers);
+    thread::scope(|scope| {
+        let handles: Vec<_> = items
+            .chunks(per_worker)
+            .map(|chunk| scope.spawn(move || chunk.iter().map(judge).collect::<Vec<_>>()))
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("judging an entry does not panic"))
+            .collect()
+    })
+}
+
+/// What the walk makes of an entry seen as `seen`, following a symlink only
+/// when `follow_links` is set; `stat` reports the entry itself, or with `true`
+/// its link's target. `None` for anything else, a broken link included.
+fn kind_of(seen: Seen, follow_links: bool, stat: &dyn Fn(bool) -> Option<Stat>) -> Option<Kind> {
+    match seen {
+        Seen::Dir => Some(Kind::Dir),
+        Seen::File => Some(Kind::File),
+        Seen::Other => None,
+        Seen::Unknown => {
+            let entry = stat(false)?;
+            if entry.is_link {
+                kind_of(Seen::Link, follow_links, stat)
+            } else {
+                classify(entry.is_dir, entry.is_file, false)
+            }
+        }
+        Seen::Link if follow_links => {
+            let target = stat(true)?;
+            classify(target.is_dir, target.is_file, true)
+        }
+        Seen::Link => None,
     }
-    let target = fs::metadata(entry.path()).ok()?;
-    classify(target.is_dir(), target.is_file(), true)
+}
+
+/// What a stat of a path reports.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Stat {
+    is_link: bool,
+    is_dir: bool,
+    is_file: bool,
+}
+
+/// The stat of `path`, through a symlink when `follow` is set.
+fn stat_of(path: &Path, follow: bool) -> Option<Stat> {
+    let metadata = if follow {
+        fs::metadata(path)
+    } else {
+        fs::symlink_metadata(path)
+    };
+    let file_type = metadata.ok()?.file_type();
+    Some(Stat {
+        is_link: file_type.is_symlink(),
+        is_dir: file_type.is_dir(),
+        is_file: file_type.is_file(),
+    })
 }
 
 fn classify(is_dir: bool, is_file: bool, linked: bool) -> Option<Kind> {
@@ -482,24 +644,17 @@ fn classify(is_dir: bool, is_file: bool, linked: bool) -> Option<Kind> {
     }
 }
 
-fn sorted_entries(dir: &Path) -> Vec<(OsString, DirEntry)> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut entries: Vec<(OsString, DirEntry)> = entries
-        .filter_map(Result::ok)
-        .map(|entry| (entry.file_name(), entry))
-        .collect();
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
-    entries
-}
-
 /// The `.gitignore` files above `start`, up to and including the repo root
-/// `top`, outermost first.
-fn gitignores_above(start: &Path, top: &Path) -> Vec<Gitignore> {
+/// `top`, outermost first, each read by `load`.
+fn gitignores_above(
+    start: &Path,
+    top: &Path,
+    load: &dyn Fn(&Path) -> Option<Gitignore>,
+) -> Vec<Arc<Gitignore>> {
     dirs_above(start, top)
         .into_iter()
-        .filter_map(load_gitignore)
+        .filter_map(load)
+        .map(Arc::new)
         .collect()
 }
 
@@ -536,7 +691,7 @@ fn load_gitignore(dir: &Path) -> Option<Gitignore> {
 
 /// Whether the `.gitignore` files in force mark `path` ignored. Deeper files
 /// take precedence (git's rule), and a whitelisting `!pattern` un-ignores.
-fn is_gitignored(frames: &[Gitignore], path: &Path, is_dir: bool) -> bool {
+fn is_gitignored(frames: &[Arc<Gitignore>], path: &Path, is_dir: bool) -> bool {
     for frame in frames.iter().rev() {
         match frame.matched(path, is_dir) {
             Match::Ignore(_) => return true,
@@ -574,10 +729,6 @@ fn is_reserved_dir(depth: usize, is_dir: bool, file_name: &std::ffi::OsStr) -> b
     depth == 1 && is_dir && file_name == RESERVED_DIR
 }
 
-fn child_depth(parent_depth: usize) -> usize {
-    parent_depth + 1
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -587,6 +738,166 @@ mod tests {
     // (unit-lint isolation); only the pure predicate is tested here.
 
     #[test]
+    fn judge_all_keeps_the_order_of_its_items() {
+        let items: Vec<usize> = (0..PARALLEL_ENTRIES * 3).collect();
+        assert_eq!(
+            judge_all(&items, &|n| n * 2),
+            items.iter().map(|n| n * 2).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn judge_all_shares_a_large_directory_across_threads() {
+        let items = vec![(); PARALLEL_ENTRIES];
+        let threads: std::collections::HashSet<_> = judge_all(&items, &|()| thread::current().id())
+            .into_iter()
+            .collect();
+        assert!(threads.len() > 1, "judged on {} thread(s)", threads.len());
+    }
+
+    #[test]
+    fn judge_all_judges_a_small_directory_on_the_calling_thread() {
+        let items = vec![(); PARALLEL_ENTRIES - 1];
+        let caller = thread::current().id();
+        assert!(
+            judge_all(&items, &|()| thread::current().id())
+                .iter()
+                .all(|id| *id == caller)
+        );
+    }
+
+    const LINK: Stat = Stat {
+        is_link: true,
+        is_dir: false,
+        is_file: false,
+    };
+    const DIR: Stat = Stat {
+        is_link: false,
+        is_dir: true,
+        is_file: false,
+    };
+    const FILE: Stat = Stat {
+        is_link: false,
+        is_dir: false,
+        is_file: true,
+    };
+
+    /// A stat of a symlink to `target`.
+    fn link_to(target: Stat) -> impl Fn(bool) -> Option<Stat> {
+        move |follow| Some(if follow { target } else { LINK })
+    }
+
+    fn unstatted(_follow: bool) -> Option<Stat> {
+        panic!("an entry its listing named needs no stat")
+    }
+
+    #[test]
+    fn kind_of_takes_a_directory_and_a_file_as_they_were_seen() {
+        assert_eq!(kind_of(Seen::Dir, true, &unstatted), Some(Kind::Dir));
+        assert_eq!(kind_of(Seen::File, true, &unstatted), Some(Kind::File));
+    }
+
+    #[test]
+    fn kind_of_drops_a_device_and_an_unfollowed_link() {
+        assert_eq!(kind_of(Seen::Other, true, &unstatted), None);
+        assert_eq!(kind_of(Seen::Link, false, &link_to(DIR)), None);
+    }
+
+    #[test]
+    fn kind_of_follows_a_link_to_its_target_when_asked() {
+        assert_eq!(
+            kind_of(Seen::Link, true, &link_to(DIR)),
+            Some(Kind::LinkedDir)
+        );
+        assert_eq!(kind_of(Seen::Link, true, &link_to(FILE)), Some(Kind::File));
+        assert_eq!(kind_of(Seen::Link, true, &|_| None), None);
+    }
+
+    #[test]
+    fn kind_of_stats_an_entry_its_listing_did_not_type() {
+        assert_eq!(
+            kind_of(Seen::Unknown, false, &|_| Some(DIR)),
+            Some(Kind::Dir)
+        );
+        assert_eq!(
+            kind_of(Seen::Unknown, false, &|_| Some(FILE)),
+            Some(Kind::File)
+        );
+        assert_eq!(kind_of(Seen::Unknown, false, &link_to(DIR)), None);
+        assert_eq!(
+            kind_of(Seen::Unknown, true, &link_to(DIR)),
+            Some(Kind::LinkedDir)
+        );
+        assert_eq!(kind_of(Seen::Unknown, true, &|_| None), None);
+    }
+
+    #[test]
+    fn stat_of_reports_a_directory_a_file_and_a_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.md");
+        fs::write(&file, "").unwrap();
+        assert_eq!(stat_of(dir.path(), false), Some(DIR));
+        assert_eq!(stat_of(&file, true), Some(FILE));
+        assert_eq!(stat_of(&dir.path().join("missing"), true), None);
+    }
+
+    fn take(
+        walk: &Walk<'_>,
+        name: &str,
+        seen: Seen,
+        states: &[usize],
+        linked: bool,
+    ) -> Option<Taken> {
+        walk.take(
+            Path::new("/r"),
+            OsStr::new(name),
+            seen,
+            Path::new(""),
+            1,
+            states,
+            linked,
+        )
+    }
+
+    #[test]
+    fn take_enters_a_real_directory_a_component_can_enter_off_any_link() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("*/x").unwrap();
+        let walk = walk_with(&ignore, Some(&glob), Vec::new());
+        assert_eq!(
+            take(&walk, "a", Seen::Dir, &[0], false),
+            Some(Taken::Dir {
+                child: PathBuf::from("a"),
+                next: vec![1],
+                linked: false,
+            })
+        );
+    }
+
+    #[test]
+    fn take_keeps_a_file_off_a_link_for_the_whole_path_to_judge() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("*/x").unwrap();
+        let walk = walk_with(&ignore, Some(&glob), Vec::new());
+        assert_eq!(
+            take(&walk, "y", Seen::File, &[1], false),
+            Some(Taken::File(PathBuf::from("y")))
+        );
+    }
+
+    #[test]
+    fn take_drops_a_file_below_a_link_the_glob_does_not_reach() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("*/x").unwrap();
+        let walk = walk_with(&ignore, Some(&glob), Vec::new());
+        assert_eq!(take(&walk, "y", Seen::File, &[1], true), None);
+        assert_eq!(
+            take(&walk, "x", Seen::File, &[1], true),
+            Some(Taken::File(PathBuf::from("x")))
+        );
+    }
+
+    #[test]
     fn is_reserved_dir_matches_top_level_dirsql() {
         assert!(is_reserved_dir(1, true, OsStr::new(RESERVED_DIR)));
     }
@@ -594,11 +905,6 @@ mod tests {
     #[test]
     fn is_reserved_dir_rejects_nested_dirsql() {
         assert!(!is_reserved_dir(2, true, OsStr::new(RESERVED_DIR)));
-    }
-
-    #[test]
-    fn child_depth_advances_one_level() {
-        assert_eq!(child_depth(3), 4);
     }
 
     #[test]
@@ -730,12 +1036,12 @@ mod tests {
     }
 
     /// A gitignore frame compiled from in-memory lines; no filesystem.
-    fn frame(dir: &str, lines: &[&str]) -> Gitignore {
+    fn frame(dir: &str, lines: &[&str]) -> Arc<Gitignore> {
         let mut builder = GitignoreBuilder::new(Path::new(dir));
         for line in lines {
             builder.add_line(None, line).unwrap();
         }
-        builder.build().unwrap()
+        Arc::new(builder.build().unwrap())
     }
 
     #[test]
@@ -781,6 +1087,20 @@ mod tests {
     }
 
     #[test]
+    fn gitignores_above_loads_the_ancestors_holding_one_outermost_first() {
+        let load = |dir: &Path| {
+            (dir != Path::new("/r/a")).then(|| {
+                let mut builder = GitignoreBuilder::new(dir);
+                builder.add_line(None, "*.log").unwrap();
+                builder.build().unwrap()
+            })
+        };
+        let frames = gitignores_above(Path::new("/r/a/b/c"), Path::new("/r"), &load);
+        let roots: Vec<&Path> = frames.iter().map(|frame| frame.path()).collect();
+        assert_eq!(roots, vec![Path::new("/r"), Path::new("/r/a/b")]);
+    }
+
+    #[test]
     fn dirs_above_is_empty_when_the_start_is_the_top() {
         assert!(dirs_above(Path::new("/r"), Path::new("/r")).is_empty());
     }
@@ -799,7 +1119,7 @@ mod tests {
     fn walk_with<'a>(
         ignore: &'a TableMatcher,
         glob: Option<&'a PathGlob>,
-        frames: Vec<Gitignore>,
+        frames: Vec<Arc<Gitignore>>,
     ) -> Walk<'a> {
         Walk {
             ignore,

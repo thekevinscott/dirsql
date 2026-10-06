@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/ -q --deselect tests/e2e/glob_speed_one_level_test.py",
+  "ran_at": 1791239586,
+  "exit_code": 0,
+  "commit": "5320f737098f6359ba10e35cbab508be367116bc",
+  "branch": "claude/1322-walk-readdir"
+}
