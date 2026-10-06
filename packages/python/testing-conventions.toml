@@ -7,7 +7,7 @@
 # through it (#721), so every e2e case crosses it. packages/ts/napi is not: it
 # cannot reach this suite.
 [e2e]
-extra_scope = ["packages/rust/src", "packages/python/src"]
+extra_scope = ["packages/rust/src", "packages/python/src", "packages/python/tests/e2e"]
 
 # Same floor as the root file, which this lane no longer reads.
 [python.coverage]

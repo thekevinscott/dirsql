@@ -73,7 +73,10 @@ jobs:
   # job deliberately does not tag a PyPI package: a tag records what
   # shipped, and until this upload lands, nothing has.
   pypi-tag:
-    needs: pypi-publish
+    needs: [release, pypi-publish]
+    if: ${{ !cancelled() && needs.pypi-publish.result == 'success' }}
     uses: thekevinscott/putitoutthere/.github/workflows/pypi-tag.yml@v0
     permissions:
       contents: write
+    with:
+      expect: ${{ needs.release.outputs.delegated_packages }}
