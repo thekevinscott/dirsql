@@ -405,7 +405,7 @@ impl Walk<'_> {
         linked: bool,
         visit: &mut dyn FnMut(PathBuf, &DirEntry),
     ) {
-        let entered_repo = self.gitignore && holds_git(dir);
+        let entered_repo = should_enter_repo(self.gitignore, holds_git(dir));
         let inherited_frames = entered_repo.then(|| std::mem::take(&mut self.frames));
         let repo_scope = RepoScope::enter(self.in_repo, entered_repo);
         self.in_repo = repo_scope.active;
@@ -533,6 +533,10 @@ fn enclosing_repo<'a>(start: &'a Path, is_repo_root: &dyn Fn(&Path) -> bool) -> 
 
 fn holds_git(dir: &Path) -> bool {
     dir.join(".git").exists()
+}
+
+fn should_enter_repo(gitignore: bool, holds_git: bool) -> bool {
+    gitignore && holds_git
 }
 
 /// The directories strictly above `start`, up to and including its ancestor
@@ -836,6 +840,40 @@ mod tests {
         let inherited = RepoScope::enter(true, false);
         assert!(inherited.loads_gitignore());
         assert!(inherited.restore());
+    }
+
+    #[test]
+    fn repo_entry_requires_gitignore_and_a_git_marker() {
+        assert!(!should_enter_repo(false, false));
+        assert!(!should_enter_repo(false, true));
+        assert!(!should_enter_repo(true, false));
+        assert!(should_enter_repo(true, true));
+    }
+
+    #[test]
+    fn descend_visits_a_matching_source_file() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("scanner.rs").unwrap();
+        let mut walk = walk_with(&ignore, Some(&glob), Vec::new());
+        let mut visited = Vec::new();
+
+        walk.descend(
+            &root,
+            Path::new(""),
+            0,
+            &glob.start(),
+            false,
+            &mut |rel, _| {
+                if glob.is_match(&rel) {
+                    visited.push(rel);
+                }
+            },
+        );
+
+        assert_eq!(visited, [PathBuf::from("scanner.rs")]);
+        assert!(!walk.in_repo);
+        assert!(walk.frames.is_empty());
     }
 
     #[test]
