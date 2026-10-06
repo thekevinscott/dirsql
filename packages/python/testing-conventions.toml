@@ -13,8 +13,3 @@ extra_scope = ["packages/rust/src", "packages/python/src", "packages/python/test
 [python.coverage]
 fail_under = 100
 branch = true
-
-[[python.exempt]]
-path = "tests/integration/hermetic/extensions_test.py"
-rules = ["no-first-party-patch"]
-reason = "the hermetic tier IS the _RustDirSQL core-boundary patch; no third-party target exists to move it to"
