@@ -30,8 +30,11 @@ test-binding:
 # Run e2e tests (local only). Runs from packages/python so `uv run` resolves
 # that package's own venv -- in a worktree, the worktree-local
 # packages/python/.venv, not the shared repo-root .venv every worktree would
-# otherwise trample (#682).
+# otherwise trample (#682). Rebuilds the extension and the release CLI the
+# tests spawn (they prefer target/release) so a receipt never attests stale code.
 test-e2e:
+    cd packages/python && uv run maturin develop --release
+    cargo build --release -p dirsql --features cli
     cd packages/python && uv run python -m pytest tests/e2e/ -x -q
 
 # Run the Python packaging distcheck flow (build the wheel, install into a fresh
