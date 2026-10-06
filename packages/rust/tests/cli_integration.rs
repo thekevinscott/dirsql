@@ -431,6 +431,33 @@ async fn query_in_unavailable_state_returns_503() {
     handle.shutdown().await.unwrap();
 }
 
+// Removing the indexed directory after the build makes the watcher fail to
+// attach, deterministically and on every platform.
+#[tokio::test]
+async fn events_when_the_watcher_failed_to_start_returns_503_with_the_reason() {
+    let root = TempDir::new().unwrap();
+    let indexed = root.path().join("indexed");
+    fs::create_dir(&indexed).unwrap();
+    let db = DirSQL::new(&indexed, Vec::new()).unwrap();
+    fs::remove_dir(&indexed).unwrap();
+    let handle = spawn_server(db).await;
+
+    let resp = reqwest::Client::new()
+        .get(format!("{}/events", base_url(&handle)))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body: JsonValue = resp.json().await.unwrap();
+    let error = body.get("error").and_then(JsonValue::as_str).unwrap_or("");
+    assert!(
+        error.starts_with("filesystem watcher failed to start: watcher error: "),
+        "got: {body}"
+    );
+    handle.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn events_in_unavailable_state_returns_503() {
     let handle = serve_with_state(
