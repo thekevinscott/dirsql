@@ -992,6 +992,13 @@ mod tests {
     }
 
     #[test]
+    fn a_spelled_dot_component_consumes_only_the_names_it_matches() {
+        let glob = compile_glob(".claude/x").unwrap();
+        assert_eq!(states_after(&glob, &[(".claude", Kind::Dir)]), vec![1]);
+        assert!(states_after(&glob, &[(".env", Kind::Dir)]).is_empty());
+    }
+
+    #[test]
     fn a_double_star_stops_on_a_symlinked_directory() {
         let glob = compile_glob("**/x").unwrap();
         assert_eq!(states_after(&glob, &[("a", Kind::LinkedDir)]), vec![1]);

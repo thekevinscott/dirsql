@@ -242,7 +242,12 @@ fn scan_paths(root: &TempDir, pattern: &str) -> Vec<String> {
     let glob = compile_glob(pattern).unwrap();
     scan_glob(root.path(), &glob, &ignore, false)
         .into_iter()
-        .map(|p| p.to_string_lossy().into_owned())
+        .map(|p| {
+            p.components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
         .collect()
 }
 
