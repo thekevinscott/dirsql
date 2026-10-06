@@ -5,7 +5,7 @@
 use std::fs;
 
 use dirsql::matcher::TableMatcher;
-use dirsql::scanner::{compile_glob, scan_directory, scan_glob, scan_subtree};
+use dirsql::scanner::{compile_glob, scan_directory, scan_dirs, scan_glob, scan_subtree};
 use tempfile::TempDir;
 
 #[test]
@@ -264,4 +264,42 @@ fn scan_glob_a_double_star_does_not_cross_a_dot_directory_the_next_component_spe
         scan_paths(&root, "**/.cache/*.md"),
         vec![".cache/m.md", "a/.cache/m.md"]
     );
+}
+
+#[test]
+fn scan_dirs_lists_the_directories_the_scan_enters() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    for sub in ["src/deep", "node_modules/pkg", ".dirsql", "empty"] {
+        fs::create_dir_all(root.join(sub)).unwrap();
+    }
+    fs::write(root.join("src/a.txt"), "a").unwrap();
+
+    let ignore = TableMatcher::new(&[], &["node_modules/**"]).unwrap();
+    let mut dirs = scan_dirs(root, root, &ignore);
+    dirs.sort();
+
+    assert_eq!(
+        dirs,
+        vec![
+            root.to_path_buf(),
+            root.join("empty"),
+            root.join("src"),
+            root.join("src/deep"),
+        ]
+    );
+}
+
+#[test]
+fn scan_dirs_starts_below_the_root_under_the_root_s_rules() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join("src/node_modules/pkg")).unwrap();
+    fs::create_dir_all(root.join("src/lib")).unwrap();
+
+    let ignore = TableMatcher::new(&[], &["src/node_modules/**"]).unwrap();
+    let mut dirs = scan_dirs(root, &root.join("src"), &ignore);
+    dirs.sort();
+
+    assert_eq!(dirs, vec![root.join("src"), root.join("src/lib")]);
 }

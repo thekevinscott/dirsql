@@ -66,6 +66,25 @@ pub fn scan_subtree(root: &Path, dir: &Path, matcher: &TableMatcher) -> Vec<(Pat
     scan_below(root, dir, matcher, &mut |_| {})
 }
 
+/// `start` and every directory below it that [`scan_subtree`] would enter,
+/// judged relative to `root`. These are the directories whose entries can
+/// change what the index holds.
+pub fn scan_dirs(root: &Path, start: &Path, ignore: &TableMatcher) -> Vec<PathBuf> {
+    let walker = Walk {
+        ignore,
+        glob: None,
+        gitignore: false,
+        in_repo: false,
+        frames: Vec::new(),
+        dirs: true,
+    };
+    let mut dirs = vec![start.to_path_buf()];
+    walk(root, start, walker, &|_| false, &mut |rel_path, parent| {
+        dirs.push(parent.join(rel_path.file_name().unwrap_or_default()));
+    });
+    dirs
+}
+
 fn scan_below(
     root: &Path,
     start: &Path,
@@ -83,6 +102,7 @@ fn scan_below(
         gitignore: false,
         in_repo: false,
         frames: Vec::new(),
+        dirs: false,
     };
     walk(
         root,
@@ -144,6 +164,7 @@ pub fn scan_glob(
         gitignore,
         in_repo: repo.is_some(),
         frames: repo.map_or_else(Vec::new, |top| gitignores_above(root, top, &load_gitignore)),
+        dirs: false,
     };
     let mut results = Vec::new();
     walk(
@@ -435,26 +456,44 @@ impl<'a> Place<'a> {
             })
         });
         let dir: Arc<Path> = Arc::from(dir);
-        listing
-            .entries()
-            .iter()
-            .zip(taken)
-            .filter_map(|(listed, taken)| match taken? {
-                Taken::Dir {
-                    child,
-                    next,
-                    linked,
-                } => Some(Step::Dir(Box::new(Place {
-                    walk: walk.clone(),
-                    dir: dir.join(listing.name(listed)),
-                    rel: child,
-                    depth: depth + 1,
-                    states: next,
-                    linked,
-                }))),
-                Taken::File(child) => Some(Step::Leaf((child, Arc::clone(&dir)))),
-            })
-            .collect()
+        let mut steps: Vec<Step<Box<Place<'a>>, Found>> = if walk.dirs {
+            taken
+                .iter()
+                .filter_map(|taken| match taken {
+                    Some(Taken::Dir { child, .. }) => {
+                        Some(Step::Leaf((child.clone(), Arc::clone(&dir))))
+                    }
+                    _ => None,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let entered =
+            listing
+                .entries()
+                .iter()
+                .zip(taken)
+                .filter_map(|(listed, taken)| match taken? {
+                    Taken::Dir {
+                        child,
+                        next,
+                        linked,
+                    } => Some(Step::Dir(Box::new(Place {
+                        walk: walk.clone(),
+                        dir: dir.join(listing.name(listed)),
+                        rel: child,
+                        depth: depth + 1,
+                        states: next,
+                        linked,
+                    }))),
+                    Taken::File(child) => Some(Step::Leaf((child, Arc::clone(&dir)))),
+                });
+        if steps.is_empty() {
+            return entered.collect();
+        }
+        steps.extend(entered);
+        steps
     }
 }
 
@@ -469,6 +508,8 @@ struct Walk<'a> {
     /// The `.gitignore` files in force at the walk's current position, root
     /// first.
     frames: Vec<Arc<Gitignore>>,
+    /// Whether each directory entered is also visited, as a leaf.
+    dirs: bool,
 }
 
 impl Walk<'_> {
@@ -732,8 +773,11 @@ fn should_descend(
 /// Whether a walk from the root enters the directory at `rel_path`: every
 /// directory on the way, itself included, survives [`should_descend`].
 pub(crate) fn reaches_dir(rel_path: &Path, ignore: &TableMatcher) -> bool {
-    let _ = (rel_path, ignore);
-    true
+    let mut prefix = PathBuf::new();
+    rel_path.components().enumerate().all(|(depth, component)| {
+        prefix.push(component);
+        should_descend(depth + 1, true, component.as_os_str(), &prefix, ignore)
+    })
 }
 
 /// Whether `rel_path` matches `glob`.
@@ -1192,6 +1236,7 @@ mod tests {
             gitignore: !frames.is_empty(),
             in_repo: !frames.is_empty(),
             frames,
+            dirs: false,
         }
     }
 
@@ -1486,6 +1531,7 @@ mod tests {
             gitignore: false,
             in_repo: false,
             frames: Vec::new(),
+            dirs: false,
         };
         assert!(walk.follows(true, &[2], Kind::File));
         assert!(!walk.follows(true, &[1], Kind::File));
@@ -1502,6 +1548,7 @@ mod tests {
             gitignore: false,
             in_repo: false,
             frames: Vec::new(),
+            dirs: false,
         };
         assert!(walk.follows(false, &[1], Kind::Dir));
         assert!(!walk.follows(false, &[2], Kind::Dir));
@@ -1518,6 +1565,7 @@ mod tests {
             gitignore: false,
             in_repo: false,
             frames: Vec::new(),
+            dirs: false,
         };
         assert!(walk.follows(false, &[], Kind::Dir));
     }

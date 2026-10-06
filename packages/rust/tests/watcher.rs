@@ -263,6 +263,9 @@ fn created_under(events: &[FileEvent], dir: &std::path::Path) -> bool {
         .any(|e| matches!(e, FileEvent::Created(p) if p.starts_with(dir)))
 }
 
+// FSEvents and ReadDirectoryChangesW watch a whole tree with one watch, so
+// there the ignored subtree's events still arrive.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[test]
 fn scoped_watcher_puts_no_watch_on_an_ignored_subtree() {
     let dir = TempDir::new().unwrap();

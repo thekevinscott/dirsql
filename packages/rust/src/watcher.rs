@@ -1,10 +1,13 @@
 use crate::matcher::TableMatcher;
+use crate::scanner::{reaches_dir, scan_dirs};
 use notify::event::{ModifyKind, RenameMode};
 use notify::{
     Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher,
 };
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, Weak, mpsc};
+use std::thread;
 use std::time::Duration;
 
 /// Events emitted by the file watcher.
@@ -21,9 +24,14 @@ pub struct WatchScope {
     pub ignore: TableMatcher,
 }
 
+/// inotify and kqueue spend a kernel watch on every directory, so only those
+/// the scan enters get one. FSEvents and ReadDirectoryChangesW cover a whole
+/// tree with one watch, where a watch per directory would cost far more.
+const PER_DIRECTORY: bool = !cfg!(any(target_os = "macos", target_os = "windows"));
+
 /// Wraps notify::RecommendedWatcher and translates raw events into FileEvent values.
 pub struct Watcher {
-    _watcher: RecommendedWatcher,
+    _watcher: Arc<Mutex<RecommendedWatcher>>,
     rx: mpsc::Receiver<FileEvent>,
 }
 
@@ -33,39 +41,68 @@ impl Watcher {
         Self::over(&[path.to_path_buf()])
     }
 
-    /// Start watching every directory in `paths` recursively, merging their
+    /// Start watching every directory in `paths` and below, merging their
     /// events into one channel.
     pub fn over(paths: &[PathBuf]) -> Result<Self, notify::Error> {
+        let everything = TableMatcher::new(&[], &[]).expect("no patterns to compile");
+        Self::scoped(
+            paths
+                .iter()
+                .map(|root| WatchScope {
+                    root: root.clone(),
+                    ignore: everything.clone(),
+                })
+                .collect(),
+        )
+    }
+
+    /// Watch each scope's root and the directories below it the scan would
+    /// enter, merging their events into one channel. Where [`PER_DIRECTORY`]
+    /// holds, each directory gets its own non-recursive watch, so a skipped
+    /// subtree costs none, and a directory created later is walked and
+    /// watched before its creation is reported.
+    pub fn scoped(scopes: Vec<WatchScope>) -> Result<Self, notify::Error> {
+        let (raw_tx, raw_rx) = mpsc::channel::<Event>();
         let (tx, rx) = mpsc::channel();
 
         let mut watcher = RecommendedWatcher::new(
             move |res: Result<Event, notify::Error>| {
                 if let Ok(event) = res {
-                    let events = translate_event(&event);
-                    for fe in events {
-                        // Ignore send errors (receiver dropped)
-                        let _ = tx.send(fe);
-                    }
+                    // Ignore send errors (receiver dropped)
+                    let _ = raw_tx.send(event);
                 }
             },
             Config::default(),
         )?;
 
-        for path in paths {
-            watcher.watch(path, RecursiveMode::Recursive)?;
+        let mode = if PER_DIRECTORY {
+            RecursiveMode::NonRecursive
+        } else {
+            RecursiveMode::Recursive
+        };
+        let mut watched = HashSet::new();
+        for scope in &scopes {
+            watcher.watch(&scope.root, mode)?;
+            watched.insert(scope.root.clone());
         }
+        // A recursive watch already covers every directory below its root.
+        let scopes = if PER_DIRECTORY { scopes } else { Vec::new() };
+        for scope in &scopes {
+            for dir in dirs_to_watch(&scopes, &scope.root, &walk_scope) {
+                if watched.insert(dir.clone()) {
+                    watch_dir(&mut watcher, &dir)?;
+                }
+            }
+        }
+
+        let watcher = Arc::new(Mutex::new(watcher));
+        let handle = Arc::downgrade(&watcher);
+        thread::spawn(move || forward(&raw_rx, &tx, &handle, &scopes));
 
         Ok(Self {
             _watcher: watcher,
             rx,
         })
-    }
-
-    /// Watch each scope's root and the directories below it the scan would
-    /// enter, merging their events into one channel.
-    pub fn scoped(scopes: Vec<WatchScope>) -> Result<Self, notify::Error> {
-        let roots: Vec<PathBuf> = scopes.into_iter().map(|scope| scope.root).collect();
-        Self::over(&roots)
     }
 
     /// Receive the next event, blocking until one is available.
@@ -88,15 +125,86 @@ impl Watcher {
     }
 }
 
+/// Translate each raw event and pass it on, first watching any directory it
+/// creates, so nothing written inside the directory after its creation is
+/// reported goes unseen. Ends once the [`Watcher`] or its reader is dropped.
+fn forward(
+    raw_rx: &mpsc::Receiver<Event>,
+    tx: &mpsc::Sender<FileEvent>,
+    watcher: &Weak<Mutex<RecommendedWatcher>>,
+    scopes: &[WatchScope],
+) {
+    for event in raw_rx {
+        for fe in translate_event(&event) {
+            if let FileEvent::Created(path) = &fe
+                && is_real_dir(path)
+            {
+                let Some(watcher) = watcher.upgrade() else {
+                    return;
+                };
+                let mut watcher = watcher.lock().expect("watching a directory does not panic");
+                for dir in dirs_to_watch(scopes, path, &walk_scope) {
+                    // A directory gone again before its watch lands has nothing to report.
+                    let _ = watch_dir(&mut watcher, &dir);
+                }
+            }
+            if tx.send(fe).is_err() {
+                return;
+            }
+        }
+    }
+}
+
+/// A directory, not a symlink to one: the scan does not follow links, so
+/// nothing behind one is indexed.
+fn is_real_dir(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir())
+}
+
+fn walk_scope(scope: &WatchScope, dir: &Path) -> Vec<PathBuf> {
+    scan_dirs(&scope.root, dir, &scope.ignore)
+}
+
+/// Watch `dir` alone. A directory removed since the walk found it is no
+/// error: there is nothing left to watch.
+fn watch_dir(watcher: &mut RecommendedWatcher, dir: &Path) -> Result<(), notify::Error> {
+    match watcher.watch(dir, RecursiveMode::NonRecursive) {
+        Err(e) if is_not_found(&e) => Ok(()),
+        other => other,
+    }
+}
+
+fn is_not_found(error: &notify::Error) -> bool {
+    match &error.kind {
+        notify::ErrorKind::PathNotFound => true,
+        notify::ErrorKind::Io(io) => io.kind() == std::io::ErrorKind::NotFound,
+        _ => false,
+    }
+}
+
 /// The directories to watch once `dir` exists: for each scope whose walk
-/// enters `dir`, what `walk` finds from there.
+/// enters `dir`, what `walk` finds from there, each directory once.
 fn dirs_to_watch(
     scopes: &[WatchScope],
     dir: &Path,
     walk: &dyn Fn(&WatchScope, &Path) -> Vec<PathBuf>,
 ) -> Vec<PathBuf> {
-    let _ = (scopes, dir, walk);
-    Vec::new()
+    let mut seen = HashSet::new();
+    let mut dirs = Vec::new();
+    for scope in scopes {
+        let Ok(rel) = dir.strip_prefix(&scope.root) else {
+            continue;
+        };
+        if !reaches_dir(rel, &scope.ignore) {
+            continue;
+        }
+        for found in walk(scope, dir) {
+            if seen.insert(found.clone()) {
+                dirs.push(found);
+            }
+        }
+    }
+    dirs
 }
 
 /// Translate a notify Event into zero or more FileEvents.
@@ -222,8 +330,8 @@ mod tests {
     use super::*;
 
     // Effectful tests driving a real `notify` OS watcher live in
-    // `tests/watcher.rs` (unit-lint isolation); only the pure
-    // `translate_event` mapping tests belong here.
+    // `tests/watcher.rs` (unit-lint isolation); only pure functions are
+    // tested here.
 
     fn scope(root: &str, ignore: &[&str]) -> WatchScope {
         WatchScope {
