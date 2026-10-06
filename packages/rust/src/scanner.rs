@@ -400,15 +400,13 @@ impl Walk<'_> {
                 continue;
             };
             let next = self.next_states(states, &name, kind);
-            let linked = linked || kind == Kind::LinkedDir;
-            if !self.follows(linked, &next, kind) {
+            let Some(decision) = self.entry_decision(linked, &next, kind) else {
                 continue;
-            }
-            let is_dir = kind != Kind::File;
+            };
             let child = rel.join(&name);
-            if self.admits(below, is_dir, &name, &entry.path(), &child) {
-                if is_dir {
-                    self.descend(&entry.path(), &child, below, &next, linked, visit);
+            if self.admits(below, decision.is_dir, &name, &entry.path(), &child) {
+                if decision.is_dir {
+                    self.descend(&entry.path(), &child, below, &next, decision.linked, visit);
                 } else {
                     visit(child, &entry);
                 }
@@ -444,6 +442,19 @@ impl Walk<'_> {
             .map_or_else(Vec::new, |glob| glob.step(states, name, kind))
     }
 
+    fn entry_decision(
+        &self,
+        parent_linked: bool,
+        states: &[usize],
+        kind: Kind,
+    ) -> Option<EntryDecision> {
+        let linked = parent_linked || kind == Kind::LinkedDir;
+        self.follows(linked, states, kind).then_some(EntryDecision {
+            linked,
+            is_dir: kind != Kind::File,
+        })
+    }
+
     /// Whether the walk takes an entry given whether its path crosses a
     /// followed symlink. Off a link a file is judged on the whole path
     /// afterwards, and a directory is entered only while some component can
@@ -459,18 +470,64 @@ impl Walk<'_> {
     }
 }
 
+struct EntryDecision {
+    linked: bool,
+    is_dir: bool,
+}
+
 /// What the walk makes of an entry, following a symlink only when
 /// `follow_links` is set. `None` for anything else, a broken link included.
 fn kind_of(entry: &DirEntry, follow_links: bool) -> Option<Kind> {
     let file_type = entry.file_type().ok()?;
-    if !file_type.is_symlink() {
-        return classify(file_type.is_dir(), file_type.is_file(), false);
+    let facts = EntryFacts::from_file_type(&file_type);
+    let target = (facts.is_symlink && follow_links)
+        .then(|| {
+            fs::metadata(entry.path())
+                .ok()
+                .map(|metadata| EntryFacts::from_metadata(&metadata))
+        })
+        .flatten();
+    kind_from_facts(facts, target, follow_links)
+}
+
+#[derive(Clone, Copy)]
+struct EntryFacts {
+    is_symlink: bool,
+    is_dir: bool,
+    is_file: bool,
+}
+
+impl EntryFacts {
+    fn from_file_type(file_type: &fs::FileType) -> Self {
+        Self {
+            is_symlink: file_type.is_symlink(),
+            is_dir: file_type.is_dir(),
+            is_file: file_type.is_file(),
+        }
+    }
+
+    fn from_metadata(metadata: &fs::Metadata) -> Self {
+        Self {
+            is_symlink: false,
+            is_dir: metadata.is_dir(),
+            is_file: metadata.is_file(),
+        }
+    }
+}
+
+fn kind_from_facts(
+    entry: EntryFacts,
+    target: Option<EntryFacts>,
+    follow_links: bool,
+) -> Option<Kind> {
+    if !entry.is_symlink {
+        return classify(entry.is_dir, entry.is_file, false);
     }
     if !follow_links {
         return None;
     }
-    let target = fs::metadata(entry.path()).ok()?;
-    classify(target.is_dir(), target.is_file(), true)
+    let target = target?;
+    classify(target.is_dir, target.is_file, true)
 }
 
 fn classify(is_dir: bool, is_file: bool, linked: bool) -> Option<Kind> {
@@ -1053,11 +1110,67 @@ mod tests {
     }
 
     #[test]
+    fn entry_facts_classify_links_and_gate_target_following() {
+        let link = EntryFacts {
+            is_symlink: true,
+            is_dir: false,
+            is_file: false,
+        };
+        let directory = EntryFacts {
+            is_symlink: false,
+            is_dir: true,
+            is_file: false,
+        };
+        let file = EntryFacts {
+            is_symlink: false,
+            is_dir: false,
+            is_file: true,
+        };
+
+        assert_eq!(kind_from_facts(directory, None, true), Some(Kind::Dir));
+        assert_eq!(kind_from_facts(link, Some(directory), false), None);
+        assert_eq!(
+            kind_from_facts(link, Some(directory), true),
+            Some(Kind::LinkedDir)
+        );
+        assert_eq!(kind_from_facts(link, Some(file), true), Some(Kind::File));
+        assert_eq!(kind_from_facts(link, None, true), None);
+    }
+
+    #[test]
     fn follows_everything_off_a_link() {
         let ignore = TableMatcher::new(&[], &[]).unwrap();
         let walk = walk_with(&ignore, None, Vec::new());
         assert!(walk.follows(false, &[], Kind::File));
         assert!(!walk.follows(true, &[0], Kind::Dir));
+    }
+
+    #[test]
+    fn entry_decision_carries_link_and_directory_state() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("link/child").unwrap();
+        let walk = Walk {
+            ignore: &ignore,
+            glob: Some(&glob),
+            gitignore: false,
+            in_repo: false,
+            frames: Vec::new(),
+        };
+        let linked_dir_states =
+            walk.next_states(&glob.start(), OsStr::new("link"), Kind::LinkedDir);
+        let link = walk
+            .entry_decision(false, &linked_dir_states, Kind::LinkedDir)
+            .unwrap();
+        assert!(link.linked);
+        assert!(link.is_dir);
+
+        let file_states = walk.next_states(&linked_dir_states, OsStr::new("child"), Kind::File);
+        let file = walk
+            .entry_decision(link.linked, &file_states, Kind::File)
+            .unwrap();
+        assert!(file.linked);
+        assert!(!file.is_dir);
+        assert!(walk.entry_decision(false, &[], Kind::Dir).is_none());
     }
 
     #[test]
