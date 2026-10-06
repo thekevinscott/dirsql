@@ -143,7 +143,7 @@ pub fn scan_glob(
         glob: Some(glob),
         gitignore,
         in_repo: repo.is_some(),
-        frames: repo.map_or_else(Vec::new, |top| gitignores_above(root, top)),
+        frames: repo.map_or_else(Vec::new, |top| gitignores_above(root, top, &load_gitignore)),
     };
     let mut results = Vec::new();
     walk(
@@ -645,11 +645,15 @@ fn classify(is_dir: bool, is_file: bool, linked: bool) -> Option<Kind> {
 }
 
 /// The `.gitignore` files above `start`, up to and including the repo root
-/// `top`, outermost first.
-fn gitignores_above(start: &Path, top: &Path) -> Vec<Arc<Gitignore>> {
+/// `top`, outermost first, each read by `load`.
+fn gitignores_above(
+    start: &Path,
+    top: &Path,
+    load: &dyn Fn(&Path) -> Option<Gitignore>,
+) -> Vec<Arc<Gitignore>> {
     dirs_above(start, top)
         .into_iter()
-        .filter_map(load_gitignore)
+        .filter_map(load)
         .map(Arc::new)
         .collect()
 }
@@ -1080,6 +1084,20 @@ mod tests {
             dirs_above(Path::new("/r/a/b"), Path::new("/r")),
             vec![Path::new("/r"), Path::new("/r/a")]
         );
+    }
+
+    #[test]
+    fn gitignores_above_loads_the_ancestors_holding_one_outermost_first() {
+        let load = |dir: &Path| {
+            (dir != Path::new("/r/a")).then(|| {
+                let mut builder = GitignoreBuilder::new(dir);
+                builder.add_line(None, "*.log").unwrap();
+                builder.build().unwrap()
+            })
+        };
+        let frames = gitignores_above(Path::new("/r/a/b/c"), Path::new("/r"), &load);
+        let roots: Vec<&Path> = frames.iter().map(|frame| frame.path()).collect();
+        assert_eq!(roots, vec![Path::new("/r"), Path::new("/r/a/b")]);
     }
 
     #[test]
