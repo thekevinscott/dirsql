@@ -1,7 +1,7 @@
 {
   "command": "pnpm test:e2e",
-  "ran_at": 1791266223,
+  "ran_at": 1791266888,
   "exit_code": 0,
-  "commit": "78fffc95f9b0da8573f81c59497fac7eb5b2df0a",
+  "commit": "fd5fd05d44aad7f98d080b5e2fe43e3f9ee4288a",
   "branch": "claude/1330-scanner-repo-lookup"
 }
