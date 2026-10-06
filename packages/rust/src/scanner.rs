@@ -591,6 +591,32 @@ mod tests {
     use super::*;
     use std::ffi::OsStr;
 
+    #[test]
+    fn scan_glob_returns_a_matching_source_file() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let glob = compile_glob("lib.rs").unwrap();
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+
+        assert_eq!(
+            scan_glob(&root, &glob, &ignore, true),
+            vec![PathBuf::from("lib.rs")]
+        );
+    }
+
+    #[test]
+    fn descend_visits_a_matching_source_file() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let mut walk = walk_with(&ignore, None, Vec::new());
+        let mut visited = Vec::new();
+
+        walk.descend(&root, Path::new(""), 0, &[], false, &mut |path, _| {
+            visited.push(path)
+        });
+
+        assert!(visited.contains(&PathBuf::from("scanner.rs")));
+    }
+
     // Real directory-walk behavior is covered by `tests/scanner.rs`
     // (unit-lint isolation); only the pure predicate is tested here.
 
