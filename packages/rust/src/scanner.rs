@@ -48,7 +48,7 @@ pub fn scan_directory_reporting(
     matcher: &TableMatcher,
     on_file: &mut dyn FnMut(u64),
 ) -> Vec<(PathBuf, String)> {
-    scan_below(root, root, matcher, on_file)
+    scan_below(root, root, matcher, on_file, walk_directory)
 }
 
 /// [`scan_directory`] restricted to the subtree at `dir`, a directory beneath
@@ -59,20 +59,47 @@ pub fn scan_directory_reporting(
 /// `mkdir` or a rename into the tree — since the OS reports one event for the
 /// directory and none for the files already inside it.
 pub fn scan_subtree(root: &Path, dir: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, String)> {
-    scan_below(root, dir, matcher, &mut |_| {})
+    scan_below(root, dir, matcher, &mut |_| {}, walk_directory)
 }
+
+type DirectoryWalker = fn(&Path, &Path, &TableMatcher, &mut dyn FnMut(PathBuf, PathBuf));
 
 fn scan_below(
     root: &Path,
     start: &Path,
     matcher: &TableMatcher,
     on_file: &mut dyn FnMut(u64),
+    walker: DirectoryWalker,
 ) -> Vec<(PathBuf, String)> {
     let mut results = Vec::new();
     let mut seen: u64 = 0;
 
     // Match against relative path so globs like "comments/**/*.jsonl" work
     // regardless of the absolute root directory.
+    walker(root, start, matcher, &mut |rel_path, entry| {
+        if matcher.is_ignored(&rel_path) {
+            return;
+        }
+
+        seen += 1;
+        report_seen_file(on_file, seen);
+
+        // Fan-out: a file matching N tables' globs yields N (path, table)
+        // pairs, one per matching table, in declaration order.
+        for m in matcher.match_all(&rel_path) {
+            results.push((entry.clone(), m.table_name));
+        }
+    });
+
+    results
+}
+
+fn walk_directory(
+    root: &Path,
+    start: &Path,
+    matcher: &TableMatcher,
+    visit: &mut dyn FnMut(PathBuf, PathBuf),
+) {
     walk(
         root,
         start,
@@ -80,23 +107,10 @@ fn scan_below(
         None,
         false,
         None,
-        &mut |rel_path, entry| {
-            if matcher.is_ignored(&rel_path) {
-                return;
-            }
-
-            seen += 1;
-            report_seen_file(on_file, seen);
-
-            // Fan-out: a file matching N tables' globs yields N (path, table)
-            // pairs, one per matching table, in declaration order.
-            for m in matcher.match_all(&rel_path) {
-                results.push((entry.path(), m.table_name));
-            }
+        &mut |rel, entry| {
+            visit(rel, entry.path());
         },
     );
-
-    results
 }
 
 fn report_seen_file(on_file: &mut dyn FnMut(u64), seen: u64) {
@@ -648,6 +662,41 @@ mod tests {
         let mut reported = Vec::new();
         report_seen_file(&mut |count| reported.push(count), 7);
         assert_eq!(reported, [7]);
+    }
+
+    fn fake_walk(
+        _root: &Path,
+        _start: &Path,
+        _matcher: &TableMatcher,
+        visit: &mut dyn FnMut(PathBuf, PathBuf),
+    ) {
+        visit(PathBuf::from("docs/a.md"), PathBuf::from("/root/docs/a.md"));
+        visit(PathBuf::from("docs/b.md"), PathBuf::from("/root/docs/b.md"));
+    }
+
+    #[test]
+    fn scan_below_records_paths_and_reports_each_visited_file() {
+        let matcher = TableMatcher::new(&[("**/*.md", "docs")], &[]).unwrap();
+        let mut counts = Vec::new();
+
+        let rows = scan_below(
+            Path::new("/root"),
+            Path::new("/root"),
+            &matcher,
+            &mut |count| counts.push(count),
+            fake_walk,
+        );
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0],
+            (PathBuf::from("/root/docs/a.md"), "docs".to_owned())
+        );
+        assert_eq!(
+            rows[1],
+            (PathBuf::from("/root/docs/b.md"), "docs".to_owned())
+        );
+        assert_eq!(counts, [1, 2]);
     }
 
     #[test]
