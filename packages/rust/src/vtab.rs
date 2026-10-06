@@ -629,6 +629,16 @@ mod tests {
     }
 
     #[test]
+    fn read_text_reads_a_real_file() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+
+        let text = read_text(&path, None).unwrap();
+
+        assert!(text.starts_with("[package]\n"));
+        assert!(text.contains("name = \"dirsql\""));
+    }
+
+    #[test]
     fn scan_spec_read_uses_the_injected_reader() {
         let spec = spec_with_reader();
         let row = FileRow::new(Path::new(""), PathBuf::from("docs/a.md"), facts(7));
