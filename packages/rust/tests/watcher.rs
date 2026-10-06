@@ -216,3 +216,34 @@ fn try_recv_all_drains_pending_events() {
         "Expected at least one event from batch file creation"
     );
 }
+
+#[test]
+fn over_detects_events_in_every_directory() {
+    let first = TempDir::new().unwrap();
+    let second = TempDir::new().unwrap();
+    let watcher =
+        Watcher::over(&[first.path().to_path_buf(), second.path().to_path_buf()]).unwrap();
+
+    thread::sleep(Duration::from_millis(100));
+
+    fs::write(first.path().join("a.txt"), "a").unwrap();
+    fs::write(second.path().join("b.txt"), "b").unwrap();
+
+    let events = collect_events_until(&watcher, Duration::from_secs(5), |seen| {
+        let created = |dir: &std::path::Path| {
+            seen.iter().any(|e| match e {
+                FileEvent::Created(p) => p.starts_with(dir),
+                _ => false,
+            })
+        };
+        created(first.path()) && created(second.path())
+    });
+    for dir in [first.path(), second.path()] {
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, FileEvent::Created(p) if p.starts_with(dir))),
+            "no Created event under {dir:?}, saw: {events:?}"
+        );
+    }
+}
