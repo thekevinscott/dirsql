@@ -777,7 +777,7 @@ mod tests {
         let root = package.ancestors().nth(2).unwrap();
         let start = package.join("src");
 
-        assert!(!gitignores_above(&start, &root).is_empty());
+        assert!(!gitignores_above(&start, root).is_empty());
     }
 
     #[test]
