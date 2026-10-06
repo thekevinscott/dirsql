@@ -87,6 +87,7 @@ def describe_DirSQL_async():
                     side_effect=lambda path, base, resolve_relative: f"R:{path}",
                 ) as resolver,
             ):
+
                 class InjectedDirSQL(async_mod.DirSQL):
                     def _new_core(self, root, **kwargs):
                         return _FakeRustDirSQL(root, **kwargs)

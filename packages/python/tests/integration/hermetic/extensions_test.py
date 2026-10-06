@@ -125,9 +125,7 @@ def describe_extensions_kwarg():
 
     @pytest.mark.asyncio
     async def it_defaults_a_missing_entrypoint_to_none(mock_core, mock_cwd):
-        db = mock_core(
-            "/root", tables=["t"], extensions=[{"path": "./rel/libvec.so"}]
-        )
+        db = mock_core("/root", tables=["t"], extensions=[{"path": "./rel/libvec.so"}])
         await db.ready()
 
         assert _FakeRustDirSQL.instances[0].extensions == [
@@ -143,9 +141,7 @@ def describe_extensions_kwarg():
         )
         mock_glob.return_value = ["/site-packages/sqlite_vec/vec0.so"]
 
-        db = mock_core(
-            "/root", tables=["t"], extensions=[{"path": "sqlite_vec"}]
-        )
+        db = mock_core("/root", tables=["t"], extensions=[{"path": "sqlite_vec"}])
         await db.ready()
 
         assert _FakeRustDirSQL.instances[0].extensions == [
@@ -158,9 +154,7 @@ def describe_extensions_kwarg():
     ):
         mock_isfile.return_value = True
 
-        db = mock_core(
-            "/root", tables=["t"], extensions=[{"path": "sqlite_vec"}]
-        )
+        db = mock_core("/root", tables=["t"], extensions=[{"path": "sqlite_vec"}])
         await db.ready()
 
         assert _FakeRustDirSQL.instances[0].extensions == [
