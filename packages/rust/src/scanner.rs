@@ -1069,9 +1069,13 @@ mod tests {
 
     #[test]
     fn holds_git_checks_for_a_marker_at_the_given_directory() {
-        let package = Path::new(env!("CARGO_MANIFEST_DIR"));
-        assert!(holds_git(&package.join("../..")));
-        assert!(!holds_git(package));
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let plain = dir.path().join("plain");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir(&plain).unwrap();
+        assert!(holds_git(&repo));
+        assert!(!holds_git(&plain));
     }
 
     #[test]
