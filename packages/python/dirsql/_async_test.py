@@ -81,14 +81,17 @@ def describe_DirSQL_async():
         @pytest.mark.asyncio
         async def it_uses_the_background_db():
             with (
-                patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
                 patch.object(
                     async_mod,
                     "resolve_extension_path",
                     side_effect=lambda path, base, resolve_relative: f"R:{path}",
                 ) as resolver,
             ):
-                db = async_mod.DirSQL(
+                class InjectedDirSQL(async_mod.DirSQL):
+                    def _new_core(self, root, **kwargs):
+                        return _FakeRustDirSQL(root, **kwargs)
+
+                db = InjectedDirSQL(
                     "/tmp/root",
                     tables=["table-a"],
                     ignore=["**/*.tmp"],

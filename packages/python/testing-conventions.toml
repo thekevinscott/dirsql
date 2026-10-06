@@ -24,8 +24,3 @@ branch = true
 path = "tests/integration/hermetic/dirsql_test.py"
 rules = ["no-first-party-patch"]
 reason = "the hermetic tier IS the _RustDirSQL core-boundary patch; no third-party target exists to move it to"
-
-[[python.exempt]]
-path = "tests/integration/hermetic/extensions_test.py"
-rules = ["no-first-party-patch"]
-reason = "the hermetic tier IS the _RustDirSQL core-boundary patch; no third-party target exists to move it to"
