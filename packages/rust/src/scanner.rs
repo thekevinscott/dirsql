@@ -753,6 +753,13 @@ mod tests {
     }
 
     #[test]
+    fn holds_git_checks_for_a_marker_at_the_given_directory() {
+        let package = Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert!(holds_git(&package.join("../..")));
+        assert!(!holds_git(package));
+    }
+
+    #[test]
     fn enclosing_repo_includes_the_start_itself() {
         let repo = enclosing_repo(Path::new("/r"), &|dir| dir == Path::new("/r"));
         assert_eq!(repo, Some(Path::new("/r")));
