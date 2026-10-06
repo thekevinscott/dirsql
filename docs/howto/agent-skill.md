@@ -39,8 +39,8 @@ directory, such as Claude Code, get a symlink to it (`--copy` copies instead).
 
 ## Runners
 
-The skill works with whichever runner you have, and grants the agent only
-these commands through `allowed-tools`:
+The skill works with whichever runner you have. Its `allowed-tools` lets the
+agent run these commands without a permission prompt:
 
 | Runner | Command the agent runs |
 |---|---|
