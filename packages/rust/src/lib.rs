@@ -2528,6 +2528,11 @@ struct AsyncDirSqlInner {
 }
 
 #[cfg(test)]
+fn generic_watch_error(message: &str) -> notify::Error {
+    notify::Error::generic(message)
+}
+
+#[cfg(test)]
 impl AsyncDirSqlInner {
     /// Fresh inner with an empty `db` cell — the pre-`ready` state.
     fn empty() -> Self {
@@ -2684,7 +2689,7 @@ mod readonly_tests {
         // `watch`, `config`, `matcher` wrap a typed error to preserve a
         // `source()` chain.
         let io = || std::io::Error::other("x");
-        let watch_err = DirSqlError::watch(notify::Error::generic("x"));
+        let watch_err = DirSqlError::watch(generic_watch_error("x"));
         assert_eq!(watch_err.to_string(), "watcher error: x");
         assert!(StdError::source(&watch_err).is_some());
 
