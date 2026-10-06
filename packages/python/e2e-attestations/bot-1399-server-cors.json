@@ -1,7 +1,7 @@
 {
   "command": "uv run python -m pytest tests/e2e/fanout_test.py tests/e2e/query_contract_test.py -x -q",
-  "ran_at": 1791309882,
+  "ran_at": 1791312715,
   "exit_code": 0,
-  "commit": "223bcccd095e1bf977334217edd7fa73477b97f1",
+  "commit": "517f231592489abeec2e15d76c19865b7f651c3b",
   "branch": "bot/1399-server-cors"
 }
