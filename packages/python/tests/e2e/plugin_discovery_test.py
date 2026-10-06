@@ -112,14 +112,12 @@ def describe_plugin_discovery():
         assert notes.returncode == 0, f"stdout={notes.stdout!r} stderr={notes.stderr!r}"
         assert _basenames(notes) == ["hello.md"]
 
-    def it_keeps_the_baked_in_records_table_alongside_the_plugin(staged):
+    def it_adds_no_records_table_alongside_the_plugin(staged):
         site_dir, data = staged
-        # ...and the baked-in default `records` table is still served (proves the
-        # launcher added `--include-default`, not a bare `-c` that would suppress it).
+        (data / "a.json").write_text('{"id": 1}')
         records = _run(site_dir, ["query", "SELECT COUNT(*) AS n FROM records"], data)
-        assert records.returncode == 0, (
-            f"stdout={records.stdout!r} stderr={records.stderr!r}"
-        )
+        assert records.returncode != 0, f"stdout={records.stdout!r}"
+        assert "no such table" in records.stderr
 
     def it_skips_discovery_under_the_no_plugin_flag(staged):
         site_dir, data = staged
