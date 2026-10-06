@@ -1,10 +1,13 @@
 use notify::event::{ModifyKind, RenameMode};
 use notify::{
-    Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher,
+    Config, ErrorKind, Event, EventKind, RecommendedWatcher, RecursiveMode,
+    Watcher as NotifyWatcher,
 };
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
+
+const EMFILE: i32 = 24;
 
 /// Events emitted by the file watcher.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +77,25 @@ impl Watcher {
     }
 }
 
+/// The message for a watcher that failed to start. On inotify, the opaque
+/// limit errors name the exhausted limit and the sysctl that raises it.
+pub(crate) fn describe_watch_error(err: &notify::Error, inotify: bool) -> String {
+    let base = err.to_string();
+    if !inotify {
+        return base;
+    }
+    let (limit, sysctl) = match &err.kind {
+        ErrorKind::Io(io) if io.raw_os_error() == Some(EMFILE) => {
+            ("inotify instance limit", "fs.inotify.max_user_instances")
+        }
+        ErrorKind::MaxFilesWatch => ("inotify watch limit", "fs.inotify.max_user_watches"),
+        _ => return base,
+    };
+    format!(
+        "{base}; the {limit} is likely exhausted: raise it with `sudo sysctl {sysctl}=<higher value>`"
+    )
+}
+
 /// Translate a notify Event into zero or more FileEvents.
 fn translate_event(event: &Event) -> Vec<FileEvent> {
     let mut results = Vec::new();
@@ -106,7 +128,7 @@ fn translate_event(event: &Event) -> Vec<FileEvent> {
     results
 }
 
-// Test fixtures: build `notify::Event`s without the unit tests naming the
+// Test fixtures: build `notify::Event`s and `notify::Error`s without the unit tests naming the
 // `notify::event::*` inner-kind types (the unit-lint isolation rule).
 // `translate_event` matches only the outer variant, so the inner kind is an
 // arbitrary valid value.
@@ -193,12 +215,62 @@ fn access_event(paths: Vec<PathBuf>) -> Event {
 }
 
 #[cfg(test)]
+fn io_error(raw_os_error: i32) -> notify::Error {
+    notify::Error::io(std::io::Error::from_raw_os_error(raw_os_error))
+}
+
+#[cfg(test)]
+fn max_files_watch_error() -> notify::Error {
+    notify::Error::new(ErrorKind::MaxFilesWatch)
+}
+
+#[cfg(test)]
+fn path_not_found_error() -> notify::Error {
+    notify::Error::path_not_found()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     // Effectful tests driving a real `notify` OS watcher live in
     // `tests/watcher.rs` (unit-lint isolation); only the pure
     // `translate_event` mapping tests belong here.
+
+    #[test]
+    fn describe_watch_error_names_the_instance_limit_for_emfile_on_inotify() {
+        let err = io_error(24);
+        let msg = describe_watch_error(&err, true);
+        assert!(msg.starts_with(&err.to_string()), "{msg}");
+        assert!(msg.contains("inotify instance limit"), "{msg}");
+        assert!(msg.contains("fs.inotify.max_user_instances"), "{msg}");
+    }
+
+    #[test]
+    fn describe_watch_error_names_the_watch_limit_for_max_files_watch_on_inotify() {
+        let err = max_files_watch_error();
+        let msg = describe_watch_error(&err, true);
+        assert!(msg.starts_with(&err.to_string()), "{msg}");
+        assert!(msg.contains("inotify watch limit"), "{msg}");
+        assert!(msg.contains("fs.inotify.max_user_watches"), "{msg}");
+    }
+
+    #[test]
+    fn describe_watch_error_leaves_emfile_alone_off_inotify() {
+        let err = io_error(24);
+        assert_eq!(describe_watch_error(&err, false), err.to_string());
+    }
+
+    #[test]
+    fn describe_watch_error_leaves_other_errors_alone() {
+        let other_io = io_error(2);
+        assert_eq!(describe_watch_error(&other_io, true), other_io.to_string());
+        let not_found = path_not_found_error();
+        assert_eq!(
+            describe_watch_error(&not_found, true),
+            not_found.to_string()
+        );
+    }
 
     #[test]
     fn translate_event_maps_create() {

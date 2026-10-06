@@ -947,6 +947,35 @@ mod tests {
         );
     }
 
+    fn explored_dirs(place: Place<'_>) -> Vec<Place<'_>> {
+        place
+            .explore(&|_| true)
+            .into_iter()
+            .filter_map(|step| match step {
+                Step::Dir(child) => Some(*child),
+                Step::Leaf(_) => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn explore_enters_a_dirsql_directory_below_the_top_level() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("a").join(RESERVED_DIR)).unwrap();
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let top = Place {
+            walk: walk_with(&ignore, None, Vec::new()),
+            dir: root.path().to_path_buf(),
+            rel: PathBuf::new(),
+            depth: 0,
+            states: Vec::new(),
+            linked: false,
+        };
+        let [a] = <[Place<'_>; 1]>::try_from(explored_dirs(top)).ok().unwrap();
+        let nested: Vec<PathBuf> = explored_dirs(a).into_iter().map(|p| p.rel).collect();
+        assert_eq!(nested, vec![Path::new("a").join(RESERVED_DIR)]);
+    }
+
     #[test]
     fn is_reserved_dir_matches_top_level_dirsql() {
         assert!(is_reserved_dir(1, true, OsStr::new(RESERVED_DIR)));
