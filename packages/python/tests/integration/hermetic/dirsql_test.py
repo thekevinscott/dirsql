@@ -252,6 +252,25 @@ def describe_binding_layer():
             assert event == "late"
             assert len(fake.poll_calls) == 3
 
+        @pytest.mark.asyncio
+        async def it_broadcasts_every_event_to_every_stream(mock_core):
+            db = mock_core("/root", tables=["t"])
+            await db.ready()
+
+            fake = _FakeRustDirSQL.instances[0]
+            fake.poll_batches = [["a", "b"]]
+
+            first = db.watch()
+            second = db.watch()
+
+            async def take_two(stream):
+                return [await stream.__anext__(), await stream.__anext__()]
+
+            got = await asyncio.wait_for(
+                asyncio.gather(take_two(first), take_two(second)), timeout=2.0
+            )
+            assert got == [["a", "b"], ["a", "b"]]
+
     def describe_config_kwarg():
         # Feature: DirSQL(config=path) forwards to the Rust core. See
         # docs/reference/config.md and packages/python/README.md.

@@ -192,6 +192,47 @@ def describe_DirSQL_async():
 
     def describe_watch():
         @pytest.mark.asyncio
+        async def it_delivers_every_event_to_every_stream(tmp_dir):
+            db = DirSQL(
+                tmp_dir,
+                tables=[
+                    Table(
+                        name="items",
+                        ddl="CREATE TABLE items (name TEXT)",
+                        glob="**/*.json",
+                        on_file=lambda path: [
+                            json.loads(open(path, encoding="utf-8").read())
+                        ],
+                    ),
+                ],
+            )
+            await db.ready()
+
+            async def first_insert(stream):
+                async for event in stream:
+                    if event.action == "insert":
+                        return event.row["name"]
+
+            tasks = [
+                asyncio.create_task(first_insert(db.watch())),
+                asyncio.create_task(first_insert(db.watch())),
+            ]
+            await asyncio.sleep(0.3)
+
+            final = os.path.join(tmp_dir, "shared.json")
+            tmp = final + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump({"name": "shared"}, f)
+            os.replace(tmp, final)
+
+            try:
+                names = await asyncio.wait_for(asyncio.gather(*tasks), timeout=5.0)
+            except TimeoutError:
+                pytest.fail("a watch() stream missed the event")
+
+            assert names == ["shared", "shared"]
+
+        @pytest.mark.asyncio
         async def it_emits_insert_events_for_new_files(tmp_dir):
             db = DirSQL(
                 tmp_dir,
