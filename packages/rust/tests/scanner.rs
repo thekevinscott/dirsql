@@ -218,3 +218,50 @@ fn scan_glob_applies_gitignore_only_inside_a_repo() {
 
     assert_eq!(results, vec![std::path::PathBuf::from("zz-sibling/z.log")]);
 }
+
+fn dot_tree() -> TempDir {
+    let root = TempDir::new().unwrap();
+    for dir in ["a/.cache", ".d/.cache", ".cache"] {
+        fs::create_dir_all(root.path().join(dir)).unwrap();
+    }
+    for file in [
+        ".x",
+        "a/.y",
+        ".cache/.z",
+        "a/.cache/m.md",
+        ".d/.cache/m.md",
+        ".cache/m.md",
+    ] {
+        fs::write(root.path().join(file), "").unwrap();
+    }
+    root
+}
+
+fn scan_paths(root: &TempDir, pattern: &str) -> Vec<String> {
+    let ignore = TableMatcher::new(&[], &[]).unwrap();
+    let glob = compile_glob(pattern).unwrap();
+    scan_glob(root.path(), &glob, &ignore, false)
+        .into_iter()
+        .map(|p| {
+            p.components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .collect()
+}
+
+#[test]
+fn scan_glob_a_spelled_dot_component_does_not_open_dot_directories_above_it() {
+    let root = dot_tree();
+    assert_eq!(scan_paths(&root, "**/.*"), vec![".x", "a/.y"]);
+}
+
+#[test]
+fn scan_glob_a_double_star_does_not_cross_a_dot_directory_the_next_component_spells() {
+    let root = dot_tree();
+    assert_eq!(
+        scan_paths(&root, "**/.cache/*.md"),
+        vec![".cache/m.md", "a/.cache/m.md"]
+    );
+}

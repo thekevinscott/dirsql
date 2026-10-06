@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/plugin_discovery_test.py tests/e2e/plugin_extension_discovery_test.py tests/e2e/extension_package_test.py tests/e2e/cli_version_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1791301754,
+  "exit_code": 0,
+  "commit": "9a556e333ff2cbcbcba2e6eba31a3e14c7aab008",
+  "branch": "claude/1225-plugin-no-default"
+}
