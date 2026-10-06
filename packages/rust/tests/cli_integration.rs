@@ -529,3 +529,108 @@ async fn binding_an_in_use_port_surfaces_bind_error() {
 
     first.shutdown().await.unwrap();
 }
+
+async fn spawn_cors_server(db: DirSQL, origin: &'static str) -> ServerHandle {
+    let config = ServerConfig::ephemeral()
+        .with_cors_origin(reqwest::header::HeaderValue::from_static(origin));
+    serve(config, db)
+        .await
+        .expect("server should bind on an ephemeral port")
+}
+
+fn allow_origin(resp: &reqwest::Response) -> Option<&str> {
+    resp.headers()
+        .get("access-control-allow-origin")
+        .map(|v| v.to_str().unwrap())
+}
+
+#[tokio::test]
+async fn without_a_cors_origin_responses_carry_no_cors_headers() {
+    let (_root, db) = blog_fixture();
+    let handle = spawn_server(db).await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/query", base_url(&handle)))
+        .header("origin", "http://localhost:3202")
+        .json(&json!({"sql": "SELECT basename FROM posts"}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(allow_origin(&resp), None);
+    handle.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn cors_origin_is_sent_on_query_responses() {
+    let (_root, db) = blog_fixture();
+    let handle = spawn_cors_server(db, "http://localhost:3202").await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/query", base_url(&handle)))
+        .header("origin", "http://localhost:3202")
+        .json(&json!({"sql": "SELECT basename FROM posts"}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(allow_origin(&resp), Some("http://localhost:3202"));
+    handle.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn cors_origin_is_sent_on_the_events_stream() {
+    let (_root, db) = blog_fixture();
+    let handle = spawn_cors_server(db, "*").await;
+
+    let resp = reqwest::Client::new()
+        .get(format!("{}/events", base_url(&handle)))
+        .header("origin", "http://localhost:3202")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(allow_origin(&resp), Some("*"));
+    drop(resp);
+    handle.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn cors_preflight_for_a_json_query_is_allowed() {
+    let (_root, db) = blog_fixture();
+    let handle = spawn_cors_server(db, "http://localhost:3202").await;
+
+    let resp = reqwest::Client::new()
+        .request(
+            reqwest::Method::OPTIONS,
+            format!("{}/query", base_url(&handle)),
+        )
+        .header("origin", "http://localhost:3202")
+        .header("access-control-request-method", "POST")
+        .header("access-control-request-headers", "content-type")
+        .send()
+        .await
+        .unwrap();
+
+    assert!(resp.status().is_success(), "status: {}", resp.status());
+    assert_eq!(allow_origin(&resp), Some("http://localhost:3202"));
+    let methods = resp
+        .headers()
+        .get("access-control-allow-methods")
+        .map(|v| v.to_str().unwrap().to_ascii_uppercase())
+        .unwrap_or_default();
+    assert!(methods.contains("POST"), "allow-methods: {methods:?}");
+    let headers = resp
+        .headers()
+        .get("access-control-allow-headers")
+        .map(|v| v.to_str().unwrap().to_ascii_lowercase())
+        .unwrap_or_default();
+    assert!(
+        headers.contains("content-type"),
+        "allow-headers: {headers:?}"
+    );
+    handle.shutdown().await.unwrap();
+}
