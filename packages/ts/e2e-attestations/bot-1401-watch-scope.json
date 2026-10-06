@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791310949,
+  "exit_code": 0,
+  "commit": "9042d6d0270c954c56b36b4302a0201ebc93ed62",
+  "branch": "bot/1401-watch-scope"
+}
