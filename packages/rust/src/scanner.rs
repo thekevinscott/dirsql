@@ -373,6 +373,28 @@ struct Walk<'a> {
     frames: Vec<Gitignore>,
 }
 
+struct RepoScope {
+    previous: bool,
+    active: bool,
+}
+
+impl RepoScope {
+    fn enter(previous: bool, entered_repo: bool) -> Self {
+        Self {
+            previous,
+            active: previous || entered_repo,
+        }
+    }
+
+    fn loads_gitignore(&self) -> bool {
+        self.active
+    }
+
+    fn restore(self) -> bool {
+        self.previous
+    }
+}
+
 impl Walk<'_> {
     fn descend(
         &mut self,
@@ -384,11 +406,11 @@ impl Walk<'_> {
         visit: &mut dyn FnMut(PathBuf, &DirEntry),
     ) {
         let entered_repo = self.gitignore && holds_git(dir);
-        let was_in_repo = self.in_repo;
         let inherited_frames = entered_repo.then(|| std::mem::take(&mut self.frames));
-        self.in_repo |= entered_repo;
+        let repo_scope = RepoScope::enter(self.in_repo, entered_repo);
+        self.in_repo = repo_scope.active;
         let mut pushed = false;
-        if self.in_repo
+        if repo_scope.loads_gitignore()
             && let Some(matcher) = load_gitignore(dir)
         {
             self.frames.push(matcher);
@@ -420,7 +442,7 @@ impl Walk<'_> {
         if let Some(frames) = inherited_frames {
             self.frames = frames;
         }
-        self.in_repo = was_in_repo;
+        self.in_repo = repo_scope.restore();
     }
 
     /// Whether the walk takes an entry at `depth`: the skip rules and the
@@ -799,6 +821,21 @@ mod tests {
             in_repo: !frames.is_empty(),
             frames,
         }
+    }
+
+    #[test]
+    fn repo_scope_enters_nested_repos_and_restores_prior_state() {
+        let top = RepoScope::enter(false, false);
+        assert!(!top.loads_gitignore());
+        assert!(!top.restore());
+
+        let nested = RepoScope::enter(false, true);
+        assert!(nested.loads_gitignore());
+        assert!(!nested.restore());
+
+        let inherited = RepoScope::enter(true, false);
+        assert!(inherited.loads_gitignore());
+        assert!(inherited.restore());
     }
 
     #[test]
