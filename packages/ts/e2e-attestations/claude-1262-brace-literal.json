@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791240545,
+  "exit_code": 0,
+  "commit": "f6ce938426f1c162ad69d5c52254660d2f0f416d",
+  "branch": "claude/1262-brace-literal"
+}

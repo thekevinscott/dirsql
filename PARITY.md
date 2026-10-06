@@ -257,6 +257,13 @@ the skip rules (configured `ignore` plus the built-in `node_modules/**` and
 by `db::query` and the `dirsql_path` module). All three SDKs and the CLI get the
 same answers with no per-binding surface and no SDK signature changes.
 
+**Path-table braces follow bash brace expansion (#1262) — parity by
+construction, no drift.** A comma group alternates, a `..` range expands, and
+any other brace is literal text. The expansion runs in the shared Rust core
+(`brace::expand`, called by `scanner::compile_glob`), so all three SDKs and the
+CLI match the same files with no per-binding surface and no SDK signature
+changes. Config `[[table]] glob` does not use it yet.
+
 **Gitignore-by-default in path-tables (#742) — at parity, opt-out
 restored (#745/#746).** Path-table scans respect `.gitignore` files by default
 (hierarchical, traversal-pruned, hidden files still scanned). The *behavior*

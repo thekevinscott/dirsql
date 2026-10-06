@@ -163,9 +163,9 @@ fn is_wanted(glob: &PathGlob, ignore: &TableMatcher, rel_path: &Path) -> bool {
 }
 
 /// A path-table's glob as [`scan_glob`] reads it: the files it matches, and
-/// the dot-named entries it spells out and so lets the walk into, and the
-/// same pattern split into `/`-separated components, which decide where the
-/// walk may follow a symlink.
+/// the dot-named entries it spells out and so lets the walk into, and each
+/// brace-expanded word split into `/`-separated components, which decide
+/// where the walk may follow a symlink.
 ///
 /// A component beginning with `.` is spelled; `.claude` and `.env` admit
 /// exactly those names, `.*` any dot-named entry, as in the shell. Every
@@ -179,15 +179,19 @@ fn is_wanted(glob: &PathGlob, ignore: &TableMatcher, rel_path: &Path) -> bool {
 /// cannot recurse without bound.
 #[derive(Debug)]
 pub struct PathGlob {
-    files: Pattern,
+    files: Vec<Pattern>,
     spelled_dot_names: Vec<Pattern>,
+    /// Every word's components back to back, each word closed by an `End`.
     components: Vec<Component>,
+    /// Where each word's components begin.
+    starts: Vec<usize>,
 }
 
 #[derive(Debug)]
 enum Component {
     AnyDepth,
     Name(Pattern),
+    End,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -205,7 +209,7 @@ impl PathGlob {
     }
 
     pub fn is_match(&self, rel_path: &Path) -> bool {
-        self.files.is_match(rel_path)
+        self.files.iter().any(|p| p.is_match(rel_path))
     }
 
     fn has_components(&self) -> bool {
@@ -213,11 +217,11 @@ impl PathGlob {
     }
 
     fn start(&self) -> Vec<usize> {
-        self.closure(vec![0])
+        self.closure(self.starts.clone())
     }
 
     /// The components that may come next once `name` has been consumed from
-    /// `states`; `components.len()` means the whole pattern has matched.
+    /// `states`; an `End` means a whole word has matched.
     fn step(&self, states: &[usize], name: &OsStr, kind: Kind) -> Vec<usize> {
         let mut next = Vec::new();
         for &i in states {
@@ -249,11 +253,11 @@ impl PathGlob {
     /// Whether an entry below a followed symlink is worth taking: a file the
     /// whole pattern matches, or a directory some component can still enter.
     fn reaches(&self, states: &[usize], kind: Kind) -> bool {
-        let end = self.components.len();
+        let at_end = |&i: &usize| matches!(self.components[i], Component::End);
         if kind == Kind::File {
-            states.contains(&end)
+            states.iter().any(at_end)
         } else {
-            states.iter().any(|&i| i < end)
+            !states.iter().all(at_end)
         }
     }
 }
@@ -264,15 +268,30 @@ impl PathGlob {
 /// it a lone `*` would cross `/` and the explicit non-recursive spelling would
 /// silently recurse. `**` still crosses separators.
 pub fn compile_glob(pattern: &str) -> Result<PathGlob, GlobError> {
-    let spelled_dot_names = pattern
-        .split('/')
-        .filter(|c| is_dot_named(OsStr::new(c)))
-        .map(Pattern::new)
-        .collect::<Result<_, _>>()?;
+    let words = crate::brace::expand(pattern);
+    let mut files = Vec::new();
+    let mut spelled_dot_names = Vec::new();
+    for word in &words {
+        files.push(Pattern::new(word)?);
+        for component in word.split('/').filter(|c| is_dot_named(OsStr::new(c))) {
+            spelled_dot_names.push(Pattern::new(component)?);
+        }
+    }
+    let mut components = Vec::new();
+    let mut starts = Vec::new();
+    // All or nothing: the walk prunes a directory no component can enter, so
+    // a word left without components would lose its matches.
+    let compiled: Option<Vec<_>> = words.iter().map(|w| compile_components(w)).collect();
+    for word_components in compiled.unwrap_or_default() {
+        starts.push(components.len());
+        components.extend(word_components);
+        components.push(Component::End);
+    }
     Ok(PathGlob {
-        files: Pattern::new(pattern)?,
+        files,
         spelled_dot_names,
-        components: compile_components(pattern),
+        components,
+        starts,
     })
 }
 
@@ -280,19 +299,19 @@ fn is_dot_named(name: &OsStr) -> bool {
     name.as_encoded_bytes().first() == Some(&b'.')
 }
 
-/// A pattern whose components do not compile on their own (an alternation
-/// spanning a `/`) gets none, so the walk follows no symlinked directory.
-fn compile_components(pattern: &str) -> Vec<Component> {
-    let mut components = pattern
+/// A word whose components do not compile on their own (a class spanning a
+/// `/`) gets none.
+fn compile_components(word: &str) -> Option<Vec<Component>> {
+    let mut components = word
         .split('/')
         .map(|c| match c {
             "**" => Ok(Component::AnyDepth),
             _ => Pattern::new(c).map(Component::Name),
         })
         .collect::<Result<Vec<_>, _>>()
-        .unwrap_or_default();
+        .ok()?;
     components.dedup_by(|a, b| matches!((a, b), (Component::AnyDepth, Component::AnyDepth)));
-    components
+    Some(components)
 }
 
 /// Module-argument spelling for a scan that respects `.gitignore`.
@@ -379,7 +398,10 @@ impl<'a> Place<'a> {
             states,
             linked,
         } = self;
-        walk.in_repo = walk.in_repo || (walk.gitignore && holds_git(&dir));
+        if walk.gitignore && holds_git(&dir) {
+            walk.in_repo = true;
+            walk.frames.clear();
+        }
         if walk.in_repo
             && let Some(matcher) = load_gitignore(&dir)
         {
@@ -1130,16 +1152,49 @@ mod tests {
     #[test]
     fn repeated_double_stars_are_one() {
         let glob = compile_glob("**/**/x").unwrap();
-        assert_eq!(glob.components.len(), 2);
+        assert_eq!(glob.components.len(), 3);
         assert_eq!(states_after(&glob, &[("a", Kind::LinkedDir)]), vec![1]);
     }
 
     #[test]
     fn a_pattern_whose_components_do_not_compile_alone_follows_no_link() {
-        let glob = compile_glob("{a,b/c}").unwrap();
-        assert!(glob.is_match(Path::new("b/c")));
+        let glob = compile_glob("[a/b]").unwrap();
         assert!(glob.components.is_empty());
         assert!(!glob.reaches(&glob.start(), Kind::LinkedDir));
+    }
+
+    #[test]
+    fn one_brace_word_without_components_leaves_the_glob_without_any() {
+        let glob = compile_glob("{x,[a/b]}").unwrap();
+        assert!(glob.components.is_empty());
+        assert!(!glob.has_components());
+    }
+
+    #[test]
+    fn each_brace_word_is_walked_from_its_own_start() {
+        let glob = compile_glob("{a,b/c}").unwrap();
+        assert!(glob.is_match(Path::new("b/c")));
+        assert_eq!(glob.start(), vec![0, 2]);
+        assert_eq!(states_after(&glob, &[("b", Kind::LinkedDir)]), vec![3]);
+        let states = states_after(&glob, &[("b", Kind::LinkedDir), ("c", Kind::File)]);
+        assert!(glob.reaches(&states, Kind::File));
+        let states = states_after(&glob, &[("a", Kind::File)]);
+        assert!(glob.reaches(&states, Kind::File));
+        assert!(!glob.reaches(&states, Kind::LinkedDir));
+    }
+
+    #[test]
+    fn a_literal_brace_component_matches_only_its_own_text() {
+        let glob = compile_glob("{q}/x").unwrap();
+        assert_eq!(states_after(&glob, &[("{q}", Kind::LinkedDir)]), vec![1]);
+        assert!(states_after(&glob, &[("q", Kind::LinkedDir)]).is_empty());
+    }
+
+    #[test]
+    fn a_dot_name_inside_a_brace_group_is_spelled() {
+        let glob = compile_glob("{.env,x}").unwrap();
+        assert!(glob.spells_dot_name(OsStr::new(".env")));
+        assert!(!glob.spells_dot_name(OsStr::new(".git")));
     }
 
     #[test]
@@ -1210,7 +1265,7 @@ mod tests {
     #[test]
     fn enters_every_real_directory_when_the_glob_has_no_components() {
         let ignore = TableMatcher::new(&[], &[]).unwrap();
-        let glob = compile_glob("{a/b,c}").unwrap();
+        let glob = compile_glob("[a/b]").unwrap();
         let walk = Walk {
             ignore: &ignore,
             glob: Some(&glob),
