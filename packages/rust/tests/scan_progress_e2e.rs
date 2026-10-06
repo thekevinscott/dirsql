@@ -97,10 +97,11 @@ fn forced_progress_reports_the_walk_phase_on_stderr() {
         err.contains("dirsql: scanning"),
         "the directory walk draws a labeled progress line: {err:?}"
     );
-    // Four: the three fixture files plus the `.dirsql.toml` the walk also
-    // visits. The walk counts files it reached, not rows it matched.
+    // Three: the fixture files. The dot-named `.dirsql.toml` is not spelled by
+    // the glob, so the walk skips it. The walk counts files it reached, not
+    // rows it matched.
     assert!(
-        err.contains("dirsql: scanned 4 files in "),
+        err.contains("dirsql: scanned 3 files in "),
         "the walk summarizes the files it actually reached: {err:?}"
     );
 }
