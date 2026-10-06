@@ -64,7 +64,6 @@ bash's raw output. `$ROOT` is the fixture's directory and `$BASE` its parent.
 
 A test runs every row against dirsql as a path-table and, with the leading
 `./` dropped, as a config `glob`, so this table cannot drift from the code.
-`scripts/glob-conformance.sh check` re-runs the bash side.
 
 <!-- conformance-table -->
 | Pattern | Rows | Divergence |

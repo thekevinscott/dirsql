@@ -1,6 +1,5 @@
 //! The example table in `docs/reference/glob.md` is the specification: every
 //! row runs against dirsql as a path-table and as a config `[[table]] glob`.
-//! `scripts/glob-conformance.sh` checks the same rows against bash.
 #![cfg(all(unix, feature = "cli"))]
 
 use std::collections::HashMap;
