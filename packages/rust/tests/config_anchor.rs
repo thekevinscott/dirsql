@@ -56,11 +56,11 @@ fn a_relative_glob_anchors_at_the_config_directory_not_the_index_root() {
 fn an_absolute_glob_anchors_at_its_literal_prefix() {
     let cfg_dir = tempfile::TempDir::new().unwrap();
     let data = tempfile::TempDir::new().unwrap();
-    let data = fs::canonicalize(data.path()).unwrap();
+    let data = data.path().to_path_buf();
     fs::create_dir_all(data.join("sub")).unwrap();
     fs::write(data.join("sub/b.txt"), "x").unwrap();
     fs::write(cfg_dir.path().join("decoy.txt"), "x").unwrap();
-    let glob = format!("{}/*/*.txt", data.display());
+    let glob = format!("{}/*/*.txt", data.display()).replace('\\', "/");
     let cfg = write_config(cfg_dir.path(), &glob, "");
 
     let db = DirSQL::builder().config(&cfg).build().unwrap();
