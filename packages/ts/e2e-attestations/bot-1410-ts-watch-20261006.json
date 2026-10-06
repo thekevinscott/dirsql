@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run tests/integration/binding/watch.test.ts",
+  "ran_at": 1791325589,
+  "exit_code": 0,
+  "commit": "8bc27034ae5bdaafea16e6729a498f266aa79041",
+  "branch": "bot/1410-ts-watch-20261006"
+}
