@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/ -k \"declared_table_name or query_contract\" -p no:cacheprovider",
+  "ran_at": 1791251905,
+  "exit_code": 0,
+  "commit": "518ef08a0f69f880211698805c943733f22afff9",
+  "branch": "claude/1330-cli-exit"
+}
