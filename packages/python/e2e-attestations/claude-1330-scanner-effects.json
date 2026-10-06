@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/declared_table_name_test.py tests/e2e/use_case_join_test.py -x -q",
+  "ran_at": 1791300931,
+  "exit_code": 0,
+  "commit": "dbe4a7ad92b3f630f0fec40a9e09523babc3b594",
+  "branch": "claude/1330-scanner-effects"
+}

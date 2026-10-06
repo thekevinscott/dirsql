@@ -77,7 +77,15 @@ const READERS: usize = 8;
 /// `size` is what the row's stat reported, so the buffer is sized without
 /// stat'ing again; a file that has grown since is still read whole.
 fn read_text(path: &Path, size: Option<i64>) -> Option<String> {
-    let mut file = File::open(path).ok()?;
+    read_text_with(path, size, |path| File::open(path))
+}
+
+fn read_text_with<R: Read>(
+    path: &Path,
+    size: Option<i64>,
+    open: impl FnOnce(&Path) -> io::Result<R>,
+) -> Option<String> {
+    let mut file = open(path).ok()?;
     let bytes = read_all(&mut file, presize(size)).ok()?;
     String::from_utf8(bytes).ok()
 }
@@ -168,6 +176,7 @@ struct ScanSpec {
     ignore: TableMatcher,
     /// Whether the scan respects `.gitignore` files (off under `--no-ignore`).
     gitignore: bool,
+    reader: fn(&Path, Option<i64>) -> Option<String>,
     /// The row set of the statement in progress, which the first stat a
     /// statement asks for stats whole: one stat at a time as SQLite steps
     /// would be several times slower than sharing them out at once.
@@ -347,6 +356,7 @@ fn parse_module_args(args: &[&[u8]]) -> Result<ScanSpec> {
         path_prefix: PathBuf::from(path_prefix),
         ignore: vtab_scaffold::compile_ignore(ignore)?,
         gitignore: vtab_scaffold::parse_gitignore(gitignore)?,
+        reader: read_text,
         current: Mutex::new(Weak::new()),
     })
 }
@@ -374,7 +384,7 @@ impl ScanSpec {
     }
 
     fn read(&self, row: &FileRow) -> Option<String> {
-        read_text(&self.root.join(&row.rel), self.facts(row).size)
+        (self.reader)(&self.root.join(&row.rel), self.facts(row).size)
     }
 }
 
@@ -647,6 +657,62 @@ mod tests {
 
     fn no_facts(_: &FileRow) -> StatFacts {
         StatFacts::default()
+    }
+
+    fn injected_reader(path: &Path, size: Option<i64>) -> Option<String> {
+        (path == Path::new("/root/docs/a.md") && size == Some(7)).then(|| "contents".to_owned())
+    }
+
+    fn sized_row(rel: &str, size: i64) -> FileRow {
+        let row = FileRow::new(Path::new(""), PathBuf::from(rel));
+        row.facts.set(facts(size)).unwrap();
+        row
+    }
+
+    fn spec_with_reader() -> ScanSpec {
+        let args = args_with(&[b"'/root'", b"'**/*.md'", b"''", b"'gitignore'"]);
+        let mut spec = parse_module_args(&args).unwrap();
+        spec.reader = injected_reader;
+        spec
+    }
+
+    #[test]
+    fn read_text_uses_the_injected_reader_and_decodes_utf8() {
+        let text = read_text_with(Path::new("/root/docs/a.md"), Some(7), |path| {
+            assert_eq!(path, Path::new("/root/docs/a.md"));
+            Ok(std::io::Cursor::new(b"contents".to_vec()))
+        });
+
+        assert_eq!(text.as_deref(), Some("contents"));
+    }
+
+    #[test]
+    fn read_text_reads_a_real_file() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+
+        let text = read_text(&path, None).unwrap();
+
+        assert!(text.starts_with("[package]"));
+        assert!(text.contains("name = \"dirsql\""));
+    }
+
+    #[test]
+    fn scan_spec_read_uses_the_injected_reader() {
+        let spec = spec_with_reader();
+        let row = sized_row("docs/a.md", 7);
+
+        assert_eq!(spec.read(&row).as_deref(), Some("contents"));
+    }
+
+    #[test]
+    fn prefetch_caches_content_from_the_injected_reader() {
+        let spec = spec_with_reader();
+        let row = sized_row("docs/a.md", 7);
+        let rows = [&row];
+
+        spec.prefetch(&rows);
+
+        assert_eq!(row.content.get(), Some(&Some("contents".to_owned())));
     }
 
     fn facts(size: i64) -> StatFacts {
