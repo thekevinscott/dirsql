@@ -143,12 +143,14 @@ pub fn is_trusted(
     }
 }
 
+type HashEntry = (String, String, bool, Option<String>, Vec<String>);
+
 /// Compute the canonical glob-config hash. Includes table name, DDL, glob,
 /// and strict flag for every table, plus the ignore list, in a
 /// deterministic order. A mismatch against the cached value triggers a
 /// full rebuild.
 pub fn compute_glob_config_hash(tables: &[Table], ignore: &[String]) -> String {
-    let mut entries: BTreeMap<String, (String, String, bool, Option<String>)> = BTreeMap::new();
+    let mut entries: BTreeMap<String, HashEntry> = BTreeMap::new();
     for table in tables {
         entries.insert(
             table.name.clone(),
@@ -157,12 +159,13 @@ pub fn compute_glob_config_hash(tables: &[Table], ignore: &[String]) -> String {
                 table.glob.clone(),
                 table.strict,
                 table.anchor_key(),
+                table.ignore_key().to_vec(),
             ),
         );
     }
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"v1\n");
-    for (name, (ddl, glob, strict, anchor)) in &entries {
+    for (name, (ddl, glob, strict, anchor, scoped)) in &entries {
         hasher.update(name.as_bytes());
         hasher.update(b"\0");
         hasher.update(ddl.as_bytes());
@@ -173,6 +176,10 @@ pub fn compute_glob_config_hash(tables: &[Table], ignore: &[String]) -> String {
         if let Some(anchor) = anchor {
             hasher.update(b"\0anchor\0");
             hasher.update(anchor.as_bytes());
+        }
+        for pat in scoped {
+            hasher.update(b"\0ignore\0");
+            hasher.update(pat.as_bytes());
         }
         hasher.update(b"\n");
     }
@@ -469,6 +476,16 @@ mod tests {
         let at_elsewhere = compute_glob_config_hash(&[t2], &[]);
         assert_ne!(unanchored, at_elsewhere);
         assert_ne!(at_elsewhere, compute_glob_config_hash(&[t3], &[]));
+    }
+
+    #[test]
+    fn glob_config_hash_changes_when_a_tables_scoped_ignore_changes() {
+        let t1 = Table::new("a", "CREATE TABLE a (x TEXT)", "*.json", |_| vec![]);
+        let t2 = t1.clone().scoped_ignore(vec!["skip/**".to_string()]);
+        assert_ne!(
+            compute_glob_config_hash(&[t1], &[]),
+            compute_glob_config_hash(&[t2], &[])
+        );
     }
 
     #[test]

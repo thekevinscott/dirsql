@@ -14,17 +14,19 @@ with none given [no named tables](./cli.md#configless-mode) are defined (a
 `./.dirsql.toml` on disk is **not** auto-loaded). The [SDKs](./sdk.md) load a
 config via the `config` constructor parameter.
 
-**Path resolution.** Relative paths in the config (`[[dirsql.extension]]`
-`path`) resolve against the config file's parent
-directory. The **index root is not a config concern** — it is decided by the
-runner (the CLI's invocation directory, or an SDK's explicit root), never by
-the config file's location. See [`--config`](./cli.md#flags).
+**Path resolution.** A path written in a config resolves against the config
+file's parent directory: a `[[table]]` `glob` (see [anchoring](#glob-anchor)),
+`ignore`, and `[[dirsql.extension]]` `path`. A config therefore works from any
+working directory. The **index root is not a config concern** — it is decided
+by the runner (the CLI's invocation directory, or an SDK's explicit root) and
+governs only path-tables and programmatic tables. See
+[`--config`](./cli.md#flags).
 
 ## `[dirsql]` keys
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `ignore` | array of strings | `[]` | Glob patterns matched against root-relative paths, under the [one glob rule](#glob-rule): `*` matches one level, `**` any depth. Matched files are skipped entirely — excluded from the initial scan and from watch events. |
+| `ignore` | array of strings | `[]` | Glob patterns matched against paths relative to the config file's directory, under the [one glob rule](#glob-rule): `*` matches one level, `**` any depth. They apply only to this config's `[[table]]` entries (not to path-tables, and not to another config's tables). Matched files are skipped entirely — excluded from the initial scan and from watch events. |
 
 There is no timeout key. `on-file` hook runs are unbounded; to bound one, wrap
 its command in `timeout(1)` (see [Command hooks](./hooks.md#bounding-a-hook)).
@@ -230,7 +232,7 @@ what its required `on-file` command emits — dirsql injects nothing (see
 |---|---|---|
 | `name` | yes | The table's SQL name — the name you query it by. Declared, never derived from `ddl`: dirsql does not read the DDL text. The `ddl` must create a table by this name; if it doesn't, loading fails. |
 | `ddl` | yes | A SQL batch, run verbatim — any number of statements. It must create a table called `name`; that table holds the file rows, and only the columns it declares are kept (keys the `on-file` command emits that are not declared are dropped). The rest of the batch is yours: indexes, virtual tables, triggers. See [Batch `ddl`](#batch-ddl). |
-| `glob` | yes | Glob pattern matched against root-relative paths, under the [one glob rule](#glob-rule): `*` matches one level, `**` any depth. Every table whose glob matches a file receives that file's rows — a file can populate multiple tables. A `{name}` segment is rewritten to `*` (it matches one path segment but captures nothing). |
+| `glob` | yes | Glob pattern, [anchored](#glob-anchor) at the config file's directory, under the [one glob rule](#glob-rule): `*` matches one level, `**` any depth. Every table whose glob matches a file receives that file's rows — a file can populate multiple tables. A `{name}` segment is rewritten to `*` (it matches one path segment but captures nothing). |
 | `on-file` | **yes** | A command run once per table, with every matched file's absolute path appended as a trailing argument; its stdout (one JSON array of row objects) is the table's rows. Must be non-empty. A `[[table]]` with no `on-file` is a load error (see [parse errors](#parse-errors)). See [Command hooks](./hooks.md#on-file). |
 | `strict` | no (default `false`) | When `true`, rows whose keys do not exactly match the declared columns are rejected with an error: extra keys error, and every declared column must be supplied by the `on-file` output. When `false`, extra keys are dropped and missing columns become `NULL`. |
 
@@ -255,6 +257,22 @@ glob    = "**/meta.json"
 on-file = "uv run python extract_papers.py"
 strict  = true
 ```
+
+### Glob anchor
+
+A table's `glob` is matched beneath its **anchor**, never the index root:
+
+| `glob` starts with | Anchor |
+|---|---|
+| nothing special, or `./` | the config file's directory |
+| `/` (or a drive / UNC root) | the literal directory chain before the first glob character |
+| `~/` | your home directory, then the literal chain |
+| `../` | resolved against the config file's directory, then the literal chain |
+
+So `glob = "projects/*/*.jsonl"` in `~/.claude/.dirsql.toml` indexes
+`~/.claude/projects` from any working directory, and a shared config elsewhere
+writes `glob = "~/.claude/projects/*/*.jsonl"`. A table's `path` and `dir`
+columns, `{root}`, and `ignore` are all relative to its anchor.
 
 ### Batch `ddl`
 
@@ -346,7 +364,7 @@ dirsql -c ./.dirsql.toml -c ~/team/embeddings.toml -c ./local.toml
 
 The configs load and merge in **argv order**:
 
-- **`[[table]]`, `ignore`, `[[dirsql.extension]]`, and `[[dirsql.function]]`
+- **`[[table]]`, `[[dirsql.extension]]`, and `[[dirsql.function]]`
   entries accumulate** across all configs, in order.
 - **Each config's `on-file` hooks and `[[dirsql.function]]` workers run from
   that config file's own directory** — so a relative command like
@@ -360,7 +378,8 @@ The configs load and merge in **argv order**:
   silent last-writer-wins.
 
 The index [root](./cli.md#flags) is the invocation directory regardless of where
-any config lives. With no `-c`, [no named tables](./cli.md#configless-mode) are
+any config lives; each config's `[[table]]` globs anchor at that config's own
+directory, and its `ignore` applies to its own tables only. With no `-c`, [no named tables](./cli.md#configless-mode) are
 defined (no `./.dirsql.toml` auto-discovery); a single `-c` behaves exactly as
 before.
 

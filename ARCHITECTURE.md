@@ -249,7 +249,7 @@ that is not an array of objects — is the table's failure and fails the build,
 carrying the tail of the command's stderr.
 
 Two callers share it. A `[[table]]` entry becomes a `Table::per_table` whose
-closure runs the command from the config file's directory. The `--on-file`
+closure runs the command from the config file's directory; the table's glob anchors there too (`Table::anchored`), so `{root}` is that anchor and the scan, watcher and persist hash group tables by anchor. The `--on-file`
 flag arms the `dirsql_parsed` virtual-table module (`parsed_vtab`), which runs
 the command from the index root when a path-table is minted and infers the
 table's columns from the keys the rows carry; an empty array is an error,

@@ -33,13 +33,15 @@ on-file = '''sh -c 'printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\"
 #[test]
 fn config_accumulates_across_calls() {
     let data = TempDir::new().unwrap();
-    fs::write(data.path().join("a.json"), "{}").unwrap();
 
     let cfg_a = TempDir::new().unwrap();
+    fs::write(cfg_a.path().join("a.json"), "{}").unwrap();
     let cfg_a_path = write_config(cfg_a.path(), &table_config("alpha"));
     let cfg_b = TempDir::new().unwrap();
+    fs::write(cfg_b.path().join("a.json"), "{}").unwrap();
     let cfg_b_path = write_config(cfg_b.path(), &table_config("beta"));
     let cfg_c = TempDir::new().unwrap();
+    fs::write(cfg_c.path().join("a.json"), "{}").unwrap();
     let cfg_c_path = write_config(cfg_c.path(), &table_config("gamma"));
 
     let db = DirSQL::builder()
@@ -56,7 +58,7 @@ fn config_accumulates_across_calls() {
             .unwrap_or_else(|err| {
                 panic!("table {table} from an accumulated config must be queryable: {err}")
             });
-        assert_eq!(rows.len(), 1, "table {table} must index the data dir");
+        assert_eq!(rows.len(), 1, "table {table} must index its own config dir");
         assert_eq!(rows[0]["basename"], Value::Text("a.json".into()));
     }
 }
@@ -64,9 +66,9 @@ fn config_accumulates_across_calls() {
 #[test]
 fn a_single_config_call_is_unchanged() {
     let data = TempDir::new().unwrap();
-    fs::write(data.path().join("a.json"), "{}").unwrap();
 
     let cfg = TempDir::new().unwrap();
+    fs::write(cfg.path().join("a.json"), "{}").unwrap();
     let cfg_path = write_config(cfg.path(), &table_config("alpha"));
 
     let db = DirSQL::builder()

@@ -42,7 +42,8 @@ relative paths in the command resolve predictably regardless of where
 `dirsql` was launched. A command named by the `--on-file` flag has no config
 file: it runs in the **index root**, the directory `dirsql query` was run in,
 which is also the directory a `./` path-table is relative to. In both forms
-`{root}` is the index root. The command inherits `dirsql`'s environment, so
+`{root}` is where the table's glob is anchored: the index root for `--on-file`,
+the [glob anchor](./config.md#glob-anchor) for a `[[table]]`. The command inherits `dirsql`'s environment, so
 tools like `uvx --with …` / `npx …` resolve their dependencies as usual.
 
 ### stdout protocol
@@ -143,7 +144,7 @@ the path or stat metadata emits it (it has the paths).
 
 | Placeholder | Value |
 |---|---|
-| `{root}` | The index root directory. Derive a root-relative path with `relpath(path, {root})`. |
+| `{root}` | The directory the table's glob is anchored at (the index root for `--on-file`; the config file's directory, or the literal prefix of an absolute / `~/` glob, for a `[[table]]`). Derive an anchor-relative path with `relpath(path, {root})`. |
 
 The matched files' **absolute** paths are not placeholders: they are appended
 to the command as trailing arguments, after everything written in the

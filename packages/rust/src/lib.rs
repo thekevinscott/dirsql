@@ -284,6 +284,7 @@ pub struct Table {
     pub strict: bool,
     hook: Hook,
     anchor: Option<PathBuf>,
+    ignore: Vec<String>,
 }
 
 impl Table {
@@ -291,6 +292,15 @@ impl Table {
         self.anchor
             .as_ref()
             .map(|anchor| anchor.to_string_lossy().into_owned())
+    }
+
+    pub(crate) fn ignore_key(&self) -> &[String] {
+        &self.ignore
+    }
+
+    pub(crate) fn scoped_ignore(mut self, ignore: Vec<String>) -> Self {
+        self.ignore = ignore;
+        self
     }
 
     #[doc(hidden)]
@@ -343,6 +353,7 @@ impl Table {
             hook: Hook::PerFile(Arc::new(on_file)),
             strict: false,
             anchor: None,
+            ignore: Vec::new(),
         }
     }
 
@@ -388,6 +399,7 @@ impl Table {
             hook: Hook::PerTable(Arc::new(on_files)),
             strict: false,
             anchor: None,
+            ignore: Vec::new(),
         }
     }
 }
@@ -525,7 +537,8 @@ impl DirSQL {
     /// Shortcut for `DirSQL::builder().config(config_path).build()`.
     ///
     /// With no explicit `.root()`, the index roots at the process cwd, not the
-    /// config file's parent directory. To read `<root>/.dirsql.toml`, pass it
+    /// config file's parent directory; the config's `[[table]]` globs anchor at
+    /// that parent directory. To read `<root>/.dirsql.toml`, pass it
     /// explicitly: `DirSQL::from_config_path(root.join(".dirsql.toml"))` (the
     /// implicit root-joining `from_config(root)` shortcut was removed in #603).
     pub fn from_config_path(config_path: impl AsRef<Path>) -> Result<Self> {
@@ -1621,7 +1634,9 @@ impl DirSQLBuilder {
     /// entries are appended after any programmatic tables and its
     /// `[dirsql].ignore` patterns are appended. The config file does not set the
     /// index root: with no explicit [`root`](Self::root), the index roots at the
-    /// process cwd. Relative `persist_path` / `[[dirsql.extension]]` paths still
+    /// process cwd. Its `[[table]]` globs anchor at the config's parent directory
+    /// (or the literal prefix of an absolute / `~/` glob), and its `ignore`
+    /// applies to those tables only. Relative `persist_path` / `[[dirsql.extension]]` paths still
     /// resolve against the config's parent directory.
     ///
     /// Call repeatedly to load several configs: their `[[table]]`, `ignore`, and
@@ -1693,7 +1708,7 @@ impl DirSQLBuilder {
         let DirSQLBuilder {
             root: explicit_root,
             mut tables,
-            mut ignore,
+            ignore,
             mut extensions,
             config_paths,
             suppress_config_extensions,
@@ -1723,7 +1738,8 @@ impl DirSQLBuilder {
         for cfg_path in &config_paths {
             let mut cfg = config::load_config(cfg_path).map_err(DirSqlError::config)?;
 
-            let cfg_parent = cfg_path
+            let cfg_parent = std::path::absolute(cfg_path)
+                .map_err(DirSqlError::config)?
                 .parent()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
@@ -1748,9 +1764,8 @@ impl DirSQLBuilder {
                 config_dir: cfg_parent,
             } = entry;
 
-            let cfg_tables = build_tables_from_config(&cfg, &cfg_parent, &root)?;
+            let cfg_tables = build_tables_from_config(&cfg, &cfg_parent)?;
             tables.extend(cfg_tables);
-            ignore.extend(cfg.ignore);
 
             // Config-supplied extension paths resolve against the config
             // file's parent directory (absolute paths pass through); see
@@ -1924,6 +1939,8 @@ struct PersistContext {
     needs_sweep: bool,
 }
 
+type GroupDraft = (PathBuf, Vec<String>, Vec<(String, String)>);
+
 /// Walk every group's anchor in turn, reporting one running count across all of
 /// them. Returns the matches and the total count.
 fn scan_groups(
@@ -1951,7 +1968,7 @@ fn compile_groups(
     let mut seen: HashMap<String, ()> = HashMap::with_capacity(tables.len());
     let mut names = Vec::with_capacity(tables.len());
     let mut anchors = TableAnchors::at_root(root);
-    let mut grouped: Vec<(PathBuf, Vec<(String, String)>)> = Vec::new();
+    let mut grouped: Vec<GroupDraft> = Vec::new();
     for table in tables {
         let table_name = table.name.clone();
         // Validate up front so a poisoned name from a stored cache or a
@@ -1969,16 +1986,23 @@ fn compile_groups(
             None => root.to_path_buf(),
         };
         let mapping = (table.glob.clone(), table_name.clone());
-        match grouped.iter_mut().find(|(a, _)| *a == anchor) {
-            Some((_, mappings)) => mappings.push(mapping),
-            None => grouped.push((anchor, vec![mapping])),
+        match grouped
+            .iter_mut()
+            .find(|(a, i, _)| *a == anchor && *i == table.ignore)
+        {
+            Some((_, _, mappings)) => mappings.push(mapping),
+            None => grouped.push((anchor, table.ignore.clone(), vec![mapping])),
         }
         names.push(table_name);
     }
 
-    let ignore_refs: Vec<&str> = ignore_patterns.iter().map(String::as_str).collect();
     let mut groups = Vec::with_capacity(grouped.len());
-    for (anchor, mappings) in grouped {
+    for (anchor, scoped_ignore, mappings) in grouped {
+        let ignore_refs: Vec<&str> = ignore_patterns
+            .iter()
+            .chain(&scoped_ignore)
+            .map(String::as_str)
+            .collect();
         let mapping_refs: Vec<(&str, &str)> = mappings
             .iter()
             .map(|(g, n)| (g.as_str(), n.as_str()))
@@ -2375,28 +2399,31 @@ fn resolve_functions(
     Ok(())
 }
 
-fn build_tables_from_config(
-    cfg: &config::Config,
-    config_dir: &Path,
-    root: &Path,
-) -> Result<Vec<Table>> {
+fn build_tables_from_config(cfg: &config::Config, config_dir: &Path) -> Result<Vec<Table>> {
     let mut tables = Vec::with_capacity(cfg.tables.len());
+    let home = db::home_dir();
 
     for table_cfg in &cfg.tables {
         let command = table_cfg.on_file.clone();
         if let Some(message) = on_file::path_placeholder_rejection(&command) {
             return Err(DirSqlError::PathPlaceholder(message));
         }
-        let config_dir = config_dir.to_path_buf();
-        let root = root.to_path_buf();
+        let (anchor, glob) =
+            path_table::config_anchor(&table_cfg.glob, config_dir, home.as_deref()).ok_or_else(
+                || DirSqlError::Core(DbError::PathTable(db::no_home_path_table(&table_cfg.glob))),
+            )?;
+        let hook_cwd = config_dir.to_path_buf();
+        let hook_root = anchor.clone();
         let mut table = Table::per_table_streaming(
             table_cfg.name.clone(),
             table_cfg.ddl.clone(),
-            table_cfg.glob.clone(),
+            glob,
             move |paths: &[PathBuf], sink: &mut RowSink<'_>| {
-                run_on_files(&command, paths, &config_dir, &root, sink)
+                run_on_files(&command, paths, &hook_cwd, &hook_root, sink)
             },
-        );
+        )
+        .anchored(anchor)
+        .scoped_ignore(cfg.ignore.clone());
 
         if table_cfg.strict == Some(true) {
             table.strict = true;
@@ -4562,7 +4589,7 @@ mod internal_tests {
         ))
         .unwrap();
         let dir = TempDir::new().unwrap();
-        let tables = build_tables_from_config(&cfg, dir.path(), dir.path()).unwrap();
+        let tables = build_tables_from_config(&cfg, dir.path()).unwrap();
         assert_eq!(tables.len(), 2);
         let Hook::PerTable(on_files) = &tables[0].hook else {
             panic!("a configured on-file command runs once per table");
@@ -4587,7 +4614,7 @@ mod internal_tests {
         ))
         .unwrap();
         let dir = TempDir::new().unwrap();
-        let err = match build_tables_from_config(&cfg, dir.path(), dir.path()) {
+        let err = match build_tables_from_config(&cfg, dir.path()) {
             Err(err) => err,
             Ok(_) => panic!("`{{path}}` must be rejected"),
         };
