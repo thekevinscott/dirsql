@@ -55,8 +55,7 @@ class DirSQL:
 
     The index root is the explicit ``root`` when given, else the process
     current working directory. A ``config`` file's location never sets the
-    root -- it only supplies tables, ignore patterns, and extensions, and its
-    ``[[table]]`` globs anchor at the config file's own directory. There
+    root -- it only supplies tables, ignore patterns, and extensions. There
     is no ``[dirsql].root`` config key. Constructing with neither ``root``
     nor ``config`` roots at the cwd (no error is raised).
 
