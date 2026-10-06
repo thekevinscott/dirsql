@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_gitignore_test.py -x -q",
+  "ran_at": 1791301456,
+  "exit_code": 0,
+  "commit": "00f6f73e4c2ff094c87b6dc7239b3d10de127cc2",
+  "branch": "claude/1330-scanner-repo-lookup"
+}
