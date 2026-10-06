@@ -479,7 +479,9 @@ impl Walk<'_> {
         states: &[usize],
         linked: bool,
     ) -> Option<Taken> {
-        let kind = kind_of(dir, name, seen, self.glob.is_some())?;
+        let kind = kind_of(seen, self.glob.is_some(), &|follow| {
+            stat_of(&dir.join(name), follow)
+        })?;
         let linked = linked || kind == Kind::LinkedDir;
         let next = if linked || kind != Kind::File {
             self.next_states(states, name, kind)
@@ -550,6 +552,7 @@ impl Walk<'_> {
 
 /// An entry the walk takes: a directory to enter, with the glob states and
 /// link crossing it is entered with, or a file to visit.
+#[derive(Debug, PartialEq)]
 enum Taken {
     Dir {
         child: PathBuf,
@@ -585,28 +588,51 @@ fn judge_all<T: Sync, R: Send>(items: &[T], judge: &(dyn Fn(&T) -> R + Sync)) ->
     })
 }
 
-/// What the walk makes of entry `name` of `dir`, seen as `seen`, following a
-/// symlink only when `follow_links` is set. `None` for anything else, a broken
-/// link included.
-fn kind_of(dir: &Path, name: &OsStr, seen: Seen, follow_links: bool) -> Option<Kind> {
+/// What the walk makes of an entry seen as `seen`, following a symlink only
+/// when `follow_links` is set; `stat` reports the entry itself, or with `true`
+/// its link's target. `None` for anything else, a broken link included.
+fn kind_of(seen: Seen, follow_links: bool, stat: &dyn Fn(bool) -> Option<Stat>) -> Option<Kind> {
     match seen {
         Seen::Dir => Some(Kind::Dir),
         Seen::File => Some(Kind::File),
         Seen::Other => None,
         Seen::Unknown => {
-            let file_type = fs::symlink_metadata(dir.join(name)).ok()?.file_type();
-            if file_type.is_symlink() {
-                kind_of(dir, name, Seen::Link, follow_links)
+            let entry = stat(false)?;
+            if entry.is_link {
+                kind_of(Seen::Link, follow_links, stat)
             } else {
-                classify(file_type.is_dir(), file_type.is_file(), false)
+                classify(entry.is_dir, entry.is_file, false)
             }
         }
         Seen::Link if follow_links => {
-            let target = fs::metadata(dir.join(name)).ok()?;
-            classify(target.is_dir(), target.is_file(), true)
+            let target = stat(true)?;
+            classify(target.is_dir, target.is_file, true)
         }
         Seen::Link => None,
     }
+}
+
+/// What a stat of a path reports.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Stat {
+    is_link: bool,
+    is_dir: bool,
+    is_file: bool,
+}
+
+/// The stat of `path`, through a symlink when `follow` is set.
+fn stat_of(path: &Path, follow: bool) -> Option<Stat> {
+    let metadata = if follow {
+        fs::metadata(path)
+    } else {
+        fs::symlink_metadata(path)
+    };
+    let file_type = metadata.ok()?.file_type();
+    Some(Stat {
+        is_link: file_type.is_symlink(),
+        is_dir: file_type.is_dir(),
+        is_file: file_type.is_file(),
+    })
 }
 
 fn classify(is_dir: bool, is_file: bool, linked: bool) -> Option<Kind> {
@@ -736,20 +762,135 @@ mod tests {
         );
     }
 
+    const LINK: Stat = Stat {
+        is_link: true,
+        is_dir: false,
+        is_file: false,
+    };
+    const DIR: Stat = Stat {
+        is_link: false,
+        is_dir: true,
+        is_file: false,
+    };
+    const FILE: Stat = Stat {
+        is_link: false,
+        is_dir: false,
+        is_file: true,
+    };
+
+    /// A stat of a symlink to `target`.
+    fn link_to(target: Stat) -> impl Fn(bool) -> Option<Stat> {
+        move |follow| Some(if follow { target } else { LINK })
+    }
+
+    fn unstatted(_follow: bool) -> Option<Stat> {
+        panic!("an entry its listing named needs no stat")
+    }
+
     #[test]
     fn kind_of_takes_a_directory_and_a_file_as_they_were_seen() {
-        let dir = Path::new("/no/such/dir");
-        let name = OsStr::new("entry");
-        assert_eq!(kind_of(dir, name, Seen::Dir, true), Some(Kind::Dir));
-        assert_eq!(kind_of(dir, name, Seen::File, true), Some(Kind::File));
+        assert_eq!(kind_of(Seen::Dir, true, &unstatted), Some(Kind::Dir));
+        assert_eq!(kind_of(Seen::File, true, &unstatted), Some(Kind::File));
     }
 
     #[test]
     fn kind_of_drops_a_device_and_an_unfollowed_link() {
-        let dir = Path::new("/no/such/dir");
-        let name = OsStr::new("entry");
-        assert_eq!(kind_of(dir, name, Seen::Other, true), None);
-        assert_eq!(kind_of(dir, name, Seen::Link, false), None);
+        assert_eq!(kind_of(Seen::Other, true, &unstatted), None);
+        assert_eq!(kind_of(Seen::Link, false, &link_to(DIR)), None);
+    }
+
+    #[test]
+    fn kind_of_follows_a_link_to_its_target_when_asked() {
+        assert_eq!(
+            kind_of(Seen::Link, true, &link_to(DIR)),
+            Some(Kind::LinkedDir)
+        );
+        assert_eq!(kind_of(Seen::Link, true, &link_to(FILE)), Some(Kind::File));
+        assert_eq!(kind_of(Seen::Link, true, &|_| None), None);
+    }
+
+    #[test]
+    fn kind_of_stats_an_entry_its_listing_did_not_type() {
+        assert_eq!(
+            kind_of(Seen::Unknown, false, &|_| Some(DIR)),
+            Some(Kind::Dir)
+        );
+        assert_eq!(
+            kind_of(Seen::Unknown, false, &|_| Some(FILE)),
+            Some(Kind::File)
+        );
+        assert_eq!(kind_of(Seen::Unknown, false, &link_to(DIR)), None);
+        assert_eq!(
+            kind_of(Seen::Unknown, true, &link_to(DIR)),
+            Some(Kind::LinkedDir)
+        );
+        assert_eq!(kind_of(Seen::Unknown, true, &|_| None), None);
+    }
+
+    #[test]
+    fn stat_of_reports_a_directory_a_file_and_a_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.md");
+        fs::write(&file, "").unwrap();
+        assert_eq!(stat_of(dir.path(), false), Some(DIR));
+        assert_eq!(stat_of(&file, true), Some(FILE));
+        assert_eq!(stat_of(&dir.path().join("missing"), true), None);
+    }
+
+    fn take(
+        walk: &Walk<'_>,
+        name: &str,
+        seen: Seen,
+        states: &[usize],
+        linked: bool,
+    ) -> Option<Taken> {
+        walk.take(
+            Path::new("/r"),
+            OsStr::new(name),
+            seen,
+            Path::new(""),
+            1,
+            states,
+            linked,
+        )
+    }
+
+    #[test]
+    fn take_enters_a_real_directory_a_component_can_enter_off_any_link() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("*/x").unwrap();
+        let walk = walk_with(&ignore, Some(&glob), Vec::new());
+        assert_eq!(
+            take(&walk, "a", Seen::Dir, &[0], false),
+            Some(Taken::Dir {
+                child: PathBuf::from("a"),
+                next: vec![1],
+                linked: false,
+            })
+        );
+    }
+
+    #[test]
+    fn take_keeps_a_file_off_a_link_for_the_whole_path_to_judge() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("*/x").unwrap();
+        let walk = walk_with(&ignore, Some(&glob), Vec::new());
+        assert_eq!(
+            take(&walk, "y", Seen::File, &[1], false),
+            Some(Taken::File(PathBuf::from("y")))
+        );
+    }
+
+    #[test]
+    fn take_drops_a_file_below_a_link_the_glob_does_not_reach() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("*/x").unwrap();
+        let walk = walk_with(&ignore, Some(&glob), Vec::new());
+        assert_eq!(take(&walk, "y", Seen::File, &[1], true), None);
+        assert_eq!(
+            take(&walk, "x", Seen::File, &[1], true),
+            Some(Taken::File(PathBuf::from("x")))
+        );
     }
 
     #[test]

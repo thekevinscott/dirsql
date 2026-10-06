@@ -345,7 +345,7 @@ pub fn run_cli(argv: Vec<String>) -> i32 {
                 print!("{}", super::context::guide());
                 0
             }
-            None => run_default(cli).await,
+            None => run_default(cli, &mut std::io::stdout()).await,
         }
     });
     i32::from(code)
@@ -359,7 +359,7 @@ pub fn run_cli(argv: Vec<String>) -> i32 {
 /// The index is built **once**, before the loop, rather than per statement:
 /// no directory re-scan between statements, and the live watcher keeps it
 /// fresh across them.
-async fn run_default(cli: Cli) -> u8 {
+async fn run_default(cli: Cli, out: &mut impl Write) -> u8 {
     match cli.sql {
         Some(sql) => {
             run_query(
@@ -369,7 +369,7 @@ async fn run_default(cli: Cli) -> u8 {
                     format: cli.format,
                     common: cli.common,
                 },
-                &mut std::io::stdout(),
+                out,
             )
             .await
         }
@@ -388,7 +388,7 @@ async fn run_default(cli: Cli) -> u8 {
                 // `StdinLock` is not `Send`, so it cannot cross into the
                 // blocking read; `BufReader<Stdin>` locks per call and can.
                 std::io::BufReader::new(std::io::stdin()),
-                &mut std::io::stdout(),
+                out,
                 &mut std::io::stderr(),
                 std::io::stdin().is_terminal(),
             )
@@ -712,6 +712,22 @@ mod tests {
         let mut out = Vec::new();
         let args = query_args(&["dirsql", "query", "--format", "json", "SELECT nope"]);
         assert_eq!(run_query(args, &mut out).await, 1);
+        assert!(out.is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_default_runs_its_sql_as_a_one_shot_query() {
+        let mut out = Vec::new();
+        let cli = Cli::parse_from(["dirsql", "--format", "json", "SELECT 1 AS a"]);
+        assert_eq!(run_default(cli, &mut out).await, 0);
+        assert_eq!(out, b"[{\"a\":1}]\n");
+    }
+
+    #[tokio::test]
+    async fn run_default_exits_one_when_its_sql_fails() {
+        let mut out = Vec::new();
+        let cli = Cli::parse_from(["dirsql", "--format", "json", "SELECT nope"]);
+        assert_eq!(run_default(cli, &mut out).await, 1);
         assert!(out.is_empty());
     }
 
