@@ -383,6 +383,17 @@ describe("DirSQL", () => {
       await second.return();
     });
 
+    it("accepts batches larger than the JavaScript argument limit", async () => {
+      const event = { table: "t", action: "insert" as const };
+      const inner = makeInner({
+        pollEvents: vi.fn().mockResolvedValue(Array(150_000).fill(event)),
+      });
+      installFakeCore(inner);
+      const stream = new DirSQL({}).watch();
+      expect((await stream.next()).value).toEqual(event);
+      await stream.return();
+    });
+
     it("shares an in-flight poll between concurrent consumers", async () => {
       const event = { table: "t", action: "insert" as const };
       let release!: (events: (typeof event)[]) => void;

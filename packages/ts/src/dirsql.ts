@@ -323,7 +323,9 @@ export class DirSQL {
                 for (const reference of owner._watchStreams) {
                   const stream = reference.deref();
                   if (stream) {
-                    stream.push(...events);
+                    for (const event of events) {
+                      stream.push(event);
+                    }
                   } else {
                     owner._watchStreams.delete(reference);
                   }
