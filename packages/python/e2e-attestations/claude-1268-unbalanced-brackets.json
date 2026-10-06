@@ -1,7 +1,7 @@
 {
-  "command": "uv run python -m pytest tests/e2e/glob_speed_depth_bound_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/query_contract_test.py tests/e2e/fanout_test.py tests/e2e/capture_collision_test.py -x -q",
-  "ran_at": 1791301626,
+  "command": "uv run python -m pytest tests/e2e/glob_speed_depth_bound_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_one_level_test.py tests/e2e/glob_speed_matchers_test.py tests/e2e/glob_speed_dotfiles_test.py tests/e2e/query_contract_test.py tests/e2e/fanout_test.py tests/e2e/capture_collision_test.py -x -q",
+  "ran_at": 1791314878,
   "exit_code": 0,
-  "commit": "536bce1bbf2ea97a35b59815b8997d5b0428dd59",
+  "commit": "a410b6780b4c65c7a027ddd863bb35b912531026",
   "branch": "claude/1268-unbalanced-brackets"
 }
