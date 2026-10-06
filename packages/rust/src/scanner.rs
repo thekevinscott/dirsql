@@ -772,6 +772,15 @@ mod tests {
     }
 
     #[test]
+    fn gitignores_above_loads_the_repo_root_ignore_file() {
+        let package = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = package.ancestors().nth(2).unwrap();
+        let start = package.join("src");
+
+        assert!(!gitignores_above(&start, &root).is_empty());
+    }
+
+    #[test]
     fn dirs_above_is_empty_when_the_start_is_the_top() {
         assert!(dirs_above(Path::new("/r"), Path::new("/r")).is_empty());
     }

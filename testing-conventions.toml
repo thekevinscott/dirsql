@@ -120,8 +120,8 @@ reason = "whether a walked entry is a symlink, and whether the walk is below one
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [389, 391, 423, 500, 513]
-reason = "whether a repo encloses the walk, and which .gitignore files are in force, is known only from a real tree holding .git; the choice of directories is unit-tested in enclosing_repo and dirs_above, and tests/path_table_gitignore.rs (with_no_repo_a_gitignore_does_not_apply_at_the_index_root, inside_a_repo_the_same_gitignore_hides_everything, a_repo_root_gitignore_above_the_index_root_applies) asserts every outcome"
+lines = [389, 391, 423, 513]
+reason = "repo and gitignore frame state is covered against real trees in tests/path_table_gitignore.rs; pure directory selection is unit-tested in enclosing_repo and dirs_above"
 
 [[rust.exempt]]
 path = "src/scanner.rs"
