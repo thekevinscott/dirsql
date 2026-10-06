@@ -1,7 +1,0 @@
-{
-  "command": "uv run python -m pytest tests/e2e/ -k \"declared_table_name or query_contract\" -p no:cacheprovider",
-  "ran_at": 1791252315,
-  "exit_code": 0,
-  "commit": "0cc5a64d55d41e3dd99669256ca70d23104625ab",
-  "branch": "claude/1330-vtab-stat-cell"
-}
