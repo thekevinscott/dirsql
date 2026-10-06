@@ -4,6 +4,7 @@ use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, DirEntry};
 use std::path::{Path, PathBuf};
+use std::thread;
 
 /// Top-level directory name reserved for `dirsql`'s own metadata (e.g. the
 /// persistent cache database). Always excluded from the scan, regardless of
@@ -375,24 +376,21 @@ impl Walk<'_> {
             self.frames.push(matcher);
             pushed = true;
         }
-        let below = depth + 1;
-        for (name, entry) in sorted_entries(dir) {
-            let Some(kind) = kind_of(&entry, self.glob.is_some()) else {
-                continue;
-            };
-            let next = self.next_states(states, &name, kind);
-            let linked = linked || kind == Kind::LinkedDir;
-            if !self.follows(linked, &next, kind) {
-                continue;
-            }
-            let is_dir = kind != Kind::File;
-            let child = rel.join(&name);
-            if self.admits(below, is_dir, &name, &entry.path(), &child) {
-                if is_dir {
-                    self.descend(&entry.path(), &child, below, &next, linked, visit);
-                } else {
-                    visit(child, &entry);
+        let entries = sorted_entries(dir);
+        let taken = judge_all(&entries, &|(name, entry)| {
+            self.take(name, entry, rel, depth + 1, states, linked)
+        });
+        for ((_, entry), taken) in entries.iter().zip(taken) {
+            match taken {
+                Some(Taken::Dir {
+                    child,
+                    next,
+                    linked,
+                }) => {
+                    self.descend(&entry.path(), &child, depth + 1, &next, linked, visit);
                 }
+                Some(Taken::File(child)) => visit(child, entry),
+                None => {}
             }
         }
         if pushed {
@@ -401,6 +399,51 @@ impl Walk<'_> {
         if entered_repo {
             self.in_repo = false;
         }
+    }
+
+    /// What the walk makes of one entry of the directory at `rel`, whose
+    /// entries sit at `depth`, reached with glob `states` and `linked` as
+    /// whether its path already crosses a followed symlink.
+    fn take(
+        &self,
+        name: &OsStr,
+        entry: &DirEntry,
+        rel: &Path,
+        depth: usize,
+        states: &[usize],
+        linked: bool,
+    ) -> Option<Taken> {
+        let kind = kind_of(entry, self.glob.is_some())?;
+        let linked = linked || kind == Kind::LinkedDir;
+        let next = if linked || kind != Kind::File {
+            self.next_states(states, name, kind)
+        } else {
+            Vec::new()
+        };
+        if !self.follows(linked, &next, kind) {
+            return None;
+        }
+        let is_dir = kind != Kind::File;
+        let child = rel.join(name);
+        // Only a `.gitignore` reads the full path, and building one per entry
+        // is a large share of a big directory's walk.
+        let path = if self.frames.is_empty() {
+            PathBuf::new()
+        } else {
+            entry.path()
+        };
+        if !self.admits(depth, is_dir, name, &path, &child) {
+            return None;
+        }
+        Some(if is_dir {
+            Taken::Dir {
+                child,
+                next,
+                linked,
+            }
+        } else {
+            Taken::File(child)
+        })
     }
 
     /// Whether the walk takes an entry at `depth`: the skip rules and the
@@ -439,6 +482,43 @@ impl Walk<'_> {
     }
 }
 
+/// An entry the walk takes: a directory to enter, with the glob states and
+/// link crossing it is entered with, or a file to visit.
+enum Taken {
+    Dir {
+        child: PathBuf,
+        next: Vec<usize>,
+        linked: bool,
+    },
+    File(PathBuf),
+}
+
+/// Below this many entries a directory is judged on one thread; spawning
+/// workers costs more than the judging.
+const PARALLEL_ENTRIES: usize = 4096;
+
+/// `judge` applied to each of `items`, in order, shared across the cores
+/// once there are enough items to pay for the threads.
+fn judge_all<T: Sync, R: Send>(items: &[T], judge: &(dyn Fn(&T) -> R + Sync)) -> Vec<R> {
+    // Asking for the core count reads cgroup files, too dear to pay in every
+    // small directory of a deep tree.
+    if items.len() < PARALLEL_ENTRIES {
+        return items.iter().map(judge).collect();
+    }
+    let workers = thread::available_parallelism().map_or(1, usize::from);
+    let per_worker = items.len().div_ceil(workers);
+    thread::scope(|scope| {
+        let handles: Vec<_> = items
+            .chunks(per_worker)
+            .map(|chunk| scope.spawn(move || chunk.iter().map(judge).collect::<Vec<_>>()))
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("judging an entry does not panic"))
+            .collect()
+    })
+}
+
 /// What the walk makes of an entry, following a symlink only when
 /// `follow_links` is set. `None` for anything else, a broken link included.
 fn kind_of(entry: &DirEntry, follow_links: bool) -> Option<Kind> {
@@ -466,12 +546,30 @@ fn sorted_entries(dir: &Path) -> Vec<(OsString, DirEntry)> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
-    let mut entries: Vec<(OsString, DirEntry)> = entries
+    let mut entries: Vec<(u64, OsString, DirEntry)> = entries
         .filter_map(Result::ok)
-        .map(|entry| (entry.file_name(), entry))
+        .map(|entry| {
+            let name = entry.file_name();
+            (name_prefix(&name), name, entry)
+        })
         .collect();
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    // Comparing a leading word first keeps most comparisons off the heap,
+    // which is most of the sort's cost in a large directory.
+    entries.sort_unstable_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
     entries
+        .into_iter()
+        .map(|(_, name, entry)| (name, entry))
+        .collect()
+}
+
+/// A name's first eight bytes as a big-endian word, which orders names as
+/// their bytes do as far as those bytes go.
+fn name_prefix(name: &OsStr) -> u64 {
+    let bytes = name.as_encoded_bytes();
+    let mut word = [0u8; 8];
+    let len = bytes.len().min(8);
+    word[..len].copy_from_slice(&bytes[..len]);
+    u64::from_be_bytes(word)
 }
 
 /// The `.gitignore` files above `start`, up to and including the repo root
@@ -561,6 +659,54 @@ mod tests {
 
     // Real directory-walk behavior is covered by `tests/scanner.rs`
     // (unit-lint isolation); only the pure predicate is tested here.
+
+    #[test]
+    fn judge_all_keeps_the_order_of_its_items() {
+        let items: Vec<usize> = (0..PARALLEL_ENTRIES * 3).collect();
+        assert_eq!(
+            judge_all(&items, &|n| n * 2),
+            items.iter().map(|n| n * 2).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn judge_all_shares_a_large_directory_across_threads() {
+        let items = vec![(); PARALLEL_ENTRIES];
+        let threads: std::collections::HashSet<_> = judge_all(&items, &|()| thread::current().id())
+            .into_iter()
+            .collect();
+        assert!(threads.len() > 1, "judged on {} thread(s)", threads.len());
+    }
+
+    #[test]
+    fn judge_all_judges_a_small_directory_on_the_calling_thread() {
+        let items = vec![(); PARALLEL_ENTRIES - 1];
+        let caller = thread::current().id();
+        assert!(
+            judge_all(&items, &|()| thread::current().id())
+                .iter()
+                .all(|id| *id == caller)
+        );
+    }
+
+    #[test]
+    fn name_prefix_orders_names_as_their_bytes_do() {
+        let mut names = ["abcdefghZ", "abcdefgh", "abcdefghA", "ab", "b", "abc", ""];
+        names.sort_by_key(|name| (name_prefix(OsStr::new(name)), *name));
+        assert_eq!(
+            names,
+            ["", "ab", "abc", "abcdefgh", "abcdefghA", "abcdefghZ", "b"]
+        );
+    }
+
+    #[test]
+    fn name_prefix_is_the_first_eight_bytes_padded_with_zeros() {
+        assert_eq!(name_prefix(OsStr::new("ab")), 0x6162_0000_0000_0000);
+        assert_eq!(
+            name_prefix(OsStr::new("abcdefghZ")),
+            u64::from_be_bytes(*b"abcdefgh")
+        );
+    }
 
     #[test]
     fn is_reserved_dir_matches_top_level_dirsql() {
