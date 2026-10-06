@@ -88,7 +88,9 @@ fn scan_below(
         glob: None,
         gitignore,
         in_repo: repo.is_some(),
-        frames: repo.map_or_else(Vec::new, |top| gitignores_above(start, top, &load_gitignore)),
+        frames: repo.map_or_else(Vec::new, |top| {
+            gitignores_above(start, top, &load_gitignore)
+        }),
     };
     walk(
         root,
