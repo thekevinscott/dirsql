@@ -454,12 +454,7 @@ troubleshooting. The guide is compiled into the binary, so it describes the
 version that prints it. It takes no flags and exits `0`.
 
 The dirsql agent skill tells an agent to run this command before it writes a
-query. Install the skill into Claude Code, Codex, Cursor, Gemini CLI and
-others with:
-
-```sh
-npx skills add thekevinscott/dirsql
-```
+query; see [the skill page](../howto/agent-skill.md).
 
 ## Plugins
 
@@ -470,7 +465,8 @@ installed in the same environment as `dirsql` (`pip install …`, or
 loads its fragment — its tables are queryable with zero config edits.
 Installed = active: there is no enable step and no naming convention. The
 fragment is composed *after* your own `-c` configs (so your config takes
-precedence in ordering), and the shipped starter `records` table is preserved.
+precedence in ordering). A plugin adds its own tables and nothing else: no
+`records` table is seeded.
 
 Discovery is **launcher-only** — the standalone `cargo`-installed binary does no
 discovery, and the SDKs never auto-discover (pass a plugin's config explicitly

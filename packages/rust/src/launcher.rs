@@ -94,13 +94,7 @@ mod tests {
     #[test]
     fn collects_a_discovery_injected_fragment_rather_than_the_default() {
         assert_eq!(
-            scan(&[
-                "query",
-                "SELECT 1",
-                "--include-default",
-                "-c",
-                "/frag/dirsql.toml"
-            ]),
+            scan(&["query", "SELECT 1", "-c", "/frag/dirsql.toml"]),
             ["/frag/dirsql.toml"]
         );
     }

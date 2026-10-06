@@ -1,7 +1,7 @@
 {
   "command": "pnpm test:e2e",
-  "ran_at": 1791253205,
+  "ran_at": 1791304093,
   "exit_code": 0,
-  "commit": "d1b638bb94b447b365de252489749c11eb465cc7",
+  "commit": "5092c65d1c3e2d8af0a9af6e12cb2459aaf40577",
   "branch": "claude/1232-multi-watch"
 }
