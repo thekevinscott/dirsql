@@ -1098,6 +1098,15 @@ mod tests {
     }
 
     #[test]
+    fn gitignores_above_loads_the_repo_root_ignore_file() {
+        let package = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = package.ancestors().nth(2).unwrap();
+        let start = package.join("src");
+
+        assert!(!gitignores_above(&start, root, &load_gitignore).is_empty());
+    }
+
+    #[test]
     fn gitignores_above_loads_the_ancestors_holding_one_outermost_first() {
         let load = |dir: &Path| {
             (dir != Path::new("/r/a")).then(|| {
