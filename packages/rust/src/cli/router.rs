@@ -26,6 +26,7 @@ use super::execute::{QueryFailure, execute_query, require_ready};
 pub(super) struct AppContext {
     pub state: AppState,
     pub events: broadcast::Sender<String>,
+    pub watch_failure: Option<String>,
     pub cancel: watch::Receiver<bool>,
     pub query_timeout: Duration,
 }
@@ -71,6 +72,9 @@ fn failure_response(failure: &QueryFailure) -> Response {
 async fn handle_events(State(ctx): State<SharedCtx>) -> Response {
     if let Err(failure) = require_ready(&ctx.state) {
         return failure_response(&failure);
+    }
+    if let Some(reason) = &ctx.watch_failure {
+        return failure_response(&QueryFailure::Unavailable(reason.clone()));
     }
 
     // Subscribe BEFORE anything that might block so we don't drop events

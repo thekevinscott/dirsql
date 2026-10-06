@@ -1,10 +1,13 @@
 use notify::event::{ModifyKind, RenameMode};
 use notify::{
-    Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher,
+    Config, ErrorKind, Event, EventKind, RecommendedWatcher, RecursiveMode,
+    Watcher as NotifyWatcher,
 };
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
+
+const EMFILE: i32 = 24;
 
 /// Events emitted by the file watcher.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,8 +79,21 @@ impl Watcher {
 
 /// The message for a watcher that failed to start. On inotify, the opaque
 /// limit errors name the exhausted limit and the sysctl that raises it.
-pub(crate) fn describe_watch_error(err: &notify::Error, _inotify: bool) -> String {
-    err.to_string()
+pub(crate) fn describe_watch_error(err: &notify::Error, inotify: bool) -> String {
+    let base = err.to_string();
+    if !inotify {
+        return base;
+    }
+    let (limit, sysctl) = match &err.kind {
+        ErrorKind::Io(io) if io.raw_os_error() == Some(EMFILE) => {
+            ("inotify instance limit", "fs.inotify.max_user_instances")
+        }
+        ErrorKind::MaxFilesWatch => ("inotify watch limit", "fs.inotify.max_user_watches"),
+        _ => return base,
+    };
+    format!(
+        "{base}; the {limit} is likely exhausted: raise it with `sudo sysctl {sysctl}=<higher value>`"
+    )
 }
 
 /// Translate a notify Event into zero or more FileEvents.

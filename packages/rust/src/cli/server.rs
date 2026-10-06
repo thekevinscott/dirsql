@@ -38,14 +38,16 @@ pub async fn serve_with_state(
     // the underlying notify watcher (which `DirSQL::watch` only permits
     // once per instance).
     let (event_tx, _) = broadcast::channel::<String>(256);
-    if let AppState::Ready(ref db) = state {
-        start_watch_task(db.clone(), event_tx.clone());
-    }
+    let watch_failure = match state {
+        AppState::Ready(ref db) => start_watch_task(db.clone(), event_tx.clone()),
+        AppState::Unavailable(_) => None,
+    };
 
     let (cancel_tx, cancel_rx) = watch::channel(false);
     let shared = Arc::new(AppContext {
         state,
         events: event_tx,
+        watch_failure,
         cancel: cancel_rx,
         query_timeout: config.query_timeout,
     });
@@ -69,18 +71,20 @@ pub async fn serve_with_state(
     })
 }
 
-fn start_watch_task(db: DirSQL, tx: broadcast::Sender<String>) {
+/// Returns the reason `/events` must refuse requests when the watcher
+/// could not attach.
+fn start_watch_task(db: DirSQL, tx: broadcast::Sender<String>) -> Option<String> {
     // `db.watch()` spawns its own OS thread and returns an async stream.
     // We pump the stream into the broadcast channel. If no subscribers
     // exist, send() errors but we keep pumping (future subscribers
     // will get subsequent events).
-    let Ok(mut stream) = db.watch().map_err(|err| {
-        eprintln!(
-            "dirsql: failed to attach filesystem watcher ({err}); \
-             /events will return an empty stream"
-        );
-    }) else {
-        return;
+    let mut stream = match db.watch() {
+        Ok(stream) => stream,
+        Err(err) => {
+            let reason = format!("filesystem watcher failed to start: {err}");
+            eprintln!("dirsql: {reason}; /events will return 503");
+            return Some(reason);
+        }
     };
     tokio::spawn(async move {
         while let Some(event) = stream.next().await {
@@ -88,6 +92,7 @@ fn start_watch_task(db: DirSQL, tx: broadcast::Sender<String>) {
             let _ = tx.send(payload);
         }
     });
+    None
 }
 
 #[cfg(test)]
