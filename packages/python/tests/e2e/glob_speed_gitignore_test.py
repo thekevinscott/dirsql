@@ -29,9 +29,7 @@ from .speed_of_light import (
 )
 
 GLOB = "./**"
-NATIVE = (
-    "git ls-files --cached --others --exclude-standard | grep -Ev '(^|/)\\.'"
-)
+NATIVE = "git ls-files --cached --others --exclude-standard | grep -Ev '(^|/)\\.'"
 FANOUT = 8
 GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
 
