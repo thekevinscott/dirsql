@@ -21,7 +21,10 @@ use std::path::PathBuf;
 use std::pin::Pin;
 
 use super::{
-    AppState, ServerConfig, execute::execute_query, init::InitOptions, repl::run_repl,
+    AppState, ServerConfig,
+    execute::{QueryFailure, execute_query},
+    init::InitOptions,
+    repl::run_repl,
     serve_with_state, table,
 };
 use crate::{DirSQL, Extension, Row, Table};
@@ -430,9 +433,7 @@ where
     E: for<'a> FnOnce(
         &'a AppState,
         String,
-    ) -> Pin<
-        Box<dyn Future<Output = Result<Value, super::execute::QueryFailure>> + 'a>,
-    >,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, QueryFailure>> + 'a>>,
 {
     let parser = match resolve(&args.on_file) {
         Ok(parser) => parser,
@@ -715,7 +716,7 @@ mod tests {
             |_, body| {
                 Box::pin(async move {
                     assert_eq!(body, r#"{"sql":"SELECT 1"}"#);
-                    Ok::<_, super::super::execute::QueryFailure>(one_row())
+                    Ok::<_, QueryFailure>(one_row())
                 })
             },
             false,
@@ -740,13 +741,7 @@ mod tests {
             args,
             |_| Ok(None),
             |_, _| AppState::Unavailable("test state".to_owned()),
-            |_, _| {
-                Box::pin(async {
-                    Err(super::super::execute::QueryFailure::BadRequest(
-                        "invalid SQL".to_owned(),
-                    ))
-                })
-            },
+            |_, _| Box::pin(async { Err(QueryFailure::BadRequest("invalid SQL".to_owned())) }),
             false,
             &mut out,
             &mut err,
