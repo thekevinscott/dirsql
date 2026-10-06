@@ -86,7 +86,7 @@ fn scan_below(
             }
 
             seen += 1;
-            on_file(seen);
+            report_seen_file(on_file, seen);
 
             // Fan-out: a file matching N tables' globs yields N (path, table)
             // pairs, one per matching table, in declaration order.
@@ -97,6 +97,10 @@ fn scan_below(
     );
 
     results
+}
+
+fn report_seen_file(on_file: &mut dyn FnMut(u64), seen: u64) {
+    on_file(seen);
 }
 
 /// Walk `root` and return every file whose root-relative path matches `glob`,
@@ -637,6 +641,13 @@ mod tests {
     #[test]
     fn to_slash_keeps_a_native_unix_path() {
         assert_eq!(to_slash(Path::new("docs/nested/a.md")), "docs/nested/a.md");
+    }
+
+    #[test]
+    fn report_seen_file_sends_the_running_count_to_the_observer() {
+        let mut reported = Vec::new();
+        report_seen_file(&mut |count| reported.push(count), 7);
+        assert_eq!(reported, [7]);
     }
 
     #[test]
