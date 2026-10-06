@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791242461,
+  "exit_code": 0,
+  "commit": "2e00e1c1c2a267d0c89a766b8de9fa0b03fd123f",
+  "branch": "claude/1325-parallel-walk"
+}

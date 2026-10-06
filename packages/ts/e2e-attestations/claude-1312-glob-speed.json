@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791265277,
+  "exit_code": 0,
+  "commit": "f95351835a66d1273b7c94b921019f4d21d1a3f6",
+  "branch": "claude/1312-glob-speed"
+}
