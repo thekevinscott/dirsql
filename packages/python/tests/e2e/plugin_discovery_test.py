@@ -37,15 +37,22 @@ _BINARY_STAGE_DIR = os.path.join(os.path.dirname(_dirsql_pkg.__file__), "_binary
 _HOOK_PATH_BASENAME = r"""on-file = '''sh -c 'r=$1; shift; printf "["; sep=""; for p; do rel=${p#"$r"/}; printf "%s{\"path\":\"%s\",\"basename\":\"%s\"}" "$sep" "$rel" "${p##*/}"; sep=","; done; printf "]"' sh {root}'''"""
 
 
-def _stage_plugin(site_dir):
+def _stage_plugin(site_dir, data_dir):
     """Stage the fixture plugin as a discoverable dist under `site_dir`:
     the importable module plus a `.dist-info` carrying the `dirsql` entry point,
-    exactly what `importlib.metadata` scans `sys.path` for."""
+    exactly what `importlib.metadata` scans `sys.path` for. The fragment's glob
+    anchors at its own directory, so it is rewritten to name `data_dir`."""
+    staged = os.path.join(site_dir, "dirsql_plugin_fixture")
     shutil.copytree(
         os.path.join(_FIXTURES, "dirsql_plugin_fixture"),
-        os.path.join(site_dir, "dirsql_plugin_fixture"),
+        staged,
         ignore=shutil.ignore_patterns("__pycache__"),
     )
+    fragment = os.path.join(staged, "dirsql.toml")
+    with open(fragment) as f:
+        text = f.read()
+    with open(fragment, "w") as f:
+        f.write(text.replace('glob = "*.md"', f'glob = "{data_dir}/*.md"'))
     dist = os.path.join(site_dir, "dirsql_plugin_fixture-0.0.0.dist-info")
     os.makedirs(dist)
     with open(os.path.join(dist, "METADATA"), "w") as f:
@@ -95,10 +102,9 @@ def describe_plugin_discovery():
 
         site_dir = tmp_path / "site"
         site_dir.mkdir()
-        _stage_plugin(str(site_dir))
-
         data = tmp_path / "data"
         data.mkdir()
+        _stage_plugin(str(site_dir), str(data))
         (data / "hello.md").write_text("# hi\n")
         try:
             yield str(site_dir), data
