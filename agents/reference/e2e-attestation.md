@@ -37,7 +37,15 @@ CI installs the latest `testing-conventions` release (unpinned); install it loca
 
 ## E2E Before Push
 
-Agents must run the full e2e suite locally before any `git push` that includes a **substantial code change**, and report the outcome in the PR body. The commands to run differ per environment -- see the active environment file for specifics.
+Agents must run the e2e tests their change can affect before any `git push` that includes a **substantial code change**, and report which tests they ran, and the outcome, in the PR body. The gate trusts that judgment: it is a nudge to run e2e on any source change, not a demand for the full suite. A test-only Rust change may affect very few e2e tests. The commands differ per environment; see the active environment file.
+
+To attest a subset of the Python suite, build first so the receipt never covers stale code, then name the files:
+
+```bash
+cd packages/python && uv run maturin develop --release
+cargo build --release -p dirsql --features cli
+cd packages/python && testing-conventions e2e attest 'uv run python -m pytest tests/e2e/<files> -x -q'
+```
 
 **"Substantial" means any change touching:**
 - `packages/rust/**` (Rust core)
