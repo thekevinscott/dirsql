@@ -70,6 +70,13 @@ fn scan_below(
 ) -> Vec<(PathBuf, String)> {
     let mut results = Vec::new();
     let mut seen: u64 = 0;
+    let gitignore = matcher.respects_gitignore();
+    let repo = if gitignore {
+        enclosing_repo(start, &holds_git)
+    } else {
+        None
+    };
+    let repo_frames = repo.map(|top| gitignores_above(start, top));
 
     // Match against relative path so globs like "comments/**/*.jsonl" work
     // regardless of the absolute root directory.
@@ -78,8 +85,8 @@ fn scan_below(
         start,
         matcher,
         None,
-        false,
-        None,
+        gitignore,
+        repo_frames,
         &mut |rel_path, entry| {
             if matcher.is_ignored(&rel_path) {
                 return;
@@ -532,6 +539,26 @@ fn load_gitignore(dir: &Path) -> Option<Gitignore> {
     let mut builder = GitignoreBuilder::new(dir);
     builder.add(&file);
     builder.build().ok()
+}
+
+/// Whether the `.gitignore` files of the repo enclosing `path` ignore it, or
+/// a directory above it, as the walk would have: for a path a watcher reports
+/// without having walked to it.
+pub(crate) fn is_gitignored_path(path: &Path, is_dir: bool) -> bool {
+    let Some(top) = path
+        .parent()
+        .and_then(|dir| enclosing_repo(dir, &holds_git))
+    else {
+        return false;
+    };
+    for frame in gitignores_above(path, top).iter().rev() {
+        match frame.matched_path_or_any_parents(path, is_dir) {
+            Match::Ignore(_) => return true,
+            Match::Whitelist(_) => return false,
+            Match::None => {}
+        }
+    }
+    false
 }
 
 /// Whether the `.gitignore` files in force mark `path` ignored. Deeper files

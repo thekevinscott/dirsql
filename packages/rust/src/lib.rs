@@ -633,6 +633,14 @@ impl DirSQL {
         if self.inner.matcher.is_ignored(&rel_path_buf) {
             return Vec::new();
         }
+        if self.inner.matcher.respects_gitignore()
+            && scanner::is_gitignored_path(
+                &abs_path,
+                self.inner.fs.is_dir(&abs_path).unwrap_or(false),
+            )
+        {
+            return Vec::new();
+        }
 
         // A directory that appears whole (`mkdir`, or a populated directory
         // renamed into the tree) arrives as one event naming the directory and
@@ -960,6 +968,7 @@ impl DirSQL {
         } = resolved;
 
         let (matcher, table_names) = compile_matcher(&tables, &ignore)?;
+        let matcher = matcher.with_gitignore(!no_ignore);
 
         // Resolve the persistent context before scanning, so the scan can
         // consult the cached file index.
