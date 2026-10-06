@@ -11,7 +11,6 @@ def describe_with_discovered_plugins():
         with (
             patch.object(module, "discovery_disabled", return_value=True),
             patch.object(module, "discovered_fragments", side_effect=AssertionError),
-            patch.object(module, "user_passed_config", side_effect=AssertionError),
         ):
             # `--host` sorts before `--no-plugin` and must survive the strip;
             # pins the `!=` filter against a `>` mutant that would drop it.
@@ -28,7 +27,6 @@ def describe_with_discovered_plugins():
         with (
             patch.object(module, "discovery_disabled", return_value=False),
             patch.object(module, "discovered_fragments", side_effect=AssertionError),
-            patch.object(module, "user_passed_config", side_effect=AssertionError),
         ):
             assert with_discovered_plugins([init, "--force"]) == [init, "--force"]
 
@@ -37,7 +35,6 @@ def describe_with_discovered_plugins():
         with (
             patch.object(module, "discovery_disabled", return_value=False),
             patch.object(module, "discovered_fragments", side_effect=AssertionError),
-            patch.object(module, "user_passed_config", side_effect=AssertionError),
         ):
             assert with_discovered_plugins([context]) == [context]
 
@@ -45,11 +42,10 @@ def describe_with_discovered_plugins():
         with (
             patch.object(module, "discovery_disabled", return_value=False),
             patch.object(module, "discovered_fragments", return_value=[]),
-            patch.object(module, "user_passed_config", side_effect=AssertionError),
         ):
             assert with_discovered_plugins(["query", "x"]) == ["query", "x"]
 
-    def it_injects_include_default_and_c_flags_without_a_user_config():
+    def it_injects_only_c_flags_for_each_plugin():
         with (
             patch.object(module, "discovery_disabled", return_value=False),
             patch.object(
@@ -57,27 +53,22 @@ def describe_with_discovered_plugins():
                 "discovered_fragments",
                 return_value=["/a/dirsql.toml", "/b/dirsql.toml"],
             ),
-            patch.object(module, "user_passed_config", return_value=False),
         ):
-            # Appended after the user's args; config flags are subcommand-local
-            # (#609) so they accumulate with the user's own `-c`.
             assert with_discovered_plugins(["query", "x"]) == [
                 "query",
                 "x",
-                "--include-default",
                 "-c",
                 "/a/dirsql.toml",
                 "-c",
                 "/b/dirsql.toml",
             ]
 
-    def it_injects_only_c_flags_when_the_user_passed_a_config():
+    def it_appends_after_the_users_own_config():
         with (
             patch.object(module, "discovery_disabled", return_value=False),
             patch.object(
                 module, "discovered_fragments", return_value=["/a/dirsql.toml"]
             ),
-            patch.object(module, "user_passed_config", return_value=True),
         ):
             assert with_discovered_plugins(["-c", "user.toml", "query", "x"]) == [
                 "-c",

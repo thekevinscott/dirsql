@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791252658,
+  "exit_code": 0,
+  "commit": "c98dc36dee869ebe0a8f8537457e8c6180325c09",
+  "branch": "claude/1232-anchor-plumbing"
+}

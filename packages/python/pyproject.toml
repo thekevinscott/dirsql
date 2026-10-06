@@ -140,9 +140,6 @@ extend-select = ["PGH003"]
 # Deferred-error pattern: a failed background build is captured and re-raised on
 # first use, so the constructor must catch broadly.
 "dirsql/_async.py" = ["BLE001"]
-# Three disjoint prefix clauses are kept explicit alongside the comment that
-# enumerates them; collapsing into a `startswith` tuple would obscure the cases.
-"dirsql/cli/discover_plugins/user_passed_config.py" = ["PIE810"]
 # Curated barrel: the public class leads the re-export / `__all__` order rather
 # than alphabetical.
 "dirsql/__init__.py" = ["I001", "RUF022"]
