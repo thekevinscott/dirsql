@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import threading
 import weakref
 from unittest.mock import patch
 
@@ -378,6 +379,31 @@ def describe_DirSQL_async():
             ]
 
             assert got == ["event-a", "event-a", "event-b", "event-b"]
+            assert fake_db.poll_calls == [200]
+
+        @pytest.mark.asyncio
+        async def it_joins_a_poll_already_in_flight():
+            release = threading.Event()
+
+            class _SlowDb(_FakeWatcherDb):
+                def _poll_events(self, timeout_ms):
+                    release.wait()
+                    return super()._poll_events(timeout_ms)
+
+            fake_db = _SlowDb(events=[["event-a"]])
+            owner = _ReadyOwner(fake_db)
+            first = async_mod._WatchStream(owner)
+            second = async_mod._WatchStream(owner)
+
+            leading = asyncio.ensure_future(first.__anext__())
+            while owner._watch_poll is None:
+                await asyncio.sleep(0)
+            joining = asyncio.ensure_future(second.__anext__())
+            while not second._started:
+                await asyncio.sleep(0)
+            release.set()
+
+            assert await asyncio.gather(leading, joining) == ["event-a", "event-a"]
             assert fake_db.poll_calls == [200]
 
         @pytest.mark.asyncio
