@@ -1,7 +1,7 @@
 {
   "command": "pnpm test:e2e",
-  "ran_at": 1791261236,
+  "ran_at": 1791265612,
   "exit_code": 0,
-  "commit": "5c8423f96d015ec440db92fe65d183a72b9e0995",
+  "commit": "af3092e3c0c15b0cf4824a3fb2ff16712d8c79f5",
   "branch": "claude/1330-scanner-links"
 }
