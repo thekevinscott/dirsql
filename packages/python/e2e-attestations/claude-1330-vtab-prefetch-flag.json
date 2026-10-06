@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/ -k \"query_contract or declared_table_name\" -p no:cacheprovider",
+  "ran_at": 1791247281,
+  "exit_code": 0,
+  "commit": "4069a3250fc4f715172226634f9328f23d056f9b",
+  "branch": "claude/1330-vtab-prefetch-flag"
+}
