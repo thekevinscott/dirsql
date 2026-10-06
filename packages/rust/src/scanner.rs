@@ -700,6 +700,22 @@ mod tests {
     }
 
     #[test]
+    fn public_scan_entry_points_reach_the_scanner_source() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let matcher = TableMatcher::new(&[("src/scanner.rs", "source")], &[]).unwrap();
+        let mut counts = Vec::new();
+
+        let full = scan_directory_reporting(root, &matcher, &mut |count| counts.push(count));
+        let subtree = scan_subtree(root, &root.join("src"), &matcher);
+
+        let expected = vec![(root.join("src/scanner.rs"), "source".to_owned())];
+        assert_eq!(full, expected);
+        assert_eq!(subtree, expected);
+        assert!(!counts.is_empty());
+        assert!(counts.windows(2).all(|pair| pair[1] == pair[0] + 1));
+    }
+
+    #[test]
     fn compile_glob_rejects_an_invalid_pattern() {
         assert!(compile_glob("[").is_err());
     }
