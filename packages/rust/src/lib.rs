@@ -282,9 +282,17 @@ pub struct Table {
     pub glob: String,
     pub strict: bool,
     hook: Hook,
+    #[allow(dead_code)]
+    anchor: Option<PathBuf>,
 }
 
 impl Table {
+    #[doc(hidden)]
+    pub fn anchored(mut self, anchor: impl Into<PathBuf>) -> Self {
+        self.anchor = Some(anchor.into());
+        self
+    }
+
     pub fn new<F>(
         name: impl Into<String>,
         ddl: impl Into<String>,
@@ -328,6 +336,7 @@ impl Table {
             glob: glob.into(),
             hook: Hook::PerFile(Arc::new(on_file)),
             strict: false,
+            anchor: None,
         }
     }
 
@@ -372,6 +381,7 @@ impl Table {
             glob: glob.into(),
             hook: Hook::PerTable(Arc::new(on_files)),
             strict: false,
+            anchor: None,
         }
     }
 }
