@@ -5464,6 +5464,15 @@ mod internal_tests {
     }
 
     #[test]
+    fn a_built_instance_watches_its_tables_anchor() {
+        let dir = TempDir::new().unwrap();
+        let db = populated_db(dir.path(), "**/*.txt", &["a.txt"]);
+
+        assert_eq!(db.watch_roots(), vec![db.inner.watch_root.clone()]);
+        assert!(!db.watch_roots().is_empty());
+    }
+
+    #[test]
     fn watch_roots_without_tables_is_the_index_root() {
         assert_eq!(roots_for(&[]), vec![PathBuf::from("/canonical-idx")]);
     }
