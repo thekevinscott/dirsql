@@ -939,30 +939,6 @@ fn fanout_overlapping_distinct_globs_populate_both_tables() {
     assert_eq!(b_rows[0]["col_b"], Value::Text("B".into()));
 }
 
-// A programmatic table whose glob declares a `{name}` placeholder colliding
-// with one of its DDL columns is rejected at construction, just like a
-// config-file table: captures no longer populate columns.
-#[test]
-fn capture_column_collision_errors_on_construction() {
-    let root = fanout_root();
-    let a = Table::new(
-        "a",
-        "CREATE TABLE a (id TEXT, col_a TEXT)",
-        "data/{id}/metadata.json",
-        |_path| vec![HashMap::from([("col_a".into(), Value::Text("A".into()))])],
-    );
-
-    let err = match DirSQL::new(root.path(), vec![a]) {
-        Ok(_) => panic!("a {{id}} placeholder colliding with the id column must error"),
-        Err(e) => e,
-    };
-    let msg = err.to_string();
-    assert!(
-        msg.contains("id") && msg.contains("collides"),
-        "error must name the collision, got: {msg}"
-    );
-}
-
 #[test]
 fn binary_file_under_glob_does_not_break_build() {
     // dirsql must not eagerly read matched files as UTF-8 text: a non-UTF-8

@@ -79,8 +79,6 @@ pub struct MatchResult {
     pub table_name: String,
 }
 
-/// A compiled glob pattern. `{name}` placeholders are rewritten to `*` before
-/// compilation, so they are pure match wildcards.
 struct PatternEntry {
     pattern: PathGlob,
     table_name: String,
@@ -98,72 +96,13 @@ pub struct TableMatcher {
     gitignore: bool,
 }
 
-/// Byte spans of the `{name}` placeholders in `pattern`, in order: `(start,
-/// end, name)` with `end` past the closing brace.
-///
-/// The grammar is exactly `{` `[a-zA-Z_][a-zA-Z0-9_]*` `}`. Anything else --
-/// `{}`, `{1a}`, `{a-b}`, an unclosed `{` -- is not a placeholder and is left
-/// alone, matching the leftmost-first, non-overlapping scan the equivalent
-/// regex performed.
-fn placeholder_spans(pattern: &str) -> Vec<(usize, usize, String)> {
-    let bytes = pattern.as_bytes();
-    let mut spans = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'{' {
-            let mut j = i + 1;
-            if j < bytes.len() && (bytes[j].is_ascii_alphabetic() || bytes[j] == b'_') {
-                j += 1;
-                while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
-                    j += 1;
-                }
-                if j < bytes.len() && bytes[j] == b'}' {
-                    // Every byte in `i..=j` is ASCII, so these are char boundaries.
-                    spans.push((i, j + 1, pattern[i + 1..j].to_string()));
-                    i = j + 1;
-                    continue;
-                }
-            }
-        }
-        i += 1;
-    }
-    spans
-}
-
-/// Names of the `{name}` placeholders in `pattern`, in order of appearance.
-pub fn placeholder_names(pattern: &str) -> Vec<String> {
-    placeholder_spans(pattern)
-        .into_iter()
-        .map(|(_, _, name)| name)
-        .collect()
-}
-
-/// Rewrite `{name}` placeholders in a glob to `*`, so they match a single path
-/// segment without producing any captured value.
-fn glob_with_placeholders_as_star(pattern: &str) -> String {
-    let spans = placeholder_spans(pattern);
-    if spans.is_empty() {
-        return pattern.to_string();
-    }
-    let mut out = String::with_capacity(pattern.len());
-    let mut last = 0;
-    for (start, end, _) in spans {
-        out.push_str(&pattern[last..start]);
-        out.push('*');
-        last = end;
-    }
-    out.push_str(&pattern[last..]);
-    out
-}
-
 impl TableMatcher {
     /// Build a new matcher from (glob_pattern, table_name) pairs and ignore patterns.
-    /// Glob patterns may contain `{name}` placeholders, which match like `*`.
     pub fn new(mappings: &[(&str, &str)], ignore_patterns: &[&str]) -> Result<Self, GlobError> {
         let mut entries = Vec::new();
         for (pattern, table_name) in mappings {
             entries.push(PatternEntry {
-                pattern: compile_glob(&glob_with_placeholders_as_star(pattern))?,
+                pattern: compile_glob(pattern)?,
                 table_name: table_name.to_string(),
             });
         }
@@ -272,20 +211,6 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_glob_matches_like_a_star() {
-        // A `{name}` placeholder and a `*` compile to the same matcher: both
-        // globs match exactly the same file.
-        let placeholder = TableMatcher::new(&[("data/{id}/metadata.json", "a")], &[]).unwrap();
-        let star = TableMatcher::new(&[("data/*/metadata.json", "a")], &[]).unwrap();
-        let path = Path::new("data/x/metadata.json");
-        assert_eq!(names(&placeholder, "data/x/metadata.json"), vec!["a"]);
-        assert_eq!(
-            placeholder.match_all(path).is_empty(),
-            star.match_all(path).is_empty(),
-        );
-    }
-
-    #[test]
     fn match_all_with_nested_path() {
         let matcher = TableMatcher::new(&[("**/*.jsonl", "events")], &[]).unwrap();
         assert_eq!(names(&matcher, "logs/2024/events.jsonl"), vec!["events"]);
@@ -364,105 +289,6 @@ mod tests {
         let matcher = TableMatcher::new(&[("logs/**", "t")], &[]).unwrap();
         assert_eq!(names(&matcher, "logs/a.txt"), vec!["t"]);
         assert_eq!(names(&matcher, "logs/deep/nested/b.txt"), vec!["t"]);
-    }
-
-    #[test]
-    fn placeholder_matches_the_filled_segment() {
-        let matcher =
-            TableMatcher::new(&[("comments/{thread_id}/index.jsonl", "comments")], &[]).unwrap();
-        assert_eq!(
-            names(&matcher, "comments/abc123/index.jsonl"),
-            vec!["comments"]
-        );
-    }
-
-    #[test]
-    fn multiple_placeholders_match() {
-        let matcher = TableMatcher::new(&[("{org}/{repo}/data.json", "repos")], &[]).unwrap();
-        assert_eq!(names(&matcher, "acme/widgets/data.json"), vec!["repos"]);
-    }
-
-    #[test]
-    fn placeholder_no_match_returns_empty() {
-        let matcher =
-            TableMatcher::new(&[("comments/{thread_id}/index.jsonl", "comments")], &[]).unwrap();
-        assert!(matcher.match_all(Path::new("other/file.txt")).is_empty());
-    }
-
-    #[test]
-    fn placeholder_with_double_star_matches() {
-        let matcher = TableMatcher::new(&[("**/{category}/items.json", "items")], &[]).unwrap();
-        assert_eq!(
-            names(&matcher, "shop/electronics/items.json"),
-            vec!["items"]
-        );
-    }
-
-    #[test]
-    fn placeholder_with_question_mark_matches() {
-        let matcher = TableMatcher::new(&[("{name}?.txt", "files")], &[]).unwrap();
-        assert_eq!(names(&matcher, "ab.txt"), vec!["files"]);
-    }
-
-    #[test]
-    fn placeholder_names_lists_names_in_order() {
-        assert_eq!(
-            placeholder_names("{org}/{repo}/data.json"),
-            vec!["org".to_string(), "repo".to_string()]
-        );
-    }
-
-    #[test]
-    fn placeholder_names_empty_when_none() {
-        assert!(placeholder_names("data/*/metadata.json").is_empty());
-    }
-
-    #[test]
-    fn placeholder_names_rejects_everything_outside_the_grammar() {
-        // The grammar is exactly `{` `[a-zA-Z_][a-zA-Z0-9_]*` `}`. Each of these
-        // fails it at a different point -- empty name, a leading digit, a
-        // disallowed interior byte, and a brace that runs off the end of the
-        // pattern -- and all are left alone rather than read as a placeholder.
-        for pattern in ["{}", "{1a}", "{a-b}", "{a b}", "{", "a{", "{a", "{_"] {
-            assert!(
-                placeholder_names(pattern).is_empty(),
-                "`{pattern}` is outside the grammar, so it is not a placeholder"
-            );
-            assert_eq!(
-                glob_with_placeholders_as_star(pattern),
-                pattern,
-                "`{pattern}` is not a placeholder, so the glob is unrewritten"
-            );
-        }
-    }
-
-    #[test]
-    fn placeholder_names_accepts_the_whole_grammar() {
-        // A name starts with a letter or `_` and continues with those plus
-        // digits.
-        assert_eq!(placeholder_names("{a}"), vec!["a".to_string()]);
-        assert_eq!(placeholder_names("{_}"), vec!["_".to_string()]);
-        assert_eq!(placeholder_names("{_a1}"), vec!["_a1".to_string()]);
-        assert_eq!(placeholder_names("{A_1z}"), vec!["A_1z".to_string()]);
-    }
-
-    #[test]
-    fn the_scan_resumes_at_the_byte_after_a_closing_brace() {
-        // Leftmost-first and non-overlapping: back-to-back placeholders both
-        // register, and every byte outside a span survives the rewrite.
-        assert_eq!(
-            placeholder_names("{a}{b}"),
-            vec!["a".to_string(), "b".to_string()]
-        );
-        assert_eq!(glob_with_placeholders_as_star("x{a}y{b}z"), "x*y*z");
-    }
-
-    #[test]
-    fn an_unclosed_brace_leaves_a_later_placeholder_intact() {
-        // The `{` at 0 fails the grammar, so the scan advances one byte at a
-        // time and still finds the real placeholder behind it.
-        assert_eq!(placeholder_names("{a{b}"), vec!["b".to_string()]);
-        assert_eq!(glob_with_placeholders_as_star("{a{b}"), "{a*");
     }
 
     /// Two files at depth 0, two under `folder/`, two under `folder/sub/`, one
@@ -600,12 +426,12 @@ mod tests {
     }
 
     #[test]
-    fn a_placeholder_matches_exactly_one_path_segment() {
+    fn a_braced_name_matches_only_itself() {
         let matcher = TableMatcher::new(&[("data/{id}/metadata.json", "a")], &[]).unwrap();
-        assert_eq!(names(&matcher, "data/x/metadata.json"), vec!["a"]);
+        assert_eq!(names(&matcher, "data/{id}/metadata.json"), vec!["a"]);
         assert!(
             matcher
-                .match_all(Path::new("data/x/y/metadata.json"))
+                .match_all(Path::new("data/x/metadata.json"))
                 .is_empty()
         );
     }

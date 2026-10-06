@@ -199,14 +199,6 @@ pub enum DirSqlError {
     },
 
     #[error(
-        "glob capture `{{{placeholder}}}` collides with declared column `{column}`: \
-         captures no longer populate columns, so `{column}` would always be NULL. \
-         Remove `{column}` from the table's DDL, or emit its value from the on-file \
-         hook by splitting the path yourself."
-    )]
-    CaptureColumnCollision { placeholder: String, column: String },
-
-    #[error(
         "query() only accepts read-only statements; SQLite classified this statement as a write"
     )]
     WriteForbidden,
@@ -1165,18 +1157,6 @@ impl DirSQL {
                 if let Some(warning) = classify_declared_table(&table_name, entry, created)? {
                     eprintln!("{warning}");
                 }
-            }
-            // Reject a `{name}` glob placeholder whose name is also a declared
-            // column: captures no longer populate columns, so it would read
-            // NULL forever. The table exists here either way (freshly created
-            // or restored from cache), so its columns are knowable, and this
-            // runs before any file is ingested — a load-time failure.
-            let declared_columns = db.get_table_columns(&table_name).map_err(map_db_error)?;
-            if let Some(name) = find_capture_column_collision(&table.glob, &declared_columns) {
-                return Err(DirSqlError::CaptureColumnCollision {
-                    placeholder: name.clone(),
-                    column: name,
-                });
             }
             on_file_map.insert(table_name.clone(), table.hook);
             strict_map.insert(table_name.clone(), table.strict);
@@ -2275,18 +2255,6 @@ pub(crate) fn json_to_value(value: &serde_json::Value) -> Value {
         serde_json::Value::String(s) => Value::Text(s.clone()),
         other => Value::Text(other.to_string()),
     }
-}
-
-/// Returns the first `{name}` placeholder in `glob` whose name is also one of
-/// `declared_columns`. `None` when the glob has no placeholders or none of
-/// them names a declared column. Pure: the sole input is the glob string and
-/// the column list, so it is exhaustively unit-testable.
-fn find_capture_column_collision(glob: &str, declared_columns: &[String]) -> Option<String> {
-    let declared: std::collections::HashSet<&str> =
-        declared_columns.iter().map(String::as_str).collect();
-    crate::matcher::placeholder_names(glob)
-        .into_iter()
-        .find(|name| declared.contains(name.as_str()))
 }
 
 /// Async wrapper around [`DirSQL`] whose constructor returns immediately while
@@ -4210,54 +4178,6 @@ mod internal_tests {
         let (files, deleted) = reconcile_scan(dir.path(), Vec::new(), &ctx, &fake).unwrap();
         assert!(files.is_empty());
         assert_eq!(deleted, vec![("gone.txt".to_string(), "t".to_string())]);
-    }
-
-    #[test]
-    fn find_capture_column_collision_flags_a_placeholder_naming_a_column() {
-        let declared = vec!["thread_id".to_string(), "basename".to_string()];
-        assert_eq!(
-            find_capture_column_collision("_comments/{thread_id}/*.txt", &declared),
-            Some("thread_id".to_string())
-        );
-    }
-
-    #[test]
-    fn find_capture_column_collision_ignores_a_placeholder_with_no_column() {
-        let declared = vec!["path".to_string(), "basename".to_string()];
-        assert_eq!(
-            find_capture_column_collision("_comments/{thread_id}/*.txt", &declared),
-            None
-        );
-    }
-
-    #[test]
-    fn find_capture_column_collision_none_without_placeholders() {
-        let declared = vec!["thread_id".to_string()];
-        assert_eq!(
-            find_capture_column_collision("_comments/*/*.txt", &declared),
-            None
-        );
-    }
-
-    #[test]
-    fn find_capture_column_collision_returns_first_colliding_placeholder() {
-        let declared = vec!["repo".to_string(), "org".to_string()];
-        assert_eq!(
-            find_capture_column_collision("{org}/{repo}/data.json", &declared),
-            Some("org".to_string())
-        );
-    }
-
-    #[test]
-    fn capture_column_collision_error_names_placeholder_and_fix() {
-        let err = DirSqlError::CaptureColumnCollision {
-            placeholder: "thread_id".to_string(),
-            column: "thread_id".to_string(),
-        };
-        let msg = err.to_string();
-        assert!(msg.contains("thread_id"));
-        assert!(msg.contains("collides"));
-        assert!(msg.contains("on-file"));
     }
 
     /// A `name` the batch never created: the error has to say what it *did*
