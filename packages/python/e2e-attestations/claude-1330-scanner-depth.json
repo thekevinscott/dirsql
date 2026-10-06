@@ -1,7 +1,0 @@
-{
-  "command": "uv run python -m pytest tests/e2e/ -k \"declared_table_name or query_contract\" -p no:cacheprovider",
-  "ran_at": 1791251372,
-  "exit_code": 0,
-  "commit": "3a74553f85756d6e3177606dd44301846a8aae05",
-  "branch": "claude/1330-scanner-depth"
-}
