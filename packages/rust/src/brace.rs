@@ -222,10 +222,7 @@ fn escape_braces(word: &str) -> String {
                     out.extend(&chars[i..=end]);
                     resume = end + 1;
                 }
-                None => {
-                    out.push_str("[[]");
-                    resume = i + 1;
-                }
+                None => out.push_str("[[]"),
             },
             ('{', _) => out.push_str("[{]"),
             ('}', _) => out.push_str("[}]"),
