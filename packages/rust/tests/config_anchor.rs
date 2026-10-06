@@ -12,7 +12,7 @@ fn write_config(dir: &Path, glob: &str, extra: &str) -> std::path::PathBuf {
     fs::write(
         &path,
         format!(
-            "{extra}\n[[table]]\nname = \"files\"\nddl = \"CREATE TABLE files (path TEXT)\"\nglob = \"{glob}\"\n{HOOK}\n"
+            "{extra}\n[[table]]\nname = \"files\"\nddl = \"CREATE TABLE files (path TEXT)\"\nglob = '{glob}'\n{HOOK}\n"
         ),
     )
     .unwrap();

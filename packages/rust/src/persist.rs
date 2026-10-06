@@ -143,13 +143,14 @@ pub fn is_trusted(
     }
 }
 
+type HashEntry = (String, String, bool, Option<String>, Vec<String>);
+
 /// Compute the canonical glob-config hash. Includes table name, DDL, glob,
 /// and strict flag for every table, plus the ignore list, in a
 /// deterministic order. A mismatch against the cached value triggers a
 /// full rebuild.
 pub fn compute_glob_config_hash(tables: &[Table], ignore: &[String]) -> String {
-    let mut entries: BTreeMap<String, (String, String, bool, Option<String>, Vec<String>)> =
-        BTreeMap::new();
+    let mut entries: BTreeMap<String, HashEntry> = BTreeMap::new();
     for table in tables {
         entries.insert(
             table.name.clone(),

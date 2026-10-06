@@ -1933,6 +1933,8 @@ struct PersistContext {
     needs_sweep: bool,
 }
 
+type GroupDraft = (PathBuf, Vec<String>, Vec<(String, String)>);
+
 fn compile_groups(
     tables: &[Table],
     ignore_patterns: &[String],
@@ -1941,7 +1943,7 @@ fn compile_groups(
     let mut seen: HashMap<String, ()> = HashMap::with_capacity(tables.len());
     let mut names = Vec::with_capacity(tables.len());
     let mut anchors = TableAnchors::at_root(root);
-    let mut grouped: Vec<(PathBuf, Vec<String>, Vec<(String, String)>)> = Vec::new();
+    let mut grouped: Vec<GroupDraft> = Vec::new();
     for table in tables {
         let table_name = table.name.clone();
         // Validate up front so a poisoned name from a stored cache or a
