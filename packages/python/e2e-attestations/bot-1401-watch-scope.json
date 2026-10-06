@@ -1,7 +1,7 @@
 {
-  "command": "uv run python -m pytest tests/e2e/fanout_test.py tests/e2e/declared_table_name_test.py tests/e2e/query_contract_test.py -x -q",
-  "ran_at": 1791311844,
+  "command": "uv run python -m pytest tests/e2e/fanout_test.py tests/e2e/declared_table_name_test.py tests/e2e/query_contract_test.py tests/e2e/on_file_query_test.py -x -q",
+  "ran_at": 1791324350,
   "exit_code": 0,
-  "commit": "33fcfe86be72b576dc0c8e510d9c580071ea50c0",
+  "commit": "20cb91d9d8f0a1b24c57f426b95aff4dd97e433b",
   "branch": "bot/1401-watch-scope"
 }
