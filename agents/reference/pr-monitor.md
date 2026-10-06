@@ -37,7 +37,7 @@ Every run logs `Required: [...]` — the prediction. Read it before hypothesizin
 
 **The required-check context is the job's `name:`**, not the workflow's. Renaming `CI Gate` leaves every open PR reporting the old name until it gets a fresh run — merge the base branch in, or push, to retrigger. GitHub does not re-evaluate an existing run against the new requirement.
 
-**Flaky jobs are manual.** Mergify's CI Insights auto-retry left with Mergify. Re-run a flaky job by hand to unblock, then fix or quarantine it; the gate polls live state, so a re-run that goes green flips the gate without re-triggering anything else. The gate's own run can be re-run too, if it timed out against a since-fixed hang.
+**Flaky jobs are manual.** Mergify's CI Insights auto-retry left with Mergify. Re-run a flaky job by hand to unblock, then fix it (never quarantine); the gate polls live state, so a re-run that goes green flips the gate without re-triggering anything else. The gate's own run can be re-run too, if it timed out against a since-fixed hang.
 
 ## Why not check-run counting (the Mergify era, #830–#947)
 

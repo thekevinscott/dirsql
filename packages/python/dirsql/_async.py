@@ -137,7 +137,7 @@ class DirSQL:
             if config_extensions is not None:
                 extensions = [*(extensions or []), *config_extensions]
                 suppress = True
-        return _RustDirSQL(
+        return self._new_core(
             self._root,
             tables=self._tables,
             ignore=self._ignore,
@@ -148,6 +148,9 @@ class DirSQL:
             extensions=extensions,
             suppress_config_extensions=suppress,
         )
+
+    def _new_core(self, root, **kwargs):
+        return _RustDirSQL(root, **kwargs)
 
     def _resolved_extensions(self):
         """Resolve each programmatic extension's ``path`` to a loadable file.
