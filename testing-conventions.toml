@@ -108,8 +108,8 @@ features = ["cli"]
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [72, 131, 349, 386, 465, 486]
-reason = "scan_below, scan_glob, walk, descend, kind_of and sorted_entries read the filesystem; tests/scanner.rs (scan_finds_matching_files, scan_recurses_into_subdirectories), tests/vtab.rs (glob_scopes_the_walk, rowids_count_up_from_zero_in_scan_order) and tests/path_table_symlinks.rs assert what they return"
+lines = [131, 386]
+reason = "scan_glob repo discovery and entering a repo directory depend on finding a real .git marker; tests/path_table_gitignore.rs asserts their filesystem behavior"
 
 [[rust.exempt]]
 path = "src/scanner.rs"
