@@ -641,7 +641,7 @@ mod tests {
 
     #[test]
     fn compile_glob_rejects_an_invalid_pattern() {
-        assert!(compile_glob("[").is_err());
+        assert!(compile_glob("[z-a]").is_err());
     }
 
     #[test]

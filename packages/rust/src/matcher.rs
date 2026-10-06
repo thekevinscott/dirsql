@@ -1,4 +1,5 @@
 use crate::posix_class::expand_posix_classes;
+use crate::unbalanced::escape_unbalanced;
 use globset::GlobBuilder;
 use regex::{Regex, RegexBuilder};
 use std::path::Path;
@@ -161,7 +162,9 @@ impl TableMatcher {
         let mut entries = Vec::new();
         for (pattern, table_name) in mappings {
             entries.push(PatternEntry {
-                pattern: Pattern::new(&glob_with_placeholders_as_star(pattern))?,
+                pattern: Pattern::new(&escape_unbalanced(&glob_with_placeholders_as_star(
+                    pattern,
+                )))?,
                 table_name: table_name.to_string(),
             });
         }
@@ -320,7 +323,7 @@ mod tests {
 
     #[test]
     fn invalid_glob_returns_error() {
-        let result = TableMatcher::new(&[("[invalid", "t")], &[]);
+        let result = TableMatcher::new(&[("[z-a]", "t")], &[]);
         assert!(result.is_err());
     }
 

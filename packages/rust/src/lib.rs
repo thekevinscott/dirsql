@@ -43,6 +43,7 @@ pub mod row_event_flat;
 pub mod scanner;
 #[doc(hidden)]
 pub mod sql_literal;
+mod unbalanced;
 #[doc(hidden)]
 pub mod vtab;
 mod vtab_scaffold;

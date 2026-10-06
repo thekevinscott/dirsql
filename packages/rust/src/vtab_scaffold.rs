@@ -669,7 +669,7 @@ mod tests {
 
     #[test]
     fn compile_glob_rejects_an_invalid_pattern() {
-        let err = compile_glob("[").unwrap_err();
+        let err = compile_glob("[z-a]").unwrap_err();
         assert!(
             matches!(err, Error::ModuleError(_)),
             "invalid globs surface as module errors, got {err:?}"

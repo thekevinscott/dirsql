@@ -198,7 +198,7 @@ fn steps(lo: i64, hi: i64, step: i64) -> Option<impl Iterator<Item = i128>> {
 
 /// Escape the braces bash left as literal text, so globset matches them
 /// rather than reading an alternation. A complete `[...]` class is copied as
-/// written; an unclosed one ends escaping so globset reports the error.
+/// written; an unclosed `[` is a literal character.
 fn escape_braces(word: &str) -> String {
     let chars: Vec<char> = word.chars().collect();
     let mut out = String::with_capacity(word.len());
@@ -223,8 +223,8 @@ fn escape_braces(word: &str) -> String {
                     resume = end + 1;
                 }
                 None => {
-                    out.extend(&chars[i..]);
-                    return out;
+                    out.push_str("[[]");
+                    resume = i + 1;
                 }
             },
             ('{', _) => out.push_str("[{]"),
@@ -237,7 +237,7 @@ fn escape_braces(word: &str) -> String {
 
 /// Index of the `]` closing the class globset opens at `open`, where a `]`
 /// first in the class (after any `!` / `^`) is a member, not the close.
-fn class_end(chars: &[char], open: usize) -> Option<usize> {
+pub(crate) fn class_end(chars: &[char], open: usize) -> Option<usize> {
     let mut i = open + 1;
     if matches!(chars.get(i), Some('!' | '^')) {
         i += 1;
@@ -411,9 +411,9 @@ mod tests {
     }
 
     #[test]
-    fn an_unclosed_class_ends_escaping() {
-        assert_eq!(escape_braces("x[{q}"), "x[{q}");
-        assert_eq!(escape_braces("x[]{"), "x[]{");
+    fn an_unclosed_bracket_is_literal() {
+        assert_eq!(escape_braces("x[{q}"), "x[[][{]q[}]");
+        assert_eq!(escape_braces("x[]{"), "x[[]][{]");
     }
 
     #[test]

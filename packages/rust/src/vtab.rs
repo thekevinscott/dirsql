@@ -562,7 +562,7 @@ mod tests {
 
     #[test]
     fn parse_module_args_rejects_an_invalid_glob() {
-        let args = args_with(&[b"'/tmp'", b"'['", b"''", b"'gitignore'"]);
+        let args = args_with(&[b"'/tmp'", b"'[z-a]'", b"''", b"'gitignore'"]);
         assert!(parse_module_args(&args).is_err());
     }
 
