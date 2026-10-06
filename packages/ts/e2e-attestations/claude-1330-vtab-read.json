@@ -1,7 +1,7 @@
 {
   "command": "pnpm test:e2e",
-  "ran_at": 1791256581,
+  "ran_at": 1791270781,
   "exit_code": 0,
-  "commit": "c828051f424c1efd89b29e14a1a7d2f570645ffd",
+  "commit": "79b623988d6bc58bbd0db71666c3af29d62a81e1",
   "branch": "claude/1330-vtab-read"
 }
