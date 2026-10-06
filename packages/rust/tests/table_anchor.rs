@@ -46,13 +46,13 @@ fn an_unanchored_table_still_scans_the_index_root() {
         "at_root",
         "CREATE TABLE at_root (path TEXT)",
         "*.txt",
-        |p| path_row(p),
+        path_row,
     );
     let elsewhere = Table::new(
         "elsewhere",
         "CREATE TABLE elsewhere (path TEXT)",
         "*.txt",
-        |p| path_row(p),
+        path_row,
     )
     .anchored(anchor.path());
 
