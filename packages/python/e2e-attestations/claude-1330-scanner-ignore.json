@@ -1,7 +1,7 @@
 {
-  "command": "just test-e2e",
-  "ran_at": 1791301664,
+  "command": "uv run python -m pytest tests/e2e/glob_speed_gitignore_test.py -x -q",
+  "ran_at": 1791303062,
   "exit_code": 0,
-  "commit": "66267aad2aaf9737a8b3dbf414c8661f1668c61e",
+  "commit": "f4a5dcd69ecd78161b555d55912aa70075388aa1",
   "branch": "claude/1330-scanner-ignore"
 }
