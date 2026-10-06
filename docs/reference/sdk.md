@@ -301,6 +301,10 @@ under the root. The watcher starts on first iteration (Python/TypeScript)
 or at the `watch()` call (Rust). The stream never terminates on its own;
 stop consuming it to stop.
 
+Python: each `watch()` call returns an independent stream, and every stream
+on one instance receives every event observed after it was created, so
+several consumers (one per client, say) can share one instance.
+
 Rust: `watch()` may be called once per instance and is mutually exclusive
 with the polling API below — mixing them returns an error, since both drain
 the same underlying filesystem watcher.

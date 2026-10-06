@@ -331,7 +331,7 @@ fn lookup_cost(prefetch: bool) -> f64 {
 fn plan_idx_num(lookup: Option<usize>, prefetch: bool) -> c_int {
     let lookup = lookup.map_or(SCAN_IDX, lookup_idx_num);
     if prefetch {
-        lookup | PREFETCH_IDX
+        lookup + PREFETCH_IDX
     } else {
         lookup
     }

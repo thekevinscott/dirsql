@@ -1,4 +1,5 @@
 use crate::posix_class::expand_posix_classes;
+use crate::scanner::{PathGlob, compile_glob};
 use globset::GlobBuilder;
 use regex::{Regex, RegexBuilder};
 use std::path::Path;
@@ -82,7 +83,7 @@ pub struct MatchResult {
 /// compilation, so they are pure match wildcards.
 #[derive(Clone)]
 struct PatternEntry {
-    pattern: Pattern,
+    pattern: PathGlob,
     table_name: String,
 }
 
@@ -163,7 +164,7 @@ impl TableMatcher {
         let mut entries = Vec::new();
         for (pattern, table_name) in mappings {
             entries.push(PatternEntry {
-                pattern: Pattern::new(&glob_with_placeholders_as_star(pattern))?,
+                pattern: compile_glob(&glob_with_placeholders_as_star(pattern))?,
                 table_name: table_name.to_string(),
             });
         }

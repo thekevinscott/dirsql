@@ -2,13 +2,16 @@ use crate::matcher::TableMatcher;
 use crate::scanner::{reaches_dir, scan_dirs};
 use notify::event::{ModifyKind, RenameMode};
 use notify::{
-    Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher,
+    Config, ErrorKind, Event, EventKind, RecommendedWatcher, RecursiveMode,
+    Watcher as NotifyWatcher,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::thread;
 use std::time::Duration;
+
+const EMFILE: i32 = 24;
 
 /// Events emitted by the file watcher.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,7 +93,7 @@ impl Watcher {
         for scope in &scopes {
             for dir in dirs_to_watch(&scopes, &scope.root, &walk_scope) {
                 if watched.insert(dir.clone()) {
-                    watch_dir(&mut watcher, &dir)?;
+                    tolerate_missing(watcher.watch(&dir, RecursiveMode::NonRecursive))?;
                 }
             }
         }
@@ -145,7 +148,7 @@ fn forward(
                 let mut watcher = watcher.lock().expect("watching a directory does not panic");
                 for dir in dirs_to_watch(scopes, path, &walk_scope) {
                     // A directory gone again before its watch lands has nothing to report.
-                    let _ = watch_dir(&mut watcher, &dir);
+                    let _ = tolerate_missing(watcher.watch(&dir, RecursiveMode::NonRecursive));
                 }
             }
             if tx.send(fe).is_err() {
@@ -165,10 +168,10 @@ fn walk_scope(scope: &WatchScope, dir: &Path) -> Vec<PathBuf> {
     scan_dirs(&scope.root, dir, &scope.ignore)
 }
 
-/// Watch `dir` alone. A directory removed since the walk found it is no
-/// error: there is nothing left to watch.
-fn watch_dir(watcher: &mut RecommendedWatcher, dir: &Path) -> Result<(), notify::Error> {
-    match watcher.watch(dir, RecursiveMode::NonRecursive) {
+/// A directory removed since the walk found it is no error: there is nothing
+/// left to watch.
+fn tolerate_missing(result: Result<(), notify::Error>) -> Result<(), notify::Error> {
+    match result {
         Err(e) if is_not_found(&e) => Ok(()),
         other => other,
     }
@@ -207,6 +210,25 @@ fn dirs_to_watch(
     dirs
 }
 
+/// The message for a watcher that failed to start. On inotify, the opaque
+/// limit errors name the exhausted limit and the sysctl that raises it.
+pub(crate) fn describe_watch_error(err: &notify::Error, inotify: bool) -> String {
+    let base = err.to_string();
+    if !inotify {
+        return base;
+    }
+    let (limit, sysctl) = match &err.kind {
+        ErrorKind::Io(io) if io.raw_os_error() == Some(EMFILE) => {
+            ("inotify instance limit", "fs.inotify.max_user_instances")
+        }
+        ErrorKind::MaxFilesWatch => ("inotify watch limit", "fs.inotify.max_user_watches"),
+        _ => return base,
+    };
+    format!(
+        "{base}; the {limit} is likely exhausted: raise it with `sudo sysctl {sysctl}=<higher value>`"
+    )
+}
+
 /// Translate a notify Event into zero or more FileEvents.
 fn translate_event(event: &Event) -> Vec<FileEvent> {
     let mut results = Vec::new();
@@ -239,7 +261,7 @@ fn translate_event(event: &Event) -> Vec<FileEvent> {
     results
 }
 
-// Test fixtures: build `notify::Event`s without the unit tests naming the
+// Test fixtures: build `notify::Event`s and `notify::Error`s without the unit tests naming the
 // `notify::event::*` inner-kind types (the unit-lint isolation rule).
 // `translate_event` matches only the outer variant, so the inner kind is an
 // arbitrary valid value.
@@ -326,6 +348,21 @@ fn access_event(paths: Vec<PathBuf>) -> Event {
 }
 
 #[cfg(test)]
+fn io_error(raw_os_error: i32) -> notify::Error {
+    notify::Error::io(std::io::Error::from_raw_os_error(raw_os_error))
+}
+
+#[cfg(test)]
+fn max_files_watch_error() -> notify::Error {
+    notify::Error::new(ErrorKind::MaxFilesWatch)
+}
+
+#[cfg(test)]
+fn path_not_found_error() -> notify::Error {
+    notify::Error::path_not_found()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -338,6 +375,106 @@ mod tests {
             root: PathBuf::from(root),
             ignore: TableMatcher::new(&[], ignore).unwrap(),
         }
+    }
+
+    #[test]
+    fn per_directory_on_linux() {
+        if cfg!(target_os = "linux") {
+            assert!(std::hint::black_box(PER_DIRECTORY));
+        }
+    }
+
+    #[test]
+    fn is_not_found_is_true_for_a_missing_path_either_way() {
+        assert!(is_not_found(&path_not_found_error()));
+        assert!(is_not_found(&io_error(2)));
+    }
+
+    #[test]
+    fn is_not_found_is_false_for_other_errors() {
+        assert!(!is_not_found(&io_error(13)));
+        assert!(!is_not_found(&max_files_watch_error()));
+    }
+
+    #[test]
+    fn tolerate_missing_passes_success_and_swallows_only_a_missing_path() {
+        assert!(tolerate_missing(Ok(())).is_ok());
+        assert!(tolerate_missing(Err(path_not_found_error())).is_ok());
+        assert!(tolerate_missing(Err(io_error(2))).is_ok());
+        assert!(tolerate_missing(Err(io_error(13))).is_err());
+        assert!(tolerate_missing(Err(max_files_watch_error())).is_err());
+    }
+
+    #[test]
+    fn is_real_dir_is_true_only_for_a_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("f");
+        std::fs::write(&file, "").unwrap();
+        assert!(is_real_dir(root.path()));
+        assert!(!is_real_dir(&file));
+        assert!(!is_real_dir(&root.path().join("missing")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_real_dir_is_false_for_a_symlink_to_a_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("real");
+        std::fs::create_dir(&target).unwrap();
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(!is_real_dir(&link));
+    }
+
+    #[test]
+    fn walk_scope_lists_the_directories_the_scope_enters() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("a").join("b")).unwrap();
+        std::fs::create_dir(root.path().join("skip")).unwrap();
+        let scope = WatchScope {
+            root: root.path().to_path_buf(),
+            ignore: TableMatcher::new(&[], &["skip/**"]).unwrap(),
+        };
+        let mut dirs = walk_scope(&scope, &root.path().join("a"));
+        dirs.sort();
+        assert_eq!(dirs, vec![root.path().join("a"), root.path().join("a/b")]);
+    }
+
+    fn forwarded(events: Vec<Event>) -> Vec<FileEvent> {
+        let (raw_tx, raw_rx) = mpsc::channel();
+        let (tx, rx) = mpsc::channel();
+        for event in events {
+            raw_tx.send(event).unwrap();
+        }
+        drop(raw_tx);
+        forward(&raw_rx, &tx, &Weak::new(), &[]);
+        drop(tx);
+        rx.iter().collect()
+    }
+
+    #[test]
+    fn forward_passes_translated_events_on_in_order() {
+        let got = forwarded(vec![
+            modify_event(vec![PathBuf::from("/nowhere/a")]),
+            remove_event(vec![PathBuf::from("/nowhere/b")]),
+        ]);
+        assert_eq!(
+            got,
+            vec![
+                FileEvent::Modified(PathBuf::from("/nowhere/a")),
+                FileEvent::Deleted(PathBuf::from("/nowhere/b")),
+            ]
+        );
+    }
+
+    #[test]
+    fn forward_stops_at_a_new_directory_once_the_watcher_is_gone() {
+        let root = tempfile::tempdir().unwrap();
+        let got = forwarded(vec![
+            create_event(vec![root.path().to_path_buf()]),
+            modify_event(vec![PathBuf::from("/nowhere/a")]),
+        ]);
+        assert!(got.is_empty());
     }
 
     fn unwalked(_: &WatchScope, _: &Path) -> Vec<PathBuf> {
@@ -382,6 +519,41 @@ mod tests {
             &|_, dir| vec![dir.to_path_buf()],
         );
         assert_eq!(both, vec![PathBuf::from("/r/x/new")]);
+    }
+
+    #[test]
+    fn describe_watch_error_names_the_instance_limit_for_emfile_on_inotify() {
+        let err = io_error(24);
+        let msg = describe_watch_error(&err, true);
+        assert!(msg.starts_with(&err.to_string()), "{msg}");
+        assert!(msg.contains("inotify instance limit"), "{msg}");
+        assert!(msg.contains("fs.inotify.max_user_instances"), "{msg}");
+    }
+
+    #[test]
+    fn describe_watch_error_names_the_watch_limit_for_max_files_watch_on_inotify() {
+        let err = max_files_watch_error();
+        let msg = describe_watch_error(&err, true);
+        assert!(msg.starts_with(&err.to_string()), "{msg}");
+        assert!(msg.contains("inotify watch limit"), "{msg}");
+        assert!(msg.contains("fs.inotify.max_user_watches"), "{msg}");
+    }
+
+    #[test]
+    fn describe_watch_error_leaves_emfile_alone_off_inotify() {
+        let err = io_error(24);
+        assert_eq!(describe_watch_error(&err, false), err.to_string());
+    }
+
+    #[test]
+    fn describe_watch_error_leaves_other_errors_alone() {
+        let other_io = io_error(2);
+        assert_eq!(describe_watch_error(&other_io, true), other_io.to_string());
+        let not_found = path_not_found_error();
+        assert_eq!(
+            describe_watch_error(&not_found, true),
+            not_found.to_string()
+        );
     }
 
     #[test]

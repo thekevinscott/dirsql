@@ -124,7 +124,7 @@ cargo install dirsql --features cli
 dirsql "SELECT * FROM './'"
 ```
 
-`dirsql "<sql>"` runs one query and prints the rows as JSON — the default. `dirsql server` starts an HTTP server bound to `localhost:7117` that exposes the SDK over HTTP: `POST /query` for SQL and `GET /events` for a Server-Sent Events change stream. Override the bind with `dirsql server --host`, `--port`, `--config`. See the [CLI reference](https://dirsql.dev/reference/cli).
+`dirsql "<sql>"` runs one query and prints the rows as JSON — the default. `dirsql server` starts an HTTP server bound to `localhost:7117` that exposes the SDK over HTTP: `POST /query` for SQL and `GET /events` for a Server-Sent Events change stream. Override the bind with `dirsql server --host`, `--port`, `--config`; add `--cors-origin <origin>` to let a browser page on another origin call it. See the [CLI reference](https://dirsql.dev/reference/cli).
 
 The `cli` feature is **opt-in** -- `cargo add dirsql` pulls no CLI dependencies. `cargo install dirsql` without `--features cli` silently installs nothing (`required-features` skips the bin target with no warning); always include the flag, or use `npx dirsql` / `uvx dirsql` for prebuilt binaries.
 

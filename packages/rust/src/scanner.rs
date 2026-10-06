@@ -200,7 +200,7 @@ fn is_wanted(glob: &PathGlob, ignore: &TableMatcher, rel_path: &Path) -> bool {
 /// which never traverses one, though it may stop on one for the next
 /// component to enter. Each link crossed spends a component, so a cycle
 /// cannot recurse without bound.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PathGlob {
     files: Vec<Pattern>,
     spelled_dot_names: Vec<Pattern>,
@@ -210,7 +210,7 @@ pub struct PathGlob {
     starts: Vec<usize>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Component {
     AnyDepth,
     Name(Pattern),
@@ -970,6 +970,60 @@ mod tests {
             take(&walk, "x", Seen::File, &[1], true),
             Some(Taken::File(PathBuf::from("x")))
         );
+    }
+
+    fn explored_dirs(place: Place<'_>) -> Vec<Place<'_>> {
+        place
+            .explore(&|_| true)
+            .into_iter()
+            .filter_map(|step| match step {
+                Step::Dir(child) => Some(*child),
+                Step::Leaf(_) => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn scan_dirs_lists_the_start_and_every_directory_the_scan_enters() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("a").join("b")).unwrap();
+        fs::create_dir_all(root.path().join("a").join("node_modules").join("pkg")).unwrap();
+        fs::create_dir_all(root.path().join("a").join(RESERVED_DIR)).unwrap();
+        fs::write(root.path().join("a").join("f.md"), "").unwrap();
+        let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
+        let a = root.path().join("a");
+        let mut dirs = scan_dirs(root.path(), &a, &ignore);
+        dirs.sort();
+        assert_eq!(dirs, vec![a.clone(), a.join(RESERVED_DIR), a.join("b")]);
+    }
+
+    #[test]
+    fn scan_dirs_from_the_root_is_just_the_root_when_it_holds_no_directories() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("f.md"), "").unwrap();
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        assert_eq!(
+            scan_dirs(root.path(), root.path(), &ignore),
+            vec![root.path().to_path_buf()]
+        );
+    }
+
+    #[test]
+    fn explore_enters_a_dirsql_directory_below_the_top_level() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("a").join(RESERVED_DIR)).unwrap();
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let top = Place {
+            walk: walk_with(&ignore, None, Vec::new()),
+            dir: root.path().to_path_buf(),
+            rel: PathBuf::new(),
+            depth: 0,
+            states: Vec::new(),
+            linked: false,
+        };
+        let [a] = <[Place<'_>; 1]>::try_from(explored_dirs(top)).ok().unwrap();
+        let nested: Vec<PathBuf> = explored_dirs(a).into_iter().map(|p| p.rel).collect();
+        assert_eq!(nested, vec![Path::new("a").join(RESERVED_DIR)]);
     }
 
     #[test]
