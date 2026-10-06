@@ -798,13 +798,34 @@ mod tests {
         let row = row_for("", "docs/a.md");
         let mut writer = CapturingCellWriter::default();
 
-        write_column(&row, &mut writer, CONTENT_COLUMN as c_int, |_| {
-            Some("contents".to_string())
-        })
+        write_column(
+            &row,
+            &mut writer,
+            c_int::try_from(CONTENT_COLUMN).unwrap(),
+            |_| Some("contents".to_string()),
+        )
         .unwrap();
 
         assert_eq!(writer.0, [CapturedValue::Text("contents".to_string())]);
         assert_eq!(row.content.get(), Some(&Some("contents".to_string())));
+    }
+
+    #[test]
+    fn sqlite_context_receives_a_stat_cell() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let conn = Connection::open_in_memory().unwrap();
+        load_module(&conn, StatementScope::new()).unwrap();
+        conn.execute_batch(&format!(
+            "CREATE VIRTUAL TABLE files USING dirsql_path('{}', 'vtab.rs', '', 'no-gitignore')",
+            root.display()
+        ))
+        .unwrap();
+
+        let size: i64 = conn
+            .query_row("SELECT size FROM files", [], |row| row.get(0))
+            .unwrap();
+
+        assert!(size > 0);
     }
 
     #[test]
