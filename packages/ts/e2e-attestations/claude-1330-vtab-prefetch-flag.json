@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791247078,
+  "exit_code": 0,
+  "commit": "09b93a01d7fbb3f77e89f9b86747a11d2b3d7e32",
+  "branch": "claude/1330-vtab-prefetch-flag"
+}
