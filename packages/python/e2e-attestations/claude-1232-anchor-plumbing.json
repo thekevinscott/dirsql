@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/ -x -q --ignore-glob=tests/e2e/glob_speed_*",
+  "ran_at": 1791252595,
+  "exit_code": 0,
+  "commit": "1e6d04c6d180deb50bf238c8f3ac6c569377add4",
+  "branch": "claude/1232-anchor-plumbing"
+}
