@@ -477,17 +477,33 @@ struct EntryDecision {
 
 /// What the walk makes of an entry, following a symlink only when
 /// `follow_links` is set. `None` for anything else, a broken link included.
-fn kind_of(entry: &DirEntry, follow_links: bool) -> Option<Kind> {
-    let file_type = entry.file_type().ok()?;
-    let facts = EntryFacts::from_file_type(&file_type);
-    let target = (facts.is_symlink && follow_links)
-        .then(|| {
-            fs::metadata(entry.path())
-                .ok()
-                .map(|metadata| EntryFacts::from_metadata(&metadata))
-        })
-        .flatten();
+fn kind_of(entry: &impl EntrySource, follow_links: bool) -> Option<Kind> {
+    let facts = entry.entry_facts()?;
+    let target = if facts.is_symlink && follow_links {
+        entry.target_facts()
+    } else {
+        None
+    };
     kind_from_facts(facts, target, follow_links)
+}
+
+trait EntrySource {
+    fn entry_facts(&self) -> Option<EntryFacts>;
+    fn target_facts(&self) -> Option<EntryFacts>;
+}
+
+impl EntrySource for DirEntry {
+    fn entry_facts(&self) -> Option<EntryFacts> {
+        self.file_type()
+            .ok()
+            .map(|file_type| EntryFacts::from_file_type(&file_type))
+    }
+
+    fn target_facts(&self) -> Option<EntryFacts> {
+        fs::metadata(self.path())
+            .ok()
+            .map(|metadata| EntryFacts::from_metadata(&metadata))
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1109,12 +1125,34 @@ mod tests {
         assert_eq!(classify(false, false, true), None);
     }
 
+    #[derive(Clone, Copy)]
+    struct FakeEntrySource {
+        entry: Option<EntryFacts>,
+        target: Option<EntryFacts>,
+        target_reads_allowed: bool,
+    }
+
+    impl EntrySource for FakeEntrySource {
+        fn entry_facts(&self) -> Option<EntryFacts> {
+            self.entry
+        }
+
+        fn target_facts(&self) -> Option<EntryFacts> {
+            assert!(self.target_reads_allowed);
+            self.target
+        }
+    }
+
     #[test]
     fn entry_facts_classify_links_and_gate_target_following() {
-        let link = EntryFacts {
-            is_symlink: true,
-            is_dir: false,
-            is_file: false,
+        let link = FakeEntrySource {
+            entry: Some(EntryFacts {
+                is_symlink: true,
+                is_dir: false,
+                is_file: false,
+            }),
+            target: None,
+            target_reads_allowed: true,
         };
         let directory = EntryFacts {
             is_symlink: false,
@@ -1127,14 +1165,29 @@ mod tests {
             is_file: true,
         };
 
-        assert_eq!(kind_from_facts(directory, None, true), Some(Kind::Dir));
-        assert_eq!(kind_from_facts(link, Some(directory), false), None);
         assert_eq!(
-            kind_from_facts(link, Some(directory), true),
-            Some(Kind::LinkedDir)
+            kind_of(
+                &FakeEntrySource {
+                    entry: Some(directory),
+                    target: None,
+                    target_reads_allowed: false,
+                },
+                true
+            ),
+            Some(Kind::Dir)
         );
-        assert_eq!(kind_from_facts(link, Some(file), true), Some(Kind::File));
-        assert_eq!(kind_from_facts(link, None, true), None);
+        assert_eq!(kind_of(&link, false), None);
+        let link_to_dir = FakeEntrySource {
+            target: Some(directory),
+            ..link
+        };
+        assert_eq!(kind_of(&link_to_dir, true), Some(Kind::LinkedDir));
+        let link_to_file = FakeEntrySource {
+            target: Some(file),
+            ..link
+        };
+        assert_eq!(kind_of(&link_to_file, true), Some(Kind::File));
+        assert_eq!(kind_of(&link, true), None);
     }
 
     #[test]
