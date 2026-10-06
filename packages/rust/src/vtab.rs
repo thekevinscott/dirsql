@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -74,7 +74,7 @@ const READERS: usize = 8;
 /// Read `path` as text, yielding `None` when it is unreadable or not valid
 /// UTF-8. A file that cannot be read is a NULL cell, never a failed row: the
 /// filesystem is allowed to be messy and a query over it should still return.
-/// `size` is what the scan's stat reported, so the buffer is sized without
+/// `size` is what the row's stat reported, so the buffer is sized without
 /// stat'ing again; a file that has grown since is still read whole.
 fn read_text(path: &Path, size: Option<i64>) -> Option<String> {
     read_text_with(path, size, |path| File::open(path))
@@ -90,7 +90,7 @@ fn read_text_with<R: Read>(
     String::from_utf8(bytes).ok()
 }
 
-/// One past the size the scan saw: a file unchanged since fills the buffer in
+/// One past the size the stat saw: a file unchanged since fills the buffer in
 /// one read and reports its end on the next, with no stat in between.
 fn presize(size: Option<i64>) -> usize {
     usize::try_from(size.unwrap_or(0))
@@ -129,12 +129,36 @@ fn read_contents(rows: &[&FileRow], read: &(dyn Fn(&FileRow) -> Option<String> +
         .copied()
         .filter(|row| row.content.get().is_none())
         .collect();
+    share_out(&unread, READERS, &|row| {
+        row.content.get_or_init(|| read(row));
+    });
+}
+
+/// Stat every row in `rows` that has no facts yet, shared out across every
+/// core: each stat is a syscall the kernel answers independently of the
+/// last. `stat` is injected so the sharing-out is testable without a
+/// filesystem.
+fn stat_rows(rows: &[&FileRow], stat: &(dyn Fn(&FileRow) -> StatFacts + Sync)) {
+    let unstatted: Vec<&FileRow> = rows
+        .iter()
+        .copied()
+        .filter(|row| row.facts.get().is_none())
+        .collect();
+    let workers = thread::available_parallelism().map_or(1, usize::from);
+    share_out(&unstatted, workers, &|row| {
+        row.facts.get_or_init(|| stat(row));
+    });
+}
+
+/// Run `work` on every row, `workers` at a time, each worker taking the next
+/// row not yet taken.
+fn share_out(rows: &[&FileRow], workers: usize, work: &(dyn Fn(&FileRow) + Sync)) {
     let next = AtomicUsize::new(0);
     thread::scope(|scope| {
-        for _ in 0..READERS.min(unread.len()) {
+        for _ in 0..workers.min(rows.len()) {
             scope.spawn(|| {
-                while let Some(row) = unread.get(next.fetch_add(1, Ordering::Relaxed)) {
-                    row.content.get_or_init(|| read(row));
+                while let Some(row) = rows.get(next.fetch_add(1, Ordering::Relaxed)) {
+                    work(row);
                 }
             });
         }
@@ -153,6 +177,10 @@ struct ScanSpec {
     /// Whether the scan respects `.gitignore` files (off under `--no-ignore`).
     gitignore: bool,
     reader: fn(&Path, Option<i64>) -> Option<String>,
+    /// The row set of the statement in progress, which the first stat a
+    /// statement asks for stats whole: one stat at a time as SQLite steps
+    /// would be several times slower than sharing them out at once.
+    current: Mutex<Weak<Vec<FileRow>>>,
 }
 
 /// One matched file, as compact as the seven stat columns allow: the three
@@ -164,7 +192,9 @@ struct FileRow {
     /// The path as reported, under the table's prefix when it has one.
     path: String,
     spans: PathSpans,
-    facts: StatFacts,
+    /// Stat'ed at most once per statement, and only when the statement reads
+    /// a stat column or the content.
+    facts: OnceLock<StatFacts>,
     /// The file's text once a statement has asked for it, read at most once
     /// per statement: ahead for every row when the statement names the
     /// column, or on demand for the row being emitted.
@@ -172,14 +202,14 @@ struct FileRow {
 }
 
 impl FileRow {
-    fn new(path_prefix: &Path, rel: PathBuf, facts: StatFacts) -> Self {
+    fn new(path_prefix: &Path, rel: PathBuf) -> Self {
         let path = reported_path(path_prefix, &rel);
         let spans = PathSpans::of(&path);
         Self {
             rel,
             path,
             spans,
-            facts,
+            facts: OnceLock::new(),
             content: OnceLock::new(),
         }
     }
@@ -245,22 +275,12 @@ fn epoch_secs(time: Option<SystemTime>) -> Option<i64> {
     i64::try_from(since.as_secs()).ok()
 }
 
-/// The rows for the files a scan found, in scan order. The stat behind each
-/// row is a syscall the kernel answers independently of the last, so the
-/// files are shared out across every core: one stat per file is the floor
-/// `find` pays too, and spreading them is how a walk comes in under it.
-/// `stat` is injected so the row building is testable without a filesystem.
-fn build_rows(
-    path_prefix: &Path,
-    rel_paths: Vec<PathBuf>,
-    stat: &(dyn Fn(&Path) -> StatFacts + Sync),
-) -> Vec<FileRow> {
+/// The rows for the files a scan found, in scan order, unstat'ed. Built
+/// across every core, since a large scan's paths each need splitting.
+fn build_rows(path_prefix: &Path, rel_paths: Vec<PathBuf>) -> Vec<FileRow> {
     let workers = thread::available_parallelism().map_or(1, usize::from);
     let per_worker = rel_paths.len().div_ceil(workers).max(1);
-    let row = |rel: PathBuf| {
-        let facts = stat(&rel);
-        FileRow::new(path_prefix, rel, facts)
-    };
+    let row = |rel: PathBuf| FileRow::new(path_prefix, rel);
     thread::scope(|scope| {
         let handles: Vec<_> = chunks(rel_paths, per_worker)
             .into_iter()
@@ -268,7 +288,7 @@ fn build_rows(
             .collect();
         handles
             .into_iter()
-            .flat_map(|handle| handle.join().expect("a stat worker only stats"))
+            .flat_map(|handle| handle.join().expect("a row builder only builds rows"))
             .collect()
     })
 }
@@ -276,13 +296,17 @@ fn build_rows(
 /// `items` cut into runs of `size` in order, the last run holding whatever
 /// remains; one (possibly empty) run when there is less than a full one.
 fn chunks<T>(items: Vec<T>, size: usize) -> Vec<Vec<T>> {
-    let mut runs = Vec::with_capacity(items.len().div_ceil(size.max(1)));
+    let size = size.max(1);
+    let mut runs = Vec::with_capacity(items.len().div_ceil(size));
     let mut rest = items;
+    // Cut from the back so each item moves once; cutting from the front
+    // would move the whole remainder on every cut.
     while rest.len() > size {
-        let tail = rest.split_off(size);
-        runs.push(std::mem::replace(&mut rest, tail));
+        let start = (rest.len() - 1) / size * size;
+        runs.push(rest.split_off(start));
     }
     runs.push(rest);
+    runs.reverse();
     runs
 }
 
@@ -290,17 +314,21 @@ fn integer(n: Option<i64>) -> ValueRef<'static> {
     n.map_or(ValueRef::Null, ValueRef::Integer)
 }
 
-/// The cell a row holds for column `i`, `None` for the one it does not hold
-/// until asked: `content` is read from the file, not stat'ed with the rest.
-fn cell(row: &FileRow, i: c_int) -> Option<ValueRef<'_>> {
+/// The cell for column `i` of `row`, its stat columns from `facts`; `None`
+/// for `content`, which is read from the file rather than stat'ed.
+fn cell<'r>(
+    row: &'r FileRow,
+    i: c_int,
+    facts: &dyn Fn(&FileRow) -> StatFacts,
+) -> Option<ValueRef<'r>> {
     Some(match usize::try_from(i).unwrap_or(usize::MAX) {
         PATH_COLUMN => ValueRef::from(row.path.as_str()),
         BASENAME_COLUMN => ValueRef::from(row.basename()),
         DIR_COLUMN => ValueRef::from(row.dir()),
         EXT_COLUMN => ValueRef::from(row.ext()),
-        SIZE_COLUMN => integer(row.facts.size),
-        MTIME_COLUMN => integer(row.facts.mtime),
-        CTIME_COLUMN => integer(row.facts.ctime),
+        SIZE_COLUMN => integer(facts(row).size),
+        MTIME_COLUMN => integer(facts(row).mtime),
+        CTIME_COLUMN => integer(facts(row).ctime),
         CONTENT_COLUMN => return None,
         _ => ValueRef::Null,
     })
@@ -329,12 +357,34 @@ fn parse_module_args(args: &[&[u8]]) -> Result<ScanSpec> {
         ignore: vtab_scaffold::compile_ignore(ignore)?,
         gitignore: vtab_scaffold::parse_gitignore(gitignore)?,
         reader: read_text,
+        current: Mutex::new(Weak::new()),
     })
 }
 
 impl ScanSpec {
+    fn stat(&self, row: &FileRow) -> StatFacts {
+        fs::metadata(self.root.join(&row.rel)).map_or_else(
+            |_| StatFacts::default(),
+            |m| StatFacts::from_parts(m.len(), m.modified().ok(), m.created().ok()),
+        )
+    }
+
+    fn facts(&self, row: &FileRow) -> StatFacts {
+        if let Some(facts) = row.facts.get() {
+            return *facts;
+        }
+        let current = self
+            .current
+            .lock()
+            .map_or_else(|_| Weak::new(), |c| c.clone());
+        if let Some(rows) = current.upgrade() {
+            stat_rows(&rows.iter().collect::<Vec<_>>(), &|row| self.stat(row));
+        }
+        *row.facts.get_or_init(|| self.stat(row))
+    }
+
     fn read(&self, row: &FileRow) -> Option<String> {
-        (self.reader)(&self.root.join(&row.rel), row.facts.size)
+        (self.reader)(&self.root.join(&row.rel), self.facts(row).size)
     }
 }
 
@@ -367,17 +417,15 @@ impl TableSource for ScanSpec {
         // The scan runs per statement rather than at CREATE, which is what
         // makes reads live: each statement sees the filesystem as it is now.
         let rel_paths = scan_glob(&self.root, &self.glob, &self.ignore, self.gitignore);
-        let stat = |rel: &Path| {
-            fs::metadata(self.root.join(rel)).map_or_else(
-                |_| StatFacts::default(),
-                |m| StatFacts::from_parts(m.len(), m.modified().ok(), m.created().ok()),
-            )
-        };
-        Arc::new(build_rows(&self.path_prefix, rel_paths, &stat))
+        let rows = Arc::new(build_rows(&self.path_prefix, rel_paths));
+        if let Ok(mut current) = self.current.lock() {
+            *current = Arc::downgrade(&rows);
+        }
+        rows
     }
 
     fn column(&self, row: &FileRow, ctx: &mut Context, i: c_int) -> Result<()> {
-        match cell(row, i) {
+        match cell(row, i, &|row| self.facts(row)) {
             Some(value) => ctx.set_result(&ToSqlOutput::Borrowed(value)),
             // The one effectful read, reached only when a query names the
             // column: this is where laziness actually lives.
@@ -604,11 +652,21 @@ mod tests {
     }
 
     fn row_for(prefix: &str, rel: &str) -> FileRow {
-        FileRow::new(Path::new(prefix), PathBuf::from(rel), StatFacts::default())
+        FileRow::new(Path::new(prefix), PathBuf::from(rel))
+    }
+
+    fn no_facts(_: &FileRow) -> StatFacts {
+        StatFacts::default()
     }
 
     fn injected_reader(path: &Path, size: Option<i64>) -> Option<String> {
         (path == Path::new("/root/docs/a.md") && size == Some(7)).then(|| "contents".to_owned())
+    }
+
+    fn sized_row(rel: &str, size: i64) -> FileRow {
+        let row = FileRow::new(Path::new(""), PathBuf::from(rel));
+        row.facts.set(facts(size)).unwrap();
+        row
     }
 
     fn spec_with_reader() -> ScanSpec {
@@ -641,7 +699,7 @@ mod tests {
     #[test]
     fn scan_spec_read_uses_the_injected_reader() {
         let spec = spec_with_reader();
-        let row = FileRow::new(Path::new(""), PathBuf::from("docs/a.md"), facts(7));
+        let row = sized_row("docs/a.md", 7);
 
         assert_eq!(spec.read(&row).as_deref(), Some("contents"));
     }
@@ -649,7 +707,7 @@ mod tests {
     #[test]
     fn prefetch_caches_content_from_the_injected_reader() {
         let spec = spec_with_reader();
-        let row = FileRow::new(Path::new(""), PathBuf::from("docs/a.md"), facts(7));
+        let row = sized_row("docs/a.md", 7);
         let rows = [&row];
 
         spec.prefetch(&rows);
@@ -671,35 +729,44 @@ mod tests {
 
     #[test]
     fn each_stat_column_reads_its_own_cell() {
-        let mut row = row_for("", "docs/a.md");
-        row.facts = facts(7);
-        assert_eq!(cell(&row, 0), text("docs/a.md"));
-        assert_eq!(cell(&row, 1), text("a.md"));
-        assert_eq!(cell(&row, 2), text("docs"));
-        assert_eq!(cell(&row, 3), text("md"));
-        assert_eq!(cell(&row, 4), Some(ValueRef::Integer(7)));
-        assert_eq!(cell(&row, 5), Some(ValueRef::Integer(70)));
-        assert_eq!(cell(&row, 6), Some(ValueRef::Integer(700)));
+        let row = row_for("", "docs/a.md");
+        let seven = |_: &FileRow| facts(7);
+        assert_eq!(cell(&row, 0, &seven), text("docs/a.md"));
+        assert_eq!(cell(&row, 1, &seven), text("a.md"));
+        assert_eq!(cell(&row, 2, &seven), text("docs"));
+        assert_eq!(cell(&row, 3, &seven), text("md"));
+        assert_eq!(cell(&row, 4, &seven), Some(ValueRef::Integer(7)));
+        assert_eq!(cell(&row, 5, &seven), Some(ValueRef::Integer(70)));
+        assert_eq!(cell(&row, 6, &seven), Some(ValueRef::Integer(700)));
+    }
+
+    #[test]
+    fn a_path_column_stats_nothing() {
+        let row = row_for("", "docs/a.md");
+        let stat = |_: &FileRow| panic!("a path column needs no stat");
+        for i in [0, 1, 2, 3, 7, 8] {
+            cell(&row, i, &stat);
+        }
     }
 
     #[test]
     fn the_content_column_is_not_a_stored_cell() {
         let row = row_for("", "a.md");
-        assert_eq!(cell(&row, 7), None);
+        assert_eq!(cell(&row, 7, &no_facts), None);
     }
 
     #[test]
     fn an_absent_fact_is_a_null_cell() {
         let row = row_for("", "Makefile");
-        assert_eq!(cell(&row, 3), Some(ValueRef::Null), "no ext");
-        assert_eq!(cell(&row, 4), Some(ValueRef::Null), "no size");
+        assert_eq!(cell(&row, 3, &no_facts), Some(ValueRef::Null), "no ext");
+        assert_eq!(cell(&row, 4, &no_facts), Some(ValueRef::Null), "no size");
     }
 
     #[test]
     fn a_column_past_the_schema_is_null() {
         let row = row_for("", "a.md");
-        assert_eq!(cell(&row, 8), Some(ValueRef::Null));
-        assert_eq!(cell(&row, -1), Some(ValueRef::Null));
+        assert_eq!(cell(&row, 8, &no_facts), Some(ValueRef::Null));
+        assert_eq!(cell(&row, -1, &no_facts), Some(ValueRef::Null));
     }
 
     #[test]
@@ -712,8 +779,7 @@ mod tests {
     fn a_scan_spec_keys_a_row_by_the_text_of_the_lookup_column() {
         let args = args_with(&[b"'/tmp/notes'", b"'**/*.md'", b"''", b"'gitignore'"]);
         let spec = parse_module_args(&args).unwrap();
-        let mut row = row_for("", "docs/a.md");
-        row.facts = facts(3);
+        let row = row_for("", "docs/a.md");
 
         assert_eq!(spec.lookup_key(&row, 0), Some("docs/a.md"));
         assert_eq!(spec.lookup_key(&row, 1), Some("a.md"));
@@ -734,6 +800,14 @@ mod tests {
     }
 
     #[test]
+    fn an_exact_multiple_cuts_into_full_runs() {
+        assert_eq!(
+            chunks(vec![1, 2, 3, 4, 5, 6], 3),
+            vec![vec![1, 2, 3], vec![4, 5, 6]]
+        );
+    }
+
+    #[test]
     fn a_full_run_is_one_chunk() {
         assert_eq!(chunks(vec![1, 2, 3], 3), vec![vec![1, 2, 3]]);
     }
@@ -744,25 +818,65 @@ mod tests {
     }
 
     #[test]
-    fn build_rows_keeps_scan_order_and_stats_each_path() {
+    fn build_rows_keeps_scan_order() {
         let rel_paths: Vec<PathBuf> = (0..100)
             .map(|n| PathBuf::from(format!("f{n:03}.md")))
             .collect();
-        let rows = build_rows(Path::new("/root"), rel_paths, &|rel| {
-            facts(rel.to_str().unwrap()[1..4].parse().unwrap())
-        });
+        let rows = build_rows(Path::new("/root"), rel_paths);
         assert_eq!(rows.len(), 100);
         for (n, row) in rows.iter().enumerate() {
             assert_eq!(row.path, format!("/root/f{n:03}.md"));
             assert_eq!(row.rel, PathBuf::from(format!("f{n:03}.md")));
-            assert_eq!(row.facts, facts(i64::try_from(n).unwrap()));
         }
     }
 
     #[test]
+    fn build_rows_stats_no_file() {
+        let rows = build_rows(
+            Path::new(""),
+            vec![PathBuf::from("a.md"), PathBuf::from("b.md")],
+        );
+        assert!(rows.iter().all(|row| row.facts.get().is_none()));
+    }
+
+    #[test]
     fn build_rows_yields_nothing_for_an_empty_scan() {
-        let rows = build_rows(Path::new(""), Vec::new(), &|_| StatFacts::default());
+        let rows = build_rows(Path::new(""), Vec::new());
         assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn the_first_stat_a_statement_asks_for_stats_its_whole_row_set() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.md"), "aa").unwrap();
+        fs::write(dir.path().join("b.md"), "bbb").unwrap();
+        let root = dir.path().to_str().unwrap().as_bytes();
+        let args = args_with(&[root, b"'*.md'", b"''", b"'no-gitignore'"]);
+        let spec = parse_module_args(&args).unwrap();
+        let rows = spec.rows();
+        assert!(rows.iter().all(|row| row.facts.get().is_none()));
+
+        assert_eq!(spec.facts(&rows[0]).size, Some(2));
+
+        assert_eq!(rows[1].facts.get().and_then(|f| f.size), Some(3));
+    }
+
+    #[test]
+    fn stat_rows_stats_each_unstatted_row_once() {
+        let rows: Vec<FileRow> = (0..40).map(|n| row_for("", &format!("f{n}.md"))).collect();
+        rows[3].facts.set(facts(1)).unwrap();
+        let stats = AtomicUsize::new(0);
+        let stat = |row: &FileRow| {
+            stats.fetch_add(1, Ordering::Relaxed);
+            facts(row.path[1..row.path.len() - 3].parse().unwrap())
+        };
+
+        stat_rows(&rows.iter().collect::<Vec<_>>(), &stat);
+
+        assert_eq!(stats.load(Ordering::Relaxed), 39);
+        assert_eq!(rows[3].facts.get(), Some(&facts(1)));
+        assert_eq!(rows[7].facts.get(), Some(&facts(7)));
+        stat_rows(&[], &|_| panic!("nothing to stat"));
     }
 
     #[test]
@@ -988,8 +1102,10 @@ mod tests {
     #[test]
     fn an_unstattable_file_has_null_facts_but_is_still_a_row() {
         let row = row_for("", "bare");
+        let args = args_with(&[b"'/nonexistent-dirsql-root'", b"'*'", b"''", b"'gitignore'"]);
+        let spec = parse_module_args(&args).unwrap();
         assert_eq!(row.basename(), Some("bare"));
-        assert_eq!(row.facts, StatFacts::default());
+        assert_eq!(spec.facts(&row), StatFacts::default());
     }
 
     #[test]
