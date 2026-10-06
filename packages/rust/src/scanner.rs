@@ -1191,6 +1191,19 @@ mod tests {
     }
 
     #[test]
+    fn directory_entries_read_entry_and_target_facts() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let entry = fs::read_dir(path)
+            .unwrap()
+            .map(Result::unwrap)
+            .next()
+            .unwrap();
+
+        assert!(entry.entry_facts().is_some());
+        assert!(entry.target_facts().is_some());
+    }
+
+    #[test]
     fn follows_everything_off_a_link() {
         let ignore = TableMatcher::new(&[], &[]).unwrap();
         let walk = walk_with(&ignore, None, Vec::new());
