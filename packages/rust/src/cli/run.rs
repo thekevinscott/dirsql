@@ -95,8 +95,9 @@ struct ConfigArgs {
     /// tables are defined -- query the filesystem with a path-table
     /// (`FROM './'`). A
     /// `./.dirsql.toml` on disk is NOT auto-loaded (#602); pass it explicitly
-    /// to use it. A `-c` naming a missing file is an error. The index is rooted at the
-    /// invocation directory (cwd), not a config's location (#540). For `query`,
+    /// to use it. A `-c` naming a missing file is an error. The index root is the
+    /// invocation directory (cwd) and governs path-tables; a config's
+    /// `[[table]]` globs anchor at that config's own directory. For `query`,
     /// pass this AFTER the subcommand (`dirsql query <sql> -c <cfg>`).
     #[arg(short = 'c', long)]
     config: Vec<PathBuf>,

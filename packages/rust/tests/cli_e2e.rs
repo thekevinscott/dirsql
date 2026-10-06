@@ -1428,17 +1428,18 @@ fn root_config_key_degrades_server_with_503_naming_the_key() {
 }
 
 #[test]
-fn config_elsewhere_indexes_invocation_cwd_not_config_parent() {
-    // With `root` gone (#540), `--config /elsewhere/.dirsql.toml` roots at the
-    // invocation cwd, not the config's parent. The data lives in the cwd; the
-    // config's own directory holds nothing to index.
+fn config_elsewhere_indexes_the_config_directory_not_the_invocation_cwd() {
+    // A config's globs anchor at the config file's directory, so the data
+    // lives beside the config and the invocation cwd holds only a decoy.
     let cwd = TempDir::new().unwrap();
-    fs::create_dir_all(cwd.path().join("posts/alice")).unwrap();
-    fs::create_dir_all(cwd.path().join("posts/bob")).unwrap();
-    fs::write(cwd.path().join("posts/alice/Hello-World.json"), "{}").unwrap();
-    fs::write(cwd.path().join("posts/bob/Second-Post.json"), "{}").unwrap();
+    fs::create_dir_all(cwd.path().join("posts/mallory")).unwrap();
+    fs::write(cwd.path().join("posts/mallory/Decoy.json"), "{}").unwrap();
 
     let elsewhere = TempDir::new().unwrap();
+    fs::create_dir_all(elsewhere.path().join("posts/alice")).unwrap();
+    fs::create_dir_all(elsewhere.path().join("posts/bob")).unwrap();
+    fs::write(elsewhere.path().join("posts/alice/Hello-World.json"), "{}").unwrap();
+    fs::write(elsewhere.path().join("posts/bob/Second-Post.json"), "{}").unwrap();
     fs::write(
         elsewhere.path().join(".dirsql.toml"),
         r#"
@@ -1467,7 +1468,7 @@ on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{}" "$sep"; sep=",";
     assert_eq!(
         body,
         vec![json!({"n": 2})],
-        "posts must be indexed from the invocation cwd, not the config's parent"
+        "posts must be indexed from the config's directory, not the invocation cwd"
     );
 
     kill_and_wait(child);

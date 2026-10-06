@@ -35,7 +35,9 @@ All three SDKs share a single unified construction entry point — no separate
 `root`, `tables`, `ignore`, and `config`; `config` names a `.dirsql.toml`
 file whose `[[table]]` entries are appended. The index root is decided
 uniformly across all three SDKs (#540): the explicit `root` when given, else
-the process cwd — the config file's location never sets the root. (The
+the process cwd — the config file's location never sets the root. A config's
+`[[table]]` globs anchor at the config file's own directory (or the literal
+prefix of an absolute / `~/` glob) on every SDK, via the shared core. (The
 `[dirsql].root` config key was removed in #540.)
 
 **Configless construction — at parity across all three SDKs (#636), no drift.**
