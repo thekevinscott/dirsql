@@ -1,7 +1,0 @@
-{
-  "command": "uv run python -m pytest tests/e2e/ -x -q --ignore-glob=tests/e2e/glob_speed_*",
-  "ran_at": 1791253347,
-  "exit_code": 0,
-  "commit": "12cc6754fbafc0d44a111b0f9b5ff2d9d26861c4",
-  "branch": "claude/1232-multi-watch"
-}
