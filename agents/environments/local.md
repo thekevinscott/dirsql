@@ -87,6 +87,7 @@ The orchestrator (main Claude session) must proactively:
 6. **Scripts to `/tmp`**: For polling/monitoring scripts (watching CI, waiting for merges), write the script to `/tmp` then run it via `bash /tmp/script.sh`. Do not use inline bash loops in tool calls.
 7. **No permission loops**: If a repo-authorized command needs sandbox escalation, state the exact command and why once, then keep working. Do not ask the user to approve it as a separate yes/no step.
 8. **Enforce the E2E-before-push rule**: Before merging any PR that touches substantial code (see "E2E Before Push" below), confirm the PR body contains a completed `## E2E Verification` section. If it's missing, dispatch an agent to run e2e and update the PR body before merge. Do not add e2e to CI -- it stays local-only per the E2E Test Policy.
+9. **Read `agents/reference/orchestration.md`** before dispatching agents: briefs, a red `main`, the targeted mutation recheck, PR review.
 
 ## E2E Before Push -- Local Commands
 
