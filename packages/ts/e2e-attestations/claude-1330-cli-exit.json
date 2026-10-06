@@ -1,7 +1,7 @@
 {
   "command": "pnpm test:e2e",
-  "ran_at": 1791253418,
+  "ran_at": 1791270342,
   "exit_code": 0,
-  "commit": "5e7dcafd3a0ece8090f803fb49c9ef6a3d9e42a3",
+  "commit": "5076e5ad0909a14bb7dde96058de54bb3aec05e3",
   "branch": "claude/1330-cli-exit"
 }
