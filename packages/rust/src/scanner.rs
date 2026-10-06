@@ -127,11 +127,7 @@ pub fn scan_glob(
     ignore: &TableMatcher,
     gitignore: bool,
 ) -> Vec<PathBuf> {
-    let repo = if gitignore {
-        enclosing_repo(root, &holds_git)
-    } else {
-        None
-    };
+    let repo = repo_for_scan(root, gitignore, &holds_git);
     let repo_frames = repo.map(|top| gitignores_above(root, top));
     let mut results = Vec::new();
     walk(
@@ -383,7 +379,7 @@ impl Walk<'_> {
         linked: bool,
         visit: &mut dyn FnMut(PathBuf, &DirEntry),
     ) {
-        let entered_repo = self.gitignore && holds_git(dir);
+        let entered_repo = should_enter_repo(self.gitignore, holds_git(dir));
         let was_in_repo = self.in_repo;
         let inherited_frames = entered_repo.then(|| std::mem::take(&mut self.frames));
         self.in_repo |= entered_repo;
@@ -509,8 +505,24 @@ fn enclosing_repo<'a>(start: &'a Path, is_repo_root: &dyn Fn(&Path) -> bool) -> 
     start.ancestors().find(|dir| is_repo_root(dir))
 }
 
+fn repo_for_scan<'a>(
+    root: &'a Path,
+    gitignore: bool,
+    holds_git: &dyn Fn(&Path) -> bool,
+) -> Option<&'a Path> {
+    if gitignore {
+        enclosing_repo(root, holds_git)
+    } else {
+        None
+    }
+}
+
 fn holds_git(dir: &Path) -> bool {
     dir.join(".git").exists()
+}
+
+fn should_enter_repo(gitignore: bool, holds_git: bool) -> bool {
+    gitignore && holds_git
 }
 
 /// The directories strictly above `start`, up to and including its ancestor
@@ -761,6 +773,27 @@ mod tests {
     #[test]
     fn enclosing_repo_is_none_outside_any_repo() {
         assert_eq!(enclosing_repo(Path::new("/idx/docs"), &|_| false), None);
+    }
+
+    #[test]
+    fn repo_for_scan_requires_gitignore_and_finds_the_nearest_marker() {
+        let start = Path::new("/outer/inner/docs");
+        let marker = |dir: &Path| dir == Path::new("/outer/inner");
+
+        assert_eq!(repo_for_scan(start, false, &marker), None);
+        assert_eq!(repo_for_scan(start, true, &|_| false), None);
+        assert_eq!(
+            repo_for_scan(start, true, &marker),
+            Some(Path::new("/outer/inner"))
+        );
+    }
+
+    #[test]
+    fn entering_a_repo_requires_both_the_option_and_a_marker() {
+        assert!(!should_enter_repo(false, false));
+        assert!(!should_enter_repo(false, true));
+        assert!(!should_enter_repo(true, false));
+        assert!(should_enter_repo(true, true));
     }
 
     #[test]
