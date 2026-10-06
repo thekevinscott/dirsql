@@ -27,6 +27,12 @@ uvx dirsql "SELECT * FROM './'"    # via PyPI
 cargo install dirsql --features cli
 ```
 
+Agent skill, for Claude Code, Codex, Cursor, Gemini CLI and others:
+
+```bash
+npx skills add thekevinscott/dirsql
+```
+
 > The npm CLI requires **Node ≥ 20.11**.
 >
 > Supported on Linux, macOS, and Windows (x64). CI runs the Rust test suite on Linux and Windows; the macOS artifacts are built but not tested in CI.
