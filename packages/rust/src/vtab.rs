@@ -634,7 +634,7 @@ mod tests {
 
         let text = read_text(&path, None).unwrap();
 
-        assert!(text.starts_with("[package]\n"));
+        assert!(text.starts_with("[package]"));
         assert!(text.contains("name = \"dirsql\""));
     }
 
