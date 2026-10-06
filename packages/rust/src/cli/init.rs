@@ -3,10 +3,8 @@
 //!
 //! `init` does not inspect the target directory at all: it writes
 //! [`super::DEFAULT_CONFIG_TOML`] verbatim -- the escalation scaffold (a named
-//! `[[table]]` with glob, DDL, and a real `on-file` hook) that the
-//! `--include-default` launcher path also seeds from -- so a user always has
-//! a loadable, working config to hand-edit, and the two surfaces can never
-//! drift apart. No LLM, no network, no filesystem walk.
+//! `[[table]]` with glob, DDL, and a real `on-file` hook) -- so a
+//! user always has a loadable, working config to hand-edit. No LLM, no network, no filesystem walk.
 
 use std::path::PathBuf;
 

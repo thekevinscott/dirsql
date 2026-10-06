@@ -28,7 +28,8 @@ export interface ExtensionSpec {
  * Options accepted by the {@link DirSQL} constructor.
  *
  * The index root is the explicit `root` when given, otherwise the process
- * working directory. The `config` file's location never sets the root.
+ * working directory. The `config` file's location never sets the root; its
+ * `[[table]]` globs anchor at the config file's own directory.
  */
 export interface DirSQLOptions {
   /** Root directory to scan. */

@@ -1,7 +1,8 @@
 //! Integration red tests for #553: the core accepts multiple config files
 //! as an ordered accumulation.
 //!
-//! `[[table]]` and `ignore` accumulate across entries in list order; each
+//! `[[table]]` entries accumulate in list order and each config's `ignore`
+//! applies to its own tables; each
 //! entry's `on-file` hooks run from **its own** config file's directory; a
 //! duplicate table name across entries hits the existing `DuplicateTable`
 //! error. No merge step, no cross-file validation.
@@ -28,13 +29,11 @@ fn write_config(dir: &Path, contents: &str) -> std::path::PathBuf {
 
 #[test]
 fn tables_accumulate_across_config_entries() {
-    // Distinct globs per table: dirsql routes each file to a single table
-    // (one-file-one-table), so each config's table matches its own file.
+    // Each config's table anchors at its own directory and matches its own file.
     let data = TempDir::new().unwrap();
-    fs::write(data.path().join("a.json"), "{}").unwrap();
-    fs::write(data.path().join("b.json"), "{}").unwrap();
 
     let cfg_a = TempDir::new().unwrap();
+    fs::write(cfg_a.path().join("a.json"), "{}").unwrap();
     let cfg_a_path = write_config(
         cfg_a.path(),
         r#"
@@ -46,6 +45,7 @@ on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{\"basename\":\"%s\"
 "#,
     );
     let cfg_b = TempDir::new().unwrap();
+    fs::write(cfg_b.path().join("b.json"), "{}").unwrap();
     let cfg_b_path = write_config(
         cfg_b.path(),
         r#"
@@ -79,13 +79,11 @@ on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{\"basename\":\"%s\"
 
 #[test]
 fn each_on_file_runs_from_its_declaring_config_dir() {
-    // Distinct globs (one-file-one-table); each config's relative `on-file`
-    // script proves the hook's cwd was that config's own directory.
+    // Each config's relative `on-file` script proves the hook's cwd was that config's own directory.
     let data = TempDir::new().unwrap();
-    fs::write(data.path().join("a.json"), "{}").unwrap();
-    fs::write(data.path().join("b.json"), "{}").unwrap();
 
     let cfg_a = TempDir::new().unwrap();
+    fs::write(cfg_a.path().join("a.json"), "{}").unwrap();
     fs::write(
         cfg_a.path().join("emit.sh"),
         "#!/bin/sh\nprintf '[{\"v\":\"from-a\"}]'\n",
@@ -103,6 +101,7 @@ on-file = "sh ./emit.sh"
     );
 
     let cfg_b = TempDir::new().unwrap();
+    fs::write(cfg_b.path().join("b.json"), "{}").unwrap();
     fs::write(
         cfg_b.path().join("emit.sh"),
         "#!/bin/sh\nprintf '[{\"v\":\"from-b\"}]'\n",
@@ -139,14 +138,13 @@ on-file = "sh ./emit.sh"
 
 #[test]
 fn a_timeout_wrapped_hook_in_one_config_fails_the_build_under_its_table() {
-    // Distinct globs (one-file-one-table). Config A wraps ITS slow hook in
+    // Config A wraps ITS slow hook in
     // timeout(1): the kill fails the build, and the error names A's table
     // rather than config B's fast one.
     let data = TempDir::new().unwrap();
-    fs::write(data.path().join("a.json"), "{}").unwrap();
-    fs::write(data.path().join("b.json"), "{}").unwrap();
 
     let cfg_a = TempDir::new().unwrap();
+    fs::write(cfg_a.path().join("a.json"), "{}").unwrap();
     fs::write(
         cfg_a.path().join("slow.sh"),
         "#!/bin/sh\nsleep 3\nprintf '[{\"v\":\"too-late\"}]'\n",
@@ -164,6 +162,7 @@ on-file = "timeout 0.5 sh ./slow.sh"
     );
 
     let cfg_b = TempDir::new().unwrap();
+    fs::write(cfg_b.path().join("b.json"), "{}").unwrap();
     fs::write(
         cfg_b.path().join("fast.sh"),
         "#!/bin/sh\nprintf '[{\"v\":\"in-time\"}]'\n",
@@ -195,22 +194,20 @@ on-file = "sh ./fast.sh"
 }
 
 #[test]
-fn ignore_patterns_accumulate_across_config_entries() {
+fn ignore_patterns_apply_only_to_their_own_configs_tables() {
     let data = TempDir::new().unwrap();
-    fs::write(data.path().join("keep.json"), "{}").unwrap();
-    fs::create_dir_all(data.path().join("skip_a")).unwrap();
-    fs::write(data.path().join("skip_a").join("x.json"), "{}").unwrap();
-    fs::create_dir_all(data.path().join("skip_b")).unwrap();
-    fs::write(data.path().join("skip_b").join("y.json"), "{}").unwrap();
 
-    // The table lives in config A; config B contributes only an ignore
-    // pattern — which must still apply to A's table (global accumulation).
     let cfg_a = TempDir::new().unwrap();
+    for dir in ["skip_a", "skip_b"] {
+        fs::create_dir_all(cfg_a.path().join(dir)).unwrap();
+        fs::write(cfg_a.path().join(dir).join("x.json"), "{}").unwrap();
+    }
+    fs::write(cfg_a.path().join("keep.json"), "{}").unwrap();
     let cfg_a_path = write_config(
         cfg_a.path(),
         r#"
 [dirsql]
-ignore = ["**/skip_a/**"]
+ignore = ["skip_a/**"]
 
 [[table]]
 name = "files"
@@ -224,7 +221,7 @@ on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{\"basename\":\"%s\"
         cfg_b.path(),
         r#"
 [dirsql]
-ignore = ["**/skip_b/**"]
+ignore = ["**"]
 "#,
     );
 
@@ -240,10 +237,9 @@ ignore = ["**/skip_b/**"]
         .expect("the first config's table must be queryable");
     assert_eq!(
         rows.len(),
-        1,
-        "both configs' ignore patterns must apply, got {rows:?}"
+        2,
+        "config A's ignore applies, config B's does not, got {rows:?}"
     );
-    assert_eq!(rows[0]["basename"], Value::Text("keep.json".into()));
 }
 
 #[test]

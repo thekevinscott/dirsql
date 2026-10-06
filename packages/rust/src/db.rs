@@ -15,7 +15,7 @@ use crate::vtab::{self, StatementScope};
 
 /// The user's home directory, if the platform reports one. Injected here so
 /// the `~/` rule has a single production source.
-fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     #[allow(deprecated)]
     std::env::home_dir()
 }
@@ -125,7 +125,7 @@ fn unquoted_path_hint(token: &str) -> String {
     format!("hint: paths used as table names must be quoted; did you mean {token:?}?")
 }
 
-fn no_home_path_table(name: &str) -> String {
+pub(crate) fn no_home_path_table(name: &str) -> String {
     format!(
         "path-table {name:?} cannot be resolved: no home directory for '~' \
          (set HOME, or write the path out in full)"

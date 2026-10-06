@@ -62,7 +62,9 @@ and [`ignore`](../reference/config.md#dirsql-keys).
 There are **no plugin-specific keys and no plugin-specific restrictions**. The
 config schema is content-only: the index root and persistence are
 [runner-owned](../reference/config.md#dirsql-keys) — the root is the directory
-`dirsql` is run from (or an SDK's explicit `root`), persistence is the
+`dirsql` is run from (or an SDK's explicit `root`) and governs path-tables,
+while a fragment's own `[[table]]` globs anchor at the fragment's directory
+(see [glob anchor](../reference/config.md#glob-anchor)); persistence is the
 `--persist [PATH]` flag — decided by whoever runs `dirsql`, never by a config
 file, so a plugin has nothing to say about them. Whatever you can put in your
 own `.dirsql.toml`, a plugin can put in its fragment, and vice-versa.
@@ -86,11 +88,10 @@ matter most for a published plugin:
 - **A hook runs in its declaring config's directory.** For a plugin that is
   the installed fragment's directory — inside **site-packages**. That is a
   read-only, shared location: **run from it, never write to it.** Read the
-  matched files from the absolute paths the hook appends as arguments, and use
-  [`{root}`](../reference/hooks.md#on-file) to reach the user's project
-  directory. Write any cache to `{root}` or a real cache dir,
-  never next to the fragment.
-- **The paths are absolute and `{root}` is the index root**, so a command is
+  matched files from the absolute paths the hook appends as arguments. Write any cache to a real cache dir, never next to
+  the fragment.
+- **The paths are absolute and `{root}` is the table's glob anchor** (the
+  fragment's directory, or the literal prefix of an absolute / `~/` glob), so a command is
   self-sufficient from any working directory — it works whether the plugin
   lives in the project or in site-packages.
 
@@ -195,10 +196,9 @@ Discovery is deliberately narrow. Know exactly who does what:
 - **The `uvx`/`pip` launcher injects `-c <fragment>` per installed plugin.**
   Each discovered plugin's fragment is appended after your own `-c` configs, so
   your config still takes ordering precedence
-  ([composing configs](../reference/config.md#composing-multiple-configs)). When
-  you pass no `-c` of your own, the launcher also keeps the
-  shipped starter `records` table (an internal `--include-default`), so plugins
-  **add** tables rather than standing alone. Discovery is **pip/uvx only** for now — the `npx`
+  ([composing configs](../reference/config.md#composing-multiple-configs)). The
+  launcher adds only the plugin's tables and functions; it seeds no `records`
+  table. Discovery is **pip/uvx only** for now — the `npx`
   launcher does not yet discover — and is switched off per invocation with
   [`--no-plugin` or `DIRSQL_NO_PLUGIN=1`](../reference/cli.md#plugins).
 - **The SDK never auto-discovers.** Pass a plugin's config explicitly (the
