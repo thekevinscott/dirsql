@@ -2702,6 +2702,23 @@ mod internal_tests {
         assert_eq!(found, vec!["a.txt"]);
     }
 
+    /// The startup walk honors `.gitignore` unless the build asked not to.
+    #[test]
+    fn prepare_hands_the_walk_a_matcher_that_honors_gitignore_unless_no_ignore() {
+        let dir = TempDir::new().unwrap();
+        for no_ignore in [false, true] {
+            let honored = Cell::new(None);
+            let mut resolved = resolved_over(dir.path(), vec![txt_table()], false);
+            resolved.no_ignore = no_ignore;
+            DirSQL::prepare_resolved_with(resolved, &|_, matcher, _| {
+                honored.set(Some(matcher.respects_gitignore()));
+                Vec::new()
+            })
+            .unwrap();
+            assert_eq!(honored.get(), Some(!no_ignore));
+        }
+    }
+
     /// Skipping the walk skips only the walk: with persist on, the cache is
     /// still opened and reconciled against the (empty) scan.
     #[test]
