@@ -1,3 +1,4 @@
+use crate::matcher::TableMatcher;
 use notify::event::{ModifyKind, RenameMode};
 use notify::{
     Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher,
@@ -12,6 +13,12 @@ pub enum FileEvent {
     Created(PathBuf),
     Modified(PathBuf),
     Deleted(PathBuf),
+}
+
+/// A tree to watch, and the skip rules the scan applies within it.
+pub struct WatchScope {
+    pub root: PathBuf,
+    pub ignore: TableMatcher,
 }
 
 /// Wraps notify::RecommendedWatcher and translates raw events into FileEvent values.
@@ -54,6 +61,13 @@ impl Watcher {
         })
     }
 
+    /// Watch each scope's root and the directories below it the scan would
+    /// enter, merging their events into one channel.
+    pub fn scoped(scopes: Vec<WatchScope>) -> Result<Self, notify::Error> {
+        let roots: Vec<PathBuf> = scopes.into_iter().map(|scope| scope.root).collect();
+        Self::over(&roots)
+    }
+
     /// Receive the next event, blocking until one is available.
     pub fn recv(&self) -> Option<FileEvent> {
         self.rx.recv().ok()
@@ -72,6 +86,17 @@ impl Watcher {
         }
         events
     }
+}
+
+/// The directories to watch once `dir` exists: for each scope whose walk
+/// enters `dir`, what `walk` finds from there.
+fn dirs_to_watch(
+    scopes: &[WatchScope],
+    dir: &Path,
+    walk: &dyn Fn(&WatchScope, &Path) -> Vec<PathBuf>,
+) -> Vec<PathBuf> {
+    let _ = (scopes, dir, walk);
+    Vec::new()
 }
 
 /// Translate a notify Event into zero or more FileEvents.
@@ -199,6 +224,57 @@ mod tests {
     // Effectful tests driving a real `notify` OS watcher live in
     // `tests/watcher.rs` (unit-lint isolation); only the pure
     // `translate_event` mapping tests belong here.
+
+    fn scope(root: &str, ignore: &[&str]) -> WatchScope {
+        WatchScope {
+            root: PathBuf::from(root),
+            ignore: TableMatcher::new(&[], ignore).unwrap(),
+        }
+    }
+
+    fn unwalked(_: &WatchScope, _: &Path) -> Vec<PathBuf> {
+        panic!("a directory the scan skips is never walked")
+    }
+
+    #[test]
+    fn dirs_to_watch_walks_a_directory_the_scan_enters() {
+        let scopes = [scope("/r", &["node_modules/**"])];
+        let dirs = dirs_to_watch(&scopes, Path::new("/r/src"), &|_, dir| {
+            vec![dir.to_path_buf(), dir.join("deep")]
+        });
+        assert_eq!(
+            dirs,
+            vec![PathBuf::from("/r/src"), PathBuf::from("/r/src/deep")]
+        );
+    }
+
+    #[test]
+    fn dirs_to_watch_skips_an_ignored_directory() {
+        let scopes = [scope("/r", &["node_modules/**"])];
+        assert!(dirs_to_watch(&scopes, Path::new("/r/node_modules"), &unwalked).is_empty());
+        assert!(dirs_to_watch(&scopes, Path::new("/r/node_modules/pkg"), &unwalked).is_empty());
+    }
+
+    #[test]
+    fn dirs_to_watch_skips_a_directory_outside_every_scope() {
+        let scopes = [scope("/r", &[])];
+        assert!(dirs_to_watch(&scopes, Path::new("/elsewhere"), &unwalked).is_empty());
+    }
+
+    #[test]
+    fn dirs_to_watch_unites_overlapping_scopes() {
+        let scopes = [scope("/r", &["x/**"]), scope("/r/x", &[])];
+        let dirs = dirs_to_watch(&scopes, Path::new("/r/x/new"), &|_, dir| {
+            vec![dir.to_path_buf()]
+        });
+        assert_eq!(dirs, vec![PathBuf::from("/r/x/new")]);
+        let both = dirs_to_watch(
+            &[scope("/r", &[]), scope("/r/x", &[])],
+            Path::new("/r/x/new"),
+            &|_, dir| vec![dir.to_path_buf()],
+        );
+        assert_eq!(both, vec![PathBuf::from("/r/x/new")]);
+    }
 
     #[test]
     fn translate_event_maps_create() {

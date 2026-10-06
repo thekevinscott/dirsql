@@ -729,6 +729,13 @@ fn should_descend(
     !is_dir || !ignore.is_ignored_dir(rel_path)
 }
 
+/// Whether a walk from the root enters the directory at `rel_path`: every
+/// directory on the way, itself included, survives [`should_descend`].
+pub(crate) fn reaches_dir(rel_path: &Path, ignore: &TableMatcher) -> bool {
+    let _ = (rel_path, ignore);
+    true
+}
+
 /// Whether `rel_path` matches `glob`.
 fn is_glob_match(glob: &PathGlob, rel_path: &Path) -> bool {
     glob.is_match(rel_path)
@@ -919,6 +926,31 @@ mod tests {
             take(&walk, "x", Seen::File, &[1], true),
             Some(Taken::File(PathBuf::from("x")))
         );
+    }
+
+    #[test]
+    fn reaches_dir_enters_the_root_and_unignored_directories() {
+        let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
+        assert!(reaches_dir(Path::new(""), &ignore));
+        assert!(reaches_dir(Path::new("src/deep"), &ignore));
+        assert!(reaches_dir(Path::new("a/.dirsql"), &ignore));
+    }
+
+    #[test]
+    fn reaches_dir_stops_at_an_ignored_directory_and_below_it() {
+        let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
+        assert!(!reaches_dir(Path::new("node_modules"), &ignore));
+        assert!(!reaches_dir(Path::new("apps/node_modules/pkg"), &ignore));
+    }
+
+    #[test]
+    fn reaches_dir_stops_at_the_reserved_directory() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        assert!(!reaches_dir(Path::new(RESERVED_DIR), &ignore));
+        assert!(!reaches_dir(
+            &Path::new(RESERVED_DIR).join("cache"),
+            &ignore
+        ));
     }
 
     #[test]
