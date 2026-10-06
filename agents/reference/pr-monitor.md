@@ -25,7 +25,7 @@ Three structural requirements:
 
 - **`permissions:` needs all three** of `actions: read`, `contents: read`, `pull-requests: read`. The last one is willfire reading the PR and its changed files; it postdates the check-count era, so an older block is missing it.
 - **The gate stays alone in its workflow.** The action excludes its own workflow file from both sides of the comparison, so a sibling job added to `pr-monitor.yml` would go entirely unmonitored.
-- **`timeout-minutes` is the backstop.** The action has no timeout of its own (see its `monitor.ts`) and would poll forever; the job-level 20 kills it instead. Post-#834 fan-out completes in ~3 minutes, so 20 is generous. The `concurrency` group with `cancel-in-progress` covers the other half: a gate run resolves its target SHA at startup, so once a new commit lands the old run is polling a SHA nobody cares about — cancelling it frees the runner rather than letting it finish.
+- **`timeout-minutes` is the backstop.** The action has no timeout of its own (see its `monitor.ts`) and would poll forever; the job-level 120 kills it instead. Typical runs finish in minutes, but the Rust changed-lines mutation job has run up to 68 minutes on large diffs, and the reusable workflow sets no job timeout of its own (GitHub default 360), so this value is the binding cap. The `concurrency` group with `cancel-in-progress` covers the other half: a gate run resolves its target SHA at startup, so once a new commit lands the old run is polling a SHA nobody cares about — cancelling it frees the runner rather than letting it finish.
 
 ## Debugging a red or stuck gate
 
