@@ -15,11 +15,14 @@
 //! The `dirsql` binary is a shim over [`run_cli`], so `cargo install dirsql
 //! --features cli` and every other entry path run the same code.
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
 use super::{
-    AppState, ServerConfig, execute::execute_query, init::InitOptions, repl::run_repl,
+    AppState, ServerConfig,
+    execute::{execute_query, execute_query_json},
+    init::InitOptions,
+    repl::run_repl,
     serve_with_state, table,
 };
 use crate::{DirSQL, Extension, Row, Table};
@@ -336,13 +339,13 @@ pub fn run_cli(argv: Vec<String>) -> i32 {
     let code = runtime.block_on(async {
         match cli.command.take() {
             Some(Command::Init(args)) => run_init(args),
-            Some(Command::Query(args)) => run_query(args).await,
+            Some(Command::Query(args)) => run_query(args, &mut std::io::stdout()).await,
             Some(Command::Server(args)) => run_server(args).await,
             Some(Command::Context) => {
                 print!("{}", super::context::guide());
                 0
             }
-            None => run_default(cli).await,
+            None => run_default(cli, &mut std::io::stdout()).await,
         }
     });
     i32::from(code)
@@ -356,15 +359,18 @@ pub fn run_cli(argv: Vec<String>) -> i32 {
 /// The index is built **once**, before the loop, rather than per statement:
 /// no directory re-scan between statements, and the live watcher keeps it
 /// fresh across them.
-async fn run_default(cli: Cli) -> u8 {
+async fn run_default(cli: Cli, out: &mut impl Write) -> u8 {
     match cli.sql {
         Some(sql) => {
-            run_query(QueryArgs {
-                sql,
-                on_file: cli.on_file,
-                format: cli.format,
-                common: cli.common,
-            })
+            run_query(
+                QueryArgs {
+                    sql,
+                    on_file: cli.on_file,
+                    format: cli.format,
+                    common: cli.common,
+                },
+                out,
+            )
             .await
         }
         None => {
@@ -382,7 +388,7 @@ async fn run_default(cli: Cli) -> u8 {
                 // `StdinLock` is not `Send`, so it cannot cross into the
                 // blocking read; `BufReader<Stdin>` locks per call and can.
                 std::io::BufReader::new(std::io::stdin()),
-                &mut std::io::stdout(),
+                out,
                 &mut std::io::stderr(),
                 std::io::stdin().is_terminal(),
             )
@@ -393,11 +399,11 @@ async fn run_default(cli: Cli) -> u8 {
 
 /// One-shot `dirsql query`: build the index exactly as server mode would
 /// (same `load_state` / hook loading), run the SQL through the shared
-/// [`execute_query`] pipeline, print the result JSON on stdout, and exit.
+/// [`execute_query`] pipeline, write the result to `out`, and exit.
 /// Any [`QueryFailure`](super::execute::QueryFailure) prints its
 /// message — the same string the HTTP `{"error": …}` body carries — to
 /// stderr with a non-zero exit.
-async fn run_query(args: QueryArgs) -> u8 {
+async fn run_query(args: QueryArgs, out: &mut dyn Write) -> u8 {
     let parser = match resolve_on_file(&args.on_file) {
         Ok(parser) => parser,
         Err(message) => {
@@ -411,9 +417,17 @@ async fn run_query(args: QueryArgs) -> u8 {
     // natively; only the long-lived server enforces `query_timeout` (408).
     let format = args.format.resolve(std::io::stdout().is_terminal());
 
-    match execute_query(&state, query_body(&args.sql), None).await {
-        Ok(value) => {
-            print!("{}", render_rows(&value, format));
+    let printed = match format {
+        Format::Table => execute_query(&state, query_body(&args.sql), None)
+            .await
+            .map(|value| render_rows(&value, format).into_bytes()),
+        _ => execute_query_json(&state, query_body(&args.sql)).await,
+    };
+    match printed {
+        Ok(text) => {
+            // A closed pipe (`| head`) is the reader's choice, not a failure.
+            let _ = out.write_all(&text);
+            let _ = out.flush();
             0
         }
         Err(failure) => {
@@ -662,6 +676,59 @@ mod tests {
         // Blank SQL is NOT rejected here: it flows to the pipeline's shared
         // empty-rejection so both surfaces emit the identical message.
         assert_eq!(query_body("   "), r#"{"sql":"   "}"#);
+    }
+
+    fn query_args(argv: &[&str]) -> QueryArgs {
+        match Cli::parse_from(argv).command {
+            Some(Command::Query(args)) => args,
+            other => panic!("expected a query subcommand, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_query_writes_the_rows_as_json_and_exits_zero() {
+        let mut out = Vec::new();
+        let args = query_args(&[
+            "dirsql",
+            "query",
+            "--format",
+            "json",
+            "SELECT 1 AS a, 'x' AS b",
+        ]);
+        assert_eq!(run_query(args, &mut out).await, 0);
+        assert_eq!(out, b"[{\"a\":1,\"b\":\"x\"}]\n");
+    }
+
+    #[tokio::test]
+    async fn run_query_writes_the_rows_as_a_table_when_asked() {
+        let mut out = Vec::new();
+        let args = query_args(&["dirsql", "query", "--format", "table", "SELECT 1 AS a"]);
+        assert_eq!(run_query(args, &mut out).await, 0);
+        assert_eq!(out, b"a\n-\n1\n\n1 row\n");
+    }
+
+    #[tokio::test]
+    async fn run_query_exits_one_and_writes_nothing_when_the_query_fails() {
+        let mut out = Vec::new();
+        let args = query_args(&["dirsql", "query", "--format", "json", "SELECT nope"]);
+        assert_eq!(run_query(args, &mut out).await, 1);
+        assert!(out.is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_default_runs_its_sql_as_a_one_shot_query() {
+        let mut out = Vec::new();
+        let cli = Cli::parse_from(["dirsql", "--format", "json", "SELECT 1 AS a"]);
+        assert_eq!(run_default(cli, &mut out).await, 0);
+        assert_eq!(out, b"[{\"a\":1}]\n");
+    }
+
+    #[tokio::test]
+    async fn run_default_exits_one_when_its_sql_fails() {
+        let mut out = Vec::new();
+        let cli = Cli::parse_from(["dirsql", "--format", "json", "SELECT nope"]);
+        assert_eq!(run_default(cli, &mut out).await, 1);
+        assert!(out.is_empty());
     }
 
     /// The `ConfigArgs` parsed from a `query` subcommand invocation (#609:
