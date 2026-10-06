@@ -1,7 +1,10 @@
 # HTTP API
 
 The [`dirsql` server](./cli.md#dirsql-server) (default `localhost:7117`)
-exposes two endpoints: `POST /query` and `GET /events`.
+exposes two endpoints: `POST /query` and `GET /events`. It sends no CORS
+headers unless started with
+[`--cors-origin`](./cli.md#cross-origin-requests), so a browser page on
+another origin can reach it only after that opt-in.
 
 ## `POST /query`
 
@@ -112,4 +115,4 @@ Row values serialize as in [`POST /query`](#value-serialization).
 |---|---|
 | `200` | Stream opened (`text/event-stream`). |
 | `405` | `POST /events`. Plain-text body `method not allowed`. |
-| `503` | The server is in [degraded mode](./cli.md#degraded-mode). JSON `{"error": …}` body. |
+| `503` | The server is in [degraded mode](./cli.md#degraded-mode), or its filesystem watcher failed to start (for example, the inotify limit is exhausted). JSON `{"error": …}` body; for a watcher failure the message starts `filesystem watcher failed to start:` and gives the reason. `POST /query` keeps working. |

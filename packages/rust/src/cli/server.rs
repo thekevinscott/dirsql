@@ -2,9 +2,11 @@
 
 use std::sync::Arc;
 
+use axum::http::{Method, header};
 use futures::stream::StreamExt;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, oneshot, watch};
+use tower_http::cors::CorsLayer;
 
 use super::router::{AppContext, router};
 use super::serialize::event_to_json;
@@ -38,18 +40,28 @@ pub async fn serve_with_state(
     // the underlying notify watcher (which `DirSQL::watch` only permits
     // once per instance).
     let (event_tx, _) = broadcast::channel::<String>(256);
-    if let AppState::Ready(ref db) = state {
-        start_watch_task(db.clone(), event_tx.clone());
-    }
+    let watch_failure = match state {
+        AppState::Ready(ref db) => start_watch_task(db.clone(), event_tx.clone()),
+        AppState::Unavailable(_) => None,
+    };
 
     let (cancel_tx, cancel_rx) = watch::channel(false);
     let shared = Arc::new(AppContext {
         state,
         events: event_tx,
+        watch_failure,
         cancel: cancel_rx,
         query_timeout: config.query_timeout,
     });
-    let app = router(shared);
+    let mut app = router(shared);
+    if let Some(origin) = config.cors_origin {
+        app = app.layer(
+            CorsLayer::new()
+                .allow_origin(origin)
+                .allow_methods([Method::GET, Method::POST])
+                .allow_headers([header::CONTENT_TYPE]),
+        );
+    }
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let task = tokio::spawn(async move {
@@ -69,18 +81,20 @@ pub async fn serve_with_state(
     })
 }
 
-fn start_watch_task(db: DirSQL, tx: broadcast::Sender<String>) {
+/// Returns the reason `/events` must refuse requests when the watcher
+/// could not attach.
+fn start_watch_task(db: DirSQL, tx: broadcast::Sender<String>) -> Option<String> {
     // `db.watch()` spawns its own OS thread and returns an async stream.
     // We pump the stream into the broadcast channel. If no subscribers
     // exist, send() errors but we keep pumping (future subscribers
     // will get subsequent events).
-    let Ok(mut stream) = db.watch().map_err(|err| {
-        eprintln!(
-            "dirsql: failed to attach filesystem watcher ({err}); \
-             /events will return an empty stream"
-        );
-    }) else {
-        return;
+    let mut stream = match db.watch() {
+        Ok(stream) => stream,
+        Err(err) => {
+            let reason = format!("filesystem watcher failed to start: {err}");
+            eprintln!("dirsql: {reason}; /events will return 503");
+            return Some(reason);
+        }
     };
     tokio::spawn(async move {
         while let Some(event) = stream.next().await {
@@ -88,6 +102,7 @@ fn start_watch_task(db: DirSQL, tx: broadcast::Sender<String>) {
             let _ = tx.send(payload);
         }
     });
+    None
 }
 
 #[cfg(test)]
@@ -120,6 +135,29 @@ mod tests {
         let handle = serve(config, db).await.expect("bind on an ephemeral port");
         assert_ne!(handle.local_addr().port(), 0);
         handle.shutdown().await.expect("graceful shutdown");
+    }
+
+    #[tokio::test]
+    async fn start_watch_task_reports_no_failure_once_the_watcher_attaches() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = DirSQL::new(dir.path(), Vec::new()).unwrap();
+        let (tx, _) = broadcast::channel::<String>(1);
+        assert_eq!(start_watch_task(db, tx), None);
+    }
+
+    // `poll_events` locks out `watch`, the one deterministic way to make the
+    // watcher refuse to attach without exhausting inotify.
+    #[tokio::test]
+    async fn start_watch_task_returns_the_reason_when_the_watcher_cannot_attach() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = DirSQL::new(dir.path(), Vec::new()).unwrap();
+        db.poll_events(std::time::Duration::ZERO).unwrap();
+        let (tx, _) = broadcast::channel::<String>(1);
+        let reason = start_watch_task(db, tx).expect("watch() must fail");
+        assert!(
+            reason.starts_with("filesystem watcher failed to start: "),
+            "got: {reason}"
+        );
     }
 
     // Binding to a non-local TEST-NET address (RFC 5737) fails with

@@ -224,9 +224,9 @@ impl DirSqlError {
         DirSqlError::Lock(e.to_string())
     }
 
-    fn watch<E: StdError + Send + Sync + 'static>(e: E) -> Self {
+    fn watch(e: notify::Error) -> Self {
         DirSqlError::Watch {
-            message: e.to_string(),
+            message: watcher::describe_watch_error(&e, cfg!(target_os = "linux")),
             source: Some(Box::new(e)),
         }
     }
@@ -2528,6 +2528,11 @@ struct AsyncDirSqlInner {
 }
 
 #[cfg(test)]
+fn generic_watch_error(message: &str) -> notify::Error {
+    notify::Error::generic(message)
+}
+
+#[cfg(test)]
 impl AsyncDirSqlInner {
     /// Fresh inner with an empty `db` cell — the pre-`ready` state.
     fn empty() -> Self {
@@ -2681,10 +2686,10 @@ mod readonly_tests {
             DirSqlError::lock("x").to_string(),
             "failed to lock shared state: x"
         );
-        // `watch`, `config`, `matcher` wrap a typed StdError to preserve a
+        // `watch`, `config`, `matcher` wrap a typed error to preserve a
         // `source()` chain.
         let io = || std::io::Error::other("x");
-        let watch_err = DirSqlError::watch(io());
+        let watch_err = DirSqlError::watch(generic_watch_error("x"));
         assert_eq!(watch_err.to_string(), "watcher error: x");
         assert!(StdError::source(&watch_err).is_some());
 
