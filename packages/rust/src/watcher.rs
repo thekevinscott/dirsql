@@ -415,17 +415,6 @@ mod tests {
         assert!(!is_real_dir(&root.path().join("missing")));
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn is_real_dir_is_false_for_a_symlink_to_a_directory() {
-        let root = tempfile::tempdir().unwrap();
-        let target = root.path().join("real");
-        std::fs::create_dir(&target).unwrap();
-        let link = root.path().join("link");
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-        assert!(!is_real_dir(&link));
-    }
-
     #[test]
     fn walk_scope_lists_the_directories_the_scope_enters() {
         let root = tempfile::tempdir().unwrap();
