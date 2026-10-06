@@ -241,6 +241,13 @@ mod tests {
     }
 
     #[test]
+    fn a_matcher_honors_gitignore_only_once_asked_to() {
+        let matcher = TableMatcher::new(&[], &[]).unwrap();
+        assert!(!matcher.respects_gitignore());
+        assert!(matcher.with_gitignore(true).respects_gitignore());
+    }
+
+    #[test]
     fn match_all_returns_empty_for_no_match() {
         let matcher = TableMatcher::new(&[("*.csv", "data")], &[]).unwrap();
         assert!(matcher.match_all(Path::new("readme.md")).is_empty());
