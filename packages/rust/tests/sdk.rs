@@ -831,7 +831,7 @@ fn declared_name_absent_from_the_catalog_errors() {
 #[test]
 fn invalid_glob_errors() {
     let root = TempDir::new().unwrap();
-    let table = Table::new("t", "CREATE TABLE t (x TEXT)", "a[b", |_| vec![]);
+    let table = Table::new("t", "CREATE TABLE t (x TEXT)", "a[z-a]", |_| vec![]);
     let result = DirSQL::new(root.path(), vec![table]);
     assert!(matches!(result, Err(dirsql::DirSqlError::Matcher { .. })));
 }

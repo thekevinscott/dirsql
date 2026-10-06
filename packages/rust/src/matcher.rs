@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn invalid_glob_returns_error() {
-        let result = TableMatcher::new(&[("[invalid", "t")], &[]);
+        let result = TableMatcher::new(&[("[z-a]", "t")], &[]);
         assert!(result.is_err());
     }
 

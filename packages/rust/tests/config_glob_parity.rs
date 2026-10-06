@@ -60,3 +60,12 @@ fn a_brace_range_expands_as_it_does_in_a_path_table() {
     assert_eq!(path_table_paths(root.path(), "f{1..3}.md"), expected);
     assert_eq!(config_paths(root.path(), "f{1..3}.md"), expected);
 }
+
+#[test]
+fn an_unbalanced_brace_or_bracket_is_literal_as_it_is_in_a_path_table() {
+    let root = tree(&["{a.md", "a}.md", "[a.md", "a.md"]);
+    for (glob, expected) in [("{a.md", "{a.md"), ("a}.md", "a}.md"), ("[a.md", "[a.md")] {
+        assert_eq!(path_table_paths(root.path(), glob), vec![expected]);
+        assert_eq!(config_paths(root.path(), glob), vec![expected]);
+    }
+}
