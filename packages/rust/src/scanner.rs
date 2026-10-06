@@ -84,7 +84,7 @@ fn scan_below(
         root,
         start,
         matcher,
-        None,
+        Some(matcher.walk_glob()),
         gitignore,
         repo_frames,
         &mut |rel_path, entry| {
@@ -280,7 +280,16 @@ impl PathGlob {
 /// it a lone `*` would cross `/` and the explicit non-recursive spelling would
 /// silently recurse. `**` still crosses separators.
 pub fn compile_glob(pattern: &str) -> Result<PathGlob, GlobError> {
-    let words = crate::brace::expand(pattern);
+    compile_globs(&[pattern])
+}
+
+/// One [`PathGlob`] over every word of every pattern: the walk a set of
+/// tables shares, entering what any of them could reach.
+pub fn compile_globs(patterns: &[&str]) -> Result<PathGlob, GlobError> {
+    let words: Vec<String> = patterns
+        .iter()
+        .flat_map(|pattern| crate::brace::expand(pattern))
+        .collect();
     let mut files = Vec::new();
     let mut spelled_dot_names = Vec::new();
     for word in &words {
@@ -446,16 +455,16 @@ impl Walk<'_> {
     /// `.gitignore` files in force.
     fn admits(&self, depth: usize, is_dir: bool, name: &OsStr, path: &Path, rel: &Path) -> bool {
         should_descend(depth, is_dir, name, rel, self.ignore)
+            && !(is_dir && self.ignore.prunes_directory(name))
             && self.admits_name(name)
             && (self.frames.is_empty() || !is_gitignored(&self.frames, path, is_dir))
     }
 
     fn admits_name(&self, name: &OsStr) -> bool {
-        !is_dot_named(name)
-            || match self.glob {
-                Some(glob) => glob.spells_dot_name(name),
-                None => self.ignore.spells_dot_name(name),
-            }
+        match self.glob {
+            Some(glob) => !is_dot_named(name) || glob.spells_dot_name(name),
+            None => true,
+        }
     }
 
     fn next_states(&self, states: &[usize], name: &OsStr, kind: Kind) -> Vec<usize> {
@@ -907,26 +916,6 @@ mod tests {
             OsStr::new(".hidden"),
             Path::new("/r/.hidden"),
             Path::new(".hidden")
-        ));
-    }
-
-    #[test]
-    fn a_table_walk_admits_a_dot_name_only_a_table_glob_spells() {
-        let ignore = TableMatcher::new(&[(".env", "t")], &[]).unwrap();
-        let walk = walk_with(&ignore, None, Vec::new());
-        assert!(walk.admits(
-            1,
-            false,
-            OsStr::new(".env"),
-            Path::new("/r/.env"),
-            Path::new(".env")
-        ));
-        assert!(!walk.admits(
-            1,
-            false,
-            OsStr::new(".other"),
-            Path::new("/r/.other"),
-            Path::new(".other")
         ));
     }
 
