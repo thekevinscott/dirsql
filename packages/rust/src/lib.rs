@@ -24,6 +24,7 @@ pub mod functions;
 pub mod infer;
 #[doc(hidden)]
 pub mod launcher;
+mod listing;
 #[doc(hidden)]
 pub mod matcher;
 mod on_file;
@@ -43,6 +44,7 @@ pub mod row_event_flat;
 pub mod scanner;
 #[doc(hidden)]
 pub mod sql_literal;
+mod tree_walk;
 mod unbalanced;
 #[doc(hidden)]
 pub mod vtab;
@@ -489,6 +491,19 @@ impl DirSQL {
     pub fn query_ordered(&self, sql: &str) -> Result<QueryResult> {
         let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
         db.query_ordered(sql).map_err(map_db_error)
+    }
+
+    /// [`query_ordered`](Self::query_ordered) folding each row's cells, in
+    /// projection order, into the state `start` makes from the projection,
+    /// as they are read rather than collected first.
+    pub fn query_each<S>(
+        &self,
+        sql: &str,
+        start: impl FnOnce(&[String]) -> S,
+        on_row: impl FnMut(&mut S, &[Value]),
+    ) -> Result<S> {
+        let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
+        db.query_each(sql, start, on_row).map_err(map_db_error)
     }
 
     /// Lazily create the filesystem watcher. Idempotent; subsequent calls are

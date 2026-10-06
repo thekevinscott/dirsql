@@ -454,12 +454,7 @@ troubleshooting. The guide is compiled into the binary, so it describes the
 version that prints it. It takes no flags and exits `0`.
 
 The dirsql agent skill tells an agent to run this command before it writes a
-query. Install the skill into Claude Code, Codex, Cursor, Gemini CLI and
-others with:
-
-```sh
-npx skills add thekevinscott/dirsql
-```
+query; see [the skill page](../howto/agent-skill.md).
 
 ## Plugins
 
