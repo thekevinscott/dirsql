@@ -274,6 +274,10 @@ So `glob = "projects/*/*.jsonl"` in `~/.claude/.dirsql.toml` indexes
 writes `glob = "~/.claude/projects/*/*.jsonl"`. A table's `path` and `dir`
 columns, `{root}`, and `ignore` are all relative to its anchor.
 
+A table whose glob matches no files prints
+`dirsql: table 'sessions': glob 'projects/*/*.jsonl' matched no files under <anchor>`
+to stderr; the exit code is unchanged. Path-tables and programmatic tables do not warn.
+
 ### Batch `ddl`
 
 `ddl` is handed to SQLite whole, so a table declaration is not limited to one

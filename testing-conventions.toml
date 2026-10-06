@@ -130,12 +130,6 @@ lines = [133]
 reason = "scan_glob repo discovery depends on finding a real .git marker; tests/path_table_gitignore.rs asserts its filesystem behavior"
 
 [[rust.exempt]]
-path = "src/scanner.rs"
-rules = ["mutation"]
-lines = [455, 456, 570, 576]
-reason = "whether a walked entry is a symlink, and whether the walk is below one, is known only from a real tree; tests/path_table_symlinks.rs asserts every outcome against bash, and the decisions themselves are unit-tested in classify, Walk::follows and PathGlob::step"
-
-[[rust.exempt]]
 path = "src/cli/run.rs"
 rules = ["mutation"]
 lines = [351, 392]

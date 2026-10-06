@@ -285,6 +285,7 @@ pub struct Table {
     hook: Hook,
     anchor: Option<PathBuf>,
     ignore: Vec<String>,
+    warn_when_empty: bool,
 }
 
 impl Table {
@@ -296,6 +297,11 @@ impl Table {
 
     pub(crate) fn ignore_key(&self) -> &[String] {
         &self.ignore
+    }
+
+    pub(crate) fn warning_when_empty(mut self) -> Self {
+        self.warn_when_empty = true;
+        self
     }
 
     pub(crate) fn scoped_ignore(mut self, ignore: Vec<String>) -> Self {
@@ -354,6 +360,7 @@ impl Table {
             strict: false,
             anchor: None,
             ignore: Vec::new(),
+            warn_when_empty: false,
         }
     }
 
@@ -400,6 +407,7 @@ impl Table {
             strict: false,
             anchor: None,
             ignore: Vec::new(),
+            warn_when_empty: false,
         }
     }
 }
@@ -1128,6 +1136,9 @@ impl DirSQL {
             let mut progress = Progress::scanning();
             let (scanned, seen) = scan_groups(&groups, scan, &mut progress);
             progress.finish(seen);
+            for warning in empty_table_warnings(&tables, &anchors, &scanned) {
+                eprintln!("{warning}");
+            }
             scanned
         };
 
@@ -2019,6 +2030,28 @@ fn compile_groups(
     Ok((groups, anchors, names))
 }
 
+/// One stderr line per config table that matched no file in the scan, naming
+/// the table, its glob and the directory the glob was matched under.
+fn empty_table_warnings(
+    tables: &[Table],
+    anchors: &TableAnchors,
+    scanned: &[(PathBuf, String)],
+) -> Vec<String> {
+    tables
+        .iter()
+        .filter(|table| table.warn_when_empty)
+        .filter(|table| !scanned.iter().any(|(_, name)| *name == table.name))
+        .map(|table| {
+            format!(
+                "dirsql: table '{}': glob '{}' matched no files under {}",
+                table.name,
+                table.glob,
+                anchors.of(&table.name).display()
+            )
+        })
+        .collect()
+}
+
 /// Open (or create) the persistent SQLite cache and read its meta. If the
 /// meta is missing or incompatible with the current build, the resulting
 /// [`PersistContext`] carries an empty file index and asks for a sweep, so
@@ -2423,7 +2456,8 @@ fn build_tables_from_config(cfg: &config::Config, config_dir: &Path) -> Result<V
             },
         )
         .anchored(anchor)
-        .scoped_ignore(cfg.ignore.clone());
+        .scoped_ignore(cfg.ignore.clone())
+        .warning_when_empty();
 
         if table_cfg.strict == Some(true) {
             table.strict = true;
@@ -5449,6 +5483,31 @@ mod internal_tests {
             .err()
             .unwrap();
         assert!(matches!(err, DirSqlError::DuplicateTable(ref name) if name == "a"));
+    }
+
+    #[test]
+    fn an_empty_warning_table_is_named_with_its_glob_and_anchor() {
+        let tables = vec![anchored_table("a", "*.txt", "/one").warning_when_empty()];
+        let anchors = compile_groups(&tables, &[], Path::new("/idx")).unwrap().1;
+        assert_eq!(
+            empty_table_warnings(&tables, &anchors, &[]),
+            vec!["dirsql: table 'a': glob '*.txt' matched no files under /one".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_table_with_a_matched_file_does_not_warn() {
+        let tables = vec![anchored_table("a", "*.txt", "/one").warning_when_empty()];
+        let anchors = compile_groups(&tables, &[], Path::new("/idx")).unwrap().1;
+        let scanned = vec![(PathBuf::from("/one/x.txt"), "a".to_string())];
+        assert!(empty_table_warnings(&tables, &anchors, &scanned).is_empty());
+    }
+
+    #[test]
+    fn a_programmatic_empty_table_does_not_warn() {
+        let tables = vec![anchored_table("a", "*.txt", "/one")];
+        let anchors = compile_groups(&tables, &[], Path::new("/idx")).unwrap().1;
+        assert!(empty_table_warnings(&tables, &anchors, &[]).is_empty());
     }
 
     #[test]
