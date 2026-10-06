@@ -5347,8 +5347,6 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let one = dir.path().join("one");
         let two = dir.path().join("two");
-        std::fs::create_dir_all(&one).unwrap();
-        std::fs::create_dir_all(&two).unwrap();
         let db = DirSQL::with_ignore_and_fs(
             dir.path(),
             vec![
@@ -5369,7 +5367,6 @@ mod internal_tests {
     fn an_event_under_no_anchor_is_offered_raw_to_every_group() {
         let dir = TempDir::new().unwrap();
         let one = dir.path().join("one");
-        std::fs::create_dir_all(&one).unwrap();
         let db = DirSQL::with_ignore_and_fs(
             dir.path(),
             vec![anchored_table("a", "*.txt", one.to_str().unwrap())],
