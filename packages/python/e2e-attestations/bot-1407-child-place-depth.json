@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/fanout_test.py -x -q",
+  "ran_at": 1791310157,
+  "exit_code": 0,
+  "commit": "7104e6400efd6f912a92a53dd0d8f6d4c6c3a947",
+  "branch": "bot/1407-child-place-depth"
+}
