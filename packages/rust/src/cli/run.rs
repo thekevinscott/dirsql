@@ -337,7 +337,7 @@ pub fn run_cli(argv: Vec<String>) -> i32 {
         match cli.command.take() {
             Some(Command::Init(args)) => run_init(args),
             Some(Command::Query(args)) => run_query(args, &mut std::io::stdout()).await,
-            Some(Command::Server(args)) => run_server(args).await,
+            Some(Command::Server(args)) => run_server(args, wait_for_shutdown()).await,
             Some(Command::Context) => {
                 print!("{}", super::context::guide());
                 0
@@ -469,7 +469,10 @@ fn run_init(args: InitArgs) -> u8 {
     }
 }
 
-async fn run_server(args: ServerArgs) -> u8 {
+async fn run_server(
+    args: ServerArgs,
+    shutdown: impl std::future::Future<Output = std::io::Result<()>>,
+) -> u8 {
     // The server has no `--on-file`: clap rejects it as an unknown flag before
     // reaching here. Path-tables served over HTTP keep their stat columns.
     let state = load_state(&args.common, None);
@@ -490,7 +493,7 @@ async fn run_server(args: ServerArgs) -> u8 {
     // Echo back the user-facing hostname (not the resolved IP SocketAddr).
     println!("Running at {host}:{}", handle.local_addr().port());
 
-    if let Err(err) = wait_for_shutdown().await {
+    if let Err(err) = shutdown.await {
         eprintln!("dirsql: signal handler error: {err}");
     }
 
@@ -865,6 +868,43 @@ mod tests {
             }
             other => panic!("expected a server subcommand, got {other:?}"),
         }
+    }
+
+    fn server_args(argv: &[&str]) -> ServerArgs {
+        match Cli::parse_from(argv).command {
+            Some(Command::Server(args)) => args,
+            other => panic!("expected a server subcommand, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_server_exits_zero_after_a_clean_shutdown() {
+        let args = server_args(&[
+            "dirsql",
+            "server",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "0",
+            "-c",
+            "/nonexistent/.dirsql.toml",
+        ]);
+        assert_eq!(run_server(args, std::future::ready(Ok(()))).await, 0);
+    }
+
+    #[tokio::test]
+    async fn run_server_exits_one_when_the_bind_fails() {
+        let args = server_args(&[
+            "dirsql",
+            "server",
+            "--host",
+            "192.0.2.1",
+            "--port",
+            "9",
+            "-c",
+            "/nonexistent/.dirsql.toml",
+        ]);
+        assert_eq!(run_server(args, std::future::pending()).await, 1);
     }
 
     #[test]
