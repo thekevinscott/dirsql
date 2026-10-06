@@ -394,7 +394,7 @@ impl Walk<'_> {
             self.frames.push(matcher);
             pushed = true;
         }
-        let below = depth + 1;
+        let below = child_depth(depth);
         for (name, entry) in sorted_entries(dir) {
             let Some(kind) = kind_of(&entry, self.glob.is_some()) else {
                 continue;
@@ -574,6 +574,10 @@ fn is_reserved_dir(depth: usize, is_dir: bool, file_name: &std::ffi::OsStr) -> b
     depth == 1 && is_dir && file_name == RESERVED_DIR
 }
 
+fn child_depth(parent_depth: usize) -> usize {
+    parent_depth + 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,6 +594,11 @@ mod tests {
     #[test]
     fn is_reserved_dir_rejects_nested_dirsql() {
         assert!(!is_reserved_dir(2, true, OsStr::new(RESERVED_DIR)));
+    }
+
+    #[test]
+    fn child_depth_advances_one_level() {
+        assert_eq!(child_depth(3), 4);
     }
 
     #[test]
