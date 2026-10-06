@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1791301664,
+  "exit_code": 0,
+  "commit": "66267aad2aaf9737a8b3dbf414c8661f1668c61e",
+  "branch": "claude/1330-scanner-ignore"
+}
