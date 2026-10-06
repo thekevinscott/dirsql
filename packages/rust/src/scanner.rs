@@ -1587,4 +1587,14 @@ mod tests {
         let frames = [frame("", &["!keep.log"]), frame("sub", &["*.log"])];
         assert!(is_gitignored(&frames, Path::new("sub/keep.log"), false));
     }
+
+    #[test]
+    fn is_gitignored_path_ignores_a_path_the_repo_gitignore_matches() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir(repo.path().join(".git")).unwrap();
+        fs::write(repo.path().join(".gitignore"), "*.log\n").unwrap();
+
+        assert!(is_gitignored_path(&repo.path().join("debug.log"), false));
+        assert!(!is_gitignored_path(&repo.path().join("app.js"), false));
+    }
 }
