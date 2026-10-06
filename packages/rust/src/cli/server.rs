@@ -127,6 +127,29 @@ mod tests {
         handle.shutdown().await.expect("graceful shutdown");
     }
 
+    #[tokio::test]
+    async fn start_watch_task_reports_no_failure_once_the_watcher_attaches() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = DirSQL::new(dir.path(), Vec::new()).unwrap();
+        let (tx, _) = broadcast::channel::<String>(1);
+        assert_eq!(start_watch_task(db, tx), None);
+    }
+
+    // `poll_events` locks out `watch`, the one deterministic way to make the
+    // watcher refuse to attach without exhausting inotify.
+    #[tokio::test]
+    async fn start_watch_task_returns_the_reason_when_the_watcher_cannot_attach() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = DirSQL::new(dir.path(), Vec::new()).unwrap();
+        db.poll_events(std::time::Duration::ZERO).unwrap();
+        let (tx, _) = broadcast::channel::<String>(1);
+        let reason = start_watch_task(db, tx).expect("watch() must fail");
+        assert!(
+            reason.starts_with("filesystem watcher failed to start: "),
+            "got: {reason}"
+        );
+    }
+
     // Binding to a non-local TEST-NET address (RFC 5737) fails with
     // "cannot assign requested address", surfacing `ServerError::Bind` rather
     // than panicking — deterministic and DNS-free.
