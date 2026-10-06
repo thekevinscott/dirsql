@@ -46,8 +46,11 @@ fn writes_the_default_config_verbatim() {
         "init must write DEFAULT_CONFIG_TOML verbatim",
     );
 
-    dirsql::DirSQL::from_config_path(&config_path)
-        .expect("config produced by `dirsql init` must load via from_config_path");
+    dirsql::DirSQL::builder()
+        .root(cwd.path())
+        .config(&config_path)
+        .build()
+        .expect("config produced by `dirsql init` must load");
 }
 
 #[test]
@@ -104,7 +107,10 @@ fn force_flag_overwrites_existing_config() {
 
     let written = fs::read_to_string(cwd.path().join(".dirsql.toml")).unwrap();
     assert_eq!(written, dirsql::cli::DEFAULT_CONFIG_TOML);
-    dirsql::DirSQL::from_config_path(cwd.path().join(".dirsql.toml"))
+    dirsql::DirSQL::builder()
+        .root(cwd.path())
+        .config(cwd.path().join(".dirsql.toml"))
+        .build()
         .expect("forced-overwrite config must load");
 }
 
