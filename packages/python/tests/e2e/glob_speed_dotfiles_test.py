@@ -31,9 +31,7 @@ MARKDOWN = (
     "find . -mindepth 1 -name '.*' -prune -o -type f -name '*.md' -printf '%P\\n'"
 )
 DOTFILES = "find . -mindepth 1 -name '.*' -prune -type f -printf '%P\\n'"
-UNDER_CACHE = (
-    "find .cache -mindepth 1 -name '.*' -prune -o -type f -name '*.md' -print"
-)
+UNDER_CACHE = "find .cache -mindepth 1 -name '.*' -prune -o -type f -name '*.md' -print"
 FANOUT = 8
 
 
