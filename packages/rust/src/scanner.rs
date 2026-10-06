@@ -384,7 +384,11 @@ fn walk(
         in_repo: repo_frames.is_some(),
         frames: repo_frames.unwrap_or_default(),
     };
-    let states = glob.map_or_else(Vec::new, PathGlob::start);
+    let states = glob.map_or_else(Vec::new, |glob| {
+        rel.components().fold(glob.start(), |states, component| {
+            glob.step(&states, component.as_os_str(), Kind::Dir)
+        })
+    });
     walk.descend(start, rel, depth, &states, false, visit);
 }
 
@@ -917,6 +921,24 @@ mod tests {
             Path::new("/r/.hidden"),
             Path::new(".hidden")
         ));
+    }
+
+    #[test]
+    fn a_table_walk_skips_a_node_modules_directory_no_table_names() {
+        let ignore = TableMatcher::new(&[("**/*.js", "t")], &[]).unwrap();
+        let walk = walk_with(&ignore, Some(ignore.walk_glob()), Vec::new());
+        let admits = |is_dir, name: &str| {
+            walk.admits(
+                1,
+                is_dir,
+                OsStr::new(name),
+                Path::new(name),
+                Path::new(name),
+            )
+        };
+        assert!(!admits(true, "node_modules"));
+        assert!(admits(false, "node_modules"));
+        assert!(admits(true, "src"));
     }
 
     #[test]
