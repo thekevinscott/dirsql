@@ -54,6 +54,8 @@ The gate reruns the real unit suite per mutant, so it needs the native bindings 
 
 **Agents never run this gate locally** -- not `just preflight --gate mutation`, not the commands below, not `cargo mutants`. The memory cap below is per run, so parallel agent runs still exhaust the host. CI runs the gate on every PR; read its log and fix the survivors it names.
 
+The one exception is an orchestrator-only targeted recheck of a survivor fix: see `orchestration.md`.
+
 For the maintainer, against the PR's base (after building the native artifact) -- `just preflight --gate mutation` runs every lane, or one at a time:
 
 ```bash

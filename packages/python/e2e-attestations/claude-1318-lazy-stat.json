@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/ -q --deselect tests/e2e/glob_speed_one_level_test.py",
+  "ran_at": 1791234677,
+  "exit_code": 0,
+  "commit": "3d5645d54f19c86ce3fa2ce75d9a8392450b19e4",
+  "branch": "claude/1318-lazy-stat"
+}
