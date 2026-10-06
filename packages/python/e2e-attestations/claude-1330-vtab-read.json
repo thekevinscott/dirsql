@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/use_case_join_test.py tests/e2e/use_case_transcripts_test.py -x -q",
+  "ran_at": 1791301146,
+  "exit_code": 0,
+  "commit": "89e397ecdff80eb3659c42b1135f70a47705cf37",
+  "branch": "claude/1330-vtab-read"
+}
