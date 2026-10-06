@@ -26,6 +26,7 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use axum::http::HeaderValue;
 use tokio::sync::{oneshot, watch};
 use tokio::task::JoinError;
 use tokio::task::JoinHandle;
@@ -52,12 +53,15 @@ pub use server::{serve, serve_with_state};
 pub use crate::DEFAULT_CONFIG_TOML;
 
 /// Configure how the server binds. Defaults to `localhost:7117` with a
-/// 30-second per-query timeout.
+/// 30-second per-query timeout and no CORS headers.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub query_timeout: Duration,
+    /// The `Access-Control-Allow-Origin` value sent on every response, or
+    /// `None` to send no CORS headers (browsers then block cross-origin reads).
+    pub cors_origin: Option<HeaderValue>,
 }
 
 impl ServerConfig {
@@ -68,6 +72,7 @@ impl ServerConfig {
             host: "localhost".into(),
             port: 0,
             query_timeout: Duration::from_secs(30),
+            cors_origin: None,
         }
     }
 
@@ -77,6 +82,7 @@ impl ServerConfig {
             host: host.into(),
             port,
             query_timeout: Duration::from_secs(30),
+            cors_origin: None,
         }
     }
 
@@ -84,6 +90,13 @@ impl ServerConfig {
     /// return `408 Request Timeout` and release the blocking thread.
     pub fn with_query_timeout(mut self, timeout: Duration) -> Self {
         self.query_timeout = timeout;
+        self
+    }
+
+    /// Allow browser pages on `origin` (or any origin, for `*`) to read
+    /// responses and open `/events`.
+    pub fn with_cors_origin(mut self, origin: HeaderValue) -> Self {
+        self.cors_origin = Some(origin);
         self
     }
 }
