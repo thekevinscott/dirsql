@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791262286,
+  "exit_code": 0,
+  "commit": "17ea8acb7b045aaae7f1747a583d110878bf4f1e",
+  "branch": "claude/1330-scanner-reposcope"
+}
