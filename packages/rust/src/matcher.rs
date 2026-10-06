@@ -97,6 +97,7 @@ pub struct TableMatcher {
     entries: Vec<PatternEntry>,
     ignore_set: Vec<Pattern>,
     ignore_dir_set: Vec<Pattern>,
+    gitignore: bool,
 }
 
 /// Byte spans of the `{name}` placeholders in `pattern`, in order: `(start,
@@ -182,7 +183,18 @@ impl TableMatcher {
             entries,
             ignore_set,
             ignore_dir_set,
+            gitignore: false,
         })
+    }
+
+    /// Whether a scan under this matcher honors `.gitignore` files.
+    pub fn with_gitignore(mut self, gitignore: bool) -> Self {
+        self.gitignore = gitignore;
+        self
+    }
+
+    pub(crate) fn respects_gitignore(&self) -> bool {
+        self.gitignore
     }
 
     /// Returns one [`MatchResult`] per matching pattern, in declaration order.
@@ -228,6 +240,13 @@ mod tests {
     fn match_all_returns_table_for_matching_glob() {
         let matcher = TableMatcher::new(&[("*.csv", "data")], &[]).unwrap();
         assert_eq!(names(&matcher, "report.csv"), vec!["data"]);
+    }
+
+    #[test]
+    fn a_matcher_honors_gitignore_only_once_asked_to() {
+        let matcher = TableMatcher::new(&[], &[]).unwrap();
+        assert!(!matcher.respects_gitignore());
+        assert!(matcher.with_gitignore(true).respects_gitignore());
     }
 
     #[test]

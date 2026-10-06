@@ -93,15 +93,23 @@ fn scan_below(
 ) -> Vec<(PathBuf, String)> {
     let mut results = Vec::new();
     let mut seen: u64 = 0;
+    let gitignore = matcher.respects_gitignore();
+    let repo = if gitignore {
+        enclosing_repo(start, &holds_git)
+    } else {
+        None
+    };
 
     // Match against relative path so globs like "comments/**/*.jsonl" work
     // regardless of the absolute root directory.
     let walker = Walk {
         ignore: matcher,
         glob: None,
-        gitignore: false,
-        in_repo: false,
-        frames: Vec::new(),
+        gitignore,
+        in_repo: repo.is_some(),
+        frames: repo.map_or_else(Vec::new, |top| {
+            gitignores_above(start, top, &load_gitignore)
+        }),
         dirs: false,
     };
     walk(
@@ -739,6 +747,26 @@ fn load_gitignore(dir: &Path) -> Option<Gitignore> {
     let mut builder = GitignoreBuilder::new(dir);
     builder.add(&file);
     builder.build().ok()
+}
+
+/// Whether the `.gitignore` files of the repo enclosing `path` ignore it, or
+/// a directory above it, as the walk would have: for a path a watcher reports
+/// without having walked to it.
+pub(crate) fn is_gitignored_path(path: &Path, is_dir: bool) -> bool {
+    let Some(top) = path
+        .parent()
+        .and_then(|dir| enclosing_repo(dir, &holds_git))
+    else {
+        return false;
+    };
+    for frame in gitignores_above(path, top, &load_gitignore).iter().rev() {
+        match frame.matched_path_or_any_parents(path, is_dir) {
+            Match::Ignore(_) => return true,
+            Match::Whitelist(_) => return false,
+            Match::None => {}
+        }
+    }
+    false
 }
 
 /// Whether the `.gitignore` files in force mark `path` ignored. Deeper files
@@ -1663,5 +1691,15 @@ mod tests {
     fn is_gitignored_lets_a_deeper_rule_override_a_shallower_whitelist() {
         let frames = [frame("", &["!keep.log"]), frame("sub", &["*.log"])];
         assert!(is_gitignored(&frames, Path::new("sub/keep.log"), false));
+    }
+
+    #[test]
+    fn is_gitignored_path_ignores_a_path_the_repo_gitignore_matches() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir(repo.path().join(".git")).unwrap();
+        fs::write(repo.path().join(".gitignore"), "*.log\n").unwrap();
+
+        assert!(is_gitignored_path(&repo.path().join("debug.log"), false));
+        assert!(!is_gitignored_path(&repo.path().join("app.js"), false));
     }
 }

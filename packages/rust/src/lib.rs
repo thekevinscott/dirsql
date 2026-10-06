@@ -732,6 +732,14 @@ impl DirSQL {
             if group.matcher.is_ignored(&rel_path_buf) {
                 continue;
             }
+            if group.matcher.respects_gitignore()
+                && scanner::is_gitignored_path(
+                    &abs_path,
+                    self.inner.fs.is_dir(&abs_path).unwrap_or(false),
+                )
+            {
+                continue;
+            }
 
             // A directory that appears whole (`mkdir`, or a populated directory
             // renamed into the tree) arrives as one event naming the directory and
@@ -1110,6 +1118,13 @@ impl DirSQL {
         } = resolved;
 
         let (groups, anchors, table_names) = compile_groups(&tables, &ignore, &root)?;
+        let groups = groups
+            .into_iter()
+            .map(|group| AnchorGroup {
+                matcher: group.matcher.with_gitignore(!no_ignore),
+                ..group
+            })
+            .collect::<Vec<_>>();
 
         // Resolve the persistent context before scanning, so the scan can
         // consult the cached file index.
@@ -2933,6 +2948,23 @@ mod internal_tests {
             .map(|f| f.rel_path.as_str())
             .collect();
         assert_eq!(found, vec!["a.txt"]);
+    }
+
+    /// The startup walk honors `.gitignore` unless the build asked not to.
+    #[test]
+    fn prepare_hands_the_walk_a_matcher_that_honors_gitignore_unless_no_ignore() {
+        let dir = TempDir::new().unwrap();
+        for no_ignore in [false, true] {
+            let honored = Cell::new(None);
+            let mut resolved = resolved_over(dir.path(), vec![txt_table()], false);
+            resolved.no_ignore = no_ignore;
+            DirSQL::prepare_resolved_with(resolved, &|_, matcher, _| {
+                honored.set(Some(matcher.respects_gitignore()));
+                Vec::new()
+            })
+            .unwrap();
+            assert_eq!(honored.get(), Some(!no_ignore));
+        }
     }
 
     /// Skipping the walk skips only the walk: with persist on, the cache is
