@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1791299799,
+  "exit_code": 0,
+  "commit": "bc8156e317596d423f903feb4014d3ddda21c960",
+  "branch": "claude/1351-dot-dirs"
+}

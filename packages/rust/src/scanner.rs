@@ -168,8 +168,10 @@ fn is_wanted(glob: &PathGlob, ignore: &TableMatcher, rel_path: &Path) -> bool {
 /// where the walk may follow a symlink.
 ///
 /// A component beginning with `.` is spelled; `.claude` and `.env` admit
-/// exactly those names, `.*` any dot-named entry, as in the shell. Every
-/// other dot-named file or directory is skipped, the rule `ls` and `fd` use.
+/// exactly those names, `.*` any dot-named entry, as in the shell, and only at
+/// the depth the component sits: `**` never consumes a dot-named directory.
+/// Every other dot-named file or directory is skipped, the rule `ls` and `fd`
+/// use.
 /// A dot-named symlink is a dot-named entry like any other.
 ///
 /// The symlink rule is bash's (`globstar`, 4.3 and later). A symlinked file
@@ -191,6 +193,9 @@ pub struct PathGlob {
 enum Component {
     AnyDepth,
     Name(Pattern),
+    /// A component spelled with a leading `.`, the only kind that consumes a
+    /// dot-named entry.
+    DotName(Pattern),
     End,
 }
 
@@ -224,11 +229,16 @@ impl PathGlob {
     /// `states`; an `End` means a whole word has matched.
     fn step(&self, states: &[usize], name: &OsStr, kind: Kind) -> Vec<usize> {
         let mut next = Vec::new();
+        let dot_named = is_dot_named(name);
         for &i in states {
             match self.components.get(i) {
+                Some(Component::AnyDepth) if dot_named => {}
                 Some(Component::AnyDepth) if kind == Kind::LinkedDir => next.push(i + 1),
                 Some(Component::AnyDepth) => next.push(i),
-                Some(Component::Name(m)) if m.is_match(Path::new(name)) => next.push(i + 1),
+                Some(Component::Name(m)) if !dot_named && m.is_match(Path::new(name)) => {
+                    next.push(i + 1)
+                }
+                Some(Component::DotName(m)) if m.is_match(Path::new(name)) => next.push(i + 1),
                 _ => {}
             }
         }
@@ -306,6 +316,7 @@ fn compile_components(word: &str) -> Option<Vec<Component>> {
         .split('/')
         .map(|c| match c {
             "**" => Ok(Component::AnyDepth),
+            _ if is_dot_named(OsStr::new(c)) => Pattern::new(c).map(Component::DotName),
             _ => Pattern::new(c).map(Component::Name),
         })
         .collect::<Result<Vec<_>, _>>()
@@ -1292,6 +1303,28 @@ mod tests {
         let glob = compile_glob("**/x").unwrap();
         assert_eq!(states_after(&glob, &[("a", Kind::Dir)]), vec![0, 1]);
         assert_eq!(states_after(&glob, &[("a", Kind::File)]), vec![0, 1]);
+    }
+
+    #[test]
+    fn a_double_star_never_consumes_a_dot_named_entry() {
+        let glob = compile_glob("**/.*").unwrap();
+        assert_eq!(states_after(&glob, &[(".cache", Kind::Dir)]), vec![2]);
+        assert!(states_after(&glob, &[(".cache", Kind::Dir), (".z", Kind::File)]).is_empty());
+    }
+
+    #[test]
+    fn only_a_component_spelled_with_a_dot_consumes_a_dot_named_entry() {
+        let glob = compile_glob("*/x").unwrap();
+        assert!(states_after(&glob, &[(".d", Kind::Dir)]).is_empty());
+        let glob = compile_glob(".*/x").unwrap();
+        assert_eq!(states_after(&glob, &[(".d", Kind::Dir)]), vec![1]);
+    }
+
+    #[test]
+    fn a_spelled_dot_component_consumes_only_the_names_it_matches() {
+        let glob = compile_glob(".claude/x").unwrap();
+        assert_eq!(states_after(&glob, &[(".claude", Kind::Dir)]), vec![1]);
+        assert!(states_after(&glob, &[(".env", Kind::Dir)]).is_empty());
     }
 
     #[test]
