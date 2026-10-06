@@ -577,6 +577,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "shlex",
@@ -585,6 +586,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "toml",
+ "tower-http",
  "typed-path",
 ]
 

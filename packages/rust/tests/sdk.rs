@@ -639,10 +639,10 @@ on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{}" "$sep"; sep=",";
 }
 
 #[test]
-fn builder_explicit_root_wins_over_config_directory() {
-    // With `root` gone from config (#540), the index root is the explicit
-    // `.root(...)`, never the config file's own directory. The config's parent
-    // holds a decoy; only the explicit root's file is indexed. The `basename`
+fn builder_explicit_root_does_not_move_config_tables() {
+    // A config table anchors at its config file's directory; the explicit
+    // `.root(...)` governs only the index root. The explicit root holds a
+    // decoy; only the config directory's file is indexed. The `basename`
     // column is filesystem-derived so the test doesn't depend on content
     // parsing.
     let temp = TempDir::new().unwrap();
@@ -650,8 +650,8 @@ fn builder_explicit_root_wins_over_config_directory() {
     let data_dir = temp.path().join("data");
     fs::create_dir_all(&cfg_dir).unwrap();
     fs::create_dir_all(&data_dir).unwrap();
-    fs::write(cfg_dir.join("decoy.json"), "anything").unwrap();
-    fs::write(data_dir.join("present.json"), "anything").unwrap();
+    fs::write(data_dir.join("decoy.json"), "anything").unwrap();
+    fs::write(cfg_dir.join("present.json"), "anything").unwrap();
 
     let cfg_path = cfg_dir.join(".dirsql.toml");
     fs::write(
@@ -831,7 +831,7 @@ fn declared_name_absent_from_the_catalog_errors() {
 #[test]
 fn invalid_glob_errors() {
     let root = TempDir::new().unwrap();
-    let table = Table::new("t", "CREATE TABLE t (x TEXT)", "a[b", |_| vec![]);
+    let table = Table::new("t", "CREATE TABLE t (x TEXT)", "a[z-a]", |_| vec![]);
     let result = DirSQL::new(root.path(), vec![table]);
     assert!(matches!(result, Err(dirsql::DirSqlError::Matcher { .. })));
 }

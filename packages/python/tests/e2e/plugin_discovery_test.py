@@ -4,8 +4,7 @@ Drives the real launcher (`dirsql.cli.main:main`) + bundled binary with a
 fixture plugin *installed* (a staged dist declaring `[project.entry-points.dirsql]`
 on the launcher's `sys.path`). No mocks. "Installed = active" (#363): the
 launcher discovers the plugin, injects its `dirsql.toml` fragment as an ordinary
-`-c` flag, and adds the hidden `--include-default` (#604) when the user passed no
-`-c` so the baked-in `records` table survives alongside the plugin's tables.
+`-c` flag, and adds nothing else.
 
 Discovery is CLI-only and opt-out via `--no-plugin` / `DIRSQL_NO_PLUGIN=1`.
 """
@@ -37,15 +36,22 @@ _BINARY_STAGE_DIR = os.path.join(os.path.dirname(_dirsql_pkg.__file__), "_binary
 _HOOK_PATH_BASENAME = r"""on-file = '''sh -c 'r=$1; shift; printf "["; sep=""; for p; do rel=${p#"$r"/}; printf "%s{\"path\":\"%s\",\"basename\":\"%s\"}" "$sep" "$rel" "${p##*/}"; sep=","; done; printf "]"' sh {root}'''"""
 
 
-def _stage_plugin(site_dir):
+def _stage_plugin(site_dir, data_dir):
     """Stage the fixture plugin as a discoverable dist under `site_dir`:
     the importable module plus a `.dist-info` carrying the `dirsql` entry point,
-    exactly what `importlib.metadata` scans `sys.path` for."""
+    exactly what `importlib.metadata` scans `sys.path` for. The fragment's glob
+    anchors at its own directory, so it is rewritten to name `data_dir`."""
+    staged = os.path.join(site_dir, "dirsql_plugin_fixture")
     shutil.copytree(
         os.path.join(_FIXTURES, "dirsql_plugin_fixture"),
-        os.path.join(site_dir, "dirsql_plugin_fixture"),
+        staged,
         ignore=shutil.ignore_patterns("__pycache__"),
     )
+    fragment = os.path.join(staged, "dirsql.toml")
+    with open(fragment) as f:
+        text = f.read()
+    with open(fragment, "w") as f:
+        f.write(text.replace('glob = "*.md"', f'glob = "{data_dir}/*.md"'))
     dist = os.path.join(site_dir, "dirsql_plugin_fixture-0.0.0.dist-info")
     os.makedirs(dist)
     with open(os.path.join(dist, "METADATA"), "w") as f:
@@ -95,10 +101,9 @@ def describe_plugin_discovery():
 
         site_dir = tmp_path / "site"
         site_dir.mkdir()
-        _stage_plugin(str(site_dir))
-
         data = tmp_path / "data"
         data.mkdir()
+        _stage_plugin(str(site_dir), str(data))
         (data / "hello.md").write_text("# hi\n")
         try:
             yield str(site_dir), data
@@ -112,14 +117,12 @@ def describe_plugin_discovery():
         assert notes.returncode == 0, f"stdout={notes.stdout!r} stderr={notes.stderr!r}"
         assert _basenames(notes) == ["hello.md"]
 
-    def it_keeps_the_baked_in_records_table_alongside_the_plugin(staged):
+    def it_adds_no_records_table_alongside_the_plugin(staged):
         site_dir, data = staged
-        # ...and the baked-in default `records` table is still served (proves the
-        # launcher added `--include-default`, not a bare `-c` that would suppress it).
+        (data / "a.json").write_text('{"id": 1}')
         records = _run(site_dir, ["query", "SELECT COUNT(*) AS n FROM records"], data)
-        assert records.returncode == 0, (
-            f"stdout={records.stdout!r} stderr={records.stderr!r}"
-        )
+        assert records.returncode != 0, f"stdout={records.stdout!r}"
+        assert "no such table" in records.stderr
 
     def it_skips_discovery_under_the_no_plugin_flag(staged):
         site_dir, data = staged

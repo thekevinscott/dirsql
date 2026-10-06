@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e -- query-contract",
+  "ran_at": 1791309126,
+  "exit_code": 0,
+  "commit": "ec5625e9415996ff5cc173848563a7b8c1638963",
+  "branch": "bot/1398-inotify-error"
+}

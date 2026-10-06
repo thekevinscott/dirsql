@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/cli_version_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1791309015,
+  "exit_code": 0,
+  "commit": "d60aff48881ae3201bccd0e6e77f52e6cd62c646",
+  "branch": "bot/1398-inotify-error"
+}

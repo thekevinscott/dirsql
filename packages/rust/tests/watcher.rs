@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use std::{fs, thread};
 
-use dirsql::watcher::{FileEvent, Watcher};
+use dirsql::matcher::TableMatcher;
+use dirsql::watcher::{FileEvent, WatchScope, Watcher};
 use dirsql::{DirSQL, RowEvent, Table, Value};
 use tempfile::TempDir;
 
@@ -214,5 +215,102 @@ fn try_recv_all_drains_pending_events() {
     assert!(
         !events.is_empty(),
         "Expected at least one event from batch file creation"
+    );
+}
+
+#[test]
+fn over_detects_events_in_every_directory() {
+    let first = TempDir::new().unwrap();
+    let second = TempDir::new().unwrap();
+    let watcher =
+        Watcher::over(&[first.path().to_path_buf(), second.path().to_path_buf()]).unwrap();
+
+    thread::sleep(Duration::from_millis(100));
+
+    fs::write(first.path().join("a.txt"), "a").unwrap();
+    fs::write(second.path().join("b.txt"), "b").unwrap();
+
+    let events = collect_events_until(&watcher, Duration::from_secs(5), |seen| {
+        let created = |dir: &std::path::Path| {
+            seen.iter().any(|e| match e {
+                FileEvent::Created(p) => p.starts_with(dir),
+                _ => false,
+            })
+        };
+        created(first.path()) && created(second.path())
+    });
+    for dir in [first.path(), second.path()] {
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, FileEvent::Created(p) if p.starts_with(dir))),
+            "no Created event under {dir:?}, saw: {events:?}"
+        );
+    }
+}
+
+fn scoped(root: &std::path::Path, ignore: &[&str]) -> Watcher {
+    Watcher::scoped(vec![WatchScope {
+        root: root.to_path_buf(),
+        ignore: TableMatcher::new(&[], ignore).unwrap(),
+    }])
+    .unwrap()
+}
+
+fn created_under(events: &[FileEvent], dir: &std::path::Path) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, FileEvent::Created(p) if p.starts_with(dir)))
+}
+
+// FSEvents and ReadDirectoryChangesW watch a whole tree with one watch, so
+// there the ignored subtree's events still arrive.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[test]
+fn scoped_watcher_puts_no_watch_on_an_ignored_subtree() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let ignored = root.join("node_modules").join("pkg");
+    let kept = root.join("src");
+    fs::create_dir_all(&ignored).unwrap();
+    fs::create_dir_all(&kept).unwrap();
+    let watcher = scoped(&root, &["node_modules/**"]);
+
+    fs::write(ignored.join("index.js"), "x").unwrap();
+    fs::write(kept.join("main.rs"), "x").unwrap();
+
+    // Events from one watcher arrive in order, so once the later write in the
+    // watched subtree shows up, the ignored write's event would have too.
+    let events = collect_events_until(&watcher, Duration::from_secs(5), |seen| {
+        created_under(seen, &kept)
+    });
+    assert!(created_under(&events, &kept), "saw: {events:?}");
+    assert!(!created_under(&events, &ignored), "saw: {events:?}");
+}
+
+#[test]
+fn scoped_watcher_reports_files_in_a_new_directory() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let watcher = scoped(&root, &["node_modules/**"]);
+    let fresh = root.join("fresh");
+
+    fs::create_dir(&fresh).unwrap();
+    let events = collect_events_until(&watcher, Duration::from_secs(5), |seen| {
+        seen.contains(&FileEvent::Created(fresh.clone()))
+    });
+    assert!(
+        events.contains(&FileEvent::Created(fresh.clone())),
+        "saw: {events:?}"
+    );
+
+    let file = fresh.join("note.md");
+    fs::write(&file, "x").unwrap();
+    let events = collect_events_until(&watcher, Duration::from_secs(5), |seen| {
+        seen.contains(&FileEvent::Created(file.clone()))
+    });
+    assert!(
+        events.contains(&FileEvent::Created(file.clone())),
+        "saw: {events:?}"
     );
 }
