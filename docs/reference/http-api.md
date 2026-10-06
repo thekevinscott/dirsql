@@ -1,7 +1,10 @@
 # HTTP API
 
 The [`dirsql` server](./cli.md#dirsql-server) (default `localhost:7117`)
-exposes two endpoints: `POST /query` and `GET /events`.
+exposes two endpoints: `POST /query` and `GET /events`. It sends no CORS
+headers unless started with
+[`--cors-origin`](./cli.md#cross-origin-requests), so a browser page on
+another origin can reach it only after that opt-in.
 
 ## `POST /query`
 

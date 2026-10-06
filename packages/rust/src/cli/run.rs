@@ -26,6 +26,7 @@ use super::{
     serve_with_state, table,
 };
 use crate::{DirSQL, Extension};
+use axum::http::HeaderValue;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::Value;
 
@@ -183,6 +184,12 @@ struct ServerArgs {
     /// TCP port to bind.
     #[arg(long, default_value_t = 7117)]
     port: u16,
+
+    /// Send `Access-Control-Allow-Origin: <ORIGIN>` so browser pages on that
+    /// origin (`*` for any) can call `/query` and open `/events`. Without it
+    /// the server sends no CORS headers.
+    #[arg(long = "cors-origin", value_name = "ORIGIN")]
+    cors_origin: Option<HeaderValue>,
 
     #[command(flatten)]
     common: ConfigArgs,
@@ -466,7 +473,10 @@ async fn run_server(args: ServerArgs) -> u8 {
     // The server has no `--on-file`: clap rejects it as an unknown flag before
     // reaching here. Path-tables served over HTTP keep their stat columns.
     let state = load_state(&args.common, None);
-    let server_config = ServerConfig::bind(args.host.clone(), args.port);
+    let mut server_config = ServerConfig::bind(args.host.clone(), args.port);
+    if let Some(origin) = args.cors_origin {
+        server_config = server_config.with_cors_origin(origin);
+    }
 
     let host = args.host.clone();
     let handle = match serve_with_state(server_config, state).await {
@@ -858,11 +868,30 @@ mod tests {
     }
 
     #[test]
+    fn server_subcommand_parses_a_cors_origin() {
+        match Cli::parse_from(["dirsql", "server", "--cors-origin", "http://localhost:3202"])
+            .command
+        {
+            Some(Command::Server(args)) => assert_eq!(
+                args.cors_origin,
+                Some(HeaderValue::from_static("http://localhost:3202"))
+            ),
+            other => panic!("expected a server subcommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn server_subcommand_rejects_a_cors_origin_that_is_not_a_header_value() {
+        assert!(Cli::try_parse_from(["dirsql", "server", "--cors-origin", "a\nb"]).is_err());
+    }
+
+    #[test]
     fn server_subcommand_defaults_host_and_port() {
         match Cli::parse_from(["dirsql", "server"]).command {
             Some(Command::Server(args)) => {
                 assert_eq!(args.host, "localhost");
                 assert_eq!(args.port, 7117);
+                assert_eq!(args.cors_origin, None);
             }
             other => panic!("expected a server subcommand, got {other:?}"),
         }

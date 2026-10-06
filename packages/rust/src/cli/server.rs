@@ -2,9 +2,11 @@
 
 use std::sync::Arc;
 
+use axum::http::{Method, header};
 use futures::stream::StreamExt;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, oneshot, watch};
+use tower_http::cors::CorsLayer;
 
 use super::router::{AppContext, router};
 use super::serialize::event_to_json;
@@ -49,7 +51,15 @@ pub async fn serve_with_state(
         cancel: cancel_rx,
         query_timeout: config.query_timeout,
     });
-    let app = router(shared);
+    let mut app = router(shared);
+    if let Some(origin) = config.cors_origin {
+        app = app.layer(
+            CorsLayer::new()
+                .allow_origin(origin)
+                .allow_methods([Method::GET, Method::POST])
+                .allow_headers([header::CONTENT_TYPE]),
+        );
+    }
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let task = tokio::spawn(async move {

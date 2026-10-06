@@ -194,6 +194,22 @@ mod tests {
         assert_eq!(cfg.host, "localhost");
         assert_eq!(cfg.port, 7117);
         assert_eq!(cfg.query_timeout, Duration::from_secs(30));
+        assert_eq!(cfg.cors_origin, None);
+    }
+
+    #[test]
+    fn ephemeral_config_binds_port_zero_on_localhost_without_cors() {
+        let cfg = ServerConfig::ephemeral();
+        assert_eq!(cfg.host, "localhost");
+        assert_eq!(cfg.port, 0);
+        assert_eq!(cfg.query_timeout, Duration::from_secs(30));
+        assert_eq!(cfg.cors_origin, None);
+    }
+
+    #[test]
+    fn with_cors_origin_sets_the_allowed_origin() {
+        let cfg = ServerConfig::ephemeral().with_cors_origin(HeaderValue::from_static("*"));
+        assert_eq!(cfg.cors_origin, Some(HeaderValue::from_static("*")));
     }
 
     #[test]
