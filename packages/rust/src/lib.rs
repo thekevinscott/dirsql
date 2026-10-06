@@ -1120,15 +1120,7 @@ impl DirSQL {
             // The walk reports a running count rather than a fraction: it does
             // not know how many files there are until it has found them all.
             let mut progress = Progress::scanning();
-            let mut seen = 0;
-            let mut scanned = Vec::new();
-            for group in &groups {
-                let before = seen;
-                scanned.extend(scan(&group.anchor, &group.matcher, &mut |count| {
-                    seen = before + count;
-                    progress.update(seen, None);
-                }));
-            }
+            let (scanned, seen) = scan_groups(&groups, scan, &mut progress);
             progress.finish(seen);
             for warning in empty_table_warnings(&tables, &anchors, &scanned) {
                 eprintln!("{warning}");
@@ -1945,6 +1937,25 @@ struct PersistContext {
 }
 
 type GroupDraft = (PathBuf, Vec<String>, Vec<(String, String)>);
+
+/// Walk every group's anchor in turn, reporting one running count across all of
+/// them. Returns the matches and the total count.
+fn scan_groups(
+    groups: &[AnchorGroup],
+    scan: ScanFn<'_>,
+    progress: &mut Progress,
+) -> (Vec<(PathBuf, String)>, u64) {
+    let mut seen = 0;
+    let mut scanned = Vec::new();
+    for group in groups {
+        let before = seen;
+        scanned.extend(scan(&group.anchor, &group.matcher, &mut |count| {
+            seen = before + count;
+            progress.update(seen, None);
+        }));
+    }
+    (scanned, seen)
+}
 
 fn compile_groups(
     tables: &[Table],
@@ -3265,6 +3276,46 @@ mod internal_tests {
             row_names(&db),
             vec![root.join("moved/a.txt").to_string_lossy().to_string()]
         );
+    }
+
+    #[test]
+    fn delete_subtree_marks_only_this_groups_tables_holding_files_beneath_it() {
+        let (_dir, db, _abs, _rel) = upsert_fixture();
+        let tables = vec![
+            anchored_table("held", "*.txt", "/one"),
+            anchored_table("bare", "*.txt", "/one"),
+        ];
+        let (groups, _, _) = compile_groups(&tables, &[], Path::new("/idx")).unwrap();
+        let group = &groups[0];
+        {
+            let mut files = db.inner.batch_files.lock().unwrap();
+            files.insert("held".into(), vec!["moved/x".into()]);
+            files.insert("bare".into(), vec!["elsewhere/y".into()]);
+            files.insert("foreign".into(), vec!["moved/z".into()]);
+        }
+        let mut pending = PendingRefresh::default();
+
+        db.delete_subtree(group, "moved", &mut pending);
+
+        assert_eq!(pending.0, vec![("held".to_string(), "moved".to_string())]);
+    }
+
+    #[test]
+    fn scan_groups_counts_across_groups_and_collects_every_match() {
+        let tables = vec![
+            anchored_table("a", "*.txt", "/one"),
+            anchored_table("b", "*.txt", "/two"),
+        ];
+        let (groups, _, _) = compile_groups(&tables, &[], Path::new("/idx")).unwrap();
+        let scan = |anchor: &Path, _: &TableMatcher, report: &mut dyn FnMut(u64)| {
+            report(3);
+            vec![(anchor.join("f.txt"), "t".to_string())]
+        };
+
+        let (scanned, seen) = scan_groups(&groups, &scan, &mut Progress::scanning());
+
+        assert_eq!(seen, 6);
+        assert_eq!(scanned.len(), 2);
     }
 
     #[test]
@@ -5496,6 +5547,15 @@ mod internal_tests {
             .collect();
         let (groups, _, _) = compile_groups(&tables, &[], Path::new("/idx")).unwrap();
         watch_roots(Path::new("/canonical-idx"), &groups)
+    }
+
+    #[test]
+    fn a_built_instance_watches_its_tables_anchor() {
+        let dir = TempDir::new().unwrap();
+        let db = populated_db(dir.path(), "**/*.txt", &["a.txt"]);
+
+        assert_eq!(db.watch_roots(), vec![db.inner.watch_root.clone()]);
+        assert!(!db.watch_roots().is_empty());
     }
 
     #[test]
