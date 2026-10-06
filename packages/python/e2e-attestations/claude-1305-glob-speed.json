@@ -1,7 +1,7 @@
 {
   "command": "just test-e2e",
-  "ran_at": 1791286282,
+  "ran_at": 1791292687,
   "exit_code": 0,
-  "commit": "71e3e2b30966f9f1d7fa056507860ac5f2d9d200",
+  "commit": "59f2b4249816735553d8a2270ded77fc4f9c3e2c",
   "branch": "claude/1305-glob-speed"
 }
