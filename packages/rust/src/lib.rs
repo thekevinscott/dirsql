@@ -91,8 +91,7 @@ pub type WatchStream = UnboundedReceiver<RowEvent>;
 /// The escalation scaffold `dirsql init` writes verbatim: one named
 /// `[[table]]` (glob + DDL + a real `on-file` hook) demonstrating how to pull
 /// structured rows out of files, rather than duplicating the zero-config
-/// path-table floor (`SELECT * FROM './'`). The `--include-default` launcher
-/// path also seeds this table's glob/DDL. Carrying a genuine hook keeps it a
+/// path-table floor (`SELECT * FROM './'`). Carrying a genuine hook keeps it a
 /// valid config even once hook-less `[[table]]` entries become a load error.
 pub const DEFAULT_CONFIG_TOML: &str = include_str!("default_config.toml");
 

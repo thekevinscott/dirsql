@@ -4,8 +4,7 @@ Drives the real launcher (`dirsql.cli.main:main`) + bundled binary with a
 fixture plugin *installed* (a staged dist declaring `[project.entry-points.dirsql]`
 on the launcher's `sys.path`). No mocks. "Installed = active" (#363): the
 launcher discovers the plugin, injects its `dirsql.toml` fragment as an ordinary
-`-c` flag, and adds the hidden `--include-default` (#604) when the user passed no
-`-c` so the baked-in `records` table survives alongside the plugin's tables.
+`-c` flag, and adds nothing else.
 
 Discovery is CLI-only and opt-out via `--no-plugin` / `DIRSQL_NO_PLUGIN=1`.
 """

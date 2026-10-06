@@ -1150,124 +1150,9 @@ fn config_flag_before_the_subcommand_is_a_hard_error() {
     );
 }
 
-/// Run `dirsql --include-default [-c <cfg>]... query <sql>` in `dir`.
-fn run_query_include_default(
-    dir: &std::path::Path,
-    configs: &[&str],
-    sql: &str,
-) -> std::process::Output {
-    let mut cmd = std::process::Command::cargo_bin("dirsql").expect("binary must exist");
-    // Config flags are subcommand-local (#609): pass them AFTER `query <sql>`.
-    cmd.arg("query").arg(sql).arg("--include-default");
-    for cfg in configs {
-        cmd.arg("-c").arg(cfg);
-    }
-    cmd.current_dir(dir)
-        .output()
-        .expect("spawning `dirsql query` failed")
-}
-
 #[test]
-fn include_default_composes_baked_in_records_with_an_explicit_config() {
-    // #604: the hidden `--include-default` flag seeds the baked-in default
-    // `records` table BEFORE the explicit `-c` configs, so a config no longer
-    // suppresses the default. This is the additive composition the plugin
-    // launcher (#529) injects for row 2 (no user `-c` + plugin): the result is
-    // the baked-in default PLUS the config's own tables.
-    let root = blog_fixture(); // `.dirsql.toml` defines `posts`
-
-    let records = run_query_include_default(
-        root.path(),
-        &[".dirsql.toml"],
-        "SELECT COUNT(*) AS n FROM records",
-    );
-    assert!(
-        records.status.success(),
-        "the baked-in `records` table must be present under --include-default, got {records:?}"
-    );
-
-    let posts = run_query_include_default(
-        root.path(),
-        &[".dirsql.toml"],
-        "SELECT basename FROM posts ORDER BY basename",
-    );
-    assert!(
-        posts.status.success(),
-        "the explicit config's `posts` table must ALSO be present, got {posts:?}"
-    );
-    let rows: Value = serde_json::from_slice(&posts.stdout).unwrap();
-    let basenames: Vec<&str> = rows
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|r| r["basename"].as_str())
-        .collect();
-    assert_eq!(
-        basenames,
-        vec!["Hello-World.json", "Second-Post.json"],
-        "the config's posts must load alongside the default records table, got {basenames:?}"
-    );
-}
-
-#[test]
-fn include_default_with_no_config_serves_the_bare_default() {
-    // #604: `--include-default` with no `-c` is idempotent — it is exactly the
-    // bare baked-in default (row 1). Seeding the default and then merging an
-    // empty config set changes nothing: the `records` table (glob `**/*.json`)
-    // is served on its own.
-    let dir = TempDir::new().unwrap();
-    fs::write(dir.path().join("a.json"), "[]").unwrap();
-
-    let out = run_query_include_default(dir.path(), &[], "SELECT COUNT(*) AS n FROM records");
-    assert!(
-        out.status.success(),
-        "`--include-default` alone must serve the default records table, got {out:?}"
-    );
-    let rows: Value = serde_json::from_slice(&out.stdout).unwrap();
-    let n = rows.as_array().unwrap()[0]["n"].as_i64().unwrap();
-    assert_eq!(
-        n, 1,
-        "the default records table must match the one *.json file, got {n}"
-    );
-}
-
-#[test]
-fn include_default_conflicting_records_table_exits_nonzero_naming_records() {
-    // #604: seeding the baked-in `records` table and then loading a `-c` config
-    // that ALSO defines `records` is a duplicate-table conflict, caught by the
-    // existing dedup (no new conflict machinery). The diagnostic names the
-    // duplicated table.
-    let dir = TempDir::new().unwrap();
-    fs::write(
-        dir.path().join("dup.toml"),
-        r#"
-[[table]]
-name = "records"
-ddl = "CREATE TABLE records (x TEXT)"
-glob = "**/*"
-on-file = "cat"
-"#,
-    )
-    .unwrap();
-
-    let out = run_query_include_default(dir.path(), &["dup.toml"], "SELECT 1");
-    assert!(
-        !out.status.success(),
-        "a config redefining `records` under --include-default must conflict, got {out:?}"
-    );
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(
-        stderr.contains("records") && stderr.to_lowercase().contains("duplicate"),
-        "the conflict must name the duplicate `records` table, got {stderr:?}"
-    );
-}
-
-#[test]
-fn explicit_config_without_include_default_suppresses_the_baked_in_records() {
-    // #604 row 3: an explicit `-c` WITHOUT `--include-default` keeps the
-    // replacement semantics of #602 — the baked-in default is suppressed, so
-    // only the config's own tables exist. This is what makes --include-default
-    // meaningful (it opts the default back IN) and pins the flag's condition.
+fn explicit_config_serves_only_its_own_tables() {
+    // An explicit `-c` serves only its own tables; no `records` is seeded.
     let root = blog_fixture(); // `.dirsql.toml` defines `posts`, never `records`
 
     let posts = run_query_subcommand_with_config(root.path(), "SELECT COUNT(*) AS n FROM posts");
@@ -1280,30 +1165,12 @@ fn explicit_config_without_include_default_suppresses_the_baked_in_records() {
         run_query_subcommand_with_config(root.path(), "SELECT COUNT(*) AS n FROM records");
     assert!(
         !records.status.success(),
-        "an explicit `-c` without --include-default must suppress the baked-in \
-         `records` table, got {records:?}"
+        "an explicit `-c` must not seed a `records` table, got {records:?}"
     );
     let stderr = String::from_utf8(records.stderr).unwrap();
     assert!(
         stderr.contains("records"),
         "the error should name the absent `records` table, got {stderr:?}"
-    );
-}
-
-#[test]
-fn include_default_is_hidden_from_help() {
-    // #604: `--include-default` is internal launcher plumbing, not a public
-    // flag — it must not appear in `--help`.
-    let out = std::process::Command::cargo_bin("dirsql")
-        .expect("binary must exist")
-        .arg("--help")
-        .output()
-        .expect("spawning `dirsql --help` failed");
-    assert!(out.status.success(), "`--help` must exit 0, got {out:?}");
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    assert!(
-        !stdout.contains("--include-default"),
-        "the internal --include-default flag must be hidden from --help, got:\n{stdout}"
     );
 }
 

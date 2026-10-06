@@ -470,7 +470,8 @@ installed in the same environment as `dirsql` (`pip install …`, or
 loads its fragment — its tables are queryable with zero config edits.
 Installed = active: there is no enable step and no naming convention. The
 fragment is composed *after* your own `-c` configs (so your config takes
-precedence in ordering), and the shipped starter `records` table is preserved.
+precedence in ordering). A plugin adds its own tables and nothing else: no
+`records` table is seeded.
 
 Discovery is **launcher-only** — the standalone `cargo`-installed binary does no
 discovery, and the SDKs never auto-discover (pass a plugin's config explicitly
