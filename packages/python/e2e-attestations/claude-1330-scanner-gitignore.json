@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_gitignore_test.py -x -q",
+  "ran_at": 1791300776,
+  "exit_code": 0,
+  "commit": "bfe83ade86865e07e355567fb96c33cda36a46bb",
+  "branch": "claude/1330-scanner-gitignore"
+}
