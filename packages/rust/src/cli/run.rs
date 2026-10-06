@@ -25,7 +25,7 @@ use super::{
     repl::run_repl,
     serve_with_state, table,
 };
-use crate::{DirSQL, Extension, Row, Table};
+use crate::{DirSQL, Extension};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::Value;
 
@@ -103,17 +103,6 @@ struct ConfigArgs {
     /// pass this AFTER the subcommand (`dirsql query <sql> -c <cfg>`).
     #[arg(short = 'c', long)]
     config: Vec<PathBuf>,
-
-    /// Internal (launcher-only): seed the resolved config set with the shipped
-    /// starter `records` table *before* the `-c` configs, so an explicit `-c`
-    /// composes with it instead of standing alone. `--include-default -c
-    /// <plugin>` yields that table **plus** the plugin's tables — the additive
-    /// composition the plugin launcher (#529) injects for the no-user-`-c`
-    /// case (#604). This is an explicit opt-in, not the implicit no-`-c`
-    /// fallback (which was retired in #636). Hidden from `--help`: it is
-    /// internal plumbing for the launcher, not a documented public flag.
-    #[arg(long = "include-default", hide = true)]
-    include_default: bool,
 
     /// Load a SQLite extension by literal path, overriding a TOML config's
     /// `[[dirsql.extension]]` entries. Repeatable. Format: `<path>` or
@@ -502,23 +491,14 @@ async fn run_server(args: ServerArgs) -> u8 {
 }
 
 fn load_state(cfg: &ConfigArgs, path_table_parser: Option<String>) -> AppState {
-    // Neither a `-c` nor the launcher's `--include-default` -> index the
-    // invocation directory with no named tables. A `./.dirsql.toml` on disk is
-    // NOT consulted (#602); pass it explicitly with `-c` to use it.
-    if cfg.config.is_empty() && !cfg.include_default {
+    // No `-c` -> index the invocation directory with no named tables. A
+    // `./.dirsql.toml` on disk is NOT consulted (#602); pass it explicitly
+    // with `-c` to use it.
+    if cfg.config.is_empty() {
         return load_configless_state(cfg, path_table_parser);
     }
 
     let mut builder = DirSQL::builder();
-    // `--include-default` seeds the shipped starter `records` table before the
-    // `-c` configs, so an explicit config composes with it instead of standing
-    // alone (#604). Programmatic tables sort before config tables in
-    // `resolve`, giving `[starter] ++ [-c]`; a starter-vs-config `records`
-    // collision hits the existing dedup in `compile_matcher`. With no `-c` at
-    // all the flag still applies, yielding just the starter table.
-    if cfg.include_default {
-        builder = builder.table(default_records_table());
-    }
     for config_path in &cfg.config {
         // Canonicalize so config-relative paths (extension libraries, hook
         // working directories) resolve against an absolute parent — `notify`
@@ -614,22 +594,6 @@ fn load_configless_state(cfg: &ConfigArgs, path_table_parser: Option<String>) ->
         Ok(db) => AppState::Ready(db),
         Err(err) => AppState::Unavailable(format!("failed to build the index: {err}")),
     }
-}
-
-/// The shipped starter `records` table, parsed from the [`crate::DEFAULT_CONFIG_TOML`]
-/// asset `dirsql init` writes. Used only by the explicit `--include-default`
-/// compose path (#604), which seeds it as a programmatic table *before* the
-/// `-c` configs. There is no implicit no-`-c` fallback (#636).
-fn default_records_table() -> Table {
-    let config = crate::config::load_config_str(crate::DEFAULT_CONFIG_TOML)
-        .expect("DEFAULT_CONFIG_TOML must be valid dirsql config TOML");
-    let table_config = &config.tables[0];
-    Table::new(
-        table_config.name.clone(),
-        table_config.ddl.clone(),
-        table_config.glob.clone(),
-        |_path| vec![Row::new()],
-    )
 }
 
 #[cfg(unix)]
@@ -948,29 +912,6 @@ mod tests {
     }
 
     #[test]
-    fn include_default_defaults_false_without_the_flag() {
-        // Absent -> false: `-c` keeps its replacement semantics unless the
-        // launcher explicitly opts the baked-in default back in (#604).
-        let cli = Cli::parse_from(["dirsql"]);
-        assert!(!cli.common.include_default);
-    }
-
-    #[test]
-    fn include_default_flag_sets_true() {
-        let cli = Cli::parse_from(["dirsql", "--include-default"]);
-        assert!(cli.common.include_default);
-    }
-
-    #[test]
-    fn include_default_parses_after_the_query_subcommand() {
-        // Subcommand-local (#609): the launcher injects it AFTER `query`
-        // alongside `-c <plugin>`.
-        assert!(
-            query_common(&["dirsql", "query", "SELECT 1", "--include-default"]).include_default
-        );
-    }
-
-    #[test]
     fn persist_flag_absent_is_none() {
         let cli = Cli::parse_from(["dirsql"]);
         assert_eq!(cli.common.persist, None);
@@ -1104,7 +1045,6 @@ mod tests {
         // integration tier.
         let cfg = ConfigArgs {
             config: Vec::new(),
-            include_default: false,
             extension: vec!["/ext/vec0.so::sqlite3_vec_init".to_string()],
             persist: None,
             no_ignore: false,
@@ -1191,13 +1131,5 @@ mod tests {
             "SELECT 1".into(),
         ]);
         assert_eq!(code, 2);
-    }
-
-    #[test]
-    fn default_records_table_is_built_from_the_shipped_starter_config() {
-        // `--include-default` seeds this table, so a starter config that
-        // stopped parsing would break that flag rather than `dirsql init`.
-        let table = default_records_table();
-        assert!(table.ddl.contains("records"));
     }
 }
