@@ -1178,6 +1178,18 @@ mod tests {
     }
 
     #[test]
+    fn run_cli_returns_the_query_exit_code() {
+        assert_eq!(
+            run_cli(vec!["dirsql".into(), "query".into(), "SELECT 1".into()]),
+            0
+        );
+        assert_eq!(
+            run_cli(vec!["dirsql".into(), "query".into(), "SELECT FROM".into()]),
+            1
+        );
+    }
+
+    #[test]
     fn context_parses_as_its_own_subcommand_not_as_sql() {
         let cli = Cli::try_parse_from(["dirsql", "context"]).unwrap();
         assert!(matches!(cli.command, Some(Command::Context)));
