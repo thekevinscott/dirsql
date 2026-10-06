@@ -62,7 +62,7 @@ def describe_with_resolved_extensions():
         resolver.assert_called_once_with(["/x/.dirsql.toml"])
 
     def it_scans_the_whole_argv_for_config_paths():
-        argv = ["query", "SELECT 1", "--include-default", "-c", "/frag/dirsql.toml"]
+        argv = ["query", "SELECT 1", "-c", "/frag/dirsql.toml"]
         with _patch(None) as (scan, _resolver):
             rce.with_resolved_extensions(argv)
         scan.assert_called_once_with(argv)

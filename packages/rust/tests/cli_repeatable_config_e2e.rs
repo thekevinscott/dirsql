@@ -23,8 +23,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 /// Write `.dirsql.toml` declaring one single-column table into `dir`. `glob`
-/// is distinct per table because dirsql routes each file to a single table
-/// (one-file-one-table), so each config's table matches its own file.
+/// anchors at `dir`, so each config's table matches its own file.
 fn write_table_config(dir: &Path, table: &str, glob: &str) -> std::path::PathBuf {
     let path = dir.join(".dirsql.toml");
     fs::write(
@@ -78,11 +77,11 @@ fn wait_until_ready_or_exit(child: &mut Child, port: u16, timeout: Duration) {
 #[test]
 fn server_serves_tables_from_two_config_flags() {
     let data = TempDir::new().unwrap();
-    fs::write(data.path().join("a.json"), "{}").unwrap();
-    fs::write(data.path().join("b.json"), "{}").unwrap();
     let cfg_a = TempDir::new().unwrap();
+    fs::write(cfg_a.path().join("a.json"), "{}").unwrap();
     let cfg_a_path = write_table_config(cfg_a.path(), "alpha", "a.json");
     let cfg_b = TempDir::new().unwrap();
+    fs::write(cfg_b.path().join("b.json"), "{}").unwrap();
     let cfg_b_path = write_table_config(cfg_b.path(), "beta", "b.json");
 
     let port = free_port();
@@ -121,11 +120,11 @@ fn server_serves_tables_from_two_config_flags() {
 #[test]
 fn query_subcommand_accepts_repeated_config_flags() {
     let data = TempDir::new().unwrap();
-    fs::write(data.path().join("a.json"), "{}").unwrap();
-    fs::write(data.path().join("b.json"), "{}").unwrap();
     let cfg_a = TempDir::new().unwrap();
+    fs::write(cfg_a.path().join("a.json"), "{}").unwrap();
     let cfg_a_path = write_table_config(cfg_a.path(), "alpha", "a.json");
     let cfg_b = TempDir::new().unwrap();
+    fs::write(cfg_b.path().join("b.json"), "{}").unwrap();
     let cfg_b_path = write_table_config(cfg_b.path(), "beta", "b.json");
 
     let mut cmd: StdCommand = std::process::Command::cargo_bin("dirsql")

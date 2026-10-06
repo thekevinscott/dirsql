@@ -234,7 +234,7 @@ fn escape_braces(word: &str) -> String {
 
 /// Index of the `]` closing the class globset opens at `open`, where a `]`
 /// first in the class (after any `!` / `^`) is a member, not the close.
-pub(crate) fn class_end(chars: &[char], open: usize) -> Option<usize> {
+fn class_end(chars: &[char], open: usize) -> Option<usize> {
     let mut i = open + 1;
     if matches!(chars.get(i), Some('!' | '^')) {
         i += 1;
@@ -411,6 +411,15 @@ mod tests {
     fn an_unclosed_bracket_is_literal() {
         assert_eq!(escape_braces("x[{q}"), "x[[][{]q[}]");
         assert_eq!(escape_braces("x[]{"), "x[[]][{]");
+        assert_eq!(escape_braces("[!a"), "[[]!a");
+        assert_eq!(escape_braces("a].md"), "a].md");
+    }
+
+    #[test]
+    fn expand_leaves_an_unpartnered_brace_literal() {
+        assert_eq!(expand("{a.md"), vec!["[{]a.md"]);
+        assert_eq!(expand("a}.md"), vec!["a[}].md"]);
+        assert_eq!(expand("{a,b}}.md"), vec!["a[}].md", "b[}].md"]);
     }
 
     #[test]

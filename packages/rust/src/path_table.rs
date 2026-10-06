@@ -149,6 +149,41 @@ fn resolve_as<S: Syntax>(
     }
 }
 
+/// Where a config `[[table]] glob` anchors, and the glob to match beneath it.
+///
+/// A glob with a path-table prefix (`/`, `../`, `~/`, a drive or UNC root)
+/// anchors at its literal directory chain; any other glob, `./` included,
+/// anchors at the config's own directory. `None` means a `~/` glob with no
+/// home directory to resolve it against.
+pub(crate) fn config_anchor(
+    glob: &str,
+    config_dir: &Path,
+    home: Option<&Path>,
+) -> Option<(PathBuf, String)> {
+    config_anchor_as::<Utf8NativeEncoding>(glob, config_dir, home)
+}
+
+fn config_anchor_as<S: Syntax>(
+    glob: &str,
+    config_dir: &Path,
+    home: Option<&Path>,
+) -> Option<(PathBuf, String)> {
+    if let Some(rest) = glob.strip_prefix("./") {
+        return Some((config_dir.to_path_buf(), rest.to_string()));
+    }
+    let Some(target) = absolute_target::<S>(glob, config_dir, home) else {
+        return Some((config_dir.to_path_buf(), glob.to_string()));
+    };
+    let target = target?;
+    let (literal, rest) = split_at_first_glob(&target);
+    if !rest.is_empty() {
+        return Some((PathBuf::from(literal.as_str()), rest));
+    }
+    let name = literal.file_name()?.to_string();
+    let parent = literal.parent().unwrap_or(&literal);
+    Some((PathBuf::from(parent.as_str()), name))
+}
+
 /// A trailing separator is `*` appended, so `./*/` is `./*/*` (like `ls */`)
 /// rather than a `./*` whose slash the path parser would drop.
 fn trailing_separator_as_star<S: Syntax>(name: &str) -> String {
@@ -676,6 +711,66 @@ mod tests {
         normalize(Utf8Path::<Utf8UnixEncoding>::new(path))
             .as_str()
             .to_string()
+    }
+
+    fn anchor_of(glob: &str, home: Option<&Path>) -> Option<(PathBuf, String)> {
+        config_anchor(glob, Path::new("/cfg"), home)
+    }
+
+    #[test]
+    fn a_config_glob_without_a_prefix_anchors_at_the_config_directory() {
+        assert_eq!(
+            anchor_of("projects/*/*.jsonl", None),
+            Some((PathBuf::from("/cfg"), "projects/*/*.jsonl".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_dot_slash_config_glob_anchors_at_the_config_directory() {
+        assert_eq!(
+            anchor_of("./*.md", None),
+            Some((PathBuf::from("/cfg"), "*.md".to_string()))
+        );
+    }
+
+    #[test]
+    fn an_absolute_config_glob_anchors_at_its_literal_prefix() {
+        assert_eq!(
+            anchor_of("/var/*/logs/*.log", None),
+            Some((PathBuf::from("/var"), "*/logs/*.log".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_home_config_glob_anchors_beneath_the_home_directory() {
+        assert_eq!(
+            anchor_of("~/.claude/projects/*/*.jsonl", Some(Path::new("/home/u"))),
+            Some((
+                PathBuf::from("/home/u/.claude/projects"),
+                "*/*.jsonl".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn a_home_config_glob_without_a_home_directory_has_no_anchor() {
+        assert_eq!(anchor_of("~/notes/*.md", None), None);
+    }
+
+    #[test]
+    fn a_parent_config_glob_resolves_against_the_config_directory() {
+        assert_eq!(
+            anchor_of("../shared/*.md", None),
+            Some((PathBuf::from("/shared"), "*.md".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_wholly_literal_absolute_config_glob_anchors_at_its_parent() {
+        assert_eq!(
+            anchor_of("/var/log/syslog", None),
+            Some((PathBuf::from("/var/log"), "syslog".to_string()))
+        );
     }
 
     mod windows {
