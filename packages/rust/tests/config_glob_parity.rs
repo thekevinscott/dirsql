@@ -93,3 +93,25 @@ fn no_ignore_lists_a_gitignored_file_in_a_config_table() {
         vec!["keep.md", "skip.md"]
     );
 }
+
+#[test]
+fn a_directory_name_lists_the_files_directly_inside_it() {
+    let root = tree(&["docs/a.md", "docs/b.md", "docs/nested/c.md", "top.md"]);
+    let expected = vec!["docs/a.md", "docs/b.md"];
+    assert_eq!(path_table_paths(root.path(), "docs"), expected);
+    assert_eq!(config_paths(root.path(), "docs"), expected);
+}
+
+#[test]
+fn a_directory_name_with_a_trailing_slash_lists_the_files_directly_inside_it() {
+    let root = tree(&["docs/a.md", "docs/nested/c.md", "top.md"]);
+    let expected = vec!["docs/a.md"];
+    assert_eq!(path_table_paths(root.path(), "docs/"), expected);
+    assert_eq!(config_paths(root.path(), "docs/"), expected);
+}
+
+#[test]
+fn a_file_name_still_names_that_file() {
+    let root = tree(&["docs/a.md", "top.md"]);
+    assert_eq!(config_paths(root.path(), "top.md"), vec!["top.md"]);
+}
