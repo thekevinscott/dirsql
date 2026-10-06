@@ -148,12 +148,6 @@ lines = [351, 392]
 reason = "run_default and run_query build a real index and drive stdout, stderr and the process exit; tests/on_file_failure_e2e.rs (a_clean_scan_exits_zero, a_failed_command_fails_the_run) and tests/repl_pipe_e2e.rs assert their codes through the built binary"
 
 [[rust.exempt]]
-path = "src/vtab.rs"
-rules = ["mutation"]
-lines = [81, 328, 382]
-reason = "read_text and ScanSpec::read open a real file and prefetch reads a real tree ahead of the cursor; the buffer logic is unit-tested in `read_all` and `presize`, tests/vtab.rs content_is_excluded_from_star_but_selectable_by_name, content_is_null_for_non_utf8_files and unreadable_file_yields_null_content_without_erroring_the_row assert the cell, and tests/path_table_content_prefetch.rs content_is_read_for_every_row_before_the_first_is_delivered and a_join_has_the_content_it_names_read_ahead assert the read-ahead"
-
-[[rust.exempt]]
 path = "src/vtab_scaffold.rs"
 rules = ["mutation"]
 lines = [335]
