@@ -126,8 +126,8 @@ reason = "equivalent: RDONLY is zero and DIRECTORY and CLOEXEC are disjoint bits
 [[rust.exempt]]
 path = "src/scanner.rs"
 rules = ["mutation"]
-lines = [75, 133, 351, 569]
-reason = "scan_below, scan_glob, walk, descend and kind_of read the filesystem; tests/scanner.rs (scan_finds_matching_files, scan_recurses_into_subdirectories), tests/vtab.rs (glob_scopes_the_walk, rowids_count_up_from_zero_in_scan_order) and tests/path_table_symlinks.rs assert what they return"
+lines = [133]
+reason = "scan_glob repo discovery depends on finding a real .git marker; tests/path_table_gitignore.rs asserts its filesystem behavior"
 
 [[rust.exempt]]
 path = "src/scanner.rs"

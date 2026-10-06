@@ -745,6 +745,19 @@ mod tests {
     use super::*;
     use std::ffi::OsStr;
 
+    #[test]
+    fn scan_directory_reporting_walks_a_known_source_file() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let matcher = TableMatcher::new(&[("scanner.rs", "source")], &[]).unwrap();
+        let mut counts = Vec::new();
+
+        let rows = scan_directory_reporting(&root, &matcher, &mut |count| counts.push(count));
+
+        assert_eq!(rows, vec![(root.join("scanner.rs"), "source".to_owned())]);
+        assert_eq!(counts.first(), Some(&1));
+        assert!(counts.windows(2).all(|pair| pair[1] == pair[0] + 1));
+    }
+
     // Real directory-walk behavior is covered by `tests/scanner.rs`
     // (unit-lint isolation); only the pure predicate is tested here.
 
