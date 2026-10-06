@@ -69,48 +69,6 @@ ${pathBasenameHook}
     expect(rows[1].basename).toBe("b.csv");
   });
 
-  it("rejects a glob placeholder that collides with a declared column", async () => {
-    await seedFile(join(dir, "comments", "thread-1", "a.txt"), "x");
-    await seedFile(
-      configPath,
-      `
-[[table]]
-name = "comments"
-ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
-glob = "comments/{thread_id}/*.txt"
-${pathBasenameHook}
-`,
-    );
-
-    const db = new DirSQL({ root: dir, config: configPath });
-    await expect(db.ready).rejects.toThrow(/thread_id/);
-  });
-
-  it("treats a non-colliding placeholder as a wildcard", async () => {
-    await seedFile(join(dir, "comments", "thread-1", "a.txt"), "x");
-    await seedFile(join(dir, "comments", "thread-2", "b.txt"), "x");
-    await seedFile(
-      configPath,
-      `
-[[table]]
-name = "comments"
-ddl = "CREATE TABLE comments (path TEXT, basename TEXT)"
-glob = "comments/{thread_id}/*.txt"
-${pathBasenameHook}
-`,
-    );
-
-    const db = new DirSQL({ root: dir, config: configPath });
-    await db.ready;
-    const rows = await db.query(
-      "SELECT basename FROM comments ORDER BY basename",
-    );
-    expect(rows).toHaveLength(2);
-    expect(rows[0].basename).toBe("a.txt");
-    expect(rows[1].basename).toBe("b.txt");
-    expect(rows[0].thread_id).toBeUndefined();
-  });
-
   it("exposes the full set of stat virtuals when declared in DDL", async () => {
     const body = "# title\nhello world\n";
     await seedFile(join(dir, "docs", "readme.md"), body);

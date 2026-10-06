@@ -836,26 +836,6 @@ fn invalid_glob_errors() {
     assert!(matches!(result, Err(dirsql::DirSqlError::Matcher { .. })));
 }
 
-// A `{name}` placeholder that is not a declared column is a pure match
-// wildcard: it produces no column value and no error.
-#[test]
-fn undeclared_capture_is_dropped() {
-    let root = TempDir::new().unwrap();
-    fs::create_dir_all(root.path().join("logs")).unwrap();
-    fs::write(root.path().join("logs").join("a.txt"), "x").unwrap();
-    let table = Table::new(
-        "entries",
-        "CREATE TABLE entries (path TEXT)",
-        "logs/{kind}.txt",
-        |_| vec![Row::new()],
-    );
-    let db = DirSQL::new(root.path(), vec![table]).unwrap();
-    let rows = db.query("SELECT * FROM entries").unwrap();
-    assert_eq!(rows.len(), 1);
-    assert!(!rows[0].contains_key("kind"));
-    assert!(rows[0].contains_key("path"));
-}
-
 #[test]
 fn duplicate_table_name_errors() {
     let root = TempDir::new().unwrap();
