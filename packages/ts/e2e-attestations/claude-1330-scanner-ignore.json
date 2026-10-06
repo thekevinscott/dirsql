@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791259226,
+  "exit_code": 0,
+  "commit": "843f59e97c1b7361e60f8838744f7b9b2f10076c",
+  "branch": "claude/1330-scanner-ignore"
+}
