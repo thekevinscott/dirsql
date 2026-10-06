@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/on_file_query_test.py tests/e2e/fanout_test.py tests/e2e/query_contract_test.py tests/integration/binding/async_dirsql_test.py -x -q",
+  "ran_at": 1791309204,
+  "exit_code": 0,
+  "commit": "9a473a8812b974362a7c408132a9724aac50605a",
+  "branch": "bot/1397-watch-broadcast"
+}

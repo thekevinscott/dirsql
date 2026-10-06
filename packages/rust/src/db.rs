@@ -15,7 +15,7 @@ use crate::vtab::{self, StatementScope};
 
 /// The user's home directory, if the platform reports one. Injected here so
 /// the `~/` rule has a single production source.
-fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     #[allow(deprecated)]
     std::env::home_dir()
 }
@@ -125,7 +125,7 @@ fn unquoted_path_hint(token: &str) -> String {
     format!("hint: paths used as table names must be quoted; did you mean {token:?}?")
 }
 
-fn no_home_path_table(name: &str) -> String {
+pub(crate) fn no_home_path_table(name: &str) -> String {
     format!(
         "path-table {name:?} cannot be resolved: no home directory for '~' \
          (set HOME, or write the path out in full)"
@@ -995,15 +995,79 @@ impl Db {
         self.run_statement(sql)
     }
 
+    /// [`query_ordered`](Self::query_ordered) folding each row's cells, in
+    /// projection order, into the state `start` makes from the projection,
+    /// as SQLite yields them rather than collected first.
+    pub fn query_each<S>(
+        &self,
+        sql: &str,
+        start: impl FnOnce(&[String]) -> S,
+        mut on_row: impl FnMut(&mut S, &[Value]),
+    ) -> Result<S> {
+        if !self.batched.is_empty() {
+            // A batched worker may force a second run, so the rows of the
+            // first are not final until it ends.
+            let result = self.query_ordered(sql)?;
+            let mut state = start(&result.columns);
+            for row in &result.rows {
+                let cells: Vec<Value> = result
+                    .columns
+                    .iter()
+                    .map(|column| row.get(column).cloned().unwrap_or(Value::Null))
+                    .collect();
+                on_row(&mut state, &cells);
+            }
+            return Ok(state);
+        }
+        let _calls = self.calls.phase();
+        let _scope = self.scope.enter();
+        let (mut stmt, column_names) = self.prepare_statement(sql)?;
+        let mut state = start(&column_names);
+        let mut rows = stmt.query([])?;
+        let mut cells = Vec::with_capacity(column_names.len());
+        while let Some(row) = rows.next()? {
+            cells.clear();
+            for i in 0..column_names.len() {
+                let val: rusqlite::types::Value = row.get(i)?;
+                cells.push(Value::from(val));
+            }
+            on_row(&mut state, &cells);
+        }
+        Ok(state)
+    }
+
     /// Prepare and run one read-only statement, registering the path-tables
     /// it names along the way.
     fn run_statement(&self, sql: &str) -> Result<QueryResult> {
+        let (mut stmt, column_names) = self.prepare_statement(sql)?;
+        let rows = stmt.query_map([], |row| {
+            let mut map = HashMap::new();
+            for (i, name) in column_names.iter().enumerate() {
+                let val: rusqlite::types::Value = row.get(i)?;
+                map.insert(name.clone(), Value::from(val));
+            }
+            Ok(map)
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(QueryResult {
+            columns: column_names,
+            rows: results,
+        })
+    }
+
+    /// Prepare one read-only statement, registering the path-tables it names
+    /// along the way, with its column names.
+    fn prepare_statement(&self, sql: &str) -> Result<(rusqlite::Statement<'_>, Vec<String>)> {
         // Each iteration must register a table no earlier iteration did; a
         // repeat means the fallback is not making progress, so the SQLite
         // error stands. That is what bounds the loop.
         let mut attempted: HashSet<String> = HashSet::new();
 
-        let (mut stmt, reads) = loop {
+        let (stmt, reads) = loop {
             let error = match self.prepare_guarded(sql) {
                 Ok(prepared) => break prepared,
                 Err(e) => e,
@@ -1022,24 +1086,7 @@ impl Db {
         }
         self.scope.warm(&reads);
         let column_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
-
-        let rows = stmt.query_map([], |row| {
-            let mut map = HashMap::new();
-            for (i, name) in column_names.iter().enumerate() {
-                let val: rusqlite::types::Value = row.get(i)?;
-                map.insert(name.clone(), Value::from(val));
-            }
-            Ok(map)
-        })?;
-
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(QueryResult {
-            columns: column_names,
-            rows: results,
-        })
+        Ok((stmt, column_names))
     }
 
     /// Prepare `sql` with the internal-table / ATTACH authorizer installed for
@@ -1390,6 +1437,65 @@ mod tests {
             *sent.lock().unwrap(),
             [r#"{"call":["a"]}"#, r#"{"calls":[["b"],["c"]]}"#]
         );
+    }
+
+    fn folded(db: &Db, sql: &str) -> (Vec<String>, Vec<Vec<Value>>) {
+        db.query_each(
+            sql,
+            |columns| (columns.to_vec(), Vec::new()),
+            |(_, rows), cells| rows.push(cells.to_vec()),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn query_each_folds_each_row_in_projection_order() {
+        let db = titled_docs(&["a", "b"]);
+
+        let (columns, rows) = folded(&db, "SELECT 7 AS n, title FROM docs ORDER BY title");
+
+        assert_eq!(columns, ["n", "title"]);
+        assert_eq!(
+            rows,
+            [
+                [Value::Integer(7), Value::Text("a".into())],
+                [Value::Integer(7), Value::Text("b".into())]
+            ]
+        );
+    }
+
+    #[test]
+    fn query_each_folds_the_rows_a_batched_function_serves() {
+        let mut db = titled_docs(&["a", "b"]);
+        let (worker, _) = functions::test_support::batched_worker(
+            "up",
+            8,
+            Arc::clone(&db.calls),
+            vec![r#"{"ok": "A"}"#, r#"{"results": [{"ok": "B"}]}"#],
+        );
+        db.register_batched_worker(worker, &[1]);
+
+        let (columns, rows) = folded(&db, "SELECT title, up(title) AS v FROM docs ORDER BY title");
+
+        assert_eq!(columns, ["title", "v"]);
+        assert_eq!(
+            rows,
+            [
+                [Value::Text("a".into()), Value::Text("A".into())],
+                [Value::Text("b".into()), Value::Text("B".into())]
+            ]
+        );
+    }
+
+    #[test]
+    fn query_each_refuses_a_write() {
+        let db = titled_docs(&["a"]);
+
+        let err = db
+            .query_each("DELETE FROM docs", |_| (), |_, _| {})
+            .unwrap_err();
+
+        assert!(matches!(err, DbError::WriteForbidden));
     }
 
     /// A statement that never reaches the function asks the worker nothing

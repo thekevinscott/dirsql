@@ -244,7 +244,7 @@ Config flags are subcommand-local: pass them after `server`
 
 | Flag | Default | Description |
 |---|---|---|
-| `-c, --config <path>` | none | Path to a [config file](./config.md). **Repeatable** (`-c a -c b`): the configs load and merge in argv order — see [Composing multiple configs](./config.md#composing-multiple-configs). The index is always rooted at the **invocation directory** (the current working directory), regardless of where a config lives — so `--config /elsewhere/.dirsql.toml` still indexes the directory you ran `dirsql server` from. With none given, **no named tables are defined** — query the filesystem with a [path-table](./path-tables.md) (`FROM './'`). A `./.dirsql.toml` on disk is **not** auto-loaded; pass it explicitly. A `-c` naming a file that does not exist is an [error](#degraded-mode). |
+| `-c, --config <path>` | none | Path to a [config file](./config.md). **Repeatable** (`-c a -c b`): the configs load and merge in argv order — see [Composing multiple configs](./config.md#composing-multiple-configs). The index root is the **invocation directory** (the current working directory) and governs path-tables; a config's `[[table]]` globs anchor at **that config's own directory** (see [glob anchor](./config.md#glob-anchor)), so `--config /elsewhere/.dirsql.toml` indexes `/elsewhere`, from any working directory. With none given, **no named tables are defined** — query the filesystem with a [path-table](./path-tables.md) (`FROM './'`). A `./.dirsql.toml` on disk is **not** auto-loaded; pass it explicitly. A `-c` naming a file that does not exist is an [error](#degraded-mode). |
 | `--host <addr>` | `localhost` | Bind address. |
 | `--port <n>` | `7117` | TCP port to bind. |
 | `--persist [<path>]` | off | Keep the SQLite index on disk between runs so a restart only re-parses files that actually changed. Bare `--persist` caches at `<root>/.dirsql/cache.db`; `--persist <path>` caches at `<path>`. Off by default (the index is ephemeral). Also available on [`dirsql query`](#dirsql-query). See [Keep the index across restarts](../howto/persist.md). |
@@ -454,12 +454,7 @@ troubleshooting. The guide is compiled into the binary, so it describes the
 version that prints it. It takes no flags and exits `0`.
 
 The dirsql agent skill tells an agent to run this command before it writes a
-query. Install the skill into Claude Code, Codex, Cursor, Gemini CLI and
-others with:
-
-```sh
-npx skills add thekevinscott/dirsql
-```
+query; see [the skill page](../howto/agent-skill.md).
 
 ## Plugins
 
@@ -470,7 +465,8 @@ installed in the same environment as `dirsql` (`pip install …`, or
 loads its fragment — its tables are queryable with zero config edits.
 Installed = active: there is no enable step and no naming convention. The
 fragment is composed *after* your own `-c` configs (so your config takes
-precedence in ordering), and the shipped starter `records` table is preserved.
+precedence in ordering). A plugin adds its own tables and nothing else: no
+`records` table is seeded.
 
 Discovery is **launcher-only** — the standalone `cargo`-installed binary does no
 discovery, and the SDKs never auto-discover (pass a plugin's config explicitly

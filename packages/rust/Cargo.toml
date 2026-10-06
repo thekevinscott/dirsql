@@ -88,6 +88,10 @@ tokio-stream = { version = "0.1", features = ["sync"], optional = true }
 toml = "0.8"
 typed-path = "0.12"
 
+# Reads a directory's names into one buffer instead of one allocation each.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["fs"] }
+
 [lints.rust]
 # `deny`, not `forbid`: rusqlite's API imposes five unavoidable `unsafe`
 # sites (the `load_extension` guard and four `unsafe impl VTab`/`VTabCursor`).

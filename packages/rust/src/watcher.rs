@@ -23,6 +23,12 @@ pub struct Watcher {
 impl Watcher {
     /// Start watching a directory recursively. Events are buffered in an internal channel.
     pub fn new(path: &Path) -> Result<Self, notify::Error> {
+        Self::over(&[path.to_path_buf()])
+    }
+
+    /// Start watching every directory in `paths` recursively, merging their
+    /// events into one channel.
+    pub fn over(paths: &[PathBuf]) -> Result<Self, notify::Error> {
         let (tx, rx) = mpsc::channel();
 
         let mut watcher = RecommendedWatcher::new(
@@ -38,7 +44,9 @@ impl Watcher {
             Config::default(),
         )?;
 
-        watcher.watch(path, RecursiveMode::Recursive)?;
+        for path in paths {
+            watcher.watch(path, RecursiveMode::Recursive)?;
+        }
 
         Ok(Self {
             _watcher: watcher,

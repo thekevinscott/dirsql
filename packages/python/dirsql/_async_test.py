@@ -1,6 +1,9 @@
 """Unit tests for the DirSQL async wrapper."""
 
+import asyncio
 import os
+import threading
+import weakref
 from unittest.mock import patch
 
 import pytest
@@ -71,6 +74,8 @@ class _ReadyOwner:
 
     def __init__(self, db):
         self._db = db
+        self._watch_streams = weakref.WeakSet()
+        self._watch_poll = None
 
     async def ready(self):
         pass
@@ -81,14 +86,18 @@ def describe_DirSQL_async():
         @pytest.mark.asyncio
         async def it_uses_the_background_db():
             with (
-                patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL),
                 patch.object(
                     async_mod,
                     "resolve_extension_path",
                     side_effect=lambda path, base, resolve_relative: f"R:{path}",
                 ) as resolver,
             ):
-                db = async_mod.DirSQL(
+
+                class InjectedDirSQL(async_mod.DirSQL):
+                    def _new_core(self, root, **kwargs):
+                        return _FakeRustDirSQL(root, **kwargs)
+
+                db = InjectedDirSQL(
                     "/tmp/root",
                     tables=["table-a"],
                     ignore=["**/*.tmp"],
@@ -325,6 +334,8 @@ def describe_DirSQL_async():
             class _LateOwner:
                 def __init__(self):
                     self._db = None
+                    self._watch_streams = weakref.WeakSet()
+                    self._watch_poll = None
 
                 async def ready(self):
                     self._db = fake_db
@@ -342,6 +353,8 @@ def describe_DirSQL_async():
         async def it_surfaces_the_init_error_instead_of_attributeerror():
             class _BoomOwner:
                 _db = None
+                _watch_streams = weakref.WeakSet()
+                _watch_poll = None
 
                 async def ready(self):
                     raise RuntimeError("boom")
@@ -350,6 +363,73 @@ def describe_DirSQL_async():
 
             with pytest.raises(RuntimeError, match="boom"):
                 await stream.__anext__()
+
+        @pytest.mark.asyncio
+        async def it_gives_every_stream_every_event():
+            fake_db = _FakeWatcherDb(events=[["event-a", "event-b"]])
+            owner = _ReadyOwner(fake_db)
+            first = async_mod._WatchStream(owner)
+            second = async_mod._WatchStream(owner)
+
+            got = [
+                await first.__anext__(),
+                await second.__anext__(),
+                await second.__anext__(),
+                await first.__anext__(),
+            ]
+
+            assert got == ["event-a", "event-a", "event-b", "event-b"]
+            assert fake_db.poll_calls == [200]
+
+        @pytest.mark.asyncio
+        async def it_joins_a_poll_already_in_flight():
+            release = threading.Event()
+
+            class _SlowDb(_FakeWatcherDb):
+                def _poll_events(self, timeout_ms):
+                    release.wait()
+                    return super()._poll_events(timeout_ms)
+
+            fake_db = _SlowDb(events=[["event-a"]])
+            owner = _ReadyOwner(fake_db)
+            first = async_mod._WatchStream(owner)
+            second = async_mod._WatchStream(owner)
+
+            leading = asyncio.ensure_future(first.__anext__())
+            while owner._watch_poll is None:
+                await asyncio.sleep(0)
+            joining = asyncio.ensure_future(second.__anext__())
+            while not second._started:
+                await asyncio.sleep(0)
+            release.set()
+
+            assert await asyncio.gather(leading, joining) == ["event-a", "event-a"]
+            assert fake_db.poll_calls == [200]
+
+        @pytest.mark.asyncio
+        async def it_keeps_the_batch_when_the_polling_consumer_is_cancelled():
+            fake_db = _FakeWatcherDb(events=[["event-a"]])
+            owner = _ReadyOwner(fake_db)
+            first = async_mod._WatchStream(owner)
+            second = async_mod._WatchStream(owner)
+
+            polling = asyncio.ensure_future(first.__anext__())
+            while owner._watch_poll is None:
+                await asyncio.sleep(0)
+            polling.cancel()
+
+            assert await second.__anext__() == "event-a"
+            assert fake_db.poll_calls == [200]
+
+        @pytest.mark.asyncio
+        async def it_stops_feeding_a_dropped_stream():
+            fake_db = _FakeWatcherDb(events=[["event-a"]])
+            owner = _ReadyOwner(fake_db)
+            kept = async_mod._WatchStream(owner)
+            async_mod._WatchStream(owner)
+
+            assert await kept.__anext__() == "event-a"
+            assert list(owner._watch_streams) == [kept]
 
     def describe_construction():
         @pytest.mark.asyncio
