@@ -144,6 +144,8 @@ struct ScanSpec {
     ignore: TableMatcher,
     /// Whether the scan respects `.gitignore` files (off under `--no-ignore`).
     gitignore: bool,
+    scan: fn(&Path, &PathGlob, &TableMatcher, bool) -> Vec<PathBuf>,
+    stat: fn(&Path) -> StatFacts,
 }
 
 /// One matched file, as compact as the seven stat columns allow: the three
@@ -219,6 +221,13 @@ struct StatFacts {
     size: Option<i64>,
     mtime: Option<i64>,
     ctime: Option<i64>,
+}
+
+fn filesystem_stat(path: &Path) -> StatFacts {
+    fs::metadata(path).map_or_else(
+        |_| StatFacts::default(),
+        |m| StatFacts::from_parts(m.len(), m.modified().ok(), m.created().ok()),
+    )
 }
 
 impl StatFacts {
@@ -297,6 +306,31 @@ fn cell(row: &FileRow, i: c_int) -> Option<ValueRef<'_>> {
     })
 }
 
+trait CellWriter {
+    fn write_value(&mut self, value: ValueRef<'_>) -> Result<()>;
+}
+
+impl CellWriter for Context {
+    fn write_value(&mut self, value: ValueRef<'_>) -> Result<()> {
+        self.set_result(&ToSqlOutput::Borrowed(value))
+    }
+}
+
+fn write_column(
+    row: &FileRow,
+    writer: &mut impl CellWriter,
+    i: c_int,
+    read: impl FnOnce(&FileRow) -> Option<String>,
+) -> Result<()> {
+    match cell(row, i) {
+        Some(value) => writer.write_value(value),
+        None => {
+            let content = row.content.get_or_init(|| read(row));
+            writer.write_value(content.as_deref().map_or(ValueRef::Null, ValueRef::from))
+        }
+    }
+}
+
 /// Parse a path-table's own `CREATE VIRTUAL TABLE` arguments into its scan
 /// spec. `args[0..3]` are the module, database and table names; the module's
 /// own arguments follow — root, glob, path prefix, the gitignore switch, then
@@ -319,6 +353,8 @@ fn parse_module_args(args: &[&[u8]]) -> Result<ScanSpec> {
         path_prefix: PathBuf::from(path_prefix),
         ignore: vtab_scaffold::compile_ignore(ignore)?,
         gitignore: vtab_scaffold::parse_gitignore(gitignore)?,
+        scan: scan_glob,
+        stat: filesystem_stat,
     })
 }
 
@@ -356,23 +392,14 @@ impl TableSource for ScanSpec {
     fn rows(&self) -> Arc<Vec<FileRow>> {
         // The scan runs per statement rather than at CREATE, which is what
         // makes reads live: each statement sees the filesystem as it is now.
-        let rel_paths = scan_glob(&self.root, &self.glob, &self.ignore, self.gitignore);
-        let stat = |rel: &Path| {
-            fs::metadata(self.root.join(rel)).map_or_else(
-                |_| StatFacts::default(),
-                |m| StatFacts::from_parts(m.len(), m.modified().ok(), m.created().ok()),
-            )
-        };
-        Arc::new(build_rows(&self.path_prefix, rel_paths, &stat))
+        let rel_paths = (self.scan)(&self.root, &self.glob, &self.ignore, self.gitignore);
+        Arc::new(build_rows(&self.path_prefix, rel_paths, &|rel| {
+            (self.stat)(&self.root.join(rel))
+        }))
     }
 
     fn column(&self, row: &FileRow, ctx: &mut Context, i: c_int) -> Result<()> {
-        match cell(row, i) {
-            Some(value) => ctx.set_result(&ToSqlOutput::Borrowed(value)),
-            // The one effectful read, reached only when a query names the
-            // column: this is where laziness actually lives.
-            None => ctx.set_result(row.content.get_or_init(|| self.read(row))),
-        }
+        write_column(row, ctx, i, |row| self.read(row))
     }
 
     const PREFETCH_COLUMN: Option<usize> = Some(CONTENT_COLUMN);
@@ -605,6 +632,48 @@ mod tests {
         }
     }
 
+    fn scanned_paths(
+        _root: &Path,
+        _glob: &PathGlob,
+        _ignore: &TableMatcher,
+        _gitignore: bool,
+    ) -> Vec<PathBuf> {
+        vec![PathBuf::from("docs/a.md")]
+    }
+
+    fn stat_path(path: &Path) -> StatFacts {
+        if path == Path::new("/root/docs/a.md") {
+            facts(7)
+        } else {
+            StatFacts::default()
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum CapturedValue {
+        Text(String),
+        Integer(i64),
+        Real(u64),
+        Blob(Vec<u8>),
+        Null,
+    }
+
+    #[derive(Default)]
+    struct CapturingCellWriter(Vec<CapturedValue>);
+
+    impl CellWriter for CapturingCellWriter {
+        fn write_value(&mut self, value: ValueRef<'_>) -> Result<()> {
+            self.0.push(match value {
+                ValueRef::Null => CapturedValue::Null,
+                ValueRef::Integer(n) => CapturedValue::Integer(n),
+                ValueRef::Real(n) => CapturedValue::Real(n.to_bits()),
+                ValueRef::Text(s) => CapturedValue::Text(String::from_utf8_lossy(s).into()),
+                ValueRef::Blob(b) => CapturedValue::Blob(b.to_vec()),
+            });
+            Ok(())
+        }
+    }
+
     fn text(s: &str) -> Option<ValueRef<'_>> {
         Some(ValueRef::Text(s.as_bytes()))
     }
@@ -697,6 +766,45 @@ mod tests {
             assert_eq!(row.rel, PathBuf::from(format!("f{n:03}.md")));
             assert_eq!(row.facts, facts(i64::try_from(n).unwrap()));
         }
+    }
+
+    #[test]
+    fn rows_use_the_injected_scan_and_stat_effects() {
+        let args = args_with(&[b"'/root'", b"'**/*.md'", b"''", b"'gitignore'"]);
+        let mut spec = parse_module_args(&args).unwrap();
+        spec.scan = scanned_paths;
+        spec.stat = stat_path;
+
+        let rows = spec.rows();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path, "docs/a.md");
+        assert_eq!(rows[0].facts, facts(7));
+    }
+
+    #[test]
+    fn write_column_sends_a_stored_cell_to_its_effect_sink() {
+        let mut row = row_for("", "docs/a.md");
+        row.facts = facts(7);
+        let mut writer = CapturingCellWriter::default();
+
+        write_column(&row, &mut writer, 4, |_| panic!("stored cell was read")).unwrap();
+
+        assert_eq!(writer.0, [CapturedValue::Integer(7)]);
+    }
+
+    #[test]
+    fn write_column_injects_the_lazy_content_read() {
+        let row = row_for("", "docs/a.md");
+        let mut writer = CapturingCellWriter::default();
+
+        write_column(&row, &mut writer, CONTENT_COLUMN as c_int, |_| {
+            Some("contents".to_string())
+        })
+        .unwrap();
+
+        assert_eq!(writer.0, [CapturedValue::Text("contents".to_string())]);
+        assert_eq!(row.content.get(), Some(&Some("contents".to_string())));
     }
 
     #[test]
