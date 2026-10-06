@@ -66,6 +66,25 @@ pub fn scan_subtree(root: &Path, dir: &Path, matcher: &TableMatcher) -> Vec<(Pat
     scan_below(root, dir, matcher, &mut |_| {})
 }
 
+/// `start` and every directory below it that [`scan_subtree`] would enter,
+/// judged relative to `root`. These are the directories whose entries can
+/// change what the index holds.
+pub fn scan_dirs(root: &Path, start: &Path, ignore: &TableMatcher) -> Vec<PathBuf> {
+    let walker = Walk {
+        ignore,
+        glob: None,
+        gitignore: false,
+        in_repo: false,
+        frames: Vec::new(),
+        dirs: true,
+    };
+    let mut dirs = vec![start.to_path_buf()];
+    walk(root, start, walker, &|_| false, &mut |rel_path, parent| {
+        dirs.push(parent.join(rel_path.file_name().unwrap_or_default()));
+    });
+    dirs
+}
+
 fn scan_below(
     root: &Path,
     start: &Path,
@@ -91,6 +110,7 @@ fn scan_below(
         frames: repo.map_or_else(Vec::new, |top| {
             gitignores_above(start, top, &load_gitignore)
         }),
+        dirs: false,
     };
     walk(
         root,
@@ -152,6 +172,7 @@ pub fn scan_glob(
         gitignore,
         in_repo: repo.is_some(),
         frames: repo.map_or_else(Vec::new, |top| gitignores_above(root, top, &load_gitignore)),
+        dirs: false,
     };
     let mut results = Vec::new();
     walk(
@@ -187,7 +208,7 @@ fn is_wanted(glob: &PathGlob, ignore: &TableMatcher, rel_path: &Path) -> bool {
 /// which never traverses one, though it may stop on one for the next
 /// component to enter. Each link crossed spends a component, so a cycle
 /// cannot recurse without bound.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PathGlob {
     files: Vec<Pattern>,
     spelled_dot_names: Vec<Pattern>,
@@ -197,7 +218,7 @@ pub struct PathGlob {
     starts: Vec<usize>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Component {
     AnyDepth,
     Name(Pattern),
@@ -443,26 +464,44 @@ impl<'a> Place<'a> {
             })
         });
         let dir: Arc<Path> = Arc::from(dir);
-        listing
-            .entries()
-            .iter()
-            .zip(taken)
-            .filter_map(|(listed, taken)| match taken? {
-                Taken::Dir {
-                    child,
-                    next,
-                    linked,
-                } => Some(Step::Dir(Box::new(Place {
-                    walk: walk.clone(),
-                    dir: dir.join(listing.name(listed)),
-                    rel: child,
-                    depth: depth + 1,
-                    states: next,
-                    linked,
-                }))),
-                Taken::File(child) => Some(Step::Leaf((child, Arc::clone(&dir)))),
-            })
-            .collect()
+        let mut steps: Vec<Step<Box<Place<'a>>, Found>> = if walk.dirs {
+            taken
+                .iter()
+                .filter_map(|taken| match taken {
+                    Some(Taken::Dir { child, .. }) => {
+                        Some(Step::Leaf((child.clone(), Arc::clone(&dir))))
+                    }
+                    _ => None,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let entered =
+            listing
+                .entries()
+                .iter()
+                .zip(taken)
+                .filter_map(|(listed, taken)| match taken? {
+                    Taken::Dir {
+                        child,
+                        next,
+                        linked,
+                    } => Some(Step::Dir(Box::new(Place {
+                        walk: walk.clone(),
+                        dir: dir.join(listing.name(listed)),
+                        rel: child,
+                        depth: depth + 1,
+                        states: next,
+                        linked,
+                    }))),
+                    Taken::File(child) => Some(Step::Leaf((child, Arc::clone(&dir)))),
+                });
+        if steps.is_empty() {
+            return entered.collect();
+        }
+        steps.extend(entered);
+        steps
     }
 }
 
@@ -477,6 +516,8 @@ struct Walk<'a> {
     /// The `.gitignore` files in force at the walk's current position, root
     /// first.
     frames: Vec<Arc<Gitignore>>,
+    /// Whether each directory entered is also visited, as a leaf.
+    dirs: bool,
 }
 
 impl Walk<'_> {
@@ -757,6 +798,16 @@ fn should_descend(
     !is_dir || !ignore.is_ignored_dir(rel_path)
 }
 
+/// Whether a walk from the root enters the directory at `rel_path`: every
+/// directory on the way, itself included, survives [`should_descend`].
+pub(crate) fn reaches_dir(rel_path: &Path, ignore: &TableMatcher) -> bool {
+    let mut prefix = PathBuf::new();
+    rel_path.components().enumerate().all(|(depth, component)| {
+        prefix.push(component);
+        should_descend(depth + 1, true, component.as_os_str(), &prefix, ignore)
+    })
+}
+
 /// Whether `rel_path` matches `glob`.
 fn is_glob_match(glob: &PathGlob, rel_path: &Path) -> bool {
     glob.is_match(rel_path)
@@ -961,6 +1012,31 @@ mod tests {
     }
 
     #[test]
+    fn scan_dirs_lists_the_start_and_every_directory_the_scan_enters() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("a").join("b")).unwrap();
+        fs::create_dir_all(root.path().join("a").join("node_modules").join("pkg")).unwrap();
+        fs::create_dir_all(root.path().join("a").join(RESERVED_DIR)).unwrap();
+        fs::write(root.path().join("a").join("f.md"), "").unwrap();
+        let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
+        let a = root.path().join("a");
+        let mut dirs = scan_dirs(root.path(), &a, &ignore);
+        dirs.sort();
+        assert_eq!(dirs, vec![a.clone(), a.join(RESERVED_DIR), a.join("b")]);
+    }
+
+    #[test]
+    fn scan_dirs_from_the_root_is_just_the_root_when_it_holds_no_directories() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("f.md"), "").unwrap();
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        assert_eq!(
+            scan_dirs(root.path(), root.path(), &ignore),
+            vec![root.path().to_path_buf()]
+        );
+    }
+
+    #[test]
     fn explore_enters_a_dirsql_directory_below_the_top_level() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("a").join(RESERVED_DIR)).unwrap();
@@ -976,6 +1052,31 @@ mod tests {
         let [a] = <[Place<'_>; 1]>::try_from(explored_dirs(top)).ok().unwrap();
         let nested: Vec<PathBuf> = explored_dirs(a).into_iter().map(|p| p.rel).collect();
         assert_eq!(nested, vec![Path::new("a").join(RESERVED_DIR)]);
+    }
+
+    #[test]
+    fn reaches_dir_enters_the_root_and_unignored_directories() {
+        let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
+        assert!(reaches_dir(Path::new(""), &ignore));
+        assert!(reaches_dir(Path::new("src/deep"), &ignore));
+        assert!(reaches_dir(Path::new("a/.dirsql"), &ignore));
+    }
+
+    #[test]
+    fn reaches_dir_stops_at_an_ignored_directory_and_below_it() {
+        let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
+        assert!(!reaches_dir(Path::new("node_modules"), &ignore));
+        assert!(!reaches_dir(Path::new("apps/node_modules/pkg"), &ignore));
+    }
+
+    #[test]
+    fn reaches_dir_stops_at_the_reserved_directory() {
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        assert!(!reaches_dir(Path::new(RESERVED_DIR), &ignore));
+        assert!(!reaches_dir(
+            &Path::new(RESERVED_DIR).join("cache"),
+            &ignore
+        ));
     }
 
     #[test]
@@ -1037,7 +1138,7 @@ mod tests {
 
     #[test]
     fn compile_glob_rejects_an_invalid_pattern() {
-        assert!(compile_glob("[").is_err());
+        assert!(compile_glob("[z-a]").is_err());
     }
 
     #[test]
@@ -1217,6 +1318,7 @@ mod tests {
             gitignore: !frames.is_empty(),
             in_repo: !frames.is_empty(),
             frames,
+            dirs: false,
         }
     }
 
@@ -1511,6 +1613,7 @@ mod tests {
             gitignore: false,
             in_repo: false,
             frames: Vec::new(),
+            dirs: false,
         };
         assert!(walk.follows(true, &[2], Kind::File));
         assert!(!walk.follows(true, &[1], Kind::File));
@@ -1527,6 +1630,7 @@ mod tests {
             gitignore: false,
             in_repo: false,
             frames: Vec::new(),
+            dirs: false,
         };
         assert!(walk.follows(false, &[1], Kind::Dir));
         assert!(!walk.follows(false, &[2], Kind::Dir));
@@ -1543,6 +1647,7 @@ mod tests {
             gitignore: false,
             in_repo: false,
             frames: Vec::new(),
+            dirs: false,
         };
         assert!(walk.follows(false, &[], Kind::Dir));
     }

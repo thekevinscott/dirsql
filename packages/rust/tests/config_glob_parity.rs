@@ -93,3 +93,12 @@ fn no_ignore_lists_a_gitignored_file_in_a_config_table() {
         vec!["keep.md", "skip.md"]
     );
 }
+
+#[test]
+fn an_unbalanced_brace_or_bracket_is_literal_as_it_is_in_a_path_table() {
+    let root = tree(&["{a.md", "a}.md", "[a.md", "a.md"]);
+    for (glob, expected) in [("{a.md", "{a.md"), ("a}.md", "a}.md"), ("[a.md", "[a.md")] {
+        assert_eq!(path_table_paths(root.path(), glob), vec![expected]);
+        assert_eq!(config_paths(root.path(), glob), vec![expected]);
+    }
+}
