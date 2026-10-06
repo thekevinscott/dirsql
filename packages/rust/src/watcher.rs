@@ -74,6 +74,12 @@ impl Watcher {
     }
 }
 
+/// The message for a watcher that failed to start. On inotify, the opaque
+/// limit errors name the exhausted limit and the sysctl that raises it.
+pub(crate) fn describe_watch_error(err: &notify::Error, _inotify: bool) -> String {
+    err.to_string()
+}
+
 /// Translate a notify Event into zero or more FileEvents.
 fn translate_event(event: &Event) -> Vec<FileEvent> {
     let mut results = Vec::new();
@@ -199,6 +205,41 @@ mod tests {
     // Effectful tests driving a real `notify` OS watcher live in
     // `tests/watcher.rs` (unit-lint isolation); only the pure
     // `translate_event` mapping tests belong here.
+
+    #[test]
+    fn describe_watch_error_names_the_instance_limit_for_emfile_on_inotify() {
+        let err = notify::Error::io(std::io::Error::from_raw_os_error(24));
+        let msg = describe_watch_error(&err, true);
+        assert!(msg.starts_with(&err.to_string()), "{msg}");
+        assert!(msg.contains("inotify instance limit"), "{msg}");
+        assert!(msg.contains("fs.inotify.max_user_instances"), "{msg}");
+    }
+
+    #[test]
+    fn describe_watch_error_names_the_watch_limit_for_max_files_watch_on_inotify() {
+        let err = notify::Error::new(notify::ErrorKind::MaxFilesWatch);
+        let msg = describe_watch_error(&err, true);
+        assert!(msg.starts_with(&err.to_string()), "{msg}");
+        assert!(msg.contains("inotify watch limit"), "{msg}");
+        assert!(msg.contains("fs.inotify.max_user_watches"), "{msg}");
+    }
+
+    #[test]
+    fn describe_watch_error_leaves_emfile_alone_off_inotify() {
+        let err = notify::Error::io(std::io::Error::from_raw_os_error(24));
+        assert_eq!(describe_watch_error(&err, false), err.to_string());
+    }
+
+    #[test]
+    fn describe_watch_error_leaves_other_errors_alone() {
+        let other_io = notify::Error::io(std::io::Error::from_raw_os_error(2));
+        assert_eq!(describe_watch_error(&other_io, true), other_io.to_string());
+        let not_found = notify::Error::path_not_found();
+        assert_eq!(
+            describe_watch_error(&not_found, true),
+            not_found.to_string()
+        );
+    }
 
     #[test]
     fn translate_event_maps_create() {
