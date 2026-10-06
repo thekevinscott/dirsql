@@ -15,8 +15,8 @@ kind, and dirsql never injects a column the table did not produce:
   `content` column — the one place dirsql supplies columns for you. Attaching a
   `--on-file` parser replaces the stat columns with the parser's output.
 
-There is no automatic fact injection and no glob capture: a `{name}` glob
-segment is rewritten to `*` and captures nothing. (Both mechanisms were
+There is no automatic fact injection and no glob capture: a `{name}` in a glob is
+a literal, not a wildcard. (Both mechanisms were
 removed in the fact-removal epic, [#624](https://github.com/thekevinscott/dirsql/issues/624).)
 
 **Content interpretation is intentionally out of scope.** dirsql does not
@@ -224,7 +224,7 @@ Walks a directory tree and matches files against table globs. Returns a list of 
 
 ### `matcher` -- Glob-to-table mapping
 
-Maps glob patterns to table names and handles ignore patterns. A file is matched against every glob in registration order; every matching pattern fires, so a file can belong to multiple tables. A `{name}` placeholder in a glob is rewritten to `*` before compilation, so it matches a single path segment but captures no value (glob captures were removed in #624).
+Maps glob patterns to table names and handles ignore patterns. A file is matched against every glob in registration order; every matching pattern fires, so a file can belong to multiple tables. A `{name}` in a glob is a literal; `{a,b}` is an alternation.
 
 ### `watcher` -- Filesystem monitoring
 
