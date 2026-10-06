@@ -17,7 +17,7 @@ In your responses, strive for brevity. As concise as possible.
 7. **Issue first**, then the branch, then `Fixes #<n>` in the PR body. Never request the maintainer's review.
 8. **Comments: default to none.** Only a non-obvious *why* -- a constraint, an invariant, a workaround. Never archaeology: no issue references, no "added for the X flow", no restating the code.
 9. **Never chain shell commands** with `;`, `&&`, or `||`; it breaks the per-command permission model. Pipes and heredocs are fine. Scratch files go to `/tmp` under unique names. `uv` never `pip`, `pnpm` never `npm`, `trash-put` never `rm`.
-10. **Every PR is M or smaller.** Break a larger change into a sequence and stack it, each PR based on the one below, rather than serializing.
+10. **Every PR is M or smaller.** Break a larger change into a sequence of PRs, each targeting `main`; branch the next one from fresh `main` after the previous merges.
 11. **Print the handoff doc's path every time you update it, and at least every few replies.** It changes all session; the latest path must always be near the bottom of the conversation, or a stale resume costs the whole history. See `agents/reference/session-handoff.md`.
 
 Run `scripts/agent-preflight.sh <commit|push|pr>` before every `git commit`, `git push`, and `gh pr create`.
@@ -34,7 +34,7 @@ Not auto-loaded. **Read the relevant file before working in that area.**
 - `agents/reference/testing-conventions-ci.md` -- the reusable-workflow gates and their startup failures
 - `agents/reference/e2e-attestation.md` -- receipts, per-package scope, the PR body template
 - `agents/reference/changelog-migrations.md` -- changelog and migration fragments, the PR body template
-- `agents/reference/pr-workflow.md` -- sizing, stacking, releases, merge conflicts, `PARITY.md`, benchmarks
+- `agents/reference/pr-workflow.md` -- sizing, releases, merge conflicts, `PARITY.md`, benchmarks
 - `agents/reference/pr-monitor.md` -- the `CI Gate` aggregator: reading it, debugging it
 - `agents/reference/conventions.md` -- naming, imports, dependency hygiene, where CI logic may live
 - `agents/reference/source-size.md` -- judging a change that claims to shrink the codebase
