@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791251447,
+  "exit_code": 0,
+  "commit": "c8330647623176c33775957a719d6ab24b38c5ac",
+  "branch": "claude/1330-scanner-depth"
+}
