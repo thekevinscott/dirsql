@@ -149,6 +149,17 @@ fn resolve_as<S: Syntax>(
     }
 }
 
+/// `glob` as a path-table reads the same string after `FROM './`: a trailing
+/// separator or a wholly literal name that is a directory under `index_root`
+/// lists the files directly inside it.
+pub fn directory_as_glob(glob: &str, index_root: &Path, is_dir: &dyn Fn(&Path) -> bool) -> String {
+    let target = trailing_separator_as_star::<Utf8UnixEncoding>(glob);
+    if !target.is_empty() && !has_glob_metacharacter(&target) && is_dir(&index_root.join(&target)) {
+        return format!("{target}/{DIRECTORY_GLOB}");
+    }
+    target
+}
+
 /// A trailing separator is `*` appended, so `./*/` is `./*/*` (like `ls */`)
 /// rather than a `./*` whose slash the path parser would drop.
 fn trailing_separator_as_star<S: Syntax>(name: &str) -> String {
@@ -323,6 +334,45 @@ mod tests {
             Resolution::Table(t) => t,
             other => panic!("expected a path-table, got {other:?}"),
         }
+    }
+
+    fn directory_glob(glob: &str, is_dir: &dyn Fn(&Path) -> bool) -> String {
+        directory_as_glob(glob, Path::new(ROOT), is_dir)
+    }
+
+    #[test]
+    fn a_literal_directory_name_lists_one_level() {
+        assert_eq!(directory_glob("docs", &everything_is_a_dir), "docs/*");
+    }
+
+    #[test]
+    fn a_literal_directory_is_looked_up_under_the_index_root() {
+        let only_docs = |p: &Path| p == Path::new("/index/docs");
+        assert_eq!(directory_glob("docs", &only_docs), "docs/*");
+        assert_eq!(directory_glob("other", &only_docs), "other");
+    }
+
+    #[test]
+    fn a_literal_file_name_is_left_alone() {
+        assert_eq!(directory_glob("top.md", &nothing_is_a_dir), "top.md");
+    }
+
+    #[test]
+    fn a_glob_is_left_alone_even_when_a_directory_has_its_name() {
+        assert_eq!(
+            directory_glob("docs/*.md", &everything_is_a_dir),
+            "docs/*.md"
+        );
+    }
+
+    #[test]
+    fn a_trailing_separator_lists_one_level() {
+        assert_eq!(directory_glob("docs/", &nothing_is_a_dir), "docs/*");
+    }
+
+    #[test]
+    fn an_empty_glob_is_left_alone() {
+        assert_eq!(directory_glob("", &everything_is_a_dir), "");
     }
 
     #[test]

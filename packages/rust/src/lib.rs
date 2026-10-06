@@ -967,7 +967,7 @@ impl DirSQL {
             no_ignore,
         } = resolved;
 
-        let (matcher, table_names) = compile_matcher(&tables, &ignore)?;
+        let (matcher, table_names) = compile_matcher(&tables, &ignore, &root)?;
         let matcher = matcher.with_gitignore(!no_ignore);
 
         // Resolve the persistent context before scanning, so the scan can
@@ -1802,6 +1802,7 @@ struct PersistContext {
 fn compile_matcher(
     tables: &[Table],
     ignore_patterns: &[String],
+    root: &Path,
 ) -> Result<(TableMatcher, Vec<String>)> {
     let mut seen: HashMap<String, ()> = HashMap::with_capacity(tables.len());
     let mut mappings: Vec<(String, String)> = Vec::with_capacity(tables.len());
@@ -1815,7 +1816,10 @@ fn compile_matcher(
         if seen.insert(table_name.clone(), ()).is_some() {
             return Err(DirSqlError::DuplicateTable(table_name));
         }
-        mappings.push((table.glob.clone(), table_name.clone()));
+        mappings.push((
+            path_table::directory_as_glob(&table.glob, root, &|p| p.is_dir()),
+            table_name.clone(),
+        ));
         names.push(table_name);
     }
 
