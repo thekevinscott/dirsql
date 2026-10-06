@@ -1,7 +1,0 @@
-{
-  "command": "uv run python -m pytest tests/e2e/ -x -q --ignore-glob=tests/e2e/glob_speed_*",
-  "ran_at": 1791251334,
-  "exit_code": 0,
-  "commit": "2827efe118f6818f475fedc9a40812eca0b0a15e",
-  "branch": "claude/1258-config-gitignore"
-}
