@@ -359,6 +359,133 @@ describe("DirSQL", () => {
   });
 
   describe("watch", () => {
+    it("buffers each batch for every stream from creation", async () => {
+      const events = [
+        { table: "t", action: "insert" as const, row: { n: 1 } },
+        { table: "t", action: "delete" as const, row: { n: 1 } },
+      ];
+      const inner = makeInner({
+        pollEvents: vi
+          .fn()
+          .mockResolvedValueOnce(events)
+          .mockRejectedValue(new Error("unexpected extra poll")),
+      });
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      const first = db.watch();
+      const second = db.watch();
+      expect((await first.next()).value).toEqual(events[0]);
+      expect((await second.next()).value).toEqual(events[0]);
+      expect((await second.next()).value).toEqual(events[1]);
+      expect((await first.next()).value).toEqual(events[1]);
+      expect(inner.pollEvents).toHaveBeenCalledExactlyOnceWith(200);
+      await first.return();
+      await second.return();
+    });
+
+    it("shares an in-flight poll between concurrent consumers", async () => {
+      const event = { table: "t", action: "insert" as const };
+      let release!: (events: (typeof event)[]) => void;
+      const batch = new Promise<(typeof event)[]>((resolve) => {
+        release = resolve;
+      });
+      const inner = makeInner({ pollEvents: vi.fn().mockReturnValue(batch) });
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      const first = db.watch();
+      const second = db.watch();
+      const pending = [first.next(), second.next()];
+      await vi.waitFor(() => expect(inner.pollEvents).toHaveBeenCalled());
+      release([event]);
+      expect(await Promise.all(pending)).toEqual([
+        { value: event, done: false },
+        { value: event, done: false },
+      ]);
+      expect(inner.pollEvents).toHaveBeenCalledOnce();
+      await first.return();
+      await second.return();
+    });
+
+    it("does not replay an earlier batch to a later stream", async () => {
+      const before = { table: "before", action: "insert" as const };
+      const after = { table: "after", action: "delete" as const };
+      const inner = makeInner({
+        pollEvents: vi
+          .fn()
+          .mockResolvedValueOnce([before])
+          .mockResolvedValueOnce([after]),
+      });
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      const first = db.watch();
+      expect((await first.next()).value).toEqual(before);
+      const second = db.watch();
+      expect((await second.next()).value).toEqual(after);
+      expect((await first.next()).value).toEqual(after);
+      expect(inner.pollEvents).toHaveBeenCalledTimes(2);
+      await first.return();
+      await second.return();
+    });
+
+    it("stops feeding a returned stream without losing another stream's batch", async () => {
+      const event = { table: "t", action: "insert" as const };
+      const inner = makeInner({
+        pollEvents: vi.fn().mockResolvedValue([event]),
+      });
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      const first = db.watch();
+      const second = db.watch();
+      await first.next();
+      await first.return();
+      const deref = vi.spyOn(WeakRef.prototype, "deref");
+      try {
+        expect((await second.next()).value).toEqual(event);
+        expect((await second.next()).value).toEqual(event);
+        expect(deref).toHaveBeenCalledOnce();
+        await second.return();
+      } finally {
+        deref.mockRestore();
+      }
+    });
+
+    it("removes collected streams from subsequent broadcasts", async () => {
+      const event = { table: "t", action: "insert" as const };
+      const inner = makeInner({
+        pollEvents: vi.fn().mockResolvedValue([event]),
+      });
+      installFakeCore(inner);
+      const db = new DirSQL({});
+      db.watch();
+      const kept = db.watch();
+      const deref = vi
+        .spyOn(WeakRef.prototype, "deref")
+        .mockReturnValueOnce(undefined);
+      try {
+        expect((await kept.next()).value).toEqual(event);
+        expect(deref).toHaveBeenCalledTimes(2);
+        expect((await kept.next()).value).toEqual(event);
+        expect(deref).toHaveBeenCalledTimes(3);
+        await kept.return();
+      } finally {
+        deref.mockRestore();
+      }
+    });
+
+    it("surfaces initialization and native poll errors", async () => {
+      const inner = makeInner({
+        pollEvents: vi.fn().mockRejectedValue(new Error("poll failed")),
+      });
+      const open = installFakeCore(inner);
+      open.mockRejectedValueOnce(new Error("init failed"));
+      await expect(new DirSQL({}).watch().next()).rejects.toThrow(
+        "init failed",
+      );
+      await expect(new DirSQL({}).watch().next()).rejects.toThrow(
+        "poll failed",
+      );
+    });
+
     it("starts the watcher once and yields each polled event across polls", async () => {
       // Two events split across two non-empty polls (with an empty poll
       // first) so the test exercises the generator continuing its loop after
