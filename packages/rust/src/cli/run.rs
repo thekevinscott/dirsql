@@ -15,8 +15,10 @@
 //! The `dirsql` binary is a shim over [`run_cli`], so `cargo install dirsql
 //! --features cli` and every other entry path run the same code.
 
-use std::io::IsTerminal;
+use std::future::Future;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
+use std::pin::Pin;
 
 use super::{
     AppState, ServerConfig, execute::execute_query, init::InitOptions, repl::run_repl,
@@ -398,26 +400,60 @@ async fn run_default(cli: Cli) -> u8 {
 /// message — the same string the HTTP `{"error": …}` body carries — to
 /// stderr with a non-zero exit.
 async fn run_query(args: QueryArgs) -> u8 {
-    let parser = match resolve_on_file(&args.on_file) {
+    let terminal = std::io::stdout().is_terminal();
+    let mut out = std::io::stdout();
+    let mut err = std::io::stderr();
+    run_query_with(
+        args,
+        resolve_on_file,
+        load_state,
+        |state, body| Box::pin(execute_query(state, body, None)),
+        terminal,
+        &mut out,
+        &mut err,
+    )
+    .await
+}
+
+async fn run_query_with<R, L, E>(
+    args: QueryArgs,
+    resolve: R,
+    load: L,
+    execute: E,
+    terminal: bool,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> u8
+where
+    R: FnOnce(&[String]) -> std::result::Result<Option<String>, String>,
+    L: FnOnce(&ConfigArgs, Option<String>) -> AppState,
+    E: for<'a> FnOnce(
+        &'a AppState,
+        String,
+    ) -> Pin<
+        Box<dyn Future<Output = Result<Value, super::execute::QueryFailure>> + 'a>,
+    >,
+{
+    let parser = match resolve(&args.on_file) {
         Ok(parser) => parser,
         Err(message) => {
-            eprintln!("dirsql query: {message}");
+            let _ = writeln!(err, "dirsql query: {message}");
             return 1;
         }
     };
-    let state = load_state(&args.common, parser);
+    let state = load(&args.common, parser);
 
     // Unbounded: the process IS the query, so `timeout(1)` expresses any cap
     // natively; only the long-lived server enforces `query_timeout` (408).
-    let format = args.format.resolve(std::io::stdout().is_terminal());
+    let format = args.format.resolve(terminal);
 
-    match execute_query(&state, query_body(&args.sql), None).await {
+    match execute(&state, query_body(&args.sql)).await {
         Ok(value) => {
-            print!("{}", render_rows(&value, format));
+            let _ = write!(out, "{}", render_rows(&value, format));
             0
         }
         Err(failure) => {
-            eprintln!("dirsql query: {}", failure.message());
+            let _ = writeln!(err, "dirsql query: {}", failure.message());
             1
         }
     }
@@ -662,6 +698,63 @@ mod tests {
         // Blank SQL is NOT rejected here: it flows to the pipeline's shared
         // empty-rejection so both surfaces emit the identical message.
         assert_eq!(query_body("   "), r#"{"sql":"   "}"#);
+    }
+
+    #[tokio::test]
+    async fn run_query_with_writes_rows_and_returns_success() {
+        let args = match Cli::parse_from(["dirsql", "query", "SELECT 1"]).command {
+            Some(Command::Query(args)) => args,
+            other => panic!("expected query args, got {other:?}"),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_query_with(
+            args,
+            |_| Ok(None),
+            |_, _| AppState::Unavailable("test state".to_owned()),
+            |_, body| {
+                Box::pin(async move {
+                    assert_eq!(body, r#"{"sql":"SELECT 1"}"#);
+                    Ok::<_, super::super::execute::QueryFailure>(one_row())
+                })
+            },
+            false,
+            &mut out,
+            &mut err,
+        )
+        .await;
+        assert_eq!(code, 0);
+        assert!(!out.is_empty());
+        assert!(err.is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_query_with_reports_query_failure_and_returns_error() {
+        let args = match Cli::parse_from(["dirsql", "query", "SELECT 1"]).command {
+            Some(Command::Query(args)) => args,
+            other => panic!("expected query args, got {other:?}"),
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_query_with(
+            args,
+            |_| Ok(None),
+            |_, _| AppState::Unavailable("test state".to_owned()),
+            |_, _| {
+                Box::pin(async {
+                    Err(super::super::execute::QueryFailure::BadRequest(
+                        "invalid SQL".to_owned(),
+                    ))
+                })
+            },
+            false,
+            &mut out,
+            &mut err,
+        )
+        .await;
+        assert_eq!(code, 1);
+        assert!(out.is_empty());
+        assert_eq!(err, b"dirsql query: invalid SQL\n");
     }
 
     /// The `ConfigArgs` parsed from a `query` subcommand invocation (#609:

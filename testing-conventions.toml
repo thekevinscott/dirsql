@@ -142,12 +142,6 @@ lines = [360, 371]
 reason = "rows walks and stats a real tree and column hands a cell to SQLite; the cell choice is unit-tested in `cell`, and tests/vtab.rs stat_columns_carry_real_values and content_is_excluded_from_star_but_selectable_by_name assert both through a real connection"
 
 [[rust.exempt]]
-path = "src/cli/run.rs"
-rules = ["mutation"]
-lines = [351, 392]
-reason = "run_default and run_query build a real index and drive stdout, stderr and the process exit; tests/on_file_failure_e2e.rs (a_clean_scan_exits_zero, a_failed_command_fails_the_run) and tests/repl_pipe_e2e.rs assert their codes through the built binary"
-
-[[rust.exempt]]
 path = "src/vtab.rs"
 rules = ["mutation"]
 lines = [81, 328, 382]
