@@ -18,11 +18,7 @@ pub(crate) fn escape_unbalanced(glob: &str) -> String {
                 None => literal[i] = true,
             },
             '{' => open.push(i),
-            '}' => {
-                if open.pop().is_none() {
-                    literal[i] = true;
-                }
-            }
+            '}' if open.pop().is_none() => literal[i] = true,
             _ => {}
         }
         i += 1;
