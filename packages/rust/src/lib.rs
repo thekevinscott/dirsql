@@ -425,6 +425,22 @@ struct DirSqlInner {
     fs: Arc<dyn FileSystem>,
 }
 
+fn watch_roots(index_root: &Path, groups: &[AnchorGroup]) -> Vec<PathBuf> {
+    if groups.is_empty() {
+        return vec![index_root.to_path_buf()];
+    }
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for group in groups {
+        let anchor = &group.watch_anchor;
+        if roots.iter().any(|kept| anchor.starts_with(kept)) {
+            continue;
+        }
+        roots.retain(|kept| !kept.starts_with(anchor));
+        roots.push(anchor.clone());
+    }
+    roots
+}
+
 /// The tables sharing one anchor, matched against paths relative to it.
 struct AnchorGroup {
     anchor: PathBuf,
@@ -558,12 +574,19 @@ impl DirSQL {
     pub fn start_watching(&self) -> Result<()> {
         let mut guard = self.inner.watcher.lock().map_err(DirSqlError::lock)?;
         if guard.is_none() {
-            // Watch the canonicalized root, never the (possibly relative)
-            // user-supplied one — `notify` misbehaves on relative paths.
-            let watcher = Watcher::new(&self.inner.watch_root).map_err(DirSqlError::watch)?;
+            // Watch the canonicalized anchors, never the (possibly relative)
+            // user-supplied ones — `notify` misbehaves on relative paths.
+            let watcher = Watcher::over(&self.watch_roots()).map_err(DirSqlError::watch)?;
             *guard = Some(watcher);
         }
         Ok(())
+    }
+
+    /// The directories the live watcher must cover: each table anchor, minus
+    /// any already inside another's recursive watch. A build with no tables
+    /// still watches the index root.
+    fn watch_roots(&self) -> Vec<PathBuf> {
+        watch_roots(&self.inner.watch_root, &self.inner.groups)
     }
 
     /// Poll-based watch API. Blocks up to `timeout` waiting for the next
@@ -5442,6 +5465,54 @@ mod internal_tests {
         let hits = db.groups_containing(Path::new("/elsewhere/x.txt"));
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, PathBuf::from("/elsewhere/x.txt"));
+    }
+
+    fn roots_for(anchors: &[&str]) -> Vec<PathBuf> {
+        let tables: Vec<Table> = anchors
+            .iter()
+            .enumerate()
+            .map(|(i, anchor)| anchored_table(&format!("t{i}"), "*.txt", anchor))
+            .collect();
+        let (groups, _, _) = compile_groups(&tables, &[], Path::new("/idx")).unwrap();
+        watch_roots(Path::new("/canonical-idx"), &groups)
+    }
+
+    #[test]
+    fn a_built_instance_watches_its_tables_anchor() {
+        let dir = TempDir::new().unwrap();
+        let db = populated_db(dir.path(), "**/*.txt", &["a.txt"]);
+
+        assert_eq!(db.watch_roots(), vec![db.inner.watch_root.clone()]);
+        assert!(!db.watch_roots().is_empty());
+    }
+
+    #[test]
+    fn watch_roots_without_tables_is_the_index_root() {
+        assert_eq!(roots_for(&[]), vec![PathBuf::from("/canonical-idx")]);
+    }
+
+    #[test]
+    fn watch_roots_lists_each_distinct_anchor() {
+        assert_eq!(
+            roots_for(&["/one", "/two"]),
+            vec![PathBuf::from("/one"), PathBuf::from("/two")]
+        );
+    }
+
+    #[test]
+    fn watch_roots_drops_an_anchor_inside_an_earlier_one() {
+        assert_eq!(
+            roots_for(&["/one", "/one/deep"]),
+            vec![PathBuf::from("/one")]
+        );
+    }
+
+    #[test]
+    fn watch_roots_replaces_an_anchor_with_the_enclosing_later_one() {
+        assert_eq!(
+            roots_for(&["/one/deep", "/one"]),
+            vec![PathBuf::from("/one")]
+        );
     }
 }
 
