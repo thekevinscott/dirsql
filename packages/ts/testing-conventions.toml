@@ -8,7 +8,7 @@
 # directory scopes, so the package-root Cargo.toml cannot be listed here.
 # packages/python/src is not: it cannot reach this suite.
 [e2e]
-extra_scope = ["packages/rust/src", "packages/ts/napi"]
+extra_scope = ["packages/rust/src", "packages/ts/napi", "packages/ts/tests/e2e"]
 
 # The live TypeScript floors; the root file carries no `[typescript]` table.
 [typescript.coverage]
