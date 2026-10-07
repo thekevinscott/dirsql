@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_symlink_test.py tests/e2e/glob_speed_node_modules_test.py tests/e2e/glob_speed_dotfiles_test.py tests/e2e/glob_speed_matchers_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1791338642,
+  "exit_code": 0,
+  "commit": "81890d53f01c2d6e6e833e0748a6ff952e3382c5",
+  "branch": "claude/1258-config-links"
+}
