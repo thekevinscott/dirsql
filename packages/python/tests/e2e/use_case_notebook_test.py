@@ -39,7 +39,7 @@ for path in sys.argv[1:]:
 
 TOP_FIVE = (
     "import json, sys;"
-    " rows = json.load(sys.stdin);"
+    " rows = [json.loads(l) for l in sys.stdin];"
     " rows.sort(key=lambda r: r['date'], reverse=True);"
     " [print(r['date'], r['words'], sep='\\t') for r in rows[:5]]"
 )
