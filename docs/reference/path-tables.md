@@ -52,16 +52,8 @@ depth, as in the shell. A trailing `/` is `*` appended, so `'./*/'` is
 | `'./notes/today.md'` | exactly that one file — one file is one row |
 
 A path containing `*`, `?`, `[` or `{` is a glob and is used exactly as
-written: `*` matches within a single directory, `**` crosses directories.
-
-Braces expand as bash expands them. A group holding a comma is an
-alternation: `'./docs/{a,b}.md'` is `docs/a.md` and `docs/b.md`, and groups
-nest. A group holding a `..` range counts: `'./log/{1..3}.txt'`,
-`'./{a..c}.md'`, `'./{01..10}.md'` (zero-padded) and `'./{1..10..2}.md'`
-(every second value). Any other brace is literal text, so `'./br/{q}.md'`
-names the file `br/{q}.md`, and `\{` is always a literal brace. A `{`, `}`
-or `[` with no partner is literal too, in a path-table and in a config
-`[[table]] glob`.
+written. The [glob page](./glob.md) has the syntax, examples and every
+divergence from bash, including braces and unbalanced brackets.
 
 The scan starts at the last directory named outright before the first glob
 component, and descends only as deep as the pattern can match --
