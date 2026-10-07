@@ -109,6 +109,7 @@ fn a_double_star_scans_every_depth() {
             "docs/a.md",
             "docs/b.md",
             "docs/nested/deep.md",
+            "node_modules/pkg/index.js",
             "skip/s.md",
             "top.md"
         ],
@@ -198,15 +199,15 @@ fn a_glob_metacharacter_path_is_used_as_written() {
 }
 
 #[test]
-fn a_recursive_scan_skips_vcs_and_dependency_directories() {
+fn a_recursive_scan_skips_vcs_directories_only() {
     let root = fixture();
     let db = open(&root);
 
     let found = paths(&db, "SELECT path FROM './**'");
 
     assert!(
-        !found.iter().any(|p| p.starts_with("node_modules/")),
-        "node_modules must be skipped: {found:?}"
+        found.contains(&"node_modules/pkg/index.js".to_string()),
+        "node_modules is walked like any directory: {found:?}"
     );
     assert!(
         !found.iter().any(|p| p.starts_with(".git/")),
@@ -231,7 +232,7 @@ fn naming_a_skipped_directory_explicitly_still_scans_it() {
 }
 
 #[test]
-fn a_recursive_scan_skips_nested_vcs_and_dependency_directories() {
+fn a_recursive_scan_skips_nested_vcs_directories_only() {
     let root = TempDir::new().unwrap();
     fs::create_dir_all(root.path().join("apps/site/node_modules/pkg")).unwrap();
     fs::create_dir_all(root.path().join("apps/site/.git")).unwrap();
@@ -248,13 +249,13 @@ fn a_recursive_scan_skips_nested_vcs_and_dependency_directories() {
 
     assert_eq!(
         found,
-        vec!["apps/site/main.js"],
-        "node_modules and .git must be skipped at any depth, not only at the root"
+        vec!["apps/site/main.js", "apps/site/node_modules/pkg/index.js"],
+        ".git must be skipped at any depth, not only at the root"
     );
 }
 
 #[test]
-fn a_scoped_directory_scan_also_skips_nested_dependency_directories() {
+fn a_scoped_directory_scan_also_walks_nested_dependency_directories() {
     let root = TempDir::new().unwrap();
     fs::create_dir_all(root.path().join("apps/site/node_modules/pkg")).unwrap();
     fs::write(root.path().join("apps/site/main.js"), "js").unwrap();
@@ -267,8 +268,8 @@ fn a_scoped_directory_scan_also_skips_nested_dependency_directories() {
 
     assert_eq!(
         paths(&db, "SELECT path FROM './apps/**'"),
-        vec!["apps/site/main.js"],
-        "the skip rules apply inside a scoped directory scan too"
+        vec!["apps/site/main.js", "apps/site/node_modules/pkg/index.js"],
+        "node_modules is walked inside a scoped directory scan too"
     );
 }
 
@@ -333,12 +334,18 @@ fn node_modules_named_after_a_star_is_scanned() {
 }
 
 #[test]
-fn node_modules_the_glob_does_not_name_stays_skipped() {
+fn node_modules_the_glob_does_not_name_is_scanned() {
     let root = nested_dependencies();
     let db = open(&root);
 
-    assert_eq!(paths(&db, "SELECT path FROM './**'"), vec!["src/a.js"]);
-    assert_eq!(paths(&db, "SELECT path FROM './**/*.js'"), vec!["src/a.js"]);
+    let all = vec![
+        "node_modules/pkg/index.js",
+        "node_modules/top.js",
+        "pkg/node_modules/dep/i.js",
+        "src/a.js",
+    ];
+    assert_eq!(paths(&db, "SELECT path FROM './**'"), all);
+    assert_eq!(paths(&db, "SELECT path FROM './**/*.js'"), all);
 }
 
 #[test]

@@ -228,7 +228,7 @@ fn a_bare_glob_fails_with_the_dot_slash_hint() {
 }
 
 #[test]
-fn a_recursive_scan_omits_ignored_directories() {
+fn a_recursive_scan_omits_only_vcs_directories() {
     let dir = fixture();
     fs::create_dir_all(dir.path().join("node_modules/pkg")).unwrap();
     fs::create_dir_all(dir.path().join(".git")).unwrap();
@@ -239,8 +239,8 @@ fn a_recursive_scan_omits_ignored_directories() {
     let found = paths(&out);
 
     assert!(
-        !found.iter().any(|p| p.starts_with("node_modules/")),
-        "node_modules must not drown the scan: {found:?}"
+        found.contains(&"node_modules/pkg/index.js".to_string()),
+        "node_modules is walked like any directory: {found:?}"
     );
     assert!(
         !found.iter().any(|p| p.starts_with(".git/")),

@@ -171,7 +171,7 @@ fn a_repeated_on_file_flag_is_an_error_pointing_at_config_files() {
 }
 
 #[test]
-fn a_parsed_scan_honors_the_default_ignore_rules() {
+fn a_parsed_scan_walks_node_modules_like_any_directory() {
     let dir = fixture();
     fs::create_dir_all(dir.path().join("node_modules/pkg")).unwrap();
     fs::write(
@@ -182,12 +182,10 @@ fn a_parsed_scan_honors_the_default_ignore_rules() {
 
     let out = run_on_file(&dir, "SELECT title FROM './**/*.md'", "./parse.sh");
 
-    assert!(
-        !titles(&out).contains(&"dependency title".to_string()),
-        "node_modules must be skipped by a parsed scan too: {:?}",
-        titles(&out)
+    assert_eq!(
+        titles(&out),
+        vec!["alpha title", "bravo title", "dependency title"]
     );
-    assert_eq!(titles(&out), vec!["alpha title", "bravo title"]);
 }
 
 #[test]
