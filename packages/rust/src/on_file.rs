@@ -73,10 +73,12 @@ pub(crate) fn run_streaming(
         .iter()
         .map(|path| command::non_verbatim(&path.to_string_lossy()))
         .collect();
-    let runs = chunks(&args, ARG_BUDGET.saturating_sub(argv_bytes(&argv)));
-    let workers = std::thread::available_parallelism()
-        .map_or(1, std::num::NonZero::get)
-        .min(runs.len());
+    let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    let mut runs = chunks(&args, ARG_BUDGET.saturating_sub(argv_bytes(&argv)));
+    if runs.len() == 1 && cpus > 1 {
+        runs = spread(&args, &file_sizes(paths), cpus);
+    }
+    let workers = cpus.min(runs.len());
 
     let next = AtomicUsize::new(0);
     let aborted = AtomicBool::new(false);
@@ -199,6 +201,45 @@ fn chunks(args: &[String], budget: usize) -> Vec<&[String]> {
     if start < args.len() {
         out.push(&args[start..]);
     }
+    out
+}
+
+/// Bytes of file data worth a process of its own: below this, spawning
+/// another invocation costs more than it saves.
+const MIN_RUN_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Each path's size in bytes; a path that cannot be read counts as empty.
+fn file_sizes(paths: &[PathBuf]) -> Vec<u64> {
+    paths
+        .iter()
+        .map(|path| std::fs::metadata(path).map_or(0, |meta| meta.len()))
+        .collect()
+}
+
+/// Split `args` into at most `parts` consecutive runs holding about equal
+/// bytes of file data, preserving order, and never more runs than
+/// [`MIN_RUN_BYTES`] of data justify. `sizes` runs parallel to `args`.
+fn spread<'a>(args: &'a [String], sizes: &[u64], parts: usize) -> Vec<&'a [String]> {
+    let total: u64 = sizes.iter().sum();
+    let parts = parts
+        .min(args.len())
+        .min(usize::try_from(total / MIN_RUN_BYTES).unwrap_or(usize::MAX));
+    if parts <= 1 {
+        return vec![args];
+    }
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut seen = 0u64;
+    for (i, size) in sizes.iter().enumerate() {
+        seen += size;
+        let cut = u64::try_from(out.len() + 1).unwrap_or(u64::MAX);
+        let last = i + 1 == args.len();
+        if !last && out.len() + 1 < parts && seen * parts as u64 >= total * cut {
+            out.push(&args[start..=i]);
+            start = i + 1;
+        }
+    }
+    out.push(&args[start..]);
     out
 }
 
@@ -363,6 +404,36 @@ mod tests {
         )
         .unwrap()
         .len()
+    }
+
+    #[test]
+    fn spread_cuts_equal_bytes_in_order() {
+        let args = args(&["a", "b", "c", "d"]);
+        let mib = 1024 * 1024;
+        let runs = spread(&args, &[8 * mib, 8 * mib, 8 * mib, 8 * mib], 2);
+        assert_eq!(lens(&runs), [2, 2]);
+        assert_eq!(runs[1], ["c", "d"]);
+    }
+
+    #[test]
+    fn spread_never_makes_more_runs_than_the_data_justifies() {
+        let args = args(&["a", "b", "c", "d"]);
+        let mib = 1024 * 1024;
+        assert_eq!(lens(&spread(&args, &[5 * mib; 4], 16)), [1, 1, 1, 1]);
+        assert_eq!(lens(&spread(&args, &[mib; 4], 16)), [4]);
+    }
+
+    #[test]
+    fn spread_isolates_a_dominant_file() {
+        let args = args(&["a", "b", "c"]);
+        let mib = 1024 * 1024;
+        assert_eq!(lens(&spread(&args, &[100 * mib, mib, mib], 2)), [1, 2]);
+    }
+
+    #[test]
+    fn spread_gives_unreadable_files_no_weight() {
+        let args = args(&["a", "b"]);
+        assert_eq!(lens(&spread(&args, &[0, 0], 4)), [2]);
     }
 
     #[test]
