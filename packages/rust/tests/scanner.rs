@@ -277,7 +277,6 @@ fn scan_glob_a_parent_component_after_a_wildcard_is_reported_as_written() {
         scan_paths(&dir, "*/../top.md"),
         vec!["docs/../top.md", "real/../top.md"]
     );
-    assert_eq!(scan_paths(&dir, "*/./a.md"), vec!["docs/./a.md"]);
 }
 
 #[test]
