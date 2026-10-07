@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791395870,
+  "exit_code": 0,
+  "commit": "2f1bbf7290e6de210470e5b619329cb5e69541a4",
+  "branch": "bot/1440-fix-main-build"
+}
