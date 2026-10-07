@@ -224,7 +224,7 @@ Rows are embedded once, at ingest, and cached on disk by content and model
 ::: warning Editing `ddl` wedges a persisted `vec0` cache
 Under `--persist`, editing any part of a `ddl` batch whose cache holds a
 `vec0` table currently fails with `SQLite error: no such module: vec0`, and
-keeps failing until the cache is deleted (`rm -rf <root>/.dirsql`). Tracked in
+keeps failing until the cache is deleted (delete it, or pass a fresh `--persist <path>`). Tracked in
 [#1008](https://github.com/thekevinscott/dirsql/issues/1008); FTS5 is
 unaffected.
 :::

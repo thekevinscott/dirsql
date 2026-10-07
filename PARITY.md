@@ -627,7 +627,7 @@ incl. #313).
 | Persist: racy-window triggers hash     | Y      | unit (`lib.rs` reconcile tests) | Y |
 | Persist: glob change forces rebuild    | Y      | Y    | Y          |
 | Persist: dirsql_version bump rebuilds  | Y      | Y    | Y          |
-| Persist: `.dirsql/` excluded from walk | Y      | Y    | Y          |
+| Persist: default cache outside the scanned tree | Y | Y | Y |
 | Persist: custom persist_path honored   | Y      | Y    | Y          |
 | Persist: unchanged run leaves cache byte-identical | Y | Y | Y |
 

@@ -1669,7 +1669,7 @@ impl DirSQLBuilder {
     }
 
     /// Enable persistent on-disk storage. `None` writes the SQLite database to
-    /// the default `<root>/.dirsql/cache.db`; `Some(path)` writes it to `path`.
+    /// the default location in the platform cache directory; `Some(path)` writes it to `path`.
     /// Either way, subsequent startups only re-parse files that have actually
     /// changed. See `docs/howto/persist.md` for the reconcile contract.
     pub fn persist(mut self, path: Option<impl AsRef<Path>>) -> Self {

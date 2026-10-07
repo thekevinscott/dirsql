@@ -443,6 +443,10 @@ def describe_DirSQL_async():
                 assert db._db.root is None
                 assert db._db.config is None
 
+    def describe_docstring():
+        def it_names_no_cache_path_inside_the_root():
+            assert ".dirsql/cache.db" not in async_mod.DirSQL.__doc__
+
     def describe_watch():
         @pytest.mark.asyncio
         async def it_returns_a_watch_stream_bound_to_the_owner():

@@ -121,7 +121,7 @@ struct ConfigArgs {
 
     /// Keep the SQLite index on disk between runs so a restart only re-parses
     /// files that actually changed. Bare `--persist` caches at the default
-    /// location (`<root>/.dirsql/cache.db`); `--persist <path>` caches there.
+    /// location (the platform cache directory); `--persist <path>` caches there.
     /// Off by default (ephemeral index).
     #[arg(long, num_args = 0..=1)]
     persist: Option<Option<PathBuf>>,
