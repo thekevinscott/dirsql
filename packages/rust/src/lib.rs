@@ -2011,7 +2011,10 @@ fn compile_groups(
             }
             None => root.to_path_buf(),
         };
-        let mapping = (table.glob.clone(), table_name.clone());
+        let mapping = (
+            path_table::directory_as_glob(&table.glob, &anchor, &|p| p.is_dir()),
+            table_name.clone(),
+        );
         match grouped
             .iter_mut()
             .find(|(a, i, _)| *a == anchor && *i == table.ignore)

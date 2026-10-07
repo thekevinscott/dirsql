@@ -102,3 +102,25 @@ fn an_unbalanced_brace_or_bracket_is_literal_as_it_is_in_a_path_table() {
         assert_eq!(config_paths(root.path(), glob), vec![expected]);
     }
 }
+
+#[test]
+fn a_directory_name_lists_the_files_directly_inside_it() {
+    let root = tree(&["docs/a.md", "docs/b.md", "docs/nested/c.md", "top.md"]);
+    let expected = vec!["docs/a.md", "docs/b.md"];
+    assert_eq!(path_table_paths(root.path(), "docs"), expected);
+    assert_eq!(config_paths(root.path(), "docs"), expected);
+}
+
+#[test]
+fn a_directory_name_with_a_trailing_slash_lists_the_files_directly_inside_it() {
+    let root = tree(&["docs/a.md", "docs/nested/c.md", "top.md"]);
+    let expected = vec!["docs/a.md"];
+    assert_eq!(path_table_paths(root.path(), "docs/"), expected);
+    assert_eq!(config_paths(root.path(), "docs/"), expected);
+}
+
+#[test]
+fn a_file_name_still_names_that_file() {
+    let root = tree(&["docs/a.md", "top.md"]);
+    assert_eq!(config_paths(root.path(), "top.md"), vec!["top.md"]);
+}
