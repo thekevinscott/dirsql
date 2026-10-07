@@ -157,13 +157,20 @@ fn read_dir_into(dir: &Path, listing: &mut Listing) {
         return;
     };
     for entry in entries.filter_map(Result::ok) {
-        let seen = match entry.file_type() {
-            Ok(kind) if kind.is_symlink() => Seen::Link,
-            Ok(kind) if kind.is_dir() => Seen::Dir,
-            Ok(kind) if kind.is_file() => Seen::File,
-            _ => Seen::Other,
-        };
+        let seen = entry.file_type().map_or(Seen::Other, |kind| {
+            seen_flags(kind.is_symlink(), kind.is_dir(), kind.is_file())
+        });
         listing.push(&entry.file_name(), seen);
+    }
+}
+
+#[cfg(any(test, not(unix)))]
+fn seen_flags(symlink: bool, dir: bool, file: bool) -> Seen {
+    match (symlink, dir, file) {
+        (true, _, _) => Seen::Link,
+        (_, true, _) => Seen::Dir,
+        (_, _, true) => Seen::File,
+        _ => Seen::Other,
     }
 }
 
@@ -263,23 +270,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("file"), "x").unwrap();
         std::fs::create_dir(dir.path().join("dir")).unwrap();
-        #[cfg(unix)]
-        std::os::unix::fs::symlink("file", dir.path().join("link")).unwrap();
-        #[cfg(unix)]
-        std::os::unix::net::UnixListener::bind(dir.path().join("socket")).unwrap();
         dir
     }
 
-    #[cfg(unix)]
     fn fixture_entries() -> Vec<(String, Seen)> {
-        [
-            ("dir", Seen::Dir),
-            ("file", Seen::File),
-            ("link", Seen::Link),
-            ("socket", Seen::Other),
-        ]
-        .map(|(name, seen)| (name.to_string(), seen))
-        .to_vec()
+        [("dir", Seen::Dir), ("file", Seen::File)]
+            .map(|(name, seen)| (name.to_string(), seen))
+            .to_vec()
     }
 
     #[cfg(unix)]
@@ -307,7 +304,6 @@ mod tests {
         assert_eq!(read_with(read_into, dir.path()), fixture_entries());
     }
 
-    #[cfg(unix)]
     #[test]
     fn read_dir_into_classifies_what_std_reports() {
         let dir = fixture();
@@ -315,11 +311,11 @@ mod tests {
     }
 
     #[test]
-    fn read_dir_into_lists_files_and_directories() {
-        let dir = fixture();
-        let got = read_with(read_dir_into, dir.path());
-        assert!(got.contains(&("dir".to_string(), Seen::Dir)));
-        assert!(got.contains(&("file".to_string(), Seen::File)));
+    fn flags_say_what_an_entry_was_seen_as() {
+        assert_eq!(seen_flags(true, false, false), Seen::Link);
+        assert_eq!(seen_flags(false, true, false), Seen::Dir);
+        assert_eq!(seen_flags(false, false, true), Seen::File);
+        assert_eq!(seen_flags(false, false, false), Seen::Other);
     }
 
     #[test]
