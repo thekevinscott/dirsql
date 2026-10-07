@@ -110,13 +110,19 @@ impl<'de> serde::Deserialize<'de> for JsonRow {
 /// Parse a parser command's output — one JSON object per line (NDJSON), blank
 /// lines skipped — into rows that remember their key order.
 pub fn parse_rows(output: &str) -> Result<Vec<JsonRow>, String> {
+    parse_rows_at(output, 0)
+}
+
+/// [`parse_rows`] for a block that begins after `skipped` earlier lines of the
+/// same output, so an error names its line in the whole output.
+pub(crate) fn parse_rows_at(output: &str, skipped: usize) -> Result<Vec<JsonRow>, String> {
     let mut rows = Vec::new();
     for (index, line) in output.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let number = index + 1;
+        let number = skipped + index + 1;
         if line.starts_with('[') {
             return Err(format!(
                 "line {number} is a JSON array; print one JSON object per line instead"
@@ -253,6 +259,12 @@ mod tests {
         assert_eq!(SqlType::Text.as_str(), "TEXT");
         assert_eq!(SqlType::Integer.as_str(), "INTEGER");
         assert_eq!(SqlType::Real.as_str(), "REAL");
+    }
+
+    #[test]
+    fn parse_rows_at_numbers_lines_after_the_skipped_ones() {
+        let err = parse_rows_at("{\"a\":1}\nnope", 40).unwrap_err();
+        assert!(err.starts_with("line 42 "), "got: {err}");
     }
 
     #[test]

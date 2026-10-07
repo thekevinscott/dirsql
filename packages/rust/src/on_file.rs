@@ -9,9 +9,11 @@
 //! fails the whole table.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::command::{self, Placeholder};
-use crate::infer::{JsonRow, parse_rows};
+use crate::infer::{JsonRow, parse_rows_at};
 
 /// Bytes of trailing arguments one invocation may carry: GNU xargs's ceiling,
 /// comfortably under every platform's argv limit with the environment and the
@@ -52,9 +54,9 @@ pub(crate) fn run(
     Ok(rows)
 }
 
-/// [`run`], handing each invocation's rows to `sink` as they parse. The
-/// invocations still run one after another; parsing one invocation's output
-/// overlaps the next invocation, the way a shell pipe would.
+/// [`run`], handing rows to `sink` as they parse. Invocations run
+/// concurrently, like `xargs -P`, each decoding its own output as it arrives;
+/// rows keep their order within an invocation but not across invocations.
 pub(crate) fn run_streaming(
     command: &str,
     cwd: &Path,
@@ -71,35 +73,89 @@ pub(crate) fn run_streaming(
         .iter()
         .map(|path| command::non_verbatim(&path.to_string_lossy()))
         .collect();
+    let runs = chunks(&args, ARG_BUDGET.saturating_sub(argv_bytes(&argv)));
+    let workers = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZero::get)
+        .min(runs.len());
 
+    let next = AtomicUsize::new(0);
+    let aborted = AtomicBool::new(false);
+    let failures = Mutex::new(Vec::<(usize, String)>::new());
     std::thread::scope(|scope| {
-        let (payloads, received) = std::sync::mpsc::channel::<String>();
-        let parser = scope.spawn(move || -> Result<(), String> {
-            for payload in received {
-                let rows = parse_rows(&payload).map_err(|message| {
-                    format!("on-file output was not one JSON object per line: {message}")
-                })?;
-                sink(rows);
-            }
-            Ok(())
-        });
-        let spawned = (|| -> Result<(), String> {
-            for chunk in chunks(&args, ARG_BUDGET.saturating_sub(argv_bytes(&argv))) {
-                let mut full = argv.clone();
-                full.extend(chunk.iter().cloned());
-                let output =
-                    command::run_argv_stdout(command, &full, cwd, None).map_err(spawn_failure)?;
-                if payloads.send(output).is_err() {
-                    break;
+        let (rows_tx, rows_rx) = std::sync::mpsc::sync_channel::<Vec<JsonRow>>(16);
+        for _ in 0..workers {
+            let rows_tx = rows_tx.clone();
+            let (argv, runs) = (&argv, &runs);
+            let (next, aborted, failures) = (&next, &aborted, &failures);
+            scope.spawn(move || {
+                loop {
+                    let index = next.fetch_add(1, Ordering::SeqCst);
+                    if index >= runs.len() || aborted.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let mut full = argv.clone();
+                    full.extend(runs[index].iter().cloned());
+                    let outcome = run_invocation(command, &full, cwd, &|rows| {
+                        let _ = rows_tx.send(rows);
+                    });
+                    if let Err(message) = outcome {
+                        aborted.store(true, Ordering::SeqCst);
+                        failures
+                            .lock()
+                            .expect("failures lock")
+                            .push((index, message));
+                    }
+                }
+            });
+        }
+        drop(rows_tx);
+        for rows in rows_rx {
+            sink(rows);
+        }
+    });
+    // The earliest invocation's failure outranks a later one's.
+    match failures
+        .into_inner()
+        .expect("failures lock")
+        .into_iter()
+        .min()
+    {
+        Some((_, message)) => Err(message),
+        None => Ok(()),
+    }
+}
+
+/// One invocation: stream its stdout through the parser, `send`ing each
+/// block's rows. A non-zero exit outranks bad output, and bad output is
+/// drained rather than cut short so the child never dies on a broken pipe.
+fn run_invocation(
+    command: &str,
+    full: &[String],
+    cwd: &Path,
+    send: &dyn Fn(Vec<JsonRow>),
+) -> Result<(), String> {
+    let mut bad_output: Option<String> = None;
+    let mut lines_seen = 0usize;
+    command::run_argv_blocks(command, full, cwd, &mut |block| {
+        if bad_output.is_some() {
+            return;
+        }
+        match parse_rows_at(block, lines_seen) {
+            Ok(rows) => {
+                lines_seen += block.bytes().filter(|&b| b == b'\n').count();
+                if !rows.is_empty() {
+                    send(rows);
                 }
             }
-            Ok(())
-        })();
-        drop(payloads);
-        // An earlier invocation's bad output outranks a later one's failure.
-        parser.join().expect("parser thread panicked")?;
-        spawned
+            Err(message) => {
+                bad_output = Some(format!(
+                    "on-file output was not one JSON object per line: {message}"
+                ));
+            }
+        }
     })
+    .map_err(spawn_failure)?;
+    bad_output.map_or(Ok(()), Err)
 }
 
 fn spawn_failure(error: command::CommandError) -> String {
@@ -254,6 +310,63 @@ mod tests {
         .unwrap();
         assert_eq!(rows.len(), 1, "one spawn, one row");
         assert_eq!(rows[0].get("n").unwrap().as_i64().unwrap(), 300);
+    }
+
+    fn long_paths(count: usize) -> Vec<PathBuf> {
+        (0..count)
+            .map(|i| {
+                PathBuf::from(format!(
+                    "/some/long/directory/name/for/the/budget/f-{i:06}.json"
+                ))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn run_gives_every_path_to_some_invocation_when_the_table_needs_several() {
+        let paths = long_paths(6000);
+        let rows = run(
+            r#"sh -c 'echo "{\"n\":$#}"' sh"#,
+            Path::new("."),
+            Path::new("."),
+            &paths,
+        )
+        .unwrap();
+        assert!(
+            rows.len() > 1,
+            "{} paths outgrow one argument list",
+            paths.len()
+        );
+        let total: i64 = rows
+            .iter()
+            .map(|r| r.get("n").unwrap().as_i64().unwrap())
+            .sum();
+        assert_eq!(total, 6000);
+    }
+
+    #[test]
+    fn run_names_the_line_of_bad_output_after_earlier_blocks() {
+        let err = run(
+            r#"sh -c 'yes "{\"a\":1}" | head -n 100000; echo nope' sh"#,
+            Path::new("."),
+            Path::new("."),
+            &[PathBuf::from("/x")],
+        )
+        .unwrap_err();
+        assert!(err.contains("line 100001 "), "got: {err}");
+        assert!(err.contains("one JSON object per line"), "got: {err}");
+    }
+
+    #[test]
+    fn run_prefers_a_non_zero_exit_to_the_bad_output_before_it() {
+        let err = run(
+            "sh -c 'echo nope; echo boom >&2; exit 4' sh",
+            Path::new("."),
+            Path::new("."),
+            &[PathBuf::from("/x")],
+        )
+        .unwrap_err();
+        assert!(err.contains("boom"), "got: {err}");
     }
 
     #[test]

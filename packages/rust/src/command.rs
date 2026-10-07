@@ -256,19 +256,83 @@ pub(crate) fn run_argv_stdout(
     let stdout = stdout_thread.join().unwrap_or_default();
     let stderr = stderr_thread.join().unwrap_or_default();
 
-    if !status.success() {
-        let code = status
-            .code()
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "signal".to_string());
-        return Err(CommandError::NonZeroExit {
-            command: command.to_string(),
-            code,
-            stderr_tail: stderr_tail(&stderr),
-        });
-    }
+    check_exit(command, status, &stderr)?;
 
     Ok(String::from_utf8_lossy(&stdout).into_owned())
+}
+
+fn check_exit(
+    command: &str,
+    status: std::process::ExitStatus,
+    stderr: &[u8],
+) -> Result<(), CommandError> {
+    if status.success() {
+        return Ok(());
+    }
+    let code = status
+        .code()
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "signal".to_string());
+    Err(CommandError::NonZeroExit {
+        command: command.to_string(),
+        code,
+        stderr_tail: stderr_tail(stderr),
+    })
+}
+
+/// Bytes read from a child's stdout per `read` call.
+const READ_BYTES: usize = 262_144;
+
+/// Run an already-built `argv` and hand its stdout to `on_block` as it
+/// arrives, in blocks that each hold whole lines (the last block may lack its
+/// trailing newline). The child runs with stdin closed. A non-zero exit is an
+/// error after every block has been delivered.
+pub(crate) fn run_argv_blocks(
+    command: &str,
+    argv: &[String],
+    cwd: &Path,
+    on_block: &mut dyn FnMut(&str),
+) -> Result<(), CommandError> {
+    let mut cmd = Command::new(&argv[0]);
+    push_args(&mut cmd, &argv[1..]);
+    cmd.current_dir(cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null());
+    let mut child = cmd
+        .spawn()
+        .map_err(|source| spawn_error(&argv[0], source, cwd))?;
+
+    let mut stderr_pipe = child.stderr.take().expect("stderr piped");
+    let stderr_thread = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stderr_pipe.read_to_end(&mut buf);
+        buf
+    });
+    let mut stdout_pipe = child.stdout.take().expect("stdout piped");
+    let mut pending: Vec<u8> = Vec::new();
+    let mut buf = vec![0u8; READ_BYTES];
+    loop {
+        let n = match stdout_pipe.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        pending.extend_from_slice(&buf[..n]);
+        if let Some(end) = pending.iter().rposition(|&b| b == b'\n') {
+            on_block(&String::from_utf8_lossy(&pending[..=end]));
+            pending.drain(..=end);
+        }
+    }
+    if !pending.is_empty() {
+        on_block(&String::from_utf8_lossy(&pending));
+    }
+
+    let status = child.wait().map_err(|source| CommandError::Io {
+        command: command.to_string(),
+        source,
+    })?;
+    let stderr = stderr_thread.join().unwrap_or_default();
+    check_exit(command, status, &stderr)
 }
 
 // One fn with cfg blocks rather than two cfg'd fns: cargo-mutants mutates
@@ -733,6 +797,75 @@ mod tests {
         assert_eq!(
             run_argv_stdout("t", &argv("true"), &cwd(), None).unwrap(),
             ""
+        );
+    }
+
+    #[test]
+    fn run_argv_blocks_delivers_whole_lines_and_the_unterminated_tail() {
+        let argv = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "printf 'a\\nb\\nc'".to_string(),
+        ];
+        let mut seen = String::new();
+        let mut blocks = 0;
+        run_argv_blocks("t", &argv, &cwd(), &mut |block| {
+            seen.push_str(block);
+            blocks += 1;
+        })
+        .unwrap();
+        assert_eq!(seen, "a\nb\nc");
+        assert!(blocks >= 1);
+    }
+
+    #[test]
+    fn run_argv_blocks_cuts_every_block_at_a_line_boundary() {
+        let argv = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "yes abcdefghijklmnopqrstuvwxyz | head -n 100000".to_string(),
+        ];
+        let mut lines = 0;
+        let mut blocks = 0;
+        run_argv_blocks("t", &argv, &cwd(), &mut |block| {
+            blocks += 1;
+            assert!(block.ends_with('\n'), "block cut mid-line");
+            lines += block.lines().count();
+        })
+        .unwrap();
+        assert_eq!(lines, 100_000);
+        assert!(blocks > 1, "2.7 MB arrives in more than one read");
+    }
+
+    #[test]
+    fn run_argv_blocks_reports_a_non_zero_exit_after_delivering_output() {
+        let argv = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "echo partial; echo oops >&2; exit 3".to_string(),
+        ];
+        let mut seen = String::new();
+        let err =
+            run_argv_blocks("t", &argv, &cwd(), &mut |block| seen.push_str(block)).unwrap_err();
+        assert_eq!(seen, "partial\n");
+        match err {
+            CommandError::NonZeroExit {
+                code, stderr_tail, ..
+            } => {
+                assert_eq!(code, "3");
+                assert!(stderr_tail.contains("oops"));
+            }
+            other => panic!("expected NonZeroExit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_argv_blocks_names_a_missing_program() {
+        let argv = vec!["definitely-not-a-real-binary-xyzzy".to_string()];
+        let err = run_argv_blocks("t", &argv, &cwd(), &mut |_| {}).unwrap_err();
+        assert!(
+            matches!(err, CommandError::NotOnPath { .. }),
+            "got: {err:?}"
         );
     }
 
