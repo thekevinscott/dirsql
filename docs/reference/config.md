@@ -34,12 +34,6 @@ A config that still declares the removed `hook-timeout` key fails to load with
 an error naming that replacement. [`[[dirsql.function]]`](#dirsql-function)
 worker calls have their own per-call `timeout` key (default 30 seconds).
 
-The top-level `.dirsql/` directory under the root is always excluded from
-scanning, whether or not it appears in `ignore` — it is reserved for
-`dirsql`'s own metadata (the persist cache lives there by default). Only the
-top-level `.dirsql/` is reserved; a nested `sub/.dirsql/` is an ordinary
-directory.
-
 ```toml
 [dirsql]
 ignore = ["node_modules/**", ".git/**"]

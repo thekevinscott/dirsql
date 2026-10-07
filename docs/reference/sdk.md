@@ -86,7 +86,7 @@ DirSQL::builder()
     .config(config_toml_path)       // optional; repeatable — call again to
                                     //   merge another config in call order
     .persist(cache_path)            // optional; Some(path), or None for the
-                                    //   default <root>/.dirsql/cache.db
+                                    //   platform cache dir
     .extensions(extensions)         // optional; append one with .extension(e)
     .poll_interval(duration)        // optional; watch-loop cadence, default 200ms
     .build()                        // -> Result<DirSQL>  (synchronous scan)
@@ -139,8 +139,8 @@ shortcut was removed in #603 — use
   accumulate; a duplicate table name across configs errors), mirroring the
   CLI's repeatable [`-c/--config`](./cli.md#flags).
 - `persist` — Keep the SQLite index on disk between runs (default off:
-  ephemeral, rebuilt every startup). The cache lives at
-  `<root>/.dirsql/cache.db` by default; on restart, only files whose stat
+  ephemeral, rebuilt every startup). The cache lives in the
+  platform cache directory by default (outside `<root>`); on restart, only files whose stat
   changed are re-parsed. (The CLI exposes the same switch as the
   [`--persist [PATH]`](./cli.md#dirsql-server) flag; it is not a config key.)
 - `persist_path` / `persistPath` — Override the cache location. Ignored when

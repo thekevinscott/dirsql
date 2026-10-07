@@ -228,8 +228,7 @@ The table itself is per-connection: it lives in `temp`, so it cannot leak into
 `sqlite_master` or survive a restart. Under `--persist` a *parsed* table's rows
 outlive the connection in the cache (above), but the table is still minted
 fresh each run and the scan still decides what exists. A `.dirsql/` directory
-at the top of the directory the scan starts in is reserved and excluded, as
-everywhere else.
+is an ordinary dot directory.
 
 ### When to promote to a declared table
 
