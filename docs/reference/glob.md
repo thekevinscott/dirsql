@@ -70,7 +70,7 @@ A test runs every row against dirsql as a path-table and, with the leading
 | --- | --- | --- |
 | `./*.md` | `1.md`, `2.md`, `3.md`, `4.md`, `[a].md`, `[z.md`, `a.md`, `b.md`, `c.md`, `link.md`, `my file.md`, `top.md`, `{q}.md` |  |
 | `./**/*.md` | `1.md`, `2.md`, `3.md`, `4.md`, `[a].md`, `[z.md`, `a.md`, `b.md`, `c.md`, `docs/api.md`, `docs/guide.md`, `docs/nested/deep.md`, `link.md`, `linkdir/r.md`, `my file.md`, `real/r.md`, `top.md`, `{q}.md` |  |
-| `./**` | `1.md`, `2.md`, `3.md`, `4.md`, `[a].md`, `[z.md`, `a.md`, `b.md`, `c.md`, `docs/api.md`, `docs/guide.md`, `docs/nested/deep.md`, `link.md`, `my file.md`, `real/r.md`, `top.md`, `x.txt`, `{q}.md` |  |
+| `./**` | `1.md`, `2.md`, `3.md`, `4.md`, `[a].md`, `[z.md`, `a.md`, `b.md`, `c.md`, `docs/api.md`, `docs/guide.md`, `docs/nested/deep.md`, `link.md`, `my file.md`, `node_modules/pkg/index.js`, `real/r.md`, `top.md`, `x.txt`, `{q}.md` |  |
 | `./?.md` | `1.md`, `2.md`, `3.md`, `4.md`, `a.md`, `b.md`, `c.md` |  |
 | `./[ab].md` | `a.md`, `b.md` |  |
 | `./[!a].md` | `1.md`, `2.md`, `3.md`, `4.md`, `b.md`, `c.md` |  |
@@ -96,7 +96,7 @@ A test runs every row against dirsql as a path-table and, with the leading
 | `./*/` | `docs/api.md`, `docs/guide.md`, `linkdir/r.md`, `real/r.md` | directory-name |
 | `./d*` | none | files-only |
 | `./*.log` | none | gitignore |
-| `./**/*.js` | none | node-modules |
+| `./**/*.js` | `node_modules/pkg/index.js` |  |
 | `./node_modules/*/index.js` | `node_modules/pkg/index.js` |  |
 | `./docs/**/*.md` | `docs/api.md`, `docs/guide.md`, `docs/nested/deep.md` |  |
 | `./docs/*.md` | `docs/api.md`, `docs/guide.md` |  |
