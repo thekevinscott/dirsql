@@ -146,13 +146,30 @@ fn scan_below(
 /// root (the nearest directory holding `.git`) down, pruning traversal.
 /// Outside a repo none applies, as in git, fd and ripgrep. Those above `root`
 /// filter what lies below it, never `root` itself, so naming an ignored
-/// directory still scans it.
+/// directory still scans it. [`scan_glob_checking_root`] lifts that for a
+/// root that is only the literal prefix of a wildcard.
 pub fn scan_glob(
     root: &Path,
     glob: &PathGlob,
     ignore: &TableMatcher,
     gitignore: bool,
 ) -> Vec<PathBuf> {
+    scan_glob_checking_root(root, glob, ignore, gitignore, false)
+}
+
+/// [`scan_glob`], and with `check_root` set a `root` that `.gitignore` ignores
+/// yields nothing: for a glob whose wildcard sits below a literal prefix, the
+/// prefix is not a path the pattern spells out.
+pub fn scan_glob_checking_root(
+    root: &Path,
+    glob: &PathGlob,
+    ignore: &TableMatcher,
+    gitignore: bool,
+    check_root: bool,
+) -> Vec<PathBuf> {
+    if gitignore && check_root && !holds_git(root) && is_gitignored_path(root, true) {
+        return Vec::new();
+    }
     let repo = if gitignore {
         enclosing_repo(root, &holds_git)
     } else {
@@ -414,10 +431,14 @@ pub(crate) const GITIGNORE_ARG: &str = "gitignore";
 /// Module-argument spelling for a scan that does not (the CLI's `--no-ignore`).
 pub(crate) const NO_GITIGNORE_ARG: &str = "no-gitignore";
 
+/// Module-argument spelling for a scan that respects `.gitignore` files and
+/// also applies them to its own root.
+pub(crate) const GITIGNORE_ROOT_ARG: &str = "gitignore-root";
+
 /// Parse the gitignore module argument both path-table modules take.
 pub(crate) fn parse_gitignore_arg(arg: &str) -> Result<bool, String> {
     match arg {
-        GITIGNORE_ARG => Ok(true),
+        GITIGNORE_ARG | GITIGNORE_ROOT_ARG => Ok(true),
         NO_GITIGNORE_ARG => Ok(false),
         other => Err(format!(
             "expected '{GITIGNORE_ARG}' or '{NO_GITIGNORE_ARG}', got {other:?}"
@@ -1735,6 +1756,62 @@ mod tests {
         assert_eq!(scan("dist/out.log"), vec![PathBuf::from("dist/out.log")]);
         assert_eq!(scan("{a,b}.log"), vec![PathBuf::from("a.log")]);
         assert!(scan("*.log").is_empty());
+    }
+
+    #[test]
+    fn a_checked_root_that_gitignore_ignores_yields_nothing_unless_it_is_unchecked() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir(repo.path().join(".git")).unwrap();
+        fs::write(repo.path().join(".gitignore"), "dist/\n").unwrap();
+        fs::create_dir_all(repo.path().join("dist/sub")).unwrap();
+        fs::write(repo.path().join("dist/sub/o.js"), "").unwrap();
+        let none = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("*").unwrap();
+        let scan = |dir: &str, check_root: bool| {
+            scan_glob_checking_root(&repo.path().join(dir), &glob, &none, true, check_root)
+        };
+
+        assert!(scan("dist", true).is_empty());
+        assert!(scan("dist/sub", true).is_empty());
+        assert_eq!(scan("dist/sub", false), vec![PathBuf::from("o.js")]);
+        assert_eq!(scan("", true), Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn a_checked_root_that_gitignore_does_not_ignore_is_scanned() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir(repo.path().join(".git")).unwrap();
+        fs::write(repo.path().join(".gitignore"), "dist/\n").unwrap();
+        fs::create_dir(repo.path().join("src")).unwrap();
+        fs::write(repo.path().join("src/a.js"), "").unwrap();
+        let none = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("*.js").unwrap();
+
+        assert_eq!(
+            scan_glob_checking_root(&repo.path().join("src"), &glob, &none, true, true),
+            vec![PathBuf::from("a.js")]
+        );
+    }
+
+    #[test]
+    fn a_checked_root_holding_its_own_git_dir_is_not_judged_by_the_repo_above() {
+        let outer = tempfile::tempdir().unwrap();
+        fs::create_dir(outer.path().join(".git")).unwrap();
+        fs::write(outer.path().join(".gitignore"), "inner/\n").unwrap();
+        fs::create_dir_all(outer.path().join("inner/.git")).unwrap();
+        fs::write(outer.path().join("inner/a.js"), "").unwrap();
+        let none = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("*.js").unwrap();
+
+        assert_eq!(
+            scan_glob_checking_root(&outer.path().join("inner"), &glob, &none, true, true),
+            vec![PathBuf::from("a.js")]
+        );
+    }
+
+    #[test]
+    fn the_gitignore_root_switch_turns_gitignore_on() {
+        assert_eq!(parse_gitignore_arg(GITIGNORE_ROOT_ARG), Ok(true));
     }
 
     #[test]

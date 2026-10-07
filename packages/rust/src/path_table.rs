@@ -102,6 +102,13 @@ fn has_glob_metacharacter(name: &str) -> bool {
     name.contains(['*', '?', '[', '{'])
 }
 
+/// Whether the written path-table `name` has a wildcard, or a trailing
+/// separator that is one, so the literal directories ahead of it are only the
+/// place the walk starts and not a path the name spells out.
+pub fn wildcard_below_prefix(name: &str) -> bool {
+    has_glob_metacharacter(name) || name.ends_with(['/', '\\'])
+}
+
 /// Resolve `name` against the index root, reporting what kind of thing it is.
 ///
 /// `is_dir` answers the one filesystem question the rules need; production
@@ -378,6 +385,19 @@ mod tests {
             Resolution::Table(t) => t,
             other => panic!("expected a path-table, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_wildcard_or_trailing_separator_is_below_the_prefix() {
+        assert!(wildcard_below_prefix("./dist/*.js"));
+        assert!(wildcard_below_prefix("./dist/**/a.js"));
+        assert!(wildcard_below_prefix("./dist/"));
+    }
+
+    #[test]
+    fn a_wholly_literal_name_is_not_below_a_prefix() {
+        assert!(!wildcard_below_prefix("./dist"));
+        assert!(!wildcard_below_prefix("./dist/bundle.js"));
     }
 
     fn directory_glob(glob: &str, is_dir: &dyn Fn(&Path) -> bool) -> String {

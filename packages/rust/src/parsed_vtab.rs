@@ -28,7 +28,7 @@ use crate::Value;
 use crate::infer::{JsonRow, cell, declared_schema, infer_schema};
 use crate::matcher::TableMatcher;
 use crate::on_file;
-use crate::scanner::{PathGlob, scan_glob};
+use crate::scanner::{PathGlob, scan_glob_checking_root};
 use crate::vtab_scaffold::{self, StatementScope, TableSource};
 
 /// SQL module name a parsed path-table is created with.
@@ -51,6 +51,7 @@ struct ModuleArgs {
     glob: PathGlob,
     command: String,
     gitignore: bool,
+    check_root: bool,
     index_root: PathBuf,
     ignore: TableMatcher,
 }
@@ -77,6 +78,7 @@ fn parse_module_args(args: &[&[u8]]) -> Result<ModuleArgs> {
         glob: vtab_scaffold::compile_glob(pattern)?,
         command: command.clone(),
         gitignore: vtab_scaffold::parse_gitignore(gitignore)?,
+        check_root: vtab_scaffold::checks_root(gitignore),
         index_root: PathBuf::from(index_root),
         ignore: vtab_scaffold::compile_ignore(ignore)?,
     })
@@ -145,6 +147,7 @@ impl TableSource for ParsedTable {
             glob,
             command,
             gitignore,
+            check_root,
             index_root,
             ignore,
         } = parse_module_args(args)?;
@@ -152,7 +155,7 @@ impl TableSource for ParsedTable {
         // A parsed path-table honors the same skip rules a stat path-table does
         // (node_modules/.git, gitignore, plus any configured ignore), so a
         // parsed `SELECT * FROM './'` doesn't drown in dependency trees.
-        let rel_paths = scan_glob(&root, &glob, &ignore, gitignore);
+        let rel_paths = scan_glob_checking_root(&root, &glob, &ignore, gitignore, check_root);
         let run = |rel: &[PathBuf]| run_parser(&command, &index_root, &root, rel);
         let rows = collect_rows(&rel_paths, &run)?;
 
