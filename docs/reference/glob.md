@@ -91,6 +91,16 @@ A test runs every row against dirsql as a path-table and, with the leading
 | `./*/r.md` | `linkdir/r.md`, `real/r.md` |  |
 | `./**/r.md` | `linkdir/r.md`, `real/r.md` |  |
 | `./real/**` | `real/r.md` |  |
+| `./docs//api.md` | `docs//api.md` |  |
+| `./docs//*.md` | `docs//api.md`, `docs//guide.md` |  |
+| `./*//api.md` | `docs/api.md` |  |
+| `./docs/./api.md` | `docs/./api.md` |  |
+| `./*/./api.md` | `docs/./api.md` |  |
+| `./docs/../top.md` | `docs/../top.md` |  |
+| `./docs/nested/../../top.md` | `docs/nested/../../top.md` |  |
+| `./[dlr]*/../top.md` | `docs/../top.md`, `linkdir/../top.md`, `real/../top.md` |  |
+| `./**/nested/../api.md` | `docs/nested/../api.md` |  |
+| `./docs/*/../api.md` | `docs/nested/../api.md` |  |
 | `./docs` | `docs/api.md`, `docs/guide.md` | directory-name |
 | `./docs/` | `docs/api.md`, `docs/guide.md` | directory-name |
 | `./*/` | `docs/api.md`, `docs/guide.md`, `linkdir/r.md`, `real/r.md` | directory-name |

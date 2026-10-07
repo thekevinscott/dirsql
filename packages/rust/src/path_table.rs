@@ -442,6 +442,33 @@ mod tests {
     }
 
     #[test]
+    fn a_double_separator_in_the_literal_prefix_is_kept_as_written() {
+        let t = table("./docs//a.md", &nothing_is_a_dir);
+        assert_eq!(t.root, Path::new("/index/docs/"));
+        assert_eq!(t.glob, "a.md");
+        assert_eq!(t.path_prefix, "docs/");
+    }
+
+    #[test]
+    fn a_current_directory_component_in_the_literal_prefix_is_kept_as_written() {
+        let t = table("./docs/./*.md", &nothing_is_a_dir);
+        assert_eq!(t.glob, "*.md");
+        assert_eq!(t.path_prefix, "docs/.");
+    }
+
+    #[test]
+    fn a_current_directory_component_after_a_wildcard_stays_in_the_glob() {
+        let t = table("./*/./a.md", &nothing_is_a_dir);
+        assert_eq!(t.glob, "*/./a.md");
+    }
+
+    #[test]
+    fn a_double_separator_after_a_wildcard_collapses() {
+        let t = table("./*//a.md", &nothing_is_a_dir);
+        assert_eq!(t.glob, "*/a.md");
+    }
+
+    #[test]
     fn has_glob_metacharacter_spots_each_metacharacter() {
         assert!(has_glob_metacharacter("a*"));
         assert!(has_glob_metacharacter("a?"));
