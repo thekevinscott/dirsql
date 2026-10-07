@@ -522,7 +522,6 @@ impl<'a> Place<'a> {
                         walk: walk.clone(),
                         dir: dir.join(name),
                         rel: rel.join(name),
-                        depth: depth + 1,
                         states: next,
                         linked,
                     }))
@@ -1090,14 +1089,12 @@ mod tests {
             walk: walk_with(&ignore, Some(&glob), Vec::new()),
             dir: root.path().to_path_buf(),
             rel: PathBuf::new(),
-            depth: 0,
             states: glob.start(),
             linked: false,
         };
         let [dot] = <[Place<'_>; 1]>::try_from(explored_dirs(top)).ok().unwrap();
         assert_eq!(dot.rel, Path::new("."));
         assert_eq!(dot.dir, root.path().join("."));
-        assert_eq!(dot.depth, 1);
     }
 
     #[test]
