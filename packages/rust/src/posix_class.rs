@@ -60,7 +60,7 @@ fn bracket(chars: &[char], start: usize) -> Option<(usize, Option<String>)> {
             break;
         }
         if let Some((name, next)) = class_at(chars, j) {
-            ranges.extend_from_slice(class_ranges(&name));
+            ranges.extend(class_ranges(&name));
             has_class = true;
             j = next;
             continue;
@@ -111,24 +111,57 @@ fn class_at(chars: &[char], j: usize) -> Option<(String, usize)> {
     }
 }
 
-/// The ASCII members of a class; an unknown name has none, as in bash.
-fn class_ranges(name: &str) -> &'static [(char, char)] {
+/// Classes whose members are Unicode characters, in glibc's `C.utf8`: each is
+/// a regex bracket expression, stood in for inside the rewritten bracket by
+/// one noncharacter that [`class_regex`] turns back into it.
+const UNICODE_CLASSES: [(&str, &str); 11] = [
+    ("alnum", r"[\p{Alphabetic}\p{Nd}]"),
+    ("alpha", r"[\p{Alphabetic}\p{Nd}--0-9]"),
+    ("blank", r"[\p{Zs}\t--\u{a0}\u{2007}\u{202f}]"),
+    ("cntrl", r"[\p{Cc}\u{2028}\u{2029}]"),
+    (
+        "graph",
+        r"[[^\p{White_Space}\p{Cc}\p{Unassigned}]\u{a0}\u{2007}\u{202f}]",
+    ),
+    ("lower", r"[\p{Lowercase}\u{1c5}\u{1c8}\u{1cb}\u{1f2}]"),
+    ("print", r"[^\p{Cc}\p{Unassigned}\u{2028}\u{2029}]"),
+    (
+        "punct",
+        r"[[[^\p{White_Space}\p{Cc}\p{Unassigned}]\u{a0}\u{2007}\u{202f}]--[\p{Alphabetic}\p{Nd}]]",
+    ),
+    ("space", r"[\p{White_Space}--\u{a0}\u{2007}\u{202f}\u{85}]"),
+    ("upper", r"[\p{Uppercase}\p{Lt}]"),
+    ("word", r"[\p{Alphabetic}\p{Nd}_]"),
+];
+
+/// The first noncharacter, which no path holds.
+const MARKER_BASE: u32 = 0xFDD0;
+
+fn marker(index: usize) -> char {
+    char::from_u32(MARKER_BASE + index as u32).expect("noncharacters are chars")
+}
+
+/// The regex a marker stands for, as a bracket expression that leaves out
+/// the separator, since a bracket never matches `/`.
+pub(crate) fn class_regex(marker_char: char) -> Option<String> {
+    UNICODE_CLASSES
+        .iter()
+        .enumerate()
+        .find(|&(index, _)| marker(index) == marker_char)
+        .map(|(_, (_, regex))| format!("[{regex}--/]"))
+}
+
+/// The members of a class; an unknown name has none, as in bash.
+fn class_ranges(name: &str) -> Vec<(char, char)> {
     match name {
-        "alnum" => &[('0', '9'), ('A', 'Z'), ('a', 'z')],
-        "alpha" => &[('A', 'Z'), ('a', 'z')],
-        "ascii" => &[('\0', '\x7f')],
-        "blank" => &[(' ', ' '), ('\t', '\t')],
-        "cntrl" => &[('\0', '\x1f'), ('\x7f', '\x7f')],
-        "digit" => &[('0', '9')],
-        "graph" => &[('!', '~')],
-        "lower" => &[('a', 'z')],
-        "print" => &[(' ', '~')],
-        "punct" => &[('!', '/'), (':', '@'), ('[', '`'), ('{', '~')],
-        "space" => &[('\t', '\r'), (' ', ' ')],
-        "upper" => &[('A', 'Z')],
-        "word" => &[('0', '9'), ('A', 'Z'), ('a', 'z'), ('_', '_')],
-        "xdigit" => &[('0', '9'), ('A', 'F'), ('a', 'f')],
-        _ => &[],
+        "ascii" => vec![('\0', '\x7f')],
+        "digit" => vec![('0', '9')],
+        "xdigit" => vec![('0', '9'), ('A', 'F'), ('a', 'f')],
+        _ => UNICODE_CLASSES
+            .iter()
+            .position(|(known, _)| *known == name)
+            .map(|index| vec![(marker(index), marker(index))])
+            .unwrap_or_default(),
     }
 }
 
@@ -194,28 +227,38 @@ fn without(set: Vec<(u32, u32)>, c: char) -> Vec<(u32, u32)> {
 mod tests {
     use super::*;
 
+    fn marked(name: &str) -> char {
+        let index = UNICODE_CLASSES
+            .iter()
+            .position(|(known, _)| *known == name)
+            .unwrap();
+        marker(index)
+    }
+
     #[test]
     fn a_class_becomes_its_ranges() {
         assert_eq!(expand_posix_classes("[[:digit:]].md"), "[0-9].md");
-        assert_eq!(expand_posix_classes("[[:upper:]]*"), "[A-Z]*");
+        assert_eq!(
+            expand_posix_classes("[[:upper:]]*"),
+            format!("[{}]*", marked("upper"))
+        );
     }
 
     #[test]
     fn every_named_class_expands() {
+        for name in [
+            "alnum", "alpha", "blank", "cntrl", "graph", "lower", "print", "punct", "space",
+            "upper", "word",
+        ] {
+            assert_eq!(
+                expand_posix_classes(&format!("[[:{name}:]]")),
+                format!("[{}]", marked(name)),
+                "{name}"
+            );
+        }
         let cases = [
-            ("alnum", "[0-9A-Za-z]"),
-            ("alpha", "[A-Za-z]"),
             ("ascii", "[]\0- \"-,.0-\\_-\x7f!^-]"),
-            ("blank", "[\t ]"),
-            ("cntrl", "[\0-\x1f\x7f]"),
             ("digit", "[0-9]"),
-            ("graph", "[]\"-,.0-\\_-~!^-]"),
-            ("lower", "[a-z]"),
-            ("print", "[] \"-,.0-\\_-~!^-]"),
-            ("punct", "[]\"-,.:-@[-\\_-`{-~!^-]"),
-            ("space", "[\t-\r ]"),
-            ("upper", "[A-Z]"),
-            ("word", "[0-9A-Z_a-z]"),
             ("xdigit", "[0-9A-Fa-f]"),
         ];
         for (name, want) in cases {
@@ -228,6 +271,14 @@ mod tests {
     }
 
     #[test]
+    fn every_marker_names_its_class_regex() {
+        for (index, (_, regex)) in UNICODE_CLASSES.iter().enumerate() {
+            assert_eq!(class_regex(marker(index)), Some(format!("[{regex}--/]")));
+        }
+        assert_eq!(class_regex('a'), None);
+    }
+
+    #[test]
     fn a_negated_class_also_excludes_the_separator() {
         assert_eq!(expand_posix_classes("[![:digit:]]"), "[!/0-9]");
         assert_eq!(expand_posix_classes("[^[:digit:]]"), "[!/0-9]");
@@ -236,7 +287,10 @@ mod tests {
     #[test]
     fn classes_and_characters_combine() {
         assert_eq!(expand_posix_classes("[a[:digit:]]"), "[0-9a]");
-        assert_eq!(expand_posix_classes("[[:digit:][:upper:]]"), "[0-9A-Z]");
+        assert_eq!(
+            expand_posix_classes("[[:digit:][:upper:]]"),
+            format!("[0-9{}]", marked("upper"))
+        );
         assert_eq!(expand_posix_classes("[[:digit:]x-z]"), "[0-9x-z]");
     }
 

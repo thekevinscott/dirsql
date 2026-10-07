@@ -1,4 +1,4 @@
-use crate::posix_class::expand_posix_classes;
+use crate::posix_class::{class_regex, expand_posix_classes};
 use crate::scanner::{PathGlob, compile_glob, compile_globs};
 use globset::GlobBuilder;
 use regex::{Regex, RegexBuilder};
@@ -63,7 +63,10 @@ fn unicode_regex(byte_regex: &str) -> String {
             [] => break,
         }
     }
-    String::from_utf8_lossy(&out).into_owned()
+    String::from_utf8_lossy(&out)
+        .chars()
+        .map(|c| class_regex(c).unwrap_or_else(|| c.to_string()))
+        .collect()
 }
 
 fn hex_byte(digits: [u8; 2]) -> u8 {
@@ -478,5 +481,48 @@ mod tests {
         assert_eq!(names(&matcher, "u/\u{c9}.md"), vec!["upper"]);
         assert_eq!(names(&matcher, "p/\u{a1}.md"), vec!["punct"]);
         assert!(matcher.match_all(Path::new("l/\u{c9}.md")).is_empty());
+    }
+
+    #[test]
+    fn every_posix_class_follows_unicode() {
+        let cases = [
+            ("alnum", "\u{e9}", "\u{b2}"),
+            ("alpha", "\u{663}", "1"),
+            ("blank", "\u{3000}", "\u{a0}"),
+            ("cntrl", "\u{85}", "\u{ad}"),
+            ("graph", "\u{a0}", "\u{3000}"),
+            ("lower", "\u{1c5}", "\u{c9}"),
+            ("print", "\u{3000}", "\u{85}"),
+            ("punct", "\u{301}", "\u{e9}"),
+            ("space", "\u{2003}", "\u{a0}"),
+            ("upper", "\u{1c5}", "\u{e9}"),
+            ("word", "\u{4e2d}", "\u{b2}"),
+            ("digit", "7", "\u{663}"),
+            ("xdigit", "f", "\u{ff46}"),
+            ("ascii", "a", "\u{e9}"),
+        ];
+        for (class, member, outsider) in cases {
+            let matcher =
+                TableMatcher::new(&[(format!("[[:{class}:]]").as_str(), "c")], &[]).unwrap();
+            assert_eq!(names(&matcher, member), vec!["c"], "{class} {member}");
+            assert!(
+                matcher.match_all(Path::new(outsider)).is_empty(),
+                "{class} {outsider}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_posix_class_never_matches_the_separator() {
+        let matcher = TableMatcher::new(&[("a[[:punct:]]b", "c")], &[]).unwrap();
+        assert_eq!(names(&matcher, "a.b"), vec!["c"]);
+        assert!(matcher.match_all(Path::new("a/b")).is_empty());
+    }
+
+    #[test]
+    fn a_negated_posix_class_matches_the_other_unicode_characters() {
+        let matcher = TableMatcher::new(&[("[![:alpha:]].md", "c")], &[]).unwrap();
+        assert_eq!(names(&matcher, "\u{a1}.md"), vec!["c"]);
+        assert!(matcher.match_all(Path::new("\u{e9}.md")).is_empty());
     }
 }

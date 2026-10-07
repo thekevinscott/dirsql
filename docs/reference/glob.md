@@ -146,6 +146,9 @@ stderr; the exit code is unchanged. Path-tables never warn.
   `{a..c}` expand, as do zero-padded
   `{01..10}` and stepped `{1..10..2}` ranges. Groups nest.
 - `\[` is a literal bracket.
+- POSIX classes (`[[:alpha:]]`) match Unicode characters, as bash does in a UTF-8
+  locale: `[[:alpha:]]` matches `é` and `中`. `[[:digit:]]`, `[[:xdigit:]]` and
+  `[[:ascii:]]` stay ASCII.
 - A dot-named file or directory is listed only where a component spells the
   dot at that depth: `./**/.*` finds `docs/.draft.md` but does not enter
   `.config/`.
