@@ -232,8 +232,8 @@ fn quote_identifier(name: &str) -> String {
 mod tests {
     use super::*;
 
-    fn rows(payload: &str) -> Vec<JsonRow> {
-        serde_json::from_str(payload).expect("valid payload")
+    fn rows(lines: &[&str]) -> Vec<JsonRow> {
+        parse_rows(&lines.join("\n")).expect("valid payload")
     }
 
     fn names(columns: &[Column]) -> Vec<&str> {
@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn json_row_get_finds_a_key_and_misses_an_absent_one() {
-        let row = &rows(r#"[{"a":1}]"#)[0];
+        let row = &rows(&[r#"{"a":1}"#])[0];
         assert_eq!(row.get("a"), Some(&serde_json::json!(1)));
         assert_eq!(row.get("b"), None);
     }
@@ -320,127 +320,127 @@ mod tests {
 
     #[test]
     fn infer_schema_of_a_row_with_no_keys_is_no_columns() {
-        assert_eq!(infer_schema(&rows("[{}]")), Vec::new());
+        assert_eq!(infer_schema(&rows(&["{}"])), Vec::new());
     }
 
     #[test]
     fn columns_are_the_union_of_keys_across_rows() {
-        let columns = infer_schema(&rows(r#"[{"a":1},{"b":2},{"a":3,"c":4}]"#));
+        let columns = infer_schema(&rows(&[r#"{"a":1}"#, r#"{"b":2}"#, r#"{"a":3,"c":4}"#]));
         assert_eq!(names(&columns), vec!["a", "b", "c"]);
     }
 
     #[test]
     fn column_order_is_first_seen_not_alphabetical() {
-        let columns = infer_schema(&rows(r#"[{"zeta":1,"alpha":2},{"middle":3}]"#));
+        let columns = infer_schema(&rows(&[r#"{"zeta":1,"alpha":2}"#, r#"{"middle":3}"#]));
         assert_eq!(names(&columns), vec!["zeta", "alpha", "middle"]);
     }
 
     #[test]
     fn a_repeated_key_does_not_repeat_its_column() {
-        let columns = infer_schema(&rows(r#"[{"a":1},{"a":2},{"a":3}]"#));
+        let columns = infer_schema(&rows(&[r#"{"a":1}"#, r#"{"a":2}"#, r#"{"a":3}"#]));
         assert_eq!(names(&columns), vec!["a"]);
     }
 
     #[test]
     fn a_string_is_text() {
-        let columns = infer_schema(&rows(r#"[{"s":"x"}]"#));
+        let columns = infer_schema(&rows(&[r#"{"s":"x"}"#]));
         assert_eq!(ty_of(&columns, "s"), SqlType::Text);
     }
 
     #[test]
     fn an_integer_is_integer() {
-        let columns = infer_schema(&rows(r#"[{"i":42}]"#));
+        let columns = infer_schema(&rows(&[r#"{"i":42}"#]));
         assert_eq!(ty_of(&columns, "i"), SqlType::Integer);
     }
 
     #[test]
     fn a_negative_integer_is_integer() {
-        let columns = infer_schema(&rows(r#"[{"i":-42}]"#));
+        let columns = infer_schema(&rows(&[r#"{"i":-42}"#]));
         assert_eq!(ty_of(&columns, "i"), SqlType::Integer);
     }
 
     #[test]
     fn a_float_is_real() {
-        let columns = infer_schema(&rows(r#"[{"f":1.5}]"#));
+        let columns = infer_schema(&rows(&[r#"{"f":1.5}"#]));
         assert_eq!(ty_of(&columns, "f"), SqlType::Real);
     }
 
     #[test]
     fn a_number_too_large_for_i64_is_real() {
         // 10^19 exceeds i64::MAX, matching `json_to_value`'s fallback to Real.
-        let columns = infer_schema(&rows(r#"[{"big":10000000000000000000}]"#));
+        let columns = infer_schema(&rows(&[r#"{"big":10000000000000000000}"#]));
         assert_eq!(ty_of(&columns, "big"), SqlType::Real);
     }
 
     #[test]
     fn a_bool_is_integer() {
-        let columns = infer_schema(&rows(r#"[{"t":true},{"t":false}]"#));
+        let columns = infer_schema(&rows(&[r#"{"t":true}"#, r#"{"t":false}"#]));
         assert_eq!(ty_of(&columns, "t"), SqlType::Integer);
     }
 
     #[test]
     fn a_nested_object_is_text() {
-        let columns = infer_schema(&rows(r#"[{"obj":{"k":"v"}}]"#));
+        let columns = infer_schema(&rows(&[r#"{"obj":{"k":"v"}}"#]));
         assert_eq!(ty_of(&columns, "obj"), SqlType::Text);
     }
 
     #[test]
     fn a_nested_array_is_text() {
-        let columns = infer_schema(&rows(r#"[{"arr":[1,2]}]"#));
+        let columns = infer_schema(&rows(&[r#"{"arr":[1,2]}"#]));
         assert_eq!(ty_of(&columns, "arr"), SqlType::Text);
     }
 
     #[test]
     fn a_key_that_is_never_non_null_is_text() {
-        let columns = infer_schema(&rows(r#"[{"n":null},{"n":null}]"#));
+        let columns = infer_schema(&rows(&[r#"{"n":null}"#, r#"{"n":null}"#]));
         assert_eq!(ty_of(&columns, "n"), SqlType::Text);
     }
 
     #[test]
     fn a_null_takes_its_type_from_a_later_row() {
-        let columns = infer_schema(&rows(r#"[{"n":null},{"n":7}]"#));
+        let columns = infer_schema(&rows(&[r#"{"n":null}"#, r#"{"n":7}"#]));
         assert_eq!(ty_of(&columns, "n"), SqlType::Integer);
     }
 
     #[test]
     fn a_null_does_not_erase_a_type_seen_earlier() {
-        let columns = infer_schema(&rows(r#"[{"n":7},{"n":null}]"#));
+        let columns = infer_schema(&rows(&[r#"{"n":7}"#, r#"{"n":null}"#]));
         assert_eq!(ty_of(&columns, "n"), SqlType::Integer);
     }
 
     #[test]
     fn a_key_missing_from_a_row_still_takes_its_type_from_the_others() {
-        let columns = infer_schema(&rows(r#"[{"a":1,"b":"x"},{"a":2}]"#));
+        let columns = infer_schema(&rows(&[r#"{"a":1,"b":"x"}"#, r#"{"a":2}"#]));
         assert_eq!(ty_of(&columns, "b"), SqlType::Text);
     }
 
     #[test]
     fn conflicting_types_fall_back_to_text() {
-        let columns = infer_schema(&rows(r#"[{"m":1},{"m":"two"}]"#));
+        let columns = infer_schema(&rows(&[r#"{"m":1}"#, r#"{"m":"two"}"#]));
         assert_eq!(ty_of(&columns, "m"), SqlType::Text);
     }
 
     #[test]
     fn an_integer_and_a_float_conflict_rather_than_widening() {
-        let columns = infer_schema(&rows(r#"[{"m":1},{"m":1.5}]"#));
+        let columns = infer_schema(&rows(&[r#"{"m":1}"#, r#"{"m":1.5}"#]));
         assert_eq!(ty_of(&columns, "m"), SqlType::Text);
     }
 
     #[test]
     fn a_conflict_survives_further_agreeing_rows() {
-        let columns = infer_schema(&rows(r#"[{"m":1},{"m":"two"},{"m":3}]"#));
+        let columns = infer_schema(&rows(&[r#"{"m":1}"#, r#"{"m":"two"}"#, r#"{"m":3}"#]));
         assert_eq!(ty_of(&columns, "m"), SqlType::Text);
     }
 
     #[test]
     fn a_conflict_survives_a_later_null() {
-        let columns = infer_schema(&rows(r#"[{"m":1},{"m":"two"},{"m":null}]"#));
+        let columns = infer_schema(&rows(&[r#"{"m":1}"#, r#"{"m":"two"}"#, r#"{"m":null}"#]));
         assert_eq!(ty_of(&columns, "m"), SqlType::Text);
     }
 
     #[test]
     fn a_bool_and_an_integer_agree_on_integer() {
-        let columns = infer_schema(&rows(r#"[{"m":true},{"m":3}]"#));
+        let columns = infer_schema(&rows(&[r#"{"m":true}"#, r#"{"m":3}"#]));
         assert_eq!(ty_of(&columns, "m"), SqlType::Integer);
     }
 
@@ -494,33 +494,33 @@ mod tests {
 
     #[test]
     fn cell_reads_a_present_key() {
-        let row = &rows(r#"[{"s":"x","i":1}]"#)[0];
+        let row = &rows(&[r#"{"s":"x","i":1}"#])[0];
         assert_eq!(cell(row, "s"), Value::Text("x".into()));
         assert_eq!(cell(row, "i"), Value::Integer(1));
     }
 
     #[test]
     fn cell_is_null_for_a_missing_key() {
-        let row = &rows(r#"[{"a":1}]"#)[0];
+        let row = &rows(&[r#"{"a":1}"#])[0];
         assert_eq!(cell(row, "absent"), Value::Null);
     }
 
     #[test]
     fn cell_is_null_for_a_null_value() {
-        let row = &rows(r#"[{"a":null}]"#)[0];
+        let row = &rows(&[r#"{"a":null}"#])[0];
         assert_eq!(cell(row, "a"), Value::Null);
     }
 
     #[test]
     fn cell_renders_nested_values_as_json_text() {
-        let row = &rows(r#"[{"obj":{"k":"v"},"arr":[1,2]}]"#)[0];
+        let row = &rows(&[r#"{"obj":{"k":"v"},"arr":[1,2]}"#])[0];
         assert_eq!(cell(row, "obj"), Value::Text(r#"{"k":"v"}"#.into()));
         assert_eq!(cell(row, "arr"), Value::Text("[1,2]".into()));
     }
 
     #[test]
     fn declared_schema_lists_every_column_with_its_type() {
-        let columns = infer_schema(&rows(r#"[{"s":"x","i":1,"f":1.5}]"#));
+        let columns = infer_schema(&rows(&[r#"{"s":"x","i":1,"f":1.5}"#]));
         assert_eq!(
             declared_schema(&columns),
             r#"CREATE TABLE x("s" TEXT, "i" INTEGER, "f" REAL)"#
@@ -529,7 +529,7 @@ mod tests {
 
     #[test]
     fn declared_schema_quotes_a_keyword_column() {
-        let columns = infer_schema(&rows(r#"[{"select":1}]"#));
+        let columns = infer_schema(&rows(&[r#"{"select":1}"#]));
         assert_eq!(
             declared_schema(&columns),
             r#"CREATE TABLE x("select" INTEGER)"#
