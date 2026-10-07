@@ -1394,15 +1394,19 @@ fn persist_config_key_degrades_server_with_503_naming_the_key() {
 }
 
 #[test]
-fn persist_flag_writes_default_cache_and_restart_serves() {
-    // Bare `--persist` writes the cache at the default platform cache path
-    // during the startup scan, never inside the scanned root; a restart with `--persist` reopens that cache
-    // (trusting unchanged files) and serves the same rows.
+fn persist_flag_restart_reuses_the_cache_and_serves() {
+    // `--persist <path>` writes the cache during the startup scan; a restart
+    // reopens it (trusting unchanged files) and serves the same rows.
     let root = blog_fixture();
-    let cache = dirsql::persist::resolve_persist_path(root.path(), None);
+    let cache_dir = TempDir::new().unwrap();
+    let cache = cache_dir.path().join("cache.db");
 
     let port = free_port();
-    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml", "--persist"]);
+    let child = spawn_dirsql_with_args(
+        root.path(),
+        port,
+        &["-c", ".dirsql.toml", "--persist", cache.to_str().unwrap()],
+    );
     wait_until_ready(port, Duration::from_secs(10));
     let first = Client::new()
         .post(format!("http://localhost:{port}/query"))
@@ -1415,7 +1419,7 @@ fn persist_flag_writes_default_cache_and_restart_serves() {
 
     assert!(
         cache.exists(),
-        "bare --persist must write the default cache at {}",
+        "--persist <path> must write the cache at {}",
         cache.display()
     );
     assert!(
@@ -1426,7 +1430,11 @@ fn persist_flag_writes_default_cache_and_restart_serves() {
     // Restart against the unchanged tree: the cache is reused and the same
     // rows are served.
     let port = free_port();
-    let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml", "--persist"]);
+    let child = spawn_dirsql_with_args(
+        root.path(),
+        port,
+        &["-c", ".dirsql.toml", "--persist", cache.to_str().unwrap()],
+    );
     wait_until_ready(port, Duration::from_secs(10));
     let second = Client::new()
         .post(format!("http://localhost:{port}/query"))
@@ -1440,6 +1448,51 @@ fn persist_flag_writes_default_cache_and_restart_serves() {
     assert_eq!(
         first, second,
         "a persisted restart must serve the same rows"
+    );
+}
+
+#[cfg(unix)]
+fn find_file(dir: &std::path::Path, name: &str) -> bool {
+    fs::read_dir(dir).unwrap().flatten().any(|entry| {
+        let path = entry.path();
+        if path.is_dir() {
+            find_file(&path, name)
+        } else {
+            entry.file_name() == name
+        }
+    })
+}
+
+#[cfg(unix)]
+#[test]
+fn bare_persist_writes_the_cache_under_the_platform_cache_dir() {
+    // `dirs` reads XDG_CACHE_HOME on Linux and HOME on macOS; pointing both at
+    // a temp dir keeps the default location out of the developer's real cache.
+    let root = blog_fixture();
+    let home = TempDir::new().unwrap();
+
+    let out = std::process::Command::cargo_bin("dirsql")
+        .unwrap()
+        .args(["query", "SELECT basename FROM posts", "--persist"])
+        .args(["--config", ".dirsql.toml"])
+        .env("HOME", home.path())
+        .env("XDG_CACHE_HOME", home.path().join("xdg"))
+        .current_dir(root.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert!(
+        find_file(home.path(), "cache.db"),
+        "bare --persist must write cache.db under the platform cache dir"
+    );
+    assert!(
+        !find_file(root.path(), "cache.db"),
+        "bare --persist must not write the cache inside the scanned root"
     );
 }
 

@@ -54,6 +54,7 @@ fn query_persist(root: &TempDir, sql: &str) -> Output {
         .arg("--config")
         .arg(root.path().join(".dirsql.toml"))
         .arg("--persist")
+        .arg(root.path().join(".dirsql-test-cache").join("cache.db"))
         .current_dir(root.path())
         .output()
         .expect("spawning `dirsql query --persist` failed")

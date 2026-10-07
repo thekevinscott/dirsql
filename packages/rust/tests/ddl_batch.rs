@@ -11,8 +11,12 @@ use common::build_fixture_extension;
 use dirsql::{DirSQL, Extension, Row, Table, Value};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+
+fn cache_path(root: &Path) -> PathBuf {
+    root.join(".dirsql-test-cache").join("cache.db")
+}
 
 const BASE: &str = "CREATE TABLE notes (path TEXT, body TEXT)";
 
@@ -66,7 +70,7 @@ fn build_persist(root: &Path, ddl: &str) -> dirsql::Result<DirSQL> {
     DirSQL::builder()
         .root(root)
         .table(notes_table(ddl))
-        .persist(None::<&Path>)
+        .persist(Some(cache_path(root)))
         .build()
 }
 
@@ -78,7 +82,7 @@ fn build_persist_with_extension(root: &Path, ddl: &str, ext: &Path) -> dirsql::R
             path: ext.to_path_buf(),
             entrypoint: Some("sqlite3_extension_init".into()),
         })
-        .persist(None::<&Path>)
+        .persist(Some(cache_path(root)))
         .build()
 }
 
@@ -170,9 +174,7 @@ fn a_batch_sqlite_rejects_fails_the_build_and_rolls_back() {
         "SQLite's own error text must come through raw, got {message:?}"
     );
 
-    let cache =
-        rusqlite::Connection::open(dirsql::persist::resolve_persist_path(root.path(), None))
-            .unwrap();
+    let cache = rusqlite::Connection::open(cache_path(root.path())).unwrap();
     let created: i64 = cache
         .query_row(
             "SELECT COUNT(*) FROM pragma_table_list WHERE schema = 'main' AND name = 'notes'",
