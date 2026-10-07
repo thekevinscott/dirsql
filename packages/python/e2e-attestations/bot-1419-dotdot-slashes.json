@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_one_level_test.py tests/e2e/glob_speed_matchers_test.py -x -q",
+  "ran_at": 1791392720,
+  "exit_code": 0,
+  "commit": "7ffc3f247a2b09c1a4788f680e7ab1e88342df94",
+  "branch": "bot/1419-dotdot-slashes"
+}
