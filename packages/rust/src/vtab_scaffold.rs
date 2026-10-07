@@ -281,6 +281,12 @@ pub fn parse_gitignore(arg: &str) -> Result<bool> {
     scanner::parse_gitignore_arg(arg).map_err(Error::ModuleError)
 }
 
+/// Whether the module's switch argument also applies `.gitignore` to the
+/// scan's root.
+pub fn checks_root(arg: &str) -> bool {
+    arg == scanner::GITIGNORE_ROOT_ARG
+}
+
 /// One `WHERE` term SQLite offers `xBestIndex`, reduced to what the choice
 /// of lookup depends on.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -694,6 +700,13 @@ mod tests {
             .err()
             .expect("an invalid pattern must be rejected");
         assert!(matches!(err, Error::ModuleError(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn checks_root_is_true_only_for_the_gitignore_root_switch() {
+        assert!(checks_root("gitignore-root"));
+        assert!(!checks_root("gitignore"));
+        assert!(!checks_root("no-gitignore"));
     }
 
     #[test]

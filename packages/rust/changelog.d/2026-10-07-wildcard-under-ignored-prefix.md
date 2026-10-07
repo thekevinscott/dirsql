@@ -1,0 +1,1 @@
+**Fixed** A path-table whose wildcard sits below a gitignored literal prefix is hidden like any other wildcard match: `./dist/*.js` returns nothing when `dist/` is gitignored. A fully literal `./dist/bundle.js` and a named `./dist` still list.

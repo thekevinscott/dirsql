@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e query-contract fanout",
+  "ran_at": 1791403605,
+  "exit_code": 0,
+  "commit": "f48c4214ae2ff544c5431f94a6cca987c18a9610",
+  "branch": "bot/1448-wildcard-ignored-prefix"
+}

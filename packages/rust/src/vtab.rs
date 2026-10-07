@@ -12,7 +12,7 @@ use rusqlite::vtab::Context;
 use rusqlite::{Connection, Result};
 
 use crate::matcher::TableMatcher;
-use crate::scanner::{PathGlob, scan_glob, to_slash};
+use crate::scanner::{PathGlob, scan_glob_checking_root, to_slash};
 use crate::vtab_scaffold::{self, TableSource};
 
 pub use crate::vtab_scaffold::StatementScope;
@@ -176,6 +176,8 @@ struct ScanSpec {
     ignore: TableMatcher,
     /// Whether the scan respects `.gitignore` files (off under `--no-ignore`).
     gitignore: bool,
+    /// Whether a `.gitignore` that ignores `root` empties the scan.
+    check_root: bool,
     reader: fn(&Path, Option<i64>) -> Option<String>,
     /// The row set of the statement in progress, which the first stat a
     /// statement asks for stats whole: one stat at a time as SQLite steps
@@ -356,6 +358,7 @@ fn parse_module_args(args: &[&[u8]]) -> Result<ScanSpec> {
         path_prefix: PathBuf::from(path_prefix),
         ignore: vtab_scaffold::compile_ignore(ignore)?,
         gitignore: vtab_scaffold::parse_gitignore(gitignore)?,
+        check_root: vtab_scaffold::checks_root(gitignore),
         reader: read_text,
         current: Mutex::new(Weak::new()),
     })
@@ -416,7 +419,13 @@ impl TableSource for ScanSpec {
     fn rows(&self) -> Arc<Vec<FileRow>> {
         // The scan runs per statement rather than at CREATE, which is what
         // makes reads live: each statement sees the filesystem as it is now.
-        let rel_paths = scan_glob(&self.root, &self.glob, &self.ignore, self.gitignore);
+        let rel_paths = scan_glob_checking_root(
+            &self.root,
+            &self.glob,
+            &self.ignore,
+            self.gitignore,
+            self.check_root,
+        );
         let rows = Arc::new(build_rows(&self.path_prefix, rel_paths));
         if let Ok(mut current) = self.current.lock() {
             *current = Arc::downgrade(&rows);

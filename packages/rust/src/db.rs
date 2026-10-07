@@ -173,10 +173,12 @@ fn path_table_ddl(
             ],
         ),
     };
-    args.push(quote_literal(if gitignore {
-        scanner::GITIGNORE_ARG
-    } else {
+    args.push(quote_literal(if !gitignore {
         scanner::NO_GITIGNORE_ARG
+    } else if !table.path_prefix.is_empty() && path_table::wildcard_below_prefix(name) {
+        scanner::GITIGNORE_ROOT_ARG
+    } else {
+        scanner::GITIGNORE_ARG
     }));
     if parser.is_some() {
         args.push(quote_literal(&index_root.to_string_lossy()));
@@ -3228,7 +3230,7 @@ mod tests {
                 None,
                 Path::new("/root"),
             )
-            .contains("'/var/log', '*.log', '/var/log', 'gitignore')"),
+            .contains("'/var/log', '*.log', '/var/log', 'gitignore-root')"),
             "got: {}",
             path_table_ddl(
                 "/var/log/*.log",
@@ -3239,6 +3241,28 @@ mod tests {
                 Path::new("/root"),
             )
         );
+    }
+
+    #[test]
+    fn path_table_ddl_checks_the_root_of_a_wildcard_under_a_literal_prefix() {
+        let table = PathTable {
+            root: PathBuf::from("/root/dist"),
+            glob: "*.js".to_string(),
+            path_prefix: "dist".to_string(),
+        };
+        let ddl = path_table_ddl("./dist/*.js", &table, &[], true, None, Path::new("/root"));
+        assert!(ddl.ends_with("'dist', 'gitignore-root')"), "got: {ddl}");
+    }
+
+    #[test]
+    fn path_table_ddl_spares_the_root_of_a_literally_named_directory() {
+        let table = PathTable {
+            root: PathBuf::from("/root/dist"),
+            glob: "*".to_string(),
+            path_prefix: "dist".to_string(),
+        };
+        let ddl = path_table_ddl("./dist", &table, &[], true, None, Path::new("/root"));
+        assert!(ddl.ends_with("'dist', 'gitignore')"), "got: {ddl}");
     }
 
     #[test]
@@ -3307,7 +3331,7 @@ mod tests {
         );
         assert!(
             ddl.ends_with(
-                "USING dirsql_parsed('/var/log', '*.log', 'parse.py', 'gitignore', \
+                "USING dirsql_parsed('/var/log', '*.log', 'parse.py', 'gitignore-root', \
                  '/index', 'node_modules/**')"
             ),
             "the parser form drops the path prefix, names the index root and keeps \

@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_gitignore_test.py tests/e2e/glob_speed_one_level_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/query_contract_test.py tests/e2e/fanout_test.py -x -q",
+  "ran_at": 1791403526,
+  "exit_code": 0,
+  "commit": "08b154a76016e8369151b2269aa01a9331d41ed7",
+  "branch": "bot/1448-wildcard-ignored-prefix"
+}
