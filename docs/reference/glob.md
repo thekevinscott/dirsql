@@ -134,6 +134,8 @@ A test runs every row against dirsql as a path-table and, with the leading
 | `./d*/*.js` | none | gitignore |
 | `./dist/bundle.js` | `dist/bundle.js` |  |
 | `./dist/sub/o.js` | `dist/sub/o.js` |  |
+| `./dist` | `dist/bundle.js` | directory-name |
+| `./dist/` | `dist/bundle.js` | directory-name |
 | `./**/*.js` | `node_modules/pkg/index.js` |  |
 | `./node_modules/*/index.js` | `node_modules/pkg/index.js` |  |
 | `./docs/**/*.md` | `docs/api.md`, `docs/guide.md`, `docs/nested/deep.md` |  |
