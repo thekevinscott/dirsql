@@ -1129,6 +1129,46 @@ mod tests {
     }
 
     #[test]
+    fn explore_enters_a_current_directory_component_the_glob_spells() {
+        let root = tempfile::tempdir().unwrap();
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("./x").unwrap();
+        let top = Place {
+            walk: walk_with(&ignore, Some(&glob), Vec::new()),
+            dir: root.path().to_path_buf(),
+            rel: PathBuf::new(),
+            depth: 0,
+            states: glob.start(),
+            linked: false,
+        };
+        let [dot] = <[Place<'_>; 1]>::try_from(explored_dirs(top)).ok().unwrap();
+        assert_eq!(dot.rel, Path::new("."));
+        assert_eq!(dot.dir, root.path().join("."));
+        assert_eq!(dot.depth, 1);
+    }
+
+    #[test]
+    fn relative_entries_name_only_the_components_the_glob_spells() {
+        let glob = compile_glob("*/../x").unwrap();
+        let states = glob.step(&glob.start(), OsStr::new("docs"), Kind::Dir);
+        let entries = glob.relative_entries(&states);
+        assert_eq!(
+            entries.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+            vec![".."]
+        );
+        let plain = compile_glob("*/x").unwrap();
+        let states = plain.step(&plain.start(), OsStr::new("docs"), Kind::Dir);
+        assert!(plain.relative_entries(&states).is_empty());
+    }
+
+    #[test]
+    fn a_glob_spells_relative_components_only_when_a_word_has_one() {
+        assert!(compile_glob("a/./b").unwrap().spells_relative);
+        assert!(compile_glob("a/../b").unwrap().spells_relative);
+        assert!(!compile_glob("a/b").unwrap().spells_relative);
+    }
+
+    #[test]
     fn reaches_dir_enters_the_root_and_unignored_directories() {
         let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
         assert!(reaches_dir(Path::new(""), &ignore));
