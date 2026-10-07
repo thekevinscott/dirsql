@@ -72,6 +72,9 @@ jobs:
       - name: Run unit tests
         run: cargo test --manifest-path packages/rust/Cargo.toml --features cli --lib
 
+      - name: Tests left the user cache dir untouched
+        run: 'test ! -e "$HOME/.cache/dirsql" || { echo "::error::a test wrote to the real user cache dir (~/.cache/dirsql); pass an explicit persist path"; exit 1; }'
+
   integration:
     name: Integration tests
     runs-on: ubuntu-latest
@@ -93,6 +96,9 @@ jobs:
       - name: Run integration tests
         run: cargo test --manifest-path packages/rust/Cargo.toml --features cli --tests
 
+      - name: Tests left the user cache dir untouched
+        run: 'test ! -e "$HOME/.cache/dirsql" || { echo "::error::a test wrote to the real user cache dir (~/.cache/dirsql); pass an explicit persist path"; exit 1; }'
+
   windows:
     name: Windows tests
     runs-on: windows-latest
@@ -113,6 +119,10 @@ jobs:
 
       - name: Run unit and integration tests
         run: cargo test --manifest-path packages/rust/Cargo.toml --features cli --tests --no-fail-fast
+
+      - name: Tests left the user cache dir untouched
+        shell: bash
+        run: 'test ! -e "$LOCALAPPDATA/dirsql" || { echo "::error::a test wrote to the real user cache dir (%LOCALAPPDATA%/dirsql); pass an explicit persist path"; exit 1; }'
 
   coverage:
     name: Rust unit coverage floor

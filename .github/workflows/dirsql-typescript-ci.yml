@@ -279,6 +279,9 @@ jobs:
         working-directory: packages/ts
         run: pnpm exec vitest run --dir tests/integration/binding --passWithNoTests
 
+      - name: Tests left the user cache dir untouched
+        run: 'test ! -e "$HOME/.cache/dirsql" || { echo "::error::a test wrote to the real user cache dir (~/.cache/dirsql); pass an explicit persist path"; exit 1; }'
+
   distcheck:
     # Installs and runs the packed tarballs, which the `packaging` gate does
     # not do -- that gate only asserts no test files ship in the artifact.
