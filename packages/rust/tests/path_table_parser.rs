@@ -109,7 +109,7 @@ fn stat_columns_are_not_reachable_on_a_parsed_path_table() {
 }
 
 #[test]
-fn a_parsed_scan_honors_the_default_ignore_rules() {
+fn a_parsed_scan_walks_node_modules_like_any_directory() {
     let root = fixture();
     fs::create_dir_all(root.path().join("node_modules/pkg")).unwrap();
     fs::write(
@@ -123,8 +123,8 @@ fn a_parsed_scan_honors_the_default_ignore_rules() {
 
     assert_eq!(
         texts(&rows, "title"),
-        vec!["alpha", "bravo"],
-        "node_modules must be skipped by a parsed scan too"
+        vec!["alpha", "bravo", "dependency"],
+        "node_modules is walked by a parsed scan too"
     );
 }
 

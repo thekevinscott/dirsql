@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_node_modules_test.py tests/e2e/glob_speed_recursive_test.py -x -q",
+  "ran_at": 1791391105,
+  "exit_code": 0,
+  "commit": "42554b1e5556bbc63fde8573be5f68bdf7cb81d4",
+  "branch": "bot/1418-node-modules"
+}

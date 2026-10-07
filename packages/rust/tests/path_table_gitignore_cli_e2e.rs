@@ -13,7 +13,7 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 /// A tree with a gitignored `dist/`, a kept source file, a hidden directory,
-/// and a `node_modules` for the built-in floor.
+/// and a `node_modules` that is walked like any directory.
 fn fixture() -> TempDir {
     let root = TempDir::new().unwrap();
     fs::create_dir(root.path().join(".git")).unwrap();
@@ -25,6 +25,7 @@ fn fixture() -> TempDir {
     fs::write(root.path().join("app.js"), "js").unwrap();
     fs::write(root.path().join(".hidden/inside.txt"), "txt").unwrap();
     fs::write(root.path().join("node_modules/pkg/index.js"), "js").unwrap();
+    fs::write(root.path().join(".git/config"), "cfg").unwrap();
     root
 }
 
@@ -60,8 +61,8 @@ fn a_default_scan_excludes_gitignored_files() {
 
     assert_eq!(
         basenames(&out),
-        vec!["app.js"],
-        "dist/ is gitignored, node_modules is a built-in ignore, dot-named entries are hidden"
+        vec!["app.js", "index.js"],
+        "dist/ is gitignored, .git is a built-in ignore, dot-named entries are hidden"
     );
 }
 
@@ -94,8 +95,8 @@ fn no_ignore_keeps_the_built_in_ignore_floor() {
 
     let names = basenames(&out);
     assert!(
-        !names.contains(&"index.js".to_string()),
-        "--no-ignore disables gitignore only; node_modules stays skipped, got: {names:?}"
+        !names.contains(&"config".to_string()),
+        "--no-ignore disables gitignore only; .git stays skipped, got: {names:?}"
     );
 }
 

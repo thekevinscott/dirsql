@@ -603,7 +603,6 @@ impl Walk<'_> {
     /// `.gitignore` files in force.
     fn admits(&self, depth: usize, is_dir: bool, name: &OsStr, path: &Path, rel: &Path) -> bool {
         should_descend(depth, is_dir, name, rel, self.ignore)
-            && !(is_dir && self.ignore.prunes_directory(name))
             && self.admits_name(name)
             && (self.frames.is_empty() || !is_gitignored(&self.frames, path, is_dir))
     }
@@ -1418,7 +1417,7 @@ mod tests {
     }
 
     #[test]
-    fn a_table_walk_skips_a_node_modules_directory_no_table_names() {
+    fn a_table_walk_enters_a_node_modules_directory() {
         let ignore = TableMatcher::new(&[("**/*.js", "t")], &[]).unwrap();
         let walk = walk_with(&ignore, Some(ignore.walk_glob()), Vec::new());
         let admits = |is_dir, name: &str| {
@@ -1430,9 +1429,8 @@ mod tests {
                 Path::new(name),
             )
         };
-        assert!(!admits(true, "node_modules"));
+        assert!(admits(true, "node_modules"));
         assert!(admits(false, "node_modules"));
-        assert!(admits(true, "src"));
     }
 
     #[test]

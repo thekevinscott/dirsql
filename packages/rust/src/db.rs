@@ -8,7 +8,7 @@ use thiserror::Error;
 use crate::functions::{self, CallReporter, ResolvedFunction, Worker};
 use crate::infer::JsonRow;
 use crate::parsed_vtab;
-use crate::path_table::{self, PathTable, Resolution};
+use crate::path_table::{self, DEFAULT_IGNORES, PathTable, Resolution};
 use crate::scanner;
 use crate::sql_literal::{quote_identifier, quote_literal};
 use crate::vtab::{self, StatementScope};
@@ -315,8 +315,8 @@ pub struct Db {
     /// exactly where `files` used to exist implicitly. A user who declared
     /// tables and forgot `files` gets the plain SQLite error.
     hint_legacy_files_table: bool,
-    /// Configured skip rules a path-table scan applies on top of the table's
-    /// [`PathTable::default_ignores`].
+    /// Configured skip rules a path-table scan applies on top of
+    /// [`DEFAULT_IGNORES`].
     path_table_ignore: Vec<String>,
     /// Whether a path-table scan respects `.gitignore` files. On by default;
     /// the CLI's `--no-ignore` turns it off.
@@ -1210,8 +1210,8 @@ impl Db {
             .path_table_root
             .as_deref()
             .expect("a path-table resolves only under an index root");
-        let ignore: Vec<String> = table
-            .default_ignores()
+        let ignore: Vec<String> = DEFAULT_IGNORES
+            .into_iter()
             .map(str::to_string)
             .chain(self.path_table_ignore.iter().cloned())
             .collect();

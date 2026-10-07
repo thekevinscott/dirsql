@@ -5,8 +5,7 @@ import { DirSQL } from "dirsql";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 // Path-table scans respect .gitignore by default (#742); `noIgnore: true`
-// opts back in to the ignored files while the built-in floor (node_modules,
-// .git) still applies. The behavior lives in the Rust core -- these tests
+// opts back in to the ignored files. The behavior lives in the Rust core -- these tests
 // prove the constructor option crosses the napi boundary.
 describe("path-table gitignore opt-out (#746)", () => {
   let dir: string;
@@ -41,11 +40,11 @@ describe("path-table gitignore opt-out (#746)", () => {
     expect(scanned).toContain("src/app.js");
   });
 
-  it("restores gitignored files under noIgnore but keeps the built-in floor", async () => {
+  it("restores gitignored files under noIgnore", async () => {
     const scanned = await paths(new DirSQL({ root: dir, noIgnore: true }));
 
     expect(scanned).toContain("dist/bundle.js");
     expect(scanned).toContain("debug.log");
-    expect(scanned).not.toContain("node_modules/pkg/index.js");
+    expect(scanned).toContain("node_modules/pkg/index.js");
   });
 });

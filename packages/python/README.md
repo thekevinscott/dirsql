@@ -82,7 +82,7 @@ db = DirSQL(
 
 Path-table scans (`SELECT ... FROM './'`) respect `.gitignore` files by
 default. Pass `no_ignore=True` to restore the full walk; the built-in
-`node_modules`/`.git` defaults and any `ignore` patterns still apply:
+`.git` default and any `ignore` patterns still apply:
 
 ```python
 db = DirSQL("./my-blog", no_ignore=True)
