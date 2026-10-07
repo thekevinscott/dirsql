@@ -459,4 +459,24 @@ mod tests {
         assert_eq!(names(&matcher, "notes/7.md"), vec!["n"]);
         assert!(matcher.match_all(Path::new("notes/x.md")).is_empty());
     }
+
+    #[test]
+    fn a_posix_class_matches_non_ascii_characters() {
+        let matcher = TableMatcher::new(
+            &[
+                ("a/[[:alpha:]].md", "alpha"),
+                ("l/[[:lower:]].md", "lower"),
+                ("u/[[:upper:]].md", "upper"),
+                ("p/[[:punct:]].md", "punct"),
+            ],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(names(&matcher, "a/\u{e9}.md"), vec!["alpha"]);
+        assert_eq!(names(&matcher, "a/\u{4e2d}.md"), vec!["alpha"]);
+        assert_eq!(names(&matcher, "l/\u{e9}.md"), vec!["lower"]);
+        assert_eq!(names(&matcher, "u/\u{c9}.md"), vec!["upper"]);
+        assert_eq!(names(&matcher, "p/\u{a1}.md"), vec!["punct"]);
+        assert!(matcher.match_all(Path::new("l/\u{c9}.md")).is_empty());
+    }
 }
