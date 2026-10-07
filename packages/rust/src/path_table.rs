@@ -102,11 +102,11 @@ fn has_glob_metacharacter(name: &str) -> bool {
     name.contains(['*', '?', '[', '{'])
 }
 
-/// Whether the written path-table `name` has a wildcard, or a trailing
-/// separator that is one, so the literal directories ahead of it are only the
-/// place the walk starts and not a path the name spells out.
+/// Whether the written path-table `name` has a wildcard, so the literal
+/// directories ahead of it are only the place the walk starts and not a path
+/// the name spells out.
 pub fn wildcard_below_prefix(name: &str) -> bool {
-    has_glob_metacharacter(name) || name.ends_with(['/', '\\'])
+    has_glob_metacharacter(name)
 }
 
 /// Resolve `name` against the index root, reporting what kind of thing it is.
@@ -153,6 +153,19 @@ pub fn directory_as_glob(glob: &str, index_root: &Path, is_dir: &dyn Fn(&Path) -
         return format!("{target}/{DIRECTORY_GLOB}");
     }
     target
+}
+
+/// The directory `glob` names outright, if it does: a wholly literal name
+/// that is a directory under `index_root`, with or without a trailing
+/// separator. A name is a literal path whatever `.gitignore` says.
+pub fn named_directory(
+    glob: &str,
+    index_root: &Path,
+    is_dir: &dyn Fn(&Path) -> bool,
+) -> Option<String> {
+    let name = glob.trim_end_matches('/');
+    (!name.is_empty() && !has_glob_metacharacter(name) && is_dir(&index_root.join(name)))
+        .then(|| name.to_string())
 }
 
 /// Where a config `[[table]] glob` anchors, and the glob to match beneath it.
@@ -391,13 +404,45 @@ mod tests {
     fn a_wildcard_or_trailing_separator_is_below_the_prefix() {
         assert!(wildcard_below_prefix("./dist/*.js"));
         assert!(wildcard_below_prefix("./dist/**/a.js"));
-        assert!(wildcard_below_prefix("./dist/"));
     }
 
     #[test]
     fn a_wholly_literal_name_is_not_below_a_prefix() {
         assert!(!wildcard_below_prefix("./dist"));
+        assert!(!wildcard_below_prefix("./dist/"));
         assert!(!wildcard_below_prefix("./dist/bundle.js"));
+    }
+
+    #[test]
+    fn a_literal_directory_is_named_with_or_without_a_trailing_separator() {
+        assert_eq!(
+            named_directory("docs", Path::new(ROOT), &everything_is_a_dir).as_deref(),
+            Some("docs")
+        );
+        assert_eq!(
+            named_directory("docs/", Path::new(ROOT), &everything_is_a_dir).as_deref(),
+            Some("docs")
+        );
+    }
+
+    #[test]
+    fn a_file_a_wildcard_or_the_root_is_not_a_named_directory() {
+        assert_eq!(
+            named_directory("docs", Path::new(ROOT), &nothing_is_a_dir),
+            None
+        );
+        assert_eq!(
+            named_directory("do*", Path::new(ROOT), &everything_is_a_dir),
+            None
+        );
+        assert_eq!(
+            named_directory("docs/*", Path::new(ROOT), &everything_is_a_dir),
+            None
+        );
+        assert_eq!(
+            named_directory("/", Path::new(ROOT), &everything_is_a_dir),
+            None
+        );
     }
 
     fn directory_glob(glob: &str, is_dir: &dyn Fn(&Path) -> bool) -> String {

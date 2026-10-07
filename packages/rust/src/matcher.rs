@@ -132,6 +132,13 @@ impl TableMatcher {
         })
     }
 
+    /// Treat each of `dirs` as a path a table spells out, which `.gitignore`
+    /// never hides.
+    pub(crate) fn with_named_dirs(mut self, dirs: &[String]) -> Self {
+        self.walk = self.walk.with_named_dirs(dirs);
+        self
+    }
+
     /// Whether a scan under this matcher honors `.gitignore` files.
     pub fn with_gitignore(mut self, gitignore: bool) -> Self {
         self.gitignore = gitignore;

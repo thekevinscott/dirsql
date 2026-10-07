@@ -258,6 +258,12 @@ impl PathGlob {
 
     /// Whether `rel` is a path a wildcard-free word spells, or a directory on
     /// the way to one.
+    /// `self` that also takes each of `dirs` as a path it spells out.
+    pub(crate) fn with_named_dirs(mut self, dirs: &[String]) -> Self {
+        self.named.extend(dirs.iter().map(PathBuf::from));
+        self
+    }
+
     fn names(&self, rel: &Path) -> bool {
         self.named.iter().any(|word| word.starts_with(rel))
     }
@@ -1756,6 +1762,28 @@ mod tests {
         assert_eq!(scan("dist/out.log"), vec![PathBuf::from("dist/out.log")]);
         assert_eq!(scan("{a,b}.log"), vec![PathBuf::from("a.log")]);
         assert!(scan("*.log").is_empty());
+    }
+
+    #[test]
+    fn a_named_directory_lists_though_gitignored_and_a_wildcard_directory_does_not() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir(repo.path().join(".git")).unwrap();
+        fs::write(repo.path().join(".gitignore"), "dist/\n").unwrap();
+        fs::create_dir(repo.path().join("dist")).unwrap();
+        fs::write(repo.path().join("dist/a.js"), "").unwrap();
+        let scan = |named: &[&str]| {
+            let matcher = TableMatcher::new(&[("dist/*", "t")], &[])
+                .unwrap()
+                .with_gitignore(true)
+                .with_named_dirs(&named.iter().map(|d| d.to_string()).collect::<Vec<_>>());
+            scan_directory(repo.path(), &matcher)
+        };
+
+        assert_eq!(
+            scan(&["dist"]),
+            vec![(repo.path().join("dist/a.js"), "t".to_string())]
+        );
+        assert!(scan(&[]).is_empty());
     }
 
     #[test]
