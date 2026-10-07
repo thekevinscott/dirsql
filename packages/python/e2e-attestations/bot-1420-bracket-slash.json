@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_matchers_test.py -x -q",
+  "ran_at": 1791393896,
+  "exit_code": 0,
+  "commit": "10ba3a468aaa558480098ec45a7b52b802b681bd",
+  "branch": "bot/1420-bracket-slash"
+}
