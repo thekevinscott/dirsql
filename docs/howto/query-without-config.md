@@ -65,7 +65,7 @@ why indexes belong to only one of them, are in
   `config` nor `tables` and call `query("SELECT * FROM './'")`
   ([SDK reference](../reference/sdk.md)).
 - Paths outside the root resolve too — `'/var/log/*.log'`, `'../notes'`,
-  `'~/notes/*.md'` — reporting absolute paths
+  `'~/notes/*.md'` — reporting paths as you wrote them
   ([path-tables reference](../reference/path-tables.md#paths-outside-the-index-root)).
 - `.git/` is skipped by default, and a git repo's `.gitignore` hides what it
   lists, so a bare `'./**'` does not drown in machinery

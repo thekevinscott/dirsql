@@ -414,10 +414,9 @@ fn a_parent_relative_trailing_slash_after_a_glob_lists_inside_each_matched_direc
     let root = fixture();
     let db = DirSQL::new(root.path().join("docs/nested"), vec![]).unwrap();
 
-    let dir = reported(root.path());
     let found = paths(&db, "SELECT path FROM '../*/'");
 
-    assert_eq!(found, vec![format!("{dir}/docs/nested/deep.md")]);
+    assert_eq!(found, vec!["../nested/deep.md".to_string()]);
 }
 
 #[test]
@@ -443,13 +442,12 @@ fn a_parent_relative_path_table_resolves_against_the_index_root() {
     let inner = root.path().join("docs/nested");
     let db = DirSQL::new(&inner, vec![]).unwrap();
 
-    let dir = reported(root.path());
     let found = paths(&db, "SELECT path FROM '../*.md'");
 
     assert_eq!(
         found,
-        vec![format!("{dir}/docs/a.md"), format!("{dir}/docs/b.md")],
-        "'../' walks up from the index root and reports absolute paths"
+        vec!["../a.md".to_string(), "../b.md".to_string()],
+        "'../' walks up from the index root and reports the path as written"
     );
 }
 

@@ -31,7 +31,7 @@ lazily-read hidden [`content`](./path-tables.md#columns) column.
 
 | Column | Type | Value |
 |---|---|---|
-| `path` | TEXT | The file's path relative to the scan root (e.g. `posts/hello.md`); absolute for a `/`, `../` or `~/` path-table. |
+| `path` | TEXT | The file's path relative to the scan root (e.g. `posts/hello.md`); as written for a `../` path-table, absolute for a `/` or `~/` one. |
 | `basename` | TEXT | The filename, including extension (`hello.md`). |
 | `dir` | TEXT | The parent directory relative to the root (`posts`); the empty string for files directly under the root. |
 | `ext` | TEXT | The file extension without the leading dot (`md`). Original case is preserved — `Photo.JPG` yields `JPG`; use `LOWER(ext)` for case-insensitive matching. `NULL` when the file has no extension. |
