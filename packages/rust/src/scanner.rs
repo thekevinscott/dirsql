@@ -1703,6 +1703,24 @@ mod tests {
     }
 
     #[test]
+    fn a_gitignored_file_the_glob_names_outright_is_listed_and_a_wildcard_still_hides_it() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir(repo.path().join(".git")).unwrap();
+        fs::write(repo.path().join(".gitignore"), "*.log\ndist/\n").unwrap();
+        fs::create_dir(repo.path().join("dist")).unwrap();
+        fs::write(repo.path().join("dist/out.log"), "").unwrap();
+        fs::write(repo.path().join("a.log"), "").unwrap();
+        let none = TableMatcher::new(&[], &[]).unwrap();
+        let scan =
+            |pattern: &str| scan_glob(repo.path(), &compile_glob(pattern).unwrap(), &none, true);
+
+        assert_eq!(scan("a.log"), vec![PathBuf::from("a.log")]);
+        assert_eq!(scan("dist/out.log"), vec![PathBuf::from("dist/out.log")]);
+        assert_eq!(scan("{a,b}.log"), vec![PathBuf::from("a.log")]);
+        assert!(scan("*.log").is_empty());
+    }
+
+    #[test]
     fn is_gitignored_path_ignores_a_path_the_repo_gitignore_matches() {
         let repo = tempfile::tempdir().unwrap();
         fs::create_dir(repo.path().join(".git")).unwrap();
