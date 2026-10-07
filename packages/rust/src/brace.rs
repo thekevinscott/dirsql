@@ -416,6 +416,14 @@ mod tests {
     }
 
     #[test]
+    fn a_class_spanning_a_slash_is_literal() {
+        assert_eq!(escape_braces("[b/c]/*"), "[[]b/c]/*");
+        assert_eq!(escape_braces("a[/]b"), "a[[]/]b");
+        assert_eq!(escape_braces("[!/]x"), "[[]!/]x");
+        assert_eq!(escape_braces("[a]/[b]"), "[a]/[b]");
+    }
+
+    #[test]
     fn expand_leaves_an_unpartnered_brace_literal() {
         assert_eq!(expand("{a.md"), vec!["[{]a.md"]);
         assert_eq!(expand("a}.md"), vec!["a[}].md"]);

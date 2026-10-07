@@ -76,6 +76,9 @@ A test runs every row against dirsql as a path-table and, with the leading
 | `./[!a].md` | `1.md`, `2.md`, `3.md`, `4.md`, `b.md`, `c.md` |  |
 | `./\[a\].md` | `[a].md` |  |
 | `./[z.md` | `[z.md` |  |
+| `./[d/x]ocs/api.md` | none |  |
+| `./docs[/]api.md` | none |  |
+| `./[!/]*/api.md` | none |  |
 | `./{a,b}.md` | `a.md`, `b.md` |  |
 | `./{q}.md` | `{q}.md` |  |
 | `./{a.md` | none |  |
