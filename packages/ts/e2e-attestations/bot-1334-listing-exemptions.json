@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e query-contract fanout",
+  "ran_at": 1791338170,
+  "exit_code": 0,
+  "commit": "591f86782e9e421c5c57506347a7e43afbef4ad7",
+  "branch": "bot/1334-listing-exemptions"
+}
