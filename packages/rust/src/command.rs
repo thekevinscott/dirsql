@@ -730,7 +730,10 @@ mod tests {
         let argv = |script: &str| vec!["sh".to_string(), "-c".to_string(), script.to_string()];
         let all = run_argv_stdout("t", &argv("echo a; echo b"), &cwd(), None).unwrap();
         assert_eq!(all, "a\nb\n");
-        assert_eq!(run_argv_stdout("t", &argv("true"), &cwd(), None).unwrap(), "");
+        assert_eq!(
+            run_argv_stdout("t", &argv("true"), &cwd(), None).unwrap(),
+            ""
+        );
     }
 
     #[test]

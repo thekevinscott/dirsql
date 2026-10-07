@@ -18,16 +18,8 @@ fn fixture() -> TempDir {
     let root = TempDir::new().unwrap();
     fs::write(root.path().join("combine.sh"), COMBINE_SCRIPT).unwrap();
     fs::create_dir_all(root.path().join("docs")).unwrap();
-    fs::write(
-        root.path().join("docs/a.md"),
-        r#"{"title":"alpha","n":1}"#,
-    )
-    .unwrap();
-    fs::write(
-        root.path().join("docs/b.md"),
-        r#"{"title":"bravo","n":2}"#,
-    )
-    .unwrap();
+    fs::write(root.path().join("docs/a.md"), r#"{"title":"alpha","n":1}"#).unwrap();
+    fs::write(root.path().join("docs/b.md"), r#"{"title":"bravo","n":2}"#).unwrap();
     root
 }
 

@@ -270,10 +270,7 @@ mod tests {
 
     #[test]
     fn parse_rows_reads_every_line_skipping_blanks() {
-        assert_eq!(
-            parse_rows("{\"a\":1}\n\n  \n{\"b\":2}\n").unwrap().len(),
-            2
-        );
+        assert_eq!(parse_rows("{\"a\":1}\n\n  \n{\"b\":2}\n").unwrap().len(), 2);
     }
 
     #[test]
