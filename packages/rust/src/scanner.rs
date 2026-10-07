@@ -338,10 +338,8 @@ pub fn compile_globs(patterns: &[&str]) -> Result<PathGlob, GlobError> {
     }
     let mut components = Vec::new();
     let mut starts = Vec::new();
-    // All or nothing: the walk prunes a directory no component can enter, so
-    // a word left without components would lose its matches.
-    let compiled: Option<Vec<_>> = words.iter().map(|w| compile_components(w)).collect();
-    for word_components in compiled.unwrap_or_default() {
+    for word in &words {
+        let word_components = compile_components(word)?;
         starts.push(components.len());
         components.extend(word_components);
         components.push(Component::End);
@@ -358,9 +356,7 @@ fn is_dot_named(name: &OsStr) -> bool {
     name.as_encoded_bytes().first() == Some(&b'.')
 }
 
-/// A word whose components do not compile on their own (a class spanning a
-/// `/`) gets none.
-fn compile_components(word: &str) -> Option<Vec<Component>> {
+fn compile_components(word: &str) -> Result<Vec<Component>, GlobError> {
     let mut components = word
         .split('/')
         .map(|c| match c {
@@ -368,10 +364,9 @@ fn compile_components(word: &str) -> Option<Vec<Component>> {
             _ if is_dot_named(OsStr::new(c)) => Pattern::new(c).map(Component::DotName),
             _ => Pattern::new(c).map(Component::Name),
         })
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
+        .collect::<Result<Vec<_>, _>>()?;
     components.dedup_by(|a, b| matches!((a, b), (Component::AnyDepth, Component::AnyDepth)));
-    Some(components)
+    Ok(components)
 }
 
 /// Module-argument spelling for a scan that respects `.gitignore`.
@@ -1568,17 +1563,10 @@ mod tests {
     }
 
     #[test]
-    fn a_pattern_whose_components_do_not_compile_alone_follows_no_link() {
-        let glob = compile_glob("[a/b]").unwrap();
+    fn a_glob_without_words_follows_no_link() {
+        let glob = compile_globs(&[]).unwrap();
         assert!(glob.components.is_empty());
         assert!(!glob.reaches(&glob.start(), Kind::LinkedDir));
-    }
-
-    #[test]
-    fn one_brace_word_without_components_leaves_the_glob_without_any() {
-        let glob = compile_glob("{x,[a/b]}").unwrap();
-        assert!(glob.components.is_empty());
-        assert!(!glob.has_components());
     }
 
     #[test]
@@ -1678,7 +1666,7 @@ mod tests {
     #[test]
     fn enters_every_real_directory_when_the_glob_has_no_components() {
         let ignore = TableMatcher::new(&[], &[]).unwrap();
-        let glob = compile_glob("[a/b]").unwrap();
+        let glob = compile_globs(&[]).unwrap();
         let walk = Walk {
             ignore: &ignore,
             glob: Some(&glob),
