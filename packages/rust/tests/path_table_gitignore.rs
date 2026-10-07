@@ -205,8 +205,8 @@ fn a_path_table_rooted_inside_a_gitignored_directory_still_scans() {
 #[test]
 fn no_ignore_restores_gitignored_files_but_keeps_the_built_in_floor() {
     let root = fixture();
-    fs::create_dir_all(root.path().join("node_modules/pkg")).unwrap();
-    fs::write(root.path().join("node_modules/pkg/index.js"), "js").unwrap();
+    fs::create_dir_all(root.path().join(".git/hooks")).unwrap();
+    fs::write(root.path().join(".git/hooks/pre-commit"), "sh").unwrap();
     let db = DirSQL::builder()
         .root(root.path())
         .no_ignore(true)
@@ -224,7 +224,7 @@ fn no_ignore_restores_gitignored_files_but_keeps_the_built_in_floor() {
         "file-level gitignore rules are off too, got: {scanned:?}"
     );
     assert!(
-        !scanned.contains(&"node_modules/pkg/index.js".to_string()),
+        !scanned.contains(&".git/hooks/pre-commit".to_string()),
         "the built-in defaults still apply under no_ignore, got: {scanned:?}"
     );
 }

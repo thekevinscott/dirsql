@@ -35,11 +35,11 @@ def describe_no_ignore():
         assert sorted(r["path"] for r in rows) == ["ignored.md", "kept.md"]
 
     @pytest.mark.asyncio
-    async def it_keeps_the_built_in_floor_under_no_ignore(gitignored_dir, tmp_path):
+    async def it_walks_node_modules_under_no_ignore(gitignored_dir, tmp_path):
         (tmp_path / "node_modules").mkdir()
         (tmp_path / "node_modules" / "dep.js").write_text("x", encoding="utf-8")
         db = DirSQL(gitignored_dir, no_ignore=True)
 
         rows = await db.query("SELECT path FROM './**'")
 
-        assert "node_modules/dep.js" not in [r["path"] for r in rows]
+        assert "node_modules/dep.js" in [r["path"] for r in rows]

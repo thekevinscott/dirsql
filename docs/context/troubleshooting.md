@@ -52,7 +52,6 @@ uvx dirsql "SELECT path FROM './**'" --format json
   ```
 
   Naming the directory outright also works: `'./build'` scans `build/` even when it is ignored.
-- **The files are under `node_modules`**, which is skipped unless the path names it: `'./node_modules/**'`.
 - **The files start with a dot, or sit under a directory that does.** Spell the dot: `'./.git/**'`, `'./**/.env'`.
 
 ### `table ./ may not be modified`

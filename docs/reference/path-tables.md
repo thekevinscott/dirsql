@@ -198,8 +198,8 @@ over a very large table. Its output *is* the table:
   ```
   dirsql_parsed: parser produced no rows for `posts/*.md`; cannot infer a schema
   ```
-- **The skip rules still apply.** A parsed scan honors the same `node_modules`
-  /`.git`/`ignore` rules a stat scan does (see below).
+- **The skip rules still apply.** A parsed scan honors the same `.git`
+  /`ignore` rules a stat scan does (see below).
 - **The parser runs on every start.** A parsed path-table is not kept in the
   [persistent cache](/howto/persist); declared tables are.
 
@@ -250,14 +250,9 @@ choice is stated as one trade in
 A path-table scan applies the same [`ignore`](/reference/config) patterns your
 declared tables use — matched against root-relative paths under the same
 [glob rule](/reference/config#glob-rule) as the path itself, `*` one level and
-`**` any depth — plus two built-in defaults so a zero-config
-`SELECT * FROM './**'` does not drown in machinery:
-
-- `**/node_modules/**`
-- `**/.git/**`
-
-Both apply at any depth, so a `node_modules` nested inside a subdirectory is
-skipped just like one at the top.
+`**` any depth — plus one built-in default, `**/.git/**`, which applies at any depth.
+`node_modules` is an ordinary directory: a `.gitignore` that lists it hides it,
+as it hides any other.
 
 ### `.gitignore`
 
@@ -265,9 +260,7 @@ Path-table scans also respect `.gitignore` files by default, inside a git
 repo, the way git, fd and ripgrep do: a `.gitignore` applies below its own
 directory, deeper files override shallower ones, `!pattern` re-includes, and
 an ignored directory is pruned rather than walked. In a typical repo this
-excludes build output, virtualenvs, and caches with zero ceremony. The
-built-in defaults above remain as a floor for directories with no
-`.gitignore` at all.
+excludes build output, virtualenvs, and caches with zero ceremony.
 
 A `.gitignore` is in force only when a directory holding `.git` encloses it.
 Outside a repo none applies, at the scan's start, above it or below it: a
@@ -279,7 +272,7 @@ applies, including those above the directory a scan starts in, so
 Pass [`--no-ignore`](./cli.md#flags) to restore the full walk — the
 determinism switch for scripted use, since results otherwise depend on
 `.gitignore` state. It disables only the `.gitignore` respect; the built-in
-defaults and configured `ignore` patterns still apply.
+default and configured `ignore` patterns still apply.
 
 ### Naming a skipped directory
 
@@ -287,22 +280,12 @@ Skip rules are judged from the directory the scan starts in, so pointing at a
 skipped directory — built-in or gitignored — still scans it:
 
 ```sql
-SELECT path FROM './**';                   -- no node_modules rows
-SELECT path FROM './node_modules/*/package.json';  -- scans it anyway
+SELECT path FROM './.git/*';               -- scans .git anyway
 SELECT path FROM './dist';                 -- scans dist/ even when gitignored
 ```
 
 The `.gitignore` files in force there, including those above it, still
 filter what lies beneath it.
-
-A `node_modules` component after a glob names it too, at any depth:
-
-```sql
-SELECT path FROM './**/node_modules/*/package.json';  -- every node_modules
-SELECT path FROM './*/node_modules/**';               -- one level down
-```
-
-Only the literal name counts; `'./**/*.js'` still skips every `node_modules`.
 
 ### Hidden files
 

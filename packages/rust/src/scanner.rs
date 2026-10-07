@@ -131,8 +131,7 @@ fn scan_below(
 ///
 /// The single-glob counterpart to [`scan_directory`]: a path-table names one
 /// glob and mints no table names, so there is nothing to fan out over. Shares
-/// the walker, and with it the reserved-directory rule, and the same
-/// [`TableMatcher`] ignore handling declared tables get.
+/// the walker and the same [`TableMatcher`] ignore handling declared tables get.
 ///
 /// Skip rules are judged on paths relative to `root`, so a table rooted at a
 /// directory the rules would otherwise skip still scans it.
@@ -413,9 +412,6 @@ fn walk(
         walk: walker,
         dir: start.to_path_buf(),
         rel: rel.to_path_buf(),
-        // Depth below `root`, not below `start`: the reserved-directory rule
-        // is about the tree's top level wherever the walk begins.
-        depth: rel.components().count(),
         states,
         linked: false,
     };
@@ -435,7 +431,6 @@ struct Place<'a> {
     walk: Walk<'a>,
     dir: PathBuf,
     rel: PathBuf,
-    depth: usize,
     states: Vec<usize>,
     linked: bool,
 }
@@ -450,7 +445,6 @@ impl<'a> Place<'a> {
             mut walk,
             dir,
             rel,
-            depth,
             states,
             linked,
         } = self;
@@ -506,7 +500,6 @@ impl<'a> Place<'a> {
                         walk: walk.clone(),
                         dir: dir.join(listing.name(listed)),
                         rel: child,
-                        depth: depth + 1,
                         states: next,
                         linked,
                     }))),
@@ -587,7 +580,6 @@ impl Walk<'_> {
     /// rule, then the `.gitignore` files in force.
     fn admits(&self, is_dir: bool, name: &OsStr, path: &Path, rel: &Path) -> bool {
         should_descend(is_dir, rel, self.ignore)
-            && !(is_dir && self.ignore.prunes_directory(name))
             && self.admits_name(name)
             && (self.frames.is_empty() || !is_gitignored(&self.frames, path, is_dir))
     }
@@ -1037,7 +1029,6 @@ mod tests {
             walk: walk_with(&ignore, None, Vec::new()),
             dir: root.path().to_path_buf(),
             rel: PathBuf::new(),
-            depth: 0,
             states: Vec::new(),
             linked: false,
         };
@@ -1331,15 +1322,14 @@ mod tests {
     }
 
     #[test]
-    fn a_table_walk_skips_a_node_modules_directory_no_table_names() {
+    fn a_table_walk_enters_a_node_modules_directory() {
         let ignore = TableMatcher::new(&[("**/*.js", "t")], &[]).unwrap();
         let walk = walk_with(&ignore, Some(ignore.walk_glob()), Vec::new());
         let admits = |is_dir, name: &str| {
             walk.admits(is_dir, OsStr::new(name), Path::new(name), Path::new(name))
         };
-        assert!(!admits(true, "node_modules"));
+        assert!(admits(true, "node_modules"));
         assert!(admits(false, "node_modules"));
-        assert!(admits(true, "src"));
     }
 
     #[test]

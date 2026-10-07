@@ -67,5 +67,6 @@ why indexes belong to only one of them, are in
 - Paths outside the root resolve too — `'/var/log/*.log'`, `'../notes'`,
   `'~/notes/*.md'` — reporting absolute paths
   ([path-tables reference](../reference/path-tables.md#paths-outside-the-index-root)).
-- `node_modules/` and `.git/` are skipped by default so a bare `'./**'` does
-  not drown in machinery ([skip rules](../reference/path-tables.md#skip-rules)).
+- `.git/` is skipped by default, and a git repo's `.gitignore` hides what it
+  lists, so a bare `'./**'` does not drown in machinery
+  ([skip rules](../reference/path-tables.md#skip-rules)).
