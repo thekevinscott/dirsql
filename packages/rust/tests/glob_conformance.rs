@@ -168,6 +168,8 @@ fn every_row_of_the_glob_page_holds() {
         if row.divergence != "absolute" {
             let glob = pattern.strip_prefix("./").unwrap();
             let got = config_paths(&root, glob);
+            // A config table sees each file once, by its own path.
+            let expected: Vec<String> = expected.iter().map(|p| p.replace("//", "/")).collect();
             if got != expected {
                 failures.push(format!("config {}: {got:?} != {expected:?}", row.pattern));
             }

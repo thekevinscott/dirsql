@@ -267,6 +267,19 @@ fn scan_glob_a_double_star_does_not_cross_a_dot_directory_the_next_component_spe
 }
 
 #[test]
+fn scan_glob_a_parent_component_after_a_wildcard_is_reported_as_written() {
+    let dir = TempDir::new().unwrap();
+    for file in ["top.md", "docs/a.md", "real/r.md"] {
+        fs::create_dir_all(dir.path().join(file).parent().unwrap()).unwrap();
+        fs::write(dir.path().join(file), "").unwrap();
+    }
+    assert_eq!(
+        scan_paths(&dir, "*/../top.md"),
+        vec!["docs/../top.md", "real/../top.md"]
+    );
+}
+
+#[test]
 fn scan_dirs_lists_the_directories_the_scan_enters() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();

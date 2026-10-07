@@ -208,6 +208,9 @@ pub struct PathGlob {
     components: Vec<Component>,
     /// Where each word's components begin.
     starts: Vec<usize>,
+    /// Whether any word spells a `.` or `..` component, which the walk has to
+    /// enter itself: a directory listing never names them.
+    spells_relative: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -251,6 +254,19 @@ impl PathGlob {
 
     fn has_components(&self) -> bool {
         !self.components.is_empty()
+    }
+
+    /// The `.` and `..` entries a directory reached with `states` has as far
+    /// as the pattern is concerned, each with the states it leads to.
+    fn relative_entries(&self, states: &[usize]) -> Vec<(&'static str, Vec<usize>)> {
+        if !self.spells_relative {
+            return Vec::new();
+        }
+        [".", ".."]
+            .into_iter()
+            .map(|name| (name, self.step(states, OsStr::new(name), Kind::Dir)))
+            .filter(|(_, next)| self.reaches(next, Kind::Dir))
+            .collect()
     }
 
     fn start(&self) -> Vec<usize> {
@@ -319,7 +335,11 @@ pub fn compile_globs(patterns: &[&str]) -> Result<PathGlob, GlobError> {
     let words: Vec<String> = patterns
         .iter()
         .flat_map(|pattern| crate::brace::expand(pattern))
+        .map(|word| collapse_separators(&word))
         .collect();
+    let spells_relative = words
+        .iter()
+        .any(|word| word.split('/').any(|c| c == "." || c == ".."));
     let mut files = Vec::new();
     let mut spelled_dot_names = Vec::new();
     for word in &words {
@@ -343,7 +363,20 @@ pub fn compile_globs(patterns: &[&str]) -> Result<PathGlob, GlobError> {
         spelled_dot_names,
         components,
         starts,
+        spells_relative,
     })
+}
+
+/// `word` with each run of `/` made one, as the shell reads a pattern's
+/// components.
+fn collapse_separators(word: &str) -> String {
+    let mut out = String::with_capacity(word.len());
+    for c in word.chars() {
+        if c != '/' || !out.ends_with('/') {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn is_dot_named(name: &OsStr) -> bool {
@@ -486,6 +519,22 @@ impl<'a> Place<'a> {
         } else {
             Vec::new()
         };
+        let relative = walk.glob.map_or_else(Vec::new, |glob| {
+            glob.relative_entries(&states)
+                .into_iter()
+                .map(|(name, next)| {
+                    Step::Dir(Box::new(Place {
+                        walk: walk.clone(),
+                        dir: dir.join(name),
+                        rel: rel.join(name),
+                        depth: depth + 1,
+                        states: next,
+                        linked,
+                    }))
+                })
+                .collect::<Vec<_>>()
+        });
+        steps.extend(relative);
         let entered =
             listing
                 .entries()
@@ -1035,6 +1084,46 @@ mod tests {
         let [a] = <[Place<'_>; 1]>::try_from(explored_dirs(top)).ok().unwrap();
         let nested: Vec<PathBuf> = explored_dirs(a).into_iter().map(|p| p.rel).collect();
         assert_eq!(nested, vec![Path::new("a").join(".dirsql")]);
+    }
+
+    #[test]
+    fn explore_enters_a_current_directory_component_the_glob_spells() {
+        let root = tempfile::tempdir().unwrap();
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("./x").unwrap();
+        let top = Place {
+            walk: walk_with(&ignore, Some(&glob), Vec::new()),
+            dir: root.path().to_path_buf(),
+            rel: PathBuf::new(),
+            depth: 0,
+            states: glob.start(),
+            linked: false,
+        };
+        let [dot] = <[Place<'_>; 1]>::try_from(explored_dirs(top)).ok().unwrap();
+        assert_eq!(dot.rel, Path::new("."));
+        assert_eq!(dot.dir, root.path().join("."));
+        assert_eq!(dot.depth, 1);
+    }
+
+    #[test]
+    fn relative_entries_name_only_the_components_the_glob_spells() {
+        let glob = compile_glob("*/../x").unwrap();
+        let states = glob.step(&glob.start(), OsStr::new("docs"), Kind::Dir);
+        let entries = glob.relative_entries(&states);
+        assert_eq!(
+            entries.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+            vec![".."]
+        );
+        let plain = compile_glob("*/x").unwrap();
+        let states = plain.step(&plain.start(), OsStr::new("docs"), Kind::Dir);
+        assert!(plain.relative_entries(&states).is_empty());
+    }
+
+    #[test]
+    fn a_glob_spells_relative_components_only_when_a_word_has_one() {
+        assert!(compile_glob("a/./b").unwrap().spells_relative);
+        assert!(compile_glob("a/../b").unwrap().spells_relative);
+        assert!(!compile_glob("a/b").unwrap().spells_relative);
     }
 
     #[test]
