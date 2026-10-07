@@ -65,20 +65,3 @@ def describe_fanout():
         b_rows = await db.query("SELECT col_b FROM tb")
         assert len(b_rows) == 1, "second-declared table must be populated"
         assert b_rows[0]["col_b"] == "B"
-
-    @pytest.mark.asyncio
-    async def it_errors_when_a_placeholder_collides_with_a_column(tmp_dir):
-        _write_fanout_file(tmp_dir)
-        db = DirSQL(
-            tmp_dir,
-            tables=[
-                Table(
-                    name="a",
-                    ddl="CREATE TABLE a (id TEXT, col_a TEXT)",
-                    glob="data/{id}/metadata.json",
-                    on_file=lambda _path: [{"col_a": "A"}],
-                ),
-            ],
-        )
-        with pytest.raises(Exception, match="id"):
-            await db.ready()

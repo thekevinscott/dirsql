@@ -64,63 +64,6 @@ glob = "items/*.csv"
             assert results[1]["path"] == "items/b.csv"
             assert results[1]["basename"] == "b.csv"
 
-    def describe_glob_placeholders():
-        @pytest.mark.asyncio
-        async def it_errors_when_a_placeholder_collides_with_a_column(config_dir):
-            _write(
-                os.path.join(config_dir, "comments", "thread-1", "a.txt"),
-                "hello",
-            )
-            _write(
-                os.path.join(config_dir, ".dirsql.toml"),
-                """\
-[[table]]
-name = "comments"
-ddl = "CREATE TABLE comments (thread_id TEXT, basename TEXT)"
-glob = "comments/{thread_id}/*.txt"
-"""
-                + _HOOK_PATH_BASENAME
-                + "\n",
-            )
-
-            db = DirSQL(
-                root=config_dir, config=os.path.join(config_dir, ".dirsql.toml")
-            )
-            with pytest.raises(Exception, match="thread_id"):
-                await db.ready()
-
-        @pytest.mark.asyncio
-        async def it_treats_a_non_colliding_placeholder_as_a_wildcard(config_dir):
-            _write(
-                os.path.join(config_dir, "comments", "thread-1", "a.txt"),
-                "hello",
-            )
-            _write(
-                os.path.join(config_dir, "comments", "thread-2", "b.txt"),
-                "world",
-            )
-            _write(
-                os.path.join(config_dir, ".dirsql.toml"),
-                """\
-[[table]]
-name = "comments"
-ddl = "CREATE TABLE comments (path TEXT, basename TEXT)"
-glob = "comments/{thread_id}/*.txt"
-"""
-                + _HOOK_PATH_BASENAME
-                + "\n",
-            )
-
-            db = DirSQL(
-                root=config_dir, config=os.path.join(config_dir, ".dirsql.toml")
-            )
-            await db.ready()
-            results = await db.query("SELECT basename FROM comments ORDER BY basename")
-            assert len(results) == 2
-            assert results[0]["basename"] == "a.txt"
-            assert results[1]["basename"] == "b.txt"
-            assert "thread_id" not in results[0]
-
     def describe_stat_virtuals():
         @pytest.mark.asyncio
         async def it_exposes_stat_virtuals(config_dir):

@@ -124,3 +124,19 @@ fn a_file_name_still_names_that_file() {
     let root = tree(&["docs/a.md", "top.md"]);
     assert_eq!(config_paths(root.path(), "top.md"), vec!["top.md"]);
 }
+
+#[test]
+fn a_braced_name_is_not_a_wildcard() {
+    let root = tree(&["{name}.md", "x.md"]);
+    let expected = vec!["{name}.md"];
+    assert_eq!(path_table_paths(root.path(), "{name}.md"), expected);
+    assert_eq!(config_paths(root.path(), "{name}.md"), expected);
+}
+
+#[test]
+fn a_brace_alternation_still_matches_each_option() {
+    let root = tree(&["a.md", "b.md", "c.md"]);
+    let expected = vec!["a.md", "b.md"];
+    assert_eq!(path_table_paths(root.path(), "{a,b}.md"), expected);
+    assert_eq!(config_paths(root.path(), "{a,b}.md"), expected);
+}

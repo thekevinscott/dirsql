@@ -69,20 +69,4 @@ describe("DirSQL fan-out", () => {
     const b = await db.query("SELECT col_b FROM tb");
     expect(b).toEqual([{ col_b: "B" }]);
   });
-
-  it("rejects a glob placeholder that collides with a declared column", async () => {
-    const db = new DirSQL({
-      root: dir,
-      tables: [
-        {
-          name: "a",
-          ddl: "CREATE TABLE a (id TEXT, col_a TEXT)",
-          glob: "data/{id}/metadata.json",
-          onFile: () => [{ col_a: "A" }],
-        },
-      ],
-    });
-
-    await expect(db.ready).rejects.toThrow(/id/);
-  });
 });

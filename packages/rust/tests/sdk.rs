@@ -836,26 +836,6 @@ fn invalid_glob_errors() {
     assert!(matches!(result, Err(dirsql::DirSqlError::Matcher { .. })));
 }
 
-// A `{name}` placeholder that is not a declared column is a pure match
-// wildcard: it produces no column value and no error.
-#[test]
-fn undeclared_capture_is_dropped() {
-    let root = TempDir::new().unwrap();
-    fs::create_dir_all(root.path().join("logs")).unwrap();
-    fs::write(root.path().join("logs").join("a.txt"), "x").unwrap();
-    let table = Table::new(
-        "entries",
-        "CREATE TABLE entries (path TEXT)",
-        "logs/{kind}.txt",
-        |_| vec![Row::new()],
-    );
-    let db = DirSQL::new(root.path(), vec![table]).unwrap();
-    let rows = db.query("SELECT * FROM entries").unwrap();
-    assert_eq!(rows.len(), 1);
-    assert!(!rows[0].contains_key("kind"));
-    assert!(rows[0].contains_key("path"));
-}
-
 #[test]
 fn duplicate_table_name_errors() {
     let root = TempDir::new().unwrap();
@@ -937,30 +917,6 @@ fn fanout_overlapping_distinct_globs_populate_both_tables() {
     let b_rows = db.query("SELECT col_b FROM tb").unwrap();
     assert_eq!(b_rows.len(), 1, "tb (second-declared) populated");
     assert_eq!(b_rows[0]["col_b"], Value::Text("B".into()));
-}
-
-// A programmatic table whose glob declares a `{name}` placeholder colliding
-// with one of its DDL columns is rejected at construction, just like a
-// config-file table: captures no longer populate columns.
-#[test]
-fn capture_column_collision_errors_on_construction() {
-    let root = fanout_root();
-    let a = Table::new(
-        "a",
-        "CREATE TABLE a (id TEXT, col_a TEXT)",
-        "data/{id}/metadata.json",
-        |_path| vec![HashMap::from([("col_a".into(), Value::Text("A".into()))])],
-    );
-
-    let err = match DirSQL::new(root.path(), vec![a]) {
-        Ok(_) => panic!("a {{id}} placeholder colliding with the id column must error"),
-        Err(e) => e,
-    };
-    let msg = err.to_string();
-    assert!(
-        msg.contains("id") && msg.contains("collides"),
-        "error must name the collision, got: {msg}"
-    );
 }
 
 #[test]
