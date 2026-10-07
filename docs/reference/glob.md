@@ -147,6 +147,14 @@ A test runs every row against dirsql as a path-table and, with the leading
 
 `.git` needs no rule of its own: the dotfile rule hides it.
 
+## Syntax, not behavior
+
+A path-table starts with `./`, `/`, `~/` or `../`. That is how `FROM` tells a
+path from a table name, so `FROM './**/*.md'` is a glob and `FROM docs` is a
+table. A config `glob` has no such need and is written without the `./`.
+Bash accepts a bare `**/*.md`; dirsql does not in a path-table. This is syntax,
+not a divergence: past the prefix, the glob behaves as bash does.
+
 ## Where the glob is anchored
 
 A path-table pattern is relative to the index root and starts with `./`. A config `[[table]] glob`
