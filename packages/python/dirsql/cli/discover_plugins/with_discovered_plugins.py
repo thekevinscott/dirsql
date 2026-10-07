@@ -4,24 +4,21 @@ This is the public entry point of the ``discover_plugins`` package (installed =
 active, CLI only; #363/#529). A plugin is an ordinary Python package that
 declares ``[project.entry-points.dirsql]`` naming its top-level module and ships
 a ``dirsql.toml`` fragment there; when installed alongside ``dirsql``, the
-``pip``/``uvx`` launcher discovers it and injects the fragment as a ``-c`` flag
-plus the hidden ``--include-default`` (#604) when the user gave no ``-c``.
+``pip``/``uvx`` launcher discovers it and injects the fragment as a ``-c`` flag.
 Opt out via ``--no-plugin`` / ``DIRSQL_NO_PLUGIN=1``. The compiled binary knows
 nothing about plugins, and the SDK never discovers -- only this CLI launcher.
-The helpers each live in their own module (``user_passed_config``,
-``discovery_disabled``, ``fragment_path``, ``discovered_fragments``).
+The helpers each live in their own module (``discovery_disabled``, ``fragment_path``, ``discovered_fragments``).
 """
 
 from __future__ import annotations
 
 from .discovered_fragments import discovered_fragments
 from .discovery_disabled import NO_PLUGIN_FLAG, discovery_disabled
-from .user_passed_config import user_passed_config
 
 
 def with_discovered_plugins(argv: list[str]) -> list[str]:
     """Return ``argv`` with each installed plugin's fragment appended as ``-c``
-    (plus ``--include-default`` when the user passed no ``-c``). ``--no-plugin``
+    ``--no-plugin``
     / ``DIRSQL_NO_PLUGIN`` skip discovery, consuming the flag. ``init`` and ``context`` take no
     config, so they are left untouched. Raises if a declared plugin is missing its
     module or fragment (the launcher surfaces a clean error).
@@ -40,8 +37,6 @@ def with_discovered_plugins(argv: list[str]) -> list[str]:
     if not fragments:
         return argv
     injected: list[str] = []
-    if not user_passed_config(argv):
-        injected.append("--include-default")
     for fragment in fragments:
         injected.append("-c")
         injected.append(fragment)

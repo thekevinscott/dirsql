@@ -159,10 +159,10 @@ on-file = "sh abscheck.sh"
 
 /// The absolute path resolves even when the hook's working directory (the
 /// config dir) is not the index root. Since #540 the index root is the
-/// invocation cwd, so `dirsql` is launched from the data dir while its config
-/// lives elsewhere, reached via an absolute `--config`. The hook (cwd = config
-/// dir) `cat`s the file only because the path is absolute — a root-relative
-/// path would not resolve from the config dir.
+/// invocation cwd, so `dirsql` is launched from another dir while its config
+/// lives elsewhere, reached via an absolute `--config`, and the glob anchors at
+/// the config dir. The hook (cwd = config dir) `cat`s the file only because the
+/// path is absolute.
 #[test]
 fn on_file_absolute_path_resolves_when_config_dir_differs_from_root() {
     let project = TempDir::new().unwrap();
@@ -183,9 +183,9 @@ on-file = "sh abscheck.sh"
 "#,
     )
     .unwrap();
-    fs::create_dir_all(project.path().join("data")).unwrap();
+    fs::create_dir_all(configdir.path().join("data")).unwrap();
     fs::write(
-        project.path().join("data").join("meta.json"),
+        configdir.path().join("data").join("meta.json"),
         r#"[{"paper_id":"a"}]"#,
     )
     .unwrap();

@@ -51,9 +51,16 @@ def _reset_instances():
 
 @pytest.fixture
 def mock_core():
-    """Replace the Rust-backed ``_RustDirSQL`` alias in ``dirsql._async``."""
-    with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
-        yield _FakeRustDirSQL
+    """Build the wrapper with a fake core through its factory seam."""
+    return _wrapper_with_core(_FakeRustDirSQL)
+
+
+def _wrapper_with_core(core_factory):
+    class WrapperWithCore(async_mod.DirSQL):
+        def _new_core(self, root, **kwargs):
+            return core_factory(root, **kwargs)
+
+    return WrapperWithCore
 
 
 @pytest.fixture
@@ -98,14 +105,14 @@ def describe_extensions_kwarg():
     # packages/python/README.md.
     @pytest.mark.asyncio
     async def it_defaults_extensions_to_none(mock_core):
-        db = async_mod.DirSQL("/root", tables=["t"])
+        db = mock_core("/root", tables=["t"])
         await db.ready()
 
         assert _FakeRustDirSQL.instances[0].extensions is None
 
     @pytest.mark.asyncio
     async def it_forwards_literal_paths_verbatim(mock_core, mock_cwd):
-        db = async_mod.DirSQL(
+        db = mock_core(
             "/root",
             tables=["t"],
             extensions=[{"path": "/abs/libvec.so", "entrypoint": "sqlite3_vec_init"}],
@@ -118,9 +125,7 @@ def describe_extensions_kwarg():
 
     @pytest.mark.asyncio
     async def it_defaults_a_missing_entrypoint_to_none(mock_core, mock_cwd):
-        db = async_mod.DirSQL(
-            "/root", tables=["t"], extensions=[{"path": "./rel/libvec.so"}]
-        )
+        db = mock_core("/root", tables=["t"], extensions=[{"path": "./rel/libvec.so"}])
         await db.ready()
 
         assert _FakeRustDirSQL.instances[0].extensions == [
@@ -136,9 +141,7 @@ def describe_extensions_kwarg():
         )
         mock_glob.return_value = ["/site-packages/sqlite_vec/vec0.so"]
 
-        db = async_mod.DirSQL(
-            "/root", tables=["t"], extensions=[{"path": "sqlite_vec"}]
-        )
+        db = mock_core("/root", tables=["t"], extensions=[{"path": "sqlite_vec"}])
         await db.ready()
 
         assert _FakeRustDirSQL.instances[0].extensions == [
@@ -151,9 +154,7 @@ def describe_extensions_kwarg():
     ):
         mock_isfile.return_value = True
 
-        db = async_mod.DirSQL(
-            "/root", tables=["t"], extensions=[{"path": "sqlite_vec"}]
-        )
+        db = mock_core("/root", tables=["t"], extensions=[{"path": "sqlite_vec"}])
         await db.ready()
 
         assert _FakeRustDirSQL.instances[0].extensions == [
@@ -170,7 +171,7 @@ def describe_extensions_kwarg():
         )
         mock_glob.return_value = ["/site-packages/sqlite_vec/vec0.so"]
 
-        db = async_mod.DirSQL(config="/cfg/.dirsql.toml")
+        db = mock_core(config="/cfg/.dirsql.toml")
         await db.ready()
 
         inst = _FakeRustDirSQL.instances[0]
@@ -185,7 +186,7 @@ def describe_extensions_kwarg():
     ):
         mock_find_spec.return_value = None
 
-        db = async_mod.DirSQL("/root", tables=["t"], extensions=[{"path": "nope"}])
+        db = mock_core("/root", tables=["t"], extensions=[{"path": "nope"}])
         with pytest.raises(ValueError, match="not installed"):
             await db.ready()
 

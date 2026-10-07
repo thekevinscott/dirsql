@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import weakref
 
 from dirsql._dirsql import DirSQL as _RustDirSQL
 from dirsql.resolve_configs_extension_specs import resolve_configs_extension_specs
@@ -9,13 +10,18 @@ from dirsql.resolve_extension import resolve_extension_path
 
 
 class _WatchStream:
-    """Async iterator that polls for file events."""
+    """Async iterator of file events.
+
+    Every stream on one ``DirSQL`` receives every event observed after it
+    was created: one shared poll fills the buffer of each live stream.
+    """
 
     def __init__(self, owner):
         self._owner = owner
         self._db = None
         self._started = False
         self._buffer = []
+        owner._watch_streams.add(self)
 
     def __aiter__(self):
         return self
@@ -29,14 +35,22 @@ class _WatchStream:
             await asyncio.to_thread(db._start_watcher)
             self._started = True
 
+        owner = self._owner
+        while not self._buffer:
+            poll = owner._watch_poll
+            if poll is None or poll.done():
+                poll = owner._watch_poll = asyncio.ensure_future(self._poll())
+            # Shielded so a cancelled consumer cannot drop a batch that the
+            # other streams are still waiting on.
+            await asyncio.shield(poll)
+        return self._buffer.pop(0)
+
+    async def _poll(self):
         db = self._db
         assert db is not None
-        while True:
-            if self._buffer:
-                return self._buffer.pop(0)
-            events = await asyncio.to_thread(db._poll_events, 200)
-            if events:
-                self._buffer.extend(events)
+        events = await asyncio.to_thread(db._poll_events, 200)
+        for stream in list(self._owner._watch_streams):
+            stream._buffer.extend(events)
 
 
 class DirSQL:
@@ -107,6 +121,8 @@ class DirSQL:
         self._db = None
         self._ready_event = asyncio.Event()
         self._init_error = None
+        self._watch_streams = weakref.WeakSet()
+        self._watch_poll = None
         self._task = asyncio.ensure_future(self._init_bg())
 
     async def _init_bg(self):
@@ -137,7 +153,7 @@ class DirSQL:
             if config_extensions is not None:
                 extensions = [*(extensions or []), *config_extensions]
                 suppress = True
-        return _RustDirSQL(
+        return self._new_core(
             self._root,
             tables=self._tables,
             ignore=self._ignore,
@@ -148,6 +164,9 @@ class DirSQL:
             extensions=extensions,
             suppress_config_extensions=suppress,
         )
+
+    def _new_core(self, root, **kwargs):
+        return _RustDirSQL(root, **kwargs)
 
     def _resolved_extensions(self):
         """Resolve each programmatic extension's ``path`` to a loadable file.
@@ -215,5 +234,9 @@ class DirSQL:
         before an explicit ``await db.ready()`` waits for the background scan
         (and surfaces any initialization error) instead of failing on a
         still-``None`` ``_db``.
+
+        Each call returns an independent stream, and every stream receives
+        every event observed after it was created, so several consumers
+        (one per client, say) can share one instance.
         """
         return _WatchStream(self)
