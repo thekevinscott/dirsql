@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e query-contract fanout",
+  "ran_at": 1791405719,
+  "exit_code": 0,
+  "commit": "aeba7c36bbc8cf659e47210ef1ac8f861ae279ea",
+  "branch": "bot/1451-named-dir-never-hidden"
+}
