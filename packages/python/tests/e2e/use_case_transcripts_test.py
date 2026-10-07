@@ -84,8 +84,8 @@ from collections import Counter
 
 counts = Counter()
 for line in sys.stdin:
-    for row in json.loads(line):
-        counts[(row["project"], row["role"])] += 1
+    row = json.loads(line)
+    counts[(row["project"], row["role"])] += 1
 for (project, role), n in sorted(counts.items()):
     print(project, role, n, sep="\\t")
 """
