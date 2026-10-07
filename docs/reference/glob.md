@@ -49,6 +49,13 @@ docs/nested/deep.md
 docs/nested/.cache/x.md
 node_modules/pkg/index.js
 real/r.md
+uni/1.md
+uni/a.md
+uni/é.md
+uni/É.md
+uni/中.md
+uni/٣.md
+uni/¡.md
 linkdir -> real
 link.md -> top.md
 broken -> nowhere
@@ -69,13 +76,21 @@ A test runs every row against dirsql as a path-table and, with the leading
 | Pattern | Rows | Divergence |
 | --- | --- | --- |
 | `./*.md` | `1.md`, `2.md`, `3.md`, `4.md`, `[a].md`, `[z.md`, `a.md`, `b.md`, `c.md`, `link.md`, `my file.md`, `top.md`, `{q}.md` |  |
-| `./**/*.md` | `1.md`, `2.md`, `3.md`, `4.md`, `[a].md`, `[z.md`, `a.md`, `b.md`, `c.md`, `docs/api.md`, `docs/guide.md`, `docs/nested/deep.md`, `link.md`, `linkdir/r.md`, `my file.md`, `real/r.md`, `top.md`, `{q}.md` |  |
-| `./**` | `1.md`, `2.md`, `3.md`, `4.md`, `[a].md`, `[z.md`, `a.md`, `b.md`, `c.md`, `docs/api.md`, `docs/guide.md`, `docs/nested/deep.md`, `link.md`, `my file.md`, `node_modules/pkg/index.js`, `real/r.md`, `top.md`, `x.txt`, `{q}.md` |  |
+| `./**/*.md` | `1.md`, `2.md`, `3.md`, `4.md`, `[a].md`, `[z.md`, `a.md`, `b.md`, `c.md`, `docs/api.md`, `docs/guide.md`, `docs/nested/deep.md`, `link.md`, `linkdir/r.md`, `my file.md`, `real/r.md`, `top.md`, `uni/1.md`, `uni/a.md`, `uni/¡.md`, `uni/É.md`, `uni/é.md`, `uni/٣.md`, `uni/中.md`, `{q}.md` |  |
+| `./**` | `1.md`, `2.md`, `3.md`, `4.md`, `[a].md`, `[z.md`, `a.md`, `b.md`, `c.md`, `docs/api.md`, `docs/guide.md`, `docs/nested/deep.md`, `link.md`, `my file.md`, `node_modules/pkg/index.js`, `real/r.md`, `top.md`, `uni/1.md`, `uni/a.md`, `uni/¡.md`, `uni/É.md`, `uni/é.md`, `uni/٣.md`, `uni/中.md`, `x.txt`, `{q}.md` |  |
 | `./?.md` | `1.md`, `2.md`, `3.md`, `4.md`, `a.md`, `b.md`, `c.md` |  |
 | `./[ab].md` | `a.md`, `b.md` |  |
 | `./[!a].md` | `1.md`, `2.md`, `3.md`, `4.md`, `b.md`, `c.md` |  |
 | `./\[a\].md` | `[a].md` |  |
 | `./[z.md` | `[z.md` |  |
+| `./uni/[[:alpha:]].md` | `uni/a.md`, `uni/É.md`, `uni/é.md`, `uni/٣.md`, `uni/中.md` |  |
+| `./uni/[[:alnum:]].md` | `uni/1.md`, `uni/a.md`, `uni/É.md`, `uni/é.md`, `uni/٣.md`, `uni/中.md` |  |
+| `./uni/[[:lower:]].md` | `uni/a.md`, `uni/é.md` |  |
+| `./uni/[[:upper:]].md` | `uni/É.md` |  |
+| `./uni/[[:digit:]].md` | `uni/1.md` |  |
+| `./uni/[[:punct:]].md` | `uni/¡.md` |  |
+| `./uni/[[:word:]].md` | `uni/1.md`, `uni/a.md`, `uni/É.md`, `uni/é.md`, `uni/٣.md`, `uni/中.md` |  |
+| `./uni/[![:alpha:]].md` | `uni/1.md`, `uni/¡.md` |  |
 | `./[d/x]ocs/api.md` | none |  |
 | `./docs[/]api.md` | none |  |
 | `./[!/]*/api.md` | none |  |
@@ -106,7 +121,7 @@ A test runs every row against dirsql as a path-table and, with the leading
 | `./docs/*/../api.md` | `docs/nested/../api.md` |  |
 | `./docs` | `docs/api.md`, `docs/guide.md` | directory-name |
 | `./docs/` | `docs/api.md`, `docs/guide.md` | directory-name |
-| `./*/` | `docs/api.md`, `docs/guide.md`, `linkdir/r.md`, `real/r.md` | directory-name |
+| `./*/` | `docs/api.md`, `docs/guide.md`, `linkdir/r.md`, `real/r.md`, `uni/1.md`, `uni/a.md`, `uni/¡.md`, `uni/É.md`, `uni/é.md`, `uni/٣.md`, `uni/中.md` | directory-name |
 | `./d*` | none | files-only |
 | `./*.log` | none | gitignore |
 | `./ignored.log` | `ignored.log` |  |
@@ -146,6 +161,9 @@ stderr; the exit code is unchanged. Path-tables never warn.
   `{a..c}` expand, as do zero-padded
   `{01..10}` and stepped `{1..10..2}` ranges. Groups nest.
 - `\[` is a literal bracket.
+- POSIX classes (`[[:alpha:]]`) match Unicode characters, as bash does in a UTF-8
+  locale: `[[:alpha:]]` matches `é` and `中`. `[[:digit:]]`, `[[:xdigit:]]` and
+  `[[:ascii:]]` stay ASCII.
 - A dot-named file or directory is listed only where a component spells the
   dot at that depth: `./**/.*` finds `docs/.draft.md` but does not enter
   `.config/`.
