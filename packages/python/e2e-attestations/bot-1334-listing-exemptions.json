@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/query_contract_test.py tests/e2e/fanout_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_symlink_test.py tests/e2e/glob_speed_one_level_test.py -q",
+  "ran_at": 1791338095,
+  "exit_code": 0,
+  "commit": "31cfc164741af4a61694788ed23b8956401f87fb",
+  "branch": "bot/1334-listing-exemptions"
+}
