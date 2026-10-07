@@ -128,18 +128,18 @@ fn scan_fans_out_overlapping_distinct_globs() {
 }
 
 #[test]
-fn scan_excludes_top_level_dirsql_directory() {
+fn scan_treats_dirsql_directory_as_an_ordinary_dot_directory() {
     let dir = TempDir::new().unwrap();
     fs::write(dir.path().join("real.csv"), "a,b\n1,2").unwrap();
 
     fs::create_dir(dir.path().join(".dirsql")).unwrap();
     fs::write(dir.path().join(".dirsql").join("cache.csv"), "a,b\n1,2").unwrap();
 
-    let matcher = TableMatcher::new(&[("**/*.csv", "t")], &[]).unwrap();
+    let matcher = TableMatcher::new(&[(".dirsql/*.csv", "t")], &[]).unwrap();
     let results = scan_directory(dir.path(), &matcher);
 
     assert_eq!(results.len(), 1);
-    assert!(results[0].0.ends_with("real.csv"));
+    assert!(results[0].0.ends_with("cache.csv"));
 }
 
 #[test]
@@ -283,6 +283,7 @@ fn scan_dirs_lists_the_directories_the_scan_enters() {
         dirs,
         vec![
             root.to_path_buf(),
+            root.join(".dirsql"),
             root.join("empty"),
             root.join("src"),
             root.join("src/deep"),
