@@ -170,7 +170,7 @@ fn a_batch_sqlite_rejects_fails_the_build_and_rolls_back() {
         "SQLite's own error text must come through raw, got {message:?}"
     );
 
-    let cache = rusqlite::Connection::open(root.path().join(".dirsql").join("cache.db")).unwrap();
+    let cache = rusqlite::Connection::open(dirsql::persist::resolve_persist_path(root.path(), None)).unwrap();
     let created: i64 = cache
         .query_row(
             "SELECT COUNT(*) FROM pragma_table_list WHERE schema = 'main' AND name = 'notes'",

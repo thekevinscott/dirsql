@@ -85,7 +85,7 @@ fn persisted_cache_round_trips_the_mapping() {
     assert_eq!(db.query("SELECT col FROM rows").unwrap().len(), 3);
     drop(db);
 
-    let cache = root.path().join(".dirsql").join("cache.db");
+    let cache = dirsql::persist::resolve_persist_path(root.path(), None);
     let reopened = Db::open(&cache).unwrap();
     assert_mapping_consistent(&reopened, "rows", 3);
 }
@@ -105,7 +105,7 @@ fn mapping_table_is_a_durable_sidecar() {
         .unwrap();
     drop(db);
 
-    let cache = root.path().join(".dirsql").join("cache.db");
+    let cache = dirsql::persist::resolve_persist_path(root.path(), None);
     let conn = Connection::open(&cache).unwrap();
     assert!(
         table_exists(&conn, INTERNAL_ROWS_TABLE),
@@ -154,7 +154,7 @@ fn schema_bump_rebuilds_and_repopulates_mapping() {
         .unwrap();
     drop(db);
 
-    let cache = root.path().join(".dirsql").join("cache.db");
+    let cache = dirsql::persist::resolve_persist_path(root.path(), None);
     {
         let conn = Connection::open(&cache).unwrap();
         conn.execute(

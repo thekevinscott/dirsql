@@ -1395,11 +1395,11 @@ fn persist_config_key_degrades_server_with_503_naming_the_key() {
 
 #[test]
 fn persist_flag_writes_default_cache_and_restart_serves() {
-    // Bare `--persist` writes the cache at the default `<root>/.dirsql/cache.db`
-    // during the startup scan; a restart with `--persist` reopens that cache
+    // Bare `--persist` writes the cache at the default platform cache path
+    // during the startup scan, never inside the scanned root; a restart with `--persist` reopens that cache
     // (trusting unchanged files) and serves the same rows.
     let root = blog_fixture();
-    let cache = root.path().join(".dirsql").join("cache.db");
+    let cache = dirsql::persist::resolve_persist_path(root.path(), None);
 
     let port = free_port();
     let child = spawn_dirsql_with_args(root.path(), port, &["-c", ".dirsql.toml", "--persist"]);
@@ -1417,6 +1417,10 @@ fn persist_flag_writes_default_cache_and_restart_serves() {
         cache.exists(),
         "bare --persist must write the default cache at {}",
         cache.display()
+    );
+    assert!(
+        !root.path().join(".dirsql").exists(),
+        "bare --persist must not write into the scanned root"
     );
 
     // Restart against the unchanged tree: the cache is reused and the same
@@ -1467,7 +1471,7 @@ fn persist_flag_with_path_writes_the_cache_there() {
         cache.display()
     );
     assert!(
-        !root.path().join(".dirsql").join("cache.db").exists(),
+        !dirsql::persist::resolve_persist_path(root.path(), None).exists(),
         "the default cache must not be written when a path is given"
     );
 }

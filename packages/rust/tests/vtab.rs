@@ -238,12 +238,12 @@ fn glob_scopes_the_walk() {
 }
 
 #[test]
-fn reserved_dirsql_directory_is_skipped() {
+fn dirsql_directory_is_an_ordinary_dot_directory() {
     let dir = TempDir::new().unwrap();
     fs::create_dir(dir.path().join(".dirsql")).unwrap();
     fs::write(dir.path().join(".dirsql/cache.db"), "x").unwrap();
     fs::write(dir.path().join("real.md"), "x").unwrap();
-    let conn = open_over(&dir, "**/*");
+    let conn = open_over(&dir, ".dirsql/*");
 
     let mut stmt = conn.prepare("SELECT path FROM t").unwrap();
     let paths: Vec<String> = stmt
@@ -252,11 +252,7 @@ fn reserved_dirsql_directory_is_skipped() {
         .map(Result::unwrap)
         .collect();
 
-    assert_eq!(
-        paths,
-        vec!["real.md"],
-        "the reserved .dirsql/ tree is never surfaced"
-    );
+    assert_eq!(paths, vec![".dirsql/cache.db"]);
 }
 
 #[test]
