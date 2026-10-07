@@ -211,6 +211,8 @@ pub struct PathGlob {
     /// Whether any word spells a `.` or `..` component, which the walk has to
     /// enter itself: a directory listing never names them.
     spells_relative: bool,
+    /// The words that spell a path outright, with no wildcard.
+    named: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -235,6 +237,12 @@ impl PathGlob {
         self.spelled_dot_names
             .iter()
             .any(|p| p.is_match(Path::new(name)))
+    }
+
+    /// Whether `rel` is a path a wildcard-free word spells, or a directory on
+    /// the way to one.
+    fn names(&self, rel: &Path) -> bool {
+        self.named.iter().any(|word| word.starts_with(rel))
     }
 
     pub fn is_match(&self, rel_path: &Path) -> bool {
@@ -348,6 +356,11 @@ pub fn compile_globs(patterns: &[&str]) -> Result<PathGlob, GlobError> {
             spelled_dot_names.push(Pattern::new(component)?);
         }
     }
+    let named = words
+        .iter()
+        .filter(|word| !word.contains(['*', '?', '[', '\\']))
+        .map(PathBuf::from)
+        .collect();
     let mut components = Vec::new();
     let mut starts = Vec::new();
     for word in &words {
@@ -362,6 +375,7 @@ pub fn compile_globs(patterns: &[&str]) -> Result<PathGlob, GlobError> {
         components,
         starts,
         spells_relative,
+        named,
     })
 }
 
@@ -620,11 +634,14 @@ impl Walk<'_> {
     }
 
     /// Whether the walk takes an entry: the skip rules first, then the dot-name
-    /// rule, then the `.gitignore` files in force.
+    /// rule, then the `.gitignore` files in force, which never hide a path the
+    /// glob spells.
     fn admits(&self, is_dir: bool, name: &OsStr, path: &Path, rel: &Path) -> bool {
         should_descend(is_dir, rel, self.ignore)
             && self.admits_name(name)
-            && (self.frames.is_empty() || !is_gitignored(&self.frames, path, is_dir))
+            && (self.frames.is_empty()
+                || self.glob.is_some_and(|glob| glob.names(rel))
+                || !is_gitignored(&self.frames, path, is_dir))
     }
 
     fn admits_name(&self, name: &OsStr) -> bool {
@@ -1700,6 +1717,24 @@ mod tests {
     fn is_gitignored_lets_a_deeper_rule_override_a_shallower_whitelist() {
         let frames = [frame("", &["!keep.log"]), frame("sub", &["*.log"])];
         assert!(is_gitignored(&frames, Path::new("sub/keep.log"), false));
+    }
+
+    #[test]
+    fn a_gitignored_file_the_glob_names_outright_is_listed_and_a_wildcard_still_hides_it() {
+        let repo = tempfile::tempdir().unwrap();
+        fs::create_dir(repo.path().join(".git")).unwrap();
+        fs::write(repo.path().join(".gitignore"), "*.log\ndist/\n").unwrap();
+        fs::create_dir(repo.path().join("dist")).unwrap();
+        fs::write(repo.path().join("dist/out.log"), "").unwrap();
+        fs::write(repo.path().join("a.log"), "").unwrap();
+        let none = TableMatcher::new(&[], &[]).unwrap();
+        let scan =
+            |pattern: &str| scan_glob(repo.path(), &compile_glob(pattern).unwrap(), &none, true);
+
+        assert_eq!(scan("a.log"), vec![PathBuf::from("a.log")]);
+        assert_eq!(scan("dist/out.log"), vec![PathBuf::from("dist/out.log")]);
+        assert_eq!(scan("{a,b}.log"), vec![PathBuf::from("a.log")]);
+        assert!(scan("*.log").is_empty());
     }
 
     #[test]

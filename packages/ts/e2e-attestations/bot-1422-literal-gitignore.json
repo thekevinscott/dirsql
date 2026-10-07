@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791398682,
+  "exit_code": 0,
+  "commit": "13c89cc972adfa7dc281a585ea16d36dfb2d8614",
+  "branch": "bot/1422-literal-gitignore"
+}
