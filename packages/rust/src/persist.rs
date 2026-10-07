@@ -204,12 +204,25 @@ pub fn canonical_root(root: &Path) -> String {
 }
 
 /// Resolve the persist path for the cache database.
-/// Defaults to `<root>/.dirsql/cache.db`.
+///
+/// Defaults to `<platform cache dir>/dirsql/<hash of canonical root>/cache.db`,
+/// so the cache never lands inside the scanned tree.
 pub fn resolve_persist_path(root: &Path, override_path: Option<&Path>) -> PathBuf {
     match override_path {
         Some(p) => p.to_path_buf(),
-        None => root.join(".dirsql").join("cache.db"),
+        None => default_cache_path(
+            &dirs::cache_dir().unwrap_or_else(std::env::temp_dir),
+            &canonical_root(root),
+        ),
     }
+}
+
+fn default_cache_path(cache_dir: &Path, canonical_root: &str) -> PathBuf {
+    let hash = blake3::hash(canonical_root.as_bytes()).to_hex();
+    cache_dir
+        .join("dirsql")
+        .join(&hash.as_str()[..16])
+        .join("cache.db")
 }
 
 /// Ensure the directory containing `path` exists. No-op if it already does.
@@ -778,9 +791,29 @@ mod tests {
     }
 
     #[test]
-    fn resolve_persist_path_defaults_to_dirsql_cache_db() {
+    fn default_cache_path_nests_a_root_hash_under_the_cache_dir() {
+        let p = default_cache_path(Path::new("/c"), "/tmp/x");
+        let hash = p.parent().unwrap().file_name().unwrap().to_str().unwrap();
+        assert_eq!(
+            p.parent().unwrap().parent().unwrap(),
+            Path::new("/c/dirsql")
+        );
+        assert_eq!(hash.len(), 16);
+        assert_eq!(p.file_name().unwrap(), "cache.db");
+    }
+
+    #[test]
+    fn default_cache_path_differs_per_root_and_is_stable() {
+        let a = default_cache_path(Path::new("/c"), "/tmp/a");
+        assert_eq!(a, default_cache_path(Path::new("/c"), "/tmp/a"));
+        assert_ne!(a, default_cache_path(Path::new("/c"), "/tmp/b"));
+    }
+
+    #[test]
+    fn resolve_persist_path_default_is_outside_the_root() {
         let p = resolve_persist_path(Path::new("/tmp/x"), None);
-        assert_eq!(p, PathBuf::from("/tmp/x/.dirsql/cache.db"));
+        assert!(!p.starts_with("/tmp/x"));
+        assert!(p.ends_with("cache.db"));
     }
 
     #[test]

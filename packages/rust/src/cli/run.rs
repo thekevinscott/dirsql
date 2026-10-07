@@ -121,7 +121,7 @@ struct ConfigArgs {
 
     /// Keep the SQLite index on disk between runs so a restart only re-parses
     /// files that actually changed. Bare `--persist` caches at the default
-    /// location (`<root>/.dirsql/cache.db`); `--persist <path>` caches there.
+    /// location (the platform cache directory); `--persist <path>` caches there.
     /// Off by default (ephemeral index).
     #[arg(long, num_args = 0..=1)]
     persist: Option<Option<PathBuf>>,
@@ -990,7 +990,7 @@ mod tests {
     #[test]
     fn persist_flag_bare_enables_default_location() {
         // Bare `--persist` (no value) → `Some(None)`: persist at the default
-        // `<root>/.dirsql/cache.db`, no override path.
+        // platform cache dir, no override path.
         let cli = Cli::parse_from(["dirsql", "--persist"]);
         assert_eq!(cli.common.persist, Some(None));
     }

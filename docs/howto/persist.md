@@ -17,9 +17,11 @@ why it is a CLI flag, not a config key.
 dirsql --persist
 ```
 
-That's the whole change. On the next run the cache is written to
-`.dirsql/cache.db` under the root; runs after that start from it. To put
-the cache elsewhere (a CI cache dir, a tmpfs), pass a path:
+That's the whole change. On the next run the cache is written to your platform cache directory
+(`$XDG_CACHE_HOME/dirsql/<root hash>/cache.db` on Linux, `~/Library/Caches`
+on macOS, `%LOCALAPPDATA%` on Windows), outside the scanned tree; runs after
+that start from it. To put the cache elsewhere (a CI cache dir, a tmpfs), pass
+a path:
 
 ```bash
 dirsql --persist /var/cache/dirsql.db
@@ -30,20 +32,13 @@ put a bare `--persist` after the SQL there so it does not consume the query
 argument. Embedding `dirsql`? The SDK constructors expose the same switch —
 see [_Embedding `dirsql`?_](#embedding-dirsql) below.
 
-## 2. Keep the cache out of git
+## 2. Nothing to ignore in git
 
-The cache is derived data — reproducible from the tree and frequently
-large. Add it to `.gitignore`:
-
-```
-.dirsql/
-```
-
-The top-level `.dirsql/` directory is reserved for `dirsql`'s metadata and
-is never scanned as data, so the cache can't index itself
-([config reference](../reference/config.md#dirsql-keys)). While running,
-`dirsql` also creates transient `cache.db-wal` and `cache.db-shm` sidecar
-files next to the cache; the `.dirsql/` ignore already covers all three.
+The default cache lives outside the scanned tree, so there is nothing to add
+to `.gitignore` and the cache can't index itself. With `--persist <path>`, keep
+that path out of the scanned tree too, or ignore it. While running, `dirsql`
+also creates transient `cache.db-wal` and `cache.db-shm` sidecar files next to
+the cache.
 
 ## What survives, what rebuilds
 

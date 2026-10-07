@@ -8,10 +8,14 @@
 use dirsql::{DirSQL, DirSqlError, Row, Table, Value};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
+
+fn cache_path(root: &Path) -> PathBuf {
+    root.join(".dirsql-test-cache").join("cache.db")
+}
 
 /// Returns a CSV table whose extract function increments `counter` every time
 /// it runs. Used to verify that warm starts skip extract for unchanged files.
@@ -45,7 +49,7 @@ fn open(root: &Path, counter: Arc<AtomicUsize>) -> DirSQL {
     DirSQL::builder()
         .root(root)
         .table(counting_csv_table(counter))
-        .persist(None::<&Path>)
+        .persist(Some(cache_path(root)))
         .build()
         .unwrap()
 }
@@ -59,18 +63,15 @@ fn open_in_memory(root: &Path, counter: Arc<AtomicUsize>) -> DirSQL {
 }
 
 #[test]
-fn cold_start_writes_cache_at_default_path() {
+fn cold_start_writes_cache_at_the_given_path() {
     let root = TempDir::new().unwrap();
     write_csv(root.path(), "a.csv", &["alpha"]);
 
     let counter = Arc::new(AtomicUsize::new(0));
     let _db = open(root.path(), counter);
 
-    let cache = root.path().join(".dirsql").join("cache.db");
-    assert!(
-        cache.exists(),
-        "expected cache at default .dirsql/cache.db path"
-    );
+    let cache = cache_path(root.path());
+    assert!(cache.exists(), "expected cache at the given persist path");
 }
 
 #[test]
@@ -90,7 +91,7 @@ fn custom_persist_path_is_honored() {
 
     assert!(custom.exists(), "expected cache at the custom persist_path");
     assert!(
-        !root.path().join(".dirsql").join("cache.db").exists(),
+        !dirsql::persist::resolve_persist_path(root.path(), None).exists(),
         "default path should not be created when persist_path is set",
     );
 }
@@ -268,7 +269,7 @@ fn glob_config_change_forces_full_rebuild() {
     let db = DirSQL::builder()
         .root(root.path())
         .tables(vec![csv_table, tsv_table])
-        .persist(None::<&Path>)
+        .persist(Some(cache_path(root.path())))
         .build()
         .unwrap();
 
@@ -301,7 +302,7 @@ fn corrupted_meta_triggers_full_rebuild() {
     }
     counter.store(0, Ordering::SeqCst);
 
-    let cache = root.path().join(".dirsql").join("cache.db");
+    let cache = cache_path(root.path());
     let conn = Connection::open(&cache).unwrap();
     conn.execute(
         "UPDATE _dirsql_meta SET value = 'bogus-version' WHERE key = 'dirsql_version'",
@@ -321,43 +322,16 @@ fn corrupted_meta_triggers_full_rebuild() {
 }
 
 #[test]
-fn dirsql_directory_excluded_when_persist_enabled() {
+fn default_cache_is_not_written_into_the_scanned_tree() {
     let root = TempDir::new().unwrap();
-    write_csv(root.path(), "real.csv", &["alpha"]);
+    write_csv(root.path(), "a.csv", &["alpha"]);
 
-    fs::create_dir_all(root.path().join(".dirsql")).unwrap();
-    write_csv(
-        &root.path().join(".dirsql"),
-        "junk.csv",
-        &["should-not-appear"],
+    let _db = open(root.path(), Arc::new(AtomicUsize::new(0)));
+
+    assert!(
+        !root.path().join(".dirsql").exists(),
+        "the default cache must live outside the scanned root"
     );
-
-    let counter = Arc::new(AtomicUsize::new(0));
-    let db = open(root.path(), counter);
-
-    let rows = db.query("SELECT col FROM rows ORDER BY col").unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["col"], Value::Text("alpha".into()));
-}
-
-#[test]
-fn dirsql_directory_excluded_when_persist_disabled() {
-    let root = TempDir::new().unwrap();
-    write_csv(root.path(), "real.csv", &["alpha"]);
-
-    fs::create_dir_all(root.path().join(".dirsql")).unwrap();
-    write_csv(
-        &root.path().join(".dirsql"),
-        "junk.csv",
-        &["should-not-appear"],
-    );
-
-    let counter = Arc::new(AtomicUsize::new(0));
-    let db = open_in_memory(root.path(), counter);
-
-    let rows = db.query("SELECT col FROM rows ORDER BY col").unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["col"], Value::Text("alpha".into()));
 }
 
 // ---------------------------------------------------------------------------
@@ -390,7 +364,7 @@ fn open_two(root: &Path, ca: Arc<AtomicUsize>, cb: Arc<AtomicUsize>) -> DirSQL {
             counting_named_table("ta", "col_a", ca),
             counting_named_table("tb", "col_b", cb),
         ])
-        .persist(None::<&Path>)
+        .persist(Some(cache_path(root)))
         .build()
         .unwrap()
 }
@@ -436,7 +410,7 @@ fn persist_cache_records_a_row_per_matching_table() {
         let _db = open_two(root.path(), ca, cb);
     }
 
-    let cache = root.path().join(".dirsql").join("cache.db");
+    let cache = cache_path(root.path());
     let conn = Connection::open(&cache).unwrap();
     let files: i64 = conn
         .query_row("SELECT COUNT(*) FROM _dirsql_files", [], |r| r.get(0))
@@ -462,7 +436,7 @@ fn old_schema_version_cache_is_rebuilt() {
 
     // Force the cache to the pre-fan-out schema version. The bumped version
     // must make this cache incompatible, triggering a full rebuild.
-    let cache = root.path().join(".dirsql").join("cache.db");
+    let cache = cache_path(root.path());
     let conn = Connection::open(&cache).unwrap();
     conn.execute(
         "UPDATE _dirsql_meta SET value = '3' WHERE key = 'schema_version'",
@@ -492,7 +466,7 @@ fn cache_contains_sidecar_tables() {
         let _db = open(root.path(), counter);
     }
 
-    let cache = root.path().join(".dirsql").join("cache.db");
+    let cache = cache_path(root.path());
     let conn = Connection::open(&cache).unwrap();
 
     let files: i64 = conn
@@ -560,7 +534,7 @@ fn a_hook_failure_commits_the_files_that_parsed() {
                     .collect::<Vec<Row>>())
             },
         ))
-        .persist(None::<&Path>)
+        .persist(Some(cache_path(root.path())))
         .build()
         .expect("one file's hook failure must not discard the scan");
 
@@ -569,8 +543,8 @@ fn a_hook_failure_commits_the_files_that_parsed() {
     drop(db);
 
     // Open the cache with a raw connection to verify what was committed.
-    let cache_path = root.path().join(".dirsql").join("cache.db");
-    let cache_conn = rusqlite::Connection::open(&cache_path).unwrap();
+    let cache_file = cache_path(root.path());
+    let cache_conn = rusqlite::Connection::open(&cache_file).unwrap();
 
     let row_count: i64 = cache_conn
         .query_row("SELECT COUNT(*) FROM rows", [], |r| r.get(0))
@@ -599,7 +573,7 @@ fn warm_start_over_an_unchanged_tree_leaves_the_cache_untouched() {
         let _db = open(root.path(), counter.clone());
     }
 
-    let cache = root.path().join(".dirsql").join("cache.db");
+    let cache = cache_path(root.path());
     let size_before = fs::metadata(&cache).unwrap().len();
     let digest_before = blake3::hash(&fs::read(&cache).unwrap());
 
@@ -632,7 +606,7 @@ fn persist_cache_uses_wal_journal_mode() {
         let _db = open(root.path(), counter);
     }
 
-    let cache = root.path().join(".dirsql").join("cache.db");
+    let cache = cache_path(root.path());
     let conn = Connection::open(&cache).unwrap();
     let mode: String = conn
         .query_row("PRAGMA journal_mode", [], |row| row.get(0))

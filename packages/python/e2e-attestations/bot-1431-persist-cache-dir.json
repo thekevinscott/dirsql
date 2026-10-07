@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/query_contract_test.py tests/e2e/fanout_test.py tests/e2e/use_case_transcripts_test.py tests/e2e/glob_speed_dotfiles_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_one_level_test.py tests/e2e/stat_speed_test.py -x -q",
+  "ran_at": 1791391233,
+  "exit_code": 0,
+  "commit": "83e889b9041e8e071128c2334d98bf645ec52581",
+  "branch": "bot/1431-persist-cache-dir"
+}

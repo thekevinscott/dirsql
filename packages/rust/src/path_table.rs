@@ -193,20 +193,41 @@ fn trailing_separator_as_star<S: Syntax>(name: &str) -> String {
 /// Split a `./`-relative target into the directory to walk beneath the index
 /// root and the glob to match there. The walk starts at the literal prefix
 /// and `path` is reported under it, so the rows read as if the index root
-/// had been walked whole.
+/// had been walked whole. The prefix is kept as written, `//` and `.` and
+/// `..` included, as the shell keeps it; past the first wildcard, repeated
+/// separators collapse.
 fn split_relative(index_root: &Path, rest: &str, is_dir: &dyn Fn(&Path) -> bool) -> PathTable {
-    let target = Utf8Path::<Utf8UnixEncoding>::new(rest);
-    let (literal, glob) = split_target(target, &|rel| is_dir(&index_root.join(rel)));
-    let root = if literal.as_str().is_empty() {
+    let parts: Vec<&str> = rest.split('/').collect();
+    let (literal, glob) = match parts.iter().position(|p| has_glob_metacharacter(p)) {
+        Some(at) => (parts[..at].join("/"), glob_of(&parts[at..])),
+        None if is_dir(&index_root.join(rest)) => (rest.to_string(), DIRECTORY_GLOB.to_string()),
+        None => {
+            let (name, parent) = parts.split_last().expect("split yields a part");
+            (parent.join("/"), (*name).to_string())
+        }
+    };
+    let root = if literal.is_empty() {
         index_root.to_path_buf()
     } else {
-        index_root.join(literal.as_str())
+        index_root.join(&literal)
+    };
+    // A prefix already ending in a separator is not given another when a path
+    // is reported under it, so a written `//` needs the second one here.
+    let path_prefix = if literal.ends_with('/') {
+        format!("{literal}/")
+    } else {
+        literal
     };
     PathTable {
         root,
         glob,
-        path_prefix: literal.into_string(),
+        path_prefix,
     }
+}
+
+fn glob_of(parts: &[&str]) -> String {
+    let kept: Vec<&str> = parts.iter().copied().filter(|p| !p.is_empty()).collect();
+    kept.join("/")
 }
 
 fn typed<S: Syntax>(path: &Path) -> Utf8PathBuf<S> {
@@ -398,6 +419,33 @@ mod tests {
     #[test]
     fn default_ignores_cover_only_vcs_directories() {
         assert_eq!(DEFAULT_IGNORES, ["**/.git/**"]);
+    }
+
+    #[test]
+    fn a_double_separator_in_the_literal_prefix_is_kept_as_written() {
+        let t = table("./docs//a.md", &nothing_is_a_dir);
+        assert_eq!(t.root, Path::new("/index/docs/"));
+        assert_eq!(t.glob, "a.md");
+        assert_eq!(t.path_prefix, "docs//");
+    }
+
+    #[test]
+    fn a_current_directory_component_in_the_literal_prefix_is_kept_as_written() {
+        let t = table("./docs/./*.md", &nothing_is_a_dir);
+        assert_eq!(t.glob, "*.md");
+        assert_eq!(t.path_prefix, "docs/.");
+    }
+
+    #[test]
+    fn a_current_directory_component_after_a_wildcard_stays_in_the_glob() {
+        let t = table("./*/./a.md", &nothing_is_a_dir);
+        assert_eq!(t.glob, "*/./a.md");
+    }
+
+    #[test]
+    fn a_double_separator_after_a_wildcard_collapses() {
+        let t = table("./*//a.md", &nothing_is_a_dir);
+        assert_eq!(t.glob, "*/a.md");
     }
 
     #[test]

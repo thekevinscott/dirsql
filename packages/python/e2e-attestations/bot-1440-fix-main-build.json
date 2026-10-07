@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_one_level_test.py -x -q",
+  "ran_at": 1791395806,
+  "exit_code": 0,
+  "commit": "a61af62fec489a0a0d45979d96fa045df52a8f60",
+  "branch": "bot/1440-fix-main-build"
+}

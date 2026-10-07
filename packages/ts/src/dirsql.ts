@@ -49,7 +49,7 @@ export interface DirSQLOptions {
   config?: string | string[];
   /**
    * Enable persistent on-disk SQLite cache. When `true`, the database is
-   * written to `<root>/.dirsql/cache.db` (override via `persistPath`) so
+   * written to the platform cache directory (override via `persistPath`) so
    * subsequent startups only re-parse files that have actually changed.
    */
   persist?: boolean;

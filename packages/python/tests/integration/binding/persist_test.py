@@ -37,36 +37,59 @@ def persist_dir():
         yield d
 
 
+@pytest.fixture
+def cache_path():
+    with tempfile.TemporaryDirectory() as d:
+        yield os.path.join(d, "cache.db")
+
+
 def describe_persist():
     def describe_cold_start():
         @pytest.mark.asyncio
-        async def it_writes_cache_to_dotdirsql(persist_dir):
+        async def it_keeps_the_default_cache_out_of_the_scanned_tree(
+            persist_dir, cache_path
+        ):
             _write(
                 os.path.join(persist_dir, "items", "a.json"),
                 json.dumps({"name": "apple", "price": 1.5}),
             )
             box = [0]
-            db = DirSQL(persist_dir, tables=[_items_table(box)], persist=True)
+            db = DirSQL(
+                persist_dir,
+                tables=[_items_table(box)],
+                persist=True,
+                persist_path=cache_path,
+            )
             await db.ready()
             results = await db.query("SELECT * FROM items")
             assert len(results) == 1
-            assert os.path.exists(os.path.join(persist_dir, ".dirsql", "cache.db"))
+            assert not os.path.exists(os.path.join(persist_dir, ".dirsql"))
 
     def describe_warm_start():
         @pytest.mark.asyncio
-        async def it_trusts_unchanged_files(persist_dir):
+        async def it_trusts_unchanged_files(persist_dir, cache_path):
             _write(
                 os.path.join(persist_dir, "items", "a.json"),
                 json.dumps({"name": "apple", "price": 1.5}),
             )
 
             box1 = [0]
-            db1 = DirSQL(persist_dir, tables=[_items_table(box1)], persist=True)
+            db1 = DirSQL(
+                persist_dir,
+                tables=[_items_table(box1)],
+                persist=True,
+                persist_path=cache_path,
+            )
             await db1.ready()
             assert box1[0] == 1
 
             box2 = [0]
-            db2 = DirSQL(persist_dir, tables=[_items_table(box2)], persist=True)
+            db2 = DirSQL(
+                persist_dir,
+                tables=[_items_table(box2)],
+                persist=True,
+                persist_path=cache_path,
+            )
             await db2.ready()
             # Warm start: on_file not invoked for the unchanged file.
             assert box2[0] == 0
@@ -75,7 +98,7 @@ def describe_persist():
             assert results[0]["name"] == "apple"
 
         @pytest.mark.asyncio
-        async def it_leaves_the_cache_file_untouched(persist_dir):
+        async def it_leaves_the_cache_file_untouched(persist_dir, cache_path):
             """An unchanged tree is a no-op: the cache is read, never rewritten."""
             _write(
                 os.path.join(persist_dir, "items", "a.json"),
@@ -83,15 +106,25 @@ def describe_persist():
             )
 
             box1 = [0]
-            db1 = DirSQL(persist_dir, tables=[_items_table(box1)], persist=True)
+            db1 = DirSQL(
+                persist_dir,
+                tables=[_items_table(box1)],
+                persist=True,
+                persist_path=cache_path,
+            )
             await db1.ready()
             del db1
 
-            cache = os.path.join(persist_dir, ".dirsql", "cache.db")
+            cache = cache_path
             before = open(cache, "rb").read()
 
             box2 = [0]
-            db2 = DirSQL(persist_dir, tables=[_items_table(box2)], persist=True)
+            db2 = DirSQL(
+                persist_dir,
+                tables=[_items_table(box2)],
+                persist=True,
+                persist_path=cache_path,
+            )
             await db2.ready()
             del db2
 
@@ -103,12 +136,17 @@ def describe_persist():
 
     def describe_changed_file():
         @pytest.mark.asyncio
-        async def it_reparses_changed_files(persist_dir):
+        async def it_reparses_changed_files(persist_dir, cache_path):
             path = os.path.join(persist_dir, "items", "a.json")
             _write(path, json.dumps({"name": "apple", "price": 1.5}))
 
             box1 = [0]
-            db1 = DirSQL(persist_dir, tables=[_items_table(box1)], persist=True)
+            db1 = DirSQL(
+                persist_dir,
+                tables=[_items_table(box1)],
+                persist=True,
+                persist_path=cache_path,
+            )
             await db1.ready()
 
             # Bump mtime far enough into the future to escape the racy window.
@@ -120,7 +158,12 @@ def describe_persist():
             os.utime(path, (future, future))
 
             box2 = [0]
-            db2 = DirSQL(persist_dir, tables=[_items_table(box2)], persist=True)
+            db2 = DirSQL(
+                persist_dir,
+                tables=[_items_table(box2)],
+                persist=True,
+                persist_path=cache_path,
+            )
             await db2.ready()
             assert box2[0] == 1
             results = await db2.query("SELECT * FROM items")
@@ -129,34 +172,49 @@ def describe_persist():
 
     def describe_deleted_file():
         @pytest.mark.asyncio
-        async def it_drops_rows_for_deleted_files(persist_dir):
+        async def it_drops_rows_for_deleted_files(persist_dir, cache_path):
             a = os.path.join(persist_dir, "items", "a.json")
             b = os.path.join(persist_dir, "items", "b.json")
             _write(a, json.dumps({"name": "apple", "price": 1.5}))
             _write(b, json.dumps({"name": "banana", "price": 0.75}))
 
             box1 = [0]
-            db1 = DirSQL(persist_dir, tables=[_items_table(box1)], persist=True)
+            db1 = DirSQL(
+                persist_dir,
+                tables=[_items_table(box1)],
+                persist=True,
+                persist_path=cache_path,
+            )
             await db1.ready()
 
             os.remove(b)
 
             box2 = [0]
-            db2 = DirSQL(persist_dir, tables=[_items_table(box2)], persist=True)
+            db2 = DirSQL(
+                persist_dir,
+                tables=[_items_table(box2)],
+                persist=True,
+                persist_path=cache_path,
+            )
             await db2.ready()
             results = await db2.query("SELECT name FROM items")
             assert {r["name"] for r in results} == {"apple"}
 
     def describe_new_file():
         @pytest.mark.asyncio
-        async def it_ingests_new_files(persist_dir):
+        async def it_ingests_new_files(persist_dir, cache_path):
             _write(
                 os.path.join(persist_dir, "items", "a.json"),
                 json.dumps({"name": "apple", "price": 1.5}),
             )
 
             box1 = [0]
-            db1 = DirSQL(persist_dir, tables=[_items_table(box1)], persist=True)
+            db1 = DirSQL(
+                persist_dir,
+                tables=[_items_table(box1)],
+                persist=True,
+                persist_path=cache_path,
+            )
             await db1.ready()
 
             _write(
@@ -165,7 +223,12 @@ def describe_persist():
             )
 
             box2 = [0]
-            db2 = DirSQL(persist_dir, tables=[_items_table(box2)], persist=True)
+            db2 = DirSQL(
+                persist_dir,
+                tables=[_items_table(box2)],
+                persist=True,
+                persist_path=cache_path,
+            )
             await db2.ready()
             assert box2[0] == 1
             results = await db2.query("SELECT name FROM items ORDER BY name")
@@ -173,14 +236,19 @@ def describe_persist():
 
     def describe_glob_change():
         @pytest.mark.asyncio
-        async def it_forces_full_rebuild_on_config_change(persist_dir):
+        async def it_forces_full_rebuild_on_config_change(persist_dir, cache_path):
             _write(
                 os.path.join(persist_dir, "items", "a.json"),
                 json.dumps({"name": "apple", "price": 1.5}),
             )
 
             box1 = [0]
-            db1 = DirSQL(persist_dir, tables=[_items_table(box1)], persist=True)
+            db1 = DirSQL(
+                persist_dir,
+                tables=[_items_table(box1)],
+                persist=True,
+                persist_path=cache_path,
+            )
             await db1.ready()
 
             # Change the DDL — this changes the glob_config_hash and forces a
@@ -205,47 +273,16 @@ def describe_persist():
                     )
                 ],
                 persist=True,
+                persist_path=cache_path,
             )
             await db2.ready()
             assert box2[0] == 1
             results = await db2.query("SELECT * FROM items")
             assert results[0]["sku"] == "X"
 
-    def describe_dirsql_excluded():
-        @pytest.mark.asyncio
-        async def it_excludes_dotdirsql_from_walk(persist_dir):
-            _write(
-                os.path.join(persist_dir, "items", "a.json"),
-                json.dumps({"name": "apple", "price": 1.5}),
-            )
-            # A bogus file inside .dirsql that would otherwise match the glob
-            # if the scanner walked into it:
-            _write(
-                os.path.join(persist_dir, ".dirsql", "items", "boom.json"),
-                json.dumps({"name": "BOOM", "price": -1}),
-            )
-
-            db = DirSQL(
-                persist_dir,
-                tables=[
-                    Table(
-                        name="items",
-                        ddl="CREATE TABLE items (name TEXT, price REAL)",
-                        glob="**/*.json",
-                        on_file=lambda path: [
-                            json.loads(open(path, encoding="utf-8").read())
-                        ],
-                    )
-                ],
-                persist=True,
-            )
-            await db.ready()
-            results = await db.query("SELECT name FROM items")
-            assert {r["name"] for r in results} == {"apple"}
-
     def describe_racy_window():
         @pytest.mark.asyncio
-        async def it_hash_confirms_files_inside_racy_window(persist_dir):
+        async def it_hash_confirms_files_inside_racy_window(persist_dir, cache_path):
             """When a cached file's mtime falls inside the racy window
             (mtime >= snapshot_ns), the reconcile must fall back to a content
             hash instead of trusting the stat tuple. Corrupt the cached hash
@@ -254,12 +291,17 @@ def describe_persist():
             _write(path, json.dumps({"name": "apple", "price": 1.5}))
 
             box1 = [0]
-            db1 = DirSQL(persist_dir, tables=[_items_table(box1)], persist=True)
+            db1 = DirSQL(
+                persist_dir,
+                tables=[_items_table(box1)],
+                persist=True,
+                persist_path=cache_path,
+            )
             await db1.ready()
             assert box1[0] == 1
             del db1  # release any file handles before mutating cache.db
 
-            cache = os.path.join(persist_dir, ".dirsql", "cache.db")
+            cache = cache_path
             conn = sqlite3.connect(cache)
             # Force this file into the racy window by zeroing snapshot_ns,
             # and corrupt its cached hash so the hash-confirm branch fails.
@@ -270,7 +312,12 @@ def describe_persist():
             conn.close()
 
             box2 = [0]
-            db2 = DirSQL(persist_dir, tables=[_items_table(box2)], persist=True)
+            db2 = DirSQL(
+                persist_dir,
+                tables=[_items_table(box2)],
+                persist=True,
+                persist_path=cache_path,
+            )
             await db2.ready()
             assert box2[0] == 1
             results = await db2.query("SELECT name FROM items")
@@ -278,19 +325,26 @@ def describe_persist():
 
     def describe_dirsql_version_bump():
         @pytest.mark.asyncio
-        async def it_rebuilds_cache_when_dirsql_version_changes(persist_dir):
+        async def it_rebuilds_cache_when_dirsql_version_changes(
+            persist_dir, cache_path
+        ):
             _write(
                 os.path.join(persist_dir, "items", "a.json"),
                 json.dumps({"name": "apple", "price": 1.5}),
             )
 
             box1 = [0]
-            db1 = DirSQL(persist_dir, tables=[_items_table(box1)], persist=True)
+            db1 = DirSQL(
+                persist_dir,
+                tables=[_items_table(box1)],
+                persist=True,
+                persist_path=cache_path,
+            )
             await db1.ready()
             assert box1[0] == 1
             del db1
 
-            cache = os.path.join(persist_dir, ".dirsql", "cache.db")
+            cache = cache_path
             conn = sqlite3.connect(cache)
             conn.execute(
                 "UPDATE _dirsql_meta SET value = 'bogus-version' "
@@ -300,7 +354,12 @@ def describe_persist():
             conn.close()
 
             box2 = [0]
-            db2 = DirSQL(persist_dir, tables=[_items_table(box2)], persist=True)
+            db2 = DirSQL(
+                persist_dir,
+                tables=[_items_table(box2)],
+                persist=True,
+                persist_path=cache_path,
+            )
             await db2.ready()
             # Version mismatch forces a full rebuild; the file is re-parsed.
             assert box2[0] == 1

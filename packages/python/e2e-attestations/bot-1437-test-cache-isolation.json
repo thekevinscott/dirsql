@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/query_contract_test.py tests/e2e/fanout_test.py -x -q",
+  "ran_at": 1791394818,
+  "exit_code": 0,
+  "commit": "78b84634f11a52eb235c1f09c5a7a43bb5913b01",
+  "branch": "bot/1437-test-cache-isolation"
+}

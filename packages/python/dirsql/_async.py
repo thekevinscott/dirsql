@@ -79,7 +79,7 @@ class DirSQL:
     apply.
 
     Pass ``persist=True`` to keep an on-disk SQLite cache (default location:
-    ``<root>/.dirsql/cache.db``). Override the location with ``persist_path``.
+    the platform cache directory, outside ``<root>``). Override the location with ``persist_path``.
 
     Pass ``extensions`` -- a list of ``{"path": ..., "entrypoint": ...}`` dicts
     (``entrypoint`` optional) -- to load SQLite extensions onto the connection

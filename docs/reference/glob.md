@@ -91,6 +91,9 @@ A test runs every row against dirsql as a path-table and, with the leading
 | `./uni/[[:punct:]].md` | `uni/¡.md` |  |
 | `./uni/[[:word:]].md` | `uni/1.md`, `uni/a.md`, `uni/É.md`, `uni/é.md`, `uni/٣.md`, `uni/中.md` |  |
 | `./uni/[![:alpha:]].md` | `uni/1.md`, `uni/¡.md` |  |
+| `./[d/x]ocs/api.md` | none |  |
+| `./docs[/]api.md` | none |  |
+| `./[!/]*/api.md` | none |  |
 | `./{a,b}.md` | `a.md`, `b.md` |  |
 | `./{q}.md` | `{q}.md` |  |
 | `./{a.md` | none |  |
@@ -106,6 +109,16 @@ A test runs every row against dirsql as a path-table and, with the leading
 | `./*/r.md` | `linkdir/r.md`, `real/r.md` |  |
 | `./**/r.md` | `linkdir/r.md`, `real/r.md` |  |
 | `./real/**` | `real/r.md` |  |
+| `./docs//api.md` | `docs//api.md` |  |
+| `./docs//*.md` | `docs//api.md`, `docs//guide.md` |  |
+| `./*//api.md` | `docs/api.md` |  |
+| `./docs/./api.md` | `docs/./api.md` |  |
+| `./*/./api.md` | `docs/./api.md` |  |
+| `./docs/../top.md` | `docs/../top.md` |  |
+| `./docs/nested/../../top.md` | `docs/nested/../../top.md` |  |
+| `./[dlr]*/../top.md` | `docs/../top.md`, `linkdir/../top.md`, `real/../top.md` |  |
+| `./**/nested/../api.md` | `docs/nested/../api.md` |  |
+| `./docs/*/../api.md` | `docs/nested/../api.md` |  |
 | `./docs` | `docs/api.md`, `docs/guide.md` | directory-name |
 | `./docs/` | `docs/api.md`, `docs/guide.md` | directory-name |
 | `./*/` | `docs/api.md`, `docs/guide.md`, `linkdir/r.md`, `real/r.md`, `uni/1.md`, `uni/a.md`, `uni/¡.md`, `uni/É.md`, `uni/é.md`, `uni/٣.md`, `uni/中.md` | directory-name |

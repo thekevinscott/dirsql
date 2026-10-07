@@ -9,11 +9,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 
-/// Top-level directory name reserved for `dirsql`'s own metadata (e.g. the
-/// persistent cache database). Always excluded from the scan, regardless of
-/// whether persistence is enabled.
-pub const RESERVED_DIR: &str = ".dirsql";
-
 /// A root-relative path as dirsql stores and reports it: `/`-separated on
 /// every platform, so globs, `file_path` keys and `path` columns agree.
 pub(crate) fn to_slash(path: &Path) -> String {
@@ -29,8 +24,6 @@ fn with_slashes(path: &str, native: char) -> String {
 
 /// Walk a directory tree and return all file paths paired with their matching table name.
 /// Ignored paths and directories are skipped. Only files (not directories) are returned.
-///
-/// The top-level `.dirsql/` directory is unconditionally excluded.
 pub fn scan_directory(root: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, String)> {
     scan_directory_reporting(root, matcher, &mut |_| {})
 }
@@ -138,8 +131,7 @@ fn scan_below(
 ///
 /// The single-glob counterpart to [`scan_directory`]: a path-table names one
 /// glob and mints no table names, so there is nothing to fan out over. Shares
-/// the walker, and with it the reserved-directory rule, and the same
-/// [`TableMatcher`] ignore handling declared tables get.
+/// the walker and the same [`TableMatcher`] ignore handling declared tables get.
 ///
 /// Skip rules are judged on paths relative to `root`, so a table rooted at a
 /// directory the rules would otherwise skip still scans it.
@@ -216,6 +208,9 @@ pub struct PathGlob {
     components: Vec<Component>,
     /// Where each word's components begin.
     starts: Vec<usize>,
+    /// Whether any word spells a `.` or `..` component, which the walk has to
+    /// enter itself: a directory listing never names them.
+    spells_relative: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -259,6 +254,19 @@ impl PathGlob {
 
     fn has_components(&self) -> bool {
         !self.components.is_empty()
+    }
+
+    /// The `.` and `..` entries a directory reached with `states` has as far
+    /// as the pattern is concerned, each with the states it leads to.
+    fn relative_entries(&self, states: &[usize]) -> Vec<(&'static str, Vec<usize>)> {
+        if !self.spells_relative {
+            return Vec::new();
+        }
+        [".", ".."]
+            .into_iter()
+            .map(|name| (name, self.step(states, OsStr::new(name), Kind::Dir)))
+            .filter(|(_, next)| self.reaches(next, Kind::Dir))
+            .collect()
     }
 
     fn start(&self) -> Vec<usize> {
@@ -327,7 +335,11 @@ pub fn compile_globs(patterns: &[&str]) -> Result<PathGlob, GlobError> {
     let words: Vec<String> = patterns
         .iter()
         .flat_map(|pattern| crate::brace::expand(pattern))
+        .map(|word| collapse_separators(&word))
         .collect();
+    let spells_relative = words
+        .iter()
+        .any(|word| word.split('/').any(|c| c == "." || c == ".."));
     let mut files = Vec::new();
     let mut spelled_dot_names = Vec::new();
     for word in &words {
@@ -338,10 +350,8 @@ pub fn compile_globs(patterns: &[&str]) -> Result<PathGlob, GlobError> {
     }
     let mut components = Vec::new();
     let mut starts = Vec::new();
-    // All or nothing: the walk prunes a directory no component can enter, so
-    // a word left without components would lose its matches.
-    let compiled: Option<Vec<_>> = words.iter().map(|w| compile_components(w)).collect();
-    for word_components in compiled.unwrap_or_default() {
+    for word in &words {
+        let word_components = compile_components(word)?;
         starts.push(components.len());
         components.extend(word_components);
         components.push(Component::End);
@@ -351,16 +361,27 @@ pub fn compile_globs(patterns: &[&str]) -> Result<PathGlob, GlobError> {
         spelled_dot_names,
         components,
         starts,
+        spells_relative,
     })
+}
+
+/// `word` with each run of `/` made one, as the shell reads a pattern's
+/// components.
+fn collapse_separators(word: &str) -> String {
+    let mut out = String::with_capacity(word.len());
+    for c in word.chars() {
+        if c != '/' || !out.ends_with('/') {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn is_dot_named(name: &OsStr) -> bool {
     name.as_encoded_bytes().first() == Some(&b'.')
 }
 
-/// A word whose components do not compile on their own (a class spanning a
-/// `/`) gets none.
-fn compile_components(word: &str) -> Option<Vec<Component>> {
+fn compile_components(word: &str) -> Result<Vec<Component>, GlobError> {
     let mut components = word
         .split('/')
         .map(|c| match c {
@@ -368,10 +389,9 @@ fn compile_components(word: &str) -> Option<Vec<Component>> {
             _ if is_dot_named(OsStr::new(c)) => Pattern::new(c).map(Component::DotName),
             _ => Pattern::new(c).map(Component::Name),
         })
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
+        .collect::<Result<Vec<_>, _>>()?;
     components.dedup_by(|a, b| matches!((a, b), (Component::AnyDepth, Component::AnyDepth)));
-    Some(components)
+    Ok(components)
 }
 
 /// Module-argument spelling for a scan that respects `.gitignore`.
@@ -394,10 +414,9 @@ pub(crate) fn parse_gitignore_arg(arg: &str) -> Result<bool, String> {
 /// The shared traversal: every file under `start` that `keep` takes, visited
 /// with its `root`-relative path and its directory, siblings in name order,
 /// so the whole walk comes out in path order without a sort at the end.
-/// Directories are read on spare cores ahead of the visiting. Prunes the
-/// reserved top-level `.dirsql/` subtree and any directory the skip rules
-/// ignore wholesale, so an ignored tree is never read at all. With a glob, a
-/// dot-named entry it does not spell is skipped; without one all are
+/// Directories are read on spare cores ahead of the visiting. Prunes any
+/// directory the skip rules ignore wholesale, so an ignored tree is never read
+/// at all. With a glob, a dot-named entry it does not spell is skipped; without one all are
 /// admitted. With `gitignore` set, entries a `.gitignore` in force ignores
 /// are pruned/skipped too, starting from the walker's frames: the ones in
 /// force above `start` when a repo encloses it. Inside a directory holding
@@ -421,9 +440,6 @@ fn walk(
         walk: walker,
         dir: start.to_path_buf(),
         rel: rel.to_path_buf(),
-        // Depth below `root`, not below `start`: the reserved-directory rule
-        // is about the tree's top level wherever the walk begins.
-        depth: rel.components().count(),
         states,
         linked: false,
     };
@@ -443,7 +459,6 @@ struct Place<'a> {
     walk: Walk<'a>,
     dir: PathBuf,
     rel: PathBuf,
-    depth: usize,
     states: Vec<usize>,
     linked: bool,
 }
@@ -458,7 +473,6 @@ impl<'a> Place<'a> {
             mut walk,
             dir,
             rel,
-            depth,
             states,
             linked,
         } = self;
@@ -478,7 +492,6 @@ impl<'a> Place<'a> {
                 listing.name(listed),
                 listed.seen,
                 &rel,
-                depth + 1,
                 &states,
                 linked,
             )
@@ -501,6 +514,21 @@ impl<'a> Place<'a> {
         } else {
             Vec::new()
         };
+        let relative = walk.glob.map_or_else(Vec::new, |glob| {
+            glob.relative_entries(&states)
+                .into_iter()
+                .map(|(name, next)| {
+                    Step::Dir(Box::new(Place {
+                        walk: walk.clone(),
+                        dir: dir.join(name),
+                        rel: rel.join(name),
+                        states: next,
+                        linked,
+                    }))
+                })
+                .collect::<Vec<_>>()
+        });
+        steps.extend(relative);
         let entered =
             listing
                 .entries()
@@ -515,7 +543,6 @@ impl<'a> Place<'a> {
                         walk: walk.clone(),
                         dir: dir.join(listing.name(listed)),
                         rel: child,
-                        depth: depth + 1,
                         states: next,
                         linked,
                     }))),
@@ -546,20 +573,14 @@ struct Walk<'a> {
 
 impl Walk<'_> {
     /// What the walk makes of entry `name` of `dir`, seen as `seen`, the
-    /// directory at `rel` whose entries sit at `depth`, reached with glob
-    /// `states` and `linked` as whether its path already crosses a followed
-    /// symlink.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the walk's position is the arguments"
-    )]
+    /// directory at `rel`, reached with glob `states` and `linked` as whether
+    /// its path already crosses a followed symlink.
     fn take(
         &self,
         dir: &Path,
         name: &OsStr,
         seen: Seen,
         rel: &Path,
-        depth: usize,
         states: &[usize],
         linked: bool,
     ) -> Option<Taken> {
@@ -584,7 +605,7 @@ impl Walk<'_> {
         } else {
             dir.join(name)
         };
-        if !self.admits(depth, is_dir, name, &path, &child) {
+        if !self.admits(is_dir, name, &path, &child) {
             return None;
         }
         Some(if is_dir {
@@ -598,11 +619,10 @@ impl Walk<'_> {
         })
     }
 
-    /// Whether the walk takes an entry at `depth`: the skip rules and the
-    /// reserved-directory rule first, then the dot-name rule, then the
-    /// `.gitignore` files in force.
-    fn admits(&self, depth: usize, is_dir: bool, name: &OsStr, path: &Path, rel: &Path) -> bool {
-        should_descend(depth, is_dir, name, rel, self.ignore)
+    /// Whether the walk takes an entry: the skip rules first, then the dot-name
+    /// rule, then the `.gitignore` files in force.
+    fn admits(&self, is_dir: bool, name: &OsStr, path: &Path, rel: &Path) -> bool {
+        should_descend(is_dir, rel, self.ignore)
             && self.admits_name(name)
             && (self.frames.is_empty() || !is_gitignored(&self.frames, path, is_dir))
     }
@@ -806,19 +826,9 @@ fn is_gitignored(frames: &[Arc<Gitignore>], path: &Path, is_dir: bool) -> bool {
     false
 }
 
-/// Whether the walk keeps `rel_path`. False prunes the reserved top-level
-/// `.dirsql/` directory and any directory whose whole subtree the skip rules
-/// ignore.
-fn should_descend(
-    depth: usize,
-    is_dir: bool,
-    file_name: &std::ffi::OsStr,
-    rel_path: &Path,
-    ignore: &TableMatcher,
-) -> bool {
-    if is_reserved_dir(depth, is_dir, file_name) {
-        return false;
-    }
+/// Whether the walk keeps `rel_path`. False prunes any directory whose whole
+/// subtree the skip rules ignore.
+fn should_descend(is_dir: bool, rel_path: &Path, ignore: &TableMatcher) -> bool {
     !is_dir || !ignore.is_ignored_dir(rel_path)
 }
 
@@ -826,21 +836,15 @@ fn should_descend(
 /// directory on the way, itself included, survives [`should_descend`].
 pub(crate) fn reaches_dir(rel_path: &Path, ignore: &TableMatcher) -> bool {
     let mut prefix = PathBuf::new();
-    rel_path.components().enumerate().all(|(depth, component)| {
+    rel_path.components().all(|component| {
         prefix.push(component);
-        should_descend(depth + 1, true, component.as_os_str(), &prefix, ignore)
+        should_descend(true, &prefix, ignore)
     })
 }
 
 /// Whether `rel_path` matches `glob`.
 fn is_glob_match(glob: &PathGlob, rel_path: &Path) -> bool {
     glob.is_match(rel_path)
-}
-
-/// True for the reserved top-level `.dirsql/` directory (`depth == 1`), which
-/// the scan unconditionally excludes.
-fn is_reserved_dir(depth: usize, is_dir: bool, file_name: &std::ffi::OsStr) -> bool {
-    depth == 1 && is_dir && file_name == RESERVED_DIR
 }
 
 #[cfg(test)]
@@ -980,7 +984,6 @@ mod tests {
             OsStr::new(name),
             seen,
             Path::new(""),
-            1,
             states,
             linked,
         )
@@ -1040,13 +1043,13 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("a").join("b")).unwrap();
         fs::create_dir_all(root.path().join("a").join("node_modules").join("pkg")).unwrap();
-        fs::create_dir_all(root.path().join("a").join(RESERVED_DIR)).unwrap();
+        fs::create_dir_all(root.path().join("a").join(".dirsql")).unwrap();
         fs::write(root.path().join("a").join("f.md"), "").unwrap();
         let ignore = TableMatcher::new(&[(".dirsql/*", "t")], &["**/node_modules/**"]).unwrap();
         let a = root.path().join("a");
         let mut dirs = scan_dirs(root.path(), &a, &ignore);
         dirs.sort();
-        assert_eq!(dirs, vec![a.clone(), a.join(RESERVED_DIR), a.join("b")]);
+        assert_eq!(dirs, vec![a.clone(), a.join(".dirsql"), a.join("b")]);
     }
 
     #[test]
@@ -1063,19 +1066,56 @@ mod tests {
     #[test]
     fn explore_enters_a_dirsql_directory_below_the_top_level() {
         let root = tempfile::tempdir().unwrap();
-        fs::create_dir_all(root.path().join("a").join(RESERVED_DIR)).unwrap();
+        fs::create_dir_all(root.path().join("a").join(".dirsql")).unwrap();
         let ignore = TableMatcher::new(&[("**/.dirsql/*", "t")], &[]).unwrap();
         let top = Place {
             walk: walk_with(&ignore, None, Vec::new()),
             dir: root.path().to_path_buf(),
             rel: PathBuf::new(),
-            depth: 0,
             states: Vec::new(),
             linked: false,
         };
         let [a] = <[Place<'_>; 1]>::try_from(explored_dirs(top)).ok().unwrap();
         let nested: Vec<PathBuf> = explored_dirs(a).into_iter().map(|p| p.rel).collect();
-        assert_eq!(nested, vec![Path::new("a").join(RESERVED_DIR)]);
+        assert_eq!(nested, vec![Path::new("a").join(".dirsql")]);
+    }
+
+    #[test]
+    fn explore_enters_a_current_directory_component_the_glob_spells() {
+        let root = tempfile::tempdir().unwrap();
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let glob = compile_glob("./x").unwrap();
+        let top = Place {
+            walk: walk_with(&ignore, Some(&glob), Vec::new()),
+            dir: root.path().to_path_buf(),
+            rel: PathBuf::new(),
+            states: glob.start(),
+            linked: false,
+        };
+        let [dot] = <[Place<'_>; 1]>::try_from(explored_dirs(top)).ok().unwrap();
+        assert_eq!(dot.rel, Path::new("."));
+        assert_eq!(dot.dir, root.path().join("."));
+    }
+
+    #[test]
+    fn relative_entries_name_only_the_components_the_glob_spells() {
+        let glob = compile_glob("*/../x").unwrap();
+        let states = glob.step(&glob.start(), OsStr::new("docs"), Kind::Dir);
+        let entries = glob.relative_entries(&states);
+        assert_eq!(
+            entries.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+            vec![".."]
+        );
+        let plain = compile_glob("*/x").unwrap();
+        let states = plain.step(&plain.start(), OsStr::new("docs"), Kind::Dir);
+        assert!(plain.relative_entries(&states).is_empty());
+    }
+
+    #[test]
+    fn a_glob_spells_relative_components_only_when_a_word_has_one() {
+        assert!(compile_glob("a/./b").unwrap().spells_relative);
+        assert!(compile_glob("a/../b").unwrap().spells_relative);
+        assert!(!compile_glob("a/b").unwrap().spells_relative);
     }
 
     #[test]
@@ -1091,32 +1131,6 @@ mod tests {
         let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
         assert!(!reaches_dir(Path::new("node_modules"), &ignore));
         assert!(!reaches_dir(Path::new("apps/node_modules/pkg"), &ignore));
-    }
-
-    #[test]
-    fn reaches_dir_stops_at_the_reserved_directory() {
-        let ignore = TableMatcher::new(&[], &[]).unwrap();
-        assert!(!reaches_dir(Path::new(RESERVED_DIR), &ignore));
-        assert!(!reaches_dir(
-            &Path::new(RESERVED_DIR).join("cache"),
-            &ignore
-        ));
-    }
-
-    #[test]
-    fn is_reserved_dir_matches_top_level_dirsql() {
-        assert!(is_reserved_dir(1, true, OsStr::new(RESERVED_DIR)));
-    }
-
-    #[test]
-    fn is_reserved_dir_rejects_nested_dirsql() {
-        assert!(!is_reserved_dir(2, true, OsStr::new(RESERVED_DIR)));
-    }
-
-    #[test]
-    fn is_reserved_dir_rejects_files_and_other_names() {
-        assert!(!is_reserved_dir(1, false, OsStr::new(RESERVED_DIR)));
-        assert!(!is_reserved_dir(1, true, OsStr::new("data")));
     }
 
     #[test]
@@ -1183,9 +1197,7 @@ mod tests {
     fn should_descend_prunes_a_directory_the_skip_rules_fully_ignore() {
         let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
         assert!(!should_descend(
-            2,
             true,
-            OsStr::new("node_modules"),
             Path::new("apps/node_modules"),
             &ignore
         ));
@@ -1194,35 +1206,15 @@ mod tests {
     #[test]
     fn should_descend_keeps_an_ordinary_directory() {
         let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
-        assert!(should_descend(
-            1,
-            true,
-            OsStr::new("docs"),
-            Path::new("docs"),
-            &ignore
-        ));
+        assert!(should_descend(true, Path::new("docs"), &ignore));
     }
 
     #[test]
     fn should_descend_keeps_a_file_even_when_a_subtree_pattern_names_it() {
         let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
         assert!(should_descend(
-            2,
             false,
-            OsStr::new("node_modules"),
             Path::new("apps/node_modules"),
-            &ignore
-        ));
-    }
-
-    #[test]
-    fn should_descend_prunes_the_reserved_top_level_dirsql_directory() {
-        let ignore = TableMatcher::new(&[], &[]).unwrap();
-        assert!(!should_descend(
-            1,
-            true,
-            OsStr::new(RESERVED_DIR),
-            Path::new(RESERVED_DIR),
             &ignore
         ));
     }
@@ -1352,7 +1344,6 @@ mod tests {
         let glob = compile_glob("**").unwrap();
         let walk = walk_with(&ignore, Some(&glob), Vec::new());
         assert!(walk.admits(
-            1,
             false,
             OsStr::new("a.md"),
             Path::new("/r/a.md"),
@@ -1366,7 +1357,6 @@ mod tests {
         let glob = compile_glob("**").unwrap();
         let walk = walk_with(&ignore, Some(&glob), vec![frame("", &["*.log"])]);
         assert!(!walk.admits(
-            2,
             true,
             OsStr::new("node_modules"),
             Path::new("/r/apps/node_modules"),
@@ -1380,14 +1370,12 @@ mod tests {
         let glob = compile_glob("**").unwrap();
         let walk = walk_with(&ignore, Some(&glob), Vec::new());
         assert!(!walk.admits(
-            1,
             false,
             OsStr::new(".env"),
             Path::new("/r/.env"),
             Path::new(".env")
         ));
         assert!(!walk.admits(
-            1,
             true,
             OsStr::new(".hidden"),
             Path::new("/r/.hidden"),
@@ -1401,14 +1389,12 @@ mod tests {
         let glob = compile_glob("**/.env").unwrap();
         let walk = walk_with(&ignore, Some(&glob), Vec::new());
         assert!(walk.admits(
-            2,
             false,
             OsStr::new(".env"),
             Path::new("/r/sub/.env"),
             Path::new("sub/.env")
         ));
         assert!(!walk.admits(
-            1,
             true,
             OsStr::new(".hidden"),
             Path::new("/r/.hidden"),
@@ -1421,13 +1407,7 @@ mod tests {
         let ignore = TableMatcher::new(&[("**/*.js", "t")], &[]).unwrap();
         let walk = walk_with(&ignore, Some(ignore.walk_glob()), Vec::new());
         let admits = |is_dir, name: &str| {
-            walk.admits(
-                1,
-                is_dir,
-                OsStr::new(name),
-                Path::new(name),
-                Path::new(name),
-            )
+            walk.admits(is_dir, OsStr::new(name), Path::new(name), Path::new(name))
         };
         assert!(admits(true, "node_modules"));
         assert!(admits(false, "node_modules"));
@@ -1478,14 +1458,12 @@ mod tests {
         let glob = compile_glob("**").unwrap();
         let walk = walk_with(&ignore, Some(&glob), vec![frame("", &["*.log"])]);
         assert!(!walk.admits(
-            1,
             false,
             OsStr::new("debug.log"),
             Path::new("/r/debug.log"),
             Path::new("debug.log")
         ));
         assert!(walk.admits(
-            1,
             false,
             OsStr::new("app.js"),
             Path::new("/r/app.js"),
@@ -1568,17 +1546,10 @@ mod tests {
     }
 
     #[test]
-    fn a_pattern_whose_components_do_not_compile_alone_follows_no_link() {
-        let glob = compile_glob("[a/b]").unwrap();
+    fn a_glob_without_words_follows_no_link() {
+        let glob = compile_globs(&[]).unwrap();
         assert!(glob.components.is_empty());
         assert!(!glob.reaches(&glob.start(), Kind::LinkedDir));
-    }
-
-    #[test]
-    fn one_brace_word_without_components_leaves_the_glob_without_any() {
-        let glob = compile_glob("{x,[a/b]}").unwrap();
-        assert!(glob.components.is_empty());
-        assert!(!glob.has_components());
     }
 
     #[test]
@@ -1678,7 +1649,7 @@ mod tests {
     #[test]
     fn enters_every_real_directory_when_the_glob_has_no_components() {
         let ignore = TableMatcher::new(&[], &[]).unwrap();
-        let glob = compile_glob("[a/b]").unwrap();
+        let glob = compile_globs(&[]).unwrap();
         let walk = Walk {
             ignore: &ignore,
             glob: Some(&glob),

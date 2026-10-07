@@ -1669,7 +1669,7 @@ impl DirSQLBuilder {
     }
 
     /// Enable persistent on-disk storage. `None` writes the SQLite database to
-    /// the default `<root>/.dirsql/cache.db`; `Some(path)` writes it to `path`.
+    /// the default location in the platform cache directory; `Some(path)` writes it to `path`.
     /// Either way, subsequent startups only re-parse files that have actually
     /// changed. See `docs/howto/persist.md` for the reconcile contract.
     pub fn persist(mut self, path: Option<impl AsRef<Path>>) -> Self {
@@ -2861,7 +2861,7 @@ mod internal_tests {
             extensions: Vec::new(),
             functions: Vec::new(),
             persist,
-            persist_path: None,
+            persist_path: persist.then(|| root.join("cache.db")),
             poll_interval: DEFAULT_POLL_INTERVAL,
             hint_legacy_files_table: false,
             path_table_parser: None,
@@ -4323,7 +4323,8 @@ mod internal_tests {
             "*.txt",
             |_| vec![],
         )];
-        let ctx = prepare_persist(dir.path(), &tables, &[], None).unwrap();
+        let ctx =
+            prepare_persist(dir.path(), &tables, &[], Some(&dir.path().join("cache.db"))).unwrap();
         assert!(ctx.cached.is_empty());
         assert!(!ctx.expected_meta.is_empty());
         assert!(

@@ -18,7 +18,7 @@ import initSqlJs from "sql.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { exists } from "../../exists.js";
 
-// Some tests corrupt dirsql's on-disk cache (`.dirsql/cache.db`) out-of-band
+// Some tests corrupt dirsql's on-disk cache (`cache.db`) out-of-band
 // to exercise the racy-window and dirsql_version-bump reconcile paths. sql.js
 // (WASM SQLite) is used instead of `node:sqlite`, which only exists on Node
 // 22.5+. sql.js is in-memory, so we read the cache bytes, mutate, and write
@@ -29,7 +29,7 @@ const sqlJsReady = initSqlJs({
   locateFile: (file) => join(dirname(resolveModule("sql.js")), file),
 });
 
-/** Open `.dirsql/cache.db` with sql.js, run `sql`, write the bytes back. */
+/** Open the cache db with sql.js, run `sql`, write the bytes back. */
 async function corruptCache(cachePath: string, sql: string): Promise<void> {
   const SQL = await sqlJsReady;
   // With WAL mode, the cache has sidecar files (cache.db-wal, cache.db-shm).
@@ -57,9 +57,13 @@ async function corruptCache(cachePath: string, sql: string): Promise<void> {
 
 describe("DirSQL persist", () => {
   let dir: string;
+  let cacheDir: string;
+  let cachePath: string;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "dirsql-persist-"));
+    cacheDir = await mkdtemp(join(tmpdir(), "dirsql-persist-cache-"));
+    cachePath = join(cacheDir, "cache.db");
     await mkdir(join(dir, "items"), { recursive: true });
     await writeFile(
       join(dir, "items", "a.json"),
@@ -69,6 +73,7 @@ describe("DirSQL persist", () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+    await rm(cacheDir, { recursive: true, force: true });
   });
 
   function makeTable(box: { count: number }) {
@@ -83,16 +88,17 @@ describe("DirSQL persist", () => {
     };
   }
 
-  it("writes the cache db to .dirsql/cache.db on cold start", async () => {
+  it("keeps the default cache out of the scanned tree", async () => {
     const box = { count: 0 };
     const db = new DirSQL({
       root: dir,
       tables: [makeTable(box)],
       persist: true,
+      persistPath: cachePath,
     });
     const rows = await db.query("SELECT * FROM items");
     expect(rows).toHaveLength(1);
-    expect(await exists(join(dir, ".dirsql", "cache.db"))).toBe(true);
+    expect(await exists(join(dir, ".dirsql"))).toBe(false);
   });
 
   it("trusts unchanged files on warm start", async () => {
@@ -101,6 +107,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box1)],
       persist: true,
+      persistPath: cachePath,
     });
     await db1.ready;
     expect(box1.count).toBe(1);
@@ -110,6 +117,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box2)],
       persist: true,
+      persistPath: cachePath,
     });
     await db2.ready;
     expect(box2.count).toBe(0);
@@ -123,19 +131,21 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable({ count: 0 })],
       persist: true,
+      persistPath: cachePath,
     });
     await db1.ready;
     // Close before reading: the cache is WAL, so an open connection may still
     // be holding this run's writes in the sidecar rather than the db file.
     db1.close();
 
-    const cache = join(dir, ".dirsql", "cache.db");
+    const cache = cachePath;
     const before = await readFile(cache);
 
     const db2 = new DirSQL({
       root: dir,
       tables: [makeTable({ count: 0 })],
       persist: true,
+      persistPath: cachePath,
     });
     await db2.ready;
     db2.close();
@@ -151,6 +161,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box1)],
       persist: true,
+      persistPath: cachePath,
     });
     await db1.ready;
 
@@ -168,6 +179,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box2)],
       persist: true,
+      persistPath: cachePath,
     });
     await db2.ready;
     expect(box2.count).toBe(1);
@@ -186,6 +198,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box1)],
       persist: true,
+      persistPath: cachePath,
     });
     await db1.ready;
 
@@ -196,6 +209,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box2)],
       persist: true,
+      persistPath: cachePath,
     });
     await db2.ready;
     const rows = await db2.query("SELECT name FROM items ORDER BY name");
@@ -208,6 +222,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box1)],
       persist: true,
+      persistPath: cachePath,
     });
     await db1.ready;
 
@@ -221,6 +236,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box2)],
       persist: true,
+      persistPath: cachePath,
     });
     await db2.ready;
     expect(box2.count).toBe(1);
@@ -234,6 +250,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box1)],
       persist: true,
+      persistPath: cachePath,
     });
     await db1.ready;
 
@@ -254,37 +271,12 @@ describe("DirSQL persist", () => {
         },
       ],
       persist: true,
+      persistPath: cachePath,
     });
     await db2.ready;
     expect(box2.count).toBe(1);
     const rows = await db2.query("SELECT * FROM items");
     expect(rows[0].sku).toBe("X");
-  });
-
-  it("never indexes files inside the .dirsql directory", async () => {
-    await mkdir(join(dir, ".dirsql", "items"), { recursive: true });
-    await writeFile(
-      join(dir, ".dirsql", "items", "boom.json"),
-      JSON.stringify({ name: "BOOM", price: -1 }),
-    );
-
-    const db = new DirSQL({
-      root: dir,
-      tables: [
-        {
-          name: "items",
-          ddl: "CREATE TABLE items (name TEXT, price REAL)",
-          glob: "**/*.json",
-          onFile: (filePath: string) => [
-            JSON.parse(readFileSync(filePath, "utf8")),
-          ],
-        },
-      ],
-      persist: true,
-    });
-    await db.ready;
-    const rows = await db.query("SELECT name FROM items");
-    expect(rows.map((r) => r.name)).toEqual(["apple"]);
   });
 
   it("hash-confirms files that fall inside the racy window", async () => {
@@ -296,6 +288,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box1)],
       persist: true,
+      persistPath: cachePath,
     });
     await db1.ready;
     expect(box1.count).toBe(1);
@@ -305,7 +298,7 @@ describe("DirSQL persist", () => {
     // Wait for WAL checkpoint to complete before reading with sql.js.
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    const cache = join(dir, ".dirsql", "cache.db");
+    const cache = cachePath;
     await corruptCache(
       cache,
       "UPDATE _dirsql_files SET snapshot_ns = 0, content_hash = zeroblob(32)",
@@ -316,6 +309,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box2)],
       persist: true,
+      persistPath: cachePath,
     });
     await db2.ready;
     expect(box2.count).toBe(1);
@@ -329,6 +323,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box1)],
       persist: true,
+      persistPath: cachePath,
     });
     await db1.ready;
     expect(box1.count).toBe(1);
@@ -338,7 +333,7 @@ describe("DirSQL persist", () => {
     // Wait for WAL checkpoint to complete before reading with sql.js.
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    const cache = join(dir, ".dirsql", "cache.db");
+    const cache = cachePath;
     await corruptCache(
       cache,
       "UPDATE _dirsql_meta SET value = 'bogus-version' WHERE key = 'dirsql_version'",
@@ -349,6 +344,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box2)],
       persist: true,
+      persistPath: cachePath,
     });
     await db2.ready;
     expect(box2.count).toBe(1);

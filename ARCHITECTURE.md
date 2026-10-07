@@ -117,8 +117,8 @@ than it delivers:
 2. **Persist mode writes one cache database, and it is opt-in.** With
    `--persist` (off by default), dirsql maintains a SQLite cache so a restart
    need not re-parse unchanged files. By default this lands at
-   **`<root>/.dirsql/cache.db` -- inside the indexed directory** -- creating
-   the `.dirsql/` directory if absent; `--persist-path` puts it anywhere you
+   **the platform cache directory, keyed by a hash of the root -- outside the
+   indexed directory** -- creating it if absent; `--persist-path` puts it anywhere you
    name. This is the one path dirsql writes to, it is never a file dirsql
    indexed, and without `--persist` nothing is written at all.
 3. **The index itself is ephemeral and off to the side.** Without persist, the
