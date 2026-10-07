@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/server_speed_test.py -x -q",
+  "ran_at": 1791386395,
+  "exit_code": 0,
+  "commit": "54e44f7f16d84278a20a8530cc6127e868898eb6",
+  "branch": "bot/1415-server-speed"
+}
