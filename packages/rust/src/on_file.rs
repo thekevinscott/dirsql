@@ -75,7 +75,7 @@ pub(crate) fn run_streaming(
         .collect();
     let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
     let mut runs = chunks(&args, ARG_BUDGET.saturating_sub(argv_bytes(&argv)));
-    if runs.len() == 1 && cpus > 1 {
+    if runs.len() == 1 {
         runs = spread(&args, &file_sizes(paths), cpus);
     }
     let workers = cpus.min(runs.len());
@@ -428,6 +428,22 @@ mod tests {
         let args = args(&["a", "b", "c"]);
         let mib = 1024 * 1024;
         assert_eq!(lens(&spread(&args, &[100 * mib, mib, mib], 2)), [1, 2]);
+    }
+
+    #[test]
+    fn spread_cuts_at_each_even_share_of_the_bytes() {
+        let args = args(&["a", "b", "c", "d", "e"]);
+        let mib = 1024 * 1024;
+        let sizes = [5 * mib, 0, 5 * mib, 5 * mib, 0];
+        assert_eq!(lens(&spread(&args, &sizes, 3)), [1, 2, 2]);
+    }
+
+    #[test]
+    fn spread_never_ends_with_an_empty_run() {
+        let args = args(&["a", "b", "c"]);
+        let mib = 1024 * 1024;
+        let sizes = [20 * mib, 0, 20 * mib];
+        assert_eq!(lens(&spread(&args, &sizes, 3)), [1, 2]);
     }
 
     #[test]
