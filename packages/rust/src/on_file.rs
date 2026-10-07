@@ -344,6 +344,42 @@ mod tests {
         assert_eq!(total, 6000);
     }
 
+    fn files_of(dir: &Path, count: usize, bytes: usize) -> Vec<PathBuf> {
+        (0..count)
+            .map(|i| {
+                let path = dir.join(format!("f{i}.jsonl"));
+                std::fs::write(&path, vec![b'x'; bytes]).unwrap();
+                path
+            })
+            .collect()
+    }
+
+    fn invocations_over(paths: &[PathBuf]) -> usize {
+        run(
+            r#"sh -c 'echo "{\"n\":$#}"' sh"#,
+            Path::new("."),
+            Path::new("."),
+            paths,
+        )
+        .unwrap()
+        .len()
+    }
+
+    #[test]
+    fn run_spreads_a_few_large_files_across_the_available_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = files_of(dir.path(), 4, 4 * 1024 * 1024);
+        let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        assert_eq!(invocations_over(&paths), cpus.min(4));
+    }
+
+    #[test]
+    fn run_keeps_a_few_small_files_in_one_invocation() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = files_of(dir.path(), 4, 100);
+        assert_eq!(invocations_over(&paths), 1);
+    }
+
     #[test]
     fn run_names_the_line_of_bad_output_after_earlier_blocks() {
         let err = run(
