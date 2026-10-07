@@ -158,9 +158,9 @@ fn a_spelled_dot_directory_is_listed() {
 }
 
 #[test]
-fn node_modules_is_skipped_unless_the_glob_names_it() {
+fn node_modules_is_walked_like_any_directory() {
     let root = tree(&["top.js", "node_modules/top.js", "pkg/node_modules/dep/i.js"]);
-    let expected = vec!["top.js"];
+    let expected = vec!["node_modules/top.js", "pkg/node_modules/dep/i.js", "top.js"];
     assert_eq!(path_table_paths(root.path(), "**/*.js"), expected);
     assert_eq!(config_paths(root.path(), "**/*.js"), expected);
 }
