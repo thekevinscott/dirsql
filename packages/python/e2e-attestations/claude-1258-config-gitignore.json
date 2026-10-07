@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_gitignore_test.py tests/e2e/glob_speed_dotfiles_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_matchers_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1791329772,
+  "exit_code": 0,
+  "commit": "f828a8181c981ab9c5c775117cb60edf3ccd9dcc",
+  "branch": "claude/1258-config-gitignore"
+}

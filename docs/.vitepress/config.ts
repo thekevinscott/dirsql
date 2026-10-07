@@ -65,7 +65,8 @@ export default defineConfig({
             { text: 'Keep the index across restarts', link: '/howto/persist' },
             { text: 'React to file changes', link: '/howto/react-to-changes' },
             { text: 'Write a plugin', link: '/howto/write-a-plugin' },
-            { text: 'Embed dirsql in your application', link: '/howto/embed' }
+            { text: 'Embed dirsql in your application', link: '/howto/embed' },
+            { text: 'Give your agent the dirsql skill', link: '/howto/agent-skill' }
           ]
         },
         {

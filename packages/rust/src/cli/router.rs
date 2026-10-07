@@ -26,6 +26,7 @@ use super::execute::{QueryFailure, execute_query, require_ready};
 pub(super) struct AppContext {
     pub state: AppState,
     pub events: broadcast::Sender<String>,
+    pub watch_failure: Option<String>,
     pub cancel: watch::Receiver<bool>,
     pub query_timeout: Duration,
 }
@@ -71,6 +72,9 @@ fn failure_response(failure: &QueryFailure) -> Response {
 async fn handle_events(State(ctx): State<SharedCtx>) -> Response {
     if let Err(failure) = require_ready(&ctx.state) {
         return failure_response(&failure);
+    }
+    if let Some(reason) = &ctx.watch_failure {
+        return failure_response(&QueryFailure::Unavailable(reason.clone()));
     }
 
     // Subscribe BEFORE anything that might block so we don't drop events
@@ -161,6 +165,21 @@ mod tests {
             resp.headers().get(header::CONTENT_TYPE).unwrap(),
             "application/json"
         );
+    }
+
+    #[tokio::test]
+    async fn events_return_503_while_the_server_is_unavailable() {
+        let (events, _) = broadcast::channel::<String>(1);
+        let (_cancel_tx, cancel) = watch::channel(false);
+        let ctx = Arc::new(AppContext {
+            state: AppState::Unavailable("config failed to load".into()),
+            events,
+            watch_failure: None,
+            cancel,
+            query_timeout: Duration::from_secs(1),
+        });
+        let resp = handle_events(State(ctx)).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[test]

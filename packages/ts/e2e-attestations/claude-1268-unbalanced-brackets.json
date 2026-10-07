@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791325990,
+  "exit_code": 0,
+  "commit": "1b7fe8a7f8e4cd8a870c76fc6e26cd087c431dc3",
+  "branch": "claude/1268-unbalanced-brackets"
+}

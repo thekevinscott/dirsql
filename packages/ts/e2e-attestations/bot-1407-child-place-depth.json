@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e fanout",
+  "ran_at": 1791310279,
+  "exit_code": 0,
+  "commit": "3780e2eefddfe515d992e7a7d8b579eddc9ac44f",
+  "branch": "bot/1407-child-place-depth"
+}

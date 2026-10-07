@@ -98,7 +98,9 @@ DirSQL::builder()
 
 Creates a SQLite index over a directory. The index root is the explicit
 `root` when given, else the **process cwd** — the `config` file's location
-never sets the root.
+never sets the root. A config's `[[table]]` globs anchor at the config file's
+own directory instead (see [glob anchor](./config.md#glob-anchor)); `root`
+governs programmatic tables and path-tables.
 
 Constructing with **neither a `config` nor programmatic `tables`** defines
 **no named tables** — the same as the CLI with no
@@ -127,7 +129,9 @@ shortcut was removed in #603 — use
   entries are appended after any programmatic `tables`; its `ignore`
   patterns and `[[dirsql.extension]]` entries are appended likewise. The
   config file does **not** set the index root: with no explicit `root`, the
-  index roots at the process cwd. **Multiple configs merge in order** on
+  index roots at the process cwd. Its `[[table]]` globs anchor at the config
+  file's directory (or at the literal prefix of an absolute / `~/` glob), not
+  at `root`; its `ignore` applies to its own tables only. **Multiple configs merge in order** on
   every SDK — **Python** `config` accepts a `str` or a `list[str]`, the
   **Rust** builder's `.config()` is repeatable (call it once per file), and
   **TypeScript** `config` accepts a `string` or a `string[]`; the configs
@@ -296,6 +300,10 @@ Returns a stream of [`RowEvent`](#rowevent)s reflecting filesystem changes
 under the root. The watcher starts on first iteration (Python/TypeScript)
 or at the `watch()` call (Rust). The stream never terminates on its own;
 stop consuming it to stop.
+
+Python/TypeScript: each `watch()` call returns an independent stream, and every stream
+on one instance receives every event observed after it was created, so
+several consumers (one per client, say) can share one instance.
 
 Rust: `watch()` may be called once per instance and is mutually exclusive
 with the polling API below — mixing them returns an error, since both drain

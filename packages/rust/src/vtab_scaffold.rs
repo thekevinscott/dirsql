@@ -331,7 +331,7 @@ fn lookup_cost(prefetch: bool) -> f64 {
 fn plan_idx_num(lookup: Option<usize>, prefetch: bool) -> c_int {
     let lookup = lookup.map_or(SCAN_IDX, lookup_idx_num);
     if prefetch {
-        lookup | PREFETCH_IDX
+        lookup + PREFETCH_IDX
     } else {
         lookup
     }
@@ -669,7 +669,7 @@ mod tests {
 
     #[test]
     fn compile_glob_rejects_an_invalid_pattern() {
-        let err = compile_glob("[").unwrap_err();
+        let err = compile_glob("[z-a]").unwrap_err();
         assert!(
             matches!(err, Error::ModuleError(_)),
             "invalid globs surface as module errors, got {err:?}"

@@ -35,7 +35,9 @@ All three SDKs share a single unified construction entry point — no separate
 `root`, `tables`, `ignore`, and `config`; `config` names a `.dirsql.toml`
 file whose `[[table]]` entries are appended. The index root is decided
 uniformly across all three SDKs (#540): the explicit `root` when given, else
-the process cwd — the config file's location never sets the root. (The
+the process cwd — the config file's location never sets the root. A config's
+`[[table]]` globs anchor at the config file's own directory (or the literal
+prefix of an absolute / `~/` glob) on every SDK, via the shared core. (The
 `[dirsql].root` config key was removed in #540.)
 
 **Configless construction — at parity across all three SDKs (#636), no drift.**
@@ -95,6 +97,11 @@ core, so all three SDKs change at once. **No drift.**
 | Load SQLite extension(s)   | `DirSQL(extensions=[{path, entrypoint?}])`; `[[dirsql.extension]]` config entries | `.extension(Extension)` / `.extensions(I)` builder; `[[dirsql.extension]]` config entries (`path` + optional `entrypoint`) | `new DirSQL({ extensions: [{ path, entrypoint? }] })`; `[[dirsql.extension]]` config entries |
 | Multiple config files (merge in order) | `config=` accepts `str` or `list[str]` (#588) | `.config(path)` **repeatable** — each call appends; configs merge in call order (#545/#553) | `config` accepts `string` or `string[]` (#589) |
 | Worker-backed SQL functions (`[[dirsql.function]]`) | Y — config entries parsed and registered by the shared core (via `config=`) | Y — `[[dirsql.function]]` config entries (name, args arities, command, deterministic, timeout, batch) | Y — config entries parsed and registered by the shared core (via `config`) |
+
+**Multiple watch streams — TypeScript restored to Python parity.** Every
+`watch()` stream on one instance receives all events observed after its
+creation. Both SDKs share one poll and buffer events per live stream. Rust
+retains its documented single-stream, mutually exclusive watch/poll API.
 
 **Multiple config files — at parity across all three SDKs.** Several
 `.dirsql.toml` files merge in call order (`[[table]]` / `ignore` /

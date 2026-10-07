@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/capture_collision_test.py tests/e2e/fanout_test.py tests/e2e/cli_version_test.py tests/e2e/extension_package_test.py tests/e2e/on_file_query_test.py tests/e2e/sigint_interrupt_test.py tests/e2e/plugin_extension_discovery_test.py tests/e2e/plugin_discovery_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1791302200,
+  "exit_code": 0,
+  "commit": "1553e866cb8da7050a1c444833e269c831f6e0a1",
+  "branch": "claude/1330-python-dirsql-patch"
+}

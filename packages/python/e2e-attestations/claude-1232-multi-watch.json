@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/capture_collision_test.py tests/e2e/declared_table_name_test.py tests/e2e/extension_package_test.py tests/e2e/query_contract_test.py tests/e2e/plugin_discovery_test.py tests/e2e/sigint_interrupt_test.py tests/e2e/fanout_test.py tests/e2e/use_case_transcripts_test.py tests/e2e/plugin_extension_discovery_test.py tests/e2e/on_file_query_test.py -x -q",
+  "ran_at": 1791304050,
+  "exit_code": 0,
+  "commit": "8618c31f0280a80e7d09550fdb931c6460741db7",
+  "branch": "claude/1232-multi-watch"
+}

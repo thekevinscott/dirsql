@@ -1,0 +1,3 @@
+**Changed**
+
+- **A config `[[table]]` `glob` now anchors at its config file's directory, not the index root.** `glob = "projects/*/*.jsonl"` in `~/.claude/.dirsql.toml` indexes `~/.claude/projects` from any working directory. A glob may also start with `/`, `~/` or `../` (the path-table prefix grammar): it anchors at the literal directory chain before its first glob character. `{root}` in an `on-file` command, a table's `path`/`dir` columns, and `ignore` are all relative to the table's anchor. A config's `ignore` now applies to that config's tables only, no longer to path-tables or to other configs' tables. The index root (cwd, or an SDK's explicit `root`) is unchanged and still governs path-tables and programmatic tables. (#1232)

@@ -85,9 +85,8 @@ def _reset_instances():
 
 @pytest.fixture
 def mock_core():
-    """Replace the Rust-backed ``_RustDirSQL`` alias in ``dirsql._async``."""
-    with patch.object(async_mod, "_RustDirSQL", _FakeRustDirSQL):
-        yield _FakeRustDirSQL
+    """Build the wrapper with a fake core through its factory seam."""
+    return _wrapper_with_core(_FakeRustDirSQL)
 
 
 @pytest.fixture
@@ -110,7 +109,7 @@ def to_thread_spy():
 
 @pytest.fixture
 def core_init_raises(request):
-    """Patch the Rust core with a constructor that raises ``request.param``.
+    """Build the wrapper with a core constructor that raises ``request.param``.
 
     Parametrize indirectly with the exception instance the core should
     raise on construction (init / config-load failure paths).
@@ -121,8 +120,15 @@ def core_init_raises(request):
         def __init__(self, *a, **kw):
             raise exc
 
-    with patch.object(async_mod, "_RustDirSQL", Boom):
-        yield exc
+    return _wrapper_with_core(Boom)
+
+
+def _wrapper_with_core(core_factory):
+    class WrapperWithCore(async_mod.DirSQL):
+        def _new_core(self, root, **kwargs):
+            return core_factory(root, **kwargs)
+
+    return WrapperWithCore
 
 
 def describe_binding_layer():
@@ -131,14 +137,14 @@ def describe_binding_layer():
         # packages/python/README.md ("DirSQL is async by default").
         @pytest.mark.asyncio
         async def it_offloads_init_via_to_thread(mock_core, to_thread_spy):
-            db = async_mod.DirSQL("/root", tables=["t"])
+            db = mock_core("/root", tables=["t"])
             await db.ready()
 
             assert "_build_db" in to_thread_spy, to_thread_spy
 
         @pytest.mark.asyncio
         async def it_offloads_query_via_to_thread(mock_core, to_thread_spy):
-            db = async_mod.DirSQL("/root", tables=["t"])
+            db = mock_core("/root", tables=["t"])
             await db.ready()
 
             await db.query("SELECT 1")
@@ -152,13 +158,13 @@ def describe_binding_layer():
             "core_init_raises", [RuntimeError("init failed")], indirect=True
         )
         async def it_surfaces_init_exceptions(core_init_raises):
-            db = async_mod.DirSQL("/root", tables=["t"])
+            db = core_init_raises("/root", tables=["t"])
             with pytest.raises(RuntimeError, match="init failed"):
                 await db.ready()
 
         @pytest.mark.asyncio
         async def it_is_safe_to_call_repeatedly(mock_core):
-            db = async_mod.DirSQL("/root", tables=["t"])
+            db = mock_core("/root", tables=["t"])
             await db.ready()
             await db.ready()
             await db.ready()
@@ -169,7 +175,7 @@ def describe_binding_layer():
             "core_init_raises", [ValueError("bad config")], indirect=True
         )
         async def it_re_raises_init_error_on_every_ready_call(core_init_raises):
-            db = async_mod.DirSQL("/root", tables=["t"])
+            db = core_init_raises("/root", tables=["t"])
             with pytest.raises(ValueError):
                 await db.ready()
             with pytest.raises(ValueError):
@@ -180,7 +186,7 @@ def describe_binding_layer():
         # docs/reference/sdk.md and packages/python/README.md.
         @pytest.mark.asyncio
         async def it_passes_sql_through_untouched(mock_core):
-            db = async_mod.DirSQL("/root", tables=["t"])
+            db = mock_core("/root", tables=["t"])
             await db.ready()
 
             sql = "SELECT name, age FROM users WHERE age > 30 -- comment"
@@ -193,7 +199,7 @@ def describe_binding_layer():
         async def it_passes_a_path_table_name_through_untouched(mock_core):
             # Path-table resolution lives in the core; the SDK must not
             # rewrite, quote, or normalize the name on the way down.
-            db = async_mod.DirSQL("/root", tables=["t"])
+            db = mock_core("/root", tables=["t"])
             await db.ready()
 
             sql = "SELECT basename FROM './docs/*.md'"
@@ -206,7 +212,7 @@ def describe_binding_layer():
         # docs/reference/sdk.md and packages/python/README.md.
         @pytest.mark.asyncio
         async def it_lazily_starts_watcher_on_first_iteration(mock_core):
-            db = async_mod.DirSQL("/root", tables=["t"])
+            db = mock_core("/root", tables=["t"])
             await db.ready()
 
             stream = db.watch()
@@ -220,7 +226,7 @@ def describe_binding_layer():
 
         @pytest.mark.asyncio
         async def it_drains_buffered_events_before_polling_again(mock_core):
-            db = async_mod.DirSQL("/root", tables=["t"])
+            db = mock_core("/root", tables=["t"])
             await db.ready()
 
             fake = _FakeRustDirSQL.instances[0]
@@ -235,7 +241,7 @@ def describe_binding_layer():
 
         @pytest.mark.asyncio
         async def it_polls_until_events_arrive(mock_core):
-            db = async_mod.DirSQL("/root", tables=["t"])
+            db = mock_core("/root", tables=["t"])
             await db.ready()
 
             fake = _FakeRustDirSQL.instances[0]
@@ -246,12 +252,31 @@ def describe_binding_layer():
             assert event == "late"
             assert len(fake.poll_calls) == 3
 
+        @pytest.mark.asyncio
+        async def it_broadcasts_every_event_to_every_stream(mock_core):
+            db = mock_core("/root", tables=["t"])
+            await db.ready()
+
+            fake = _FakeRustDirSQL.instances[0]
+            fake.poll_batches = [["a", "b"]]
+
+            first = db.watch()
+            second = db.watch()
+
+            async def take_two(stream):
+                return [await stream.__anext__(), await stream.__anext__()]
+
+            got = await asyncio.wait_for(
+                asyncio.gather(take_two(first), take_two(second)), timeout=2.0
+            )
+            assert got == [["a", "b"], ["a", "b"]]
+
     def describe_config_kwarg():
         # Feature: DirSQL(config=path) forwards to the Rust core. See
         # docs/reference/config.md and packages/python/README.md.
         @pytest.mark.asyncio
         async def it_forwards_config_path_to_core(mock_core):
-            db = async_mod.DirSQL(config="/some/.dirsql.toml")
+            db = mock_core(config="/some/.dirsql.toml")
             await db.ready()
 
             inst = _FakeRustDirSQL.instances[-1]
@@ -266,7 +291,7 @@ def describe_binding_layer():
             "core_init_raises", [FileNotFoundError("/missing.toml")], indirect=True
         )
         async def it_surfaces_config_load_errors(core_init_raises):
-            db = async_mod.DirSQL(config="/missing.toml")
+            db = core_init_raises(config="/missing.toml")
             with pytest.raises(FileNotFoundError):
                 await db.ready()
 
@@ -276,7 +301,7 @@ def describe_binding_layer():
         ):
             # With neither root nor config the core roots at the cwd; the
             # wrapper forwards both as None.
-            db = async_mod.DirSQL()
+            db = mock_core()
             await db.ready()
 
             inst = _FakeRustDirSQL.instances[-1]
@@ -289,7 +314,7 @@ def describe_binding_layer():
         @pytest.mark.asyncio
         async def it_forwards_ignore_to_core(mock_core):
             ignore = ["**/node_modules/**", ".git"]
-            db = async_mod.DirSQL("/root", tables=["t"], ignore=ignore)
+            db = mock_core("/root", tables=["t"], ignore=ignore)
             await db.ready()
 
             inst = _FakeRustDirSQL.instances[0]
@@ -299,7 +324,7 @@ def describe_binding_layer():
 
         @pytest.mark.asyncio
         async def it_defaults_ignore_to_none(mock_core):
-            db = async_mod.DirSQL("/root", tables=["t"])
+            db = mock_core("/root", tables=["t"])
             await db.ready()
             assert _FakeRustDirSQL.instances[0].ignore is None
 
@@ -308,14 +333,14 @@ def describe_binding_layer():
         # docs/reference/path-tables.md.
         @pytest.mark.asyncio
         async def it_forwards_no_ignore_to_core(mock_core):
-            db = async_mod.DirSQL("/root", no_ignore=True)
+            db = mock_core("/root", no_ignore=True)
             await db.ready()
 
             assert _FakeRustDirSQL.instances[0].no_ignore is True
 
         @pytest.mark.asyncio
         async def it_defaults_no_ignore_to_false(mock_core):
-            db = async_mod.DirSQL("/root")
+            db = mock_core("/root")
             await db.ready()
 
             assert _FakeRustDirSQL.instances[0].no_ignore is False
@@ -324,7 +349,7 @@ def describe_binding_layer():
         # Feature: persist / persist_path. See docs/howto/persist.md.
         @pytest.mark.asyncio
         async def it_forwards_persist_kwargs_to_core(mock_core):
-            db = async_mod.DirSQL(
+            db = mock_core(
                 "/root",
                 tables=["t"],
                 persist=True,
@@ -337,7 +362,7 @@ def describe_binding_layer():
 
         @pytest.mark.asyncio
         async def it_defaults_persist_to_false(mock_core):
-            db = async_mod.DirSQL("/root", tables=["t"])
+            db = mock_core("/root", tables=["t"])
             await db.ready()
             inst = _FakeRustDirSQL.instances[0]
             assert inst.persist is False

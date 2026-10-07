@@ -49,6 +49,7 @@ cli = [
     "dep:hex",
     "dep:reedline",
     "dep:tokio-stream",
+    "dep:tower-http",
     "tokio/rt-multi-thread",
     "tokio/macros",
     "tokio/signal",
@@ -85,8 +86,13 @@ shlex = "1"
 thiserror.workspace = true
 tokio.workspace = true
 tokio-stream = { version = "0.1", features = ["sync"], optional = true }
+tower-http = { version = "0.6", features = ["cors"], optional = true }
 toml = "0.8"
 typed-path = "0.12"
+
+# Reads a directory's names into one buffer instead of one allocation each.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["fs"] }
 
 [lints.rust]
 # `deny`, not `forbid`: rusqlite's API imposes five unavoidable `unsafe`

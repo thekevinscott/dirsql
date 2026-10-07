@@ -24,6 +24,7 @@ pub mod functions;
 pub mod infer;
 #[doc(hidden)]
 pub mod launcher;
+mod listing;
 #[doc(hidden)]
 pub mod matcher;
 mod on_file;
@@ -43,6 +44,7 @@ pub mod row_event_flat;
 pub mod scanner;
 #[doc(hidden)]
 pub mod sql_literal;
+mod tree_walk;
 #[doc(hidden)]
 pub mod vtab;
 mod vtab_scaffold;
@@ -64,7 +66,7 @@ use crate::persist::{
 };
 use crate::progress::Progress;
 use crate::scanner::scan_directory_reporting;
-use crate::watcher::{FileEvent, Watcher};
+use crate::watcher::{FileEvent, WatchScope, Watcher};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use std::collections::HashMap;
 use std::error::Error as StdError;
@@ -91,8 +93,7 @@ pub type WatchStream = UnboundedReceiver<RowEvent>;
 /// The escalation scaffold `dirsql init` writes verbatim: one named
 /// `[[table]]` (glob + DDL + a real `on-file` hook) demonstrating how to pull
 /// structured rows out of files, rather than duplicating the zero-config
-/// path-table floor (`SELECT * FROM './'`). The `--include-default` launcher
-/// path also seeds this table's glob/DDL. Carrying a genuine hook keeps it a
+/// path-table floor (`SELECT * FROM './'`). Carrying a genuine hook keeps it a
 /// valid config even once hook-less `[[table]]` entries become a load error.
 pub const DEFAULT_CONFIG_TOML: &str = include_str!("default_config.toml");
 
@@ -215,9 +216,9 @@ impl DirSqlError {
         DirSqlError::Lock(e.to_string())
     }
 
-    fn watch<E: StdError + Send + Sync + 'static>(e: E) -> Self {
+    fn watch(e: notify::Error) -> Self {
         DirSqlError::Watch {
-            message: e.to_string(),
+            message: watcher::describe_watch_error(&e, cfg!(target_os = "linux")),
             source: Some(Box::new(e)),
         }
     }
@@ -274,9 +275,38 @@ pub struct Table {
     pub glob: String,
     pub strict: bool,
     hook: Hook,
+    anchor: Option<PathBuf>,
+    ignore: Vec<String>,
+    warn_when_empty: bool,
 }
 
 impl Table {
+    pub(crate) fn anchor_key(&self) -> Option<String> {
+        self.anchor
+            .as_ref()
+            .map(|anchor| anchor.to_string_lossy().into_owned())
+    }
+
+    pub(crate) fn ignore_key(&self) -> &[String] {
+        &self.ignore
+    }
+
+    pub(crate) fn warning_when_empty(mut self) -> Self {
+        self.warn_when_empty = true;
+        self
+    }
+
+    pub(crate) fn scoped_ignore(mut self, ignore: Vec<String>) -> Self {
+        self.ignore = ignore;
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn anchored(mut self, anchor: impl Into<PathBuf>) -> Self {
+        self.anchor = Some(anchor.into());
+        self
+    }
+
     pub fn new<F>(
         name: impl Into<String>,
         ddl: impl Into<String>,
@@ -320,6 +350,9 @@ impl Table {
             glob: glob.into(),
             hook: Hook::PerFile(Arc::new(on_file)),
             strict: false,
+            anchor: None,
+            ignore: Vec::new(),
+            warn_when_empty: false,
         }
     }
 
@@ -364,6 +397,9 @@ impl Table {
             glob: glob.into(),
             hook: Hook::PerTable(Arc::new(on_files)),
             strict: false,
+            anchor: None,
+            ignore: Vec::new(),
+            warn_when_empty: false,
         }
     }
 }
@@ -378,7 +414,9 @@ struct DirSqlInner {
     /// not-yet-created root); the user's `root` — and therefore the initial
     /// scan and the `path` column — stays byte-for-byte unchanged.
     watch_root: PathBuf,
-    matcher: TableMatcher,
+    /// One entry per distinct table anchor; each holds the matcher for the
+    /// tables anchored there.
+    groups: Vec<AnchorGroup>,
     on_file_map: HashMap<String, Hook>,
     strict_map: HashMap<String, bool>,
     /// The root-relative paths each per-table hook was last run over. Rows
@@ -397,6 +435,53 @@ struct DirSqlInner {
     poll_interval: Duration,
     /// Filesystem seam: [`RealFs`] in production; unit tests inject a double.
     fs: Arc<dyn FileSystem>,
+}
+
+fn watch_scopes(index_root: &Path, groups: &[AnchorGroup]) -> Vec<WatchScope> {
+    if groups.is_empty() {
+        return vec![WatchScope {
+            root: index_root.to_path_buf(),
+            ignore: TableMatcher::new(&[], &[]).expect("no patterns to compile"),
+        }];
+    }
+    groups
+        .iter()
+        .map(|group| WatchScope {
+            root: group.watch_anchor.clone(),
+            ignore: group.matcher.clone(),
+        })
+        .collect()
+}
+
+/// The tables sharing one anchor, matched against paths relative to it.
+struct AnchorGroup {
+    anchor: PathBuf,
+    /// `anchor` canonicalized for the live watcher; see
+    /// [`DirSqlInner::watch_root`].
+    watch_anchor: PathBuf,
+    matcher: TableMatcher,
+    tables: Vec<String>,
+}
+
+/// Where each table's paths are anchored. A table without an entry anchors at
+/// the index root.
+#[derive(Clone)]
+struct TableAnchors {
+    index_root: PathBuf,
+    by_table: HashMap<String, PathBuf>,
+}
+
+impl TableAnchors {
+    fn at_root(index_root: &Path) -> Self {
+        Self {
+            index_root: index_root.to_path_buf(),
+            by_table: HashMap::new(),
+        }
+    }
+
+    fn of(&self, table: &str) -> &Path {
+        self.by_table.get(table).unwrap_or(&self.index_root)
+    }
 }
 
 #[derive(Clone)]
@@ -452,7 +537,8 @@ impl DirSQL {
     /// Shortcut for `DirSQL::builder().config(config_path).build()`.
     ///
     /// With no explicit `.root()`, the index roots at the process cwd, not the
-    /// config file's parent directory. To read `<root>/.dirsql.toml`, pass it
+    /// config file's parent directory; the config's `[[table]]` globs anchor at
+    /// that parent directory. To read `<root>/.dirsql.toml`, pass it
     /// explicitly: `DirSQL::from_config_path(root.join(".dirsql.toml"))` (the
     /// implicit root-joining `from_config(root)` shortcut was removed in #603).
     pub fn from_config_path(config_path: impl AsRef<Path>) -> Result<Self> {
@@ -482,18 +568,38 @@ impl DirSQL {
         db.query_ordered(sql).map_err(map_db_error)
     }
 
+    /// [`query_ordered`](Self::query_ordered) folding each row's cells, in
+    /// projection order, into the state `start` makes from the projection,
+    /// as they are read rather than collected first.
+    pub fn query_each<S>(
+        &self,
+        sql: &str,
+        start: impl FnOnce(&[String]) -> S,
+        on_row: impl FnMut(&mut S, &[Value]),
+    ) -> Result<S> {
+        let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
+        db.query_each(sql, start, on_row).map_err(map_db_error)
+    }
+
     /// Lazily create the filesystem watcher. Idempotent; subsequent calls are
     /// no-ops. Called implicitly by [`poll_events`](Self::poll_events) and
     /// [`watch`](Self::watch).
     pub fn start_watching(&self) -> Result<()> {
         let mut guard = self.inner.watcher.lock().map_err(DirSqlError::lock)?;
         if guard.is_none() {
-            // Watch the canonicalized root, never the (possibly relative)
-            // user-supplied one — `notify` misbehaves on relative paths.
-            let watcher = Watcher::new(&self.inner.watch_root).map_err(DirSqlError::watch)?;
+            // Watch the canonicalized anchors, never the (possibly relative)
+            // user-supplied ones — `notify` misbehaves on relative paths.
+            let watcher = Watcher::scoped(self.watch_scopes()).map_err(DirSqlError::watch)?;
             *guard = Some(watcher);
         }
         Ok(())
+    }
+
+    /// The trees the live watcher must cover: each table anchor, under the
+    /// skip rules its tables' scan applies. A build with no tables still
+    /// watches the index root.
+    fn watch_scopes(&self) -> Vec<WatchScope> {
+        watch_scopes(&self.inner.watch_root, &self.inner.groups)
     }
 
     /// Poll-based watch API. Blocks up to `timeout` waiting for the next
@@ -613,69 +719,91 @@ impl DirSQL {
         let abs_path = match &event {
             FileEvent::Created(p) | FileEvent::Modified(p) | FileEvent::Deleted(p) => p.clone(),
         };
-        // Events arrive under the canonical `watch_root`, so strip that
-        // first; fall back to the user-supplied `root` (the already-canonical
-        // /absolute-root case), then to the raw absolute path.
-        let rel_path_buf = abs_path
-            .strip_prefix(&self.inner.watch_root)
-            .or_else(|_| abs_path.strip_prefix(&self.inner.root))
-            .unwrap_or(&abs_path)
-            .to_path_buf();
-
-        if self.inner.matcher.is_ignored(&rel_path_buf) {
-            return Vec::new();
-        }
-        if self.inner.matcher.respects_gitignore()
-            && scanner::is_gitignored_path(
-                &abs_path,
-                self.inner.fs.is_dir(&abs_path).unwrap_or(false),
-            )
-        {
-            return Vec::new();
-        }
-
-        // A directory that appears whole (`mkdir`, or a populated directory
-        // renamed into the tree) arrives as one event naming the directory and
-        // none for the files already inside it, so the subtree is walked here.
-        // Only on creation: a metadata change on a directory says nothing
-        // about its files, and walking on every one would re-run `on_file`
-        // across the subtree for a `chmod`.
-        if matches!(event, FileEvent::Created(_))
-            && self.inner.fs.is_dir(&abs_path).unwrap_or(false)
-        {
-            return self.index_subtree(&abs_path, pending);
-        }
-
-        // Fan-out: dispatch the event to every table whose glob matches, and
-        // concatenate the resulting row events. Cross-table event order is
-        // unspecified. An `on_file` failure produces an error event for that
-        // table only; the other matching tables still process the event.
-        let matches = self.inner.matcher.match_all(&rel_path_buf);
-        let rel_path = scanner::to_slash(&rel_path_buf);
-
         let mut events = Vec::new();
-        for m in matches {
-            if self.is_per_table(&m.table_name) {
-                pending.mark(&m.table_name, &rel_path);
+        for (group, rel_path_buf) in self.groups_containing(&abs_path) {
+            if group.matcher.is_ignored(&rel_path_buf) {
                 continue;
             }
-            match &event {
-                FileEvent::Deleted(_) => {
-                    events.extend(self.handle_delete(&m.table_name, &rel_path));
+            if group.matcher.respects_gitignore()
+                && scanner::is_gitignored_path(
+                    &abs_path,
+                    self.inner.fs.is_dir(&abs_path).unwrap_or(false),
+                )
+            {
+                continue;
+            }
+
+            // A directory that appears whole (`mkdir`, or a populated directory
+            // renamed into the tree) arrives as one event naming the directory and
+            // none for the files already inside it, so the subtree is walked here.
+            // Only on creation: a metadata change on a directory says nothing
+            // about its files, and walking on every one would re-run `on_file`
+            // across the subtree for a `chmod`.
+            if matches!(event, FileEvent::Created(_))
+                && self.inner.fs.is_dir(&abs_path).unwrap_or(false)
+            {
+                events.extend(self.index_subtree(group, &abs_path, pending));
+                continue;
+            }
+
+            // Fan-out: dispatch the event to every table whose glob matches, and
+            // concatenate the resulting row events. Cross-table event order is
+            // unspecified. An `on_file` failure produces an error event for that
+            // table only; the other matching tables still process the event.
+            let matches = group.matcher.match_all(&rel_path_buf);
+            let rel_path = scanner::to_slash(&rel_path_buf);
+
+            for m in matches {
+                if self.is_per_table(&m.table_name) {
+                    pending.mark(&m.table_name, &rel_path);
+                    continue;
                 }
-                FileEvent::Created(_) | FileEvent::Modified(_) => {
-                    events.extend(self.handle_upsert(&m.table_name, &abs_path, &rel_path));
+                match &event {
+                    FileEvent::Deleted(_) => {
+                        events.extend(self.handle_delete(&m.table_name, &rel_path));
+                    }
+                    FileEvent::Created(_) | FileEvent::Modified(_) => {
+                        events.extend(self.handle_upsert(&m.table_name, &abs_path, &rel_path));
+                    }
                 }
             }
-        }
-        // The mirror of the walk above: a directory that leaves the tree
-        // (`rm -r`, or a rename out of or within the root) arrives as one
-        // event naming the directory and none for the files beneath it. It is
-        // already gone, so the rows are the only record of what it held.
-        if matches!(event, FileEvent::Deleted(_)) {
-            events.extend(self.delete_subtree(&rel_path, pending));
+            // The mirror of the walk above: a directory that leaves the tree
+            // (`rm -r`, or a rename out of or within the root) arrives as one
+            // event naming the directory and none for the files beneath it. It is
+            // already gone, so the rows are the only record of what it held.
+            if matches!(event, FileEvent::Deleted(_)) {
+                events.extend(self.delete_subtree(group, &rel_path, pending));
+            }
         }
         events
+    }
+
+    /// The anchor groups an event path falls under, each with the path
+    /// relative to its anchor. Events arrive under the canonical
+    /// `watch_anchor`, so that is stripped first; the user-supplied anchor
+    /// (the already-canonical /absolute case) is the fallback. A path under
+    /// no anchor is matched raw against every group.
+    fn groups_containing(&self, abs_path: &Path) -> Vec<(&AnchorGroup, PathBuf)> {
+        let under: Vec<(&AnchorGroup, PathBuf)> = self
+            .inner
+            .groups
+            .iter()
+            .filter_map(|group| {
+                abs_path
+                    .strip_prefix(&group.watch_anchor)
+                    .or_else(|_| abs_path.strip_prefix(&group.anchor))
+                    .ok()
+                    .map(|rel| (group, rel.to_path_buf()))
+            })
+            .collect();
+        if !under.is_empty() {
+            return under;
+        }
+        self.inner
+            .groups
+            .iter()
+            .map(|group| (group, abs_path.to_path_buf()))
+            .collect()
     }
 
     fn is_per_table(&self, table: &str) -> bool {
@@ -696,10 +824,18 @@ impl DirSQL {
         let Some(Hook::PerTable(hook)) = self.inner.on_file_map.get(table) else {
             return Vec::new();
         };
-        let root = &self.inner.root;
+        let Some(group) = self
+            .inner
+            .groups
+            .iter()
+            .find(|group| group.tables.iter().any(|name| name == table))
+        else {
+            return Vec::new();
+        };
+        let root = &group.anchor;
         let mut rel_paths = Vec::new();
         let mut abs_paths = Vec::new();
-        for (path, matched) in self.inner.fs.scan_subtree(root, root, &self.inner.matcher) {
+        for (path, matched) in self.inner.fs.scan_subtree(root, root, &group.matcher) {
             if matched == table {
                 rel_paths.push(relative_path(root, &path));
                 abs_paths.push(path);
@@ -745,11 +881,17 @@ impl DirSQL {
 
     /// Delete the rows of every file recorded beneath `rel_dir`, in every
     /// table, as if each file had its own delete event.
-    fn delete_subtree(&self, rel_dir: &str, pending: &mut PendingRefresh) -> Vec<RowEvent> {
+    fn delete_subtree(
+        &self,
+        group: &AnchorGroup,
+        rel_dir: &str,
+        pending: &mut PendingRefresh,
+    ) -> Vec<RowEvent> {
         let prefix = format!("{rel_dir}/");
+        let in_group = |table: &str| group.tables.iter().any(|name| name == table);
         if let Ok(batch_files) = self.inner.batch_files.lock() {
             for (table, files) in batch_files.iter() {
-                if files.iter().any(|file| file.starts_with(&prefix)) {
+                if in_group(table) && files.iter().any(|file| file.starts_with(&prefix)) {
                     pending.mark(table, rel_dir);
                 }
             }
@@ -766,6 +908,9 @@ impl DirSQL {
         };
         let mut events = Vec::new();
         for (table, file_path) in files {
+            if !in_group(&table) {
+                continue;
+            }
             events.extend(self.handle_delete(&table, &file_path));
         }
         events
@@ -774,14 +919,19 @@ impl DirSQL {
     /// Index every file beneath `dir` as if each had its own create event,
     /// using the scanner's walk so the watch path and the initial scan share
     /// one definition of what counts as a row.
-    fn index_subtree(&self, dir: &Path, pending: &mut PendingRefresh) -> Vec<RowEvent> {
-        let base = if dir.starts_with(&self.inner.watch_root) {
-            &self.inner.watch_root
+    fn index_subtree(
+        &self,
+        group: &AnchorGroup,
+        dir: &Path,
+        pending: &mut PendingRefresh,
+    ) -> Vec<RowEvent> {
+        let base = if dir.starts_with(&group.watch_anchor) {
+            &group.watch_anchor
         } else {
-            &self.inner.root
+            &group.anchor
         };
         let mut events = Vec::new();
-        for (path, table) in self.inner.fs.scan_subtree(base, dir, &self.inner.matcher) {
+        for (path, table) in self.inner.fs.scan_subtree(base, dir, &group.matcher) {
             let rel_path = scanner::to_slash(path.strip_prefix(base).unwrap_or(&path));
             if self.is_per_table(&table) {
                 pending.mark(&table, &rel_path);
@@ -959,8 +1109,14 @@ impl DirSQL {
             no_ignore,
         } = resolved;
 
-        let (matcher, table_names) = compile_matcher(&tables, &ignore, &root)?;
-        let matcher = matcher.with_gitignore(!no_ignore);
+        let (groups, anchors, table_names) = compile_groups(&tables, &ignore, &root)?;
+        let groups = groups
+            .into_iter()
+            .map(|group| AnchorGroup {
+                matcher: group.matcher.with_gitignore(!no_ignore),
+                ..group
+            })
+            .collect::<Vec<_>>();
 
         // Resolve the persistent context before scanning, so the scan can
         // consult the cached file index.
@@ -985,12 +1141,11 @@ impl DirSQL {
             // The walk reports a running count rather than a fraction: it does
             // not know how many files there are until it has found them all.
             let mut progress = Progress::scanning();
-            let mut seen = 0;
-            let scanned = scan(&root, &matcher, &mut |count| {
-                seen = count;
-                progress.update(count, None);
-            });
+            let (scanned, seen) = scan_groups(&groups, scan, &mut progress);
             progress.finish(seen);
+            for warning in empty_table_warnings(&tables, &anchors, &scanned) {
+                eprintln!("{warning}");
+            }
             scanned
         };
 
@@ -1002,7 +1157,7 @@ impl DirSQL {
                 let mut files = Vec::with_capacity(scanned.len());
                 for (path, table_name) in scanned {
                     files.push(ScannedFile {
-                        rel_path: relative_path(&root, &path),
+                        rel_path: relative_path(anchors.of(&table_name), &path),
                         table_name,
                         stat: None,
                         trusted: false,
@@ -1010,7 +1165,7 @@ impl DirSQL {
                 }
                 (files, Vec::new())
             }
-            Some(ctx) => reconcile_scan(&root, scanned, ctx, &RealFs)?,
+            Some(ctx) => reconcile_scan(&anchors, scanned, ctx, &RealFs)?,
         };
 
         Ok(PreparedBuild {
@@ -1018,7 +1173,8 @@ impl DirSQL {
             tables,
             extensions,
             functions,
-            matcher,
+            groups,
+            anchors,
             ignore,
             scanned_files,
             hint_legacy_files_table,
@@ -1074,7 +1230,8 @@ impl DirSQL {
             tables,
             extensions,
             functions,
-            matcher,
+            groups,
+            anchors,
             ignore,
             scanned_files,
             persist,
@@ -1239,7 +1396,7 @@ impl DirSQL {
             progress.update(done, Some(total_files));
             done += 1;
             let strict = *strict_map.get(&table_name).unwrap_or(&false);
-            let abs_path = root.join(&rel_path);
+            let abs_path = anchors.of(&table_name).join(&rel_path);
             // A hook failure is this file's problem, not the scan's: record it
             // and keep going, so one unreadable file cannot hide the state of
             // every file after it.
@@ -1279,7 +1436,7 @@ impl DirSQL {
             if persist_ready.is_some()
                 && let Some(stat) = stat.as_ref()
             {
-                let hash = hash_file(&root.join(&rel_path)).ok();
+                let hash = hash_file(&anchors.of(&table_name).join(&rel_path)).ok();
                 upsert_file(
                     db.conn(),
                     &rel_path,
@@ -1304,7 +1461,9 @@ impl DirSQL {
                 files.iter().all(|f| f.trusted) && !deleted.iter().any(|(_, t)| *t == table_name)
             });
             if !current {
-                let abs_paths: Vec<PathBuf> = rel_paths.iter().map(|r| root.join(r)).collect();
+                let table_root = anchors.of(&table_name);
+                let abs_paths: Vec<PathBuf> =
+                    rel_paths.iter().map(|r| table_root.join(r)).collect();
                 let outcome =
                     stream_table_rows(&db, &table_name, hook.as_ref(), &abs_paths, strict)
                         .map_err(map_db_error)?;
@@ -1315,7 +1474,7 @@ impl DirSQL {
                                 let Some(stat) = file.stat.as_ref() else {
                                     continue;
                                 };
-                                let hash = hash_file(&root.join(&file.rel_path)).ok();
+                                let hash = hash_file(&table_root.join(&file.rel_path)).ok();
                                 upsert_file(
                                     db.conn(),
                                     &file.rel_path,
@@ -1364,13 +1523,17 @@ impl DirSQL {
         // Canonicalize the watch root so the live watcher never sees a
         // relative path; `root` itself is left untouched.
         let watch_root = PathBuf::from(fs.canonical_root(&root));
+        let mut groups = groups;
+        for group in &mut groups {
+            group.watch_anchor = PathBuf::from(fs.canonical_root(&group.anchor));
+        }
 
         Ok(Self {
             inner: Arc::new(DirSqlInner {
                 db: Mutex::new(db),
                 root,
                 watch_root,
-                matcher,
+                groups,
                 on_file_map,
                 strict_map,
                 batch_files: Mutex::new(batch_files),
@@ -1477,7 +1640,9 @@ impl DirSQLBuilder {
     /// entries are appended after any programmatic tables and its
     /// `[dirsql].ignore` patterns are appended. The config file does not set the
     /// index root: with no explicit [`root`](Self::root), the index roots at the
-    /// process cwd. Relative `persist_path` / `[[dirsql.extension]]` paths still
+    /// process cwd. Its `[[table]]` globs anchor at the config's parent directory
+    /// (or the literal prefix of an absolute / `~/` glob), and its `ignore`
+    /// applies to those tables only. Relative `persist_path` / `[[dirsql.extension]]` paths still
     /// resolve against the config's parent directory.
     ///
     /// Call repeatedly to load several configs: their `[[table]]`, `ignore`, and
@@ -1549,7 +1714,7 @@ impl DirSQLBuilder {
         let DirSQLBuilder {
             root: explicit_root,
             mut tables,
-            mut ignore,
+            ignore,
             mut extensions,
             config_paths,
             suppress_config_extensions,
@@ -1579,7 +1744,8 @@ impl DirSQLBuilder {
         for cfg_path in &config_paths {
             let mut cfg = config::load_config(cfg_path).map_err(DirSqlError::config)?;
 
-            let cfg_parent = cfg_path
+            let cfg_parent = std::path::absolute(cfg_path)
+                .map_err(DirSqlError::config)?
                 .parent()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
@@ -1604,9 +1770,8 @@ impl DirSQLBuilder {
                 config_dir: cfg_parent,
             } = entry;
 
-            let cfg_tables = build_tables_from_config(&cfg, &cfg_parent, &root)?;
+            let cfg_tables = build_tables_from_config(&cfg, &cfg_parent)?;
             tables.extend(cfg_tables);
-            ignore.extend(cfg.ignore);
 
             // Config-supplied extension paths resolve against the config
             // file's parent directory (absolute paths pass through); see
@@ -1731,11 +1896,12 @@ pub struct ScannedFile {
 pub struct PreparedBuild {
     root: PathBuf,
     tables: Vec<Table>,
+    groups: Vec<AnchorGroup>,
+    anchors: TableAnchors,
     /// SQLite extensions to load onto the connection before any table DDL.
     extensions: Vec<Extension>,
     /// Worker-backed SQL scalar functions to register after extensions load.
     functions: Vec<ResolvedFunction>,
-    matcher: TableMatcher,
     /// The configured skip rules, carried through so path-table scans apply
     /// the same ones declared tables do.
     ignore: Vec<String>,
@@ -1779,14 +1945,36 @@ struct PersistContext {
     needs_sweep: bool,
 }
 
-fn compile_matcher(
+type GroupDraft = (PathBuf, Vec<String>, Vec<(String, String)>);
+
+/// Walk every group's anchor in turn, reporting one running count across all of
+/// them. Returns the matches and the total count.
+fn scan_groups(
+    groups: &[AnchorGroup],
+    scan: ScanFn<'_>,
+    progress: &mut Progress,
+) -> (Vec<(PathBuf, String)>, u64) {
+    let mut seen = 0;
+    let mut scanned = Vec::new();
+    for group in groups {
+        let before = seen;
+        scanned.extend(scan(&group.anchor, &group.matcher, &mut |count| {
+            seen = before + count;
+            progress.update(seen, None);
+        }));
+    }
+    (scanned, seen)
+}
+
+fn compile_groups(
     tables: &[Table],
     ignore_patterns: &[String],
     root: &Path,
-) -> Result<(TableMatcher, Vec<String>)> {
+) -> Result<(Vec<AnchorGroup>, TableAnchors, Vec<String>)> {
     let mut seen: HashMap<String, ()> = HashMap::with_capacity(tables.len());
-    let mut mappings: Vec<(String, String)> = Vec::with_capacity(tables.len());
     let mut names = Vec::with_capacity(tables.len());
+    let mut anchors = TableAnchors::at_root(root);
+    let mut grouped: Vec<GroupDraft> = Vec::new();
     for table in tables {
         let table_name = table.name.clone();
         // Validate up front so a poisoned name from a stored cache or a
@@ -1796,20 +1984,70 @@ fn compile_matcher(
         if seen.insert(table_name.clone(), ()).is_some() {
             return Err(DirSqlError::DuplicateTable(table_name));
         }
-        mappings.push((
-            path_table::directory_as_glob(&table.glob, root, &|p| p.is_dir()),
+        let anchor = match &table.anchor {
+            Some(anchor) => {
+                anchors.by_table.insert(table_name.clone(), anchor.clone());
+                anchor.clone()
+            }
+            None => root.to_path_buf(),
+        };
+        let mapping = (
+            path_table::directory_as_glob(&table.glob, &anchor, &|p| p.is_dir()),
             table_name.clone(),
-        ));
+        );
+        match grouped
+            .iter_mut()
+            .find(|(a, i, _)| *a == anchor && *i == table.ignore)
+        {
+            Some((_, _, mappings)) => mappings.push(mapping),
+            None => grouped.push((anchor, table.ignore.clone(), vec![mapping])),
+        }
         names.push(table_name);
     }
 
-    let mapping_refs: Vec<(&str, &str)> = mappings
+    let mut groups = Vec::with_capacity(grouped.len());
+    for (anchor, scoped_ignore, mappings) in grouped {
+        let ignore_refs: Vec<&str> = ignore_patterns
+            .iter()
+            .chain(&scoped_ignore)
+            .map(String::as_str)
+            .collect();
+        let mapping_refs: Vec<(&str, &str)> = mappings
+            .iter()
+            .map(|(g, n)| (g.as_str(), n.as_str()))
+            .collect();
+        let matcher =
+            TableMatcher::new(&mapping_refs, &ignore_refs).map_err(DirSqlError::matcher)?;
+        groups.push(AnchorGroup {
+            watch_anchor: anchor.clone(),
+            anchor,
+            matcher,
+            tables: mappings.into_iter().map(|(_, name)| name).collect(),
+        });
+    }
+    Ok((groups, anchors, names))
+}
+
+/// One stderr line per config table that matched no file in the scan, naming
+/// the table, its glob and the directory the glob was matched under.
+fn empty_table_warnings(
+    tables: &[Table],
+    anchors: &TableAnchors,
+    scanned: &[(PathBuf, String)],
+) -> Vec<String> {
+    tables
         .iter()
-        .map(|(g, n)| (g.as_str(), n.as_str()))
-        .collect();
-    let ignore_refs: Vec<&str> = ignore_patterns.iter().map(String::as_str).collect();
-    let matcher = TableMatcher::new(&mapping_refs, &ignore_refs).map_err(DirSqlError::matcher)?;
-    Ok((matcher, names))
+        .filter(|table| table.warn_when_empty)
+        .filter(|table| !scanned.iter().any(|(_, name)| *name == table.name))
+        .map(|table| {
+            format!(
+                "dirsql: table '{}': glob '{}' matched no files under {}",
+                table.name,
+                table.glob,
+                anchors.of(&table.name).display()
+            )
+        })
+        .collect()
 }
 
 /// Open (or create) the persistent SQLite cache and read its meta. If the
@@ -1911,7 +2149,7 @@ impl FileSystem for RealFs {
 /// and which were removed since the last cache write.
 #[allow(clippy::type_complexity)]
 fn reconcile_scan(
-    root: &Path,
+    anchors: &TableAnchors,
     scanned: Vec<(PathBuf, String)>,
     ctx: &PersistContext,
     fs: &dyn FileSystem,
@@ -1923,7 +2161,7 @@ fn reconcile_scan(
         std::collections::HashSet::with_capacity(scanned.len());
 
     for (path, table_name) in scanned {
-        let rel_path = relative_path(root, &path);
+        let rel_path = relative_path(anchors.of(&table_name), &path);
         seen.insert((rel_path.clone(), table_name.clone()));
 
         let stat = fs.stat(&path)?;
@@ -2192,28 +2430,32 @@ fn resolve_functions(
     Ok(())
 }
 
-fn build_tables_from_config(
-    cfg: &config::Config,
-    config_dir: &Path,
-    root: &Path,
-) -> Result<Vec<Table>> {
+fn build_tables_from_config(cfg: &config::Config, config_dir: &Path) -> Result<Vec<Table>> {
     let mut tables = Vec::with_capacity(cfg.tables.len());
+    let home = db::home_dir();
 
     for table_cfg in &cfg.tables {
         let command = table_cfg.on_file.clone();
         if let Some(message) = on_file::path_placeholder_rejection(&command) {
             return Err(DirSqlError::PathPlaceholder(message));
         }
-        let config_dir = config_dir.to_path_buf();
-        let root = root.to_path_buf();
+        let (anchor, glob) =
+            path_table::config_anchor(&table_cfg.glob, config_dir, home.as_deref()).ok_or_else(
+                || DirSqlError::Core(DbError::PathTable(db::no_home_path_table(&table_cfg.glob))),
+            )?;
+        let hook_cwd = config_dir.to_path_buf();
+        let hook_root = anchor.clone();
         let mut table = Table::per_table_streaming(
             table_cfg.name.clone(),
             table_cfg.ddl.clone(),
-            table_cfg.glob.clone(),
+            glob,
             move |paths: &[PathBuf], sink: &mut RowSink<'_>| {
-                run_on_files(&command, paths, &config_dir, &root, sink)
+                run_on_files(&command, paths, &hook_cwd, &hook_root, sink)
             },
-        );
+        )
+        .anchored(anchor)
+        .scoped_ignore(cfg.ignore.clone())
+        .warning_when_empty();
 
         if table_cfg.strict == Some(true) {
             table.strict = true;
@@ -2269,6 +2511,11 @@ pub struct AsyncDirSQL {
 struct AsyncDirSqlInner {
     db: tokio::sync::OnceCell<std::result::Result<DirSQL, DirSqlError>>,
     ready_notify: tokio::sync::Notify,
+}
+
+#[cfg(test)]
+fn generic_watch_error(message: &str) -> notify::Error {
+    notify::Error::generic(message)
 }
 
 #[cfg(test)]
@@ -2425,10 +2672,10 @@ mod readonly_tests {
             DirSqlError::lock("x").to_string(),
             "failed to lock shared state: x"
         );
-        // `watch`, `config`, `matcher` wrap a typed StdError to preserve a
+        // `watch`, `config`, `matcher` wrap a typed error to preserve a
         // `source()` chain.
         let io = || std::io::Error::other("x");
-        let watch_err = DirSqlError::watch(io());
+        let watch_err = DirSqlError::watch(generic_watch_error("x"));
         assert_eq!(watch_err.to_string(), "watcher error: x");
         assert!(StdError::source(&watch_err).is_some());
 
@@ -2741,14 +2988,14 @@ mod internal_tests {
     #[test]
     fn finish_build_errors_on_ghost_scanned_file() {
         let dir = TempDir::new().unwrap();
-        let matcher = TableMatcher::new(&[], &[]).unwrap();
         let prepared = PreparedBuild {
             ignore: Vec::new(),
             root: dir.path().to_path_buf(),
             tables: Vec::new(),
             extensions: Vec::new(),
             functions: Vec::new(),
-            matcher,
+            groups: Vec::new(),
+            anchors: TableAnchors::at_root(dir.path()),
             scanned_files: vec![ScannedFile {
                 rel_path: "ghost.txt".into(),
                 table_name: "ghost".into(),
@@ -3054,10 +3301,51 @@ mod internal_tests {
     }
 
     #[test]
+    fn delete_subtree_marks_only_this_groups_tables_holding_files_beneath_it() {
+        let (_dir, db, _abs, _rel) = upsert_fixture();
+        let tables = vec![
+            anchored_table("held", "*.txt", "/one"),
+            anchored_table("bare", "*.txt", "/one"),
+        ];
+        let (groups, _, _) = compile_groups(&tables, &[], Path::new("/idx")).unwrap();
+        let group = &groups[0];
+        {
+            let mut files = db.inner.batch_files.lock().unwrap();
+            files.insert("held".into(), vec!["moved/x".into()]);
+            files.insert("bare".into(), vec!["elsewhere/y".into()]);
+            files.insert("foreign".into(), vec!["moved/z".into()]);
+        }
+        let mut pending = PendingRefresh::default();
+
+        db.delete_subtree(group, "moved", &mut pending);
+
+        assert_eq!(pending.0, vec![("held".to_string(), "moved".to_string())]);
+    }
+
+    #[test]
+    fn scan_groups_counts_across_groups_and_collects_every_match() {
+        let tables = vec![
+            anchored_table("a", "*.txt", "/one"),
+            anchored_table("b", "*.txt", "/two"),
+        ];
+        let (groups, _, _) = compile_groups(&tables, &[], Path::new("/idx")).unwrap();
+        let scan = |anchor: &Path, _: &TableMatcher, report: &mut dyn FnMut(u64)| {
+            report(3);
+            vec![(anchor.join("f.txt"), "t".to_string())]
+        };
+
+        let (scanned, seen) = scan_groups(&groups, &scan, &mut Progress::scanning());
+
+        assert_eq!(seen, 6);
+        assert_eq!(scanned.len(), 2);
+    }
+
+    #[test]
     fn delete_subtree_surfaces_db_poison() {
         let (_dir, db, _abs, _rel) = upsert_fixture();
         poison(&db.inner.db);
-        let events = db.delete_subtree("moved", &mut PendingRefresh::default());
+        let events =
+            db.delete_subtree(&db.inner.groups[0], "moved", &mut PendingRefresh::default());
         assert_single_lock_error(&events);
     }
 
@@ -3071,7 +3359,8 @@ mod internal_tests {
             .conn()
             .execute("DROP TABLE _dirsql_internal_rows", [])
             .unwrap();
-        let events = db.delete_subtree("moved", &mut PendingRefresh::default());
+        let events =
+            db.delete_subtree(&db.inner.groups[0], "moved", &mut PendingRefresh::default());
         assert_eq!(events.len(), 1, "expected one error event: {events:?}");
         assert!(
             matches!(&events[0], RowEvent::Error { table: None, file_path, error }
@@ -3177,7 +3466,7 @@ mod internal_tests {
         .unwrap();
 
         // Repoint watch_root to a non-prefix sibling so the first strip misses.
-        Arc::get_mut(&mut db.inner).unwrap().watch_root = root.join("does-not-prefix");
+        Arc::get_mut(&mut db.inner).unwrap().groups[0].watch_anchor = root.join("does-not-prefix");
 
         let events = db.process_file_event(FileEvent::Created(abs));
         assert_eq!(events.len(), 1, "expected one insert: {events:?}");
@@ -3257,7 +3546,8 @@ mod internal_tests {
             needs_sweep: false,
         };
         let scanned = vec![(abs.clone(), "t".to_string())];
-        let (files, deleted) = reconcile_scan(dir.path(), scanned, &ctx, &fake).unwrap();
+        let (files, deleted) =
+            reconcile_scan(&TableAnchors::at_root(dir.path()), scanned, &ctx, &fake).unwrap();
         assert_eq!(files.len(), 1);
         assert!(files[0].trusted);
         assert_eq!(files[0].rel_path, "a.txt");
@@ -3293,7 +3583,8 @@ mod internal_tests {
             needs_sweep: false,
         };
         let scanned = vec![(abs.clone(), "t".to_string())];
-        let (files, _deleted) = reconcile_scan(dir.path(), scanned, &ctx, &fake).unwrap();
+        let (files, _deleted) =
+            reconcile_scan(&TableAnchors::at_root(dir.path()), scanned, &ctx, &fake).unwrap();
         assert_eq!(files.len(), 1);
         assert!(!files[0].trusted);
     }
@@ -3311,7 +3602,7 @@ mod internal_tests {
         let missing = dir.path().join("ghost.txt");
         let scanned = vec![(missing, "t".to_string())];
         let fake = FakeFs::default();
-        assert!(reconcile_scan(dir.path(), scanned, &ctx, &fake).is_err());
+        assert!(reconcile_scan(&TableAnchors::at_root(dir.path()), scanned, &ctx, &fake).is_err());
     }
 
     #[test]
@@ -4115,7 +4406,8 @@ mod internal_tests {
             needs_sweep: false,
         };
         let scanned = vec![(abs, "t".to_string())];
-        let (files, deleted) = reconcile_scan(dir.path(), scanned, &ctx, &fake).unwrap();
+        let (files, deleted) =
+            reconcile_scan(&TableAnchors::at_root(dir.path()), scanned, &ctx, &fake).unwrap();
         assert_eq!(files.len(), 1);
         assert!(files[0].trusted);
         assert!(deleted.is_empty());
@@ -4148,7 +4440,8 @@ mod internal_tests {
             needs_sweep: false,
         };
         let scanned = vec![(abs, "t".to_string())];
-        let (files, _deleted) = reconcile_scan(dir.path(), scanned, &ctx, &fake).unwrap();
+        let (files, _deleted) =
+            reconcile_scan(&TableAnchors::at_root(dir.path()), scanned, &ctx, &fake).unwrap();
         assert_eq!(files.len(), 1);
         assert!(!files[0].trusted);
     }
@@ -4175,7 +4468,8 @@ mod internal_tests {
             needs_sweep: false,
         };
         let fake = FakeFs::default();
-        let (files, deleted) = reconcile_scan(dir.path(), Vec::new(), &ctx, &fake).unwrap();
+        let (files, deleted) =
+            reconcile_scan(&TableAnchors::at_root(dir.path()), Vec::new(), &ctx, &fake).unwrap();
         assert!(files.is_empty());
         assert_eq!(deleted, vec![("gone.txt".to_string(), "t".to_string())]);
     }
@@ -4289,7 +4583,7 @@ mod internal_tests {
         ))
         .unwrap();
         let dir = TempDir::new().unwrap();
-        let tables = build_tables_from_config(&cfg, dir.path(), dir.path()).unwrap();
+        let tables = build_tables_from_config(&cfg, dir.path()).unwrap();
         assert_eq!(tables.len(), 2);
         let Hook::PerTable(on_files) = &tables[0].hook else {
             panic!("a configured on-file command runs once per table");
@@ -4314,7 +4608,7 @@ mod internal_tests {
         ))
         .unwrap();
         let dir = TempDir::new().unwrap();
-        let err = match build_tables_from_config(&cfg, dir.path(), dir.path()) {
+        let err = match build_tables_from_config(&cfg, dir.path()) {
             Err(err) => err,
             Ok(_) => panic!("`{{path}}` must be rejected"),
         };
@@ -4687,7 +4981,8 @@ mod internal_tests {
             tables,
             extensions: Vec::new(),
             functions: Vec::new(),
-            matcher: TableMatcher::new(&[], &[]).unwrap(),
+            groups: Vec::new(),
+            anchors: TableAnchors::at_root(root),
             scanned_files,
             poll_interval: DEFAULT_POLL_INTERVAL,
             persist,
@@ -5094,6 +5389,172 @@ mod internal_tests {
             ]
         );
         assert_eq!(row_names(&db), vec!["a.txt", "b.txt"]);
+    }
+
+    fn anchored_table(name: &str, glob: &str, anchor: &str) -> Table {
+        Table::new(
+            name,
+            format!("CREATE TABLE {name} (x TEXT)"),
+            glob,
+            |_| vec![],
+        )
+        .anchored(anchor)
+    }
+
+    #[test]
+    fn compile_groups_puts_unanchored_tables_at_the_index_root() {
+        let tables = vec![Table::new(
+            "a",
+            "CREATE TABLE a (x TEXT)",
+            "*.txt",
+            |_| vec![],
+        )];
+        let (groups, anchors, names) = compile_groups(&tables, &[], Path::new("/idx")).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].anchor, PathBuf::from("/idx"));
+        assert_eq!(groups[0].tables, vec!["a".to_string()]);
+        assert_eq!(anchors.of("a"), Path::new("/idx"));
+        assert_eq!(names, vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn compile_groups_makes_one_group_per_distinct_anchor() {
+        let tables = vec![
+            anchored_table("a", "*.txt", "/one"),
+            anchored_table("b", "*.md", "/two"),
+            anchored_table("c", "*.rs", "/one"),
+        ];
+        let (groups, anchors, _) = compile_groups(&tables, &[], Path::new("/idx")).unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].anchor, PathBuf::from("/one"));
+        assert_eq!(groups[0].tables, vec!["a".to_string(), "c".to_string()]);
+        assert_eq!(groups[1].anchor, PathBuf::from("/two"));
+        assert_eq!(anchors.of("b"), Path::new("/two"));
+        assert_eq!(anchors.of("c"), Path::new("/one"));
+    }
+
+    #[test]
+    fn compile_groups_rejects_a_duplicate_name_across_anchors() {
+        let tables = vec![
+            anchored_table("a", "*.txt", "/one"),
+            anchored_table("a", "*.md", "/two"),
+        ];
+        let err = compile_groups(&tables, &[], Path::new("/idx"))
+            .err()
+            .unwrap();
+        assert!(matches!(err, DirSqlError::DuplicateTable(ref name) if name == "a"));
+    }
+
+    #[test]
+    fn an_empty_warning_table_is_named_with_its_glob_and_anchor() {
+        let tables = vec![anchored_table("a", "*.txt", "/one").warning_when_empty()];
+        let anchors = compile_groups(&tables, &[], Path::new("/idx")).unwrap().1;
+        assert_eq!(
+            empty_table_warnings(&tables, &anchors, &[]),
+            vec!["dirsql: table 'a': glob '*.txt' matched no files under /one".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_table_with_a_matched_file_does_not_warn() {
+        let tables = vec![anchored_table("a", "*.txt", "/one").warning_when_empty()];
+        let anchors = compile_groups(&tables, &[], Path::new("/idx")).unwrap().1;
+        let scanned = vec![(PathBuf::from("/one/x.txt"), "a".to_string())];
+        assert!(empty_table_warnings(&tables, &anchors, &scanned).is_empty());
+    }
+
+    #[test]
+    fn a_programmatic_empty_table_does_not_warn() {
+        let tables = vec![anchored_table("a", "*.txt", "/one")];
+        let anchors = compile_groups(&tables, &[], Path::new("/idx")).unwrap().1;
+        assert!(empty_table_warnings(&tables, &anchors, &[]).is_empty());
+    }
+
+    #[test]
+    fn anchors_of_an_unknown_table_is_the_index_root() {
+        let anchors = TableAnchors::at_root(Path::new("/idx"));
+        assert_eq!(anchors.of("nope"), Path::new("/idx"));
+    }
+
+    #[test]
+    fn an_event_under_one_anchor_is_not_offered_to_another() {
+        let dir = TempDir::new().unwrap();
+        let one = dir.path().join("one");
+        let two = dir.path().join("two");
+        let db = DirSQL::with_ignore_and_fs(
+            dir.path(),
+            vec![
+                anchored_table("a", "*.txt", one.to_str().unwrap()),
+                anchored_table("b", "*.txt", two.to_str().unwrap()),
+            ],
+            Vec::<String>::new(),
+            Arc::new(FakeFs::default()),
+        )
+        .unwrap();
+        let hits = db.groups_containing(&one.join("x.txt"));
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0.tables, vec!["a".to_string()]);
+        assert_eq!(hits[0].1, PathBuf::from("x.txt"));
+    }
+
+    #[test]
+    fn an_event_under_no_anchor_is_offered_raw_to_every_group() {
+        let dir = TempDir::new().unwrap();
+        let one = dir.path().join("one");
+        let db = DirSQL::with_ignore_and_fs(
+            dir.path(),
+            vec![anchored_table("a", "*.txt", one.to_str().unwrap())],
+            Vec::<String>::new(),
+            Arc::new(FakeFs::default()),
+        )
+        .unwrap();
+        let hits = db.groups_containing(Path::new("/elsewhere/x.txt"));
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, PathBuf::from("/elsewhere/x.txt"));
+    }
+
+    fn scopes_for(anchors: &[&str], ignore: &[&str]) -> Vec<WatchScope> {
+        let tables: Vec<Table> = anchors
+            .iter()
+            .enumerate()
+            .map(|(i, anchor)| anchored_table(&format!("t{i}"), "*.txt", anchor))
+            .collect();
+        let ignore: Vec<String> = ignore.iter().map(|p| p.to_string()).collect();
+        let (groups, _, _) = compile_groups(&tables, &ignore, Path::new("/idx")).unwrap();
+        watch_scopes(Path::new("/canonical-idx"), &groups)
+    }
+
+    fn roots(scopes: &[WatchScope]) -> Vec<PathBuf> {
+        scopes.iter().map(|scope| scope.root.clone()).collect()
+    }
+
+    #[test]
+    fn a_built_instance_watches_its_tables_anchor() {
+        let dir = TempDir::new().unwrap();
+        let db = populated_db(dir.path(), "**/*.txt", &["a.txt"]);
+
+        assert_eq!(roots(&db.watch_scopes()), vec![db.inner.watch_root.clone()]);
+    }
+
+    #[test]
+    fn watch_scopes_without_tables_is_the_whole_index_root() {
+        let scopes = scopes_for(&[], &[]);
+        assert_eq!(roots(&scopes), vec![PathBuf::from("/canonical-idx")]);
+        assert!(!scopes[0].ignore.is_ignored_dir(Path::new("node_modules")));
+    }
+
+    #[test]
+    fn watch_scopes_lists_each_anchor_under_its_skip_rules() {
+        let scopes = scopes_for(&["/one", "/one/deep"], &["node_modules/**"]);
+        assert_eq!(
+            roots(&scopes),
+            vec![PathBuf::from("/one"), PathBuf::from("/one/deep")]
+        );
+        assert!(
+            scopes
+                .iter()
+                .all(|scope| scope.ignore.is_ignored_dir(Path::new("node_modules")))
+        );
     }
 }
 

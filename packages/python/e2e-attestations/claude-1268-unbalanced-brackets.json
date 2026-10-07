@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_depth_bound_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_one_level_test.py tests/e2e/glob_speed_matchers_test.py tests/e2e/glob_speed_dotfiles_test.py tests/e2e/query_contract_test.py tests/e2e/fanout_test.py tests/e2e/capture_collision_test.py -x -q",
+  "ran_at": 1791325871,
+  "exit_code": 0,
+  "commit": "45535f123cfc3ea9cf9460c228196e2630d377db",
+  "branch": "claude/1268-unbalanced-brackets"
+}

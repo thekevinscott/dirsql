@@ -28,7 +28,8 @@ export interface ExtensionSpec {
  * Options accepted by the {@link DirSQL} constructor.
  *
  * The index root is the explicit `root` when given, otherwise the process
- * working directory. The `config` file's location never sets the root.
+ * working directory. The `config` file's location never sets the root; its
+ * `[[table]]` globs anchor at the config file's own directory.
  */
 export interface DirSQLOptions {
   /** Root directory to scan. */
@@ -162,6 +163,8 @@ export class DirSQL {
 
   // Initialized by `ready`. Do NOT touch before awaiting `ready`.
   private _inner!: NativeDirSQL;
+  private readonly _watchStreams = new Set<WeakRef<RowEvent[]>>();
+  private _watchPoll?: Promise<void>;
   // Constructor options preserved verbatim; public-by-design.
   readonly _options: DirSQLOptions;
 
@@ -300,18 +303,45 @@ export class DirSQL {
    * Awaits the initial scan on first iteration, starts the underlying
    * watcher, then awaits a bounded native poll each cycle. The iterator
    * runs indefinitely; break out of the `for await` loop to stop.
+   * Each stream receives every event observed after its creation, even
+   * while another stream is consuming events on the same instance.
    */
-  async *watch(): AsyncGenerator<RowEvent, void, unknown> {
-    await this.ready;
-    await this._inner.startWatcher();
-    while (true) {
-      // Native poll runs on the libuv threadpool; ~200ms bounds each await
-      // without starving the event loop.
-      const events = await this._inner.pollEvents(200);
-      for (const event of events) {
-        yield event;
+  watch(): AsyncGenerator<RowEvent, void, unknown> {
+    const buffer: RowEvent[] = [];
+    const reference = new WeakRef(buffer);
+    this._watchStreams.add(reference);
+    const owner = this;
+    return (async function* () {
+      try {
+        await owner.ready;
+        await owner._inner.startWatcher();
+        while (true) {
+          while (buffer.length === 0) {
+            owner._watchPoll ??= owner._inner
+              .pollEvents(200)
+              .then((events) => {
+                for (const reference of owner._watchStreams) {
+                  const stream = reference.deref();
+                  if (stream) {
+                    for (const event of events) {
+                      stream.push(event);
+                    }
+                  } else {
+                    owner._watchStreams.delete(reference);
+                  }
+                }
+              })
+              .finally(() => {
+                owner._watchPoll = undefined;
+              });
+            await owner._watchPoll;
+          }
+          yield buffer.shift() as RowEvent;
+        }
+      } finally {
+        owner._watchStreams.delete(reference);
       }
-    }
+    })();
   }
 
   /**
