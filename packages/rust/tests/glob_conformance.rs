@@ -14,7 +14,6 @@ use tempfile::TempDir;
 struct Row {
     pattern: String,
     expected: Vec<String>,
-    divergence: String,
 }
 
 fn page() -> String {
@@ -54,7 +53,6 @@ fn rows(page: &str) -> Vec<Row> {
             Row {
                 pattern: backticked(cells[0]).remove(0),
                 expected: backticked(cells[1]),
-                divergence: cells[2].to_string(),
             }
         })
         .collect()
