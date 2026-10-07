@@ -138,7 +138,8 @@ const UNICODE_CLASSES: [(&str, &str); 11] = [
 const MARKER_BASE: u32 = 0xFDD0;
 
 fn marker(index: usize) -> char {
-    char::from_u32(MARKER_BASE + index as u32).expect("noncharacters are chars")
+    let offset = u32::try_from(index).expect("a class index fits in u32");
+    char::from_u32(MARKER_BASE + offset).expect("noncharacters are chars")
 }
 
 /// The regex a marker stands for, as a bracket expression that leaves out
@@ -225,6 +226,12 @@ fn without(set: Vec<(u32, u32)>, c: char) -> Vec<(u32, u32)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn markers_count_up_from_the_first_noncharacter() {
+        assert_eq!(marker(0), '\u{fdd0}');
+        assert_eq!(marker(2), '\u{fdd2}');
+    }
+
     use super::*;
 
     fn marked(name: &str) -> char {
