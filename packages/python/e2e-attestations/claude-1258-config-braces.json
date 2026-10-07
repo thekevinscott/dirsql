@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_matchers_test.py tests/e2e/glob_speed_one_level_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1791333540,
+  "exit_code": 0,
+  "commit": "37586d9320ebca5d4be159cfe3a523ebcf017884",
+  "branch": "claude/1258-config-braces"
+}
