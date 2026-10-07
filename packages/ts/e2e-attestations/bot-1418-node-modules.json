@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791391187,
+  "exit_code": 0,
+  "commit": "44546a78e0970c2f4e4d26efd4045cc14b2d8df5",
+  "branch": "bot/1418-node-modules"
+}
