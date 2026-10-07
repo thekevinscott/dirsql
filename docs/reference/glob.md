@@ -109,6 +109,8 @@ A test runs every row against dirsql as a path-table and, with the leading
 | `./*/` | `docs/api.md`, `docs/guide.md`, `linkdir/r.md`, `real/r.md` | directory-name |
 | `./d*` | none | files-only |
 | `./*.log` | none | gitignore |
+| `./ignored.log` | `ignored.log` |  |
+| `./{ignored,x}.log` | `ignored.log` |  |
 | `./**/*.js` | `node_modules/pkg/index.js` |  |
 | `./node_modules/*/index.js` | `node_modules/pkg/index.js` |  |
 | `./docs/**/*.md` | `docs/api.md`, `docs/guide.md`, `docs/nested/deep.md` |  |
