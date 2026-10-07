@@ -44,7 +44,7 @@ on-file = "jq -c '{level, ms}'"
 NATIVE = (
     "jq -r '[.level, .ms] | @tsv' logs/*.jsonl"
     " | awk -F '\\t' '{ n[$1]++; s[$1] += $2 }"
-    " END { for (k in n) print k \"\\t\" n[k] \"\\t\" s[k] }'"
+    ' END { for (k in n) print k "\\t" n[k] "\\t" s[k] }\''
     " | sort"
 )
 

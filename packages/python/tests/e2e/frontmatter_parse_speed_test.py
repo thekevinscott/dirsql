@@ -64,7 +64,7 @@ function emit() { print status "\t" words }
 NATIVE = (
     "find notes -name '*.md' -exec awk -f fields.awk {} +"
     " | awk -F '\\t' '{ n[$1]++; s[$1] += $2 }"
-    " END { for (k in n) print k \"\\t\" n[k] \"\\t\" s[k] }'"
+    ' END { for (k in n) print k "\\t" n[k] "\\t" s[k] }\''
     " | sort"
 )
 
