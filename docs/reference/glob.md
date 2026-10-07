@@ -115,9 +115,12 @@ A test runs every row against dirsql as a path-table and, with the leading
 | `./node_modules/*/index.js` | `node_modules/pkg/index.js` |  |
 | `./docs/**/*.md` | `docs/api.md`, `docs/guide.md`, `docs/nested/deep.md` |  |
 | `./docs/*.md` | `docs/api.md`, `docs/guide.md` |  |
-| `$ROOT/docs/*.md` | `$ROOT/docs/api.md`, `$ROOT/docs/guide.md` | absolute |
-| `~/docs/*.md` | `$ROOT/docs/api.md`, `$ROOT/docs/guide.md` | absolute |
-| `../proj/docs/*.md` | `$BASE/proj/docs/api.md`, `$BASE/proj/docs/guide.md` | absolute |
+| `$ROOT/docs/*.md` | `$ROOT/docs/api.md`, `$ROOT/docs/guide.md` |  |
+| `~/docs/*.md` | `$ROOT/docs/api.md`, `$ROOT/docs/guide.md` |  |
+| `../proj/docs/*.md` | `../proj/docs/api.md`, `../proj/docs/guide.md` |  |
+| `../*/top.md` | `../proj/top.md` |  |
+| `../proj/**/deep.md` | `../proj/docs/nested/deep.md` |  |
+| `../proj/docs` | `../proj/docs/api.md`, `../proj/docs/guide.md` | directory-name |
 
 ## Divergences from bash
 
