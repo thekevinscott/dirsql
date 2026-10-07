@@ -94,6 +94,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box)],
       persist: true,
+      persistPath: cachePath,
     });
     const rows = await db.query("SELECT * FROM items");
     expect(rows).toHaveLength(1);
@@ -106,6 +107,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box1)],
       persist: true,
+      persistPath: cachePath,
     });
     await db1.ready;
     expect(box1.count).toBe(1);
@@ -115,6 +117,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box2)],
       persist: true,
+      persistPath: cachePath,
     });
     await db2.ready;
     expect(box2.count).toBe(0);
@@ -158,6 +161,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box1)],
       persist: true,
+      persistPath: cachePath,
     });
     await db1.ready;
 
@@ -175,6 +179,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box2)],
       persist: true,
+      persistPath: cachePath,
     });
     await db2.ready;
     expect(box2.count).toBe(1);
@@ -193,6 +198,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box1)],
       persist: true,
+      persistPath: cachePath,
     });
     await db1.ready;
 
@@ -203,6 +209,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box2)],
       persist: true,
+      persistPath: cachePath,
     });
     await db2.ready;
     const rows = await db2.query("SELECT name FROM items ORDER BY name");
@@ -215,6 +222,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box1)],
       persist: true,
+      persistPath: cachePath,
     });
     await db1.ready;
 
@@ -228,6 +236,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box2)],
       persist: true,
+      persistPath: cachePath,
     });
     await db2.ready;
     expect(box2.count).toBe(1);
@@ -241,6 +250,7 @@ describe("DirSQL persist", () => {
       root: dir,
       tables: [makeTable(box1)],
       persist: true,
+      persistPath: cachePath,
     });
     await db1.ready;
 
@@ -261,6 +271,7 @@ describe("DirSQL persist", () => {
         },
       ],
       persist: true,
+      persistPath: cachePath,
     });
     await db2.ready;
     expect(box2.count).toBe(1);

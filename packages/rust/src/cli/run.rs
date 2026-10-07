@@ -990,7 +990,7 @@ mod tests {
     #[test]
     fn persist_flag_bare_enables_default_location() {
         // Bare `--persist` (no value) → `Some(None)`: persist at the default
-        // `<root>/.dirsql/cache.db`, no override path.
+        // platform cache dir, no override path.
         let cli = Cli::parse_from(["dirsql", "--persist"]);
         assert_eq!(cli.common.persist, Some(None));
     }

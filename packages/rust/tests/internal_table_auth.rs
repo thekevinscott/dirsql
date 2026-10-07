@@ -10,8 +10,12 @@
 
 use dirsql::{DirSQL, Table, Value};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+
+fn cache_path(root: &Path) -> PathBuf {
+    root.join(".dirsql-test-cache").join("cache.db")
+}
 
 fn user_table() -> Table {
     Table::new("items", "CREATE TABLE items (name TEXT)", "*.txt", |path| {
@@ -32,7 +36,7 @@ fn persisted_db(root: &Path) -> DirSQL {
     DirSQL::builder()
         .root(root)
         .table(user_table())
-        .persist(None::<&Path>)
+        .persist(Some(cache_path(root)))
         .build()
         .unwrap()
 }

@@ -9,7 +9,12 @@ use dirsql::{DirSQL, Table, Value};
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::fs;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+
+fn cache_path(root: &Path) -> PathBuf {
+    root.join(".dirsql-test-cache").join("cache.db")
+}
 
 fn row(id: &str) -> HashMap<String, Value> {
     HashMap::from([("id".into(), Value::Text(id.into()))])
@@ -79,13 +84,13 @@ fn persisted_cache_round_trips_the_mapping() {
     let db = DirSQL::builder()
         .root(root.path())
         .table(csv_table())
-        .persist(None::<&std::path::Path>)
+        .persist(Some(cache_path(root.path())))
         .build()
         .unwrap();
     assert_eq!(db.query("SELECT col FROM rows").unwrap().len(), 3);
     drop(db);
 
-    let cache = dirsql::persist::resolve_persist_path(root.path(), None);
+    let cache = cache_path(root.path());
     let reopened = Db::open(&cache).unwrap();
     assert_mapping_consistent(&reopened, "rows", 3);
 }
@@ -100,12 +105,12 @@ fn mapping_table_is_a_durable_sidecar() {
     let db = DirSQL::builder()
         .root(root.path())
         .table(csv_table())
-        .persist(None::<&std::path::Path>)
+        .persist(Some(cache_path(root.path())))
         .build()
         .unwrap();
     drop(db);
 
-    let cache = dirsql::persist::resolve_persist_path(root.path(), None);
+    let cache = cache_path(root.path());
     let conn = Connection::open(&cache).unwrap();
     assert!(
         table_exists(&conn, INTERNAL_ROWS_TABLE),
@@ -149,12 +154,12 @@ fn schema_bump_rebuilds_and_repopulates_mapping() {
     let db = DirSQL::builder()
         .root(root.path())
         .table(csv_table())
-        .persist(None::<&std::path::Path>)
+        .persist(Some(cache_path(root.path())))
         .build()
         .unwrap();
     drop(db);
 
-    let cache = dirsql::persist::resolve_persist_path(root.path(), None);
+    let cache = cache_path(root.path());
     {
         let conn = Connection::open(&cache).unwrap();
         conn.execute(
@@ -169,7 +174,7 @@ fn schema_bump_rebuilds_and_repopulates_mapping() {
     let db = DirSQL::builder()
         .root(root.path())
         .table(csv_table())
-        .persist(None::<&std::path::Path>)
+        .persist(Some(cache_path(root.path())))
         .build()
         .unwrap();
     drop(db);

@@ -1,0 +1,7 @@
+{
+  "command": "pnpm exec vitest run --dir tests/e2e query-contract fanout",
+  "ran_at": 1791394929,
+  "exit_code": 0,
+  "commit": "385444ef5812c872a3c0694ca168ed1d3820ffff",
+  "branch": "bot/1437-test-cache-isolation"
+}

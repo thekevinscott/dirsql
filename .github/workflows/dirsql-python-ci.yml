@@ -232,6 +232,9 @@ jobs:
         run: uv run python -m pytest tests/integration/binding/ -x -q --tb=short
         working-directory: packages/python
 
+      - name: Tests left the user cache dir untouched
+        run: 'test ! -e "$HOME/.cache/dirsql" || { echo "::error::a test wrote to the real user cache dir (~/.cache/dirsql); pass an explicit persist path"; exit 1; }'
+
   distcheck:
     # Installs and runs the built wheel, which the `packaging` gate does not
     # do -- that gate only asserts no test files ship in the artifact.
