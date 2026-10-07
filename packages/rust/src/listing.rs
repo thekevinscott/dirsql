@@ -29,12 +29,52 @@ pub(crate) struct Listed {
 
 #[derive(Default)]
 pub(crate) struct Listing {
-    #[cfg(unix)]
-    names: Vec<u8>,
-    #[cfg(not(unix))]
-    names: Vec<std::ffi::OsString>,
+    names: Names,
     entries: Vec<Listed>,
 }
+
+/// One buffer holding every name end to end.
+#[cfg(unix)]
+#[derive(Default)]
+struct Packed(Vec<u8>);
+
+#[cfg(unix)]
+impl Packed {
+    fn add(&mut self, name: &OsStr) -> usize {
+        use std::os::unix::ffi::OsStrExt;
+        let start = self.0.len();
+        self.0.extend_from_slice(name.as_bytes());
+        start
+    }
+
+    fn get(&self, start: usize, end: usize) -> &OsStr {
+        use std::os::unix::ffi::OsStrExt;
+        OsStr::from_bytes(&self.0[start..end])
+    }
+}
+
+/// One allocation per name, for platforms whose names are not bytes. Built
+/// under test too, so the Linux unit run covers it.
+#[cfg(any(test, not(unix)))]
+#[derive(Default)]
+struct Owned(Vec<std::ffi::OsString>);
+
+#[cfg(any(test, not(unix)))]
+impl Owned {
+    fn add(&mut self, name: &OsStr) -> usize {
+        self.0.push(name.to_os_string());
+        self.0.len() - 1
+    }
+
+    fn get(&self, start: usize, _end: usize) -> &OsStr {
+        &self.0[start]
+    }
+}
+
+#[cfg(unix)]
+type Names = Packed;
+#[cfg(not(unix))]
+type Names = Owned;
 
 impl Listing {
     /// The entries of `dir` in the byte order of their names; none when it
@@ -50,40 +90,18 @@ impl Listing {
         &self.entries
     }
 
-    #[cfg(unix)]
     pub(crate) fn push(&mut self, name: &OsStr, seen: Seen) {
-        use std::os::unix::ffi::OsStrExt;
-        let start = self.names.len();
-        self.names.extend_from_slice(name.as_bytes());
+        let start = self.names.add(name);
         self.entries.push(Listed {
             prefix: name_prefix(name),
             start,
-            end: self.names.len(),
+            end: start + name.len(),
             seen,
         });
     }
 
-    #[cfg(not(unix))]
-    pub(crate) fn push(&mut self, name: &OsStr, seen: Seen) {
-        let start = self.names.len();
-        self.names.push(name.to_os_string());
-        self.entries.push(Listed {
-            prefix: name_prefix(name),
-            start,
-            end: start + 1,
-            seen,
-        });
-    }
-
-    #[cfg(unix)]
     pub(crate) fn name(&self, listed: &Listed) -> &OsStr {
-        use std::os::unix::ffi::OsStrExt;
-        OsStr::from_bytes(&self.names[listed.start..listed.end])
-    }
-
-    #[cfg(not(unix))]
-    pub(crate) fn name(&self, listed: &Listed) -> &OsStr {
-        &self.names[listed.start]
+        self.names.get(listed.start, listed.end)
     }
 
     pub(crate) fn sort(&mut self) {
@@ -100,10 +118,24 @@ impl Listing {
 }
 
 #[cfg(unix)]
+fn seen(kind: rustix::fs::FileType) -> Seen {
+    use rustix::fs::FileType;
+    match kind {
+        FileType::Directory => Seen::Dir,
+        FileType::RegularFile => Seen::File,
+        FileType::Symlink => Seen::Link,
+        FileType::Unknown => Seen::Unknown,
+        _ => Seen::Other,
+    }
+}
+
+#[cfg(unix)]
 fn read_into(dir: &Path, listing: &mut Listing) {
-    use rustix::fs::{Dir, FileType, Mode, OFlags};
+    use rustix::fs::{Dir, Mode, OFlags};
     use std::os::unix::ffi::OsStrExt;
-    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    let flags = OFlags::RDONLY
+        .union(OFlags::DIRECTORY)
+        .union(OFlags::CLOEXEC);
     let Ok(fd) = rustix::fs::open(dir, flags, Mode::empty()) else {
         return;
     };
@@ -115,32 +147,35 @@ fn read_into(dir: &Path, listing: &mut Listing) {
         if name == b"." || name == b".." {
             continue;
         }
-        let seen = match entry.file_type() {
-            FileType::Directory => Seen::Dir,
-            FileType::RegularFile => Seen::File,
-            FileType::Symlink => Seen::Link,
-            FileType::Unknown => Seen::Unknown,
-            _ => Seen::Other,
-        };
-        listing.push(OsStr::from_bytes(name), seen);
+        listing.push(OsStr::from_bytes(name), seen(entry.file_type()));
     }
 }
 
-#[cfg(not(unix))]
-fn read_into(dir: &Path, listing: &mut Listing) {
+#[cfg(any(test, not(unix)))]
+fn read_dir_into(dir: &Path, listing: &mut Listing) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.filter_map(Result::ok) {
-        let seen = match entry.file_type() {
-            Ok(kind) if kind.is_symlink() => Seen::Link,
-            Ok(kind) if kind.is_dir() => Seen::Dir,
-            Ok(kind) if kind.is_file() => Seen::File,
-            _ => Seen::Other,
-        };
+        let seen = entry.file_type().map_or(Seen::Other, |kind| {
+            seen_flags(kind.is_symlink(), kind.is_dir(), kind.is_file())
+        });
         listing.push(&entry.file_name(), seen);
     }
 }
+
+#[cfg(any(test, not(unix)))]
+fn seen_flags(symlink: bool, dir: bool, file: bool) -> Seen {
+    match (symlink, dir, file) {
+        (true, _, _) => Seen::Link,
+        (_, true, _) => Seen::Dir,
+        (_, _, true) => Seen::File,
+        _ => Seen::Other,
+    }
+}
+
+#[cfg(not(unix))]
+use read_dir_into as read_into;
 
 /// A name's first eight bytes as a big-endian word, which orders names as
 /// their bytes do as far as those bytes go.
@@ -213,5 +248,110 @@ mod tests {
             name_prefix(OsStr::new("abcdefghZ")),
             u64::from_be_bytes(*b"abcdefgh")
         );
+    }
+
+    fn read_with(read: fn(&Path, &mut Listing), dir: &Path) -> Vec<(String, Seen)> {
+        let mut listing = Listing::default();
+        read(dir, &mut listing);
+        listing.sort();
+        listing
+            .entries()
+            .iter()
+            .map(|listed| {
+                (
+                    listing.name(listed).to_string_lossy().into_owned(),
+                    listed.seen,
+                )
+            })
+            .collect()
+    }
+
+    fn fixture() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("file"), "x").unwrap();
+        std::fs::create_dir(dir.path().join("dir")).unwrap();
+        dir
+    }
+
+    fn fixture_entries() -> Vec<(String, Seen)> {
+        [("dir", Seen::Dir), ("file", Seen::File)]
+            .map(|(name, seen)| (name.to_string(), seen))
+            .to_vec()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_lists_each_entry_of_a_directory_sorted_and_classified() {
+        let dir = fixture();
+        let listing = Listing::read(dir.path());
+        let got: Vec<_> = listing
+            .entries()
+            .iter()
+            .map(|listed| {
+                (
+                    listing.name(listed).to_string_lossy().into_owned(),
+                    listed.seen,
+                )
+            })
+            .collect();
+        assert_eq!(got, fixture_entries());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_into_lists_the_entries_without_dot_and_dot_dot() {
+        let dir = fixture();
+        assert_eq!(read_with(read_into, dir.path()), fixture_entries());
+    }
+
+    #[test]
+    fn read_dir_into_classifies_what_std_reports() {
+        let dir = fixture();
+        assert_eq!(read_with(read_dir_into, dir.path()), fixture_entries());
+    }
+
+    #[test]
+    fn flags_say_what_an_entry_was_seen_as() {
+        assert_eq!(seen_flags(true, false, false), Seen::Link);
+        assert_eq!(seen_flags(false, true, false), Seen::Dir);
+        assert_eq!(seen_flags(false, false, true), Seen::File);
+        assert_eq!(seen_flags(false, false, false), Seen::Other);
+    }
+
+    #[test]
+    fn an_unreadable_directory_lists_nothing() {
+        let dir = fixture();
+        let file = dir.path().join("file");
+        let missing = dir.path().join("missing");
+        for path in [&file, &missing] {
+            assert!(Listing::read(path).entries().is_empty());
+            assert!(read_with(read_dir_into, path).is_empty());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn every_file_type_maps_to_what_it_was_seen_as() {
+        use rustix::fs::FileType;
+        let kinds = [
+            (FileType::Directory, Seen::Dir),
+            (FileType::RegularFile, Seen::File),
+            (FileType::Symlink, Seen::Link),
+            (FileType::Unknown, Seen::Unknown),
+            (FileType::Socket, Seen::Other),
+            (FileType::Fifo, Seen::Other),
+        ];
+        for (kind, expected) in kinds {
+            assert_eq!(seen(kind), expected);
+        }
+    }
+
+    #[test]
+    fn owned_names_come_back_by_the_index_they_were_added_at() {
+        let mut names = Owned::default();
+        let first = names.add(OsStr::new("first"));
+        let second = names.add(OsStr::new("second"));
+        assert_eq!(names.get(first, 0), "first");
+        assert_eq!(names.get(second, 0), "second");
     }
 }
