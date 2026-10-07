@@ -1030,7 +1030,7 @@ mod tests {
         fs::create_dir_all(root.path().join("a").join("node_modules").join("pkg")).unwrap();
         fs::create_dir_all(root.path().join("a").join(RESERVED_DIR)).unwrap();
         fs::write(root.path().join("a").join("f.md"), "").unwrap();
-        let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
+        let ignore = TableMatcher::new(&[(".dirsql/*", "t")], &["**/node_modules/**"]).unwrap();
         let a = root.path().join("a");
         let mut dirs = scan_dirs(root.path(), &a, &ignore);
         dirs.sort();
@@ -1052,7 +1052,7 @@ mod tests {
     fn explore_enters_a_dirsql_directory_below_the_top_level() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("a").join(RESERVED_DIR)).unwrap();
-        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let ignore = TableMatcher::new(&[("**/.dirsql/*", "t")], &[]).unwrap();
         let top = Place {
             walk: walk_with(&ignore, None, Vec::new()),
             dir: root.path().to_path_buf(),
