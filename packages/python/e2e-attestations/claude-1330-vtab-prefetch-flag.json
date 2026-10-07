@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/query_contract_test.py tests/e2e/declared_table_name_test.py tests/e2e/fanout_test.py -x -q",
+  "ran_at": 1791310416,
+  "exit_code": 0,
+  "commit": "bcedde49401cf6f9cc01deb2d95af1d1e907f0f7",
+  "branch": "claude/1330-vtab-prefetch-flag"
+}

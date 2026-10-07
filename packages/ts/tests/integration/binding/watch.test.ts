@@ -55,6 +55,36 @@ describe("DirSQL watch() async iterator", () => {
   });
 
   it(
+    "delivers an insert to every concurrent stream",
+    async () => {
+      const db = new DirSQL({ root: dir, tables: [jsonTable("*.json")] });
+      await db.ready;
+      const received: string[] = [];
+      const collectors = [0, 1].map(async () => {
+        const events = await collectFromWatch(db, {
+          filter: (event) => event.action === "insert",
+          until: (events) => events.length === 1,
+        });
+        received.push(String(events[0].row?.name));
+      });
+      const settled = Promise.allSettled(collectors);
+      await sleep(300);
+      const final = join(dir, "shared.json");
+      await writeFile(`${final}.tmp`, JSON.stringify({ name: "shared" }));
+      await rename(`${final}.tmp`, final);
+      try {
+        await expect
+          .poll(() => received, { timeout: 3000 })
+          .toEqual(["shared", "shared"]);
+      } finally {
+        db.close();
+        await settled;
+      }
+    },
+    TEST_TIMEOUT,
+  );
+
+  it(
     "emits insert events for new files",
     async () => {
       const db = new DirSQL({ root: dir, tables: [jsonTable("**/*.json")] });

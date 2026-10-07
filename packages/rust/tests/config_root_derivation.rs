@@ -41,17 +41,18 @@ impl Drop for CwdGuard {
     }
 }
 
-/// A `.config(path)` with no explicit `.root()` roots at the **process cwd**,
-/// never the config file's parent directory. The config's parent holds a decoy
-/// file that must NOT be indexed; the cwd holds the file that must be.
+/// A `.config(path)` with no explicit `.root()` still roots the index at the
+/// **process cwd**, but a config table anchors at the config file's directory.
+/// The cwd holds a decoy that must NOT be indexed; the config's parent holds
+/// the file that must be.
 #[test]
-fn config_without_root_indexes_process_cwd_not_config_parent() {
+fn config_tables_anchor_at_the_config_directory_not_the_process_cwd() {
     let cwd_dir = tempfile::TempDir::new().unwrap();
     let cwd_dir = fs::canonicalize(cwd_dir.path()).unwrap();
-    fs::write(cwd_dir.join("in_cwd.txt"), "x").unwrap();
+    fs::write(cwd_dir.join("decoy.txt"), "x").unwrap();
 
     let cfg_dir = tempfile::TempDir::new().unwrap();
-    fs::write(cfg_dir.path().join("decoy.txt"), "x").unwrap();
+    fs::write(cfg_dir.path().join("in_config_dir.txt"), "x").unwrap();
     let cfg_path = cfg_dir.path().join(".dirsql.toml");
     fs::write(
         &cfg_path,
@@ -69,11 +70,11 @@ on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""
     let db = DirSQL::builder().config(&cfg_path).build().unwrap();
     let rows = db.query("SELECT path FROM files").unwrap();
 
-    assert_eq!(rows.len(), 1, "should index cwd, not the config's parent");
-    assert_eq!(rows[0]["path"], Value::Text("in_cwd.txt".into()));
+    assert_eq!(rows.len(), 1, "should index the config's directory");
+    assert_eq!(rows[0]["path"], Value::Text("in_config_dir.txt".into()));
 }
 
-/// An explicit `.root(...)` still wins over the process cwd.
+/// An explicit `.root(...)` still wins over the process cwd for the index root.
 #[test]
 fn explicit_root_wins_over_cwd() {
     let cwd_dir = tempfile::TempDir::new().unwrap();

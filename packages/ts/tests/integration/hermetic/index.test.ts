@@ -219,6 +219,33 @@ describe("DirSQL delegation", () => {
 });
 
 describe("DirSQL watch", () => {
+  it("delivers every event to streams created before their first iteration", async () => {
+    const events: RowEvent[] = [
+      { table: "t", action: "insert", row: { n: 1 } },
+      { table: "t", action: "delete", row: { n: 1 } },
+    ];
+    const inner = makeInner({
+      pollEvents: vi
+        .fn()
+        .mockResolvedValueOnce(events)
+        .mockRejectedValue(new Error("a watch() stream missed the event")),
+    });
+    openAsync.mockResolvedValue(inner);
+    const db = new DirSQL({ root: "/data" });
+    const first = db.watch();
+    const second = db.watch();
+    try {
+      expect((await first.next()).value).toEqual(events[0]);
+      expect((await second.next()).value).toEqual(events[0]);
+      expect((await second.next()).value).toEqual(events[1]);
+      expect((await first.next()).value).toEqual(events[1]);
+      expect(inner.pollEvents).toHaveBeenCalledExactlyOnceWith(200);
+    } finally {
+      await first.return();
+      await second.return();
+    }
+  });
+
   it("starts the watcher and yields events across poll batches", async () => {
     const batches: RowEvent[][] = [
       [

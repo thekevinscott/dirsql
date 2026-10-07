@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791263539,
+  "exit_code": 0,
+  "commit": "cc0931bbec318d57f476c0d53224e3931dd611b7",
+  "branch": "claude/1330-scanner-effects"
+}
