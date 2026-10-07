@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1791396367,
+  "exit_code": 0,
+  "commit": "5059be3329c27bc9cf891bfd19e9d2ea8c240fad",
+  "branch": "bot/fix-main-place-depth-20261007"
+}
