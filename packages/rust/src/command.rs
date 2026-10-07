@@ -281,7 +281,7 @@ fn check_exit(
 }
 
 /// Bytes read from a child's stdout per `read` call.
-const READ_BYTES: usize = 256 * 1024;
+const READ_BYTES: usize = 262_144;
 
 /// Run an already-built `argv` and hand its stdout to `on_block` as it
 /// arrives, in blocks that each hold whole lines (the last block may lack its

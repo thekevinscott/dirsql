@@ -82,7 +82,7 @@ pub(crate) fn run_streaming(
     let aborted = AtomicBool::new(false);
     let failures = Mutex::new(Vec::<(usize, String)>::new());
     std::thread::scope(|scope| {
-        let (rows_tx, rows_rx) = std::sync::mpsc::sync_channel::<Vec<JsonRow>>(workers * 2);
+        let (rows_tx, rows_rx) = std::sync::mpsc::sync_channel::<Vec<JsonRow>>(16);
         for _ in 0..workers {
             let rows_tx = rows_tx.clone();
             let (argv, runs) = (&argv, &runs);
