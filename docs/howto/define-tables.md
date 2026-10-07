@@ -11,18 +11,16 @@ Suppose your blog posts live under `posts/`, one markdown file each. A named
 table needs three keys: a `glob` that selects the files, a `ddl` that names
 the columns, and an [`on-file`](../reference/config.md#table) hook that emits
 the table's rows. Put a small parser next to the config — `extract.py`, which
-reads each post's title line and prints one JSON array of row objects:
+reads each post's title line and prints one JSON row object per line:
 
 ```python
 #!/usr/bin/env python3
 import json, os, sys
 
-rows = []
 for path in sys.argv[1:]:
     text = open(path, encoding="utf-8").read()
     title = next((l[2:].strip() for l in text.splitlines() if l.startswith("# ")), None)
-    rows.append({"title": title, "slug": os.path.basename(path)[:-3]})
-print(json.dumps(rows))
+    print(json.dumps({"title": title, "slug": os.path.basename(path)[:-3]}))
 ```
 
 Then declare the table in `.dirsql.toml`:

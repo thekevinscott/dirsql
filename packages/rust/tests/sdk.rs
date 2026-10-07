@@ -624,7 +624,7 @@ fn builder_config_loads_tables_with_explicit_root() {
 name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.json"
-on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{}" "$sep"; sep=","; done; printf "]"' sh'''
+on-file = '''sh -c 'for p; do printf "{}\n"; done' sh'''
 "#,
     )
     .unwrap();
@@ -661,7 +661,7 @@ fn builder_explicit_root_does_not_move_config_tables() {
 name = "items"
 ddl = "CREATE TABLE items (basename TEXT)"
 glob = "*.json"
-on-file = '''sh -c 'printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); printf "%s{\"basename\":\"%s\"}" "$sep" "${p##*/}"; sep=","; done; printf "]"' sh'''
+on-file = '''sh -c 'for p; do p=$(printf %s "$p" | tr "\\\\" /); printf "{\"basename\":\"%s\"}\n" "${p##*/}"; done' sh'''
 "#,
     )
     .unwrap();
@@ -691,7 +691,7 @@ fn builder_appends_programmatic_tables_to_config_tables() {
 name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.json"
-on-file = "printf '[{}]'"
+on-file = "printf '{}'"
 "#,
     )
     .unwrap();

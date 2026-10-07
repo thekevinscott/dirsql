@@ -73,10 +73,9 @@ def rows(path):
 
 
 if __name__ == "__main__":
-    out = []
     for path in sys.argv[1:]:
-        out.extend(rows(path))
-    print(json.dumps(out))
+        for row in rows(path):
+            print(json.dumps(row))
 """
 
 COUNT = """\
@@ -85,8 +84,8 @@ from collections import Counter
 
 counts = Counter()
 for line in sys.stdin:
-    for row in json.loads(line):
-        counts[(row["project"], row["role"])] += 1
+    row = json.loads(line)
+    counts[(row["project"], row["role"])] += 1
 for (project, role), n in sorted(counts.items()):
     print(project, role, n, sep="\\t")
 """

@@ -26,7 +26,7 @@ def _cli() -> str:
 def _fixture(tmp_path, config: str):
     root = tmp_path / "data-root"
     (root / "data").mkdir(parents=True)
-    (root / "data" / "a.json").write_text('[{"id": "one"}, {"id": "two"}]')
+    (root / "data" / "a.json").write_text('{"id": "one"}\n{"id": "two"}\n')
     cfg = root / ".dirsql.toml"
     cfg.write_text(config)
     return root, cfg

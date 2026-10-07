@@ -48,18 +48,18 @@ tools like `uvx --with …` / `npx …` resolve their dependencies as usual.
 
 ### stdout protocol
 
-The command's result payload is the **last non-empty line of stdout**,
-trimmed. Any log or chatter lines above it are ignored. A command that
-exits successfully but prints no non-empty line is a failure ("produced no
-output on stdout").
+The command's stdout is **NDJSON: one JSON object per line**, one row each.
+Blank lines are skipped. A command that exits successfully and prints nothing
+yields no rows. Every non-blank line must be a JSON object: a line that is
+an array, a scalar, or log chatter fails the table, and the error names the
+line number. There is no array form.
 
 stderr is never data — it is captured only to enrich error messages (the
-last 2 000 characters are attached to failures).
+last 2 000 characters are attached to failures). Send logs there.
 
-::: tip Print single-line output
-Because only the last non-empty line is the payload, multi-line output loses
-everything above the last line. `jq` users: pass `-c` so the JSON is emitted
-compactly on one line.
+::: tip Print one object per line
+`jq` users: pass `-c` so each object is emitted compactly on one line. Do not
+slurp into an array (`jq -s`, `jq -n '[inputs]'`).
 :::
 
 ### Bounding a hook
@@ -95,8 +95,8 @@ A hook run fails when the command:
 - exits non-zero (the exit code — or `signal`, if killed by one — and the
   stderr tail are reported; a `timeout(1)` wrapper killing an overrun lands
   here),
-- exits zero but prints no non-empty stdout line,
-- or prints output that does not parse as a JSON array of row objects.
+- or prints output where a non-blank line is not a JSON object (an array
+  line is rejected with a message saying to print one object per line).
 
 What a failure *means*: the command ran once for the whole table, so its
 failure is the table's, and a table that cannot be filled fails the build.
@@ -107,23 +107,22 @@ counts as the same kind of failure.
 ## `on-file` contract
 
 Runs **once per table**, with every file matched by the table's `glob`
-appended to the command as a trailing argument, and prints **one JSON array
-of row objects** for the whole table. That is the whole contract. The command
+appended to the command as a trailing argument, and prints **one JSON object
+per line** for the whole table, one row each. That is the whole contract. The command
 reads the files itself; see [`[[table]]`](./config.md#table) for the
 row-mapping rules.
 
 One process over all the files is the shape to write: a loop over the
-arguments that collects rows and prints them once at the end. Parsing is the
+arguments that prints each row as it is parsed. Parsing is the
 command's cost, not dirsql's — dirsql spawns the command, waits, and reads
 its stdout. A table over no matched files spawns nothing.
 
 ```python
 import json, sys
 
-rows = []
 for path in sys.argv[1:]:
-    rows.extend(parse(path))
-print(json.dumps(rows))
+    for row in parse(path):
+        print(json.dumps(row))
 ```
 
 There is no row-to-file attribution: dirsql does not know which file a row
@@ -154,7 +153,7 @@ path anywhere other than last gets a wrapper script. A command that spells
 `{path}` is rejected at startup:
 
 ```
-on-file command `python3 extract.py {path}` uses `{path}`, but an on-file command now runs once per table with every matched path appended as trailing arguments and prints one JSON array of row objects. Remove `{path}` and read the paths from the command's arguments.
+on-file command `python3 extract.py {path}` uses `{path}`, but an on-file command now runs once per table with every matched path appended as trailing arguments and prints one JSON object per line. Remove `{path}` and read the paths from the command's arguments.
 ```
 
 ### Argument-list limits
@@ -162,7 +161,7 @@ on-file command `python3 extract.py {path}` uses `{path}`, but an on-file comman
 Every platform caps the bytes one process may receive as arguments. When a
 table's paths outgrow that cap, dirsql splits them into the fewest
 consecutive runs that fit, runs the command once per run, and concatenates
-the arrays it prints, in order. The command cannot tell: each run is an
+the rows it prints, in order. The command cannot tell: each run is an
 ordinary invocation with a subset of the paths. A command must therefore not
 assume one invocation sees every path — a count, a cross-file join, or a
 dedupe over `sys.argv[1:]` is per run, not per table. Do that work in SQL.

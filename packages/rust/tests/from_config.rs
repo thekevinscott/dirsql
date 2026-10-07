@@ -18,7 +18,7 @@ fn from_config_produces_one_row_per_matched_file() {
 name = "files"
 ddl = "CREATE TABLE files (path TEXT, basename TEXT)"
 glob = "data/*.csv"
-on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "%s{\"path\":\"%s\",\"basename\":\"%s\"}" "$sep" "$rel" "${p##*/}"; sep=","; done; printf "]"' sh {root}'''
+on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "{\"path\":\"%s\",\"basename\":\"%s\"}\n" "$rel" "${p##*/}"; done' sh {root}'''
 "#,
     )
     .unwrap();
@@ -57,7 +57,7 @@ ignore = ["ignored/**"]
 name = "files"
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "**/*.csv"
-on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "%s{\"path\":\"%s\"}" "$sep" "$rel"; sep=","; done; printf "]"' sh {root}'''
+on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "{\"path\":\"%s\"}\n" "$rel"; done' sh {root}'''
 "#,
     )
     .unwrap();
@@ -89,7 +89,7 @@ fn from_config_exposes_stat_virtuals() {
 name = "files"
 ddl = "CREATE TABLE files (path TEXT, basename TEXT, dir TEXT, ext TEXT, size INTEGER, mtime INTEGER)"
 glob = "docs/*.md"
-on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for f; do p=$(printf %s "$f" | tr "\\\\" /); rel=${p#"$r"/}; base=${p##*/}; case "$rel" in */*) dir=${rel%/*};; *) dir="";; esac; ext=${base##*.}; [ "$ext" = "$base" ] && ext=""; size=$(wc -c < "$f" | tr -d " "); mtime=$(stat -c %Y "$f"); printf "%s{\"path\":\"%s\",\"basename\":\"%s\",\"dir\":\"%s\",\"ext\":\"%s\",\"size\":%s,\"mtime\":%s}" "$sep" "$rel" "$base" "$dir" "$ext" "$size" "$mtime"; sep=","; done; printf "]"' sh {root}'''
+on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; for f; do p=$(printf %s "$f" | tr "\\\\" /); rel=${p#"$r"/}; base=${p##*/}; case "$rel" in */*) dir=${rel%/*};; *) dir="";; esac; ext=${base##*.}; [ "$ext" = "$base" ] && ext=""; size=$(wc -c < "$f" | tr -d " "); mtime=$(stat -c %Y "$f"); printf "{\"path\":\"%s\",\"basename\":\"%s\",\"dir\":\"%s\",\"ext\":\"%s\",\"size\":%s,\"mtime\":%s}\n" "$rel" "$base" "$dir" "$ext" "$size" "$mtime"; done' sh {root}'''
 "#,
     )
     .unwrap();
@@ -136,7 +136,7 @@ fn from_config_undeclared_stat_columns_are_silently_dropped() {
 name = "minimal"
 ddl = "CREATE TABLE minimal (path TEXT)"
 glob = "*.txt"
-on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "%s{\"path\":\"%s\",\"basename\":\"%s\"}" "$sep" "$rel" "${p##*/}"; sep=","; done; printf "]"' sh {root}'''
+on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "{\"path\":\"%s\",\"basename\":\"%s\"}\n" "$rel" "${p##*/}"; done' sh {root}'''
 "#,
     )
     .unwrap();
@@ -270,7 +270,7 @@ name = "files"
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "*.csv"
 strict = true
-on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "%s{\"path\":\"%s\"}" "$sep" "$rel"; sep=","; done; printf "]"' sh {root}'''
+on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "{\"path\":\"%s\"}\n" "$rel"; done' sh {root}'''
 "#,
     )
     .unwrap();
@@ -296,7 +296,7 @@ async fn async_from_config_works() {
 name = "files"
 ddl = "CREATE TABLE files (path TEXT, basename TEXT)"
 glob = "*.csv"
-on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "%s{\"path\":\"%s\",\"basename\":\"%s\"}" "$sep" "$rel" "${p##*/}"; sep=","; done; printf "]"' sh {root}'''
+on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "{\"path\":\"%s\",\"basename\":\"%s\"}\n" "$rel" "${p##*/}"; done' sh {root}'''
 "#,
     )
     .unwrap();
@@ -316,7 +316,7 @@ on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""
     assert_eq!(rows[0]["basename"], Value::Text("data.csv".into()));
 }
 
-const PATH_HOOK: &str = r#"on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "%s{\"path\":\"%s\"}" "$sep" "$rel"; sep=","; done; printf "]"' sh {root}'''"#;
+const PATH_HOOK: &str = r#"on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "{\"path\":\"%s\"}\n" "$rel"; done' sh {root}'''"#;
 
 /// root.json at depth 0, folder/a.json at depth 1, folder/sub/b.json at depth 2.
 fn nested_json_fixture() -> TempDir {

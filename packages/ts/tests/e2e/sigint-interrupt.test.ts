@@ -51,7 +51,7 @@ describe("SIGINT during a scan (CLI)", () => {
 name = "files"
 ddl = "CREATE TABLE files (path TEXT)"
 glob = "data/*.txt"
-on-file = "sh -c 'touch ${ready}; sleep 120; printf \\"[]\\"'"
+on-file = "sh -c 'touch ${ready}; sleep 120'"
 `,
     );
   });

@@ -41,7 +41,7 @@ def describe_sigint_during_a_scan():
             'name = "files"\n'
             'ddl = "CREATE TABLE files (path TEXT)"\n'
             'glob = "*.txt"\n'
-            f'on-file = "sh -c \'touch {ready}; sleep 120; printf \\"[]\\"\'"\n'
+            f"on-file = \"sh -c 'touch {ready}; sleep 120'\"\n"
         )
 
         proc = subprocess.Popen(

@@ -17,7 +17,7 @@ fn on_file_runs_once_per_table_with_every_matched_path_as_trailing_args() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("record.sh"),
-        "#!/bin/sh\nline=\"\"\nfor arg; do line=\"$line$arg\t\"; done\nprintf '%s\\n' \"$line\" >> argv.log\nprintf '[]'\n",
+        "#!/bin/sh\nline=\"\"\nfor arg; do line=\"$line$arg\t\"; done\nprintf '%s\\n' \"$line\" >> argv.log\nprintf ''\n",
     )
     .unwrap();
     fs::write(

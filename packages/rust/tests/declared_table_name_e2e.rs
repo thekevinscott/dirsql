@@ -22,7 +22,7 @@ fn fixture(config: &str) -> TempDir {
     fs::create_dir_all(root.path().join("data")).unwrap();
     fs::write(
         root.path().join("data/a.json"),
-        r#"[{"id": "one"}, {"id": "two"}]"#,
+        "{\"id\": \"one\"}\n{\"id\": \"two\"}",
     )
     .unwrap();
     fs::write(root.path().join(".dirsql.toml"), config).unwrap();

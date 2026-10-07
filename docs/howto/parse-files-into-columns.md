@@ -32,15 +32,14 @@ To get them, you need a parser.
 
 ## 2. Attach a parser with `--on-file`
 
-Any program that reads the files named by its arguments and prints a **JSON
-array of row objects** on stdout is a parser. Here is a small one,
+Any program that reads the files named by its arguments and prints **one JSON
+object per line** on stdout is a parser. Here is a small one,
 `extract.py`, that reads each post's frontmatter:
 
 ```python
 #!/usr/bin/env python3
 import json, re, sys
 
-rows = []
 for path in sys.argv[1:]:
     text = open(path, encoding="utf-8").read()
     m = re.match(r"^---\n(.*?)\n---", text, re.DOTALL)
@@ -48,8 +47,7 @@ for path in sys.argv[1:]:
         (k.strip(), v.strip())
         for k, _, v in (line.partition(":") for line in (m.group(1).splitlines() if m else []))
     )
-    rows.append({"title": fields.get("title"), "author": fields.get("author")})
-print(json.dumps(rows))
+    print(json.dumps({"title": fields.get("title"), "author": fields.get("author")}))
 ```
 
 Point the path-table at it with `--on-file`:
@@ -75,7 +73,7 @@ for the full behavior.
 
 One run, one process: on a thousand files the parser starts once, not a
 thousand times, so a Python or Node parser costs its startup once per query.
-That is the shape to write — loop over `sys.argv[1:]`, collect, print once.
+That is the shape to write — loop over `sys.argv[1:]` and print each row as you go.
 
 `--on-file` applies to every path-table in the query and may be given at most
 once. It is a `query`-only flag: there is no config file involved yet, so it is
@@ -121,8 +119,8 @@ row that needs the file's `path` emits it (the parser has the path).
 
 ## The two shapes
 
-Every parser is one of two shapes. The array length is the row count either
-way; what differs is how many files feed it.
+Every parser is one of two shapes. The number of lines printed is the row
+count either way; what differs is how many files feed it.
 
 **One file, many rows.** A lab notebook is a single Markdown file of dated
 `## YYYY-MM-DD` sections, and the question is about the sections. Name the one
@@ -132,12 +130,10 @@ section. `notebook.py`:
 ```python
 import json, re, sys
 
-rows = []
 for path in sys.argv[1:]:
     text = open(path, encoding="utf-8").read()
     for date, body in re.findall(r"^## (\d{4}-\d\d-\d\d)\n(.*?)(?=^## |\Z)", text, re.S | re.M):
-        rows.append({"date": date, "words": len(body.split())})
-print(json.dumps(rows))
+        print(json.dumps({"date": date, "words": len(body.split())}))
 ```
 
 ```bash
@@ -158,14 +154,12 @@ attach it. `messages.py`:
 ```python
 import json, os, sys
 
-rows = []
 for path in sys.argv[1:]:
     project = os.path.relpath(path, "projects").split(os.sep)[0]
     for line in open(path, encoding="utf-8"):
         entry = json.loads(line)
         if entry["type"] in ("user", "assistant"):
-            rows.append({"project": project, "role": entry["type"], "text": entry["message"]["content"]})
-print(json.dumps(rows))
+            print(json.dumps({"project": project, "role": entry["type"], "text": entry["message"]["content"]}))
 ```
 
 ```bash

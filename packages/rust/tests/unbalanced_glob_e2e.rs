@@ -16,7 +16,7 @@ const NAMES: [&str; 5] = ["{a.json", "a}.json", "[a.json", "a[b.json", "a.json"]
 fn fixture(glob: &str) -> TempDir {
     let root = TempDir::new().unwrap();
     for name in NAMES {
-        fs::write(root.path().join(name), r#"[{"id": "row"}]"#).unwrap();
+        fs::write(root.path().join(name), r#"{"id": "row"}"#).unwrap();
     }
     fs::write(
         root.path().join(".dirsql.toml"),

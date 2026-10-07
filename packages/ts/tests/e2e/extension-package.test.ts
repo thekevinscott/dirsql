@@ -284,7 +284,7 @@ async function runServerAndQuery(configPath: string): Promise<unknown[]> {
 describe("dirsql CLI --config: extension by package name (#299)", () => {
   it("loads a TOML `[[dirsql.extension]]` referenced by package name", async () => {
     const dir = await mkdtemp(join(tmpdir(), "dirsql-ext-toml-"));
-    await writeFile(join(dir, "a.txt"), '[{"path":"a.txt"}]');
+    await writeFile(join(dir, "a.txt"), '{"path":"a.txt"}');
     await writeFile(
       join(dir, ".dirsql.toml"),
       `[[dirsql.extension]]\npath = "${PKG_NAME}"\nentrypoint = "sqlite3_extension_init"\n\n[[table]]\nname = "files"\nddl = "CREATE TABLE files (path TEXT)"\nglob = "*.txt"\non-file = "cat"\n`,
@@ -313,7 +313,7 @@ describe("dirsql CLI --config: extension package with no loadable file", () => {
 
   it("reports the searched suffixes as glob patterns", async () => {
     const dir = await mkdtemp(join(tmpdir(), "dirsql-ext-empty-"));
-    await writeFile(join(dir, "a.txt"), '[{"path":"a.txt"}]');
+    await writeFile(join(dir, "a.txt"), '{"path":"a.txt"}');
     const configPath = join(dir, ".dirsql.toml");
     await writeFile(
       configPath,

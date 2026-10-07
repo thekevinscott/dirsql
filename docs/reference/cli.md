@@ -383,8 +383,8 @@ uses**, so behavior is identical to `POST /query` by construction:
 
 Attach a parser to every [path-table](./path-tables.md#parsing-rows-with-on-file)
 in the query: the command runs once per path-table, with every matched file's
-path as a trailing argument, and the JSON array of row objects it prints
-replaces the stat columns:
+path as a trailing argument, and the JSON row objects it prints, one per line,
+replace the stat columns:
 
 ```sh
 dirsql query "SELECT title, author FROM './posts/*.md'" \

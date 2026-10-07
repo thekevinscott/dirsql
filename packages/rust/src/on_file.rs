@@ -1,11 +1,11 @@
 //! The `on-file` runner: one process per table, every matched path appended
-//! to the command's argv as trailing arguments, one JSON array of row objects
-//! back on stdout.
+//! to the command's argv as trailing arguments, one JSON object per line
+//! (NDJSON) back on stdout.
 //!
 //! A table over more paths than one argv can carry is split into the fewest
-//! invocations that fit, and their arrays are concatenated; the command never
+//! invocations that fit, and their rows are concatenated; the command never
 //! sees the split. Zero paths spawn nothing. Any failure -- a spawn error, a
-//! non-zero exit, empty output, or output that is not an array of objects --
+//! non-zero exit, or output that is not one JSON object per line --
 //! fails the whole table.
 
 use std::path::{Path, PathBuf};
@@ -30,7 +30,7 @@ pub(crate) fn path_placeholder_rejection(command: &str) -> Option<String> {
         format!(
             "on-file command `{command}` uses `{PATH_PLACEHOLDER}`, but an on-file command \
              now runs once per table with every matched path appended as trailing \
-             arguments and prints one JSON array of row objects. Remove \
+             arguments and prints one JSON object per line. Remove \
              `{PATH_PLACEHOLDER}` and read the paths from the command's arguments."
         )
     })
@@ -77,7 +77,7 @@ pub(crate) fn run_streaming(
         let parser = scope.spawn(move || -> Result<(), String> {
             for payload in received {
                 let rows = parse_rows(&payload).map_err(|message| {
-                    format!("on-file output was not a JSON array of rows: {message}")
+                    format!("on-file output was not one JSON object per line: {message}")
                 })?;
                 sink(rows);
             }
@@ -87,8 +87,9 @@ pub(crate) fn run_streaming(
             for chunk in chunks(&args, ARG_BUDGET.saturating_sub(argv_bytes(&argv))) {
                 let mut full = argv.clone();
                 full.extend(chunk.iter().cloned());
-                let output = command::run_argv(command, &full, cwd, None).map_err(spawn_failure)?;
-                if payloads.send(output.payload).is_err() {
+                let output =
+                    command::run_argv_stdout(command, &full, cwd, None).map_err(spawn_failure)?;
+                if payloads.send(output).is_err() {
                     break;
                 }
             }
@@ -225,7 +226,7 @@ mod tests {
             "names the contract: {message}"
         );
         assert!(
-            message.contains("one JSON array"),
+            message.contains("one JSON object per line"),
             "names the output: {message}"
         );
     }
@@ -245,13 +246,13 @@ mod tests {
             .map(|i| PathBuf::from(format!("/some/long/directory/name/file-{i:04}.json")))
             .collect();
         let rows = run(
-            r#"sh -c 'echo "[{\"n\":$#}]"' sh"#,
+            r#"sh -c 'echo "{\"n\":$#}"' sh"#,
             Path::new("."),
             Path::new("."),
             &paths,
         )
         .unwrap();
-        assert_eq!(rows.len(), 1, "one spawn, one array");
+        assert_eq!(rows.len(), 1, "one spawn, one row");
         assert_eq!(rows[0].get("n").unwrap().as_i64().unwrap(), 300);
     }
 

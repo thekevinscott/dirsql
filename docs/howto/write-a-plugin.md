@@ -121,7 +121,7 @@ embedding. dirsql injects no columns, so the script emits the path itself,
 from the `{root}` the hook passes in and the paths it appends:
 
 ```python
-"""Embed each file's text; print one dirsql row array on stdout."""
+"""Embed each file's text; print one dirsql row per line on stdout."""
 import json
 import os
 import sys
@@ -131,12 +131,9 @@ from model2vec import StaticModel
 root, paths = sys.argv[1], sys.argv[2:]
 texts = [open(path, encoding="utf-8").read() for path in paths]
 model = StaticModel.from_pretrained("minishlab/potion-base-8M")
-rows = [
-    {"path": os.path.relpath(path, root), "text": text,
-     "embedding": json.dumps([round(float(x), 6) for x in vector])}
-    for path, text, vector in zip(paths, texts, model.encode(texts))
-]
-print(json.dumps(rows))
+for path, text, vector in zip(paths, texts, model.encode(texts)):
+    print(json.dumps({"path": os.path.relpath(path, root), "text": text,
+                      "embedding": json.dumps([round(float(x), 6) for x in vector])}))
 ```
 
 The relative `embed.py` above resolves against the fragment directory, which

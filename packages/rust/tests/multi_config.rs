@@ -41,7 +41,7 @@ fn tables_accumulate_across_config_entries() {
 name = "alpha"
 ddl = "CREATE TABLE alpha (basename TEXT)"
 glob = "a.json"
-on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{\"basename\":\"%s\"}" "$sep" "${p##*/}"; sep=","; done; printf "]"' sh'''
+on-file = '''sh -c 'for p; do printf "{\"basename\":\"%s\"}\n" "${p##*/}"; done' sh'''
 "#,
     );
     let cfg_b = TempDir::new().unwrap();
@@ -53,7 +53,7 @@ on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{\"basename\":\"%s\"
 name = "beta"
 ddl = "CREATE TABLE beta (basename TEXT)"
 glob = "b.json"
-on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{\"basename\":\"%s\"}" "$sep" "${p##*/}"; sep=","; done; printf "]"' sh'''
+on-file = '''sh -c 'for p; do printf "{\"basename\":\"%s\"}\n" "${p##*/}"; done' sh'''
 "#,
     );
 
@@ -86,7 +86,7 @@ fn each_on_file_runs_from_its_declaring_config_dir() {
     fs::write(cfg_a.path().join("a.json"), "{}").unwrap();
     fs::write(
         cfg_a.path().join("emit.sh"),
-        "#!/bin/sh\nprintf '[{\"v\":\"from-a\"}]'\n",
+        "#!/bin/sh\nprintf '{\"v\":\"from-a\"}'\n",
     )
     .unwrap();
     let cfg_a_path = write_config(
@@ -104,7 +104,7 @@ on-file = "sh ./emit.sh"
     fs::write(cfg_b.path().join("b.json"), "{}").unwrap();
     fs::write(
         cfg_b.path().join("emit.sh"),
-        "#!/bin/sh\nprintf '[{\"v\":\"from-b\"}]'\n",
+        "#!/bin/sh\nprintf '{\"v\":\"from-b\"}'\n",
     )
     .unwrap();
     let cfg_b_path = write_config(
@@ -147,7 +147,7 @@ fn a_timeout_wrapped_hook_in_one_config_fails_the_build_under_its_table() {
     fs::write(cfg_a.path().join("a.json"), "{}").unwrap();
     fs::write(
         cfg_a.path().join("slow.sh"),
-        "#!/bin/sh\nsleep 3\nprintf '[{\"v\":\"too-late\"}]'\n",
+        "#!/bin/sh\nsleep 3\nprintf '{\"v\":\"too-late\"}'\n",
     )
     .unwrap();
     let cfg_a_path = write_config(
@@ -165,7 +165,7 @@ on-file = "timeout 0.5 sh ./slow.sh"
     fs::write(cfg_b.path().join("b.json"), "{}").unwrap();
     fs::write(
         cfg_b.path().join("fast.sh"),
-        "#!/bin/sh\nprintf '[{\"v\":\"in-time\"}]'\n",
+        "#!/bin/sh\nprintf '{\"v\":\"in-time\"}'\n",
     )
     .unwrap();
     let cfg_b_path = write_config(
@@ -213,7 +213,7 @@ ignore = ["skip_a/**"]
 name = "files"
 ddl = "CREATE TABLE files (basename TEXT)"
 glob = "**/*.json"
-on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{\"basename\":\"%s\"}" "$sep" "${p##*/}"; sep=","; done; printf "]"' sh'''
+on-file = '''sh -c 'for p; do printf "{\"basename\":\"%s\"}\n" "${p##*/}"; done' sh'''
 "#,
     );
     let cfg_b = TempDir::new().unwrap();

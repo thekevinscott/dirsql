@@ -30,7 +30,7 @@ _BINARY_STAGE_DIR = os.path.join(os.path.dirname(_dirsql_pkg.__file__), "_binary
 
 # An `on-file` hook emitting `path` for every handed path, relative to the
 # scan root (`{root}`).
-_HOOK_PATH = r"""on-file = '''sh -c 'r=$1; shift; printf "["; sep=""; for p; do rel=${p#"$r"/}; printf "%s{\"path\":\"%s\"}" "$sep" "$rel"; sep=","; done; printf "]"' sh {root}'''"""
+_HOOK_PATH = r"""on-file = '''sh -c 'r=$1; shift; for p; do rel=${p#"$r"/}; printf "{\"path\":\"%s\"}\n" "$rel"; done' sh {root}'''"""
 
 
 def _free_port():

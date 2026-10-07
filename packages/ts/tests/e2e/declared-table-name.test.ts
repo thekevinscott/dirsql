@@ -63,7 +63,7 @@ describe("declared [[table]] name (CLI)", () => {
     await mkdir(join(dir, "data"), { recursive: true });
     await writeFile(
       join(dir, "data", "a.json"),
-      '[{"id": "one"}, {"id": "two"}]',
+      '{"id": "one"}\n{"id": "two"}\n',
     );
   });
 

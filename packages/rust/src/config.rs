@@ -241,8 +241,8 @@ pub struct TableConfig {
     pub glob: String,
     pub strict: Option<bool>,
     /// The required per-file command (`on-file`). Each matched file's rows come
-    /// from running this command, which reads the file and prints a JSON array
-    /// of row objects. A table without it would emit no columns of its own —
+    /// from running this command, which reads the file and prints one JSON
+    /// object per line. A table without it would emit no columns of its own —
     /// every row all-NULL — so it is rejected at load. See `dirsql::command`
     /// for the execution contract.
     pub on_file: String,

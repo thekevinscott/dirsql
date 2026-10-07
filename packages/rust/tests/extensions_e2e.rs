@@ -40,7 +40,7 @@ const SQL: &str = "SELECT dirsql_testext_answer() AS a";
 /// the index has something to build either way.
 fn fixture(extension: &str) -> TempDir {
     let root = TempDir::new().unwrap();
-    fs::write(root.path().join("a.json"), r#"[{"name": "a"}]"#).unwrap();
+    fs::write(root.path().join("a.json"), r#"{"name": "a"}"#).unwrap();
     fs::write(
         root.path().join(".dirsql.toml"),
         format!(

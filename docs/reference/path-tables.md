@@ -171,7 +171,7 @@ dirsql query "SELECT title, author FROM './posts/*.md'" \
 ```
 
 The command runs once, with every matched file's absolute path appended as an
-argument, and prints one JSON array of row objects, exactly like a declared
+argument, and prints one JSON object per line, exactly like a declared
 table's [`on-file` hook](/reference/hooks) — same argv splitting, same `{root}`
 placeholder, same [argument-list splitting](/reference/hooks#argument-list-limits)
 over a very large table. Its output *is* the table:
@@ -185,11 +185,10 @@ over a very large table. Its output *is* the table:
   run in — the same directory the `./` path is relative to — and `{root}`
   names it. `python3 extract.py` finds `extract.py` in that directory,
   whatever directory the path-table scans.
-- **A parser failure is the query's failure.** A run that fails (spawn,
-  non-zero exit, or no output) or whose output is not a JSON array of row
-  objects fails the query with the command's stderr tail; there is no partial
-  table, and the CLI exits `1`. A run that succeeds but prints an empty array
-  fails too, because there are no keys to infer columns from:
+- **A parser failure is the query's failure.** A run that fails (spawn
+  or non-zero exit) or whose output is not one JSON object per line fails the
+  query with the command's stderr tail; there is no partial table, and the CLI
+  exits `1`. A run that succeeds but prints nothing fails too, because there are no keys to infer columns from:
 
   ```
   dirsql_parsed: parser produced no rows for `posts/*.md`; cannot infer a schema

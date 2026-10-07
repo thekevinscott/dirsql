@@ -1,0 +1,1 @@
+**Changed** An `on-file` command now prints NDJSON: one JSON object per line, one row each, instead of a single JSON array on the last line. Blank lines are skipped, empty output is a table with no rows, and a line that is an array or not an object fails the table with its line number. Applies to `[[table]]` entries and `--on-file`.

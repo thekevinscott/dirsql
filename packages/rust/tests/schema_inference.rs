@@ -13,10 +13,11 @@ use dirsql::vtab::StatementScope;
 use rusqlite::Connection;
 use tempfile::TempDir;
 
-/// A parser that hands back the files' bodies combined into one array: each
-/// file is a one-line JSON array of row objects, so stripping its brackets and
-/// joining the bodies with commas is the table's output.
-const COMBINE_SCRIPT: &str = "#!/bin/sh\nprintf '['\nsep=''\nfor f; do\n  body=$(cat \"$f\")\n  body=${body#'['}\n  body=${body%']'}\n  if [ -n \"$body\" ]; then printf '%s%s' \"$sep\" \"$body\"; sep=','; fi\ndone\nprintf ']'\n";
+/// A parser that hands back the files' bodies one after another: each file is
+/// NDJSON of row objects, so concatenating them is the table's output.
+const COMBINE_SCRIPT: &str = "#!/bin/sh
+for f; do cat \"$f\"; echo; done
+";
 
 /// The SQL that declares a vtab named `t` over `glob` under `dir`, parsed by
 /// the combining script written into `dir`. The parser runs from the index
@@ -62,7 +63,7 @@ fn declared_types(conn: &Connection) -> Vec<(String, String)> {
 #[test]
 fn columns_are_inferred_from_row_objects_and_rows_are_queryable() {
     let dir = TempDir::new().unwrap();
-    write(&dir, "a.json", r#"[{"title":"one","n":1}]"#);
+    write(&dir, "a.json", r#"{"title":"one","n":1}"#);
     let conn = open_over(&dir, "**/*.json");
 
     assert_eq!(column_names(&conn, "SELECT * FROM t"), vec!["title", "n"]);
@@ -77,8 +78,8 @@ fn columns_are_inferred_from_row_objects_and_rows_are_queryable() {
 #[test]
 fn columns_are_the_union_of_keys_across_every_row() {
     let dir = TempDir::new().unwrap();
-    write(&dir, "a.json", r#"[{"a":1},{"b":2}]"#);
-    write(&dir, "b.json", r#"[{"c":3}]"#);
+    write(&dir, "a.json", "{\"a\":1}\n{\"b\":2}");
+    write(&dir, "b.json", r#"{"c":3}"#);
     let conn = open_over(&dir, "**/*.json");
 
     let mut cols = column_names(&conn, "SELECT * FROM t");
@@ -89,7 +90,7 @@ fn columns_are_the_union_of_keys_across_every_row() {
 #[test]
 fn column_order_is_first_seen_so_select_star_is_stable() {
     let dir = TempDir::new().unwrap();
-    write(&dir, "a.json", r#"[{"zeta":1,"alpha":2},{"middle":3}]"#);
+    write(&dir, "a.json", "{\"zeta\":1,\"alpha\":2}\n{\"middle\":3}");
     let conn = open_over(&dir, "**/*.json");
 
     assert_eq!(
@@ -105,7 +106,7 @@ fn json_types_map_to_sqlite_types() {
     write(
         &dir,
         "a.json",
-        r#"[{"s":"x","i":1,"f":1.5,"b":true,"nested":{"k":"v"}}]"#,
+        r#"{"s":"x","i":1,"f":1.5,"b":true,"nested":{"k":"v"}}"#,
     );
     let conn = open_over(&dir, "**/*.json");
 
@@ -124,7 +125,7 @@ fn json_types_map_to_sqlite_types() {
 #[test]
 fn a_key_that_is_never_non_null_is_text() {
     let dir = TempDir::new().unwrap();
-    write(&dir, "a.json", r#"[{"maybe":null},{"maybe":null}]"#);
+    write(&dir, "a.json", "{\"maybe\":null}\n{\"maybe\":null}");
     let conn = open_over(&dir, "**/*.json");
 
     assert_eq!(
@@ -136,7 +137,7 @@ fn a_key_that_is_never_non_null_is_text() {
 #[test]
 fn a_key_null_in_one_row_takes_its_type_from_another() {
     let dir = TempDir::new().unwrap();
-    write(&dir, "a.json", r#"[{"n":null},{"n":7}]"#);
+    write(&dir, "a.json", "{\"n\":null}\n{\"n\":7}");
     let conn = open_over(&dir, "**/*.json");
 
     assert_eq!(
@@ -157,7 +158,7 @@ fn a_key_null_in_one_row_takes_its_type_from_another() {
 #[test]
 fn a_key_missing_from_one_row_is_null_there() {
     let dir = TempDir::new().unwrap();
-    write(&dir, "a.json", r#"[{"a":1,"b":"x"},{"a":2}]"#);
+    write(&dir, "a.json", "{\"a\":1,\"b\":\"x\"}\n{\"a\":2}");
     let conn = open_over(&dir, "**/*.json");
 
     let bs: Vec<Option<String>> = {
@@ -173,7 +174,7 @@ fn a_key_missing_from_one_row_is_null_there() {
 #[test]
 fn conflicting_types_across_rows_fall_back_to_text() {
     let dir = TempDir::new().unwrap();
-    write(&dir, "a.json", r#"[{"mixed":1},{"mixed":"two"}]"#);
+    write(&dir, "a.json", "{\"mixed\":1}\n{\"mixed\":\"two\"}");
     let conn = open_over(&dir, "**/*.json");
 
     assert_eq!(
@@ -185,7 +186,7 @@ fn conflicting_types_across_rows_fall_back_to_text() {
 #[test]
 fn nested_objects_and_arrays_are_stored_as_json_text() {
     let dir = TempDir::new().unwrap();
-    write(&dir, "a.json", r#"[{"obj":{"k":"v"},"arr":[1,2]}]"#);
+    write(&dir, "a.json", r#"{"obj":{"k":"v"},"arr":[1,2]}"#);
     let conn = open_over(&dir, "**/*.json");
 
     let (obj, arr): (String, String) = conn
@@ -198,8 +199,8 @@ fn nested_objects_and_arrays_are_stored_as_json_text() {
 #[test]
 fn rows_from_every_matched_file_are_present() {
     let dir = TempDir::new().unwrap();
-    write(&dir, "a.json", r#"[{"id":"a1"},{"id":"a2"}]"#);
-    write(&dir, "b.json", r#"[{"id":"b1"}]"#);
+    write(&dir, "a.json", "{\"id\":\"a1\"}\n{\"id\":\"a2\"}");
+    write(&dir, "b.json", r#"{"id":"b1"}"#);
     let conn = open_over(&dir, "**/*.json");
 
     let mut stmt = conn.prepare("SELECT id FROM t ORDER BY id").unwrap();
@@ -214,8 +215,8 @@ fn rows_from_every_matched_file_are_present() {
 #[test]
 fn the_glob_scopes_which_files_the_parser_sees() {
     let dir = TempDir::new().unwrap();
-    write(&dir, "a.json", r#"[{"id":"kept"}]"#);
-    write(&dir, "b.txt", r#"[{"id":"skipped"}]"#);
+    write(&dir, "a.json", r#"{"id":"kept"}"#);
+    write(&dir, "b.txt", r#"{"id":"skipped"}"#);
     let conn = open_over(&dir, "**/*.json");
 
     let mut stmt = conn.prepare("SELECT id FROM t").unwrap();
@@ -230,7 +231,7 @@ fn the_glob_scopes_which_files_the_parser_sees() {
 #[test]
 fn a_parser_producing_no_rows_is_an_error_at_registration() {
     let dir = TempDir::new().unwrap();
-    write(&dir, "a.json", "[]");
+    write(&dir, "a.json", "");
     let conn = Connection::open_in_memory().unwrap();
     load_module(&conn, StatementScope::new()).unwrap();
 
@@ -248,7 +249,7 @@ fn a_file_the_parser_cannot_handle_fails_the_table_at_registration() {
     // rows leaves nothing to infer a schema from, so registration fails and
     // names the problem.
     let dir = TempDir::new().unwrap();
-    write(&dir, "a.json", r#"[{"id":"kept"}]"#);
+    write(&dir, "a.json", r#"{"id":"kept"}"#);
     write(&dir, "bad.json", "not valid json");
     let conn = Connection::open_in_memory().unwrap();
     load_module(&conn, StatementScope::new()).unwrap();
@@ -256,7 +257,7 @@ fn a_file_the_parser_cannot_handle_fails_the_table_at_registration() {
     let err = conn.execute_batch(&declare(&dir, "**/*.json")).unwrap_err();
 
     assert!(
-        err.to_string().contains("not a JSON array of rows"),
+        err.to_string().contains("not one JSON object per line"),
         "a parser failure is the table's failure; got: {err}"
     );
 }
@@ -264,7 +265,7 @@ fn a_file_the_parser_cannot_handle_fails_the_table_at_registration() {
 #[test]
 fn writes_are_rejected() {
     let dir = TempDir::new().unwrap();
-    write(&dir, "a.json", r#"[{"id":"a"}]"#);
+    write(&dir, "a.json", r#"{"id":"a"}"#);
     let conn = open_over(&dir, "**/*.json");
 
     let err = conn.execute("DELETE FROM t", []).unwrap_err();

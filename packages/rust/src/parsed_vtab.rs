@@ -392,7 +392,7 @@ mod tests {
     #[test]
     fn run_parser_returns_the_commands_rows() {
         let rows = run_parser(
-            r#"sh -c "echo chatter; printf '[{\"id\":1}]'""#,
+            r#"sh -c "printf '{\"id\":1}'""#,
             Path::new("."),
             Path::new("."),
             &[PathBuf::from("a.json")],
@@ -411,7 +411,7 @@ mod tests {
         let root = index_root.join("docs");
         std::fs::create_dir_all(&root).unwrap();
         run_parser(
-            r#"sh -c 'printf "%s\n%s\n%s\n" "$1" "$2" "$3" > seen; echo "[]"' sh {root}"#,
+            r#"sh -c 'printf "%s\n%s\n%s\n" "$1" "$2" "$3" > seen' sh {root}"#,
             &index_root,
             &root,
             &[PathBuf::from("a.json"), PathBuf::from("b.json")],
