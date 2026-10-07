@@ -123,7 +123,7 @@ A test runs every row against dirsql as a path-table and, with the leading
 
 | Tag | Rule | Why |
 | --- | --- | --- |
-| `gitignore` | Inside a git repo, `.gitignore` files hide matching files and directories. `--no-ignore` turns it off. | A query over a repo should not drown in build output. |
+| `gitignore` | Inside a git repo, `.gitignore` files hide files and directories a wildcard matches, never one the pattern spells out. `--no-ignore` turns it off. | A query over a repo should not drown in build output. |
 | `directory-name` | A pattern's last component that names a directory lists the files directly inside it, like `ls docs`. A trailing `/` is `*` appended. | A table is rows of files, and `ls` is the shell habit. |
 | `files-only` | A pattern that matches a directory but no file returns nothing. | Every row is a file. |
 | `absolute` | `/`, `~/` and `../` patterns report absolute `path` values, with `..` folded out textually. | The scanned root is derived from the pattern, so there is no relative base. |

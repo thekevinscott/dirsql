@@ -262,6 +262,9 @@ directory, deeper files override shallower ones, `!pattern` re-includes, and
 an ignored directory is pruned rather than walked. In a typical repo this
 excludes build output, virtualenvs, and caches with zero ceremony.
 
+A `.gitignore` never hides a path the pattern spells out: `'./debug.log'` lists
+that file even when `*.log` is ignored, while `'./*.log'` does not.
+
 A `.gitignore` is in force only when a directory holding `.git` encloses it.
 Outside a repo none applies, at the scan's start, above it or below it: a
 `~/.claude` whose `.gitignore` is `*` still lists its files when `~/.claude`
