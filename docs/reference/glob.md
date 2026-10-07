@@ -19,7 +19,7 @@ divergence is a written decision.
 ## The fixture
 
 Every example below runs against this tree. A name ending in `/` is an empty
-directory, `a -> b` is a symlink, and `.gitignore` holds `*.log`.
+directory, `a -> b` is a symlink, and `.gitignore` holds `*.log` and `dist/`.
 
 <!-- conformance-tree -->
 ```text
@@ -48,6 +48,8 @@ docs/.draft.md
 docs/nested/deep.md
 docs/nested/.cache/x.md
 node_modules/pkg/index.js
+dist/bundle.js
+dist/sub/o.js
 real/r.md
 uni/1.md
 uni/a.md
@@ -126,6 +128,12 @@ A test runs every row against dirsql as a path-table and, with the leading
 | `./*.log` | none | gitignore |
 | `./ignored.log` | `ignored.log` |  |
 | `./{ignored,x}.log` | `ignored.log` |  |
+| `./dist/*.js` | none | gitignore |
+| `./dist/**/*.js` | none | gitignore |
+| `./dist/sub/*.js` | none | gitignore |
+| `./d*/*.js` | none | gitignore |
+| `./dist/bundle.js` | `dist/bundle.js` |  |
+| `./dist/sub/o.js` | `dist/sub/o.js` |  |
 | `./**/*.js` | `node_modules/pkg/index.js` |  |
 | `./node_modules/*/index.js` | `node_modules/pkg/index.js` |  |
 | `./docs/**/*.md` | `docs/api.md`, `docs/guide.md`, `docs/nested/deep.md` |  |

@@ -70,7 +70,7 @@ fn build(root: &Path, entries: &[String]) {
             fs::write(at, "x\n").unwrap();
         }
     }
-    fs::write(root.join(".gitignore"), "*.log\n").unwrap();
+    fs::write(root.join(".gitignore"), "*.log\ndist/\n").unwrap();
 }
 
 fn texts(db: &DirSQL, sql: &str, column: &str) -> Vec<String> {
