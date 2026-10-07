@@ -236,7 +236,7 @@ enum Kind {
 }
 
 impl PathGlob {
-    fn spells_dot_name(&self, name: &OsStr) -> bool {
+    pub(crate) fn spells_dot_name(&self, name: &OsStr) -> bool {
         self.spelled_dot_names
             .iter()
             .any(|p| p.is_match(Path::new(name)))
@@ -244,6 +244,17 @@ impl PathGlob {
 
     pub fn is_match(&self, rel_path: &Path) -> bool {
         self.files.iter().any(|p| p.is_match(rel_path))
+    }
+
+    /// [`is_match`](Self::is_match), and every dot-named component of the path
+    /// is one the glob spells.
+    pub(crate) fn is_match_unhidden(&self, rel_path: &Path) -> bool {
+        self.is_match(rel_path)
+            && rel_path
+                .components()
+                .map(|c| c.as_os_str())
+                .filter(|name| is_dot_named(name))
+                .all(|name| self.spells_dot_name(name))
     }
 
     fn has_components(&self) -> bool {
@@ -584,10 +595,11 @@ impl Walk<'_> {
     }
 
     fn admits_name(&self, name: &OsStr) -> bool {
-        match self.glob {
-            Some(glob) => !is_dot_named(name) || glob.spells_dot_name(name),
-            None => true,
-        }
+        !is_dot_named(name)
+            || match self.glob {
+                Some(glob) => glob.spells_dot_name(name),
+                None => self.ignore.spells_dot_name(name),
+            }
     }
 
     fn next_states(&self, states: &[usize], name: &OsStr, kind: Kind) -> Vec<usize> {
@@ -1018,7 +1030,7 @@ mod tests {
         fs::create_dir_all(root.path().join("a").join("node_modules").join("pkg")).unwrap();
         fs::create_dir_all(root.path().join("a").join(RESERVED_DIR)).unwrap();
         fs::write(root.path().join("a").join("f.md"), "").unwrap();
-        let ignore = TableMatcher::new(&[], &["**/node_modules/**"]).unwrap();
+        let ignore = TableMatcher::new(&[(".dirsql/*", "t")], &["**/node_modules/**"]).unwrap();
         let a = root.path().join("a");
         let mut dirs = scan_dirs(root.path(), &a, &ignore);
         dirs.sort();
@@ -1040,7 +1052,7 @@ mod tests {
     fn explore_enters_a_dirsql_directory_below_the_top_level() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("a").join(RESERVED_DIR)).unwrap();
-        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let ignore = TableMatcher::new(&[("**/.dirsql/*", "t")], &[]).unwrap();
         let top = Place {
             walk: walk_with(&ignore, None, Vec::new()),
             dir: root.path().to_path_buf(),
@@ -1393,8 +1405,8 @@ mod tests {
     }
 
     #[test]
-    fn admits_every_dot_named_entry_when_no_glob_governs_the_walk() {
-        let ignore = TableMatcher::new(&[], &[]).unwrap();
+    fn a_table_walk_admits_a_dot_name_only_a_table_glob_spells() {
+        let ignore = TableMatcher::new(&[(".env", "t")], &[]).unwrap();
         let walk = walk_with(&ignore, None, Vec::new());
         assert!(walk.admits(
             1,
@@ -1403,6 +1415,23 @@ mod tests {
             Path::new("/r/.env"),
             Path::new(".env")
         ));
+        assert!(!walk.admits(
+            1,
+            false,
+            OsStr::new(".other"),
+            Path::new("/r/.other"),
+            Path::new(".other")
+        ));
+    }
+
+    #[test]
+    fn a_match_with_an_unspelled_dot_component_is_hidden() {
+        let glob = compile_glob("**/*.md").unwrap();
+        assert!(glob.is_match_unhidden(Path::new("sub/b.md")));
+        assert!(!glob.is_match_unhidden(Path::new(".env.md")));
+        assert!(!glob.is_match_unhidden(Path::new(".hid/z.md")));
+        let spelled = compile_glob(".hid/*.md").unwrap();
+        assert!(spelled.is_match_unhidden(Path::new(".hid/z.md")));
     }
 
     #[test]

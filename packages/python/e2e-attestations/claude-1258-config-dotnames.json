@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_dotfiles_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_matchers_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1791335904,
+  "exit_code": 0,
+  "commit": "dd146cf1e0f60982d186b8393e96ca484fb4b0b8",
+  "branch": "claude/1258-config-dotnames"
+}

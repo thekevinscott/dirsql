@@ -140,3 +140,19 @@ fn a_brace_alternation_still_matches_each_option() {
     assert_eq!(path_table_paths(root.path(), "{a,b}.md"), expected);
     assert_eq!(config_paths(root.path(), "{a,b}.md"), expected);
 }
+
+#[test]
+fn dot_named_entries_are_hidden_unless_the_glob_spells_them() {
+    let root = tree(&["a.md", ".env.md", ".hid/z.md", "sub/b.md"]);
+    let expected = vec!["a.md", "sub/b.md"];
+    assert_eq!(path_table_paths(root.path(), "**/*.md"), expected);
+    assert_eq!(config_paths(root.path(), "**/*.md"), expected);
+}
+
+#[test]
+fn a_spelled_dot_directory_is_listed() {
+    let root = tree(&["a.md", ".hid/z.md"]);
+    let expected = vec![".hid/z.md"];
+    assert_eq!(path_table_paths(root.path(), ".hid/*.md"), expected);
+    assert_eq!(config_paths(root.path(), ".hid/*.md"), expected);
+}

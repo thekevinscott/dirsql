@@ -2,6 +2,7 @@ use crate::posix_class::expand_posix_classes;
 use crate::scanner::{PathGlob, compile_glob};
 use globset::GlobBuilder;
 use regex::{Regex, RegexBuilder};
+use std::ffi::OsStr;
 use std::path::Path;
 
 #[derive(Debug, thiserror::Error)]
@@ -142,11 +143,18 @@ impl TableMatcher {
     pub fn match_all(&self, path: &Path) -> Vec<MatchResult> {
         self.entries
             .iter()
-            .filter(|entry| entry.pattern.is_match(path))
+            .filter(|entry| entry.pattern.is_match_unhidden(path))
             .map(|entry| MatchResult {
                 table_name: entry.table_name.clone(),
             })
             .collect()
+    }
+
+    /// Whether any table's glob spells the dot-named `name`.
+    pub(crate) fn spells_dot_name(&self, name: &OsStr) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.pattern.spells_dot_name(name))
     }
 
     /// Returns true if the path matches any ignore pattern.
