@@ -156,3 +156,35 @@ fn a_spelled_dot_directory_is_listed() {
     assert_eq!(path_table_paths(root.path(), ".hid/*.md"), expected);
     assert_eq!(config_paths(root.path(), ".hid/*.md"), expected);
 }
+
+#[test]
+fn node_modules_is_skipped_unless_the_glob_names_it() {
+    let root = tree(&["top.js", "node_modules/top.js", "pkg/node_modules/dep/i.js"]);
+    let expected = vec!["top.js"];
+    assert_eq!(path_table_paths(root.path(), "**/*.js"), expected);
+    assert_eq!(config_paths(root.path(), "**/*.js"), expected);
+}
+
+#[test]
+fn a_glob_naming_node_modules_lists_it() {
+    let root = tree(&["top.js", "node_modules/top.js"]);
+    let expected = vec!["node_modules/top.js"];
+    assert_eq!(path_table_paths(root.path(), "node_modules/*.js"), expected);
+    assert_eq!(config_paths(root.path(), "node_modules/*.js"), expected);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_file_and_directory_are_followed() {
+    use std::os::unix::fs::symlink;
+    let root = tree(&["top.md", "real/r.md"]);
+    symlink("top.md", root.path().join("link.md")).unwrap();
+    symlink("real", root.path().join("linkdir")).unwrap();
+    for (glob, expected) in [
+        ("link.md", vec!["link.md"]),
+        ("linkdir/*", vec!["linkdir/r.md"]),
+    ] {
+        assert_eq!(path_table_paths(root.path(), glob), expected, "{glob}");
+        assert_eq!(config_paths(root.path(), glob), expected, "{glob}");
+    }
+}

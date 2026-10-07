@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791338676,
+  "exit_code": 0,
+  "commit": "d686573e68751258dc25c982adcfaef986ca6176",
+  "branch": "claude/1258-config-links"
+}
