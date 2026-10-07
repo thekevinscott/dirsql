@@ -24,7 +24,7 @@ just e2e-attest-ts       # cd packages/ts && testing-conventions e2e attest 'pnp
 
 Receipts are append-only in practice -- a merged branch's receipt stays in the directory as the record that its suite ran. They are not source: the `changelog-gate` exempts `e2e-attestations/`, `release-ci.yml` excludes it from the publish globs, and `putitoutthere.toml` keeps it out of every shipped artifact.
 
-**Everything compiled into the binding is in scope -- CI-enforced via `[e2e].extra_scope`.** The shared Rust core (`packages/rust/src`) is compiled into both bindings but lives in neither binding's subtree, and `e2e verify --scope` requires the scope to be a **descendant of the caller's `path`** -- so a binding caller cannot point its own `--scope` at the core. That case is solved by the `e2e verify --extra-scope` / `--exclude` flags (upstream #333): an `[e2e]` block declares the extra roots, `detect.py` reads it, and the reusable `e2e-verify` job passes it through. Pure config; the former bespoke `e2e_core_freshness.py` gate is not needed. Two roots per binding:
+**Everything compiled into the binding is in scope -- CI-enforced via `[e2e].extra_scope`.** The shared Rust core (`packages/rust/src`) is compiled into both bindings but lives in neither binding's subtree, and `e2e verify --scope` requires the scope to be a **descendant of the caller's `path`** -- so a binding caller cannot point its own `--scope` at the core. That case is solved by the `e2e verify --extra-scope` / `--exclude` flags (upstream #333): an `[e2e]` block declares the extra roots, `detect.py` reads it, and the reusable `e2e-verify` job passes it through. Pure config; the former bespoke `e2e_core_freshness.py` gate is not needed. Three roots per binding: the two below, plus the package's own `tests/e2e` directory (`packages/python/tests/e2e`, `packages/ts/tests/e2e`), so an e2e-test-only change owes a receipt too.
 
 - **The core, `packages/rust/src` -- puts BOTH bindings in scope** (#337). **After any shared-core change, attest each binding** (`just e2e-attest-python`, `just e2e-attest-ts`) -- CI enforces this, it is no longer a by-hand-only promise. **`cli`-only** core source (`packages/rust/src/cli/**`, `packages/rust/src/bin/**`) is feature-gated out of the binding *libraries*, but since #721 each launcher calls the core's `run_cli` **in-process through its binding** -- a CLI change alters what those suites exercise, so it demands a receipt from both bindings like any other core change (no `exclude` carve-out).
 - **The binding crate itself -- puts ONLY its own package in scope** (#933): `packages/python/src` (the PyO3 glue) for python, `packages/ts/napi` plus `packages/ts/Cargo.toml` (the napi-rs crate, `build.rs` included; the manifest sits at the package root so the release stamps its version) for typescript. Same #721 argument one layer out: `run_cli` in each binding does argv framing, GIL detach / exit-code handling, and runs in every e2e case, so a binding-only diff changes what the suites exercise with no core change at all. A napi change has no bearing on the python suite and never demands a python receipt, and vice versa.
@@ -37,7 +37,15 @@ CI installs the latest `testing-conventions` release (unpinned); install it loca
 
 ## E2E Before Push
 
-Agents must run the full e2e suite locally before any `git push` that includes a **substantial code change**, and report the outcome in the PR body. The commands to run differ per environment -- see the active environment file for specifics.
+Agents must run the e2e tests their change can affect before any `git push` that includes a **substantial code change**, and report which tests they ran, and the outcome, in the PR body. The gate trusts that judgment: it is a nudge to run e2e on any source change, not a demand for the full suite. A test-only Rust change may affect very few e2e tests. The commands differ per environment; see the active environment file.
+
+To attest a subset of the Python suite, build first so the receipt never covers stale code, then name the files:
+
+```bash
+cd packages/python && uv run maturin develop --release
+cargo build --release -p dirsql --features cli
+cd packages/python && testing-conventions e2e attest 'uv run python -m pytest tests/e2e/<files> -x -q'
+```
 
 **"Substantial" means any change touching:**
 - `packages/rust/**` (Rust core)

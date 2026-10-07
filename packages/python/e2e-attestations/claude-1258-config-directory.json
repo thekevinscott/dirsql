@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_one_level_test.py tests/e2e/glob_speed_matchers_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1791331926,
+  "exit_code": 0,
+  "commit": "04430dd3eae48a6936b5ff45c9c51a38900fbacc",
+  "branch": "claude/1258-config-directory"
+}

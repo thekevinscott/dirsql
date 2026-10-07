@@ -17,7 +17,7 @@ pub enum GlobError {
 /// does in a UTF-8 locale. globset parses the pattern, but its regex is
 /// byte-oriented, so it is recompiled in Unicode mode over the `/`-separated
 /// path text.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Pattern(Regex);
 
 impl Pattern {
@@ -80,6 +80,7 @@ pub struct MatchResult {
     pub table_name: String,
 }
 
+#[derive(Clone)]
 struct PatternEntry {
     pattern: PathGlob,
     table_name: String,
@@ -90,6 +91,7 @@ struct PatternEntry {
 /// `MatchResult`s (one per table), so a file can belong to multiple tables.
 /// An ignore list filters paths entirely. `{name}` placeholders in glob
 /// patterns are accepted and behave like `*`.
+#[derive(Clone)]
 pub struct TableMatcher {
     entries: Vec<PatternEntry>,
     ignore_set: Vec<Pattern>,
@@ -273,7 +275,7 @@ mod tests {
 
     #[test]
     fn invalid_glob_returns_error() {
-        let result = TableMatcher::new(&[("[invalid", "t")], &[]);
+        let result = TableMatcher::new(&[("[z-a]", "t")], &[]);
         assert!(result.is_err());
     }
 
