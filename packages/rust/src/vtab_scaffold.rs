@@ -703,6 +703,13 @@ mod tests {
     }
 
     #[test]
+    fn checks_root_is_true_only_for_the_gitignore_root_switch() {
+        assert!(checks_root("gitignore-root"));
+        assert!(!checks_root("gitignore"));
+        assert!(!checks_root("no-gitignore"));
+    }
+
+    #[test]
     fn parse_gitignore_reads_both_switches() {
         assert!(parse_gitignore("gitignore").unwrap());
         assert!(!parse_gitignore("no-gitignore").unwrap());
