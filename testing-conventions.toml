@@ -15,7 +15,7 @@
 # `[<lang>.coverage]` table sets the unit-only coverage floor the `unit
 # coverage` job enforces.
 #
-# The only exemptions below are those Rust mutation entries. The three-tier conformance work (#517) is
+# There are no exemptions. The three-tier conformance work (#517) is
 # complete: the binding suites moved into the recognized tier
 # `tests/integration/binding/` (#519) and the packaging distcheck flows moved to the
 # `internals/distcheck` package (#520), so nothing trips `unknown-tier` anymore.
@@ -100,28 +100,6 @@ branch = true
 # is silently unmeasured.
 [rust]
 features = ["cli"]
-
-# The walkers: a body that reads directories has no unit-tier contract, and
-# the decisions it makes are lifted into pure functions the unit suite judges
-# (`is_wanted`, `Walk::admits`, `Walk::follows`, `PathGlob::step`,
-# `classify`, `should_descend`, `is_gitignored`).
-[[rust.exempt]]
-path = "src/listing.rs"
-rules = ["mutation"]
-lines = [42, 103, 119, 121, 122]
-reason = "Listing::read and read_into read a real directory; the ordering and the names are unit-tested on a pushed listing, and tests/scanner.rs (scan_finds_matching_files, scan_recurses_into_subdirectories), tests/vtab.rs (rowids_count_up_from_zero_in_scan_order) and tests/path_table_symlinks.rs assert what a real walk returns"
-
-[[rust.exempt]]
-path = "src/listing.rs"
-rules = ["mutation"]
-lines = [68, 73, 86, 131, 136, 137, 138]
-reason = "the cfg(not(unix)) push, name and read_into are never compiled on the Linux mutation runner; the Windows test job runs the same unit tests and tests/scanner.rs against them"
-
-[[rust.exempt]]
-path = "src/listing.rs"
-rules = ["mutation"]
-lines = [106]
-reason = "equivalent: RDONLY is zero and DIRECTORY and CLOEXEC are disjoint bits, so ^ is the same value, and with & the open still reads a directory (a non-directory fails at Dir::read_from instead) while close-on-exec is unobservable to the walk"
 
 # Unit-only coverage floor: measured by `cargo llvm-cov --lib --features cli`
 # (the `--lib` scoping keeps the integration tier under packages/rust/tests/ out
