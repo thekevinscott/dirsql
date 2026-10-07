@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/stat_speed_test.py -x -q",
+  "ran_at": 1791385891,
+  "exit_code": 0,
+  "commit": "7647977af354f51e12a919585b0ad765e234c524",
+  "branch": "bot/1414-stat-speed"
+}
