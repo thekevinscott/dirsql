@@ -98,6 +98,11 @@ core, so all three SDKs change at once. **No drift.**
 | Multiple config files (merge in order) | `config=` accepts `str` or `list[str]` (#588) | `.config(path)` **repeatable** — each call appends; configs merge in call order (#545/#553) | `config` accepts `string` or `string[]` (#589) |
 | Worker-backed SQL functions (`[[dirsql.function]]`) | Y — config entries parsed and registered by the shared core (via `config=`) | Y — `[[dirsql.function]]` config entries (name, args arities, command, deterministic, timeout, batch) | Y — config entries parsed and registered by the shared core (via `config`) |
 
+**Multiple watch streams — TypeScript restored to Python parity.** Every
+`watch()` stream on one instance receives all events observed after its
+creation. Both SDKs share one poll and buffer events per live stream. Rust
+retains its documented single-stream, mutually exclusive watch/poll API.
+
 **Multiple config files — at parity across all three SDKs.** Several
 `.dirsql.toml` files merge in call order (`[[table]]` / `ignore` /
 `[[dirsql.extension]]` accumulate; a duplicate table name across configs
