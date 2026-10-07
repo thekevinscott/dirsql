@@ -35,7 +35,10 @@ def build_tree(root, lo, hi):
     `i % 97` bytes and stamped with a distinct modification time."""
     for i in range(lo, hi):
         folder = (
-            root / f"x{i % FANOUT}" / f"y{i // FANOUT % FANOUT}" / f"z{i // FANOUT**2 % FANOUT}"
+            root
+            / f"x{i % FANOUT}"
+            / f"y{i // FANOUT % FANOUT}"
+            / f"z{i // FANOUT**2 % FANOUT}"
         )
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / f"n{i}.dat"
