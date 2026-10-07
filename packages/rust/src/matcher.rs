@@ -2,7 +2,6 @@ use crate::posix_class::expand_posix_classes;
 use crate::scanner::{PathGlob, compile_glob, compile_globs};
 use globset::GlobBuilder;
 use regex::{Regex, RegexBuilder};
-use std::ffi::OsStr;
 use std::path::Path;
 
 #[derive(Debug, thiserror::Error)]
@@ -80,13 +79,10 @@ pub struct MatchResult {
     pub table_name: String,
 }
 
-const NODE_MODULES: &str = "node_modules";
-
 #[derive(Clone)]
 struct PatternEntry {
     pattern: PathGlob,
     table_name: String,
-    names_node_modules: bool,
 }
 
 /// Maps file paths to table names based on glob patterns.
@@ -102,10 +98,6 @@ pub struct TableMatcher {
     walk: PathGlob,
 }
 
-fn has_node_modules_component(path: &Path) -> bool {
-    path.components().any(|c| c.as_os_str() == NODE_MODULES)
-}
-
 impl TableMatcher {
     /// Build a new matcher from (glob_pattern, table_name) pairs and ignore patterns.
     pub fn new(mappings: &[(&str, &str)], ignore_patterns: &[&str]) -> Result<Self, GlobError> {
@@ -114,7 +106,6 @@ impl TableMatcher {
             entries.push(PatternEntry {
                 pattern: compile_glob(pattern)?,
                 table_name: table_name.to_string(),
-                names_node_modules: pattern.split('/').any(|c| c == NODE_MODULES),
             });
         }
         let globs: Vec<&str> = mappings.iter().map(|(pattern, _)| *pattern).collect();
@@ -154,10 +145,7 @@ impl TableMatcher {
     pub fn match_all(&self, path: &Path) -> Vec<MatchResult> {
         self.entries
             .iter()
-            .filter(|entry| {
-                entry.pattern.is_match_unhidden(path)
-                    && (entry.names_node_modules || !has_node_modules_component(path))
-            })
+            .filter(|entry| entry.pattern.is_match_unhidden(path))
             .map(|entry| MatchResult {
                 table_name: entry.table_name.clone(),
             })
@@ -167,14 +155,6 @@ impl TableMatcher {
     /// The one glob a walk for every table at once follows.
     pub(crate) fn walk_glob(&self) -> &PathGlob {
         &self.walk
-    }
-
-    /// Whether the walk may skip a directory called `name` outright: it is
-    /// `node_modules` and no table's glob names it.
-    pub(crate) fn prunes_directory(&self, name: &OsStr) -> bool {
-        name == NODE_MODULES
-            && !self.entries.is_empty()
-            && !self.entries.iter().any(|e| e.names_node_modules)
     }
 
     /// Returns true if the path matches any ignore pattern.
@@ -217,27 +197,10 @@ mod tests {
     }
 
     #[test]
-    fn node_modules_is_skipped_unless_a_table_names_it() {
-        let matcher =
-            TableMatcher::new(&[("**/*.js", "all"), ("node_modules/*.js", "nm")], &[]).unwrap();
-        assert_eq!(names(&matcher, "pkg/a.js"), vec!["all"]);
-        assert_eq!(
-            names(&matcher, "pkg/node_modules/a.js"),
-            Vec::<String>::new()
-        );
-        assert_eq!(names(&matcher, "node_modules/a.js"), vec!["nm"]);
-    }
-
-    #[test]
-    fn the_walk_prunes_node_modules_only_while_no_table_names_it() {
-        let name = OsStr::new("node_modules");
-        let plain = TableMatcher::new(&[("**/*.js", "t")], &[]).unwrap();
-        let naming = TableMatcher::new(&[("node_modules/*.js", "t")], &[]).unwrap();
-        let none = TableMatcher::new(&[], &[]).unwrap();
-        assert!(plain.prunes_directory(name));
-        assert!(!plain.prunes_directory(OsStr::new("src")));
-        assert!(!naming.prunes_directory(name));
-        assert!(!none.prunes_directory(name));
+    fn node_modules_is_matched_like_any_directory() {
+        let matcher = TableMatcher::new(&[("**/*.js", "all")], &[]).unwrap();
+        assert_eq!(names(&matcher, "pkg/node_modules/a.js"), vec!["all"]);
+        assert_eq!(names(&matcher, "node_modules/a.js"), vec!["all"]);
     }
 
     #[test]

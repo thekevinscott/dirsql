@@ -123,7 +123,7 @@ shortcut was removed in #603 — use
   matched files are skipped entirely (scan and watch).
 - `no_ignore` / `noIgnore` — Scan files a `.gitignore` would hide.
   [Path-tables](./path-tables.md#skip-rules) respect `.gitignore` files by
-  default; the built-in `node_modules`/`.git` skips and any `ignore` patterns
+  default; the built-in `.git` skip and any `ignore` patterns
   still apply. The CLI's [`--no-ignore`](./cli.md#flags).
 - `config` — Path to a [`.dirsql.toml`](./config.md). Its `[[table]]`
   entries are appended after any programmatic `tables`; its `ignore`
