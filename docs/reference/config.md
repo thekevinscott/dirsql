@@ -232,7 +232,7 @@ what its required `on-file` command emits — dirsql injects nothing (see
 | `name` | yes | The table's SQL name — the name you query it by. Declared, never derived from `ddl`: dirsql does not read the DDL text. The `ddl` must create a table by this name; if it doesn't, loading fails. |
 | `ddl` | yes | A SQL batch, run verbatim — any number of statements. It must create a table called `name`; that table holds the file rows, and only the columns it declares are kept (keys the `on-file` command emits that are not declared are dropped). The rest of the batch is yours: indexes, virtual tables, triggers. See [Batch `ddl`](#batch-ddl). |
 | `glob` | yes | Glob pattern, [anchored](#glob-anchor) at the config file's directory, under the [one glob rule](#glob-rule): `*` matches one level, `**` any depth. Every table whose glob matches a file receives that file's rows — a file can populate multiple tables. A `{name}` is a literal, as in bash and a path-table; the [glob page](./glob.md) has the syntax. |
-| `on-file` | **yes** | A command run once per table, with every matched file's absolute path appended as a trailing argument; its stdout (one JSON array of row objects) is the table's rows. Must be non-empty. A `[[table]]` with no `on-file` is a load error (see [parse errors](#parse-errors)). See [Command hooks](./hooks.md#on-file). |
+| `on-file` | **yes** | A command run once per table, with every matched file's absolute path appended as a trailing argument; its stdout (one JSON object per line) is the table's rows. Must be non-empty. A `[[table]]` with no `on-file` is a load error (see [parse errors](#parse-errors)). See [Command hooks](./hooks.md#on-file). |
 | `strict` | no (default `false`) | When `true`, rows whose keys do not exactly match the declared columns are rejected with an error: extra keys error, and every declared column must be supplied by the `on-file` output. When `false`, extra keys are dropped and missing columns become `NULL`. |
 
 `on-file` is required because a table's rows come from nowhere else. dirsql
@@ -345,13 +345,15 @@ Two consequences of `ddl` running **once, when the table is created**:
 
 ### `on-file` row mapping
 
-The command prints a JSON array of objects; each object becomes one row.
+The command prints one JSON object per line (NDJSON); each line becomes one
+row. Blank lines are skipped, and a command that prints nothing yields a table
+with no rows. An array on a line is an error, not a list of rows.
 JSON values map to SQLite as: `null` → `NULL`; `true`/`false` → `1`/`0`; an
 integral number → `INTEGER`, any other number → `REAL`; a string → `TEXT`; a
 nested array or object → its JSON text as `TEXT`.
 
 A row's columns are exactly the keys the command emits, narrowed to the DDL;
-dirsql merges nothing else in. Output that is not a JSON array of objects fails
+dirsql merges nothing else in. Output that is not one JSON object per line fails
 the table, and a failed table fails the build (see
 [failure semantics](./hooks.md#failure-semantics)).
 

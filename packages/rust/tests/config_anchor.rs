@@ -5,7 +5,7 @@ use dirsql::{DirSQL, Value};
 use std::fs;
 use std::path::Path;
 
-const HOOK: &str = r#"on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; printf "["; sep=""; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "%s{\"path\":\"%s\"}" "$sep" "$rel"; sep=","; done; printf "]"' sh {root}'''"#;
+const HOOK: &str = r#"on-file = '''sh -c 'r=$(printf %s "$1" | tr "\\\\" /); shift; for p; do p=$(printf %s "$p" | tr "\\\\" /); rel=${p#"$r"/}; printf "{\"path\":\"%s\"}\n" "$rel"; done' sh {root}'''"#;
 
 fn write_config(dir: &Path, glob: &str, extra: &str) -> std::path::PathBuf {
     let path = dir.join(".dirsql.toml");

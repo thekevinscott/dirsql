@@ -8,10 +8,11 @@ use std::fs;
 use dirsql::{DirSQL, Row, Value};
 use tempfile::TempDir;
 
-/// A parser that hands back the files' bodies combined into one array: each
-/// file is a one-line JSON array of row objects, so stripping its brackets and
-/// joining the bodies with commas is the table's output.
-const COMBINE_SCRIPT: &str = "#!/bin/sh\nprintf '['\nsep=''\nfor f; do\n  body=$(cat \"$f\")\n  body=${body#'['}\n  body=${body%']'}\n  if [ -n \"$body\" ]; then printf '%s%s' \"$sep\" \"$body\"; sep=','; fi\ndone\nprintf ']'\n";
+/// A parser that hands back the files' bodies one after another: each file is
+/// NDJSON of row objects, so concatenating them is the table's output.
+const COMBINE_SCRIPT: &str = "#!/bin/sh
+for f; do cat \"$f\"; echo; done
+";
 
 fn fixture() -> TempDir {
     let root = TempDir::new().unwrap();
@@ -19,12 +20,12 @@ fn fixture() -> TempDir {
     fs::create_dir_all(root.path().join("docs")).unwrap();
     fs::write(
         root.path().join("docs/a.md"),
-        r#"[{"title":"alpha","n":1}]"#,
+        r#"{"title":"alpha","n":1}"#,
     )
     .unwrap();
     fs::write(
         root.path().join("docs/b.md"),
-        r#"[{"title":"bravo","n":2}]"#,
+        r#"{"title":"bravo","n":2}"#,
     )
     .unwrap();
     root
@@ -76,7 +77,7 @@ fn a_parsed_directory_path_table_lists_one_level() {
     fs::create_dir_all(root.path().join("docs/sub")).unwrap();
     fs::write(
         root.path().join("docs/sub/c.md"),
-        r#"[{"title":"charlie","n":3}]"#,
+        r#"{"title":"charlie","n":3}"#,
     )
     .unwrap();
 
@@ -114,7 +115,7 @@ fn a_parsed_scan_honors_the_default_ignore_rules() {
     fs::create_dir_all(root.path().join("node_modules/pkg")).unwrap();
     fs::write(
         root.path().join("node_modules/pkg/dep.md"),
-        r#"[{"title":"dependency","n":9}]"#,
+        r#"{"title":"dependency","n":9}"#,
     )
     .unwrap();
 
@@ -134,7 +135,7 @@ fn a_parsed_scan_enters_node_modules_the_glob_names() {
     fs::create_dir_all(root.path().join("node_modules/pkg")).unwrap();
     fs::write(
         root.path().join("node_modules/pkg/dep.md"),
-        r#"[{"title":"dependency","n":9}]"#,
+        r#"{"title":"dependency","n":9}"#,
     )
     .unwrap();
 
@@ -158,7 +159,7 @@ fn a_file_the_parser_cannot_handle_fails_the_whole_table() {
         .to_string();
 
     assert!(
-        err.contains("not a JSON array of rows"),
+        err.contains("not one JSON object per line"),
         "the parser's output is the table's output, so one bad file fails it: {err}"
     );
 }
@@ -169,7 +170,7 @@ fn a_parser_is_spawned_in_the_index_root_and_root_names_it() {
     let root = fixture();
     fs::write(
         root.path().join("parse.sh"),
-        "printf '[{\"root\":\"%s\"}]' \"$1\"\n",
+        "printf '{\"root\":\"%s\"}' \"$1\"\n",
     )
     .unwrap();
     let db = DirSQL::builder()

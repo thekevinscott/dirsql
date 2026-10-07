@@ -87,7 +87,7 @@ on-file = "cat"
     fs::create_dir_all(root.path().join("p1")).unwrap();
     fs::write(
         root.path().join("p1").join("meta.json"),
-        r#"[{"paper_id":"a","title":"First"},{"paper_id":"b","title":"Second"}]"#,
+        "{\"paper_id\":\"a\",\"title\":\"First\"}\n{\"paper_id\":\"b\",\"title\":\"Second\"}",
     )
     .unwrap();
 
@@ -139,7 +139,7 @@ on-file = "sh abscheck.sh"
     fs::create_dir_all(root.path().join("p1")).unwrap();
     fs::write(
         root.path().join("p1").join("meta.json"),
-        r#"[{"paper_id":"a"}]"#,
+        r#"{"paper_id":"a"}"#,
     )
     .unwrap();
 
@@ -186,7 +186,7 @@ on-file = "sh abscheck.sh"
     fs::create_dir_all(configdir.path().join("data")).unwrap();
     fs::write(
         configdir.path().join("data").join("meta.json"),
-        r#"[{"paper_id":"a"}]"#,
+        r#"{"paper_id":"a"}"#,
     )
     .unwrap();
 
@@ -213,7 +213,7 @@ fn on_file_abspath_token_is_not_substituted() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("echo_args.sh"),
-        "#!/bin/sh\nprintf '[{\"q\":\"%s\"}]' \"$1\"\n",
+        "#!/bin/sh\nprintf '{\"q\":\"%s\"}' \"$1\"\n",
     )
     .unwrap();
     fs::write(
@@ -252,7 +252,7 @@ fn on_file_runs_once_with_every_matched_path_appended() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("count.sh"),
-        "#!/bin/sh\nprintf '[{\"n\":%s}]' \"$#\"\n",
+        "#!/bin/sh\nprintf '{\"n\":%s}' \"$#\"\n",
     )
     .unwrap();
     fs::write(
@@ -290,7 +290,7 @@ fn a_table_whose_command_errors_leaves_the_server_unavailable() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("extract.sh"),
-        "#!/bin/sh\nif grep -q BOOM \"$@\"; then exit 1; fi\nprintf '[{\"name\":\"ok\"}]'\n",
+        "#!/bin/sh\nif grep -q BOOM \"$@\"; then exit 1; fi\nprintf '{\"name\":\"ok\"}'\n",
     )
     .unwrap();
     fs::write(

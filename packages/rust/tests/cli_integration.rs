@@ -43,7 +43,7 @@ fn blog_fixture() -> (TempDir, DirSQL) {
 name = "posts"
 ddl = "CREATE TABLE posts (basename TEXT, size INTEGER)"
 glob = "posts/*/*.json"
-on-file = '''sh -c 'printf "["; sep=""; for f; do p=$(printf %s "$f" | tr "\\\\" /); size=$(wc -c < "$f" | tr -d " "); printf "%s{\"basename\":\"%s\",\"size\":%s}" "$sep" "${p##*/}" "$size"; sep=","; done; printf "]"' sh'''
+on-file = '''sh -c 'for f; do p=$(printf %s "$f" | tr "\\\\" /); size=$(wc -c < "$f" | tr -d " "); printf "{\"basename\":\"%s\",\"size\":%s}\n" "${p##*/}" "$size"; done' sh'''
 "#,
     )
     .unwrap();

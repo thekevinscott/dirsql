@@ -36,7 +36,7 @@ on-file = "cat"
     fs::create_dir_all(root.path().join("p1")).unwrap();
     fs::write(
         root.path().join("p1").join("meta.json"),
-        r#"[{"paper_id":"a","title":"First","basename":"meta.json"},{"paper_id":"b","title":"Second","basename":"meta.json"}]"#,
+        "{\"paper_id\":\"a\",\"title\":\"First\",\"basename\":\"meta.json\"}\n{\"paper_id\":\"b\",\"title\":\"Second\",\"basename\":\"meta.json\"}",
     )
     .unwrap();
 
@@ -67,7 +67,7 @@ fn on_file_abspath_token_is_not_substituted() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("echo_args.sh"),
-        "#!/bin/sh\nprintf '[{\"q\":\"%s\"}]' \"$1\"\n",
+        "#!/bin/sh\nprintf '{\"q\":\"%s\"}' \"$1\"\n",
     )
     .unwrap();
     fs::write(
@@ -101,7 +101,7 @@ fn on_file_runs_once_with_every_matched_path_appended() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("count.sh"),
-        "#!/bin/sh\nprintf '[{\"n\":%s}]' \"$#\"\n",
+        "#!/bin/sh\nprintf '{\"n\":%s}' \"$#\"\n",
     )
     .unwrap();
     fs::write(
@@ -182,7 +182,7 @@ on-file = "sh abscheck.sh"
 "#,
     )
     .unwrap();
-    fs::write(root.path().join("a.json"), r#"[{"name":"widget"}]"#).unwrap();
+    fs::write(root.path().join("a.json"), r#"{"name":"widget"}"#).unwrap();
 
     let db = DirSQL::builder()
         .root(root.path())
@@ -225,7 +225,7 @@ on-file = "sh abscheck.sh"
     fs::create_dir_all(root.path().join("data")).unwrap();
     fs::write(
         root.path().join("data").join("meta.json"),
-        r#"[{"name":"widget"}]"#,
+        r#"{"name":"widget"}"#,
     )
     .unwrap();
 
@@ -250,7 +250,7 @@ fn a_failing_command_fails_the_build() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("extract.sh"),
-        "#!/bin/sh\nif grep -q BOOM \"$@\"; then echo 'boom seen' >&2; exit 1; fi\nprintf '[{\"name\":\"ok\"}]'\n",
+        "#!/bin/sh\nif grep -q BOOM \"$@\"; then echo 'boom seen' >&2; exit 1; fi\nprintf '{\"name\":\"ok\"}'\n",
     )
     .unwrap();
     fs::write(
@@ -288,7 +288,7 @@ fn build_err(root: &TempDir) -> DirSqlError {
         .expect("a failed command must fail the build")
 }
 
-/// Output that is not a JSON array of objects fails the build the same way.
+/// Output that is not one JSON object per line fails the build the same way.
 #[test]
 fn malformed_output_fails_the_build() {
     let root = TempDir::new().unwrap();
@@ -314,7 +314,7 @@ on-file = "sh extract.sh"
 
     assert!(
         matches!(&err, DirSqlError::TableCommand { name, message }
-            if name == "items" && message.contains("not a JSON array of rows")),
+            if name == "items" && message.contains("not one JSON object per line")),
         "got: {err}"
     );
 }
@@ -327,7 +327,7 @@ fn a_timeout_wrapped_hook_that_overruns_fails_the_build() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("slow.sh"),
-        "#!/bin/sh\nsleep 2\nprintf '[{\"name\":\"late\"}]'\n",
+        "#!/bin/sh\nsleep 2\nprintf '{\"name\":\"late\"}'\n",
     )
     .unwrap();
     fs::write(
@@ -358,7 +358,7 @@ fn a_slow_unwrapped_hook_runs_to_completion() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("slowish.sh"),
-        "#!/bin/sh\nsleep 2\nprintf '[{\"name\":\"ok\"}]'\n",
+        "#!/bin/sh\nsleep 2\nprintf '{\"name\":\"ok\"}'\n",
     )
     .unwrap();
     fs::write(
@@ -392,7 +392,7 @@ fn a_strict_violation_fails_the_build() {
     let root = TempDir::new().unwrap();
     fs::write(
         root.path().join("gen.sh"),
-        "#!/bin/sh\nprintf '[{\"name\":\"ok\"},{\"nope\":1}]'\n",
+        "#!/bin/sh\nprintf '{\"name\":\"ok\"}\\n{\"nope\":1}'\n",
     )
     .unwrap();
     fs::write(

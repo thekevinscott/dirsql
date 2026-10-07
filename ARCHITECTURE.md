@@ -239,13 +239,13 @@ Compares old and new row sets for a file to produce `RowEvent` variants: `Insert
 Runs a configured `on-file` command once over a table's matched files: the
 command string is split into an argv (`command`), `{root}` is substituted,
 every matched absolute path is appended as a trailing argument, and the
-command's stdout is parsed as one JSON array of row objects (`infer`). There
+command's stdout is parsed as NDJSON, one JSON row object per line (`infer`). There
 is no `{path}` placeholder; a command containing one is rejected when the
 config or flag is loaded. A table whose paths exceed the platform's argument
-budget is split into the fewest consecutive runs that fit and the arrays are
+budget is split into the fewest consecutive runs that fit and the rows are
 concatenated in order; the command cannot observe the split. No paths spawns
-nothing. Any failure — spawn error, non-zero exit, empty output, or output
-that is not an array of objects — is the table's failure and fails the build,
+nothing. Any failure — spawn error, non-zero exit, or a line that is not
+a JSON object (an array is rejected by name) — is the table's failure and fails the build,
 carrying the tail of the command's stderr.
 
 Two callers share it. A `[[table]]` entry becomes a `Table::per_table` whose

@@ -24,7 +24,7 @@ fn a_clean_scan_reports_no_skipped_files() {
 name = "items"
 ddl = "CREATE TABLE items (name TEXT)"
 glob = "*.txt"
-on-file = "printf '[{\"name\":\"ok\"}]'"
+on-file = "printf '{\"name\":\"ok\"}'"
 "#,
     )
     .unwrap();

@@ -18,9 +18,9 @@ from dirsql import DirSQL
 # `on-file` hooks that emit the stat facts a row needs, one row per handed
 # path, relative to the scan root (`{root}`). Emitting a superset of the
 # DDL's columns is safe -- undeclared keys are dropped.
-_HOOK_PATH = r"""on-file = '''sh -c 'r=$1; shift; printf "["; sep=""; for p; do rel=${p#"$r"/}; printf "%s{\"path\":\"%s\"}" "$sep" "$rel"; sep=","; done; printf "]"' sh {root}'''"""
-_HOOK_PATH_BASENAME = r"""on-file = '''sh -c 'r=$1; shift; printf "["; sep=""; for p; do rel=${p#"$r"/}; printf "%s{\"path\":\"%s\",\"basename\":\"%s\"}" "$sep" "$rel" "${p##*/}"; sep=","; done; printf "]"' sh {root}'''"""
-_HOOK_STAT = r"""on-file = '''sh -c 'r=$1; shift; printf "["; sep=""; for p; do rel=${p#"$r"/}; base=${p##*/}; case "$rel" in */*) dir=${rel%/*};; *) dir="";; esac; ext=${base##*.}; [ "$ext" = "$base" ] && ext=""; size=$(wc -c < "$p" | tr -d " "); mtime=$(stat -c %Y "$p"); printf "%s{\"path\":\"%s\",\"basename\":\"%s\",\"dir\":\"%s\",\"ext\":\"%s\",\"size\":%s,\"mtime\":%s}" "$sep" "$rel" "$base" "$dir" "$ext" "$size" "$mtime"; sep=","; done; printf "]"' sh {root}'''"""
+_HOOK_PATH = r"""on-file = '''sh -c 'r=$1; shift; for p; do rel=${p#"$r"/}; printf "{\"path\":\"%s\"}\n" "$rel"; done' sh {root}'''"""
+_HOOK_PATH_BASENAME = r"""on-file = '''sh -c 'r=$1; shift; for p; do rel=${p#"$r"/}; printf "{\"path\":\"%s\",\"basename\":\"%s\"}\n" "$rel" "${p##*/}"; done' sh {root}'''"""
+_HOOK_STAT = r"""on-file = '''sh -c 'r=$1; shift; for p; do rel=${p#"$r"/}; base=${p##*/}; case "$rel" in */*) dir=${rel%/*};; *) dir="";; esac; ext=${base##*.}; [ "$ext" = "$base" ] && ext=""; size=$(wc -c < "$p" | tr -d " "); mtime=$(stat -c %Y "$p"); printf "{\"path\":\"%s\",\"basename\":\"%s\",\"dir\":\"%s\",\"ext\":\"%s\",\"size\":%s,\"mtime\":%s}\n" "$rel" "$base" "$dir" "$ext" "$size" "$mtime"; done' sh {root}'''"""
 
 
 @pytest.fixture

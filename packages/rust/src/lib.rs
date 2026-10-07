@@ -2379,7 +2379,7 @@ fn relative_path(root: &Path, path: &Path) -> String {
 ///
 /// A config-defined table runs its `on-file` command once over every matched
 /// file (see [`run_on_files`]): the command receives the absolute paths as
-/// trailing arguments and prints one JSON array of row objects on stdout,
+/// trailing arguments and prints one JSON row object per line on stdout,
 /// which becomes the table's rows verbatim. The core injects nothing — a DDL
 /// column the hook does not emit is NULL, validated against the DDL as usual.
 /// `config_dir` is the command's working directory (the config file's parent)
@@ -4573,7 +4573,7 @@ mod internal_tests {
             "name = \"a\"\n",
             "ddl = \"CREATE TABLE a (x TEXT)\"\n",
             "glob = \"*.a\"\n",
-            "on-file = \"printf '[{\\\"x\\\":1}]'\"\n\n",
+            "on-file = \"printf '{\\\"x\\\":1}'\"\n\n",
             "[[table]]\n",
             "name = \"b\"\n",
             "ddl = \"CREATE TABLE b (y TEXT)\"\n",
@@ -4767,7 +4767,7 @@ mod internal_tests {
     fn run_on_files_parses_command_json_output() {
         let dir = TempDir::new().unwrap();
         let rows = collect_on_files(
-            "printf '[{\"n\":1}]'",
+            "printf '{\"n\":1}'",
             &[dir.path().join("f.txt")],
             dir.path(),
             dir.path(),
@@ -4785,7 +4785,7 @@ mod internal_tests {
             .collect();
         let mut chunks = Vec::new();
         run_on_files(
-            r#"sh -c 'echo "[{\"n\":$#}]"' sh"#,
+            r#"sh -c 'echo "{\"n\":$#}"' sh"#,
             &paths,
             dir.path(),
             dir.path(),
@@ -4812,7 +4812,7 @@ mod internal_tests {
     fn run_on_files_does_not_substitute_abspath() {
         let dir = TempDir::new().unwrap();
         let rows = collect_on_files(
-            r#"printf '[{"q":"%s"}]%.0s' {abspath}"#,
+            r#"printf '{"q":"%s"}%.0s' {abspath}"#,
             &[dir.path().join("f.txt")],
             dir.path(),
             dir.path(),
@@ -4832,7 +4832,7 @@ mod internal_tests {
         let a = dir.path().join("a.txt");
         let b = dir.path().join("b.txt");
         collect_on_files(
-            r#"sh -c 'shift; printf "%s\n" "$@" > seen; echo "[]"' sh first"#,
+            r#"sh -c 'shift; printf "%s\n" "$@" > seen; true' sh first"#,
             &[a.clone(), b.clone()],
             dir.path(),
             dir.path(),
@@ -4850,7 +4850,7 @@ mod internal_tests {
     fn run_on_files_hands_the_hook_non_verbatim_paths_and_root() {
         let dir = TempDir::new().unwrap();
         collect_on_files(
-            r#"sh -c 'printf "%s|%s" "$2" "$1" > seen; echo "[]"' sh {root}"#,
+            r#"sh -c 'printf "%s|%s" "$2" "$1" > seen; true' sh {root}"#,
             &[PathBuf::from(r"\\?\C:\r\f.txt")],
             dir.path(),
             Path::new(r"\\?\D:\r"),
@@ -4892,7 +4892,7 @@ mod internal_tests {
         )
         .expect_err("a non-JSON payload is a failure");
         assert!(
-            error.to_string().contains("not a JSON array of rows"),
+            error.to_string().contains("not one JSON object per line"),
             "the error names the stage: {error}"
         );
     }
@@ -5575,8 +5575,8 @@ mod command_rows_tests {
     }
 
     #[test]
-    fn converts_an_array_of_row_objects() {
-        let rows = rows(r#"[{"id":"a","n":1},{"id":"b","n":2}]"#);
+    fn converts_one_row_object_per_line() {
+        let rows = rows("{\"id\":\"a\",\"n\":1}\n{\"id\":\"b\",\"n\":2}");
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["id"], Value::Text("a".into()));
         assert_eq!(rows[0]["n"], Value::Integer(1));
@@ -5585,14 +5585,14 @@ mod command_rows_tests {
     }
 
     #[test]
-    fn converts_an_empty_array_to_no_rows() {
-        assert_eq!(rows("[]"), Vec::<Row>::new());
+    fn converts_empty_output_to_no_rows() {
+        assert_eq!(rows(""), Vec::<Row>::new());
     }
 
     #[test]
     fn maps_every_json_value_type_including_nested_to_text_json() {
         let rows = rows(
-            r#"[{"nul":null,"t":true,"f":false,"i":42,"r":1.5,"s":"hi","arr":[1,2],"obj":{"k":"v"}}]"#,
+            r#"{"nul":null,"t":true,"f":false,"i":42,"r":1.5,"s":"hi","arr":[1,2],"obj":{"k":"v"}}"#,
         );
         let row = &rows[0];
         assert_eq!(row["nul"], Value::Null);
@@ -5608,7 +5608,7 @@ mod command_rows_tests {
     #[test]
     fn a_number_that_does_not_fit_i64_becomes_real() {
         // 10^19 exceeds i64::MAX but fits u64.
-        let rows = rows(r#"[{"big":10000000000000000000}]"#);
+        let rows = rows(r#"{"big":10000000000000000000}"#);
         assert!(matches!(rows[0]["big"], Value::Real(_)));
     }
 

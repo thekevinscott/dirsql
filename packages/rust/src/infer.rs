@@ -1,6 +1,6 @@
 //! Schema inference from row-object output.
 //!
-//! A parser's contract is a JSON array of row objects. This module turns a
+//! A parser's contract is one JSON row object per line. This module turns a
 //! sample of those rows into a SQLite column list, so a table can exist
 //! without the user writing DDL for it.
 //!
@@ -107,11 +107,26 @@ impl<'de> serde::Deserialize<'de> for JsonRow {
     }
 }
 
-/// Parse a parser command's payload — a JSON array of row objects — into rows
-/// that remember their key order.
-pub fn parse_rows(payload: &str) -> Result<Vec<JsonRow>, String> {
-    serde_json::from_str::<Vec<JsonRow>>(payload)
-        .map_err(|e| format!("expected a JSON array of row objects: {e}"))
+/// Parse a parser command's output — one JSON object per line (NDJSON), blank
+/// lines skipped — into rows that remember their key order.
+pub fn parse_rows(output: &str) -> Result<Vec<JsonRow>, String> {
+    let mut rows = Vec::new();
+    for (index, line) in output.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let number = index + 1;
+        if line.starts_with('[') {
+            return Err(format!(
+                "line {number} is a JSON array; print one JSON object per line instead"
+            ));
+        }
+        let row = serde_json::from_str::<JsonRow>(line)
+            .map_err(|e| format!("line {number} is not a JSON object: {e}"))?;
+        rows.push(row);
+    }
+    Ok(rows)
 }
 
 /// What the rows have said about one key so far.
@@ -218,7 +233,7 @@ mod tests {
     use super::*;
 
     fn rows(payload: &str) -> Vec<JsonRow> {
-        parse_rows(payload).expect("valid payload")
+        serde_json::from_str(payload).expect("valid payload")
     }
 
     fn names(columns: &[Column]) -> Vec<&str> {
@@ -242,7 +257,7 @@ mod tests {
 
     #[test]
     fn parse_rows_preserves_key_order_rather_than_sorting() {
-        let parsed = rows(r#"[{"zeta":1,"alpha":2}]"#);
+        let parsed = parse_rows(r#"{"zeta":1,"alpha":2}"#).unwrap();
         assert_eq!(
             parsed[0]
                 .0
@@ -254,25 +269,31 @@ mod tests {
     }
 
     #[test]
-    fn parse_rows_reads_every_element() {
-        assert_eq!(rows(r#"[{"a":1},{"b":2}]"#).len(), 2);
+    fn parse_rows_reads_every_line_skipping_blanks() {
+        assert_eq!(
+            parse_rows("{\"a\":1}\n\n  \n{\"b\":2}\n").unwrap().len(),
+            2
+        );
     }
 
     #[test]
-    fn parse_rows_accepts_an_empty_array() {
-        assert_eq!(rows("[]"), Vec::<JsonRow>::new());
+    fn parse_rows_accepts_empty_output() {
+        assert_eq!(parse_rows(""), Ok(Vec::<JsonRow>::new()));
     }
 
     #[test]
-    fn parse_rows_rejects_a_non_array_payload() {
-        let err = parse_rows(r#"{"a":1}"#).unwrap_err();
-        assert!(err.contains("array of row objects"), "got: {err}");
+    fn parse_rows_rejects_an_array_naming_the_contract() {
+        let err = parse_rows("{\"a\":1}\n[{\"a\":1}]").unwrap_err();
+        assert_eq!(
+            err,
+            "line 2 is a JSON array; print one JSON object per line instead"
+        );
     }
 
     #[test]
-    fn parse_rows_rejects_an_element_that_is_not_an_object() {
-        let err = parse_rows("[3]").unwrap_err();
-        assert!(err.contains("array of row objects"), "got: {err}");
+    fn parse_rows_rejects_a_line_that_is_not_an_object() {
+        let err = parse_rows("3").unwrap_err();
+        assert!(err.starts_with("line 1 is not a JSON object"), "got: {err}");
     }
 
     #[test]

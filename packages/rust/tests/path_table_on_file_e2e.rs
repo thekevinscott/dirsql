@@ -13,11 +13,9 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 /// A real parser: reads every file it is handed, fails loudly on a poisoned
-/// one, and otherwise prints one JSON array with a row object per file derived
+/// one, and otherwise prints a row object per file, one per line, derived
 /// from its content.
 const PARSER_SCRIPT: &str = r#"#!/bin/sh
-printf '['
-sep=''
 for f; do
   if grep -q POISON "$f"; then
     echo "poison detected in $f" >&2
@@ -25,10 +23,8 @@ for f; do
   fi
   title=$(head -n1 "$f")
   words=$(wc -w < "$f" | tr -d ' ')
-  printf '%s{"title":"%s","words":%s}' "$sep" "$title" "$words"
-  sep=','
+  printf '{"title":"%s","words":%s}\n' "$title" "$words"
 done
-printf ']\n'
 "#;
 
 /// A temp tree of markdown-like files plus an executable `parse.sh` at the

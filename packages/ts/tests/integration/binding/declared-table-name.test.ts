@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 // Emits each matched file's root-relative `path`. The absolute paths arrive
 // as trailing arguments, `{root}` is the index root.
-const pathHook = `on-file = '''sh -c 'r=$1; shift; printf "["; sep=""; for p; do rel=\${p#"$r"/}; printf "%s{\\"path\\":\\"%s\\"}" "$sep" "$rel"; sep=","; done; printf "]"' sh {root}'''`;
+const pathHook = `on-file = '''sh -c 'r=$1; shift; for p; do rel=\${p#"$r"/}; printf "{\\"path\\":\\"%s\\"}\\n" "$rel"; done' sh {root}'''`;
 
 async function seedFile(path: string, content: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });

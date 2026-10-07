@@ -185,6 +185,22 @@ pub(crate) fn run_argv(
     cwd: &Path,
     stdin_payload: Option<&[u8]>,
 ) -> Result<CommandOutput, CommandError> {
+    let stdout = run_argv_stdout(command, argv, cwd, stdin_payload)?;
+    match extract_payload(&stdout) {
+        Some(payload) => Ok(CommandOutput { payload }),
+        None => Err(CommandError::EmptyOutput {
+            command: command.to_string(),
+        }),
+    }
+}
+
+/// Run an already-built `argv` to completion and return all of its stdout.
+pub(crate) fn run_argv_stdout(
+    command: &str,
+    argv: &[String],
+    cwd: &Path,
+    stdin_payload: Option<&[u8]>,
+) -> Result<String, CommandError> {
     // `build_argv` guarantees a non-empty argv.
     let mut cmd = Command::new(&argv[0]);
     push_args(&mut cmd, &argv[1..]);
@@ -252,13 +268,7 @@ pub(crate) fn run_argv(
         });
     }
 
-    let stdout = String::from_utf8_lossy(&stdout);
-    match extract_payload(&stdout) {
-        Some(payload) => Ok(CommandOutput { payload }),
-        None => Err(CommandError::EmptyOutput {
-            command: command.to_string(),
-        }),
-    }
+    Ok(String::from_utf8_lossy(&stdout).into_owned())
 }
 
 // One fn with cfg blocks rather than two cfg'd fns: cargo-mutants mutates
@@ -713,6 +723,14 @@ mod tests {
     fn run_command_returns_last_nonempty_stdout_line() {
         let out = run_command("sh -c 'echo chatter; echo PAYLOAD'", &[], &cwd(), None).unwrap();
         assert_eq!(out.payload, "PAYLOAD");
+    }
+
+    #[test]
+    fn run_argv_stdout_returns_all_of_stdout_and_allows_none() {
+        let argv = |script: &str| vec!["sh".to_string(), "-c".to_string(), script.to_string()];
+        let all = run_argv_stdout("t", &argv("echo a; echo b"), &cwd(), None).unwrap();
+        assert_eq!(all, "a\nb\n");
+        assert_eq!(run_argv_stdout("t", &argv("true"), &cwd(), None).unwrap(), "");
     }
 
     #[test]

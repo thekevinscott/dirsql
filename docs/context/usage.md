@@ -44,7 +44,7 @@ Every row has `path`, `basename`, `dir`, `ext` (no dot, `NULL` when absent), `si
 
 1. A path-table, as above. Fits a question you ask once.
 2. The same tree queried repeatedly, or a parser you want to keep: declare a table in a `.dirsql.toml` and pass it with `-c .dirsql.toml`. See [config](https://dirsql.dev/reference/config).
-3. One row per record inside each file, inline: `--on-file <command>` attaches a parser to every path-table in the query, and its output replaces the stat columns. See [hooks](https://dirsql.dev/reference/hooks).
+3. One row per record inside each file, inline: `--on-file <command>` attaches a parser to every path-table in the query. The parser prints one JSON object per line (NDJSON, never an array), and its output replaces the stat columns. See [hooks](https://dirsql.dev/reference/hooks).
 4. Search by meaning: `uvx --with dirsql-plugin-embeddings dirsql "<sql>" --format json` adds `embed()` and `vec_distance_cosine()`. See [search by meaning](https://dirsql.dev/howto/search-by-meaning).
 
 ### Read-only

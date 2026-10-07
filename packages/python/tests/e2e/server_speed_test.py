@@ -48,12 +48,10 @@ on-file = "python3 rows.py"
 ROWS = """\
 import json, sys
 
-out = []
 for path in sys.argv[1:]:
     for line in open(path, encoding="utf-8"):
         i, k, v, body = line.rstrip("\\n").split("\\t")
-        out.append({"id": int(i), "k": k, "v": int(v), "body": body})
-print(json.dumps(out))
+        print(json.dumps({"id": int(i), "k": k, "v": int(v), "body": body}))
 """
 
 

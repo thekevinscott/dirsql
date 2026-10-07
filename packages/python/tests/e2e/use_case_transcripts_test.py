@@ -73,10 +73,9 @@ def rows(path):
 
 
 if __name__ == "__main__":
-    out = []
     for path in sys.argv[1:]:
-        out.extend(rows(path))
-    print(json.dumps(out))
+        for row in rows(path):
+            print(json.dumps(row))
 """
 
 COUNT = """\

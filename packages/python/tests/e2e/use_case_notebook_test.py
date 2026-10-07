@@ -31,14 +31,10 @@ QUERY = "SELECT date, words FROM './notebook.md' ORDER BY date DESC LIMIT 5"
 EXTRACT = """\
 import json, re, sys
 
-rows = []
 for path in sys.argv[1:]:
     text = open(path, encoding="utf-8").read()
-    rows += [
-        {"date": date, "body": body.strip(), "words": len(body.split())}
-        for date, body in re.findall(r"^## (\\d{4}-\\d\\d-\\d\\d)\\n(.*?)(?=^## |\\Z)", text, re.S | re.M)
-    ]
-print(json.dumps(rows))
+    for date, body in re.findall(r"^## (\\d{4}-\\d\\d-\\d\\d)\\n(.*?)(?=^## |\\Z)", text, re.S | re.M):
+        print(json.dumps({"date": date, "body": body.strip(), "words": len(body.split())}))
 """
 
 TOP_FIVE = (

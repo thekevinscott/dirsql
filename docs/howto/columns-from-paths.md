@@ -17,19 +17,17 @@ photos/2025/01/snow.jpg
 
 Write a small parser, `pathcols.py`, that turns each path into a row. It
 receives the matched files' absolute paths as its arguments and prints one
-JSON array of row objects:
+JSON object per line, one row each:
 
 ```python
 #!/usr/bin/env python3
 import json, os, sys
 
-rows = []
 for path in sys.argv[1:]:
     parts = path.split(os.sep)
     # .../photos/<year>/<month>/<file>
-    rows.append({"year": parts[-3], "month": parts[-2],
-                 "basename": os.path.basename(path)})
-print(json.dumps(rows))
+    print(json.dumps({"year": parts[-3], "month": parts[-2],
+                     "basename": os.path.basename(path)}))
 ```
 
 Point a table at it in `.dirsql.toml`:

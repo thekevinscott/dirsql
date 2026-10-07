@@ -27,15 +27,11 @@ import dirsql as _dirsql_pkg
 _BINARY_STAGE_DIR = os.path.join(os.path.dirname(_dirsql_pkg.__file__), "_binary")
 
 _PARSER = """#!/bin/sh
-printf '['
-sep=""
 for f; do
   if grep -q POISON "$f"; then echo "poison in $f" >&2; exit 7; fi
   title=$(head -n1 "$f" | sed 's/^# //')
-  printf '%s{"title":"%s"}' "$sep" "$title"
-  sep=","
+  printf '{"title":"%s"}\\n' "$title"
 done
-printf ']\\n'
 """
 
 

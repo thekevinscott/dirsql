@@ -445,8 +445,8 @@ public-API binding, so no drift.
   binding, so the removal is identical across every install — no drift.
 
 - **`--on-file` (path-table parser, #631).** A `dirsql query` flag naming a
-  command that supplies every path-table's rows and schema (a JSON array of row
-  objects; the `on-file` hook contract — argv splitting, `{root}`, trailing
+  command that supplies every path-table's rows and schema (one JSON row object
+  per line; the `on-file` hook contract — argv splitting, `{root}`, trailing
   paths, a failed command fails the query). The stat columns are not
   reachable on a parsed path-table; parsed scans honor the same skip rules stat
   scans do. Threaded through the shared Rust core (`db::Db::set_path_table_parser`

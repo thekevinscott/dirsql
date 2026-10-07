@@ -25,11 +25,11 @@ use tempfile::TempDir;
 /// A hook that exits non-zero when any file it is handed contains `BOOM`, and
 /// otherwise emits one row. Kept in a script rather than inline TOML to
 /// sidestep nested-quote parsing.
-const EXTRACT: &str = "#!/bin/sh\nif grep -q BOOM \"$@\"; then echo \"cannot read $1\" >&2; exit 1; fi\nprintf '[{\"name\":\"ok\"}]'\n";
+const EXTRACT: &str = "#!/bin/sh\nif grep -q BOOM \"$@\"; then echo \"cannot read $1\" >&2; exit 1; fi\nprintf '{\"name\":\"ok\"}'\n";
 
 /// A hook that emits a row with an unexpected column alongside a good one.
 /// Under `strict = true` that row fails normalization.
-const STRICTGEN: &str = "#!/bin/sh\nprintf '[{\"name\":\"ok\"},{\"nope\":1}]'\n";
+const STRICTGEN: &str = "#!/bin/sh\nprintf '{\"name\":\"ok\"}\\n{\"nope\":1}'\n";
 
 fn fixture(script: &str, config: &str) -> TempDir {
     let root = TempDir::new().unwrap();

@@ -15,7 +15,7 @@ fn write_config(dir: &Path, glob: &str) -> std::path::PathBuf {
     fs::write(
         &path,
         format!(
-            "[[table]]\nname = \"sessions\"\nddl = \"CREATE TABLE sessions (n TEXT)\"\nglob = \"{glob}\"\non-file = \"printf []\"\n"
+            "[[table]]\nname = \"sessions\"\nddl = \"CREATE TABLE sessions (n TEXT)\"\nglob = \"{glob}\"\non-file = \"true\"\n"
         ),
     )
     .unwrap();

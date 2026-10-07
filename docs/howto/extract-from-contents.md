@@ -3,8 +3,8 @@
 Paths and stat metadata only get you so far — when the columns you want live
 *inside* the files (JSON fields, frontmatter, log lines), add an
 [`on-file`](../reference/config.md#table) command: it runs once for the
-table, with every matched file as an argument, and the JSON array it prints
-becomes the table's rows.
+table, with every matched file as an argument, and the JSON objects it prints,
+one per line, become the table's rows.
 
 ## 1. Point a command at the files
 
@@ -14,19 +14,19 @@ Suppose each book is a JSON file:
 {"title": "Middlemarch", "author": "George Eliot", "year": 1871}
 ```
 
-Any program that reads the files named by its arguments and prints a **JSON
-array of row objects** on stdout works. With [`jq`](https://jqlang.org/):
+Any program that reads the files named by its arguments and prints **one JSON
+object per line** on stdout works. With [`jq`](https://jqlang.org/):
 
 ```toml
 [[table]]
 name = "books"
 ddl     = "CREATE TABLE books (title TEXT, author TEXT, year INTEGER)"
 glob    = "books/*.json"
-on-file = "jq -c -n '[inputs | {title, author, year}]'"
+on-file = "jq -c '{title, author, year}'"
 ```
 
 The command runs once for the table, with every matched file's absolute path
-appended as an argument, and prints one array for all of them — the
+appended as an argument, and prints one object per line for all of them — the
 [command hook contract](../reference/hooks.md#on-file), which also covers
 the argv splitting, working directory, and stdout protocol shared by every
 hook.
@@ -50,15 +50,15 @@ The table's columns are exactly what the command emits, narrowed to the DDL —
 
 ## Multiple rows per file
 
-Each object in the printed array is one row. To turn a JSONL file into one
-row per line, slurp it:
+Each printed line is one row. A JSONL file is already one row per line, so
+project the fields you want:
 
 ```toml
 [[table]]
 name = "events"
 ddl     = "CREATE TABLE events (event TEXT, user TEXT)"
 glob    = "logs/*.jsonl"
-on-file = "jq -c -s '.'"
+on-file = "jq -c '{event, user}'"
 ```
 
 ```bash
@@ -72,12 +72,12 @@ dirsql query "SELECT event, user FROM events" -c ./.dirsql.toml
 ## When the command fails
 
 The command runs once for the whole table, so its failure is the table's: a
-non-zero exit, no output, or output that is not a JSON array of objects fails
-the build, and `dirsql query` exits `1` with the command's stderr tail on
+non-zero exit, or output that is not one JSON object per line (an array
+is rejected) fails the build, and `dirsql query` exits `1` with the command's stderr tail on
 stderr and nothing on stdout.
 
 ```
-dirsql query: failed to load config: table `books`: on-file command failed: command `jq -c -n '[inputs | {title, author, year}]'` failed (exit 5): jq: error (at /home/me/library/books/broken.json:1): Cannot index string with string "title"
+dirsql query: failed to load config: table `books`: on-file command failed: command `jq -c '{title, author, year}'` failed (exit 5): jq: error (at /home/me/library/books/broken.json:1): Cannot index string with string "title"
 ```
 
 A file the command cannot parse is the command's to handle — skip it, or

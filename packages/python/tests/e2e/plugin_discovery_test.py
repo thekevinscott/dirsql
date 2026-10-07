@@ -33,7 +33,7 @@ _BINARY_STAGE_DIR = os.path.join(os.path.dirname(_dirsql_pkg.__file__), "_binary
 
 # An `on-file` hook emitting `path` and `basename` for every handed path,
 # relative to the scan root (`{root}`).
-_HOOK_PATH_BASENAME = r"""on-file = '''sh -c 'r=$1; shift; printf "["; sep=""; for p; do rel=${p#"$r"/}; printf "%s{\"path\":\"%s\",\"basename\":\"%s\"}" "$sep" "$rel" "${p##*/}"; sep=","; done; printf "]"' sh {root}'''"""
+_HOOK_PATH_BASENAME = r"""on-file = '''sh -c 'r=$1; shift; for p; do rel=${p#"$r"/}; printf "{\"path\":\"%s\",\"basename\":\"%s\"}\n" "$rel" "${p##*/}"; done' sh {root}'''"""
 
 
 def _stage_plugin(site_dir, data_dir):

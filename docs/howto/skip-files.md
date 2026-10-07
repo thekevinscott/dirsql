@@ -25,7 +25,7 @@ ignore = ["notes/drafts/**", "**/*.tmp"]
 name = "notes"
 ddl     = "CREATE TABLE notes (basename TEXT)"
 glob    = "notes/**/*"
-on-file = '''sh -c 'printf "["; sep=""; for p; do printf "%s{\"basename\":\"%s\"}" "$sep" "${p##*/}"; sep=","; done; printf "]"' sh'''
+on-file = '''sh -c 'for p; do printf "{\"basename\":\"%s\"}\n" "${p##*/}"; done' sh'''
 ```
 
 Patterns match against root-relative paths, the same way table globs do. An

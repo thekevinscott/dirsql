@@ -152,22 +152,16 @@ That parser is the point: a named table's columns are exactly what its
 `on-file` command emits. `dirsql` adds nothing on its own — so this is where
 you pull a value out of each file. Still inside `my-notes`, write a tiny
 parser that reads a note's title line (the `# Heading`) and its author (the
-folder name), and prints them as a JSON row:
+folder name), and prints them as a JSON row, one object per line:
 
 ```bash
 cat > note.sh <<'EOF'
 #!/usr/bin/env sh
-printf '['
-sep=''
 for f; do
   title=$(sed -n 's/^# //p' "$f" | head -n1)
   author=$(basename "$(dirname "$f")")
-  printf '%s{"title":%s,"author":%s}' "$sep" \
-    "$(jq -Rn --arg t "$title" '$t')" \
-    "$(jq -Rn --arg a "$author" '$a')"
-  sep=','
+  jq -cn --arg t "$title" --arg a "$author" '{title: $t, author: $a}'
 done
-printf ']'
 EOF
 ```
 
@@ -189,7 +183,7 @@ Three keys define the table:
   `notes/`, relative to the directory the config sits in.
 - `ddl` is ordinary `CREATE TABLE` SQL naming the columns you want to keep.
 - `on-file` is the command run once for the table, with every matched file's
-  path appended as an argument; the JSON array it prints is the table's rows.
+  path appended as an argument; the JSON objects it prints, one per line, are the table's rows.
   The columns are exactly what it emits — `title` from the heading, `author`
   from the folder.
 
