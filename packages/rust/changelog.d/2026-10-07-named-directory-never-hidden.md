@@ -1,0 +1,1 @@
+**Fixed** A named directory is never hidden by `.gitignore`, with or without a trailing slash, in path-tables and config globs: with `dist/` gitignored, `./dist`, `./dist/` and a config `glob = "dist"` all list the files directly inside it.

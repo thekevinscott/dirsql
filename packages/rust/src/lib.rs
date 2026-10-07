@@ -1945,7 +1945,7 @@ struct PersistContext {
     needs_sweep: bool,
 }
 
-type GroupDraft = (PathBuf, Vec<String>, Vec<(String, String)>);
+type GroupDraft = (PathBuf, Vec<String>, Vec<(String, String)>, Vec<String>);
 
 /// Walk every group's anchor in turn, reporting one running count across all of
 /// them. Returns the matches and the total count.
@@ -1995,18 +1995,27 @@ fn compile_groups(
             path_table::directory_as_glob(&table.glob, &anchor, &|p| p.is_dir()),
             table_name.clone(),
         );
+        let named = path_table::named_directory(&table.glob, &anchor, &|p| p.is_dir());
         match grouped
             .iter_mut()
-            .find(|(a, i, _)| *a == anchor && *i == table.ignore)
+            .find(|(a, i, _, _)| *a == anchor && *i == table.ignore)
         {
-            Some((_, _, mappings)) => mappings.push(mapping),
-            None => grouped.push((anchor, table.ignore.clone(), vec![mapping])),
+            Some((_, _, mappings, dirs)) => {
+                mappings.push(mapping);
+                dirs.extend(named);
+            }
+            None => grouped.push((
+                anchor,
+                table.ignore.clone(),
+                vec![mapping],
+                named.into_iter().collect(),
+            )),
         }
         names.push(table_name);
     }
 
     let mut groups = Vec::with_capacity(grouped.len());
-    for (anchor, scoped_ignore, mappings) in grouped {
+    for (anchor, scoped_ignore, mappings, named_dirs) in grouped {
         let ignore_refs: Vec<&str> = ignore_patterns
             .iter()
             .chain(&scoped_ignore)
@@ -2016,8 +2025,9 @@ fn compile_groups(
             .iter()
             .map(|(g, n)| (g.as_str(), n.as_str()))
             .collect();
-        let matcher =
-            TableMatcher::new(&mapping_refs, &ignore_refs).map_err(DirSqlError::matcher)?;
+        let matcher = TableMatcher::new(&mapping_refs, &ignore_refs)
+            .map_err(DirSqlError::matcher)?
+            .with_named_dirs(&named_dirs);
         groups.push(AnchorGroup {
             watch_anchor: anchor.clone(),
             anchor,
