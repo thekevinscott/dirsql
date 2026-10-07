@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_gitignore_test.py tests/e2e/glob_speed_one_level_test.py tests/e2e/query_contract_test.py tests/e2e/fanout_test.py -x -q",
+  "ran_at": 1791406385,
+  "exit_code": 0,
+  "commit": "e201e3c27cb3c33ed16a725e23a55ebd8b6a8d7b",
+  "branch": "bot/1451-named-dir-never-hidden"
+}
