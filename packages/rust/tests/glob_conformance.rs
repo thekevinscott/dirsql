@@ -14,7 +14,6 @@ use tempfile::TempDir;
 struct Row {
     pattern: String,
     expected: Vec<String>,
-    divergence: String,
 }
 
 fn page() -> String {
@@ -54,7 +53,6 @@ fn rows(page: &str) -> Vec<Row> {
             Row {
                 pattern: backticked(cells[0]).remove(0),
                 expected: backticked(cells[1]),
-                divergence: cells[2].to_string(),
             }
         })
         .collect()
@@ -165,8 +163,7 @@ fn every_row_of_the_glob_page_holds() {
                 row.pattern
             ));
         }
-        if row.divergence != "absolute" {
-            let glob = pattern.strip_prefix("./").unwrap();
+        if let Some(glob) = pattern.strip_prefix("./") {
             let got = config_paths(&root, glob);
             // A config table sees each file once, by its own path.
             let expected: Vec<String> = expected.iter().map(|p| p.replace("//", "/")).collect();

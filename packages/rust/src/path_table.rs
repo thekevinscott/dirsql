@@ -125,6 +125,9 @@ fn resolve_as<S: Syntax>(
     if let Some(rest) = target.strip_prefix("./") {
         return Resolution::Table(split_relative(index_root, rest, is_dir));
     }
+    if target.starts_with("../") {
+        return Resolution::Table(split_relative(index_root, &target, is_dir));
+    }
 
     match absolute_target::<S>(&target, index_root, home) {
         Some(Some(target)) => Resolution::Table(split_absolute(&target, is_dir)),
@@ -515,8 +518,9 @@ mod tests {
     #[test]
     fn a_parent_relative_trailing_slash_after_a_glob_is_a_star_appended() {
         let t = table("../*/", &nothing_is_a_dir);
-        assert_eq!(t.root, Path::new("/"));
+        assert_eq!(t.root, Path::new(ROOT).join(".."));
         assert_eq!(t.glob, "*/*");
+        assert_eq!(t.path_prefix, "..");
     }
 
     #[test]
@@ -641,8 +645,9 @@ mod tests {
     #[test]
     fn a_parent_relative_directory_lists_one_level() {
         let t = table("../notes", &everything_is_a_dir);
-        assert_eq!(t.root, Path::new("/notes"));
+        assert_eq!(t.root, Path::new(ROOT).join("../notes"));
         assert_eq!(t.glob, "*");
+        assert_eq!(t.path_prefix, "../notes");
     }
 
     #[test]
@@ -677,32 +682,33 @@ mod tests {
     #[test]
     fn a_parent_relative_path_resolves_against_the_index_root() {
         let t = table("../notes/*.md", &nothing_is_a_dir);
-        assert_eq!(t.root, Path::new("/notes"));
+        assert_eq!(t.root, Path::new(ROOT).join("../notes"));
         assert_eq!(t.glob, "*.md");
+        assert_eq!(t.path_prefix, "../notes");
     }
 
     #[test]
-    fn a_parent_relative_path_folds_repeated_parents() {
+    fn a_parent_relative_path_keeps_repeated_parents_as_written() {
         let t = resolve("../../a/*.md", Path::new("/x/y/z"), None, &nothing_is_a_dir);
         assert_eq!(
             t,
             Resolution::Table(PathTable {
-                root: PathBuf::from("/x/a"),
+                root: PathBuf::from("/x/y/z").join("../../a"),
                 glob: "*.md".to_string(),
-                path_prefix: "/x/a".to_string(),
+                path_prefix: "../../a".to_string(),
             })
         );
     }
 
     #[test]
-    fn a_parent_relative_path_past_the_filesystem_root_stops_there() {
+    fn a_parent_relative_path_past_the_filesystem_root_is_kept_as_written() {
         let t = resolve("../../*.md", Path::new("/x"), None, &nothing_is_a_dir);
         assert_eq!(
             t,
             Resolution::Table(PathTable {
-                root: PathBuf::from("/"),
+                root: PathBuf::from("/x").join("../.."),
                 glob: "*.md".to_string(),
-                path_prefix: "/".to_string(),
+                path_prefix: "../..".to_string(),
             })
         );
     }
@@ -933,7 +939,7 @@ mod tests {
         }
 
         #[test]
-        fn a_parent_relative_path_resolves_against_the_index_root() {
+        fn a_parent_relative_path_keeps_repeated_parents_as_written() {
             let t = resolve_as::<Utf8WindowsEncoding>(
                 "../../a/*.md",
                 Path::new(r"C:\x\y\z"),
@@ -943,15 +949,15 @@ mod tests {
             assert_eq!(
                 t,
                 Resolution::Table(PathTable {
-                    root: PathBuf::from(r"C:\x\a"),
+                    root: PathBuf::from(r"C:\x\y\z").join("../../a"),
                     glob: "*.md".to_string(),
-                    path_prefix: "C:/x/a".to_string(),
+                    path_prefix: "../../a".to_string(),
                 })
             );
         }
 
         #[test]
-        fn a_parent_relative_path_past_the_drive_root_stops_there() {
+        fn a_parent_relative_path_past_the_drive_root_is_kept_as_written() {
             let t = resolve_as::<Utf8WindowsEncoding>(
                 "../../*.md",
                 Path::new(r"C:\x"),
@@ -961,9 +967,9 @@ mod tests {
             assert_eq!(
                 t,
                 Resolution::Table(PathTable {
-                    root: PathBuf::from(r"C:\"),
+                    root: PathBuf::from(r"C:\x").join("../.."),
                     glob: "*.md".to_string(),
-                    path_prefix: "C:/".to_string(),
+                    path_prefix: "../..".to_string(),
                 })
             );
         }

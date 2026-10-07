@@ -109,19 +109,15 @@ Three other prefixes resolve, with their usual shell meanings:
 | You write | dirsql scans |
 | --- | --- |
 | `'/var/log/*.log'` | an absolute path |
-| `'../notes'` | relative to the index root's parent |
+| `'../notes'` | relative to the index root's parent, as written |
 | `'~/notes/*.md'` | relative to your home directory |
 
 A directory named this way is one level too; `'../notes/**'` descends. The
 trailing-`/` rule holds here as well: `'~/*/'` is `'~/*/*'`.
-`..` is folded out textually, not followed through symlinks, so the directory
-scanned is a function of the string you wrote.
-
-**These report absolute `path` values.** A `./` path-table reports paths
-relative to the index root, matching every other dirsql table; a `/`, `../` or
-`~/` path-table has no meaningful relative base — the root it scans is derived
-from the pattern, not named by you — so it reports the full path instead. The
-value you get back is one you can paste into another command:
+**A `../` path-table reports `path` as written**, relative to the directory
+dirsql runs in, as bash prints it: `'../notes/*.md'` gives `../notes/a.md`. A
+`/` or `~/` path-table is absolute already, so it reports the full path. Either
+value is one you can paste into another command:
 
 ```sql
 SELECT path FROM '/var/log/*.log';
@@ -144,7 +140,7 @@ table:
 
 | Column | Type | Meaning |
 | --- | --- | --- |
-| `path` | TEXT | path relative to the index root (absolute for `/`, `../`, `~/` tables) |
+| `path` | TEXT | path relative to the index root (as written for `../` tables, absolute for `/` and `~/` tables) |
 | `basename` | TEXT | filename with extension |
 | `dir` | TEXT | parent directory, relative to the index root |
 | `ext` | TEXT | extension without the dot |

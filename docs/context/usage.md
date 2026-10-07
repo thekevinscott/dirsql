@@ -22,7 +22,7 @@ A quoted path stands in for a table name. Paths are relative to the directory yo
 | `'./**/*.md'` | markdown at any depth |
 | `'./notes/today.md'` | that one file |
 
-`*` matches within one directory level and `**` matches any depth. A directory name lists one level, like `ls docs`, so write `'./**'` to scan the whole tree. Rows are files only, never directories. `'/var/log/*.log'`, `'../notes'` and `'~/notes/*.md'` also resolve; those report absolute `path` values.
+`*` matches within one directory level and `**` matches any depth. A directory name lists one level, like `ls docs`, so write `'./**'` to scan the whole tree. Rows are files only, never directories. `'/var/log/*.log'`, `'../notes'` and `'~/notes/*.md'` also resolve; `path` is reported as written, so `'../notes'` gives `../notes/x.md` and the others give absolute paths.
 
 Two mistakes fail every time:
 
