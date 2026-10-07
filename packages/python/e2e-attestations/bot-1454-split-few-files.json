@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/declared_table_name_test.py tests/e2e/fanout_test.py tests/e2e/extension_package_test.py tests/e2e/frontmatter_parse_speed_test.py tests/e2e/jsonl_parse_speed_test.py tests/e2e/plugin_extension_discovery_test.py tests/e2e/on_file_query_test.py tests/e2e/sigint_interrupt_test.py tests/e2e/use_case_notebook_test.py tests/e2e/server_speed_test.py tests/e2e/query_contract_test.py tests/e2e/plugin_discovery_test.py tests/e2e/use_case_transcripts_test.py  -q",
+  "ran_at": 1791411055,
+  "exit_code": 0,
+  "commit": "7a93d0b97fe085a269b90d2b75c2a0aa22511c18",
+  "branch": "bot/1454-split-few-files"
+}

@@ -163,7 +163,7 @@ table's paths outgrow that cap, dirsql splits them into the fewest
 consecutive runs that fit, runs the command once per run, and concatenates
 the rows it prints. Runs execute concurrently, one per CPU at most, like
 `xargs -P`, so rows keep their order within a run but not across runs; SQL
-never promised row order, so `ORDER BY` what you need. The command cannot tell: each run is an
+never promised row order, so `ORDER BY` what you need. A table whose paths fit one run is also split, by file size, into up to one run per CPU once it holds at least 4 MiB of file data per run, so a few large files do not serialize behind one process. The command cannot tell: each run is an
 ordinary invocation with a subset of the paths. A command must therefore not
 assume one invocation sees every path — a count, a cross-file join, or a
 dedupe over `sys.argv[1:]` is per run, not per table. Do that work in SQL.

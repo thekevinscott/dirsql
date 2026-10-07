@@ -1,0 +1,1 @@
+**Changed** An `on-file` table with a few large files now runs its command over up to one run per CPU, split by file size at 4 MiB of data per run, instead of one run over all of them. Small tables still use one run.
