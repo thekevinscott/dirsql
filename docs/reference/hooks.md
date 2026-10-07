@@ -161,7 +161,9 @@ on-file command `python3 extract.py {path}` uses `{path}`, but an on-file comman
 Every platform caps the bytes one process may receive as arguments. When a
 table's paths outgrow that cap, dirsql splits them into the fewest
 consecutive runs that fit, runs the command once per run, and concatenates
-the rows it prints, in order. The command cannot tell: each run is an
+the rows it prints. Runs execute concurrently, one per CPU at most, like
+`xargs -P`, so rows keep their order within a run but not across runs; SQL
+never promised row order, so `ORDER BY` what you need. The command cannot tell: each run is an
 ordinary invocation with a subset of the paths. A command must therefore not
 assume one invocation sees every path — a count, a cross-file join, or a
 dedupe over `sys.argv[1:]` is per run, not per table. Do that work in SQL.

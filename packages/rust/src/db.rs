@@ -368,6 +368,10 @@ impl Db {
     /// tmpfs mount.
     pub fn new() -> Result<Self> {
         let conn = Connection::open("")?;
+        // The database is a private temp file that dies with the process, so
+        // durability buys nothing; a larger cache keeps a big scan in memory.
+        conn.pragma_update(None, "synchronous", "OFF")?;
+        conn.pragma_update(None, "cache_size", -65536)?;
         ensure_internal_rows_table(&conn)?;
         let scope = StatementScope::new();
         vtab::load_module(&conn, Arc::clone(&scope))?;
@@ -2064,6 +2068,18 @@ mod tests {
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .unwrap();
         assert_eq!(mode, "delete");
+    }
+
+    #[test]
+    fn new_skips_fsync_and_sizes_its_page_cache_to_64_mib() {
+        let db = Db::new().unwrap();
+        let pragma = |name: &str| -> i64 {
+            db.conn()
+                .query_row(&format!("PRAGMA {name}"), [], |row| row.get(0))
+                .unwrap()
+        };
+        assert_eq!(pragma("synchronous"), 0);
+        assert_eq!(pragma("cache_size"), -65536);
     }
 
     #[test]
