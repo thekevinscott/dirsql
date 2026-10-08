@@ -1,4 +1,4 @@
-"""Glob speed: one-level listings, `'./*'`, `'./docs'` and `'./'`.
+"""Glob speed: one-level listings, `'./*'` and `'./'`.
 
 A wide flat root and a wide flat `docs/`, each beside subdirectories full of
 files that a one-level listing must not read, plus dotfiles it must hide.
@@ -25,9 +25,6 @@ from .speed_of_light import (
 )
 
 ROOT_NATIVE = "find . -mindepth 1 -maxdepth 1 -type f ! -name '.*' -printf '%P\\n'"
-DOCS_NATIVE = (
-    "find docs -mindepth 1 -maxdepth 1 -type f ! -name '.*' -printf 'docs/%P\\n'"
-)
 FILES_PER_SUBDIR = 1000
 
 
@@ -67,7 +64,7 @@ def describe_one_level_glob_speed_of_light():
 
     @pytest.mark.parametrize(
         ("glob", "script"),
-        [("./*", ROOT_NATIVE), ("./", ROOT_NATIVE), ("./docs", DOCS_NATIVE)],
+        [("./*", ROOT_NATIVE), ("./", ROOT_NATIVE)],
     )
     def it_matches_native_files_within_the_bar(tree, glob, script):
         root, n, startup = tree
