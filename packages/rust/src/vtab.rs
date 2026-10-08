@@ -1155,4 +1155,22 @@ mod tests {
         let size = std::mem::size_of::<FileRow>();
         assert!(size <= 112, "a FileRow is {size} bytes");
     }
+    #[test]
+    fn a_content_column_reads_the_file_through_the_module() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.md"), "hi").unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        load_module(&conn, StatementScope::new()).unwrap();
+        conn.execute_batch(&format!(
+            "CREATE VIRTUAL TABLE t USING dirsql_path('{}', '*.md', '', 'no-gitignore')",
+            dir.path().display()
+        ))
+        .unwrap();
+
+        let content: String = conn
+            .query_row("SELECT content FROM t", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(content, "hi");
+    }
 }
