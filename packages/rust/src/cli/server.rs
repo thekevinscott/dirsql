@@ -108,7 +108,16 @@ fn start_watch_task(db: DirSQL, tx: broadcast::Sender<String>) -> Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Table;
+
+    fn db_with_a_table(root: &std::path::Path) -> DirSQL {
+        let config = root.join("dirsql.toml");
+        std::fs::write(
+            &config,
+            "[[table]]\nname = \"t\"\nddl = \"CREATE TABLE t (x TEXT)\"\nglob = \"*.none\"\non-file = \"true\"\n",
+        )
+        .unwrap();
+        DirSQL::builder().root(root).config(config).build().unwrap()
+    }
 
     // An `Unavailable` state needs no DB/filesystem, so the real bind /
     // graceful-shutdown plumbing runs without standing up an index.
@@ -131,16 +140,7 @@ mod tests {
     #[tokio::test]
     async fn serve_with_a_ready_db_attaches_the_watcher_then_shuts_down() {
         let dir = tempfile::tempdir().unwrap();
-        let db = DirSQL::new(
-            dir.path(),
-            vec![Table::new(
-                "t",
-                "CREATE TABLE t (x TEXT)",
-                "*.none",
-                |_| vec![],
-            )],
-        )
-        .unwrap();
+        let db = db_with_a_table(dir.path());
         let config = ServerConfig::bind("127.0.0.1".to_string(), 0);
         let handle = serve(config, db).await.expect("bind on an ephemeral port");
         assert_ne!(handle.local_addr().port(), 0);
@@ -150,16 +150,7 @@ mod tests {
     #[tokio::test]
     async fn start_watch_task_reports_no_failure_once_the_watcher_attaches() {
         let dir = tempfile::tempdir().unwrap();
-        let db = DirSQL::new(
-            dir.path(),
-            vec![Table::new(
-                "t",
-                "CREATE TABLE t (x TEXT)",
-                "*.none",
-                |_| vec![],
-            )],
-        )
-        .unwrap();
+        let db = db_with_a_table(dir.path());
         let (tx, _) = broadcast::channel::<String>(1);
         assert_eq!(start_watch_task(db, tx), None);
     }
@@ -181,16 +172,7 @@ mod tests {
     #[tokio::test]
     async fn start_watch_task_returns_the_reason_when_the_watcher_cannot_attach() {
         let dir = tempfile::tempdir().unwrap();
-        let db = DirSQL::new(
-            dir.path(),
-            vec![Table::new(
-                "t",
-                "CREATE TABLE t (x TEXT)",
-                "*.none",
-                |_| vec![],
-            )],
-        )
-        .unwrap();
+        let db = db_with_a_table(dir.path());
         db.poll_events(std::time::Duration::ZERO).unwrap();
         let (tx, _) = broadcast::channel::<String>(1);
         let reason = start_watch_task(db, tx).expect("watch() must fail");
