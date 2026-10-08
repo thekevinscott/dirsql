@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_one_level_test.py -x -q -rA",
+  "ran_at": 1791492173,
+  "exit_code": 0,
+  "commit": "ce22059009267d7759e47aa47cba10e28fd6543c",
+  "branch": "bot/1462-paired-speed-harness-1008"
+}
