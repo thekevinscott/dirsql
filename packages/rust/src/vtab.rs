@@ -1142,4 +1142,10 @@ mod tests {
         assert_eq!(epoch_secs(Some(t)), None);
         assert_eq!(epoch_secs(None), None);
     }
+
+    #[test]
+    fn a_row_not_yet_stat_or_read_stays_compact() {
+        let size = std::mem::size_of::<FileRow>();
+        assert!(size <= 112, "a FileRow is {size} bytes");
+    }
 }
