@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/server_speed_test.py tests/e2e/query_contract_test.py tests/e2e/sigint_interrupt_test.py tests/e2e/cli_version_test.py -x -q",
+  "ran_at": 1791474667,
+  "exit_code": 0,
+  "commit": "31f567c6cc0e5873a9bdc41df84e95a6722527f1",
+  "branch": "bot/1406-watch-no-tables-1008"
+}

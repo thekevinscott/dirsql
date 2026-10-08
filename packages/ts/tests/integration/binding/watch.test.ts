@@ -301,3 +301,17 @@ describe("DirSQL watch() async iterator", () => {
     TEST_TIMEOUT,
   );
 });
+
+describe("DirSQL watch() without named tables", () => {
+  it("rejects on first iteration, naming the cause", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "dirsql-watch-notables-"));
+    try {
+      const db = new DirSQL({ root: dir });
+      await expect(db.watch().next()).rejects.toThrow(
+        /path-tables emit no watch events/,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

@@ -407,13 +407,6 @@ impl Table {
 struct DirSqlInner {
     db: Mutex<Db>,
     root: PathBuf,
-    /// Canonicalized `root`, used **only** for the live filesystem watcher:
-    /// `notify` misbehaves on relative paths (it may deliver no events, or
-    /// deliver them under the cwd-joined path so the relative prefix no
-    /// longer strips). Literal fallback when canonicalization fails (e.g. a
-    /// not-yet-created root); the user's `root` — and therefore the initial
-    /// scan and the `path` column — stays byte-for-byte unchanged.
-    watch_root: PathBuf,
     /// One entry per distinct table anchor; each holds the matcher for the
     /// tables anchored there.
     groups: Vec<AnchorGroup>,
@@ -437,13 +430,7 @@ struct DirSqlInner {
     fs: Arc<dyn FileSystem>,
 }
 
-fn watch_scopes(index_root: &Path, groups: &[AnchorGroup]) -> Vec<WatchScope> {
-    if groups.is_empty() {
-        return vec![WatchScope {
-            root: index_root.to_path_buf(),
-            ignore: TableMatcher::new(&[], &[]).expect("no patterns to compile"),
-        }];
-    }
+fn watch_scopes(groups: &[AnchorGroup]) -> Vec<WatchScope> {
     groups
         .iter()
         .map(|group| WatchScope {
@@ -456,8 +443,11 @@ fn watch_scopes(index_root: &Path, groups: &[AnchorGroup]) -> Vec<WatchScope> {
 /// The tables sharing one anchor, matched against paths relative to it.
 struct AnchorGroup {
     anchor: PathBuf,
-    /// `anchor` canonicalized for the live watcher; see
-    /// [`DirSqlInner::watch_root`].
+    /// `anchor` canonicalized for the live watcher only: `notify` misbehaves
+    /// on relative paths (it may deliver no events, or deliver them under the
+    /// cwd-joined path so the relative prefix no longer strips). Literal
+    /// fallback when canonicalization fails; `anchor` and the `path` column
+    /// stay byte-for-byte as supplied.
     watch_anchor: PathBuf,
     matcher: TableMatcher,
     tables: Vec<String>,
@@ -585,6 +575,7 @@ impl DirSQL {
     /// no-ops. Called implicitly by [`poll_events`](Self::poll_events) and
     /// [`watch`](Self::watch).
     pub fn start_watching(&self) -> Result<()> {
+        self.require_named_tables()?;
         let mut guard = self.inner.watcher.lock().map_err(DirSqlError::lock)?;
         if guard.is_none() {
             // Watch the canonicalized anchors, never the (possibly relative)
@@ -595,11 +586,19 @@ impl DirSQL {
         Ok(())
     }
 
+    fn require_named_tables(&self) -> Result<()> {
+        if self.inner.groups.is_empty() {
+            return Err(DirSqlError::watch_msg(
+                "watching requires at least one named table: path-tables emit no watch events; define a table",
+            ));
+        }
+        Ok(())
+    }
+
     /// The trees the live watcher must cover: each table anchor, under the
-    /// skip rules its tables' scan applies. A build with no tables still
-    /// watches the index root.
+    /// skip rules its tables' scan applies.
     fn watch_scopes(&self) -> Vec<WatchScope> {
-        watch_scopes(&self.inner.watch_root, &self.inner.groups)
+        watch_scopes(&self.inner.groups)
     }
 
     /// Poll-based watch API. Blocks up to `timeout` waiting for the next
@@ -680,6 +679,7 @@ impl DirSQL {
     ///
     /// Mutually exclusive with [`poll_events`](Self::poll_events).
     pub fn watch(&self) -> Result<WatchStream> {
+        self.require_named_tables()?;
         if self.inner.poll_used.load(Ordering::SeqCst) {
             return Err(DirSqlError::watch_msg(
                 "poll_events() already in use; cannot call watch()",
@@ -1583,9 +1583,6 @@ impl DirSQL {
         // Commit the ingest transaction.
         _tx.commit().map_err(DirSqlError::sqlite)?;
 
-        // Canonicalize the watch root so the live watcher never sees a
-        // relative path; `root` itself is left untouched.
-        let watch_root = PathBuf::from(fs.canonical_root(&root));
         let mut groups = groups;
         for group in &mut groups {
             group.watch_anchor = PathBuf::from(fs.canonical_root(&group.anchor));
@@ -1595,7 +1592,6 @@ impl DirSQL {
             inner: Arc::new(DirSqlInner {
                 db: Mutex::new(db),
                 root,
-                watch_root,
                 groups,
                 on_file_map,
                 strict_map,
@@ -3436,11 +3432,11 @@ mod internal_tests {
         );
     }
 
-    /// Building with a **relative** root canonicalizes `watch_root` to an
+    /// Building with a **relative** root canonicalizes the watch anchor to an
     /// absolute path while leaving `root` exactly as the caller supplied it,
     /// so `notify` never sees `.`.
     #[test]
-    fn relative_root_canonicalizes_watch_root_only() {
+    fn relative_root_canonicalizes_watch_anchor_only() {
         let canonical = if cfg!(windows) {
             r"C:\ws\canonical"
         } else {
@@ -3462,11 +3458,11 @@ mod internal_tests {
 
         assert_eq!(db.inner.root, PathBuf::from("."));
         assert!(
-            db.inner.watch_root.is_absolute(),
-            "watch_root must be absolute, got {:?}",
-            db.inner.watch_root
+            db.inner.groups[0].watch_anchor.is_absolute(),
+            "watch_anchor must be absolute, got {:?}",
+            db.inner.groups[0].watch_anchor
         );
-        assert_eq!(db.inner.watch_root, PathBuf::from(canonical));
+        assert_eq!(db.inner.groups[0].watch_anchor, PathBuf::from(canonical));
     }
 
     /// With an absolute root, `process_file_event` strips the `watch_root`
@@ -3730,8 +3726,17 @@ mod internal_tests {
     /// tableless for these lock-poison / error-path tests.
     fn simple_db() -> (TempDir, DirSQL) {
         let dir = TempDir::new().unwrap();
-        let db =
-            DirSQL::with_ignore(dir.path(), Vec::<Table>::new(), Vec::<String>::new()).unwrap();
+        let db = DirSQL::with_ignore(
+            dir.path(),
+            vec![Table::new(
+                "t",
+                "CREATE TABLE t (x TEXT)",
+                "*.none",
+                |_| vec![],
+            )],
+            Vec::<String>::new(),
+        )
+        .unwrap();
         (dir, db)
     }
 
@@ -4137,6 +4142,27 @@ mod internal_tests {
         let err = db.watch().unwrap_err();
         assert!(
             err.to_string().contains("poll_events() already in use"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn watch_without_named_tables_names_the_cause() {
+        let db = DirSQL::new(TempDir::new().unwrap().path(), vec![]).unwrap();
+        let err = db.watch().unwrap_err().to_string();
+        assert!(
+            err.contains("path-tables emit no watch events"),
+            "got: {err}"
+        );
+        assert!(err.contains("define a table"), "got: {err}");
+    }
+
+    #[test]
+    fn poll_events_without_named_tables_names_the_cause() {
+        let db = DirSQL::new(TempDir::new().unwrap().path(), vec![]).unwrap();
+        let err = db.poll_events(Duration::ZERO).unwrap_err().to_string();
+        assert!(
+            err.contains("path-tables emit no watch events"),
             "got: {err}"
         );
     }
@@ -4968,7 +4994,16 @@ mod internal_tests {
     #[tokio::test]
     async fn async_dirsql_builds_queries_and_forwards() {
         let dir = TempDir::new().unwrap();
-        let adb = AsyncDirSQL::new(dir.path(), Vec::<Table>::new()).unwrap();
+        let adb = AsyncDirSQL::new(
+            dir.path(),
+            vec![Table::new(
+                "t",
+                "CREATE TABLE t (x TEXT)",
+                "*.none",
+                |_| vec![],
+            )],
+        )
+        .unwrap();
         adb.ready().await.unwrap();
         let rows = adb.query("SELECT 1 AS n").await.unwrap();
         assert_eq!(rows[0]["n"], Value::Integer(1));
@@ -4984,7 +5019,16 @@ mod internal_tests {
     #[tokio::test]
     async fn async_dirsql_watch_forwards() {
         let dir = TempDir::new().unwrap();
-        let adb = AsyncDirSQL::new(dir.path(), Vec::<Table>::new()).unwrap();
+        let adb = AsyncDirSQL::new(
+            dir.path(),
+            vec![Table::new(
+                "t",
+                "CREATE TABLE t (x TEXT)",
+                "*.none",
+                |_| vec![],
+            )],
+        )
+        .unwrap();
         adb.ready().await.unwrap();
         let _stream = adb.watch().unwrap();
     }
@@ -5848,7 +5892,7 @@ mod internal_tests {
             .collect();
         let ignore: Vec<String> = ignore.iter().map(|p| p.to_string()).collect();
         let (groups, _, _) = compile_groups(&tables, &ignore, Path::new("/idx")).unwrap();
-        watch_scopes(Path::new("/canonical-idx"), &groups)
+        watch_scopes(&groups)
     }
 
     fn roots(scopes: &[WatchScope]) -> Vec<PathBuf> {
@@ -5860,14 +5904,10 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let db = populated_db(dir.path(), "**/*.txt", &["a.txt"]);
 
-        assert_eq!(roots(&db.watch_scopes()), vec![db.inner.watch_root.clone()]);
-    }
-
-    #[test]
-    fn watch_scopes_without_tables_is_the_whole_index_root() {
-        let scopes = scopes_for(&[], &[]);
-        assert_eq!(roots(&scopes), vec![PathBuf::from("/canonical-idx")]);
-        assert!(!scopes[0].ignore.is_ignored_dir(Path::new("node_modules")));
+        assert_eq!(
+            roots(&db.watch_scopes()),
+            vec![db.inner.groups[0].watch_anchor.clone()]
+        );
     }
 
     #[test]

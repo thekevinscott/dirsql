@@ -301,6 +301,10 @@ under the root. The watcher starts on first iteration (Python/TypeScript)
 or at the `watch()` call (Rust). The stream never terminates on its own;
 stop consuming it to stop.
 
+An instance with no named tables cannot be watched: path-tables emit no
+watch events, so `watch()` (and the polling primitives) raise an error naming
+that cause. Define a table first.
+
 Python/TypeScript: each `watch()` call returns an independent stream, and every stream
 on one instance receives every event observed after it was created, so
 several consumers (one per client, say) can share one instance.
