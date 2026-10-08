@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1791489252,
+  "exit_code": 0,
+  "commit": "b0b5ca59ab7dcfa90ac9ea1bf701b675b4202713",
+  "branch": "bot/1461-row-footprint-1008"
+}

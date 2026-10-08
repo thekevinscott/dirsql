@@ -130,7 +130,7 @@ fn read_contents(rows: &[&FileRow], read: &(dyn Fn(&FileRow) -> Option<String> +
         .filter(|row| row.content.get().is_none())
         .collect();
     share_out(&unread, READERS, &|row| {
-        row.content.get_or_init(|| read(row));
+        row.content.get_or_init(|| Box::new(read(row)));
     });
 }
 
@@ -146,7 +146,7 @@ fn stat_rows(rows: &[&FileRow], stat: &(dyn Fn(&FileRow) -> StatFacts + Sync)) {
         .collect();
     let workers = thread::available_parallelism().map_or(1, usize::from);
     share_out(&unstatted, workers, &|row| {
-        row.facts.get_or_init(|| stat(row));
+        row.facts.get_or_init(|| Box::new(stat(row)));
     });
 }
 
@@ -196,11 +196,11 @@ struct FileRow {
     spans: PathSpans,
     /// Stat'ed at most once per statement, and only when the statement reads
     /// a stat column or the content.
-    facts: OnceLock<StatFacts>,
+    facts: OnceLock<Box<StatFacts>>,
     /// The file's text once a statement has asked for it, read at most once
     /// per statement: ahead for every row when the statement names the
     /// column, or on demand for the row being emitted.
-    content: OnceLock<Option<String>>,
+    content: OnceLock<Box<Option<String>>>,
 }
 
 impl FileRow {
@@ -217,15 +217,15 @@ impl FileRow {
     }
 
     fn basename(&self) -> Option<&str> {
-        self.spans.name_at.map(|at| &self.path[at..])
+        self.spans.name_at.map(|at| &self.path[at as usize..])
     }
 
     fn dir(&self) -> Option<&str> {
-        self.spans.dir_len.map(|len| &self.path[..len])
+        self.spans.dir_len.map(|len| &self.path[..len as usize])
     }
 
     fn ext(&self) -> Option<&str> {
-        self.spans.ext_at.map(|at| &self.path[at..])
+        self.spans.ext_at.map(|at| &self.path[at as usize..])
     }
 }
 
@@ -236,19 +236,20 @@ impl FileRow {
 /// one length each locates them.
 #[derive(Debug, PartialEq, Eq)]
 struct PathSpans {
-    name_at: Option<usize>,
-    dir_len: Option<usize>,
-    ext_at: Option<usize>,
+    name_at: Option<u32>,
+    dir_len: Option<u32>,
+    ext_at: Option<u32>,
 }
 
 impl PathSpans {
     fn of(path: &str) -> Self {
         let p = Path::new(path);
-        let suffix_at = |s: &std::ffi::OsStr| path.len() - s.len();
+        let span = |at: usize| u32::try_from(at).ok();
+        let suffix_at = |s: &std::ffi::OsStr| span(path.len() - s.len());
         Self {
-            name_at: p.file_name().map(suffix_at),
-            dir_len: p.parent().map(|d| d.as_os_str().len()),
-            ext_at: p.extension().map(suffix_at),
+            name_at: p.file_name().and_then(suffix_at),
+            dir_len: p.parent().and_then(|d| span(d.as_os_str().len())),
+            ext_at: p.extension().and_then(suffix_at),
         }
     }
 }
@@ -374,7 +375,7 @@ impl ScanSpec {
 
     fn facts(&self, row: &FileRow) -> StatFacts {
         if let Some(facts) = row.facts.get() {
-            return *facts;
+            return **facts;
         }
         let current = self
             .current
@@ -383,7 +384,7 @@ impl ScanSpec {
         if let Some(rows) = current.upgrade() {
             stat_rows(&rows.iter().collect::<Vec<_>>(), &|row| self.stat(row));
         }
-        *row.facts.get_or_init(|| self.stat(row))
+        **row.facts.get_or_init(|| Box::new(self.stat(row)))
     }
 
     fn read(&self, row: &FileRow) -> Option<String> {
@@ -438,7 +439,7 @@ impl TableSource for ScanSpec {
             Some(value) => ctx.set_result(&ToSqlOutput::Borrowed(value)),
             // The one effectful read, reached only when a query names the
             // column: this is where laziness actually lives.
-            None => ctx.set_result(row.content.get_or_init(|| self.read(row))),
+            None => ctx.set_result(&**row.content.get_or_init(|| Box::new(self.read(row)))),
         }
     }
 
@@ -674,7 +675,7 @@ mod tests {
 
     fn sized_row(rel: &str, size: i64) -> FileRow {
         let row = FileRow::new(Path::new(""), PathBuf::from(rel));
-        row.facts.set(facts(size)).unwrap();
+        row.facts.set(Box::new(facts(size))).unwrap();
         row
     }
 
@@ -721,7 +722,10 @@ mod tests {
 
         spec.prefetch(&rows);
 
-        assert_eq!(row.content.get(), Some(&Some("contents".to_owned())));
+        assert_eq!(
+            row.content.get().map(|c| &**c),
+            Some(&Some("contents".to_owned()))
+        );
     }
 
     fn facts(size: i64) -> StatFacts {
@@ -873,7 +877,7 @@ mod tests {
     #[test]
     fn stat_rows_stats_each_unstatted_row_once() {
         let rows: Vec<FileRow> = (0..40).map(|n| row_for("", &format!("f{n}.md"))).collect();
-        rows[3].facts.set(facts(1)).unwrap();
+        rows[3].facts.set(Box::new(facts(1))).unwrap();
         let stats = AtomicUsize::new(0);
         let stat = |row: &FileRow| {
             stats.fetch_add(1, Ordering::Relaxed);
@@ -883,8 +887,8 @@ mod tests {
         stat_rows(&rows.iter().collect::<Vec<_>>(), &stat);
 
         assert_eq!(stats.load(Ordering::Relaxed), 39);
-        assert_eq!(rows[3].facts.get(), Some(&facts(1)));
-        assert_eq!(rows[7].facts.get(), Some(&facts(7)));
+        assert_eq!(rows[3].facts.get().map(|f| **f), Some(facts(1)));
+        assert_eq!(rows[7].facts.get().map(|f| **f), Some(facts(7)));
         stat_rows(&[], &|_| panic!("nothing to stat"));
     }
 
@@ -1002,7 +1006,10 @@ mod tests {
     #[test]
     fn read_contents_reads_each_unread_row_once() {
         let rows: Vec<FileRow> = (0..40).map(|n| row_for("", &format!("f{n}.md"))).collect();
-        rows[3].content.set(Some("already".to_string())).unwrap();
+        rows[3]
+            .content
+            .set(Box::new(Some("already".to_string())))
+            .unwrap();
         let reads = std::sync::Mutex::new(Vec::new());
         let read = |row: &FileRow| {
             reads.lock().unwrap().push(row.path.clone());
@@ -1033,13 +1040,13 @@ mod tests {
     fn read_contents_keeps_a_null_read() {
         let rows = [row_for("", "a.md")];
         read_contents(&[&rows[0]], &|_| None);
-        assert_eq!(rows[0].content.get(), Some(&None));
+        assert_eq!(rows[0].content.get().map(|c| &**c), Some(&None));
     }
 
     #[test]
     fn read_contents_reads_nothing_when_every_row_is_read() {
         let rows = [row_for("", "a.md")];
-        rows[0].content.set(None).unwrap();
+        rows[0].content.set(Box::new(None)).unwrap();
         read_contents(&[&rows[0]], &|_| {
             panic!("a row read already is not read again")
         });
@@ -1141,5 +1148,29 @@ mod tests {
         let t = UNIX_EPOCH - std::time::Duration::from_secs(1);
         assert_eq!(epoch_secs(Some(t)), None);
         assert_eq!(epoch_secs(None), None);
+    }
+
+    #[test]
+    fn a_row_not_yet_stat_or_read_stays_compact() {
+        let size = std::mem::size_of::<FileRow>();
+        assert!(size <= 112, "a FileRow is {size} bytes");
+    }
+    #[test]
+    fn a_content_column_reads_the_file_through_the_module() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.md"), "hi").unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        load_module(&conn, StatementScope::new()).unwrap();
+        conn.execute_batch(&format!(
+            "CREATE VIRTUAL TABLE t USING dirsql_path('{}', '*.md', '', 'no-gitignore')",
+            dir.path().display()
+        ))
+        .unwrap();
+
+        let content: String = conn
+            .query_row("SELECT content FROM t", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(content, "hi");
     }
 }
