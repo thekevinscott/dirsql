@@ -4142,6 +4142,21 @@ mod internal_tests {
     }
 
     #[test]
+    fn watch_without_named_tables_names_the_cause() {
+        let db = DirSQL::new(TempDir::new().unwrap().path(), vec![]).unwrap();
+        let err = db.watch().unwrap_err().to_string();
+        assert!(err.contains("path-tables emit no watch events"), "got: {err}");
+        assert!(err.contains("define a table"), "got: {err}");
+    }
+
+    #[test]
+    fn poll_events_without_named_tables_names_the_cause() {
+        let db = DirSQL::new(TempDir::new().unwrap().path(), vec![]).unwrap();
+        let err = db.poll_events(Duration::ZERO).unwrap_err().to_string();
+        assert!(err.contains("path-tables emit no watch events"), "got: {err}");
+    }
+
+    #[test]
     fn watch_twice_reports_already_started() {
         let (_dir, db) = simple_db();
         let _stream = db.watch().unwrap();
