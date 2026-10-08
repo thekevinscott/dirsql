@@ -5624,7 +5624,13 @@ mod internal_tests {
                 |path| {
                     vec![Row::from_iter([(
                         "name".to_string(),
-                        Value::Text(path.rsplit('/').next().unwrap().to_string()),
+                        Value::Text(
+                            Path::new(path)
+                                .file_name()
+                                .unwrap()
+                                .to_string_lossy()
+                                .into_owned(),
+                        ),
                     )])]
                 },
             )
