@@ -18,6 +18,9 @@ pub(crate) enum Seen {
     Unknown,
 }
 
+/// Entries a worker judges at a time.
+const BATCH: usize = 4096;
+
 /// One entry of a [`Listing`]: where its name sits, and what it is.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Listed {
@@ -77,15 +80,6 @@ type Names = Packed;
 type Names = Owned;
 
 impl Listing {
-    /// The entries of `dir` in the byte order of their names; none when it
-    /// cannot be read.
-    pub(crate) fn read(dir: &Path) -> Listing {
-        let mut listing = Listing::default();
-        read_into(dir, &mut listing);
-        listing.sort();
-        listing
-    }
-
     pub(crate) fn entries(&self) -> &[Listed] {
         &self.entries
     }
@@ -117,6 +111,34 @@ impl Listing {
     }
 }
 
+/// `dir`'s entries, each judged by `judge` and the ones it keeps returned in
+/// the byte order of their names; none when `dir` cannot be read. `name` is
+/// the name a kept result sorts under.
+pub(crate) fn read_judged<R: Send>(
+    dir: &Path,
+    judge: &(dyn Fn(&OsStr, Seen) -> Option<R> + Sync),
+    name: fn(&R) -> &OsStr,
+) -> Vec<R> {
+    judge_stream(|sink| read_into(dir, sink), judge, name)
+}
+
+/// [`read_judged`] over whatever `source` feeds its sink.
+fn judge_stream<R: Send>(
+    source: impl FnOnce(&mut dyn FnMut(&OsStr, Seen)),
+    judge: &(dyn Fn(&OsStr, Seen) -> Option<R> + Sync),
+    name: fn(&R) -> &OsStr,
+) -> Vec<R> {
+    let mut listing = Listing::default();
+    source(&mut |entry, seen| listing.push(entry, seen));
+    listing.sort();
+    let _ = name;
+    listing
+        .entries()
+        .iter()
+        .filter_map(|listed| judge(listing.name(listed), listed.seen))
+        .collect()
+}
+
 #[cfg(unix)]
 fn seen(kind: rustix::fs::FileType) -> Seen {
     use rustix::fs::FileType;
@@ -130,7 +152,7 @@ fn seen(kind: rustix::fs::FileType) -> Seen {
 }
 
 #[cfg(unix)]
-fn read_into(dir: &Path, listing: &mut Listing) {
+fn read_into(dir: &Path, sink: &mut dyn FnMut(&OsStr, Seen)) {
     use rustix::fs::{Dir, Mode, OFlags};
     use std::os::unix::ffi::OsStrExt;
     let flags = OFlags::RDONLY
@@ -147,12 +169,12 @@ fn read_into(dir: &Path, listing: &mut Listing) {
         if name == b"." || name == b".." {
             continue;
         }
-        listing.push(OsStr::from_bytes(name), seen(entry.file_type()));
+        sink(OsStr::from_bytes(name), seen(entry.file_type()));
     }
 }
 
 #[cfg(any(test, not(unix)))]
-fn read_dir_into(dir: &Path, listing: &mut Listing) {
+fn read_dir_into(dir: &Path, sink: &mut dyn FnMut(&OsStr, Seen)) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -160,7 +182,7 @@ fn read_dir_into(dir: &Path, listing: &mut Listing) {
         let seen = entry.file_type().map_or(Seen::Other, |kind| {
             seen_flags(kind.is_symlink(), kind.is_dir(), kind.is_file())
         });
-        listing.push(&entry.file_name(), seen);
+        sink(&entry.file_name(), seen);
     }
 }
 
@@ -250,9 +272,9 @@ mod tests {
         );
     }
 
-    fn read_with(read: fn(&Path, &mut Listing), dir: &Path) -> Vec<(String, Seen)> {
+    fn read_with(read: fn(&Path, &mut dyn FnMut(&OsStr, Seen)), dir: &Path) -> Vec<(String, Seen)> {
         let mut listing = Listing::default();
-        read(dir, &mut listing);
+        read(dir, &mut |name, seen| listing.push(name, seen));
         listing.sort();
         listing
             .entries()
@@ -277,24 +299,6 @@ mod tests {
         [("dir", Seen::Dir), ("file", Seen::File)]
             .map(|(name, seen)| (name.to_string(), seen))
             .to_vec()
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn read_lists_each_entry_of_a_directory_sorted_and_classified() {
-        let dir = fixture();
-        let listing = Listing::read(dir.path());
-        let got: Vec<_> = listing
-            .entries()
-            .iter()
-            .map(|listed| {
-                (
-                    listing.name(listed).to_string_lossy().into_owned(),
-                    listed.seen,
-                )
-            })
-            .collect();
-        assert_eq!(got, fixture_entries());
     }
 
     #[cfg(unix)]
@@ -324,7 +328,6 @@ mod tests {
         let file = dir.path().join("file");
         let missing = dir.path().join("missing");
         for path in [&file, &missing] {
-            assert!(Listing::read(path).entries().is_empty());
             assert!(read_with(read_dir_into, path).is_empty());
         }
     }
@@ -353,5 +356,84 @@ mod tests {
         let second = names.add(OsStr::new("second"));
         assert_eq!(names.get(first, 0), "first");
         assert_eq!(names.get(second, 0), "second");
+    }
+
+    fn named(entry: &String) -> &OsStr {
+        OsStr::new(entry)
+    }
+
+    fn keep_name(entry: &OsStr, _: Seen) -> Option<String> {
+        Some(entry.to_string_lossy().into_owned())
+    }
+
+    #[test]
+    fn entries_are_judged_while_the_directory_is_still_being_read() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+        let judged = AtomicUsize::new(0);
+        let judge = |entry: &OsStr, seen| {
+            judged.fetch_add(1, Ordering::SeqCst);
+            keep_name(entry, seen)
+        };
+        let mut judged_before_the_end = false;
+        judge_stream(
+            |sink| {
+                for n in 0..BATCH * 3 {
+                    sink(OsStr::new(&format!("f{n}")), Seen::File);
+                }
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while judged.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+                    std::thread::yield_now();
+                }
+                judged_before_the_end = judged.load(Ordering::SeqCst) > 0;
+            },
+            &judge,
+            named,
+        );
+        assert!(judged_before_the_end);
+    }
+
+    #[test]
+    fn judged_entries_come_back_in_name_order_across_batches() {
+        let count = BATCH * 3 + 5;
+        let names: Vec<String> = (0..count).map(|n| format!("f{n:08}")).collect();
+        let got = judge_stream(
+            |sink| {
+                for entry in names.iter().rev() {
+                    sink(OsStr::new(entry), Seen::File);
+                }
+            },
+            &keep_name,
+            named,
+        );
+        assert_eq!(got, names);
+    }
+
+    #[test]
+    fn an_entry_the_judge_drops_is_not_returned() {
+        let got = judge_stream(
+            |sink| {
+                for entry in ["b", "a", "c"] {
+                    sink(OsStr::new(entry), Seen::File);
+                }
+            },
+            &|entry, seen| keep_name(entry, seen).filter(|kept| kept != "b"),
+            named,
+        );
+        assert_eq!(got, ["a", "c"]);
+    }
+
+    #[test]
+    fn a_small_directory_is_judged_on_the_calling_thread() {
+        let threads = judge_stream(
+            |sink| {
+                for n in 0..BATCH - 1 {
+                    sink(OsStr::new(&format!("f{n}")), Seen::File);
+                }
+            },
+            &|_, _| Some(std::thread::current().id()),
+            |_| OsStr::new(""),
+        );
+        assert!(threads.iter().all(|id| *id == std::thread::current().id()));
     }
 }

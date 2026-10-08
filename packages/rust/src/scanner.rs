@@ -1,4 +1,4 @@
-use crate::listing::{Listing, Seen};
+use crate::listing::{Seen, read_judged};
 use crate::matcher::{GlobError, Pattern, TableMatcher};
 use crate::tree_walk::{Step, walk_in_order};
 use ignore::Match;
@@ -526,27 +526,23 @@ impl<'a> Place<'a> {
         {
             walk.frames.push(Arc::new(matcher));
         }
-        let listing = Listing::read(&dir);
-        let taken = judge_all(listing.entries(), &|listed| {
-            walk.take(
-                &dir,
-                listing.name(listed),
-                listed.seen,
-                &rel,
-                &states,
-                linked,
-            )
-            .filter(|taken| match taken {
-                Taken::File(child) => keep(child),
-                Taken::Dir { .. } => true,
-            })
-        });
+        let taken = read_judged(
+            &dir,
+            &|name, seen| {
+                walk.take(&dir, name, seen, &rel, &states, linked)
+                    .filter(|taken| match taken {
+                        Taken::File(child) => keep(child),
+                        Taken::Dir { .. } => true,
+                    })
+            },
+            taken_name,
+        );
         let dir: Arc<Path> = Arc::from(dir);
         let mut steps: Vec<Step<Box<Place<'a>>, Found>> = if walk.dirs {
             taken
                 .iter()
                 .filter_map(|taken| match taken {
-                    Some(Taken::Dir { child, .. }) => {
+                    Taken::Dir { child, .. } => {
                         Some(Step::Leaf((child.clone(), Arc::clone(&dir))))
                     }
                     _ => None,
@@ -570,25 +566,20 @@ impl<'a> Place<'a> {
                 .collect::<Vec<_>>()
         });
         steps.extend(relative);
-        let entered =
-            listing
-                .entries()
-                .iter()
-                .zip(taken)
-                .filter_map(|(listed, taken)| match taken? {
-                    Taken::Dir {
-                        child,
-                        next,
-                        linked,
-                    } => Some(Step::Dir(Box::new(Place {
-                        walk: walk.clone(),
-                        dir: dir.join(listing.name(listed)),
-                        rel: child,
-                        states: next,
-                        linked,
-                    }))),
-                    Taken::File(child) => Some(Step::Leaf((child, Arc::clone(&dir)))),
-                });
+        let entered = taken.into_iter().map(|taken| match taken {
+            Taken::Dir {
+                child,
+                next,
+                linked,
+            } => Step::Dir(Box::new(Place {
+                walk: walk.clone(),
+                dir: dir.join(child.file_name().unwrap_or_default()),
+                rel: child,
+                states: next,
+                linked,
+            })),
+            Taken::File(child) => Step::Leaf((child, Arc::clone(&dir))),
+        });
         if steps.is_empty() {
             return entered.collect();
         }
@@ -710,30 +701,11 @@ enum Taken {
     File(PathBuf),
 }
 
-/// Below this many entries a directory is judged on one thread; spawning
-/// workers costs more than the judging.
-const PARALLEL_ENTRIES: usize = 4096;
-
-/// `judge` applied to each of `items`, in order, shared across the cores
-/// once there are enough items to pay for the threads.
-fn judge_all<T: Sync, R: Send>(items: &[T], judge: &(dyn Fn(&T) -> R + Sync)) -> Vec<R> {
-    // Asking for the core count reads cgroup files, too dear to pay in every
-    // small directory of a deep tree.
-    if items.len() < PARALLEL_ENTRIES {
-        return items.iter().map(judge).collect();
+/// The name a taken entry sorts under.
+fn taken_name(taken: &Taken) -> &OsStr {
+    match taken {
+        Taken::File(child) | Taken::Dir { child, .. } => child.file_name().unwrap_or_default(),
     }
-    let workers = thread::available_parallelism().map_or(1, usize::from);
-    let per_worker = items.len().div_ceil(workers);
-    thread::scope(|scope| {
-        let handles: Vec<_> = items
-            .chunks(per_worker)
-            .map(|chunk| scope.spawn(move || chunk.iter().map(judge).collect::<Vec<_>>()))
-            .collect();
-        handles
-            .into_iter()
-            .flat_map(|handle| handle.join().expect("judging an entry does not panic"))
-            .collect()
-    })
 }
 
 /// What the walk makes of an entry seen as `seen`, following a symlink only
@@ -911,35 +883,6 @@ mod tests {
 
     // Real directory-walk behavior is covered by `tests/scanner.rs`
     // (unit-lint isolation); only the pure predicate is tested here.
-
-    #[test]
-    fn judge_all_keeps_the_order_of_its_items() {
-        let items: Vec<usize> = (0..PARALLEL_ENTRIES * 3).collect();
-        assert_eq!(
-            judge_all(&items, &|n| n * 2),
-            items.iter().map(|n| n * 2).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn judge_all_shares_a_large_directory_across_threads() {
-        let items = vec![(); PARALLEL_ENTRIES];
-        let threads: std::collections::HashSet<_> = judge_all(&items, &|()| thread::current().id())
-            .into_iter()
-            .collect();
-        assert!(threads.len() > 1, "judged on {} thread(s)", threads.len());
-    }
-
-    #[test]
-    fn judge_all_judges_a_small_directory_on_the_calling_thread() {
-        let items = vec![(); PARALLEL_ENTRIES - 1];
-        let caller = thread::current().id();
-        assert!(
-            judge_all(&items, &|()| thread::current().id())
-                .iter()
-                .all(|id| *id == caller)
-        );
-    }
 
     const LINK: Stat = Stat {
         is_link: true,
