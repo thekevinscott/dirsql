@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/query_contract_test.py tests/e2e/on_file_query_test.py tests/e2e/stat_speed_test.py tests/e2e/glob_speed_one_level_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/use_case_dossier_test.py -x -q",
+  "ran_at": 1791489188,
+  "exit_code": 0,
+  "commit": "fe75eb79358f5324a5af3395d1e2383e6233c98f",
+  "branch": "bot/1461-row-footprint-1008"
+}
