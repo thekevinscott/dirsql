@@ -1,0 +1,1 @@
+**Changed** A watch event on an `on-file` table no longer re-walks the table's glob or rewrites every row: the table's file list is kept up to date from the events, and only the rows that changed are written. The command still runs over all of the table's files and the emitted row events are the same.
