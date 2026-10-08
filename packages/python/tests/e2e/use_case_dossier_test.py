@@ -17,14 +17,13 @@ import pytest
 
 from .speed_of_light import (
     assert_speed_of_light,
-    best_of,
     cli,
     dirsql_rows,
-    dirsql_timeout,
     grow_until_native_takes_a_second,
-    hopeless_seconds,
+    paired,
     startup_seconds,
     timed,
+    timed_native,
 )
 
 DAY = 86400
@@ -124,26 +123,24 @@ def describe_dossier_speed_of_light():
         startup = startup_seconds()
 
         def native():
-            proc, seconds = timed(["bash", "-c", NATIVE], root, timeout=600)
+            proc, seconds = timed_native(["bash", "-c", NATIVE], root)
             return native_rows(proc), seconds
 
         grow_until_native_takes_a_second(
             lambda lo, hi: build_tree(root, lo, hi), native, start=50_000, ceiling=2**21
         )
-        expected, native_seconds = best_of(native, "native")
-        assert len(expected) == 18, expected
 
-        def dirsql():
+        def dirsql(timeout):
             proc, seconds = timed(
                 [cli(), "query", QUERY],
                 root,
-                timeout=dirsql_timeout(native_seconds),
+                timeout=timeout,
             )
             return dirsql_rows(proc, COLUMNS), seconds
 
-        actual, dirsql_seconds = best_of(
-            dirsql, "dirsql", hopeless_seconds(native_seconds, startup)
-        )
+        result = paired(native, dirsql, startup)
+        expected, actual = result.native_rows, result.dirsql_rows
+        assert len(expected) == 18, expected
 
         assert actual == expected
-        assert_speed_of_light("dossier", native_seconds, dirsql_seconds, startup)
+        assert_speed_of_light("dossier", result, startup)

@@ -15,14 +15,13 @@ import pytest
 
 from .speed_of_light import (
     assert_speed_of_light,
-    best_of,
     cli,
     dirsql_rows,
-    dirsql_timeout,
     grow_until_native_takes_a_second,
-    hopeless_seconds,
+    paired,
     startup_seconds,
     timed,
+    timed_native,
 )
 
 GLOB = "./*/*.md"
@@ -70,7 +69,7 @@ def matched(n):
 
 
 def native(root):
-    proc, seconds = timed(["bash", "-c", NATIVE], root, timeout=600)
+    proc, seconds = timed_native(["bash", "-c", NATIVE], root)
     assert proc.returncode == 0, proc.stderr
     return sorted(proc.stdout.splitlines()), seconds
 
@@ -93,20 +92,18 @@ def describe_depth_bound_glob_speed_of_light():
             start=100_000,
             ceiling=2**22,
         )
-        expected, native_seconds = best_of(lambda: native(root), "native")
-        assert len(expected) == matched(n)
 
-        def dirsql():
+        def dirsql(timeout):
             proc, seconds = timed(
                 [cli(), "query", f"SELECT path FROM '{GLOB}'"],
                 root,
-                timeout=dirsql_timeout(native_seconds),
+                timeout=timeout,
             )
             return sorted(row for (row,) in dirsql_rows(proc, ("path",))), seconds
 
-        actual, dirsql_seconds = best_of(
-            dirsql, "dirsql", hopeless_seconds(native_seconds, startup)
-        )
+        result = paired(lambda: native(root), dirsql, startup)
+        expected, actual = result.native_rows, result.dirsql_rows
+        assert len(expected) == matched(n)
 
         assert actual == expected
-        assert_speed_of_light(GLOB, native_seconds, dirsql_seconds, startup)
+        assert_speed_of_light(GLOB, result, startup)
