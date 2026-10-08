@@ -2,9 +2,9 @@
 
 Four large event logs, one JSON object per line, each projected to the two
 fields the question needs by `jq -c '{level, ms}'` named in `.dirsql.toml`; the
-question is the event count and summed duration per level. Native streams the
-same two fields out of every line with one `jq` process and aggregates them in
-awk. No mocks: real console script, real process, real filesystem, real
+question is the event count and summed duration per level. Natives stream the
+same two fields out of every line with one `jq` process, or with one per file
+under `xargs -P`, and aggregate them in awk. No mocks: real console script, real process, real filesystem, real
 parser spawn.
 """
 
@@ -16,14 +16,19 @@ import shutil
 import pytest
 
 from .speed_of_light import (
+    AGG_AWK,
+    MERGE_AWK,
+    Native,
+    agreed_rows,
     assert_speed_of_light,
+    baseline,
     cli,
     dirsql_rows,
     grow_until_native_takes_a_second,
     paired,
+    shell_natives,
     startup_seconds,
     timed,
-    timed_native,
 )
 
 COLUMNS = ("level", "n", "total_ms")
@@ -40,12 +45,20 @@ ddl     = "CREATE TABLE events (level TEXT, ms INTEGER)"
 on-file = "jq -c '{level, ms}'"
 """
 
-NATIVE = (
-    "jq -r '[.level, .ms] | @tsv' logs/*.jsonl"
-    " | awk -F '\\t' '{ n[$1]++; s[$1] += $2 }"
-    ' END { for (k in n) print k "\\t" n[k] "\\t" s[k] }\''
-    " | sort"
-)
+NATIVE = [
+    Native(
+        "jq",
+        ("jq",),
+        "{bin} -r '[.level, .ms] | @tsv' logs/*.jsonl | awk -F '\\t' -f agg.awk | sort",
+    ),
+    Native(
+        "jq+xargs-P",
+        ("jq",),
+        "printf '%s\\0' logs/*.jsonl | xargs -0 -P\"$(nproc)\" -n 1 sh -c"
+        ' \'{bin} -r "[.level, .ms] | @tsv" "$@" | awk -F "\\t" -f agg.awk\' _'
+        " | awk -F '\\t' -f merge.awk | sort",
+    ),
+]
 
 LEVELS = ("debug", "info", "warn", "error")
 FILES = 4
@@ -57,6 +70,8 @@ def build_logs(root, lo, hi):
     if lo == 0:
         (root / "logs").mkdir(parents=True)
         (root / ".dirsql.toml").write_text(CONFIG)
+        (root / "agg.awk").write_text(AGG_AWK)
+        (root / "merge.awk").write_text(MERGE_AWK)
     handles = [
         open(root / "logs" / f"events-{f}.jsonl", "a", encoding="utf-8")
         for f in range(FILES)
@@ -76,7 +91,6 @@ def build_logs(root, lo, hi):
 
 
 def native_rows(proc):
-    assert proc.returncode == 0, proc.stderr
     rows = []
     for line in proc.stdout.splitlines():
         level, n, total = line.split("\t")
@@ -97,13 +111,10 @@ def describe_jsonl_parse_speed_of_light():
     def it_matches_native_rows_within_the_bar(root):
         startup = startup_seconds()
 
-        def native():
-            proc, seconds = timed_native(["sh", "-c", NATIVE], root)
-            return native_rows(proc), seconds
-
+        natives = shell_natives(root, NATIVE, native_rows, shell="sh")
         grow_until_native_takes_a_second(
             lambda lo, hi: build_logs(root, lo, hi),
-            native,
+            baseline(natives),
             start=2**17,
             ceiling=2**24,
         )
@@ -116,8 +127,8 @@ def describe_jsonl_parse_speed_of_light():
             )
             return dirsql_rows(proc, COLUMNS), seconds
 
-        result = paired(native, dirsql, startup)
-        expected, actual = result.native_rows, result.dirsql_rows
+        result = paired(natives, dirsql, startup)
+        expected, actual = agreed_rows(result), result.dirsql_rows
         assert len(expected) == len(LEVELS), expected
 
         assert actual == expected

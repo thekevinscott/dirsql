@@ -16,14 +16,17 @@ import time
 import pytest
 
 from .speed_of_light import (
+    Native,
+    agreed_rows,
     assert_speed_of_light,
+    baseline,
     cli,
     dirsql_rows,
     grow_until_native_takes_a_second,
     paired,
+    shell_natives,
     startup_seconds,
     timed,
-    timed_native,
 )
 
 DAY = 86400
@@ -55,7 +58,11 @@ UNION ALL SELECT 3, 'recent', path, mtime FROM recent
 ORDER BY rank, mtime DESC, path
 """
 
-NATIVE = r"""
+NATIVE = [
+    Native(
+        "find+sort",
+        ("bash",),
+        r"""
 set -e
 export LC_ALL=C
 cutoff=$(( $(date +%s) - 14 * 86400 ))
@@ -71,7 +78,9 @@ cutoff=$(( $(date +%s) - 14 * 86400 ))
     | sort -rn | head -10 \
     | awk -F '\t' -v OFS='\t' '{ print 3, "recent", $2, $1 }'
 } | sort -t "$(printf '\t')" -k1,1n -k4,4rn -k3,3
-"""
+""",
+    )
+]
 
 
 def _write(path, mtime, body="# note\nbody\n"):
@@ -102,7 +111,6 @@ def build_tree(root, lo, hi):
 
 
 def native_rows(proc):
-    assert proc.returncode == 0, proc.stderr
     rows = []
     for line in proc.stdout.splitlines():
         rank, kind, path, mtime = line.split("\t")
@@ -122,12 +130,13 @@ def describe_dossier_speed_of_light():
     def it_matches_native_rows_within_the_bar(root):
         startup = startup_seconds()
 
-        def native():
-            proc, seconds = timed_native(["bash", "-c", NATIVE], root)
-            return native_rows(proc), seconds
+        natives = shell_natives(root, NATIVE, native_rows, shell="bash")
 
         grow_until_native_takes_a_second(
-            lambda lo, hi: build_tree(root, lo, hi), native, start=50_000, ceiling=2**21
+            lambda lo, hi: build_tree(root, lo, hi),
+            baseline(natives),
+            start=50_000,
+            ceiling=2**21,
         )
 
         def dirsql(timeout):
@@ -138,8 +147,8 @@ def describe_dossier_speed_of_light():
             )
             return dirsql_rows(proc, COLUMNS), seconds
 
-        result = paired(native, dirsql, startup)
-        expected, actual = result.native_rows, result.dirsql_rows
+        result = paired(natives, dirsql, startup)
+        expected, actual = agreed_rows(result), result.dirsql_rows
         assert len(expected) == 18, expected
 
         assert actual == expected

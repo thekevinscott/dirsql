@@ -2,8 +2,9 @@
 
 A tree of JSONL session logs, each turned into message rows by a parser
 named in `.dirsql.toml`; the question is how many messages each project has
-per role. Native pipes the parser's JSON rows over every file into a
-second process that decodes and counts them, the same hand-off dirsql pays.
+per role. Natives pipe the parser's JSON rows over every file into a
+second process that decodes and counts them, the same hand-off dirsql pays,
+or run the pair in `xargs -P` batches that each count their own files.
 dirsql runs the same parser over every file through the real launcher. No
 mocks: real console script, real process, real filesystem, real parser spawn.
 """
@@ -16,14 +17,17 @@ import shutil
 import pytest
 
 from .speed_of_light import (
+    Native,
+    agreed_rows,
     assert_speed_of_light,
+    baseline,
     cli,
     dirsql_rows,
     grow_until_native_takes_a_second,
     paired,
+    shell_natives,
     startup_seconds,
     timed,
-    timed_native,
 )
 
 COLUMNS = ("project", "role", "n")
@@ -89,9 +93,29 @@ for (project, role), n in sorted(counts.items()):
     print(project, role, n, sep="\\t")
 """
 
-NATIVE = (
-    "find projects -name '*.jsonl' -exec python3 messages.py {} + | python3 count.py"
+BATCHED = (
+    '-0 -P"$(nproc)" -n 4 sh -c \'python3 messages.py "$@" | python3 count.py\' _'
+    " | awk -F '\\t' '{ k = $1 \"\\t\" $2; n[k] += $3 }"
+    ' END { for (k in n) print k "\\t" n[k] }\' | sort'
 )
+NATIVE = [
+    Native(
+        "find+python",
+        ("find",),
+        "{bin} projects -name '*.jsonl' -exec python3 messages.py {} +"
+        " | python3 count.py",
+    ),
+    Native(
+        "find+xargs-P",
+        ("find",),
+        "{bin} projects -name '*.jsonl' -print0 | xargs " + BATCHED,
+    ),
+    Native(
+        "fd+xargs-P",
+        ("fd", "fdfind"),
+        "{bin} --no-ignore -0 -e jsonl . projects | xargs " + BATCHED,
+    ),
+]
 
 LINE_KINDS = (
     {
@@ -151,7 +175,6 @@ def build_transcripts(root, lo, hi):
 
 
 def native_rows(proc):
-    assert proc.returncode == 0, proc.stderr
     rows = []
     for line in proc.stdout.splitlines():
         project, role, n = line.split("\t")
@@ -171,13 +194,11 @@ def describe_transcripts_speed_of_light():
     def it_matches_native_rows_within_the_bar(root):
         startup = startup_seconds()
 
-        def native():
-            proc, seconds = timed_native(["sh", "-c", NATIVE], root)
-            return native_rows(proc), seconds
+        natives = shell_natives(root, NATIVE, native_rows, shell="sh")
 
         grow_until_native_takes_a_second(
             lambda lo, hi: build_transcripts(root, lo, hi),
-            native,
+            baseline(natives),
             start=128,
             ceiling=2**16,
         )
@@ -190,8 +211,8 @@ def describe_transcripts_speed_of_light():
             )
             return dirsql_rows(proc, COLUMNS), seconds
 
-        result = paired(native, dirsql, startup)
-        expected, actual = result.native_rows, result.dirsql_rows
+        result = paired(natives, dirsql, startup)
+        expected, actual = agreed_rows(result), result.dirsql_rows
         assert len(expected) == 16, expected
 
         assert actual == expected

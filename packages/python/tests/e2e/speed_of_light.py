@@ -1,15 +1,16 @@
 """Harness for the use-case speed-of-light tests.
 
-Each use-case test asks one question of a generated corpus twice: once through
-the fastest native pipeline (find, sort, join, awk, a single parser process)
-and once through the real `dirsql` launcher. The rows must be identical and
-dirsql's wall time, after subtracting the launcher's measured startup, must be
-within ten percent of native. The bar is a ratio, never a millisecond number,
-so it holds on any machine.
+Each test asks one question of a generated corpus through every plausible
+native pipeline (find, fd, rg, bash globstar, xargs -P, a single parser
+process) and once through the real `dirsql` launcher. Every native's rows must
+equal dirsql's. dirsql's wall time, after subtracting the launcher's measured
+startup, must be within ten percent of the fastest native. The bar is a ratio,
+never a millisecond number, so it holds on any machine. A native whose tool is
+not installed is printed as SKIPPED, never dropped quietly.
 
-Native and dirsql run as alternating pairs (native first, then dirsql first,
-and so on) after one discarded warm-up pair, so drift in machine speed hits
-both sides alike. The verdict is the median of the per-pair ratios. Startup is
+The natives and dirsql run as alternating pairs (natives first, then dirsql
+first, and so on) after one discarded warm-up pair, so drift in machine speed
+hits every side alike. The verdict is the median of the per-pair ratios. Startup is
 the median of `dirsql query 'SELECT 1'` runs with the first dropped, and
 native's own is the median of `bash -c true` the same way; each is subtracted
 from its side. A corpus too small to time is grown by doubling until the
@@ -26,6 +27,7 @@ import statistics
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -42,12 +44,27 @@ class Startup(NamedTuple):
     native: float
 
 
+class Native(NamedTuple):
+    """One native pipeline. `needs` lists the names its tool goes by, first
+    installed wins; `script` has `{bin}` where that name goes."""
+
+    name: str
+    needs: tuple
+    script: str
+
+
+class Natives(NamedTuple):
+    runs: dict
+    skipped: list
+
+
 @dataclass
 class Paired:
-    native_rows: object
+    native_rows: dict
     dirsql_rows: object
-    native_seconds: list
+    native_seconds: dict
     dirsql_seconds: list
+    skipped: list
 
 
 def cli() -> str:
@@ -77,6 +94,64 @@ def timed(argv, cwd, timeout, env=None):
 
 def timed_native(argv, cwd, timeout=600):
     return timed(argv, cwd, timeout, env=NATIVE_ENV)
+
+
+def sorted_lines(proc):
+    return sorted(proc.stdout.splitlines())
+
+
+def resolve_natives(specs, which=shutil.which):
+    runnable, skipped = [], []
+    for spec in specs:
+        binary = next((n for n in spec.needs if which(n)), None)
+        if binary is None:
+            skipped.append(spec.name)
+        else:
+            runnable.append((spec.name, spec.script.replace("{bin}", binary)))
+    assert runnable, f"no native installed: {[s.name for s in specs]}"
+    return runnable, skipped
+
+
+def shell_natives(root, specs, parse=sorted_lines, shell="bash") -> Natives:
+    def runner(script):
+        def run():
+            proc, seconds = timed_native([shell, "-c", script], root)
+            assert proc.returncode == 0, proc.stderr
+            return parse(proc), seconds
+
+        return run
+
+    runnable, skipped = resolve_natives(specs)
+    return Natives({name: runner(script) for name, script in runnable}, skipped)
+
+
+AGG_AWK = (
+    '{ n[$1]++; s[$1] += $2 } END { for (k in n) print k "\\t" n[k] "\\t" s[k] }\n'
+)
+MERGE_AWK = (
+    '{ n[$1] += $2; s[$1] += $3 } END { for (k in n) print k "\\t" n[k] "\\t" s[k] }\n'
+)
+
+
+def fd(args):
+    return Native("fd", ("fd", "fdfind"), "{bin} --no-ignore --type f " + args)
+
+
+def rg(args):
+    return Native("rg", ("rg",), "{bin} --files --no-ignore " + args)
+
+
+def globstar(pattern):
+    trim = "cut -c3-" if pattern.startswith("./") else "cat"
+    return Native(
+        "bash-globstar",
+        ("bash",),
+        '{bin} -O globstar -O nullglob -c \'printf "%s\\n" ' + pattern + f"' | {trim}",
+    )
+
+
+def baseline(natives: Natives) -> Callable:
+    return next(iter(natives.runs.values()))
 
 
 def median_after_first(samples):
@@ -152,38 +227,51 @@ def run_or_fail(run, name):
         ) from None
 
 
-def paired(native, dirsql, startup, pairs=PAIRS):
-    """Alternate `native()` and `dirsql(timeout)`, native first on even pairs.
+def paired(natives, dirsql, startup, pairs=PAIRS):
+    """Alternate every native with `dirsql(timeout)`, natives first on even pairs.
 
-    Both return `(rows, seconds)`. The first pair is a discarded warm-up that
-    also sets dirsql's timeout. A run that raises `TimeoutExpired` fails the
-    test at once. Three hopeless pairs in a row end the series early: noise
-    does not account for an order of magnitude, so more pairs cannot bring
-    the median under the bar.
+    Each native returns `(rows, seconds)` and so does `dirsql`. The first pair
+    is a discarded warm-up that also sets dirsql's timeout. A run that raises
+    `TimeoutExpired` fails the test at once. Three hopeless pairs in a row,
+    judged against the pair's fastest native, end the series early: noise does
+    not account for an order of magnitude, so more pairs cannot bring the
+    median under the bar.
     """
-    native_rows, native_warm = run_or_fail(native, "native")
-    timeout = dirsql_timeout(native_warm)
+    runs = natives.runs
+    rows = {}
+    warm = []
+    for name, run in runs.items():
+        rows[name], seconds = run_or_fail(run, name)
+        warm.append(seconds)
+    timeout = dirsql_timeout(max(warm))
 
     def run_dirsql():
         return run_or_fail(lambda: dirsql(timeout), "dirsql")
 
     dirsql_rows_, _ = run_dirsql()
-    native_times, dirsql_times, streak = [], [], 0
+    native_times = {name: [] for name in runs}
+    dirsql_times, streak = [], 0
     for index in range(pairs):
+        order = list(runs)
+        if index % 2:
+            order.reverse()
+        this_pair = {}
         if index % 2 == 0:
-            native_rows, native_seconds = run_or_fail(native, "native")
+            for name in order:
+                rows[name], this_pair[name] = run_or_fail(runs[name], name)
             dirsql_rows_, dirsql_seconds = run_dirsql()
         else:
             dirsql_rows_, dirsql_seconds = run_dirsql()
-            native_rows, native_seconds = run_or_fail(native, "native")
-        native_times.append(native_seconds)
+            for name in order:
+                rows[name], this_pair[name] = run_or_fail(runs[name], name)
+        for name, seconds in this_pair.items():
+            native_times[name].append(seconds)
         dirsql_times.append(dirsql_seconds)
-        streak = (
-            streak + 1 if is_hopeless(native_seconds, dirsql_seconds, startup) else 0
-        )
+        fastest = min(this_pair.values())
+        streak = streak + 1 if is_hopeless(fastest, dirsql_seconds, startup) else 0
         if streak == HOPELESS_STREAK:
             break
-    return Paired(native_rows, dirsql_rows_, native_times, dirsql_times)
+    return Paired(rows, dirsql_rows_, native_times, dirsql_times, natives.skipped)
 
 
 def summarize(ratios):
@@ -192,14 +280,47 @@ def summarize(ratios):
     return low, median, high, (high - low) / median
 
 
-def assert_speed_of_light(name, result, startup):
-    ratios = pair_ratios(result.native_seconds, result.dirsql_seconds, startup)
-    low, median, high, spread = summarize(ratios)
-    line = (
-        f"{name}: {len(ratios)} pairs, ratio min {low:.3f} median {median:.3f}"
-        f" max {high:.3f} spread {spread:.0%}, native median"
-        f" {statistics.median(result.native_seconds):.3f}s, startup"
-        f" dirsql {startup.dirsql:.3f}s native {startup.native:.3f}s"
+def fastest_native(result):
+    return min(
+        result.native_seconds,
+        key=lambda name: statistics.median(result.native_seconds[name]),
     )
-    print(f"SPEED {line}")
-    assert median <= TOLERANCE, f"{line}; median is over {TOLERANCE}x"
+
+
+def agreed_rows(result):
+    names = list(result.native_rows)
+    first = names[0]
+    for name in names[1:]:
+        assert result.native_rows[name] == result.native_rows[first], (
+            f"{name} disagrees with {first}"
+        )
+    return result.native_rows[first]
+
+
+def assert_speed_of_light(name, result, startup):
+    fastest = fastest_native(result)
+    lines, verdict = [], None
+    for native in result.native_seconds:
+        ratios = pair_ratios(
+            result.native_seconds[native], result.dirsql_seconds, startup
+        )
+        low, median, high, spread = summarize(ratios)
+        line = (
+            f"{name} vs {native}: {len(ratios)} pairs, ratio min {low:.3f}"
+            f" median {median:.3f} max {high:.3f} spread {spread:.0%}, native"
+            f" median {statistics.median(result.native_seconds[native]):.3f}s"
+        )
+        lines.append(line + (" [fastest]" if native == fastest else ""))
+        if native == fastest:
+            verdict = (median, line)
+    lines.extend(f"{name}: SKIPPED {tool} (not installed)" for tool in result.skipped)
+    lines.append(
+        f"{name}: startup dirsql {startup.dirsql:.3f}s native {startup.native:.3f}s,"
+        f" load {os.getloadavg()[0]:.1f}"
+    )
+    for line in lines:
+        print(f"SPEED {line}")
+    median, line = verdict
+    assert median <= TOLERANCE, (
+        f"fastest native {fastest}: {line}; median is over {TOLERANCE}x"
+    )

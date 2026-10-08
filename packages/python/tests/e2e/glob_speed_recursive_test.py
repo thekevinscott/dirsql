@@ -3,8 +3,8 @@
 A deep, wide tree of markdown files mixed with other files, dotfiles and
 dot-named directories that globstar with dotglob off must not return. A
 quarter of it sits under `a/b`, the rest beside it, so a prefixed glob that
-walked the whole tree would read four times what it needs. Native is `find`
-pruning dot-named entries, faster here than bash globstar. No mocks: real
+walked the whole tree would read four times what it needs. Natives are `find`
+pruning dot-named entries, `fd`, `rg --files` and bash globstar. No mocks: real
 console script, real process, real filesystem.
 """
 
@@ -15,20 +15,42 @@ import shutil
 import pytest
 
 from .speed_of_light import (
+    Native,
+    agreed_rows,
     assert_speed_of_light,
+    baseline,
     cli,
     dirsql_rows,
+    fd,
+    globstar,
     grow_until_native_takes_a_second,
     paired,
+    rg,
+    shell_natives,
     startup_seconds,
     timed,
-    timed_native,
 )
 
-ALL_NATIVE = (
-    "find . -mindepth 1 -name '.*' -prune -o -type f -name '*.md' -printf '%P\\n'"
-)
-PREFIX_NATIVE = "find a/b -mindepth 1 -name '.*' -prune -o -type f -name '*.md' -print"
+ALL_NATIVE = [
+    Native(
+        "find",
+        ("find",),
+        "{bin} . -mindepth 1 -name '.*' -prune -o -type f -name '*.md' -printf '%P\\n'",
+    ),
+    fd("--glob '*.md'"),
+    rg("-g '*.md' -g '!.*'"),
+    globstar("./**/*.md"),
+]
+PREFIX_NATIVE = [
+    Native(
+        "find",
+        ("find",),
+        "{bin} a/b -mindepth 1 -name '.*' -prune -o -type f -name '*.md' -print",
+    ),
+    fd("--glob '*.md' a/b"),
+    rg("-g '*.md' -g '!.*' a/b"),
+    globstar("./a/b/**/*.md"),
+]
 FANOUT = 8
 
 
@@ -70,12 +92,6 @@ def matched(n, prefix):
     )
 
 
-def native(root, script):
-    proc, seconds = timed_native(["bash", "-c", script], root)
-    assert proc.returncode == 0, proc.stderr
-    return sorted(proc.stdout.splitlines()), seconds
-
-
 def describe_recursive_glob_speed_of_light():
     @pytest.fixture(scope="module")
     def tree(tmp_path_factory):
@@ -84,7 +100,7 @@ def describe_recursive_glob_speed_of_light():
         try:
             n = grow_until_native_takes_a_second(
                 lambda lo, hi: build_tree(root, lo, hi),
-                lambda: native(root, ALL_NATIVE),
+                baseline(shell_natives(root, ALL_NATIVE)),
                 start=100_000,
                 ceiling=2**22,
             )
@@ -93,10 +109,10 @@ def describe_recursive_glob_speed_of_light():
             shutil.rmtree(root, ignore_errors=True)
 
     @pytest.mark.parametrize(
-        ("glob", "script", "prefix"),
+        ("glob", "specs", "prefix"),
         [("./**/*.md", ALL_NATIVE, ""), ("./a/b/**/*.md", PREFIX_NATIVE, "a/b")],
     )
-    def it_matches_native_files_within_the_bar(tree, glob, script, prefix):
+    def it_matches_native_files_within_the_bar(tree, glob, specs, prefix):
         root, n, startup = tree
 
         def dirsql(timeout):
@@ -107,8 +123,8 @@ def describe_recursive_glob_speed_of_light():
             )
             return sorted(row for (row,) in dirsql_rows(proc, ("path",))), seconds
 
-        result = paired(lambda: native(root, script), dirsql, startup)
-        expected, actual = result.native_rows, result.dirsql_rows
+        result = paired(shell_natives(root, specs), dirsql, startup)
+        expected, actual = agreed_rows(result), result.dirsql_rows
         assert len(expected) == matched(n, prefix)
 
         assert actual == expected

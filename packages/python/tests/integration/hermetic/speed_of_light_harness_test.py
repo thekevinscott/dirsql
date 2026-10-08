@@ -14,12 +14,16 @@ from tests.e2e.speed_of_light import (
     Paired,
     Startup,
     agreed_rows,
+    baseline,
+    fd,
+    globstar,
     assert_speed_of_light,
     fastest_native,
     median_after_first,
     pair_ratios,
     paired,
     resolve_natives,
+    rg,
     summarize,
 )
 
@@ -120,10 +124,11 @@ def describe_paired():
             paired(one(recorder([], "n", 1.0)), dirsql, NO_STARTUP, pairs=1)
 
 
-def describe_resolve_natives():
-    def installed(*names):
-        return lambda binary: f"/bin/{binary}" if binary in names else None
+def installed(*names):
+    return lambda binary: f"/bin/{binary}" if binary in names else None
 
+
+def describe_resolve_natives():
     def it_keeps_the_natives_whose_tool_is_installed():
         specs = [Native("find", ("find",), "{bin} .")]
         runnable, skipped = resolve_natives(specs, installed("find"))
@@ -248,3 +253,21 @@ def describe_assert_speed_of_light():
         assert "find" in out
         assert "rg" in out
         assert "SKIPPED fd" in out
+
+
+def describe_native_specs():
+    def it_lets_fd_go_by_either_name():
+        assert fd("--glob x").needs == ("fd", "fdfind")
+
+    def it_has_rg_list_files_without_honoring_ignore_files():
+        assert "--files --no-ignore" in rg("-g x").script
+
+    def it_strips_the_dot_slash_from_globstar_output_when_the_pattern_has_one():
+        assert globstar("./**/*.md").script.endswith("| cut -c3-")
+        assert globstar(".cache/**/*.md").script.endswith("| cat")
+
+
+def describe_baseline():
+    def it_is_the_first_native():
+        first, second = object(), object()
+        assert baseline(Natives({"a": first, "b": second}, [])) is first

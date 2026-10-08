@@ -4,8 +4,10 @@ A tree whose `src/vendor` is a symlink to a large directory outside it.
 `'./**/*.md'` follows the link the way bash globstar does: `**` stops on it
 and `*.md` lists the files directly inside, never the directories below.
 `'./docs/'` lists the files directly in `docs`, however deep `docs` goes.
-Native is bash globstar for the first, the reference for which links it
-takes, and `find` bounded at one level for the second. No mocks: real console
+Native for the first is bash globstar alone, the reference for which links it
+takes: `find`, `fd` and `rg` either skip the link or descend through it.
+Natives for the second are `find` bounded at one level, `fd`, `rg --files`
+and a bash glob. No mocks: real console
 script, real process, real filesystem.
 """
 
@@ -16,18 +18,37 @@ import shutil
 import pytest
 
 from .speed_of_light import (
+    Native,
+    agreed_rows,
     assert_speed_of_light,
+    baseline,
     cli,
     dirsql_rows,
+    fd,
+    globstar,
     grow_until_native_takes_a_second,
     paired,
+    rg,
+    shell_natives,
     startup_seconds,
     timed,
-    timed_native,
 )
 
-LINKED = "bash -O globstar -O nullglob -c 'printf \"%s\\n\" ./**/*.md' | cut -c3-"
-DOCS = "find docs -mindepth 1 -maxdepth 1 -type f ! -name '.*' -printf 'docs/%P\\n'"
+LINKED = [globstar("./**/*.md")]
+DOCS = [
+    Native(
+        "find",
+        ("find",),
+        "{bin} docs -mindepth 1 -maxdepth 1 -type f ! -name '.*' -printf 'docs/%P\\n'",
+    ),
+    fd("--max-depth 1 . docs"),
+    rg("--max-depth 1 docs"),
+    Native(
+        "bash-glob",
+        ("bash",),
+        '{bin} -c \'for f in docs/*; do if [ -f "$f" ]; then printf "%s\\n" "$f"; fi; done\'',
+    ),
+]
 FANOUT = 8
 
 
@@ -72,12 +93,6 @@ def matched(n, glob):
     return sum(1 for i in range(n) if hit(i))
 
 
-def native(root, script):
-    proc, seconds = timed_native(["bash", "-c", script], root)
-    assert proc.returncode == 0, proc.stderr
-    return sorted(proc.stdout.splitlines()), seconds
-
-
 def describe_symlink_and_trailing_slash_glob_speed_of_light():
     @pytest.fixture(scope="module")
     def tree(tmp_path_factory):
@@ -86,7 +101,7 @@ def describe_symlink_and_trailing_slash_glob_speed_of_light():
         try:
             n = grow_until_native_takes_a_second(
                 lambda lo, hi: build_tree(root, lo, hi),
-                lambda: native(root, LINKED),
+                baseline(shell_natives(root, LINKED)),
                 start=100_000,
                 ceiling=2**22,
             )
@@ -95,10 +110,10 @@ def describe_symlink_and_trailing_slash_glob_speed_of_light():
             shutil.rmtree(root.parent, ignore_errors=True)
 
     @pytest.mark.parametrize(
-        ("glob", "script"),
+        ("glob", "specs"),
         [("./**/*.md", LINKED), ("./docs/", DOCS)],
     )
-    def it_matches_native_files_within_the_bar(tree, glob, script):
+    def it_matches_native_files_within_the_bar(tree, glob, specs):
         root, n, startup = tree
 
         def dirsql(timeout):
@@ -109,8 +124,8 @@ def describe_symlink_and_trailing_slash_glob_speed_of_light():
             )
             return sorted(row for (row,) in dirsql_rows(proc, ("path",))), seconds
 
-        result = paired(lambda: native(root, script), dirsql, startup)
-        expected, actual = result.native_rows, result.dirsql_rows
+        result = paired(shell_natives(root, specs), dirsql, startup)
+        expected, actual = agreed_rows(result), result.dirsql_rows
         assert len(expected) == matched(n, glob)
 
         assert actual == expected

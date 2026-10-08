@@ -3,7 +3,7 @@
 Few directories at the top, each holding markdown files mixed with other
 files, dotfiles, and a deep chain of directories as large again as the
 files the glob can match. A walk that descended past depth two would read
-the chain for nothing. Native is `find` bounded at depth two. No mocks:
+the chain for nothing. Natives are `find` bounded at depth two, `fd`, `rg --files` and bash globstar. No mocks:
 real console script, real process, real filesystem.
 """
 
@@ -14,20 +14,34 @@ import shutil
 import pytest
 
 from .speed_of_light import (
+    Native,
+    agreed_rows,
     assert_speed_of_light,
+    baseline,
     cli,
     dirsql_rows,
+    fd,
+    globstar,
     grow_until_native_takes_a_second,
     paired,
+    rg,
+    shell_natives,
     startup_seconds,
     timed,
-    timed_native,
 )
 
 GLOB = "./*/*.md"
-NATIVE = (
-    "find . -mindepth 2 -maxdepth 2 -type f -name '*.md' ! -path '*/.*' -printf '%P\\n'"
-)
+NATIVE = [
+    Native(
+        "find",
+        ("find",),
+        "{bin} . -mindepth 2 -maxdepth 2 -type f -name '*.md' ! -path '*/.*'"
+        " -printf '%P\\n'",
+    ),
+    fd("--max-depth 2 --glob '*.md'"),
+    rg("--max-depth 2 -g '*.md' -g '!.*'"),
+    globstar("./*/*.md"),
+]
 TOPS = 32
 FANOUT = 8
 
@@ -68,12 +82,6 @@ def matched(n):
     return sum(1 for i in range(n) if i % TOPS != 17 and i % 9 and i % 50)
 
 
-def native(root):
-    proc, seconds = timed_native(["bash", "-c", NATIVE], root)
-    assert proc.returncode == 0, proc.stderr
-    return sorted(proc.stdout.splitlines()), seconds
-
-
 def describe_depth_bound_glob_speed_of_light():
     @pytest.fixture
     def root(tmp_path):
@@ -86,9 +94,10 @@ def describe_depth_bound_glob_speed_of_light():
 
     def it_matches_native_files_within_the_bar(root):
         startup = startup_seconds()
+        natives = shell_natives(root, NATIVE)
         n = grow_until_native_takes_a_second(
             lambda lo, hi: build_tree(root, lo, hi),
-            lambda: native(root),
+            baseline(natives),
             start=100_000,
             ceiling=2**22,
         )
@@ -101,8 +110,8 @@ def describe_depth_bound_glob_speed_of_light():
             )
             return sorted(row for (row,) in dirsql_rows(proc, ("path",))), seconds
 
-        result = paired(lambda: native(root), dirsql, startup)
-        expected, actual = result.native_rows, result.dirsql_rows
+        result = paired(natives, dirsql, startup)
+        expected, actual = agreed_rows(result), result.dirsql_rows
         assert len(expected) == matched(n)
 
         assert actual == expected
