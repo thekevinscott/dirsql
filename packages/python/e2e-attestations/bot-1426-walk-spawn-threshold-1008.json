@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_depth_bound_test.py tests/e2e/glob_speed_dotfiles_test.py tests/e2e/glob_speed_gitignore_test.py tests/e2e/glob_speed_matchers_test.py tests/e2e/glob_speed_node_modules_test.py tests/e2e/glob_speed_one_level_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_symlink_test.py tests/e2e/stat_speed_test.py tests/e2e/use_case_dossier_test.py -q",
+  "ran_at": 1791462453,
+  "exit_code": 0,
+  "commit": "ed0fc583ad7e8f6151b4c22c81ee3660bdaa7696",
+  "branch": "bot/1426-walk-spawn-threshold-1008"
+}
