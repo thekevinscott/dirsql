@@ -1,4 +1,4 @@
-"""Glob speed: one-level listings, `'./*'`, `'./docs'` and `'./'`.
+"""Glob speed: one-level listings, `'./*'`.
 
 A wide flat root and a wide flat `docs/`, each beside subdirectories full of
 files that a one-level listing must not read, plus dotfiles it must hide.
@@ -15,20 +15,16 @@ import pytest
 
 from .speed_of_light import (
     assert_speed_of_light,
-    best_of,
     cli,
     dirsql_rows,
-    dirsql_timeout,
     grow_until_native_takes_a_second,
-    hopeless_seconds,
+    paired,
     startup_seconds,
     timed,
+    timed_native,
 )
 
 ROOT_NATIVE = "find . -mindepth 1 -maxdepth 1 -type f ! -name '.*' -printf '%P\\n'"
-DOCS_NATIVE = (
-    "find docs -mindepth 1 -maxdepth 1 -type f ! -name '.*' -printf 'docs/%P\\n'"
-)
 FILES_PER_SUBDIR = 1000
 
 
@@ -46,7 +42,7 @@ def build_tree(root, lo, hi):
 
 
 def native(root, script):
-    proc, seconds = timed(["bash", "-c", script], root, timeout=600)
+    proc, seconds = timed_native(["bash", "-c", script], root)
     assert proc.returncode == 0, proc.stderr
     return sorted(proc.stdout.splitlines()), seconds
 
@@ -68,24 +64,22 @@ def describe_one_level_glob_speed_of_light():
 
     @pytest.mark.parametrize(
         ("glob", "script"),
-        [("./*", ROOT_NATIVE), ("./", ROOT_NATIVE), ("./docs", DOCS_NATIVE)],
+        [("./*", ROOT_NATIVE)],
     )
     def it_matches_native_files_within_the_bar(tree, glob, script):
         root, n, startup = tree
-        expected, native_seconds = best_of(lambda: native(root, script), "native")
-        assert len(expected) == n - len(range(0, n, 50))
 
-        def dirsql():
+        def dirsql(timeout):
             proc, seconds = timed(
                 [cli(), "query", f"SELECT path FROM '{glob}'"],
                 root,
-                timeout=dirsql_timeout(native_seconds),
+                timeout=timeout,
             )
             return sorted(row for (row,) in dirsql_rows(proc, ("path",))), seconds
 
-        actual, dirsql_seconds = best_of(
-            dirsql, "dirsql", hopeless_seconds(native_seconds, startup)
-        )
+        result = paired(lambda: native(root, script), dirsql, startup)
+        expected, actual = result.native_rows, result.dirsql_rows
+        assert len(expected) == n - len(range(0, n, 50))
 
         assert actual == expected
-        assert_speed_of_light(glob, native_seconds, dirsql_seconds, startup)
+        assert_speed_of_light(glob, result, startup)

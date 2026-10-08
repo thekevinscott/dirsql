@@ -24,12 +24,13 @@ import urllib.request
 import pytest
 
 from .speed_of_light import (
-    BEST_OF,
     ONE_SECOND,
     TOLERANCE,
     cli,
     grow_until_native_takes_a_second,
 )
+
+BEST_OF = 3
 
 COLUMNS = ("k", "n", "bytes", "tail")
 NEEDLES = ("1", "3", "5", "7", "9")

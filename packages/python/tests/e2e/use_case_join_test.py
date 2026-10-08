@@ -15,14 +15,13 @@ import pytest
 
 from .speed_of_light import (
     assert_speed_of_light,
-    best_of,
     cli,
     dirsql_rows,
-    dirsql_timeout,
     grow_until_native_takes_a_second,
-    hopeless_seconds,
+    paired,
     startup_seconds,
     timed,
+    timed_native,
 )
 
 COLUMNS = ("dir", "title", "abstract_bytes")
@@ -86,7 +85,7 @@ def describe_join_speed_of_light():
         startup = startup_seconds()
 
         def native():
-            proc, seconds = timed(["bash", "-c", NATIVE], root, timeout=600)
+            proc, seconds = timed_native(["bash", "-c", NATIVE], root)
             return native_rows(proc), seconds
 
         n = grow_until_native_takes_a_second(
@@ -95,20 +94,18 @@ def describe_join_speed_of_light():
             start=10_000,
             ceiling=2**20,
         )
-        expected, native_seconds = best_of(native, "native")
-        assert len(expected) == sum(1 for i in range(n) if i % 7 and i % 11)
 
-        def dirsql():
+        def dirsql(timeout):
             proc, seconds = timed(
                 [cli(), "query", QUERY],
                 root,
-                timeout=dirsql_timeout(native_seconds),
+                timeout=timeout,
             )
             return dirsql_rows(proc, COLUMNS), seconds
 
-        actual, dirsql_seconds = best_of(
-            dirsql, "dirsql", hopeless_seconds(native_seconds, startup)
-        )
+        result = paired(native, dirsql, startup)
+        expected, actual = result.native_rows, result.dirsql_rows
+        assert len(expected) == sum(1 for i in range(n) if i % 7 and i % 11)
 
         assert actual == expected
-        assert_speed_of_light("join", native_seconds, dirsql_seconds, startup)
+        assert_speed_of_light("join", result, startup)
