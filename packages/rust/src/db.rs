@@ -3182,6 +3182,25 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_batch_rows_inserts_each_copy_the_table_holds_too_few_of() {
+        let db = batch_db(serde_json::json!([{"id":"a"}]));
+        let next = shaped(
+            &db,
+            "t",
+            serde_json::json!([{"id":"a"},{"id":"a"},{"id":"a"}]),
+        );
+
+        let changes = db.reconcile_batch_rows("t", "", &next).unwrap();
+
+        assert_eq!(
+            table_rows(&db, "t"),
+            vec![(1, "a".into()), (2, "a".into()), (3, "a".into())]
+        );
+        assert_eq!(ids(&changes.added).len(), 2);
+        assert!(changes.removed.is_empty());
+    }
+
+    #[test]
     fn reconcile_batch_rows_writes_nothing_when_no_row_changed() {
         let db = batch_db(serde_json::json!([{"id":"a"},{"id":"b"}]));
         let same = shaped(&db, "t", serde_json::json!([{"id":"b"},{"id":"a"}]));
