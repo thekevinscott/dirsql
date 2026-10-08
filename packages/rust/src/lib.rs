@@ -5402,6 +5402,80 @@ mod internal_tests {
         assert_eq!(row_names(&db), vec!["a.txt", "b.txt"]);
     }
 
+    #[test]
+    fn apply_file_events_refreshes_a_per_table_hook_without_walking_the_tree() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let a = root.join("a.txt");
+        let b = root.join("b.txt");
+        let fake = Arc::new(FakeFs::default().with_subtree(
+            root.clone(),
+            vec![(a.clone(), "items".into()), (b.clone(), "items".into())],
+        ));
+        let (items, calls) = recording_per_table("items", "**/*.txt");
+        let db = DirSQL::with_ignore_and_fs(&root, vec![items], Vec::<String>::new(), fake.clone())
+            .unwrap();
+
+        db.apply_file_events(vec![
+            FileEvent::Created(b.clone()),
+            FileEvent::Created(a.clone()),
+        ]);
+        db.apply_file_events(vec![FileEvent::Modified(a.clone())]);
+        db.apply_file_events(vec![FileEvent::Deleted(a.clone())]);
+
+        assert_eq!(
+            fake.subtree_walks(),
+            Vec::<PathBuf>::new(),
+            "a file event must not re-walk the tree"
+        );
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![vec![a.clone(), b.clone()], vec![a, b.clone()], vec![b]]
+        );
+    }
+
+    #[test]
+    fn apply_file_events_writes_only_the_rows_a_per_table_refresh_changed() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let paths: Vec<PathBuf> = (0..20).map(|i| root.join(format!("f{i:02}.txt"))).collect();
+        let found = paths.iter().map(|p| (p.clone(), "items".into())).collect();
+        let fake = Arc::new(FakeFs::default().with_subtree(root.clone(), found));
+        let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&runs);
+        let items = Table::per_table(
+            "items",
+            "CREATE TABLE items (name TEXT)",
+            "**/*.txt",
+            move |paths: &[PathBuf]| {
+                let run = counted.fetch_add(1, Ordering::SeqCst);
+                Ok(paths
+                    .iter()
+                    .map(|p| {
+                        let name = p.file_name().unwrap().to_string_lossy().into_owned();
+                        name_json_row(&if name == "f00.txt" {
+                            format!("{name}#{run}")
+                        } else {
+                            name
+                        })
+                    })
+                    .collect())
+            },
+        );
+        let db =
+            DirSQL::with_ignore_and_fs(&root, vec![items], Vec::<String>::new(), fake).unwrap();
+        db.apply_file_events(paths.iter().cloned().map(FileEvent::Created).collect());
+        let written = || db.inner.db.lock().unwrap().conn().total_changes();
+        let before = written();
+
+        let events = db.apply_file_events(vec![FileEvent::Modified(paths[0].clone())]);
+
+        assert_eq!(events.len(), 1, "{events:?}");
+        let delta = written() - before;
+        assert!(delta <= 6, "one changed row rewrote {delta} rows");
+        assert_eq!(row_names(&db).len(), 20);
+    }
+
     fn anchored_table(name: &str, glob: &str, anchor: &str) -> Table {
         Table::new(
             name,
