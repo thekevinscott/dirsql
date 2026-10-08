@@ -658,8 +658,16 @@ impl DirSQL {
     pub fn apply_file_events(&self, events: Vec<FileEvent>) -> Vec<RowEvent> {
         let mut pending = PendingRefresh::default();
         let mut out = Vec::new();
+        let mut rescan = false;
         for fe in events {
+            if fe == FileEvent::Rescan {
+                rescan = true;
+                continue;
+            }
             out.extend(self.route_file_event(fe, &mut pending));
+        }
+        if rescan {
+            out.extend(self.rescan(&mut pending));
         }
         out.extend(self.refresh_pending(pending));
         out
@@ -929,6 +937,43 @@ impl DirSQL {
                 continue;
             }
             events.extend(self.handle_delete(&table, &file_path));
+        }
+        events
+    }
+
+    /// Reconcile every table with the tree after the OS dropped events: walk
+    /// each group's root again, drop the rows of files that are gone, re-read
+    /// the files that are there, and rebuild each per-table hook's file list.
+    fn rescan(&self, pending: &mut PendingRefresh) -> Vec<RowEvent> {
+        let owned = match self.inner.db.lock() {
+            Ok(db) => db.owned_files(),
+            Err(e) => return vec![error_event(None, "", e.to_string())],
+        };
+        let owned = match owned {
+            Ok(owned) => owned,
+            Err(e) => return vec![error_event(None, "", e.to_string())],
+        };
+        let mut events = Vec::new();
+        for group in &self.inner.groups {
+            let in_group = |table: &str| group.tables.iter().any(|name| name == table);
+            for (table, file_path) in &owned {
+                if in_group(table)
+                    && !self
+                        .inner
+                        .fs
+                        .is_file(&group.watch_anchor.join(file_path))
+                        .unwrap_or(false)
+                {
+                    events.extend(self.handle_delete(table, file_path));
+                }
+            }
+            for table in group.tables.iter().filter(|table| self.is_per_table(table)) {
+                if let Ok(mut batch_files) = self.inner.batch_files.lock() {
+                    batch_files.remove(table);
+                }
+                pending.mark(table, ".");
+            }
+            events.extend(self.index_subtree(group, &group.watch_anchor, pending));
         }
         events
     }
@@ -5653,7 +5698,10 @@ mod internal_tests {
         );
         assert_eq!(
             rescan_summary(&events),
-            vec!["delete a.txt", "insert c.txt", "insert d.txt"]
+            vec![
+                "Update { table: \"items\", old_row: {\"name\": Text(\"a.txt\")}, new_row: {\"name\": Text(\"d.txt\")}, file_path: \".\" }",
+                "insert c.txt"
+            ]
         );
         assert_eq!(row_names(&db), vec!["b.txt", "c.txt", "d.txt"]);
     }

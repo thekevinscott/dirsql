@@ -1,0 +1,1 @@
+**Fixed** When the OS drops file events (an inotify queue overflow), the watcher now re-walks the tree and reconciles every table, including the file lists of `on-file` tables, emitting the row events for what changed. Before, tables stayed out of step with disk until restart.

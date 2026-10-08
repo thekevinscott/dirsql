@@ -154,6 +154,19 @@ fn forward(
                     let _ = tolerate_missing(watcher.watch(&dir, RecursiveMode::NonRecursive));
                 }
             }
+            if fe == FileEvent::Rescan && PER_DIRECTORY {
+                let Some(watcher) = watcher.upgrade() else {
+                    return;
+                };
+                let mut watcher = watcher.lock().expect("watching a directory does not panic");
+                // Directories created while events were being dropped have no
+                // watch yet.
+                for scope in scopes {
+                    for dir in dirs_to_watch(scopes, &scope.root, &walk_scope) {
+                        let _ = tolerate_missing(watcher.watch(&dir, RecursiveMode::NonRecursive));
+                    }
+                }
+            }
             if tx.send(fe).is_err() {
                 return;
             }
@@ -259,6 +272,10 @@ fn translate_event(event: &Event) -> Vec<FileEvent> {
         if let Some(fe) = fe {
             results.push(fe);
         }
+    }
+
+    if event.need_rescan() {
+        results.push(FileEvent::Rescan);
     }
 
     results

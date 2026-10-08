@@ -991,6 +991,22 @@ impl Db {
             .collect()
     }
 
+    /// Every distinct `(table_name, file_path)` that owns rows, ordered by
+    /// table then path. A per-table hook's rows have no file owner and are
+    /// not listed.
+    pub fn owned_files(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT table_name, file_path FROM ( \
+                SELECT table_name, file_path FROM _dirsql_internal_rows \
+                UNION ALL \
+                SELECT table_name, file_path FROM _dirsql_internal_ranges) \
+             WHERE file_path != '' \
+             ORDER BY table_name, file_path",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     /// Every distinct `(table_name, file_path)` whose file sits beneath the
     /// directory `dir`, ordered by table then path.
     pub fn files_under(&self, dir: &str) -> Result<Vec<(String, String)>> {
@@ -2494,6 +2510,42 @@ mod tests {
             "a multi-row file is listed once; `dir2/` is not beneath `dir`"
         );
         assert!(db.files_under("nothing").unwrap().is_empty());
+    }
+
+    #[test]
+    fn owned_files_lists_each_file_once_and_skips_the_batch_owner() {
+        let db = Db::new().unwrap();
+        db.create_table("t1", "CREATE TABLE t1 (id TEXT)").unwrap();
+        db.create_table("t2", "CREATE TABLE t2 (id TEXT)").unwrap();
+        let row = HashMap::from([("id".into(), Value::Text("x".into()))]);
+        for (table, file, idx) in [
+            ("t2", "c.jsonl", 0),
+            ("t1", "a.jsonl", 0),
+            ("t1", "a.jsonl", 1),
+            ("t1", "d/b.jsonl", 0),
+            ("t1", "", 0),
+        ] {
+            db.insert_row(table, &row, file, idx).unwrap();
+        }
+
+        assert_eq!(
+            db.owned_files().unwrap(),
+            vec![
+                ("t1".to_string(), "a.jsonl".to_string()),
+                ("t1".to_string(), "d/b.jsonl".to_string()),
+                ("t2".to_string(), "c.jsonl".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn owned_files_surfaces_sql_failure() {
+        let db = Db::new().unwrap();
+        db.conn
+            .execute("DROP TABLE _dirsql_internal_rows", [])
+            .unwrap();
+        let err = db.owned_files().unwrap_err();
+        assert!(matches!(err, DbError::Sqlite(_)), "got: {err:?}");
     }
 
     #[test]
