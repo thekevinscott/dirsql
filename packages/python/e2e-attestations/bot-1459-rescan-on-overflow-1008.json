@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/on_file_query_test.py tests/e2e/query_contract_test.py tests/e2e/use_case_notebook_test.py -x -q",
+  "ran_at": 1791464863,
+  "exit_code": 0,
+  "commit": "480d3e491818207f55eb2d8dc6c95498dc27afab",
+  "branch": "bot/1459-rescan-on-overflow-1008"
+}

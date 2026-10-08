@@ -19,6 +19,9 @@ pub enum FileEvent {
     Created(PathBuf),
     Modified(PathBuf),
     Deleted(PathBuf),
+    /// The OS dropped events (an inotify queue overflow); the index may have
+    /// diverged from disk and must be rebuilt from a walk.
+    Rescan,
 }
 
 /// A tree to watch, and the skip rules the scan applies within it.
@@ -151,6 +154,19 @@ fn forward(
                     let _ = tolerate_missing(watcher.watch(&dir, RecursiveMode::NonRecursive));
                 }
             }
+            if fe == FileEvent::Rescan && PER_DIRECTORY {
+                let Some(watcher) = watcher.upgrade() else {
+                    return;
+                };
+                let mut watcher = watcher.lock().expect("watching a directory does not panic");
+                // Directories created while events were being dropped have no
+                // watch yet.
+                for scope in scopes {
+                    for dir in dirs_to_watch(scopes, &scope.root, &walk_scope) {
+                        let _ = tolerate_missing(watcher.watch(&dir, RecursiveMode::NonRecursive));
+                    }
+                }
+            }
             if tx.send(fe).is_err() {
                 return;
             }
@@ -258,6 +274,10 @@ fn translate_event(event: &Event) -> Vec<FileEvent> {
         }
     }
 
+    if event.need_rescan() {
+        results.push(FileEvent::Rescan);
+    }
+
     results
 }
 
@@ -345,6 +365,16 @@ fn access_event(paths: Vec<PathBuf>) -> Event {
         paths,
         attrs: Default::default(),
     }
+}
+
+#[cfg(test)]
+fn rescan_event() -> Event {
+    Event {
+        kind: EventKind::Other,
+        paths: Vec::new(),
+        attrs: Default::default(),
+    }
+    .set_flag(notify::event::Flag::Rescan)
 }
 
 #[cfg(test)]
@@ -561,6 +591,11 @@ mod tests {
             results,
             vec![FileEvent::Deleted(PathBuf::from("/tmp/gone.txt"))]
         );
+    }
+
+    #[test]
+    fn translate_event_turns_a_rescan_flag_into_a_rescan() {
+        assert_eq!(translate_event(&rescan_event()), vec![FileEvent::Rescan]);
     }
 
     #[test]
