@@ -1,4 +1,4 @@
-use crate::listing::{Listing, Seen};
+use crate::listing::{Seen, read_judged};
 use crate::matcher::{GlobError, Pattern, TableMatcher};
 use crate::tree_walk::{Step, walk_in_order};
 use ignore::Match;
@@ -526,35 +526,37 @@ impl<'a> Place<'a> {
         {
             walk.frames.push(Arc::new(matcher));
         }
-        let listing = Listing::read(&dir);
-        let taken = judge_all(listing.entries(), &|listed| {
-            walk.take(
-                &dir,
-                listing.name(listed),
-                listed.seen,
-                &rel,
-                &states,
-                linked,
-            )
-            .filter(|taken| match taken {
-                Taken::File(child) => keep(child),
-                Taken::Dir { .. } => true,
-            })
+        let judged = read_judged(&dir, &|name, seen| {
+            walk.take(&dir, name, seen, &rel, &states, linked)
+                .filter(|taken| match taken {
+                    Taken::File(child) => keep(child),
+                    Taken::Dir { .. } => true,
+                })
         });
         let dir: Arc<Path> = Arc::from(dir);
-        let mut steps: Vec<Step<Box<Place<'a>>, Found>> = if walk.dirs {
-            taken
-                .iter()
-                .filter_map(|taken| match taken {
-                    Some(Taken::Dir { child, .. }) => {
-                        Some(Step::Leaf((child.clone(), Arc::clone(&dir))))
-                    }
-                    _ => None,
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let mut dir_leaves: Vec<Step<Box<Place<'a>>, Found>> = Vec::new();
+        let mut entered: Vec<Step<Box<Place<'a>>, Found>> = Vec::new();
+        judged.each(&mut |name, taken| match taken {
+            Some(Taken::Dir {
+                child,
+                next,
+                linked,
+            }) => {
+                if walk.dirs {
+                    dir_leaves.push(Step::Leaf((child.clone(), Arc::clone(&dir))));
+                }
+                entered.push(Step::Dir(Box::new(Place {
+                    walk: walk.clone(),
+                    dir: dir.join(name),
+                    rel: child,
+                    states: next,
+                    linked,
+                })));
+            }
+            Some(Taken::File(child)) => entered.push(Step::Leaf((child, Arc::clone(&dir)))),
+            None => {}
+        });
+        let mut steps = dir_leaves;
         let relative = walk.glob.map_or_else(Vec::new, |glob| {
             glob.relative_entries(&states)
                 .into_iter()
@@ -570,27 +572,8 @@ impl<'a> Place<'a> {
                 .collect::<Vec<_>>()
         });
         steps.extend(relative);
-        let entered =
-            listing
-                .entries()
-                .iter()
-                .zip(taken)
-                .filter_map(|(listed, taken)| match taken? {
-                    Taken::Dir {
-                        child,
-                        next,
-                        linked,
-                    } => Some(Step::Dir(Box::new(Place {
-                        walk: walk.clone(),
-                        dir: dir.join(listing.name(listed)),
-                        rel: child,
-                        states: next,
-                        linked,
-                    }))),
-                    Taken::File(child) => Some(Step::Leaf((child, Arc::clone(&dir)))),
-                });
         if steps.is_empty() {
-            return entered.collect();
+            return entered;
         }
         steps.extend(entered);
         steps

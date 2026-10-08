@@ -76,6 +76,37 @@ type Names = Packed;
 #[cfg(not(unix))]
 type Names = Owned;
 
+/// The entries of a directory, each judged, in the byte order of their names.
+pub(crate) struct Judged<R> {
+    listing: Listing,
+    results: Vec<Option<R>>,
+}
+
+impl<R> Judged<R> {
+    /// Hands `f` each entry's name and judgment, in name order.
+    pub(crate) fn each(mut self, f: &mut dyn FnMut(&OsStr, R)) {
+        for (listed, result) in self.listing.entries().iter().zip(self.results.iter_mut()) {
+            if let Some(result) = result.take() {
+                f(self.listing.name(listed), result);
+            }
+        }
+    }
+}
+
+/// Reads `dir` and judges each entry with `judge`.
+pub(crate) fn read_judged<R: Send>(
+    dir: &Path,
+    judge: &(dyn Fn(&OsStr, Seen) -> R + Sync),
+) -> Judged<R> {
+    let listing = Listing::read(dir);
+    let results = listing
+        .entries()
+        .iter()
+        .map(|listed| Some(judge(listing.name(listed), listed.seen)))
+        .collect();
+    Judged { listing, results }
+}
+
 impl Listing {
     /// The entries of `dir` in the byte order of their names; none when it
     /// cannot be read.
@@ -353,5 +384,56 @@ mod tests {
         let second = names.add(OsStr::new("second"));
         assert_eq!(names.get(first, 0), "first");
         assert_eq!(names.get(second, 0), "second");
+    }
+    const LARGE: usize = 3 * 4096;
+
+    fn large_dir() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for n in 0..LARGE {
+            std::fs::write(dir.path().join(format!("f{n:05}")), "").unwrap();
+        }
+        dir
+    }
+
+    fn judged_names(dir: &Path) -> Vec<String> {
+        let mut got = Vec::new();
+        read_judged(dir, &|name, _| name.len() > 0).each(&mut |name, keep| {
+            if keep {
+                got.push(name.to_string_lossy().into_owned());
+            }
+        });
+        got
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_large_directory_is_judged_whole_and_handed_back_in_name_order() {
+        let dir = large_dir();
+        let want: Vec<String> = (0..LARGE).map(|n| format!("f{n:05}")).collect();
+        assert_eq!(judged_names(dir.path()), want);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_large_directory_is_judged_on_more_than_one_thread() {
+        let dir = large_dir();
+        let threads = std::sync::Mutex::new(std::collections::HashSet::new());
+        read_judged(dir.path(), &|_, _| {
+            threads.lock().unwrap().insert(std::thread::current().id());
+        })
+        .each(&mut |_, ()| {});
+        let judged_on = threads.lock().unwrap().len();
+        assert!(judged_on > 1, "judged on {judged_on} thread(s)");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_small_directory_is_judged_on_the_calling_thread() {
+        let dir = fixture();
+        let caller = std::thread::current().id();
+        let mut on_caller = Vec::new();
+        read_judged(dir.path(), &|_, _| std::thread::current().id() == caller)
+            .each(&mut |_, here| on_caller.push(here));
+        assert_eq!(on_caller, vec![true, true]);
     }
 }
