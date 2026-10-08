@@ -1,0 +1,1 @@
+**Changed** — `watch()` (and the polling primitives) on an instance with no named tables now fails immediately with `watching requires at least one named table: path-tables emit no watch events; define a table`, instead of starting a watcher that never yields. The `dirsql server` `/events` endpoint returns 503 with the same reason; `/query` is unaffected.

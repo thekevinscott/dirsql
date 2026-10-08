@@ -7,7 +7,8 @@ side.
 
 Row events are emitted for **named tables**, so this flow needs a config —
 [path-tables](../reference/path-tables.md) are scanned per query and are not
-watched. Define one next to your files. A named table's columns are whatever
+watched, so `watch()` on an instance with no named tables raises an error and
+`/events` returns `503`. Define one next to your files. A named table's columns are whatever
 its [`on-file`](../reference/config.md#table) hook emits; here a minimal hook
 prints each file's basename:
 

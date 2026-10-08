@@ -115,4 +115,4 @@ Row values serialize as in [`POST /query`](#value-serialization).
 |---|---|
 | `200` | Stream opened (`text/event-stream`). |
 | `405` | `POST /events`. Plain-text body `method not allowed`. |
-| `503` | The server is in [degraded mode](./cli.md#degraded-mode), or its filesystem watcher failed to start (for example, the inotify limit is exhausted). JSON `{"error": …}` body; for a watcher failure the message starts `filesystem watcher failed to start:` and gives the reason. `POST /query` keeps working. |
+| `503` | The server is in [degraded mode](./cli.md#degraded-mode), or its filesystem watcher failed to start (for example, the inotify limit is exhausted, or the instance has no named tables). JSON `{"error": …}` body; for a watcher failure the message starts `filesystem watcher failed to start:` and gives the reason. `POST /query` keeps working. |
