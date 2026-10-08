@@ -19,6 +19,9 @@ pub enum FileEvent {
     Created(PathBuf),
     Modified(PathBuf),
     Deleted(PathBuf),
+    /// The OS dropped events (an inotify queue overflow); the index may have
+    /// diverged from disk and must be rebuilt from a walk.
+    Rescan,
 }
 
 /// A tree to watch, and the skip rules the scan applies within it.
@@ -348,6 +351,16 @@ fn access_event(paths: Vec<PathBuf>) -> Event {
 }
 
 #[cfg(test)]
+fn rescan_event() -> Event {
+    Event {
+        kind: EventKind::Other,
+        paths: Vec::new(),
+        attrs: Default::default(),
+    }
+    .set_flag(notify::event::Flag::Rescan)
+}
+
+#[cfg(test)]
 fn io_error(raw_os_error: i32) -> notify::Error {
     notify::Error::io(std::io::Error::from_raw_os_error(raw_os_error))
 }
@@ -561,6 +574,11 @@ mod tests {
             results,
             vec![FileEvent::Deleted(PathBuf::from("/tmp/gone.txt"))]
         );
+    }
+
+    #[test]
+    fn translate_event_turns_a_rescan_flag_into_a_rescan() {
+        assert_eq!(translate_event(&rescan_event()), vec![FileEvent::Rescan]);
     }
 
     #[test]

@@ -718,6 +718,7 @@ impl DirSQL {
     fn route_file_event(&self, event: FileEvent, pending: &mut PendingRefresh) -> Vec<RowEvent> {
         let abs_path = match &event {
             FileEvent::Created(p) | FileEvent::Modified(p) | FileEvent::Deleted(p) => p.clone(),
+            FileEvent::Rescan => return Vec::new(),
         };
         let mut events = Vec::new();
         for (group, rel_path_buf) in self.groups_containing(&abs_path) {
@@ -767,6 +768,7 @@ impl DirSQL {
                     FileEvent::Created(_) | FileEvent::Modified(_) => {
                         events.extend(self.handle_upsert(&m.table_name, &abs_path, &rel_path));
                     }
+                    FileEvent::Rescan => {}
                 }
             }
             // The mirror of the walk above: a directory that leaves the tree
@@ -5561,6 +5563,105 @@ mod internal_tests {
             &Vec::<PathBuf>::new()
         );
         assert_eq!(row_names(&db), Vec::<String>::new());
+    }
+
+    fn rescan_fixture(per_table: bool) -> (TempDir, PathBuf, DirSQL, Calls) {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let (items, calls) = recording_per_table("items", "**/*.txt");
+        let table = if per_table {
+            items
+        } else {
+            Table::new(
+                "items",
+                "CREATE TABLE items (name TEXT)",
+                "**/*.txt",
+                |path| {
+                    vec![Row::from_iter([(
+                        "name".to_string(),
+                        Value::Text(path.rsplit('/').next().unwrap().to_string()),
+                    )])]
+                },
+            )
+        };
+        let db =
+            DirSQL::with_ignore_and_fs(&root, vec![table], Vec::<String>::new(), Arc::new(RealFs))
+                .unwrap();
+        for rel in ["a.txt", "sub/b.txt"] {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "x").unwrap();
+            db.apply_file_events(vec![FileEvent::Created(path)]);
+        }
+        (dir, root, db, calls)
+    }
+
+    fn drift(root: &Path) {
+        std::fs::remove_file(root.join("a.txt")).unwrap();
+        std::fs::write(root.join("sub/c.txt"), "x").unwrap();
+        std::fs::write(root.join("d.txt"), "x").unwrap();
+    }
+
+    fn name_of(row: &Row) -> String {
+        match &row["name"] {
+            Value::Text(n) => n.clone(),
+            other => format!("{other:?}"),
+        }
+    }
+
+    fn rescan_summary(events: &[RowEvent]) -> Vec<String> {
+        let mut out: Vec<String> = events
+            .iter()
+            .map(|event| match event {
+                RowEvent::Insert { row, .. } => format!("insert {}", name_of(row)),
+                RowEvent::Delete { row, .. } => format!("delete {}", name_of(row)),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn a_rescan_reconciles_a_per_file_table_with_the_tree() {
+        let (_dir, root, db, _) = rescan_fixture(false);
+        drift(&root);
+
+        let events = db.apply_file_events(vec![FileEvent::Rescan]);
+
+        assert_eq!(
+            rescan_summary(&events),
+            vec!["delete a.txt", "insert c.txt", "insert d.txt"]
+        );
+        assert_eq!(row_names(&db), vec!["b.txt", "c.txt", "d.txt"]);
+    }
+
+    #[test]
+    fn a_rescan_rebuilds_a_per_table_hooks_files_and_reconciles_its_rows() {
+        let (_dir, root, db, calls) = rescan_fixture(true);
+        drift(&root);
+
+        let events = db.apply_file_events(vec![FileEvent::Rescan]);
+
+        assert_eq!(
+            calls.lock().unwrap().last().unwrap(),
+            &vec![
+                root.join("d.txt"),
+                root.join("sub/b.txt"),
+                root.join("sub/c.txt")
+            ]
+        );
+        assert_eq!(
+            rescan_summary(&events),
+            vec!["delete a.txt", "insert c.txt", "insert d.txt"]
+        );
+        assert_eq!(row_names(&db), vec!["b.txt", "c.txt", "d.txt"]);
+    }
+
+    #[test]
+    fn a_rescan_of_a_tree_that_did_not_drift_emits_nothing() {
+        let (_dir, _root, db, _) = rescan_fixture(false);
+        assert_eq!(db.apply_file_events(vec![FileEvent::Rescan]), vec![]);
     }
 
     fn anchored_table(name: &str, glob: &str, anchor: &str) -> Table {
