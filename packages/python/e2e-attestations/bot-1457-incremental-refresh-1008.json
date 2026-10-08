@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/on_file_query_test.py tests/e2e/query_contract_test.py tests/e2e/use_case_transcripts_test.py -x -q",
+  "ran_at": 1791462122,
+  "exit_code": 0,
+  "commit": "e59418c942479166b7edd1a1587ed559574c60b7",
+  "branch": "bot/1457-incremental-refresh-1008"
+}

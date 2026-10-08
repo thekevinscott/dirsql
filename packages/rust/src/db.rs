@@ -266,6 +266,28 @@ pub fn ensure_internal_rows_table(conn: &Connection) -> rusqlite::Result<()> {
     )
 }
 
+fn insert_sql(table: &str, columns: &[String]) -> String {
+    if columns.is_empty() {
+        return format!("INSERT INTO \"{table}\" DEFAULT VALUES");
+    }
+    let names: Vec<String> = columns.iter().map(|c| format!("\"{c}\"")).collect();
+    let placeholders: Vec<String> = (1..=columns.len()).map(|i| format!("?{i}")).collect();
+    format!(
+        "INSERT INTO \"{table}\" ({}) VALUES ({})",
+        names.join(", "),
+        placeholders.join(", ")
+    )
+}
+
+/// The rows a [`Db::reconcile_batch_rows`] did not carry over: those only the
+/// table held (`removed`) and those only the new rows hold (`added`), each in
+/// its original order.
+#[derive(Debug, Default)]
+pub struct RowChanges {
+    pub removed: Vec<HashMap<String, Value>>,
+    pub added: Vec<HashMap<String, Value>>,
+}
+
 /// A batch of rows laid out in a table's DDL column order, so each row binds
 /// positionally with no per-cell lookup.
 #[derive(Debug, Clone, PartialEq)]
@@ -700,18 +722,7 @@ impl Db {
     /// interleave batches of different owners.
     pub fn insert_rows(&self, table: &str, rows: &ShapedRows, file_path: &str) -> Result<()> {
         validate_identifier(table)?;
-        let columns = &rows.columns;
-        let sql = if columns.is_empty() {
-            format!("INSERT INTO \"{table}\" DEFAULT VALUES")
-        } else {
-            let names: Vec<String> = columns.iter().map(|c| format!("\"{c}\"")).collect();
-            let placeholders: Vec<String> = (1..=columns.len()).map(|i| format!("?{i}")).collect();
-            format!(
-                "INSERT INTO \"{table}\" ({}) VALUES ({})",
-                names.join(", "),
-                placeholders.join(", ")
-            )
-        };
+        let sql = insert_sql(table, &rows.columns);
         let tx = if self.conn.is_autocommit() {
             Some(self.conn.unchecked_transaction()?)
         } else {
@@ -741,6 +752,99 @@ impl Db {
             tx.commit()?;
         }
         Ok(())
+    }
+
+    /// Make the table's rows, all owned by the batch `owner`, equal `rows`,
+    /// writing only the difference. The rows are compared as a multiset (a
+    /// batch has no row identity): an equal row already stored is left in
+    /// place, a stored row with no match is deleted, and a new row with no
+    /// match is inserted. The owner's rowid range is then re-fitted to the
+    /// table. Run it inside the caller's transaction.
+    pub fn reconcile_batch_rows(
+        &self,
+        table: &str,
+        owner: &str,
+        rows: &ShapedRows,
+    ) -> Result<RowChanges> {
+        validate_identifier(table)?;
+        let columns = &rows.columns;
+        let select = if columns.is_empty() {
+            format!("SELECT rowid FROM \"{table}\" ORDER BY rowid")
+        } else {
+            let names: Vec<String> = columns.iter().map(|c| format!("\"{c}\"")).collect();
+            format!(
+                "SELECT rowid, {} FROM \"{table}\" ORDER BY rowid",
+                names.join(", ")
+            )
+        };
+        let mut stored: Vec<(i64, Vec<Value>)> = Vec::new();
+        {
+            let mut stmt = self.conn.prepare(&select)?;
+            let mut cursor = stmt.query([])?;
+            while let Some(row) = cursor.next()? {
+                let cells = (0..columns.len())
+                    .map(|i| row.get::<_, rusqlite::types::Value>(i + 1).map(Value::from))
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                stored.push((row.get(0)?, cells));
+            }
+        }
+        let mut unclaimed: HashMap<String, Vec<usize>> = HashMap::new();
+        for (index, (_, cells)) in stored.iter().enumerate().rev() {
+            unclaimed
+                .entry(format!("{cells:?}"))
+                .or_default()
+                .push(index);
+        }
+        let mut added = Vec::new();
+        for (index, cells) in rows.cells.iter().enumerate() {
+            match unclaimed.get_mut(&format!("{cells:?}")) {
+                Some(indexes) if !indexes.is_empty() => {
+                    indexes.pop();
+                }
+                _ => added.push(index),
+            }
+        }
+        let mut removed: Vec<usize> = unclaimed.into_values().flatten().collect();
+        removed.sort_unstable();
+
+        let to_map = |cells: &[Value]| -> HashMap<String, Value> {
+            columns.iter().cloned().zip(cells.iter().cloned()).collect()
+        };
+        let changes = RowChanges {
+            removed: removed.iter().map(|&i| to_map(&stored[i].1)).collect(),
+            added: added.iter().map(|&i| to_map(&rows.cells[i])).collect(),
+        };
+        if removed.is_empty() && added.is_empty() {
+            return Ok(changes);
+        }
+        let mut delete = self
+            .conn
+            .prepare_cached(&format!("DELETE FROM \"{table}\" WHERE rowid = ?1"))?;
+        for &index in &removed {
+            delete.execute([stored[index].0])?;
+        }
+        let mut insert = self.conn.prepare_cached(&insert_sql(table, columns))?;
+        for &index in &added {
+            for (i, value) in rows.cells[index].iter().enumerate() {
+                insert.raw_bind_parameter(i + 1, value)?;
+            }
+            insert.raw_execute()?;
+        }
+        self.conn.execute(
+            "DELETE FROM _dirsql_internal_ranges WHERE table_name = ?1 AND file_path = ?2",
+            rusqlite::params![table, owner],
+        )?;
+        let (first, last): (Option<i64>, Option<i64>) = self.conn.query_row(
+            &format!("SELECT min(rowid), max(rowid) FROM \"{table}\""),
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if let (Some(first), Some(last)) = (first, last) {
+            self.conn
+                .prepare_cached(RANGE_INSERT)?
+                .execute(rusqlite::params![table, owner, first, last])?;
+        }
+        Ok(changes)
     }
 
     /// Both the table name and every user-provided column name are validated
@@ -3021,6 +3125,141 @@ mod tests {
 
         assert!(db.get_rows_by_file("t", "a.json").unwrap().is_empty());
         assert!(range_rows(&db, "t").is_empty());
+    }
+
+    fn table_rows(db: &Db, table: &str) -> Vec<(i64, String)> {
+        db.conn()
+            .prepare(&format!("SELECT rowid, id FROM {table} ORDER BY rowid"))
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    fn ids(changes: &[HashMap<String, Value>]) -> Vec<Value> {
+        changes.iter().map(|row| row["id"].clone()).collect()
+    }
+
+    fn batch_db(ids: serde_json::Value) -> Db {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
+        db.insert_rows("t", &shaped(&db, "t", ids), "").unwrap();
+        db
+    }
+
+    #[test]
+    fn reconcile_batch_rows_leaves_equal_rows_in_place_and_writes_the_rest() {
+        let db = batch_db(serde_json::json!([{"id":"a"},{"id":"b"},{"id":"c"}]));
+        let next = shaped(
+            &db,
+            "t",
+            serde_json::json!([{"id":"a"},{"id":"x"},{"id":"c"}]),
+        );
+        let before = db.conn().total_changes();
+
+        let changes = db.reconcile_batch_rows("t", "", &next).unwrap();
+
+        assert_eq!(
+            table_rows(&db, "t"),
+            vec![(1, "a".into()), (3, "c".into()), (4, "x".into())]
+        );
+        assert_eq!(ids(&changes.removed), vec![Value::Text("b".into())]);
+        assert_eq!(ids(&changes.added), vec![Value::Text("x".into())]);
+        assert_eq!(db.conn().total_changes() - before, 4);
+    }
+
+    #[test]
+    fn reconcile_batch_rows_compares_rows_as_a_multiset() {
+        let db = batch_db(serde_json::json!([{"id":"a"},{"id":"a"},{"id":"a"}]));
+        let next = shaped(&db, "t", serde_json::json!([{"id":"a"},{"id":"a"}]));
+
+        let changes = db.reconcile_batch_rows("t", "", &next).unwrap();
+
+        assert_eq!(table_rows(&db, "t"), vec![(1, "a".into()), (2, "a".into())]);
+        assert_eq!(ids(&changes.removed), vec![Value::Text("a".into())]);
+        assert!(changes.added.is_empty());
+    }
+
+    #[test]
+    fn reconcile_batch_rows_inserts_each_copy_the_table_holds_too_few_of() {
+        let db = batch_db(serde_json::json!([{"id":"a"}]));
+        let next = shaped(
+            &db,
+            "t",
+            serde_json::json!([{"id":"a"},{"id":"a"},{"id":"a"}]),
+        );
+
+        let changes = db.reconcile_batch_rows("t", "", &next).unwrap();
+
+        assert_eq!(
+            table_rows(&db, "t"),
+            vec![(1, "a".into()), (2, "a".into()), (3, "a".into())]
+        );
+        assert_eq!(ids(&changes.added).len(), 2);
+        assert!(changes.removed.is_empty());
+    }
+
+    #[test]
+    fn reconcile_batch_rows_writes_nothing_when_no_row_changed() {
+        let db = batch_db(serde_json::json!([{"id":"a"},{"id":"b"}]));
+        let same = shaped(&db, "t", serde_json::json!([{"id":"b"},{"id":"a"}]));
+        let before = db.conn().total_changes();
+
+        let changes = db.reconcile_batch_rows("t", "", &same).unwrap();
+
+        assert!(changes.removed.is_empty() && changes.added.is_empty());
+        assert_eq!(db.conn().total_changes(), before);
+    }
+
+    #[test]
+    fn reconcile_batch_rows_refits_the_owners_range_to_the_table() {
+        let db = batch_db(serde_json::json!([{"id":"a"},{"id":"b"},{"id":"c"}]));
+        let next = shaped(&db, "t", serde_json::json!([{"id":"b"},{"id":"d"}]));
+        db.reconcile_batch_rows("t", "", &next).unwrap();
+
+        assert_eq!(range_rows(&db, "t"), vec![(String::new(), 2, 3)]);
+        let read: Vec<Value> = db
+            .get_rows_by_file("t", "")
+            .unwrap()
+            .into_iter()
+            .map(|r| r["id"].clone())
+            .collect();
+        assert_eq!(read, vec![Value::Text("b".into()), Value::Text("d".into())]);
+
+        let empty = shaped(&db, "t", serde_json::json!([]));
+        db.reconcile_batch_rows("t", "", &empty).unwrap();
+        assert!(range_rows(&db, "t").is_empty());
+        assert!(table_rows(&db, "t").is_empty());
+    }
+
+    #[test]
+    fn reconcile_batch_rows_binds_an_empty_column_list_by_default_values() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
+        let rows = ShapedRows {
+            columns: vec![],
+            cells: vec![vec![]],
+        };
+        db.reconcile_batch_rows("t", "", &rows).unwrap();
+        assert_eq!(table_rows_count(&db), 1);
+    }
+
+    fn table_rows_count(db: &Db) -> i64 {
+        db.conn()
+            .query_row("SELECT count(*) FROM t", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn reconcile_batch_rows_rejects_an_unsafe_table_name() {
+        let db = Db::new().unwrap();
+        let rows = ShapedRows {
+            columns: vec![],
+            cells: vec![],
+        };
+        let err = db.reconcile_batch_rows("bad name", "", &rows).unwrap_err();
+        assert!(matches!(err, DbError::InvalidIdentifier(_)), "got: {err}");
     }
 
     #[test]

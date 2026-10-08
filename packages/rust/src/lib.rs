@@ -755,6 +755,8 @@ impl DirSQL {
 
             for m in matches {
                 if self.is_per_table(&m.table_name) {
+                    let deleted = matches!(event, FileEvent::Deleted(_));
+                    self.track_batch_file(&m.table_name, &abs_path, &rel_path, deleted);
                     pending.mark(&m.table_name, &rel_path);
                     continue;
                 }
@@ -832,22 +834,20 @@ impl DirSQL {
         else {
             return Vec::new();
         };
-        let root = &group.anchor;
-        let mut rel_paths = Vec::new();
-        let mut abs_paths = Vec::new();
-        for (path, matched) in self.inner.fs.scan_subtree(root, root, &group.matcher) {
-            if matched == table {
-                rel_paths.push(relative_path(root, &path));
-                abs_paths.push(path);
-            }
-        }
+        let abs_paths: Vec<PathBuf> = match self.inner.batch_files.lock() {
+            Ok(files) => files
+                .get(table)
+                .map(|rel_paths| rel_paths.iter().map(|rel| group.anchor.join(rel)).collect())
+                .unwrap_or_default(),
+            Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
+        };
         let raw_rows = match collect_table_rows(hook.as_ref(), &abs_paths) {
             Ok(rows) => rows,
             Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
         };
         let strict = *self.inner.strict_map.get(table).unwrap_or(&false);
 
-        let (old_rows, new_rows) = {
+        let changes = {
             let db = match self.inner.db.lock() {
                 Ok(g) => g,
                 Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
@@ -856,27 +856,41 @@ impl DirSQL {
                 Ok(rows) => rows,
                 Err(message) => return vec![error_event(Some(table), trigger, message)],
             };
-            let old_rows = match db.get_rows_by_file(table, BATCH_OWNER) {
-                Ok(rows) => rows,
-                Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
-            };
             let _tx = match db.conn().unchecked_transaction() {
                 Ok(tx) => tx,
                 Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
             };
-            if let Err(e) = replace_table_rows(&db, table, &new_rows) {
-                return vec![error_event(Some(table), trigger, e.to_string())];
-            }
+            let changes = match db.reconcile_batch_rows(table, BATCH_OWNER, &new_rows) {
+                Ok(changes) => changes,
+                Err(e) => return vec![error_event(Some(table), trigger, e.to_string())],
+            };
             if let Err(e) = _tx.commit() {
                 return vec![error_event(Some(table), trigger, e.to_string())];
             }
-            (old_rows, new_rows.to_maps())
+            changes
         };
-        if let Ok(mut files) = self.inner.batch_files.lock() {
-            files.insert(table.to_string(), rel_paths);
-        }
 
-        differ::diff_unordered(table, &old_rows, &new_rows, trigger)
+        differ::diff_unordered(table, &changes.removed, &changes.added, trigger)
+    }
+
+    /// Record in the table's file set whether `abs_path` is, now, one of the
+    /// files its per-table hook runs over. The set stays in walk order
+    /// (component-wise byte order), so the hook sees the same argument list a
+    /// walk of the tree would give it.
+    fn track_batch_file(&self, table: &str, abs_path: &Path, rel_path: &str, deleted: bool) {
+        let present = !deleted && self.inner.fs.is_file(abs_path).unwrap_or(false);
+        let Ok(mut batch_files) = self.inner.batch_files.lock() else {
+            return;
+        };
+        let files = batch_files.entry(table.to_string()).or_default();
+        let at = files.binary_search_by(|file| Path::new(file).cmp(Path::new(rel_path)));
+        match (present, at) {
+            (true, Err(at)) => files.insert(at, rel_path.to_string()),
+            (false, Ok(at)) => {
+                files.remove(at);
+            }
+            _ => {}
+        }
     }
 
     /// Delete the rows of every file recorded beneath `rel_dir`, in every
@@ -889,9 +903,10 @@ impl DirSQL {
     ) -> Vec<RowEvent> {
         let prefix = format!("{rel_dir}/");
         let in_group = |table: &str| group.tables.iter().any(|name| name == table);
-        if let Ok(batch_files) = self.inner.batch_files.lock() {
-            for (table, files) in batch_files.iter() {
+        if let Ok(mut batch_files) = self.inner.batch_files.lock() {
+            for (table, files) in batch_files.iter_mut() {
                 if in_group(table) && files.iter().any(|file| file.starts_with(&prefix)) {
+                    files.retain(|file| !file.starts_with(&prefix));
                     pending.mark(table, rel_dir);
                 }
             }
@@ -934,6 +949,7 @@ impl DirSQL {
         for (path, table) in self.inner.fs.scan_subtree(base, dir, &group.matcher) {
             let rel_path = scanner::to_slash(path.strip_prefix(base).unwrap_or(&path));
             if self.is_per_table(&table) {
+                self.track_batch_file(&table, &path, &rel_path, false);
                 pending.mark(&table, &rel_path);
                 continue;
             }
@@ -2342,12 +2358,6 @@ fn stream_table_rows(
         let produced = producer.join().expect("per-table hook panicked");
         Ok(produced.and(shaped))
     })
-}
-
-/// Replace a per-table hook's rows wholesale under [`BATCH_OWNER`].
-fn replace_table_rows(db: &Db, table: &str, rows: &ShapedRows) -> db::Result<()> {
-    db.delete_rows_by_file(table, BATCH_OWNER)?;
-    db.insert_rows(table, rows, BATCH_OWNER)
 }
 
 fn error_event(table: Option<&str>, rel_path: &str, error: String) -> RowEvent {
@@ -5400,6 +5410,157 @@ mod internal_tests {
             ]
         );
         assert_eq!(row_names(&db), vec!["a.txt", "b.txt"]);
+    }
+
+    #[test]
+    fn apply_file_events_refreshes_a_per_table_hook_without_walking_the_tree() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let a = root.join("a.txt");
+        let b = root.join("b.txt");
+        let fake = Arc::new(FakeFs::default().with_subtree(
+            root.clone(),
+            vec![(a.clone(), "items".into()), (b.clone(), "items".into())],
+        ));
+        let (items, calls) = recording_per_table("items", "**/*.txt");
+        let db = DirSQL::with_ignore_and_fs(&root, vec![items], Vec::<String>::new(), fake.clone())
+            .unwrap();
+
+        db.apply_file_events(vec![
+            FileEvent::Created(b.clone()),
+            FileEvent::Created(a.clone()),
+        ]);
+        db.apply_file_events(vec![FileEvent::Modified(a.clone())]);
+        db.apply_file_events(vec![FileEvent::Deleted(a.clone())]);
+
+        assert_eq!(
+            fake.subtree_walks(),
+            Vec::<PathBuf>::new(),
+            "a file event must not re-walk the tree"
+        );
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![vec![a.clone(), b.clone()], vec![a, b.clone()], vec![b]]
+        );
+    }
+
+    #[test]
+    fn apply_file_events_writes_only_the_rows_a_per_table_refresh_changed() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let paths: Vec<PathBuf> = (0..20).map(|i| root.join(format!("f{i:02}.txt"))).collect();
+        let found = paths.iter().map(|p| (p.clone(), "items".into())).collect();
+        let fake = Arc::new(FakeFs::default().with_subtree(root.clone(), found));
+        let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&runs);
+        let items = Table::per_table(
+            "items",
+            "CREATE TABLE items (name TEXT)",
+            "**/*.txt",
+            move |paths: &[PathBuf]| {
+                let run = counted.fetch_add(1, Ordering::SeqCst);
+                Ok(paths
+                    .iter()
+                    .map(|p| {
+                        let name = p.file_name().unwrap().to_string_lossy().into_owned();
+                        name_json_row(&if name == "f00.txt" {
+                            format!("{name}#{run}")
+                        } else {
+                            name
+                        })
+                    })
+                    .collect())
+            },
+        );
+        let db =
+            DirSQL::with_ignore_and_fs(&root, vec![items], Vec::<String>::new(), fake).unwrap();
+        db.apply_file_events(paths.iter().cloned().map(FileEvent::Created).collect());
+        let written = || db.inner.db.lock().unwrap().conn().total_changes();
+        let before = written();
+
+        let events = db.apply_file_events(vec![FileEvent::Modified(paths[0].clone())]);
+
+        assert_eq!(events.len(), 1, "{events:?}");
+        let delta = written() - before;
+        assert!(delta <= 6, "one changed row rewrote {delta} rows");
+        assert_eq!(row_names(&db).len(), 20);
+    }
+
+    fn walked_paths(root: &Path, glob: &str) -> Vec<PathBuf> {
+        let matcher = TableMatcher::new(&[(glob, "items")], &[]).unwrap();
+        scanner::scan_subtree(root, root, &matcher)
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect()
+    }
+
+    #[test]
+    fn a_per_table_hook_gets_the_argument_list_a_walk_of_the_tree_gives_it() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let write = |rel: &str| {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "x").unwrap();
+            path
+        };
+        let (items, calls) = recording_per_table("items", "**/*.txt");
+        let db =
+            DirSQL::with_ignore_and_fs(&root, vec![items], Vec::<String>::new(), Arc::new(RealFs))
+                .unwrap();
+        let last_args = || calls.lock().unwrap().last().cloned().unwrap();
+
+        let events: Vec<FileEvent> = [
+            "z.txt",
+            "a-b.txt",
+            "a/c.txt",
+            ".hid.txt",
+            "a/b/d.txt",
+            "n.md",
+        ]
+        .into_iter()
+        .map(|rel| FileEvent::Created(write(rel)))
+        .collect();
+        db.apply_file_events(events);
+        assert_eq!(last_args(), walked_paths(&root, "**/*.txt"));
+
+        write("a/c.txt");
+        db.apply_file_events(vec![FileEvent::Modified(root.join("a/c.txt"))]);
+        assert_eq!(last_args(), walked_paths(&root, "**/*.txt"));
+
+        write("m/one.txt");
+        write("m/deep/two.txt");
+        db.apply_file_events(vec![FileEvent::Created(root.join("m"))]);
+        assert_eq!(last_args(), walked_paths(&root, "**/*.txt"));
+
+        std::fs::remove_file(root.join("a-b.txt")).unwrap();
+        db.apply_file_events(vec![FileEvent::Deleted(root.join("a-b.txt"))]);
+        assert_eq!(last_args(), walked_paths(&root, "**/*.txt"));
+
+        std::fs::remove_dir_all(root.join("m")).unwrap();
+        db.apply_file_events(vec![FileEvent::Deleted(root.join("m"))]);
+        assert_eq!(last_args(), walked_paths(&root, "**/*.txt"));
+    }
+
+    #[test]
+    fn a_vanished_file_is_dropped_from_a_per_table_hooks_arguments() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let (items, calls) = recording_per_table("items", "*.txt");
+        let db =
+            DirSQL::with_ignore_and_fs(&root, vec![items], Vec::<String>::new(), Arc::new(RealFs))
+                .unwrap();
+        std::fs::write(root.join("a.txt"), "x").unwrap();
+        db.apply_file_events(vec![FileEvent::Created(root.join("a.txt"))]);
+        std::fs::remove_file(root.join("a.txt")).unwrap();
+
+        db.apply_file_events(vec![FileEvent::Modified(root.join("a.txt"))]);
+
+        assert_eq!(
+            calls.lock().unwrap().last().unwrap(),
+            &Vec::<PathBuf>::new()
+        );
+        assert_eq!(row_names(&db), Vec::<String>::new());
     }
 
     fn anchored_table(name: &str, glob: &str, anchor: &str) -> Table {
