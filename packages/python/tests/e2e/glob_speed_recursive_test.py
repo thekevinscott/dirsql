@@ -4,7 +4,7 @@ A deep, wide tree of markdown files mixed with other files, dotfiles and
 dot-named directories that globstar with dotglob off must not return. A
 quarter of it sits under `a/b`, the rest beside it, so a prefixed glob that
 walked the whole tree would read four times what it needs. Natives are `find`
-pruning dot-named entries, `fd`, `rg --files` and bash globstar. No mocks: real
+pruning dot-named entries, `fd` and `rg --files`. No mocks: real
 console script, real process, real filesystem.
 """
 
@@ -28,6 +28,7 @@ from .speed_of_light import (
     rg,
     shell_natives,
     startup_seconds,
+    suite_only,
     timed,
 )
 
@@ -39,7 +40,7 @@ ALL_NATIVE = [
     ),
     fd("--glob '*.md'"),
     rg("-g '*.md' -g '!.*'"),
-    globstar("./**/*.md"),
+    *suite_only(globstar("./**/*.md")),
 ]
 PREFIX_NATIVE = [
     Native(
@@ -49,7 +50,7 @@ PREFIX_NATIVE = [
     ),
     fd("--glob '*.md' a/b"),
     rg("-g '*.md' -g '!.*' a/b"),
-    globstar("./a/b/**/*.md"),
+    *suite_only(globstar("./a/b/**/*.md")),
 ]
 FANOUT = 8
 

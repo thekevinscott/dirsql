@@ -96,6 +96,11 @@ def suite_pairs():
     return int(count) if count and os.environ.get("DIRSQL_BENCH_OUT") else None
 
 
+def suite_only(*specs):
+    """Natives the performance suite times that the e2e ratchet does not."""
+    return list(specs) if suite_pairs() else []
+
+
 def cli() -> str:
     dirsql = shutil.which("dirsql")
     assert dirsql is not None, (

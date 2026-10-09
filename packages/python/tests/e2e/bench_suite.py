@@ -67,7 +67,7 @@ def git_commit():
 
 
 def metadata(pairs):
-    versions = {"dirsql": first_line(["dirsql", "--version"])}
+    versions = {}
     for name, argv in TOOLS:
         versions[name] = first_line(argv)
     return {
