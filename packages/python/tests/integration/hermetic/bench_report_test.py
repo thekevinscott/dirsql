@@ -6,6 +6,10 @@ switch are checked without spawning a process or timing anything.
 """
 
 import json
+import os
+from unittest.mock import patch
+
+import pytest
 
 from tests.e2e.bench_report import (
     append_record,
@@ -152,10 +156,23 @@ def describe_records_on_disk():
         assert read_records(tmp_path) == [rec, rec]
 
 
+@pytest.fixture
+def suite(tmp_path):
+    env = {"DIRSQL_BENCH_PAIRS": "4", "DIRSQL_BENCH_OUT": str(tmp_path)}
+    with patch.dict(os.environ, env):
+        yield tmp_path
+
+
+@pytest.fixture
+def no_suite():
+    with patch.dict(os.environ):
+        os.environ.pop("DIRSQL_BENCH_PAIRS", None)
+        os.environ.pop("DIRSQL_BENCH_OUT", None)
+        yield
+
+
 def describe_suite_mode():
-    def it_times_every_native_for_the_requested_pairs(monkeypatch, tmp_path):
-        monkeypatch.setenv("DIRSQL_BENCH_PAIRS", "4")
-        monkeypatch.setenv("DIRSQL_BENCH_OUT", str(tmp_path))
+    def it_times_every_native_for_the_requested_pairs(suite):
         natives = Natives({"a": canned(3.0), "b": canned(1.0)}, [])
         out = paired(natives, canned(1.0), NO_STARTUP, pairs=2, screen=1)
         assert set(out.native_seconds) == {"a", "b"}
@@ -163,25 +180,18 @@ def describe_suite_mode():
         assert len(out.dirsql_seconds) == 4
         assert out.fastest == "b"
 
-    def it_does_not_give_up_on_hopeless_pairs(monkeypatch, tmp_path):
-        monkeypatch.setenv("DIRSQL_BENCH_PAIRS", "6")
-        monkeypatch.setenv("DIRSQL_BENCH_OUT", str(tmp_path))
+    def it_does_not_give_up_on_hopeless_pairs(suite):
         out = paired(Natives({"a": canned(1.0)}, []), canned(50.0), NO_STARTUP)
-        assert len(out.dirsql_seconds) == 6
+        assert len(out.dirsql_seconds) == 4
 
-    def it_records_the_case_instead_of_asserting_a_bar(monkeypatch, tmp_path):
-        monkeypatch.setenv("DIRSQL_BENCH_PAIRS", "3")
-        monkeypatch.setenv("DIRSQL_BENCH_OUT", str(tmp_path))
+    def it_records_the_case_instead_of_asserting_a_bar(suite):
         over = result({"find": [1.0] * 3}, [9.0] * 3)
         assert_speed_of_light("case", over, NO_STARTUP)
-        (rec,) = read_records(tmp_path)
+        (rec,) = read_records(suite)
         assert rec["name"] == "case"
         assert rec["ratio_vs_fastest"] == 9.0
 
-    def it_is_off_without_the_environment(monkeypatch):
-        monkeypatch.delenv("DIRSQL_BENCH_PAIRS", raising=False)
-        monkeypatch.delenv("DIRSQL_BENCH_OUT", raising=False)
-        out = paired(
-            Natives({"a": canned(1.0)}, []), canned(1.0), NO_STARTUP, pairs=2, screen=1
-        )
+    def it_is_off_without_the_environment(no_suite):
+        natives = Natives({"a": canned(1.0)}, [])
+        out = paired(natives, canned(1.0), NO_STARTUP, pairs=2, screen=1)
         assert len(out.dirsql_seconds) == 2
