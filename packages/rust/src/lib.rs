@@ -1543,8 +1543,7 @@ impl DirSQL {
             progress.update(done, Some(total_files));
             done += files.len() as u64;
             let strict = *strict_map.get(&table_name).unwrap_or(&false);
-            let (rel_paths, abs_paths) =
-                batch_paths(anchors.of(&table_name), &mut files, persist_ready.is_some());
+            let (rel_paths, abs_paths) = batch_paths(&mut files, persist_ready.is_some());
             // A cached table is current only when every file it was run over
             // is, and none has gone: the command saw them all at once, so any
             // change re-runs it over all of them.
@@ -2466,14 +2465,17 @@ fn run_channel_loop(db: DirSQL, tx: UnboundedSender<RowEvent>) {
 /// The absolute path is the one the scan found. Relative paths are cloned
 /// when `keep_rel` (the files are still read afterwards) and moved out
 /// otherwise.
-fn batch_paths(
-    root: &Path,
-    files: &mut [ScannedFile],
-    keep_rel: bool,
-) -> (Vec<String>, Vec<PathBuf>) {
-    let rel: Vec<String> = files.iter().map(|f| f.rel_path.clone()).collect();
-    let _ = keep_rel;
-    let abs = rel.iter().map(|r| root.join(r)).collect();
+fn batch_paths(files: &mut [ScannedFile], keep_rel: bool) -> (Vec<String>, Vec<PathBuf>) {
+    let mut rel = Vec::with_capacity(files.len());
+    let mut abs = Vec::with_capacity(files.len());
+    for file in files {
+        abs.push(std::mem::take(&mut file.abs_path));
+        rel.push(if keep_rel {
+            file.rel_path.clone()
+        } else {
+            std::mem::take(&mut file.rel_path)
+        });
+    }
     (rel, abs)
 }
 
@@ -5143,6 +5145,13 @@ mod internal_tests {
         scanned_files: Vec<ScannedFile>,
         persist: Option<PreparedPersist>,
     ) -> PreparedBuild {
+        let scanned_files = scanned_files
+            .into_iter()
+            .map(|mut file| {
+                file.abs_path = root.join(&file.rel_path);
+                file
+            })
+            .collect();
         PreparedBuild {
             ignore: Vec::new(),
             root: root.to_path_buf(),
@@ -5178,7 +5187,7 @@ mod internal_tests {
                 trusted: false,
             },
         ];
-        let (rel, abs) = batch_paths(Path::new("/elsewhere"), &mut files, true);
+        let (rel, abs) = batch_paths(&mut files, true);
         assert_eq!(rel, vec!["a/one.md", "b/two.md"]);
         assert_eq!(
             abs,
@@ -5198,7 +5207,7 @@ mod internal_tests {
             stat: None,
             trusted: false,
         }];
-        let (rel, _) = batch_paths(Path::new("/scan"), &mut files, true);
+        let (rel, _) = batch_paths(&mut files, true);
         assert_eq!(rel, vec!["a.md"]);
         assert_eq!(files[0].rel_path, "a.md");
     }
@@ -5212,7 +5221,7 @@ mod internal_tests {
             stat: None,
             trusted: false,
         }];
-        let (rel, _) = batch_paths(Path::new("/scan"), &mut files, false);
+        let (rel, _) = batch_paths(&mut files, false);
         assert_eq!(rel, vec!["a.md"]);
         assert!(files[0].rel_path.is_empty());
     }
