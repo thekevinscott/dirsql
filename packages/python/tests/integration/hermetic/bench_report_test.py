@@ -82,12 +82,16 @@ def describe_case_record():
         assert rec["dirsql_median_s"] == 3.0
 
     def it_subtracts_each_sides_startup():
-        rec = case_record("c", result({"find": [2.0] * 3}, [1.5] * 3), Startup(0.5, 1.0))
+        rec = case_record(
+            "c", result({"find": [2.0] * 3}, [1.5] * 3), Startup(0.5, 1.0)
+        )
         assert rec["ratio_vs_fastest"] == 1.0
         assert rec["startup"] == {"dirsql": 0.5, "native": 1.0}
 
     def it_carries_the_skipped_natives():
-        rec = case_record("c", result({"find": [1.0] * 3}, [1.0] * 3, ["fd"]), NO_STARTUP)
+        rec = case_record(
+            "c", result({"find": [1.0] * 3}, [1.0] * 3, ["fd"]), NO_STARTUP
+        )
         assert rec["skipped"] == ["fd"]
 
 
@@ -102,20 +106,21 @@ def describe_build_report():
         json.dumps(report)
 
 
-def describe_render_markdown():
-    def report():
-        slow = case_record(
-            "slow-case",
-            result({"find": [2.0] * 3, "bash-globstar": [1.0] * 3}, [3.0] * 3),
-            NO_STARTUP,
-        )
-        fast = case_record(
-            "fast-case", result({"find": [2.0] * 3}, [1.0] * 3, ["fd"]), NO_STARTUP
-        )
-        return build_report([slow, fast], META)
+def sample_report():
+    slow = case_record(
+        "slow-case",
+        result({"find": [2.0] * 3, "bash-globstar": [1.0] * 3}, [3.0] * 3),
+        NO_STARTUP,
+    )
+    fast = case_record(
+        "fast-case", result({"find": [2.0] * 3}, [1.0] * 3, ["fd"]), NO_STARTUP
+    )
+    return build_report([slow, fast], META)
 
+
+def describe_render_markdown():
     def it_states_commit_date_machine_and_versions():
-        md = render_markdown(report())
+        md = render_markdown(sample_report())
         assert "abc123" in md
         assert "2026-10-09T00:00:00Z" in md
         assert "Linux" in md
@@ -123,17 +128,17 @@ def describe_render_markdown():
         assert "3 paired runs" in md
 
     def it_lists_each_case_with_its_ratio_to_the_fastest_native():
-        md = render_markdown(report())
+        md = render_markdown(sample_report())
         assert "| slow-case | bash-globstar | 3.00x |" in md
         assert "| fast-case | find | 0.50x |" in md
 
     def it_flags_cases_above_the_fastest_native():
-        md = render_markdown(report())
+        md = render_markdown(sample_report())
         assert "slow-case | bash-globstar | 3.00x | 0% | over" in md
         assert "fast-case | find | 0.50x | 0% | ok" in md
 
     def it_details_every_native_and_the_skipped_ones():
-        md = render_markdown(report())
+        md = render_markdown(sample_report())
         assert "| bash-globstar | 1.000 | 3.00x |" in md
         assert "| find | 2.000 | 1.50x |" in md
         assert "fd (not installed)" in md
@@ -176,5 +181,7 @@ def describe_suite_mode():
     def it_is_off_without_the_environment(monkeypatch):
         monkeypatch.delenv("DIRSQL_BENCH_PAIRS", raising=False)
         monkeypatch.delenv("DIRSQL_BENCH_OUT", raising=False)
-        out = paired(Natives({"a": canned(1.0)}, []), canned(1.0), NO_STARTUP, pairs=2, screen=1)
+        out = paired(
+            Natives({"a": canned(1.0)}, []), canned(1.0), NO_STARTUP, pairs=2, screen=1
+        )
         assert len(out.dirsql_seconds) == 2

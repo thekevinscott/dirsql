@@ -35,6 +35,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
+from .bench_report import append_record, case_record
+
 ONE_SECOND = 1.0
 TOLERANCE = 1.1
 STARTUP_PROBES = 11
@@ -86,6 +88,12 @@ class Paired:
     screen_dirsql: list = field(default_factory=list)
     fastest: str = ""
     bar: str = ""
+
+
+def suite_pairs():
+    """The pair count when `just bench-suite` drives the run, else None."""
+    count = os.environ.get("DIRSQL_BENCH_PAIRS")
+    return int(count) if count and os.environ.get("DIRSQL_BENCH_OUT") else None
 
 
 def cli() -> str:
@@ -272,6 +280,19 @@ def paired(natives, dirsql, startup, pairs=PAIRS, screen=SCREEN_PAIRS):
         return run_or_fail(lambda: dirsql(timeout), "dirsql")
 
     run_dirsql()
+    everyone = suite_pairs()
+    if everyone:
+        result = run_pairs(runs, run_dirsql, everyone)
+        fastest = fastest_by_median(result.native_seconds)
+        return Paired(
+            {**rows, **result.rows},
+            result.dirsql_rows,
+            result.native_seconds,
+            result.dirsql_seconds,
+            natives.skipped,
+            fastest=fastest,
+            bar=fastest,
+        )
     screened = run_pairs(runs, run_dirsql, screen)
     rows.update(screened.rows)
     fastest = fastest_by_median(screened.native_seconds)
@@ -358,8 +379,14 @@ def assert_speed_of_light(name, result, startup):
     """Print every native's screening time and ratio, then hold dirsql to the bar.
 
     The bar is `result.bar`; the fastest native's ratio is printed beside it
-    and not asserted unless the bar is that native.
+    and not asserted unless the bar is that native. Under `just bench-suite`
+    the case is recorded and nothing is asserted: the suite reports.
     """
+    if suite_pairs():
+        append_record(
+            os.environ["DIRSQL_BENCH_OUT"], case_record(name, result, startup)
+        )
+        return
     lines = []
     for native, seconds in result.screen_seconds.items():
         _, line = ratio_line(
