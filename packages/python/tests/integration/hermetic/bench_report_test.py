@@ -165,9 +165,7 @@ def suite(tmp_path):
 
 @pytest.fixture
 def no_suite():
-    with patch.dict(os.environ):
-        os.environ.pop("DIRSQL_BENCH_PAIRS", None)
-        os.environ.pop("DIRSQL_BENCH_OUT", None)
+    with patch.dict(os.environ, {"DIRSQL_BENCH_PAIRS": "", "DIRSQL_BENCH_OUT": ""}):
         yield
 
 
