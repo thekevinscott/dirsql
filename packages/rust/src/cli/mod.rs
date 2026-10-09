@@ -62,6 +62,8 @@ pub struct ServerConfig {
     /// The `Access-Control-Allow-Origin` value sent on every response, or
     /// `None` to send no CORS headers (browsers then block cross-origin reads).
     pub cors_origin: Option<HeaderValue>,
+    /// Serve the bundled SQL explorer at `/` and its state at `/frontend/state`.
+    pub frontend: bool,
 }
 
 impl ServerConfig {
@@ -73,6 +75,7 @@ impl ServerConfig {
             port: 0,
             query_timeout: Duration::from_secs(30),
             cors_origin: None,
+            frontend: false,
         }
     }
 
@@ -83,6 +86,7 @@ impl ServerConfig {
             port,
             query_timeout: Duration::from_secs(30),
             cors_origin: None,
+            frontend: false,
         }
     }
 
@@ -97,6 +101,12 @@ impl ServerConfig {
     /// responses and open `/events`.
     pub fn with_cors_origin(mut self, origin: HeaderValue) -> Self {
         self.cors_origin = Some(origin);
+        self
+    }
+
+    /// Enable the bundled, same-origin SQL explorer.
+    pub fn with_frontend(mut self) -> Self {
+        self.frontend = true;
         self
     }
 }
@@ -210,6 +220,12 @@ mod tests {
     fn with_cors_origin_sets_the_allowed_origin() {
         let cfg = ServerConfig::ephemeral().with_cors_origin(HeaderValue::from_static("*"));
         assert_eq!(cfg.cors_origin, Some(HeaderValue::from_static("*")));
+    }
+
+    #[test]
+    fn frontend_is_opt_in() {
+        assert!(!ServerConfig::ephemeral().frontend);
+        assert!(ServerConfig::ephemeral().with_frontend().frontend);
     }
 
     #[test]

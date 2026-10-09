@@ -148,6 +148,132 @@ fn kill_and_wait(mut child: ServerGuard) {
 }
 
 #[test]
+fn frontend_is_opt_in_and_serves_a_bundled_page() {
+    let root = TempDir::new().unwrap();
+    let port = free_port();
+    let server = spawn_dirsql(root.path(), port);
+    wait_until_ready(port, Duration::from_secs(5));
+    let client = Client::new();
+    let base = format!("http://localhost:{port}");
+    assert_eq!(
+        client.get(&base).send().unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        client
+            .get(format!("{base}/frontend/state"))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    kill_and_wait(server);
+
+    let server = spawn_dirsql_with_args(root.path(), port, &["--frontend"]);
+    wait_until_ready(port, Duration::from_secs(5));
+    let page = client.get(&base).send().unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    assert!(
+        page.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html")
+    );
+    assert!(page.text().unwrap().contains("dirsql SQL explorer"));
+    assert_eq!(
+        client
+            .get(format!("{base}/frontend/state"))
+            .send()
+            .unwrap()
+            .json::<Value>()
+            .unwrap(),
+        json!({"error": null})
+    );
+    assert_eq!(
+        client
+            .get(format!("{base}/.dirsql.toml"))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    kill_and_wait(server);
+}
+
+#[test]
+fn frontend_still_loads_and_reports_an_invalid_config() {
+    let root = TempDir::new().unwrap();
+    let port = free_port();
+    let server = spawn_dirsql_with_args(root.path(), port, &["--frontend", "-c", "missing.toml"]);
+    wait_until_ready(port, Duration::from_secs(5));
+    let client = Client::new();
+    let base = format!("http://localhost:{port}");
+    assert_eq!(client.get(&base).send().unwrap().status(), StatusCode::OK);
+    let state = client.get(format!("{base}/frontend/state")).send().unwrap();
+    assert_eq!(state.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        state.json::<Value>().unwrap()["error"]
+            .as_str()
+            .unwrap()
+            .contains("missing.toml")
+    );
+    kill_and_wait(server);
+}
+
+#[test]
+fn frontend_prints_its_url_with_the_actual_ephemeral_port() {
+    let root = TempDir::new().unwrap();
+    let mut server = spawn_dirsql_with_args(root.path(), 0, &["--frontend"]);
+    let mut line = String::new();
+    let mut stdout = BufReader::new(server.stdout.take().unwrap());
+    stdout.read_line(&mut line).unwrap();
+    let url = line
+        .trim()
+        .strip_prefix("Frontend at ")
+        .expect("frontend URL on stdout")
+        .to_string();
+    assert!(url.starts_with("http://localhost:"), "{url}");
+    assert_ne!(url, "http://localhost:0/", "{url}");
+    line.clear();
+    stdout.read_line(&mut line).unwrap();
+    assert!(line.starts_with("Running at localhost:"), "{line}");
+    assert_eq!(
+        Client::new().get(url).send().unwrap().status(),
+        StatusCode::OK
+    );
+    kill_and_wait(server);
+}
+
+#[test]
+fn frontend_loads_with_an_explicit_valid_config() {
+    let root = blog_fixture();
+    let port = free_port();
+    let server = spawn_dirsql_with_args(root.path(), port, &["--frontend", "-c", ".dirsql.toml"]);
+    wait_until_ready(port, Duration::from_secs(5));
+    let client = Client::new();
+    let base = format!("http://localhost:{port}");
+    assert_eq!(client.get(&base).send().unwrap().status(), StatusCode::OK);
+    assert_eq!(
+        client
+            .get(format!("{base}/frontend/state"))
+            .send()
+            .unwrap()
+            .json::<Value>()
+            .unwrap(),
+        json!({"error": null})
+    );
+    assert_eq!(
+        client
+            .get(format!("{base}/posts/alice/Hello-World.json"))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    kill_and_wait(server);
+}
+
+#[test]
 fn version_flag_prints_and_exits_zero() {
     std::process::Command::cargo_bin("dirsql")
         .expect("binary must exist (cargo install --features cli / `cargo test --features cli`)")

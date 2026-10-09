@@ -53,7 +53,7 @@ pub async fn serve_with_state(
         cancel: cancel_rx,
         query_timeout: config.query_timeout,
     });
-    let mut app = router(shared);
+    let mut app = router(shared, config.frontend);
     if let Some(origin) = config.cors_origin {
         app = app.layer(
             CorsLayer::new()

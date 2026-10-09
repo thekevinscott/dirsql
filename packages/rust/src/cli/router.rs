@@ -8,13 +8,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::Json;
 use axum::Router;
 use axum::extract::State;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use axum::{Json, response::Html};
 use futures::stream::StreamExt;
 use serde_json::json;
 use tokio::sync::{broadcast, watch};
@@ -33,8 +33,8 @@ pub(super) struct AppContext {
 
 pub(super) type SharedCtx = Arc<AppContext>;
 
-pub(super) fn router(ctx: SharedCtx) -> Router {
-    Router::new()
+pub(super) fn router(ctx: SharedCtx, frontend: bool) -> Router {
+    let mut app = Router::new()
         .route(
             "/query",
             post(handle_query).on(axum::routing::MethodFilter::GET, method_not_allowed),
@@ -42,8 +42,24 @@ pub(super) fn router(ctx: SharedCtx) -> Router {
         .route(
             "/events",
             get(handle_events).on(axum::routing::MethodFilter::POST, method_not_allowed),
+        );
+    if frontend {
+        app = app
+            .route("/", get(|| async { Html(include_str!("frontend.html")) }))
+            .route("/frontend/state", get(handle_frontend_state));
+    }
+    app.with_state(ctx)
+}
+
+async fn handle_frontend_state(State(ctx): State<SharedCtx>) -> Response {
+    match &ctx.state {
+        AppState::Ready(_) => Json(json!({ "error": null })).into_response(),
+        AppState::Unavailable(reason) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": reason })),
         )
-        .with_state(ctx)
+            .into_response(),
+    }
 }
 
 async fn handle_query(State(ctx): State<SharedCtx>, body: String) -> Response {
@@ -179,6 +195,23 @@ mod tests {
             query_timeout: Duration::from_secs(1),
         });
         let resp = handle_events(State(ctx)).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn frontend_routes_and_state_report_a_config_failure() {
+        let (events, _) = broadcast::channel::<String>(1);
+        let (_cancel_tx, cancel) = watch::channel(false);
+        let ctx = Arc::new(AppContext {
+            state: AppState::Unavailable("failed to load config".into()),
+            events,
+            watch_failure: None,
+            cancel,
+            query_timeout: Duration::from_secs(1),
+        });
+
+        assert!(router(ctx.clone(), true).has_routes());
+        let resp = handle_frontend_state(State(ctx)).await;
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
