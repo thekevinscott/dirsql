@@ -15,17 +15,17 @@ from tests.e2e.speed_of_light import (
     Paired,
     Startup,
     agreed_rows,
+    assert_speed_of_light,
     baseline,
+    fastest_by_median,
     fd,
     globstar,
-    shell_natives,
-    assert_speed_of_light,
-    fastest_by_median,
     median_after_first,
     pair_ratios,
     paired,
     resolve_natives,
     rg,
+    shell_natives,
     summarize,
 )
 
@@ -140,7 +140,9 @@ def describe_paired():
         natives = Natives(
             {"slow": recorder([], "s", 40.0), "quick": recorder([], "q", 1.0)}, []
         )
-        result = paired(natives, recorder([], "d", 50.0), NO_STARTUP, pairs=100, screen=1)
+        result = paired(
+            natives, recorder([], "d", 50.0), NO_STARTUP, pairs=100, screen=1
+        )
         assert len(result.dirsql_seconds) == 3
 
     def it_keeps_going_when_hopeless_pairs_are_not_consecutive():
@@ -149,7 +151,9 @@ def describe_paired():
         def dirsql(_timeout):
             return "d", next(slow)
 
-        result = paired(one(recorder([], "n", 1.0)), dirsql, NO_STARTUP, pairs=10, screen=1)
+        result = paired(
+            one(recorder([], "n", 1.0)), dirsql, NO_STARTUP, pairs=10, screen=1
+        )
         assert len(result.dirsql_seconds) == 10
 
     def it_fails_when_a_run_times_out():

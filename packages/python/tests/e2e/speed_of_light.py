@@ -133,9 +133,7 @@ def resolve_natives(specs, which=shutil.which):
     return runnable, skipped
 
 
-def shell_natives(
-    root, specs, parse=sorted_lines, shell="bash", bar=""
-) -> Natives:
+def shell_natives(root, specs, parse=sorted_lines, shell="bash", bar="") -> Natives:
     def runner(script):
         def run():
             proc, seconds = timed_native([shell, "-c", script], root)
@@ -145,9 +143,7 @@ def shell_natives(
         return run
 
     runnable, skipped = resolve_natives(specs)
-    return Natives(
-        {name: runner(script) for name, script in runnable}, skipped, bar
-    )
+    return Natives({name: runner(script) for name, script in runnable}, skipped, bar)
 
 
 AGG_AWK = (
@@ -275,7 +271,7 @@ def paired(natives, dirsql, startup, pairs=PAIRS, screen=SCREEN_PAIRS):
     def run_dirsql():
         return run_or_fail(lambda: dirsql(timeout), "dirsql")
 
-    dirsql_rows_, _ = run_dirsql()
+    run_dirsql()
     screened = run_pairs(runs, run_dirsql, screen)
     rows.update(screened.rows)
     fastest = fastest_by_median(screened.native_seconds)
@@ -334,9 +330,7 @@ def summarize(ratios):
 
 
 def fastest_by_median(native_seconds):
-    return min(
-        native_seconds, key=lambda name: statistics.median(native_seconds[name])
-    )
+    return min(native_seconds, key=lambda name: statistics.median(native_seconds[name]))
 
 
 def agreed_rows(result):
