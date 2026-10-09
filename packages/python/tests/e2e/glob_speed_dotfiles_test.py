@@ -4,9 +4,9 @@ A deep, wide tree where half the top-level directories are dot-named and
 dot-named directories and dotfiles recur below. `'./**/*.md'` must skip
 every one of them; `'./**/.*'` reaches dotfiles because the pattern spells
 the dot, and `'./.cache/**/*.md'` reaches under a dot-named directory
-because the pattern names it. Native is `find` pruning what bash globstar
-with dotglob off would not enter. No mocks: real console script, real
-process, real filesystem.
+because the pattern names it. Natives are `find` pruning what bash globstar
+with dotglob off would not enter, `fd` and `rg --files`. No mocks: real console
+script, real process, real filesystem.
 """
 
 from __future__ import annotations
@@ -16,21 +16,48 @@ import shutil
 import pytest
 
 from .speed_of_light import (
+    Native,
+    agreed_rows,
     assert_speed_of_light,
+    baseline,
     cli,
     dirsql_rows,
+    fd,
     grow_until_native_takes_a_second,
     paired,
+    rg,
+    shell_natives,
     startup_seconds,
     timed,
-    timed_native,
 )
 
-MARKDOWN = (
-    "find . -mindepth 1 -name '.*' -prune -o -type f -name '*.md' -printf '%P\\n'"
-)
-DOTFILES = "find . -mindepth 1 -name '.*' -prune -type f -printf '%P\\n'"
-UNDER_CACHE = "find .cache -mindepth 1 -name '.*' -prune -o -type f -name '*.md' -print"
+MARKDOWN = [
+    Native(
+        "find",
+        ("find",),
+        "{bin} . -mindepth 1 -name '.*' -prune -o -type f -name '*.md' -printf '%P\\n'",
+    ),
+    fd("--glob '*.md'"),
+    rg("-g '*.md' -g '!.*'"),
+]
+DOTFILES = [
+    Native(
+        "find",
+        ("find",),
+        "{bin} . -mindepth 1 -name '.*' -prune -type f -printf '%P\\n'",
+    ),
+    fd("--hidden -E '.*/' --glob '.*'"),
+    rg("--hidden -g '.*' -g '!.*/'"),
+]
+UNDER_CACHE = [
+    Native(
+        "find",
+        ("find",),
+        "{bin} .cache -mindepth 1 -name '.*' -prune -o -type f -name '*.md' -print",
+    ),
+    fd("--glob '*.md' .cache"),
+    rg("-g '*.md' -g '!.*' .cache"),
+]
 FANOUT = 8
 
 
@@ -77,12 +104,6 @@ def matched(n, glob):
     return sum(1 for i in range(n) if hit(i))
 
 
-def native(root, script):
-    proc, seconds = timed_native(["bash", "-c", script], root)
-    assert proc.returncode == 0, proc.stderr
-    return sorted(proc.stdout.splitlines()), seconds
-
-
 def describe_dotfile_glob_speed_of_light():
     @pytest.fixture(scope="module")
     def tree(tmp_path_factory):
@@ -91,7 +112,7 @@ def describe_dotfile_glob_speed_of_light():
         try:
             n = grow_until_native_takes_a_second(
                 lambda lo, hi: build_tree(root, lo, hi),
-                lambda: native(root, MARKDOWN),
+                baseline(shell_natives(root, MARKDOWN)),
                 start=100_000,
                 ceiling=2**22,
             )
@@ -100,14 +121,14 @@ def describe_dotfile_glob_speed_of_light():
             shutil.rmtree(root, ignore_errors=True)
 
     @pytest.mark.parametrize(
-        ("glob", "script"),
+        ("glob", "specs"),
         [
             ("./**/*.md", MARKDOWN),
             ("./**/.*", DOTFILES),
             ("./.cache/**/*.md", UNDER_CACHE),
         ],
     )
-    def it_matches_native_files_within_the_bar(tree, glob, script):
+    def it_matches_native_files_within_the_bar(tree, glob, specs):
         root, n, startup = tree
 
         def dirsql(timeout):
@@ -118,8 +139,8 @@ def describe_dotfile_glob_speed_of_light():
             )
             return sorted(row for (row,) in dirsql_rows(proc, ("path",))), seconds
 
-        result = paired(lambda: native(root, script), dirsql, startup)
-        expected, actual = result.native_rows, result.dirsql_rows
+        result = paired(shell_natives(root, specs), dirsql, startup)
+        expected, actual = agreed_rows(result), result.dirsql_rows
         assert len(expected) == matched(n, glob)
 
         assert actual == expected

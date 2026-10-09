@@ -14,14 +14,17 @@ import shutil
 import pytest
 
 from .speed_of_light import (
+    Native,
+    agreed_rows,
     assert_speed_of_light,
+    baseline,
     cli,
     dirsql_rows,
     grow_until_native_takes_a_second,
     paired,
+    shell_natives,
     startup_seconds,
     timed,
-    timed_native,
 )
 
 COLUMNS = ("date", "words")
@@ -43,7 +46,13 @@ TOP_FIVE = (
     " [print(r['date'], r['words'], sep='\\t') for r in rows[:5]]"
 )
 
-NATIVE = f'python3 extract.py notebook.md | python3 -c "{TOP_FIVE}"'
+NATIVE = [
+    Native(
+        "python",
+        ("python3",),
+        f'{{bin}} extract.py notebook.md | {{bin}} -c "{TOP_FIVE}"',
+    )
+]
 
 WORDS = [
     "ran",
@@ -74,7 +83,6 @@ def build_notebook(root, n):
 
 
 def native_rows(proc):
-    assert proc.returncode == 0, proc.stderr
     rows = []
     for line in proc.stdout.splitlines():
         date, words = line.split("\t")
@@ -94,12 +102,13 @@ def describe_notebook_speed_of_light():
     def it_matches_native_rows_within_the_bar(root):
         startup = startup_seconds()
 
-        def native():
-            proc, seconds = timed_native(["sh", "-c", NATIVE], root)
-            return native_rows(proc), seconds
+        natives = shell_natives(root, NATIVE, native_rows, shell="sh")
 
         grow_until_native_takes_a_second(
-            lambda _, n: build_notebook(root, n), native, start=20_000, ceiling=2**22
+            lambda _, n: build_notebook(root, n),
+            baseline(natives),
+            start=20_000,
+            ceiling=2**22,
         )
 
         def dirsql(timeout):
@@ -110,8 +119,8 @@ def describe_notebook_speed_of_light():
             )
             return dirsql_rows(proc, COLUMNS), seconds
 
-        result = paired(native, dirsql, startup)
-        expected, actual = result.native_rows, result.dirsql_rows
+        result = paired(natives, dirsql, startup)
+        expected, actual = agreed_rows(result), result.dirsql_rows
         assert len(expected) == 5, expected
 
         assert actual == expected

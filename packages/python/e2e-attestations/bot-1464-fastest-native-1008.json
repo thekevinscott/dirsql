@@ -1,0 +1,7 @@
+{
+  "command": "just test-e2e",
+  "ran_at": 1791551036,
+  "exit_code": 0,
+  "commit": "30fee35315cbb6f971956415d71be398c0c9d46e",
+  "branch": "bot/1464-fastest-native-1008"
+}

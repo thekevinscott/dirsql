@@ -14,14 +14,17 @@ import shutil
 import pytest
 
 from .speed_of_light import (
+    Native,
+    agreed_rows,
     assert_speed_of_light,
+    baseline,
     cli,
     dirsql_rows,
     grow_until_native_takes_a_second,
     paired,
+    shell_natives,
     startup_seconds,
     timed,
-    timed_native,
 )
 
 COLUMNS = ("dir", "title", "abstract_bytes")
@@ -32,7 +35,11 @@ JOIN './papers/*/title.md' t ON t.dir = a.dir
 ORDER BY a.dir
 """
 
-NATIVE = r"""
+NATIVE = [
+    Native(
+        "find+join",
+        ("bash",),
+        r"""
 set -e
 export LC_ALL=C
 tab="$(printf '\t')"
@@ -41,7 +48,9 @@ join -t "$tab" \
       -exec awk -v OFS='\t' '{ split(FILENAME, p, "/"); print p[1] "/" p[2], $0 }' {} + \
       | sort) \
   <(find papers -name abstract.md -printf '%h\t%s\n' | sort)
-"""
+""",
+    )
+]
 
 SENTENCE = (
     "We study the problem from first principles and report a method that "
@@ -64,7 +73,6 @@ def build_papers(root, lo, hi):
 
 
 def native_rows(proc):
-    assert proc.returncode == 0, proc.stderr
     rows = []
     for line in proc.stdout.splitlines():
         folder, title, size = line.split("\t")
@@ -84,13 +92,11 @@ def describe_join_speed_of_light():
     def it_matches_native_rows_within_the_bar(root):
         startup = startup_seconds()
 
-        def native():
-            proc, seconds = timed_native(["bash", "-c", NATIVE], root)
-            return native_rows(proc), seconds
+        natives = shell_natives(root, NATIVE, native_rows, shell="bash")
 
         n = grow_until_native_takes_a_second(
             lambda lo, hi: build_papers(root, lo, hi),
-            native,
+            baseline(natives),
             start=10_000,
             ceiling=2**20,
         )
@@ -103,8 +109,8 @@ def describe_join_speed_of_light():
             )
             return dirsql_rows(proc, COLUMNS), seconds
 
-        result = paired(native, dirsql, startup)
-        expected, actual = result.native_rows, result.dirsql_rows
+        result = paired(natives, dirsql, startup)
+        expected, actual = agreed_rows(result), result.dirsql_rows
         assert len(expected) == sum(1 for i in range(n) if i % 7 and i % 11)
 
         assert actual == expected

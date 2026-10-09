@@ -2,9 +2,9 @@
 
 One deep, wide tree of markdown files whose names start with different
 letters, a digit or `file` plus one or two characters, so each matcher keeps
-a different share of them. Native is `find` with the same name test, which
-returns what bash globstar does with dotglob off. No mocks: real console
-script, real process, real filesystem.
+a different share of them. Natives are `find` with the same name test, `fd`
+and `rg --files`, which all return what globstar does with
+dotglob off. No mocks: real console script, real process, real filesystem.
 """
 
 from __future__ import annotations
@@ -14,23 +14,38 @@ import shutil
 import pytest
 
 from .speed_of_light import (
+    Native,
+    agreed_rows,
     assert_speed_of_light,
+    baseline,
     cli,
     dirsql_rows,
+    fd,
     grow_until_native_takes_a_second,
     paired,
+    rg,
+    shell_natives,
     startup_seconds,
     timed,
-    timed_native,
 )
 
-FIND = "find . -mindepth 1 -name '.*' -prune -o -type f {test} -printf '%P\\n'"
+FIND = "{{bin}} . -mindepth 1 -name '.*' -prune -o -type f {test} -printf '%P\\n'"
 CASES = [
-    ("./**/{a,b}*.md", "\\( -name 'a*.md' -o -name 'b*.md' \\)"),
-    ("./**/file?.md", "-name 'file?.md'"),
-    ("./**/[a-c]*.md", "-name '[a-c]*.md'"),
-    ("./**/[[:digit:]]*.md", "-name '[[:digit:]]*.md'"),
+    ("./**/{a,b}*.md", "\\( -name 'a*.md' -o -name 'b*.md' \\)", "{a,b}*.md"),
+    ("./**/file?.md", "-name 'file?.md'", "file?.md"),
+    ("./**/[a-c]*.md", "-name '[a-c]*.md'", "[a-c]*.md"),
+    ("./**/[[:digit:]]*.md", "-name '[[:digit:]]*.md'", "[0-9]*.md"),
 ]
+
+
+def specs_for(glob, test, name):
+    return [
+        Native("find", ("find",), FIND.format(test=test)),
+        fd(f"--glob '{name}'"),
+        rg(f"-g '{name}' -g '!.*'"),
+    ]
+
+
 FANOUT = 8
 
 
@@ -78,12 +93,6 @@ def matched(n, glob):
     return sum(1 for i in range(n) if hit(i))
 
 
-def native(root, script):
-    proc, seconds = timed_native(["bash", "-c", script], root)
-    assert proc.returncode == 0, proc.stderr
-    return sorted(proc.stdout.splitlines()), seconds
-
-
 def describe_matcher_glob_speed_of_light():
     @pytest.fixture(scope="module")
     def tree(tmp_path_factory):
@@ -92,7 +101,7 @@ def describe_matcher_glob_speed_of_light():
         try:
             n = grow_until_native_takes_a_second(
                 lambda lo, hi: build_tree(root, lo, hi),
-                lambda: native(root, FIND.format(test=CASES[0][1])),
+                baseline(shell_natives(root, specs_for(*CASES[0]))),
                 start=100_000,
                 ceiling=2**22,
             )
@@ -100,9 +109,9 @@ def describe_matcher_glob_speed_of_light():
         finally:
             shutil.rmtree(root, ignore_errors=True)
 
-    @pytest.mark.parametrize(("glob", "test"), CASES)
-    def it_matches_native_files_within_the_bar(tree, glob, test):
-        script = FIND.format(test=test)
+    @pytest.mark.parametrize(("glob", "test", "name"), CASES)
+    def it_matches_native_files_within_the_bar(tree, glob, test, name):
+        specs = specs_for(glob, test, name)
         root, n, startup = tree
 
         def dirsql(timeout):
@@ -113,8 +122,8 @@ def describe_matcher_glob_speed_of_light():
             )
             return sorted(row for (row,) in dirsql_rows(proc, ("path",))), seconds
 
-        result = paired(lambda: native(root, script), dirsql, startup)
-        expected, actual = result.native_rows, result.dirsql_rows
+        result = paired(shell_natives(root, specs), dirsql, startup)
+        expected, actual = agreed_rows(result), result.dirsql_rows
         assert len(expected) == matched(n, glob)
 
         assert actual == expected

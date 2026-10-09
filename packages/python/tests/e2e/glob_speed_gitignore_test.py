@@ -3,9 +3,10 @@
 A repo whose root `.gitignore` excludes `build/` and `*.log`, and whose
 `pkg/.gitignore` excludes `out/`. The ignored trees are as large as the
 visible ones, so a walk that read them would pay for it. Some visible files
-are committed and the rest left untracked, so both kinds count. Native is
+are committed and the rest left untracked, so both kinds count. Natives are
 `git ls-files --cached --others --exclude-standard`, the reference for what a
-repo ignores, less the dot-named paths `'./**'` hides. No mocks: real console
+repo ignores, less the dot-named paths `'./**'` hides, plus `fd` and
+`rg --files`, which honor `.gitignore` themselves. No mocks: real console
 script, real process, real filesystem, real git.
 """
 
@@ -17,18 +18,29 @@ import subprocess
 import pytest
 
 from .speed_of_light import (
+    Native,
+    agreed_rows,
     assert_speed_of_light,
+    baseline,
     cli,
     dirsql_rows,
     grow_until_native_takes_a_second,
     paired,
+    shell_natives,
     startup_seconds,
     timed,
-    timed_native,
 )
 
 GLOB = "./**"
-NATIVE = "git ls-files --cached --others --exclude-standard | grep -Ev '(^|/)\\.'"
+NATIVE = [
+    Native(
+        "git-ls-files",
+        ("git",),
+        "{bin} ls-files --cached --others --exclude-standard | grep -Ev '(^|/)\\.'",
+    ),
+    Native("fd", ("fd", "fdfind"), "{bin} --type f"),
+    Native("rg", ("rg",), "{bin} --files"),
+]
 FANOUT = 8
 GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
 
@@ -79,12 +91,6 @@ def kept(n):
     return sum(1 for i in range(n) if item(i)[1])
 
 
-def native(root):
-    proc, seconds = timed_native(["bash", "-c", NATIVE], root)
-    assert proc.returncode == 0, proc.stderr
-    return sorted(proc.stdout.splitlines()), seconds
-
-
 def describe_gitignore_glob_speed_of_light():
     @pytest.fixture
     def root(tmp_path):
@@ -97,9 +103,10 @@ def describe_gitignore_glob_speed_of_light():
 
     def it_matches_native_files_within_the_bar(root):
         startup = startup_seconds()
+        natives = shell_natives(root, NATIVE)
         n = grow_until_native_takes_a_second(
             lambda lo, hi: build_tree(root, lo, hi),
-            lambda: native(root),
+            baseline(natives),
             start=100_000,
             ceiling=2**22,
         )
@@ -112,8 +119,8 @@ def describe_gitignore_glob_speed_of_light():
             )
             return sorted(row for (row,) in dirsql_rows(proc, ("path",))), seconds
 
-        result = paired(lambda: native(root), dirsql, startup)
-        expected, actual = result.native_rows, result.dirsql_rows
+        result = paired(natives, dirsql, startup)
+        expected, actual = agreed_rows(result), result.dirsql_rows
         assert len(expected) == kept(n)
 
         assert actual == expected

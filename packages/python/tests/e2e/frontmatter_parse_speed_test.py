@@ -2,9 +2,10 @@
 
 A tree of notes, each opening with a `---` frontmatter block, parsed by one
 awk process named in `.dirsql.toml`; the question is how many notes carry each
-status and their summed word counts. Native runs the same awk over every file
-and aggregates its tab-separated fields with a second awk, the hand-off
-dirsql pays as one JSON object per line. No mocks: real console script, real process,
+status and their summed word counts. Natives run the same awk over every file,
+found by `find` or `fd`, in one process or in `xargs -P` batches that each
+aggregate their own tab-separated fields, the hand-off dirsql pays as one
+JSON object per line. No mocks: real console script, real process,
 real filesystem, real parser spawn.
 """
 
@@ -15,14 +16,19 @@ import shutil
 import pytest
 
 from .speed_of_light import (
+    AGG_AWK,
+    MERGE_AWK,
+    Native,
+    agreed_rows,
     assert_speed_of_light,
+    baseline,
     cli,
     dirsql_rows,
     grow_until_native_takes_a_second,
     paired,
+    shell_natives,
     startup_seconds,
     timed,
-    timed_native,
 )
 
 COLUMNS = ("status", "n", "total_words")
@@ -60,12 +66,29 @@ function emit() { print status "\t" words }
 """
 )
 
-NATIVE = (
-    "find notes -name '*.md' -exec awk -f fields.awk {} +"
-    " | awk -F '\\t' '{ n[$1]++; s[$1] += $2 }"
-    ' END { for (k in n) print k "\\t" n[k] "\\t" s[k] }\''
-    " | sort"
+BATCHED = (
+    '-0 -P"$(nproc)" -n 1000 sh -c'
+    ' \'awk -f fields.awk "$@" | awk -F "\\t" -f agg.awk\' _'
+    " | awk -F '\\t' -f merge.awk | sort"
 )
+NATIVE = [
+    Native(
+        "find+awk",
+        ("find",),
+        "{bin} notes -name '*.md' -exec awk -f fields.awk {} +"
+        " | awk -F '\\t' -f agg.awk | sort",
+    ),
+    Native(
+        "find+xargs-P",
+        ("find",),
+        "{bin} notes -name '*.md' -print0 | xargs " + BATCHED,
+    ),
+    Native(
+        "fd+xargs-P",
+        ("fd", "fdfind"),
+        "{bin} --no-ignore -0 -e md . notes | xargs " + BATCHED,
+    ),
+]
 
 STATUSES = ("draft", "review", "published", "archived")
 BODY = "\n".join(["Some body text that follows the frontmatter block."] * 20)
@@ -79,6 +102,8 @@ def build_notes(root, lo, hi):
         (root / ".dirsql.toml").write_text(CONFIG)
         (root / "notes.awk").write_text(NOTES_AWK)
         (root / "fields.awk").write_text(FIELDS_AWK)
+        (root / "agg.awk").write_text(AGG_AWK)
+        (root / "merge.awk").write_text(MERGE_AWK)
     for i in range(lo, hi):
         path = root / "notes" / f"dir-{i % 100}" / f"note-{i}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -95,7 +120,6 @@ def build_notes(root, lo, hi):
 
 
 def native_rows(proc):
-    assert proc.returncode == 0, proc.stderr
     rows = []
     for line in proc.stdout.splitlines():
         status, n, total = line.split("\t")
@@ -115,13 +139,10 @@ def describe_frontmatter_parse_speed_of_light():
     def it_matches_native_rows_within_the_bar(root):
         startup = startup_seconds()
 
-        def native():
-            proc, seconds = timed_native(["sh", "-c", NATIVE], root)
-            return native_rows(proc), seconds
-
+        natives = shell_natives(root, NATIVE, native_rows, shell="sh")
         grow_until_native_takes_a_second(
             lambda lo, hi: build_notes(root, lo, hi),
-            native,
+            baseline(natives),
             start=2048,
             ceiling=2**18,
         )
@@ -134,8 +155,8 @@ def describe_frontmatter_parse_speed_of_light():
             )
             return dirsql_rows(proc, COLUMNS), seconds
 
-        result = paired(native, dirsql, startup)
-        expected, actual = result.native_rows, result.dirsql_rows
+        result = paired(natives, dirsql, startup)
+        expected, actual = agreed_rows(result), result.dirsql_rows
         assert len(expected) == len(STATUSES), expected
 
         assert actual == expected
