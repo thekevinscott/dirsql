@@ -16,7 +16,7 @@ pub(crate) enum Step<D, L> {
 
 /// Once a walk has found this many directories it shares them across the
 /// cores; below it, spawning workers costs more than the exploring.
-const PARALLEL_DIRS: usize = 128;
+const PARALLEL_DIRS: usize = 8;
 
 enum Item<L> {
     Dir(usize),
@@ -232,13 +232,8 @@ mod tests {
     }
 
     #[test]
-    fn a_walk_of_a_few_dozen_directories_stays_on_the_calling_thread() {
-        assert_eq!(threads_exploring(4, 2), 1);
-    }
-
-    #[test]
-    fn a_walk_of_under_a_hundred_directories_stays_on_the_calling_thread() {
-        assert_eq!(threads_exploring(4, 3), 1);
+    fn a_walk_of_a_few_dozen_directories_is_shared_across_threads() {
+        assert!(threads_exploring(4, 2) > 1);
     }
 
     #[test]

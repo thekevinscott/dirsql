@@ -712,7 +712,7 @@ enum Taken {
 
 /// Below this many entries a directory is judged on one thread; spawning
 /// workers costs more than the judging.
-const PARALLEL_ENTRIES: usize = 4096;
+const PARALLEL_ENTRIES: usize = 65536;
 
 /// `judge` applied to each of `items`, in order, shared across the cores
 /// once there are enough items to pay for the threads.
@@ -928,6 +928,15 @@ mod tests {
             .into_iter()
             .collect();
         assert!(threads.len() > 1, "judged on {} thread(s)", threads.len());
+    }
+
+    #[test]
+    fn judge_all_judges_a_directory_of_ten_thousand_entries_on_the_calling_thread() {
+        let items = vec![(); 10_000];
+        let threads: std::collections::HashSet<_> = judge_all(&items, &|()| thread::current().id())
+            .into_iter()
+            .collect();
+        assert_eq!(threads.len(), 1);
     }
 
     #[test]
