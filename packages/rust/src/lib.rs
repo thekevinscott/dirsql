@@ -1247,6 +1247,7 @@ impl DirSQL {
                 for (path, table_name) in scanned {
                     files.push(ScannedFile {
                         rel_path: relative_path(anchors.of(&table_name), &path),
+                        abs_path: path,
                         table_name,
                         stat: None,
                         trusted: false,
@@ -1538,11 +1539,12 @@ impl DirSQL {
             }
         }
 
-        for (table_name, hook, files) in batches {
+        for (table_name, hook, mut files) in batches {
             progress.update(done, Some(total_files));
             done += files.len() as u64;
             let strict = *strict_map.get(&table_name).unwrap_or(&false);
-            let rel_paths: Vec<String> = files.iter().map(|f| f.rel_path.clone()).collect();
+            let (rel_paths, abs_paths) =
+                batch_paths(anchors.of(&table_name), &mut files, persist_ready.is_some());
             // A cached table is current only when every file it was run over
             // is, and none has gone: the command saw them all at once, so any
             // change re-runs it over all of them.
@@ -1551,8 +1553,6 @@ impl DirSQL {
             });
             if !current {
                 let table_root = anchors.of(&table_name);
-                let abs_paths: Vec<PathBuf> =
-                    rel_paths.iter().map(|r| table_root.join(r)).collect();
                 let outcome =
                     stream_table_rows(&db, &table_name, hook.as_ref(), &abs_paths, strict)
                         .map_err(map_db_error)?;
@@ -1965,6 +1965,7 @@ pub struct ResolvedBuild {
 /// tuple captured during the scan (when persist is on).
 #[doc(hidden)]
 pub struct ScannedFile {
+    pub abs_path: PathBuf,
     pub rel_path: String,
     pub table_name: String,
     pub stat: Option<FileStat>,
@@ -2273,6 +2274,7 @@ fn reconcile_scan(
         });
 
         files.push(ScannedFile {
+            abs_path: path,
             rel_path,
             table_name,
             stat: Some(stat),
@@ -2458,6 +2460,21 @@ fn run_channel_loop(db: DirSQL, tx: UnboundedSender<RowEvent>) {
             }
         }
     }
+}
+
+/// The relative and absolute paths a per-table hook runs over, in file order.
+/// The absolute path is the one the scan found. Relative paths are cloned
+/// when `keep_rel` (the files are still read afterwards) and moved out
+/// otherwise.
+fn batch_paths(
+    root: &Path,
+    files: &mut [ScannedFile],
+    keep_rel: bool,
+) -> (Vec<String>, Vec<PathBuf>) {
+    let rel: Vec<String> = files.iter().map(|f| f.rel_path.clone()).collect();
+    let _ = keep_rel;
+    let abs = rel.iter().map(|r| root.join(r)).collect();
+    (rel, abs)
 }
 
 fn relative_path(root: &Path, path: &Path) -> String {
@@ -3086,6 +3103,7 @@ mod internal_tests {
             groups: Vec::new(),
             anchors: TableAnchors::at_root(dir.path()),
             scanned_files: vec![ScannedFile {
+                abs_path: PathBuf::new(),
                 rel_path: "ghost.txt".into(),
                 table_name: "ghost".into(),
                 stat: None,
@@ -5142,8 +5160,66 @@ mod internal_tests {
         }
     }
 
+    #[test]
+    fn batch_paths_hands_the_hook_the_paths_the_scan_found() {
+        let mut files = vec![
+            ScannedFile {
+                abs_path: PathBuf::from("/scan/a/one.md"),
+                rel_path: "a/one.md".into(),
+                table_name: "t".into(),
+                stat: None,
+                trusted: false,
+            },
+            ScannedFile {
+                abs_path: PathBuf::from("/scan/b/two.md"),
+                rel_path: "b/two.md".into(),
+                table_name: "t".into(),
+                stat: None,
+                trusted: false,
+            },
+        ];
+        let (rel, abs) = batch_paths(Path::new("/elsewhere"), &mut files, true);
+        assert_eq!(rel, vec!["a/one.md", "b/two.md"]);
+        assert_eq!(
+            abs,
+            vec![
+                PathBuf::from("/scan/a/one.md"),
+                PathBuf::from("/scan/b/two.md")
+            ]
+        );
+    }
+
+    #[test]
+    fn batch_paths_leaves_the_relative_paths_in_place_when_asked_to_keep_them() {
+        let mut files = vec![ScannedFile {
+            abs_path: PathBuf::from("/scan/a.md"),
+            rel_path: "a.md".into(),
+            table_name: "t".into(),
+            stat: None,
+            trusted: false,
+        }];
+        let (rel, _) = batch_paths(Path::new("/scan"), &mut files, true);
+        assert_eq!(rel, vec!["a.md"]);
+        assert_eq!(files[0].rel_path, "a.md");
+    }
+
+    #[test]
+    fn batch_paths_moves_the_relative_paths_out_when_not_kept() {
+        let mut files = vec![ScannedFile {
+            abs_path: PathBuf::from("/scan/a.md"),
+            rel_path: "a.md".into(),
+            table_name: "t".into(),
+            stat: None,
+            trusted: false,
+        }];
+        let (rel, _) = batch_paths(Path::new("/scan"), &mut files, false);
+        assert_eq!(rel, vec!["a.md"]);
+        assert!(files[0].rel_path.is_empty());
+    }
+
     fn scanned(rel_path: &str, table: &str, trusted: bool) -> ScannedFile {
         ScannedFile {
+            abs_path: PathBuf::new(),
             rel_path: rel_path.into(),
             table_name: table.into(),
             stat: None,
