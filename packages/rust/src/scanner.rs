@@ -712,7 +712,7 @@ enum Taken {
 
 /// Below this many entries a directory is judged on one thread; spawning
 /// workers costs more than the judging.
-const PARALLEL_ENTRIES: usize = 4096;
+const PARALLEL_ENTRIES: usize = 65536;
 
 /// `judge` applied to each of `items`, in order, shared across the cores
 /// once there are enough items to pay for the threads.

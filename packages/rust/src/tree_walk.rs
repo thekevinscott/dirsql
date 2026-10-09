@@ -16,7 +16,7 @@ pub(crate) enum Step<D, L> {
 
 /// Once a walk has found this many directories it shares them across the
 /// cores; below it, spawning workers costs more than the exploring.
-const PARALLEL_DIRS: usize = 128;
+const PARALLEL_DIRS: usize = 8;
 
 enum Item<L> {
     Dir(usize),
