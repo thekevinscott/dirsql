@@ -779,7 +779,7 @@ impl Db {
         };
         let mut stored: Vec<(i64, Vec<Value>)> = Vec::new();
         {
-            let mut stmt = self.conn.prepare(&select)?;
+            let mut stmt = self.conn.prepare_cached(&select)?;
             let mut cursor = stmt.query([])?;
             while let Some(row) = cursor.next()? {
                 let cells = (0..columns.len())

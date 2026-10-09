@@ -655,15 +655,31 @@ impl DirSQL {
     /// the TypeScript binding).
     #[doc(hidden)]
     pub fn apply_file_events(&self, events: Vec<FileEvent>) -> Vec<RowEvent> {
+        self.apply_file_events_draining(events, Vec::new)
+    }
+
+    /// [`apply_file_events`](Self::apply_file_events), asking `late` for events
+    /// that arrived while the batch was being routed, until it returns none,
+    /// before any per-table hook runs. One write reaches the watcher as
+    /// several events; a hook run for the first would run again for the rest.
+    fn apply_file_events_draining(
+        &self,
+        events: Vec<FileEvent>,
+        mut late: impl FnMut() -> Vec<FileEvent>,
+    ) -> Vec<RowEvent> {
         let mut pending = PendingRefresh::default();
         let mut out = Vec::new();
         let mut rescan = false;
-        for fe in events {
-            if fe == FileEvent::Rescan {
-                rescan = true;
-                continue;
+        let mut batch = events;
+        while !batch.is_empty() {
+            for fe in batch {
+                if fe == FileEvent::Rescan {
+                    rescan = true;
+                    continue;
+                }
+                out.extend(self.route_file_event(fe, &mut pending));
             }
-            out.extend(self.route_file_event(fe, &mut pending));
+            batch = late();
         }
         if rescan {
             out.extend(self.rescan(&mut pending));
@@ -710,7 +726,17 @@ impl DirSQL {
             events
         };
 
-        Ok(self.apply_file_events(file_events))
+        Ok(self.apply_file_events_draining(file_events, || self.queued_file_events()))
+    }
+
+    /// The events the watcher already holds, without waiting for more.
+    fn queued_file_events(&self) -> Vec<FileEvent> {
+        self.inner
+            .watcher
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().map(Watcher::try_recv_all))
+            .unwrap_or_default()
     }
 
     /// Process a single [`FileEvent`], mutating the DB and cache as needed.
@@ -4136,6 +4162,18 @@ mod internal_tests {
     }
 
     #[test]
+    fn queued_file_events_hands_over_what_the_watcher_holds_without_waiting() {
+        let (dir, db) = simple_db();
+        assert!(db.queued_file_events().is_empty(), "no watcher yet");
+        db.start_watching().unwrap();
+        std::fs::write(dir.path().join("a.none"), "x").unwrap();
+        let mut held = Vec::new();
+        while !held.iter().any(|e| matches!(e, FileEvent::Created(_))) {
+            held.extend(db.queued_file_events());
+        }
+    }
+
+    #[test]
     fn poll_events_locks_out_watch() {
         let (_dir, db) = simple_db();
         db.poll_events(Duration::from_millis(0)).unwrap();
@@ -5500,6 +5538,31 @@ mod internal_tests {
                 },
             ]
         );
+        assert_eq!(row_names(&db), vec!["a.txt", "b.txt"]);
+    }
+
+    #[test]
+    fn events_arriving_while_a_batch_is_routed_share_its_per_table_rerun() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let a = root.join("a.txt");
+        let b = root.join("b.txt");
+        let fake = FakeFs::default().with_subtree(
+            root.clone(),
+            vec![(a.clone(), "items".into()), (b.clone(), "items".into())],
+        );
+        let (items, calls) = recording_per_table("items", "**/*.txt");
+        let db =
+            DirSQL::with_ignore_and_fs(&root, vec![items], Vec::<String>::new(), Arc::new(fake))
+                .unwrap();
+
+        let mut arrivals = vec![vec![FileEvent::Modified(b.clone())]];
+        let events = db.apply_file_events_draining(vec![FileEvent::Created(a.clone())], || {
+            arrivals.pop().unwrap_or_default()
+        });
+
+        assert_eq!(*calls.lock().unwrap(), vec![vec![a, b]]);
+        assert_eq!(events.len(), 2);
         assert_eq!(row_names(&db), vec!["a.txt", "b.txt"]);
     }
 

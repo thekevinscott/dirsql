@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/watch_speed_test.py tests/e2e/on_file_query_test.py tests/e2e/server_speed_test.py -q -p no:cacheprovider",
+  "ran_at": 1791548609,
+  "exit_code": 0,
+  "commit": "ea38a739b990bc5135cc32ba9b61193fd0a2c1e1",
+  "branch": "bot/1416-watch-speed-1008"
+}
