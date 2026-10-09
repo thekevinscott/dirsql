@@ -225,15 +225,18 @@ fn frontend_prints_its_url_with_the_actual_ephemeral_port() {
     let root = TempDir::new().unwrap();
     let mut server = spawn_dirsql_with_args(root.path(), 0, &["--frontend"]);
     let mut line = String::new();
-    BufReader::new(server.stdout.take().unwrap())
-        .read_line(&mut line)
-        .unwrap();
+    let mut stdout = BufReader::new(server.stdout.take().unwrap());
+    stdout.read_line(&mut line).unwrap();
     let url = line
         .trim()
         .strip_prefix("Frontend at ")
-        .expect("frontend URL on stdout");
+        .expect("frontend URL on stdout")
+        .to_string();
     assert!(url.starts_with("http://localhost:"), "{url}");
     assert_ne!(url, "http://localhost:0/", "{url}");
+    line.clear();
+    stdout.read_line(&mut line).unwrap();
+    assert!(line.starts_with("Running at localhost:"), "{line}");
     assert_eq!(
         Client::new().get(url).send().unwrap().status(),
         StatusCode::OK
