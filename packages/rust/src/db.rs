@@ -2885,6 +2885,28 @@ mod tests {
     }
 
     #[test]
+    fn shape_rows_for_shapes_against_a_column_list_without_a_connection() {
+        let columns = vec!["id".to_string(), "n".to_string()];
+        let rows = json_rows(serde_json::json!([{"n":2,"id":"b"},{"id":"c"}]));
+        let out = shape_rows_for(columns.clone(), "t", rows, false).unwrap();
+        assert_eq!(out.columns, columns);
+        assert_eq!(
+            out.cells,
+            vec![
+                vec![Value::Text("b".into()), Value::Integer(2)],
+                vec![Value::Text("c".into()), Value::Null],
+            ]
+        );
+    }
+
+    #[test]
+    fn shape_rows_for_rejects_an_extra_key_in_strict_mode() {
+        let rows = json_rows(serde_json::json!([{"id":"a","nope":1}]));
+        let err = shape_rows_for(vec!["id".to_string()], "t", rows, true).unwrap_err();
+        assert!(err.to_string().contains("extra columns"), "{err}");
+    }
+
+    #[test]
     fn shape_rows_lays_cells_out_in_ddl_order_whatever_the_key_order() {
         let db = Db::new().unwrap();
         db.create_table("t", "CREATE TABLE t (id TEXT, n INTEGER)")

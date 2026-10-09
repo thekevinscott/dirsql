@@ -278,6 +278,35 @@ mod tests {
     }
 
     #[test]
+    fn run_streaming_shapes_each_chunk_off_the_calling_thread() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let paths: Vec<PathBuf> = (0..3000)
+            .map(|i| dir.path().join(format!("{i:0>96}.txt")))
+            .collect();
+        let shaped_on = Mutex::new(Vec::new());
+        let mut chunks = 0;
+        run_streaming(
+            r#"sh -c 'echo "{\"n\":$#}"' sh"#,
+            dir.path(),
+            dir.path(),
+            &paths,
+            &|rows| {
+                shaped_on.lock().unwrap().push(std::thread::current().id());
+                rows.len()
+            },
+            &mut |count| {
+                assert_eq!(count, 1);
+                chunks += 1;
+            },
+        )
+        .unwrap();
+        let shaped_on = shaped_on.into_inner().unwrap();
+        assert!(chunks > 1, "{chunks} invocation(s)");
+        assert_eq!(shaped_on.len(), chunks);
+        assert!(!shaped_on.contains(&std::thread::current().id()));
+    }
+
+    #[test]
     fn arg_cost_is_the_spawned_form_plus_a_separator() {
         let quotes = if cfg!(windows) { 2 } else { 0 };
         assert_eq!(arg_cost("aa"), 2 + quotes + 1);
