@@ -73,12 +73,15 @@ pub(crate) fn run_streaming(
         .iter()
         .map(|path| command::non_verbatim(&path.to_string_lossy()))
         .collect();
-    let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
     let mut runs = chunks(&args, ARG_BUDGET.saturating_sub(argv_bytes(&argv)));
     if runs.len() == 1 {
-        runs = spread(&args, &file_sizes(paths), cpus);
+        runs = spread_runs(&args, &file_sizes(paths), cpus);
     }
-    let workers = cpus.min(runs.len());
+    let workers = if runs.len() <= 1 {
+        runs.len()
+    } else {
+        cpus().min(runs.len())
+    };
 
     let next = AtomicUsize::new(0);
     let aborted = AtomicBool::new(false);
@@ -207,6 +210,20 @@ fn chunks(args: &[String], budget: usize) -> Vec<&[String]> {
 /// Bytes of file data worth a process of its own: below this, spawning
 /// another invocation costs more than it saves.
 const MIN_RUN_BYTES: u64 = 4 * 1024 * 1024;
+
+fn cpus() -> usize {
+    std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
+}
+
+/// [`spread`] over the machine's CPUs, asking for the count only when the
+/// data could fill more than one run: the query reads cgroup files each time.
+fn spread_runs<'a>(
+    args: &'a [String],
+    sizes: &[u64],
+    cpus: impl FnOnce() -> usize,
+) -> Vec<&'a [String]> {
+    spread(args, sizes, cpus())
+}
 
 /// Each path's size in bytes; a path that cannot be read counts as empty.
 fn file_sizes(paths: &[PathBuf]) -> Vec<u64> {
@@ -421,6 +438,22 @@ mod tests {
         let mib = 1024 * 1024;
         assert_eq!(lens(&spread(&args, &[5 * mib; 4], 16)), [1, 1, 1, 1]);
         assert_eq!(lens(&spread(&args, &[mib; 4], 16)), [4]);
+    }
+
+    #[test]
+    fn spread_runs_does_not_count_cpus_for_data_that_fits_one_run() {
+        let args = args(&["a", "b", "c", "d"]);
+        let mib = 1024 * 1024;
+        let runs = spread_runs(&args, &[mib; 4], || panic!("counted the cpus"));
+        assert_eq!(lens(&runs), [4]);
+    }
+
+    #[test]
+    fn spread_runs_counts_cpus_once_the_data_fills_more_than_one_run() {
+        let args = args(&["a", "b", "c", "d"]);
+        let mib = 1024 * 1024;
+        let runs = spread_runs(&args, &[8 * mib; 4], || 2);
+        assert_eq!(lens(&runs), [2, 2]);
     }
 
     #[test]
