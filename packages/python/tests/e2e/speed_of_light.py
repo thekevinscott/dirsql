@@ -383,3 +383,16 @@ def assert_speed_of_light(name, result, startup):
     assert median <= TOLERANCE, (
         f"bar native {result.bar}: {line}; median is over {TOLERANCE}x"
     )
+
+
+SLOWDOWN = 1.5
+RELEASE_PAIRS = 10
+ATTEMPTS = 3
+
+
+def release_ratios(pr, release, startup, pairs=RELEASE_PAIRS):
+    raise NotImplementedError
+
+
+def assert_no_slowdown(name, measure, threshold=SLOWDOWN, attempts=ATTEMPTS):
+    raise NotImplementedError
