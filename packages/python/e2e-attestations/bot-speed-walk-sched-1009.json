@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_depth_bound_test.py tests/e2e/glob_speed_one_level_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_symlink_test.py -x -q",
+  "ran_at": 1791561608,
+  "exit_code": 0,
+  "commit": "d4ace79bbd16978ba199811907976d240ca55507",
+  "branch": "bot/speed-walk-sched-1009"
+}
