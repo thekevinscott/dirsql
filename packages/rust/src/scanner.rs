@@ -931,6 +931,15 @@ mod tests {
     }
 
     #[test]
+    fn judge_all_judges_a_directory_of_ten_thousand_entries_on_the_calling_thread() {
+        let items = vec![(); 10_000];
+        let threads: std::collections::HashSet<_> = judge_all(&items, &|()| thread::current().id())
+            .into_iter()
+            .collect();
+        assert_eq!(threads.len(), 1);
+    }
+
+    #[test]
     fn judge_all_judges_a_small_directory_on_the_calling_thread() {
         let items = vec![(); PARALLEL_ENTRIES - 1];
         let caller = thread::current().id();
