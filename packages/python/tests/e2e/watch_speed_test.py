@@ -73,7 +73,7 @@ class Writer:
         sample = next(self.samples)
         value = sample
         started = time.perf_counter()
-        target(self.root, sample).write_text('{"v": %d}\n' % value)
+        target(self.root, sample).write_text(f'{{"v": {value}}}\n')
         return value, started
 
 
@@ -133,7 +133,7 @@ class Dirsql:
 
     def sample(self):
         value, started = self.writer.write()
-        needle = b'"row":{"v":%d}' % value
+        needle = f'"row":{{"v":{value}}}'.encode()
         while needle not in self.buffer:
             self.next_event()
         seconds = time.perf_counter() - started

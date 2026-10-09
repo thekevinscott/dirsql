@@ -655,6 +655,19 @@ impl DirSQL {
     /// the TypeScript binding).
     #[doc(hidden)]
     pub fn apply_file_events(&self, events: Vec<FileEvent>) -> Vec<RowEvent> {
+        self.apply_file_events_draining(events, Vec::new)
+    }
+
+    /// [`apply_file_events`](Self::apply_file_events), asking `late` for events
+    /// that arrived while the batch was being routed, until it returns none,
+    /// before any per-table hook runs. One write reaches the watcher as
+    /// several events; a hook run for the first would run again for the rest.
+    fn apply_file_events_draining(
+        &self,
+        events: Vec<FileEvent>,
+        late: impl FnMut() -> Vec<FileEvent>,
+    ) -> Vec<RowEvent> {
+        let _ = late;
         let mut pending = PendingRefresh::default();
         let mut out = Vec::new();
         let mut rescan = false;
@@ -5500,6 +5513,31 @@ mod internal_tests {
                 },
             ]
         );
+        assert_eq!(row_names(&db), vec!["a.txt", "b.txt"]);
+    }
+
+    #[test]
+    fn events_arriving_while_a_batch_is_routed_share_its_per_table_rerun() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let a = root.join("a.txt");
+        let b = root.join("b.txt");
+        let fake = FakeFs::default().with_subtree(
+            root.clone(),
+            vec![(a.clone(), "items".into()), (b.clone(), "items".into())],
+        );
+        let (items, calls) = recording_per_table("items", "**/*.txt");
+        let db =
+            DirSQL::with_ignore_and_fs(&root, vec![items], Vec::<String>::new(), Arc::new(fake))
+                .unwrap();
+
+        let mut arrivals = vec![vec![FileEvent::Modified(b.clone())]];
+        let events = db.apply_file_events_draining(vec![FileEvent::Created(a.clone())], || {
+            arrivals.pop().unwrap_or_default()
+        });
+
+        assert_eq!(*calls.lock().unwrap(), vec![vec![a, b]]);
+        assert_eq!(events.len(), 2);
         assert_eq!(row_names(&db), vec!["a.txt", "b.txt"]);
     }
 
