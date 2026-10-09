@@ -364,6 +364,14 @@ for await (const event of db.watch()) { ... }
 
 ## CLI: invocation modes
 
+`dirsql server --frontend` is a shared Rust CLI option available through the
+Rust binary and the Python and TypeScript launchers. It serves the embedded
+SQL explorer shell at `/` on the API's origin and exposes its load diagnostic
+through `GET /frontend/state` (HTTP 503 when unavailable). The page needs no
+runtime asset download; the option adds no SDK binding API. Without the flag,
+the existing HTTP routes are unchanged. Query controls and distribution
+validation are tracked in the subsequent frontend issues.
+
 **Parity by construction, no drift; no SDK API change (#662).** Query is the
 default CLI mode: `dirsql "<sql>"` runs one query and prints JSON rows,
 identical to the retained explicit synonym `dirsql query "<sql>"`. The HTTP

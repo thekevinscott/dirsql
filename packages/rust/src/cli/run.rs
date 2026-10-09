@@ -177,6 +177,10 @@ enum Command {
 
 #[derive(Debug, Args)]
 struct ServerArgs {
+    /// Serve the bundled SQL explorer at the server URL (no browser opens).
+    #[arg(long)]
+    frontend: bool,
+
     /// Bind address.
     #[arg(long, default_value = "localhost")]
     host: String,
@@ -480,6 +484,9 @@ async fn run_server(
     if let Some(origin) = args.cors_origin {
         server_config = server_config.with_cors_origin(origin);
     }
+    if args.frontend {
+        server_config = server_config.with_frontend();
+    }
 
     let host = args.host.clone();
     let handle = match serve_with_state(server_config, state).await {
@@ -491,6 +498,18 @@ async fn run_server(
     };
 
     // Echo back the user-facing hostname (not the resolved IP SocketAddr).
+    if args.frontend {
+        let url_host = match host.as_str() {
+            "0.0.0.0" => "localhost".to_string(),
+            "::" | "[::]" => "[::1]".to_string(),
+            _ if host.contains(':') && !host.starts_with('[') => format!("[{host}]"),
+            _ => host.clone(),
+        };
+        println!(
+            "Frontend at http://{url_host}:{}/",
+            handle.local_addr().port()
+        );
+    }
     println!("Running at {host}:{}", handle.local_addr().port());
 
     if let Err(err) = shutdown.await {
