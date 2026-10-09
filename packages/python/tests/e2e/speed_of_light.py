@@ -383,3 +383,56 @@ def assert_speed_of_light(name, result, startup):
     assert median <= TOLERANCE, (
         f"bar native {result.bar}: {line}; median is over {TOLERANCE}x"
     )
+
+
+SLOWDOWN = 1.5
+RELEASE_PAIRS = 10
+ATTEMPTS = 3
+
+
+def release_ratios(pr, release, startup, pairs=RELEASE_PAIRS):
+    """Per-pair PR/release time ratios, each side net of its own startup.
+
+    `startup.dirsql` is the PR build's, `startup.native` the release's. One
+    discarded warm-up pair, then pairs alternate which build runs first.
+    """
+    release()
+    pr()
+    series = run_pairs({"release": release}, pr, pairs)
+    return pair_ratios(series.native_seconds["release"], series.dirsql_seconds, startup)
+
+
+def assert_no_slowdown(name, measure, threshold=SLOWDOWN, attempts=ATTEMPTS):
+    """Pass on the first attempt whose median ratio is within `threshold`.
+
+    Fails only when every attempt is over, so one noisy window on a shared
+    runner does not fail the check.
+    """
+    medians = []
+    for attempt in range(1, attempts + 1):
+        ratios = measure()
+        low, median, high, spread = summarize(ratios)
+        print(
+            f"SPEED {name} vs release: attempt {attempt}, {len(ratios)} pairs,"
+            f" ratio min {low:.3f} median {median:.3f} max {high:.3f}"
+            f" spread {spread:.0%}"
+        )
+        if median <= threshold:
+            return
+        medians.append(median)
+    shown = ", ".join(f"{median:.3f}" for median in medians)
+    raise AssertionError(
+        f"{name}: PR build is over {threshold}x the previous release on every"
+        f" attempt (median ratios {shown})"
+    )
+
+
+def install_release(dest):
+    """Install the latest published dirsql into a fresh venv at `dest`."""
+    subprocess.run(["uv", "venv", str(dest)], check=True, capture_output=True)
+    subprocess.run(
+        ["uv", "pip", "install", "--python", str(dest), "dirsql"],
+        check=True,
+        capture_output=True,
+    )
+    return dest / "bin" / "dirsql"

@@ -71,7 +71,7 @@ For the typical "fake out a stdlib helper / module function" case, mock it inste
 
 ## E2E Test Policy
 
-E2E tests exercise the CLI and are your primary local feedback mechanism. Run them liberally after significant changes -- they catch issues integration tests miss because integration mocks out SQLite, the filesystem, and (eventually) LLM calls. Do NOT add the e2e suites to CI; CI verifies only the per-package *attestation* that they ran (see *E2E Attestation* below). The no-mock tiers that *do* run in CI are the **binding** tier (`tests/integration/binding/`, the SDK against the real core) and the **distcheck** flows (the `internals/distcheck` package, the functional publishability gate).
+E2E tests exercise the CLI and are your primary local feedback mechanism. Run them liberally after significant changes -- they catch issues integration tests miss because integration mocks out SQLite, the filesystem, and (eventually) LLM calls. Do NOT add the e2e suites to CI (the sole exception is `release_speed_test.py`, run by `speed-sanity-ci.yml`); CI verifies only the per-package *attestation* that they ran (see *E2E Attestation* below). The no-mock tiers that *do* run in CI are the **binding** tier (`tests/integration/binding/`, the SDK against the real core) and the **distcheck** flows (the `internals/distcheck` package, the functional publishability gate).
 
 See skillet or karat for examples of test organization, fixtures, and pytest-describe patterns.
 
