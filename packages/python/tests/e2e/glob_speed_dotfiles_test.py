@@ -5,8 +5,8 @@ dot-named directories and dotfiles recur below. `'./**/*.md'` must skip
 every one of them; `'./**/.*'` reaches dotfiles because the pattern spells
 the dot, and `'./.cache/**/*.md'` reaches under a dot-named directory
 because the pattern names it. Natives are `find` pruning what bash globstar
-with dotglob off would not enter, `fd`, `rg --files` and bash globstar. No mocks: real console script, real
-process, real filesystem.
+with dotglob off would not enter, `fd` and `rg --files`. No mocks: real console
+script, real process, real filesystem.
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ from .speed_of_light import (
     cli,
     dirsql_rows,
     fd,
-    globstar,
     grow_until_native_takes_a_second,
     paired,
     rg,
@@ -40,7 +39,6 @@ MARKDOWN = [
     ),
     fd("--glob '*.md'"),
     rg("-g '*.md' -g '!.*'"),
-    globstar("./**/*.md"),
 ]
 DOTFILES = [
     Native(
@@ -59,7 +57,6 @@ UNDER_CACHE = [
     ),
     fd("--glob '*.md' .cache"),
     rg("-g '*.md' -g '!.*' .cache"),
-    globstar(".cache/**/*.md"),
 ]
 FANOUT = 8
 

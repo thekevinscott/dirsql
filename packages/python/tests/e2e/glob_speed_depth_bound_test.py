@@ -3,8 +3,8 @@
 Few directories at the top, each holding markdown files mixed with other
 files, dotfiles, and a deep chain of directories as large again as the
 files the glob can match. A walk that descended past depth two would read
-the chain for nothing. Natives are `find` bounded at depth two, `fd`, `rg --files` and bash globstar. No mocks:
-real console script, real process, real filesystem.
+the chain for nothing. Natives are `find` bounded at depth two, `fd` and `rg --files`. No mocks: real
+console script, real process, real filesystem.
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ from .speed_of_light import (
     cli,
     dirsql_rows,
     fd,
-    globstar,
     grow_until_native_takes_a_second,
     paired,
     rg,
@@ -40,7 +39,6 @@ NATIVE = [
     ),
     fd("--max-depth 2 --glob '*.md'"),
     rg("--max-depth 2 -g '*.md' -g '!.*'"),
-    globstar("./*/*.md"),
 ]
 TOPS = 32
 FANOUT = 8

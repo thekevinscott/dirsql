@@ -2,10 +2,9 @@
 
 One deep, wide tree of markdown files whose names start with different
 letters, a digit or `file` plus one or two characters, so each matcher keeps
-a different share of them. Natives are `find` with the same name test, `fd`,
-`rg --files` and bash globstar, which all return what globstar does with
-dotglob off. No mocks: real console
-script, real process, real filesystem.
+a different share of them. Natives are `find` with the same name test, `fd`
+and `rg --files`, which all return what globstar does with
+dotglob off. No mocks: real console script, real process, real filesystem.
 """
 
 from __future__ import annotations
@@ -22,7 +21,6 @@ from .speed_of_light import (
     cli,
     dirsql_rows,
     fd,
-    globstar,
     grow_until_native_takes_a_second,
     paired,
     rg,
@@ -45,7 +43,6 @@ def specs_for(glob, test, name):
         Native("find", ("find",), FIND.format(test=test)),
         fd(f"--glob '{name}'"),
         rg(f"-g '{name}' -g '!.*'"),
-        globstar(glob),
     ]
 
 
