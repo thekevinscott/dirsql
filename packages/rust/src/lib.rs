@@ -665,18 +665,21 @@ impl DirSQL {
     fn apply_file_events_draining(
         &self,
         events: Vec<FileEvent>,
-        late: impl FnMut() -> Vec<FileEvent>,
+        mut late: impl FnMut() -> Vec<FileEvent>,
     ) -> Vec<RowEvent> {
-        let _ = late;
         let mut pending = PendingRefresh::default();
         let mut out = Vec::new();
         let mut rescan = false;
-        for fe in events {
-            if fe == FileEvent::Rescan {
-                rescan = true;
-                continue;
+        let mut batch = events;
+        while !batch.is_empty() {
+            for fe in batch {
+                if fe == FileEvent::Rescan {
+                    rescan = true;
+                    continue;
+                }
+                out.extend(self.route_file_event(fe, &mut pending));
             }
-            out.extend(self.route_file_event(fe, &mut pending));
+            batch = late();
         }
         if rescan {
             out.extend(self.rescan(&mut pending));
@@ -723,7 +726,17 @@ impl DirSQL {
             events
         };
 
-        Ok(self.apply_file_events(file_events))
+        Ok(self.apply_file_events_draining(file_events, || self.queued_file_events()))
+    }
+
+    /// The events the watcher already holds, without waiting for more.
+    fn queued_file_events(&self) -> Vec<FileEvent> {
+        self.inner
+            .watcher
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().map(Watcher::try_recv_all))
+            .unwrap_or_default()
     }
 
     /// Process a single [`FileEvent`], mutating the DB and cache as needed.
@@ -4146,6 +4159,19 @@ mod internal_tests {
         assert!(e1.to_string().contains("watch() is active"), "got: {e1}");
         let e2 = db.wait_file_events(Duration::from_millis(0)).unwrap_err();
         assert!(e2.to_string().contains("watch() is active"), "got: {e2}");
+    }
+
+    #[test]
+    fn queued_file_events_hands_over_what_the_watcher_holds_without_waiting() {
+        let (dir, db) = simple_db();
+        assert!(db.queued_file_events().is_empty(), "no watcher yet");
+        db.start_watching().unwrap();
+        std::fs::write(dir.path().join("a.none"), "x").unwrap();
+        let mut held = Vec::new();
+        while !held.iter().any(|e| matches!(e, FileEvent::Created(_))) {
+            held.extend(db.queued_file_events());
+            std::thread::yield_now();
+        }
     }
 
     #[test]

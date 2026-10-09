@@ -77,11 +77,12 @@ pub(crate) fn run_streaming(
     if runs.len() == 1 {
         runs = spread_runs(&args, &file_sizes(paths), cpus);
     }
-    let workers = if runs.len() <= 1 {
-        runs.len()
-    } else {
-        cpus().min(runs.len())
-    };
+    if let [only] = runs.as_slice() {
+        let mut full = argv;
+        full.extend(only.iter().cloned());
+        return run_invocation(command, &full, cwd, &mut |rows| sink(rows));
+    }
+    let workers = cpus().min(runs.len());
 
     let next = AtomicUsize::new(0);
     let aborted = AtomicBool::new(false);
@@ -100,7 +101,7 @@ pub(crate) fn run_streaming(
                     }
                     let mut full = argv.clone();
                     full.extend(runs[index].iter().cloned());
-                    let outcome = run_invocation(command, &full, cwd, &|rows| {
+                    let outcome = run_invocation(command, &full, cwd, &mut |rows| {
                         let _ = rows_tx.send(rows);
                     });
                     if let Err(message) = outcome {
@@ -137,7 +138,7 @@ fn run_invocation(
     command: &str,
     full: &[String],
     cwd: &Path,
-    send: &dyn Fn(Vec<JsonRow>),
+    send: &mut dyn FnMut(Vec<JsonRow>),
 ) -> Result<(), String> {
     let mut bad_output: Option<String> = None;
     let mut lines_seen = 0usize;
@@ -222,6 +223,10 @@ fn spread_runs<'a>(
     sizes: &[u64],
     cpus: impl FnOnce() -> usize,
 ) -> Vec<&'a [String]> {
+    let by_data = usize::try_from(sizes.iter().sum::<u64>() / MIN_RUN_BYTES).unwrap_or(usize::MAX);
+    if by_data.min(args.len()) <= 1 {
+        return vec![args];
+    }
     spread(args, sizes, cpus())
 }
 

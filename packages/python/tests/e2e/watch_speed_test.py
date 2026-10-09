@@ -1,10 +1,11 @@
 """Watch speed: the time from a file write to its event reaching the consumer.
 
-Two identical small trees of JSON-lines files, one per side. Native is `inotifywait`
+Two identical one-file trees, one per side, so the clock isolates the fixed
+cost of a change from the size of the table. Native is `inotifywait`
 recursively watching `close_write`, a competent user's watcher, whose consumer
 reads the changed file and parses it. dirsql is `dirsql server` holding an
 `/events` stream open, whose consumer waits for the changed row. Each sample
-writes a new value into one file and stops the clock when the consumer has the
+writes a new value into the file and stops the clock when the consumer has the
 value, so both sides deliver the same fact. Samples alternate between the two
 sides. No mocks: real console script, real server process, real sockets, real
 filesystem.
@@ -28,8 +29,8 @@ from .speed_of_light import (
     paired,
 )
 
-DIRS = 2
-FILES_PER_DIR = 10
+DIRS = 1
+FILES_PER_DIR = 1
 PAIRS = 15
 DEADLINE = 30.0
 WATCHES_ESTABLISHED = 1.0
