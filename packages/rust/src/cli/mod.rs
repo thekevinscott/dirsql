@@ -223,6 +223,12 @@ mod tests {
     }
 
     #[test]
+    fn frontend_is_opt_in() {
+        assert!(!ServerConfig::ephemeral().frontend);
+        assert!(ServerConfig::ephemeral().with_frontend().frontend);
+    }
+
+    #[test]
     fn with_query_timeout_overrides_the_default() {
         let cfg = ServerConfig::bind("127.0.0.1", 8080).with_query_timeout(Duration::from_secs(5));
         assert_eq!(cfg.query_timeout, Duration::from_secs(5));

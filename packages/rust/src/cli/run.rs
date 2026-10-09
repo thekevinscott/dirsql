@@ -499,15 +499,9 @@ async fn run_server(
 
     // Echo back the user-facing hostname (not the resolved IP SocketAddr).
     if args.frontend {
-        let url_host = match host.as_str() {
-            "0.0.0.0" => "localhost".to_string(),
-            "::" | "[::]" => "[::1]".to_string(),
-            _ if host.contains(':') && !host.starts_with('[') => format!("[{host}]"),
-            _ => host.clone(),
-        };
         println!(
-            "Frontend at http://{url_host}:{}/",
-            handle.local_addr().port()
+            "Frontend at {}",
+            frontend_url(&host, handle.local_addr().port())
         );
     }
     println!("Running at {host}:{}", handle.local_addr().port());
@@ -521,6 +515,16 @@ async fn run_server(
         return 1;
     }
     0
+}
+
+fn frontend_url(host: &str, port: u16) -> String {
+    let url_host = match host {
+        "0.0.0.0" => "localhost".to_string(),
+        "::" | "[::]" => "[::1]".to_string(),
+        _ if host.contains(':') && !host.starts_with('[') => format!("[{host}]"),
+        _ => host.to_string(),
+    };
+    format!("http://{url_host}:{port}/")
 }
 
 fn load_state(cfg: &ConfigArgs, path_table_parser: Option<String>) -> AppState {
@@ -887,6 +891,16 @@ mod tests {
             }
             other => panic!("expected a server subcommand, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn frontend_url_uses_a_reachable_and_valid_host() {
+        assert_eq!(frontend_url("localhost", 7117), "http://localhost:7117/");
+        assert_eq!(frontend_url("0.0.0.0", 7117), "http://localhost:7117/");
+        assert_eq!(frontend_url("::", 7117), "http://[::1]:7117/");
+        assert_eq!(frontend_url("[::]", 7117), "http://[::1]:7117/");
+        assert_eq!(frontend_url("::1", 7117), "http://[::1]:7117/");
+        assert_eq!(frontend_url("[::1]", 7117), "http://[::1]:7117/");
     }
 
     fn server_args(argv: &[&str]) -> ServerArgs {

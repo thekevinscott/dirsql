@@ -198,6 +198,23 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
+    #[tokio::test]
+    async fn frontend_routes_and_state_report_a_config_failure() {
+        let (events, _) = broadcast::channel::<String>(1);
+        let (_cancel_tx, cancel) = watch::channel(false);
+        let ctx = Arc::new(AppContext {
+            state: AppState::Unavailable("failed to load config".into()),
+            events,
+            watch_failure: None,
+            cancel,
+            query_timeout: Duration::from_secs(1),
+        });
+
+        assert!(router(ctx.clone(), true).has_routes());
+        let resp = handle_frontend_state(State(ctx)).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
     #[test]
     fn error_response_sets_json_content_type() {
         let resp = error_response(StatusCode::BAD_REQUEST, "boom");
