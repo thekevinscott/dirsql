@@ -19,11 +19,13 @@ from tests.e2e.bench_report import (
     render_markdown,
 )
 from tests.e2e.speed_of_light import (
+    Native,
     Natives,
     Paired,
     Startup,
     assert_speed_of_light,
     paired,
+    suite_only,
 )
 
 NO_STARTUP = Startup(0.0, 0.0)
@@ -193,3 +195,12 @@ def describe_suite_mode():
         natives = Natives({"a": canned(1.0)}, [])
         out = paired(natives, canned(1.0), NO_STARTUP, pairs=2, screen=1)
         assert len(out.dirsql_seconds) == 2
+
+    def it_adds_the_suite_only_natives(suite):
+        spec = Native("bash-globstar", ("bash",), "{bin}")
+        assert suite_only(spec) == [spec]
+
+
+def describe_suite_only():
+    def it_adds_nothing_to_the_e2e_ratchet(no_suite):
+        assert suite_only(Native("bash-globstar", ("bash",), "{bin}")) == []
