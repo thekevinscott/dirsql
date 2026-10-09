@@ -4170,7 +4170,6 @@ mod internal_tests {
         let mut held = Vec::new();
         while !held.iter().any(|e| matches!(e, FileEvent::Created(_))) {
             held.extend(db.queued_file_events());
-            std::thread::yield_now();
         }
     }
 
