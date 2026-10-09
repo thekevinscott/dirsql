@@ -37,6 +37,15 @@ test-e2e:
     cargo build --release -p dirsql --features cli
     cd packages/python && uv run python -m pytest tests/e2e/ -x -q
 
+# Performance suite: every e2e speed case against every native, `pairs` paired
+# interleaved runs each. Writes report.json and report.md to `out` and never
+# gates; file a "Speed:" issue by hand for any case over 1.0x of the fastest
+# native. `-k` narrows the cases.
+bench-suite pairs="100" out="/tmp/dirsql-bench" k="":
+    cd packages/python && uv run maturin develop --release
+    cargo build --release -p dirsql --features cli
+    cd packages/python && uv run python -m tests.e2e.bench_suite --pairs {{pairs}} --out {{out}} -k "{{k}}"
+
 # Run the Python packaging distcheck flow (build the wheel, install into a fresh
 # venv, run the installed CLI) from the internals/distcheck package (#520). Runs in
 # CI (dirsql-python-ci.yml `distcheck` job). Needs `cargo build -p dirsql --features cli`

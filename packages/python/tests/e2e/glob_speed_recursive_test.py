@@ -22,11 +22,13 @@ from .speed_of_light import (
     cli,
     dirsql_rows,
     fd,
+    globstar,
     grow_until_native_takes_a_second,
     paired,
     rg,
     shell_natives,
     startup_seconds,
+    suite_only,
     timed,
 )
 
@@ -38,6 +40,7 @@ ALL_NATIVE = [
     ),
     fd("--glob '*.md'"),
     rg("-g '*.md' -g '!.*'"),
+    *suite_only(globstar("./**/*.md")),
 ]
 PREFIX_NATIVE = [
     Native(
@@ -47,6 +50,7 @@ PREFIX_NATIVE = [
     ),
     fd("--glob '*.md' a/b"),
     rg("-g '*.md' -g '!.*' a/b"),
+    *suite_only(globstar("./a/b/**/*.md")),
 ]
 FANOUT = 8
 
