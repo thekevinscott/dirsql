@@ -4297,6 +4297,26 @@ mod internal_tests {
     }
 
     #[test]
+    fn tables_lists_declared_tables_and_root_reports_the_index_root() {
+        let dir = TempDir::new().unwrap();
+        let db = DirSQL::builder()
+            .root(dir.path())
+            .table(Table::new(
+                "b",
+                "CREATE TABLE b (y TEXT)",
+                "*.b",
+                |_| vec![],
+            ))
+            .build()
+            .unwrap();
+        let tables = db.tables().unwrap();
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].name, "b");
+        assert_eq!(tables[0].columns[0].name, "y");
+        assert_eq!(db.root(), dir.path());
+    }
+
+    #[test]
     fn builder_setters_configure_and_build() {
         let dir = TempDir::new().unwrap();
         let cache = dir.path().join("custom-cache.db");
