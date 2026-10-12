@@ -612,8 +612,15 @@ struct Walk<'a> {
     dirs: bool,
 }
 
+/// `rel.join(name)` in one allocation: the walk builds one per entry on every
+/// worker thread, and `join`'s grow-on-push contends the allocator's arenas.
 fn child_path(rel: &Path, name: &OsStr) -> PathBuf {
-    rel.join(name)
+    let rel_len = rel.as_os_str().len();
+    let separator = usize::from(rel_len > 0);
+    let mut child = PathBuf::with_capacity(rel_len + separator + name.len());
+    child.push(rel);
+    child.push(name);
+    child
 }
 
 impl Walk<'_> {
