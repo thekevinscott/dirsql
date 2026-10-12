@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/jsonl_parse_speed_test.py tests/e2e/frontmatter_parse_speed_test.py tests/e2e/on_file_query_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1791768023,
+  "exit_code": 0,
+  "commit": "db8e06627eb807a3932ae3989ef662019a288ce1",
+  "branch": "bot/speed-parse-overlap-1011"
+}
