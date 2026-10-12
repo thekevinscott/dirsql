@@ -237,6 +237,22 @@ On startup the server prints `Running at <host>:<port>` to stdout. It runs
 until it receives `SIGINT` (Ctrl-C) or `SIGTERM`, then drains in-flight
 requests, closes open `/events` streams, and exits.
 
+Pass `--frontend` to serve the bundled dirsql SQL explorer shell at `/` on
+the same origin as the HTTP API. It works offline and prints `Frontend at
+http://<host>:<actual-port>/` without opening a browser. With `--port 0`, the
+printed URL uses the assigned port. The initial shell shows server status;
+query controls are coming in a subsequent update.
+
+```bash
+dirsql server --frontend
+dirsql server --frontend -c .dirsql.toml
+```
+
+The shell reads `GET /frontend/state`: `{"error":null}` when the index is
+ready, or HTTP `503` with `{"error":"<diagnostic>"}` when config loading
+fails. Fix the config and restart the server. Without `--frontend`, the `/`
+and `/frontend/state` routes return `404`.
+
 ### Flags
 
 Config flags are subcommand-local: pass them after `server`
@@ -247,6 +263,7 @@ Config flags are subcommand-local: pass them after `server`
 | `-c, --config <path>` | none | Path to a [config file](./config.md). **Repeatable** (`-c a -c b`): the configs load and merge in argv order — see [Composing multiple configs](./config.md#composing-multiple-configs). The index root is the **invocation directory** (the current working directory) and governs path-tables; a config's `[[table]]` globs anchor at **that config's own directory** (see [glob anchor](./config.md#glob-anchor)), so `--config /elsewhere/.dirsql.toml` indexes `/elsewhere`, from any working directory. With none given, **no named tables are defined** — query the filesystem with a [path-table](./path-tables.md) (`FROM './'`). A `./.dirsql.toml` on disk is **not** auto-loaded; pass it explicitly. A `-c` naming a file that does not exist is an [error](#degraded-mode). |
 | `--host <addr>` | `localhost` | Bind address. |
 | `--port <n>` | `7117` | TCP port to bind. |
+| `--frontend` | off | Serve the bundled SQL explorer shell and print its URL. |
 | `--cors-origin <origin>` | off | Let browser pages on `<origin>` (an exact origin such as `http://localhost:3202`, or `*` for any) call `/query` and open `/events`. See [Cross-origin requests](#cross-origin-requests). |
 | `--persist [<path>]` | off | Keep the SQLite index on disk between runs so a restart only re-parses files that actually changed. Bare `--persist` caches under the platform cache directory (`$XDG_CACHE_HOME/dirsql/<root hash>/cache.db` on Linux), outside the root; `--persist <path>` caches at `<path>`. Off by default (the index is ephemeral). Also available on [`dirsql query`](#dirsql-query). See [Keep the index across restarts](../howto/persist.md). |
 | `--no-ignore` | off | Scan files a `.gitignore` would hide. [Path-tables](./path-tables.md#skip-rules) respect `.gitignore` files by default; this flag restores the full walk. The built-in `.git` skip and configured `ignore` patterns still apply. Also available on [`dirsql query`](#dirsql-query). |

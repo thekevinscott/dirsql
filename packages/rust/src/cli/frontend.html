@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dirsql SQL explorer</title>
+  <style>
+    :root { color-scheme: light; font-family: ui-sans-serif, system-ui, sans-serif; background: #f4f6f4; color: #173026; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; }
+    header { border-bottom: 1px solid #d9e1da; background: #fff; padding: 1.1rem max(1.5rem, calc((100vw - 56rem) / 2)); }
+    header strong { font-size: 1.15rem; letter-spacing: -.03em; }
+    main { max-width: 56rem; margin: 0 auto; padding: clamp(2rem, 7vw, 5rem) 1.5rem; }
+    h1 { font-size: clamp(2rem, 5vw, 3.4rem); line-height: 1.1; letter-spacing: -.055em; margin: 0 0 1rem; }
+    p { line-height: 1.6; color: #4a5d51; max-width: 42rem; }
+    .panel { margin-top: 2.5rem; padding: 1.5rem; border: 1px solid #d9e1da; border-radius: 12px; background: #fff; box-shadow: 0 3px 12px #17302609; }
+    .panel h2 { margin: 0 0 .5rem; font-size: 1rem; }
+    .panel p { margin: 0; }
+    .error { border-color: #d7a7a1; background: #fff8f7; }
+    .error h2 { color: #a0362a; }
+    .error pre { white-space: pre-wrap; overflow-wrap: anywhere; font: .9rem/1.5 ui-monospace, monospace; margin: .8rem 0; }
+  </style>
+</head>
+<body>
+  <header><strong>dirsql</strong></header>
+  <main>
+    <h1>dirsql SQL explorer</h1>
+    <p>Explore the files and tables in this directory with SQL.</p>
+    <section class="panel" id="state" aria-live="polite">
+      <h2 id="state-title">Connecting to dirsql…</h2>
+      <p id="state-message">Checking the server state.</p>
+    </section>
+  </main>
+  <script>
+    (async () => {
+      const panel = document.getElementById('state');
+      const title = document.getElementById('state-title');
+      const message = document.getElementById('state-message');
+      try {
+        const response = await fetch('/frontend/state');
+        const state = await response.json();
+        if (state.error) {
+          panel.classList.add('error');
+          title.textContent = 'Configuration could not load';
+          message.textContent = state.error + ' Fix the configuration and restart dirsql server.';
+        } else if (response.ok) {
+          title.textContent = 'Ready to explore';
+          message.textContent = 'The SQL explorer is connected to this directory.';
+        } else {
+          throw new Error('Unexpected server response');
+        }
+      } catch (error) {
+        panel.classList.add('error');
+        title.textContent = 'Could not connect';
+        message.textContent = error.message;
+      }
+    })();
+  </script>
+</body>
+</html>
