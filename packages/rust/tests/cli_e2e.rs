@@ -147,6 +147,10 @@ fn kill_and_wait(mut child: ServerGuard) {
     let _ = child.wait();
 }
 
+fn canonical_root(path: &std::path::Path) -> String {
+    path.canonicalize().unwrap().to_string_lossy().into_owned()
+}
+
 #[test]
 fn frontend_is_opt_in_and_serves_a_bundled_page() {
     let root = TempDir::new().unwrap();
@@ -187,7 +191,7 @@ fn frontend_is_opt_in_and_serves_a_bundled_page() {
             .unwrap()
             .json::<Value>()
             .unwrap(),
-        json!({"error": null})
+        json!({"error": null, "root": canonical_root(root.path()), "tables": []})
     );
     assert_eq!(
         client
@@ -260,7 +264,12 @@ fn frontend_loads_with_an_explicit_valid_config() {
             .unwrap()
             .json::<Value>()
             .unwrap(),
-        json!({"error": null})
+        json!({"error": null, "root": canonical_root(root.path()), "tables": [
+            {"name": "posts", "columns": [
+                {"name": "basename", "type": "TEXT"},
+                {"name": "size", "type": "INTEGER"}
+            ]}
+        ]})
     );
     assert_eq!(
         client
