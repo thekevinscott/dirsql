@@ -101,7 +101,9 @@ type BoxError = Box<dyn StdError + Send + Sync + 'static>;
 type OnFileFn = dyn Fn(&str) -> std::result::Result<Vec<Row>, BoxError> + Send + Sync + 'static;
 /// Where a per-table hook hands its rows, one chunk at a time.
 type RowSink<'a> = dyn FnMut(Vec<infer::JsonRow>) + Send + 'a;
-type OnFilesFn = dyn Fn(&[PathBuf], &mut RowSink<'_>) -> std::result::Result<(), BoxError>
+/// The paths a per-table hook runs over, yielded as the scan finds them.
+type PathFeed<'a> = dyn Iterator<Item = PathBuf> + Send + 'a;
+type OnFilesFn = dyn Fn(&mut PathFeed<'_>, &mut RowSink<'_>) -> std::result::Result<(), BoxError>
     + Send
     + Sync
     + 'static;
@@ -371,8 +373,9 @@ impl Table {
             + Sync
             + 'static,
     {
-        Self::per_table_streaming(name, ddl, glob, move |paths, sink: &mut RowSink<'_>| {
-            sink(on_files(paths)?);
+        Self::per_table_streaming(name, ddl, glob, move |feed, sink: &mut RowSink<'_>| {
+            let paths: Vec<PathBuf> = feed.collect();
+            sink(on_files(&paths)?);
             Ok(())
         })
     }
@@ -386,7 +389,7 @@ impl Table {
         on_files: F,
     ) -> Self
     where
-        F: Fn(&[PathBuf], &mut RowSink<'_>) -> std::result::Result<(), BoxError>
+        F: Fn(&mut PathFeed<'_>, &mut RowSink<'_>) -> std::result::Result<(), BoxError>
             + Send
             + Sync
             + 'static,
@@ -484,7 +487,12 @@ pub struct DirSQL {
 /// from not walking, so *whether* it ran takes a seam. Production always
 /// passes [`scan_directory_reporting`]; the third argument is the walk's
 /// running file count, which drives the progress line.
-type ScanFn<'a> = &'a dyn Fn(&Path, &TableMatcher, &mut dyn FnMut(u64)) -> Vec<(PathBuf, String)>;
+type ScanFn<'a> = &'a dyn Fn(
+    &Path,
+    &TableMatcher,
+    &mut dyn FnMut(u64),
+    &mut dyn FnMut(&Path, &str),
+) -> Vec<(PathBuf, String)>;
 
 impl DirSQL {
     /// Start building a `DirSQL`. See [`DirSQLBuilder`] for the available
@@ -1224,13 +1232,23 @@ impl DirSQL {
         // its entries -- so the walk is guaranteed to return nothing. That is
         // the configless case (path-tables run their own per-statement scan),
         // where the walk was the bulk of startup.
+        let (feeds, early) = if false {
+            start_per_table_hooks(&tables)
+        } else {
+            (HashMap::new(), HashMap::new())
+        };
         let scanned = if table_names.is_empty() {
             Vec::new()
         } else {
             // The walk reports a running count rather than a fraction: it does
             // not know how many files there are until it has found them all.
             let mut progress = Progress::scanning();
-            let (scanned, seen) = scan_groups(&groups, scan, &mut progress);
+            let (scanned, seen) = scan_groups(&groups, scan, &mut progress, &mut |path, table| {
+                if let Some(feed) = feeds.get(table) {
+                    let _ = feed.send(path.to_path_buf());
+                }
+            });
+            drop(feeds);
             progress.finish(seen);
             for warning in empty_table_warnings(&tables, &anchors, &scanned) {
                 eprintln!("{warning}");
@@ -1267,6 +1285,7 @@ impl DirSQL {
             anchors,
             ignore,
             scanned_files,
+            early,
             hint_legacy_files_table,
             persist: persist_ctx.map(|ctx| PreparedPersist {
                 db: ctx.db,
@@ -1324,6 +1343,7 @@ impl DirSQL {
             anchors,
             ignore,
             scanned_files,
+            mut early,
             persist,
             poll_interval,
             hint_legacy_files_table,
@@ -1552,9 +1572,11 @@ impl DirSQL {
             });
             if !current {
                 let table_root = anchors.of(&table_name);
-                let outcome =
-                    stream_table_rows(&db, &table_name, hook.as_ref(), &abs_paths, strict)
-                        .map_err(map_db_error)?;
+                let production = early
+                    .remove(&table_name)
+                    .unwrap_or_else(|| start_hook(hook, abs_paths.into_iter()));
+                let outcome = stream_table_rows(&db, &table_name, production, strict)
+                    .map_err(map_db_error)?;
                 match outcome {
                     Ok(()) => {
                         if persist_ready.is_some() {
@@ -1991,6 +2013,8 @@ pub struct PreparedBuild {
     /// the same ones declared tables do.
     ignore: Vec<String>,
     scanned_files: Vec<ScannedFile>,
+    /// Per-table hooks already running over the paths the scan found, by table.
+    early: HashMap<String, Production>,
     persist: Option<PreparedPersist>,
     poll_interval: Duration,
     hint_legacy_files_table: bool,
@@ -2038,15 +2062,21 @@ fn scan_groups(
     groups: &[AnchorGroup],
     scan: ScanFn<'_>,
     progress: &mut Progress,
+    on_match: &mut dyn FnMut(&Path, &str),
 ) -> (Vec<(PathBuf, String)>, u64) {
     let mut seen = 0;
     let mut scanned = Vec::new();
     for group in groups {
         let before = seen;
-        scanned.extend(scan(&group.anchor, &group.matcher, &mut |count| {
-            seen = before + count;
-            progress.update(seen, None);
-        }));
+        scanned.extend(scan(
+            &group.anchor,
+            &group.matcher,
+            &mut |count| {
+                seen = before + count;
+                progress.update(seen, None);
+            },
+            on_match,
+        ));
     }
     (scanned, seen)
 }
@@ -2390,7 +2420,7 @@ fn collect_table_rows(
     paths: &[PathBuf],
 ) -> std::result::Result<Vec<infer::JsonRow>, BoxError> {
     let mut rows = Vec::new();
-    hook(paths, &mut |chunk| rows.extend(chunk))?;
+    hook(&mut paths.iter().cloned(), &mut |chunk| rows.extend(chunk))?;
     Ok(rows)
 }
 
@@ -2402,32 +2432,70 @@ fn collect_table_rows(
 fn stream_table_rows(
     db: &Db,
     table: &str,
-    hook: &OnFilesFn,
-    paths: &[PathBuf],
+    production: Production,
     strict: bool,
 ) -> db::Result<std::result::Result<(), String>> {
     db.delete_rows_by_file(table, BATCH_OWNER)?;
-    std::thread::scope(|scope| {
-        let (chunks, received) = std::sync::mpsc::channel();
-        let producer = scope.spawn(move || {
-            hook(paths, &mut |chunk| {
-                let _ = chunks.send(chunk);
-            })
-            .map_err(|e| e.to_string())
-        });
-        let mut shaped = Ok(());
-        for chunk in received {
-            if shaped.is_err() {
-                continue;
-            }
-            match db.shape_rows(table, chunk, strict) {
-                Ok(rows) => db.insert_rows(table, &rows, BATCH_OWNER)?,
-                Err(e) => shaped = Err(e.to_string()),
-            }
+    let mut shaped = Ok(());
+    for chunk in production.chunks {
+        if shaped.is_err() {
+            continue;
         }
-        let produced = producer.join().expect("per-table hook panicked");
-        Ok(produced.and(shaped))
-    })
+        match db.shape_rows(table, chunk, strict) {
+            Ok(rows) => db.insert_rows(table, &rows, BATCH_OWNER)?,
+            Err(e) => shaped = Err(e.to_string()),
+        }
+    }
+    let produced = production.handle.join().expect("per-table hook panicked");
+    Ok(produced.and(shaped))
+}
+
+/// A per-table hook running on its own thread, its rows arriving as chunks.
+struct Production {
+    chunks: std::sync::mpsc::Receiver<Vec<infer::JsonRow>>,
+    handle: std::thread::JoinHandle<std::result::Result<(), String>>,
+}
+
+fn start_hook(
+    hook: Arc<OnFilesFn>,
+    paths: impl Iterator<Item = PathBuf> + Send + 'static,
+) -> Production {
+    let (sender, chunks) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let mut paths = paths.peekable();
+        if paths.peek().is_none() {
+            return Ok(());
+        }
+        hook(&mut paths, &mut |chunk| {
+            let _ = sender.send(chunk);
+        })
+        .map_err(|e| e.to_string())
+    });
+    Production { chunks, handle }
+}
+
+/// Start every per-table hook before the scan, so each runs over its paths as
+/// the scan finds them: the senders feed the hooks, and closing them ends the
+/// paths.
+fn start_per_table_hooks(
+    tables: &[Table],
+) -> (
+    HashMap<String, std::sync::mpsc::Sender<PathBuf>>,
+    HashMap<String, Production>,
+) {
+    let mut feeds = HashMap::new();
+    let mut running = HashMap::new();
+    for table in tables {
+        if let Hook::PerTable(hook) = &table.hook {
+            let (feed, paths) = std::sync::mpsc::channel();
+            running.insert(
+                table.name.clone(),
+                start_hook(Arc::clone(hook), paths.into_iter()),
+            );
+            feeds.insert(table.name.clone(), feed);
+        }
+    }
+    (feeds, running)
 }
 
 fn error_event(table: Option<&str>, rel_path: &str, error: String) -> RowEvent {
@@ -2557,7 +2625,7 @@ fn build_tables_from_config(cfg: &config::Config, config_dir: &Path) -> Result<V
             table_cfg.name.clone(),
             table_cfg.ddl.clone(),
             glob,
-            move |paths: &[PathBuf], sink: &mut RowSink<'_>| {
+            move |paths: &mut PathFeed<'_>, sink: &mut RowSink<'_>| {
                 run_on_files(&command, paths, &hook_cwd, &hook_root, sink)
             },
         )
@@ -2581,7 +2649,7 @@ fn build_tables_from_config(cfg: &config::Config, config_dir: &Path) -> Result<V
 /// Any failure is the table's and fails the build.
 fn run_on_files(
     command: &str,
-    paths: &[PathBuf],
+    paths: &mut PathFeed<'_>,
     config_dir: &Path,
     root: &Path,
     sink: &mut RowSink<'_>,
@@ -2952,6 +3020,7 @@ mod internal_tests {
             _root: &Path,
             _matcher: &TableMatcher,
             on_file: &mut dyn FnMut(u64),
+            _on_match: &mut dyn FnMut(&Path, &str),
         ) -> Vec<(PathBuf, String)> {
             self.calls.set(self.calls.get() + 1);
             for (index, _) in self.found.iter().enumerate() {
@@ -2995,7 +3064,7 @@ mod internal_tests {
 
         let prepared = DirSQL::prepare_resolved_with(
             resolved_over(dir.path(), Vec::new(), false),
-            &|root, matcher, on_file| scan.scan(root, matcher, on_file),
+            &|root, matcher, on_file, on_match| scan.scan(root, matcher, on_file, on_match),
         )
         .unwrap();
 
@@ -3016,7 +3085,7 @@ mod internal_tests {
 
         let prepared = DirSQL::prepare_resolved_with(
             resolved_over(dir.path(), vec![txt_table()], false),
-            &|root, matcher, on_file| scan.scan(root, matcher, on_file),
+            &|root, matcher, on_file, on_match| scan.scan(root, matcher, on_file, on_match),
         )
         .unwrap();
 
@@ -3029,6 +3098,39 @@ mod internal_tests {
         assert_eq!(found, vec!["a.txt"]);
     }
 
+    /// A per-table hook is running over a path before the walk has finished.
+    #[test]
+    fn prepare_starts_a_per_table_hook_while_the_walk_is_still_running() {
+        let dir = TempDir::new().unwrap();
+        let (got, got_rx) = std::sync::mpsc::channel::<PathBuf>();
+        let got = Mutex::new(got);
+        let items = Table::per_table_streaming(
+            "items",
+            "CREATE TABLE items (name TEXT)",
+            "**/*.txt",
+            move |paths: &mut PathFeed<'_>, _: &mut RowSink<'_>| {
+                for path in paths {
+                    let _ = got.lock().unwrap().send(path);
+                }
+                Ok(())
+            },
+        );
+        let resolved = resolved_over(dir.path(), vec![items], false);
+        let hook_saw_it_mid_walk = Cell::new(false);
+        let found = dir.path().join("a.txt");
+        DirSQL::prepare_resolved_with(resolved, &|_, _, _, on_match| {
+            on_match(&found, "items");
+            hook_saw_it_mid_walk.set(
+                got_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .is_ok(),
+            );
+            vec![(found.clone(), "items".to_string())]
+        })
+        .unwrap();
+        assert!(hook_saw_it_mid_walk.get());
+    }
+
     /// The startup walk honors `.gitignore` unless the build asked not to.
     #[test]
     fn prepare_hands_the_walk_a_matcher_that_honors_gitignore_unless_no_ignore() {
@@ -3037,7 +3139,7 @@ mod internal_tests {
             let honored = Cell::new(None);
             let mut resolved = resolved_over(dir.path(), vec![txt_table()], false);
             resolved.no_ignore = no_ignore;
-            DirSQL::prepare_resolved_with(resolved, &|_, matcher, _| {
+            DirSQL::prepare_resolved_with(resolved, &|_, matcher, _, _| {
                 honored.set(Some(matcher.respects_gitignore()));
                 Vec::new()
             })
@@ -3055,7 +3157,7 @@ mod internal_tests {
 
         let prepared = DirSQL::prepare_resolved_with(
             resolved_over(dir.path(), Vec::new(), true),
-            &|root, matcher, on_file| scan.scan(root, matcher, on_file),
+            &|root, matcher, on_file, on_match| scan.scan(root, matcher, on_file, on_match),
         )
         .unwrap();
 
@@ -3111,6 +3213,7 @@ mod internal_tests {
                 stat: None,
                 trusted: false,
             }],
+            early: HashMap::new(),
             poll_interval: DEFAULT_POLL_INTERVAL,
             persist: None,
             hint_legacy_files_table: false,
@@ -3438,12 +3541,15 @@ mod internal_tests {
             anchored_table("b", "*.txt", "/two"),
         ];
         let (groups, _, _) = compile_groups(&tables, &[], Path::new("/idx")).unwrap();
-        let scan = |anchor: &Path, _: &TableMatcher, report: &mut dyn FnMut(u64)| {
+        let scan = |anchor: &Path,
+                    _: &TableMatcher,
+                    report: &mut dyn FnMut(u64),
+                    _: &mut dyn FnMut(&Path, &str)| {
             report(3);
             vec![(anchor.join("f.txt"), "t".to_string())]
         };
 
-        let (scanned, seen) = scan_groups(&groups, &scan, &mut Progress::scanning());
+        let (scanned, seen) = scan_groups(&groups, &scan, &mut Progress::scanning(), &mut |_, _| {});
 
         assert_eq!(seen, 6);
         assert_eq!(scanned.len(), 2);
@@ -4909,7 +5015,7 @@ mod internal_tests {
         root: &Path,
     ) -> std::result::Result<Vec<infer::JsonRow>, BoxError> {
         let mut rows = Vec::new();
-        run_on_files(command, paths, config_dir, root, &mut |chunk| {
+        run_on_files(command, &mut paths.iter().cloned(), config_dir, root, &mut |chunk| {
             rows.extend(chunk)
         })?;
         Ok(rows)
@@ -4938,7 +5044,7 @@ mod internal_tests {
         let mut chunks = Vec::new();
         run_on_files(
             r#"sh -c 'echo "{\"n\":$#}"' sh"#,
-            &paths,
+            &mut paths.iter().cloned(),
             dir.path(),
             dir.path(),
             &mut |chunk| chunks.push(chunk),
@@ -5161,6 +5267,7 @@ mod internal_tests {
             groups: Vec::new(),
             anchors: TableAnchors::at_root(root),
             scanned_files,
+            early: HashMap::new(),
             poll_interval: DEFAULT_POLL_INTERVAL,
             persist,
             hint_legacy_files_table: false,
@@ -5317,7 +5424,7 @@ mod internal_tests {
             "items",
             "CREATE TABLE items (name TEXT)",
             "*.txt",
-            move |_: &[PathBuf], sink: &mut RowSink<'_>| hook(sink),
+            move |_: &mut PathFeed<'_>, sink: &mut RowSink<'_>| hook(sink),
         )
     }
 

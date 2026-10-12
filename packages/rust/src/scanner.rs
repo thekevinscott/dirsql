@@ -25,7 +25,7 @@ fn with_slashes(path: &str, native: char) -> String {
 /// Walk a directory tree and return all file paths paired with their matching table name.
 /// Ignored paths and directories are skipped. Only files (not directories) are returned.
 pub fn scan_directory(root: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, String)> {
-    scan_directory_reporting(root, matcher, &mut |_| {})
+    scan_directory_reporting(root, matcher, &mut |_| {}, &mut |_, _| {})
 }
 
 /// [`scan_directory`], calling `on_file` with the running count of files the
@@ -44,8 +44,9 @@ pub fn scan_directory_reporting(
     root: &Path,
     matcher: &TableMatcher,
     on_file: &mut dyn FnMut(u64),
+    on_match: &mut dyn FnMut(&Path, &str),
 ) -> Vec<(PathBuf, String)> {
-    scan_below(root, root, matcher, on_file)
+    scan_below(root, root, matcher, on_file, on_match)
 }
 
 /// [`scan_directory`] restricted to the subtree at `dir`, a directory beneath
@@ -56,7 +57,7 @@ pub fn scan_directory_reporting(
 /// `mkdir` or a rename into the tree — since the OS reports one event for the
 /// directory and none for the files already inside it.
 pub fn scan_subtree(root: &Path, dir: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, String)> {
-    scan_below(root, dir, matcher, &mut |_| {})
+    scan_below(root, dir, matcher, &mut |_| {}, &mut |_, _| {})
 }
 
 /// `start` and every directory below it that [`scan_subtree`] would enter,
@@ -83,6 +84,7 @@ fn scan_below(
     start: &Path,
     matcher: &TableMatcher,
     on_file: &mut dyn FnMut(u64),
+    on_match: &mut dyn FnMut(&Path, &str),
 ) -> Vec<(PathBuf, String)> {
     let mut results = Vec::new();
     let mut seen: u64 = 0;
@@ -118,6 +120,7 @@ fn scan_below(
             // pairs, one per matching table, in declaration order.
             let path = dir.join(rel_path.file_name().unwrap_or_default());
             for m in matcher.match_all(&rel_path) {
+                on_match(&path, &m.table_name);
                 results.push((path.clone(), m.table_name));
             }
         },
@@ -902,7 +905,7 @@ mod tests {
         let matcher = TableMatcher::new(&[("scanner.rs", "source")], &[]).unwrap();
         let mut counts = Vec::new();
 
-        let rows = scan_directory_reporting(&root, &matcher, &mut |count| counts.push(count));
+        let rows = scan_directory_reporting(&root, &matcher, &mut |count| counts.push(count), &mut |_, _| {});
 
         assert_eq!(rows, vec![(root.join("scanner.rs"), "source".to_owned())]);
         assert_eq!(counts.first(), Some(&1));
