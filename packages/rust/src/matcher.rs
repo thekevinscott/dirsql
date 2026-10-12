@@ -17,23 +17,36 @@ pub enum GlobError {
 /// byte-oriented, so it is recompiled in Unicode mode over the `/`-separated
 /// path text.
 #[derive(Debug, Clone)]
-pub(crate) struct Pattern(Regex);
+pub(crate) struct Pattern {
+    path: Regex,
+    last_component: Option<Regex>,
+}
 
 impl Pattern {
     /// `*` and `?` stop at `/`; `**` crosses it.
     pub(crate) fn new(glob: &str) -> Result<Self, GlobError> {
-        let glob = GlobBuilder::new(&expand_posix_classes(glob))
-            .literal_separator(true)
-            .build()?;
-        let regex = RegexBuilder::new(&unicode_regex(glob.regex()))
-            .dot_matches_new_line(true)
-            .build()?;
-        Ok(Self(regex))
+        Ok(Self {
+            path: compile(glob)?,
+            last_component: None,
+        })
     }
 
     pub(crate) fn is_match(&self, path: &Path) -> bool {
-        self.0.is_match(&crate::scanner::to_slash(path))
+        self.path.is_match(&crate::scanner::slashed(path))
     }
+
+    pub(crate) fn matches_last_component_only(&self) -> bool {
+        self.last_component.is_some()
+    }
+}
+
+fn compile(glob: &str) -> Result<Regex, GlobError> {
+    let glob = GlobBuilder::new(&expand_posix_classes(glob))
+        .literal_separator(true)
+        .build()?;
+    Ok(RegexBuilder::new(&unicode_regex(glob.regex()))
+        .dot_matches_new_line(true)
+        .build()?)
 }
 
 /// globset spells each non-ASCII character as the `\xNN` escapes of its UTF-8
@@ -191,6 +204,44 @@ mod tests {
             .into_iter()
             .map(|m| m.table_name)
             .collect()
+    }
+
+    #[test]
+    fn a_globstar_led_single_component_glob_matches_on_the_last_component_only() {
+        assert!(
+            Pattern::new("**/*.md")
+                .unwrap()
+                .matches_last_component_only()
+        );
+        assert!(
+            Pattern::new("**/{a,b}*.md")
+                .unwrap()
+                .matches_last_component_only()
+        );
+    }
+
+    #[test]
+    fn a_glob_with_a_directory_part_matches_the_whole_path() {
+        assert!(
+            !Pattern::new("a/**/*.md")
+                .unwrap()
+                .matches_last_component_only()
+        );
+        assert!(
+            !Pattern::new("**/a/*.md")
+                .unwrap()
+                .matches_last_component_only()
+        );
+        assert!(!Pattern::new("*.md").unwrap().matches_last_component_only());
+    }
+
+    #[test]
+    fn a_last_component_pattern_matches_at_any_depth_including_the_top() {
+        let pattern = Pattern::new("**/[[:digit:]]*.md").unwrap();
+        assert!(pattern.is_match(Path::new("1a.md")));
+        assert!(pattern.is_match(Path::new("x/.y/2b.md")));
+        assert!(!pattern.is_match(Path::new("1/b.md")));
+        assert!(!pattern.is_match(Path::new("1a.md/b.txt")));
     }
 
     #[test]

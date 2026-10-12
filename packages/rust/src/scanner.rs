@@ -3,6 +3,7 @@ use crate::matcher::{GlobError, Pattern, TableMatcher};
 use crate::tree_walk::{Step, walk_in_order};
 use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,6 +14,10 @@ use std::thread;
 /// every platform, so globs, `file_path` keys and `path` columns agree.
 pub(crate) fn to_slash(path: &Path) -> String {
     with_slashes(&path.to_string_lossy(), std::path::MAIN_SEPARATOR)
+}
+
+pub(crate) fn slashed(path: &Path) -> Cow<'_, str> {
+    Cow::Owned(to_slash(path))
 }
 
 fn with_slashes(path: &str, native: char) -> String {
@@ -1220,6 +1225,15 @@ mod tests {
     #[test]
     fn with_slashes_leaves_a_backslash_in_a_unix_file_name() {
         assert_eq!(with_slashes(r"dir/a\b.txt", '/'), r"dir/a\b.txt");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn slashed_borrows_a_native_unix_path() {
+        assert!(matches!(
+            slashed(Path::new("docs/nested/a.md")),
+            Cow::Borrowed("docs/nested/a.md")
+        ));
     }
 
     #[test]
