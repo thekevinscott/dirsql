@@ -22,6 +22,7 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use super::AppState;
 use super::execute::{QueryFailure, execute_query, require_ready};
+use crate::TableInfo;
 
 pub(super) struct AppContext {
     pub state: AppState,
@@ -53,13 +54,32 @@ pub(super) fn router(ctx: SharedCtx, frontend: bool) -> Router {
 
 async fn handle_frontend_state(State(ctx): State<SharedCtx>) -> Response {
     match &ctx.state {
-        AppState::Ready(_) => Json(json!({ "error": null })).into_response(),
+        AppState::Ready(db) => match db.tables() {
+            Ok(tables) => Json(json!({
+                "error": null,
+                "root": db.root().to_string_lossy(),
+                "tables": tables.iter().map(table_json).collect::<Vec<_>>(),
+            }))
+            .into_response(),
+            Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+        },
         AppState::Unavailable(reason) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "error": reason })),
         )
             .into_response(),
     }
+}
+
+fn table_json(table: &TableInfo) -> serde_json::Value {
+    json!({
+        "name": table.name,
+        "columns": table
+            .columns
+            .iter()
+            .map(|c| json!({ "name": c.name, "type": c.sql_type }))
+            .collect::<Vec<_>>(),
+    })
 }
 
 async fn handle_query(State(ctx): State<SharedCtx>, body: String) -> Response {
@@ -213,6 +233,21 @@ mod tests {
         assert!(router(ctx.clone(), true).has_routes());
         let resp = handle_frontend_state(State(ctx)).await;
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn table_json_names_each_column_with_its_type() {
+        let table = TableInfo {
+            name: "t".into(),
+            columns: vec![crate::ColumnInfo {
+                name: "a".into(),
+                sql_type: "TEXT".into(),
+            }],
+        };
+        assert_eq!(
+            table_json(&table),
+            json!({"name": "t", "columns": [{"name": "a", "type": "TEXT"}]})
+        );
     }
 
     #[test]

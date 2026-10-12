@@ -80,7 +80,7 @@ use std::time::Duration;
 use thiserror::Error;
 
 pub use crate::config::ExtensionSpec as Extension;
-pub use crate::db::{DbError, QueryResult, Value};
+pub use crate::db::{ColumnInfo, DbError, QueryResult, TableInfo, Value};
 pub use crate::differ::RowEvent;
 #[doc(hidden)]
 pub use crate::row_event_flat::{FlatRowEvent, flatten_row_event};
@@ -556,6 +556,18 @@ impl DirSQL {
     pub fn query_ordered(&self, sql: &str) -> Result<QueryResult> {
         let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
         db.query_ordered(sql).map_err(map_db_error)
+    }
+
+    /// The directory the index is rooted at: where path-tables resolve.
+    pub fn root(&self) -> &Path {
+        &self.inner.root
+    }
+
+    /// The tables a query can read by name, with their columns, straight from
+    /// SQLite's catalog: empty tables included, no file read or table scanned.
+    pub fn tables(&self) -> Result<Vec<TableInfo>> {
+        let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
+        db.user_tables().map_err(map_db_error)
     }
 
     /// [`query_ordered`](Self::query_ordered) folding each row's cells, in

@@ -326,6 +326,27 @@ pub struct QueryResult {
     pub rows: Vec<HashMap<String, Value>>,
 }
 
+/// A column of a user table as SQLite's catalog reports it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnInfo {
+    pub name: String,
+    pub sql_type: String,
+}
+
+/// A user table and its columns in declaration order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableInfo {
+    pub name: String,
+    pub columns: Vec<ColumnInfo>,
+}
+
+const USER_TABLES: &str = "SELECT name FROM pragma_table_list WHERE schema = 'main' \
+     AND type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' \
+     AND name NOT LIKE '\\_dirsql\\_%' ESCAPE '\\' ORDER BY name";
+
+const TABLE_COLUMNS: &str = "SELECT name, type FROM pragma_table_xinfo(?1, 'main') \
+     WHERE hidden <> 1 ORDER BY cid";
+
 pub struct Db {
     conn: Connection,
     /// Where this connection's path tables hold their rows for the statement in
@@ -551,6 +572,34 @@ impl Db {
             .filter_map(|r| r.ok())
             .collect();
         Ok(columns)
+    }
+
+    /// The plain tables in the persistent schema with their columns, read from
+    /// SQLite's catalog alone: no table is scanned and no virtual table is
+    /// opened. dirsql's bookkeeping tables, `sqlite_` tables, virtual tables
+    /// (and their shadow tables) and the per-connection path-tables are left
+    /// out.
+    pub fn user_tables(&self) -> Result<Vec<TableInfo>> {
+        let names = self
+            .conn
+            .prepare(USER_TABLES)?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut columns = self.conn.prepare(TABLE_COLUMNS)?;
+        names
+            .into_iter()
+            .map(|name| {
+                let columns = columns
+                    .query_map([&name], |row| {
+                        Ok(ColumnInfo {
+                            name: row.get(0)?,
+                            sql_type: row.get(1)?,
+                        })
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(TableInfo { name, columns })
+            })
+            .collect()
     }
 
     /// Normalize a row to match the table schema.
@@ -1858,6 +1907,69 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0]["name"], Value::Text("apple".into()));
         assert_eq!(results[1]["name"], Value::Text("cherry".into()));
+    }
+
+    #[test]
+    fn user_tables_lists_plain_tables_with_columns_in_name_order() {
+        let db = Db::new().unwrap();
+        db.create_table("zeta", "CREATE TABLE zeta (a TEXT, \"two words\" INTEGER)")
+            .unwrap();
+        db.create_table("_alpha", "CREATE TABLE _alpha (x)")
+            .unwrap();
+        let col = |name: &str, sql_type: &str| ColumnInfo {
+            name: name.into(),
+            sql_type: sql_type.into(),
+        };
+        assert_eq!(
+            db.user_tables().unwrap(),
+            vec![
+                TableInfo {
+                    name: "_alpha".into(),
+                    columns: vec![col("x", "")],
+                },
+                TableInfo {
+                    name: "zeta".into(),
+                    columns: vec![col("a", "TEXT"), col("two words", "INTEGER")],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn user_tables_is_empty_for_a_fresh_db() {
+        assert_eq!(Db::new().unwrap().user_tables().unwrap(), vec![]);
+    }
+
+    #[test]
+    fn user_tables_skips_virtual_shadow_sqlite_and_temp_tables() {
+        let db = Db::new().unwrap();
+        db.create_table(
+            "notes",
+            "CREATE TABLE notes (body TEXT); \
+             CREATE VIRTUAL TABLE notes_fts USING fts5(body); \
+             CREATE TABLE seq (id INTEGER PRIMARY KEY AUTOINCREMENT); \
+             CREATE TEMP TABLE scratch (y);",
+        )
+        .unwrap();
+        let names: Vec<String> = db
+            .user_tables()
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(names, vec!["notes", "seq"]);
+    }
+
+    #[test]
+    fn user_tables_keeps_generated_columns() {
+        let db = Db::new().unwrap();
+        db.create_table(
+            "g",
+            "CREATE TABLE g (a INTEGER, b INTEGER GENERATED ALWAYS AS (a + 1) VIRTUAL)",
+        )
+        .unwrap();
+        let columns = db.user_tables().unwrap().remove(0).columns;
+        assert_eq!(columns.len(), 2);
     }
 
     #[test]

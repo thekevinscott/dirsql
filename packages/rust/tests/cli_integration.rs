@@ -647,6 +647,15 @@ async fn frontend_state(db: DirSQL) -> (ServerHandle, JsonValue) {
     (handle, body)
 }
 
+fn assert_same_dir(reported: &JsonValue, dir: &std::path::Path) {
+    assert_eq!(
+        std::path::Path::new(reported.as_str().unwrap())
+            .canonicalize()
+            .unwrap(),
+        dir.canonicalize().unwrap()
+    );
+}
+
 fn db_from_config(config: &str) -> (TempDir, DirSQL) {
     let root = TempDir::new().unwrap();
     fs::write(root.path().join(".dirsql.toml"), config).unwrap();
@@ -664,7 +673,7 @@ async fn frontend_state_reports_the_query_root_and_declared_columns() {
     let (handle, body) = frontend_state(db).await;
 
     assert_eq!(body["error"], JsonValue::Null);
-    assert_eq!(body["root"], json!(root.path().to_string_lossy()));
+    assert_same_dir(&body["root"], root.path());
     assert_eq!(
         body["tables"],
         json!([{"name": "posts", "columns": [
@@ -739,7 +748,7 @@ async fn frontend_state_has_no_tables_without_a_config() {
     let (handle, body) = frontend_state(db).await;
 
     assert_eq!(body["tables"], json!([]));
-    assert_eq!(body["root"], json!(root.path().to_string_lossy()));
+    assert_same_dir(&body["root"], root.path());
     handle.shutdown().await.unwrap();
 }
 

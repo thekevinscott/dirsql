@@ -248,10 +248,32 @@ dirsql server --frontend
 dirsql server --frontend -c .dirsql.toml
 ```
 
-The shell reads `GET /frontend/state`: `{"error":null}` when the index is
-ready, or HTTP `503` with `{"error":"<diagnostic>"}` when config loading
-fails. Fix the config and restart the server. Without `--frontend`, the `/`
-and `/frontend/state` routes return `404`.
+The shell reads `GET /frontend/state`. When the index is ready it returns
+HTTP `200`:
+
+```json
+{
+  "error": null,
+  "root": "/abs/path/of/the/invocation/directory",
+  "tables": [
+    {"name": "posts", "columns": [{"name": "basename", "type": "TEXT"}]}
+  ]
+}
+```
+
+`root` is the query root, where [path-tables](./path-tables.md) resolve.
+`tables` lists the declared tables, ordered by name, each with its columns in
+declaration order and the declared SQLite type (`""` when untyped). Empty
+tables are listed. A configless server, or a config with only functions or
+extensions, returns `"tables": []`. dirsql's bookkeeping tables, SQLite's own
+tables, virtual tables with their shadow tables, and path-tables are never
+listed. The metadata is read from SQLite's catalog: no file is parsed, no
+directory walked, no table counted.
+
+When config loading fails the endpoint returns HTTP `503` with
+`{"error":"<diagnostic>"}` and no `root` or `tables`. Fix the config and
+restart the server. Without `--frontend`, the `/` and `/frontend/state`
+routes return `404`. `POST /query` is unchanged.
 
 ### Flags
 
