@@ -1232,7 +1232,7 @@ impl DirSQL {
         // its entries -- so the walk is guaranteed to return nothing. That is
         // the configless case (path-tables run their own per-statement scan),
         // where the walk was the bulk of startup.
-        let (feeds, early) = if false {
+        let (feeds, early) = if persist_ctx.is_none() {
             start_per_table_hooks(&tables)
         } else {
             (HashMap::new(), HashMap::new())
