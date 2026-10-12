@@ -393,6 +393,8 @@ impl Db {
         // The database is a private temp file that dies with the process, so
         // durability buys nothing.
         conn.pragma_update(None, "synchronous", "OFF")?;
+        // Lets a GROUP BY or ORDER BY over a large table sort on background threads.
+        conn.pragma_update(None, "threads", 8)?;
         ensure_internal_rows_table(&conn)?;
         let scope = StatementScope::new();
         vtab::load_module(&conn, Arc::clone(&scope))?;
