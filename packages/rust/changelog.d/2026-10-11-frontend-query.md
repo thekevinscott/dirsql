@@ -1,0 +1,1 @@
+**Added** SQL execution in the `dirsql server --frontend` explorer: an editable `LIMIT 100` starter query, an explicit Run control, elapsed time, result rows rendered as text, and query and server errors.

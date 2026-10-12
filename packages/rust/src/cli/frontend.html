@@ -16,6 +16,18 @@
     .panel { margin-top: 2.5rem; padding: 1.5rem; border: 1px solid #d9e1da; border-radius: 12px; background: #fff; box-shadow: 0 3px 12px #17302609; }
     .panel h2 { margin: 0 0 .5rem; font-size: 1rem; }
     .panel p { margin: 0; }
+    form { margin-top: 2rem; }
+    label { display: block; font-weight: 600; margin-bottom: .4rem; }
+    textarea { width: 100%; min-height: 7rem; padding: .7rem; border: 1px solid #b9c7bd; border-radius: 8px; font: .95rem/1.5 ui-monospace, monospace; resize: vertical; }
+    button { margin-top: .6rem; padding: .5rem 1.2rem; border: 0; border-radius: 8px; background: #1f6b46; color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+    button[aria-busy="true"] { opacity: .6; cursor: progress; }
+    .hint { font-size: .85rem; margin: .4rem 0 0; }
+    #result { margin-top: 1.5rem; overflow-x: auto; }
+    #result p.error { color: #a0362a; white-space: pre-wrap; overflow-wrap: anywhere; }
+    table { border-collapse: collapse; font: .85rem/1.4 ui-monospace, monospace; background: #fff; }
+    th, td { border: 1px solid #d9e1da; padding: .3rem .6rem; text-align: left; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 40rem; }
+    th { background: #eef2ee; }
+    td.null { color: #7a8a80; font-style: italic; }
     .error { border-color: #d7a7a1; background: #fff8f7; }
     .error h2 { color: #a0362a; }
     .error pre { white-space: pre-wrap; overflow-wrap: anywhere; font: .9rem/1.5 ui-monospace, monospace; margin: .8rem 0; }
@@ -30,7 +42,15 @@
       <h2 id="state-title">Connecting to dirsql…</h2>
       <p id="state-message">Checking the server state.</p>
     </section>
+    <form id="query" onsubmit="return false">
+      <label for="sql">SQL (read-only)</label>
+      <textarea id="sql" name="sql" spellcheck="false" aria-describedby="sql-hint">SELECT * FROM './' LIMIT 100</textarea>
+      <button type="button" id="run">Run</button>
+      <p class="hint" id="sql-hint">Runs exactly as written; edit the LIMIT as needed. Press Ctrl+Enter or Cmd+Enter to run.</p>
+    </form>
+    <section id="result" aria-live="polite" aria-label="Query result"></section>
   </main>
+  <script type="module" src="/frontend.js"></script>
   <script>
     (async () => {
       const panel = document.getElementById('state');

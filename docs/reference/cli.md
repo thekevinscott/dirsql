@@ -240,8 +240,14 @@ requests, closes open `/events` streams, and exits.
 Pass `--frontend` to serve the bundled dirsql SQL explorer shell at `/` on
 the same origin as the HTTP API. It works offline and prints `Frontend at
 http://<host>:<actual-port>/` without opening a browser. With `--port 0`, the
-printed URL uses the assigned port. The initial shell shows server status;
-query controls are coming in a subsequent update.
+printed URL uses the assigned port. The page offers an editable SQL box
+holding the starter query `SELECT * FROM './' LIMIT 100`. Nothing runs until
+you press **Run** (or Ctrl/Cmd+Enter); pressing it again refreshes the
+result. Queries go through `POST /query`, so the read-only rule applies, and
+run exactly as written. The page shows elapsed time, the number of rows
+returned, and errors. Values render as text (`NULL` is marked), and only the
+first 1000 rows are displayed. An empty result says so and shows no column
+names, since the response carries none.
 
 ```bash
 dirsql server --frontend
