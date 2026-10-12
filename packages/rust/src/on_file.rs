@@ -9,9 +9,9 @@
 //! fails the whole table.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, SyncSender};
-use std::sync::Mutex;
 
 use crate::command::{self, Placeholder};
 use crate::infer::{JsonRow, parse_rows_at};
@@ -143,6 +143,7 @@ pub(crate) fn run_streaming(
                 jobs: job_tx,
                 rows: rows_tx,
                 workers: 0,
+                limit: cpus(),
                 sent: 0,
             };
             let mut packer = Packer::new(budget);
@@ -192,6 +193,7 @@ struct Dispatch<'scope, 'env> {
     jobs: Sender<Job>,
     rows: SyncSender<Vec<JsonRow>>,
     workers: usize,
+    limit: usize,
     sent: usize,
 }
 
@@ -202,7 +204,7 @@ impl Dispatch<'_, '_> {
             args,
         });
         self.sent += 1;
-        if self.workers < cpus() {
+        if self.workers < self.limit {
             self.workers += 1;
             let (pool, rows) = (self.pool, self.rows.clone());
             self.scope.spawn(move || pool.work(&rows));
@@ -359,6 +361,36 @@ fn spread<'a>(args: &'a [String], sizes: &[u64], parts: usize) -> Vec<&'a [Strin
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn dispatch_starts_one_worker_per_core_and_counts_every_job() {
+        let (job_tx, job_rx) = std::sync::mpsc::channel::<Job>();
+        let (rows_tx, _rows_rx) = std::sync::mpsc::sync_channel::<Vec<JsonRow>>(1);
+        let pool = Pool {
+            command: "unused",
+            argv: &[],
+            cwd: Path::new("."),
+            jobs: Mutex::new(job_rx),
+            aborted: AtomicBool::new(true),
+            failures: Mutex::new(Vec::new()),
+        };
+        std::thread::scope(|scope| {
+            let mut dispatch = Dispatch {
+                scope,
+                pool: &pool,
+                jobs: job_tx,
+                rows: rows_tx,
+                workers: 0,
+                limit: 2,
+                sent: 0,
+            };
+            for _ in 0..5 {
+                dispatch.send(Vec::new());
+            }
+            assert_eq!(dispatch.workers, 2);
+            assert_eq!(dispatch.sent, 5);
+        });
+    }
     use super::*;
 
     fn args(words: &[&str]) -> Vec<String> {

@@ -905,7 +905,12 @@ mod tests {
         let matcher = TableMatcher::new(&[("scanner.rs", "source")], &[]).unwrap();
         let mut counts = Vec::new();
 
-        let rows = scan_directory_reporting(&root, &matcher, &mut |count| counts.push(count), &mut |_, _| {});
+        let rows = scan_directory_reporting(
+            &root,
+            &matcher,
+            &mut |count| counts.push(count),
+            &mut |_, _| {},
+        );
 
         assert_eq!(rows, vec![(root.join("scanner.rs"), "source".to_owned())]);
         assert_eq!(counts.first(), Some(&1));

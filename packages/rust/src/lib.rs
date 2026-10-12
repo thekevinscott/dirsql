@@ -3549,7 +3549,8 @@ mod internal_tests {
             vec![(anchor.join("f.txt"), "t".to_string())]
         };
 
-        let (scanned, seen) = scan_groups(&groups, &scan, &mut Progress::scanning(), &mut |_, _| {});
+        let (scanned, seen) =
+            scan_groups(&groups, &scan, &mut Progress::scanning(), &mut |_, _| {});
 
         assert_eq!(seen, 6);
         assert_eq!(scanned.len(), 2);
@@ -5015,9 +5016,13 @@ mod internal_tests {
         root: &Path,
     ) -> std::result::Result<Vec<infer::JsonRow>, BoxError> {
         let mut rows = Vec::new();
-        run_on_files(command, &mut paths.iter().cloned(), config_dir, root, &mut |chunk| {
-            rows.extend(chunk)
-        })?;
+        run_on_files(
+            command,
+            &mut paths.iter().cloned(),
+            config_dir,
+            root,
+            &mut |chunk| rows.extend(chunk),
+        )?;
         Ok(rows)
     }
 
