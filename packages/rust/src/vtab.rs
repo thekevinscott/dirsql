@@ -665,6 +665,17 @@ mod tests {
         FileRow::new(Path::new(prefix), PathBuf::from(rel))
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_row_without_a_prefix_keeps_the_scanned_path_allocation() {
+        let rel = PathBuf::from("docs/a.md");
+        let scanned = rel.as_os_str().as_encoded_bytes().as_ptr();
+
+        let row = FileRow::new(Path::new(""), rel);
+
+        assert_eq!(row.path.as_ptr(), scanned);
+    }
+
     fn no_facts(_: &FileRow) -> StatFacts {
         StatFacts::default()
     }

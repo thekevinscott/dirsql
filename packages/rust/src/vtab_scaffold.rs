@@ -996,6 +996,54 @@ mod tests {
         }
     }
 
+    /// A row that reports the thread it is freed on.
+    struct Noted(std::sync::mpsc::Sender<thread::ThreadId>);
+
+    impl Drop for Noted {
+        fn drop(&mut self) {
+            let _ = self.0.send(thread::current().id());
+        }
+    }
+
+    struct Many {
+        freed_on: Mutex<std::sync::mpsc::Sender<thread::ThreadId>>,
+    }
+
+    impl TableSource for Many {
+        type Row = Noted;
+        const NAME: &'static str = "many";
+
+        fn connect(_args: &[&[u8]]) -> Result<(String, Self)> {
+            unreachable!()
+        }
+
+        fn rows(&self) -> Arc<Vec<Noted>> {
+            let freed_on = self.freed_on.lock().unwrap();
+            Arc::new((0..10_000).map(|_| Noted(freed_on.clone())).collect())
+        }
+
+        fn column(&self, _row: &Noted, _ctx: &mut Context, _i: c_int) -> Result<()> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn a_large_evicted_row_set_is_freed_off_the_evicting_thread() {
+        let (freed_on, freed) = std::sync::mpsc::channel();
+        let cache = RowCache::new(Arc::new(Many {
+            freed_on: Mutex::new(freed_on),
+        }));
+        drop(cache.rows());
+
+        cache.evict();
+
+        let here = thread::current().id();
+        let timeout = std::time::Duration::from_secs(10);
+        for _ in 0..10_000 {
+            assert_ne!(freed.recv_timeout(timeout).unwrap(), here);
+        }
+    }
+
     fn counted() -> RowCache<Counted> {
         RowCache::new(Arc::new(Counted {
             scans: std::sync::atomic::AtomicUsize::new(0),
