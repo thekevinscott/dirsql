@@ -42,6 +42,11 @@ const PREFETCH_LOOKUP_COST: f64 = 100.;
 /// `idxNum` for a full scan; a lookup carries its column as `column + 1`.
 const SCAN_IDX: c_int = 0;
 
+/// Rows a statement's row set holds before its eviction frees them on a
+/// thread of their own: below it, spawning costs more than the freeing, and
+/// above it the statement need not wait on the freeing.
+const FREE_ELSEWHERE_ROWS: usize = 4096;
+
 /// Set in `idxNum` when the statement names the prefetch column; the low bits
 /// still name the lookup.
 const PREFETCH_IDX: c_int = 1 << 30;
@@ -217,7 +222,12 @@ impl<S: TableSource> RowCache<S> {
 
 impl<S: TableSource> Held for RowCache<S> {
     fn evict(&self) {
-        *self.slot.lock().unwrap() = Slot::Empty;
+        let evicted = std::mem::replace(&mut *self.slot.lock().unwrap(), Slot::Empty);
+        if let Slot::Ready(rows) = evicted
+            && rows.len() >= FREE_ELSEWHERE_ROWS
+        {
+            let _ = thread::Builder::new().spawn(move || drop(rows));
+        }
     }
 
     fn warm(&self) {

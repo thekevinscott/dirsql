@@ -189,8 +189,8 @@ struct ScanSpec {
 /// path-derived text columns are slices of `path` located by [`PathSpans`],
 /// so a row costs two allocations however many columns a query reads.
 struct FileRow {
-    /// The path as scanned, root-relative; where the lazy content read goes.
-    rel: PathBuf,
+    /// The path as scanned, root-relative, when `path` is not already it.
+    rel: Option<PathBuf>,
     /// The path as reported, under the table's prefix when it has one.
     path: String,
     spans: PathSpans,
@@ -205,7 +205,13 @@ struct FileRow {
 
 impl FileRow {
     fn new(path_prefix: &Path, rel: PathBuf) -> Self {
-        let path = reported_path(path_prefix, &rel);
+        let (rel, path) = match reported_in_place(path_prefix, rel) {
+            Ok(path) => (None, path),
+            Err(rel) => {
+                let path = reported_path(path_prefix, &rel);
+                (Some(rel), path)
+            }
+        };
         let spans = PathSpans::of(&path);
         Self {
             rel,
@@ -214,6 +220,11 @@ impl FileRow {
             facts: OnceLock::new(),
             content: OnceLock::new(),
         }
+    }
+
+    /// The path as scanned, root-relative; where the lazy content read goes.
+    fn rel(&self) -> &Path {
+        self.rel.as_deref().unwrap_or_else(|| Path::new(&self.path))
     }
 
     fn basename(&self) -> Option<&str> {
@@ -367,7 +378,7 @@ fn parse_module_args(args: &[&[u8]]) -> Result<ScanSpec> {
 
 impl ScanSpec {
     fn stat(&self, row: &FileRow) -> StatFacts {
-        fs::metadata(self.root.join(&row.rel)).map_or_else(
+        fs::metadata(self.root.join(row.rel())).map_or_else(
             |_| StatFacts::default(),
             |m| StatFacts::from_parts(m.len(), m.modified().ok(), m.created().ok()),
         )
@@ -388,7 +399,7 @@ impl ScanSpec {
     }
 
     fn read(&self, row: &FileRow) -> Option<String> {
-        (self.reader)(&self.root.join(&row.rel), self.facts(row).size)
+        (self.reader)(&self.root.join(row.rel()), self.facts(row).size)
     }
 }
 
@@ -404,6 +415,15 @@ fn reported_path(path_prefix: &Path, rel_path: &Path) -> String {
         return format!("{prefix}{rel_path}");
     }
     format!("{prefix}/{rel_path}")
+}
+
+/// The reported path taken from `rel` itself, when it is already what a
+/// table with no prefix reports: handing `rel` back otherwise.
+fn reported_in_place(path_prefix: &Path, rel: PathBuf) -> Result<String, PathBuf> {
+    if !path_prefix.as_os_str().is_empty() || std::path::MAIN_SEPARATOR != '/' {
+        return Err(rel);
+    }
+    rel.into_os_string().into_string().map_err(PathBuf::from)
 }
 
 impl TableSource for ScanSpec {
@@ -850,7 +870,7 @@ mod tests {
         assert_eq!(rows.len(), 100);
         for (n, row) in rows.iter().enumerate() {
             assert_eq!(row.path, format!("/root/f{n:03}.md"));
-            assert_eq!(row.rel, PathBuf::from(format!("f{n:03}.md")));
+            assert_eq!(row.rel(), Path::new(&format!("f{n:03}.md")));
         }
     }
 
@@ -1087,8 +1107,8 @@ mod tests {
         assert_eq!(row.dir(), Some("/var/log"));
         assert_eq!(row.basename(), Some("a.log"));
         assert_eq!(
-            row.rel,
-            PathBuf::from("a.log"),
+            row.rel(),
+            Path::new("a.log"),
             "content is read from the scanned path"
         );
     }

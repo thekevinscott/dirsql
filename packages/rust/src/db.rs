@@ -1429,7 +1429,13 @@ pub(crate) fn table_catalog_entry(
 
 /// Set `cell` to what SQLite holds in `source`.
 fn fill_cell(cell: &mut Value, source: ValueRef<'_>) {
-    *cell = Value::from(rusqlite::types::Value::from(source));
+    match (&mut *cell, source) {
+        (Value::Text(held), ValueRef::Text(bytes)) => {
+            held.clear();
+            held.push_str(&String::from_utf8_lossy(bytes));
+        }
+        _ => *cell = Value::from(rusqlite::types::Value::from(source)),
+    }
 }
 
 impl From<rusqlite::types::Value> for Value {
