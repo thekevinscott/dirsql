@@ -2201,6 +2201,16 @@ mod tests {
     }
 
     #[test]
+    fn new_lets_the_sorter_use_worker_threads() {
+        let db = Db::new().unwrap();
+        let threads: i64 = db
+            .conn()
+            .query_row("PRAGMA threads", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(threads, 8);
+    }
+
+    #[test]
     fn get_rows_by_file_returns_rows_in_row_index_order() {
         let db = Db::new().unwrap();
         db.create_table("t", "CREATE TABLE t (id TEXT)").unwrap();
