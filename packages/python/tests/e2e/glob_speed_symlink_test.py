@@ -50,7 +50,7 @@ DOCS = [
     ),
 ]
 CASES = [
-    ("./**/*.md", "./**/*.md", LINKED),
+    ("./**/*.md (symlinks)", "./**/*.md", LINKED),
     ("./docs/", "./docs/", DOCS),
 ]
 FANOUT = 8

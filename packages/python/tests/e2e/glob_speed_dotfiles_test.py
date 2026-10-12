@@ -59,7 +59,7 @@ UNDER_CACHE = [
     rg("-g '*.md' -g '!.*' .cache"),
 ]
 CASES = [
-    ("./**/*.md", "./**/*.md", MARKDOWN),
+    ("./**/*.md (dotfiles)", "./**/*.md", MARKDOWN),
     ("./**/.*", "./**/.*", DOTFILES),
     ("./.cache/**/*.md", "./.cache/**/*.md", UNDER_CACHE),
 ]
