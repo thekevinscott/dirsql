@@ -612,6 +612,10 @@ struct Walk<'a> {
     dirs: bool,
 }
 
+fn child_path(rel: &Path, name: &OsStr) -> PathBuf {
+    rel.join(name)
+}
+
 impl Walk<'_> {
     /// What the walk makes of entry `name` of `dir`, seen as `seen`, the
     /// directory at `rel`, reached with glob `states` and `linked` as whether
@@ -638,7 +642,7 @@ impl Walk<'_> {
             return None;
         }
         let is_dir = kind != Kind::File;
-        let child = rel.join(name);
+        let child = child_path(rel, name);
         // Only a `.gitignore` reads the full path, and building one per entry
         // is a large share of a big directory's walk.
         let path = if self.frames.is_empty() {
@@ -1040,6 +1044,20 @@ mod tests {
             states,
             linked,
         )
+    }
+
+    #[test]
+    fn child_path_allocates_exactly_its_length() {
+        let child = child_path(Path::new("alpha/beta/gamma"), OsStr::new("delta.md"));
+        assert_eq!(child, Path::new("alpha/beta/gamma/delta.md"));
+        assert_eq!(child.capacity(), child.as_os_str().len());
+    }
+
+    #[test]
+    fn child_path_of_the_root_is_the_bare_name() {
+        let child = child_path(Path::new(""), OsStr::new("c.md"));
+        assert_eq!(child, Path::new("c.md"));
+        assert_eq!(child.capacity(), 4);
     }
 
     #[test]
