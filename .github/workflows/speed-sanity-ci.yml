@@ -1,0 +1,56 @@
+name: Speed sanity CI
+
+# Times this build against the previous published dirsql, never against a
+# native. Runs only when a change can move the CLI's speed: the core, the PyO3
+# glue, or the harness and the cases it runs.
+on:
+  pull_request:
+    paths:
+      - 'packages/rust/src/**'
+      - 'packages/python/src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'packages/python/tests/e2e/speed_of_light.py'
+      - 'packages/python/tests/e2e/release_speed_test.py'
+      - 'packages/python/tests/e2e/glob_speed_recursive_test.py'
+      - 'packages/python/tests/e2e/stat_speed_test.py'
+      - '.github/workflows/speed-sanity-ci.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  speed-sanity:
+    name: Speed sanity vs previous release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync
+        working-directory: packages/python
+
+      - name: Build Rust extension (release)
+        run: uv run maturin develop --release
+        working-directory: packages/python
+
+      - name: Time this build against the previous release
+        run: uv run python -m pytest tests/e2e/release_speed_test.py -x -q -s --tb=short
+        working-directory: packages/python

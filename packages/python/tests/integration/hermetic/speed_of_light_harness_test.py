@@ -8,13 +8,17 @@ without spawning a process or timing anything.
 import pytest
 
 from tests.e2e.speed_of_light import (
+    ATTEMPTS,
     FASTEST,
+    RELEASE_PAIRS,
+    SLOWDOWN,
     TOLERANCE,
     Native,
     Natives,
     Paired,
     Startup,
     agreed_rows,
+    assert_no_slowdown,
     assert_speed_of_light,
     baseline,
     fastest_by_median,
@@ -23,6 +27,7 @@ from tests.e2e.speed_of_light import (
     median_after_first,
     pair_ratios,
     paired,
+    release_ratios,
     resolve_natives,
     rg,
     shell_natives,
@@ -369,3 +374,97 @@ def describe_shell_natives():
         specs = [Native("true", ("true",), "{bin}")]
         assert shell_natives(tmp_path, specs, bar=FASTEST).bar == FASTEST
         assert shell_natives(tmp_path, specs).bar == ""
+
+
+def describe_release_ratios():
+    def it_discards_one_warm_up_pair_and_times_the_requested_pairs():
+        log = []
+        ratios = release_ratios(
+            recorder(log, "P", 2.0), recorder(log, "R", 1.0), NO_STARTUP, pairs=4
+        )
+        assert log.count("P") == 5
+        assert log.count("R") == 5
+        assert len(ratios) == 4
+
+    def it_alternates_which_build_runs_first():
+        log = []
+        release_ratios(
+            recorder(log, "P", 1.0), recorder(log, "R", 1.0), NO_STARTUP, pairs=4
+        )
+        assert log == ["R", "P"] + ["R", "P", "P", "R", "R", "P", "P", "R"]
+
+    def it_divides_the_pr_time_by_the_release_time():
+        ratios = release_ratios(
+            recorder([], "P", 3.0), recorder([], "R", 2.0), NO_STARTUP, pairs=3
+        )
+        assert ratios == [1.5, 1.5, 1.5]
+
+    def it_subtracts_each_builds_own_startup():
+        ratios = release_ratios(
+            recorder([], "P", 3.0),
+            recorder([], "R", 2.0),
+            Startup(1.0, 0.5),
+            pairs=2,
+        )
+        assert ratios == [pytest.approx(2.0 / 1.5)] * 2
+
+    def it_defaults_to_ten_pairs():
+        assert RELEASE_PAIRS == 10
+
+
+def attempts_returning(*medians):
+    queue = list(medians)
+    calls = []
+
+    def measure():
+        calls.append(1)
+        return [queue.pop(0)] * 3
+
+    return measure, calls
+
+
+def describe_assert_no_slowdown():
+    def it_passes_without_a_retry_when_the_first_attempt_is_within_the_threshold():
+        measure, calls = attempts_returning(SLOWDOWN)
+        assert_no_slowdown("case", measure)
+        assert len(calls) == 1
+
+    def it_retries_an_over_attempt_and_passes_when_a_later_one_is_within():
+        measure, calls = attempts_returning(2.0, 2.0, 1.0)
+        assert_no_slowdown("case", measure)
+        assert len(calls) == 3
+
+    def it_fails_only_when_every_attempt_is_over():
+        measure, calls = attempts_returning(*[2.0] * ATTEMPTS)
+        with pytest.raises(AssertionError, match="case"):
+            assert_no_slowdown("case", measure)
+        assert len(calls) == ATTEMPTS
+
+    def it_names_the_threshold_and_every_attempts_median_on_failure():
+        measure, _ = attempts_returning(2.0, 2.5, 3.0)
+        with pytest.raises(AssertionError) as raised:
+            assert_no_slowdown("case", measure)
+        message = str(raised.value)
+        assert f"{SLOWDOWN}x" in message
+        assert "2.000" in message and "2.500" in message and "3.000" in message
+
+    def it_judges_the_median_not_an_outlier_pair():
+        assert_no_slowdown("case", lambda: [1.0, 1.1, 1.2, 9.0, 1.0])
+
+    def it_prints_each_attempts_distribution(capsys):
+        measure, _ = attempts_returning(2.0, 1.0)
+        assert_no_slowdown("case", measure)
+        lines = [
+            l for l in capsys.readouterr().out.splitlines() if l.startswith("SPEED")
+        ]
+        assert len(lines) == 2
+        assert "case vs release" in lines[0]
+        assert "attempt 1" in lines[0]
+        assert "attempt 2" in lines[1]
+
+    def it_takes_a_custom_threshold():
+        with pytest.raises(AssertionError):
+            assert_no_slowdown("case", lambda: [1.2] * 3, threshold=1.1, attempts=1)
+
+    def it_defaults_the_threshold_to_fifty_percent():
+        assert SLOWDOWN == 1.5

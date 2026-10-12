@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/release_speed_test.py -x -q",
+  "ran_at": 1791556899,
+  "exit_code": 0,
+  "commit": "f4ef45b80656a68f454aafdcacc9b56cd555b917",
+  "branch": "bot/1469-ci-speed-sanity-1009"
+}
