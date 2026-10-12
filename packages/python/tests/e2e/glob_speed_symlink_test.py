@@ -49,6 +49,10 @@ DOCS = [
         '{bin} -c \'for f in docs/*; do if [ -f "$f" ]; then printf "%s\\n" "$f"; fi; done\'',
     ),
 ]
+CASES = [
+    ("./**/*.md", "./**/*.md", LINKED),
+    ("./docs/", "./docs/", DOCS),
+]
 FANOUT = 8
 
 
@@ -109,11 +113,8 @@ def describe_symlink_and_trailing_slash_glob_speed_of_light():
         finally:
             shutil.rmtree(root.parent, ignore_errors=True)
 
-    @pytest.mark.parametrize(
-        ("glob", "specs"),
-        [("./**/*.md", LINKED), ("./docs/", DOCS)],
-    )
-    def it_matches_native_files_within_the_bar(tree, glob, specs):
+    @pytest.mark.parametrize(("name", "glob", "specs"), CASES)
+    def it_matches_native_files_within_the_bar(tree, name, glob, specs):
         root, n, startup = tree
 
         def dirsql(timeout):
@@ -129,4 +130,4 @@ def describe_symlink_and_trailing_slash_glob_speed_of_light():
         assert len(expected) == matched(n, glob)
 
         assert actual == expected
-        assert_speed_of_light(glob, result, startup)
+        assert_speed_of_light(name, result, startup)

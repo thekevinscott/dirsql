@@ -58,6 +58,11 @@ UNDER_CACHE = [
     fd("--glob '*.md' .cache"),
     rg("-g '*.md' -g '!.*' .cache"),
 ]
+CASES = [
+    ("./**/*.md", "./**/*.md", MARKDOWN),
+    ("./**/.*", "./**/.*", DOTFILES),
+    ("./.cache/**/*.md", "./.cache/**/*.md", UNDER_CACHE),
+]
 FANOUT = 8
 
 
@@ -120,15 +125,8 @@ def describe_dotfile_glob_speed_of_light():
         finally:
             shutil.rmtree(root, ignore_errors=True)
 
-    @pytest.mark.parametrize(
-        ("glob", "specs"),
-        [
-            ("./**/*.md", MARKDOWN),
-            ("./**/.*", DOTFILES),
-            ("./.cache/**/*.md", UNDER_CACHE),
-        ],
-    )
-    def it_matches_native_files_within_the_bar(tree, glob, specs):
+    @pytest.mark.parametrize(("name", "glob", "specs"), CASES)
+    def it_matches_native_files_within_the_bar(tree, name, glob, specs):
         root, n, startup = tree
 
         def dirsql(timeout):
@@ -144,4 +142,4 @@ def describe_dotfile_glob_speed_of_light():
         assert len(expected) == matched(n, glob)
 
         assert actual == expected
-        assert_speed_of_light(glob, result, startup)
+        assert_speed_of_light(name, result, startup)
