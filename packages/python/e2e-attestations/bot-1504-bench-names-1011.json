@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m tests.e2e.bench_suite --pairs 3 --out /tmp/bench-1504 -k \"glob_speed_symlink or glob_speed_dotfiles or glob_speed_recursive\"",
+  "ran_at": 1791770495,
+  "exit_code": 0,
+  "commit": "cce3e83ece8026cc8feedbb1cd64f73242f1d230",
+  "branch": "bot/1504-bench-names-1011"
+}
