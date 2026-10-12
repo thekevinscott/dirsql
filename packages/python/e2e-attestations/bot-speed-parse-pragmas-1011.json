@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/jsonl_parse_speed_test.py tests/e2e/frontmatter_parse_speed_test.py tests/e2e/on_file_query_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1791766109,
+  "exit_code": 0,
+  "commit": "a2a42d2c9ac8c5aa5292f4d4d540296cf1e1ee6c",
+  "branch": "bot/speed-parse-pragmas-1011"
+}
