@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_depth_bound_test.py tests/e2e/glob_speed_one_level_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_symlink_test.py tests/e2e/glob_speed_dotfiles_test.py tests/e2e/glob_speed_node_modules_test.py tests/e2e/glob_speed_matchers_test.py tests/e2e/glob_speed_gitignore_test.py tests/e2e/stat_speed_test.py tests/e2e/query_contract_test.py -x -q",
+  "ran_at": 1791768231,
+  "exit_code": 0,
+  "commit": "d6653e1f4d8a1d8b4b723b6f24c0bc805e4aa7e1",
+  "branch": "bot/speed-walk-rowpath-1011"
+}
