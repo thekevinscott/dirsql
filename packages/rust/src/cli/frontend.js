@@ -31,7 +31,7 @@ export function createQueryRunner({ fetch, now, onChange }) {
     const elapsed = () => Math.round(now() - started);
     let outcome;
     try {
-      const response = await fetch('/query', { method: 'POST', body: sql, signal: controller.signal });
+      const response = await fetch('/query', { method: 'POST', body: JSON.stringify({ sql }), signal: controller.signal });
       if (response.ok) {
         const rows = await response.json();
         if (!Array.isArray(rows)) throw new Error('unexpected response');

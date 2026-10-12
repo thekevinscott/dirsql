@@ -122,7 +122,7 @@ describe('query success', () => {
     });
     const sql = 'select path, size from "./"   limit 5';
     await runner.run(sql);
-    assert.deepEqual(calls, [['/query', 'POST', sql]]);
+    assert.deepEqual(calls, [['/query', 'POST', JSON.stringify({ sql })]]);
     assert.deepEqual(changes, ['running', 'success']);
     const state = runner.state();
     assert.equal(state.status, 'success');
