@@ -142,9 +142,11 @@ pub(crate) fn run_streaming(
                 pool,
                 jobs: job_tx,
                 rows: rows_tx,
-                workers: 0,
-                limit: cpus(),
-                sent: 0,
+                tally: Tally {
+                    workers: 0,
+                    limit: cpus(),
+                    sent: 0,
+                },
             };
             let mut packer = Packer::new(budget);
             let mut kept: Vec<PathBuf> = Vec::new();
@@ -155,12 +157,12 @@ pub(crate) fn run_streaming(
                 if let Some(full) = packer.push(command::non_verbatim(&path.to_string_lossy())) {
                     dispatch.send(full);
                 }
-                if dispatch.sent == 0 {
+                if dispatch.tally.sent == 0 {
                     kept.push(path);
                 }
             }
             let rest = packer.rest();
-            if dispatch.sent == 0 {
+            if dispatch.tally.sent == 0 {
                 for run in spread_runs(&rest, &file_sizes(&kept), cpus) {
                     dispatch.send(run.to_vec());
                 }
@@ -192,20 +194,33 @@ struct Dispatch<'scope, 'env> {
     pool: &'scope Pool<'env>,
     jobs: Sender<Job>,
     rows: SyncSender<Vec<JsonRow>>,
+    tally: Tally,
+}
+
+/// Numbers the jobs and decides when another worker is wanted.
+struct Tally {
     workers: usize,
     limit: usize,
     sent: usize,
 }
 
+impl Tally {
+    fn next(&mut self) -> (usize, bool) {
+        let index = self.sent;
+        self.sent += 1;
+        let spawn = self.workers < self.limit;
+        if spawn {
+            self.workers += 1;
+        }
+        (index, spawn)
+    }
+}
+
 impl Dispatch<'_, '_> {
     fn send(&mut self, args: Vec<String>) {
-        let _ = self.jobs.send(Job {
-            index: self.sent,
-            args,
-        });
-        self.sent += 1;
-        if self.workers < self.limit {
-            self.workers += 1;
+        let (index, spawn) = self.tally.next();
+        let _ = self.jobs.send(Job { index, args });
+        if spawn {
             let (pool, rows) = (self.pool, self.rows.clone());
             self.scope.spawn(move || pool.work(&rows));
         }
@@ -363,33 +378,18 @@ fn spread<'a>(args: &'a [String], sizes: &[u64], parts: usize) -> Vec<&'a [Strin
 mod tests {
 
     #[test]
-    fn dispatch_starts_one_worker_per_core_and_counts_every_job() {
-        let (job_tx, job_rx) = std::sync::mpsc::channel::<Job>();
-        let (rows_tx, _rows_rx) = std::sync::mpsc::sync_channel::<Vec<JsonRow>>(1);
-        let pool = Pool {
-            command: "unused",
-            argv: &[],
-            cwd: Path::new("."),
-            jobs: Mutex::new(job_rx),
-            aborted: AtomicBool::new(true),
-            failures: Mutex::new(Vec::new()),
+    fn tally_numbers_every_job_and_asks_for_a_worker_per_core_only() {
+        let mut tally = Tally {
+            workers: 0,
+            limit: 2,
+            sent: 0,
         };
-        std::thread::scope(|scope| {
-            let mut dispatch = Dispatch {
-                scope,
-                pool: &pool,
-                jobs: job_tx,
-                rows: rows_tx,
-                workers: 0,
-                limit: 2,
-                sent: 0,
-            };
-            for _ in 0..5 {
-                dispatch.send(Vec::new());
-            }
-            assert_eq!(dispatch.workers, 2);
-            assert_eq!(dispatch.sent, 5);
-        });
+        let steps: Vec<(usize, bool)> = (0..5).map(|_| tally.next()).collect();
+        assert_eq!(
+            steps,
+            vec![(0, true), (1, true), (2, false), (3, false), (4, false)]
+        );
+        assert_eq!(tally.sent, 5);
     }
     use super::*;
 
