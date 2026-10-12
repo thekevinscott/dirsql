@@ -19,19 +19,28 @@ pub enum GlobError {
 #[derive(Debug, Clone)]
 pub(crate) struct Pattern {
     path: Regex,
+    /// For a `**/`-led glob whose remainder is one component: that remainder,
+    /// which a path matches exactly when its last component does.
     last_component: Option<Regex>,
 }
 
 impl Pattern {
     /// `*` and `?` stop at `/`; `**` crosses it.
     pub(crate) fn new(glob: &str) -> Result<Self, GlobError> {
+        let last_component = match glob.strip_prefix("**/") {
+            Some(rest) if !rest.is_empty() && !rest.contains('/') => Some(compile(rest)?),
+            _ => None,
+        };
         Ok(Self {
             path: compile(glob)?,
-            last_component: None,
+            last_component,
         })
     }
 
     pub(crate) fn is_match(&self, path: &Path) -> bool {
+        if let Some((regex, name)) = self.last_component.as_ref().zip(path.file_name()) {
+            return regex.is_match(&name.to_string_lossy());
+        }
         self.path.is_match(&crate::scanner::slashed(path))
     }
 

@@ -17,7 +17,11 @@ pub(crate) fn to_slash(path: &Path) -> String {
 }
 
 pub(crate) fn slashed(path: &Path) -> Cow<'_, str> {
-    Cow::Owned(to_slash(path))
+    let text = path.to_string_lossy();
+    if std::path::MAIN_SEPARATOR == '/' {
+        return text;
+    }
+    Cow::Owned(with_slashes(&text, std::path::MAIN_SEPARATOR))
 }
 
 fn with_slashes(path: &str, native: char) -> String {
