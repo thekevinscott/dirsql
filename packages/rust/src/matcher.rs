@@ -44,6 +44,7 @@ impl Pattern {
         self.path.is_match(&crate::scanner::slashed(path))
     }
 
+    #[cfg(test)]
     pub(crate) fn matches_last_component_only(&self) -> bool {
         self.last_component.is_some()
     }
