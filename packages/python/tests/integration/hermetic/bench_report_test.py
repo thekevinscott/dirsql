@@ -135,13 +135,18 @@ def describe_render_markdown():
 
     def it_lists_each_case_with_its_ratio_to_the_fastest_native():
         md = render_markdown(sample_report())
-        assert "| slow-case | bash-globstar | 3.00x |" in md
-        assert "| fast-case | find | 0.50x |" in md
+        assert "| `slow-case` | bash-globstar | 3.00x |" in md
+        assert "| `fast-case` | find | 0.50x |" in md
 
     def it_flags_cases_above_the_fastest_native():
         md = render_markdown(sample_report())
-        assert "slow-case | bash-globstar | 3.00x | 0% | over" in md
-        assert "fast-case | find | 0.50x | 0% | ok" in md
+        assert "`slow-case` | bash-globstar | 3.00x | 0% | over" in md
+        assert "`fast-case` | find | 0.50x | 0% | ok" in md
+
+    def it_names_the_cadence_that_makes_staleness_checkable():
+        md = render_markdown(sample_report())
+        assert "30 days" in md
+        assert "just bench-suite" in md
 
     def it_details_every_native_and_the_skipped_ones():
         md = render_markdown(sample_report())
