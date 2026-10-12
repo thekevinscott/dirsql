@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/frontmatter_parse_speed_test.py tests/e2e/jsonl_parse_speed_test.py tests/e2e/on_file_query_test.py tests/e2e/query_contract_test.py tests/e2e/fanout_test.py tests/e2e/declared_table_name_test.py tests/e2e/use_case_dossier_test.py tests/e2e/use_case_join_test.py tests/e2e/use_case_notebook_test.py tests/e2e/use_case_transcripts_test.py -x -q -s",
+  "ran_at": 1791560842,
+  "exit_code": 0,
+  "commit": "d5ea2e249e40f6b64e6eb1f799fc47d8290b795e",
+  "branch": "bot/speed-parse-paths-1009"
+}
