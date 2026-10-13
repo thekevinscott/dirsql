@@ -23,6 +23,7 @@ from itertools import count
 import pytest
 
 from .speed_of_light import (
+    Natives,
     Startup,
     assert_speed_of_light,
     cli,
@@ -147,6 +148,11 @@ class Dirsql:
         self.proc.wait(timeout=60)
 
 
+def measure(native, dirsql):
+    natives = Natives({"inotifywait": native.sample}, [])
+    return paired(natives, lambda _timeout: dirsql.sample(), NO_STARTUP, PAIRS)
+
+
 def describe_watch_speed_of_light():
     @pytest.fixture(scope="module")
     def trees(tmp_path_factory):
@@ -165,9 +171,7 @@ def describe_watch_speed_of_light():
 
     def it_delivers_a_write_to_the_consumer_within_the_bar(trees):
         native, dirsql = trees
-        result = paired(
-            native.sample, lambda _timeout: dirsql.sample(), NO_STARTUP, PAIRS
-        )
-        assert result.native_rows == next(native.writer.samples) - 1
+        result = measure(native, dirsql)
+        assert result.native_rows == {"inotifywait": next(native.writer.samples) - 1}
         assert result.dirsql_rows == next(dirsql.writer.samples) - 1
         assert_speed_of_light("watch", result, NO_STARTUP)

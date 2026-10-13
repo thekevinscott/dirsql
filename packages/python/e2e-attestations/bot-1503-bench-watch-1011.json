@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m tests.e2e.bench_suite --pairs 5 --out /tmp/bench-1503 -k watch",
+  "ran_at": 1791769095,
+  "exit_code": 0,
+  "commit": "409ebb5a7e1da55d1516983fcd936cae7fdc952c",
+  "branch": "bot/1503-bench-watch-1011"
+}
