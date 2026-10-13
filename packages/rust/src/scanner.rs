@@ -169,6 +169,22 @@ pub fn scan_glob(
     scan_glob_checking_root(root, glob, ignore, gitignore, false)
 }
 
+/// [`scan_glob_checking_root`], each matched path made into `row` on the
+/// thread that found it, so making rows overlaps the walk.
+pub(crate) fn scan_glob_rows<T: Send>(
+    root: &Path,
+    glob: &PathGlob,
+    ignore: &TableMatcher,
+    gitignore: bool,
+    check_root: bool,
+    row: &(dyn Fn(PathBuf) -> T + Sync),
+) -> Vec<T> {
+    scan_glob_checking_root(root, glob, ignore, gitignore, check_root)
+        .into_iter()
+        .map(row)
+        .collect()
+}
+
 /// [`scan_glob`], and with `check_root` set a `root` that `.gitignore` ignores
 /// yields nothing: for a glob whose wildcard sits below a literal prefix, the
 /// prefix is not a path the pattern spells out.
@@ -1910,5 +1926,27 @@ mod tests {
 
         assert!(is_gitignored_path(&repo.path().join("debug.log"), false));
         assert!(!is_gitignored_path(&repo.path().join("app.js"), false));
+    }
+
+    #[test]
+    fn scan_glob_rows_makes_rows_on_the_walk_threads_in_scan_order() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..64 {
+            let sub = dir.path().join(format!("d{i:02}"));
+            std::fs::create_dir(&sub).unwrap();
+            std::fs::write(sub.join("f.md"), "").unwrap();
+        }
+        let glob = compile_glob("**/*.md").unwrap();
+        let none = TableMatcher::new(&[], &[]).unwrap();
+        let caller = std::thread::current().id();
+
+        let rows = scan_glob_rows(dir.path(), &glob, &none, false, false, &|rel| {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            (std::thread::current().id(), rel)
+        });
+
+        let paths: Vec<PathBuf> = rows.iter().map(|(_, rel)| rel.clone()).collect();
+        assert_eq!(paths, scan_glob(dir.path(), &glob, &none, false));
+        assert!(rows.iter().any(|(made_on, _)| *made_on != caller));
     }
 }
