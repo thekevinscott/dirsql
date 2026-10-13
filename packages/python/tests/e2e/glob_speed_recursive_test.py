@@ -52,6 +52,10 @@ PREFIX_NATIVE = [
     rg("-g '*.md' -g '!.*' a/b"),
     *suite_only(globstar("./a/b/**/*.md")),
 ]
+CASES = [
+    ("./**/*.md", "./**/*.md", ALL_NATIVE, ""),
+    ("./a/b/**/*.md", "./a/b/**/*.md", PREFIX_NATIVE, "a/b"),
+]
 FANOUT = 8
 
 
@@ -109,11 +113,8 @@ def describe_recursive_glob_speed_of_light():
         finally:
             shutil.rmtree(root, ignore_errors=True)
 
-    @pytest.mark.parametrize(
-        ("glob", "specs", "prefix"),
-        [("./**/*.md", ALL_NATIVE, ""), ("./a/b/**/*.md", PREFIX_NATIVE, "a/b")],
-    )
-    def it_matches_native_files_within_the_bar(tree, glob, specs, prefix):
+    @pytest.mark.parametrize(("name", "glob", "specs", "prefix"), CASES)
+    def it_matches_native_files_within_the_bar(tree, name, glob, specs, prefix):
         root, n, startup = tree
 
         def dirsql(timeout):
@@ -129,4 +130,4 @@ def describe_recursive_glob_speed_of_light():
         assert len(expected) == matched(n, prefix)
 
         assert actual == expected
-        assert_speed_of_light(glob, result, startup)
+        assert_speed_of_light(name, result, startup)
