@@ -414,6 +414,8 @@ impl Db {
         // The database is a private temp file that dies with the process, so
         // durability buys nothing.
         conn.pragma_update(None, "synchronous", "OFF")?;
+        // Lets a GROUP BY or ORDER BY over a large table sort on background threads.
+        conn.pragma_update(None, "threads", 8)?;
         ensure_internal_rows_table(&conn)?;
         let scope = StatementScope::new();
         vtab::load_module(&conn, Arc::clone(&scope))?;
@@ -2310,6 +2312,16 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(pragma("synchronous"), 0);
+    }
+
+    #[test]
+    fn new_lets_the_sorter_use_worker_threads() {
+        let db = Db::new().unwrap();
+        let threads: i64 = db
+            .conn()
+            .query_row("PRAGMA threads", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(threads, 8);
     }
 
     #[test]
