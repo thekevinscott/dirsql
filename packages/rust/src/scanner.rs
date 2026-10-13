@@ -82,9 +82,14 @@ pub fn scan_dirs(root: &Path, start: &Path, ignore: &TableMatcher) -> Vec<PathBu
         dirs: true,
     };
     let mut dirs = vec![start.to_path_buf()];
-    walk(root, start, walker, &|_| false, &mut |rel_path, parent| {
-        dirs.push(parent.join(rel_path.file_name().unwrap_or_default()));
-    });
+    walk(
+        root,
+        start,
+        walker,
+        &|_| false,
+        &|rel_path, parent| parent.join(rel_path.file_name().unwrap_or_default()),
+        &mut |dir| dirs.push(dir),
+    );
     dirs
 }
 
@@ -121,13 +126,16 @@ fn scan_below(
         start,
         walker,
         &|rel_path| !matcher.is_ignored(rel_path),
-        &mut |rel_path, dir| {
+        &|rel_path, dir| {
+            let path = dir.join(rel_path.file_name().unwrap_or_default());
+            (rel_path, path)
+        },
+        &mut |(rel_path, path)| {
             seen += 1;
             on_file(seen);
 
             // Fan-out: a file matching N tables' globs yields N (path, table)
             // pairs, one per matching table, in declaration order.
-            let path = dir.join(rel_path.file_name().unwrap_or_default());
             for m in matcher.match_all(&rel_path) {
                 on_match(&path, &m.table_name);
                 results.push((path.clone(), m.table_name));
@@ -169,22 +177,6 @@ pub fn scan_glob(
     scan_glob_checking_root(root, glob, ignore, gitignore, false)
 }
 
-/// [`scan_glob_checking_root`], each matched path made into `row` on the
-/// thread that found it, so making rows overlaps the walk.
-pub(crate) fn scan_glob_rows<T: Send>(
-    root: &Path,
-    glob: &PathGlob,
-    ignore: &TableMatcher,
-    gitignore: bool,
-    check_root: bool,
-    row: &(dyn Fn(PathBuf) -> T + Sync),
-) -> Vec<T> {
-    scan_glob_checking_root(root, glob, ignore, gitignore, check_root)
-        .into_iter()
-        .map(row)
-        .collect()
-}
-
 /// [`scan_glob`], and with `check_root` set a `root` that `.gitignore` ignores
 /// yields nothing: for a glob whose wildcard sits below a literal prefix, the
 /// prefix is not a path the pattern spells out.
@@ -195,6 +187,21 @@ pub fn scan_glob_checking_root(
     gitignore: bool,
     check_root: bool,
 ) -> Vec<PathBuf> {
+    scan_glob_rows(root, glob, ignore, gitignore, check_root, &|rel_path| {
+        rel_path
+    })
+}
+
+/// [`scan_glob_checking_root`], each matched path made into `row` on the
+/// thread that found it, so making rows overlaps the walk.
+pub(crate) fn scan_glob_rows<T: Send>(
+    root: &Path,
+    glob: &PathGlob,
+    ignore: &TableMatcher,
+    gitignore: bool,
+    check_root: bool,
+    row: &(dyn Fn(PathBuf) -> T + Sync),
+) -> Vec<T> {
     if gitignore && check_root && !holds_git(root) && is_gitignored_path(root, true) {
         return Vec::new();
     }
@@ -217,7 +224,8 @@ pub fn scan_glob_checking_root(
         root,
         walker,
         &|rel_path| is_wanted(glob, ignore, rel_path),
-        &mut |rel_path, _| results.push(rel_path),
+        &|rel_path, _| row(rel_path),
+        &mut |found| results.push(found),
     );
     results
 }
@@ -492,12 +500,13 @@ pub(crate) fn parse_gitignore_arg(arg: &str) -> Result<bool, String> {
 /// `.git`, its `.gitignore` files apply. Symlinks are followed only as the
 /// glob allows, and not at all without one; a broken link or an unreadable
 /// directory contributes nothing.
-fn walk(
+fn walk<L: Send>(
     root: &Path,
     start: &Path,
     walker: Walk<'_>,
     keep: &(dyn Fn(&Path) -> bool + Sync),
-    visit: &mut dyn FnMut(PathBuf, &Path),
+    leaf: &(dyn Fn(PathBuf, &Path) -> L + Sync),
+    visit: &mut dyn FnMut(L),
 ) {
     let rel = start.strip_prefix(root).unwrap_or(start);
     let states = walker.glob.map_or_else(Vec::new, |glob| {
@@ -514,10 +523,8 @@ fn walk(
     };
     walk_in_order(
         Box::new(place),
-        &|place: Box<Place<'_>>| (*place).explore(keep),
-        &mut |(rel, dir)| {
-            visit(rel, &dir);
-        },
+        &|place: Box<Place<'_>>| (*place).explore(keep, leaf),
+        visit,
     );
 }
 
@@ -532,12 +539,15 @@ struct Place<'a> {
     linked: bool,
 }
 
-type Found = (PathBuf, Arc<Path>);
-
 impl<'a> Place<'a> {
-    /// The directory's entries in walk order: each file `keep` takes, and
-    /// each directory to enter.
-    fn explore(self, keep: &(dyn Fn(&Path) -> bool + Sync)) -> Vec<Step<Box<Place<'a>>, Found>> {
+    /// The directory's entries in walk order: each file `keep` takes, made
+    /// into a `leaf` with the directory it sits in, and each directory to
+    /// enter.
+    fn explore<L>(
+        self,
+        keep: &(dyn Fn(&Path) -> bool + Sync),
+        leaf: &(dyn Fn(PathBuf, &Path) -> L + Sync),
+    ) -> Vec<Step<Box<Place<'a>>, L>> {
         let Place {
             mut walk,
             dir,
@@ -569,14 +579,11 @@ impl<'a> Place<'a> {
                 Taken::Dir { .. } => true,
             })
         });
-        let dir: Arc<Path> = Arc::from(dir);
-        let mut steps: Vec<Step<Box<Place<'a>>, Found>> = if walk.dirs {
+        let mut steps: Vec<Step<Box<Place<'a>>, L>> = if walk.dirs {
             taken
                 .iter()
                 .filter_map(|taken| match taken {
-                    Some(Taken::Dir { child, .. }) => {
-                        Some(Step::Leaf((child.clone(), Arc::clone(&dir))))
-                    }
+                    Some(Taken::Dir { child, .. }) => Some(Step::Leaf(leaf(child.clone(), &dir))),
                     _ => None,
                 })
                 .collect()
@@ -615,7 +622,7 @@ impl<'a> Place<'a> {
                         states: next,
                         linked,
                     }))),
-                    Taken::File(child) => Some(Step::Leaf((child, Arc::clone(&dir)))),
+                    Taken::File(child) => Some(Step::Leaf(leaf(child, &dir))),
                 });
         if steps.is_empty() {
             return entered.collect();
@@ -934,6 +941,7 @@ fn is_glob_match(glob: &PathGlob, rel_path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     #[test]
     fn scan_directory_reporting_walks_a_known_source_file() {
@@ -1140,7 +1148,7 @@ mod tests {
 
     fn explored_dirs(place: Place<'_>) -> Vec<Place<'_>> {
         place
-            .explore(&|_| true)
+            .explore(&|_| true, &|_, _| ())
             .into_iter()
             .filter_map(|step| match step {
                 Step::Dir(child) => Some(*child),
@@ -1938,15 +1946,27 @@ mod tests {
         }
         let glob = compile_glob("**/*.md").unwrap();
         let none = TableMatcher::new(&[], &[]).unwrap();
-        let caller = std::thread::current().id();
+        let in_flight = AtomicUsize::new(0);
+        let overlapped = AtomicBool::new(false);
 
         let rows = scan_glob_rows(dir.path(), &glob, &none, false, false, &|rel| {
-            std::thread::sleep(std::time::Duration::from_millis(1));
-            (std::thread::current().id(), rel)
+            if in_flight.fetch_add(1, Ordering::SeqCst) > 0 {
+                overlapped.store(true, Ordering::SeqCst);
+            }
+            for _ in 0..1_000_000 {
+                if overlapped.load(Ordering::SeqCst) {
+                    break;
+                }
+                std::hint::spin_loop();
+            }
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+            rel
         });
 
-        let paths: Vec<PathBuf> = rows.iter().map(|(_, rel)| rel.clone()).collect();
-        assert_eq!(paths, scan_glob(dir.path(), &glob, &none, false));
-        assert!(rows.iter().any(|(made_on, _)| *made_on != caller));
+        assert_eq!(rows, scan_glob(dir.path(), &glob, &none, false));
+        assert!(
+            overlapped.load(Ordering::SeqCst),
+            "rows were made one at a time"
+        );
     }
 }
