@@ -249,6 +249,19 @@ returned, and errors. Values render as text (`NULL` is marked), and only the
 first 1000 rows are displayed. An empty result says so and shows no column
 names, since the response carries none.
 
+Above the SQL box the page shows the query root and the path-table columns
+(`path`, `basename`, `dir`, `ext`, `size`, `mtime`, `ctime`, plus `content`,
+read only when named), with a button that loads the starter query. A config
+with declared tables adds each table and its columns; choosing one loads
+`SELECT * FROM "<table>" LIMIT 100` into the box without running it.
+Declared-table globs anchor at their config file's directory, while
+path-tables resolve under the query root. With no declared tables, including
+a config of only functions or extensions, the page shows the path-table
+start alone. A config that fails to load shows its diagnostic and how to
+restart. To refresh, run the query again: path-tables re-read the filesystem,
+and declared tables reflect the server's index. The page does not use
+`/events`.
+
 ```bash
 dirsql server --frontend
 dirsql server --frontend -c .dirsql.toml

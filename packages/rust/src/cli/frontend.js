@@ -137,11 +137,147 @@ export function renderResult(doc, container, state) {
   container.replaceChildren(...(state.rowCount ? [note, tableOf(doc, state)] : [note]));
 }
 
+export async function loadState(fetch) {
+  try {
+    const response = await fetch('/frontend/state');
+    if (!response.ok) {
+      const { message } = await failureOf(response);
+      return { status: response.status === 503 ? 'unavailable' : 'failed', message };
+    }
+    const { root, tables } = await response.json();
+    return { status: 'ready', root, tables };
+  } catch (error) {
+    return { status: 'failed', message: error.message };
+  }
+}
+
+export function previewQuery(table) {
+  return `SELECT * FROM "${table.replaceAll('"', '""')}" LIMIT 100`;
+}
+
+const PATH_COLUMNS = [
+  ['path', 'path relative to the query root'],
+  ['basename', 'filename with extension'],
+  ['dir', 'parent directory'],
+  ['ext', 'extension without the dot'],
+  ['size', 'size in bytes'],
+  ['mtime', 'modification time, Unix seconds'],
+  ['ctime', 'creation/change time, Unix seconds'],
+];
+
+function node(doc, tag, ...children) {
+  const el = doc.createElement(tag);
+  el.append(...children);
+  return el;
+}
+
+const code = (doc, text) => node(doc, 'code', text);
+
+function choice(doc, label, sql, onChoose) {
+  const button = node(doc, 'button', label);
+  button.setAttribute('type', 'button');
+  button.className = 'choice';
+  button.addEventListener('click', () => onChoose(sql));
+  return button;
+}
+
+function pathTableGuide(doc, onChoose) {
+  return [
+    node(doc, 'h2', 'Path-tables'),
+    node(
+      doc,
+      'p',
+      'Query files with no configuration: write a quoted path or glob where a table name goes, such as ',
+      code(doc, "'./'"),
+      ' (files directly in the query root) or ',
+      code(doc, "'./**/*.md'"),
+      ' (Markdown files at any depth). Edit the path in the SQL to choose files.',
+    ),
+    choice(doc, STARTER_QUERY, STARTER_QUERY, onChoose),
+    node(doc, 'ul', ...PATH_COLUMNS.map(([name, meaning]) => node(doc, 'li', code(doc, name), ` ${meaning}`))),
+    node(
+      doc,
+      'p',
+      code(doc, 'content'),
+      " holds the file's text. It is left out of SELECT * and read only when you name it, as in ",
+      code(doc, "SELECT path, content FROM './*.md' LIMIT 10"),
+      '.',
+    ),
+  ];
+}
+
+function tableCatalog(doc, tables, onChoose) {
+  if (!tables.length) return [node(doc, 'h2', 'Declared tables'), node(doc, 'p', 'No declared tables.')];
+  return [
+    node(doc, 'h2', 'Declared tables'),
+    node(
+      doc,
+      'p',
+      "Declared-table globs are anchored at their config file's directory; path-table queries use the query root. Choose a table to load a preview query, then run it.",
+    ),
+    ...tables.map((table) =>
+      node(
+        doc,
+        'div',
+        choice(doc, table.name, previewQuery(table.name), onChoose),
+        node(
+          doc,
+          'ul',
+          ...table.columns.map((column) => node(doc, 'li', code(doc, column.name), column.type ? ` ${column.type}` : '')),
+        ),
+      ),
+    ),
+  ];
+}
+
+export function renderState(doc, container, state, onChoose) {
+  if (state.status === 'ready') {
+    container.className = 'panel';
+    container.replaceChildren(
+      node(doc, 'h2', 'Query root'),
+      node(doc, 'p', code(doc, state.root)),
+      ...pathTableGuide(doc, onChoose),
+      ...tableCatalog(doc, state.tables, onChoose),
+      node(
+        doc,
+        'p',
+        "Run again to refresh: path-tables read the filesystem on every query; declared tables reflect the server's index.",
+      ),
+    );
+    return;
+  }
+  const title = node(doc, 'h2', state.status === 'unavailable' ? 'Configuration could not load' : 'Could not connect');
+  title.setAttribute('role', 'alert');
+  container.className = 'panel error';
+  if (state.status === 'unavailable') {
+    container.replaceChildren(
+      title,
+      node(doc, 'pre', state.message),
+      node(
+        doc,
+        'p',
+        'Fix the configuration, stop this server (Ctrl+C), and restart it with ',
+        code(doc, 'dirsql server --frontend -c <config>'),
+        '.',
+      ),
+    );
+    return;
+  }
+  container.replaceChildren(title, node(doc, 'p', `Could not load the server state: ${state.message}`));
+}
+
 if (typeof document !== 'undefined') {
   const sql = document.getElementById('sql');
   const run = document.getElementById('run');
   const result = document.getElementById('result');
+  const panel = document.getElementById('state');
   sql.value = STARTER_QUERY;
+  loadState((url) => fetch(url)).then((state) =>
+    renderState(document, panel, state, (query) => {
+      sql.value = query;
+      sql.focus();
+    }),
+  );
   const runner = createQueryRunner({
     fetch: (url, init) => fetch(url, init),
     now: () => performance.now(),

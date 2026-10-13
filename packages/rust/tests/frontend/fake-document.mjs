@@ -8,7 +8,7 @@ export function fakeDocument() {
       className: '',
       _text: '',
       get textContent() {
-        return el._text + el.children.map((c) => c.textContent).join('');
+        return el._text + el.children.map((c) => (typeof c === 'string' ? c : c.textContent)).join('');
       },
       set textContent(v) {
         el._text = String(v);
@@ -37,7 +37,7 @@ export function fakeDocument() {
         const out = [];
         const walk = (n) => {
           if (n.tag === tagName) out.push(n);
-          n.children.forEach(walk);
+          n.children.forEach((c) => typeof c !== 'string' && walk(c));
         };
         walk(el);
         return out;

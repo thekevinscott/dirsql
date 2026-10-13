@@ -371,7 +371,8 @@ query root, and declared tables and columns through `GET /frontend/state`
 (HTTP 503 when unavailable). The page needs no
 runtime asset download; the option adds no SDK binding API. Without the flag,
 the existing HTTP routes are unchanged. The page runs SQL through `POST
-/query` (script at `/frontend.js`). Distribution validation is tracked in a
+/query` (script at `/frontend.js`) and lists declared tables with a
+quoted preview query beside the path-table guide. Distribution validation is tracked in a
 subsequent frontend issue.
 
 **Parity by construction, no drift; no SDK API change (#662).** Query is the
