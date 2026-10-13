@@ -9,6 +9,7 @@ fn frontend_script_passes_its_node_tests() {
     let output = Command::new("node")
         .arg("--test")
         .arg(dir.join("query.test.mjs"))
+        .arg(dir.join("browse.test.mjs"))
         .output()
         .expect("node must be installed to test the bundled frontend");
     assert!(
