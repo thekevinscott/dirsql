@@ -10,7 +10,8 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, Sender, SyncSender};
 
 use crate::command::{self, Placeholder};
 use crate::infer::{JsonRow, parse_rows_at};
@@ -50,77 +51,132 @@ pub(crate) fn run(
     paths: &[PathBuf],
 ) -> Result<Vec<JsonRow>, String> {
     let mut rows = Vec::new();
-    run_streaming(command, cwd, root, paths, &mut |chunk| rows.extend(chunk))?;
+    run_streaming(
+        command,
+        cwd,
+        root,
+        &mut paths.iter().cloned(),
+        &mut |chunk| rows.extend(chunk),
+    )?;
     Ok(rows)
+}
+
+/// A job for one invocation: its position among the table's invocations and
+/// the paths it carries.
+struct Job {
+    index: usize,
+    args: Vec<String>,
+}
+
+/// What the invocations share: the command, where it runs, and how they fail.
+struct Pool<'a> {
+    command: &'a str,
+    argv: &'a [String],
+    cwd: &'a Path,
+    jobs: Mutex<Receiver<Job>>,
+    aborted: AtomicBool,
+    failures: Mutex<Vec<(usize, String)>>,
+}
+
+impl Pool<'_> {
+    fn work(&self, rows: &SyncSender<Vec<JsonRow>>) {
+        loop {
+            let job = self.jobs.lock().expect("jobs lock").recv();
+            let Ok(Job { index, args }) = job else {
+                return;
+            };
+            if self.aborted.load(Ordering::SeqCst) {
+                return;
+            }
+            let mut full = self.argv.to_vec();
+            full.extend(args);
+            let outcome = run_invocation(self.command, &full, self.cwd, &mut |chunk| {
+                let _ = rows.send(chunk);
+            });
+            if let Err(message) = outcome {
+                self.aborted.store(true, Ordering::SeqCst);
+                self.failures
+                    .lock()
+                    .expect("failures lock")
+                    .push((index, message));
+            }
+        }
+    }
 }
 
 /// [`run`], handing rows to `sink` as they parse. Invocations run
 /// concurrently, like `xargs -P`, each decoding its own output as it arrives;
 /// rows keep their order within an invocation but not across invocations.
+///
+/// `paths` is consumed as it yields: an invocation starts as soon as its
+/// argument list is full, while later paths are still arriving.
 pub(crate) fn run_streaming(
     command: &str,
     cwd: &Path,
     root: &Path,
-    paths: &[PathBuf],
+    paths: &mut (dyn Iterator<Item = PathBuf> + Send),
     sink: &mut (dyn FnMut(Vec<JsonRow>) + Send),
 ) -> Result<(), String> {
-    if paths.is_empty() {
+    let Some(first) = paths.next() else {
         return Ok(());
-    }
+    };
     let placeholders = [Placeholder::path("root", &root.to_string_lossy())];
     let argv = command::build_argv(command, &placeholders).map_err(spawn_failure)?;
-    let args: Vec<String> = paths
-        .iter()
-        .map(|path| command::non_verbatim(&path.to_string_lossy()))
-        .collect();
-    let mut runs = chunks(&args, ARG_BUDGET.saturating_sub(argv_bytes(&argv)));
-    if runs.len() == 1 {
-        runs = spread_runs(&args, &file_sizes(paths), cpus);
-    }
-    if let [only] = runs.as_slice() {
-        let mut full = argv;
-        full.extend(only.iter().cloned());
-        return run_invocation(command, &full, cwd, &mut |rows| sink(rows));
-    }
-    let workers = cpus().min(runs.len());
+    let budget = ARG_BUDGET.saturating_sub(argv_bytes(&argv));
 
-    let next = AtomicUsize::new(0);
-    let aborted = AtomicBool::new(false);
-    let failures = Mutex::new(Vec::<(usize, String)>::new());
+    let (job_tx, job_rx) = std::sync::mpsc::channel::<Job>();
+    let (rows_tx, rows_rx) = std::sync::mpsc::sync_channel::<Vec<JsonRow>>(16);
+    let pool = Pool {
+        command,
+        argv: &argv,
+        cwd,
+        jobs: Mutex::new(job_rx),
+        aborted: AtomicBool::new(false),
+        failures: Mutex::new(Vec::new()),
+    };
     std::thread::scope(|scope| {
-        let (rows_tx, rows_rx) = std::sync::mpsc::sync_channel::<Vec<JsonRow>>(16);
-        for _ in 0..workers {
-            let rows_tx = rows_tx.clone();
-            let (argv, runs) = (&argv, &runs);
-            let (next, aborted, failures) = (&next, &aborted, &failures);
-            scope.spawn(move || {
-                loop {
-                    let index = next.fetch_add(1, Ordering::SeqCst);
-                    if index >= runs.len() || aborted.load(Ordering::SeqCst) {
-                        return;
-                    }
-                    let mut full = argv.clone();
-                    full.extend(runs[index].iter().cloned());
-                    let outcome = run_invocation(command, &full, cwd, &mut |rows| {
-                        let _ = rows_tx.send(rows);
-                    });
-                    if let Err(message) = outcome {
-                        aborted.store(true, Ordering::SeqCst);
-                        failures
-                            .lock()
-                            .expect("failures lock")
-                            .push((index, message));
-                    }
+        let pool = &pool;
+        scope.spawn(move || {
+            let mut dispatch = Dispatch {
+                scope,
+                pool,
+                jobs: job_tx,
+                rows: rows_tx,
+                tally: Tally {
+                    workers: 0,
+                    limit: cpus(),
+                    sent: 0,
+                },
+            };
+            let mut packer = Packer::new(budget);
+            let mut kept: Vec<PathBuf> = Vec::new();
+            for path in std::iter::once(first).chain(paths) {
+                if pool.aborted.load(Ordering::SeqCst) {
+                    return;
                 }
-            });
-        }
-        drop(rows_tx);
-        for rows in rows_rx {
-            sink(rows);
+                if let Some(full) = packer.push(command::non_verbatim(&path.to_string_lossy())) {
+                    dispatch.send(full);
+                }
+                if dispatch.tally.sent == 0 {
+                    kept.push(path);
+                }
+            }
+            let rest = packer.rest();
+            if dispatch.tally.sent == 0 {
+                for run in spread_runs(&rest, &file_sizes(&kept), cpus) {
+                    dispatch.send(run.to_vec());
+                }
+            } else {
+                dispatch.send(rest);
+            }
+        });
+        for chunk in rows_rx {
+            sink(chunk);
         }
     });
     // The earliest invocation's failure outranks a later one's.
-    match failures
+    match pool
+        .failures
         .into_inner()
         .expect("failures lock")
         .into_iter()
@@ -128,6 +184,46 @@ pub(crate) fn run_streaming(
     {
         Some((_, message)) => Err(message),
         None => Ok(()),
+    }
+}
+
+/// Hands argument lists to the invocations, starting a worker for each until
+/// every core has one.
+struct Dispatch<'scope, 'env> {
+    scope: &'scope std::thread::Scope<'scope, 'env>,
+    pool: &'scope Pool<'env>,
+    jobs: Sender<Job>,
+    rows: SyncSender<Vec<JsonRow>>,
+    tally: Tally,
+}
+
+/// Numbers the jobs and decides when another worker is wanted.
+struct Tally {
+    workers: usize,
+    limit: usize,
+    sent: usize,
+}
+
+impl Tally {
+    fn next(&mut self) -> (usize, bool) {
+        let index = self.sent;
+        self.sent += 1;
+        let spawn = self.workers < self.limit;
+        if spawn {
+            self.workers += 1;
+        }
+        (index, spawn)
+    }
+}
+
+impl Dispatch<'_, '_> {
+    fn send(&mut self, args: Vec<String>) {
+        let (index, spawn) = self.tally.next();
+        let _ = self.jobs.send(Job { index, args });
+        if spawn {
+            let (pool, rows) = (self.pool, self.rows.clone());
+            self.scope.spawn(move || pool.work(&rows));
+        }
     }
 }
 
@@ -186,26 +282,39 @@ fn argv_bytes(argv: &[String]) -> usize {
     argv.iter().map(|arg| arg_cost(arg)).sum()
 }
 
-/// Split `args` into the fewest consecutive runs whose bytes fit `budget`,
-/// preserving order. A single argument over the budget still gets a run of
-/// its own: the kernel, not this split, is the judge of what fits.
-fn chunks(args: &[String], budget: usize) -> Vec<&[String]> {
-    let mut out = Vec::new();
-    let mut start = 0;
-    let mut used = 0;
-    for (i, arg) in args.iter().enumerate() {
-        let cost = arg_cost(arg);
-        if i > start && used + cost > budget {
-            out.push(&args[start..i]);
-            start = i;
-            used = 0;
+/// Fills argument lists up to `budget` bytes, in order. A single argument over
+/// the budget still gets a list of its own: the kernel, not this split, is the
+/// judge of what fits.
+struct Packer {
+    budget: usize,
+    used: usize,
+    args: Vec<String>,
+}
+
+impl Packer {
+    fn new(budget: usize) -> Self {
+        Self {
+            budget,
+            used: 0,
+            args: Vec::new(),
         }
-        used += cost;
     }
-    if start < args.len() {
-        out.push(&args[start..]);
+
+    /// Add `arg`, returning the list it overflowed.
+    fn push(&mut self, arg: String) -> Option<Vec<String>> {
+        let cost = arg_cost(&arg);
+        let full = (!self.args.is_empty() && self.used + cost > self.budget).then(|| {
+            self.used = 0;
+            std::mem::take(&mut self.args)
+        });
+        self.used += cost;
+        self.args.push(arg);
+        full
     }
-    out
+
+    fn rest(self) -> Vec<String> {
+        self.args
+    }
 }
 
 /// Bytes of file data worth a process of its own: below this, spawning
@@ -267,14 +376,42 @@ fn spread<'a>(args: &'a [String], sizes: &[u64], parts: usize) -> Vec<&'a [Strin
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn tally_numbers_every_job_and_asks_for_a_worker_per_core_only() {
+        let mut tally = Tally {
+            workers: 0,
+            limit: 2,
+            sent: 0,
+        };
+        let steps: Vec<(usize, bool)> = (0..5).map(|_| tally.next()).collect();
+        assert_eq!(
+            steps,
+            vec![(0, true), (1, true), (2, false), (3, false), (4, false)]
+        );
+        assert_eq!(tally.sent, 5);
+    }
     use super::*;
 
     fn args(words: &[&str]) -> Vec<String> {
         words.iter().map(|w| w.to_string()).collect()
     }
 
-    fn lens(chunks: &[&[String]]) -> Vec<usize> {
-        chunks.iter().map(|chunk| chunk.len()).collect()
+    fn lens<T: AsRef<[String]>>(chunks: &[T]) -> Vec<usize> {
+        chunks.iter().map(|chunk| chunk.as_ref().len()).collect()
+    }
+
+    fn chunks(args: &[String], budget: usize) -> Vec<Vec<String>> {
+        let mut packer = Packer::new(budget);
+        let mut out: Vec<Vec<String>> = args
+            .iter()
+            .filter_map(|arg| packer.push(arg.clone()))
+            .collect();
+        let rest = packer.rest();
+        if !rest.is_empty() {
+            out.push(rest);
+        }
+        out
     }
 
     #[test]
@@ -294,8 +431,8 @@ mod tests {
         let args = args(&["aa", "bb", "cc", "dd"]);
         let split = chunks(&args, 2 * arg_cost("aa"));
         assert_eq!(lens(&split), vec![2, 2]);
-        assert_eq!(split[0], &args[..2]);
-        assert_eq!(split[1], &args[2..]);
+        assert_eq!(split[0], args[..2]);
+        assert_eq!(split[1], args[2..]);
     }
 
     #[test]
@@ -317,7 +454,7 @@ mod tests {
         let args = args(&["toolong", "a"]);
         let split = chunks(&args, arg_cost("a"));
         assert_eq!(lens(&split), vec![1, 1]);
-        assert_eq!(split[0], &args[..1]);
+        assert_eq!(split[0], args[..1]);
     }
 
     #[test]
