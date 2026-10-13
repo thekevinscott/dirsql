@@ -366,8 +366,9 @@ for await (const event of db.watch()) { ... }
 
 `dirsql server --frontend` is a shared Rust CLI option available through the
 Rust binary and the Python and TypeScript launchers. It serves the embedded
-SQL explorer shell at `/` on the API's origin and exposes its load diagnostic
-through `GET /frontend/state` (HTTP 503 when unavailable). The page needs no
+SQL explorer shell at `/` on the API's origin and exposes its load diagnostic,
+query root, and declared tables and columns through `GET /frontend/state`
+(HTTP 503 when unavailable). The page needs no
 runtime asset download; the option adds no SDK binding API. Without the flag,
 the existing HTTP routes are unchanged. Query controls and distribution
 validation are tracked in the subsequent frontend issues.

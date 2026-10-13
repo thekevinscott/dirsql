@@ -80,7 +80,7 @@ use std::time::Duration;
 use thiserror::Error;
 
 pub use crate::config::ExtensionSpec as Extension;
-pub use crate::db::{DbError, QueryResult, Value};
+pub use crate::db::{ColumnInfo, DbError, QueryResult, TableInfo, Value};
 pub use crate::differ::RowEvent;
 #[doc(hidden)]
 pub use crate::row_event_flat::{FlatRowEvent, flatten_row_event};
@@ -556,6 +556,18 @@ impl DirSQL {
     pub fn query_ordered(&self, sql: &str) -> Result<QueryResult> {
         let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
         db.query_ordered(sql).map_err(map_db_error)
+    }
+
+    /// The directory the index is rooted at: where path-tables resolve.
+    pub fn root(&self) -> &Path {
+        &self.inner.root
+    }
+
+    /// The tables a query can read by name, with their columns, straight from
+    /// SQLite's catalog: empty tables included, no file read or table scanned.
+    pub fn tables(&self) -> Result<Vec<TableInfo>> {
+        let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
+        db.user_tables().map_err(map_db_error)
     }
 
     /// [`query_ordered`](Self::query_ordered) folding each row's cells, in
@@ -4282,6 +4294,26 @@ mod internal_tests {
         let dbg = format!("{:?}", events[0]);
         assert!(dbg.contains("Error"), "got: {dbg}");
         assert!(dbg.contains("boom"), "got: {dbg}");
+    }
+
+    #[test]
+    fn tables_lists_declared_tables_and_root_reports_the_index_root() {
+        let dir = TempDir::new().unwrap();
+        let db = DirSQL::builder()
+            .root(dir.path())
+            .table(Table::new(
+                "b",
+                "CREATE TABLE b (y TEXT)",
+                "*.b",
+                |_| vec![],
+            ))
+            .build()
+            .unwrap();
+        let tables = db.tables().unwrap();
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].name, "b");
+        assert_eq!(tables[0].columns[0].name, "y");
+        assert_eq!(db.root(), dir.path());
     }
 
     #[test]

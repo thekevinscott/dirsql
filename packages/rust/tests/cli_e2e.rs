@@ -147,6 +147,23 @@ fn kill_and_wait(mut child: ServerGuard) {
     let _ = child.wait();
 }
 
+fn assert_state_without_root(client: &Client, base: &str, dir: &std::path::Path, expected: Value) {
+    let mut state = client
+        .get(format!("{base}/frontend/state"))
+        .send()
+        .unwrap()
+        .json::<Value>()
+        .unwrap();
+    let root = state.as_object_mut().unwrap().remove("root").unwrap();
+    assert_eq!(
+        std::path::Path::new(root.as_str().unwrap())
+            .canonicalize()
+            .unwrap(),
+        dir.canonicalize().unwrap()
+    );
+    assert_eq!(state, expected);
+}
+
 #[test]
 fn frontend_is_opt_in_and_serves_a_bundled_page() {
     let root = TempDir::new().unwrap();
@@ -180,14 +197,11 @@ fn frontend_is_opt_in_and_serves_a_bundled_page() {
             .starts_with("text/html")
     );
     assert!(page.text().unwrap().contains("dirsql SQL explorer"));
-    assert_eq!(
-        client
-            .get(format!("{base}/frontend/state"))
-            .send()
-            .unwrap()
-            .json::<Value>()
-            .unwrap(),
-        json!({"error": null})
+    assert_state_without_root(
+        &client,
+        &base,
+        root.path(),
+        json!({"error": null, "tables": []}),
     );
     assert_eq!(
         client
@@ -253,14 +267,16 @@ fn frontend_loads_with_an_explicit_valid_config() {
     let client = Client::new();
     let base = format!("http://localhost:{port}");
     assert_eq!(client.get(&base).send().unwrap().status(), StatusCode::OK);
-    assert_eq!(
-        client
-            .get(format!("{base}/frontend/state"))
-            .send()
-            .unwrap()
-            .json::<Value>()
-            .unwrap(),
-        json!({"error": null})
+    assert_state_without_root(
+        &client,
+        &base,
+        root.path(),
+        json!({"error": null, "tables": [
+            {"name": "posts", "columns": [
+                {"name": "basename", "type": "TEXT"},
+                {"name": "size", "type": "INTEGER"}
+            ]}
+        ]}),
     );
     assert_eq!(
         client

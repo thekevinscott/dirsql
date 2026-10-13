@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/cli_version_test.py tests/e2e/query_contract_test.py tests/e2e/declared_table_name_test.py tests/e2e/on_file_query_test.py -x -q",
+  "ran_at": 1791764712,
+  "exit_code": 0,
+  "commit": "ae61a26f7b9018c3e12aebeea7c6a3cf32ef4d87",
+  "branch": "bot/1488-frontend-metadata-1011"
+}

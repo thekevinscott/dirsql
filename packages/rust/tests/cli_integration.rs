@@ -634,3 +634,153 @@ async fn cors_preflight_for_a_json_query_is_allowed() {
     );
     handle.shutdown().await.unwrap();
 }
+
+async fn frontend_state(db: DirSQL) -> (ServerHandle, JsonValue) {
+    let handle = serve(ServerConfig::ephemeral().with_frontend(), db)
+        .await
+        .unwrap();
+    let resp = reqwest::get(format!("{}/frontend/state", base_url(&handle)))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.json().await.unwrap();
+    (handle, body)
+}
+
+fn assert_same_dir(reported: &JsonValue, dir: &std::path::Path) {
+    assert_eq!(
+        std::path::Path::new(reported.as_str().unwrap())
+            .canonicalize()
+            .unwrap(),
+        dir.canonicalize().unwrap()
+    );
+}
+
+fn db_from_config(config: &str) -> (TempDir, DirSQL) {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join(".dirsql.toml"), config).unwrap();
+    let db = DirSQL::builder()
+        .root(root.path())
+        .config(root.path().join(".dirsql.toml"))
+        .build()
+        .unwrap();
+    (root, db)
+}
+
+#[tokio::test]
+async fn frontend_state_reports_the_query_root_and_declared_columns() {
+    let (root, db) = blog_fixture();
+    let (handle, body) = frontend_state(db).await;
+
+    assert_eq!(body["error"], JsonValue::Null);
+    assert_same_dir(&body["root"], root.path());
+    assert_eq!(
+        body["tables"],
+        json!([{"name": "posts", "columns": [
+            {"name": "basename", "type": "TEXT"},
+            {"name": "size", "type": "INTEGER"},
+        ]}])
+    );
+    handle.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn frontend_state_lists_empty_and_unusually_named_tables_in_name_order() {
+    let (_root, db) = db_from_config(
+        r#"
+[[table]]
+name = "order"
+ddl = 'CREATE TABLE "order" ("select" TEXT, "two words" REAL)'
+glob = "nothing/*.json"
+on-file = "true"
+
+[[table]]
+name = "_Mixed9"
+ddl = "CREATE TABLE _Mixed9 (a)"
+glob = "nothing/*.csv"
+on-file = "true"
+"#,
+    );
+    let (handle, body) = frontend_state(db).await;
+
+    assert_eq!(
+        body["tables"],
+        json!([
+            {"name": "_Mixed9", "columns": [{"name": "a", "type": ""}]},
+            {"name": "order", "columns": [
+                {"name": "select", "type": "TEXT"},
+                {"name": "two words", "type": "REAL"},
+            ]},
+        ])
+    );
+    handle.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn frontend_state_excludes_bookkeeping_shadow_and_path_tables() {
+    let (root, db) = db_from_config(
+        r#"
+[[table]]
+name = "notes"
+ddl = """
+CREATE TABLE notes (body TEXT);
+CREATE VIRTUAL TABLE notes_fts USING fts5(body, content='notes', content_rowid='rowid');
+"""
+glob = "nothing/*.json"
+on-file = "true"
+"#,
+    );
+    fs::write(root.path().join("a.txt"), "a").unwrap();
+    db.query("SELECT path FROM './'").unwrap();
+    let (handle, body) = frontend_state(db).await;
+
+    assert_eq!(
+        body["tables"],
+        json!([{"name": "notes", "columns": [{"name": "body", "type": "TEXT"}]}])
+    );
+    handle.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn frontend_state_has_no_tables_without_a_config() {
+    let root = TempDir::new().unwrap();
+    let db = DirSQL::builder().root(root.path()).build().unwrap();
+    let (handle, body) = frontend_state(db).await;
+
+    assert_eq!(body["tables"], json!([]));
+    assert_same_dir(&body["root"], root.path());
+    handle.shutdown().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn frontend_state_has_no_tables_for_a_functions_only_config() {
+    let (_root, db) = db_from_config(
+        r#"
+[[dirsql.function]]
+name = "up"
+args = [1]
+command = "python3 worker.py"
+"#,
+    );
+    let (handle, body) = frontend_state(db).await;
+
+    assert_eq!(body["tables"], json!([]));
+    handle.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn frontend_state_leaves_query_responses_unchanged() {
+    let (_root, db) = blog_fixture();
+    let (handle, _) = frontend_state(db).await;
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/query", base_url(&handle)))
+        .json(&json!({"sql": "SELECT basename FROM posts WHERE size = 0 AND 0"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.json::<JsonValue>().await.unwrap(), json!([]));
+    handle.shutdown().await.unwrap();
+}
