@@ -94,6 +94,11 @@ fn write_cell(out: &mut Vec<u8>, value: &CellValue) {
     written.expect("writing JSON to memory cannot fail");
 }
 
+#[allow(dead_code)]
+fn is_plain(_bytes: &[u8]) -> bool {
+    false
+}
+
 pub(super) fn row_to_json(row: &Row) -> Value {
     let mut map = Map::with_capacity(row.len());
     for (k, v) in row {
@@ -243,6 +248,28 @@ mod tests {
             ])],
         };
         assert_eq!(streamed(&result), rendered(&result));
+    }
+
+    #[test]
+    fn printable_ascii_is_plain() {
+        assert!(is_plain(b""));
+        assert!(is_plain(b" docs/a-b_c~.md"));
+        assert!(is_plain(b"\x7f"));
+    }
+
+    #[test]
+    fn text_json_must_escape_or_validate_is_not_plain() {
+        for text in [
+            &b"a\x00"[..],
+            b"\x1f",
+            b"\"",
+            b"a\\b",
+            b"\x80",
+            b"\xff",
+            b"caf\xc3\xa9",
+        ] {
+            assert!(!is_plain(text), "{text:?}");
+        }
     }
 
     #[test]
