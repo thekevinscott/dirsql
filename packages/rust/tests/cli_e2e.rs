@@ -215,6 +215,50 @@ fn frontend_is_opt_in_and_serves_a_bundled_page() {
 }
 
 #[test]
+fn frontend_page_has_query_controls_and_serves_its_script() {
+    let root = TempDir::new().unwrap();
+    let port = free_port();
+    let server = spawn_dirsql(root.path(), port);
+    wait_until_ready(port, Duration::from_secs(5));
+    let client = Client::new();
+    let base = format!("http://localhost:{port}");
+    assert_eq!(
+        client
+            .get(format!("{base}/frontend.js"))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    kill_and_wait(server);
+
+    let server = spawn_dirsql_with_args(root.path(), port, &["--frontend"]);
+    wait_until_ready(port, Duration::from_secs(5));
+    let page = client.get(&base).send().unwrap().text().unwrap();
+    assert!(page.contains("<textarea"), "{page}");
+    assert!(page.contains("LIMIT 100"), "{page}");
+    assert!(page.contains("Run"), "{page}");
+    let script = client.get(format!("{base}/frontend.js")).send().unwrap();
+    assert_eq!(script.status(), StatusCode::OK);
+    assert!(
+        script.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/javascript")
+    );
+    assert!(script.text().unwrap().contains("createQueryRunner"));
+
+    let write = client
+        .post(format!("{base}/query"))
+        .body("CREATE TABLE t (a)")
+        .send()
+        .unwrap();
+    assert_eq!(write.status(), StatusCode::BAD_REQUEST);
+    assert!(write.json::<Value>().unwrap()["error"].is_string());
+    kill_and_wait(server);
+}
+
+#[test]
 fn frontend_still_loads_and_reports_an_invalid_config() {
     let root = TempDir::new().unwrap();
     let port = free_port();

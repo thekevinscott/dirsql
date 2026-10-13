@@ -47,9 +47,18 @@ pub(super) fn router(ctx: SharedCtx, frontend: bool) -> Router {
     if frontend {
         app = app
             .route("/", get(|| async { Html(include_str!("frontend.html")) }))
+            .route("/frontend.js", get(handle_frontend_script))
             .route("/frontend/state", get(handle_frontend_state));
     }
     app.with_state(ctx)
+}
+
+async fn handle_frontend_script() -> Response {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        include_str!("frontend.js"),
+    )
+        .into_response()
 }
 
 async fn handle_frontend_state(State(ctx): State<SharedCtx>) -> Response {
@@ -233,6 +242,16 @@ mod tests {
         assert!(router(ctx.clone(), true).has_routes());
         let resp = handle_frontend_state(State(ctx)).await;
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn frontend_script_is_served_as_javascript() {
+        let resp = handle_frontend_script().await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()[header::CONTENT_TYPE],
+            "text/javascript; charset=utf-8"
+        );
     }
 
     #[test]

@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/cli_version_test.py tests/e2e/query_contract_test.py tests/e2e/fanout_test.py tests/e2e/extension_package_test.py tests/e2e/server_speed_test.py -x -q",
+  "ran_at": 1791765336,
+  "exit_code": 0,
+  "commit": "a2b5671787b3cfa038a128d5cbbeac13e6c268a9",
+  "branch": "bot/1487-frontend-query-1011"
+}
