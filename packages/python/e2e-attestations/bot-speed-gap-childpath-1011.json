@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_depth_bound_test.py tests/e2e/glob_speed_one_level_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_symlink_test.py tests/e2e/glob_speed_matchers_test.py tests/e2e/glob_speed_dotfiles_test.py tests/e2e/glob_speed_gitignore_test.py -x -q",
+  "ran_at": 1791777891,
+  "exit_code": 0,
+  "commit": "fb7068d3883fd35c014146a174f4f342aaf93dab",
+  "branch": "bot/speed-gap-childpath-1011"
+}
