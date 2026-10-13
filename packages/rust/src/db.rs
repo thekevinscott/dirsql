@@ -1202,10 +1202,9 @@ impl Db {
         let mut rows = stmt.query([])?;
         let mut cells = Vec::with_capacity(column_names.len());
         while let Some(row) = rows.next()? {
-            cells.clear();
-            for i in 0..column_names.len() {
-                let val: rusqlite::types::Value = row.get(i)?;
-                cells.push(Value::from(val));
+            cells.resize(column_names.len(), Value::Null);
+            for (i, cell) in cells.iter_mut().enumerate() {
+                fill_cell(cell, row.get_ref(i)?);
             }
             on_row(&mut state, &cells);
         }
@@ -1479,6 +1478,17 @@ pub(crate) fn table_catalog_entry(
     .optional()
 }
 
+/// Set `cell` to what SQLite holds in `source`.
+fn fill_cell(cell: &mut Value, source: ValueRef<'_>) {
+    match (&mut *cell, source) {
+        (Value::Text(held), ValueRef::Text(bytes)) => {
+            held.clear();
+            held.push_str(&String::from_utf8_lossy(bytes));
+        }
+        _ => *cell = Value::from(rusqlite::types::Value::from(source)),
+    }
+}
+
 impl From<rusqlite::types::Value> for Value {
     fn from(v: rusqlite::types::Value) -> Self {
         match v {
@@ -1622,6 +1632,39 @@ mod tests {
             |(_, rows), cells| rows.push(cells.to_vec()),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn filling_a_text_cell_with_text_reuses_its_buffer() {
+        let mut cell = Value::Text(String::with_capacity(64));
+        let Value::Text(held) = &cell else {
+            unreachable!()
+        };
+        let buffer = held.as_ptr();
+
+        fill_cell(&mut cell, ValueRef::Text(b"a.md"));
+
+        let Value::Text(filled) = &cell else {
+            panic!("a text source fills a text cell, got {cell:?}")
+        };
+        assert_eq!(filled, "a.md");
+        assert_eq!(filled.as_ptr(), buffer);
+    }
+
+    #[test]
+    fn filling_a_cell_takes_each_kind_of_source() {
+        let mut cell = Value::Text("old".into());
+
+        fill_cell(&mut cell, ValueRef::Integer(7));
+        assert_eq!(cell, Value::Integer(7));
+        fill_cell(&mut cell, ValueRef::Real(0.5));
+        assert_eq!(cell, Value::Real(0.5));
+        fill_cell(&mut cell, ValueRef::Blob(&[0, 255]));
+        assert_eq!(cell, Value::Blob(vec![0, 255]));
+        fill_cell(&mut cell, ValueRef::Text(b"t"));
+        assert_eq!(cell, Value::Text("t".into()));
+        fill_cell(&mut cell, ValueRef::Null);
+        assert_eq!(cell, Value::Null);
     }
 
     #[test]

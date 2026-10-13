@@ -1,0 +1,1 @@
+**Changed** Path queries over large trees return sooner: a matched file's path is no longer copied into its row, query cells reuse their buffers, and a large result's rows are freed in the background.

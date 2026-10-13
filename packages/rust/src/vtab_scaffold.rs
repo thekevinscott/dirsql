@@ -42,6 +42,11 @@ const PREFETCH_LOOKUP_COST: f64 = 100.;
 /// `idxNum` for a full scan; a lookup carries its column as `column + 1`.
 const SCAN_IDX: c_int = 0;
 
+/// Rows a statement's row set holds before its eviction frees them on a
+/// thread of their own: below it, spawning costs more than the freeing, and
+/// above it the statement need not wait on the freeing.
+const FREE_ELSEWHERE_ROWS: usize = 4096;
+
 /// Set in `idxNum` when the statement names the prefetch column; the low bits
 /// still name the lookup.
 const PREFETCH_IDX: c_int = 1 << 30;
@@ -217,7 +222,12 @@ impl<S: TableSource> RowCache<S> {
 
 impl<S: TableSource> Held for RowCache<S> {
     fn evict(&self) {
-        *self.slot.lock().unwrap() = Slot::Empty;
+        let evicted = std::mem::replace(&mut *self.slot.lock().unwrap(), Slot::Empty);
+        if let Slot::Ready(rows) = evicted
+            && rows.len() >= FREE_ELSEWHERE_ROWS
+        {
+            let _ = thread::Builder::new().spawn(move || drop(rows));
+        }
     }
 
     fn warm(&self) {
@@ -993,6 +1003,54 @@ mod tests {
 
         fn column(&self, _row: &usize, _ctx: &mut Context, _i: c_int) -> Result<()> {
             unreachable!()
+        }
+    }
+
+    /// A row that reports the thread it is freed on.
+    struct Noted(std::sync::mpsc::Sender<thread::ThreadId>);
+
+    impl Drop for Noted {
+        fn drop(&mut self) {
+            let _ = self.0.send(thread::current().id());
+        }
+    }
+
+    struct Many {
+        freed_on: Mutex<std::sync::mpsc::Sender<thread::ThreadId>>,
+    }
+
+    impl TableSource for Many {
+        type Row = Noted;
+        const NAME: &'static str = "many";
+
+        fn connect(_args: &[&[u8]]) -> Result<(String, Self)> {
+            unreachable!()
+        }
+
+        fn rows(&self) -> Arc<Vec<Noted>> {
+            let freed_on = self.freed_on.lock().unwrap();
+            Arc::new((0..10_000).map(|_| Noted(freed_on.clone())).collect())
+        }
+
+        fn column(&self, _row: &Noted, _ctx: &mut Context, _i: c_int) -> Result<()> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn a_large_evicted_row_set_is_freed_off_the_evicting_thread() {
+        let (freed_on, freed) = std::sync::mpsc::channel();
+        let cache = RowCache::new(Arc::new(Many {
+            freed_on: Mutex::new(freed_on),
+        }));
+        drop(cache.rows());
+
+        cache.evict();
+
+        let here = thread::current().id();
+        let timeout = std::time::Duration::from_secs(10);
+        for _ in 0..10_000 {
+            assert_ne!(freed.recv_timeout(timeout).unwrap(), here);
         }
     }
 
