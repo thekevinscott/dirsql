@@ -1180,16 +1180,34 @@ impl Db {
         start: impl FnOnce(&[String]) -> S,
         mut on_row: impl FnMut(&mut S, &[Value]),
     ) -> Result<S> {
+        let mut cells = Vec::new();
+        self.query_each_ref(sql, start, |state, sources| {
+            cells.resize(sources.len(), Value::Null);
+            for (cell, source) in cells.iter_mut().zip(sources) {
+                fill_cell(cell, *source);
+            }
+            on_row(state, &cells);
+        })
+    }
+
+    /// [`query_each`](Self::query_each) handing each row's cells as SQLite
+    /// holds them, valid until the callback returns.
+    pub(crate) fn query_each_ref<S>(
+        &self,
+        sql: &str,
+        start: impl FnOnce(&[String]) -> S,
+        mut on_row: impl FnMut(&mut S, &[ValueRef<'_>]),
+    ) -> Result<S> {
         if !self.batched.is_empty() {
             // A batched worker may force a second run, so the rows of the
             // first are not final until it ends.
             let result = self.query_ordered(sql)?;
             let mut state = start(&result.columns);
             for row in &result.rows {
-                let cells: Vec<Value> = result
+                let cells: Vec<ValueRef<'_>> = result
                     .columns
                     .iter()
-                    .map(|column| row.get(column).cloned().unwrap_or(Value::Null))
+                    .map(|column| row.get(column).map_or(ValueRef::Null, value_ref))
                     .collect();
                 on_row(&mut state, &cells);
             }
@@ -1200,25 +1218,16 @@ impl Db {
         let (mut stmt, column_names) = self.prepare_statement(sql)?;
         let mut state = start(&column_names);
         let mut rows = stmt.query([])?;
-        let mut cells = Vec::with_capacity(column_names.len());
+        let mut spare: Vec<ValueRef<'_>> = Vec::with_capacity(column_names.len());
         while let Some(row) = rows.next()? {
-            cells.resize(column_names.len(), Value::Null);
-            for (i, cell) in cells.iter_mut().enumerate() {
-                fill_cell(cell, row.get_ref(i)?);
+            let mut cells = recycled(spare);
+            for i in 0..column_names.len() {
+                cells.push(row.get_ref(i)?);
             }
             on_row(&mut state, &cells);
+            spare = recycled(cells);
         }
         Ok(state)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn query_each_ref<S>(
-        &self,
-        _sql: &str,
-        start: impl FnOnce(&[String]) -> S,
-        _on_row: impl FnMut(&mut S, &[ValueRef<'_>]),
-    ) -> Result<S> {
-        Ok(start(&[]))
     }
 
     /// Prepare and run one read-only statement, registering the path-tables
@@ -1495,18 +1504,27 @@ fn fill_cell(cell: &mut Value, source: ValueRef<'_>) {
             held.clear();
             held.push_str(&String::from_utf8_lossy(bytes));
         }
+        (_, ValueRef::Text(bytes)) => {
+            *cell = Value::Text(String::from_utf8_lossy(bytes).into_owned())
+        }
         _ => *cell = Value::from(rusqlite::types::Value::from(source)),
     }
 }
 
-#[allow(dead_code)]
-fn value_ref(_value: &Value) -> ValueRef<'_> {
-    ValueRef::Null
+fn value_ref(value: &Value) -> ValueRef<'_> {
+    match value {
+        Value::Null => ValueRef::Null,
+        Value::Integer(i) => ValueRef::Integer(*i),
+        Value::Real(f) => ValueRef::Real(*f),
+        Value::Text(s) => ValueRef::Text(s.as_bytes()),
+        Value::Blob(b) => ValueRef::Blob(b),
+    }
 }
 
-#[allow(dead_code)]
-fn recycled<'a>(_cells: Vec<ValueRef<'_>>) -> Vec<ValueRef<'a>> {
-    Vec::new()
+/// `cells` emptied and free to borrow anew, keeping its allocation.
+fn recycled<'a>(mut cells: Vec<ValueRef<'_>>) -> Vec<ValueRef<'a>> {
+    cells.clear();
+    cells.into_iter().map(|_| ValueRef::Null).collect()
 }
 
 impl From<rusqlite::types::Value> for Value {
