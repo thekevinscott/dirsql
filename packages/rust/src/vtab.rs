@@ -1,6 +1,7 @@
 use std::ffi::c_int;
 use std::fs::{self, File};
 use std::io::{self, Read};
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -12,7 +13,7 @@ use rusqlite::vtab::Context;
 use rusqlite::{Connection, Result};
 
 use crate::matcher::TableMatcher;
-use crate::scanner::{PathGlob, scan_glob_checking_root, to_slash};
+use crate::scanner::{PathGlob, scan_glob_rows, to_slash};
 use crate::vtab_scaffold::{self, TableSource};
 
 pub use crate::vtab_scaffold::StatementScope;
@@ -190,9 +191,9 @@ struct ScanSpec {
 /// so a row costs two allocations however many columns a query reads.
 struct FileRow {
     /// The path as scanned, root-relative, when `path` is not already it.
-    rel: Option<PathBuf>,
+    rel: Option<Box<Path>>,
     /// The path as reported, under the table's prefix when it has one.
-    path: String,
+    path: Box<str>,
     spans: PathSpans,
     /// Stat'ed at most once per statement, and only when the statement reads
     /// a stat column or the content.
@@ -209,9 +210,10 @@ impl FileRow {
             Ok(path) => (None, path),
             Err(rel) => {
                 let path = reported_path(path_prefix, &rel);
-                (Some(rel), path)
+                (Some(rel.into_boxed_path()), path)
             }
         };
+        let path = path.into_boxed_str();
         let spans = PathSpans::of(&path);
         Self {
             rel,
@@ -224,19 +226,21 @@ impl FileRow {
 
     /// The path as scanned, root-relative; where the lazy content read goes.
     fn rel(&self) -> &Path {
-        self.rel.as_deref().unwrap_or_else(|| Path::new(&self.path))
+        self.rel
+            .as_deref()
+            .unwrap_or_else(|| Path::new(&*self.path))
     }
 
     fn basename(&self) -> Option<&str> {
-        self.spans.name_at.map(|at| &self.path[at as usize..])
+        self.spans.name_at.map(|at| &self.path[span_end(at)..])
     }
 
     fn dir(&self) -> Option<&str> {
-        self.spans.dir_len.map(|len| &self.path[..len as usize])
+        self.spans.dir_len.map(|len| &self.path[..span_end(len)])
     }
 
     fn ext(&self) -> Option<&str> {
-        self.spans.ext_at.map(|at| &self.path[at as usize..])
+        self.spans.ext_at.map(|at| &self.path[span_end(at)..])
     }
 }
 
@@ -244,18 +248,29 @@ impl FileRow {
 /// where [`Path`] has no answer: no basename or dir for an empty path, no ext
 /// for a dotfile or an extensionless name. [`Path::parent`] is a prefix of
 /// the path and [`Path::file_name`] and [`Path::extension`] are suffixes, so
-/// one length each locates them.
+/// one length each locates them. Each is held one past its offset, so an
+/// absent span costs no more room than a present one.
 #[derive(Debug, PartialEq, Eq)]
 struct PathSpans {
-    name_at: Option<u32>,
-    dir_len: Option<u32>,
-    ext_at: Option<u32>,
+    name_at: Option<NonZeroU32>,
+    dir_len: Option<NonZeroU32>,
+    ext_at: Option<NonZeroU32>,
+}
+
+/// The offset a [`PathSpans`] span holds one past.
+fn span_end(span: NonZeroU32) -> usize {
+    (span.get() - 1) as usize
 }
 
 impl PathSpans {
     fn of(path: &str) -> Self {
         let p = Path::new(path);
-        let span = |at: usize| u32::try_from(at).ok();
+        let span = |at: usize| {
+            u32::try_from(at)
+                .ok()?
+                .checked_add(1)
+                .and_then(NonZeroU32::new)
+        };
         let suffix_at = |s: &std::ffi::OsStr| span(path.len() - s.len());
         Self {
             name_at: p.file_name().and_then(suffix_at),
@@ -289,41 +304,6 @@ fn epoch_secs(time: Option<SystemTime>) -> Option<i64> {
     i64::try_from(since.as_secs()).ok()
 }
 
-/// The rows for the files a scan found, in scan order, unstat'ed. Built
-/// across every core, since a large scan's paths each need splitting.
-fn build_rows(path_prefix: &Path, rel_paths: Vec<PathBuf>) -> Vec<FileRow> {
-    let workers = thread::available_parallelism().map_or(1, usize::from);
-    let per_worker = rel_paths.len().div_ceil(workers).max(1);
-    let row = |rel: PathBuf| FileRow::new(path_prefix, rel);
-    thread::scope(|scope| {
-        let handles: Vec<_> = chunks(rel_paths, per_worker)
-            .into_iter()
-            .map(|chunk| scope.spawn(move || chunk.into_iter().map(row).collect::<Vec<_>>()))
-            .collect();
-        handles
-            .into_iter()
-            .flat_map(|handle| handle.join().expect("a row builder only builds rows"))
-            .collect()
-    })
-}
-
-/// `items` cut into runs of `size` in order, the last run holding whatever
-/// remains; one (possibly empty) run when there is less than a full one.
-fn chunks<T>(items: Vec<T>, size: usize) -> Vec<Vec<T>> {
-    let size = size.max(1);
-    let mut runs = Vec::with_capacity(items.len().div_ceil(size));
-    let mut rest = items;
-    // Cut from the back so each item moves once; cutting from the front
-    // would move the whole remainder on every cut.
-    while rest.len() > size {
-        let start = (rest.len() - 1) / size * size;
-        runs.push(rest.split_off(start));
-    }
-    runs.push(rest);
-    runs.reverse();
-    runs
-}
-
 fn integer(n: Option<i64>) -> ValueRef<'static> {
     n.map_or(ValueRef::Null, ValueRef::Integer)
 }
@@ -336,7 +316,7 @@ fn cell<'r>(
     facts: &dyn Fn(&FileRow) -> StatFacts,
 ) -> Option<ValueRef<'r>> {
     Some(match usize::try_from(i).unwrap_or(usize::MAX) {
-        PATH_COLUMN => ValueRef::from(row.path.as_str()),
+        PATH_COLUMN => ValueRef::from(&*row.path),
         BASENAME_COLUMN => ValueRef::from(row.basename()),
         DIR_COLUMN => ValueRef::from(row.dir()),
         EXT_COLUMN => ValueRef::from(row.ext()),
@@ -440,14 +420,14 @@ impl TableSource for ScanSpec {
     fn rows(&self) -> Arc<Vec<FileRow>> {
         // The scan runs per statement rather than at CREATE, which is what
         // makes reads live: each statement sees the filesystem as it is now.
-        let rel_paths = scan_glob_checking_root(
+        let rows = Arc::new(scan_glob_rows(
             &self.root,
             &self.glob,
             &self.ignore,
             self.gitignore,
             self.check_root,
-        );
-        let rows = Arc::new(build_rows(&self.path_prefix, rel_paths));
+            &|rel| FileRow::new(&self.path_prefix, rel),
+        ));
         if let Ok(mut current) = self.current.lock() {
             *current = Arc::downgrade(&rows);
         }
@@ -836,57 +816,17 @@ mod tests {
     }
 
     #[test]
-    fn chunks_cut_in_order_with_the_remainder_last() {
-        assert_eq!(
-            chunks(vec![1, 2, 3, 4, 5], 2),
-            vec![vec![1, 2], vec![3, 4], vec![5]]
-        );
+    fn a_row_reports_its_path_under_the_prefix_and_reads_from_the_scanned_one() {
+        let row = FileRow::new(Path::new("/root"), PathBuf::from("f001.md"));
+        assert_eq!(&*row.path, "/root/f001.md");
+        assert_eq!(row.rel(), Path::new("f001.md"));
     }
 
     #[test]
-    fn an_exact_multiple_cuts_into_full_runs() {
-        assert_eq!(
-            chunks(vec![1, 2, 3, 4, 5, 6], 3),
-            vec![vec![1, 2, 3], vec![4, 5, 6]]
-        );
-    }
-
-    #[test]
-    fn a_full_run_is_one_chunk() {
-        assert_eq!(chunks(vec![1, 2, 3], 3), vec![vec![1, 2, 3]]);
-    }
-
-    #[test]
-    fn nothing_is_one_empty_chunk() {
-        assert_eq!(chunks(Vec::<u8>::new(), 4), vec![Vec::<u8>::new()]);
-    }
-
-    #[test]
-    fn build_rows_keeps_scan_order() {
-        let rel_paths: Vec<PathBuf> = (0..100)
-            .map(|n| PathBuf::from(format!("f{n:03}.md")))
-            .collect();
-        let rows = build_rows(Path::new("/root"), rel_paths);
-        assert_eq!(rows.len(), 100);
-        for (n, row) in rows.iter().enumerate() {
-            assert_eq!(row.path, format!("/root/f{n:03}.md"));
-            assert_eq!(row.rel(), Path::new(&format!("f{n:03}.md")));
-        }
-    }
-
-    #[test]
-    fn build_rows_stats_no_file() {
-        let rows = build_rows(
-            Path::new(""),
-            vec![PathBuf::from("a.md"), PathBuf::from("b.md")],
-        );
-        assert!(rows.iter().all(|row| row.facts.get().is_none()));
-    }
-
-    #[test]
-    fn build_rows_yields_nothing_for_an_empty_scan() {
-        let rows = build_rows(Path::new(""), Vec::new());
-        assert!(rows.is_empty());
+    fn a_new_row_is_unstatted_and_unread() {
+        let row = FileRow::new(Path::new(""), PathBuf::from("a.md"));
+        assert!(row.facts.get().is_none());
+        assert!(row.content.get().is_none());
     }
 
     #[test]
@@ -1043,7 +983,7 @@ mod tests {
             .unwrap();
         let reads = std::sync::Mutex::new(Vec::new());
         let read = |row: &FileRow| {
-            reads.lock().unwrap().push(row.path.clone());
+            reads.lock().unwrap().push(row.path.to_string());
             Some(format!("body of {}", row.path))
         };
 
@@ -1087,7 +1027,7 @@ mod tests {
     #[test]
     fn a_nested_path_splits_into_dir_basename_and_ext() {
         let row = row_for("", "nested/sub.txt");
-        assert_eq!(row.path, "nested/sub.txt");
+        assert_eq!(&*row.path, "nested/sub.txt");
         assert_eq!(row.dir(), Some("nested"));
         assert_eq!(row.basename(), Some("sub.txt"));
         assert_eq!(row.ext(), Some("txt"));
@@ -1103,7 +1043,7 @@ mod tests {
     #[test]
     fn an_absolute_row_reports_its_prefix_in_path_and_dir() {
         let row = row_for("/var/log", "a.log");
-        assert_eq!(row.path, "/var/log/a.log");
+        assert_eq!(&*row.path, "/var/log/a.log");
         assert_eq!(row.dir(), Some("/var/log"));
         assert_eq!(row.basename(), Some("a.log"));
         assert_eq!(
@@ -1184,7 +1124,7 @@ mod tests {
     #[test]
     fn a_row_not_yet_stat_or_read_stays_compact() {
         let size = std::mem::size_of::<FileRow>();
-        assert!(size <= 112, "a FileRow is {size} bytes");
+        assert!(size <= 80, "a FileRow is {size} bytes");
     }
     #[test]
     fn a_content_column_reads_the_file_through_the_module() {
