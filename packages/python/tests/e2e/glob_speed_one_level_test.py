@@ -1,4 +1,4 @@
-"""Glob speed: one-level listings, `'./*'`.
+"""Glob speed: one-level listings, `'./*'`, `'./'` and `'./docs'`.
 
 A wide flat root and a wide flat `docs/`, each beside subdirectories full of
 files that a one-level listing must not read, plus dotfiles it must hide.
@@ -15,6 +15,7 @@ import shutil
 import pytest
 
 from .speed_of_light import (
+    FASTEST,
     Native,
     agreed_rows,
     assert_speed_of_light,
@@ -42,6 +43,20 @@ ROOT_NATIVE = [
         "bash-glob",
         ("bash",),
         '{bin} -c \'for f in *; do if [ -f "$f" ]; then printf "%s\\n" "$f"; fi; done\'',
+    ),
+]
+DOCS_NATIVE = [
+    Native(
+        "find",
+        ("find",),
+        "{bin} docs -mindepth 1 -maxdepth 1 -type f ! -name '.*'",
+    ),
+    fd("--max-depth 1 . docs"),
+    rg("--max-depth 1 docs"),
+    Native(
+        "bash-glob",
+        ("bash",),
+        '{bin} -c \'for f in docs/*; do if [ -f "$f" ]; then printf "%s\\n" "$f"; fi; done\'',
     ),
 ]
 FILES_PER_SUBDIR = 1000
@@ -76,10 +91,14 @@ def describe_one_level_glob_speed_of_light():
             shutil.rmtree(root, ignore_errors=True)
 
     @pytest.mark.parametrize(
-        ("glob", "specs"),
-        [("./*", ROOT_NATIVE)],
+        ("glob", "specs", "bar"),
+        [
+            ("./*", ROOT_NATIVE, ""),
+            ("./", ROOT_NATIVE, FASTEST),
+            ("./docs", DOCS_NATIVE, FASTEST),
+        ],
     )
-    def it_matches_native_files_within_the_bar(tree, glob, specs):
+    def it_matches_native_files_within_the_bar(tree, glob, specs, bar):
         root, n, startup = tree
 
         def dirsql(timeout):
@@ -90,7 +109,7 @@ def describe_one_level_glob_speed_of_light():
             )
             return sorted(row for (row,) in dirsql_rows(proc, ("path",))), seconds
 
-        result = paired(shell_natives(root, specs), dirsql, startup)
+        result = paired(shell_natives(root, specs, bar=bar), dirsql, startup)
         expected, actual = agreed_rows(result), result.dirsql_rows
         assert len(expected) == n - len(range(0, n, 50))
 
