@@ -44,6 +44,35 @@ def _ok_sequence():
     ]
 
 
+@pytest.fixture(autouse=True)
+def probe_frontend():
+    with mock.patch("distcheck.python_flow.gate.probe_frontend", create=True) as patched:
+        yield patched
+
+
+def test_run_probes_the_installed_frontend(probe_frontend):
+    run("/pkg", "/repo", runner=mock.Mock(side_effect=_ok_sequence()), fs=_fs())
+
+    probe_frontend.assert_called_once_with("/stg/venv/bin/dirsql", "/repo")
+
+
+def test_run_frontend_failure_still_cleans_up(probe_frontend):
+    fs = _fs()
+    probe_frontend.side_effect = DistcheckError("frontend broke")
+    with pytest.raises(DistcheckError, match="frontend broke"):
+        run("/pkg", "/repo", runner=mock.Mock(side_effect=_ok_sequence()), fs=fs)
+    fs.rmtree.assert_called_once_with("/stg")
+
+
+def test_run_skips_the_frontend_when_the_import_fails(probe_frontend):
+    runner = mock.Mock(
+        side_effect=[_res(), _res(), _res(), _res(stdout="dirsql 1.0"), _res(rc=1)]
+    )
+    with pytest.raises(DistcheckError):
+        run("/pkg", "/repo", runner=runner, fs=_fs())
+    probe_frontend.assert_not_called()
+
+
 def test_bin_subdir_is_scripts_on_windows_else_bin():
     assert bin_subdir("nt") == "Scripts"
     assert bin_subdir("posix") == "bin"
