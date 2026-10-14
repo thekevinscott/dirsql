@@ -79,7 +79,8 @@ export default defineConfig({
             { text: 'Path-tables', link: '/reference/path-tables' },
             { text: 'Globs', link: '/reference/glob' },
             { text: 'HTTP API', link: '/reference/http-api' },
-            { text: 'SDK', link: '/reference/sdk' }
+            { text: 'SDK', link: '/reference/sdk' },
+            { text: 'Speed', link: '/speed' }
           ]
         },
         {

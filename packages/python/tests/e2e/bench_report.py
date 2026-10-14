@@ -66,6 +66,11 @@ def render_markdown(report):
             " are dirsql over the native after each side's startup, median across"
             " pairs"
         ),
+        (
+            "- Cadence: rerun with `just bench-suite` after a change to how dirsql"
+            " walks, matches, queries or serializes, and when this report is more"
+            " than 30 days old"
+        ),
         "",
         "| Case | Fastest native | dirsql / fastest | Spread | vs 1.0x |",
         "|---|---|---|---|---|",
@@ -74,13 +79,13 @@ def render_markdown(report):
         stats = case["natives"][case["fastest"]]["ratio"]
         verdict = "over" if case["ratio_vs_fastest"] > 1.0 else "ok"
         lines.append(
-            f"| {case['name']} | {case['fastest']} | {case['ratio_vs_fastest']:.2f}x"
+            f"| `{case['name']}` | {case['fastest']} | {case['ratio_vs_fastest']:.2f}x"
             f" | {stats['spread']:.0%} | {verdict} |"
         )
     for case in report["cases"]:
         lines += [
             "",
-            f"## {case['name']}",
+            f"## `{case['name']}`",
             "",
             f"dirsql median {case['dirsql_median_s']:.3f}s",
             "",

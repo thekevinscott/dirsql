@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_recursive_test.py tests/e2e/stat_speed_test.py -x -q",
+  "ran_at": 1791767913,
+  "exit_code": 0,
+  "commit": "236f11457ee26440323331067d3c95ae57b59eee",
+  "branch": "bot/1470-speed-page-1011"
+}
