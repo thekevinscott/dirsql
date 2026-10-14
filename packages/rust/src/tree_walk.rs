@@ -65,7 +65,11 @@ pub(crate) fn walk_in_order<D: Send, L: Send>(
                 Some(Item::Dir(id)) => {
                     if !spawned && shared.found() >= PARALLEL_DIRS {
                         spawned = true;
-                        let workers = thread::available_parallelism().map_or(1, usize::from);
+                        // A walker on the sibling hyperthread of the one taking
+                        // its rows slows that consumer more than it speeds the walk.
+                        let workers = thread::available_parallelism()
+                            .map_or(1, usize::from)
+                            .min(num_cpus::get_physical());
                         for _ in 1..workers {
                             scope.spawn(|| shared.work());
                         }
