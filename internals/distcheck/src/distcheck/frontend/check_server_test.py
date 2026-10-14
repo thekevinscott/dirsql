@@ -100,7 +100,7 @@ def test_check_server_rejects_a_missing_url_and_kills_the_server():
 def test_check_server_rejects_a_page_that_is_not_the_bundled_one():
     server = _server()
     with pytest.raises(DistcheckError, match=f"{_URL} does not serve the bundled asset"):
-        _check(server, _request(page="<html>other</html>"))
+        _check(server, _request(page="<html>zzz</html>"))
     server.kill.assert_called_once_with()
 
 
@@ -132,7 +132,13 @@ def test_check_server_rejects_an_unclean_shutdown():
     server.kill.assert_not_called()
 
 
+def test_check_server_rejects_a_server_killed_by_the_signal():
+    with pytest.raises(DistcheckError, match="exited -15 after SIGTERM"):
+        _check(_server(code=-15), _request())
+
+
 def test_check_server_defaults_to_real_processes_and_http():
     params = inspect.signature(check_server).parameters
     assert params["spawn"].default is subprocess.Popen
     assert params["request"].default is urllib.request.urlopen
+    assert params["spawn"].kind is inspect.Parameter.KEYWORD_ONLY

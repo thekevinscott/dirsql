@@ -93,3 +93,4 @@ def test_probe_defaults_to_real_processes_and_http():
     assert params["spawn"].default is subprocess.Popen
     assert params["request"].default is urllib.request.urlopen
     assert isinstance(params["fs"].default, FileSystem)
+    assert params["spawn"].kind is inspect.Parameter.KEYWORD_ONLY
