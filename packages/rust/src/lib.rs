@@ -40,6 +40,7 @@ mod posix_class;
 pub mod progress;
 #[doc(hidden)]
 pub mod row_event_flat;
+mod row_stream;
 #[doc(hidden)]
 pub mod scanner;
 #[doc(hidden)]

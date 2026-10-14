@@ -187,13 +187,22 @@ pub fn scan_glob_checking_root(
     gitignore: bool,
     check_root: bool,
 ) -> Vec<PathBuf> {
-    scan_glob_rows(root, glob, ignore, gitignore, check_root, &|rel_path| {
-        rel_path
-    })
+    let mut paths = Vec::new();
+    scan_glob_rows(
+        root,
+        glob,
+        ignore,
+        gitignore,
+        check_root,
+        &|rel_path| rel_path,
+        &mut |rel_path| paths.push(rel_path),
+    );
+    paths
 }
 
 /// [`scan_glob_checking_root`], each matched path made into `row` on the
-/// thread that found it, so making rows overlaps the walk.
+/// thread that found it, so making rows overlaps the walk, and handed to
+/// `visit` in scan order as soon as the walk reaches it.
 pub(crate) fn scan_glob_rows<T: Send>(
     root: &Path,
     glob: &PathGlob,
@@ -201,9 +210,10 @@ pub(crate) fn scan_glob_rows<T: Send>(
     gitignore: bool,
     check_root: bool,
     row: &(dyn Fn(PathBuf) -> T + Sync),
-) -> Vec<T> {
+    visit: &mut dyn FnMut(T),
+) {
     if gitignore && check_root && !holds_git(root) && is_gitignored_path(root, true) {
-        return Vec::new();
+        return;
     }
     let repo = if gitignore {
         enclosing_repo(root, &holds_git)
@@ -218,16 +228,14 @@ pub(crate) fn scan_glob_rows<T: Send>(
         frames: repo.map_or_else(Vec::new, |top| gitignores_above(root, top, &load_gitignore)),
         dirs: false,
     };
-    let mut results = Vec::new();
     walk(
         root,
         root,
         walker,
         &|rel_path| is_wanted(glob, ignore, rel_path),
         &|rel_path, _| row(rel_path),
-        &mut |found| results.push(found),
+        visit,
     );
-    results
 }
 
 /// Whether a walked file is a row of the table: it matches the glob and no
@@ -652,7 +660,8 @@ struct Walk<'a> {
 fn child_path(rel: &Path, name: &OsStr) -> PathBuf {
     let rel_len = rel.as_os_str().len();
     let separator = usize::from(rel_len > 0);
-    let mut child = PathBuf::with_capacity(rel_len + separator + name.len());
+    // One byte spare for the NUL a path-table row ends its path with.
+    let mut child = PathBuf::with_capacity(rel_len + separator + name.len() + 1);
     child.push(rel);
     child.push(name);
     child
@@ -1095,17 +1104,17 @@ mod tests {
     }
 
     #[test]
-    fn child_path_allocates_exactly_its_length() {
+    fn child_path_allocates_its_length_and_a_terminator() {
         let child = child_path(Path::new("alpha/beta/gamma"), OsStr::new("delta.md"));
         assert_eq!(child, Path::new("alpha/beta/gamma/delta.md"));
-        assert_eq!(child.capacity(), child.as_os_str().len());
+        assert_eq!(child.capacity(), child.as_os_str().len() + 1);
     }
 
     #[test]
     fn child_path_of_the_root_is_the_bare_name() {
         let child = child_path(Path::new(""), OsStr::new("c.md"));
         assert_eq!(child, Path::new("c.md"));
-        assert_eq!(child.capacity(), 4);
+        assert_eq!(child.capacity(), 5);
     }
 
     #[test]
@@ -1949,19 +1958,28 @@ mod tests {
         let in_flight = AtomicUsize::new(0);
         let overlapped = AtomicBool::new(false);
 
-        let rows = scan_glob_rows(dir.path(), &glob, &none, false, false, &|rel| {
-            if in_flight.fetch_add(1, Ordering::SeqCst) > 0 {
-                overlapped.store(true, Ordering::SeqCst);
-            }
-            for _ in 0..1_000_000 {
-                if overlapped.load(Ordering::SeqCst) {
-                    break;
+        let mut rows = Vec::new();
+        scan_glob_rows(
+            dir.path(),
+            &glob,
+            &none,
+            false,
+            false,
+            &|rel| {
+                if in_flight.fetch_add(1, Ordering::SeqCst) > 0 {
+                    overlapped.store(true, Ordering::SeqCst);
                 }
-                std::hint::spin_loop();
-            }
-            in_flight.fetch_sub(1, Ordering::SeqCst);
-            rel
-        });
+                for _ in 0..1_000_000 {
+                    if overlapped.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    std::hint::spin_loop();
+                }
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+                rel
+            },
+            &mut |row| rows.push(row),
+        );
 
         assert_eq!(rows, scan_glob(dir.path(), &glob, &none, false));
         assert!(
