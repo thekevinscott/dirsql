@@ -46,6 +46,10 @@ Every row has `path`, `basename`, `dir`, `ext` (no dot, `NULL` when absent), `si
 3. One row per record inside each file, inline: `--on-file <command>` attaches a parser to every path-table in the query. The parser prints one JSON object per line (NDJSON, never an array), and its output replaces the stat columns. See [hooks](https://dirsql.dev/reference/hooks).
 4. Search by meaning: `uvx --with dirsql-plugin-embeddings dirsql "<sql>" --format json` adds `embed()` and `vec_distance_cosine()`. See [search by meaning](https://dirsql.dev/howto/search-by-meaning).
 
+### Browser
+
+When a person wants to explore the tree by hand, `uvx dirsql server --frontend` serves a SQL explorer and prints its URL (`Frontend at http://localhost:7117/`); add `-c .dirsql.toml` to list declared tables. The page runs nothing until **Run** is pressed; press it again to refresh. A config that fails to load shows its diagnostic in the page. It runs until Ctrl-C.
+
 ### Read-only
 
 dirsql never writes to, moves or changes the files it scans, and it rejects mutating SQL. Do not pass `--persist`: it writes a cache database into the directory.

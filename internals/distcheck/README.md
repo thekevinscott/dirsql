@@ -36,6 +36,12 @@ tooling, so one tested home matters more than language purity of the harness.
   sub-package layout. Nothing separate is staged for the CLI: since #739 the
   napi addon carries it and the launcher calls it in-process.
 
+Both flows then run the installed `dirsql server --frontend --port 0` twice,
+without and with `-c` (`frontend/probe.py`): the served `/` and
+`/frontend.js` must equal `packages/rust/src/cli/frontend.{html,js}`, a
+`POST /query` must return the expected rows, and `SIGTERM` must end the
+server with exit `0`.
+
 **Caveat (host triple only):** each flow tests the host triple/interpreter.
 Cross-target coverage lives in the release pipeline's install matrix (one runner
 per target).

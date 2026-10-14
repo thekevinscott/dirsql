@@ -364,16 +364,19 @@ for await (const event of db.watch()) { ... }
 
 ## CLI: invocation modes
 
-`dirsql server --frontend` is a shared Rust CLI option available through the
-Rust binary and the Python and TypeScript launchers. It serves the embedded
-SQL explorer shell at `/` on the API's origin and exposes its load diagnostic,
-query root, and declared tables and columns through `GET /frontend/state`
-(HTTP 503 when unavailable). The page needs no
-runtime asset download; the option adds no SDK binding API. Without the flag,
-the existing HTTP routes are unchanged. The page runs SQL through `POST
-/query` (script at `/frontend.js`) and lists declared tables with a
-quoted preview query beside the path-table guide. Distribution validation is tracked in a
-subsequent frontend issue.
+`dirsql server --frontend` is shared CLI support, not a programmatic server
+API. The Rust binary and the Python and TypeScript launchers all run the same
+core `run_cli`, so each serves the same embedded SQL explorer shell at `/` on
+the API's origin, its script at `/frontend.js`, and its load diagnostic, query
+root, and declared tables and columns through `GET /frontend/state` (HTTP 503
+when unavailable). The assets are compiled into the binary, the PyO3
+extension, and the napi addon exactly once; no distribution downloads or
+ships them as separate files. The page runs SQL through `POST /query` and
+lists declared tables with a quoted preview query beside the path-table
+guide. Without the flag, the existing HTTP routes are unchanged. The Python
+`DirSQL` and TypeScript `DirSQL` classes expose no server or frontend
+method. The packaging distcheck runs the installed wheel's and npm package's `dirsql
+server --frontend`, with and without `-c`, against the repo's bundled assets.
 
 **Parity by construction, no drift; no SDK API change (#662).** Query is the
 default CLI mode: `dirsql "<sql>"` runs one query and prints JSON rows,
