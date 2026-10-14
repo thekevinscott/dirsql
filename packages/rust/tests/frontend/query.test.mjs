@@ -8,6 +8,7 @@ import {
   formatCell,
   renderResult,
 } from '../../src/cli/frontend.js';
+import { fakeDocument } from './fake-document.mjs';
 
 function response(status, body) {
   return {
@@ -31,49 +32,6 @@ function deferred() {
     resolve = r;
   });
   return { promise, resolve };
-}
-
-function fakeDocument() {
-  function element(tag) {
-    const el = {
-      tag,
-      children: [],
-      attrs: {},
-      className: '',
-      _text: '',
-      get textContent() {
-        return el._text + el.children.map((c) => c.textContent).join('');
-      },
-      set textContent(v) {
-        el._text = String(v);
-        el.children = [];
-      },
-      set innerHTML(_) {
-        throw new Error('innerHTML must never be used');
-      },
-      setAttribute(k, v) {
-        el.attrs[k] = String(v);
-      },
-      append(...nodes) {
-        el.children.push(...nodes);
-      },
-      replaceChildren(...nodes) {
-        el._text = '';
-        el.children = nodes;
-      },
-      find(tagName) {
-        const out = [];
-        const walk = (n) => {
-          if (n.tag === tagName) out.push(n);
-          n.children.forEach(walk);
-        };
-        walk(el);
-        return out;
-      },
-    };
-    return el;
-  }
-  return { createElement: element };
 }
 
 function run(state) {

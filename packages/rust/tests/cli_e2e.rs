@@ -259,6 +259,27 @@ fn frontend_page_has_query_controls_and_serves_its_script() {
 }
 
 #[test]
+fn frontend_script_offers_table_browsing_and_path_onboarding() {
+    let root = TempDir::new().unwrap();
+    let port = free_port();
+    let server = spawn_dirsql_with_args(root.path(), port, &["--frontend"]);
+    wait_until_ready(port, Duration::from_secs(5));
+    let script = Client::new()
+        .get(format!("http://localhost:{port}/frontend.js"))
+        .send()
+        .unwrap()
+        .text()
+        .unwrap();
+    for name in ["loadState", "renderState", "previewQuery"] {
+        assert!(
+            script.contains(name),
+            "{name} missing from the frontend script"
+        );
+    }
+    kill_and_wait(server);
+}
+
+#[test]
 fn frontend_still_loads_and_reports_an_invalid_config() {
     let root = TempDir::new().unwrap();
     let port = free_port();

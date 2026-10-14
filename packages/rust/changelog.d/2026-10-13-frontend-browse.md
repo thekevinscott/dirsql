@@ -1,0 +1,1 @@
+**Added** Table browsing and configless onboarding in the `dirsql server --frontend` explorer: the query root, the path-table columns and an editable path-table example, declared tables with their columns and a quoted `LIMIT 100` preview query per table, and config-load diagnostics with restart guidance.

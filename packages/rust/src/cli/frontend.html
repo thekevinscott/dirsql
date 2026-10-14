@@ -15,7 +15,10 @@
     p { line-height: 1.6; color: #4a5d51; max-width: 42rem; }
     .panel { margin-top: 2.5rem; padding: 1.5rem; border: 1px solid #d9e1da; border-radius: 12px; background: #fff; box-shadow: 0 3px 12px #17302609; }
     .panel h2 { margin: 0 0 .5rem; font-size: 1rem; }
-    .panel p { margin: 0; }
+    .panel p { margin: 0 0 .6rem; }
+    .panel h2:not(:first-child) { margin-top: 1.2rem; }
+    .panel ul { margin: .2rem 0 .8rem; padding-left: 1.2rem; line-height: 1.5; color: #4a5d51; }
+    .panel button.choice { margin: .2rem 0; padding: .25rem .6rem; background: #eef2ee; color: #173026; border: 1px solid #b9c7bd; font: .9rem/1.4 ui-monospace, monospace; }
     form { margin-top: 2rem; }
     label { display: block; font-weight: 600; margin-bottom: .4rem; }
     textarea { width: 100%; min-height: 7rem; padding: .7rem; border: 1px solid #b9c7bd; border-radius: 8px; font: .95rem/1.5 ui-monospace, monospace; resize: vertical; }
@@ -51,30 +54,5 @@
     <section id="result" aria-live="polite" aria-label="Query result"></section>
   </main>
   <script type="module" src="/frontend.js"></script>
-  <script>
-    (async () => {
-      const panel = document.getElementById('state');
-      const title = document.getElementById('state-title');
-      const message = document.getElementById('state-message');
-      try {
-        const response = await fetch('/frontend/state');
-        const state = await response.json();
-        if (state.error) {
-          panel.classList.add('error');
-          title.textContent = 'Configuration could not load';
-          message.textContent = state.error + ' Fix the configuration and restart dirsql server.';
-        } else if (response.ok) {
-          title.textContent = 'Ready to explore';
-          message.textContent = 'The SQL explorer is connected to this directory.';
-        } else {
-          throw new Error('Unexpected server response');
-        }
-      } catch (error) {
-        panel.classList.add('error');
-        title.textContent = 'Could not connect';
-        message.textContent = error.message;
-      }
-    })();
-  </script>
 </body>
 </html>
