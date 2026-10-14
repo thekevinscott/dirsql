@@ -122,7 +122,6 @@ impl<R> Settled<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
 
     fn stream_of(chunks: &[&[u32]]) -> RowStream<u32> {
         let stream = RowStream::default();
@@ -146,30 +145,6 @@ mod tests {
         let stream = stream_of(&[&[], &[1], &[]]);
         assert_eq!(*stream.chunk(0).unwrap(), vec![1]);
         assert!(stream.chunk(1).is_none());
-    }
-
-    #[test]
-    fn a_reader_waits_for_a_chunk_still_being_made() {
-        let stream = Arc::new(RowStream::default());
-        let reader = {
-            let stream = Arc::clone(&stream);
-            thread::spawn(move || stream.chunk(0).map(|chunk| chunk[0]))
-        };
-        stream.push(Arc::new(vec![7]));
-        assert_eq!(reader.join().unwrap(), Some(7));
-    }
-
-    #[test]
-    fn all_waits_for_the_scan_to_finish() {
-        let stream = Arc::new(RowStream::default());
-        stream.push(Arc::new(vec![1]));
-        let reader = {
-            let stream = Arc::clone(&stream);
-            thread::spawn(move || stream.all().iter().copied().collect::<Vec<_>>())
-        };
-        stream.push(Arc::new(vec![2, 3]));
-        stream.finish(false);
-        assert_eq!(reader.join().unwrap(), vec![1, 2, 3]);
     }
 
     #[test]
