@@ -114,7 +114,7 @@ fn write_text(out: &mut Vec<u8>, bytes: &[u8]) -> serde_json::Result<()> {
 fn is_plain(bytes: &[u8]) -> bool {
     // A fold rather than `all`, so the loop has no early exit and vectorizes.
     bytes.iter().fold(true, |plain, &b| {
-        plain & (b >= 0x20) & (b < 0x80) & (b != b'"') & (b != b'\\')
+        plain & (0x20..0x80).contains(&b) & (b != b'"') & (b != b'\\')
     })
 }
 
