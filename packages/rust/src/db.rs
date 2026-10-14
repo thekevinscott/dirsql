@@ -1180,16 +1180,34 @@ impl Db {
         start: impl FnOnce(&[String]) -> S,
         mut on_row: impl FnMut(&mut S, &[Value]),
     ) -> Result<S> {
+        let mut cells = Vec::new();
+        self.query_each_ref(sql, start, |state, sources| {
+            cells.resize(sources.len(), Value::Null);
+            for (cell, source) in cells.iter_mut().zip(sources) {
+                fill_cell(cell, *source);
+            }
+            on_row(state, &cells);
+        })
+    }
+
+    /// [`query_each`](Self::query_each) handing each row's cells as SQLite
+    /// holds them, valid until the callback returns.
+    pub(crate) fn query_each_ref<S>(
+        &self,
+        sql: &str,
+        start: impl FnOnce(&[String]) -> S,
+        mut on_row: impl FnMut(&mut S, &[ValueRef<'_>]),
+    ) -> Result<S> {
         if !self.batched.is_empty() {
             // A batched worker may force a second run, so the rows of the
             // first are not final until it ends.
             let result = self.query_ordered(sql)?;
             let mut state = start(&result.columns);
             for row in &result.rows {
-                let cells: Vec<Value> = result
+                let cells: Vec<ValueRef<'_>> = result
                     .columns
                     .iter()
-                    .map(|column| row.get(column).cloned().unwrap_or(Value::Null))
+                    .map(|column| row.get(column).map_or(ValueRef::Null, value_ref))
                     .collect();
                 on_row(&mut state, &cells);
             }
@@ -1200,13 +1218,14 @@ impl Db {
         let (mut stmt, column_names) = self.prepare_statement(sql)?;
         let mut state = start(&column_names);
         let mut rows = stmt.query([])?;
-        let mut cells = Vec::with_capacity(column_names.len());
+        let mut spare: Vec<ValueRef<'_>> = Vec::with_capacity(column_names.len());
         while let Some(row) = rows.next()? {
-            cells.resize(column_names.len(), Value::Null);
-            for (i, cell) in cells.iter_mut().enumerate() {
-                fill_cell(cell, row.get_ref(i)?);
+            let mut cells = recycled(spare);
+            for i in 0..column_names.len() {
+                cells.push(row.get_ref(i)?);
             }
             on_row(&mut state, &cells);
+            spare = recycled(cells);
         }
         Ok(state)
     }
@@ -1485,8 +1504,27 @@ fn fill_cell(cell: &mut Value, source: ValueRef<'_>) {
             held.clear();
             held.push_str(&String::from_utf8_lossy(bytes));
         }
+        (_, ValueRef::Text(bytes)) => {
+            *cell = Value::Text(String::from_utf8_lossy(bytes).into_owned())
+        }
         _ => *cell = Value::from(rusqlite::types::Value::from(source)),
     }
+}
+
+fn value_ref(value: &Value) -> ValueRef<'_> {
+    match value {
+        Value::Null => ValueRef::Null,
+        Value::Integer(i) => ValueRef::Integer(*i),
+        Value::Real(f) => ValueRef::Real(*f),
+        Value::Text(s) => ValueRef::Text(s.as_bytes()),
+        Value::Blob(b) => ValueRef::Blob(b),
+    }
+}
+
+/// `cells` emptied and free to borrow anew, keeping its allocation.
+fn recycled<'a>(mut cells: Vec<ValueRef<'_>>) -> Vec<ValueRef<'a>> {
+    cells.clear();
+    cells.into_iter().map(|_| ValueRef::Null).collect()
 }
 
 impl From<rusqlite::types::Value> for Value {
@@ -1668,6 +1706,15 @@ mod tests {
     }
 
     #[test]
+    fn filling_a_cell_with_text_that_is_not_utf8_replaces_the_bad_bytes() {
+        let mut cell = Value::Null;
+        fill_cell(&mut cell, ValueRef::Text(b"\xffA"));
+        assert_eq!(cell, Value::Text("\u{FFFD}A".into()));
+        fill_cell(&mut cell, ValueRef::Text(b"B\xff"));
+        assert_eq!(cell, Value::Text("B\u{FFFD}".into()));
+    }
+
+    #[test]
     fn query_each_folds_each_row_in_projection_order() {
         let db = titled_docs(&["a", "b"]);
 
@@ -1704,6 +1751,128 @@ mod tests {
                 [Value::Text("b".into()), Value::Text("B".into())]
             ]
         );
+    }
+
+    #[test]
+    fn query_each_reads_text_that_is_not_utf8_lossily() {
+        let db = titled_docs(&["a"]);
+
+        let (_, rows) = folded(&db, "SELECT CAST(x'ff41' AS TEXT) AS t");
+
+        assert_eq!(rows, [[Value::Text("\u{FFFD}A".into())]]);
+    }
+
+    fn owned(cell: &ValueRef<'_>) -> Value {
+        match *cell {
+            ValueRef::Null => Value::Null,
+            ValueRef::Integer(i) => Value::Integer(i),
+            ValueRef::Real(f) => Value::Real(f),
+            ValueRef::Text(bytes) => Value::Text(String::from_utf8_lossy(bytes).into_owned()),
+            ValueRef::Blob(bytes) => Value::Blob(bytes.to_vec()),
+        }
+    }
+
+    fn folded_refs(db: &Db, sql: &str) -> (Vec<String>, Vec<Vec<Value>>) {
+        db.query_each_ref(
+            sql,
+            |columns| (columns.to_vec(), Vec::new()),
+            |(_, rows), cells| rows.push(cells.iter().map(owned).collect()),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn query_each_ref_hands_each_row_in_projection_order() {
+        let db = titled_docs(&["a", "b"]);
+
+        let (columns, rows) = folded_refs(&db, "SELECT 7 AS n, title FROM docs ORDER BY title");
+
+        assert_eq!(columns, ["n", "title"]);
+        assert_eq!(
+            rows,
+            [
+                [Value::Integer(7), Value::Text("a".into())],
+                [Value::Integer(7), Value::Text("b".into())]
+            ]
+        );
+    }
+
+    #[test]
+    fn query_each_ref_hands_text_as_sqlite_holds_it() {
+        let db = titled_docs(&["a"]);
+
+        let held = db
+            .query_each_ref(
+                "SELECT CAST(x'ff41' AS TEXT) AS t",
+                |_| Vec::new(),
+                |held: &mut Vec<Vec<u8>>, cells| match cells {
+                    [ValueRef::Text(bytes)] => held.push(bytes.to_vec()),
+                    other => panic!("expected one text cell, got {other:?}"),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(held, [b"\xffA".to_vec()]);
+    }
+
+    #[test]
+    fn query_each_ref_hands_the_rows_a_batched_function_serves() {
+        let mut db = titled_docs(&["a", "b"]);
+        let (worker, _) = functions::test_support::batched_worker(
+            "up",
+            8,
+            Arc::clone(&db.calls),
+            vec![r#"{"ok": "A"}"#, r#"{"results": [{"ok": "B"}]}"#],
+        );
+        db.register_batched_worker(worker, &[1]);
+
+        let (columns, rows) =
+            folded_refs(&db, "SELECT title, up(title) AS v FROM docs ORDER BY title");
+
+        assert_eq!(columns, ["title", "v"]);
+        assert_eq!(
+            rows,
+            [
+                [Value::Text("a".into()), Value::Text("A".into())],
+                [Value::Text("b".into()), Value::Text("B".into())]
+            ]
+        );
+    }
+
+    #[test]
+    fn query_each_ref_refuses_a_write() {
+        let db = titled_docs(&["a"]);
+
+        let err = db
+            .query_each_ref("DELETE FROM docs", |_| (), |_, _| {})
+            .unwrap_err();
+
+        assert!(matches!(err, DbError::WriteForbidden));
+    }
+
+    #[test]
+    fn a_value_is_borrowed_as_the_same_kind_of_cell() {
+        assert_eq!(value_ref(&Value::Null), ValueRef::Null);
+        assert_eq!(value_ref(&Value::Integer(7)), ValueRef::Integer(7));
+        assert_eq!(value_ref(&Value::Real(0.5)), ValueRef::Real(0.5));
+        assert_eq!(value_ref(&Value::Text("t".into())), ValueRef::Text(b"t"));
+        assert_eq!(
+            value_ref(&Value::Blob(vec![0, 255])),
+            ValueRef::Blob(&[0, 255])
+        );
+    }
+
+    #[test]
+    fn recycled_cells_are_empty_in_the_same_allocation() {
+        let mut cells: Vec<ValueRef<'_>> = Vec::with_capacity(4);
+        cells.push(ValueRef::Integer(1));
+        let buffer = cells.as_ptr();
+
+        let emptied: Vec<ValueRef<'_>> = recycled(cells);
+
+        assert!(emptied.is_empty());
+        assert_eq!(emptied.capacity(), 4);
+        assert_eq!(emptied.as_ptr(), buffer);
     }
 
     #[test]

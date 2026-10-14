@@ -1,5 +1,6 @@
 //! `Row` / `RowEvent` → JSON serialization for the HTTP API.
 
+use rusqlite::types::ValueRef;
 use serde_json::{Map, Value};
 
 use crate::db::Value as CellValue;
@@ -58,7 +59,7 @@ impl JsonRows {
         }
     }
 
-    pub(super) fn row(&mut self, cells: &[CellValue]) {
+    pub(super) fn row(&mut self, cells: &[ValueRef<'_>]) {
         if self.rows > 0 {
             self.out.push(b',');
         }
@@ -70,7 +71,7 @@ impl JsonRows {
             }
             self.out.extend_from_slice(key);
             self.out.push(b':');
-            write_cell(&mut self.out, &cells[*i]);
+            write_cell(&mut self.out, cells[*i]);
         }
         self.out.push(b'}');
     }
@@ -86,12 +87,35 @@ fn json_bytes(text: &str) -> Vec<u8> {
     serde_json::to_vec(text).expect("a string always serializes")
 }
 
-fn write_cell(out: &mut Vec<u8>, value: &CellValue) {
+fn write_cell(out: &mut Vec<u8>, value: ValueRef<'_>) {
     let written = match value {
-        CellValue::Text(text) => serde_json::to_writer(&mut *out, text),
-        other => serde_json::to_writer(&mut *out, &cell_to_json(other)),
+        ValueRef::Text(bytes) => write_text(out, bytes),
+        other => serde_json::to_writer(
+            &mut *out,
+            &cell_to_json(&CellValue::from(rusqlite::types::Value::from(other))),
+        ),
     };
     written.expect("writing JSON to memory cannot fail");
+}
+
+fn write_text(out: &mut Vec<u8>, bytes: &[u8]) -> serde_json::Result<()> {
+    if is_plain(bytes) {
+        out.push(b'"');
+        out.extend_from_slice(bytes);
+        out.push(b'"');
+        Ok(())
+    } else {
+        serde_json::to_writer(out, &String::from_utf8_lossy(bytes))
+    }
+}
+
+/// Whether `bytes` is ASCII a JSON string holds verbatim: no control
+/// character, quote or backslash to escape.
+fn is_plain(bytes: &[u8]) -> bool {
+    // A fold rather than `all`, so the loop has no early exit and vectorizes.
+    bytes.iter().fold(true, |plain, &b| {
+        plain & (0x20..0x80).contains(&b) & (b != b'"') & (b != b'\\')
+    })
 }
 
 pub(super) fn row_to_json(row: &Row) -> Value {
@@ -194,14 +218,24 @@ mod tests {
     fn streamed(result: &QueryResult) -> String {
         let mut rows = JsonRows::new(&result.columns);
         for row in &result.rows {
-            let cells: Vec<CellValue> = result
+            let cells: Vec<ValueRef<'_>> = result
                 .columns
                 .iter()
-                .map(|column| row[column].clone())
+                .map(|column| as_ref(&row[column]))
                 .collect();
             rows.row(&cells);
         }
         String::from_utf8(rows.finish()).unwrap()
+    }
+
+    fn as_ref(value: &CellValue) -> ValueRef<'_> {
+        match value {
+            CellValue::Null => ValueRef::Null,
+            CellValue::Integer(i) => ValueRef::Integer(*i),
+            CellValue::Real(f) => ValueRef::Real(*f),
+            CellValue::Text(s) => ValueRef::Text(s.as_bytes()),
+            CellValue::Blob(b) => ValueRef::Blob(b),
+        }
     }
 
     fn row_of(cells: &[(&str, CellValue)]) -> Row {
@@ -243,6 +277,55 @@ mod tests {
             ])],
         };
         assert_eq!(streamed(&result), rendered(&result));
+    }
+
+    fn streamed_text(bytes: &[u8]) -> String {
+        let mut rows = JsonRows::new(&["t".to_string()]);
+        rows.row(&[ValueRef::Text(bytes)]);
+        String::from_utf8(rows.finish()).unwrap()
+    }
+
+    #[test]
+    fn each_character_streams_as_serde_json_writes_it() {
+        let texts = (0..=0x7f_u8)
+            .map(|b| char::from(b).to_string())
+            .chain(["\u{e9}", "\u{2028}", "\u{1F600}", "a \"b\" \\ c", ""].map(String::from));
+        for text in texts {
+            let json = String::from_utf8(json_bytes(&text)).unwrap();
+            let expected = format!("[{{\"t\":{json}}}]\n");
+            assert_eq!(streamed_text(text.as_bytes()), expected, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn text_that_is_not_utf8_streams_with_replacement_characters() {
+        assert_eq!(
+            streamed_text(b"\xffA\xc3"),
+            "[{\"t\":\"\u{FFFD}A\u{FFFD}\"}]\n"
+        );
+        assert_eq!(streamed_text(b"\"\xff"), "[{\"t\":\"\\\"\u{FFFD}\"}]\n");
+    }
+
+    #[test]
+    fn printable_ascii_is_plain() {
+        assert!(is_plain(b""));
+        assert!(is_plain(b" docs/a-b_c~.md"));
+        assert!(is_plain(b"\x7f"));
+    }
+
+    #[test]
+    fn text_json_must_escape_or_validate_is_not_plain() {
+        for text in [
+            &b"a\x00"[..],
+            b"\x1f",
+            b"\"",
+            b"a\\b",
+            b"\x80",
+            b"\xff",
+            b"caf\xc3\xa9",
+        ] {
+            assert!(!is_plain(text), "{text:?}");
+        }
     }
 
     #[test]

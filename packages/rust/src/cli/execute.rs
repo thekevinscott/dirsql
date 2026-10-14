@@ -90,7 +90,7 @@ pub async fn execute_query_json(
     let sql = parse_sql_body(&raw_body)?;
     let db = require_ready(state)?;
     let join = tokio::task::spawn_blocking(move || {
-        db.query_each(&sql, JsonRows::new, JsonRows::row)
+        db.query_each_ref(&sql, JsonRows::new, JsonRows::row)
             .map(JsonRows::finish)
     })
     .await;

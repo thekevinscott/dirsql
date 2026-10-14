@@ -591,6 +591,19 @@ impl DirSQL {
         db.query_each(sql, start, on_row).map_err(map_db_error)
     }
 
+    /// [`query_each`](Self::query_each) handing each row's cells as SQLite
+    /// holds them, valid until the callback returns.
+    #[cfg(feature = "cli")]
+    pub(crate) fn query_each_ref<S>(
+        &self,
+        sql: &str,
+        start: impl FnOnce(&[String]) -> S,
+        on_row: impl FnMut(&mut S, &[rusqlite::types::ValueRef<'_>]),
+    ) -> Result<S> {
+        let db = self.inner.db.lock().map_err(DirSqlError::lock)?;
+        db.query_each_ref(sql, start, on_row).map_err(map_db_error)
+    }
+
     /// Lazily create the filesystem watcher. Idempotent; subsequent calls are
     /// no-ops. Called implicitly by [`poll_events`](Self::poll_events) and
     /// [`watch`](Self::watch).
