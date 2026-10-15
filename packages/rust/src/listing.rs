@@ -130,13 +130,49 @@ fn seen(kind: rustix::fs::FileType) -> Seen {
 }
 
 #[cfg(unix)]
-fn read_into(dir: &Path, listing: &mut Listing) {
-    use rustix::fs::{Dir, Mode, OFlags};
-    use std::os::unix::ffi::OsStrExt;
+fn open_dir(dir: &Path) -> rustix::io::Result<rustix::fd::OwnedFd> {
+    use rustix::fs::{Mode, OFlags};
     let flags = OFlags::RDONLY
         .union(OFlags::DIRECTORY)
         .union(OFlags::CLOEXEC);
-    let Ok(fd) = rustix::fs::open(dir, flags, Mode::empty()) else {
+    rustix::fs::open(dir, flags, Mode::empty())
+}
+
+#[cfg(target_os = "linux")]
+thread_local! {
+    /// Where a walk thread reads its directories' entries: big enough that a
+    /// directory of millions takes few `getdents` calls, and reused so a deep
+    /// tree of small directories pays for it once.
+    static ENTRY_BUFFER: std::cell::RefCell<Vec<u8>> =
+        std::cell::RefCell::new(Vec::with_capacity(1 << 20));
+}
+
+/// Reads entries straight out of the kernel's buffer, where `Dir` would copy
+/// each name into its own allocation.
+#[cfg(target_os = "linux")]
+fn read_into(dir: &Path, listing: &mut Listing) {
+    use rustix::fs::RawDir;
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(fd) = open_dir(dir) else {
+        return;
+    };
+    ENTRY_BUFFER.with_borrow_mut(|buffer| {
+        let mut entries = RawDir::new(&fd, buffer.spare_capacity_mut());
+        while let Some(Ok(entry)) = entries.next() {
+            let name = entry.file_name().to_bytes();
+            if name == b"." || name == b".." {
+                continue;
+            }
+            listing.push(OsStr::from_bytes(name), seen(entry.file_type()));
+        }
+    });
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn read_into(dir: &Path, listing: &mut Listing) {
+    use rustix::fs::Dir;
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(fd) = open_dir(dir) else {
         return;
     };
     let Ok(mut entries) = Dir::read_from(&fd) else {

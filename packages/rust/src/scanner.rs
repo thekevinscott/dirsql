@@ -543,7 +543,7 @@ impl<'a> Place<'a> {
     /// The directory's entries in walk order: each file `keep` takes, made
     /// into a `leaf` with the directory it sits in, and each directory to
     /// enter.
-    fn explore<L>(
+    fn explore<L: Send>(
         self,
         keep: &(dyn Fn(&Path) -> bool + Sync),
         leaf: &(dyn Fn(PathBuf, &Path) -> L + Sync),
@@ -574,9 +574,17 @@ impl<'a> Place<'a> {
                 &states,
                 linked,
             )
-            .filter(|taken| match taken {
-                Taken::File(child) => keep(child),
-                Taken::Dir { .. } => true,
+            .and_then(|taken| match taken {
+                Taken::File(child) => keep(&child).then(|| Taken::File(leaf(child, &dir))),
+                Taken::Dir {
+                    child,
+                    next,
+                    linked,
+                } => Some(Taken::Dir {
+                    child,
+                    next,
+                    linked,
+                }),
             })
         });
         let mut steps: Vec<Step<Box<Place<'a>>, L>> = if walk.dirs {
@@ -622,7 +630,7 @@ impl<'a> Place<'a> {
                         states: next,
                         linked,
                     }))),
-                    Taken::File(child) => Some(Step::Leaf(leaf(child, &dir))),
+                    Taken::File(made) => Some(Step::Leaf(made)),
                 });
         if steps.is_empty() {
             return entered.collect();
@@ -745,15 +753,16 @@ impl Walk<'_> {
 }
 
 /// An entry the walk takes: a directory to enter, with the glob states and
-/// link crossing it is entered with, or a file to visit.
+/// link crossing it is entered with, or a file to visit, as its path or as
+/// the leaf made of it.
 #[derive(Debug, PartialEq)]
-enum Taken {
+enum Taken<F = PathBuf> {
     Dir {
         child: PathBuf,
         next: Vec<usize>,
         linked: bool,
     },
-    File(PathBuf),
+    File(F),
 }
 
 /// Below this many entries a directory is judged on one thread; spawning
