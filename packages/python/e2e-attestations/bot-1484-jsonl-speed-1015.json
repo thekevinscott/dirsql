@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/jsonl_parse_speed_test.py tests/e2e/frontmatter_parse_speed_test.py tests/e2e/on_file_query_test.py tests/e2e/fanout_test.py tests/e2e/declared_table_name_test.py tests/e2e/query_contract_test.py tests/e2e/use_case_transcripts_test.py -x -q -s",
+  "ran_at": 1792074725,
+  "exit_code": 0,
+  "commit": "80a263f8596483f747e652b34ade1dca00bbd31e",
+  "branch": "bot/1484-jsonl-speed-1015"
+}
