@@ -82,6 +82,9 @@ pub(crate) fn walk_in_order<D: Send, L: Send>(
                         spawned = true;
                         let workers = thread::available_parallelism().map_or(1, usize::from);
                         for _ in 1..workers {
+                            // Counted before it starts, so a directory judged
+                            // meanwhile already sees the core as taken.
+                            shared.busy.fetch_add(1, Ordering::Relaxed);
                             scope.spawn(|| {
                                 BUSY.set(Some(Arc::clone(&shared.busy)));
                                 shared.work();
@@ -135,6 +138,7 @@ impl<D, L> Shared<'_, D, L> {
         let mut queue = self.lock();
         loop {
             if queue.done {
+                self.busy.fetch_sub(1, Ordering::Relaxed);
                 return;
             }
             let claimed = queue.open.pop().map(|id| (id, queue.unclaimed[id].take()));
@@ -148,10 +152,12 @@ impl<D, L> Shared<'_, D, L> {
                 }
                 Some((_, None)) => {}
                 None => {
+                    self.busy.fetch_sub(1, Ordering::Relaxed);
                     queue = self
                         .changed
                         .wait(queue)
                         .expect("exploring a directory does not panic");
+                    self.busy.fetch_add(1, Ordering::Relaxed);
                 }
             }
         }

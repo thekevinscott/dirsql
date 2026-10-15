@@ -785,8 +785,8 @@ fn judge_all<T: Sync, R: Send>(items: &[T], judge: &(dyn Fn(&T) -> R + Sync)) ->
 
 /// The cores a directory may split its judging across: those the walk's busy
 /// workers leave, and always the calling thread's own.
-fn idle_cores(cores: usize, _busy: usize) -> usize {
-    cores
+fn idle_cores(cores: usize, busy: usize) -> usize {
+    cores.saturating_sub(busy).max(1)
 }
 
 /// What the walk makes of an entry seen as `seen`, following a symlink only

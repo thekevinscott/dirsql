@@ -35,7 +35,21 @@ impl<T: Clone + 'static> PerThread<T> {
     /// `f` applied to the calling thread's copy of the value, cloned on the
     /// thread's first call.
     pub(crate) fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        f(&self.value)
+        let copy = COPIES.with_borrow_mut(|copies| self.copy_in(copies));
+        f(copy
+            .downcast_ref::<T>()
+            .expect("a token's copy is of the type it was made from"))
+    }
+
+    fn copy_in(&self, copies: &mut Copies) -> Rc<dyn Any> {
+        let token = Arc::as_ptr(&self.token);
+        if let Some((_, copy)) = copies.iter().find(|(held, _)| held.as_ptr() == token) {
+            return Rc::clone(copy);
+        }
+        copies.retain(|(held, _)| held.strong_count() > 0);
+        let copy: Rc<dyn Any> = Rc::new(self.value.clone());
+        copies.push((Arc::downgrade(&self.token), Rc::clone(&copy)));
+        copy
     }
 }
 
