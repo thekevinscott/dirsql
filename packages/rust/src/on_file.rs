@@ -117,6 +117,18 @@ pub(crate) fn run_streaming(
     paths: &mut (dyn Iterator<Item = PathBuf> + Send),
     sink: &mut (dyn FnMut(Vec<JsonRow>) + Send),
 ) -> Result<(), String> {
+    run_streaming_on(command, cwd, root, paths, sink, &cpus)
+}
+
+/// [`run_streaming`] with the machine's CPU count asked of `cpus`.
+fn run_streaming_on(
+    command: &str,
+    cwd: &Path,
+    root: &Path,
+    paths: &mut (dyn Iterator<Item = PathBuf> + Send),
+    sink: &mut (dyn FnMut(Vec<JsonRow>) + Send),
+    cpus: &(dyn Fn() -> usize + Sync),
+) -> Result<(), String> {
     let Some(first) = paths.next() else {
         return Ok(());
     };
@@ -665,6 +677,23 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("boom"), "got: {err}");
+    }
+
+    #[test]
+    fn run_streaming_does_not_count_cpus_for_known_paths_that_fit_one_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = files_of(dir.path(), 4, 100);
+        let mut rows = Vec::new();
+        run_streaming_on(
+            r#"sh -c 'echo "{\"n\":$#}"' sh"#,
+            Path::new("."),
+            Path::new("."),
+            &mut paths.into_iter(),
+            &mut |chunk| rows.extend(chunk),
+            &|| panic!("counted the cpus"),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
     }
 
     #[test]
