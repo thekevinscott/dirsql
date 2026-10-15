@@ -148,6 +148,13 @@ mod tests {
     }
 
     #[test]
+    fn a_made_chunk_is_read_before_the_scan_finishes() {
+        let stream = RowStream::default();
+        stream.push(Arc::new(vec![7]));
+        assert_eq!(*stream.chunk(0).unwrap(), vec![7]);
+    }
+
+    #[test]
     fn a_failed_scan_fails_its_readers() {
         let stream = RowStream::<u32>::default();
         stream.finish(true);

@@ -200,6 +200,17 @@ mod tests {
         assert_eq!(MODULE_NAME, "dirsql_parsed");
     }
 
+    #[test]
+    fn a_statement_reads_the_rows_materialized_at_create() {
+        let table = ParsedTable {
+            column_names: Vec::new(),
+            rows: Arc::new(vec![JsonRow(Vec::new())]),
+        };
+        let stream = Arc::new(RowStream::default());
+        table.rows(&stream);
+        assert!(Arc::ptr_eq(&stream.chunk(0).unwrap(), &table.rows));
+    }
+
     /// The three fixed arguments SQLite prepends before the module's own.
     fn args_with<'a>(user: &[&'a [u8]]) -> Vec<&'a [u8]> {
         let mut all: Vec<&'a [u8]> = vec![
