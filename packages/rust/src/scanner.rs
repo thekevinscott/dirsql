@@ -1969,4 +1969,24 @@ mod tests {
             "rows were made one at a time"
         );
     }
+
+    #[test]
+    fn scan_glob_rows_makes_rows_of_a_wide_directory_on_many_threads() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..PARALLEL_ENTRIES {
+            fs::File::create(dir.path().join(format!("f{i}"))).unwrap();
+        }
+        let glob = compile_glob("*").unwrap();
+        let none = TableMatcher::new(&[], &[]).unwrap();
+
+        let rows = scan_glob_rows(dir.path(), &glob, &none, false, false, &|rel| {
+            (thread::current().id(), rel)
+        });
+
+        let paths: Vec<PathBuf> = rows.iter().map(|(_, rel)| rel.clone()).collect();
+        assert_eq!(paths, scan_glob(dir.path(), &glob, &none, false));
+        let threads: std::collections::HashSet<_> =
+            rows.iter().map(|(made_on, _)| made_on).collect();
+        assert!(threads.len() > 1, "every row was made on one thread");
+    }
 }
