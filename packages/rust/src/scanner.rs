@@ -1238,6 +1238,31 @@ mod tests {
     }
 
     #[test]
+    fn explore_outside_gitignore_mode_ignores_a_repo_it_enters() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join(".git")).unwrap();
+        fs::write(root.path().join(".gitignore"), "x.md\n").unwrap();
+        fs::write(root.path().join("x.md"), "").unwrap();
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let top = Place {
+            walk: walk_with(&ignore, None, Vec::new()),
+            dir: root.path().to_path_buf(),
+            rel: PathBuf::new(),
+            states: Vec::new(),
+            linked: false,
+        };
+        let leaves: Vec<PathBuf> = top
+            .explore(&|_| true, &|_| true, &|rel, _| rel)
+            .into_iter()
+            .filter_map(|step| match step {
+                Step::Leaf(rel) => Some(rel),
+                Step::Dir(_) => None,
+            })
+            .collect();
+        assert!(leaves.contains(&PathBuf::from("x.md")), "{leaves:?}");
+    }
+
+    #[test]
     fn explore_enters_a_dirsql_directory_below_the_top_level() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("a").join(".dirsql")).unwrap();

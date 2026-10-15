@@ -51,9 +51,6 @@ struct Explored<D, L> {
 /// it is far from, which would leave it to explore its next directory itself.
 struct Open<D, L> {
     slots: BinaryHeap<Pending<D, L>>,
-    /// Workers waiting for a directory, so a find wakes only as many as it
-    /// has work for.
-    idle: usize,
     done: bool,
 }
 
@@ -97,7 +94,6 @@ pub(crate) fn walk_in_order<D: Send, L: Send>(
     let shared = Shared {
         open: Mutex::new(Open {
             slots: BinaryHeap::new(),
-            idle: 0,
             done: false,
         }),
         found_dir: Condvar::new(),
@@ -184,12 +180,10 @@ impl<D, L> Shared<'_, D, L> {
             if let Some(Pending(slot)) = open.slots.pop() {
                 return Some(slot);
             }
-            open.idle += 1;
             open = self
                 .found_dir
                 .wait(open)
                 .expect("exploring a directory does not panic");
-            open.idle -= 1;
         }
     }
 
@@ -222,11 +216,9 @@ impl<D, L> Shared<'_, D, L> {
             return items;
         }
         self.found.fetch_add(dirs.len(), Ordering::Relaxed);
-        let mut open = self.open_lock();
-        let wake = open.idle.min(dirs.len());
-        open.slots.extend(dirs.into_iter().map(Pending));
-        drop(open);
-        for _ in 0..wake {
+        let found = dirs.len();
+        self.open_lock().slots.extend(dirs.into_iter().map(Pending));
+        for _ in 0..found {
             self.found_dir.notify_one();
         }
         items
@@ -306,6 +298,12 @@ mod tests {
             }),
             ready: Condvar::new(),
         }))
+    }
+
+    #[test]
+    fn open_directories_are_equal_exactly_when_their_keys_are() {
+        assert!(pending(&[0, 1]) == pending(&[0, 1]));
+        assert!(pending(&[0, 1]) != pending(&[0, 2]));
     }
 
     #[test]
