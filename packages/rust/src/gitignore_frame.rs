@@ -70,15 +70,18 @@ impl Frame {
         &self.gitignore
     }
 
-    /// `Gitignore::matched`, on this thread's copy, or the shared one when a
-    /// copy no longer compiles.
+    /// `Gitignore::matched`, on this thread's copy.
     pub(crate) fn matched(&self, path: &Path, is_dir: bool) -> Match<&Glob> {
-        let slot = SLOT.with(|slot| slot % self.copies.len());
-        self.copies[slot]
+        SLOT.with(|slot| self.copy(*slot)).matched(path, is_dir)
+    }
+
+    /// The copy for thread `slot`, or the shared one when a copy no longer
+    /// compiles.
+    fn copy(&self, slot: usize) -> &Gitignore {
+        self.copies[slot % self.copies.len()]
             .get_or_init(&*self.compile)
             .as_ref()
             .unwrap_or(&self.gitignore)
-            .matched(path, is_dir)
     }
 }
 
@@ -125,6 +128,13 @@ mod tests {
         })
         .unwrap();
         assert!(frame.matched(Path::new("/r/a.log"), false).is_ignore());
+    }
+
+    #[test]
+    fn a_frame_serves_more_threads_than_it_has_copies() {
+        let frame = Frame::from_lines(Path::new("/r"), &["*.log"]);
+        let slot = frame.copies.len() * frame.copies.len();
+        assert!(frame.copy(slot).matched("/r/a.log", false).is_ignore());
     }
 
     #[test]
