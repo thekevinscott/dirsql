@@ -5847,6 +5847,28 @@ mod internal_tests {
     }
 
     #[test]
+    fn startup_runs_a_per_table_hook_once_over_every_file() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(root.join("a.txt"), "").unwrap();
+        std::fs::write(root.join("b.txt"), "").unwrap();
+        let (items, calls) = recording_per_table("items", "*.txt");
+
+        let db =
+            DirSQL::with_ignore_and_fs(&root, vec![items], Vec::<String>::new(), Arc::new(RealFs))
+                .unwrap();
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        let mut seen = calls[0].clone();
+        seen.sort();
+        assert_eq!(seen, vec![root.join("a.txt"), root.join("b.txt")]);
+        let mut names = row_names(&db);
+        names.sort();
+        assert_eq!(names, vec!["a.txt", "b.txt"]);
+    }
+
+    #[test]
     fn events_arriving_while_a_batch_is_routed_share_its_per_table_rerun() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
