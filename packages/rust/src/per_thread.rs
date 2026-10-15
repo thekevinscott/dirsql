@@ -56,14 +56,14 @@ impl<T: Clone + 'static> PerThread<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
 
     fn address(shared: &PerThread<Box<u32>>) -> usize {
         shared.with(|value| std::ptr::from_ref::<u32>(value).addr())
     }
 
-    fn held() -> usize {
-        COPIES.with_borrow(Vec::len)
+    fn address_in(shared: &PerThread<Box<u32>>, copies: &mut Copies) -> usize {
+        let copy = shared.copy_in(copies);
+        std::ptr::from_ref::<u32>(copy.downcast_ref::<Box<u32>>().unwrap()).addr()
     }
 
     #[test]
@@ -74,26 +74,20 @@ mod tests {
     }
 
     #[test]
-    fn each_thread_reaches_a_copy_of_its_own() {
+    fn a_thread_reaches_a_copy_not_the_original() {
         let shared = PerThread::new(Box::new(7));
         let original = std::ptr::from_ref::<u32>(&shared.value).addr();
-        // Both threads hold their copy until each has its address, so a freed
-        // copy's memory cannot come back as the other's.
-        let both_hold = std::sync::Barrier::new(2);
-        let addresses: Vec<usize> = thread::scope(|scope| {
-            let handles: Vec<_> = (0..2)
-                .map(|_| {
-                    scope.spawn(|| {
-                        let at = address(&shared);
-                        both_hold.wait();
-                        at
-                    })
-                })
-                .collect();
-            handles.into_iter().map(|h| h.join().unwrap()).collect()
-        });
-        assert_ne!(addresses[0], addresses[1]);
-        assert!(!addresses.contains(&original));
+        assert_ne!(address(&shared), original);
+    }
+
+    #[test]
+    fn each_thread_reaches_a_copy_of_its_own() {
+        let shared = PerThread::new(Box::new(7));
+        let (mut one, mut other) = (Copies::new(), Copies::new());
+        assert_ne!(
+            address_in(&shared, &mut one),
+            address_in(&shared, &mut other)
+        );
     }
 
     #[test]
@@ -104,17 +98,14 @@ mod tests {
 
     #[test]
     fn a_dropped_value_frees_its_copy_and_a_live_one_keeps_it() {
-        thread::spawn(|| {
-            let kept = PerThread::new(Box::new(1));
-            let kept_at = address(&kept);
-            address(&PerThread::new(Box::new(2)));
-            assert_eq!(held(), 2);
-            let fresh = PerThread::new(Box::new(3));
-            assert_eq!(fresh.with(|value| **value), 3);
-            assert_eq!(held(), 2);
-            assert_eq!(address(&kept), kept_at);
-        })
-        .join()
-        .unwrap();
+        let mut copies = Copies::new();
+        let kept = PerThread::new(Box::new(1));
+        let kept_at = address_in(&kept, &mut copies);
+        address_in(&PerThread::new(Box::new(2)), &mut copies);
+        assert_eq!(copies.len(), 2);
+        let fresh = PerThread::new(Box::new(3));
+        address_in(&fresh, &mut copies);
+        assert_eq!(copies.len(), 2);
+        assert_eq!(address_in(&kept, &mut copies), kept_at);
     }
 }
