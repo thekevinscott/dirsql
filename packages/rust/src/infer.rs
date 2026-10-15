@@ -23,10 +23,12 @@
 //! Everything here is pure. Reading files, running parsers, and declaring the
 //! schema to SQLite belong to the caller (see [`crate::parsed_vtab`]).
 
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::sync::Arc;
 
-use serde::de::{Deserializer, MapAccess, Visitor};
+use serde::de::{DeserializeSeed, Deserializer, MapAccess, Visitor};
 
 use crate::Value;
 use crate::json_to_value;
@@ -62,13 +64,17 @@ pub struct Column {
 /// `serde_json::Map` sorts its keys, which would make column order
 /// alphabetical; keeping the pairs in a `Vec` is what makes first-seen
 /// ordering possible at all.
+///
+/// Keys are shared: every row parsed from one block of output holds the same
+/// allocation for a key, so millions of rows cost no per-row key strings to
+/// build or to free on the thread that stores them.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct JsonRow(pub Vec<(String, serde_json::Value)>);
+pub struct JsonRow(pub Vec<(Arc<str>, serde_json::Value)>);
 
 impl JsonRow {
     /// The raw JSON value for `key`, or `None` when the row omits it.
     pub fn get(&self, key: &str) -> Option<&serde_json::Value> {
-        self.0.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+        self.0.iter().find(|(k, _)| **k == *key).map(|(_, v)| v)
     }
 }
 
@@ -77,33 +83,55 @@ impl serde::Serialize for JsonRow {
         use serde::ser::SerializeMap;
         let mut map = serializer.serialize_map(Some(self.0.len()))?;
         for (key, value) in &self.0 {
-            map.serialize_entry(key, value)?;
+            map.serialize_entry(&**key, value)?;
         }
         map.end()
     }
 }
 
-impl<'de> serde::Deserialize<'de> for JsonRow {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct RowVisitor;
+/// The keys one block of output has used, handed out shared.
+#[derive(Default)]
+struct Keys(HashSet<Arc<str>>);
 
-        impl<'de> Visitor<'de> for RowVisitor {
-            type Value = JsonRow;
-
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("a JSON row object")
-            }
-
-            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<JsonRow, A::Error> {
-                let mut pairs = Vec::new();
-                while let Some(pair) = map.next_entry::<String, serde_json::Value>()? {
-                    pairs.push(pair);
-                }
-                Ok(JsonRow(pairs))
-            }
+impl Keys {
+    fn intern(&mut self, key: &str) -> Arc<str> {
+        if let Some(seen) = self.0.get(key) {
+            return Arc::clone(seen);
         }
+        let key: Arc<str> = Arc::from(key);
+        self.0.insert(Arc::clone(&key));
+        key
+    }
+}
 
-        deserializer.deserialize_map(RowVisitor)
+/// A key as the line spells it, borrowed unless it carries an escape.
+#[derive(serde::Deserialize)]
+struct Key<'a>(#[serde(borrow)] Cow<'a, str>);
+
+/// Deserializes one row, drawing its keys from a block's [`Keys`].
+struct RowSeed<'k>(&'k mut Keys);
+
+impl<'de> DeserializeSeed<'de> for RowSeed<'_> {
+    type Value = JsonRow;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<JsonRow, D::Error> {
+        deserializer.deserialize_map(self)
+    }
+}
+
+impl<'de> Visitor<'de> for RowSeed<'_> {
+    type Value = JsonRow;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a JSON row object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<JsonRow, A::Error> {
+        let mut pairs = Vec::new();
+        while let Some(Key(key)) = map.next_key::<Key<'de>>()? {
+            pairs.push((self.0.intern(&key), map.next_value::<serde_json::Value>()?));
+        }
+        Ok(JsonRow(pairs))
     }
 }
 
@@ -116,6 +144,7 @@ pub fn parse_rows(output: &str) -> Result<Vec<JsonRow>, String> {
 /// [`parse_rows`] for a block that begins after `skipped` earlier lines of the
 /// same output, so an error names its line in the whole output.
 pub(crate) fn parse_rows_at(output: &str, skipped: usize) -> Result<Vec<JsonRow>, String> {
+    let mut keys = Keys::default();
     let mut rows = Vec::new();
     for (index, line) in output.lines().enumerate() {
         let line = line.trim();
@@ -128,11 +157,20 @@ pub(crate) fn parse_rows_at(output: &str, skipped: usize) -> Result<Vec<JsonRow>
                 "line {number} is a JSON array; print one JSON object per line instead"
             ));
         }
-        let row = serde_json::from_str::<JsonRow>(line)
+        let row = parse_row(line, &mut keys)
             .map_err(|e| format!("line {number} is not a JSON object: {e}"))?;
         rows.push(row);
     }
     Ok(rows)
+}
+
+/// One line as a row, rejecting anything after the object as serde_json's
+/// `from_str` does.
+fn parse_row(line: &str, keys: &mut Keys) -> serde_json::Result<JsonRow> {
+    let mut deserializer = serde_json::Deserializer::from_str(line);
+    let row = RowSeed(keys).deserialize(&mut deserializer)?;
+    deserializer.end()?;
+    Ok(row)
 }
 
 /// What the rows have said about one key so far.
@@ -194,8 +232,8 @@ pub fn infer_schema(rows: &[JsonRow]) -> Vec<Column> {
 
     for row in rows {
         for (key, value) in &row.0 {
-            let entry = observed.entry(key.as_str()).or_insert_with(|| {
-                order.push(key.clone());
+            let entry = observed.entry(&**key).or_insert_with(|| {
+                order.push(key.to_string());
                 Observed::Untyped
             });
             *entry = entry.observe(value);
@@ -271,11 +309,7 @@ mod tests {
     fn parse_rows_preserves_key_order_rather_than_sorting() {
         let parsed = parse_rows(r#"{"zeta":1,"alpha":2}"#).unwrap();
         assert_eq!(
-            parsed[0]
-                .0
-                .iter()
-                .map(|(k, _)| k.as_str())
-                .collect::<Vec<_>>(),
+            parsed[0].0.iter().map(|(k, _)| &**k).collect::<Vec<_>>(),
             vec!["zeta", "alpha"]
         );
     }
