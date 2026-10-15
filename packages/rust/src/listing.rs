@@ -168,8 +168,10 @@ fn read_into(dir: &Path, listing: &mut Listing) {
     });
 }
 
-#[cfg(all(unix, not(target_os = "linux")))]
-fn read_into(dir: &Path, listing: &mut Listing) {
+/// `read_into` for Unix systems without `RawDir`. Built under test too, so the
+/// Linux unit run covers it.
+#[cfg(all(unix, any(test, not(target_os = "linux"))))]
+fn read_dir_with_copies_into(dir: &Path, listing: &mut Listing) {
     use rustix::fs::Dir;
     use std::os::unix::ffi::OsStrExt;
     let Ok(fd) = open_dir(dir) else {
@@ -212,6 +214,8 @@ fn seen_flags(symlink: bool, dir: bool, file: bool) -> Seen {
 
 #[cfg(not(unix))]
 use read_dir_into as read_into;
+#[cfg(all(unix, not(target_os = "linux")))]
+use read_dir_with_copies_into as read_into;
 
 /// A name's first eight bytes as a big-endian word, which orders names as
 /// their bytes do as far as those bytes go.
@@ -338,6 +342,16 @@ mod tests {
     fn read_into_lists_the_entries_without_dot_and_dot_dot() {
         let dir = fixture();
         assert_eq!(read_with(read_into, dir.path()), fixture_entries());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_dir_with_copies_into_lists_the_entries_without_dot_and_dot_dot() {
+        let dir = fixture();
+        assert_eq!(
+            read_with(read_dir_with_copies_into, dir.path()),
+            fixture_entries()
+        );
     }
 
     #[test]
