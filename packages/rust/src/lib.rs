@@ -20,6 +20,7 @@ pub mod differ;
 pub mod extension_resolution;
 #[doc(hidden)]
 pub mod functions;
+mod gitignore_frame;
 #[doc(hidden)]
 pub mod infer;
 #[doc(hidden)]
