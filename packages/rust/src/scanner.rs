@@ -34,7 +34,28 @@ fn with_slashes(path: &str, native: char) -> String {
 /// Walk a directory tree and return all file paths paired with their matching table name.
 /// Ignored paths and directories are skipped. Only files (not directories) are returned.
 pub fn scan_directory(root: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, String)> {
-    scan_directory_reporting(root, matcher, &mut |_| {}, &mut |_, _| {})
+    paired(scan_directory_reporting(
+        root,
+        matcher,
+        &mut |_| {},
+        &mut |_, _| {},
+    ))
+}
+
+/// A file a scan matched to a table: its path, the same path relative to the
+/// scan root as `/`-separated text, and the table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    pub path: PathBuf,
+    pub rel_path: String,
+    pub table_name: String,
+}
+
+fn paired(found: Vec<Found>) -> Vec<(PathBuf, String)> {
+    found
+        .into_iter()
+        .map(|found| (found.path, found.table_name))
+        .collect()
 }
 
 /// [`scan_directory`], calling `on_file` with the running count of files the
@@ -54,7 +75,7 @@ pub fn scan_directory_reporting(
     matcher: &TableMatcher,
     on_file: &mut dyn FnMut(u64),
     on_match: &mut dyn FnMut(&Path, &str),
-) -> Vec<(PathBuf, String)> {
+) -> Vec<Found> {
     scan_below(root, root, matcher, on_file, on_match)
 }
 
@@ -66,7 +87,26 @@ pub fn scan_directory_reporting(
 /// `mkdir` or a rename into the tree — since the OS reports one event for the
 /// directory and none for the files already inside it.
 pub fn scan_subtree(root: &Path, dir: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, String)> {
-    scan_below(root, dir, matcher, &mut |_| {}, &mut |_, _| {})
+    paired(scan_below(root, dir, matcher, &mut |_| {}, &mut |_, _| {}))
+}
+
+/// One [`Found`] per table whose glob matches `rel_path`, in declaration
+/// order, for the file of that name in `dir`.
+fn found_in(matcher: &TableMatcher, rel_path: &Path, dir: &Path) -> Vec<Found> {
+    let matches = matcher.match_all(rel_path);
+    if matches.is_empty() {
+        return Vec::new();
+    }
+    let path = dir.join(rel_path.file_name().unwrap_or_default());
+    let rel = to_slash(rel_path);
+    matches
+        .into_iter()
+        .map(|m| Found {
+            path: path.clone(),
+            rel_path: rel.clone(),
+            table_name: m.table_name,
+        })
+        .collect()
 }
 
 /// `start` and every directory below it that [`scan_subtree`] would enter,
@@ -99,7 +139,7 @@ fn scan_below(
     matcher: &TableMatcher,
     on_file: &mut dyn FnMut(u64),
     on_match: &mut dyn FnMut(&Path, &str),
-) -> Vec<(PathBuf, String)> {
+) -> Vec<Found> {
     let mut results = Vec::new();
     let mut seen: u64 = 0;
     let gitignore = matcher.respects_gitignore();
@@ -126,20 +166,17 @@ fn scan_below(
         start,
         walker,
         &|rel_path| !matcher.is_ignored(rel_path),
-        &|rel_path, dir| {
-            let path = dir.join(rel_path.file_name().unwrap_or_default());
-            (rel_path, path)
-        },
-        &mut |(rel_path, path)| {
+        // Matching and the relative path are made on the worker that found
+        // the file: the calling thread hands out every file in turn, so any
+        // per-file work left to it is serial.
+        &|rel_path, dir| found_in(matcher, &rel_path, dir),
+        &mut |found| {
             seen += 1;
             on_file(seen);
-
-            // Fan-out: a file matching N tables' globs yields N (path, table)
-            // pairs, one per matching table, in declaration order.
-            for m in matcher.match_all(&rel_path) {
-                on_match(&path, &m.table_name);
-                results.push((path.clone(), m.table_name));
+            for found in &found {
+                on_match(&found.path, &found.table_name);
             }
+            results.extend(found);
         },
     );
 
@@ -956,9 +993,40 @@ mod tests {
             &mut |_, _| {},
         );
 
-        assert_eq!(rows, vec![(root.join("scanner.rs"), "source".to_owned())]);
+        assert_eq!(
+            rows,
+            vec![Found {
+                path: root.join("scanner.rs"),
+                rel_path: "scanner.rs".to_owned(),
+                table_name: "source".to_owned(),
+            }]
+        );
         assert_eq!(counts.first(), Some(&1));
         assert!(counts.windows(2).all(|pair| pair[1] == pair[0] + 1));
+    }
+
+    #[test]
+    fn found_in_fans_a_file_out_to_every_matching_table_in_order() {
+        let matcher =
+            TableMatcher::new(&[("docs/**/*.md", "notes"), ("**/*.md", "all")], &[]).unwrap();
+        let rel = Path::new("docs").join("a").join("b.md");
+        let found = found_in(&matcher, &rel, Path::new("/r/docs/a"));
+        let path = Path::new("/r/docs/a").join("b.md");
+        let expected: Vec<Found> = ["notes", "all"]
+            .into_iter()
+            .map(|table| Found {
+                path: path.clone(),
+                rel_path: "docs/a/b.md".to_owned(),
+                table_name: table.to_owned(),
+            })
+            .collect();
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn found_in_is_empty_for_a_file_no_table_matches() {
+        let matcher = TableMatcher::new(&[("*.md", "notes")], &[]).unwrap();
+        assert!(found_in(&matcher, Path::new("a.txt"), Path::new("/r")).is_empty());
     }
 
     // Real directory-walk behavior is covered by `tests/scanner.rs`
