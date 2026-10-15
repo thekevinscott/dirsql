@@ -303,6 +303,28 @@ mod tests {
     fn parse_rows_rejects_a_line_that_is_not_an_object() {
         let err = parse_rows("3").unwrap_err();
         assert!(err.starts_with("line 1 is not a JSON object"), "got: {err}");
+        assert!(err.contains("expected a JSON row object"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_rows_rejects_anything_after_the_object_on_its_line() {
+        let err = parse_rows(r#"{"a":1} {"b":2}"#).unwrap_err();
+        assert!(err.starts_with("line 1 is not a JSON object"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_rows_reads_a_key_spelled_with_an_escape() {
+        let row = &rows(&[r#"{"a\u0062":1}"#])[0];
+        assert_eq!(row.get("ab"), Some(&serde_json::json!(1)));
+    }
+
+    #[test]
+    fn parse_rows_shares_one_allocation_per_key_across_a_blocks_rows() {
+        let parsed = rows(&[r#"{"a":1,"b":2}"#, r#"{"b":3,"a":4}"#]);
+        let key = |row: usize, i: usize| parsed[row].0[i].0.as_ptr();
+        assert_eq!(key(0, 0), key(1, 1));
+        assert_eq!(key(0, 1), key(1, 0));
+        assert_ne!(key(0, 0), key(0, 1));
     }
 
     #[test]
