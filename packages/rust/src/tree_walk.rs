@@ -4,7 +4,10 @@
 //! of every other directory, so workers explore ahead of the walk while the
 //! calling thread hands out what they found in depth-first order.
 
-use std::sync::{Condvar, Mutex};
+use std::cmp::Ordering as Order;
+use std::collections::BinaryHeap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 
 /// What exploring a directory yields: a leaf to hand out, or a directory to
@@ -18,24 +21,69 @@ pub(crate) enum Step<D, L> {
 /// cores; below it, spawning workers costs more than the exploring.
 const PARALLEL_DIRS: usize = 8;
 
-enum Item<L> {
-    Dir(usize),
+enum Item<D, L> {
+    Dir(Arc<Slot<D, L>>),
     Leaf(L),
 }
 
-struct Queue<D, L> {
-    /// Each directory found, until a thread claims it.
-    unclaimed: Vec<Option<D>>,
-    /// Each explored directory's items, until the walk reaches it.
-    explored: Vec<Option<Vec<Item<L>>>>,
-    /// Unclaimed directories, the next one the walk will want on top.
-    open: Vec<usize>,
+/// One directory found: unexplored until a thread takes it, then its items
+/// once that thread is through. Each directory has its own locks, so the walk
+/// waiting on one never contends with workers exploring others.
+struct Slot<D, L> {
+    /// The directory's place in the walk: each step's index among its
+    /// parent's directories, root first, so keys order as the walk reaches
+    /// them.
+    key: Vec<u32>,
+    dir: Mutex<Option<D>>,
+    explored: Mutex<Explored<D, L>>,
+    ready: Condvar,
+}
+
+struct Explored<D, L> {
+    items: Option<Vec<Item<D, L>>>,
+    /// Whether the walk is waiting on these items, so a worker signals only
+    /// then.
+    awaited: bool,
+}
+
+/// Directories found and not yet claimed. Workers take the one the walk will
+/// reach first, so they explore just ahead of it rather than deep in a subtree
+/// it is far from, which would leave it to explore its next directory itself.
+struct Open<D, L> {
+    slots: BinaryHeap<Pending<D, L>>,
+    /// Workers waiting for a directory, so a find wakes only as many as it
+    /// has work for.
+    idle: usize,
     done: bool,
 }
 
+/// A found directory, ordered so the heap's greatest is the earliest key.
+struct Pending<D, L>(Arc<Slot<D, L>>);
+
+impl<D, L> PartialEq for Pending<D, L> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.key == other.0.key
+    }
+}
+
+impl<D, L> Eq for Pending<D, L> {}
+
+impl<D, L> PartialOrd for Pending<D, L> {
+    fn partial_cmp(&self, other: &Self) -> Option<Order> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<D, L> Ord for Pending<D, L> {
+    fn cmp(&self, other: &Self) -> Order {
+        other.0.key.cmp(&self.0.key)
+    }
+}
+
 struct Shared<'e, D, L> {
-    queue: Mutex<Queue<D, L>>,
-    changed: Condvar,
+    open: Mutex<Open<D, L>>,
+    found_dir: Condvar,
+    found: AtomicUsize,
     explore: &'e (dyn Fn(D) -> Vec<Step<D, L>> + Sync),
 }
 
@@ -47,118 +95,140 @@ pub(crate) fn walk_in_order<D: Send, L: Send>(
     visit: &mut dyn FnMut(L),
 ) {
     let shared = Shared {
-        queue: Mutex::new(Queue {
-            unclaimed: vec![Some(root)],
-            explored: vec![None],
-            open: Vec::new(),
+        open: Mutex::new(Open {
+            slots: BinaryHeap::new(),
+            idle: 0,
             done: false,
         }),
-        changed: Condvar::new(),
+        found_dir: Condvar::new(),
+        found: AtomicUsize::new(1),
         explore,
     };
     thread::scope(|scope| {
         let mut spawned = false;
-        let mut stack = vec![shared.obtain(0).into_iter()];
+        let mut stack = vec![shared.explore(root, &[]).into_iter()];
         while let Some(items) = stack.last_mut() {
             match items.next() {
                 Some(Item::Leaf(leaf)) => visit(leaf),
-                Some(Item::Dir(id)) => {
-                    if !spawned && shared.found() >= PARALLEL_DIRS {
+                Some(Item::Dir(slot)) => {
+                    if !spawned && shared.found.load(Ordering::Relaxed) >= PARALLEL_DIRS {
                         spawned = true;
                         let workers = thread::available_parallelism().map_or(1, usize::from);
                         for _ in 1..workers {
                             scope.spawn(|| shared.work());
                         }
                     }
-                    stack.push(shared.obtain(id).into_iter());
+                    stack.push(shared.obtain(&slot).into_iter());
                 }
                 None => {
                     stack.pop();
                 }
             }
         }
-        shared.lock().done = true;
-        shared.changed.notify_all();
+        shared.open_lock().done = true;
+        shared.found_dir.notify_all();
     });
 }
 
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().expect("exploring a directory does not panic")
+}
+
 impl<D, L> Shared<'_, D, L> {
-    fn lock(&self) -> std::sync::MutexGuard<'_, Queue<D, L>> {
-        self.queue
-            .lock()
-            .expect("exploring a directory does not panic")
+    fn open_lock(&self) -> MutexGuard<'_, Open<D, L>> {
+        lock(&self.open)
     }
 
-    fn found(&self) -> usize {
-        self.lock().unclaimed.len()
-    }
-
-    /// Directory `id`'s items: explored here if no worker has claimed it,
+    /// Directory `slot`'s items: explored here if no worker has claimed it,
     /// else once the worker that has is through.
-    fn obtain(&self, id: usize) -> Vec<Item<L>> {
-        let mut queue = self.lock();
+    fn obtain(&self, slot: &Slot<D, L>) -> Vec<Item<D, L>> {
+        let unclaimed = lock(&slot.dir).take();
+        if let Some(dir) = unclaimed {
+            return self.explore(dir, &slot.key);
+        }
+        let mut explored = lock(&slot.explored);
         loop {
-            if let Some(items) = queue.explored[id].take() {
+            if let Some(items) = explored.items.take() {
                 return items;
             }
-            if let Some(dir) = queue.unclaimed[id].take() {
-                drop(queue);
-                return self.explore(dir);
-            }
-            queue = self
-                .changed
-                .wait(queue)
+            explored.awaited = true;
+            explored = slot
+                .ready
+                .wait(explored)
                 .expect("exploring a directory does not panic");
         }
     }
 
     fn work(&self) {
-        let mut queue = self.lock();
-        loop {
-            if queue.done {
-                return;
-            }
-            let claimed = queue.open.pop().map(|id| (id, queue.unclaimed[id].take()));
-            match claimed {
-                Some((id, Some(dir))) => {
-                    drop(queue);
-                    let items = self.explore(dir);
-                    queue = self.lock();
-                    queue.explored[id] = Some(items);
-                    self.changed.notify_all();
-                }
-                Some((_, None)) => {}
-                None => {
-                    queue = self
-                        .changed
-                        .wait(queue)
-                        .expect("exploring a directory does not panic");
-                }
+        while let Some(slot) = self.claim() {
+            let unclaimed = lock(&slot.dir).take();
+            let Some(dir) = unclaimed else {
+                continue;
+            };
+            let items = self.explore(dir, &slot.key);
+            let mut explored = lock(&slot.explored);
+            explored.items = Some(items);
+            if explored.awaited {
+                slot.ready.notify_one();
             }
         }
     }
 
-    /// Explore `dir`, registering the directories it holds for any thread
-    /// to claim.
-    fn explore(&self, dir: D) -> Vec<Item<L>> {
+    /// The next directory found, or `None` once the walk is over.
+    fn claim(&self) -> Option<Arc<Slot<D, L>>> {
+        let mut open = self.open_lock();
+        loop {
+            if open.done {
+                return None;
+            }
+            if let Some(Pending(slot)) = open.slots.pop() {
+                return Some(slot);
+            }
+            open.idle += 1;
+            open = self
+                .found_dir
+                .wait(open)
+                .expect("exploring a directory does not panic");
+            open.idle -= 1;
+        }
+    }
+
+    /// Explore `dir`, at `key`, registering the directories it holds for any
+    /// thread to claim.
+    fn explore(&self, dir: D, key: &[u32]) -> Vec<Item<D, L>> {
         let steps = (self.explore)(dir);
-        let mut queue = self.lock();
         let mut dirs = Vec::new();
-        let items = steps
+        let items: Vec<Item<D, L>> = steps
             .into_iter()
             .map(|step| match step {
                 Step::Leaf(leaf) => Item::Leaf(leaf),
                 Step::Dir(dir) => {
-                    let id = queue.unclaimed.len();
-                    queue.unclaimed.push(Some(dir));
-                    queue.explored.push(None);
-                    dirs.push(id);
-                    Item::Dir(id)
+                    let index = u32::try_from(dirs.len()).unwrap_or(u32::MAX);
+                    let slot = Arc::new(Slot {
+                        key: [key, &[index]].concat(),
+                        dir: Mutex::new(Some(dir)),
+                        explored: Mutex::new(Explored {
+                            items: None,
+                            awaited: false,
+                        }),
+                        ready: Condvar::new(),
+                    });
+                    dirs.push(Arc::clone(&slot));
+                    Item::Dir(slot)
                 }
             })
             .collect();
-        queue.open.extend(dirs.into_iter().rev());
-        self.changed.notify_all();
+        if dirs.is_empty() {
+            return items;
+        }
+        self.found.fetch_add(dirs.len(), Ordering::Relaxed);
+        let mut open = self.open_lock();
+        let wake = open.idle.min(dirs.len());
+        open.slots.extend(dirs.into_iter().map(Pending));
+        drop(open);
+        for _ in 0..wake {
+            self.found_dir.notify_one();
+        }
         items
     }
 }
@@ -224,6 +294,30 @@ mod tests {
         };
         walk_in_order(String::from("r"), &explore, &mut |_| {});
         threads.into_inner().unwrap().len()
+    }
+
+    fn pending(key: &[u32]) -> Pending<(), ()> {
+        Pending(Arc::new(Slot {
+            key: key.to_vec(),
+            dir: Mutex::new(None),
+            explored: Mutex::new(Explored {
+                items: None,
+                awaited: false,
+            }),
+            ready: Condvar::new(),
+        }))
+    }
+
+    #[test]
+    fn the_open_directories_yield_the_one_the_walk_reaches_first() {
+        let mut open = BinaryHeap::new();
+        for key in [&[1][..], &[0, 2], &[0], &[0, 1, 5]] {
+            open.push(pending(key));
+        }
+        let order: Vec<Vec<u32>> = std::iter::from_fn(|| open.pop())
+            .map(|Pending(slot)| slot.key.clone())
+            .collect();
+        assert_eq!(order, vec![vec![0], vec![0, 1, 5], vec![0, 2], vec![1]]);
     }
 
     #[test]

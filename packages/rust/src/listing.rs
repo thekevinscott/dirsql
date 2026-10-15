@@ -100,6 +100,13 @@ impl Listing {
         });
     }
 
+    /// Whether an entry is named `name`; the listing must be sorted.
+    pub(crate) fn holds(&self, name: &OsStr) -> bool {
+        self.entries
+            .binary_search_by(|listed| self.name(listed).cmp(name))
+            .is_ok()
+    }
+
     pub(crate) fn name(&self, listed: &Listed) -> &OsStr {
         self.names.get(listed.start, listed.end)
     }
@@ -139,7 +146,7 @@ fn read_into(dir: &Path, listing: &mut Listing) {
     let Ok(fd) = rustix::fs::open(dir, flags, Mode::empty()) else {
         return;
     };
-    let Ok(mut entries) = Dir::read_from(&fd) else {
+    let Ok(mut entries) = Dir::new(fd) else {
         return;
     };
     while let Some(Ok(entry)) = entries.read() {
@@ -229,6 +236,19 @@ mod tests {
         listing.push(OsStr::new("first"), Seen::File);
         listing.push(OsStr::new("second"), Seen::Other);
         assert_eq!(names(&listing), ["first", "second"]);
+    }
+
+    #[test]
+    fn a_sorted_listing_holds_exactly_the_names_pushed() {
+        let mut listing = Listing::default();
+        for name in [".gitignore", "b", ".git", "a"] {
+            listing.push(OsStr::new(name), Seen::File);
+        }
+        listing.sort();
+        assert!(listing.holds(OsStr::new(".git")));
+        assert!(listing.holds(OsStr::new("a")));
+        assert!(!listing.holds(OsStr::new(".gi")));
+        assert!(!Listing::default().holds(OsStr::new(".git")));
     }
 
     #[test]
