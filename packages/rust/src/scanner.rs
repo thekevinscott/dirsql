@@ -1,8 +1,8 @@
+use crate::gitignore_frame::Frame;
 use crate::listing::{Listing, Seen};
 use crate::matcher::{GlobError, Pattern, TableMatcher};
 use crate::tree_walk::{Step, walk_in_order};
 use ignore::Match;
-use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::fs;
@@ -116,9 +116,7 @@ fn scan_below(
         glob: Some(matcher.walk_glob()),
         gitignore,
         in_repo: repo.is_some(),
-        frames: repo.map_or_else(Vec::new, |top| {
-            gitignores_above(start, top, &load_gitignore)
-        }),
+        frames: repo.map_or_else(Vec::new, |top| gitignores_above(start, top, &Frame::load)),
         dirs: false,
     };
     walk(
@@ -215,7 +213,7 @@ pub(crate) fn scan_glob_rows<T: Send>(
         glob: Some(glob),
         gitignore,
         in_repo: repo.is_some(),
-        frames: repo.map_or_else(Vec::new, |top| gitignores_above(root, top, &load_gitignore)),
+        frames: repo.map_or_else(Vec::new, |top| gitignores_above(root, top, &Frame::load)),
         dirs: false,
     };
     let mut results = Vec::new();
@@ -560,9 +558,9 @@ impl<'a> Place<'a> {
             walk.frames.clear();
         }
         if walk.in_repo
-            && let Some(matcher) = load_gitignore(&dir)
+            && let Some(frame) = Frame::load(&dir)
         {
-            walk.frames.push(Arc::new(matcher));
+            walk.frames.push(Arc::new(frame));
         }
         let listing = Listing::read(&dir);
         let taken = judge_all(listing.entries(), &|listed| {
@@ -642,7 +640,7 @@ struct Walk<'a> {
     in_repo: bool,
     /// The `.gitignore` files in force at the walk's current position, root
     /// first.
-    frames: Vec<Arc<Gitignore>>,
+    frames: Vec<Arc<Frame>>,
     /// Whether each directory entered is also visited, as a leaf.
     dirs: bool,
 }
@@ -843,8 +841,8 @@ fn classify(is_dir: bool, is_file: bool, linked: bool) -> Option<Kind> {
 fn gitignores_above(
     start: &Path,
     top: &Path,
-    load: &dyn Fn(&Path) -> Option<Gitignore>,
-) -> Vec<Arc<Gitignore>> {
+    load: &dyn Fn(&Path) -> Option<Frame>,
+) -> Vec<Arc<Frame>> {
     dirs_above(start, top)
         .into_iter()
         .filter_map(load)
@@ -871,18 +869,6 @@ fn dirs_above<'a>(start: &'a Path, top: &Path) -> Vec<&'a Path> {
     dirs
 }
 
-/// Compile the `.gitignore` in `dir`, if one exists. An unparsable file
-/// degrades to no matcher rather than failing the scan.
-fn load_gitignore(dir: &Path) -> Option<Gitignore> {
-    let file = dir.join(".gitignore");
-    if !file.is_file() {
-        return None;
-    }
-    let mut builder = GitignoreBuilder::new(dir);
-    builder.add(&file);
-    builder.build().ok()
-}
-
 /// Whether the `.gitignore` files of the repo enclosing `path` ignore it, or
 /// a directory above it, as the walk would have: for a path a watcher reports
 /// without having walked to it.
@@ -893,8 +879,8 @@ pub(crate) fn is_gitignored_path(path: &Path, is_dir: bool) -> bool {
     else {
         return false;
     };
-    for frame in gitignores_above(path, top, &load_gitignore).iter().rev() {
-        match frame.matched_path_or_any_parents(path, is_dir) {
+    for frame in gitignores_above(path, top, &Frame::load).iter().rev() {
+        match frame.gitignore().matched_path_or_any_parents(path, is_dir) {
             Match::Ignore(_) => return true,
             Match::Whitelist(_) => return false,
             Match::None => {}
@@ -905,7 +891,7 @@ pub(crate) fn is_gitignored_path(path: &Path, is_dir: bool) -> bool {
 
 /// Whether the `.gitignore` files in force mark `path` ignored. Deeper files
 /// take precedence (git's rule), and a whitelisting `!pattern` un-ignores.
-fn is_gitignored(frames: &[Arc<Gitignore>], path: &Path, is_dir: bool) -> bool {
+fn is_gitignored(frames: &[Arc<Frame>], path: &Path, is_dir: bool) -> bool {
     for frame in frames.iter().rev() {
         match frame.matched(path, is_dir) {
             Match::Ignore(_) => return true,
@@ -1362,12 +1348,8 @@ mod tests {
     }
 
     /// A gitignore frame compiled from in-memory lines; no filesystem.
-    fn frame(dir: &str, lines: &[&str]) -> Arc<Gitignore> {
-        let mut builder = GitignoreBuilder::new(Path::new(dir));
-        for line in lines {
-            builder.add_line(None, line).unwrap();
-        }
-        Arc::new(builder.build().unwrap())
+    fn frame(dir: &str, lines: &[&str]) -> Arc<Frame> {
+        Arc::new(Frame::from_lines(Path::new(dir), lines))
     }
 
     #[test]
@@ -1418,20 +1400,18 @@ mod tests {
         let root = package.ancestors().nth(2).unwrap();
         let start = package.join("src");
 
-        assert!(!gitignores_above(&start, root, &load_gitignore).is_empty());
+        assert!(!gitignores_above(&start, root, &Frame::load).is_empty());
     }
 
     #[test]
     fn gitignores_above_loads_the_ancestors_holding_one_outermost_first() {
-        let load = |dir: &Path| {
-            (dir != Path::new("/r/a")).then(|| {
-                let mut builder = GitignoreBuilder::new(dir);
-                builder.add_line(None, "*.log").unwrap();
-                builder.build().unwrap()
-            })
-        };
+        let load =
+            |dir: &Path| (dir != Path::new("/r/a")).then(|| Frame::from_lines(dir, &["*.log"]));
         let frames = gitignores_above(Path::new("/r/a/b/c"), Path::new("/r"), &load);
-        let roots: Vec<&Path> = frames.iter().map(|frame| frame.path()).collect();
+        let roots: Vec<&Path> = frames
+            .iter()
+            .map(|frame| frame.gitignore().path())
+            .collect();
         assert_eq!(roots, vec![Path::new("/r"), Path::new("/r/a/b")]);
     }
 
@@ -1454,7 +1434,7 @@ mod tests {
     fn walk_with<'a>(
         ignore: &'a TableMatcher,
         glob: Option<&'a PathGlob>,
-        frames: Vec<Arc<Gitignore>>,
+        frames: Vec<Arc<Frame>>,
     ) -> Walk<'a> {
         Walk {
             ignore,
