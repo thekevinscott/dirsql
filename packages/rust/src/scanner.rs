@@ -1,6 +1,6 @@
 use crate::listing::{Listing, Seen};
 use crate::matcher::{GlobError, Pattern, TableMatcher};
-use crate::tree_walk::{Step, walk_in_order};
+use crate::tree_walk::{Step, busy_workers, walk_in_order};
 use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::borrow::Cow;
@@ -760,15 +760,16 @@ enum Taken {
 /// workers costs more than the judging.
 const PARALLEL_ENTRIES: usize = 65536;
 
-/// `judge` applied to each of `items`, in order, shared across the cores
-/// once there are enough items to pay for the threads.
+/// `judge` applied to each of `items`, in order, shared across the cores the
+/// walk leaves idle once there are enough items to pay for the threads.
 fn judge_all<T: Sync, R: Send>(items: &[T], judge: &(dyn Fn(&T) -> R + Sync)) -> Vec<R> {
     // Asking for the core count reads cgroup files, too dear to pay in every
     // small directory of a deep tree.
     if items.len() < PARALLEL_ENTRIES {
         return items.iter().map(judge).collect();
     }
-    let workers = thread::available_parallelism().map_or(1, usize::from);
+    let cores = thread::available_parallelism().map_or(1, usize::from);
+    let workers = idle_cores(cores, busy_workers());
     let per_worker = items.len().div_ceil(workers);
     thread::scope(|scope| {
         let handles: Vec<_> = items
@@ -780,6 +781,12 @@ fn judge_all<T: Sync, R: Send>(items: &[T], judge: &(dyn Fn(&T) -> R + Sync)) ->
             .flat_map(|handle| handle.join().expect("judging an entry does not panic"))
             .collect()
     })
+}
+
+/// The cores a directory may split its judging across: those the walk's busy
+/// workers leave, and always the calling thread's own.
+fn idle_cores(cores: usize, _busy: usize) -> usize {
+    cores
 }
 
 /// What the walk makes of an entry seen as `seen`, following a symlink only
@@ -963,6 +970,14 @@ mod tests {
 
     // Real directory-walk behavior is covered by `tests/scanner.rs`
     // (unit-lint isolation); only the pure predicate is tested here.
+
+    #[test]
+    fn idle_cores_are_those_busy_workers_leave_and_never_fewer_than_one() {
+        assert_eq!(idle_cores(32, 0), 32);
+        assert_eq!(idle_cores(4, 1), 3);
+        assert_eq!(idle_cores(32, 31), 1);
+        assert_eq!(idle_cores(32, 40), 1);
+    }
 
     #[test]
     fn judge_all_keeps_the_order_of_its_items() {

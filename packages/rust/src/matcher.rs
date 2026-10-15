@@ -1,3 +1,4 @@
+use crate::per_thread::PerThread;
 use crate::posix_class::{class_regex, expand_posix_classes};
 use crate::scanner::{PathGlob, compile_glob, compile_globs};
 use globset::GlobBuilder;
@@ -18,30 +19,33 @@ pub enum GlobError {
 /// path text.
 #[derive(Debug, Clone)]
 pub(crate) struct Pattern {
-    path: Regex,
+    path: PerThread<Regex>,
     /// For a `**/`-led glob whose remainder is one component: that remainder,
     /// which a path matches exactly when its last component does.
-    last_component: Option<Regex>,
+    last_component: Option<PerThread<Regex>>,
 }
 
 impl Pattern {
     /// `*` and `?` stop at `/`; `**` crosses it.
     pub(crate) fn new(glob: &str) -> Result<Self, GlobError> {
         let last_component = match glob.strip_prefix("**/") {
-            Some(rest) if !rest.is_empty() && !rest.contains('/') => Some(compile(rest)?),
+            Some(rest) if !rest.is_empty() && !rest.contains('/') => {
+                Some(PerThread::new(compile(rest)?))
+            }
             _ => None,
         };
         Ok(Self {
-            path: compile(glob)?,
+            path: PerThread::new(compile(glob)?),
             last_component,
         })
     }
 
     pub(crate) fn is_match(&self, path: &Path) -> bool {
         if let Some((regex, name)) = self.last_component.as_ref().zip(path.file_name()) {
-            return regex.is_match(&name.to_string_lossy());
+            return regex.with(|regex| regex.is_match(&name.to_string_lossy()));
         }
-        self.path.is_match(&crate::scanner::slashed(path))
+        self.path
+            .with(|regex| regex.is_match(&crate::scanner::slashed(path)))
     }
 
     #[cfg(test)]

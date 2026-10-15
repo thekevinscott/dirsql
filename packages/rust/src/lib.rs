@@ -33,6 +33,7 @@ mod on_file;
 pub mod parsed_vtab;
 #[doc(hidden)]
 pub mod path_table;
+mod per_thread;
 #[doc(hidden)]
 pub mod persist;
 mod posix_class;
