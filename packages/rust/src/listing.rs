@@ -50,7 +50,7 @@ impl Chunk {
     }
 
     fn is_full(&self) -> bool {
-        self.entries.len() > usize::MAX - CHUNK_ENTRIES
+        self.entries.len() == CHUNK_ENTRIES
     }
 
     fn push(&mut self, name: &OsStr, seen: Seen) {
