@@ -66,10 +66,10 @@ use crate::persist::{
     resolve_persist_path, upsert_file, write_meta,
 };
 use crate::progress::Progress;
-use crate::scanner::scan_directory_reporting;
+use crate::scanner::{Found, scan_directory_reporting};
 use crate::watcher::{FileEvent, WatchScope, Watcher};
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -493,7 +493,7 @@ type ScanFn<'a> = &'a dyn Fn(
     &TableMatcher,
     &mut dyn FnMut(u64),
     &mut dyn FnMut(&Path, &str),
-) -> Vec<(PathBuf, String)>;
+) -> Vec<Found>;
 
 impl DirSQL {
     /// Start building a `DirSQL`. See [`DirSQLBuilder`] for the available
@@ -1287,19 +1287,19 @@ impl DirSQL {
         // re-parsed.
         let (scanned_files, deleted) = match &persist_ctx {
             None => {
-                let mut files = Vec::with_capacity(scanned.len());
-                for (path, table_name) in scanned {
-                    files.push(ScannedFile {
-                        rel_path: relative_path(anchors.of(&table_name), &path),
-                        abs_path: path,
-                        table_name,
+                let files = scanned
+                    .into_iter()
+                    .map(|found| ScannedFile {
+                        abs_path: found.path,
+                        rel_path: found.rel_path,
+                        table_name: found.table_name,
                         stat: None,
                         trusted: false,
-                    });
-                }
+                    })
+                    .collect();
                 (files, Vec::new())
             }
-            Some(ctx) => reconcile_scan(&anchors, scanned, ctx, &RealFs)?,
+            Some(ctx) => reconcile_scan(scanned, ctx, &RealFs)?,
         };
 
         Ok(PreparedBuild {
@@ -1369,7 +1369,7 @@ impl DirSQL {
             anchors,
             ignore,
             scanned_files,
-            mut early,
+            early,
             persist,
             poll_interval,
             hint_legacy_files_table,
@@ -1479,36 +1479,18 @@ impl DirSQL {
         let mut on_file_failures: Vec<OnFileFailure> = Vec::new();
         let mut batch_files: HashMap<String, Vec<String>> = HashMap::new();
 
-        // Per-file hooks run file by file; a per-table hook's files are
-        // gathered, in scan order, for one run after the per-file pass.
-        let mut per_file: Vec<(ScannedFile, Arc<OnFileFn>)> = Vec::new();
-        let mut batches: Vec<(String, Arc<OnFilesFn>, Vec<ScannedFile>)> = Vec::new();
-        for file in scanned_files {
-            match on_file_map.get(&file.table_name) {
-                Some(Hook::PerFile(hook)) => {
-                    if !file.trusted {
-                        per_file.push((file, Arc::clone(hook)));
-                    }
-                }
-                Some(Hook::PerTable(hook)) => {
-                    match batches
-                        .iter_mut()
-                        .find(|(name, _, _)| *name == file.table_name)
-                    {
-                        Some((_, _, files)) => files.push(file),
-                        None => {
-                            batches.push((file.table_name.clone(), Arc::clone(hook), vec![file]))
-                        }
-                    }
-                }
-                None => {
-                    return Err(DirSqlError::Ddl(format!(
-                        "missing on-file function for table {}",
-                        file.table_name
-                    )));
-                }
-            }
-        }
+        // Grouping walks every scanned file, so it runs beside the early
+        // hooks' inserts instead of ahead of them.
+        let (grouped, streamed) = std::thread::scope(|scope| {
+            let grouping = scope.spawn(|| group_scanned(scanned_files, &on_file_map));
+            let streamed = stream_early(&db, early, &strict_map);
+            (
+                grouping.join().expect("grouping scanned files panicked"),
+                streamed,
+            )
+        });
+        let streamed = streamed?;
+        let (per_file, batches) = grouped?;
 
         // The phase a user actually waits on: one `on_file` round trip per
         // file or per table, plus whatever the table's DDL triggers on insert.
@@ -1596,11 +1578,9 @@ impl DirSQL {
             let current = persist_ready.as_ref().is_some_and(|(deleted, _, _)| {
                 files.iter().all(|f| f.trusted) && !deleted.iter().any(|(_, t)| *t == table_name)
             });
-            if !current {
+            if !current && !streamed.contains(&table_name) {
                 let table_root = anchors.of(&table_name);
-                let production = early
-                    .remove(&table_name)
-                    .unwrap_or_else(|| start_hook(hook, abs_paths.into_iter()));
+                let production = start_hook(hook, abs_paths.into_iter());
                 let outcome = stream_table_rows(&db, &table_name, production, strict)
                     .map_err(map_db_error)?;
                 match outcome {
@@ -2089,7 +2069,7 @@ fn scan_groups(
     scan: ScanFn<'_>,
     progress: &mut Progress,
     on_match: &mut dyn FnMut(&Path, &str),
-) -> (Vec<(PathBuf, String)>, u64) {
+) -> (Vec<Found>, u64) {
     let mut seen = 0;
     let mut scanned = Vec::new();
     for group in groups {
@@ -2184,12 +2164,12 @@ fn compile_groups(
 fn empty_table_warnings(
     tables: &[Table],
     anchors: &TableAnchors,
-    scanned: &[(PathBuf, String)],
+    scanned: &[Found],
 ) -> Vec<String> {
     tables
         .iter()
         .filter(|table| table.warn_when_empty)
-        .filter(|table| !scanned.iter().any(|(_, name)| *name == table.name))
+        .filter(|table| !scanned.iter().any(|found| found.table_name == table.name))
         .map(|table| {
             format!(
                 "dirsql: table '{}': glob '{}' matched no files under {}",
@@ -2300,8 +2280,7 @@ impl FileSystem for RealFs {
 /// and which were removed since the last cache write.
 #[allow(clippy::type_complexity)]
 fn reconcile_scan(
-    anchors: &TableAnchors,
-    scanned: Vec<(PathBuf, String)>,
+    scanned: Vec<Found>,
     ctx: &PersistContext,
     fs: &dyn FileSystem,
 ) -> Result<(Vec<ScannedFile>, Vec<(String, String)>)> {
@@ -2311,8 +2290,12 @@ fn reconcile_scan(
     let mut seen: std::collections::HashSet<(String, String)> =
         std::collections::HashSet::with_capacity(scanned.len());
 
-    for (path, table_name) in scanned {
-        let rel_path = relative_path(anchors.of(&table_name), &path);
+    for Found {
+        path,
+        rel_path,
+        table_name,
+    } in scanned
+    {
         seen.insert((rel_path.clone(), table_name.clone()));
 
         let stat = fs.stat(&path)?;
@@ -2559,6 +2542,76 @@ fn run_channel_loop(db: DirSQL, tx: UnboundedSender<RowEvent>) {
 /// The absolute path is the one the scan found. Relative paths are cloned
 /// when `keep_rel` (the files are still read afterwards) and moved out
 /// otherwise.
+/// Each per-file hook's file paired with its hook, then each per-table
+/// hook's table with its files, in scan order.
+#[allow(clippy::type_complexity)]
+fn group_scanned(
+    scanned_files: Vec<ScannedFile>,
+    on_file_map: &HashMap<String, Hook>,
+) -> Result<(
+    Vec<(ScannedFile, Arc<OnFileFn>)>,
+    Vec<(String, Arc<OnFilesFn>, Vec<ScannedFile>)>,
+)> {
+    let mut per_file: Vec<(ScannedFile, Arc<OnFileFn>)> = Vec::new();
+    let mut batches: Vec<(String, Arc<OnFilesFn>, Vec<ScannedFile>)> = Vec::new();
+    for file in scanned_files {
+        // Files arrive in walk order, so a table's files mostly follow
+        // one another: the last batch is checked before the map.
+        if let Some((name, _, files)) = batches.last_mut()
+            && *name == file.table_name
+        {
+            files.push(file);
+            continue;
+        }
+        match on_file_map.get(&file.table_name) {
+            Some(Hook::PerFile(hook)) => {
+                if !file.trusted {
+                    per_file.push((file, Arc::clone(hook)));
+                }
+            }
+            Some(Hook::PerTable(hook)) => {
+                match batches
+                    .iter_mut()
+                    .find(|(name, _, _)| *name == file.table_name)
+                {
+                    Some((_, _, files)) => files.push(file),
+                    None => batches.push((file.table_name.clone(), Arc::clone(hook), vec![file])),
+                }
+            }
+            None => {
+                return Err(DirSqlError::Ddl(format!(
+                    "missing on-file function for table {}",
+                    file.table_name
+                )));
+            }
+        }
+    }
+    Ok((per_file, batches))
+}
+
+/// Insert the rows of every hook started before the scan, returning the
+/// tables streamed.
+fn stream_early(
+    db: &Db,
+    early: HashMap<String, Production>,
+    strict_map: &HashMap<String, bool>,
+) -> Result<HashSet<String>> {
+    let mut streamed = HashSet::new();
+    for (table_name, production) in early {
+        let strict = *strict_map.get(&table_name).unwrap_or(&false);
+        if let Err(message) =
+            stream_table_rows(db, &table_name, production, strict).map_err(map_db_error)?
+        {
+            return Err(DirSqlError::TableCommand {
+                name: table_name,
+                message,
+            });
+        }
+        streamed.insert(table_name);
+    }
+    Ok(streamed)
+}
+
 fn batch_paths(files: &mut [ScannedFile], keep_rel: bool) -> (Vec<String>, Vec<PathBuf>) {
     let mut rel = Vec::with_capacity(files.len());
     let mut abs = Vec::with_capacity(files.len());
@@ -2571,10 +2624,6 @@ fn batch_paths(files: &mut [ScannedFile], keep_rel: bool) -> (Vec<String>, Vec<P
         });
     }
     (rel, abs)
-}
-
-fn relative_path(root: &Path, path: &Path) -> String {
-    scanner::to_slash(path.strip_prefix(root).unwrap_or(path))
 }
 
 /// Build [`Table`] objects from a parsed config.
@@ -3028,11 +3077,11 @@ mod internal_tests {
     /// tree on disk.
     struct RecordingScan {
         calls: Cell<usize>,
-        found: Vec<(PathBuf, String)>,
+        found: Vec<Found>,
     }
 
     impl RecordingScan {
-        fn new(found: Vec<(PathBuf, String)>) -> Self {
+        fn new(found: Vec<Found>) -> Self {
             Self {
                 calls: Cell::new(0),
                 found,
@@ -3047,7 +3096,7 @@ mod internal_tests {
             _matcher: &TableMatcher,
             on_file: &mut dyn FnMut(u64),
             _on_match: &mut dyn FnMut(&Path, &str),
-        ) -> Vec<(PathBuf, String)> {
+        ) -> Vec<Found> {
             self.calls.set(self.calls.get() + 1);
             for (index, _) in self.found.iter().enumerate() {
                 on_file(index as u64 + 1);
@@ -3086,7 +3135,11 @@ mod internal_tests {
     #[test]
     fn prepare_does_not_walk_the_tree_when_no_tables_are_declared() {
         let dir = TempDir::new().unwrap();
-        let scan = RecordingScan::new(vec![(dir.path().join("a.txt"), "items".into())]);
+        let scan = RecordingScan::new(vec![Found {
+            path: dir.path().join("a.txt"),
+            rel_path: "a.txt".into(),
+            table_name: "items".into(),
+        }]);
 
         let prepared = DirSQL::prepare_resolved_with(
             resolved_over(dir.path(), Vec::new(), false),
@@ -3107,7 +3160,11 @@ mod internal_tests {
     #[test]
     fn prepare_walks_the_tree_when_a_table_is_declared() {
         let dir = TempDir::new().unwrap();
-        let scan = RecordingScan::new(vec![(dir.path().join("a.txt"), "items".into())]);
+        let scan = RecordingScan::new(vec![Found {
+            path: dir.path().join("a.txt"),
+            rel_path: "a.txt".into(),
+            table_name: "items".into(),
+        }]);
 
         let prepared = DirSQL::prepare_resolved_with(
             resolved_over(dir.path(), vec![txt_table()], false),
@@ -3151,7 +3208,11 @@ mod internal_tests {
                     .recv_timeout(std::time::Duration::from_secs(5))
                     .is_ok(),
             );
-            vec![(found.clone(), "items".to_string())]
+            vec![Found {
+                path: found.clone(),
+                rel_path: "a.txt".into(),
+                table_name: "items".into(),
+            }]
         })
         .unwrap();
         assert!(hook_saw_it_mid_walk.get());
@@ -3560,6 +3621,14 @@ mod internal_tests {
         assert_eq!(pending.0, vec![("held".to_string(), "moved".to_string())]);
     }
 
+    fn found_at(root: &Path, path: &Path, table: &str) -> Found {
+        Found {
+            path: path.to_path_buf(),
+            rel_path: scanner::to_slash(path.strip_prefix(root).unwrap()),
+            table_name: table.to_string(),
+        }
+    }
+
     #[test]
     fn scan_groups_counts_across_groups_and_collects_every_match() {
         let tables = vec![
@@ -3572,7 +3641,7 @@ mod internal_tests {
                     report: &mut dyn FnMut(u64),
                     _: &mut dyn FnMut(&Path, &str)| {
             report(3);
-            vec![(anchor.join("f.txt"), "t".to_string())]
+            vec![found_at(anchor, &anchor.join("f.txt"), "t")]
         };
 
         let (scanned, seen) =
@@ -3787,9 +3856,8 @@ mod internal_tests {
             meta_current: false,
             needs_sweep: false,
         };
-        let scanned = vec![(abs.clone(), "t".to_string())];
-        let (files, deleted) =
-            reconcile_scan(&TableAnchors::at_root(dir.path()), scanned, &ctx, &fake).unwrap();
+        let scanned = vec![found_at(dir.path(), &abs, "t")];
+        let (files, deleted) = reconcile_scan(scanned, &ctx, &fake).unwrap();
         assert_eq!(files.len(), 1);
         assert!(files[0].trusted);
         assert_eq!(files[0].rel_path, "a.txt");
@@ -3824,9 +3892,8 @@ mod internal_tests {
             meta_current: false,
             needs_sweep: false,
         };
-        let scanned = vec![(abs.clone(), "t".to_string())];
-        let (files, _deleted) =
-            reconcile_scan(&TableAnchors::at_root(dir.path()), scanned, &ctx, &fake).unwrap();
+        let scanned = vec![found_at(dir.path(), &abs, "t")];
+        let (files, _deleted) = reconcile_scan(scanned, &ctx, &fake).unwrap();
         assert_eq!(files.len(), 1);
         assert!(!files[0].trusted);
     }
@@ -3842,9 +3909,9 @@ mod internal_tests {
             needs_sweep: false,
         };
         let missing = dir.path().join("ghost.txt");
-        let scanned = vec![(missing, "t".to_string())];
+        let scanned = vec![found_at(dir.path(), &missing, "t")];
         let fake = FakeFs::default();
-        assert!(reconcile_scan(&TableAnchors::at_root(dir.path()), scanned, &ctx, &fake).is_err());
+        assert!(reconcile_scan(scanned, &ctx, &fake).is_err());
     }
 
     #[test]
@@ -4710,9 +4777,8 @@ mod internal_tests {
             meta_current: false,
             needs_sweep: false,
         };
-        let scanned = vec![(abs, "t".to_string())];
-        let (files, deleted) =
-            reconcile_scan(&TableAnchors::at_root(dir.path()), scanned, &ctx, &fake).unwrap();
+        let scanned = vec![found_at(dir.path(), &abs, "t")];
+        let (files, deleted) = reconcile_scan(scanned, &ctx, &fake).unwrap();
         assert_eq!(files.len(), 1);
         assert!(files[0].trusted);
         assert!(deleted.is_empty());
@@ -4744,16 +4810,14 @@ mod internal_tests {
             meta_current: false,
             needs_sweep: false,
         };
-        let scanned = vec![(abs, "t".to_string())];
-        let (files, _deleted) =
-            reconcile_scan(&TableAnchors::at_root(dir.path()), scanned, &ctx, &fake).unwrap();
+        let scanned = vec![found_at(dir.path(), &abs, "t")];
+        let (files, _deleted) = reconcile_scan(scanned, &ctx, &fake).unwrap();
         assert_eq!(files.len(), 1);
         assert!(!files[0].trusted);
     }
 
     #[test]
     fn reconcile_scan_reports_deleted_cached_files() {
-        let dir = TempDir::new().unwrap();
         let mut cached = HashMap::new();
         cached.insert(
             ("gone.txt".to_string(), "t".to_string()),
@@ -4773,8 +4837,7 @@ mod internal_tests {
             needs_sweep: false,
         };
         let fake = FakeFs::default();
-        let (files, deleted) =
-            reconcile_scan(&TableAnchors::at_root(dir.path()), Vec::new(), &ctx, &fake).unwrap();
+        let (files, deleted) = reconcile_scan(Vec::new(), &ctx, &fake).unwrap();
         assert!(files.is_empty());
         assert_eq!(deleted, vec![("gone.txt".to_string(), "t".to_string())]);
     }
@@ -5785,6 +5848,28 @@ mod internal_tests {
     }
 
     #[test]
+    fn startup_runs_a_per_table_hook_once_over_every_file() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(root.join("a.txt"), "").unwrap();
+        std::fs::write(root.join("b.txt"), "").unwrap();
+        let (items, calls) = recording_per_table("items", "*.txt");
+
+        let db =
+            DirSQL::with_ignore_and_fs(&root, vec![items], Vec::<String>::new(), Arc::new(RealFs))
+                .unwrap();
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        let mut seen = calls[0].clone();
+        seen.sort();
+        assert_eq!(seen, vec![root.join("a.txt"), root.join("b.txt")]);
+        let mut names = row_names(&db);
+        names.sort();
+        assert_eq!(names, vec!["a.txt", "b.txt"]);
+    }
+
+    #[test]
     fn events_arriving_while_a_batch_is_routed_share_its_per_table_rerun() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
@@ -6136,7 +6221,7 @@ mod internal_tests {
     fn a_table_with_a_matched_file_does_not_warn() {
         let tables = vec![anchored_table("a", "*.txt", "/one").warning_when_empty()];
         let anchors = compile_groups(&tables, &[], Path::new("/idx")).unwrap().1;
-        let scanned = vec![(PathBuf::from("/one/x.txt"), "a".to_string())];
+        let scanned = vec![found_at(Path::new("/one"), Path::new("/one/x.txt"), "a")];
         assert!(empty_table_warnings(&tables, &anchors, &scanned).is_empty());
     }
 
