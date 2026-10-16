@@ -609,21 +609,19 @@ impl<S: TableSource> ScaffoldCursor<S> {
         let source = Arc::clone(&self.source);
         self.settled();
         let rows = self.settled.as_ref().expect("settled above");
-        let indexed = self.index.as_ref().is_some_and(|i| i.column == column);
-        if !indexed && self.scanned != Some(column) {
-            self.scanned = Some(column);
-            return Selection::Only(scan_matching(rows.iter(), column, key, |row, c| {
-                source.lookup_key(row, c)
-            }));
+        if let Some(index) = &self.index
+            && index.column == column
+        {
+            return Selection::Only(index.matching(key));
         }
-        let index = match &self.index {
-            Some(index) if index.column == column => index,
-            _ => self
-                .index
-                .insert(LookupIndex::build(rows.iter(), column, |row, c| {
-                    source.lookup_key(row, c)
-                })),
-        };
+        let row_key = |row, c| source.lookup_key(row, c);
+        if self.scanned != Some(column) {
+            self.scanned = Some(column);
+            return Selection::Only(scan_matching(rows.iter(), column, key, row_key));
+        }
+        let index = self
+            .index
+            .insert(LookupIndex::build(rows.iter(), column, row_key));
         Selection::Only(index.matching(key))
     }
 
@@ -1594,6 +1592,17 @@ mod tests {
         cursor.selection = cursor.select_by_lookup(0, "a");
 
         assert_eq!(cursor.index.as_ref().unwrap().column, 0);
+        assert!(cursor.eof(), "column 0 carries no key, so nothing matches");
+    }
+
+    #[test]
+    fn a_single_lookup_on_another_column_keeps_the_index() {
+        let mut cursor = cursor_over(vec!["ab", "cd"]);
+        cursor.select_by_lookup(1, "a");
+        cursor.select_by_lookup(1, "a");
+        cursor.selection = cursor.select_by_lookup(0, "a");
+
+        assert_eq!(cursor.index.as_ref().unwrap().column, 1);
         assert!(cursor.eof(), "column 0 carries no key, so nothing matches");
     }
 
