@@ -1286,6 +1286,65 @@ mod tests {
         assert_eq!(dot.dir, root.path().join("."));
     }
 
+    fn explored_leaves(place: Place<'_>) -> Vec<PathBuf> {
+        place
+            .explore(&|_| true, &|child, _| child)
+            .into_iter()
+            .filter_map(|step| match step {
+                Step::Leaf(child) => Some(child),
+                Step::Dir(_) => None,
+            })
+            .collect()
+    }
+
+    fn place_at<'a>(walk: Walk<'a>, dir: &Path) -> Place<'a> {
+        Place {
+            walk,
+            dir: dir.to_path_buf(),
+            rel: PathBuf::new(),
+            states: Vec::new(),
+            linked: false,
+            part: None,
+        }
+    }
+
+    #[test]
+    fn explore_keeps_what_a_repo_s_gitignore_names_when_gitignore_is_off() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join(".git")).unwrap();
+        fs::write(root.path().join(".gitignore"), "x.md\n").unwrap();
+        fs::File::create(root.path().join("x.md")).unwrap();
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let leaves = explored_leaves(place_at(walk_with(&ignore, None, Vec::new()), root.path()));
+        assert!(leaves.contains(&PathBuf::from("x.md")), "{leaves:?}");
+    }
+
+    #[test]
+    fn explore_judges_a_directory_of_part_entries_whole() {
+        let root = tempfile::tempdir().unwrap();
+        for i in 0..PART_ENTRIES {
+            fs::File::create(root.path().join(format!("f{i:05}"))).unwrap();
+        }
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let leaves = explored_leaves(place_at(walk_with(&ignore, None, Vec::new()), root.path()));
+        assert_eq!(leaves.len(), PART_ENTRIES);
+    }
+
+    #[test]
+    fn explore_splits_a_wider_directory_into_parts_of_part_entries() {
+        let root = tempfile::tempdir().unwrap();
+        for i in 0..=PART_ENTRIES {
+            fs::File::create(root.path().join(format!("f{i:05}"))).unwrap();
+        }
+        let ignore = TableMatcher::new(&[], &[]).unwrap();
+        let parts = explored_dirs(place_at(walk_with(&ignore, None, Vec::new()), root.path()));
+        let sizes: Vec<usize> = parts
+            .into_iter()
+            .map(|part| explored_leaves(part).len())
+            .collect();
+        assert_eq!(sizes, [PART_ENTRIES, 1]);
+    }
+
     #[test]
     fn relative_entries_name_only_the_components_the_glob_spells() {
         let glob = compile_glob("*/../x").unwrap();
