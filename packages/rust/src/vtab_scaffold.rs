@@ -1501,6 +1501,15 @@ mod tests {
     }
 
     #[test]
+    fn a_single_lookup_builds_no_index() {
+        let mut cursor = cursor_over(vec!["ab", "cd", "ax"]);
+        cursor.selection = cursor.select_by_lookup(1, "a");
+
+        assert!(cursor.index.is_none());
+        assert_eq!(selected(&cursor), vec!["ab", "ax"]);
+    }
+
+    #[test]
     fn a_cursor_builds_its_index_once_per_column() {
         let mut cursor = cursor_over(vec!["ab", "cd"]);
         cursor.select_by_lookup(1, "a");
