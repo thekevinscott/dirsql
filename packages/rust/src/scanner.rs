@@ -1,14 +1,13 @@
 use crate::gitignore_frame::Frame;
-use crate::listing::{Listing, Seen};
+use crate::listing::{Listed, Listing, Seen};
 use crate::matcher::{GlobError, Pattern, TableMatcher};
-use crate::tree_walk::{Step, busy_workers, walk_in_order};
+use crate::tree_walk::{Step, walk_in_order};
 use ignore::Match;
 use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::thread;
 
 /// A root-relative path as dirsql stores and reports it: `/`-separated on
 /// every platform, so globs, `file_path` keys and `path` columns agree.
@@ -563,6 +562,7 @@ fn walk<L: Send>(
         rel: rel.to_path_buf(),
         states,
         linked: false,
+        part: None,
     };
     walk_in_order(
         Box::new(place),
@@ -574,91 +574,146 @@ fn walk<L: Send>(
 /// A directory the walk enters, and how it got there: the glob `states`
 /// it is entered with, and `linked` as whether its path crosses a followed
 /// symlink.
+#[derive(Clone)]
 struct Place<'a> {
     walk: Walk<'a>,
     dir: PathBuf,
     rel: PathBuf,
     states: Vec<usize>,
     linked: bool,
+    /// The share of the directory's entries this place judges, when its
+    /// listing is wide enough to be judged in parts; `None` for a directory
+    /// not yet read.
+    part: Option<Part>,
 }
+
+/// A run of a read directory's entries, judged apart from the rest so the
+/// walk shares a wide directory across its workers and hands out its first
+/// rows before the last are judged.
+#[derive(Clone)]
+struct Part {
+    listing: Arc<Listing>,
+    range: std::ops::Range<usize>,
+}
+
+/// A directory with more entries than this is judged in parts of this many.
+const PART_ENTRIES: usize = 8192;
 
 impl<'a> Place<'a> {
     /// The directory's entries in walk order: each file `keep` takes, made
     /// into a `leaf` with the directory it sits in, and each directory to
-    /// enter.
+    /// enter. A directory wider than [`PART_ENTRIES`] yields its parts to
+    /// enter instead, and a part yields what its own entries make.
     fn explore<L: Send>(
-        self,
+        mut self,
+        keep: &(dyn Fn(&Path) -> bool + Sync),
+        leaf: &(dyn Fn(PathBuf, &Path) -> L + Sync),
+    ) -> Vec<Step<Box<Place<'a>>, L>> {
+        if let Some(Part { listing, range }) = self.part.take() {
+            return self.judge(&listing, &listing.entries()[range], keep, leaf);
+        }
+        if self.walk.gitignore && holds_git(&self.dir) {
+            self.walk.in_repo = true;
+            self.walk.frames.clear();
+        }
+        if self.walk.in_repo
+            && let Some(frame) = Frame::load(&self.dir)
+        {
+            self.walk.frames.push(Arc::new(frame));
+        }
+        let listing = Listing::read(&self.dir);
+        let mut steps = self.relative();
+        let len = listing.entries().len();
+        if len > PART_ENTRIES {
+            let listing = Arc::new(listing);
+            steps.extend((0..len).step_by(PART_ENTRIES).map(|start| {
+                Step::Dir(Box::new(Place {
+                    part: Some(Part {
+                        listing: Arc::clone(&listing),
+                        range: start..len.min(start + PART_ENTRIES),
+                    }),
+                    ..self.clone()
+                }))
+            }));
+            return steps;
+        }
+        let judged = self.judge(&listing, listing.entries(), keep, leaf);
+        if steps.is_empty() {
+            return judged;
+        }
+        steps.extend(judged);
+        steps
+    }
+
+    /// The `.` and `..` components the glob spells here, which no listing
+    /// names, as directories to enter.
+    fn relative<L>(&self) -> Vec<Step<Box<Place<'a>>, L>> {
+        self.walk.glob.map_or_else(Vec::new, |glob| {
+            glob.relative_entries(&self.states)
+                .into_iter()
+                .map(|(name, next)| {
+                    Step::Dir(Box::new(Place {
+                        walk: self.walk.clone(),
+                        dir: self.dir.join(name),
+                        rel: self.rel.join(name),
+                        states: next,
+                        linked: self.linked,
+                        part: None,
+                    }))
+                })
+                .collect()
+        })
+    }
+
+    /// What `entries` of the directory's `listing` make, in order: with
+    /// `dirs`, each directory taken as a leaf first; then each file `keep`
+    /// takes, as a `leaf`, and each directory to enter.
+    fn judge<L>(
+        &self,
+        listing: &Listing,
+        entries: &[Listed],
         keep: &(dyn Fn(&Path) -> bool + Sync),
         leaf: &(dyn Fn(PathBuf, &Path) -> L + Sync),
     ) -> Vec<Step<Box<Place<'a>>, L>> {
         let Place {
-            mut walk,
+            walk,
             dir,
             rel,
             states,
             linked,
+            ..
         } = self;
-        if walk.gitignore && holds_git(&dir) {
-            walk.in_repo = true;
-            walk.frames.clear();
-        }
-        if walk.in_repo
-            && let Some(frame) = Frame::load(&dir)
-        {
-            walk.frames.push(Arc::new(frame));
-        }
-        let listing = Listing::read(&dir);
-        let taken = judge_all(listing.entries(), &|listed| {
-            walk.take(
-                &dir,
-                listing.name(listed),
-                listed.seen,
-                &rel,
-                &states,
-                linked,
-            )
-            .and_then(|taken| match taken {
-                Taken::File(child) => keep(&child).then(|| Taken::File(leaf(child, &dir))),
-                Taken::Dir {
-                    child,
-                    next,
-                    linked,
-                } => Some(Taken::Dir {
-                    child,
-                    next,
-                    linked,
-                }),
+        let taken: Vec<_> = entries
+            .iter()
+            .map(|listed| {
+                walk.take(dir, listing.name(listed), listed.seen, rel, states, *linked)
+                    .and_then(|taken| match taken {
+                        Taken::File(child) => keep(&child).then(|| Taken::File(leaf(child, dir))),
+                        Taken::Dir {
+                            child,
+                            next,
+                            linked,
+                        } => Some(Taken::Dir {
+                            child,
+                            next,
+                            linked,
+                        }),
+                    })
             })
-        });
+            .collect();
         let mut steps: Vec<Step<Box<Place<'a>>, L>> = if walk.dirs {
             taken
                 .iter()
                 .filter_map(|taken| match taken {
-                    Some(Taken::Dir { child, .. }) => Some(Step::Leaf(leaf(child.clone(), &dir))),
+                    Some(Taken::Dir { child, .. }) => Some(Step::Leaf(leaf(child.clone(), dir))),
                     _ => None,
                 })
                 .collect()
         } else {
             Vec::new()
         };
-        let relative = walk.glob.map_or_else(Vec::new, |glob| {
-            glob.relative_entries(&states)
-                .into_iter()
-                .map(|(name, next)| {
-                    Step::Dir(Box::new(Place {
-                        walk: walk.clone(),
-                        dir: dir.join(name),
-                        rel: rel.join(name),
-                        states: next,
-                        linked,
-                    }))
-                })
-                .collect::<Vec<_>>()
-        });
-        steps.extend(relative);
-        let entered =
-            listing
-                .entries()
+        steps.extend(
+            entries
                 .iter()
                 .zip(taken)
                 .filter_map(|(listed, taken)| match taken? {
@@ -672,13 +727,11 @@ impl<'a> Place<'a> {
                         rel: child,
                         states: next,
                         linked,
+                        part: None,
                     }))),
                     Taken::File(made) => Some(Step::Leaf(made)),
-                });
-        if steps.is_empty() {
-            return entered.collect();
-        }
-        steps.extend(entered);
+                }),
+        );
         steps
     }
 }
@@ -807,39 +860,6 @@ enum Taken<F = PathBuf> {
         linked: bool,
     },
     File(F),
-}
-
-/// Below this many entries a directory is judged on one thread; spawning
-/// workers costs more than the judging.
-const PARALLEL_ENTRIES: usize = 65536;
-
-/// `judge` applied to each of `items`, in order, shared across the cores the
-/// walk leaves idle once there are enough items to pay for the threads.
-fn judge_all<T: Sync, R: Send>(items: &[T], judge: &(dyn Fn(&T) -> R + Sync)) -> Vec<R> {
-    // Asking for the core count reads cgroup files, too dear to pay in every
-    // small directory of a deep tree.
-    if items.len() < PARALLEL_ENTRIES {
-        return items.iter().map(judge).collect();
-    }
-    let cores = thread::available_parallelism().map_or(1, usize::from);
-    let workers = idle_cores(cores, busy_workers());
-    let per_worker = items.len().div_ceil(workers);
-    thread::scope(|scope| {
-        let handles: Vec<_> = items
-            .chunks(per_worker)
-            .map(|chunk| scope.spawn(move || chunk.iter().map(judge).collect::<Vec<_>>()))
-            .collect();
-        handles
-            .into_iter()
-            .flat_map(|handle| handle.join().expect("judging an entry does not panic"))
-            .collect()
-    })
-}
-
-/// The cores a directory may split its judging across: those the walk's busy
-/// workers leave, and always the calling thread's own.
-fn idle_cores(cores: usize, busy: usize) -> usize {
-    cores.saturating_sub(busy).max(1)
 }
 
 /// What the walk makes of an entry seen as `seen`, following a symlink only
@@ -988,6 +1008,7 @@ fn is_glob_match(glob: &PathGlob, rel_path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
     use std::ffi::OsStr;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -1042,52 +1063,6 @@ mod tests {
 
     // Real directory-walk behavior is covered by `tests/scanner.rs`
     // (unit-lint isolation); only the pure predicate is tested here.
-
-    #[test]
-    fn idle_cores_are_those_busy_workers_leave_and_never_fewer_than_one() {
-        assert_eq!(idle_cores(32, 0), 32);
-        assert_eq!(idle_cores(4, 1), 3);
-        assert_eq!(idle_cores(32, 31), 1);
-        assert_eq!(idle_cores(32, 40), 1);
-    }
-
-    #[test]
-    fn judge_all_keeps_the_order_of_its_items() {
-        let items: Vec<usize> = (0..PARALLEL_ENTRIES * 3).collect();
-        assert_eq!(
-            judge_all(&items, &|n| n * 2),
-            items.iter().map(|n| n * 2).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn judge_all_shares_a_large_directory_across_threads() {
-        let items = vec![(); PARALLEL_ENTRIES];
-        let threads: std::collections::HashSet<_> = judge_all(&items, &|()| thread::current().id())
-            .into_iter()
-            .collect();
-        assert!(threads.len() > 1, "judged on {} thread(s)", threads.len());
-    }
-
-    #[test]
-    fn judge_all_judges_a_directory_of_ten_thousand_entries_on_the_calling_thread() {
-        let items = vec![(); 10_000];
-        let threads: std::collections::HashSet<_> = judge_all(&items, &|()| thread::current().id())
-            .into_iter()
-            .collect();
-        assert_eq!(threads.len(), 1);
-    }
-
-    #[test]
-    fn judge_all_judges_a_small_directory_on_the_calling_thread() {
-        let items = vec![(); PARALLEL_ENTRIES - 1];
-        let caller = thread::current().id();
-        assert!(
-            judge_all(&items, &|()| thread::current().id())
-                .iter()
-                .all(|id| *id == caller)
-        );
-    }
 
     const LINK: Stat = Stat {
         is_link: true,
@@ -1280,6 +1255,7 @@ mod tests {
             rel: PathBuf::new(),
             states: Vec::new(),
             linked: false,
+            part: None,
         };
         let [a] = <[Place<'_>; 1]>::try_from(explored_dirs(top)).ok().unwrap();
         let nested: Vec<PathBuf> = explored_dirs(a).into_iter().map(|p| p.rel).collect();
@@ -1297,6 +1273,7 @@ mod tests {
             rel: PathBuf::new(),
             states: glob.start(),
             linked: false,
+            part: None,
         };
         let [dot] = <[Place<'_>; 1]>::try_from(explored_dirs(top)).ok().unwrap();
         assert_eq!(dot.rel, Path::new("."));
@@ -2063,7 +2040,7 @@ mod tests {
     #[test]
     fn scan_glob_rows_makes_rows_of_a_wide_directory_on_many_threads() {
         let dir = tempfile::tempdir().unwrap();
-        for i in 0..PARALLEL_ENTRIES {
+        for i in 0..PART_ENTRIES * 8 {
             fs::File::create(dir.path().join(format!("f{i}"))).unwrap();
         }
         let glob = compile_glob("*").unwrap();
