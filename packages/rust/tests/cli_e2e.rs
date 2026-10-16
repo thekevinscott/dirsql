@@ -354,6 +354,70 @@ fn frontend_loads_with_an_explicit_valid_config() {
     kill_and_wait(server);
 }
 
+fn stop_and_expect_exit_zero(mut child: ServerGuard) {
+    #[cfg(unix)]
+    {
+        #[expect(
+            unsafe_code,
+            reason = "no safe std API sends a signal to another process"
+        )]
+        unsafe {
+            libc::kill(i32::try_from(child.id()).unwrap(), libc::SIGTERM);
+        }
+        let status = child.wait().unwrap();
+        assert_eq!(
+            status.code(),
+            Some(0),
+            "expected exit 0 on SIGTERM, got {status:?}"
+        );
+    }
+    #[cfg(not(unix))]
+    kill_and_wait(child);
+}
+
+#[test]
+fn frontend_serves_the_bundled_assets_and_runs_queries_with_and_without_config() {
+    let root = blog_fixture();
+    let bundled = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cli");
+    let page = fs::read_to_string(bundled.join("frontend.html")).unwrap();
+    let script = fs::read_to_string(bundled.join("frontend.js")).unwrap();
+    let rows = json!([{"basename": "Hello-World.json"}, {"basename": "Second-Post.json"}]);
+    let client = Client::new();
+    for (extra, sql) in [
+        (
+            &["--frontend"][..],
+            "SELECT basename FROM './posts/**' ORDER BY basename",
+        ),
+        (
+            &["--frontend", "-c", ".dirsql.toml"][..],
+            "SELECT basename FROM posts ORDER BY basename",
+        ),
+    ] {
+        let port = free_port();
+        let server = spawn_dirsql_with_args(root.path(), port, extra);
+        wait_until_ready(port, Duration::from_secs(5));
+        let base = format!("http://localhost:{port}");
+        assert_eq!(client.get(&base).send().unwrap().text().unwrap(), page);
+        assert_eq!(
+            client
+                .get(format!("{base}/frontend.js"))
+                .send()
+                .unwrap()
+                .text()
+                .unwrap(),
+            script
+        );
+        let answer = client
+            .post(format!("{base}/query"))
+            .json(&json!({"sql": sql}))
+            .send()
+            .unwrap();
+        assert_eq!(answer.status(), StatusCode::OK, "{extra:?}");
+        assert_eq!(answer.json::<Value>().unwrap(), rows, "{extra:?}");
+        stop_and_expect_exit_zero(server);
+    }
+}
+
 #[test]
 fn version_flag_prints_and_exits_zero() {
     std::process::Command::cargo_bin("dirsql")

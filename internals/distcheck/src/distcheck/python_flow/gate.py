@@ -3,7 +3,8 @@ the per-package `build_test.py`).
 
 build -> pack -> install -> run: build
 the wheel with `maturin build`, install it into a fresh venv with `pip install`,
-and run the installed `dirsql --version` console script plus an `import dirsql`.
+and run the installed `dirsql --version` console script plus an `import dirsql`,
+then the installed `dirsql server --frontend` workflow.
 No mocks -- exactly what `pip install dirsql` gives an end user.
 
 Caveats:
@@ -26,6 +27,7 @@ import sys
 from distcheck.filesystem import FileSystem
 
 from ..errors import DistcheckError
+from ..frontend.probe import probe_frontend
 from ..require_zero import require_zero
 from .sole_wheel import sole_wheel
 from .wheel_tag import check_wheel_tag
@@ -109,6 +111,8 @@ def run(
         require_zero(imported, imported_err)
         if not imported.stdout.strip():
             raise DistcheckError(imported_err)
+
+        probe_frontend(cli, repo_root)
     finally:
         fs.rmtree(staging)
     return 0

@@ -264,8 +264,19 @@ and declared tables reflect the server's index. The page does not use
 
 ```bash
 dirsql server --frontend
+# Frontend at http://localhost:7117/
+# Running at localhost:7117
 dirsql server --frontend -c .dirsql.toml
 ```
+
+Every distribution embeds the same page and script in its binary, so
+`npx dirsql server --frontend`, `uvx dirsql server --frontend`, and the
+`cargo install`ed `dirsql server --frontend` serve the identical UI offline,
+with no separate frontend runtime. In the page, a path-table query such as
+`SELECT basename, size FROM './posts' ORDER BY basename` runs with or
+without `-c`; a declared table such as `SELECT title, author FROM posts`
+needs the config that declares it, passed with `-c`. The frontend stops like
+the API-only server: `SIGINT` or `SIGTERM` exits `0`.
 
 The shell reads `GET /frontend/state`. When the index is ready it returns
 HTTP `200`:
