@@ -186,8 +186,8 @@ fn worker_count(cores: usize) -> usize {
     (cores / 2).max(cores.min(8))
 }
 
-/// Start worker `n` of `workers`, which starts workers `2n` and `2n + 1`
-/// before it explores: spawning a thread takes tens of microseconds, and the
+/// Start worker `n` of `workers`, which starts its [`children`] before it
+/// explores: spawning a thread takes tens of microseconds, and the
 /// walk hands out nothing while it spawns.
 fn spawn_worker<'scope, D: Send, L: Send>(
     scope: &'scope thread::Scope<'scope, '_>,
@@ -199,10 +199,17 @@ fn spawn_worker<'scope, D: Send, L: Send>(
         return;
     }
     scope.spawn(move || {
-        spawn_worker(scope, shared, 2 * n, workers);
-        spawn_worker(scope, shared, 2 * n + 1, workers);
+        for child in children(n) {
+            spawn_worker(scope, shared, child, workers);
+        }
         shared.work();
     });
+}
+
+/// The workers worker `n` starts, numbered so that, from worker 1, each
+/// number below the worker count is started exactly once.
+fn children(n: usize) -> std::ops::Range<usize> {
+    2 * n..2 * n + 2
 }
 
 impl<D, L> Shared<'_, D, L> {
@@ -496,6 +503,11 @@ mod tests {
     #[test]
     fn a_machine_explores_on_at_least_eight_cores() {
         assert_eq!(worker_count(12), 8);
+    }
+
+    #[test]
+    fn a_worker_starts_the_two_numbered_after_twice_its_own() {
+        assert_eq!([1, 5].map(children), [2..4, 10..12]);
     }
 
     #[test]
