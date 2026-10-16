@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_gitignore_test.py tests/e2e/glob_speed_matchers_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/query_contract_test.py -x -q -s",
+  "ran_at": 1792078679,
+  "exit_code": 0,
+  "commit": "64a91dcf4851c02183542106f7230e7a237f482f",
+  "branch": "bot/1481-gitrepo-speed-1015"
+}
