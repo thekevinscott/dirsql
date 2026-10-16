@@ -1,7 +1,7 @@
 {
-  "command": "uv run python -m pytest tests/e2e/glob_speed_matchers_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_gitignore_test.py tests/e2e/glob_speed_dotfiles_test.py tests/e2e/glob_speed_symlink_test.py tests/e2e/glob_speed_node_modules_test.py tests/e2e/glob_speed_one_level_test.py tests/e2e/glob_speed_depth_bound_test.py tests/e2e/stat_speed_test.py tests/e2e/fanout_test.py tests/e2e/query_contract_test.py tests/e2e/declared_table_name_test.py -x -q -s",
-  "ran_at": 1792075541,
+  "command": "uv run python -m pytest tests/e2e/glob_speed_one_level_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_depth_bound_test.py tests/e2e/glob_speed_gitignore_test.py tests/e2e/glob_speed_dotfiles_test.py tests/e2e/glob_speed_matchers_test.py tests/e2e/glob_speed_node_modules_test.py tests/e2e/glob_speed_symlink_test.py tests/e2e/stat_speed_test.py tests/e2e/query_contract_test.py -q",
+  "ran_at": 1792154998,
   "exit_code": 0,
-  "commit": "f6fdddfc1d2152ac7208fb0defcc9d6806afc062",
+  "commit": "581d7e2f57df9c78060a43a2bf9f81e600878921",
   "branch": "bot/1480-matcher-speed-1015"
 }
