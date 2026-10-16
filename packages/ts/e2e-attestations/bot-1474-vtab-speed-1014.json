@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1792075285,
+  "exit_code": 0,
+  "commit": "678064e2bd7a7c9cc97cd9e9cbb85f3a39a74f68",
+  "branch": "bot/1474-vtab-speed-1014"
+}
