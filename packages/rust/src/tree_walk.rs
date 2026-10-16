@@ -158,10 +158,9 @@ pub(crate) fn walk_in_order<D: Send, L: Send>(
                 Some(Item::Dir(slot)) => {
                     if !spawned && shared.found.load(Ordering::Relaxed) >= PARALLEL_DIRS {
                         spawned = true;
-                        let workers = thread::available_parallelism().map_or(1, usize::from);
-                        for _ in 1..workers {
-                            scope.spawn(|| shared.work());
-                        }
+                        let workers =
+                            worker_count(thread::available_parallelism().map_or(1, usize::from));
+                        spawn_worker(scope, &shared, 1, workers);
                     }
                     stack.push(shared.obtain(&slot).into_iter());
                 }
@@ -177,6 +176,33 @@ pub(crate) fn walk_in_order<D: Send, L: Send>(
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().expect("exploring a directory does not panic")
+}
+
+/// How many threads explore on a machine of `cores` logical cores: half, as
+/// past the physical cores a worker mostly takes time from the walking thread
+/// and the thread reading its rows; but every core up to eight, as a small
+/// machine walks slower on fewer.
+fn worker_count(cores: usize) -> usize {
+    (cores / 2).max(cores.min(8))
+}
+
+/// Start worker `n` of `workers`, which starts workers `2n` and `2n + 1`
+/// before it explores: spawning a thread takes tens of microseconds, and the
+/// walk hands out nothing while it spawns.
+fn spawn_worker<'scope, D: Send, L: Send>(
+    scope: &'scope thread::Scope<'scope, '_>,
+    shared: &'scope Shared<'_, D, L>,
+    n: usize,
+    workers: usize,
+) {
+    if n >= workers {
+        return;
+    }
+    scope.spawn(move || {
+        spawn_worker(scope, shared, 2 * n, workers);
+        spawn_worker(scope, shared, 2 * n + 1, workers);
+        shared.work();
+    });
 }
 
 impl<D, L> Shared<'_, D, L> {
@@ -455,6 +481,21 @@ mod tests {
     #[test]
     fn a_walk_of_a_few_dozen_directories_is_shared_across_threads() {
         assert!(threads_exploring(4, 2) > 1);
+    }
+
+    #[test]
+    fn a_large_machine_explores_on_half_its_cores() {
+        assert_eq!(worker_count(32), 16);
+    }
+
+    #[test]
+    fn a_small_machine_explores_on_every_core() {
+        assert_eq!([1, 4, 8].map(worker_count), [1, 4, 8]);
+    }
+
+    #[test]
+    fn a_machine_explores_on_at_least_eight_cores() {
+        assert_eq!(worker_count(12), 8);
     }
 
     #[test]
