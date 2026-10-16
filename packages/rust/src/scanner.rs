@@ -2069,9 +2069,16 @@ mod tests {
         let glob = compile_glob("*").unwrap();
         let none = TableMatcher::new(&[], &[]).unwrap();
 
-        let rows = scan_glob_rows(dir.path(), &glob, &none, false, false, &|rel| {
-            (thread::current().id(), rel)
-        });
+        let mut rows = Vec::new();
+        scan_glob_rows(
+            dir.path(),
+            &glob,
+            &none,
+            false,
+            false,
+            &|rel| (thread::current().id(), rel),
+            &mut |row| rows.push(row),
+        );
 
         let paths: Vec<PathBuf> = rows.iter().map(|(_, rel)| rel.clone()).collect();
         assert_eq!(paths, scan_glob(dir.path(), &glob, &none, false));
