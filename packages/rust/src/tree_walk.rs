@@ -4,8 +4,21 @@
 //! of every other directory, so workers explore ahead of the walk while the
 //! calling thread hands out what they found in depth-first order.
 
-use std::sync::{Condvar, Mutex};
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
+
+thread_local! {
+    /// How many workers are exploring for the walk this thread explores for.
+    static BUSY: RefCell<Option<Arc<AtomicUsize>>> = const { RefCell::new(None) };
+}
+
+/// How many of its workers the walk the calling thread explores for has
+/// exploring right now; none when the walk has not spread across the cores.
+pub(crate) fn busy_workers() -> usize {
+    BUSY.with_borrow(|busy| busy.as_ref().map_or(0, |busy| busy.load(Ordering::Relaxed)))
+}
 
 /// What exploring a directory yields: a leaf to hand out, or a directory to
 /// explore in its place.
@@ -36,6 +49,7 @@ struct Queue<D, L> {
 struct Shared<'e, D, L> {
     queue: Mutex<Queue<D, L>>,
     changed: Condvar,
+    busy: Arc<AtomicUsize>,
     explore: &'e (dyn Fn(D) -> Vec<Step<D, L>> + Sync),
 }
 
@@ -54,6 +68,7 @@ pub(crate) fn walk_in_order<D: Send, L: Send>(
             done: false,
         }),
         changed: Condvar::new(),
+        busy: Arc::default(),
         explore,
     };
     thread::scope(|scope| {
@@ -67,8 +82,15 @@ pub(crate) fn walk_in_order<D: Send, L: Send>(
                         spawned = true;
                         let workers = thread::available_parallelism().map_or(1, usize::from);
                         for _ in 1..workers {
-                            scope.spawn(|| shared.work());
+                            // Counted before it starts, so a directory judged
+                            // meanwhile already sees the core as taken.
+                            shared.busy.fetch_add(1, Ordering::Relaxed);
+                            scope.spawn(|| {
+                                BUSY.set(Some(Arc::clone(&shared.busy)));
+                                shared.work();
+                            });
                         }
+                        BUSY.set(Some(Arc::clone(&shared.busy)));
                     }
                     stack.push(shared.obtain(id).into_iter());
                 }
@@ -116,6 +138,7 @@ impl<D, L> Shared<'_, D, L> {
         let mut queue = self.lock();
         loop {
             if queue.done {
+                self.busy.fetch_sub(1, Ordering::Relaxed);
                 return;
             }
             let claimed = queue.open.pop().map(|id| (id, queue.unclaimed[id].take()));
@@ -129,10 +152,12 @@ impl<D, L> Shared<'_, D, L> {
                 }
                 Some((_, None)) => {}
                 None => {
+                    self.busy.fetch_sub(1, Ordering::Relaxed);
                     queue = self
                         .changed
                         .wait(queue)
                         .expect("exploring a directory does not panic");
+                    self.busy.fetch_add(1, Ordering::Relaxed);
                 }
             }
         }
@@ -167,7 +192,7 @@ impl<D, L> Shared<'_, D, L> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     /// A tree of `fanout` directories per level, `depth` levels deep, each
     /// holding one leaf named for its path, with the leaf before its
@@ -234,6 +259,64 @@ mod tests {
     #[test]
     fn a_walk_of_a_few_dozen_directories_is_shared_across_threads() {
         assert!(threads_exploring(4, 2) > 1);
+    }
+
+    /// Whether `busy_workers` satisfies `done` within ten seconds.
+    fn busy_workers_reach(done: impl Fn(usize) -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if done(busy_workers()) {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        false
+    }
+
+    #[test]
+    fn a_walk_that_stays_on_the_calling_thread_has_no_busy_workers() {
+        let tree = explore_tree(3, 1);
+        let seen = Mutex::new(Vec::new());
+        let explore = |path: String| {
+            seen.lock().unwrap().push(busy_workers());
+            tree(path)
+        };
+        walk_in_order(String::from("r"), &explore, &mut |_| {});
+        assert_eq!(seen.into_inner().unwrap(), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_spread_walk_counts_its_workers_busy() {
+        let cores = thread::available_parallelism().map_or(1, usize::from);
+        let tree = explore_tree(8, 1);
+        let seen = Mutex::new(Vec::new());
+        let explore = |path: String| {
+            seen.lock().unwrap().push(busy_workers());
+            tree(path)
+        };
+        walk_in_order(String::from("r"), &explore, &mut |_| {});
+        let most = seen.into_inner().unwrap().into_iter().max();
+        assert_eq!(most > Some(0), cores > 1);
+    }
+
+    #[test]
+    fn a_worker_waiting_for_a_directory_is_not_busy() {
+        let tree = explore_tree(8, 1);
+        let others_idle = Mutex::new(None);
+        let explore = |path: String| {
+            if path == "r/0" {
+                *others_idle.lock().unwrap() = Some(busy_workers_reach(|busy| busy <= 1));
+            }
+            tree(path)
+        };
+        walk_in_order(String::from("r"), &explore, &mut |_| {});
+        assert_eq!(others_idle.into_inner().unwrap(), Some(true));
+    }
+
+    #[test]
+    fn a_finished_walk_leaves_no_worker_busy() {
+        walk_in_order(String::from("r"), &explore_tree(8, 1), &mut |_| {});
+        assert_eq!(busy_workers(), 0);
     }
 
     #[test]
