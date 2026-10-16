@@ -1,7 +1,7 @@
-//! A directory's entries, read in one pass and sorted by name.
+//! A directory's entries, read in chunks and sorted by name.
 //!
-//! The names share one buffer rather than one allocation each, which in a
-//! directory of a million files is most of what reading it costs.
+//! Each chunk's names share one buffer rather than one allocation each, which
+//! in a directory of a million files is most of what reading it costs.
 
 use std::ffi::OsStr;
 use std::path::Path;
@@ -18,18 +18,85 @@ pub(crate) enum Seen {
     Unknown,
 }
 
-/// One entry of a [`Listing`]: where its name sits, and what it is.
+/// One entry of a [`Listing`]: which chunk's buffer its name sits in and
+/// where, and what it is.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Listed {
     prefix: u64,
-    start: usize,
-    end: usize,
+    chunk: u32,
+    start: u32,
+    end: u32,
     pub(crate) seen: Seen,
+}
+
+/// The most entries a [`Chunk`] holds, which keeps every offset into its
+/// names within a `u32`.
+const CHUNK_ENTRIES: usize = 8192;
+
+/// Entries read in a row, at most [`CHUNK_ENTRIES`] of them, with their names.
+#[derive(Default)]
+pub(crate) struct Chunk {
+    index: u32,
+    names: Names,
+    entries: Vec<Listed>,
+}
+
+impl Chunk {
+    fn new(index: u32) -> Chunk {
+        Chunk {
+            index,
+            ..Chunk::default()
+        }
+    }
+
+    fn is_full(&self) -> bool {
+        self.entries.len() == CHUNK_ENTRIES
+    }
+
+    fn push(&mut self, name: &OsStr, seen: Seen) {
+        let start = self.names.add(name);
+        self.entries.push(Listed {
+            prefix: name_prefix(name),
+            chunk: self.index,
+            start,
+            end: start + span(name),
+            seen,
+        });
+    }
+}
+
+/// Gathers entries into chunks, handing each to `emit` once full.
+struct Chunker<'e> {
+    chunk: Chunk,
+    emit: &'e mut dyn FnMut(Chunk),
+}
+
+impl<'e> Chunker<'e> {
+    fn new(emit: &'e mut dyn FnMut(Chunk)) -> Chunker<'e> {
+        Chunker {
+            chunk: Chunk::default(),
+            emit,
+        }
+    }
+
+    fn push(&mut self, name: &OsStr, seen: Seen) {
+        if self.chunk.is_full() {
+            let next = Chunk::new(self.chunk.index + 1);
+            (self.emit)(std::mem::replace(&mut self.chunk, next));
+        }
+        self.chunk.push(name, seen);
+    }
+
+    fn finish(self) {
+        if !self.chunk.entries.is_empty() {
+            (self.emit)(self.chunk);
+        }
+    }
 }
 
 #[derive(Default)]
 pub(crate) struct Listing {
-    names: Names,
+    names: Vec<Names>,
     entries: Vec<Listed>,
 }
 
@@ -40,16 +107,16 @@ struct Packed(Vec<u8>);
 
 #[cfg(unix)]
 impl Packed {
-    fn add(&mut self, name: &OsStr) -> usize {
+    fn add(&mut self, name: &OsStr) -> u32 {
         use std::os::unix::ffi::OsStrExt;
-        let start = self.0.len();
+        let start = offset(self.0.len());
         self.0.extend_from_slice(name.as_bytes());
         start
     }
 
-    fn get(&self, start: usize, end: usize) -> &OsStr {
+    fn get(&self, start: u32, end: u32) -> &OsStr {
         use std::os::unix::ffi::OsStrExt;
-        OsStr::from_bytes(&self.0[start..end])
+        OsStr::from_bytes(&self.0[start as usize..end as usize])
     }
 }
 
@@ -61,14 +128,25 @@ struct Owned(Vec<std::ffi::OsString>);
 
 #[cfg(any(test, not(unix)))]
 impl Owned {
-    fn add(&mut self, name: &OsStr) -> usize {
+    fn add(&mut self, name: &OsStr) -> u32 {
         self.0.push(name.to_os_string());
-        self.0.len() - 1
+        offset(self.0.len() - 1)
     }
 
-    fn get(&self, start: usize, _end: usize) -> &OsStr {
-        &self.0[start]
+    fn get(&self, start: u32, _end: u32) -> &OsStr {
+        &self.0[start as usize]
     }
+}
+
+/// `n` as a chunk offset, which a chunk of at most [`CHUNK_ENTRIES`] names of
+/// at most a few hundred bytes each never outgrows.
+fn offset(n: usize) -> u32 {
+    u32::try_from(n).expect("a chunk's names fit in u32 offsets")
+}
+
+/// How far a name reaches past its start in a chunk's names.
+fn span(name: &OsStr) -> u32 {
+    offset(name.len())
 }
 
 #[cfg(unix)]
@@ -81,7 +159,7 @@ impl Listing {
     /// cannot be read.
     pub(crate) fn read(dir: &Path) -> Listing {
         let mut listing = Listing::default();
-        read_into(dir, &mut listing);
+        read_chunks(dir, &mut |chunk| listing.add(chunk));
         listing.sort();
         listing
     }
@@ -90,18 +168,15 @@ impl Listing {
         &self.entries
     }
 
-    pub(crate) fn push(&mut self, name: &OsStr, seen: Seen) {
-        let start = self.names.add(name);
-        self.entries.push(Listed {
-            prefix: name_prefix(name),
-            start,
-            end: start + name.len(),
-            seen,
-        });
+    /// Takes `chunk` in, which must be the next one read.
+    fn add(&mut self, chunk: Chunk) {
+        debug_assert_eq!(chunk.index as usize, self.names.len());
+        self.names.push(chunk.names);
+        self.entries.extend(chunk.entries);
     }
 
     pub(crate) fn name(&self, listed: &Listed) -> &OsStr {
-        self.names.get(listed.start, listed.end)
+        self.names[listed.chunk as usize].get(listed.start, listed.end)
     }
 
     pub(crate) fn sort(&mut self) {
@@ -147,10 +222,18 @@ thread_local! {
         std::cell::RefCell::new(Vec::with_capacity(1 << 20));
 }
 
+/// The entries of `dir` in the order the filesystem lists them, handed to
+/// `emit` a chunk at a time as they are read; none when it cannot be read.
+pub(crate) fn read_chunks(dir: &Path, emit: &mut dyn FnMut(Chunk)) {
+    let mut chunker = Chunker::new(emit);
+    read_into(dir, &mut chunker);
+    chunker.finish();
+}
+
 /// Reads entries straight out of the kernel's buffer, where `Dir` would copy
 /// each name into its own allocation.
 #[cfg(target_os = "linux")]
-fn read_into(dir: &Path, listing: &mut Listing) {
+fn read_into(dir: &Path, listing: &mut Chunker<'_>) {
     use rustix::fs::RawDir;
     use std::os::unix::ffi::OsStrExt;
     let Ok(fd) = open_dir(dir) else {
@@ -171,7 +254,7 @@ fn read_into(dir: &Path, listing: &mut Listing) {
 /// `read_into` for Unix systems without `RawDir`. Built under test too, so the
 /// Linux unit run covers it.
 #[cfg(all(unix, any(test, not(target_os = "linux"))))]
-fn read_dir_with_copies_into(dir: &Path, listing: &mut Listing) {
+fn read_dir_with_copies_into(dir: &Path, listing: &mut Chunker<'_>) {
     use rustix::fs::Dir;
     use std::os::unix::ffi::OsStrExt;
     let Ok(fd) = open_dir(dir) else {
@@ -190,7 +273,7 @@ fn read_dir_with_copies_into(dir: &Path, listing: &mut Listing) {
 }
 
 #[cfg(any(test, not(unix)))]
-fn read_dir_into(dir: &Path, listing: &mut Listing) {
+fn read_dir_into(dir: &Path, listing: &mut Chunker<'_>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -239,12 +322,34 @@ mod tests {
             .collect()
     }
 
+    fn chunks_of(names: impl IntoIterator<Item = (String, Seen)>) -> Vec<Chunk> {
+        let mut chunks = Vec::new();
+        let mut emit = |chunk| chunks.push(chunk);
+        let mut chunker = Chunker::new(&mut emit);
+        for (name, seen) in names {
+            chunker.push(OsStr::new(&name), seen);
+        }
+        chunker.finish();
+        chunks
+    }
+
+    fn listing_of(names: &[(&str, Seen)]) -> Listing {
+        let mut listing = Listing::default();
+        let named = names.iter().map(|&(name, seen)| (name.to_string(), seen));
+        for chunk in chunks_of(named) {
+            listing.add(chunk);
+        }
+        listing
+    }
+
+    fn numbered(count: usize) -> impl Iterator<Item = (String, Seen)> {
+        (0..count).map(|i| (format!("n{i:05}"), Seen::File))
+    }
+
     #[test]
     fn a_listing_sorts_its_names_into_byte_order() {
-        let mut listing = Listing::default();
-        for name in ["abcdefghZ", "b", "abcdefgh", "ab", "abcdefghA", "abc", "B"] {
-            listing.push(OsStr::new(name), Seen::File);
-        }
+        let pushed = ["abcdefghZ", "b", "abcdefgh", "ab", "abcdefghA", "abc", "B"];
+        let mut listing = listing_of(&pushed.map(|name| (name, Seen::File)));
         listing.sort();
         assert_eq!(
             names(&listing),
@@ -254,10 +359,7 @@ mod tests {
 
     #[test]
     fn a_sorted_entry_keeps_what_it_was_seen_as() {
-        let mut listing = Listing::default();
-        listing.push(OsStr::new("z"), Seen::Dir);
-        listing.push(OsStr::new("y"), Seen::Link);
-        listing.push(OsStr::new("x"), Seen::Unknown);
+        let mut listing = listing_of(&[("z", Seen::Dir), ("y", Seen::Link), ("x", Seen::Unknown)]);
         listing.sort();
         let seen: Vec<_> = listing.entries().iter().map(|listed| listed.seen).collect();
         assert_eq!(seen, [Seen::Unknown, Seen::Link, Seen::Dir]);
@@ -265,10 +367,51 @@ mod tests {
 
     #[test]
     fn a_listing_hands_back_each_name_as_pushed() {
-        let mut listing = Listing::default();
-        listing.push(OsStr::new("first"), Seen::File);
-        listing.push(OsStr::new("second"), Seen::Other);
+        let listing = listing_of(&[("first", Seen::File), ("second", Seen::Other)]);
         assert_eq!(names(&listing), ["first", "second"]);
+    }
+
+    #[test]
+    fn a_chunk_holds_at_most_chunk_entries_and_the_rest_start_the_next() {
+        let chunks = chunks_of(numbered(2 * CHUNK_ENTRIES + 1));
+        let shape: Vec<_> = chunks
+            .iter()
+            .map(|chunk| (chunk.index, chunk.entries.len()))
+            .collect();
+        assert_eq!(shape, [(0, CHUNK_ENTRIES), (1, CHUNK_ENTRIES), (2, 1)]);
+    }
+
+    #[test]
+    fn a_chunker_of_no_entries_hands_out_no_chunk() {
+        assert!(chunks_of(numbered(0)).is_empty());
+    }
+
+    #[test]
+    fn a_listing_sorts_names_from_every_chunk_together() {
+        let count = CHUNK_ENTRIES + 2;
+        let mut listing = Listing::default();
+        for chunk in chunks_of(numbered(count).collect::<Vec<_>>().into_iter().rev()) {
+            listing.add(chunk);
+        }
+        listing.sort();
+        let expected: Vec<_> = numbered(count).map(|(name, _)| name).collect();
+        let got: Vec<_> = names(&listing)
+            .into_iter()
+            .map(|name| name.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(got, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_chunks_hands_out_a_wide_directory_a_chunk_at_a_time() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..=CHUNK_ENTRIES {
+            std::fs::File::create(dir.path().join(format!("f{i}"))).unwrap();
+        }
+        let mut sizes = Vec::new();
+        read_chunks(dir.path(), &mut |chunk| sizes.push(chunk.entries.len()));
+        assert_eq!(sizes, [CHUNK_ENTRIES, 1]);
     }
 
     #[test]
@@ -290,9 +433,12 @@ mod tests {
         );
     }
 
-    fn read_with(read: fn(&Path, &mut Listing), dir: &Path) -> Vec<(String, Seen)> {
+    fn read_with(read: fn(&Path, &mut Chunker<'_>), dir: &Path) -> Vec<(String, Seen)> {
         let mut listing = Listing::default();
-        read(dir, &mut listing);
+        let mut emit = |chunk| listing.add(chunk);
+        let mut chunker = Chunker::new(&mut emit);
+        read(dir, &mut chunker);
+        chunker.finish();
         listing.sort();
         listing
             .entries()
