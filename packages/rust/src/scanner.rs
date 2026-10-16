@@ -1008,9 +1008,15 @@ fn is_glob_match(glob: &PathGlob, rel_path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
     use std::ffi::OsStr;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Condvar, Mutex};
+    use std::time::Duration;
+
+    thread_local! {
+        /// Lives at its own address on each thread, so it tells threads apart.
+        static MADE_ON: u8 = const { 0 };
+    }
 
     #[test]
     fn scan_directory_reporting_walks_a_known_source_file() {
@@ -2053,7 +2059,7 @@ mod tests {
             &none,
             false,
             false,
-            &|rel| (thread::current().id(), rel),
+            &|rel| (MADE_ON.with(|on| std::ptr::from_ref(on).addr()), rel),
             &mut |row| rows.push(row),
         );
 
@@ -2074,7 +2080,7 @@ mod tests {
         let last = PathBuf::from(format!("f{:05}", files - 1));
         let glob = compile_glob("*").unwrap();
         let none = TableMatcher::new(&[], &[]).unwrap();
-        let handed_out = AtomicBool::new(false);
+        let handed_out = (Mutex::new(false), Condvar::new());
         let last_made_after = AtomicBool::new(false);
 
         scan_glob_rows(
@@ -2085,17 +2091,21 @@ mod tests {
             false,
             &|rel| {
                 if rel == last {
-                    for _ in 0..100_000 {
-                        if handed_out.load(Ordering::SeqCst) {
-                            break;
-                        }
-                        thread::sleep(std::time::Duration::from_micros(50));
-                    }
-                    last_made_after.store(handed_out.load(Ordering::SeqCst), Ordering::SeqCst);
+                    let (lock, changed) = &handed_out;
+                    let (any, _) = changed
+                        .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(10), |any| {
+                            !*any
+                        })
+                        .unwrap();
+                    last_made_after.store(*any, Ordering::SeqCst);
                 }
                 rel
             },
-            &mut |_| handed_out.store(true, Ordering::SeqCst),
+            &mut |_| {
+                let (lock, changed) = &handed_out;
+                *lock.lock().unwrap() = true;
+                changed.notify_all();
+            },
         );
 
         assert!(
