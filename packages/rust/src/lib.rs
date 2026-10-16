@@ -5779,6 +5779,48 @@ mod internal_tests {
     }
 
     #[test]
+    fn finish_build_counts_the_files_of_a_hook_started_before_the_scan_toward_the_ingest_total() {
+        let dir = TempDir::new().unwrap();
+        let out = Captured::default();
+        let progress = Progress::new(
+            "indexing",
+            "indexed",
+            "files",
+            Box::new(out.clone()),
+            Box::new(progress::SystemClock),
+            progress::Mode::Always,
+            false,
+        );
+        let notes = Table::new("notes", "CREATE TABLE notes (name TEXT)", "*.md", |_| {
+            Vec::new()
+        });
+        let (items, _) = recording_per_table("items", "*.txt");
+        let (feeds, early) = start_per_table_hooks(std::slice::from_ref(&items));
+        for name in ["a.txt", "b.txt"] {
+            feeds["items"].send(dir.path().join(name)).unwrap();
+        }
+        drop(feeds);
+        let scanned = vec![
+            scanned("a.txt", "items", false),
+            scanned("b.txt", "items", false),
+            scanned("n.md", "notes", false),
+        ];
+        let mut prepared = prepared_build(dir.path(), vec![notes, items], scanned, None);
+        prepared.early = early;
+
+        DirSQL::finish_build_with_fs(prepared, Arc::new(FakeFs::default()), progress).unwrap();
+
+        let text = out.text();
+        for line in [
+            "dirsql: indexing 0/3 files (0%)",
+            "dirsql: indexing 2/3 files (66%)",
+            "dirsql: indexed 3 files in",
+        ] {
+            assert!(text.contains(line), "missing {line:?} in {text:?}");
+        }
+    }
+
+    #[test]
     fn finish_build_skips_a_per_file_hook_for_a_file_the_cache_holds() {
         let dir = TempDir::new().unwrap();
         let calls: Arc<Mutex<Vec<String>>> = Arc::default();
