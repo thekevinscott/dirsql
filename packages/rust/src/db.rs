@@ -1861,6 +1861,21 @@ mod tests {
     }
 
     #[test]
+    fn a_plain_scan_of_a_path_table_is_read_without_stepping() {
+        let mut db = Db::new().unwrap();
+        db.set_path_table_root(PathBuf::from("/nonexistent-dirsql-root"));
+        let plain = "SELECT path FROM './*.md'";
+        let limited = "SELECT path FROM './*.md' LIMIT 1";
+        let (_plain_stmt, _, plain_reads) = db.prepare_reading(plain).unwrap();
+        let (_limited_stmt, _, limited_reads) = db.prepare_reading(limited).unwrap();
+        let mut rows = 0;
+
+        assert!(db.read_directly(plain, &plain_reads, &mut |_| rows += 1));
+        assert!(!db.read_directly(limited, &limited_reads, &mut |_| rows += 1));
+        assert_eq!(rows, 0);
+    }
+
+    #[test]
     fn a_statement_over_an_ordinary_table_is_stepped() {
         let db = Db::new().unwrap();
         db.create_table("t", "CREATE TABLE t (a TEXT)").unwrap();

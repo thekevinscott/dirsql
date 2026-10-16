@@ -487,9 +487,7 @@ impl TableSource for ScanSpec {
         }
     }
 
-    fn holds(i: usize) -> bool {
-        i < CONTENT_COLUMN
-    }
+    const HELD_COLUMNS: usize = CONTENT_COLUMN;
 
     fn cell<'r>(&self, row: &'r FileRow, i: usize) -> ValueRef<'r> {
         c_int::try_from(i)
@@ -619,12 +617,6 @@ mod tests {
         ];
         all.extend_from_slice(user);
         all
-    }
-
-    #[test]
-    fn a_path_table_holds_every_column_but_content() {
-        assert!((0..CONTENT_COLUMN).all(ScanSpec::holds));
-        assert!(!ScanSpec::holds(CONTENT_COLUMN));
     }
 
     #[test]

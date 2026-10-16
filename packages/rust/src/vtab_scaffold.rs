@@ -95,15 +95,12 @@ pub trait TableSource: Sized + Send + Sync + 'static {
     /// column is declared, so a source that declares none is never asked.
     fn prefetch(&self, _rows: &[&Self::Row]) {}
 
-    /// Whether every row holds column `i` as a [`cell`](Self::cell), so a
-    /// plain scan can be read without stepping SQLite.
-    fn holds(i: usize) -> bool {
-        let _ = i;
-        false
-    }
+    /// How many leading columns every row holds as a [`cell`](Self::cell),
+    /// so a plain scan of them can be read without stepping SQLite.
+    const HELD_COLUMNS: usize = 0;
 
     /// Column `i` of `row`, the value [`column`](Self::column) emits. Only
-    /// reached for a column [`holds`](Self::holds) admits.
+    /// reached for a column below [`HELD_COLUMNS`](Self::HELD_COLUMNS).
     fn cell<'r>(&self, _row: &'r Self::Row, i: usize) -> ValueRef<'r> {
         unreachable!("column {i} is not held by {}", Self::NAME)
     }
@@ -281,7 +278,7 @@ impl<S: TableSource> Held for RowCache<S> {
     }
 
     fn each_row(&self, columns: &[usize], on_row: &mut dyn FnMut(&[ValueRef<'_>])) -> bool {
-        if !columns.iter().all(|&i| S::holds(i)) {
+        if !columns.iter().all(|&i| i < S::HELD_COLUMNS) {
             return false;
         }
         let rows = self.rows();
@@ -1374,9 +1371,7 @@ mod tests {
             unreachable!()
         }
 
-        fn holds(i: usize) -> bool {
-            i < 2
-        }
+        const HELD_COLUMNS: usize = 2;
 
         fn cell<'r>(&self, row: &'r i64, i: usize) -> ValueRef<'r> {
             ValueRef::Integer(row * 10 + i64::try_from(i).unwrap())
