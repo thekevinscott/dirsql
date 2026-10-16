@@ -1502,6 +1502,7 @@ impl DirSQL {
             as u64;
         let mut done: u64 = 0;
         for (table_name, rel_paths) in streamed {
+            progress.update(done, Some(total_files));
             done += rel_paths.len() as u64;
             batch_files.insert(table_name, rel_paths);
         }

@@ -623,9 +623,10 @@ impl Db {
     /// Return the column names declared in `table`'s DDL.
     pub fn get_table_columns(&self, table: &str) -> Result<Vec<String>> {
         validate_identifier(table)?;
-        let mut stmt = self
-            .conn
-            .prepare(&format!("PRAGMA table_info({})", table))?;
+        let mut stmt = self.conn.prepare(&format!(
+            "PRAGMA table_info({})",
+            crate::sql_literal::quote_identifier(table)
+        ))?;
         let columns: Vec<String> = stmt
             .query_map([], |row| row.get::<_, String>(1))?
             .filter_map(|r| r.ok())
@@ -2484,6 +2485,15 @@ mod tests {
         let db = Db::new().unwrap();
         let result = db.delete_rows_by_file("nonexistent", "f.json");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn get_table_columns_reads_a_table_named_by_a_keyword() {
+        let db = Db::new().unwrap();
+        db.create_table("order", "CREATE TABLE \"order\" (name TEXT)")
+            .unwrap();
+        let cols = db.get_table_columns("order").unwrap();
+        assert!(cols.contains(&"name".to_string()), "{cols:?}");
     }
 
     #[test]
