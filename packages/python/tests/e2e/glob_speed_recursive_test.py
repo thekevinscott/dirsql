@@ -55,7 +55,7 @@ PREFIX_NATIVE = [
 ]
 CASES = [
     ("./**/*.md", "./**/*.md", ALL_NATIVE, "", FASTEST),
-    ("./a/b/**/*.md", "./a/b/**/*.md", PREFIX_NATIVE, "a/b", ""),
+    ("./a/b/**/*.md", "./a/b/**/*.md", PREFIX_NATIVE, "a/b", FASTEST),
 ]
 FANOUT = 8
 

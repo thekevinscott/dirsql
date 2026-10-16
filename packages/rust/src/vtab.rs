@@ -487,6 +487,15 @@ impl TableSource for ScanSpec {
         }
     }
 
+    const HELD_COLUMNS: usize = CONTENT_COLUMN;
+
+    fn cell<'r>(&self, row: &'r FileRow, i: usize) -> ValueRef<'r> {
+        c_int::try_from(i)
+            .ok()
+            .and_then(|i| cell(row, i, &|row| self.facts(row)))
+            .unwrap_or(ValueRef::Null)
+    }
+
     const PREFETCH_COLUMN: Option<usize> = Some(CONTENT_COLUMN);
 
     fn prefetch(&self, rows: &[&FileRow]) {
@@ -608,6 +617,28 @@ mod tests {
         ];
         all.extend_from_slice(user);
         all
+    }
+
+    #[test]
+    fn a_held_cell_is_the_value_the_column_emits() {
+        let args = args_with(&[b"'/tmp/notes'", b"'**/*.md'", b"''", b"'gitignore'"]);
+        let spec = parse_module_args(&args).unwrap();
+        let row = FileRow::new(Path::new(""), PathBuf::from("docs/a.md"));
+        let cells: Vec<ValueRef<'_>> = [PATH_COLUMN, BASENAME_COLUMN, DIR_COLUMN, EXT_COLUMN]
+            .into_iter()
+            .map(|i| spec.cell(&row, i))
+            .collect();
+
+        assert_eq!(
+            cells,
+            [
+                ValueRef::Text(b"docs/a.md"),
+                ValueRef::Text(b"a.md"),
+                ValueRef::Text(b"docs"),
+                ValueRef::Text(b"md"),
+            ]
+        );
+        assert_eq!(spec.cell(&row, CONTENT_COLUMN), ValueRef::Null);
     }
 
     #[test]

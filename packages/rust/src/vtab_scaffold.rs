@@ -94,6 +94,16 @@ pub trait TableSource: Sized + Send + Sync + 'static {
     /// Read [`Self::PREFETCH_COLUMN`] for `rows`. Only reached when the
     /// column is declared, so a source that declares none is never asked.
     fn prefetch(&self, _rows: &[&Self::Row]) {}
+
+    /// How many leading columns every row holds as a [`cell`](Self::cell),
+    /// so a plain scan of them can be read without stepping SQLite.
+    const HELD_COLUMNS: usize = 0;
+
+    /// Column `i` of `row`, the value [`column`](Self::column) emits. Only
+    /// reached for a column below [`HELD_COLUMNS`](Self::HELD_COLUMNS).
+    fn cell<'r>(&self, _row: &'r Self::Row, i: usize) -> ValueRef<'r> {
+        unreachable!("column {i} is not held by {}", Self::NAME)
+    }
 }
 
 /// The row sets the tables on one connection hold across a statement.
@@ -152,6 +162,26 @@ impl StatementScope {
         }
     }
 
+    /// Hand `on_row` columns `columns` of every row of table `name`, in the
+    /// order a full scan of it yields them, without stepping SQLite. False,
+    /// having handed nothing, when no table here answers to `name` or its
+    /// rows do not hold one of `columns`.
+    pub fn each_row(
+        &self,
+        name: &str,
+        columns: &[usize],
+        on_row: &mut dyn FnMut(&[ValueRef<'_>]),
+    ) -> bool {
+        let cache = self
+            .tables
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(table, _)| table == name)
+            .find_map(|(_, cache)| cache.upgrade());
+        cache.is_some_and(|cache| cache.each_row(columns, on_row))
+    }
+
     fn adopt(&self, name: String, cache: Weak<dyn Held + Send + Sync>) {
         self.tables.lock().unwrap().push((name, cache));
     }
@@ -168,6 +198,7 @@ impl Drop for StatementGuard {
 trait Held {
     fn evict(&self);
     fn warm(&self);
+    fn each_row(&self, columns: &[usize], on_row: &mut dyn FnMut(&[ValueRef<'_>])) -> bool;
 }
 
 /// One table's rows for the statement in progress, empty between statements.
@@ -244,6 +275,24 @@ impl<S: TableSource> Held for RowCache<S> {
 
     fn warm(&self) {
         self.warm();
+    }
+
+    fn each_row(&self, columns: &[usize], on_row: &mut dyn FnMut(&[ValueRef<'_>])) -> bool {
+        if !columns.iter().all(|&i| i < S::HELD_COLUMNS) {
+            return false;
+        }
+        let rows = self.rows();
+        let mut n = 0;
+        while let Some(chunk) = rows.chunk(n) {
+            let mut cells = Vec::with_capacity(columns.len());
+            for row in chunk.iter() {
+                cells.clear();
+                cells.extend(columns.iter().map(|&i| self.source.cell(row, i)));
+                on_row(&cells);
+            }
+            n += 1;
+        }
+        true
     }
 }
 
@@ -1295,6 +1344,131 @@ mod tests {
         assert_eq!(contents(&cache.rows()), vec![2]);
         drop(guard);
         assert_eq!(contents(&cache.rows()), vec![3]);
+    }
+
+    /// A source holding two columns, each cell its row times ten plus the
+    /// column, over rows pushed in two chunks.
+    struct Tens {
+        scans: std::sync::atomic::AtomicUsize,
+    }
+
+    impl TableSource for Tens {
+        type Row = i64;
+        const NAME: &'static str = "tens";
+
+        fn connect(_args: &[&[u8]]) -> Result<(String, Self)> {
+            unreachable!()
+        }
+
+        fn rows(&self, rows: &Arc<RowStream<i64>>) {
+            self.scans
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            rows.push(Arc::new(vec![1, 2]));
+            rows.push(Arc::new(vec![3]));
+        }
+
+        fn column(&self, _row: &i64, _ctx: &mut Context, _i: c_int) -> Result<()> {
+            unreachable!()
+        }
+
+        const HELD_COLUMNS: usize = 2;
+
+        fn cell<'r>(&self, row: &'r i64, i: usize) -> ValueRef<'r> {
+            ValueRef::Integer(row * 10 + i64::try_from(i).unwrap())
+        }
+    }
+
+    fn tens(scope: &StatementScope, name: &str) -> Arc<RowCache<Tens>> {
+        let cache = Arc::new(RowCache::new(Arc::new(Tens {
+            scans: std::sync::atomic::AtomicUsize::new(0),
+        })));
+        scope.adopt(
+            name.to_string(),
+            Arc::downgrade(&cache) as Weak<dyn Held + Send + Sync>,
+        );
+        cache
+    }
+
+    fn each_row(scope: &StatementScope, name: &str, columns: &[usize]) -> Option<Vec<Vec<i64>>> {
+        let mut rows = Vec::new();
+        let read = scope.each_row(name, columns, &mut |cells| {
+            rows.push(cells.iter().map(|cell| cell.as_i64().unwrap()).collect());
+        });
+        read.then_some(rows)
+    }
+
+    #[test]
+    fn a_scope_hands_each_row_of_a_table_in_scan_order_by_column() {
+        let scope = StatementScope::new();
+        let _table = tens(&scope, "t");
+
+        assert_eq!(
+            each_row(&scope, "t", &[1, 0, 1]),
+            Some(vec![vec![11, 10, 11], vec![21, 20, 21], vec![31, 30, 31]])
+        );
+    }
+
+    #[test]
+    fn a_scope_reads_rows_the_statement_already_holds() {
+        let scope = StatementScope::new();
+        let table = tens(&scope, "t");
+        table.rows();
+
+        each_row(&scope, "t", &[0]);
+
+        assert_eq!(
+            table
+                .source
+                .scans
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[test]
+    fn a_scope_hands_nothing_and_scans_nothing_for_a_column_not_held() {
+        let scope = StatementScope::new();
+        let table = tens(&scope, "t");
+        let counted = adopted(&scope, "c");
+
+        assert_eq!(each_row(&scope, "t", &[0, 2]), None);
+        assert_eq!(each_row(&scope, "c", &[0]), None);
+        assert!(!is_held(&counted));
+        assert_eq!(
+            table
+                .source
+                .scans
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn a_scope_hands_nothing_for_a_table_it_does_not_hold() {
+        let scope = StatementScope::new();
+        let _table = tens(&scope, "t");
+        let gone = tens(&scope, "gone");
+        drop(gone);
+
+        assert_eq!(each_row(&scope, "absent", &[0]), None);
+        assert_eq!(each_row(&scope, "gone", &[0]), None);
+    }
+
+    #[test]
+    fn a_scope_reads_the_live_table_of_a_name_adopted_twice() {
+        let scope = StatementScope::new();
+        let gone = tens(&scope, "t");
+        drop(gone);
+        let _live = tens(&scope, "t");
+
+        assert_eq!(each_row(&scope, "t", &[0]).map(|rows| rows.len()), Some(3));
+    }
+
+    #[test]
+    #[should_panic(expected = "column 0 is not held by counted")]
+    fn a_source_that_holds_no_column_has_no_cell() {
+        let cache = counted();
+        cache.source.cell(&0, 0);
     }
 
     #[test]
