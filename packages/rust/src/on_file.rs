@@ -117,12 +117,41 @@ pub(crate) fn run_streaming(
     paths: &mut (dyn Iterator<Item = PathBuf> + Send),
     sink: &mut (dyn FnMut(Vec<JsonRow>) + Send),
 ) -> Result<(), String> {
+    run_streaming_on(command, cwd, root, paths, sink, &cpus)
+}
+
+/// [`run_streaming`] with the machine's CPU count asked of `cpus`.
+fn run_streaming_on(
+    command: &str,
+    cwd: &Path,
+    root: &Path,
+    paths: &mut (dyn Iterator<Item = PathBuf> + Send),
+    sink: &mut (dyn FnMut(Vec<JsonRow>) + Send),
+    cpus: &(dyn Fn() -> usize + Sync),
+) -> Result<(), String> {
     let Some(first) = paths.next() else {
         return Ok(());
     };
     let placeholders = [Placeholder::path("root", &root.to_string_lossy())];
     let argv = command::build_argv(command, &placeholders).map_err(spawn_failure)?;
     let budget = ARG_BUDGET.saturating_sub(argv_bytes(&argv));
+
+    let mut known_rest;
+    let (first, paths): (PathBuf, &mut (dyn Iterator<Item = PathBuf> + Send)) =
+        if paths.size_hint().1.is_some() {
+            let known: Vec<PathBuf> = std::iter::once(first).chain(paths).collect();
+            // Threads and the cgroup CPU query cost more than a small rerun.
+            if let Some(args) = lone_run(&known, budget, cpus) {
+                let mut full = argv;
+                full.extend(args);
+                return run_invocation(command, &full, cwd, sink);
+            }
+            known_rest = known.into_iter();
+            let first = known_rest.next().expect("known holds the first path");
+            (first, &mut known_rest)
+        } else {
+            (first, paths)
+        };
 
     let (job_tx, job_rx) = std::sync::mpsc::channel::<Job>();
     let (rows_tx, rows_rx) = std::sync::mpsc::sync_channel::<Vec<JsonRow>>(16);
@@ -185,6 +214,20 @@ pub(crate) fn run_streaming(
         Some((_, message)) => Err(message),
         None => Ok(()),
     }
+}
+
+/// The one argument list `paths` make when they fit one invocation and their
+/// data does not justify a second.
+fn lone_run(paths: &[PathBuf], budget: usize, cpus: impl FnOnce() -> usize) -> Option<Vec<String>> {
+    let args: Vec<String> = paths
+        .iter()
+        .map(|path| command::non_verbatim(&path.to_string_lossy()))
+        .collect();
+    if argv_bytes(&args) > budget {
+        return None;
+    }
+    let lone = spread_runs(&args, &file_sizes(paths), cpus).len() == 1;
+    lone.then_some(args)
 }
 
 /// Hands argument lists to the invocations, starting a worker for each until
@@ -665,6 +708,56 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("boom"), "got: {err}");
+    }
+
+    #[test]
+    fn run_streaming_does_not_count_cpus_for_known_paths_that_fit_one_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = files_of(dir.path(), 4, 100);
+        let mut rows = Vec::new();
+        run_streaming_on(
+            r#"sh -c 'echo "{\"n\":$#}"' sh"#,
+            Path::new("."),
+            Path::new("."),
+            &mut paths.into_iter(),
+            &mut |chunk| rows.extend(chunk),
+            &|| panic!("counted the cpus"),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    fn two_paths() -> (Vec<PathBuf>, Vec<String>, usize) {
+        let paths = vec![PathBuf::from("/a"), PathBuf::from("/b")];
+        let spawned: Vec<String> = paths
+            .iter()
+            .map(|path| command::non_verbatim(&path.to_string_lossy()))
+            .collect();
+        let bytes = argv_bytes(&spawned);
+        (paths, spawned, bytes)
+    }
+
+    #[test]
+    fn lone_run_takes_paths_that_exactly_fill_the_budget() {
+        let (paths, spawned, bytes) = two_paths();
+        let run = lone_run(&paths, bytes, || panic!("counted the cpus"));
+        assert_eq!(run, Some(spawned));
+    }
+
+    #[test]
+    fn lone_run_refuses_paths_over_the_budget() {
+        let (paths, _, bytes) = two_paths();
+        assert_eq!(
+            lone_run(&paths, bytes - 1, || panic!("counted the cpus")),
+            None
+        );
+    }
+
+    #[test]
+    fn lone_run_refuses_data_that_fills_more_than_one_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = files_of(dir.path(), 2, 4 * 1024 * 1024);
+        assert_eq!(lone_run(&paths, ARG_BUDGET, || 2), None);
     }
 
     #[test]
