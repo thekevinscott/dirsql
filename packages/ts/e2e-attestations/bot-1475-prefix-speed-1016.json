@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1792155123,
+  "exit_code": 0,
+  "commit": "c87b7254ed29d990a4d75dab2e635a7c3039f588",
+  "branch": "bot/1475-prefix-speed-1016"
+}
