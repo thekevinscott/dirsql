@@ -1,0 +1,7 @@
+{
+  "command": "pnpm test:e2e",
+  "ran_at": 1792074926,
+  "exit_code": 0,
+  "commit": "3b20b2d88476250609109ceb89a2a5d9c18f938e",
+  "branch": "bot/1484-jsonl-speed-1015"
+}

@@ -15,7 +15,7 @@
 # `[<lang>.coverage]` table sets the unit-only coverage floor the `unit
 # coverage` job enforces.
 #
-# There are no exemptions. The three-tier conformance work (#517) is
+# The only exemption is the Rust mutation entry below. The three-tier conformance work (#517) is
 # complete: the binding suites moved into the recognized tier
 # `tests/integration/binding/` (#519) and the packaging distcheck flows moved to the
 # `internals/distcheck` package (#520), so nothing trips `unknown-tier` anymore.
@@ -100,6 +100,12 @@ branch = true
 # is silently unmeasured.
 [rust]
 features = ["cli"]
+
+[[rust.exempt]]
+path = "src/vtab.rs"
+rules = ["mutation"]
+lines = [513, 520]
+reason = "set_terminated_text writes through a raw sqlite3_context, which only a real Connection supplies and unit-lint isolation forbids; tests/vtab.rs (stat_columns_carry_real_values) asserts the full path, basename and ext text"
 
 # Unit-only coverage floor: measured by `cargo llvm-cov --lib --features cli`
 # (the `--lib` scoping keeps the integration tier under packages/rust/tests/ out

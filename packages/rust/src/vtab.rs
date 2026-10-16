@@ -10,9 +10,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::types::{ToSqlOutput, ValueRef};
 use rusqlite::vtab::Context;
-use rusqlite::{Connection, Result};
+use rusqlite::{Connection, Result, ffi};
 
 use crate::matcher::TableMatcher;
+use crate::row_stream::RowStream;
 use crate::scanner::{PathGlob, scan_glob_rows, to_slash};
 use crate::vtab_scaffold::{self, TableSource};
 
@@ -22,6 +23,10 @@ pub use crate::vtab_scaffold::StatementScope;
 /// `CREATE VIRTUAL TABLE t USING dirsql_path('<root>', '<glob>', '<path prefix>',
 /// '<gitignore|no-gitignore>'[, '<ignore>'...])`.
 pub const MODULE_NAME: &str = "dirsql_path";
+
+/// Rows a scan hands a reading cursor at once: few enough that the cursor
+/// starts long before the walk ends, enough that handing over costs nothing.
+const STREAM_CHUNK_ROWS: usize = 4096;
 
 /// Number of module arguments that are not ignore patterns.
 const FIXED_ARGS: usize = 4;
@@ -183,17 +188,21 @@ struct ScanSpec {
     /// The row set of the statement in progress, which the first stat a
     /// statement asks for stats whole: one stat at a time as SQLite steps
     /// would be several times slower than sharing them out at once.
-    current: Mutex<Weak<Vec<FileRow>>>,
+    current: Mutex<Weak<RowStream<FileRow>>>,
 }
 
 /// One matched file, as compact as the seven stat columns allow: the three
-/// path-derived text columns are slices of `path` located by [`PathSpans`],
-/// so a row costs two allocations however many columns a query reads.
+/// path-derived text columns are slices of the path located by
+/// [`PathSpans`], so a row costs two allocations however many columns a query
+/// reads.
 struct FileRow {
-    /// The path as scanned, root-relative, when `path` is not already it.
+    /// The path as scanned, root-relative, when the reported path is not
+    /// already it.
     rel: Option<Box<Path>>,
-    /// The path as reported, under the table's prefix when it has one.
-    path: Box<str>,
+    /// The path as reported, under the table's prefix when it has one, then
+    /// a NUL: SQLite reads a NUL-terminated cell in place, and `basename`
+    /// and `ext` are suffixes that end on the same NUL.
+    terminated: Box<str>,
     spans: PathSpans,
     /// Stat'ed at most once per statement, and only when the statement reads
     /// a stat column or the content.
@@ -213,11 +222,12 @@ impl FileRow {
                 (Some(rel.into_boxed_path()), path)
             }
         };
-        let path = path.into_boxed_str();
         let spans = PathSpans::of(&path);
+        let mut terminated = path;
+        terminated.push('\0');
         Self {
             rel,
-            path,
+            terminated: terminated.into_boxed_str(),
             spans,
             facts: OnceLock::new(),
             content: OnceLock::new(),
@@ -228,19 +238,39 @@ impl FileRow {
     fn rel(&self) -> &Path {
         self.rel
             .as_deref()
-            .unwrap_or_else(|| Path::new(&*self.path))
+            .unwrap_or_else(|| Path::new(self.path()))
+    }
+
+    fn path(&self) -> &str {
+        &self.terminated[..self.terminated.len() - 1]
+    }
+
+    /// Column `i` with its terminating NUL, for the columns that end the
+    /// path; `None` for any other column, or one the path has no answer for.
+    fn terminated_cell(&self, i: c_int) -> Option<&str> {
+        match usize::try_from(i).ok()? {
+            PATH_COLUMN => Some(&self.terminated),
+            BASENAME_COLUMN => self
+                .spans
+                .name_at
+                .map(|at| &self.terminated[span_end(at)..]),
+            EXT_COLUMN => self.spans.ext_at.map(|at| &self.terminated[span_end(at)..]),
+            _ => None,
+        }
     }
 
     fn basename(&self) -> Option<&str> {
-        self.spans.name_at.map(|at| &self.path[span_end(at)..])
+        self.spans.name_at.map(|at| &self.path()[span_end(at)..])
     }
 
     fn dir(&self) -> Option<&str> {
-        self.spans.dir_len.map(|len| &self.path[..span_end(len)])
+        self.spans
+            .dir_len
+            .map(|len| &self.terminated[..span_end(len)])
     }
 
     fn ext(&self) -> Option<&str> {
-        self.spans.ext_at.map(|at| &self.path[span_end(at)..])
+        self.spans.ext_at.map(|at| &self.path()[span_end(at)..])
     }
 }
 
@@ -316,7 +346,7 @@ fn cell<'r>(
     facts: &dyn Fn(&FileRow) -> StatFacts,
 ) -> Option<ValueRef<'r>> {
     Some(match usize::try_from(i).unwrap_or(usize::MAX) {
-        PATH_COLUMN => ValueRef::from(&*row.path),
+        PATH_COLUMN => ValueRef::from(row.path()),
         BASENAME_COLUMN => ValueRef::from(row.basename()),
         DIR_COLUMN => ValueRef::from(row.dir()),
         EXT_COLUMN => ValueRef::from(row.ext()),
@@ -373,7 +403,9 @@ impl ScanSpec {
             .lock()
             .map_or_else(|_| Weak::new(), |c| c.clone());
         if let Some(rows) = current.upgrade() {
-            stat_rows(&rows.iter().collect::<Vec<_>>(), &|row| self.stat(row));
+            stat_rows(&rows.all().iter().collect::<Vec<_>>(), &|row| {
+                self.stat(row)
+            });
         }
         **row.facts.get_or_init(|| Box::new(self.stat(row)))
     }
@@ -417,24 +449,36 @@ impl TableSource for ScanSpec {
         Ok((declared_schema(), parse_module_args(args)?))
     }
 
-    fn rows(&self) -> Arc<Vec<FileRow>> {
+    fn rows(&self, rows: &Arc<RowStream<FileRow>>) {
+        if let Ok(mut current) = self.current.lock() {
+            *current = Arc::downgrade(rows);
+        }
         // The scan runs per statement rather than at CREATE, which is what
         // makes reads live: each statement sees the filesystem as it is now.
-        let rows = Arc::new(scan_glob_rows(
+        let mut chunk = Vec::with_capacity(STREAM_CHUNK_ROWS);
+        scan_glob_rows(
             &self.root,
             &self.glob,
             &self.ignore,
             self.gitignore,
             self.check_root,
             &|rel| FileRow::new(&self.path_prefix, rel),
-        ));
-        if let Ok(mut current) = self.current.lock() {
-            *current = Arc::downgrade(&rows);
-        }
-        rows
+            &mut |row| {
+                chunk.push(row);
+                if chunk.len() == STREAM_CHUNK_ROWS {
+                    let full = std::mem::replace(&mut chunk, Vec::with_capacity(STREAM_CHUNK_ROWS));
+                    rows.push(Arc::new(full));
+                }
+            },
+        );
+        rows.push(Arc::new(chunk));
     }
 
     fn column(&self, row: &FileRow, ctx: &mut Context, i: c_int) -> Result<()> {
+        if let Some(text) = row.terminated_cell(i) {
+            set_terminated_text(ctx, text);
+            return Ok(());
+        }
         match cell(row, i, &|row| self.facts(row)) {
             Some(value) => ctx.set_result(&ToSqlOutput::Borrowed(value)),
             // The one effectful read, reached only when a query names the
@@ -451,11 +495,29 @@ impl TableSource for ScanSpec {
 
     fn lookup_key<'r>(&self, row: &'r FileRow, column: usize) -> Option<&'r str> {
         match column {
-            PATH_COLUMN => Some(&row.path),
+            PATH_COLUMN => Some(row.path()),
             BASENAME_COLUMN => row.basename(),
             DIR_COLUMN => row.dir(),
             _ => None,
         }
+    }
+}
+
+/// Hand SQLite `text`, which ends in a NUL, without copying it. rusqlite
+/// only offers `SQLITE_TRANSIENT`, which copies every cell.
+#[expect(
+    unsafe_code,
+    reason = "rusqlite exposes neither the raw context nor SQLITE_STATIC"
+)]
+fn set_terminated_text(ctx: &mut Context, text: &str) {
+    const _: () = assert!(size_of::<Context>() == size_of::<*mut ffi::sqlite3_context>());
+    // SAFETY: `Context` is a newtype over the raw context pointer, as the
+    // size assert above checks. SQLITE_STATIC is sound because the rows stay
+    // held by the statement scope until the statement is finalized. A length
+    // of -1 marks the value NUL-terminated, so SQLite never copies it to add one.
+    unsafe {
+        let raw = *std::ptr::from_mut(ctx).cast::<*mut ffi::sqlite3_context>();
+        ffi::sqlite3_result_text(raw, text.as_ptr().cast(), -1, ffi::SQLITE_STATIC());
     }
 }
 
@@ -668,12 +730,39 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_row_without_a_prefix_keeps_the_scanned_path_allocation() {
-        let rel = PathBuf::from("docs/a.md");
+        let mut rel = PathBuf::with_capacity("docs/a.md".len() + 1);
+        rel.push("docs/a.md");
         let scanned = rel.as_os_str().as_encoded_bytes().as_ptr();
 
         let row = FileRow::new(Path::new(""), rel);
 
-        assert_eq!(row.path.as_ptr(), scanned);
+        assert_eq!(row.terminated.as_ptr(), scanned);
+    }
+
+    #[test]
+    fn the_cells_that_end_the_path_keep_its_terminator() {
+        let row = row_for("", "docs/a.md");
+        let cells: Vec<Option<&str>> = (0..=8).map(|i| row.terminated_cell(i)).collect();
+        assert_eq!(
+            cells,
+            vec![
+                Some("docs/a.md\0"),
+                Some("a.md\0"),
+                None,
+                Some("md\0"),
+                None,
+                None,
+                None,
+                None,
+                None
+            ]
+        );
+        assert_eq!(row.terminated_cell(-1), None);
+    }
+
+    #[test]
+    fn a_path_without_an_ext_has_no_terminated_ext() {
+        assert_eq!(row_for("", "Makefile").terminated_cell(3), None);
     }
 
     fn no_facts(_: &FileRow) -> StatFacts {
@@ -818,7 +907,7 @@ mod tests {
     #[test]
     fn a_row_reports_its_path_under_the_prefix_and_reads_from_the_scanned_one() {
         let row = FileRow::new(Path::new("/root"), PathBuf::from("f001.md"));
-        assert_eq!(&*row.path, "/root/f001.md");
+        assert_eq!(row.path(), "/root/f001.md");
         assert_eq!(row.rel(), Path::new("f001.md"));
     }
 
@@ -837,12 +926,44 @@ mod tests {
         let root = dir.path().to_str().unwrap().as_bytes();
         let args = args_with(&[root, b"'*.md'", b"''", b"'no-gitignore'"]);
         let spec = parse_module_args(&args).unwrap();
-        let rows = spec.rows();
+        let rows = scanned(&spec);
+        let rows = rows.all();
         assert!(rows.iter().all(|row| row.facts.get().is_none()));
 
-        assert_eq!(spec.facts(&rows[0]).size, Some(2));
+        assert_eq!(spec.facts(rows.get(0).unwrap()).size, Some(2));
 
-        assert_eq!(rows[1].facts.get().and_then(|f| f.size), Some(3));
+        assert_eq!(
+            rows.get(1).unwrap().facts.get().and_then(|f| f.size),
+            Some(3)
+        );
+    }
+
+    fn scanned(spec: &ScanSpec) -> Arc<RowStream<FileRow>> {
+        let rows = Arc::new(RowStream::default());
+        spec.rows(&rows);
+        rows.finish(false);
+        rows
+    }
+
+    #[test]
+    fn a_scan_hands_its_rows_over_in_full_chunks_and_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let names: Vec<String> = (0..=STREAM_CHUNK_ROWS)
+            .map(|n| format!("f{n:05}.md"))
+            .collect();
+        for name in &names {
+            fs::write(dir.path().join(name), "").unwrap();
+        }
+        let root = dir.path().to_str().unwrap().as_bytes();
+        let args = args_with(&[root, b"'*.md'", b"''", b"'no-gitignore'"]);
+        let rows = scanned(&parse_module_args(&args).unwrap());
+
+        assert_eq!(rows.chunk(0).unwrap().len(), STREAM_CHUNK_ROWS);
+        assert_eq!(rows.chunk(1).unwrap().len(), 1);
+        assert!(rows.chunk(2).is_none());
+        let all = rows.all();
+        let paths: Vec<&str> = all.iter().map(FileRow::path).collect();
+        assert_eq!(paths, names);
     }
 
     #[test]
@@ -852,7 +973,7 @@ mod tests {
         let stats = AtomicUsize::new(0);
         let stat = |row: &FileRow| {
             stats.fetch_add(1, Ordering::Relaxed);
-            facts(row.path[1..row.path.len() - 3].parse().unwrap())
+            facts(row.path()[1..row.path().len() - 3].parse().unwrap())
         };
 
         stat_rows(&rows.iter().collect::<Vec<_>>(), &stat);
@@ -983,8 +1104,8 @@ mod tests {
             .unwrap();
         let reads = std::sync::Mutex::new(Vec::new());
         let read = |row: &FileRow| {
-            reads.lock().unwrap().push(row.path.to_string());
-            Some(format!("body of {}", row.path))
+            reads.lock().unwrap().push(row.path().to_string());
+            Some(format!("body of {}", row.path()))
         };
 
         read_contents(&rows.iter().collect::<Vec<_>>(), &read);
@@ -1027,7 +1148,7 @@ mod tests {
     #[test]
     fn a_nested_path_splits_into_dir_basename_and_ext() {
         let row = row_for("", "nested/sub.txt");
-        assert_eq!(&*row.path, "nested/sub.txt");
+        assert_eq!(row.path(), "nested/sub.txt");
         assert_eq!(row.dir(), Some("nested"));
         assert_eq!(row.basename(), Some("sub.txt"));
         assert_eq!(row.ext(), Some("txt"));
@@ -1043,7 +1164,7 @@ mod tests {
     #[test]
     fn an_absolute_row_reports_its_prefix_in_path_and_dir() {
         let row = row_for("/var/log", "a.log");
-        assert_eq!(&*row.path, "/var/log/a.log");
+        assert_eq!(row.path(), "/var/log/a.log");
         assert_eq!(row.dir(), Some("/var/log"));
         assert_eq!(row.basename(), Some("a.log"));
         assert_eq!(

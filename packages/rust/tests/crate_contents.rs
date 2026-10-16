@@ -87,3 +87,15 @@ fn crate_archive_omits_migration_fragments() {
          add `migrations.d/` to [package].exclude. Shipped: {shipped:?}"
     );
 }
+
+#[test]
+fn crate_archive_ships_the_bundled_frontend_assets() {
+    let paths = packaged_paths();
+
+    for asset in ["src/cli/frontend.html", "src/cli/frontend.js"] {
+        assert!(
+            paths.iter().any(|p| p == asset),
+            "`cargo install dirsql --features cli` embeds {asset}; it must ship. Got: {paths:?}"
+        );
+    }
+}

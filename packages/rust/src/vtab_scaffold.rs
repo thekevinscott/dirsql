@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_int;
 use std::sync::{Arc, Mutex, Weak};
-use std::thread::{self, JoinHandle};
+use std::thread;
 
 use rusqlite::types::ValueRef;
 use rusqlite::vtab::{
@@ -21,6 +21,7 @@ use rusqlite::{Connection, Error, Result, ffi};
 
 use crate::Value;
 use crate::matcher::TableMatcher;
+use crate::row_stream::{RowStream, Settled};
 use crate::scanner::{self, PathGlob};
 use crate::sql_literal::unquote;
 
@@ -63,11 +64,11 @@ pub trait TableSource: Sized + Send + Sync + 'static {
     /// declares to SQLite.
     fn connect(args: &[&[u8]]) -> Result<(String, Self)>;
 
-    /// The row set one statement reads, taken on the statement's first
-    /// `xFilter` over the table and held for the rest of it. A table whose
-    /// reads are live rescans here; one that materialized at `CREATE` hands
-    /// back the `Arc` it already holds.
-    fn rows(&self) -> Arc<Vec<Self::Row>>;
+    /// Push the row set one statement reads into `rows`, in order. It is
+    /// taken on the statement's first `xFilter` over the table and held for
+    /// the rest of it. A table whose reads are live rescans here; one that
+    /// materialized at `CREATE` pushes the `Arc` it already holds.
+    fn rows(&self, rows: &Arc<RowStream<Self::Row>>);
 
     /// Columns an equality constraint is answered on by lookup rather than by
     /// scanning, in order of preference.
@@ -169,40 +170,46 @@ trait Held {
     fn warm(&self);
 }
 
-/// Where one table's rows stand within the statement in progress.
-enum Slot<R> {
-    Empty,
-    /// A scan started ahead of the first read, on a thread of its own.
-    Pending(JoinHandle<Arc<Vec<R>>>),
-    Ready(Arc<Vec<R>>),
-}
-
 /// One table's rows for the statement in progress, empty between statements.
 struct RowCache<S: TableSource> {
     source: Arc<S>,
-    slot: Mutex<Slot<S::Row>>,
+    slot: Mutex<Option<Arc<RowStream<S::Row>>>>,
+}
+
+/// Finishes a stream when its scan returns or unwinds, so no reader waits on
+/// a scan that is gone.
+struct Finishing<'a, R>(&'a RowStream<R>);
+
+impl<R> Drop for Finishing<'_, R> {
+    fn drop(&mut self) {
+        self.0.finish(thread::panicking());
+    }
+}
+
+fn fill<S: TableSource>(source: &S, rows: &Arc<RowStream<S::Row>>) {
+    let _finishing = Finishing(rows);
+    source.rows(rows);
 }
 
 impl<S: TableSource> RowCache<S> {
     fn new(source: Arc<S>) -> Self {
         Self {
             source,
-            slot: Mutex::new(Slot::Empty),
+            slot: Mutex::new(None),
         }
     }
 
-    /// The rows held, waiting for a scan started ahead to finish; or else the
-    /// source's rows scanned now, held from here on.
-    fn rows(&self) -> Arc<Vec<S::Row>> {
+    /// The rows held, however far their scan has got; or else the source's
+    /// rows scanned now, held from here on.
+    fn rows(&self) -> Arc<RowStream<S::Row>> {
         let mut slot = self.slot.lock().unwrap();
-        let rows = match std::mem::replace(&mut *slot, Slot::Empty) {
-            Slot::Ready(rows) => rows,
-            Slot::Pending(scan) => scan
-                .join()
-                .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
-            Slot::Empty => self.source.rows(),
-        };
-        *slot = Slot::Ready(Arc::clone(&rows));
+        if let Some(rows) = &*slot {
+            return Arc::clone(rows);
+        }
+        let rows = Arc::new(RowStream::default());
+        *slot = Some(Arc::clone(&rows));
+        drop(slot);
+        fill(&*self.source, &rows);
         rows
     }
 
@@ -210,20 +217,25 @@ impl<S: TableSource> RowCache<S> {
     /// or underway.
     fn warm(&self) {
         let mut slot = self.slot.lock().unwrap();
-        if !matches!(*slot, Slot::Empty) {
+        if slot.is_some() {
             return;
         }
+        let rows = Arc::new(RowStream::default());
         let source = Arc::clone(&self.source);
-        if let Ok(scan) = thread::Builder::new().spawn(move || source.rows()) {
-            *slot = Slot::Pending(scan);
+        let filled = Arc::clone(&rows);
+        if thread::Builder::new()
+            .spawn(move || fill(&*source, &filled))
+            .is_ok()
+        {
+            *slot = Some(rows);
         }
     }
 }
 
 impl<S: TableSource> Held for RowCache<S> {
     fn evict(&self) {
-        let evicted = std::mem::replace(&mut *self.slot.lock().unwrap(), Slot::Empty);
-        if let Slot::Ready(rows) = evicted
+        let evicted = self.slot.lock().unwrap().take();
+        if let Some(rows) = evicted
             && rows.len() >= FREE_ELSEWHERE_ROWS
         {
             let _ = thread::Builder::new().spawn(move || drop(rows));
@@ -406,25 +418,51 @@ impl LookupIndex {
     }
 }
 
-/// The rows one `xFilter` selected, as positions into the cursor's row set.
-enum Selection {
-    Every(usize),
+/// The rows one `xFilter` selected.
+enum Selection<R> {
+    /// Every row, read a chunk at a time as the scan makes them.
+    Every(Reading<R>),
+    /// The rows at these positions, read once the scan is through.
     Only(Vec<usize>),
 }
 
-impl Selection {
-    fn len(&self) -> usize {
-        match self {
-            Self::Every(count) => *count,
-            Self::Only(positions) => positions.len(),
+/// How far a read of every row has got: chunk `n` of the stream, whose first
+/// row sits at position `start`; no chunk once past the last.
+struct Reading<R> {
+    n: usize,
+    start: usize,
+    chunk: Option<Arc<Vec<R>>>,
+}
+
+impl<R> Reading<R> {
+    fn from(rows: &RowStream<R>, n: usize, start: usize) -> Self {
+        Self {
+            n,
+            start,
+            chunk: rows.chunk(n),
         }
     }
 
-    /// The row position the `step`th selected row sits at.
-    fn position(&self, step: usize) -> Option<usize> {
-        match self {
-            Self::Every(count) => (step < *count).then_some(step),
-            Self::Only(positions) => positions.get(step).copied(),
+    fn done() -> Self {
+        Self {
+            n: 0,
+            start: 0,
+            chunk: None,
+        }
+    }
+
+    fn row(&self, step: usize) -> Option<&R> {
+        self.chunk.as_ref()?.get(step.checked_sub(self.start)?)
+    }
+
+    /// The reading that holds `step`, moving on a chunk once this one is
+    /// read through.
+    fn advanced(self, rows: &RowStream<R>, step: usize) -> Self {
+        match &self.chunk {
+            Some(chunk) if step >= self.start + chunk.len() => {
+                Self::from(rows, self.n + 1, self.start + chunk.len())
+            }
+            _ => self,
         }
     }
 }
@@ -506,8 +544,9 @@ unsafe impl<'vtab, S: TableSource> VTab<'vtab> for ScaffoldTab<S> {
             source: Arc::clone(&self.source),
             cache: Arc::clone(&self.cache),
             rows: None,
+            settled: None,
             index: None,
-            selection: Selection::Every(0),
+            selection: Selection::Every(Reading::done()),
             step: 0,
         })
     }
@@ -527,22 +566,31 @@ pub struct ScaffoldCursor<S: TableSource> {
     cache: Arc<RowCache<S>>,
     /// Taken from the statement's cache on the first `xFilter`; `None` until
     /// then.
-    rows: Option<Arc<Vec<S::Row>>>,
+    rows: Option<Arc<RowStream<S::Row>>>,
+    /// Every row, by position; taken once the scan is through, on the first
+    /// `xFilter` that needs rows other than in order.
+    settled: Option<Settled<S::Row>>,
     /// Built on the first `xFilter` that probes a column.
     index: Option<LookupIndex>,
-    selection: Selection,
+    selection: Selection<S::Row>,
     step: usize,
 }
 
 impl<S: TableSource> ScaffoldCursor<S> {
-    fn rows(&mut self) -> Arc<Vec<S::Row>> {
+    fn rows(&mut self) -> Arc<RowStream<S::Row>> {
         let cache = &self.cache;
         Arc::clone(self.rows.get_or_insert_with(|| cache.rows()))
     }
 
-    fn select_by_lookup(&mut self, column: usize, key: &str) -> Selection {
+    fn settled(&mut self) -> &Settled<S::Row> {
         let rows = self.rows();
+        self.settled.get_or_insert_with(|| rows.all())
+    }
+
+    fn select_by_lookup(&mut self, column: usize, key: &str) -> Selection<S::Row> {
         let source = Arc::clone(&self.source);
+        self.settled();
+        let rows = self.settled.as_ref().expect("settled above");
         let index = match &self.index {
             Some(index) if index.column == column => index,
             _ => self
@@ -555,19 +603,28 @@ impl<S: TableSource> ScaffoldCursor<S> {
     }
 
     fn current(&self) -> Option<(usize, &S::Row)> {
-        let position = self.selection.position(self.step)?;
-        let row = self.rows.as_ref()?.get(position)?;
-        Some((position, row))
+        match &self.selection {
+            Selection::Every(reading) => Some((self.step, reading.row(self.step)?)),
+            Selection::Only(positions) => {
+                let position = *positions.get(self.step)?;
+                Some((position, self.settled.as_ref()?.get(position)?))
+            }
+        }
     }
 
     /// Read the prefetch column ahead for every row the filter selected.
-    fn prefetch(&self) {
-        let Some(rows) = &self.rows else { return };
-        let selected: Vec<&S::Row> = (0..self.selection.len())
-            .filter_map(|step| self.selection.position(step))
-            .filter_map(|position| rows.get(position))
-            .collect();
-        self.source.prefetch(&selected);
+    fn prefetch(&mut self) {
+        let positions = match &self.selection {
+            Selection::Only(positions) => Some(positions.clone()),
+            Selection::Every(_) => None,
+        };
+        let source = Arc::clone(&self.source);
+        let rows = self.settled();
+        let selected: Vec<&S::Row> = match positions {
+            Some(positions) => positions.iter().filter_map(|&p| rows.get(p)).collect(),
+            None => rows.iter().collect(),
+        };
+        source.prefetch(&selected);
     }
 }
 
@@ -577,7 +634,7 @@ unsafe impl<S: TableSource> VTabCursor for ScaffoldCursor<S> {
         let key = args.iter().next().and_then(text_key);
         self.selection = match (lookup_column(idx_num), key) {
             (Some(column), Some(key)) => self.select_by_lookup(column, key),
-            _ => Selection::Every(self.rows().len()),
+            _ => Selection::Every(Reading::from(&self.rows(), 0, 0)),
         };
         self.step = 0;
         if prefetches(idx_num) {
@@ -588,11 +645,18 @@ unsafe impl<S: TableSource> VTabCursor for ScaffoldCursor<S> {
 
     fn next(&mut self) -> Result<()> {
         self.step += 1;
+        if let (Selection::Every(reading), Some(rows)) = (&mut self.selection, &self.rows) {
+            let current = std::mem::replace(reading, Reading::done());
+            *reading = current.advanced(rows, self.step);
+        }
         Ok(())
     }
 
     fn eof(&self) -> bool {
-        at_eof(self.step, self.selection.len())
+        match &self.selection {
+            Selection::Every(reading) => reading.row(self.step).is_none(),
+            Selection::Only(positions) => at_eof(self.step, positions.len()),
+        }
     }
 
     fn column(&self, ctx: &mut Context, i: c_int) -> Result<()> {
@@ -933,22 +997,51 @@ mod tests {
         assert!(index.positions.is_empty());
     }
 
-    #[test]
-    fn selecting_every_row_walks_the_positions_in_order() {
-        let every = Selection::Every(2);
-        assert_eq!(every.len(), 2);
-        assert_eq!(every.position(0), Some(0));
-        assert_eq!(every.position(1), Some(1));
-        assert_eq!(every.position(2), None);
+    fn stream_of(chunks: &[&[u32]]) -> RowStream<u32> {
+        let stream = RowStream::default();
+        for chunk in chunks {
+            stream.push(Arc::new(chunk.to_vec()));
+        }
+        stream.finish(false);
+        stream
     }
 
     #[test]
-    fn selecting_only_some_rows_maps_steps_to_their_positions() {
-        let only = Selection::Only(vec![4, 9]);
-        assert_eq!(only.len(), 2);
-        assert_eq!(only.position(0), Some(4));
-        assert_eq!(only.position(1), Some(9));
-        assert_eq!(only.position(2), None);
+    fn a_reading_moves_through_every_chunk_in_order() {
+        let stream = stream_of(&[&[1, 2], &[3]]);
+        let mut reading = Reading::from(&stream, 0, 0);
+        let mut seen = Vec::new();
+        for step in 0.. {
+            reading = reading.advanced(&stream, step);
+            match reading.row(step) {
+                Some(row) => seen.push(*row),
+                None => break,
+            }
+        }
+        assert_eq!(seen, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn a_reading_keeps_its_chunk_until_read_through() {
+        let stream = stream_of(&[&[1, 2], &[3]]);
+        let reading = Reading::from(&stream, 0, 0).advanced(&stream, 1);
+        assert_eq!((reading.n, reading.start), (0, 0));
+        let reading = reading.advanced(&stream, 2);
+        assert_eq!((reading.n, reading.start), (1, 2));
+        assert_eq!(reading.row(2), Some(&3));
+    }
+
+    #[test]
+    fn a_reading_finds_no_row_before_its_chunk() {
+        let stream = stream_of(&[&[1], &[2]]);
+        let reading = Reading::from(&stream, 1, 1);
+        assert_eq!(reading.row(0), None);
+        assert_eq!(reading.row(1), Some(&2));
+    }
+
+    #[test]
+    fn a_done_reading_has_no_rows() {
+        assert_eq!(Reading::<u32>::done().row(0), None);
     }
 
     #[test]
@@ -993,12 +1086,12 @@ mod tests {
             unreachable!()
         }
 
-        fn rows(&self) -> Arc<Vec<usize>> {
+        fn rows(&self, rows: &Arc<RowStream<usize>>) {
             let scan = self
                 .scans
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                 + 1;
-            Arc::new(vec![scan])
+            rows.push(Arc::new(vec![scan]));
         }
 
         fn column(&self, _row: &usize, _ctx: &mut Context, _i: c_int) -> Result<()> {
@@ -1027,9 +1120,11 @@ mod tests {
             unreachable!()
         }
 
-        fn rows(&self) -> Arc<Vec<Noted>> {
+        fn rows(&self, rows: &Arc<RowStream<Noted>>) {
             let freed_on = self.freed_on.lock().unwrap();
-            Arc::new((0..10_000).map(|_| Noted(freed_on.clone())).collect())
+            rows.push(Arc::new(
+                (0..10_000).map(|_| Noted(freed_on.clone())).collect(),
+            ));
         }
 
         fn column(&self, _row: &Noted, _ctx: &mut Context, _i: c_int) -> Result<()> {
@@ -1067,8 +1162,12 @@ mod tests {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    fn is_pending(cache: &RowCache<Counted>) -> bool {
-        matches!(*cache.slot.lock().unwrap(), Slot::Pending(_))
+    fn is_held(cache: &RowCache<Counted>) -> bool {
+        cache.slot.lock().unwrap().is_some()
+    }
+
+    fn contents(rows: &RowStream<usize>) -> Vec<usize> {
+        rows.all().iter().copied().collect()
     }
 
     #[test]
@@ -1085,15 +1184,15 @@ mod tests {
         let cache = counted();
         cache.rows();
         cache.evict();
-        assert_eq!(*cache.rows(), vec![2]);
+        assert_eq!(contents(&cache.rows()), vec![2]);
     }
 
     #[test]
     fn a_warmed_row_cache_has_its_scan_underway_before_any_read() {
         let cache = counted();
         cache.warm();
-        assert!(is_pending(&cache));
-        assert_eq!(*cache.rows(), vec![1]);
+        assert!(is_held(&cache));
+        assert_eq!(contents(&cache.rows()), vec![1]);
         assert_eq!(scans(&cache), 1);
     }
 
@@ -1102,7 +1201,7 @@ mod tests {
         let cache = counted();
         cache.warm();
         cache.warm();
-        assert_eq!(*cache.rows(), vec![1]);
+        assert_eq!(contents(&cache.rows()), vec![1]);
         assert_eq!(scans(&cache), 1);
     }
 
@@ -1111,7 +1210,6 @@ mod tests {
         let cache = counted();
         let held = cache.rows();
         cache.warm();
-        assert!(!is_pending(&cache));
         assert!(Arc::ptr_eq(&held, &cache.rows()));
         assert_eq!(scans(&cache), 1);
     }
@@ -1147,8 +1245,8 @@ mod tests {
 
         scope.reset();
 
-        assert_eq!(*a.rows(), vec![2]);
-        assert_eq!(*b.rows(), vec![2]);
+        assert_eq!(contents(&a.rows()), vec![2]);
+        assert_eq!(contents(&b.rows()), vec![2]);
     }
 
     #[test]
@@ -1172,8 +1270,8 @@ mod tests {
 
         scope.warm(&names(&["named", "absent"]));
 
-        assert!(is_pending(&named));
-        assert!(!is_pending(&other));
+        assert!(is_held(&named));
+        assert!(!is_held(&other));
         assert_eq!(scans(&other), 0);
     }
 
@@ -1184,7 +1282,7 @@ mod tests {
 
         scope.warm(&names(&["./b"]));
 
-        assert!(!is_pending(&table));
+        assert!(!is_held(&table));
     }
 
     #[test]
@@ -1194,9 +1292,9 @@ mod tests {
         cache.rows();
 
         let guard = scope.enter();
-        assert_eq!(*cache.rows(), vec![2]);
+        assert_eq!(contents(&cache.rows()), vec![2]);
         drop(guard);
-        assert_eq!(*cache.rows(), vec![3]);
+        assert_eq!(contents(&cache.rows()), vec![3]);
     }
 
     #[test]
@@ -1222,7 +1320,7 @@ mod tests {
             unreachable!()
         }
 
-        fn rows(&self) -> Arc<Vec<()>> {
+        fn rows(&self, _rows: &Arc<RowStream<()>>) {
             unreachable!()
         }
 
@@ -1269,10 +1367,10 @@ mod tests {
             ))
         }
 
-        fn rows(&self) -> Arc<Vec<&'static str>> {
+        fn rows(&self, rows: &Arc<RowStream<&'static str>>) {
             self.scans
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            Arc::new(self.words.clone())
+            rows.push(Arc::new(self.words.clone()));
         }
 
         fn column(&self, row: &&'static str, ctx: &mut Context, i: c_int) -> Result<()> {
@@ -1309,17 +1407,24 @@ mod tests {
             cache: Arc::new(RowCache::new(Arc::clone(&source))),
             source,
             rows: None,
+            settled: None,
             index: None,
-            selection: Selection::Every(0),
+            selection: Selection::Every(Reading::done()),
             step: 0,
         }
     }
 
     fn selected(cursor: &ScaffoldCursor<Words>) -> Vec<&'static str> {
-        (0..cursor.selection.len())
-            .map(|step| cursor.selection.position(step).unwrap())
-            .map(|position| cursor.rows.as_ref().unwrap()[position])
-            .collect()
+        let Selection::Only(positions) = &cursor.selection else {
+            panic!("not a lookup");
+        };
+        let rows = cursor.settled.as_ref().unwrap();
+        positions.iter().map(|&p| *rows.get(p).unwrap()).collect()
+    }
+
+    fn scan_every(cursor: &mut ScaffoldCursor<Words>) {
+        cursor.selection = Selection::Every(Reading::from(&cursor.rows(), 0, 0));
+        cursor.step = 0;
     }
 
     #[test]
@@ -1333,14 +1438,14 @@ mod tests {
     #[test]
     fn a_scan_selects_every_row_in_order() {
         let mut cursor = cursor_over(vec!["ab", "cd"]);
-        cursor.selection = Selection::Every(cursor.rows().len());
-        cursor.step = 0;
+        scan_every(&mut cursor);
 
-        assert_eq!(selected(&cursor), vec!["ab", "cd"]);
         assert!(!cursor.eof());
+        assert_eq!(cursor.current().map(|(_, row)| *row), Some("ab"));
         assert_eq!(cursor.rowid().unwrap(), 0);
         cursor.next().unwrap();
         assert!(!cursor.eof());
+        assert_eq!(cursor.current().map(|(_, row)| *row), Some("cd"));
         assert_eq!(cursor.rowid().unwrap(), 1);
         cursor.next().unwrap();
         assert!(cursor.eof());
@@ -1350,7 +1455,7 @@ mod tests {
     #[test]
     fn a_scan_over_no_rows_is_at_eof() {
         let mut cursor = cursor_over(Vec::new());
-        cursor.selection = Selection::Every(cursor.rows().len());
+        scan_every(&mut cursor);
         assert!(cursor.eof());
     }
 

@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/ --ignore=tests/e2e/watch_speed_test.py -q",
+  "ran_at": 1792075222,
+  "exit_code": 0,
+  "commit": "111db17ede0ace14d6a6b62eea7561c8d5270277",
+  "branch": "bot/1474-vtab-speed-1014"
+}

@@ -4,7 +4,7 @@ the per-package `build.test.ts`).
 build -> pack -> install -> run: pack the main `dirsql` package and a
 reconstructed host `@dirsql/lib-<slug>` sub-package the way the release pipeline
 would, `npm install` both into a fresh dir, and run
-`node_modules/.bin/dirsql --version`. No mocks -- exactly what `npx dirsql` does
+`node_modules/.bin/dirsql --version` and its `server --frontend` workflow. No mocks -- exactly what `npx dirsql` does
 for an end user.
 
 Caveats:
@@ -29,6 +29,7 @@ from distcheck.filesystem import FileSystem
 from distcheck.node_flow.platforms import Platform
 
 from ..errors import DistcheckError
+from ..frontend.probe import probe_frontend
 from ..require_zero import require_zero
 from .tarball import select_tarball
 
@@ -155,4 +156,6 @@ def run(
             "the addon carries the CLI since #739, so shipping one would put "
             "a second copy of the core in every install."
         )
+
+    probe_frontend(bin_path, os.path.normpath(os.path.join(ts_pkg, "..", "..")))
     return 0

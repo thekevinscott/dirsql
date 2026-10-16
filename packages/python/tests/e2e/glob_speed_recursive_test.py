@@ -15,6 +15,7 @@ import shutil
 import pytest
 
 from .speed_of_light import (
+    FASTEST,
     Native,
     agreed_rows,
     assert_speed_of_light,
@@ -53,8 +54,8 @@ PREFIX_NATIVE = [
     *suite_only(globstar("./a/b/**/*.md")),
 ]
 CASES = [
-    ("./**/*.md", "./**/*.md", ALL_NATIVE, ""),
-    ("./a/b/**/*.md", "./a/b/**/*.md", PREFIX_NATIVE, "a/b"),
+    ("./**/*.md", "./**/*.md", ALL_NATIVE, "", FASTEST),
+    ("./a/b/**/*.md", "./a/b/**/*.md", PREFIX_NATIVE, "a/b", ""),
 ]
 FANOUT = 8
 
@@ -113,8 +114,8 @@ def describe_recursive_glob_speed_of_light():
         finally:
             shutil.rmtree(root, ignore_errors=True)
 
-    @pytest.mark.parametrize(("name", "glob", "specs", "prefix"), CASES)
-    def it_matches_native_files_within_the_bar(tree, name, glob, specs, prefix):
+    @pytest.mark.parametrize(("name", "glob", "specs", "prefix", "bar"), CASES)
+    def it_matches_native_files_within_the_bar(tree, name, glob, specs, prefix, bar):
         root, n, startup = tree
 
         def dirsql(timeout):
@@ -125,7 +126,7 @@ def describe_recursive_glob_speed_of_light():
             )
             return sorted(row for (row,) in dirsql_rows(proc, ("path",))), seconds
 
-        result = paired(shell_natives(root, specs), dirsql, startup)
+        result = paired(shell_natives(root, specs, bar=bar), dirsql, startup)
         expected, actual = agreed_rows(result), result.dirsql_rows
         assert len(expected) == matched(n, prefix)
 

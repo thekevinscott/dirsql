@@ -28,6 +28,7 @@ use crate::Value;
 use crate::infer::{JsonRow, cell, declared_schema, infer_schema};
 use crate::matcher::TableMatcher;
 use crate::on_file;
+use crate::row_stream::RowStream;
 use crate::scanner::{PathGlob, scan_glob_checking_root};
 use crate::vtab_scaffold::{self, StatementScope, TableSource};
 
@@ -172,10 +173,10 @@ impl TableSource for ParsedTable {
         Ok((schema, table))
     }
 
-    fn rows(&self) -> Arc<Vec<JsonRow>> {
+    fn rows(&self, rows: &Arc<RowStream<JsonRow>>) {
         // Materialized once at CREATE, so every statement reads the same rows
         // rather than re-spawning a parser per file.
-        Arc::clone(&self.rows)
+        rows.push(Arc::clone(&self.rows));
     }
 
     fn column(&self, row: &JsonRow, ctx: &mut Context, i: c_int) -> Result<()> {
@@ -197,6 +198,17 @@ mod tests {
     #[test]
     fn module_name_is_stable() {
         assert_eq!(MODULE_NAME, "dirsql_parsed");
+    }
+
+    #[test]
+    fn a_statement_reads_the_rows_materialized_at_create() {
+        let table = ParsedTable {
+            column_names: Vec::new(),
+            rows: Arc::new(vec![JsonRow(Vec::new())]),
+        };
+        let stream = Arc::new(RowStream::default());
+        table.rows(&stream);
+        assert!(Arc::ptr_eq(&stream.chunk(0).unwrap(), &table.rows));
     }
 
     /// The three fixed arguments SQLite prepends before the module's own.

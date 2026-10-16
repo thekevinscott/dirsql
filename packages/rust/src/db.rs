@@ -724,7 +724,7 @@ impl Db {
                 let extra: Vec<&str> = row
                     .0
                     .iter()
-                    .map(|(key, _)| key.as_str())
+                    .map(|(key, _)| &**key)
                     .filter(|key| !columns.iter().any(|c| c == key))
                     .collect();
                 if !extra.is_empty() {
@@ -737,7 +737,7 @@ impl Db {
                 let missing: Vec<&str> = columns
                     .iter()
                     .map(String::as_str)
-                    .filter(|c| !row.0.iter().any(|(key, _)| key == c))
+                    .filter(|c| !row.0.iter().any(|(key, _)| **key == **c))
                     .collect();
                 if !missing.is_empty() {
                     return Err(DbError::SchemaMismatch(format!(
@@ -748,14 +748,14 @@ impl Db {
                 }
             }
             let in_order = row.0.len() == columns.len()
-                && row.0.iter().zip(&columns).all(|((key, _), c)| key == c);
+                && row.0.iter().zip(&columns).all(|((key, _), c)| **key == **c);
             if in_order {
                 cells.push(row.0.into_iter().map(|(_, v)| json_into_value(v)).collect());
                 continue;
             }
             let mut shaped = vec![Value::Null; columns.len()];
             for (key, value) in row.0 {
-                if let Some(i) = columns.iter().position(|c| *c == key) {
+                if let Some(i) = columns.iter().position(|c| **c == *key) {
                     shaped[i] = json_into_value(value);
                 }
             }
@@ -3211,7 +3211,7 @@ mod tests {
                 let serde_json::Value::Object(map) = row else {
                     panic!("row must be an object");
                 };
-                JsonRow(map.into_iter().collect())
+                JsonRow(map.into_iter().map(|(k, v)| (k.into(), v)).collect())
             })
             .collect()
     }

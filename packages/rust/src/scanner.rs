@@ -1,8 +1,8 @@
+use crate::gitignore_frame::Frame;
 use crate::listing::{Listing, Seen};
 use crate::matcher::{GlobError, Pattern, TableMatcher};
-use crate::tree_walk::{Step, walk_in_order};
+use crate::tree_walk::{Step, busy_workers, walk_in_order};
 use ignore::Match;
-use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::fs;
@@ -34,7 +34,28 @@ fn with_slashes(path: &str, native: char) -> String {
 /// Walk a directory tree and return all file paths paired with their matching table name.
 /// Ignored paths and directories are skipped. Only files (not directories) are returned.
 pub fn scan_directory(root: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, String)> {
-    scan_directory_reporting(root, matcher, &mut |_| {}, &mut |_, _| {})
+    paired(scan_directory_reporting(
+        root,
+        matcher,
+        &mut |_| {},
+        &mut |_, _| {},
+    ))
+}
+
+/// A file a scan matched to a table: its path, the same path relative to the
+/// scan root as `/`-separated text, and the table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    pub path: PathBuf,
+    pub rel_path: String,
+    pub table_name: String,
+}
+
+fn paired(found: Vec<Found>) -> Vec<(PathBuf, String)> {
+    found
+        .into_iter()
+        .map(|found| (found.path, found.table_name))
+        .collect()
 }
 
 /// [`scan_directory`], calling `on_file` with the running count of files the
@@ -54,7 +75,7 @@ pub fn scan_directory_reporting(
     matcher: &TableMatcher,
     on_file: &mut dyn FnMut(u64),
     on_match: &mut dyn FnMut(&Path, &str),
-) -> Vec<(PathBuf, String)> {
+) -> Vec<Found> {
     scan_below(root, root, matcher, on_file, on_match)
 }
 
@@ -66,7 +87,26 @@ pub fn scan_directory_reporting(
 /// `mkdir` or a rename into the tree — since the OS reports one event for the
 /// directory and none for the files already inside it.
 pub fn scan_subtree(root: &Path, dir: &Path, matcher: &TableMatcher) -> Vec<(PathBuf, String)> {
-    scan_below(root, dir, matcher, &mut |_| {}, &mut |_, _| {})
+    paired(scan_below(root, dir, matcher, &mut |_| {}, &mut |_, _| {}))
+}
+
+/// One [`Found`] per table whose glob matches `rel_path`, in declaration
+/// order, for the file of that name in `dir`.
+fn found_in(matcher: &TableMatcher, rel_path: &Path, dir: &Path) -> Vec<Found> {
+    let matches = matcher.match_all(rel_path);
+    if matches.is_empty() {
+        return Vec::new();
+    }
+    let path = dir.join(rel_path.file_name().unwrap_or_default());
+    let rel = to_slash(rel_path);
+    matches
+        .into_iter()
+        .map(|m| Found {
+            path: path.clone(),
+            rel_path: rel.clone(),
+            table_name: m.table_name,
+        })
+        .collect()
 }
 
 /// `start` and every directory below it that [`scan_subtree`] would enter,
@@ -100,7 +140,7 @@ fn scan_below(
     matcher: &TableMatcher,
     on_file: &mut dyn FnMut(u64),
     on_match: &mut dyn FnMut(&Path, &str),
-) -> Vec<(PathBuf, String)> {
+) -> Vec<Found> {
     let mut results = Vec::new();
     let mut seen: u64 = 0;
     let gitignore = matcher.respects_gitignore();
@@ -117,9 +157,7 @@ fn scan_below(
         glob: Some(matcher.walk_glob()),
         gitignore,
         in_repo: repo.is_some(),
-        frames: repo.map_or_else(Vec::new, |top| {
-            gitignores_above(start, top, &load_gitignore)
-        }),
+        frames: repo.map_or_else(Vec::new, |top| gitignores_above(start, top, &Frame::load)),
         dirs: false,
     };
     walk(
@@ -128,20 +166,17 @@ fn scan_below(
         walker,
         &|_| true,
         &|rel_path| !matcher.is_ignored(rel_path),
-        &|rel_path, dir| {
-            let path = dir.join(rel_path.file_name().unwrap_or_default());
-            (rel_path, path)
-        },
-        &mut |(rel_path, path)| {
+        // Matching and the relative path are made on the worker that found
+        // the file: the calling thread hands out every file in turn, so any
+        // per-file work left to it is serial.
+        &|rel_path, dir| found_in(matcher, &rel_path, dir),
+        &mut |found| {
             seen += 1;
             on_file(seen);
-
-            // Fan-out: a file matching N tables' globs yields N (path, table)
-            // pairs, one per matching table, in declaration order.
-            for m in matcher.match_all(&rel_path) {
-                on_match(&path, &m.table_name);
-                results.push((path.clone(), m.table_name));
+            for found in &found {
+                on_match(&found.path, &found.table_name);
             }
+            results.extend(found);
         },
     );
 
@@ -189,13 +224,22 @@ pub fn scan_glob_checking_root(
     gitignore: bool,
     check_root: bool,
 ) -> Vec<PathBuf> {
-    scan_glob_rows(root, glob, ignore, gitignore, check_root, &|rel_path| {
-        rel_path
-    })
+    let mut paths = Vec::new();
+    scan_glob_rows(
+        root,
+        glob,
+        ignore,
+        gitignore,
+        check_root,
+        &|rel_path| rel_path,
+        &mut |rel_path| paths.push(rel_path),
+    );
+    paths
 }
 
 /// [`scan_glob_checking_root`], each matched path made into `row` on the
-/// thread that found it, so making rows overlaps the walk.
+/// thread that found it, so making rows overlaps the walk, and handed to
+/// `visit` in scan order as soon as the walk reaches it.
 pub(crate) fn scan_glob_rows<T: Send>(
     root: &Path,
     glob: &PathGlob,
@@ -203,9 +247,10 @@ pub(crate) fn scan_glob_rows<T: Send>(
     gitignore: bool,
     check_root: bool,
     row: &(dyn Fn(PathBuf) -> T + Sync),
-) -> Vec<T> {
+    visit: &mut dyn FnMut(T),
+) {
     if gitignore && check_root && !holds_git(root) && is_gitignored_path(root, true) {
-        return Vec::new();
+        return;
     }
     let repo = if gitignore {
         enclosing_repo(root, &holds_git)
@@ -217,10 +262,9 @@ pub(crate) fn scan_glob_rows<T: Send>(
         glob: Some(glob),
         gitignore,
         in_repo: repo.is_some(),
-        frames: repo.map_or_else(Vec::new, |top| gitignores_above(root, top, &load_gitignore)),
+        frames: repo.map_or_else(Vec::new, |top| gitignores_above(root, top, &Frame::load)),
         dirs: false,
     };
-    let mut results = Vec::new();
     walk(
         root,
         root,
@@ -228,9 +272,8 @@ pub(crate) fn scan_glob_rows<T: Send>(
         &|name| glob.may_match_name(name),
         &|rel_path| is_wanted(glob, ignore, rel_path),
         &|rel_path, _| row(rel_path),
-        &mut |found| results.push(found),
+        visit,
     );
-    results
 }
 
 /// Whether a walked file is a row of the table: it matches the glob and no
@@ -565,7 +608,7 @@ impl<'a> Place<'a> {
     /// into a `leaf` with the directory it sits in, and each directory to
     /// enter. A regular file whose name `keep_name` rejects is dropped before
     /// its path is built.
-    fn explore<L>(
+    fn explore<L: Send>(
         self,
         keep_name: &(dyn Fn(&OsStr) -> bool + Sync),
         keep: &(dyn Fn(&Path) -> bool + Sync),
@@ -585,9 +628,9 @@ impl<'a> Place<'a> {
         }
         if walk.in_repo
             && listing.holds(OsStr::new(".gitignore"))
-            && let Some(matcher) = load_gitignore(&dir)
+            && let Some(frame) = Frame::load(&dir)
         {
-            walk.frames.push(Arc::new(matcher));
+            walk.frames.push(Arc::new(frame));
         }
         let taken = judge_all(listing.entries(), &|listed| {
             let name = listing.name(listed);
@@ -595,9 +638,17 @@ impl<'a> Place<'a> {
                 return None;
             }
             walk.take(&dir, name, listed.seen, &rel, &states, linked)
-                .filter(|taken| match taken {
-                    Taken::File(child) => keep(child),
-                    Taken::Dir { .. } => true,
+                .and_then(|taken| match taken {
+                    Taken::File(child) => keep(&child).then(|| Taken::File(leaf(child, &dir))),
+                    Taken::Dir {
+                        child,
+                        next,
+                        linked,
+                    } => Some(Taken::Dir {
+                        child,
+                        next,
+                        linked,
+                    }),
                 })
         });
         let mut steps: Vec<Step<Box<Place<'a>>, L>> = if walk.dirs {
@@ -643,7 +694,7 @@ impl<'a> Place<'a> {
                         states: next,
                         linked,
                     }))),
-                    Taken::File(child) => Some(Step::Leaf(leaf(child, &dir))),
+                    Taken::File(made) => Some(Step::Leaf(made)),
                 });
         if steps.is_empty() {
             return entered.collect();
@@ -663,7 +714,7 @@ struct Walk<'a> {
     in_repo: bool,
     /// The `.gitignore` files in force at the walk's current position, root
     /// first.
-    frames: Vec<Arc<Gitignore>>,
+    frames: Vec<Arc<Frame>>,
     /// Whether each directory entered is also visited, as a leaf.
     dirs: bool,
 }
@@ -673,7 +724,8 @@ struct Walk<'a> {
 fn child_path(rel: &Path, name: &OsStr) -> PathBuf {
     let rel_len = rel.as_os_str().len();
     let separator = usize::from(rel_len > 0);
-    let mut child = PathBuf::with_capacity(rel_len + separator + name.len());
+    // One byte spare for the NUL a path-table row ends its path with.
+    let mut child = PathBuf::with_capacity(rel_len + separator + name.len() + 1);
     child.push(rel);
     child.push(name);
     child
@@ -766,30 +818,32 @@ impl Walk<'_> {
 }
 
 /// An entry the walk takes: a directory to enter, with the glob states and
-/// link crossing it is entered with, or a file to visit.
+/// link crossing it is entered with, or a file to visit, as its path or as
+/// the leaf made of it.
 #[derive(Debug, PartialEq)]
-enum Taken {
+enum Taken<F = PathBuf> {
     Dir {
         child: PathBuf,
         next: Vec<usize>,
         linked: bool,
     },
-    File(PathBuf),
+    File(F),
 }
 
 /// Below this many entries a directory is judged on one thread; spawning
 /// workers costs more than the judging.
 const PARALLEL_ENTRIES: usize = 65536;
 
-/// `judge` applied to each of `items`, in order, shared across the cores
-/// once there are enough items to pay for the threads.
+/// `judge` applied to each of `items`, in order, shared across the cores the
+/// walk leaves idle once there are enough items to pay for the threads.
 fn judge_all<T: Sync, R: Send>(items: &[T], judge: &(dyn Fn(&T) -> R + Sync)) -> Vec<R> {
     // Asking for the core count reads cgroup files, too dear to pay in every
     // small directory of a deep tree.
     if items.len() < PARALLEL_ENTRIES {
         return items.iter().map(judge).collect();
     }
-    let workers = thread::available_parallelism().map_or(1, usize::from);
+    let cores = thread::available_parallelism().map_or(1, usize::from);
+    let workers = idle_cores(cores, busy_workers());
     let per_worker = items.len().div_ceil(workers);
     thread::scope(|scope| {
         let handles: Vec<_> = items
@@ -801,6 +855,12 @@ fn judge_all<T: Sync, R: Send>(items: &[T], judge: &(dyn Fn(&T) -> R + Sync)) ->
             .flat_map(|handle| handle.join().expect("judging an entry does not panic"))
             .collect()
     })
+}
+
+/// The cores a directory may split its judging across: those the walk's busy
+/// workers leave, and always the calling thread's own.
+fn idle_cores(cores: usize, busy: usize) -> usize {
+    cores.saturating_sub(busy).max(1)
 }
 
 /// What the walk makes of an entry seen as `seen`, following a symlink only
@@ -864,8 +924,8 @@ fn classify(is_dir: bool, is_file: bool, linked: bool) -> Option<Kind> {
 fn gitignores_above(
     start: &Path,
     top: &Path,
-    load: &dyn Fn(&Path) -> Option<Gitignore>,
-) -> Vec<Arc<Gitignore>> {
+    load: &dyn Fn(&Path) -> Option<Frame>,
+) -> Vec<Arc<Frame>> {
     dirs_above(start, top)
         .into_iter()
         .filter_map(load)
@@ -892,18 +952,6 @@ fn dirs_above<'a>(start: &'a Path, top: &Path) -> Vec<&'a Path> {
     dirs
 }
 
-/// Compile the `.gitignore` in `dir`, if one exists. An unparsable file
-/// degrades to no matcher rather than failing the scan.
-fn load_gitignore(dir: &Path) -> Option<Gitignore> {
-    let file = dir.join(".gitignore");
-    if !file.is_file() {
-        return None;
-    }
-    let mut builder = GitignoreBuilder::new(dir);
-    builder.add(&file);
-    builder.build().ok()
-}
-
 /// Whether the `.gitignore` files of the repo enclosing `path` ignore it, or
 /// a directory above it, as the walk would have: for a path a watcher reports
 /// without having walked to it.
@@ -914,8 +962,8 @@ pub(crate) fn is_gitignored_path(path: &Path, is_dir: bool) -> bool {
     else {
         return false;
     };
-    for frame in gitignores_above(path, top, &load_gitignore).iter().rev() {
-        match frame.matched_path_or_any_parents(path, is_dir) {
+    for frame in gitignores_above(path, top, &Frame::load).iter().rev() {
+        match frame.gitignore().matched_path_or_any_parents(path, is_dir) {
             Match::Ignore(_) => return true,
             Match::Whitelist(_) => return false,
             Match::None => {}
@@ -926,7 +974,7 @@ pub(crate) fn is_gitignored_path(path: &Path, is_dir: bool) -> bool {
 
 /// Whether the `.gitignore` files in force mark `path` ignored. Deeper files
 /// take precedence (git's rule), and a whitelisting `!pattern` un-ignores.
-fn is_gitignored(frames: &[Arc<Gitignore>], path: &Path, is_dir: bool) -> bool {
+fn is_gitignored(frames: &[Arc<Frame>], path: &Path, is_dir: bool) -> bool {
     for frame in frames.iter().rev() {
         match frame.matched(path, is_dir) {
             Match::Ignore(_) => return true,
@@ -977,13 +1025,52 @@ mod tests {
             &mut |_, _| {},
         );
 
-        assert_eq!(rows, vec![(root.join("scanner.rs"), "source".to_owned())]);
+        assert_eq!(
+            rows,
+            vec![Found {
+                path: root.join("scanner.rs"),
+                rel_path: "scanner.rs".to_owned(),
+                table_name: "source".to_owned(),
+            }]
+        );
         assert_eq!(counts.first(), Some(&1));
         assert!(counts.windows(2).all(|pair| pair[1] == pair[0] + 1));
     }
 
+    #[test]
+    fn found_in_fans_a_file_out_to_every_matching_table_in_order() {
+        let matcher =
+            TableMatcher::new(&[("docs/**/*.md", "notes"), ("**/*.md", "all")], &[]).unwrap();
+        let rel = Path::new("docs").join("a").join("b.md");
+        let found = found_in(&matcher, &rel, Path::new("/r/docs/a"));
+        let path = Path::new("/r/docs/a").join("b.md");
+        let expected: Vec<Found> = ["notes", "all"]
+            .into_iter()
+            .map(|table| Found {
+                path: path.clone(),
+                rel_path: "docs/a/b.md".to_owned(),
+                table_name: table.to_owned(),
+            })
+            .collect();
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn found_in_is_empty_for_a_file_no_table_matches() {
+        let matcher = TableMatcher::new(&[("*.md", "notes")], &[]).unwrap();
+        assert!(found_in(&matcher, Path::new("a.txt"), Path::new("/r")).is_empty());
+    }
+
     // Real directory-walk behavior is covered by `tests/scanner.rs`
     // (unit-lint isolation); only the pure predicate is tested here.
+
+    #[test]
+    fn idle_cores_are_those_busy_workers_leave_and_never_fewer_than_one() {
+        assert_eq!(idle_cores(32, 0), 32);
+        assert_eq!(idle_cores(4, 1), 3);
+        assert_eq!(idle_cores(32, 31), 1);
+        assert_eq!(idle_cores(32, 40), 1);
+    }
 
     #[test]
     fn judge_all_keeps_the_order_of_its_items() {
@@ -1116,17 +1203,17 @@ mod tests {
     }
 
     #[test]
-    fn child_path_allocates_exactly_its_length() {
+    fn child_path_allocates_its_length_and_a_terminator() {
         let child = child_path(Path::new("alpha/beta/gamma"), OsStr::new("delta.md"));
         assert_eq!(child, Path::new("alpha/beta/gamma/delta.md"));
-        assert_eq!(child.capacity(), child.as_os_str().len());
+        assert_eq!(child.capacity(), child.as_os_str().len() + 1);
     }
 
     #[test]
     fn child_path_of_the_root_is_the_bare_name() {
         let child = child_path(Path::new(""), OsStr::new("c.md"));
         assert_eq!(child, Path::new("c.md"));
-        assert_eq!(child.capacity(), 4);
+        assert_eq!(child.capacity(), 5);
     }
 
     #[test]
@@ -1442,12 +1529,8 @@ mod tests {
     }
 
     /// A gitignore frame compiled from in-memory lines; no filesystem.
-    fn frame(dir: &str, lines: &[&str]) -> Arc<Gitignore> {
-        let mut builder = GitignoreBuilder::new(Path::new(dir));
-        for line in lines {
-            builder.add_line(None, line).unwrap();
-        }
-        Arc::new(builder.build().unwrap())
+    fn frame(dir: &str, lines: &[&str]) -> Arc<Frame> {
+        Arc::new(Frame::from_lines(Path::new(dir), lines))
     }
 
     #[test]
@@ -1498,20 +1581,18 @@ mod tests {
         let root = package.ancestors().nth(2).unwrap();
         let start = package.join("src");
 
-        assert!(!gitignores_above(&start, root, &load_gitignore).is_empty());
+        assert!(!gitignores_above(&start, root, &Frame::load).is_empty());
     }
 
     #[test]
     fn gitignores_above_loads_the_ancestors_holding_one_outermost_first() {
-        let load = |dir: &Path| {
-            (dir != Path::new("/r/a")).then(|| {
-                let mut builder = GitignoreBuilder::new(dir);
-                builder.add_line(None, "*.log").unwrap();
-                builder.build().unwrap()
-            })
-        };
+        let load =
+            |dir: &Path| (dir != Path::new("/r/a")).then(|| Frame::from_lines(dir, &["*.log"]));
         let frames = gitignores_above(Path::new("/r/a/b/c"), Path::new("/r"), &load);
-        let roots: Vec<&Path> = frames.iter().map(|frame| frame.path()).collect();
+        let roots: Vec<&Path> = frames
+            .iter()
+            .map(|frame| frame.gitignore().path())
+            .collect();
         assert_eq!(roots, vec![Path::new("/r"), Path::new("/r/a/b")]);
     }
 
@@ -1534,7 +1615,7 @@ mod tests {
     fn walk_with<'a>(
         ignore: &'a TableMatcher,
         glob: Option<&'a PathGlob>,
-        frames: Vec<Arc<Gitignore>>,
+        frames: Vec<Arc<Frame>>,
     ) -> Walk<'a> {
         Walk {
             ignore,
@@ -2044,24 +2125,60 @@ mod tests {
         let in_flight = AtomicUsize::new(0);
         let overlapped = AtomicBool::new(false);
 
-        let rows = scan_glob_rows(dir.path(), &glob, &none, false, false, &|rel| {
-            if in_flight.fetch_add(1, Ordering::SeqCst) > 0 {
-                overlapped.store(true, Ordering::SeqCst);
-            }
-            for _ in 0..1_000_000 {
-                if overlapped.load(Ordering::SeqCst) {
-                    break;
+        let mut rows = Vec::new();
+        scan_glob_rows(
+            dir.path(),
+            &glob,
+            &none,
+            false,
+            false,
+            &|rel| {
+                if in_flight.fetch_add(1, Ordering::SeqCst) > 0 {
+                    overlapped.store(true, Ordering::SeqCst);
                 }
-                std::hint::spin_loop();
-            }
-            in_flight.fetch_sub(1, Ordering::SeqCst);
-            rel
-        });
+                for _ in 0..1_000_000 {
+                    if overlapped.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    std::hint::spin_loop();
+                }
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+                rel
+            },
+            &mut |row| rows.push(row),
+        );
 
         assert_eq!(rows, scan_glob(dir.path(), &glob, &none, false));
         assert!(
             overlapped.load(Ordering::SeqCst),
             "rows were made one at a time"
         );
+    }
+
+    #[test]
+    fn scan_glob_rows_makes_rows_of_a_wide_directory_on_many_threads() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..PARALLEL_ENTRIES {
+            fs::File::create(dir.path().join(format!("f{i}"))).unwrap();
+        }
+        let glob = compile_glob("*").unwrap();
+        let none = TableMatcher::new(&[], &[]).unwrap();
+
+        let mut rows = Vec::new();
+        scan_glob_rows(
+            dir.path(),
+            &glob,
+            &none,
+            false,
+            false,
+            &|rel| (thread::current().id(), rel),
+            &mut |row| rows.push(row),
+        );
+
+        let paths: Vec<PathBuf> = rows.iter().map(|(_, rel)| rel.clone()).collect();
+        assert_eq!(paths, scan_glob(dir.path(), &glob, &none, false));
+        let threads: std::collections::HashSet<_> =
+            rows.iter().map(|(made_on, _)| made_on).collect();
+        assert!(threads.len() > 1, "every row was made on one thread");
     }
 }

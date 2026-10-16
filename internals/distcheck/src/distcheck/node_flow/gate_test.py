@@ -59,6 +59,27 @@ def _ok_sequence():
     return [_res(), _res(), _res(), _res(stdout="dirsql 1.0")]
 
 
+@pytest.fixture(autouse=True)
+def probe_frontend():
+    with mock.patch("distcheck.node_flow.gate.probe_frontend", create=True) as patched:
+        yield patched
+
+
+def test_run_probes_the_installed_frontend(probe_frontend):
+    run("/repo/packages/ts", _HOST, runner=mock.Mock(side_effect=_ok_sequence()), fs=_fs())
+
+    probe_frontend.assert_called_once_with(
+        "/inst/node_modules/.bin/dirsql", "/repo"
+    )
+
+
+def test_run_skips_the_frontend_when_the_layout_is_wrong(probe_frontend):
+    fs = _fs(read_name="@dirsql/lib-wrong")
+    with pytest.raises(DistcheckError, match="name mismatch"):
+        run("/ts", _HOST, runner=mock.Mock(side_effect=_ok_sequence()), fs=fs)
+    probe_frontend.assert_not_called()
+
+
 def test_run_success_executes_the_full_sequence():
     fs = _fs()
     runner = mock.Mock(side_effect=_ok_sequence())
