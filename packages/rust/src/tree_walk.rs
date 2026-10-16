@@ -242,7 +242,9 @@ impl<D, L> Shared<'_, D, L> {
         self.found.fetch_add(dirs.len(), Ordering::Relaxed);
         let found = dirs.len();
         self.open_lock().slots.extend(dirs.into_iter().map(Pending));
-        for _ in 0..found {
+        // The thread that found them takes one next, so only the rest need
+        // a waiting worker.
+        for _ in 1..found {
             self.found_dir.notify_one();
         }
         items
