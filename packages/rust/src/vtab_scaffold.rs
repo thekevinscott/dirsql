@@ -391,6 +391,19 @@ fn text_key(value: ValueRef<'_>) -> Option<&str> {
     value.as_str().ok()
 }
 
+/// Positions of the rows whose `column` carries `key`, in order.
+fn scan_matching<'r, R: 'r>(
+    rows: impl Iterator<Item = &'r R>,
+    column: usize,
+    key: &str,
+    row_key: impl Fn(&'r R, usize) -> Option<&'r str>,
+) -> Vec<usize> {
+    rows.enumerate()
+        .filter(|&(_, row)| row_key(row, column) == Some(key))
+        .map(|(position, _)| position)
+        .collect()
+}
+
 /// Row positions keyed by one column's text, built once per cursor from its
 /// scanned rows.
 struct LookupIndex {
@@ -545,6 +558,7 @@ unsafe impl<'vtab, S: TableSource> VTab<'vtab> for ScaffoldTab<S> {
             cache: Arc::clone(&self.cache),
             rows: None,
             settled: None,
+            scanned: None,
             index: None,
             selection: Selection::Every(Reading::done()),
             step: 0,
@@ -570,7 +584,11 @@ pub struct ScaffoldCursor<S: TableSource> {
     /// Every row, by position; taken once the scan is through, on the first
     /// `xFilter` that needs rows other than in order.
     settled: Option<Settled<S::Row>>,
-    /// Built on the first `xFilter` that probes a column.
+    /// The column the last probe compared every row on. Building an index
+    /// costs several comparisons of every row, so a column is indexed only
+    /// on its second probe: one equality never pays for it.
+    scanned: Option<usize>,
+    /// Built on the second `xFilter` that probes a column.
     index: Option<LookupIndex>,
     selection: Selection<S::Row>,
     step: usize,
@@ -591,6 +609,13 @@ impl<S: TableSource> ScaffoldCursor<S> {
         let source = Arc::clone(&self.source);
         self.settled();
         let rows = self.settled.as_ref().expect("settled above");
+        let indexed = self.index.as_ref().is_some_and(|i| i.column == column);
+        if !indexed && self.scanned != Some(column) {
+            self.scanned = Some(column);
+            return Selection::Only(scan_matching(rows.iter(), column, key, |row, c| {
+                source.lookup_key(row, c)
+            }));
+        }
         let index = match &self.index {
             Some(index) if index.column == column => index,
             _ => self
@@ -971,6 +996,33 @@ mod tests {
 
     fn by_first_letter<'r>(row: &'r &str, column: usize) -> Option<&'r str> {
         (column == 1).then(|| &row[..1])
+    }
+
+    #[test]
+    fn scan_matching_finds_every_row_carrying_the_key_in_order() {
+        let rows = ["ab", "cd", "ax"];
+        assert_eq!(
+            scan_matching(rows.iter(), 1, "a", by_first_letter),
+            vec![0, 2]
+        );
+    }
+
+    #[test]
+    fn scan_matching_finds_nothing_for_an_absent_key() {
+        let rows = ["ab"];
+        assert_eq!(
+            scan_matching(rows.iter(), 1, "z", by_first_letter),
+            Vec::<usize>::new()
+        );
+    }
+
+    #[test]
+    fn scan_matching_skips_rows_without_a_key() {
+        let rows = ["ab"];
+        assert_eq!(
+            scan_matching(rows.iter(), 0, "a", by_first_letter),
+            Vec::<usize>::new()
+        );
     }
 
     #[test]
@@ -1408,6 +1460,7 @@ mod tests {
             source,
             rows: None,
             settled: None,
+            scanned: None,
             index: None,
             selection: Selection::Every(Reading::done()),
             step: 0,
@@ -1510,8 +1563,19 @@ mod tests {
     }
 
     #[test]
+    fn a_second_lookup_on_a_column_builds_its_index() {
+        let mut cursor = cursor_over(vec!["ab", "cd", "ax"]);
+        cursor.select_by_lookup(1, "c");
+        cursor.selection = cursor.select_by_lookup(1, "a");
+
+        assert_eq!(cursor.index.as_ref().unwrap().column, 1);
+        assert_eq!(selected(&cursor), vec!["ab", "ax"]);
+    }
+
+    #[test]
     fn a_cursor_builds_its_index_once_per_column() {
         let mut cursor = cursor_over(vec!["ab", "cd"]);
+        cursor.select_by_lookup(1, "a");
         cursor.select_by_lookup(1, "a");
         let first = cursor.index.as_ref().unwrap() as *const LookupIndex;
         cursor.select_by_lookup(1, "c");
@@ -1525,6 +1589,8 @@ mod tests {
     fn a_cursor_rebuilds_its_index_for_a_different_column() {
         let mut cursor = cursor_over(vec!["ab", "cd"]);
         cursor.select_by_lookup(1, "a");
+        cursor.select_by_lookup(1, "a");
+        cursor.select_by_lookup(0, "a");
         cursor.selection = cursor.select_by_lookup(0, "a");
 
         assert_eq!(cursor.index.as_ref().unwrap().column, 0);
@@ -1606,14 +1672,15 @@ mod tests {
 
         cursor.select_by_lookup(1, "b");
         cursor.select_by_lookup(1, "a");
+        cursor.select_by_lookup(1, "b");
 
         let keyed = cursor
             .source
             .keys
             .load(std::sync::atomic::Ordering::Relaxed);
         assert_eq!(
-            keyed, 3,
-            "each row is keyed once per column, not per lookup"
+            keyed, 6,
+            "each row is keyed once to scan and once to index, not per lookup"
         );
     }
 
