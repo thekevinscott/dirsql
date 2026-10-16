@@ -370,3 +370,49 @@ fn an_ordinary_syntax_error_carries_no_quoting_hint() {
         "a syntax error with no path in it must stay unhinted, got: {err}"
     );
 }
+
+/// Each row of `sql` as `query_each` folds it, beside the same rows as
+/// `query_ordered` steps them, both sorted.
+fn folded_and_stepped(db: &DirSQL, sql: &str) -> (Vec<Vec<Value>>, Vec<Vec<Value>>) {
+    let (columns, mut folded) = db
+        .query_each(
+            sql,
+            |columns| (columns.to_vec(), Vec::new()),
+            |(_, rows), cells| rows.push(cells.to_vec()),
+        )
+        .unwrap();
+    let result = db.query_ordered(sql).unwrap();
+    assert_eq!(columns, result.columns, "{sql}");
+    let mut stepped: Vec<Vec<Value>> = result
+        .rows
+        .iter()
+        .map(|row| columns.iter().map(|c| row[c].clone()).collect())
+        .collect();
+    let key = |row: &Vec<Value>| format!("{row:?}");
+    folded.sort_by_key(key);
+    stepped.sort_by_key(key);
+    (folded, stepped)
+}
+
+#[test]
+fn rows_folded_from_a_path_table_are_the_rows_sqlite_steps() {
+    let root = fixture();
+    fs::write(root.path().join(".hidden"), "").unwrap();
+    let db = open(&root);
+
+    for sql in [
+        "SELECT path FROM './**'",
+        "SELECT path AS p, ext, dir, basename, path FROM './**'",
+        "SELECT * FROM './**/*.md'",
+        "SELECT size, mtime, ctime FROM './docs/*'",
+        "SELECT path FROM './docs/*.rst'",
+        "SELECT path, content FROM './docs/*.md'",
+        "SELECT path FROM './**' WHERE ext = 'md' LIMIT 2",
+        "SELECT path, cells FROM rows_csv",
+        "SELECT path FROM './docs/*.md';",
+    ] {
+        let (folded, stepped) = folded_and_stepped(&db, sql);
+        assert!(!folded.is_empty() || sql.contains(".rst"), "{sql}");
+        assert_eq!(folded, stepped, "{sql}");
+    }
+}

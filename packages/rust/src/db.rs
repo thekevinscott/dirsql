@@ -1215,8 +1215,11 @@ impl Db {
         }
         let _calls = self.calls.phase();
         let _scope = self.scope.enter();
-        let (mut stmt, column_names) = self.prepare_statement(sql)?;
+        let (mut stmt, column_names, reads) = self.prepare_reading(sql)?;
         let mut state = start(&column_names);
+        if self.read_directly(sql, &reads, &mut |cells| on_row(&mut state, cells)) {
+            return Ok(state);
+        }
         let mut rows = stmt.query([])?;
         let mut spare: Vec<ValueRef<'_>> = Vec::with_capacity(column_names.len());
         while let Some(row) = rows.next()? {
@@ -1256,6 +1259,16 @@ impl Db {
     /// Prepare one read-only statement, registering the path-tables it names
     /// along the way, with its column names.
     fn prepare_statement(&self, sql: &str) -> Result<(rusqlite::Statement<'_>, Vec<String>)> {
+        self.prepare_reading(sql)
+            .map(|(stmt, column_names, _)| (stmt, column_names))
+    }
+
+    /// [`prepare_statement`](Self::prepare_statement), with the tables the
+    /// statement reads.
+    fn prepare_reading(
+        &self,
+        sql: &str,
+    ) -> Result<(rusqlite::Statement<'_>, Vec<String>, HashSet<String>)> {
         // Each iteration must register a table no earlier iteration did; a
         // repeat means the fallback is not making progress, so the SQLite
         // error stands. That is what bounds the loop.
@@ -1280,7 +1293,44 @@ impl Db {
         }
         self.scope.warm(&reads);
         let column_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
-        Ok((stmt, column_names))
+        Ok((stmt, column_names, reads))
+    }
+
+    /// Hand `on_row` the rows of `sql` straight from the one table it reads,
+    /// when its program is a plain scan of that table: SQLite would only copy
+    /// each cell through. False, having handed nothing, for any other
+    /// statement.
+    fn read_directly(
+        &self,
+        sql: &str,
+        reads: &HashSet<String>,
+        on_row: &mut dyn FnMut(&[ValueRef<'_>]),
+    ) -> bool {
+        let mut tables = reads.iter();
+        let (Some(table), None) = (tables.next(), tables.next()) else {
+            return false;
+        };
+        self.program(sql)
+            .and_then(|program| scanned_columns(&program))
+            .is_some_and(|columns| self.scope.each_row(table, &columns, on_row))
+    }
+
+    /// The program SQLite compiles `sql` to, as `EXPLAIN` lists it.
+    fn program(&self, sql: &str) -> Option<Vec<Op>> {
+        let mut explain = self.conn.prepare(&format!("EXPLAIN {sql}")).ok()?;
+        explain
+            .query_map([], |row| {
+                Ok(Op {
+                    code: row.get(1)?,
+                    p1: row.get(2)?,
+                    p2: row.get(3)?,
+                    p3: row.get(4)?,
+                    p5: row.get(6)?,
+                })
+            })
+            .ok()?
+            .collect::<rusqlite::Result<Vec<Op>>>()
+            .ok()
     }
 
     /// Prepare `sql` with the internal-table / ATTACH authorizer installed for
@@ -1521,6 +1571,73 @@ fn value_ref(value: &Value) -> ValueRef<'_> {
     }
 }
 
+/// One instruction of a statement's program, as `EXPLAIN` lists it; `p4`
+/// is left out, since for these programs it holds only pointers and cookies.
+#[derive(Debug, Clone, PartialEq)]
+struct Op {
+    code: String,
+    p1: i64,
+    p2: i64,
+    p3: i64,
+    p5: i64,
+}
+
+fn op(code: &str, p1: i64, p2: i64, p3: i64) -> Op {
+    Op {
+        code: code.to_string(),
+        p1,
+        p2,
+        p3,
+        p5: 0,
+    }
+}
+
+/// The program SQLite compiles `SELECT` of `columns` of one virtual table to,
+/// up to the transactions it opens: scan cursor 0 with idxNum 0 and no
+/// arguments, and yield the columns of each row as they are.
+fn scan_program(columns: &[i64]) -> Vec<Op> {
+    let width = i64::try_from(columns.len()).unwrap_or(i64::MAX);
+    let mut program = vec![
+        op("Init", 0, width + 8, 0),
+        op("VOpen", 0, 0, 0),
+        op("Integer", 0, 1, 0),
+        op("Integer", 0, 2, 0),
+        op("VFilter", 0, width + 7, 1),
+    ];
+    program.extend(
+        (3..)
+            .zip(columns)
+            .map(|(at, &column)| op("VColumn", 0, column, at)),
+    );
+    program.extend([
+        op("ResultRow", 3, width, 0),
+        op("VNext", 0, 5, 0),
+        op("Halt", 0, 0, 0),
+    ]);
+    program
+}
+
+/// The columns `program` yields when it is exactly [`scan_program`]: one
+/// full scan of one virtual table, with no filter, order, limit or
+/// expression. `None` for any other program.
+fn scanned_columns(program: &[Op]) -> Option<Vec<usize>> {
+    let columns: Vec<i64> = program
+        .iter()
+        .filter(|op| op.code == "VColumn")
+        .map(|op| op.p2)
+        .collect();
+    let expected = scan_program(&columns);
+    let (body, rest) = program.split_at_checked(expected.len())?;
+    let (last, transactions) = rest.split_last()?;
+    let plain = !columns.is_empty()
+        && body == expected
+        && transactions.iter().all(|op| op.code == "Transaction")
+        && *last == op("Goto", 0, 1, 0);
+    plain
+        .then(|| columns.iter().map(|&c| usize::try_from(c).ok()).collect())
+        .flatten()
+}
+
 /// `cells` emptied and free to borrow anew, keeping its allocation.
 fn recycled<'a>(mut cells: Vec<ValueRef<'_>>) -> Vec<ValueRef<'a>> {
     cells.clear();
@@ -1670,6 +1787,89 @@ mod tests {
             |(_, rows), cells| rows.push(cells.to_vec()),
         )
         .unwrap()
+    }
+
+    fn with_transactions(columns: &[i64], transactions: usize) -> Vec<Op> {
+        let mut program = scan_program(columns);
+        program.extend((0..transactions).map(|_| op("Transaction", 1, 0, 1)));
+        program.push(op("Goto", 0, 1, 0));
+        program
+    }
+
+    #[test]
+    fn a_scan_program_is_what_sqlite_compiles_a_plain_projection_to() {
+        let codes = |program: &[Op]| -> Vec<(String, i64, i64, i64)> {
+            program
+                .iter()
+                .map(|op| (op.code.clone(), op.p1, op.p2, op.p3))
+                .collect()
+        };
+        let expected: Vec<(String, i64, i64, i64)> = [
+            ("Init", 0, 10, 0),
+            ("VOpen", 0, 0, 0),
+            ("Integer", 0, 1, 0),
+            ("Integer", 0, 2, 0),
+            ("VFilter", 0, 9, 1),
+            ("VColumn", 0, 4, 3),
+            ("VColumn", 0, 0, 4),
+            ("ResultRow", 3, 2, 0),
+            ("VNext", 0, 5, 0),
+            ("Halt", 0, 0, 0),
+        ]
+        .into_iter()
+        .map(|(code, p1, p2, p3)| (code.to_string(), p1, p2, p3))
+        .collect();
+        assert_eq!(codes(&scan_program(&[4, 0])), expected);
+    }
+
+    #[test]
+    fn a_plain_scan_yields_its_columns_whatever_transactions_it_opens() {
+        for transactions in 0..3 {
+            assert_eq!(
+                scanned_columns(&with_transactions(&[2, 0, 2], transactions)),
+                Some(vec![2, 0, 2])
+            );
+        }
+    }
+
+    #[test]
+    fn a_program_that_differs_from_a_plain_scan_yields_nothing() {
+        let plain = with_transactions(&[0, 1], 1);
+        let mut filtered = plain.clone();
+        filtered.insert(7, op("Le", 3, 6, 4));
+        let mut shifted = plain.clone();
+        shifted[6].p3 = 5;
+        let mut flagged = plain.clone();
+        flagged[5].p5 = 1;
+        let mut opened = plain.clone();
+        opened[10] = op("OpenRead", 1, 2, 0);
+        let mut ended = plain.clone();
+        ended[11] = op("Goto", 0, 2, 0);
+        for program in [
+            filtered,
+            shifted,
+            flagged,
+            opened,
+            ended,
+            plain[..10].to_vec(),
+            plain[..4].to_vec(),
+            with_transactions(&[], 1),
+            with_transactions(&[-1], 1),
+        ] {
+            assert_eq!(scanned_columns(&program), None, "{program:?}");
+        }
+    }
+
+    #[test]
+    fn a_statement_over_an_ordinary_table_is_stepped() {
+        let db = Db::new().unwrap();
+        db.create_table("t", "CREATE TABLE t (a TEXT)").unwrap();
+        let reads: HashSet<String> = ["t".to_string()].into();
+
+        assert!(db.program("SELECT a FROM t").is_some());
+        assert!(db.program("SELECT a FROM").is_none());
+        assert!(!db.read_directly("SELECT a FROM t", &reads, &mut |_| {}));
+        assert!(!db.read_directly("SELECT 1", &HashSet::new(), &mut |_| {}));
     }
 
     #[test]
