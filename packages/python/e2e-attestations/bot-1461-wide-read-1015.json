@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_one_level_test.py tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_depth_bound_test.py tests/e2e/glob_speed_gitignore_test.py tests/e2e/glob_speed_dotfiles_test.py tests/e2e/glob_speed_matchers_test.py tests/e2e/glob_speed_node_modules_test.py tests/e2e/glob_speed_symlink_test.py tests/e2e/stat_speed_test.py tests/e2e/query_contract_test.py -q",
+  "ran_at": 1792077498,
+  "exit_code": 0,
+  "commit": "7c3d73c0397b24cb4a43a785b80223e5632a8dc5",
+  "branch": "bot/1461-wide-read-1015"
+}
