@@ -329,7 +329,13 @@ pub fn run_cli(argv: Vec<String>) -> i32 {
         }
     };
 
-    let runtime = match tokio::runtime::Runtime::new() {
+    let runtime = match if serves(&cli) {
+        tokio::runtime::Runtime::new()
+    } else {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+    } {
         Ok(runtime) => runtime,
         Err(err) => {
             eprintln!("dirsql: failed to start the async runtime: {err}");
@@ -350,6 +356,13 @@ pub fn run_cli(argv: Vec<String>) -> i32 {
         }
     });
     i32::from(code)
+}
+
+/// Whether `cli` keeps serving, as the server and the REPL do, and so wants a
+/// runtime with a worker per core; a one-shot command waits on one thing at a
+/// time, and starting and stopping those workers is a cost it would only pay.
+fn serves(cli: &Cli) -> bool {
+    matches!(cli.command, Some(Command::Server(_))) || (cli.command.is_none() && cli.sql.is_none())
 }
 
 /// The default (no-subcommand) behavior. With SQL, run it as a one-shot query,
@@ -677,6 +690,24 @@ mod tests {
         // Blank SQL is NOT rejected here: it flows to the pipeline's shared
         // empty-rejection so both surfaces emit the identical message.
         assert_eq!(query_body("   "), r#"{"sql":"   "}"#);
+    }
+
+    #[test]
+    fn the_server_and_the_repl_serve() {
+        let serving =
+            [&["dirsql", "server"][..], &["dirsql"]].map(|argv| serves(&Cli::parse_from(argv)));
+        assert_eq!(serving, [true, true]);
+    }
+
+    #[test]
+    fn one_shot_commands_do_not_serve() {
+        let serving = [
+            &["dirsql", "query", "SELECT 1"][..],
+            &["dirsql", "SELECT 1"],
+            &["dirsql", "context"],
+        ]
+        .map(|argv| serves(&Cli::parse_from(argv)));
+        assert_eq!(serving, [false, false, false]);
     }
 
     fn query_args(argv: &[&str]) -> QueryArgs {

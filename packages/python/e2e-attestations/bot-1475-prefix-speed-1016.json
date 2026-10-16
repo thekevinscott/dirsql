@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/glob_speed_recursive_test.py tests/e2e/glob_speed_one_level_test.py tests/e2e/stat_speed_test.py tests/e2e/release_speed_test.py tests/e2e/query_contract_test.py tests/e2e/sigint_interrupt_test.py tests/e2e/on_file_query_test.py tests/e2e/repl_interactive_test.py tests/e2e/cli_version_test.py tests/e2e/fanout_test.py tests/e2e/use_case_dossier_test.py tests/e2e/use_case_join_test.py tests/e2e/use_case_notebook_test.py tests/e2e/use_case_transcripts_test.py -q",
+  "ran_at": 1792155028,
+  "exit_code": 0,
+  "commit": "f4827295ea0755e7f16b927d1891fadfa1920922",
+  "branch": "bot/1475-prefix-speed-1016"
+}

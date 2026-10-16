@@ -80,16 +80,9 @@ pub(crate) fn walk_in_order<D: Send, L: Send>(
                 Some(Item::Dir(id)) => {
                     if !spawned && shared.found() >= PARALLEL_DIRS {
                         spawned = true;
-                        let workers = thread::available_parallelism().map_or(1, usize::from);
-                        for _ in 1..workers {
-                            // Counted before it starts, so a directory judged
-                            // meanwhile already sees the core as taken.
-                            shared.busy.fetch_add(1, Ordering::Relaxed);
-                            scope.spawn(|| {
-                                BUSY.set(Some(Arc::clone(&shared.busy)));
-                                shared.work();
-                            });
-                        }
+                        let workers =
+                            worker_count(thread::available_parallelism().map_or(1, usize::from));
+                        spawn_worker(scope, &shared, 1, workers);
                         BUSY.set(Some(Arc::clone(&shared.busy)));
                     }
                     stack.push(shared.obtain(id).into_iter());
@@ -102,6 +95,44 @@ pub(crate) fn walk_in_order<D: Send, L: Send>(
         shared.lock().done = true;
         shared.changed.notify_all();
     });
+}
+
+/// How many threads explore on a machine of `cores` logical cores: half, as
+/// past the physical cores a worker mostly takes time from the walking thread
+/// and the thread reading its rows; but every core up to eight, as a small
+/// machine walks slower on fewer.
+fn worker_count(cores: usize) -> usize {
+    (cores / 2).max(cores.min(8))
+}
+
+/// Start worker `n` of `workers`, which starts its [`children`] before it
+/// explores: spawning a thread takes tens of microseconds, and the
+/// walk hands out nothing while it spawns.
+fn spawn_worker<'scope, D: Send, L: Send>(
+    scope: &'scope thread::Scope<'scope, '_>,
+    shared: &'scope Shared<'_, D, L>,
+    n: usize,
+    workers: usize,
+) {
+    if n >= workers {
+        return;
+    }
+    // Counted before it starts, so a directory judged meanwhile already sees
+    // the core as taken.
+    shared.busy.fetch_add(1, Ordering::Relaxed);
+    scope.spawn(move || {
+        for child in children(n) {
+            spawn_worker(scope, shared, child, workers);
+        }
+        BUSY.set(Some(Arc::clone(&shared.busy)));
+        shared.work();
+    });
+}
+
+/// The workers worker `n` starts, numbered so that, from worker 1, each
+/// number below the worker count is started exactly once.
+fn children(n: usize) -> std::ops::Range<usize> {
+    2 * n..2 * n + 2
 }
 
 impl<D, L> Shared<'_, D, L> {
@@ -317,6 +348,26 @@ mod tests {
     fn a_finished_walk_leaves_no_worker_busy() {
         walk_in_order(String::from("r"), &explore_tree(8, 1), &mut |_| {});
         assert_eq!(busy_workers(), 0);
+    }
+
+    #[test]
+    fn a_large_machine_explores_on_half_its_cores() {
+        assert_eq!(worker_count(32), 16);
+    }
+
+    #[test]
+    fn a_small_machine_explores_on_every_core() {
+        assert_eq!([1, 4, 8].map(worker_count), [1, 4, 8]);
+    }
+
+    #[test]
+    fn a_machine_explores_on_at_least_eight_cores() {
+        assert_eq!(worker_count(12), 8);
+    }
+
+    #[test]
+    fn a_worker_starts_the_two_numbered_after_twice_its_own() {
+        assert_eq!([1, 5].map(children), [2..4, 10..12]);
     }
 
     #[test]
