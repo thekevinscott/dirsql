@@ -2086,4 +2086,44 @@ mod tests {
             rows.iter().map(|(made_on, _)| made_on).collect();
         assert!(threads.len() > 1, "every row was made on one thread");
     }
+
+    #[test]
+    fn scan_glob_rows_hands_out_a_wide_directory_s_first_rows_before_its_last_is_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = 32_768;
+        for i in 0..files {
+            fs::File::create(dir.path().join(format!("f{i:05}"))).unwrap();
+        }
+        let last = PathBuf::from(format!("f{:05}", files - 1));
+        let glob = compile_glob("*").unwrap();
+        let none = TableMatcher::new(&[], &[]).unwrap();
+        let handed_out = AtomicBool::new(false);
+        let last_made_after = AtomicBool::new(false);
+
+        scan_glob_rows(
+            dir.path(),
+            &glob,
+            &none,
+            false,
+            false,
+            &|rel| {
+                if rel == last {
+                    for _ in 0..100_000 {
+                        if handed_out.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        thread::sleep(std::time::Duration::from_micros(50));
+                    }
+                    last_made_after.store(handed_out.load(Ordering::SeqCst), Ordering::SeqCst);
+                }
+                rel
+            },
+            &mut |_| handed_out.store(true, Ordering::SeqCst),
+        );
+
+        assert!(
+            last_made_after.load(Ordering::SeqCst),
+            "no row was handed out until the whole directory was judged"
+        );
+    }
 }
