@@ -5416,7 +5416,7 @@ mod internal_tests {
     }
 
     fn name_json_row(name: &str) -> infer::JsonRow {
-        infer::JsonRow(vec![("name".to_string(), serde_json::json!(name))])
+        infer::JsonRow(vec![("name".into(), serde_json::json!(name))])
     }
 
     type Calls = Arc<Mutex<Vec<Vec<PathBuf>>>>;
@@ -5525,7 +5525,7 @@ mod internal_tests {
         let mut items = streaming_per_table(|sink| {
             sink(vec![name_json_row("a")]);
             sink(vec![infer::JsonRow(vec![(
-                "nope".to_string(),
+                "nope".into(),
                 serde_json::json!(1),
             )])]);
             Ok(())
@@ -5542,7 +5542,7 @@ mod internal_tests {
         let dir = TempDir::new().unwrap();
         let mut items = streaming_per_table(|sink| {
             sink(vec![infer::JsonRow(vec![(
-                "nope".to_string(),
+                "nope".into(),
                 serde_json::json!(1),
             )])]);
             Err("parser exploded".into())
