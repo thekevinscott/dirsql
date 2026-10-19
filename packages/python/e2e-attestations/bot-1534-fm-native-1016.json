@@ -1,0 +1,7 @@
+{
+  "command": "uv run python -m pytest tests/e2e/frontmatter_parse_speed_test.py tests/e2e/jsonl_parse_speed_test.py tests/e2e/on_file_query_test.py tests/e2e/fanout_test.py tests/e2e/declared_table_name_test.py tests/e2e/query_contract_test.py tests/e2e/use_case_notebook_test.py tests/e2e/use_case_transcripts_test.py tests/e2e/sigint_interrupt_test.py -q -s",
+  "ran_at": 1792158472,
+  "exit_code": 0,
+  "commit": "4eaa7f0c26fa324fdb9b161e90fdb3fe22b8774f",
+  "branch": "bot/1534-fm-native-1016"
+}
