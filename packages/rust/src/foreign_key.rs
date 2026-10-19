@@ -327,6 +327,19 @@ mod tests {
     }
 
     #[test]
+    fn orphans_up_to_the_limit_are_all_listed() {
+        let conn = family(CHILD);
+        begin(&conn).unwrap();
+        for pid in 100..100 + LISTED {
+            conn.execute("INSERT INTO child VALUES ('kid', ?1)", [pid])
+                .unwrap();
+        }
+        let v = violation(commit(&conn).unwrap_err());
+        assert_eq!(v.message.matches("matches no row").count(), LISTED);
+        assert!(!v.message.contains("more)"), "{}", v.message);
+    }
+
+    #[test]
     fn a_composite_key_names_every_column() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
