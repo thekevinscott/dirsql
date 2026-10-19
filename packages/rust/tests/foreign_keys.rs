@@ -200,9 +200,39 @@ fn orphaning_a_child_in_watch_reports_it_and_keeps_the_previous_state() {
     let other = root.join("parents").join("2.txt");
     fs::write(&other, "beta renamed").unwrap();
     let events = db.apply_file_events(vec![FileEvent::Modified(other)]);
-    assert_eq!(errors(&events), Vec::<String>::new());
+    assert_eq!(
+        errors(&events),
+        reported,
+        "the held deletion is still rejected"
+    );
     assert_eq!(
         names(&db, "SELECT name FROM parent ORDER BY id"),
         vec!["alpha", "beta renamed"]
+    );
+}
+
+#[test]
+fn a_rejected_batch_lands_with_the_batch_that_resolves_it() {
+    let (_dir, root, db) = family(&[("1", "alpha"), ("2", "beta")], &[("kid", "1")]);
+    let parent = root.join("parents").join("1.txt");
+    fs::remove_file(&parent).unwrap();
+    let rejected = db.apply_file_events(vec![FileEvent::Deleted(parent)]);
+    assert_eq!(errors(&rejected).len(), 1, "{rejected:?}");
+
+    let child = root.join("children").join("kid.txt");
+    fs::write(&child, "2").unwrap();
+    let events = db.apply_file_events(vec![FileEvent::Modified(child)]);
+
+    assert_eq!(errors(&events), Vec::<String>::new());
+    assert_eq!(
+        names(&db, "SELECT name FROM parent ORDER BY id"),
+        vec!["beta"]
+    );
+    assert_eq!(
+        names(
+            &db,
+            "SELECT p.name FROM child c JOIN parent p ON p.id = c.parent_id"
+        ),
+        vec!["beta"]
     );
 }
