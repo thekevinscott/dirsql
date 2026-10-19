@@ -236,6 +236,11 @@ rows — filtered to the DDL — are the table. For plain stat columns with no
 command, query the path directly with a [path-table](./path-tables.md)
 instead of declaring a table.
 
+Tables' `on-file` commands run one table at a time, in declaration order:
+a table's command finishes before the next table's starts, whatever order
+their files sort in. That holds at startup and when a change under watch
+re-runs several tables at once.
+
 ```toml
 [[table]]
 name = "comments"
@@ -369,6 +374,8 @@ The configs load and merge in **argv order**:
   that config file's own directory** — so a relative command like
   `on-file = "sh ./extract.sh"` resolves against the config that declared it,
   wherever it lives.
+- **`on-file` commands run in argv order**: every table of the first config,
+  in declaration order, before any table of the second.
 - Each config is **validated on its own** (the [parse errors](#parse-errors)
   below apply per file). There is no cross-file merge validation, with two
   structural exceptions: **two configs defining a table of the same name is
